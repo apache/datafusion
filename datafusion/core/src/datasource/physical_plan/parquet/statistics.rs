@@ -269,7 +269,7 @@ mod test {
     #[test]
     fn roundtrip_bool() {
         Test {
-            input: Arc::new(BooleanArray::from(vec![
+            input: bool_array([
                 // row group 1
                 Some(true),
                 None,
@@ -282,17 +282,9 @@ mod test {
                 None,
                 None,
                 None,
-            ])),
-            expected_min: Arc::new(BooleanArray::from(vec![
-                Some(true),
-                Some(false),
-                None,
-            ])),
-            expected_max: Arc::new(BooleanArray::from(vec![
-                Some(true),
-                Some(true),
-                None,
-            ])),
+            ]),
+            expected_min: bool_array([Some(true), Some(false), None]),
+            expected_max: bool_array([Some(true), Some(true), None]),
         }
         .run()
     }
@@ -300,7 +292,7 @@ mod test {
     #[test]
     fn roundtrip_int32() {
         Test {
-            input: Arc::new(Int32Array::from(vec![
+            input: i32_array([
                 // row group 1
                 Some(1),
                 None,
@@ -313,9 +305,9 @@ mod test {
                 None,
                 None,
                 None,
-            ])),
-            expected_min: Arc::new(Int32Array::from(vec![Some(1), Some(0), None])),
-            expected_max: Arc::new(Int32Array::from(vec![Some(3), Some(5), None])),
+            ]),
+            expected_min: i32_array([Some(1), Some(0), None]),
+            expected_max: i32_array([Some(3), Some(5), None]),
         }
         .run()
     }
@@ -323,7 +315,7 @@ mod test {
     #[test]
     fn roundtrip_int64() {
         Test {
-            input: Arc::new(Int64Array::from(vec![
+            input: i64_array([
                 // row group 1
                 Some(1),
                 None,
@@ -336,9 +328,9 @@ mod test {
                 None,
                 None,
                 None,
-            ])),
-            expected_min: Arc::new(Int64Array::from(vec![Some(1), Some(0), None])),
-            expected_max: Arc::new(Int64Array::from(vec![Some(3), Some(5), None])),
+            ]),
+            expected_min: i64_array([Some(1), Some(0), None]),
+            expected_max: i64_array(vec![Some(3), Some(5), None]),
         }
         .run()
     }
@@ -346,7 +338,7 @@ mod test {
     #[test]
     fn roundtrip_f32() {
         Test {
-            input: Arc::new(Float32Array::from(vec![
+            input: f32_array([
                 // row group 1
                 Some(1.0),
                 None,
@@ -359,9 +351,9 @@ mod test {
                 None,
                 None,
                 None,
-            ])),
-            expected_min: Arc::new(Float32Array::from(vec![Some(1.0), Some(-1.0), None])),
-            expected_max: Arc::new(Float32Array::from(vec![Some(3.0), Some(5.0), None])),
+            ]),
+            expected_min: f32_array([Some(1.0), Some(-1.0), None]),
+            expected_max: f32_array([Some(3.0), Some(5.0), None]),
         }
         .run()
     }
@@ -369,7 +361,7 @@ mod test {
     #[test]
     fn roundtrip_f64() {
         Test {
-            input: Arc::new(Float64Array::from(vec![
+            input: f64_array([
                 // row group 1
                 Some(1.0),
                 None,
@@ -382,9 +374,9 @@ mod test {
                 None,
                 None,
                 None,
-            ])),
-            expected_min: Arc::new(Float64Array::from(vec![Some(1.0), Some(-1.0), None])),
-            expected_max: Arc::new(Float64Array::from(vec![Some(3.0), Some(5.0), None])),
+            ]),
+            expected_min: f64_array([Some(1.0), Some(-1.0), None]),
+            expected_max: f64_array([Some(3.0), Some(5.0), None]),
         }
         .run()
     }
@@ -395,7 +387,7 @@ mod test {
     )]
     fn roundtrip_timestamp() {
         Test {
-            input: Arc::new(TimestampNanosecondArray::from(vec![
+            input: timestamp_array([
                 // row group 1
                 Some(1),
                 None,
@@ -408,17 +400,9 @@ mod test {
                 None,
                 None,
                 None,
-            ])),
-            expected_min: Arc::new(TimestampNanosecondArray::from(vec![
-                Some(1),
-                Some(5),
-                None,
-            ])),
-            expected_max: Arc::new(TimestampNanosecondArray::from(vec![
-                Some(3),
-                Some(9),
-                None,
-            ])),
+            ]),
+            expected_min: timestamp_array([Some(1), Some(5), None]),
+            expected_max: timestamp_array([Some(3), Some(9), None]),
         }
         .run()
     }
@@ -461,7 +445,7 @@ mod test {
     #[test]
     fn roundtrip_utf8() {
         Test {
-            input: Arc::new(StringArray::from(vec![
+            input: utf8_array([
                 // row group 1
                 Some("A"),
                 None,
@@ -474,9 +458,9 @@ mod test {
                 None,
                 None,
                 None,
-            ])),
-            expected_min: Arc::new(StringArray::from(vec![Some("A"), Some("AA"), None])),
-            expected_max: Arc::new(StringArray::from(vec![Some("Q"), Some("ZZ"), None])),
+            ]),
+            expected_min: utf8_array([Some("A"), Some("AA"), None]),
+            expected_max: utf8_array([Some("Q"), Some("ZZ"), None]),
         }
         .run()
     }
@@ -484,7 +468,7 @@ mod test {
     #[test]
     fn roundtrip_struct() {
         let mut test = Test {
-            input: make_struct_array(vec![
+            input: struct_array(vec![
                 // row group 1
                 (Some(true), Some(1)),
                 (None, None),
@@ -498,13 +482,13 @@ mod test {
                 (None, None),
                 (None, None),
             ]),
-            expected_min: make_struct_array(vec![
+            expected_min: struct_array(vec![
                 (Some(true), Some(1)),
                 (Some(true), Some(0)),
                 (None, None),
             ]),
 
-            expected_max: make_struct_array(vec![
+            expected_max: struct_array(vec![
                 (Some(true), Some(3)),
                 (Some(true), Some(0)),
                 (None, None),
@@ -557,17 +541,17 @@ mod test {
     fn struct_and_non_struct() {
         // Ensures that statistics for an array that appears *after* a struct
         // array are not wrong
-        let struct_col = make_struct_array(vec![
+        let struct_col = struct_array(vec![
             // row group 1
             (Some(true), Some(1)),
             (None, None),
             (Some(true), Some(3)),
         ]);
-        let int_col = Arc::new(Int32Array::from(vec![Some(100), Some(200), Some(300)]));
+        let int_col = i32_array([Some(100), Some(200), Some(300)]);
 
-        let expected_min = Arc::new(Int32Array::from(vec![Some(100)])) as ArrayRef;
+        let expected_min = i32_array([Some(100)]);
 
-        let expected_max = Arc::new(Int32Array::from(vec![Some(300)])) as ArrayRef;
+        let expected_max = i32_array(vec![Some(300)]);
 
         let input_batch = RecordBatch::try_from_iter([
             ("struct_col", struct_col),
@@ -600,6 +584,151 @@ mod test {
             "Max. Statistics\n\n{}\n\n",
             DisplayStats(row_groups)
         );
+    }
+
+    #[test]
+    fn nan_in_stats() {
+        // /parquet-testing/data/nan_in_stats.parquet
+        // row_groups: 1
+        // "x": Double({min: Some(1.0), max: Some(NaN), distinct_count: None, null_count: 0, min_max_deprecated: false, min_max_backwards_compatible: false})
+
+        TestFile::new("nan_in_stats.parquet")
+            .with_column(ExpectedColumn {
+                name: "x",
+                expected_min: Arc::new(Float64Array::from(vec![Some(1.0)])),
+                expected_max: Arc::new(Float64Array::from(vec![Some(f64::NAN)])),
+            })
+            .run();
+    }
+
+    #[test]
+    fn alltypes_plain() {
+        // /parquet-testing/data/datapage_v1-snappy-compressed-checksum.parquet
+        // row_groups: 1
+        // (has no statistics)
+        TestFile::new("alltypes_plain.parquet")
+            // No column statistics should be read as NULL, but with the right type
+            .with_column(ExpectedColumn {
+                name: "id",
+                expected_min: Arc::new(Int32Array::from(vec![None])),
+                expected_max: Arc::new(Int32Array::from(vec![None])),
+            })
+            .with_column(ExpectedColumn {
+                name: "bool_col",
+                expected_min: Arc::new(BooleanArray::from(vec![None])),
+                expected_max: Arc::new(BooleanArray::from(vec![None])),
+            })
+            .run();
+    }
+
+    #[test]
+    fn alltypes_tiny_pages() {
+        // /parquet-testing/data/alltypes_tiny_pages.parquet
+        // row_groups: 1
+        // "id": Int32({min: Some(0), max: Some(7299), distinct_count: None, null_count: 0, min_max_deprecated: false, min_max_backwards_compatible: false})
+        // "bool_col": Boolean({min: Some(false), max: Some(true), distinct_count: None, null_count: 0, min_max_deprecated: false, min_max_backwards_compatible: false})
+        // "tinyint_col": Int32({min: Some(0), max: Some(9), distinct_count: None, null_count: 0, min_max_deprecated: false, min_max_backwards_compatible: false})
+        // "smallint_col": Int32({min: Some(0), max: Some(9), distinct_count: None, null_count: 0, min_max_deprecated: false, min_max_backwards_compatible: false})
+        // "int_col": Int32({min: Some(0), max: Some(9), distinct_count: None, null_count: 0, min_max_deprecated: false, min_max_backwards_compatible: false})
+        // "bigint_col": Int64({min: Some(0), max: Some(90), distinct_count: None, null_count: 0, min_max_deprecated: false, min_max_backwards_compatible: false})
+        // "float_col": Float({min: Some(0.0), max: Some(9.9), distinct_count: None, null_count: 0, min_max_deprecated: false, min_max_backwards_compatible: false})
+        // "double_col": Double({min: Some(0.0), max: Some(90.89999999999999), distinct_count: None, null_count: 0, min_max_deprecated: false, min_max_backwards_compatible: false})
+        // "date_string_col": ByteArray({min: Some(ByteArray { data: "01/01/09" }), max: Some(ByteArray { data: "12/31/10" }), distinct_count: None, null_count: 0, min_max_deprecated: false, min_max_backwards_compatible: false})
+        // "string_col": ByteArray({min: Some(ByteArray { data: "0" }), max: Some(ByteArray { data: "9" }), distinct_count: None, null_count: 0, min_max_deprecated: false, min_max_backwards_compatible: false})
+        // "timestamp_col": Int96({min: None, max: None, distinct_count: None, null_count: 0, min_max_deprecated: true, min_max_backwards_compatible: true})
+        // "year": Int32({min: Some(2009), max: Some(2010), distinct_count: None, null_count: 0, min_max_deprecated: false, min_max_backwards_compatible: false})
+        // "month": Int32({min: Some(1), max: Some(12), distinct_count: None, null_count: 0, min_max_deprecated: false, min_max_backwards_compatible: false})
+        TestFile::new("alltypes_tiny_pages.parquet")
+            .with_column(ExpectedColumn {
+                name: "id",
+                expected_min: Arc::new(Int32Array::from(vec![Some(0)])),
+                expected_max: Arc::new(Int32Array::from(vec![Some(7299)])),
+            })
+            .with_column(ExpectedColumn {
+                name: "bool_col",
+                expected_min: Arc::new(BooleanArray::from(vec![Some(false)])),
+                expected_max: Arc::new(BooleanArray::from(vec![Some(true)])),
+            })
+            .with_column(ExpectedColumn {
+                name: "tinyint_col",
+                expected_min: Arc::new(Int32Array::from(vec![Some(0)])),
+                expected_max: Arc::new(Int32Array::from(vec![Some(9)])),
+            })
+            .with_column(ExpectedColumn {
+                name: "smallint_col",
+                expected_min: Arc::new(Int32Array::from(vec![Some(0)])),
+                expected_max: Arc::new(Int32Array::from(vec![Some(9)])),
+            })
+            .with_column(ExpectedColumn {
+                name: "int_col",
+                expected_min: Arc::new(Int32Array::from(vec![Some(0)])),
+                expected_max: Arc::new(Int32Array::from(vec![Some(9)])),
+            })
+            .with_column(ExpectedColumn {
+                name: "bigint_col",
+                expected_min: Arc::new(Int64Array::from(vec![Some(0)])),
+                expected_max: Arc::new(Int64Array::from(vec![Some(90)])),
+            })
+            .with_column(ExpectedColumn {
+                name: "float_col",
+                expected_min: Arc::new(Float32Array::from(vec![Some(0.0)])),
+                expected_max: Arc::new(Float32Array::from(vec![Some(9.9)])),
+            })
+            .with_column(ExpectedColumn {
+                name: "double_col",
+                expected_min: Arc::new(Float64Array::from(vec![Some(0.0)])),
+                expected_max: Arc::new(Float64Array::from(vec![Some(90.89999999999999)])),
+            })
+            .with_column(ExpectedColumn {
+                name: "date_string_col",
+                expected_min: Arc::new(StringArray::from(vec![Some("01/01/09")])),
+                expected_max: Arc::new(StringArray::from(vec![Some("12/31/10")])),
+            })
+            .with_column(ExpectedColumn {
+                name: "string_col",
+                expected_min: Arc::new(StringArray::from(vec![Some("0")])),
+                expected_max: Arc::new(StringArray::from(vec![Some("9")])),
+            })
+            // File has no min/max for timestamp_col
+            .with_column(ExpectedColumn {
+                name: "timestamp_col",
+                expected_min: Arc::new(TimestampNanosecondArray::from(vec![None])),
+                expected_max: Arc::new(TimestampNanosecondArray::from(vec![None])),
+            })
+            .with_column(ExpectedColumn {
+                name: "year",
+                expected_min: Arc::new(Int32Array::from(vec![Some(2009)])),
+                expected_max: Arc::new(Int32Array::from(vec![Some(2010)])),
+            })
+            .with_column(ExpectedColumn {
+                name: "month",
+                expected_min: Arc::new(Int32Array::from(vec![Some(1)])),
+                expected_max: Arc::new(Int32Array::from(vec![Some(12)])),
+            })
+            .run();
+    }
+
+    #[test]
+    fn fixed_length_decimal_legacy() {
+        // /parquet-testing/data/fixed_length_decimal_legacy.parquet
+        // row_groups: 1
+        // "value": FixedLenByteArray({min: Some(FixedLenByteArray(ByteArray { data: Some(ByteBufferPtr { data: b"\0\0\0\0\0\xc8" }) })), max: Some(FixedLenByteArray(ByteArray { data: "\0\0\0\0\t`" })), distinct_count: None, null_count: 0, min_max_deprecated: true, min_max_backwards_compatible: true})
+
+        TestFile::new("fixed_length_decimal_legacy.parquet")
+            .with_column(ExpectedColumn {
+                name: "value",
+                expected_min: Arc::new(
+                    Decimal128Array::from(vec![Some(200)])
+                        .with_precision_and_scale(13, 2)
+                        .unwrap(),
+                ),
+                expected_max: Arc::new(
+                    Decimal128Array::from(vec![Some(2400)])
+                        .with_precision_and_scale(13, 2)
+                        .unwrap(),
+                ),
+            })
+            .run();
     }
 
     const ROWS_PER_ROW_GROUP: usize = 3;
@@ -735,153 +864,46 @@ mod test {
         }
     }
 
-    #[test]
-    fn alltypes_plain() {
-        // /parquet-testing/data/datapage_v1-snappy-compressed-checksum.parquet
-        // row_groups: 1
-        // (has no statistics)
-        TestFile::new("alltypes_plain.parquet")
-            // No column statistics should be read as NULL, but with the right type
-            .with_column(ExpectedColumn {
-                name: "id",
-                expected_min: Arc::new(Int32Array::from(vec![None])),
-                expected_max: Arc::new(Int32Array::from(vec![None])),
-            })
-            .with_column(ExpectedColumn {
-                name: "bool_col",
-                expected_min: Arc::new(BooleanArray::from(vec![None])),
-                expected_max: Arc::new(BooleanArray::from(vec![None])),
-            })
-            .run();
+    fn bool_array(input: impl IntoIterator<Item = Option<bool>>) -> ArrayRef {
+        let array: BooleanArray = input.into_iter().collect();
+        Arc::new(array)
     }
 
-    #[test]
-    fn alltypes_tiny_pages() {
-        // /parquet-testing/data/alltypes_tiny_pages.parquet
-        // row_groups: 1
-        // "id": Int32({min: Some(0), max: Some(7299), distinct_count: None, null_count: 0, min_max_deprecated: false, min_max_backwards_compatible: false})
-        // "bool_col": Boolean({min: Some(false), max: Some(true), distinct_count: None, null_count: 0, min_max_deprecated: false, min_max_backwards_compatible: false})
-        // "tinyint_col": Int32({min: Some(0), max: Some(9), distinct_count: None, null_count: 0, min_max_deprecated: false, min_max_backwards_compatible: false})
-        // "smallint_col": Int32({min: Some(0), max: Some(9), distinct_count: None, null_count: 0, min_max_deprecated: false, min_max_backwards_compatible: false})
-        // "int_col": Int32({min: Some(0), max: Some(9), distinct_count: None, null_count: 0, min_max_deprecated: false, min_max_backwards_compatible: false})
-        // "bigint_col": Int64({min: Some(0), max: Some(90), distinct_count: None, null_count: 0, min_max_deprecated: false, min_max_backwards_compatible: false})
-        // "float_col": Float({min: Some(0.0), max: Some(9.9), distinct_count: None, null_count: 0, min_max_deprecated: false, min_max_backwards_compatible: false})
-        // "double_col": Double({min: Some(0.0), max: Some(90.89999999999999), distinct_count: None, null_count: 0, min_max_deprecated: false, min_max_backwards_compatible: false})
-        // "date_string_col": ByteArray({min: Some(ByteArray { data: "01/01/09" }), max: Some(ByteArray { data: "12/31/10" }), distinct_count: None, null_count: 0, min_max_deprecated: false, min_max_backwards_compatible: false})
-        // "string_col": ByteArray({min: Some(ByteArray { data: "0" }), max: Some(ByteArray { data: "9" }), distinct_count: None, null_count: 0, min_max_deprecated: false, min_max_backwards_compatible: false})
-        // "timestamp_col": Int96({min: None, max: None, distinct_count: None, null_count: 0, min_max_deprecated: true, min_max_backwards_compatible: true})
-        // "year": Int32({min: Some(2009), max: Some(2010), distinct_count: None, null_count: 0, min_max_deprecated: false, min_max_backwards_compatible: false})
-        // "month": Int32({min: Some(1), max: Some(12), distinct_count: None, null_count: 0, min_max_deprecated: false, min_max_backwards_compatible: false})
-        TestFile::new("alltypes_tiny_pages.parquet")
-            .with_column(ExpectedColumn {
-                name: "id",
-                expected_min: Arc::new(Int32Array::from(vec![Some(0)])),
-                expected_max: Arc::new(Int32Array::from(vec![Some(7299)])),
-            })
-            .with_column(ExpectedColumn {
-                name: "bool_col",
-                expected_min: Arc::new(BooleanArray::from(vec![Some(false)])),
-                expected_max: Arc::new(BooleanArray::from(vec![Some(true)])),
-            })
-            .with_column(ExpectedColumn {
-                name: "tinyint_col",
-                expected_min: Arc::new(Int32Array::from(vec![Some(0)])),
-                expected_max: Arc::new(Int32Array::from(vec![Some(9)])),
-            })
-            .with_column(ExpectedColumn {
-                name: "smallint_col",
-                expected_min: Arc::new(Int32Array::from(vec![Some(0)])),
-                expected_max: Arc::new(Int32Array::from(vec![Some(9)])),
-            })
-            .with_column(ExpectedColumn {
-                name: "int_col",
-                expected_min: Arc::new(Int32Array::from(vec![Some(0)])),
-                expected_max: Arc::new(Int32Array::from(vec![Some(9)])),
-            })
-            .with_column(ExpectedColumn {
-                name: "bigint_col",
-                expected_min: Arc::new(Int64Array::from(vec![Some(0)])),
-                expected_max: Arc::new(Int64Array::from(vec![Some(90)])),
-            })
-            .with_column(ExpectedColumn {
-                name: "float_col",
-                expected_min: Arc::new(Float32Array::from(vec![Some(0.0)])),
-                expected_max: Arc::new(Float32Array::from(vec![Some(9.9)])),
-            })
-            .with_column(ExpectedColumn {
-                name: "double_col",
-                expected_min: Arc::new(Float64Array::from(vec![Some(0.0)])),
-                expected_max: Arc::new(Float64Array::from(vec![Some(90.89999999999999)])),
-            })
-            .with_column(ExpectedColumn {
-                name: "date_string_col",
-                expected_min: Arc::new(StringArray::from(vec![Some("01/01/09")])),
-                expected_max: Arc::new(StringArray::from(vec![Some("12/31/10")])),
-            })
-            .with_column(ExpectedColumn {
-                name: "string_col",
-                expected_min: Arc::new(StringArray::from(vec![Some("0")])),
-                expected_max: Arc::new(StringArray::from(vec![Some("9")])),
-            })
-            // File has no min/max for timestamp_col
-            .with_column(ExpectedColumn {
-                name: "timestamp_col",
-                expected_min: Arc::new(TimestampNanosecondArray::from(vec![None])),
-                expected_max: Arc::new(TimestampNanosecondArray::from(vec![None])),
-            })
-            .with_column(ExpectedColumn {
-                name: "year",
-                expected_min: Arc::new(Int32Array::from(vec![Some(2009)])),
-                expected_max: Arc::new(Int32Array::from(vec![Some(2010)])),
-            })
-            .with_column(ExpectedColumn {
-                name: "month",
-                expected_min: Arc::new(Int32Array::from(vec![Some(1)])),
-                expected_max: Arc::new(Int32Array::from(vec![Some(12)])),
-            })
-            .run();
+    fn i32_array(input: impl IntoIterator<Item = Option<i32>>) -> ArrayRef {
+        let array: Int32Array = input.into_iter().collect();
+        Arc::new(array)
     }
 
-    #[test]
-    fn fixed_length_decimal_legacy() {
-        // /parquet-testing/data/fixed_length_decimal_legacy.parquet
-        // row_groups: 1
-        // "value": FixedLenByteArray({min: Some(FixedLenByteArray(ByteArray { data: Some(ByteBufferPtr { data: b"\0\0\0\0\0\xc8" }) })), max: Some(FixedLenByteArray(ByteArray { data: "\0\0\0\0\t`" })), distinct_count: None, null_count: 0, min_max_deprecated: true, min_max_backwards_compatible: true})
-
-        TestFile::new("fixed_length_decimal_legacy.parquet")
-            .with_column(ExpectedColumn {
-                name: "value",
-                expected_min: Arc::new(
-                    Decimal128Array::from(vec![Some(200)])
-                        .with_precision_and_scale(13, 2)
-                        .unwrap(),
-                ),
-                expected_max: Arc::new(
-                    Decimal128Array::from(vec![Some(2400)])
-                        .with_precision_and_scale(13, 2)
-                        .unwrap(),
-                ),
-            })
-            .run();
+    fn i64_array(input: impl IntoIterator<Item = Option<i64>>) -> ArrayRef {
+        let array: Int64Array = input.into_iter().collect();
+        Arc::new(array)
     }
 
-    #[test]
-    fn nan_in_stats() {
-        // /parquet-testing/data/nan_in_stats.parquet
-        // row_groups: 1
-        // "x": Double({min: Some(1.0), max: Some(NaN), distinct_count: None, null_count: 0, min_max_deprecated: false, min_max_backwards_compatible: false})
+    fn f32_array(input: impl IntoIterator<Item = Option<f32>>) -> ArrayRef {
+        let array: Float32Array = input.into_iter().collect();
+        Arc::new(array)
+    }
 
-        TestFile::new("nan_in_stats.parquet")
-            .with_column(ExpectedColumn {
-                name: "x",
-                expected_min: Arc::new(Float64Array::from(vec![Some(1.0)])),
-                expected_max: Arc::new(Float64Array::from(vec![Some(f64::NAN)])),
-            })
-            .run();
+    fn f64_array(input: impl IntoIterator<Item = Option<f64>>) -> ArrayRef {
+        let array: Float64Array = input.into_iter().collect();
+        Arc::new(array)
+    }
+
+    fn timestamp_array(input: impl IntoIterator<Item = Option<i64>>) -> ArrayRef {
+        let array: TimestampNanosecondArray = input.into_iter().collect();
+        Arc::new(array)
+    }
+
+    fn utf8_array<'a>(input: impl IntoIterator<Item = Option<&'a str>>) -> ArrayRef {
+        let array: StringArray = input
+            .into_iter()
+            .map(|s| s.map(|s| s.to_string()))
+            .collect();
+        Arc::new(array)
     }
 
     // returns a struct array with columns "b" and "i" with the specified values
-    fn make_struct_array(input: Vec<(Option<bool>, Option<i32>)>) -> ArrayRef {
+    fn struct_array(input: Vec<(Option<bool>, Option<i32>)>) -> ArrayRef {
         let boolean: BooleanArray = input.iter().map(|(b, _i)| b).collect();
         let int: Int32Array = input.iter().map(|(_b, i)| i).collect();
 
