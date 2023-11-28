@@ -507,6 +507,7 @@ impl FileOpener for ParquetOpener {
             let file_metadata = builder.metadata().clone();
             let predicate = pruning_predicate.as_ref().map(|p| p.as_ref());
             let mut row_groups = row_groups::prune_row_groups_by_statistics(
+                builder.parquet_schema(),
                 file_metadata.row_groups(),
                 file_range,
                 predicate,
