@@ -2002,6 +2002,7 @@ mod tests {
     use super::*;
     use arrow::datatypes::Int64Type;
 
+    /// Only test internal functions, array-related sql functions will be tested in sqllogictest `array.slt`
     #[test]
     fn test_align_array_dimensions() {
         let array1d_1 =
