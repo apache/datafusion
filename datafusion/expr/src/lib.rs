@@ -26,10 +26,20 @@
 //! The [expr_fn] module contains functions for creating expressions.
 
 mod accumulator;
-pub mod aggregate_function;
-pub mod array_expressions;
 mod built_in_function;
 mod columnar_value;
+mod literal;
+mod nullif;
+mod operator;
+mod partition_evaluator;
+mod signature;
+mod table_source;
+mod udaf;
+mod udf;
+mod udwf;
+
+pub mod aggregate_function;
+pub mod array_expressions;
 pub mod conditional_expressions;
 pub mod expr;
 pub mod expr_fn;
@@ -37,19 +47,11 @@ pub mod expr_rewriter;
 pub mod expr_schema;
 pub mod field_util;
 pub mod function;
-mod literal;
+pub mod interval_arithmetic;
 pub mod logical_plan;
-mod nullif;
-mod operator;
-mod partition_evaluator;
-mod signature;
 pub mod struct_expressions;
-mod table_source;
 pub mod tree_node;
 pub mod type_coercion;
-mod udaf;
-mod udf;
-mod udwf;
 pub mod utils;
 pub mod window_frame;
 pub mod window_function;
@@ -61,7 +63,7 @@ pub use built_in_function::BuiltinScalarFunction;
 pub use columnar_value::ColumnarValue;
 pub use expr::{
     Between, BinaryExpr, Case, Cast, Expr, GetFieldAccess, GetIndexedField, GroupingSet,
-    Like, TryCast,
+    Like, ScalarFunctionDefinition, TryCast,
 };
 pub use expr_fn::*;
 pub use expr_schema::ExprSchemable;

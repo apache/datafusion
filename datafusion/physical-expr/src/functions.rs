@@ -836,6 +836,29 @@ pub fn create_physical_fun(
                 ))),
             })
         }
+        BuiltinScalarFunction::SubstrIndex => {
+            Arc::new(|args| match args[0].data_type() {
+                DataType::Utf8 => {
+                    let func = invoke_if_unicode_expressions_feature_flag!(
+                        substr_index,
+                        i32,
+                        "substr_index"
+                    );
+                    make_scalar_function(func)(args)
+                }
+                DataType::LargeUtf8 => {
+                    let func = invoke_if_unicode_expressions_feature_flag!(
+                        substr_index,
+                        i64,
+                        "substr_index"
+                    );
+                    make_scalar_function(func)(args)
+                }
+                other => Err(DataFusionError::Internal(format!(
+                    "Unsupported data type {other:?} for function substr_index",
+                ))),
+            })
+        }
     })
 }
 

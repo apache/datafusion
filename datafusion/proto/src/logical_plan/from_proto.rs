@@ -55,9 +55,9 @@ use datafusion_expr::{
     lower, lpad, ltrim, md5, nanvl, now, nullif, octet_length, overlay, pi, power,
     radians, random, regexp_match, regexp_replace, repeat, replace, reverse, right,
     round, rpad, rtrim, sha224, sha256, sha384, sha512, signum, sin, sinh, split_part,
-    sqrt, starts_with, string_to_array, strpos, struct_fun, substr, substring, tan, tanh,
-    to_hex, to_timestamp_micros, to_timestamp_millis, to_timestamp_nanos,
-    to_timestamp_seconds, translate, trim, trunc, upper, uuid,
+    sqrt, starts_with, string_to_array, strpos, struct_fun, substr, substr_index,
+    substring, tan, tanh, to_hex, to_timestamp_micros, to_timestamp_millis,
+    to_timestamp_nanos, to_timestamp_seconds, translate, trim, trunc, upper, uuid,
     window_frame::regularize,
     AggregateFunction, Between, BinaryExpr, BuiltInWindowFunction, BuiltinScalarFunction,
     Case, Cast, Expr, GetFieldAccess, GetIndexedField, GroupingSet,
@@ -549,6 +549,7 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::ArrowTypeof => Self::ArrowTypeof,
             ScalarFunction::OverLay => Self::OverLay,
             ScalarFunction::Levenshtein => Self::Levenshtein,
+            ScalarFunction::SubstrIndex => Self::SubstrIndex,
         }
     }
 }
@@ -658,7 +659,9 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
             Value::Float64Value(v) => Self::Float64(Some(*v)),
             Value::Date32Value(v) => Self::Date32(Some(*v)),
             // ScalarValue::List is serialized using arrow IPC format
-            Value::ListValue(scalar_list) | Value::FixedSizeListValue(scalar_list) => {
+            Value::ListValue(scalar_list)
+            | Value::FixedSizeListValue(scalar_list)
+            | Value::LargeListValue(scalar_list) => {
                 let protobuf::ScalarListValue {
                     ipc_message,
                     arrow_data,
@@ -701,6 +704,7 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
                 let arr = record_batch.column(0);
                 match value {
                     Value::ListValue(_) => Self::List(arr.to_owned()),
+                    Value::LargeListValue(_) => Self::LargeList(arr.to_owned()),
                     Value::FixedSizeListValue(_) => Self::FixedSizeList(arr.to_owned()),
                     _ => unreachable!(),
                 }
@@ -1703,6 +1707,11 @@ pub fn parse_expr(
                         .map(|expr| parse_expr(expr, registry))
                         .collect::<Result<Vec<_>, _>>()?,
                 )),
+                ScalarFunction::SubstrIndex => Ok(substr_index(
+                    parse_expr(&args[0], registry)?,
+                    parse_expr(&args[1], registry)?,
+                    parse_expr(&args[2], registry)?,
+                )),
                 ScalarFunction::StructFun => {
                     Ok(struct_fun(parse_expr(&args[0], registry)?))
                 }
@@ -1710,7 +1719,7 @@ pub fn parse_expr(
         }
         ExprType::ScalarUdfExpr(protobuf::ScalarUdfExprNode { fun_name, args }) => {
             let scalar_fn = registry.udf(fun_name.as_str())?;
-            Ok(Expr::ScalarUDF(expr::ScalarUDF::new(
+            Ok(Expr::ScalarFunction(expr::ScalarFunction::new_udf(
                 scalar_fn,
                 args.iter()
                     .map(|expr| parse_expr(expr, registry))

@@ -27,7 +27,6 @@ use super::expressions::PhysicalSortExpr;
 use super::{
     ColumnStatistics, DisplayAs, RecordBatchStream, SendableRecordBatchStream, Statistics,
 };
-
 use crate::{
     metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet},
     Column, DisplayFormatType, ExecutionPlan, Partitioning,
@@ -215,7 +214,8 @@ impl ExecutionPlan for FilterExec {
             &self.input.schema(),
             &input_stats.column_statistics,
         )?;
-        let analysis_ctx = analyze(predicate, input_analysis_ctx)?;
+
+        let analysis_ctx = analyze(predicate, input_analysis_ctx, &self.schema())?;
 
         // Estimate (inexact) selectivity of predicate
         let selectivity = analysis_ctx.selectivity.unwrap_or(1.0);
@@ -254,19 +254,12 @@ fn collect_new_statistics(
                     ..
                 },
             )| {
-                let closed_interval = interval.close_bounds();
-                let (min_value, max_value) =
-                    if closed_interval.lower.value.eq(&closed_interval.upper.value) {
-                        (
-                            Precision::Exact(closed_interval.lower.value),
-                            Precision::Exact(closed_interval.upper.value),
-                        )
-                    } else {
-                        (
-                            Precision::Inexact(closed_interval.lower.value),
-                            Precision::Inexact(closed_interval.upper.value),
-                        )
-                    };
+                let (lower, upper) = interval.into_bounds();
+                let (min_value, max_value) = if lower.eq(&upper) {
+                    (Precision::Exact(lower), Precision::Exact(upper))
+                } else {
+                    (Precision::Inexact(lower), Precision::Inexact(upper))
+                };
                 ColumnStatistics {
                     null_count: input_column_stats[idx].null_count.clone().to_inexact(),
                     max_value,

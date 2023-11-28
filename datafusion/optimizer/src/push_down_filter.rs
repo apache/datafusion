@@ -28,7 +28,8 @@ use datafusion_expr::{
     and,
     expr_rewriter::replace_col,
     logical_plan::{CrossJoin, Join, JoinType, LogicalPlan, TableScan, Union},
-    or, BinaryExpr, Expr, Filter, Operator, TableProviderFilterPushDown,
+    or, BinaryExpr, Expr, Filter, Operator, ScalarFunctionDefinition,
+    TableProviderFilterPushDown,
 };
 use itertools::Itertools;
 use std::collections::{HashMap, HashSet};
@@ -221,7 +222,10 @@ fn can_evaluate_as_join_condition(predicate: &Expr) -> Result<bool> {
         | Expr::InSubquery(_)
         | Expr::ScalarSubquery(_)
         | Expr::OuterReferenceColumn(_, _)
-        | Expr::ScalarUDF(..) => {
+        | Expr::ScalarFunction(datafusion_expr::expr::ScalarFunction {
+            func_def: ScalarFunctionDefinition::UDF(_),
+            ..
+        }) => {
             is_evaluate = false;
             Ok(VisitRecursion::Stop)
         }
@@ -977,10 +981,26 @@ fn is_volatile_expression(e: &Expr) -> bool {
     let mut is_volatile = false;
     e.apply(&mut |expr| {
         Ok(match expr {
-            Expr::ScalarFunction(f) if f.fun.volatility() == Volatility::Volatile => {
-                is_volatile = true;
-                VisitRecursion::Stop
-            }
+            Expr::ScalarFunction(f) => match &f.func_def {
+                ScalarFunctionDefinition::BuiltIn { fun, .. }
+                    if fun.volatility() == Volatility::Volatile =>
+                {
+                    is_volatile = true;
+                    VisitRecursion::Stop
+                }
+                ScalarFunctionDefinition::UDF(fun)
+                    if fun.signature().volatility == Volatility::Volatile =>
+                {
+                    is_volatile = true;
+                    VisitRecursion::Stop
+                }
+                ScalarFunctionDefinition::Name(_) => {
+                    return internal_err!(
+                        "Function `Expr` with name should be resolved."
+                    );
+                }
+                _ => VisitRecursion::Continue,
+            },
             _ => VisitRecursion::Continue,
         })
     })
