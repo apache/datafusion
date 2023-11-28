@@ -746,8 +746,14 @@ pub fn gen_range(args: &[ArrayRef]) -> Result<ArrayRef> {
         if step == 0 {
             return exec_err!("step can't be 0 for function range(start [, stop, step]");
         }
-        let value = (start..stop).step_by(step as usize);
-        values.extend(value);
+        if step < 0 {
+            // Decreasing range
+            values.extend((stop + 1..start + 1).rev().step_by((-step) as usize));
+        } else {
+            // Increasing range
+            values.extend((start..stop).step_by(step as usize));
+        }
+
         offsets.push(values.len() as i32);
     }
     let arr = Arc::new(ListArray::try_new(
@@ -2512,6 +2518,67 @@ mod tests {
             .downcast_ref::<Int64Array>()
             .unwrap()
             .is_null(0));
+    }
+
+    #[test]
+    fn test_array_range() {
+        // range(1, 5, 1) = [1, 2, 3, 4]
+        let args1 = Arc::new(Int64Array::from(vec![Some(1)])) as ArrayRef;
+        let args2 = Arc::new(Int64Array::from(vec![Some(5)])) as ArrayRef;
+        let args3 = Arc::new(Int64Array::from(vec![Some(1)])) as ArrayRef;
+        let arr = gen_range(&[args1, args2, args3]).unwrap();
+
+        let result = as_list_array(&arr).expect("failed to initialize function range");
+        assert_eq!(
+            &[1, 2, 3, 4],
+            result
+                .value(0)
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .unwrap()
+                .values()
+        );
+
+        // range(1, -5, -1) = [1, 0, -1, -2, -3, -4]
+        let args1 = Arc::new(Int64Array::from(vec![Some(1)])) as ArrayRef;
+        let args2 = Arc::new(Int64Array::from(vec![Some(-5)])) as ArrayRef;
+        let args3 = Arc::new(Int64Array::from(vec![Some(-1)])) as ArrayRef;
+        let arr = gen_range(&[args1, args2, args3]).unwrap();
+
+        let result = as_list_array(&arr).expect("failed to initialize function range");
+        assert_eq!(
+            &[1, 0, -1, -2, -3, -4],
+            result
+                .value(0)
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .unwrap()
+                .values()
+        );
+
+        // range(1, 5, -1) = []
+        let args1 = Arc::new(Int64Array::from(vec![Some(1)])) as ArrayRef;
+        let args2 = Arc::new(Int64Array::from(vec![Some(5)])) as ArrayRef;
+        let args3 = Arc::new(Int64Array::from(vec![Some(-1)])) as ArrayRef;
+        let arr = gen_range(&[args1, args2, args3]).unwrap();
+
+        let result = as_list_array(&arr).expect("failed to initialize function range");
+        assert_eq!(
+            &[],
+            result
+                .value(0)
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .unwrap()
+                .values()
+        );
+
+        // range(1, 5, 0) = []
+        let args1 = Arc::new(Int64Array::from(vec![Some(1)])) as ArrayRef;
+        let args2 = Arc::new(Int64Array::from(vec![Some(5)])) as ArrayRef;
+        let args3 = Arc::new(Int64Array::from(vec![Some(0)])) as ArrayRef;
+        let is_err = gen_range(&[args1, args2, args3]).is_err();
+        assert!(is_err)
     }
 
     #[test]
