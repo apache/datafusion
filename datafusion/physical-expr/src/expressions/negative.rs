@@ -33,7 +33,7 @@ use arrow::{
 use datafusion_common::{internal_err, DataFusionError, Result};
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::{
-    type_coercion::{is_interval, is_null, is_signed_numeric},
+    type_coercion::{is_interval, is_null, is_signed_numeric, is_timestamp},
     ColumnarValue,
 };
 
@@ -160,7 +160,10 @@ pub fn negative(
     let data_type = arg.data_type(input_schema)?;
     if is_null(&data_type) {
         Ok(arg)
-    } else if !is_signed_numeric(&data_type) && !is_interval(&data_type) {
+    } else if !is_signed_numeric(&data_type)
+        && !is_interval(&data_type)
+        && !is_timestamp(&data_type)
+    {
         internal_err!(
             "Can't create negative physical expr for (- '{arg:?}'), the type of child expr is {data_type}, not signed numeric"
         )
