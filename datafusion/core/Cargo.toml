@@ -65,7 +65,7 @@ dashmap = { workspace = true }
 datafusion-common = { path = "../common", version = "33.0.0", features = ["object_store"], default-features = false }
 datafusion-execution = { workspace = true }
 datafusion-expr = { workspace = true }
-datafusion-functions = { workspace = true, version = "33.0.0"}
+datafusion-functions = { path = "../functions", version = "33.0.0"}
 datafusion-optimizer = { path = "../optimizer", version = "33.0.0", default-features = false }
 datafusion-physical-expr = { path = "../physical-expr", version = "33.0.0", default-features = false }
 datafusion-physical-plan = { workspace = true }
