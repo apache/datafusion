@@ -1634,9 +1634,7 @@ array_append(array, element)
 Sort array.
 
 ```
-array_sort(array)
-array_sort(array, 'ASC')
-array_sort(array, 'DESC', 'NULLS FIRST')
+array_sort(array, desc, nulls_first)
 ```
 
 #### Arguments
