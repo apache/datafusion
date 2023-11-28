@@ -35,6 +35,7 @@ use datafusion::{
 };
 use datafusion_common::DataFusionError;
 use log::info;
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::Write;
 use std::path::Path;
@@ -57,8 +58,8 @@ impl TestContext {
         }
     }
 
-    /// Create a SessionContext, configured for the specific test, if
-    /// possible.
+    /// Create a SessionContext, configured for the specific sqllogictest
+    /// test(.slt file) , if possible.
     ///
     /// If `None` is returned (e.g. because some needed feature is not
     /// enabled), the file should be skipped
@@ -67,7 +68,7 @@ impl TestContext {
             // hardcode target partitions so plans are deterministic
             .with_target_partitions(4);
 
-        let test_ctx = TestContext::new(SessionContext::new_with_config(config));
+        let mut test_ctx = TestContext::new(SessionContext::new_with_config(config));
 
         let file_name = relative_path.file_name().unwrap().to_str().unwrap();
         match file_name {
@@ -86,10 +87,8 @@ impl TestContext {
             "avro.slt" => {
                 #[cfg(feature = "avro")]
                 {
-                    let mut test_ctx = test_ctx;
                     info!("Registering avro tables");
                     register_avro_tables(&mut test_ctx).await;
-                    return Some(test_ctx);
                 }
                 #[cfg(not(feature = "avro"))]
                 {
@@ -99,10 +98,11 @@ impl TestContext {
             }
             "joins.slt" => {
                 info!("Registering partition table tables");
-
-                let mut test_ctx = test_ctx;
                 register_partition_table(&mut test_ctx).await;
-                return Some(test_ctx);
+            }
+            "metadata.slt" => {
+                info!("Registering metadata table tables");
+                register_metadata_tables(test_ctx.session_ctx()).await;
             }
             _ => {
                 info!("Using default SessionContext");
@@ -298,4 +298,32 @@ fn table_with_many_types() -> Arc<dyn TableProvider> {
     .unwrap();
     let provider = MemTable::try_new(Arc::new(schema), vec![vec![batch]]).unwrap();
     Arc::new(provider)
+}
+
+/// Registers a table_with_metadata that contains both field level and Table level metadata
+pub async fn register_metadata_tables(ctx: &SessionContext) {
+    let id = Field::new("id", DataType::Int32, true).with_metadata(HashMap::from([(
+        String::from("metadata_key"),
+        String::from("the id field"),
+    )]));
+    let name = Field::new("name", DataType::Utf8, true).with_metadata(HashMap::from([(
+        String::from("metadata_key"),
+        String::from("the name field"),
+    )]));
+
+    let schema = Schema::new(vec![id, name]).with_metadata(HashMap::from([(
+        String::from("metadata_key"),
+        String::from("the entire schema"),
+    )]));
+
+    let batch = RecordBatch::try_new(
+        Arc::new(schema),
+        vec![
+            Arc::new(Int32Array::from(vec![Some(1), None, Some(3)])) as _,
+            Arc::new(StringArray::from(vec![None, Some("bar"), Some("baz")])) as _,
+        ],
+    )
+    .unwrap();
+
+    ctx.register_batch("table_with_metadata", batch).unwrap();
 }

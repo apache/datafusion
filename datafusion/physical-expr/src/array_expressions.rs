@@ -228,10 +228,10 @@ fn compute_array_dims(arr: Option<ArrayRef>) -> Result<Option<Vec<Option<u64>>>>
 
 fn check_datatypes(name: &str, args: &[&ArrayRef]) -> Result<()> {
     let data_type = args[0].data_type();
-    if !args
-        .iter()
-        .all(|arg| arg.data_type().equals_datatype(data_type))
-    {
+    if !args.iter().all(|arg| {
+        arg.data_type().equals_datatype(data_type)
+            || arg.data_type().equals_datatype(&DataType::Null)
+    }) {
         let types = args.iter().map(|arg| arg.data_type()).collect::<Vec<_>>();
         return plan_err!("{name} received incompatible types: '{types:?}'.");
     }
@@ -746,8 +746,14 @@ pub fn gen_range(args: &[ArrayRef]) -> Result<ArrayRef> {
         if step == 0 {
             return exec_err!("step can't be 0 for function range(start [, stop, step]");
         }
-        let value = (start..stop).step_by(step as usize);
-        values.extend(value);
+        if step < 0 {
+            // Decreasing range
+            values.extend((stop + 1..start + 1).rev().step_by((-step) as usize));
+        } else {
+            // Increasing range
+            values.extend((start..stop).step_by(step as usize));
+        }
+
         offsets.push(values.len() as i32);
     }
     let arr = Arc::new(ListArray::try_new(
@@ -1591,19 +1597,29 @@ pub fn array_union(args: &[ArrayRef]) -> Result<ArrayRef> {
     match (array1.data_type(), array2.data_type()) {
         (DataType::Null, _) => Ok(array2.clone()),
         (_, DataType::Null) => Ok(array1.clone()),
-        (DataType::List(field_ref), DataType::List(_)) => {
-            check_datatypes("array_union", &[array1, array2])?;
-            let list1 = array1.as_list::<i32>();
-            let list2 = array2.as_list::<i32>();
-            let result = union_generic_lists::<i32>(list1, list2, field_ref)?;
-            Ok(Arc::new(result))
+        (DataType::List(l_field_ref), DataType::List(r_field_ref)) => {
+            match (l_field_ref.data_type(), r_field_ref.data_type()) {
+                (DataType::Null, _) => Ok(array2.clone()),
+                (_, DataType::Null) => Ok(array1.clone()),
+                (_, _) => {
+                    let list1 = array1.as_list::<i32>();
+                    let list2 = array2.as_list::<i32>();
+                    let result = union_generic_lists::<i32>(list1, list2, l_field_ref)?;
+                    Ok(Arc::new(result))
+                }
+            }
         }
-        (DataType::LargeList(field_ref), DataType::LargeList(_)) => {
-            check_datatypes("array_union", &[array1, array2])?;
-            let list1 = array1.as_list::<i64>();
-            let list2 = array2.as_list::<i64>();
-            let result = union_generic_lists::<i64>(list1, list2, field_ref)?;
-            Ok(Arc::new(result))
+        (DataType::LargeList(l_field_ref), DataType::LargeList(r_field_ref)) => {
+            match (l_field_ref.data_type(), r_field_ref.data_type()) {
+                (DataType::Null, _) => Ok(array2.clone()),
+                (_, DataType::Null) => Ok(array1.clone()),
+                (_, _) => {
+                    let list1 = array1.as_list::<i64>();
+                    let list2 = array2.as_list::<i64>();
+                    let result = union_generic_lists::<i64>(list1, list2, l_field_ref)?;
+                    Ok(Arc::new(result))
+                }
+            }
         }
         _ => {
             internal_err!(
@@ -1998,55 +2014,66 @@ pub fn string_to_array<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef
 pub fn array_intersect(args: &[ArrayRef]) -> Result<ArrayRef> {
     assert_eq!(args.len(), 2);
 
-    let first_array = as_list_array(&args[0])?;
-    let second_array = as_list_array(&args[1])?;
+    let first_array = &args[0];
+    let second_array = &args[1];
 
-    if first_array.value_type() != second_array.value_type() {
-        return internal_err!("array_intersect is not implemented for '{first_array:?}' and '{second_array:?}'");
-    }
-    let dt = first_array.value_type();
+    match (first_array.data_type(), second_array.data_type()) {
+        (DataType::Null, _) => Ok(second_array.clone()),
+        (_, DataType::Null) => Ok(first_array.clone()),
+        _ => {
+            let first_array = as_list_array(&first_array)?;
+            let second_array = as_list_array(&second_array)?;
 
-    let mut offsets = vec![0];
-    let mut new_arrays = vec![];
+            if first_array.value_type() != second_array.value_type() {
+                return internal_err!("array_intersect is not implemented for '{first_array:?}' and '{second_array:?}'");
+            }
 
-    let converter = RowConverter::new(vec![SortField::new(dt.clone())])?;
-    for (first_arr, second_arr) in first_array.iter().zip(second_array.iter()) {
-        if let (Some(first_arr), Some(second_arr)) = (first_arr, second_arr) {
-            let l_values = converter.convert_columns(&[first_arr])?;
-            let r_values = converter.convert_columns(&[second_arr])?;
+            let dt = first_array.value_type();
 
-            let values_set: HashSet<_> = l_values.iter().collect();
-            let mut rows = Vec::with_capacity(r_values.num_rows());
-            for r_val in r_values.iter().sorted().dedup() {
-                if values_set.contains(&r_val) {
-                    rows.push(r_val);
+            let mut offsets = vec![0];
+            let mut new_arrays = vec![];
+
+            let converter = RowConverter::new(vec![SortField::new(dt.clone())])?;
+            for (first_arr, second_arr) in first_array.iter().zip(second_array.iter()) {
+                if let (Some(first_arr), Some(second_arr)) = (first_arr, second_arr) {
+                    let l_values = converter.convert_columns(&[first_arr])?;
+                    let r_values = converter.convert_columns(&[second_arr])?;
+
+                    let values_set: HashSet<_> = l_values.iter().collect();
+                    let mut rows = Vec::with_capacity(r_values.num_rows());
+                    for r_val in r_values.iter().sorted().dedup() {
+                        if values_set.contains(&r_val) {
+                            rows.push(r_val);
+                        }
+                    }
+
+                    let last_offset: i32 = match offsets.last().copied() {
+                        Some(offset) => offset,
+                        None => return internal_err!("offsets should not be empty"),
+                    };
+                    offsets.push(last_offset + rows.len() as i32);
+                    let arrays = converter.convert_rows(rows)?;
+                    let array = match arrays.get(0) {
+                        Some(array) => array.clone(),
+                        None => {
+                            return internal_err!(
+                                "array_intersect: failed to get array from rows"
+                            )
+                        }
+                    };
+                    new_arrays.push(array);
                 }
             }
 
-            let last_offset: i32 = match offsets.last().copied() {
-                Some(offset) => offset,
-                None => return internal_err!("offsets should not be empty"),
-            };
-            offsets.push(last_offset + rows.len() as i32);
-            let arrays = converter.convert_rows(rows)?;
-            let array = match arrays.get(0) {
-                Some(array) => array.clone(),
-                None => {
-                    return internal_err!(
-                        "array_intersect: failed to get array from rows"
-                    )
-                }
-            };
-            new_arrays.push(array);
+            let field = Arc::new(Field::new("item", dt, true));
+            let offsets = OffsetBuffer::new(offsets.into());
+            let new_arrays_ref =
+                new_arrays.iter().map(|v| v.as_ref()).collect::<Vec<_>>();
+            let values = compute::concat(&new_arrays_ref)?;
+            let arr = Arc::new(ListArray::try_new(field, offsets, values, None)?);
+            Ok(arr)
         }
     }
-
-    let field = Arc::new(Field::new("item", dt, true));
-    let offsets = OffsetBuffer::new(offsets.into());
-    let new_arrays_ref = new_arrays.iter().map(|v| v.as_ref()).collect::<Vec<_>>();
-    let values = compute::concat(&new_arrays_ref)?;
-    let arr = Arc::new(ListArray::try_new(field, offsets, values, None)?);
-    Ok(arr)
 }
 
 #[cfg(test)]
@@ -2570,6 +2597,67 @@ mod tests {
             .downcast_ref::<Int64Array>()
             .unwrap()
             .is_null(0));
+    }
+
+    #[test]
+    fn test_array_range() {
+        // range(1, 5, 1) = [1, 2, 3, 4]
+        let args1 = Arc::new(Int64Array::from(vec![Some(1)])) as ArrayRef;
+        let args2 = Arc::new(Int64Array::from(vec![Some(5)])) as ArrayRef;
+        let args3 = Arc::new(Int64Array::from(vec![Some(1)])) as ArrayRef;
+        let arr = gen_range(&[args1, args2, args3]).unwrap();
+
+        let result = as_list_array(&arr).expect("failed to initialize function range");
+        assert_eq!(
+            &[1, 2, 3, 4],
+            result
+                .value(0)
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .unwrap()
+                .values()
+        );
+
+        // range(1, -5, -1) = [1, 0, -1, -2, -3, -4]
+        let args1 = Arc::new(Int64Array::from(vec![Some(1)])) as ArrayRef;
+        let args2 = Arc::new(Int64Array::from(vec![Some(-5)])) as ArrayRef;
+        let args3 = Arc::new(Int64Array::from(vec![Some(-1)])) as ArrayRef;
+        let arr = gen_range(&[args1, args2, args3]).unwrap();
+
+        let result = as_list_array(&arr).expect("failed to initialize function range");
+        assert_eq!(
+            &[1, 0, -1, -2, -3, -4],
+            result
+                .value(0)
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .unwrap()
+                .values()
+        );
+
+        // range(1, 5, -1) = []
+        let args1 = Arc::new(Int64Array::from(vec![Some(1)])) as ArrayRef;
+        let args2 = Arc::new(Int64Array::from(vec![Some(5)])) as ArrayRef;
+        let args3 = Arc::new(Int64Array::from(vec![Some(-1)])) as ArrayRef;
+        let arr = gen_range(&[args1, args2, args3]).unwrap();
+
+        let result = as_list_array(&arr).expect("failed to initialize function range");
+        assert_eq!(
+            &[],
+            result
+                .value(0)
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .unwrap()
+                .values()
+        );
+
+        // range(1, 5, 0) = []
+        let args1 = Arc::new(Int64Array::from(vec![Some(1)])) as ArrayRef;
+        let args2 = Arc::new(Int64Array::from(vec![Some(5)])) as ArrayRef;
+        let args3 = Arc::new(Int64Array::from(vec![Some(0)])) as ArrayRef;
+        let is_err = gen_range(&[args1, args2, args3]).is_err();
+        assert!(is_err)
     }
 
     #[test]

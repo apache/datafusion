@@ -16,20 +16,20 @@
 // under the License.
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
-use arrow::array::new_null_array;
 use arrow::compute::kernels::cast_utils::parse_interval_month_day_nano;
 use arrow::datatypes::DECIMAL128_MAX_PRECISION;
 use arrow_schema::DataType;
 use datafusion_common::{
     not_impl_err, plan_err, DFSchema, DataFusionError, Result, ScalarValue,
 };
+use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::expr::{BinaryExpr, Placeholder};
 use datafusion_expr::{lit, Expr, Operator};
+use datafusion_expr::{BuiltinScalarFunction, ScalarFunctionDefinition};
 use log::debug;
 use sqlparser::ast::{BinaryOperator, Expr as SQLExpr, Interval, Value};
 use sqlparser::parser::ParserError::ParserError;
 use std::borrow::Cow;
-use std::collections::HashSet;
 
 impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     pub(crate) fn parse_value(
@@ -138,9 +138,22 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 schema,
                 &mut PlannerContext::new(),
             )?;
+
             match value {
-                Expr::Literal(scalar) => {
-                    values.push(scalar);
+                Expr::Literal(_) => {
+                    values.push(value);
+                }
+                Expr::ScalarFunction(ScalarFunction {
+                    func_def: ScalarFunctionDefinition::BuiltIn { fun, .. },
+                    ..
+                }) => {
+                    if fun == BuiltinScalarFunction::MakeArray {
+                        values.push(value);
+                    } else {
+                        return not_impl_err!(
+                            "ScalarFunctions without MakeArray are not supported: {value}"
+                        );
+                    }
                 }
                 _ => {
                     return not_impl_err!(
@@ -150,18 +163,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             }
         }
 
-        let data_types: HashSet<DataType> =
-            values.iter().map(|e| e.data_type()).collect();
-
-        if data_types.is_empty() {
-            Ok(lit(ScalarValue::List(new_null_array(&DataType::Null, 0))))
-        } else if data_types.len() > 1 {
-            not_impl_err!("Arrays with different types are not supported: {data_types:?}")
-        } else {
-            let data_type = values[0].data_type();
-            let arr = ScalarValue::new_list(&values, &data_type);
-            Ok(lit(ScalarValue::List(arr)))
-        }
+        Ok(Expr::ScalarFunction(ScalarFunction::new(
+            BuiltinScalarFunction::MakeArray,
+            values,
+        )))
     }
 
     /// Convert a SQL interval expression to a DataFusion logical plan

@@ -265,6 +265,14 @@ AS VALUES
   (make_array([28, 29, 30], [31, 32, 33], [34, 35, 36], [28, 29, 30], [31, 32, 33], [34, 35, 36], [28, 29, 30], [31, 32, 33], [34, 35, 36], [28, 29, 30]), [28, 29, 30], [37, 38, 39], 10)
 ;
 
+query ?
+select [1, true, null]
+----
+[1, 1, ]
+
+query error DataFusion error: This feature is not implemented: ScalarFunctions without MakeArray are not supported: now()
+SELECT [now()]
+
 query TTT
 select arrow_typeof(column1), arrow_typeof(column2), arrow_typeof(column3) from arrays;
 ----
@@ -2052,7 +2060,7 @@ drop table arrays_with_repeating_elements_for_union;
 query ?
 select array_union([], []);
 ----
-NULL
+[]
 
 # array_union scalar function #7
 query ?
@@ -2070,7 +2078,7 @@ select array_union([null], [null]);
 query ?
 select array_union(null, []);
 ----
-NULL
+[]
 
 # array_union scalar function #10
 query ?
@@ -2725,6 +2733,26 @@ SELECT  array_intersect(make_array(1,2,3), make_array(2,3,4)),
 ----
 [2, 3] [] [aa, cc] [true] [2.2, 3.3] [[2, 2], [3, 3]]
 
+query ?
+select array_intersect([], []);
+----
+[]
+
+query ?
+select array_intersect([], null);
+----
+[]
+
+query ?
+select array_intersect(null, []);
+----
+[]
+
+query ?
+select array_intersect(null, null);
+----
+NULL
+
 query ??????
 SELECT  list_intersect(make_array(1,2,3), make_array(2,3,4)),
         list_intersect(make_array(1,3,5), make_array(2,4,6)),
@@ -2754,15 +2782,16 @@ from arrays_range;
 [0, 1, 2, 3, 4, 5, 6, 7, 8, 9] [3, 4, 5, 6, 7, 8, 9] [3, 5, 7, 9]
 [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12] [4, 5, 6, 7, 8, 9, 10, 11, 12] [4, 7, 10]
 
-query ?????
+query ??????
 select range(5),
        range(2, 5),
        range(2, 10, 3),
        range(1, 5, -1),
-       range(1, -5, 1)
+       range(1, -5, 1),
+       range(1, -5, -1)
 ;
 ----
-[0, 1, 2, 3, 4] [2, 3, 4] [2, 5, 8] [1] []
+[0, 1, 2, 3, 4] [2, 3, 4] [2, 5, 8] [] [] [1, 0, -1, -2, -3, -4]
 
 query ???
 select generate_series(5),
@@ -2879,6 +2908,26 @@ NULL
 
 statement ok
 drop table array_except_table_bool;
+
+query ?
+select array_except([], null);
+----
+[]
+
+query ?
+select array_except([], []);
+----
+[]
+
+query ?
+select array_except(null, []);
+----
+NULL
+
+query ?
+select array_except(null, null)
+----
+NULL
 
 ### Array operators tests
 

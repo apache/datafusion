@@ -742,7 +742,7 @@ async fn test_arrow_typeof() -> Result<()> {
         "+-----------------------------------------------------------------------+",
         "| arrow_typeof(date_trunc(Utf8(\"microsecond\"),to_timestamp(Int64(61)))) |",
         "+-----------------------------------------------------------------------+",
-        "| Timestamp(Second, None)                                               |",
+        "| Timestamp(Nanosecond, None)                                           |",
         "+-----------------------------------------------------------------------+",
     ];
     assert_batches_eq!(expected, &actual);

@@ -455,3 +455,68 @@ pub fn translate<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
 
     Ok(Arc::new(result) as ArrayRef)
 }
+
+/// Returns the substring from str before count occurrences of the delimiter delim. If count is positive, everything to the left of the final delimiter (counting from the left) is returned. If count is negative, everything to the right of the final delimiter (counting from the right) is returned.
+/// SUBSTRING_INDEX('www.apache.org', '.', 1) = www
+/// SUBSTRING_INDEX('www.apache.org', '.', 2) = www.apache
+/// SUBSTRING_INDEX('www.apache.org', '.', -2) = apache.org
+/// SUBSTRING_INDEX('www.apache.org', '.', -1) = org
+pub fn substr_index<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
+    if args.len() != 3 {
+        return internal_err!(
+            "substr_index was called with {} arguments. It requires 3.",
+            args.len()
+        );
+    }
+
+    let string_array = as_generic_string_array::<T>(&args[0])?;
+    let delimiter_array = as_generic_string_array::<T>(&args[1])?;
+    let count_array = as_int64_array(&args[2])?;
+
+    let result = string_array
+        .iter()
+        .zip(delimiter_array.iter())
+        .zip(count_array.iter())
+        .map(|((string, delimiter), n)| match (string, delimiter, n) {
+            (Some(string), Some(delimiter), Some(n)) => {
+                let mut res = String::new();
+                match n {
+                    0 => {
+                        "".to_string();
+                    }
+                    _other => {
+                        if n > 0 {
+                            let idx = string
+                                .split(delimiter)
+                                .take(n as usize)
+                                .fold(0, |len, x| len + x.len() + delimiter.len())
+                                - delimiter.len();
+                            res.push_str(if idx >= string.len() {
+                                string
+                            } else {
+                                &string[..idx]
+                            });
+                        } else {
+                            let idx = (string.split(delimiter).take((-n) as usize).fold(
+                                string.len() as isize,
+                                |len, x| {
+                                    len - x.len() as isize - delimiter.len() as isize
+                                },
+                            ) + delimiter.len() as isize)
+                                as usize;
+                            res.push_str(if idx >= string.len() {
+                                string
+                            } else {
+                                &string[idx..]
+                            });
+                        }
+                    }
+                }
+                Some(res)
+            }
+            _ => None,
+        })
+        .collect::<GenericStringArray<T>>();
+
+    Ok(Arc::new(result) as ArrayRef)
+}

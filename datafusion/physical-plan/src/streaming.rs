@@ -26,6 +26,7 @@ use crate::stream::RecordBatchStreamAdapter;
 use crate::{ExecutionPlan, Partitioning, SendableRecordBatchStream};
 
 use arrow::datatypes::SchemaRef;
+use arrow_schema::Schema;
 use datafusion_common::{internal_err, plan_err, DataFusionError, Result};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{EquivalenceProperties, LexOrdering, PhysicalSortExpr};
@@ -70,9 +71,9 @@ impl StreamingTableExec {
     ) -> Result<Self> {
         for x in partitions.iter() {
             let partition_schema = x.schema();
-            if !schema.contains(partition_schema) {
+            if !schema.eq(partition_schema) {
                 debug!(
-                    "target schema does not contain partition schema. \
+                    "Target schema does not match with partition schema. \
                         Target_schema: {schema:?}. Partiton Schema: {partition_schema:?}"
                 );
                 return plan_err!("Mismatch between schema and batches");
@@ -91,6 +92,30 @@ impl StreamingTableExec {
             projected_output_ordering: projected_output_ordering.into_iter().collect(),
             infinite,
         })
+    }
+
+    pub fn partitions(&self) -> &Vec<Arc<dyn PartitionStream>> {
+        &self.partitions
+    }
+
+    pub fn partition_schema(&self) -> &SchemaRef {
+        self.partitions[0].schema()
+    }
+
+    pub fn projection(&self) -> &Option<Arc<[usize]>> {
+        &self.projection
+    }
+
+    pub fn projected_schema(&self) -> &Schema {
+        &self.projected_schema
+    }
+
+    pub fn projected_output_ordering(&self) -> impl IntoIterator<Item = LexOrdering> {
+        self.projected_output_ordering.clone()
+    }
+
+    pub fn is_infinite(&self) -> bool {
+        self.infinite
     }
 }
 
