@@ -942,7 +942,7 @@ select array_slice(make_array(1, 2, 3, 4, 5), 0, -4), array_slice(make_array('h'
 
 # array_slice scalar function #13 (with negative number and NULL)
 query error
-select array_slice(make_array(1, 2, 3, 4, 5), 2, NULL), array_slice(make_array('h', 'e', 'l', 'l', 'o'), 3, NULL);
+select array_slice(make_array(1, 2, 3, 4, 5), -2, NULL), array_slice(make_array('h', 'e', 'l', 'l', 'o'), -3, NULL);
 
 # array_slice scalar function #14 (with NULL and negative number)
 query error
@@ -979,10 +979,10 @@ select array_slice(make_array(1, 2, 3, 4, 5), -7, -2), array_slice(make_array('h
 [] []
 
 # array_slice scalar function #20 (with negative indexes; nested array)
-query ?
-select array_slice(make_array(make_array(1, 2, 3, 4, 5), make_array(6, 7, 8, 9, 10)), -2, -1);
+query ??
+select array_slice(make_array(make_array(1, 2, 3, 4, 5), make_array(6, 7, 8, 9, 10)), -2, -1), array_slice(make_array(make_array(1, 2, 3), make_array(6, 7, 8)), -1, -1);
 ----
-[[1, 2, 3, 4, 5]]
+[[1, 2, 3, 4, 5]] []
 
 # array_slice scalar function #21 (with first positive index and last negative index)
 query ??
@@ -2395,11 +2395,17 @@ select array_length(make_array()), array_length(make_array(), 1), array_length(m
 ----
 0 0 NULL
 
-# list_length scalar function #6 (function alias `array_length`)
+# array_length scalar function #6 nested array
 query III
-select list_length(make_array(1, 2, 3, 4, 5)), list_length(make_array(1, 2, 3)), list_length(make_array([1, 2], [3, 4], [5, 6]));
+select array_length([[1, 2, 3, 4], [5, 6, 7, 8]]), array_length([[1, 2, 3, 4], [5, 6, 7, 8]], 1), array_length([[1, 2, 3, 4], [5, 6, 7, 8]], 2);
 ----
-5 3 3
+2 2 4
+
+# list_length scalar function #7 (function alias `array_length`)
+query IIII
+select list_length(make_array(1, 2, 3, 4, 5)), list_length(make_array(1, 2, 3)), list_length(make_array([1, 2], [3, 4], [5, 6])), array_length([[1, 2, 3, 4], [5, 6, 7, 8]], 3);
+----
+5 3 3 NULL
 
 # array_length with columns
 query I
