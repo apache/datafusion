@@ -1100,9 +1100,8 @@ mod test {
 
         let empty = empty_with_type(DataType::Int64);
         let plan = LogicalPlan::Projection(Projection::try_new(vec![expr], empty)?);
-        let ret = assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), &plan, "");
-        let err = ret.unwrap_err().to_string();
-        assert!(err.contains("Cannot infer common argument type for comparison operation Int64 IS DISTINCT FROM Boolean"), "{err}");
+        let expected = "Projection: CAST(a AS Boolean) IS TRUE\n  EmptyRelation";
+        assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), &plan, expected)?;
 
         // is not true
         let expr = col("a").is_not_true();
@@ -1202,9 +1201,8 @@ mod test {
 
         let empty = empty_with_type(DataType::Utf8);
         let plan = LogicalPlan::Projection(Projection::try_new(vec![expr], empty)?);
-        let ret = assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), &plan, expected);
-        let err = ret.unwrap_err().to_string();
-        assert!(err.contains("Cannot infer common argument type for comparison operation Utf8 IS DISTINCT FROM Boolean"), "{err}");
+        let expected = "Projection: CAST(a AS Boolean) IS UNKNOWN\n  EmptyRelation";
+        assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), &plan, expected)?;
 
         // is not unknown
         let expr = col("a").is_not_unknown();
