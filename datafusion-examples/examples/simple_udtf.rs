@@ -179,7 +179,9 @@ impl TableFunctionImpl for LocalCsvTableFunc {
 
 fn read_csv_batches(csv_path: impl AsRef<Path>) -> Result<(SchemaRef, Vec<RecordBatch>)> {
     let mut file = File::open(csv_path)?;
-    let (schema, _) = Format::default().infer_schema(&mut file, None)?;
+    let (schema, _) = Format::default()
+        .with_header(true)
+        .infer_schema(&mut file, None)?;
     file.rewind()?;
 
     let reader = ReaderBuilder::new(Arc::new(schema.clone()))
