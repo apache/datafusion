@@ -501,10 +501,11 @@ async fn simple_intersect() -> Result<()> {
     assert_expected_plan(
         "SELECT COUNT(*) FROM (SELECT data.a FROM data INTERSECT SELECT data2.a FROM data2);",
         "Aggregate: groupBy=[[]], aggr=[[COUNT(UInt8(1))]]\
-         \n  LeftSemi Join: data.a = data2.a\
-         \n    Aggregate: groupBy=[[data.a]], aggr=[[]]\
-         \n      TableScan: data projection=[a]\
-         \n    TableScan: data2 projection=[a]",
+         \n  Projection: \
+         \n    LeftSemi Join: data.a = data2.a\
+         \n      Aggregate: groupBy=[[data.a]], aggr=[[]]\
+         \n        TableScan: data projection=[a]\
+         \n      TableScan: data2 projection=[a]",
     )
         .await
 }
@@ -514,10 +515,11 @@ async fn simple_intersect_table_reuse() -> Result<()> {
     assert_expected_plan(
         "SELECT COUNT(*) FROM (SELECT data.a FROM data INTERSECT SELECT data.a FROM data);",
         "Aggregate: groupBy=[[]], aggr=[[COUNT(UInt8(1))]]\
-         \n  LeftSemi Join: data.a = data.a\
-         \n    Aggregate: groupBy=[[data.a]], aggr=[[]]\
-         \n      TableScan: data projection=[a]\
-         \n    TableScan: data projection=[a]",
+         \n  Projection: \
+         \n    LeftSemi Join: data.a = data.a\
+         \n      Aggregate: groupBy=[[data.a]], aggr=[[]]\
+         \n        TableScan: data projection=[a]\
+         \n      TableScan: data projection=[a]",
     )
         .await
 }
