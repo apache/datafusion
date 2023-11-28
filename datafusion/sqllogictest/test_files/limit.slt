@@ -379,11 +379,26 @@ SELECT COUNT(*) FROM (SELECT a FROM t1 WHERE a > 3 LIMIT 3 OFFSET 6);
 ----
 1
 
-# generate BIGINT data from 1 to 1000
+# generate BIGINT data from 1 to 1000 in multiple partitions
 statement ok
 CREATE TABLE t1000 (i BIGINT) AS
 WITH t AS (VALUES (0), (0), (0), (0), (0), (0), (0), (0), (0), (0))
 SELECT ROW_NUMBER() OVER (PARTITION BY t1.column1) FROM t t1, t t2, t t3;
+
+# verify that there are multiple partitions in the input (i.e. MemoryExec says
+# there are 4 partitions) so that this tests multi-partition limit.
+query TT
+EXPLAIN SELECT DISTINCT i FROM t1000;
+----
+logical_plan
+Aggregate: groupBy=[[t1000.i]], aggr=[[]]
+--TableScan: t1000 projection=[i]
+physical_plan
+AggregateExec: mode=FinalPartitioned, gby=[i@0 as i], aggr=[]
+--CoalesceBatchesExec: target_batch_size=8192
+----RepartitionExec: partitioning=Hash([i@0], 4), input_partitions=4
+------AggregateExec: mode=Partial, gby=[i@0 as i], aggr=[]
+--------MemoryExec: partitions=4, partition_sizes=[1, 1, 2, 1]
 
 query I
 SELECT i FROM t1000 ORDER BY i DESC LIMIT 3;
