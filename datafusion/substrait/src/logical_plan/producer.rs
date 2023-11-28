@@ -33,12 +33,13 @@ use datafusion::common::{exec_err, internal_err, not_impl_err};
 #[allow(unused_imports)]
 use datafusion::logical_expr::aggregate_function;
 use datafusion::logical_expr::expr::{
-    Alias, BinaryExpr, Case, Cast, GroupingSet, InList,
+    Alias, BinaryExpr, Case, Cast, GroupingSet, InList, InSubquery,
     ScalarFunction as DFScalarFunction, ScalarFunctionDefinition, Sort, WindowFunction,
 };
 use datafusion::logical_expr::{expr, Between, JoinConstraint, LogicalPlan, Operator};
 use datafusion::prelude::Expr;
 use prost_types::Any as ProtoAny;
+use substrait::proto::expression::subquery::InPredicate;
 use substrait::proto::expression::window_function::BoundsType;
 use substrait::{
     proto::{
@@ -54,7 +55,8 @@ use substrait::{
             window_function::bound::Kind as BoundKind,
             window_function::Bound,
             FieldReference, IfThen, Literal, MaskExpression, ReferenceSegment, RexType,
-            ScalarFunction, SingularOrList, WindowFunction as SubstraitWindowFunction,
+            ScalarFunction, SingularOrList, Subquery,
+            WindowFunction as SubstraitWindowFunction,
         },
         extensions::{
             self,
@@ -1100,6 +1102,47 @@ pub fn to_substrait_rex(
                     options: vec![],
                 })),
             })
+        }
+        Expr::InSubquery(InSubquery {
+            expr,
+            subquery,
+            negated,
+        }) => {
+            let substrait_expr =
+                to_substrait_rex(expr, schema, col_ref_offset, extension_info)?;
+            let ctx = SessionContext::new();
+            let subquery_plan =
+                to_substrait_rel(subquery.subquery.as_ref(), &ctx, extension_info)?;
+            let substrait_subquery = Expression {
+                rex_type: Some(RexType::Subquery(Box::new(Subquery {
+                    subquery_type: Some(
+                        substrait::proto::expression::subquery::SubqueryType::InPredicate(
+                            Box::new(InPredicate {
+                                needles: (vec![substrait_expr]),
+                                haystack: Some(subquery_plan),
+                            }),
+                        ),
+                    ),
+                }))),
+            };
+            if *negated {
+                let function_anchor =
+                    _register_function("not".to_string(), extension_info);
+
+                Ok(Expression {
+                    rex_type: Some(RexType::ScalarFunction(ScalarFunction {
+                        function_reference: function_anchor,
+                        arguments: vec![FunctionArgument {
+                            arg_type: Some(ArgType::Value(substrait_subquery)),
+                        }],
+                        output_type: None,
+                        args: vec![],
+                        options: vec![],
+                    })),
+                })
+            } else {
+                Ok(substrait_subquery)
+            }
         }
         _ => {
             not_impl_err!("Unsupported expression: {expr:?}")
