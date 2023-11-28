@@ -800,7 +800,7 @@ mod tests {
     }
 
     #[test]
-    fn case_test_incompatible() -> Result<()> {
+    fn case_test_with_coercion() -> Result<()> {
         // 1 then is int64
         // 2 then is boolean
         let batch = case_test_batch()?;
@@ -828,7 +828,8 @@ mod tests {
             None,
             schema.as_ref(),
         );
-        assert!(expr.is_err());
+        // expr is ok since boolean coercion is supported
+        assert!(expr.is_ok());
 
         // then 1 is int32
         // then 2 is int64
