@@ -1239,34 +1239,4 @@ mod test {
             unreachable!();
         }
     }
-
-    #[test]
-    fn encode_function_definitions() {
-        if let Expr::ScalarFunction(ScalarFunction {
-            func_def: ScalarFunctionDefinition::BuiltIn { fun, .. },
-            args,
-        }) = encode(col("tableA.a"), lit("base64"))
-        {
-            let name = BuiltinScalarFunction::Encode;
-            assert_eq!(name, fun);
-            assert_eq!(2, args.len());
-        } else {
-            unreachable!();
-        }
-    }
-
-    #[test]
-    fn decode_function_definitions() {
-        if let Expr::ScalarFunction(ScalarFunction {
-            func_def: ScalarFunctionDefinition::BuiltIn { fun, .. },
-            args,
-        }) = decode(col("tableA.a"), lit("hex"))
-        {
-            let name = BuiltinScalarFunction::Decode;
-            assert_eq!(name, fun);
-            assert_eq!(2, args.len());
-        } else {
-            unreachable!();
-        }
-    }
 }
