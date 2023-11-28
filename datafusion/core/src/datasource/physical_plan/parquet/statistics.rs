@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! [`RowGroupStatisticsConverter`] tp converts parquet RowGroup statistics to arrow [`ArrayRef`].
+//! [`min_statistics`] and [`max_statistics`] convert statistics in parquet format to arrow [`ArrayRef`].
 
 use arrow::{array::ArrayRef, datatypes::DataType};
 use arrow_array::new_empty_array;
@@ -128,7 +128,7 @@ macro_rules! get_statistic {
 /// Lookups up the parquet column by name
 ///
 /// Returns the parquet column index and the corresponding arrow field
-pub fn parquet_column<'a>(
+pub(crate) fn parquet_column<'a>(
     parquet_schema: &SchemaDescriptor,
     arrow_schema: &'a Schema,
     name: &str,
@@ -151,7 +151,7 @@ pub fn parquet_column<'a>(
 }
 
 /// Extracts the min statistics from an iterator of [`ParquetStatistics`] to an [`ArrayRef`]
-pub fn min_statistics<'a, I: Iterator<Item = Option<&'a ParquetStatistics>>>(
+pub(crate) fn min_statistics<'a, I: Iterator<Item = Option<&'a ParquetStatistics>>>(
     data_type: &DataType,
     iterator: I,
 ) -> Result<ArrayRef> {
@@ -161,7 +161,7 @@ pub fn min_statistics<'a, I: Iterator<Item = Option<&'a ParquetStatistics>>>(
 }
 
 /// Extracts the max statistics from an iterator of [`ParquetStatistics`] to an [`ArrayRef`]
-pub fn max_statistics<'a, I: Iterator<Item = Option<&'a ParquetStatistics>>>(
+pub(crate) fn max_statistics<'a, I: Iterator<Item = Option<&'a ParquetStatistics>>>(
     data_type: &DataType,
     iterator: I,
 ) -> Result<ArrayRef> {

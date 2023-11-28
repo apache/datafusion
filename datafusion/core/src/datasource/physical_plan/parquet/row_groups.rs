@@ -52,7 +52,8 @@ use super::ParquetFileMetrics;
 /// If an index IS present in the returned Vec it means the predicate
 /// did not filter out that row group.
 ///
-/// Note: This method currently ignores ColumnOrder (#8342)
+/// Note: This method currently ignores ColumnOrder
+/// <https://github.com/apache/arrow-datafusion/issues/8335>
 pub(crate) fn prune_row_groups_by_statistics(
     parquet_schema: &SchemaDescriptor,
     groups: &[RowGroupMetaData],
