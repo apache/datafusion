@@ -150,6 +150,7 @@ impl<'a> Parser<'a> {
             Token::Dictionary => self.parse_dictionary(),
             Token::List => self.parse_list(),
             Token::LargeList => self.parse_large_list(),
+            Token::FixedSizeList => self.parse_fixed_size_list(),
             tok => Err(make_error(
                 self.val,
                 &format!("finding next type, got unexpected '{tok}'"),
@@ -175,6 +176,18 @@ impl<'a> Parser<'a> {
         Ok(DataType::LargeList(Arc::new(Field::new(
             "item", data_type, true,
         ))))
+    }
+
+    /// Parses the FixedSizeList type
+    fn parse_fixed_size_list(&mut self) -> Result<DataType> {
+        self.expect_token(Token::LParen)?;
+        let length = self.parse_i32("FixedSizeList")?;
+        self.expect_token(Token::Comma)?;
+        let data_type = self.parse_next_type()?;
+        self.expect_token(Token::RParen)?;
+        Ok(DataType::FixedSizeList(Arc::new(Field::new(
+            "item", data_type, true,
+        )), length))
     }
 
     /// Parses the next timeunit
@@ -508,6 +521,7 @@ impl<'a> Tokenizer<'a> {
 
             "List" => Token::List,
             "LargeList" => Token::LargeList,
+            "FixedSizeList" => Token::FixedSizeList,
 
             "Second" => Token::TimeUnit(TimeUnit::Second),
             "Millisecond" => Token::TimeUnit(TimeUnit::Millisecond),
@@ -598,6 +612,7 @@ enum Token {
     DoubleQuotedString(String),
     List,
     LargeList,
+    FixedSizeList,
 }
 
 impl Display for Token {
@@ -606,6 +621,7 @@ impl Display for Token {
             Token::SimpleType(t) => write!(f, "{t}"),
             Token::List => write!(f, "List"),
             Token::LargeList => write!(f, "LargeList"),
+            Token::FixedSizeList => write!(f, "FixedSizeList"),
             Token::Timestamp => write!(f, "Timestamp"),
             Token::Time32 => write!(f, "Time32"),
             Token::Time64 => write!(f, "Time64"),
