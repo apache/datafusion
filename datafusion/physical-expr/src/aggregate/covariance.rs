@@ -116,6 +116,10 @@ impl AggregateExpr for Covariance {
     fn name(&self) -> &str {
         &self.name
     }
+
+    fn func_name(&self) -> &str {
+        "COVAR"
+    }
 }
 
 impl PartialEq<dyn Any> for Covariance {
@@ -194,6 +198,10 @@ impl AggregateExpr for CovariancePop {
 
     fn name(&self) -> &str {
         &self.name
+    }
+
+    fn func_name(&self) -> &str {
+        "COVAR_POP"
     }
 }
 

@@ -86,6 +86,10 @@ impl AggregateExpr for Grouping {
     fn name(&self) -> &str {
         &self.name
     }
+
+    fn func_name(&self) -> &str {
+        "GROUPING"
+    }
 }
 
 impl PartialEq<dyn Any> for Grouping {

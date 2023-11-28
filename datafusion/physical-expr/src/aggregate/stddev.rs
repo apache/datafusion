@@ -101,6 +101,10 @@ impl AggregateExpr for Stddev {
     fn name(&self) -> &str {
         &self.name
     }
+
+    fn func_name(&self) -> &str {
+        "STD_DEV"
+    }
 }
 
 impl PartialEq<dyn Any> for Stddev {
@@ -168,6 +172,10 @@ impl AggregateExpr for StddevPop {
 
     fn name(&self) -> &str {
         &self.name
+    }
+
+    fn func_name(&self) -> &str {
+        "STD_DEV_POP"
     }
 }
 

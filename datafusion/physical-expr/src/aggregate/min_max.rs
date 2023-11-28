@@ -172,6 +172,10 @@ impl AggregateExpr for Max {
         &self.name
     }
 
+    fn func_name(&self) -> &str {
+        "MAX"
+    }
+
     fn groups_accumulator_supported(&self) -> bool {
         use DataType::*;
         matches!(
@@ -894,6 +898,10 @@ impl AggregateExpr for Min {
 
     fn name(&self) -> &str {
         &self.name
+    }
+
+    fn func_name(&self) -> &str {
+        "MIN"
     }
 
     fn groups_accumulator_supported(&self) -> bool {

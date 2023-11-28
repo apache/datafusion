@@ -96,6 +96,10 @@ impl AggregateExpr for ArrayAgg {
     fn name(&self) -> &str {
         &self.name
     }
+
+    fn func_name(&self) -> &str {
+        "ARRAY_AGG"
+    }
 }
 
 impl PartialEq<dyn Any> for ArrayAgg {

@@ -106,6 +106,10 @@ impl AggregateExpr for Variance {
     fn name(&self) -> &str {
         &self.name
     }
+
+    fn func_name(&self) -> &str {
+        "VAR"
+    }
 }
 
 impl PartialEq<dyn Any> for Variance {
@@ -177,6 +181,10 @@ impl AggregateExpr for VariancePop {
 
     fn name(&self) -> &str {
         &self.name
+    }
+
+    fn func_name(&self) -> &str {
+        "VAR_POP"
     }
 }
 

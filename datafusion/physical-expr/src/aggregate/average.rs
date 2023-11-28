@@ -142,6 +142,10 @@ impl AggregateExpr for Avg {
         &self.name
     }
 
+    fn func_name(&self) -> &str {
+        "AVG"
+    }
+
     fn reverse_expr(&self) -> Option<Arc<dyn AggregateExpr>> {
         Some(Arc::new(self.clone()))
     }

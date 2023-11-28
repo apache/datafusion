@@ -241,6 +241,10 @@ impl AggregateExpr for Count {
         &self.name
     }
 
+    fn func_name(&self) -> &str {
+        "COUNT"
+    }
+
     fn groups_accumulator_supported(&self) -> bool {
         // groups accumulator only supports `COUNT(c1)`, not
         // `COUNT(c1, c2)`, etc

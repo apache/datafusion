@@ -130,6 +130,10 @@ impl AggregateExpr for BoolAnd {
         &self.name
     }
 
+    fn func_name(&self) -> &str {
+        "BOOL_AND"
+    }
+
     fn groups_accumulator_supported(&self) -> bool {
         true
     }
@@ -261,6 +265,10 @@ impl AggregateExpr for BoolOr {
 
     fn name(&self) -> &str {
         &self.name
+    }
+
+    fn func_name(&self) -> &str {
+        "BOOL_OR"
     }
 
     fn groups_accumulator_supported(&self) -> bool {

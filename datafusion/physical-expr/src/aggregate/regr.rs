@@ -170,6 +170,10 @@ impl AggregateExpr for Regr {
     fn name(&self) -> &str {
         &self.name
     }
+
+    fn func_name(&self) -> &str {
+        "REGR"
+    }
 }
 
 impl PartialEq<dyn Any> for Regr {

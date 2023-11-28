@@ -125,6 +125,10 @@ impl AggregateExpr for Sum {
         &self.name
     }
 
+    fn func_name(&self) -> &str {
+        "SUM"
+    }
+
     fn groups_accumulator_supported(&self) -> bool {
         true
     }

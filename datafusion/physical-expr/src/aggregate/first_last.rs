@@ -115,6 +115,10 @@ impl AggregateExpr for FirstValue {
         &self.name
     }
 
+    fn func_name(&self) -> &str {
+        "FIRST_VALUE"
+    }
+
     fn reverse_expr(&self) -> Option<Arc<dyn AggregateExpr>> {
         let name = if self.name.starts_with("FIRST") {
             format!("LAST{}", &self.name[5..])
@@ -337,6 +341,10 @@ impl AggregateExpr for LastValue {
 
     fn name(&self) -> &str {
         &self.name
+    }
+
+    fn func_name(&self) -> &str {
+        "LAST_VALUE"
     }
 
     fn reverse_expr(&self) -> Option<Arc<dyn AggregateExpr>> {

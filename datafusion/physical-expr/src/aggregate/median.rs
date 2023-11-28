@@ -111,6 +111,10 @@ impl AggregateExpr for Median {
     fn name(&self) -> &str {
         &self.name
     }
+
+    fn func_name(&self) -> &str {
+        "MEDIAN"
+    }
 }
 
 impl PartialEq<dyn Any> for Median {

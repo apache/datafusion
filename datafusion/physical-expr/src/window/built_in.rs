@@ -102,8 +102,8 @@ impl WindowExpr for BuiltInWindowExpr {
         self
     }
 
-    fn name(&self) -> &str {
-        self.expr.name()
+    fn name(&self) -> String {
+        self.expr.display_name()
     }
 
     fn field(&self) -> Result<Field> {

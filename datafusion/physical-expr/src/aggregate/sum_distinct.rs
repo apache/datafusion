@@ -91,6 +91,10 @@ impl AggregateExpr for DistinctSum {
         &self.name
     }
 
+    fn func_name(&self) -> &str {
+        "SUM"
+    }
+
     fn create_accumulator(&self) -> Result<Box<dyn Accumulator>> {
         macro_rules! helper {
             ($t:ty, $dt:expr) => {

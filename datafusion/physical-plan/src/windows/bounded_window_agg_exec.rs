@@ -195,12 +195,7 @@ impl DisplayAs for BoundedWindowAggExec {
                     .window_expr
                     .iter()
                     .map(|e| {
-                        format!(
-                            "{}: {:?}, frame: {:?}",
-                            e.name().to_owned(),
-                            e.field(),
-                            e.get_window_frame()
-                        )
+                        format!("{}, frame: {:?}", e.display_name(), e.get_window_frame())
                     })
                     .collect();
                 let mode = &self.partition_search_mode;

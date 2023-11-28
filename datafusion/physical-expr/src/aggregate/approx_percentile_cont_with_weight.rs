@@ -99,6 +99,10 @@ impl AggregateExpr for ApproxPercentileContWithWeight {
     fn name(&self) -> &str {
         self.approx_percentile_cont.name()
     }
+
+    fn func_name(&self) -> &str {
+        "APPROX_PERCENTILE_CONT"
+    }
 }
 
 impl PartialEq<dyn Any> for ApproxPercentileContWithWeight {

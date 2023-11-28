@@ -130,12 +130,7 @@ impl DisplayAs for WindowAggExec {
                     .window_expr
                     .iter()
                     .map(|e| {
-                        format!(
-                            "{}: {:?}, frame: {:?}",
-                            e.name().to_owned(),
-                            e.field(),
-                            e.get_window_frame()
-                        )
+                        format!("{}, frame: {:?}", e.display_name(), e.get_window_frame())
                     })
                     .collect();
                 write!(f, "wdw=[{}]", g.join(", "))?;

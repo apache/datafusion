@@ -100,6 +100,10 @@ impl AggregateExpr for StringAgg {
     fn name(&self) -> &str {
         &self.name
     }
+
+    fn func_name(&self) -> &str {
+        "STRING_AGG"
+    }
 }
 
 impl PartialEq<dyn Any> for StringAgg {

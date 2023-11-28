@@ -102,6 +102,21 @@ pub trait AggregateExpr: Send + Sync + Debug + PartialEq<dyn Any> {
         "AggregateExpr: default name"
     }
 
+    /// Returns Aggregate Fucntion Name
+    fn func_name(&self) -> &str;
+
+    /// Human readable name such as `"MIN(c2)"` or `"RANK()"`. The default
+    /// implementation returns `"FUNCTION_NAME(args, [PARTITION BY[exprs], ORDER BY[sort exprs]])"`
+    fn display_name(&self) -> String {
+        let fn_name = self.func_name().to_string();
+        let exprs = self
+            .expressions()
+            .iter()
+            .map(|expr| format!("{expr}"))
+            .collect::<Vec<_>>();
+        format!("{fn_name}({})", exprs.join(", "))
+    }
+
     /// If the aggregate expression has a specialized
     /// [`GroupsAccumulator`] implementation. If this returns true,
     /// `[Self::create_groups_accumulator`] will be called.

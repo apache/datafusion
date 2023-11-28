@@ -109,6 +109,10 @@ impl AggregateExpr for BitAnd {
         &self.name
     }
 
+    fn func_name(&self) -> &str {
+        "BIT_AND"
+    }
+
     fn groups_accumulator_supported(&self) -> bool {
         true
     }
@@ -274,6 +278,10 @@ impl AggregateExpr for BitOr {
         &self.name
     }
 
+    fn func_name(&self) -> &str {
+        "BIT_OR"
+    }
+
     fn groups_accumulator_supported(&self) -> bool {
         true
     }
@@ -433,6 +441,10 @@ impl AggregateExpr for BitXor {
 
     fn name(&self) -> &str {
         &self.name
+    }
+
+    fn func_name(&self) -> &str {
+        "BIT_XOR"
     }
 
     fn groups_accumulator_supported(&self) -> bool {
@@ -595,6 +607,10 @@ impl AggregateExpr for DistinctBitXor {
 
     fn name(&self) -> &str {
         &self.name
+    }
+
+    fn func_name(&self) -> &str {
+        "BIT_XOR"
     }
 }
 

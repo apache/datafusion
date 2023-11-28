@@ -92,6 +92,10 @@ impl AggregateExpr for DistinctCount {
     fn name(&self) -> &str {
         &self.name
     }
+
+    fn func_name(&self) -> &str {
+        "COUNT"
+    }
 }
 
 impl PartialEq<dyn Any> for DistinctCount {

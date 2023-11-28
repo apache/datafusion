@@ -114,6 +114,10 @@ impl AggregateExpr for ApproxDistinct {
     fn name(&self) -> &str {
         &self.name
     }
+
+    fn func_name(&self) -> &str {
+        "APPROX_DISTINCT"
+    }
 }
 
 impl PartialEq<dyn Any> for ApproxDistinct {

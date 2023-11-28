@@ -27,6 +27,7 @@ use crate::window::window_expr::{NthValueKind, NthValueState};
 use crate::window::BuiltInWindowFunctionExpr;
 use crate::PhysicalExpr;
 
+use crate::expressions::Literal;
 use arrow::array::{Array, ArrayRef};
 use arrow::datatypes::{DataType, Field};
 use datafusion_common::{exec_err, ScalarValue};
@@ -108,7 +109,15 @@ impl BuiltInWindowFunctionExpr for NthValue {
     }
 
     fn expressions(&self) -> Vec<Arc<dyn PhysicalExpr>> {
-        vec![self.expr.clone()]
+        match self.kind {
+            NthValueKind::Nth(index) => {
+                vec![
+                    self.expr.clone(),
+                    Arc::new(Literal::new(ScalarValue::Int64(Some(index)))) as _,
+                ]
+            }
+            _ => vec![self.expr.clone()],
+        }
     }
 
     fn name(&self) -> &str {

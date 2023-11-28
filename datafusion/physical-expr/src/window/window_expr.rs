@@ -70,8 +70,32 @@ pub trait WindowExpr: Send + Sync + Debug {
 
     /// Human readable name such as `"MIN(c2)"` or `"RANK()"`. The default
     /// implementation returns placeholder text.
-    fn name(&self) -> &str {
-        "WindowExpr: default name"
+    fn name(&self) -> String {
+        "WindowExpr: default name".to_string()
+    }
+
+    /// Human readable name such as `"MIN(c2)"` or `"RANK()"`. The default
+    /// implementation returns `"FUNCTION_NAME(args, [PARTITION BY[exprs], ORDER BY[sort exprs]])"`
+    fn display_name(&self) -> String {
+        let mut display_name = self.name().to_string();
+        if !self.partition_by().is_empty() {
+            let partition_bys = self
+                .partition_by()
+                .iter()
+                .map(|expr| format!("{}", expr))
+                .collect::<Vec<_>>();
+            display_name =
+                format!("{display_name} PARTITION BY [{}]", partition_bys.join(", "))
+        }
+        if !self.order_by().is_empty() {
+            let order_bys = self
+                .order_by()
+                .iter()
+                .map(|expr| format!("{}", expr))
+                .collect::<Vec<_>>();
+            display_name = format!("{display_name} ORDER BY [{}]", order_bys.join(", "))
+        }
+        display_name
     }
 
     /// Expressions that are passed to the WindowAccumulator.

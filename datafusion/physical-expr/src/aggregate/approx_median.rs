@@ -82,6 +82,10 @@ impl AggregateExpr for ApproxMedian {
     fn name(&self) -> &str {
         &self.name
     }
+
+    fn func_name(&self) -> &str {
+        "APPROX_MEDIAN"
+    }
 }
 
 impl PartialEq<dyn Any> for ApproxMedian {

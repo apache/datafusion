@@ -85,8 +85,8 @@ impl WindowExpr for SlidingAggregateWindowExpr {
         self.aggregate.field()
     }
 
-    fn name(&self) -> &str {
-        self.aggregate.name()
+    fn name(&self) -> String {
+        self.aggregate.display_name()
     }
 
     fn expressions(&self) -> Vec<Arc<dyn PhysicalExpr>> {

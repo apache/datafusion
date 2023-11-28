@@ -166,6 +166,10 @@ impl AggregateExpr for AggregateFunctionExpr {
     fn name(&self) -> &str {
         &self.name
     }
+
+    fn func_name(&self) -> &str {
+        &self.name
+    }
 }
 
 impl PartialEq<dyn Any> for AggregateFunctionExpr {
