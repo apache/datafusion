@@ -38,10 +38,10 @@ use arrow::record_batch::{RecordBatch, RecordBatchOptions};
 use datafusion_common::stats::Precision;
 use datafusion_common::Result;
 use datafusion_execution::TaskContext;
+use datafusion_physical_expr::equivalence::ProjectionMapping;
 use datafusion_physical_expr::expressions::{Literal, UnKnownColumn};
 use datafusion_physical_expr::EquivalenceProperties;
 
-use datafusion_physical_expr::equivalence::ProjectionMapping;
 use futures::stream::{Stream, StreamExt};
 use log::trace;
 
@@ -257,16 +257,12 @@ fn get_field_metadata(
     e: &Arc<dyn PhysicalExpr>,
     input_schema: &Schema,
 ) -> Option<HashMap<String, String>> {
-    let name = if let Some(column) = e.as_any().downcast_ref::<Column>() {
-        column.name()
-    } else {
-        return None;
-    };
-
-    input_schema
-        .field_with_name(name)
-        .ok()
-        .map(|f| f.metadata().clone())
+    // Look up field by index in schema (not NAME as there can be more than one
+    // column with the same name)
+    e.as_any()
+        .downcast_ref::<Column>()
+        .map(|column| input_schema.field(column.index()).metadata())
+        .cloned()
 }
 
 fn stats_projection(

@@ -350,3 +350,65 @@ insert into bad_new_empty_table values (1);
 
 statement ok
 drop table bad_new_empty_table;
+
+
+### Test for specifying column's default value
+
+statement ok
+create table test_column_defaults(
+  a int,
+  b int not null default null,
+  c int default 100*2+300, 
+  d text default lower('DEFAULT_TEXT'),
+  e timestamp default now()
+)
+
+query IIITP
+insert into test_column_defaults values(1, 10, 100, 'ABC', now())
+----
+1
+
+statement error DataFusion error: Execution error: Invalid batch column at '1' has null but schema specifies non-nullable
+insert into test_column_defaults(a) values(2)
+
+query IIITP
+insert into test_column_defaults(b) values(20)
+----
+1
+
+query IIIT rowsort
+select a,b,c,d from test_column_defaults
+----
+1 10 100 ABC
+NULL 20 500 default_text
+
+statement ok
+drop table test_column_defaults
+
+
+# test create table as
+statement ok
+create table test_column_defaults(
+  a int,
+  b int not null default null,
+  c int default 100*2+300, 
+  d text default lower('DEFAULT_TEXT'),
+  e timestamp default now()
+) as values(1, 10, 100, 'ABC', now())
+
+query IIITP
+insert into test_column_defaults(b) values(20)
+----
+1
+
+query IIIT rowsort
+select a,b,c,d from test_column_defaults
+----
+1 10 100 ABC
+NULL 20 500 default_text
+
+statement ok
+drop table test_column_defaults
+
+statement error DataFusion error: Error during planning: Column reference is not allowed in the DEFAULT expression : Schema error: No field named a.
+create table test_column_defaults(a int, b int default a+1)

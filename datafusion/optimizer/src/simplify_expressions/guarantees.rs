@@ -18,11 +18,12 @@
 //! Simplifier implementation for [`ExprSimplifier::with_guarantees()`]
 //!
 //! [`ExprSimplifier::with_guarantees()`]: crate::simplify_expressions::expr_simplifier::ExprSimplifier::with_guarantees
-use datafusion_common::{tree_node::TreeNodeRewriter, DataFusionError, Result};
-use datafusion_expr::{expr::InList, lit, Between, BinaryExpr, Expr};
+
 use std::{borrow::Cow, collections::HashMap};
 
-use datafusion_physical_expr::intervals::{Interval, IntervalBound, NullableInterval};
+use datafusion_common::{tree_node::TreeNodeRewriter, DataFusionError, Result};
+use datafusion_expr::interval_arithmetic::{Interval, NullableInterval};
+use datafusion_expr::{expr::InList, lit, Between, BinaryExpr, Expr};
 
 /// Rewrite expressions to incorporate guarantees.
 ///
@@ -82,10 +83,7 @@ impl<'a> TreeNodeRewriter for GuaranteeRewriter<'a> {
                     high.as_ref(),
                 ) {
                     let expr_interval = NullableInterval::NotNull {
-                        values: Interval::new(
-                            IntervalBound::new(low.clone(), false),
-                            IntervalBound::new(high.clone(), false),
-                        ),
+                        values: Interval::try_new(low.clone(), high.clone())?,
                     };
 
                     let contains = expr_interval.contains(*interval)?;
@@ -146,12 +144,8 @@ impl<'a> TreeNodeRewriter for GuaranteeRewriter<'a> {
 
             // Columns (if interval is collapsed to a single value)
             Expr::Column(_) => {
-                if let Some(col_interval) = self.guarantees.get(&expr) {
-                    if let Some(value) = col_interval.single_value() {
-                        Ok(lit(value))
-                    } else {
-                        Ok(expr)
-                    }
+                if let Some(interval) = self.guarantees.get(&expr) {
+                    Ok(interval.single_value().map_or(expr, lit))
                 } else {
                     Ok(expr)
                 }
@@ -215,7 +209,7 @@ mod tests {
             (
                 col("x"),
                 NullableInterval::NotNull {
-                    values: Default::default(),
+                    values: Interval::make_unbounded(&DataType::Boolean).unwrap(),
                 },
             ),
         ];
@@ -262,18 +256,18 @@ mod tests {
     #[test]
     fn test_inequalities_non_null_bounded() {
         let guarantees = vec![
-            // x ∈ (1, 3] (not null)
+            // x ∈ [1, 3] (not null)
             (
                 col("x"),
                 NullableInterval::NotNull {
-                    values: Interval::make(Some(1_i32), Some(3_i32), (true, false)),
+                    values: Interval::make(Some(1_i32), Some(3_i32)).unwrap(),
                 },
             ),
-            // s.y ∈ (1, 3] (not null)
+            // s.y ∈ [1, 3] (not null)
             (
                 col("s").field("y"),
                 NullableInterval::NotNull {
-                    values: Interval::make(Some(1_i32), Some(3_i32), (true, false)),
+                    values: Interval::make(Some(1_i32), Some(3_i32)).unwrap(),
                 },
             ),
         ];
@@ -282,18 +276,16 @@ mod tests {
 
         // (original_expr, expected_simplification)
         let simplified_cases = &[
-            (col("x").lt_eq(lit(1)), false),
-            (col("s").field("y").lt_eq(lit(1)), false),
+            (col("x").lt(lit(0)), false),
+            (col("s").field("y").lt(lit(0)), false),
             (col("x").lt_eq(lit(3)), true),
             (col("x").gt(lit(3)), false),
-            (col("x").gt(lit(1)), true),
+            (col("x").gt(lit(0)), true),
             (col("x").eq(lit(0)), false),
             (col("x").not_eq(lit(0)), true),
-            (col("x").between(lit(2), lit(5)), true),
-            (col("x").between(lit(2), lit(3)), true),
+            (col("x").between(lit(0), lit(5)), true),
             (col("x").between(lit(5), lit(10)), false),
-            (col("x").not_between(lit(2), lit(5)), false),
-            (col("x").not_between(lit(2), lit(3)), false),
+            (col("x").not_between(lit(0), lit(5)), false),
             (col("x").not_between(lit(5), lit(10)), true),
             (
                 Expr::BinaryExpr(BinaryExpr {
@@ -334,10 +326,11 @@ mod tests {
             (
                 col("x"),
                 NullableInterval::NotNull {
-                    values: Interval::new(
-                        IntervalBound::new(ScalarValue::Date32(Some(18628)), false),
-                        IntervalBound::make_unbounded(DataType::Date32).unwrap(),
-                    ),
+                    values: Interval::try_new(
+                        ScalarValue::Date32(Some(18628)),
+                        ScalarValue::Date32(None),
+                    )
+                    .unwrap(),
                 },
             ),
         ];
@@ -412,7 +405,11 @@ mod tests {
             (
                 col("x"),
                 NullableInterval::MaybeNull {
-                    values: Interval::make(Some("abc"), Some("def"), (true, false)),
+                    values: Interval::try_new(
+                        ScalarValue::Utf8(Some("abc".to_string())),
+                        ScalarValue::Utf8(Some("def".to_string())),
+                    )
+                    .unwrap(),
                 },
             ),
         ];
@@ -485,11 +482,15 @@ mod tests {
     #[test]
     fn test_in_list() {
         let guarantees = vec![
-            // x ∈ [1, 10) (not null)
+            // x ∈ [1, 10] (not null)
             (
                 col("x"),
                 NullableInterval::NotNull {
-                    values: Interval::make(Some(1_i32), Some(10_i32), (false, true)),
+                    values: Interval::try_new(
+                        ScalarValue::Int32(Some(1)),
+                        ScalarValue::Int32(Some(10)),
+                    )
+                    .unwrap(),
                 },
             ),
         ];
@@ -501,8 +502,8 @@ mod tests {
         let cases = &[
             // x IN (9, 11) => x IN (9)
             ("x", vec![9, 11], false, vec![9]),
-            // x IN (10, 2) => x IN (2)
-            ("x", vec![10, 2], false, vec![2]),
+            // x IN (10, 2) => x IN (10, 2)
+            ("x", vec![10, 2], false, vec![10, 2]),
             // x NOT IN (9, 11) => x NOT IN (9)
             ("x", vec![9, 11], true, vec![9]),
             // x NOT IN (0, 22) => x NOT IN ()

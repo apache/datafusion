@@ -302,6 +302,8 @@ pub enum BuiltinScalarFunction {
     OverLay,
     /// levenshtein
     Levenshtein,
+    /// substr_index
+    SubstrIndex,
 }
 
 /// Maps the sql function name to `BuiltinScalarFunction`
@@ -470,6 +472,7 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::ArrowTypeof => Volatility::Immutable,
             BuiltinScalarFunction::OverLay => Volatility::Immutable,
             BuiltinScalarFunction::Levenshtein => Volatility::Immutable,
+            BuiltinScalarFunction::SubstrIndex => Volatility::Immutable,
 
             // Stable builtin functions
             BuiltinScalarFunction::Now => Volatility::Stable,
@@ -599,12 +602,24 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::ArrayReplaceAll => Ok(input_expr_types[0].clone()),
             BuiltinScalarFunction::ArraySlice => Ok(input_expr_types[0].clone()),
             BuiltinScalarFunction::ArrayToString => Ok(Utf8),
-            BuiltinScalarFunction::ArrayIntersect => Ok(input_expr_types[0].clone()),
-            BuiltinScalarFunction::ArrayUnion => Ok(input_expr_types[0].clone()),
+            BuiltinScalarFunction::ArrayUnion | BuiltinScalarFunction::ArrayIntersect => {
+                match (input_expr_types[0].clone(), input_expr_types[1].clone()) {
+                    (DataType::Null, dt) => Ok(dt),
+                    (dt, DataType::Null) => Ok(dt),
+                    (dt, _) => Ok(dt),
+                }
+            }
             BuiltinScalarFunction::Range => {
                 Ok(List(Arc::new(Field::new("item", Int64, true))))
             }
-            BuiltinScalarFunction::ArrayExcept => Ok(input_expr_types[0].clone()),
+            BuiltinScalarFunction::ArrayExcept => {
+                match (input_expr_types[0].clone(), input_expr_types[1].clone()) {
+                    (DataType::Null, _) | (_, DataType::Null) => {
+                        Ok(input_expr_types[0].clone())
+                    }
+                    (dt, _) => Ok(dt),
+                }
+            }
             BuiltinScalarFunction::Cardinality => Ok(UInt64),
             BuiltinScalarFunction::MakeArray => match input_expr_types.len() {
                 0 => Ok(List(Arc::new(Field::new("item", Null, true)))),
@@ -761,13 +776,13 @@ impl BuiltinScalarFunction {
                     return plan_err!("The to_hex function can only accept integers.");
                 }
             }),
-            BuiltinScalarFunction::ToTimestamp => Ok(match &input_expr_types[0] {
-                Int64 => Timestamp(Second, None),
-                _ => Timestamp(Nanosecond, None),
-            }),
+            BuiltinScalarFunction::SubstrIndex => {
+                utf8_to_str_type(&input_expr_types[0], "substr_index")
+            }
+            BuiltinScalarFunction::ToTimestamp
+            | BuiltinScalarFunction::ToTimestampNanos => Ok(Timestamp(Nanosecond, None)),
             BuiltinScalarFunction::ToTimestampMillis => Ok(Timestamp(Millisecond, None)),
             BuiltinScalarFunction::ToTimestampMicros => Ok(Timestamp(Microsecond, None)),
-            BuiltinScalarFunction::ToTimestampNanos => Ok(Timestamp(Nanosecond, None)),
             BuiltinScalarFunction::ToTimestampSeconds => Ok(Timestamp(Second, None)),
             BuiltinScalarFunction::FromUnixtime => Ok(Timestamp(Second, None)),
             BuiltinScalarFunction::Now => {
@@ -1223,6 +1238,14 @@ impl BuiltinScalarFunction {
                 self.volatility(),
             ),
 
+            BuiltinScalarFunction::SubstrIndex => Signature::one_of(
+                vec![
+                    Exact(vec![Utf8, Utf8, Int64]),
+                    Exact(vec![LargeUtf8, LargeUtf8, Int64]),
+                ],
+                self.volatility(),
+            ),
+
             BuiltinScalarFunction::Replace | BuiltinScalarFunction::Translate => {
                 Signature::one_of(vec![Exact(vec![Utf8, Utf8, Utf8])], self.volatility())
             }
@@ -1474,6 +1497,7 @@ fn aliases(func: &BuiltinScalarFunction) -> &'static [&'static str] {
         BuiltinScalarFunction::Upper => &["upper"],
         BuiltinScalarFunction::Uuid => &["uuid"],
         BuiltinScalarFunction::Levenshtein => &["levenshtein"],
+        BuiltinScalarFunction::SubstrIndex => &["substr_index", "substring_index"],
 
         // regex functions
         BuiltinScalarFunction::RegexpMatch => &["regexp_match"],

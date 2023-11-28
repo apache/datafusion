@@ -20,12 +20,12 @@
 use crate::expr::{
     AggregateFunction, AggregateUDF, Alias, Between, BinaryExpr, Case, Cast,
     GetIndexedField, GroupingSet, InList, InSubquery, Like, Placeholder, ScalarFunction,
-    ScalarUDF, Sort, TryCast, WindowFunction,
+    ScalarFunctionDefinition, Sort, TryCast, WindowFunction,
 };
 use crate::{Expr, GetFieldAccess};
 
 use datafusion_common::tree_node::{TreeNode, VisitRecursion};
-use datafusion_common::Result;
+use datafusion_common::{internal_err, DataFusionError, Result};
 
 impl TreeNode for Expr {
     fn apply_children<F>(&self, op: &mut F) -> Result<VisitRecursion>
@@ -64,7 +64,7 @@ impl TreeNode for Expr {
             }
             Expr::GroupingSet(GroupingSet::Rollup(exprs))
             | Expr::GroupingSet(GroupingSet::Cube(exprs)) => exprs.clone(),
-            Expr::ScalarFunction (ScalarFunction{ args, .. } )| Expr::ScalarUDF(ScalarUDF { args, .. })  => {
+            Expr::ScalarFunction (ScalarFunction{ args, .. } )  => {
                 args.clone()
             }
             Expr::GroupingSet(GroupingSet::GroupingSets(lists_of_exprs)) => {
@@ -276,12 +276,19 @@ impl TreeNode for Expr {
                 asc,
                 nulls_first,
             )),
-            Expr::ScalarFunction(ScalarFunction { args, fun }) => Expr::ScalarFunction(
-                ScalarFunction::new(fun, transform_vec(args, &mut transform)?),
-            ),
-            Expr::ScalarUDF(ScalarUDF { args, fun }) => {
-                Expr::ScalarUDF(ScalarUDF::new(fun, transform_vec(args, &mut transform)?))
-            }
+            Expr::ScalarFunction(ScalarFunction { func_def, args }) => match func_def {
+                ScalarFunctionDefinition::BuiltIn { fun, .. } => Expr::ScalarFunction(
+                    ScalarFunction::new(fun, transform_vec(args, &mut transform)?),
+                ),
+                ScalarFunctionDefinition::UDF(fun) => Expr::ScalarFunction(
+                    ScalarFunction::new_udf(fun, transform_vec(args, &mut transform)?),
+                ),
+                ScalarFunctionDefinition::Name(_) => {
+                    return internal_err!(
+                        "Function `Expr` with name should be resolved."
+                    );
+                }
+            },
             Expr::WindowFunction(WindowFunction {
                 args,
                 fun,

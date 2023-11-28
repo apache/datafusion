@@ -149,6 +149,7 @@ impl<'a> Parser<'a> {
             Token::Decimal256 => self.parse_decimal_256(),
             Token::Dictionary => self.parse_dictionary(),
             Token::List => self.parse_list(),
+            Token::LargeList => self.parse_large_list(),
             tok => Err(make_error(
                 self.val,
                 &format!("finding next type, got unexpected '{tok}'"),
@@ -162,6 +163,16 @@ impl<'a> Parser<'a> {
         let data_type = self.parse_next_type()?;
         self.expect_token(Token::RParen)?;
         Ok(DataType::List(Arc::new(Field::new(
+            "item", data_type, true,
+        ))))
+    }
+
+    /// Parses the LargeList type
+    fn parse_large_list(&mut self) -> Result<DataType> {
+        self.expect_token(Token::LParen)?;
+        let data_type = self.parse_next_type()?;
+        self.expect_token(Token::RParen)?;
+        Ok(DataType::LargeList(Arc::new(Field::new(
             "item", data_type, true,
         ))))
     }
@@ -496,6 +507,7 @@ impl<'a> Tokenizer<'a> {
             "Date64" => Token::SimpleType(DataType::Date64),
 
             "List" => Token::List,
+            "LargeList" => Token::LargeList,
 
             "Second" => Token::TimeUnit(TimeUnit::Second),
             "Millisecond" => Token::TimeUnit(TimeUnit::Millisecond),
@@ -585,6 +597,7 @@ enum Token {
     Integer(i64),
     DoubleQuotedString(String),
     List,
+    LargeList,
 }
 
 impl Display for Token {
@@ -592,6 +605,7 @@ impl Display for Token {
         match self {
             Token::SimpleType(t) => write!(f, "{t}"),
             Token::List => write!(f, "List"),
+            Token::LargeList => write!(f, "LargeList"),
             Token::Timestamp => write!(f, "Timestamp"),
             Token::Time32 => write!(f, "Time32"),
             Token::Time64 => write!(f, "Time64"),

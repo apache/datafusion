@@ -25,7 +25,7 @@ use arrow::compute;
 use arrow::compute::{partition, SortColumn, SortOptions};
 use arrow::datatypes::{Field, SchemaRef, UInt32Type};
 use arrow::record_batch::RecordBatch;
-use arrow_array::{Array, ListArray};
+use arrow_array::{Array, LargeListArray, ListArray};
 use sqlparser::ast::Ident;
 use sqlparser::dialect::GenericDialect;
 use sqlparser::parser::Parser;
@@ -342,6 +342,18 @@ pub fn longest_consecutive_prefix<T: Borrow<usize>>(
 pub fn array_into_list_array(arr: ArrayRef) -> ListArray {
     let offsets = OffsetBuffer::from_lengths([arr.len()]);
     ListArray::new(
+        Arc::new(Field::new("item", arr.data_type().to_owned(), true)),
+        offsets,
+        arr,
+        None,
+    )
+}
+
+/// Wrap an array into a single element `LargeListArray`.
+/// For example `[1, 2, 3]` would be converted into `[[1, 2, 3]]`
+pub fn array_into_large_list_array(arr: ArrayRef) -> LargeListArray {
+    let offsets = OffsetBuffer::from_lengths([arr.len()]);
+    LargeListArray::new(
         Arc::new(Field::new("item", arr.data_type().to_owned(), true)),
         offsets,
         arr,
