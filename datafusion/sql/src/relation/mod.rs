@@ -17,7 +17,7 @@
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use datafusion_common::{
-    not_impl_err, DFSchema, DataFusionError, Result, TableReference,
+    not_impl_err, plan_err, DFSchema, DataFusionError, Result, TableReference,
 };
 use datafusion_expr::{LogicalPlan, LogicalPlanBuilder};
 use sqlparser::ast::{FunctionArg, FunctionArgExpr, TableFactor};
@@ -35,30 +35,23 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             TableFactor::Table {
                 name, alias, args, ..
             } => {
-                // this maybe a little diffcult to resolve others tables' schema, so we only supprt value and scalar functions now
                 if let Some(func_args) = args {
                     let tbl_func_name = name.0.get(0).unwrap().value.to_string();
-                    let mut args = vec![];
-                    for arg in func_args {
-                        match arg {
-                            FunctionArg::Unnamed(FunctionArgExpr::Expr(expr)) => {
-                                let expr = self.sql_expr_to_logical_expr(
+                    let args = func_args
+                        .into_iter()
+                        .flat_map(|arg| {
+                            if let FunctionArg::Unnamed(FunctionArgExpr::Expr(expr)) = arg
+                            {
+                                self.sql_expr_to_logical_expr(
                                     expr,
-                                    // TODO(veeupup): for now, maybe it's little diffcult to resolve tables' schema before create provider
-                                    //                maybe we can put all relations schema in
                                     &DFSchema::empty(),
                                     planner_context,
-                                )?;
-                                args.push(expr);
-                            }
-                            arg => {
-                                unimplemented!(
-                                    "Unsupported function argument type: {:?}",
-                                    arg
                                 )
+                            } else {
+                                plan_err!("Unsupported function argument type: {:?}", arg)
                             }
-                        }
-                    }
+                        })
+                        .collect::<Vec<_>>();
                     let provider = self
                         .context_provider
                         .get_table_function_source(&tbl_func_name, args)?;

@@ -57,7 +57,7 @@ pub trait ContextProvider {
         _name: &str,
         _args: Vec<Expr>,
     ) -> Result<Arc<dyn TableSource>> {
-        unimplemented!()
+        not_impl_err!("Table Functions are not supported")
     }
 
     /// Getter for a UDF description

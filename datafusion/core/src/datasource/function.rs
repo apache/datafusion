@@ -45,8 +45,8 @@ impl TableFunction {
     }
 
     /// Get the name of the table function
-    pub fn name(&self) -> String {
-        self.name.clone()
+    pub fn name(&self) -> &str {
+        &self.name
     }
 
     /// Get the function implementation and generate a table
