@@ -19,6 +19,7 @@
 //! functions that can be evaluated at run time during query execution.
 
 use std::any::Any;
+use std::cmp::Ordering;
 use std::ops::Range;
 use std::sync::Arc;
 
@@ -165,17 +166,20 @@ impl PartitionEvaluator for NthValueEvaluator {
             NthValueKind::Nth(n) => {
                 let n_range =
                     state.window_frame_range.end - state.window_frame_range.start;
-                #[allow(clippy::comparison_chain)]
-                if n > 0 {
-                    (n_range >= (n as usize) && size > (n as usize), false)
-                } else if n < 0 {
-                    let reverse_index = (-n) as usize;
-                    buffer_size = reverse_index;
-                    // Negative index represents reverse direction.
-                    (n_range >= reverse_index, true)
-                } else {
-                    // The case n = 0 is not valid for the NTH_VALUE function.
-                    unreachable!();
+                match n.cmp(&0) {
+                    Ordering::Greater => {
+                        (n_range >= (n as usize) && size > (n as usize), false)
+                    }
+                    Ordering::Less => {
+                        let reverse_index = (-n) as usize;
+                        buffer_size = reverse_index;
+                        // Negative index represents reverse direction.
+                        (n_range >= reverse_index, true)
+                    }
+                    Ordering::Equal => {
+                        // The case n = 0 is not valid for the NTH_VALUE function.
+                        unreachable!();
+                    }
                 }
             }
         };
@@ -209,30 +213,33 @@ impl PartitionEvaluator for NthValueEvaluator {
                 NthValueKind::First => ScalarValue::try_from_array(arr, range.start),
                 NthValueKind::Last => ScalarValue::try_from_array(arr, range.end - 1),
                 NthValueKind::Nth(n) => {
-                    #[allow(clippy::comparison_chain)]
-                    if n > 0 {
-                        // SQL indices are not 0-based.
-                        let index = (n as usize) - 1;
-                        if index >= n_range {
-                            // Outside the range, return NULL:
-                            ScalarValue::try_from(arr.data_type())
-                        } else {
-                            ScalarValue::try_from_array(arr, range.start + index)
+                    match n.cmp(&0) {
+                        Ordering::Greater => {
+                            // SQL indices are not 0-based.
+                            let index = (n as usize) - 1;
+                            if index >= n_range {
+                                // Outside the range, return NULL:
+                                ScalarValue::try_from(arr.data_type())
+                            } else {
+                                ScalarValue::try_from_array(arr, range.start + index)
+                            }
                         }
-                    } else if n < 0 {
-                        let reverse_index = (-n) as usize;
-                        if n_range >= reverse_index {
-                            ScalarValue::try_from_array(
-                                arr,
-                                range.start + n_range - reverse_index,
-                            )
-                        } else {
-                            // Outside the range, return NULL:
-                            ScalarValue::try_from(arr.data_type())
+                        Ordering::Less => {
+                            let reverse_index = (-n) as usize;
+                            if n_range >= reverse_index {
+                                ScalarValue::try_from_array(
+                                    arr,
+                                    range.start + n_range - reverse_index,
+                                )
+                            } else {
+                                // Outside the range, return NULL:
+                                ScalarValue::try_from(arr.data_type())
+                            }
                         }
-                    } else {
-                        // The case n = 0 is not valid for the NTH_VALUE function.
-                        unreachable!();
+                        Ordering::Equal => {
+                            // The case n = 0 is not valid for the NTH_VALUE function.
+                            unreachable!();
+                        }
                     }
                 }
             }
