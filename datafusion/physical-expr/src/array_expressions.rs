@@ -1429,7 +1429,7 @@ fn general_replace_v2(
     // let from_data = from_array.to_data();
     let to_data = to_array.to_data();
     let capacity = Capacities::Array(original_data.len());
-    
+
     let mut mutable = MutableArrayData::with_capacities(
         vec![&original_data, &to_data],
         false,
@@ -1452,12 +1452,8 @@ fn general_replace_v2(
 
         // Compute all positions in list_row_array (that is itself an
         // array) that are equal to `from_array_row`
-        let eq_array = compare_element_to_list(
-            &list_array_row,
-            &from_array,
-            row_index,
-            true,
-        )?;
+        let eq_array =
+            compare_element_to_list(&list_array_row, &from_array, row_index, true)?;
         assert_eq!(end, start + eq_array.len());
 
         let original_idx = 0;

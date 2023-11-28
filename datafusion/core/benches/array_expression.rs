@@ -24,12 +24,12 @@ mod data_utils;
 use crate::criterion::Criterion;
 use arrow_array::cast::AsArray;
 use arrow_array::types::Int64Type;
-use arrow_array::{Int64Array, ListArray, ArrayRef};
+use arrow_array::{ArrayRef, Int64Array, ListArray};
 use datafusion_physical_expr::array_expressions;
 use std::sync::Arc;
 
 fn criterion_benchmark(c: &mut Criterion) {
-    let array_len = 1000000000;
+    let array_len = 600000000;
 
     let array = (0..array_len).map(|_| Some(2 as i64)).collect::<Vec<_>>();
     let list_array = ListArray::from_iter_primitive::<Int64Type, _, _>(vec![
@@ -52,10 +52,15 @@ fn criterion_benchmark(c: &mut Criterion) {
         Some(array.clone()),
         Some(array),
     ]);
-    
+
     c.bench_function("array_replace", |b| {
         b.iter(|| {
-            assert_eq!(array_expressions::array_replace_all(args.as_slice()).unwrap().as_list::<i32>(), criterion::black_box(&expected_array))
+            assert_eq!(
+                array_expressions::array_replace_all(args.as_slice())
+                    .unwrap()
+                    .as_list::<i32>(),
+                criterion::black_box(&expected_array)
+            )
         })
     });
 }
