@@ -37,7 +37,7 @@ use datafusion::error::Result;
 use datafusion::execution::context::SessionContext;
 use datafusion::prelude::JoinType;
 use datafusion::prelude::{CsvReadOptions, ParquetReadOptions};
-use datafusion::test_util::parquet_test_data;
+use datafusion::test_util::{parquet_test_data, scan_empty};
 use datafusion::{assert_batches_eq, assert_batches_sorted_eq};
 use datafusion_common::{DataFusionError, ScalarValue, UnnestOptions};
 use datafusion_execution::config::SessionConfig;
@@ -1595,5 +1595,30 @@ async fn test_array_agg() -> Result<()> {
     ];
     assert_batches_eq!(expected, &results);
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn aggregate_with_alias() -> Result<()> {
+    let ctx = SessionContext::new();
+    let state = ctx.state();
+
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("c1", DataType::Utf8, false),
+        Field::new("c2", DataType::UInt32, false),
+    ]));
+
+    let plan = scan_empty(None, schema.as_ref(), None)?
+        .aggregate(vec![col("c1")], vec![sum(col("c2"))])?
+        .project(vec![col("c1"), sum(col("c2")).alias("total_salary")])?
+        .build()?;
+
+    let plan = state.optimize(&plan)?;
+    let physical_plan = state.create_physical_plan(&Arc::new(plan)).await?;
+    assert_eq!("c1", physical_plan.schema().field(0).name().as_str());
+    assert_eq!(
+        "total_salary",
+        physical_plan.schema().field(1).name().as_str()
+    );
     Ok(())
 }
