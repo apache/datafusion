@@ -102,6 +102,7 @@ fn compare_element_to_list(
 ) -> Result<BooleanArray> {
     let indices = UInt32Array::from(vec![row_index as u32]);
     let element_array_row = arrow::compute::take(element_array, &indices, None)?;
+
     // Compute all positions in list_row_array (that is itself an
     // array) that are equal to `from_array_row`
     let res = match element_array_row.data_type() {
@@ -1415,16 +1416,103 @@ fn general_replace(
     )?))
 }
 
+fn general_replace_v2(
+    list_array: &ListArray,
+    from_array: &ArrayRef,
+    to_array: &ArrayRef,
+    arr_n: Vec<i64>,
+) -> Result<ArrayRef> {
+    // Build up the offsets for the final output array
+    let mut offsets: Vec<i32> = vec![0];
+    let values = list_array.values();
+    let original_data = values.to_data();
+    // let from_data = from_array.to_data();
+    let to_data = to_array.to_data();
+    let capacity = Capacities::Array(original_data.len());
+    
+    let mut mutable = MutableArrayData::with_capacities(
+        vec![&original_data, &to_data],
+        false,
+        capacity,
+    );
+
+    let mut valid = BooleanBufferBuilder::new(list_array.len());
+
+    for (row_index, offset_window) in list_array.offsets().windows(2).enumerate() {
+        if list_array.is_null(row_index) {
+            offsets.push(offsets[row_index]);
+            valid.append(false);
+            continue;
+        }
+
+        let start = offset_window[0] as usize;
+        let end = offset_window[1] as usize;
+
+        let list_array_row = list_array.value(row_index);
+
+        // Compute all positions in list_row_array (that is itself an
+        // array) that are equal to `from_array_row`
+        let eq_array = compare_element_to_list(
+            &list_array_row,
+            &from_array,
+            row_index,
+            true,
+        )?;
+        assert_eq!(end, start + eq_array.len());
+
+        let original_idx = 0;
+        let replace_idx = 1;
+        let n = arr_n[row_index];
+        let mut counter = 0;
+
+        if eq_array.false_count() == eq_array.len() {
+            // no matches, copy original data
+            mutable.extend(original_idx, start, end);
+            offsets.push(offsets[row_index] + (end - start) as i32);
+            valid.append(true);
+            continue;
+        }
+
+        for (i, to_replace) in eq_array.iter().enumerate() {
+            if let Some(true) = to_replace {
+                mutable.extend(replace_idx, row_index, row_index + 1);
+                counter += 1;
+                if counter == n {
+                    // copy original data for any matches past n
+                    mutable.extend(original_idx, start + i + 1, end);
+                    break;
+                }
+            } else {
+                // copy original data for false / null matches
+                mutable.extend(original_idx, start + i, start + i + 1);
+            }
+        }
+
+        offsets.push(offsets[row_index] + (end - start) as i32);
+        valid.append(true);
+    }
+
+    let data = mutable.freeze();
+
+    Ok(Arc::new(ListArray::try_new(
+        Arc::new(Field::new("item", list_array.value_type(), true)),
+        OffsetBuffer::new(offsets.into()),
+        arrow_array::make_array(data),
+        Some(NullBuffer::new(valid.finish())),
+    )?))
+}
+
 pub fn array_replace(args: &[ArrayRef]) -> Result<ArrayRef> {
     // replace at most one occurence for each element
     let arr_n = vec![1; args[0].len()];
-    general_replace(as_list_array(&args[0])?, &args[1], &args[2], arr_n)
+    // general_replace(as_list_array(&args[0])?, &args[1], &args[2], arr_n)
+    general_replace_v2(as_list_array(&args[0])?, &args[1], &args[2], arr_n)
 }
 
 pub fn array_replace_n(args: &[ArrayRef]) -> Result<ArrayRef> {
     // replace the specified number of occurences
     let arr_n = as_int64_array(&args[3])?.values().to_vec();
-    general_replace(as_list_array(&args[0])?, &args[1], &args[2], arr_n)
+    general_replace_v2(as_list_array(&args[0])?, &args[1], &args[2], arr_n)
 }
 
 pub fn array_replace_all(args: &[ArrayRef]) -> Result<ArrayRef> {

@@ -167,3 +167,7 @@ name = "sort"
 [[bench]]
 harness = false
 name = "topk_aggregate"
+
+[[bench]]
+harness = false
+name = "array_expression"
