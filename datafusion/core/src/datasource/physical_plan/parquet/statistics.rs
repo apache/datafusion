@@ -19,11 +19,9 @@
 
 use arrow::{array::ArrayRef, datatypes::DataType};
 use arrow_array::new_empty_array;
-use arrow_schema::{Field, FieldRef, Schema};
+use arrow_schema::{FieldRef, Schema};
 use datafusion_common::{Result, ScalarValue};
-use parquet::file::{
-    metadata::RowGroupMetaData, statistics::Statistics as ParquetStatistics,
-};
+use parquet::file::statistics::Statistics as ParquetStatistics;
 use parquet::schema::types::SchemaDescriptor;
 
 // Convert the bytes array to i128.
@@ -195,12 +193,12 @@ mod test {
         Float64Array, Int32Array, Int64Array, RecordBatch, StringArray, StructArray,
         TimestampNanosecondArray,
     };
-    use arrow_schema::SchemaRef;
+    use arrow_schema::{Field, SchemaRef};
     use bytes::Bytes;
     use datafusion_common::test_util::parquet_test_data;
     use parquet::arrow::arrow_reader::ArrowReaderBuilder;
     use parquet::arrow::arrow_writer::ArrowWriter;
-    use parquet::file::metadata::ParquetMetaData;
+    use parquet::file::metadata::{ParquetMetaData, RowGroupMetaData};
     use parquet::file::properties::{EnabledStatistics, WriterProperties};
     use std::path::PathBuf;
     use std::sync::Arc;
