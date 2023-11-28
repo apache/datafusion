@@ -16,8 +16,11 @@
 // under the License.
 
 use arrow::{array::ArrayRef, datatypes::Schema};
+use arrow_schema::FieldRef;
 use datafusion_common::tree_node::{TreeNode, VisitRecursion};
 use datafusion_common::{Column, DataFusionError, Result, ScalarValue};
+use parquet::file::metadata::ColumnChunkMetaData;
+use parquet::schema::types::SchemaDescriptor;
 use parquet::{
     arrow::{async_reader::AsyncFileReader, ParquetRecordBatchStreamBuilder},
     bloom_filter::Sbbf,
@@ -29,12 +32,14 @@ use std::{
 };
 
 use crate::datasource::listing::FileRange;
+use crate::datasource::physical_plan::parquet::statistics::{
+    max_statistics, min_statistics, parquet_column,
+};
 use crate::logical_expr::Operator;
 use crate::physical_expr::expressions as phys_expr;
 use crate::physical_optimizer::pruning::{PruningPredicate, PruningStatistics};
 use crate::physical_plan::PhysicalExpr;
 
-use super::statistics::RowGroupStatisticsConverter;
 use super::ParquetFileMetrics;
 
 /// Prune row groups based on statistics
@@ -46,7 +51,10 @@ use super::ParquetFileMetrics;
 ///
 /// If an index IS present in the returned Vec it means the predicate
 /// did not filter out that row group.
+///
+/// Note: This method currently ignores ColumnOrder (#8342)
 pub(crate) fn prune_row_groups_by_statistics(
+    parquet_schema: &SchemaDescriptor,
     groups: &[RowGroupMetaData],
     range: Option<FileRange>,
     predicate: Option<&PruningPredicate>,
@@ -69,8 +77,9 @@ pub(crate) fn prune_row_groups_by_statistics(
 
         if let Some(predicate) = predicate {
             let pruning_stats = RowGroupPruningStatistics {
+                parquet_schema,
                 row_group_metadata: metadata,
-                parquet_schema: predicate.schema().as_ref(),
+                arrow_schema: predicate.schema().as_ref(),
             };
             match predicate.prune(&pruning_stats) {
                 Ok(values) => {
@@ -291,46 +300,33 @@ impl BloomFilterPruningPredicate {
     }
 }
 
-/// Wraps parquet statistics in a way
-/// that implements [`PruningStatistics`]
+/// Wraps [`RowGroupMetaData`] in a way that implements [`PruningStatistics`]
+///
+/// Note: This should be implemented for an array of [`RowGroupMetaData`] instead
+/// of per row-group
 struct RowGroupPruningStatistics<'a> {
+    parquet_schema: &'a SchemaDescriptor,
     row_group_metadata: &'a RowGroupMetaData,
-    parquet_schema: &'a Schema,
+    arrow_schema: &'a Schema,
 }
 
-// Extract the null count value on the ParquetStatistics
-macro_rules! get_null_count_values {
-    ($self:expr, $column:expr) => {{
-        let value = ScalarValue::UInt64(
-            if let Some(col) = $self
-                .row_group_metadata
-                .columns()
-                .iter()
-                .find(|c| c.column_descr().name() == &$column.name)
-            {
-                col.statistics().map(|s| s.null_count())
-            } else {
-                Some($self.row_group_metadata.num_rows() as u64)
-            },
-        );
-
-        value.to_array().ok()
-    }};
+impl<'a> RowGroupPruningStatistics<'a> {
+    /// Lookups up the parquet column by name
+    fn column(&self, name: &str) -> Option<(&ColumnChunkMetaData, &FieldRef)> {
+        let (idx, field) = parquet_column(self.parquet_schema, self.arrow_schema, name)?;
+        Some((self.row_group_metadata.column(idx), field))
+    }
 }
 
 impl<'a> PruningStatistics for RowGroupPruningStatistics<'a> {
     fn min_values(&self, column: &Column) -> Option<ArrayRef> {
-        RowGroupStatisticsConverter::try_new(self.parquet_schema, &column.name)
-            .and_then(|converter| converter.min([self.row_group_metadata]))
-            // ignore errors during conversion, and just use no statistics
-            .ok()
+        let (column, field) = self.column(&column.name)?;
+        min_statistics(field.data_type(), std::iter::once(column.statistics())).ok()
     }
 
     fn max_values(&self, column: &Column) -> Option<ArrayRef> {
-        RowGroupStatisticsConverter::try_new(self.parquet_schema, &column.name)
-            .and_then(|converter| converter.max([self.row_group_metadata]))
-            // ignore errors during conversion, and just use no statistics
-            .ok()
+        let (column, field) = self.column(&column.name)?;
+        max_statistics(field.data_type(), std::iter::once(column.statistics())).ok()
     }
 
     fn num_containers(&self) -> usize {
@@ -338,7 +334,9 @@ impl<'a> PruningStatistics for RowGroupPruningStatistics<'a> {
     }
 
     fn null_counts(&self, column: &Column) -> Option<ArrayRef> {
-        get_null_count_values!(self, column)
+        let (c, _) = self.column(&column.name)?;
+        let scalar = ScalarValue::UInt64(Some(c.statistics()?.null_count()));
+        scalar.to_array().ok()
     }
 }
 
@@ -358,6 +356,7 @@ mod tests {
     use datafusion_physical_expr::execution_props::ExecutionProps;
     use datafusion_physical_expr::{create_physical_expr, PhysicalExpr};
     use datafusion_sql::planner::ContextProvider;
+    use parquet::arrow::arrow_to_parquet_schema;
     use parquet::arrow::async_reader::ParquetObjectReader;
     use parquet::basic::LogicalType;
     use parquet::data_type::{ByteArray, FixedLenByteArray};
@@ -435,6 +434,7 @@ mod tests {
         let metrics = parquet_file_metrics();
         assert_eq!(
             prune_row_groups_by_statistics(
+                &schema_descr,
                 &[rgm1, rgm2],
                 None,
                 Some(&pruning_predicate),
@@ -469,6 +469,7 @@ mod tests {
         // is null / undefined so the first row group can't be filtered out
         assert_eq!(
             prune_row_groups_by_statistics(
+                &schema_descr,
                 &[rgm1, rgm2],
                 None,
                 Some(&pruning_predicate),
@@ -516,6 +517,7 @@ mod tests {
         // when conditions are joined using AND
         assert_eq!(
             prune_row_groups_by_statistics(
+                &schema_descr,
                 groups,
                 None,
                 Some(&pruning_predicate),
@@ -534,6 +536,7 @@ mod tests {
         // this bypasses the entire predicate expression and no row groups are filtered out
         assert_eq!(
             prune_row_groups_by_statistics(
+                &schema_descr,
                 groups,
                 None,
                 Some(&pruning_predicate),
@@ -573,6 +576,7 @@ mod tests {
             Field::new("c1", DataType::Int32, false),
             Field::new("c2", DataType::Boolean, false),
         ]));
+        let schema_descr = arrow_to_parquet_schema(&schema).unwrap();
         let expr = col("c1").gt(lit(15)).and(col("c2").is_null());
         let expr = logical2physical(&expr, &schema);
         let pruning_predicate = PruningPredicate::try_new(expr, schema).unwrap();
@@ -582,6 +586,7 @@ mod tests {
         // First row group was filtered out because it contains no null value on "c2".
         assert_eq!(
             prune_row_groups_by_statistics(
+                &schema_descr,
                 &groups,
                 None,
                 Some(&pruning_predicate),
@@ -601,6 +606,7 @@ mod tests {
             Field::new("c1", DataType::Int32, false),
             Field::new("c2", DataType::Boolean, false),
         ]));
+        let schema_descr = arrow_to_parquet_schema(&schema).unwrap();
         let expr = col("c1")
             .gt(lit(15))
             .and(col("c2").eq(lit(ScalarValue::Boolean(None))));
@@ -613,6 +619,7 @@ mod tests {
         // pass predicates. Ideally these should both be false
         assert_eq!(
             prune_row_groups_by_statistics(
+                &schema_descr,
                 &groups,
                 None,
                 Some(&pruning_predicate),
@@ -671,6 +678,7 @@ mod tests {
         let metrics = parquet_file_metrics();
         assert_eq!(
             prune_row_groups_by_statistics(
+                &schema_descr,
                 &[rgm1, rgm2, rgm3],
                 None,
                 Some(&pruning_predicate),
@@ -734,6 +742,7 @@ mod tests {
         let metrics = parquet_file_metrics();
         assert_eq!(
             prune_row_groups_by_statistics(
+                &schema_descr,
                 &[rgm1, rgm2, rgm3, rgm4],
                 None,
                 Some(&pruning_predicate),
@@ -781,6 +790,7 @@ mod tests {
         let metrics = parquet_file_metrics();
         assert_eq!(
             prune_row_groups_by_statistics(
+                &schema_descr,
                 &[rgm1, rgm2, rgm3],
                 None,
                 Some(&pruning_predicate),
@@ -851,6 +861,7 @@ mod tests {
         let metrics = parquet_file_metrics();
         assert_eq!(
             prune_row_groups_by_statistics(
+                &schema_descr,
                 &[rgm1, rgm2, rgm3],
                 None,
                 Some(&pruning_predicate),
@@ -910,6 +921,7 @@ mod tests {
         let metrics = parquet_file_metrics();
         assert_eq!(
             prune_row_groups_by_statistics(
+                &schema_descr,
                 &[rgm1, rgm2, rgm3],
                 None,
                 Some(&pruning_predicate),
@@ -923,7 +935,6 @@ mod tests {
         schema_descr: &SchemaDescPtr,
         column_statistics: Vec<ParquetStatistics>,
     ) -> RowGroupMetaData {
-        use parquet::file::metadata::ColumnChunkMetaData;
         let mut columns = vec![];
         for (i, s) in column_statistics.iter().enumerate() {
             let column = ColumnChunkMetaData::builder(schema_descr.column(i))
@@ -941,7 +952,7 @@ mod tests {
     }
 
     fn get_test_schema_descr(fields: Vec<PrimitiveTypeField>) -> SchemaDescPtr {
-        use parquet::schema::types::{SchemaDescriptor, Type as SchemaType};
+        use parquet::schema::types::Type as SchemaType;
         let schema_fields = fields
             .iter()
             .map(|field| {

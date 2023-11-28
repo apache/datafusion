@@ -19,11 +19,12 @@
 
 use arrow::{array::ArrayRef, datatypes::DataType};
 use arrow_array::new_empty_array;
-use arrow_schema::Field;
+use arrow_schema::{Field, FieldRef, Schema};
 use datafusion_common::{Result, ScalarValue};
 use parquet::file::{
     metadata::RowGroupMetaData, statistics::Statistics as ParquetStatistics,
 };
+use parquet::schema::types::SchemaDescriptor;
 
 // Convert the bytes array to i128.
 // The endian of the input bytes array must be big-endian.
@@ -66,8 +67,8 @@ macro_rules! get_statistic {
                     Some(DataType::Decimal128(precision, scale)) => {
                         Some(ScalarValue::Decimal128(
                             Some(*s.$func() as i128),
-                            precision,
-                            scale,
+                            *precision,
+                            *scale,
                         ))
                     }
                     _ => Some(ScalarValue::Int32(Some(*s.$func()))),
@@ -79,8 +80,8 @@ macro_rules! get_statistic {
                     Some(DataType::Decimal128(precision, scale)) => {
                         Some(ScalarValue::Decimal128(
                             Some(*s.$func() as i128),
-                            precision,
-                            scale,
+                            *precision,
+                            *scale,
                         ))
                     }
                     _ => Some(ScalarValue::Int64(Some(*s.$func()))),
@@ -96,8 +97,8 @@ macro_rules! get_statistic {
                     Some(DataType::Decimal128(precision, scale)) => {
                         Some(ScalarValue::Decimal128(
                             Some(from_bytes_to_i128(s.$bytes_func())),
-                            precision,
-                            scale,
+                            *precision,
+                            *scale,
                         ))
                     }
                     _ => {
@@ -115,8 +116,8 @@ macro_rules! get_statistic {
                     Some(DataType::Decimal128(precision, scale)) => {
                         Some(ScalarValue::Decimal128(
                             Some(from_bytes_to_i128(s.$bytes_func())),
-                            precision,
-                            scale,
+                            *precision,
+                            *scale,
                         ))
                     }
                     _ => None,
@@ -126,111 +127,62 @@ macro_rules! get_statistic {
     }};
 }
 
-#[derive(Debug, Clone, Copy)]
-enum Statistic {
-    Min,
-    Max,
-}
-
-/// Extracts statistics for a single leaf column from [`RowGroupMetaData`] as an
-/// arrow [`ArrayRef`]
+/// Lookups up the parquet column by name
 ///
-/// For example, given a parquet file with 3 Row Groups, when asked for
-/// statistics for column "A" it will return a single array with 3 elements.
-pub(crate) struct RowGroupStatisticsConverter<'a> {
-    field: &'a Field,
+/// Returns the parquet column index and the corresponding arrow field
+pub fn parquet_column<'a>(
+    parquet_schema: &SchemaDescriptor,
+    arrow_schema: &'a Schema,
+    name: &str,
+) -> Option<(usize, &'a FieldRef)> {
+    let (root_idx, field) = arrow_schema.fields.find(name)?;
+    if field.data_type().is_nested() {
+        // Nested fields are not supported and require non-trivial logic
+        // to correctly walk the parquet schema accounting for the
+        // logical type rules - <https://github.com/apache/parquet-format/blob/master/LogicalTypes.md>
+        //
+        // For example a ListArray could correspond to anything from 1 to 3 levels
+        // in the parquet schema
+        return None;
+    }
+
+    // This could be made more efficient (#TBD)
+    let parquet_idx = (0..parquet_schema.columns().len())
+        .find(|x| parquet_schema.get_column_root_idx(*x) == root_idx)?;
+    Some((parquet_idx, field))
 }
 
-impl<'a> RowGroupStatisticsConverter<'a> {
-    /// Create a new RowGoupStatisticsConverter for extracting the named column
-    /// in the schema.
-    pub fn try_new(schema: &'a arrow_schema::Schema, column_name: &str) -> Result<Self> {
-        let field = schema.field_with_name(column_name)?;
-        Ok(Self { field })
-    }
+/// Extracts the min statistics from an iterator of [`ParquetStatistics`] to an [`ArrayRef`]
+pub fn min_statistics<'a, I: Iterator<Item = Option<&'a ParquetStatistics>>>(
+    data_type: &DataType,
+    iterator: I,
+) -> Result<ArrayRef> {
+    let scalars = iterator
+        .map(|x| x.and_then(|s| get_statistic!(s, min, min_bytes, Some(data_type))));
+    collect_scalars(data_type, scalars)
+}
 
-    /// Returns the min value for the column into an array ref.
-    pub fn min<'b>(
-        &self,
-        row_group_meta_data: impl IntoIterator<Item = &'b RowGroupMetaData>,
-    ) -> Result<ArrayRef> {
-        self.min_max_impl(Statistic::Min, row_group_meta_data)
-    }
+/// Extracts the max statistics from an iterator of [`ParquetStatistics`] to an [`ArrayRef`]
+pub fn max_statistics<'a, I: Iterator<Item = Option<&'a ParquetStatistics>>>(
+    data_type: &DataType,
+    iterator: I,
+) -> Result<ArrayRef> {
+    let scalars = iterator
+        .map(|x| x.and_then(|s| get_statistic!(s, max, max_bytes, Some(data_type))));
+    collect_scalars(data_type, scalars)
+}
 
-    /// Returns the max value for the column into an array ref.
-    pub fn max<'b>(
-        &self,
-        row_group_meta_data: impl IntoIterator<Item = &'b RowGroupMetaData>,
-    ) -> Result<ArrayRef> {
-        self.min_max_impl(Statistic::Max, row_group_meta_data)
-    }
-
-    /// Extracts all min/max values for the column into an array ref.
-    fn min_max_impl<'b>(
-        &self,
-        mm: Statistic,
-        row_group_meta_data: impl IntoIterator<Item = &'b RowGroupMetaData>,
-    ) -> Result<ArrayRef> {
-        let mut row_group_meta_data = row_group_meta_data.into_iter().peekable();
-
-        // if it is empty, return empty array
-        if row_group_meta_data.peek().is_none() {
-            return Ok(new_empty_array(self.field.data_type()));
-        }
-
-        let maybe_index = row_group_meta_data.peek().and_then(|rg_meta| {
-            rg_meta
-                .columns()
-                .iter()
-                .enumerate()
-                .find(|(_idx, c)| c.column_descr().name() == self.field.name())
-                .map(|(idx, _c)| idx)
-        });
-
-        // don't have this column, return an array of all NULLs
-        let Some(column_index) = maybe_index else {
-            let num_row_groups = row_group_meta_data.count();
-            let sv = ScalarValue::try_from(self.field.data_type())?;
-            return sv.to_array_of_size(num_row_groups);
-        };
-
-        let stats_iter = row_group_meta_data.map(move |row_group_meta_data| {
-            row_group_meta_data.column(column_index).statistics()
-        });
-
-        // this is the value to use when the statistics are not set
-        let null_value = ScalarValue::try_from(self.field.data_type())?;
-        match mm {
-            Statistic::Min => {
-                let values = stats_iter.map(|column_statistics| {
-                    column_statistics
-                        .and_then(|column_statistics| {
-                            get_statistic!(
-                                column_statistics,
-                                min,
-                                min_bytes,
-                                Some(self.field.data_type().clone())
-                            )
-                        })
-                        .unwrap_or_else(|| null_value.clone())
-                });
-                ScalarValue::iter_to_array(values)
-            }
-            Statistic::Max => {
-                let values = stats_iter.map(|column_statistics| {
-                    column_statistics
-                        .and_then(|column_statistics| {
-                            get_statistic!(
-                                column_statistics,
-                                max,
-                                max_bytes,
-                                Some(self.field.data_type().clone())
-                            )
-                        })
-                        .unwrap_or_else(|| null_value.clone())
-                });
-                ScalarValue::iter_to_array(values)
-            }
+/// Builds an array from an iterator of ScalarValue
+fn collect_scalars<I: Iterator<Item = Option<ScalarValue>>>(
+    data_type: &DataType,
+    iterator: I,
+) -> Result<ArrayRef> {
+    let mut scalars = iterator.peekable();
+    match scalars.peek().is_none() {
+        true => Ok(new_empty_array(data_type)),
+        false => {
+            let null = ScalarValue::try_from(data_type)?;
+            ScalarValue::iter_to_array(scalars.map(|x| x.unwrap_or_else(|| null.clone())))
         }
     }
 }
@@ -570,14 +522,16 @@ mod test {
         let schema = input_batch.schema();
 
         let metadata = parquet_metadata(schema.clone(), input_batch);
+        let parquet_schema = metadata.file_metadata().schema_descr();
 
         // read the int_col statistics
-        let (_idx, field) = schema.column_with_name("int_col").unwrap();
+        let (idx, _) = parquet_column(parquet_schema, &schema, "int_col").unwrap();
+        assert_eq!(idx, 2);
 
-        let converter =
-            RowGroupStatisticsConverter::try_new(&schema, field.name()).unwrap();
         let row_groups = metadata.row_groups();
-        let min = converter.min(row_groups).unwrap();
+        let iter = row_groups.iter().map(|x| x.column(idx).statistics());
+
+        let min = min_statistics(&DataType::Int32, iter.clone()).unwrap();
         assert_eq!(
             &min,
             &expected_min,
@@ -585,7 +539,7 @@ mod test {
             DisplayStats(row_groups)
         );
 
-        let max = converter.max(row_groups).unwrap();
+        let max = max_statistics(&DataType::Int32, iter).unwrap();
         assert_eq!(
             &max,
             &expected_max,
@@ -762,12 +716,23 @@ mod test {
             let schema = input_batch.schema();
 
             let metadata = parquet_metadata(schema.clone(), input_batch);
+            let parquet_schema = metadata.file_metadata().schema_descr();
+
+            let row_groups = metadata.row_groups();
 
             for field in schema.fields() {
-                let converter =
-                    RowGroupStatisticsConverter::try_new(&schema, field.name()).unwrap();
-                let row_groups = metadata.row_groups();
-                let min = converter.min(row_groups).unwrap();
+                if field.data_type().is_nested() {
+                    let lookup = parquet_column(parquet_schema, &schema, field.name());
+                    assert_eq!(lookup, None);
+                    continue;
+                }
+
+                let (idx, f) =
+                    parquet_column(parquet_schema, &schema, field.name()).unwrap();
+                assert_eq!(f, field);
+
+                let iter = row_groups.iter().map(|x| x.column(idx).statistics());
+                let min = min_statistics(f.data_type(), iter.clone()).unwrap();
                 assert_eq!(
                     &min,
                     &expected_min,
@@ -775,7 +740,7 @@ mod test {
                     DisplayStats(row_groups)
                 );
 
-                let max = converter.max(row_groups).unwrap();
+                let max = max_statistics(f.data_type(), iter).unwrap();
                 assert_eq!(
                     &max,
                     &expected_max,
@@ -852,6 +817,8 @@ mod test {
             let reader = ArrowReaderBuilder::try_new(file).unwrap();
             let arrow_schema = reader.schema();
             let metadata = reader.metadata();
+            let row_groups = metadata.row_groups();
+            let parquet_schema = metadata.file_metadata().schema_descr();
 
             for expected_column in self.expected_columns {
                 let ExpectedColumn {
@@ -860,13 +827,14 @@ mod test {
                     expected_max,
                 } = expected_column;
 
-                let converter = RowGroupStatisticsConverter::try_new(arrow_schema, name)
-                    .expect("can't find field in schema");
+                let (idx, field) =
+                    parquet_column(parquet_schema, arrow_schema, name).unwrap();
 
-                let actual_min = converter.min(metadata.row_groups()).unwrap();
+                let iter = row_groups.iter().map(|x| x.column(idx).statistics());
+                let actual_min = min_statistics(field.data_type(), iter.clone()).unwrap();
                 assert_eq!(&expected_min, &actual_min, "column {name}");
 
-                let actual_max = converter.max(metadata.row_groups()).unwrap();
+                let actual_max = max_statistics(field.data_type(), iter).unwrap();
                 assert_eq!(&expected_max, &actual_max, "column {name}");
             }
         }
