@@ -1339,6 +1339,7 @@ fn general_replace(
     let to_data = to_array.to_data();
     let capacity = Capacities::Array(original_data.len());
 
+    // First array is the original array, second array is the element to replace with.
     let mut mutable = MutableArrayData::with_capacities(
         vec![&original_data, &to_data],
         false,
@@ -1382,7 +1383,7 @@ fn general_replace(
                 mutable.extend(replace_idx, row_index, row_index + 1);
                 counter += 1;
                 if counter == n {
-                    // copy original data for any matches pass n
+                    // copy original data for any matches past n
                     mutable.extend(original_idx, start + i + 1, end);
                     break;
                 }
