@@ -34,8 +34,7 @@ use datafusion_common::cast::{
 };
 use datafusion_common::utils::array_into_list_array;
 use datafusion_common::{
-    exec_err, internal_datafusion_err, internal_err, not_impl_err, plan_err,
-    DataFusionError, Result,
+    exec_err, internal_err, not_impl_err, plan_err, DataFusionError, Result,
 };
 
 use itertools::Itertools;
@@ -1335,98 +1334,8 @@ fn general_replace(
 ) -> Result<ArrayRef> {
     // Build up the offsets for the final output array
     let mut offsets: Vec<i32> = vec![0];
-    let data_type = list_array.value_type();
-    let mut new_values = vec![];
-
-    // n is the number of elements to replace in this row
-    for (row_index, (list_array_row, n)) in
-        list_array.iter().zip(arr_n.iter()).enumerate()
-    {
-        let last_offset: i32 = offsets
-            .last()
-            .copied()
-            .ok_or_else(|| internal_datafusion_err!("offsets should not be empty"))?;
-
-        match list_array_row {
-            Some(list_array_row) => {
-                // Compute all positions in list_row_array (that is itself an
-                // array) that are equal to `from_array_row`
-                let eq_array = compare_element_to_list(
-                    &list_array_row,
-                    &from_array,
-                    row_index,
-                    true,
-                )?;
-
-                // Use MutableArrayData to build the replaced array
-                let original_data = list_array_row.to_data();
-                let to_data = to_array.to_data();
-                let capacity = Capacities::Array(original_data.len() + to_data.len());
-
-                // First array is the original array, second array is the element to replace with.
-                let mut mutable = MutableArrayData::with_capacities(
-                    vec![&original_data, &to_data],
-                    false,
-                    capacity,
-                );
-                let original_idx = 0;
-                let replace_idx = 1;
-
-                let mut counter = 0;
-                for (i, to_replace) in eq_array.iter().enumerate() {
-                    if let Some(true) = to_replace {
-                        mutable.extend(replace_idx, row_index, row_index + 1);
-                        counter += 1;
-                        if counter == *n {
-                            // copy original data for any matches past n
-                            mutable.extend(original_idx, i + 1, eq_array.len());
-                            break;
-                        }
-                    } else {
-                        // copy original data for false / null matches
-                        mutable.extend(original_idx, i, i + 1);
-                    }
-                }
-
-                let data = mutable.freeze();
-                let replaced_array = arrow_array::make_array(data);
-
-                offsets.push(last_offset + replaced_array.len() as i32);
-                new_values.push(replaced_array);
-            }
-            None => {
-                // Null element results in a null row (no new offsets)
-                offsets.push(last_offset);
-            }
-        }
-    }
-
-    let values = if new_values.is_empty() {
-        new_empty_array(&data_type)
-    } else {
-        let new_values: Vec<_> = new_values.iter().map(|a| a.as_ref()).collect();
-        arrow::compute::concat(&new_values)?
-    };
-
-    Ok(Arc::new(ListArray::try_new(
-        Arc::new(Field::new("item", data_type, true)),
-        OffsetBuffer::new(offsets.into()),
-        values,
-        list_array.nulls().cloned(),
-    )?))
-}
-
-fn general_replace_v2(
-    list_array: &ListArray,
-    from_array: &ArrayRef,
-    to_array: &ArrayRef,
-    arr_n: Vec<i64>,
-) -> Result<ArrayRef> {
-    // Build up the offsets for the final output array
-    let mut offsets: Vec<i32> = vec![0];
     let values = list_array.values();
     let original_data = values.to_data();
-    // let from_data = from_array.to_data();
     let to_data = to_array.to_data();
     let capacity = Capacities::Array(original_data.len());
 
@@ -1454,15 +1363,14 @@ fn general_replace_v2(
         // array) that are equal to `from_array_row`
         let eq_array =
             compare_element_to_list(&list_array_row, &from_array, row_index, true)?;
-        assert_eq!(end, start + eq_array.len());
 
         let original_idx = 0;
         let replace_idx = 1;
         let n = arr_n[row_index];
         let mut counter = 0;
 
+        // All elements are false, no need to replace, just copy original data
         if eq_array.false_count() == eq_array.len() {
-            // no matches, copy original data
             mutable.extend(original_idx, start, end);
             offsets.push(offsets[row_index] + (end - start) as i32);
             valid.append(true);
@@ -1474,7 +1382,7 @@ fn general_replace_v2(
                 mutable.extend(replace_idx, row_index, row_index + 1);
                 counter += 1;
                 if counter == n {
-                    // copy original data for any matches past n
+                    // copy original data for any matches pass n
                     mutable.extend(original_idx, start + i + 1, end);
                     break;
                 }
@@ -1501,14 +1409,13 @@ fn general_replace_v2(
 pub fn array_replace(args: &[ArrayRef]) -> Result<ArrayRef> {
     // replace at most one occurence for each element
     let arr_n = vec![1; args[0].len()];
-    // general_replace(as_list_array(&args[0])?, &args[1], &args[2], arr_n)
-    general_replace_v2(as_list_array(&args[0])?, &args[1], &args[2], arr_n)
+    general_replace(as_list_array(&args[0])?, &args[1], &args[2], arr_n)
 }
 
 pub fn array_replace_n(args: &[ArrayRef]) -> Result<ArrayRef> {
     // replace the specified number of occurences
     let arr_n = as_int64_array(&args[3])?.values().to_vec();
-    general_replace_v2(as_list_array(&args[0])?, &args[1], &args[2], arr_n)
+    general_replace(as_list_array(&args[0])?, &args[1], &args[2], arr_n)
 }
 
 pub fn array_replace_all(args: &[ArrayRef]) -> Result<ArrayRef> {
