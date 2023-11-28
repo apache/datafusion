@@ -26,7 +26,7 @@ use datafusion::logical_expr::{
 };
 use datafusion::logical_expr::{
     expr, Cast, Extension, GroupingSet, Like, LogicalPlanBuilder, WindowFrameBound,
-    WindowFrameUnits,
+    WindowFrameUnits, Subquery,
 };
 use datafusion::prelude::JoinType;
 use datafusion::sql::TableReference;
@@ -36,6 +36,7 @@ use datafusion::{
     prelude::{Column, SessionContext},
     scalar::ScalarValue,
 };
+use substrait::proto::expression::subquery::{InPredicate, SubqueryType};
 use substrait::proto::expression::{Literal, ScalarFunction};
 use substrait::proto::{
     aggregate_function::AggregationInvocation,
@@ -58,7 +59,7 @@ use substrait::proto::{
 use substrait::proto::{FunctionArgument, SortField};
 
 use datafusion::common::plan_err;
-use datafusion::logical_expr::expr::{InList, Sort};
+use datafusion::logical_expr::expr::{InList, Sort, InSubquery};
 use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -1002,6 +1003,37 @@ pub async fn from_substrait_rex(
                     end_bound: from_substrait_bound(&window.upper_bound, false)?,
                 },
             })))
+        }
+        Some(RexType::Subquery(subquery)) => {
+            match &subquery.as_ref().subquery_type {
+                Some(subquery_type) => match subquery_type {
+                    SubqueryType::InPredicate(in_predicate) => {
+                    if in_predicate.needles.len() != 1 {
+                        Err(DataFusionError::Substrait("InSubquery must have exactly one expression on LHS".to_string()))
+                    } else {
+                        let lhs_expr = &in_predicate.needles[0];
+                        let rhs_expr = &in_predicate.haystack;
+                        let ctx = SessionContext::new();
+
+                        if let Some(rhs_expr) = rhs_expr {
+                            let rhs_expr = from_substrait_rel(&ctx, rhs_expr, extensions).await?;
+
+                            Ok(Arc::new(Expr::InSubquery(InSubquery {
+                                expr: Box::new(from_substrait_rex(lhs_expr, input_schema, extensions).await?.as_ref().clone()),
+                                subquery: Subquery {subquery: Arc::new(rhs_expr), outer_ref_columns: vec![]},
+                                negated: false
+                            })))
+                        } else {
+                            Err(DataFusionError::Substrait("InSubquery expression rhs must not be empty".to_string()))
+                        }                     
+                    }
+                    }, 
+                    _ => Err(DataFusionError::Substrait("InSubquery expression type not implemented".to_string()))
+                },
+                None => Err(DataFusionError::Substrait(
+                    "Subquery experssion without SubqueryType is not allowed".to_string(),
+                )),
+            }
         }
         _ => not_impl_err!("unsupported rex_type"),
     }
