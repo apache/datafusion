@@ -1926,3 +1926,14 @@ A true
 B false
 C false
 D false
+
+# bool_coercion
+query BBBB
+select 1 == true, false == 0, 1.0 == true, false == 'false';
+----
+true true true true
+
+query BBBB
+select 2 > true, false is not distinct from 0, 1.0 >= true, true is distinct from 'false';
+----
+true true true true
