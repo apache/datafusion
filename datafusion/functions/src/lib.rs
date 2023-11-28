@@ -15,8 +15,30 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Several packages of built in functions for DataFusion
-
+//! Built in optional function packages for DataFusion
+//!
+//! Each module should implement a "function package" that should have a function with the signature:
+//!
+//! ```
+//! # use std::sync::Arc;
+//! # use datafusion_expr::FunctionImplementation;
+//! // return a list of functions or stubs
+//! fn functions() -> Vec<Arc<dyn FunctionImplementation + Send + Sync>> {
+//!    todo!()
+//! }
+//! ```
+//!
+//! Which returns:
+//!
+//! 1. The list of actual function implementation when the relevant
+//! feature is activated,
+//!
+//! 2. A list of stub function when the feature is not activated that produce
+//! a runtime error (and explain what feature flag is needed to activate them).
+//!
+//! The rationale for providing stub functions is to help users to configure datafusion
+//! properly (so they get an error telling them why a function is not available)
+//! instead of getting a cryptic "no function found" message at runtime.
 use datafusion_common::Result;
 use datafusion_execution::FunctionRegistry;
 use datafusion_expr::ScalarUDF;
