@@ -2191,18 +2191,6 @@ fn union_with_aliases() {
 }
 
 #[test]
-fn union_with_incompatible_data_types() {
-    let sql = "SELECT 'a' a UNION ALL SELECT true a";
-    let err = logical_plan(sql)
-        .expect_err("query should have failed")
-        .strip_backtrace();
-    assert_eq!(
-        "Error during planning: UNION Column a (type: Boolean) is not compatible with column a (type: Utf8)",
-        err
-    );
-}
-
-#[test]
 fn empty_over() {
     let sql = "SELECT order_id, MAX(order_id) OVER () from orders";
     let expected = "\

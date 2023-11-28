@@ -157,6 +157,12 @@ SELECT 1 UNION SELECT 2
 1
 2
 
+query T
+SELECT 'a' a UNION ALL SELECT true a
+----
+true
+a
+
 # union_with_except_input
 query T rowsort
 (
