@@ -31,7 +31,7 @@ use std::sync::Arc;
 fn criterion_benchmark(c: &mut Criterion) {
     let array_len = 600000000;
 
-    let array = (0..array_len).map(|_| Some(2 as i64)).collect::<Vec<_>>();
+    let array = (0..array_len).map(|_| Some(2_i64)).collect::<Vec<_>>();
     let list_array = ListArray::from_iter_primitive::<Int64Type, _, _>(vec![
         Some(array.clone()),
         Some(array.clone()),
@@ -46,7 +46,7 @@ fn criterion_benchmark(c: &mut Criterion) {
         Arc::new(to_array) as ArrayRef,
     ];
 
-    let array = (0..array_len).map(|_| Some(-2 as i64)).collect::<Vec<_>>();
+    let array = (0..array_len).map(|_| Some(-2_i64)).collect::<Vec<_>>();
     let expected_array = ListArray::from_iter_primitive::<Int64Type, _, _>(vec![
         Some(array.clone()),
         Some(array.clone()),
