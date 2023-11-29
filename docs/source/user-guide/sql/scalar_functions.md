@@ -1447,7 +1447,7 @@ Strings are parsed as RFC3339 (e.g. '2023-07-20T05:44:00')
 Integers and unsigned integers are interpreted as seconds since the unix epoch (`1970-01-01T00:00:00Z`)
 return the corresponding timestamp.
 
-Note: `to_timestamp` returns `Timestamp(Nanosecond)`. The supported range for integer input is between `-9223372037` and `9223372036`. 
+Note: `to_timestamp` returns `Timestamp(Nanosecond)`. The supported range for integer input is between `-9223372037` and `9223372036`.
 Supported range for string input is between `1677-09-21T00:12:44.0` and `2262-04-11T23:47:16.0`. Please use `to_timestamp_seconds` for the input outside of supported bounds.
 
 ```
@@ -1500,7 +1500,7 @@ return the corresponding timestamp.
 to_timestamp_nanos(expression)
 ```
 
-Note: `to_timestamp_nanos` returns `Timestamp(Nanosecond)`. The supported range for integer input is between `-9223372037` and `9223372036`. 
+Note: `to_timestamp_nanos` returns `Timestamp(Nanosecond)`. The supported range for integer input is between `-9223372037` and `9223372036`.
 Supported range for string input is between `1677-09-21T00:12:44.0` and `2262-04-11T23:47:16.0`. Please use `to_timestamp_seconds` for the input outside of supported bounds.
 
 #### Arguments
