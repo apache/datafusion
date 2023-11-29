@@ -1612,7 +1612,7 @@ fn create_name(e: &Expr) -> Result<String> {
                 }
                 AggregateFunctionDefinition::UDF(..) => {
                     let names: Vec<String> =
-                        args.iter().map(|e| create_name(e)).collect::<Result<_>>()?;
+                        args.iter().map(create_name).collect::<Result<_>>()?;
                     names.join(",")
                 }
             };
