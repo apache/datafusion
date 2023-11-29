@@ -31,11 +31,12 @@ use crate::expressions::PhysicalSortExpr;
 use crate::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use crate::windows::{
     calc_requirements, get_ordered_partition_by_indices, get_partition_by_sort_exprs,
-    window_equivalence_properties, PartitionSearchMode,
+    window_equivalence_properties,
 };
 use crate::{
     ColumnStatistics, DisplayAs, DisplayFormatType, Distribution, ExecutionPlan,
-    Partitioning, RecordBatchStream, SendableRecordBatchStream, Statistics, WindowExpr,
+    PartitionSearchMode, Partitioning, RecordBatchStream, SendableRecordBatchStream,
+    Statistics, WindowExpr,
 };
 
 use arrow::{

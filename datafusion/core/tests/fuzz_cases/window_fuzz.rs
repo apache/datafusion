@@ -25,9 +25,9 @@ use arrow::util::pretty::pretty_format_batches;
 use datafusion::physical_plan::memory::MemoryExec;
 use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::physical_plan::windows::{
-    create_window_expr, BoundedWindowAggExec, PartitionSearchMode, WindowAggExec,
+    create_window_expr, BoundedWindowAggExec, WindowAggExec,
 };
-use datafusion::physical_plan::{collect, ExecutionPlan};
+use datafusion::physical_plan::{collect, ExecutionPlan, PartitionSearchMode};
 use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::type_coercion::aggregates::coerce_types;
@@ -43,9 +43,7 @@ use hashbrown::HashMap;
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 
-use datafusion_physical_plan::windows::PartitionSearchMode::{
-    Linear, PartiallySorted, Sorted,
-};
+use datafusion_physical_plan::PartitionSearchMode::{Linear, PartiallySorted, Sorted};
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
 async fn window_bounded_window_random_comparison() -> Result<()> {

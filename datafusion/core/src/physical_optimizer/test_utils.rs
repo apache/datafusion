@@ -35,7 +35,7 @@ use crate::physical_plan::sorts::sort::SortExec;
 use crate::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use crate::physical_plan::union::UnionExec;
 use crate::physical_plan::windows::create_window_expr;
-use crate::physical_plan::{ExecutionPlan, Partitioning};
+use crate::physical_plan::{ExecutionPlan, PartitionSearchMode, Partitioning};
 use crate::prelude::{CsvReadOptions, SessionContext};
 
 use arrow_schema::{Schema, SchemaRef, SortOptions};
@@ -44,7 +44,6 @@ use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_expr::{AggregateFunction, WindowFrame, WindowFunction};
 use datafusion_physical_expr::expressions::col;
 use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
-use datafusion_physical_plan::windows::PartitionSearchMode;
 
 use async_trait::async_trait;
 

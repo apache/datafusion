@@ -27,7 +27,7 @@ use crate::{
         cume_dist, dense_rank, lag, lead, percent_rank, rank, Literal, NthValue, Ntile,
         PhysicalSortExpr, RowNumber,
     },
-    udaf, unbounded_output, ExecutionPlan, PhysicalExpr,
+    udaf, unbounded_output, ExecutionPlan, PartitionSearchMode, PhysicalExpr,
 };
 
 use arrow::datatypes::Schema;
@@ -53,30 +53,6 @@ pub use window_agg_exec::WindowAggExec;
 pub use datafusion_physical_expr::window::{
     BuiltInWindowExpr, PlainAggregateWindowExpr, WindowExpr,
 };
-
-#[derive(Debug, Clone, PartialEq)]
-/// Specifies aggregation grouping and/or window partitioning properties of a
-/// set of expressions in terms of the existing ordering.
-/// For example, if the existing ordering is `[a ASC, b ASC, c ASC]`:
-/// - A `PARTITION BY b` clause will result in `Linear` mode.
-/// - A `PARTITION BY a, c` or a `PARTITION BY c, a` clause will result in
-///   `PartiallySorted([0])` or `PartiallySorted([1])` modes, respectively.
-///   The vector stores the index of `a` in the respective PARTITION BY expression.
-/// - A `PARTITION BY a, b` or a `PARTITION BY b, a` clause will result in
-///   `Sorted` mode.
-/// Note that the examples above are applicable for `GROUP BY` clauses too.
-pub enum PartitionSearchMode {
-    /// There is no partial permutation of the expressions satisfying the
-    /// existing ordering.
-    Linear,
-    /// There is a partial permutation of the expressions satisfying the
-    /// existing ordering. Indices describing the longest partial permutation
-    /// are stored in the vector.
-    PartiallySorted(Vec<usize>),
-    /// There is a (full) permutation of the expressions satisfying the
-    /// existing ordering.
-    Sorted,
-}
 
 /// Create a physical expression for window function
 pub fn create_window_expr(

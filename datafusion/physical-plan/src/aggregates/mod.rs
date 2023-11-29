@@ -27,11 +27,9 @@ use crate::aggregates::{
 };
 
 use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet};
-use crate::windows::{
-    get_ordered_partition_by_indices, get_window_mode, PartitionSearchMode,
-};
+use crate::windows::{get_ordered_partition_by_indices, get_window_mode};
 use crate::{
-    DisplayFormatType, Distribution, ExecutionPlan, Partitioning,
+    DisplayFormatType, Distribution, ExecutionPlan, PartitionSearchMode, Partitioning,
     SendableRecordBatchStream, Statistics,
 };
 

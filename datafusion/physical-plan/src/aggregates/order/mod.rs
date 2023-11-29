@@ -23,7 +23,7 @@ use datafusion_physical_expr::{EmitTo, PhysicalSortExpr};
 mod full;
 mod partial;
 
-use crate::windows::PartitionSearchMode;
+use crate::PartitionSearchMode;
 pub(crate) use full::GroupOrderingFull;
 pub(crate) use partial::GroupOrderingPartial;
 

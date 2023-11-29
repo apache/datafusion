@@ -63,12 +63,10 @@ use crate::physical_plan::sorts::sort::SortExec;
 use crate::physical_plan::union::UnionExec;
 use crate::physical_plan::unnest::UnnestExec;
 use crate::physical_plan::values::ValuesExec;
-use crate::physical_plan::windows::{
-    BoundedWindowAggExec, PartitionSearchMode, WindowAggExec,
-};
+use crate::physical_plan::windows::{BoundedWindowAggExec, WindowAggExec};
 use crate::physical_plan::{
-    aggregates, displayable, udaf, windows, AggregateExpr, ExecutionPlan, Partitioning,
-    PhysicalExpr, WindowExpr,
+    aggregates, displayable, udaf, windows, AggregateExpr, ExecutionPlan,
+    PartitionSearchMode, Partitioning, PhysicalExpr, WindowExpr,
 };
 
 use arrow::compute::SortOptions;
