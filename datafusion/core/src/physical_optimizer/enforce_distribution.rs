@@ -28,8 +28,8 @@ use std::sync::Arc;
 use crate::config::ConfigOptions;
 use crate::error::Result;
 use crate::physical_optimizer::utils::{
-    add_sort_above, get_children_exectrees, get_plan_string, is_coalesce_partitions,
-    is_repartition, is_sort_preserving_merge, ExecTree,
+    add_sort_above, get_children_exectrees, is_coalesce_partitions, is_repartition,
+    is_sort_preserving_merge, ExecTree,
 };
 use crate::physical_optimizer::PhysicalOptimizerRule;
 use crate::physical_plan::aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy};
@@ -54,8 +54,8 @@ use datafusion_physical_expr::utils::map_columns_before_projection;
 use datafusion_physical_expr::{
     physical_exprs_equal, EquivalenceProperties, PhysicalExpr,
 };
-use datafusion_physical_plan::unbounded_output;
 use datafusion_physical_plan::windows::{get_best_fitting_window, BoundedWindowAggExec};
+use datafusion_physical_plan::{get_plan_string, unbounded_output};
 
 use itertools::izip;
 
@@ -3787,7 +3787,7 @@ pub(crate) mod tests {
     fn repartition_transitively_past_sort_with_projection_and_filter() -> Result<()> {
         let schema = schema();
         let sort_key = vec![PhysicalSortExpr {
-            expr: col("c", &schema).unwrap(),
+            expr: col("a", &schema).unwrap(),
             options: SortOptions::default(),
         }];
         let plan = sort_exec(
@@ -3804,9 +3804,9 @@ pub(crate) mod tests {
         );
 
         let expected = &[
-            "SortPreservingMergeExec: [c@2 ASC]",
+            "SortPreservingMergeExec: [a@0 ASC]",
             // Expect repartition on the input to the sort (as it can benefit from additional parallelism)
-            "SortExec: expr=[c@2 ASC]",
+            "SortExec: expr=[a@0 ASC]",
             "ProjectionExec: expr=[a@0 as a, b@1 as b, c@2 as c]",
             "FilterExec: c@2 = 0",
             // repartition is lowest down
@@ -3817,7 +3817,7 @@ pub(crate) mod tests {
         assert_optimized!(expected, plan.clone(), true);
 
         let expected_first_sort_enforcement = &[
-            "SortExec: expr=[c@2 ASC]",
+            "SortExec: expr=[a@0 ASC]",
             "CoalescePartitionsExec",
             "ProjectionExec: expr=[a@0 as a, b@1 as b, c@2 as c]",
             "FilterExec: c@2 = 0",

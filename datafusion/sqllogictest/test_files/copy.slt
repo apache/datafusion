@@ -63,6 +63,12 @@ select * from validate_parquet;
 2 Bar
 1 Foo
 2 Bar
+1 Foo
+2 Bar
+1 Foo
+2 Bar
+1 Foo
+2 Bar
 
 # Copy parquet with all supported statment overrides
 query IT
@@ -107,6 +113,8 @@ select * from validate_parquet_with_options;
 ----
 1 Foo
 2 Bar
+1 Foo
+2 Bar
 
 # Copy from table to single file
 query IT
@@ -139,6 +147,8 @@ select * from validate_json_gz;
 ----
 1 Foo
 2 Bar
+1 Foo
+2 Bar
 
 # copy from table to folder of compressed csv files
 query IT
@@ -153,6 +163,8 @@ CREATE EXTERNAL TABLE validate_csv STORED AS csv COMPRESSION TYPE gzip LOCATION 
 query IT
 select * from validate_csv;
 ----
+1 Foo
+2 Bar
 1 Foo
 2 Bar
 
@@ -187,6 +199,8 @@ select * from validate_json;
 ----
 1 Foo
 2 Bar
+1 Foo
+2 Bar
 
 # Copy from table to single json file
 query IT
@@ -201,6 +215,8 @@ CREATE EXTERNAL TABLE validate_single_json STORED AS json LOCATION 'test_files/s
 query IT
 select * from validate_single_json;
 ----
+1 Foo
+2 Bar
 1 Foo
 2 Bar
 
@@ -227,6 +243,8 @@ LOCATION 'test_files/scratch/copy/table_csv_with_options';
 query T
 select * from validate_csv_with_options;
 ----
+1;Foo
+2;Bar
 1;Foo
 2;Bar
 

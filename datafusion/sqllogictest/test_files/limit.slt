@@ -381,6 +381,125 @@ SELECT COUNT(*) FROM (SELECT a FROM t1 WHERE a > 3 LIMIT 3 OFFSET 6);
 ----
 1
 
+# generate BIGINT data from 1 to 1000 in multiple partitions
+statement ok
+CREATE TABLE t1000 (i BIGINT) AS
+WITH t AS (VALUES (0), (0), (0), (0), (0), (0), (0), (0), (0), (0))
+SELECT ROW_NUMBER() OVER (PARTITION BY t1.column1) FROM t t1, t t2, t t3;
+
+# verify that there are multiple partitions in the input (i.e. MemoryExec says
+# there are 4 partitions) so that this tests multi-partition limit.
+query TT
+EXPLAIN SELECT DISTINCT i FROM t1000;
+----
+logical_plan
+Aggregate: groupBy=[[t1000.i]], aggr=[[]]
+--TableScan: t1000 projection=[i]
+physical_plan
+AggregateExec: mode=FinalPartitioned, gby=[i@0 as i], aggr=[]
+--CoalesceBatchesExec: target_batch_size=8192
+----RepartitionExec: partitioning=Hash([i@0], 4), input_partitions=4
+------AggregateExec: mode=Partial, gby=[i@0 as i], aggr=[]
+--------MemoryExec: partitions=4, partition_sizes=[1, 1, 2, 1]
+
+query I
+SELECT i FROM t1000 ORDER BY i DESC LIMIT 3;
+----
+1000
+999
+998
+
+query I
+SELECT i FROM t1000 ORDER BY i LIMIT 3;
+----
+1
+2
+3
+
+query I
+SELECT COUNT(*) FROM (SELECT i FROM t1000 LIMIT 3);
+----
+3
+
+# limit_multi_partitions
+statement ok
+CREATE TABLE t15 (i BIGINT);
+
+query I
+INSERT INTO t15 VALUES (1);
+----
+1
+
+query I
+INSERT INTO t15 VALUES (1), (2);
+----
+2
+
+query I
+INSERT INTO t15 VALUES (1), (2), (3);
+----
+3
+
+query I
+INSERT INTO t15 VALUES (1), (2), (3), (4);
+----
+4
+
+query I
+INSERT INTO t15 VALUES (1), (2), (3), (4), (5);
+----
+5
+
+query I
+SELECT COUNT(*) FROM t15;
+----
+15
+
+query I
+SELECT COUNT(*) FROM (SELECT i FROM t15 LIMIT 1);
+----
+1
+
+query I
+SELECT COUNT(*) FROM (SELECT i FROM t15 LIMIT 2);
+----
+2
+
+query I
+SELECT COUNT(*) FROM (SELECT i FROM t15 LIMIT 3);
+----
+3
+
+query I
+SELECT COUNT(*) FROM (SELECT i FROM t15 LIMIT 4);
+----
+4
+
+query I
+SELECT COUNT(*) FROM (SELECT i FROM t15 LIMIT 5);
+----
+5
+
+query I
+SELECT COUNT(*) FROM (SELECT i FROM t15 LIMIT 6);
+----
+6
+
+query I
+SELECT COUNT(*) FROM (SELECT i FROM t15 LIMIT 7);
+----
+7
+
+query I
+SELECT COUNT(*) FROM (SELECT i FROM t15 LIMIT 8);
+----
+8
+
+query I
+SELECT COUNT(*) FROM (SELECT i FROM t15 LIMIT 9);
+----
+9
+
 ########
 # Clean up after the test
 ########

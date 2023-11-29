@@ -38,9 +38,8 @@ use super::PartitionedFile;
 use crate::datasource::listing::ListingTableUrl;
 use crate::execution::context::SessionState;
 use datafusion_common::tree_node::{TreeNode, VisitRecursion};
-use datafusion_common::{Column, DFField, DFSchema, DataFusionError};
-use datafusion_expr::expr::ScalarUDF;
-use datafusion_expr::{Expr, Volatility};
+use datafusion_common::{internal_err, Column, DFField, DFSchema, DataFusionError};
+use datafusion_expr::{Expr, ScalarFunctionDefinition, Volatility};
 use datafusion_physical_expr::create_physical_expr;
 use datafusion_physical_expr::execution_props::ExecutionProps;
 use object_store::path::Path;
@@ -54,13 +53,13 @@ use object_store::{ObjectMeta, ObjectStore};
 pub fn expr_applicable_for_cols(col_names: &[String], expr: &Expr) -> bool {
     let mut is_applicable = true;
     expr.apply(&mut |expr| {
-        Ok(match expr {
+        match expr {
             Expr::Column(Column { ref name, .. }) => {
                 is_applicable &= col_names.contains(name);
                 if is_applicable {
-                    VisitRecursion::Skip
+                    Ok(VisitRecursion::Skip)
                 } else {
-                    VisitRecursion::Stop
+                    Ok(VisitRecursion::Stop)
                 }
             }
             Expr::Literal(_)
@@ -89,25 +88,32 @@ pub fn expr_applicable_for_cols(col_names: &[String], expr: &Expr) -> bool {
             | Expr::ScalarSubquery(_)
             | Expr::GetIndexedField { .. }
             | Expr::GroupingSet(_)
-            | Expr::Case { .. } => VisitRecursion::Continue,
+            | Expr::Case { .. } => Ok(VisitRecursion::Continue),
 
             Expr::ScalarFunction(scalar_function) => {
-                match scalar_function.fun.volatility() {
-                    Volatility::Immutable => VisitRecursion::Continue,
-                    // TODO: Stable functions could be `applicable`, but that would require access to the context
-                    Volatility::Stable | Volatility::Volatile => {
-                        is_applicable = false;
-                        VisitRecursion::Stop
+                match &scalar_function.func_def {
+                    ScalarFunctionDefinition::BuiltIn { fun, .. } => {
+                        match fun.volatility() {
+                            Volatility::Immutable => Ok(VisitRecursion::Continue),
+                            // TODO: Stable functions could be `applicable`, but that would require access to the context
+                            Volatility::Stable | Volatility::Volatile => {
+                                is_applicable = false;
+                                Ok(VisitRecursion::Stop)
+                            }
+                        }
                     }
-                }
-            }
-            Expr::ScalarUDF(ScalarUDF { fun, .. }) => {
-                match fun.signature().volatility {
-                    Volatility::Immutable => VisitRecursion::Continue,
-                    // TODO: Stable functions could be `applicable`, but that would require access to the context
-                    Volatility::Stable | Volatility::Volatile => {
-                        is_applicable = false;
-                        VisitRecursion::Stop
+                    ScalarFunctionDefinition::UDF(fun) => {
+                        match fun.signature().volatility {
+                            Volatility::Immutable => Ok(VisitRecursion::Continue),
+                            // TODO: Stable functions could be `applicable`, but that would require access to the context
+                            Volatility::Stable | Volatility::Volatile => {
+                                is_applicable = false;
+                                Ok(VisitRecursion::Stop)
+                            }
+                        }
+                    }
+                    ScalarFunctionDefinition::Name(_) => {
+                        internal_err!("Function `Expr` with name should be resolved.")
                     }
                 }
             }
@@ -123,9 +129,9 @@ pub fn expr_applicable_for_cols(col_names: &[String], expr: &Expr) -> bool {
             | Expr::Wildcard { .. }
             | Expr::Placeholder(_) => {
                 is_applicable = false;
-                VisitRecursion::Stop
+                Ok(VisitRecursion::Stop)
             }
-        })
+        }
     })
     .unwrap();
     is_applicable

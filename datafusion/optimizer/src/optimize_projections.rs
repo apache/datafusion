@@ -24,7 +24,7 @@ use crate::optimizer::ApplyOrder;
 use datafusion_common::{
     get_required_group_by_exprs_indices, Column, DFSchema, DFSchemaRef, JoinType, Result,
 };
-use datafusion_expr::expr::{Alias, ScalarFunction};
+use datafusion_expr::expr::{Alias, ScalarFunction, ScalarFunctionDefinition};
 use datafusion_expr::{
     logical_plan::LogicalPlan, projection_schema, Aggregate, BinaryExpr, Cast, Distinct,
     Expr, Projection, TableScan, Window,
@@ -528,14 +528,21 @@ fn rewrite_expr(expr: &Expr, input: &Projection) -> Result<Option<Expr>> {
                 cast.data_type.clone(),
             )))
         }
-        Expr::ScalarFunction(scalar_fn) => scalar_fn
-            .args
-            .iter()
-            .map(|expr| rewrite_expr(expr, input))
-            .collect::<Result<Option<Vec<_>>>>()?
-            .map(|new_args| {
-                Expr::ScalarFunction(ScalarFunction::new(scalar_fn.fun, new_args))
-            }),
+        Expr::ScalarFunction(scalar_fn) => {
+            let fun = if let ScalarFunctionDefinition::BuiltIn { fun, .. } =
+                scalar_fn.func_def
+            {
+                fun
+            } else {
+                return Ok(None);
+            };
+            scalar_fn
+                .args
+                .iter()
+                .map(|expr| rewrite_expr(expr, input))
+                .collect::<Result<Option<Vec<_>>>>()?
+                .map(|new_args| Expr::ScalarFunction(ScalarFunction::new(fun, new_args)))
+        }
         _ => {
             // Unsupported type to merge in consecutive projections
             None
