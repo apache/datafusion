@@ -70,33 +70,13 @@ pub trait WindowExpr: Send + Sync + Debug {
 
     /// Human readable name such as `"MIN(c2)"` or `"RANK()"`. The default
     /// implementation returns placeholder text.
-    fn name(&self) -> String {
-        "WindowExpr: default name".to_string()
+    fn name(&self) -> &str {
+        "WindowExpr: default name"
     }
 
     /// Human readable name such as `"MIN(c2)"` or `"RANK()"`. The default
     /// implementation returns `"FUNCTION_NAME(args, [PARTITION BY[exprs], ORDER BY[sort exprs]])"`
-    fn display_name(&self) -> String {
-        let mut display_name = self.name().to_string();
-        if !self.partition_by().is_empty() {
-            let partition_bys = self
-                .partition_by()
-                .iter()
-                .map(|expr| format!("{}", expr))
-                .collect::<Vec<_>>();
-            display_name =
-                format!("{display_name} PARTITION BY [{}]", partition_bys.join(", "))
-        }
-        if !self.order_by().is_empty() {
-            let order_bys = self
-                .order_by()
-                .iter()
-                .map(|expr| format!("{}", expr))
-                .collect::<Vec<_>>();
-            display_name = format!("{display_name} ORDER BY [{}]", order_bys.join(", "))
-        }
-        display_name
-    }
+    fn display_name(&self) -> String;
 
     /// Expressions that are passed to the WindowAccumulator.
     /// Functions which take a single input argument, such as `sum`, return a single [`datafusion_expr::expr::Expr`],
@@ -286,6 +266,32 @@ pub trait AggregateWindowExpr: WindowExpr {
 /// Get order by expression results inside `order_by_columns`.
 pub(crate) fn get_orderby_values(order_by_columns: Vec<SortColumn>) -> Vec<ArrayRef> {
     order_by_columns.into_iter().map(|s| s.values).collect()
+}
+
+/// Human readable name such as `"MIN(c2)"` or `"RANK()"`. The default
+/// implementation returns `"FUNCTION_NAME(args, [PARTITION BY[exprs], ORDER BY[sort exprs]])"`
+pub(crate) fn display_name_helper(
+    func_name: String,
+    partition_bys: &[Arc<dyn PhysicalExpr>],
+    order_bys: &[PhysicalSortExpr],
+) -> String {
+    let mut display_name = func_name;
+    if !partition_bys.is_empty() {
+        let partition_bys = partition_bys
+            .iter()
+            .map(|expr| format!("{}", expr))
+            .collect::<Vec<_>>();
+        display_name =
+            format!("{display_name} PARTITION BY [{}]", partition_bys.join(", "))
+    }
+    if !order_bys.is_empty() {
+        let order_bys = order_bys
+            .iter()
+            .map(|expr| format!("{}", expr))
+            .collect::<Vec<_>>();
+        display_name = format!("{display_name} ORDER BY [{}]", order_bys.join(", "))
+    }
+    display_name
 }
 
 #[derive(Debug)]

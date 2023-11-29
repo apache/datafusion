@@ -23,7 +23,7 @@ use std::sync::Arc;
 
 use super::{BuiltInWindowFunctionExpr, WindowExpr};
 use crate::expressions::PhysicalSortExpr;
-use crate::window::window_expr::{get_orderby_values, WindowFn};
+use crate::window::window_expr::{display_name_helper, get_orderby_values, WindowFn};
 use crate::window::{PartitionBatches, PartitionWindowAggStates, WindowState};
 use crate::{reverse_order_bys, EquivalenceProperties, PhysicalExpr};
 
@@ -102,8 +102,12 @@ impl WindowExpr for BuiltInWindowExpr {
         self
     }
 
-    fn name(&self) -> String {
-        self.expr.display_name()
+    fn name(&self) -> &str {
+        self.expr.name()
+    }
+
+    fn display_name(&self) -> String {
+        display_name_helper(self.expr.display_name(), &self.partition_by, &self.order_by)
     }
 
     fn field(&self) -> Result<Field> {

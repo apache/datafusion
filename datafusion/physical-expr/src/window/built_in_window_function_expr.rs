@@ -56,7 +56,7 @@ pub trait BuiltInWindowFunctionExpr: Send + Sync + std::fmt::Debug {
     fn func_name(&self) -> &str;
 
     /// Human readable name such as `"MIN(c2)"` or `"RANK()"`. The default
-    /// implementation returns `"FUNCTION_NAME(args, [PARTITION BY[exprs], ORDER BY[sort exprs]])"`
+    /// implementation returns `"FUNCTION_NAME(args)"`
     fn display_name(&self) -> String {
         let fn_name = self.func_name().to_string();
         let exprs = self

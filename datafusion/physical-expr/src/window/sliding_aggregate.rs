@@ -28,7 +28,7 @@ use arrow::record_batch::RecordBatch;
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::{Accumulator, WindowFrame};
 
-use crate::window::window_expr::AggregateWindowExpr;
+use crate::window::window_expr::{display_name_helper, AggregateWindowExpr};
 use crate::window::{
     PartitionBatches, PartitionWindowAggStates, PlainAggregateWindowExpr, WindowExpr,
 };
@@ -85,8 +85,16 @@ impl WindowExpr for SlidingAggregateWindowExpr {
         self.aggregate.field()
     }
 
-    fn name(&self) -> String {
-        self.aggregate.display_name()
+    fn name(&self) -> &str {
+        self.aggregate.name()
+    }
+
+    fn display_name(&self) -> String {
+        display_name_helper(
+            self.aggregate.display_name(),
+            &self.partition_by,
+            &self.order_by,
+        )
     }
 
     fn expressions(&self) -> Vec<Arc<dyn PhysicalExpr>> {
