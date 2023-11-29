@@ -326,7 +326,6 @@ create external table new_empty_table(x int) stored as parquet  location 'test_f
 query I
 select * from new_empty_table;
 ----
-1
 
 # should succeed and the table should create the direectory
 statement ok
@@ -336,7 +335,6 @@ insert into new_empty_table values (1);
 query I
 select * from new_empty_table;
 ----
-1
 1
 
 statement ok
