@@ -2358,11 +2358,11 @@ physical_plan
 GlobalLimitExec: skip=0, fetch=4
 --SortPreservingMergeExec: [MAX(traces.timestamp)@1 DESC], fetch=4
 ----SortExec: TopK(fetch=4), expr=[MAX(traces.timestamp)@1 DESC]
-------AggregateExec: mode=FinalPartitioned, gby=[trace_id@0 as trace_id], aggr=[MAX(traces.timestamp)]
+------AggregateExec: mode=FinalPartitioned, gby=[trace_id@0 as trace_id], aggr=[MAX(timestamp@1)]
 --------CoalesceBatchesExec: target_batch_size=8192
 ----------RepartitionExec: partitioning=Hash([trace_id@0], 4), input_partitions=4
 ------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
---------------AggregateExec: mode=Partial, gby=[trace_id@0 as trace_id], aggr=[MAX(traces.timestamp)]
+--------------AggregateExec: mode=Partial, gby=[trace_id@0 as trace_id], aggr=[MAX(timestamp@1)]
 ----------------MemoryExec: partitions=1, partition_sizes=[1]
 
 
@@ -2413,11 +2413,11 @@ physical_plan
 GlobalLimitExec: skip=0, fetch=4
 --SortPreservingMergeExec: [MAX(traces.timestamp)@1 DESC], fetch=4
 ----SortExec: TopK(fetch=4), expr=[MAX(traces.timestamp)@1 DESC]
-------AggregateExec: mode=FinalPartitioned, gby=[trace_id@0 as trace_id], aggr=[MAX(traces.timestamp)], lim=[4]
+------AggregateExec: mode=FinalPartitioned, gby=[trace_id@0 as trace_id], aggr=[MAX(timestamp@1)], lim=[4]
 --------CoalesceBatchesExec: target_batch_size=8192
 ----------RepartitionExec: partitioning=Hash([trace_id@0], 4), input_partitions=4
 ------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
---------------AggregateExec: mode=Partial, gby=[trace_id@0 as trace_id], aggr=[MAX(traces.timestamp)], lim=[4]
+--------------AggregateExec: mode=Partial, gby=[trace_id@0 as trace_id], aggr=[MAX(timestamp@1)], lim=[4]
 ----------------MemoryExec: partitions=1, partition_sizes=[1]
 
 query TT
@@ -2432,11 +2432,11 @@ physical_plan
 GlobalLimitExec: skip=0, fetch=4
 --SortPreservingMergeExec: [MIN(traces.timestamp)@1 DESC], fetch=4
 ----SortExec: TopK(fetch=4), expr=[MIN(traces.timestamp)@1 DESC]
-------AggregateExec: mode=FinalPartitioned, gby=[trace_id@0 as trace_id], aggr=[MIN(traces.timestamp)]
+------AggregateExec: mode=FinalPartitioned, gby=[trace_id@0 as trace_id], aggr=[MIN(timestamp@1)]
 --------CoalesceBatchesExec: target_batch_size=8192
 ----------RepartitionExec: partitioning=Hash([trace_id@0], 4), input_partitions=4
 ------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
---------------AggregateExec: mode=Partial, gby=[trace_id@0 as trace_id], aggr=[MIN(traces.timestamp)]
+--------------AggregateExec: mode=Partial, gby=[trace_id@0 as trace_id], aggr=[MIN(timestamp@1)]
 ----------------MemoryExec: partitions=1, partition_sizes=[1]
 
 query TT
@@ -2451,11 +2451,11 @@ physical_plan
 GlobalLimitExec: skip=0, fetch=4
 --SortPreservingMergeExec: [MAX(traces.timestamp)@1 ASC NULLS LAST], fetch=4
 ----SortExec: TopK(fetch=4), expr=[MAX(traces.timestamp)@1 ASC NULLS LAST]
-------AggregateExec: mode=FinalPartitioned, gby=[trace_id@0 as trace_id], aggr=[MAX(traces.timestamp)]
+------AggregateExec: mode=FinalPartitioned, gby=[trace_id@0 as trace_id], aggr=[MAX(timestamp@1)]
 --------CoalesceBatchesExec: target_batch_size=8192
 ----------RepartitionExec: partitioning=Hash([trace_id@0], 4), input_partitions=4
 ------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
---------------AggregateExec: mode=Partial, gby=[trace_id@0 as trace_id], aggr=[MAX(traces.timestamp)]
+--------------AggregateExec: mode=Partial, gby=[trace_id@0 as trace_id], aggr=[MAX(timestamp@1)]
 ----------------MemoryExec: partitions=1, partition_sizes=[1]
 
 query TT
@@ -2470,11 +2470,11 @@ physical_plan
 GlobalLimitExec: skip=0, fetch=4
 --SortPreservingMergeExec: [trace_id@0 ASC NULLS LAST], fetch=4
 ----SortExec: TopK(fetch=4), expr=[trace_id@0 ASC NULLS LAST]
-------AggregateExec: mode=FinalPartitioned, gby=[trace_id@0 as trace_id], aggr=[MAX(traces.timestamp)]
+------AggregateExec: mode=FinalPartitioned, gby=[trace_id@0 as trace_id], aggr=[MAX(timestamp@1)]
 --------CoalesceBatchesExec: target_batch_size=8192
 ----------RepartitionExec: partitioning=Hash([trace_id@0], 4), input_partitions=4
 ------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
---------------AggregateExec: mode=Partial, gby=[trace_id@0 as trace_id], aggr=[MAX(traces.timestamp)]
+--------------AggregateExec: mode=Partial, gby=[trace_id@0 as trace_id], aggr=[MAX(timestamp@1)]
 ----------------MemoryExec: partitions=1, partition_sizes=[1]
 
 query TI
@@ -2631,9 +2631,9 @@ Projection: MAX(aggregate_test_100.c1), aggregate_test_100.c2, aggregate_test_10
 physical_plan
 ProjectionExec: expr=[MAX(aggregate_test_100.c1)@2 as MAX(aggregate_test_100.c1), c2@0 as c2, c3@1 as c3]
 --GlobalLimitExec: skip=0, fetch=5
-----AggregateExec: mode=Final, gby=[c2@0 as c2, c3@1 as c3], aggr=[MAX(aggregate_test_100.c1)]
+----AggregateExec: mode=Final, gby=[c2@0 as c2, c3@1 as c3], aggr=[MAX(c1@0)]
 ------CoalescePartitionsExec
---------AggregateExec: mode=Partial, gby=[c2@1 as c2, c3@2 as c3], aggr=[MAX(aggregate_test_100.c1)]
+--------AggregateExec: mode=Partial, gby=[c2@1 as c2, c3@2 as c3], aggr=[MAX(c1@0)]
 ----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 ------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c2, c3], has_header=true
 

@@ -360,7 +360,7 @@ mod tests {
         );
         // should not combine the Partial/Final AggregateExecs
         let expected = &[
-            "AggregateExec: mode=Final, gby=[], aggr=[COUNT(2)]",
+            "AggregateExec: mode=Final, gby=[], aggr=[COUNT(1)]",
             "AggregateExec: mode=Partial, gby=[], aggr=[COUNT(1)]",
             "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c]",
         ];
@@ -424,7 +424,7 @@ mod tests {
         let plan = final_aggregate_exec(partial_agg, final_group_by, aggr_expr);
         // should combine the Partial/Final AggregateExecs to tne Single AggregateExec
         let expected = &[
-            "AggregateExec: mode=Single, gby=[c@2 as c], aggr=[Sum(b)]",
+            "AggregateExec: mode=Single, gby=[c@2 as c], aggr=[SUM(b@1)]",
             "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c]",
         ];
 

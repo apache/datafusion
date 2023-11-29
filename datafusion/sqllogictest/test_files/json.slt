@@ -52,9 +52,9 @@ logical_plan
 Aggregate: groupBy=[[]], aggr=[[COUNT(UInt8(1)) AS COUNT(*)]]
 --TableScan: json_test projection=[]
 physical_plan
-AggregateExec: mode=Final, gby=[], aggr=[COUNT(*)]
+AggregateExec: mode=Final, gby=[], aggr=[COUNT(1)]
 --CoalescePartitionsExec
-----AggregateExec: mode=Partial, gby=[], aggr=[COUNT(*)]
+----AggregateExec: mode=Partial, gby=[], aggr=[COUNT(1)]
 ------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 --------JsonExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/2.json]]}
 

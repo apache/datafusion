@@ -229,26 +229,26 @@ fn roundtrip_window() -> Result<()> {
     };
 
     let builtin_window_expr = Arc::new(BuiltInWindowExpr::new(
-            Arc::new(NthValue::first(
-                "FIRST_VALUE(a) PARTITION BY [b] ORDER BY [a ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW",
-                col("a", &schema)?,
-                DataType::Int64,
-            )),
-            &[col("b", &schema)?],
-            &[PhysicalSortExpr {
-                expr: col("a", &schema)?,
-                options: SortOptions {
-                    descending: false,
-                    nulls_first: false,
-                },
-            }],
-            Arc::new(window_frame),
-        ));
+        Arc::new(NthValue::first(
+            "FIRST_VALUE(a@0)",
+            col("a", &schema)?,
+            DataType::Int64,
+        )),
+        &[col("b", &schema)?],
+        &[PhysicalSortExpr {
+            expr: col("a", &schema)?,
+            options: SortOptions {
+                descending: false,
+                nulls_first: false,
+            },
+        }],
+        Arc::new(window_frame),
+    ));
 
     let plain_aggr_window_expr = Arc::new(PlainAggregateWindowExpr::new(
         Arc::new(Avg::new(
             cast(col("b", &schema)?, &schema, DataType::Float64)?,
-            "AVG(b)".to_string(),
+            "AVG(CAST(b@1 AS Float64))".to_string(),
             DataType::Float64,
         )),
         &[],
@@ -265,7 +265,7 @@ fn roundtrip_window() -> Result<()> {
     let sliding_aggr_window_expr = Arc::new(SlidingAggregateWindowExpr::new(
         Arc::new(Sum::new(
             cast(col("a", &schema)?, &schema, DataType::Float64)?,
-            "SUM(a) RANGE BETWEEN CURRENT ROW AND UNBOUNDED PRECEEDING",
+            "SUM(CAST(a@0 AS Float64))",
             DataType::Float64,
         )),
         &[],

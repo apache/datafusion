@@ -365,9 +365,9 @@ Aggregate: groupBy=[[]], aggr=[[COUNT(UInt8(1)) AS COUNT(*)]]
 ----Filter: t1.a > Int32(3)
 ------TableScan: t1 projection=[a]
 physical_plan
-AggregateExec: mode=Final, gby=[], aggr=[COUNT(*)]
+AggregateExec: mode=Final, gby=[], aggr=[COUNT(1)]
 --CoalescePartitionsExec
-----AggregateExec: mode=Partial, gby=[], aggr=[COUNT(*)]
+----AggregateExec: mode=Partial, gby=[], aggr=[COUNT(1)]
 ------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 --------GlobalLimitExec: skip=6, fetch=3
 ----------CoalesceBatchesExec: target_batch_size=8192

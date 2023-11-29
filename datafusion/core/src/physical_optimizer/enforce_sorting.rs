@@ -904,17 +904,17 @@ mod tests {
 
         let physical_plan = bounded_window_exec("non_nullable_col", sort_exprs, filter);
 
-        let expected_input = ["BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow }], mode=[Sorted]",
+        let expected_input = ["BoundedWindowAggExec: wdw=[COUNT(non_nullable_col@1) ORDER BY [non_nullable_col@1 ASC NULLS LAST], frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow }], mode=[Sorted]",
             "  FilterExec: NOT non_nullable_col@1",
             "    SortExec: expr=[non_nullable_col@1 ASC NULLS LAST]",
-            "      BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow }], mode=[Sorted]",
+            "      BoundedWindowAggExec: wdw=[COUNT(non_nullable_col@1) ORDER BY [non_nullable_col@1 DESC], frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow }], mode=[Sorted]",
             "        CoalesceBatchesExec: target_batch_size=128",
             "          SortExec: expr=[non_nullable_col@1 DESC]",
             "            MemoryExec: partitions=1, partition_sizes=[0]"];
 
-        let expected_optimized = ["WindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: CurrentRow, end_bound: Following(NULL) }]",
+        let expected_optimized = ["WindowAggExec: wdw=[COUNT(non_nullable_col@1) ORDER BY [non_nullable_col@1 DESC], frame: WindowFrame { units: Range, start_bound: CurrentRow, end_bound: Following(NULL) }]",
             "  FilterExec: NOT non_nullable_col@1",
-            "    BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow }], mode=[Sorted]",
+            "    BoundedWindowAggExec: wdw=[COUNT(non_nullable_col@1) ORDER BY [non_nullable_col@1 DESC], frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow }], mode=[Sorted]",
             "      CoalesceBatchesExec: target_batch_size=128",
             "        SortExec: expr=[non_nullable_col@1 DESC]",
             "          MemoryExec: partitions=1, partition_sizes=[0]"];
@@ -1637,7 +1637,7 @@ mod tests {
         // corresponding SortExecs together. Also, the inputs of these `SortExec`s
         // are not necessarily the same to be able to remove them.
         let expected_input = [
-            "BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow }], mode=[Sorted]",
+            "BoundedWindowAggExec: wdw=[COUNT(nullable_col@0) ORDER BY [nullable_col@0 DESC NULLS LAST], frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow }], mode=[Sorted]",
             "  SortPreservingMergeExec: [nullable_col@0 DESC NULLS LAST]",
             "    UnionExec",
             "      SortExec: expr=[nullable_col@0 DESC NULLS LAST]",
@@ -1645,7 +1645,7 @@ mod tests {
             "      SortExec: expr=[nullable_col@0 DESC NULLS LAST]",
             "        ParquetExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], output_ordering=[nullable_col@0 ASC]"];
         let expected_optimized = [
-            "WindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: CurrentRow, end_bound: Following(NULL) }]",
+            "WindowAggExec: wdw=[COUNT(nullable_col@0) ORDER BY [nullable_col@0 ASC], frame: WindowFrame { units: Range, start_bound: CurrentRow, end_bound: Following(NULL) }]",
             "  SortPreservingMergeExec: [nullable_col@0 ASC]",
             "    UnionExec",
             "      ParquetExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], output_ordering=[nullable_col@0 ASC, non_nullable_col@1 ASC]",
@@ -1674,14 +1674,14 @@ mod tests {
 
         // The `WindowAggExec` can get its required sorting from the leaf nodes directly.
         // The unnecessary SortExecs should be removed
-        let expected_input = ["BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow }], mode=[Sorted]",
+        let expected_input = ["BoundedWindowAggExec: wdw=[COUNT(nullable_col@0) ORDER BY [nullable_col@0 ASC], frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow }], mode=[Sorted]",
             "  SortPreservingMergeExec: [nullable_col@0 ASC,non_nullable_col@1 ASC]",
             "    UnionExec",
             "      SortExec: expr=[nullable_col@0 ASC,non_nullable_col@1 ASC]",
             "        ParquetExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], output_ordering=[nullable_col@0 ASC]",
             "      SortExec: expr=[nullable_col@0 ASC,non_nullable_col@1 ASC]",
             "        ParquetExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], output_ordering=[nullable_col@0 ASC]"];
-        let expected_optimized = ["BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow }], mode=[Sorted]",
+        let expected_optimized = ["BoundedWindowAggExec: wdw=[COUNT(nullable_col@0) ORDER BY [nullable_col@0 ASC], frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow }], mode=[Sorted]",
             "  SortPreservingMergeExec: [nullable_col@0 ASC]",
             "    UnionExec",
             "      ParquetExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], output_ordering=[nullable_col@0 ASC]",
@@ -1969,15 +1969,15 @@ mod tests {
         let physical_plan =
             bounded_window_exec("non_nullable_col", sort_exprs1, window_agg2);
 
-        let expected_input = ["BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow }], mode=[Sorted]",
-            "  BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow }], mode=[Sorted]",
-            "    BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow }], mode=[Sorted]",
+        let expected_input = ["BoundedWindowAggExec: wdw=[COUNT(non_nullable_col@1) ORDER BY [nullable_col@0 ASC], frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow }], mode=[Sorted]",
+            "  BoundedWindowAggExec: wdw=[COUNT(non_nullable_col@1) ORDER BY [nullable_col@0 ASC, non_nullable_col@1 ASC], frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow }], mode=[Sorted]",
+            "    BoundedWindowAggExec: wdw=[COUNT(non_nullable_col@1) ORDER BY [nullable_col@0 ASC], frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow }], mode=[Sorted]",
             "      SortExec: expr=[nullable_col@0 ASC]",
             "        MemoryExec: partitions=1, partition_sizes=[0]"];
 
-        let expected_optimized = ["BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow }], mode=[Sorted]",
-            "  BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow }], mode=[Sorted]",
-            "    BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow }], mode=[Sorted]",
+        let expected_optimized = ["BoundedWindowAggExec: wdw=[COUNT(non_nullable_col@1) ORDER BY [nullable_col@0 ASC], frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow }], mode=[Sorted]",
+            "  BoundedWindowAggExec: wdw=[COUNT(non_nullable_col@1) ORDER BY [nullable_col@0 ASC, non_nullable_col@1 ASC], frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow }], mode=[Sorted]",
+            "    BoundedWindowAggExec: wdw=[COUNT(non_nullable_col@1) ORDER BY [nullable_col@0 ASC], frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow }], mode=[Sorted]",
             "      SortExec: expr=[nullable_col@0 ASC,non_nullable_col@1 ASC]",
             "        MemoryExec: partitions=1, partition_sizes=[0]"];
         assert_optimized!(expected_input, expected_optimized, physical_plan, true);
@@ -2041,7 +2041,7 @@ mod tests {
         let expected_input = vec![
             "SortExec: expr=[nullable_col@0 ASC]",
             "  RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
-            "    BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow }], mode=[Sorted]",
+            "    BoundedWindowAggExec: wdw=[COUNT(nullable_col@0) ORDER BY [nullable_col@0 ASC], frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow }], mode=[Sorted]",
             "      MemoryExec: partitions=1, partition_sizes=[0]",
         ];
         assert_eq!(
@@ -2258,7 +2258,7 @@ mod tests {
         let physical_plan = bounded_window_exec("a", sort_exprs, spm);
 
         let expected_input = [
-            "BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow }], mode=[Sorted]",
+            "BoundedWindowAggExec: wdw=[COUNT(a@0) ORDER BY [a@0 ASC, b@1 ASC], frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow }], mode=[Sorted]",
             "  SortPreservingMergeExec: [a@0 ASC,b@1 ASC]",
             "    SortPreservingRepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=10, sort_exprs=a@0 ASC,b@1 ASC",
             "      RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
@@ -2266,7 +2266,7 @@ mod tests {
             "          CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], has_header=false",
         ];
         let expected_optimized = [
-            "BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow }], mode=[Sorted]",
+            "BoundedWindowAggExec: wdw=[COUNT(a@0) ORDER BY [a@0 ASC, b@1 ASC], frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow }], mode=[Sorted]",
             "  SortExec: expr=[a@0 ASC,b@1 ASC]",
             "    CoalescePartitionsExec",
             "      RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=10",

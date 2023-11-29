@@ -614,10 +614,10 @@ async fn test_physical_plan_display_indent() {
         "  SortPreservingMergeExec: [the_min@2 DESC], fetch=10",
         "    SortExec: TopK(fetch=10), expr=[the_min@2 DESC]",
         "      ProjectionExec: expr=[c1@0 as c1, MAX(aggregate_test_100.c12)@1 as MAX(aggregate_test_100.c12), MIN(aggregate_test_100.c12)@2 as the_min]",
-        "        AggregateExec: mode=FinalPartitioned, gby=[c1@0 as c1], aggr=[MAX(aggregate_test_100.c12), MIN(aggregate_test_100.c12)]",
+        "        AggregateExec: mode=FinalPartitioned, gby=[c1@0 as c1], aggr=[MAX(c12@1), MIN(c12@1)]",
         "          CoalesceBatchesExec: target_batch_size=4096",
         "            RepartitionExec: partitioning=Hash([c1@0], 9000), input_partitions=9000",
-        "              AggregateExec: mode=Partial, gby=[c1@0 as c1], aggr=[MAX(aggregate_test_100.c12), MIN(aggregate_test_100.c12)]",
+        "              AggregateExec: mode=Partial, gby=[c1@0 as c1], aggr=[MAX(c12@1), MIN(c12@1)]",
         "                CoalesceBatchesExec: target_batch_size=4096",
         "                  FilterExec: c12@1 < 10",
         "                    RepartitionExec: partitioning=RoundRobinBatch(9000), input_partitions=1",
@@ -699,7 +699,7 @@ async fn csv_explain_analyze() {
     // Only test basic plumbing and try to avoid having to change too
     // many things. explain_analyze_baseline_metrics covers the values
     // in greater depth
-    let needle = "AggregateExec: mode=FinalPartitioned, gby=[c1@0 as c1], aggr=[COUNT(*)], metrics=[output_rows=5";
+    let needle = "AggregateExec: mode=FinalPartitioned, gby=[c1@0 as c1], aggr=[COUNT(1)], metrics=[output_rows=5";
     assert_contains!(&formatted, needle);
 
     let verbose_needle = "Output Rows";

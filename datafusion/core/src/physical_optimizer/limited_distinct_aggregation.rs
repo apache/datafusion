@@ -537,7 +537,7 @@ mod tests {
         // expected not to push the limit to the AggregateExec
         let expected = [
             "LocalLimitExec: fetch=10",
-            "AggregateExec: mode=Single, gby=[a@0 as a], aggr=[COUNT(*)]",
+            "AggregateExec: mode=Single, gby=[a@0 as a], aggr=[COUNT(1)]",
             "MemoryExec: partitions=1, partition_sizes=[1]",
         ];
         let plan: Arc<dyn ExecutionPlan> = Arc::new(limit_exec);

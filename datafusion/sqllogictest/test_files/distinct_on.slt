@@ -97,10 +97,10 @@ physical_plan
 ProjectionExec: expr=[FIRST_VALUE(aggregate_test_100.c3) ORDER BY [aggregate_test_100.c1 ASC NULLS LAST, aggregate_test_100.c3 ASC NULLS LAST]@1 as c3, FIRST_VALUE(aggregate_test_100.c2) ORDER BY [aggregate_test_100.c1 ASC NULLS LAST, aggregate_test_100.c3 ASC NULLS LAST]@2 as c2]
 --SortPreservingMergeExec: [c1@0 ASC NULLS LAST]
 ----SortExec: expr=[c1@0 ASC NULLS LAST]
-------AggregateExec: mode=FinalPartitioned, gby=[c1@0 as c1], aggr=[FIRST_VALUE(aggregate_test_100.c3), FIRST_VALUE(aggregate_test_100.c2)]
+------AggregateExec: mode=FinalPartitioned, gby=[c1@0 as c1], aggr=[FIRST_VALUE(c3@2), FIRST_VALUE(c2@1)]
 --------CoalesceBatchesExec: target_batch_size=8192
 ----------RepartitionExec: partitioning=Hash([c1@0], 4), input_partitions=4
-------------AggregateExec: mode=Partial, gby=[c1@0 as c1], aggr=[FIRST_VALUE(aggregate_test_100.c3), FIRST_VALUE(aggregate_test_100.c2)], ordering_mode=Sorted
+------------AggregateExec: mode=Partial, gby=[c1@0 as c1], aggr=[FIRST_VALUE(c3@2), FIRST_VALUE(c2@1)], ordering_mode=Sorted
 --------------SortExec: expr=[c1@0 ASC NULLS LAST,c3@2 ASC NULLS LAST]
 ----------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 ------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c2, c3], has_header=true

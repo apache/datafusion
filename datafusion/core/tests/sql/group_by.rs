@@ -83,8 +83,10 @@ async fn group_by_limit() -> Result<()> {
     let mut expected_physical_plan = r#"
 GlobalLimitExec: skip=0, fetch=4
   SortExec: TopK(fetch=4), expr=[MAX(traces.ts)@1 DESC]
-    AggregateExec: mode=Single, gby=[trace_id@0 as trace_id], aggr=[MAX(traces.ts)], lim=[4]
-    "#.trim().to_string();
+    AggregateExec: mode=Single, gby=[trace_id@0 as trace_id], aggr=[MAX(ts@1)], lim=[4]
+    "#
+    .trim()
+    .to_string();
     let actual_phys_plan =
         format_plan(physical_plan.clone(), &mut expected_physical_plan);
     assert_eq!(actual_phys_plan, expected_physical_plan);

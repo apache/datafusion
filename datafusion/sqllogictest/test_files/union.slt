@@ -424,7 +424,7 @@ Projection: COUNT(*)
 --------TableScan: t2 projection=[name]
 physical_plan
 ProjectionExec: expr=[COUNT(*)@1 as COUNT(*)]
---AggregateExec: mode=SinglePartitioned, gby=[name@0 as name], aggr=[COUNT(*)]
+--AggregateExec: mode=SinglePartitioned, gby=[name@0 as name], aggr=[COUNT(1)]
 ----InterleaveExec
 ------AggregateExec: mode=FinalPartitioned, gby=[name@0 as name], aggr=[]
 --------CoalesceBatchesExec: target_batch_size=2
@@ -573,12 +573,12 @@ Union
 physical_plan
 UnionExec
 --ProjectionExec: expr=[COUNT(*)@1 as count, n@0 as n]
-----AggregateExec: mode=FinalPartitioned, gby=[n@0 as n], aggr=[COUNT(*)]
+----AggregateExec: mode=FinalPartitioned, gby=[n@0 as n], aggr=[COUNT(1)]
 ------CoalesceBatchesExec: target_batch_size=2
 --------RepartitionExec: partitioning=Hash([n@0], 4), input_partitions=1
-----------AggregateExec: mode=Partial, gby=[n@0 as n], aggr=[COUNT(*)]
+----------AggregateExec: mode=Partial, gby=[n@0 as n], aggr=[COUNT(1)]
 ------------ProjectionExec: expr=[5 as n]
 --------------EmptyExec: produce_one_row=true
 --ProjectionExec: expr=[1 as count, MAX(Int64(10))@0 as n]
-----AggregateExec: mode=Single, gby=[], aggr=[MAX(Int64(10))]
+----AggregateExec: mode=Single, gby=[], aggr=[MAX(10)]
 ------EmptyExec: produce_one_row=true
