@@ -28,8 +28,8 @@ use std::sync::Arc;
 use crate::config::ConfigOptions;
 use crate::error::Result;
 use crate::physical_optimizer::utils::{
-    add_sort_above, get_children_exectrees, get_plan_string, is_coalesce_partitions,
-    is_repartition, is_sort_preserving_merge, ExecTree,
+    add_sort_above, get_children_exectrees, is_coalesce_partitions, is_repartition,
+    is_sort_preserving_merge, ExecTree,
 };
 use crate::physical_optimizer::PhysicalOptimizerRule;
 use crate::physical_plan::aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy};
@@ -54,8 +54,8 @@ use datafusion_physical_expr::utils::map_columns_before_projection;
 use datafusion_physical_expr::{
     physical_exprs_equal, EquivalenceProperties, PhysicalExpr,
 };
-use datafusion_physical_plan::unbounded_output;
 use datafusion_physical_plan::windows::{get_best_fitting_window, BoundedWindowAggExec};
+use datafusion_physical_plan::{get_plan_string, unbounded_output};
 
 use itertools::izip;
 
