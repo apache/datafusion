@@ -509,10 +509,9 @@ enum ExprMask {
     /// - [`Sort`](Expr::Sort)
     /// - [`Wildcard`](Expr::Wildcard)
     /// - [`AggregateFunction`](Expr::AggregateFunction)
-    /// - [`AggregateUDF`](Expr::AggregateUDF)
     Normal,
 
-    /// Like [`Normal`](Self::Normal), but includes [`AggregateFunction`](Expr::AggregateFunction) and [`AggregateUDF`](Expr::AggregateUDF).
+    /// Like [`Normal`](Self::Normal), but includes [`AggregateFunction`](Expr::AggregateFunction).
     NormalAndAggregates,
 }
 
@@ -918,19 +917,6 @@ mod test {
                 None,
                 None,
             ))
-
-            // Expr::AggregateUDF(datafusion_expr::expr::AggregateUDF::new(
-            //     Arc::new(AggregateUDF::new(
-            //         "my_agg",
-            //         &Signature::exact(vec![DataType::UInt32], Volatility::Stable),
-            //         &return_type,
-            //         &accumulator,
-            //         &state_type,
-            //     )),
-            //     vec![inner],
-            //     None,
-            //     None,
-            // ))
         };
 
         // test: common aggregates

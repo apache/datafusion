@@ -311,7 +311,11 @@ impl TreeNode for Expr {
             }) => match func_def {
                 AggregateFunctionDefinition::BuiltIn { fun, .. } => {
                     Expr::AggregateFunction(AggregateFunction::new(
-                        fun, args, distinct, filter, order_by,
+                        fun,
+                        transform_vec(args, &mut transform)?,
+                        distinct,
+                        transform_option_box(filter, &mut transform)?,
+                        transform_option_vec(order_by, &mut transform)?,
                     ))
                 }
                 AggregateFunctionDefinition::UDF(fun) => {
@@ -321,7 +325,11 @@ impl TreeNode for Expr {
                         None
                     };
                     Expr::AggregateFunction(AggregateFunction::new_udf(
-                        fun, args, distinct, filter, order_by,
+                        fun,
+                        transform_vec(args, &mut transform)?,
+                        false,
+                        transform_option_box(filter, &mut transform)?,
+                        transform_option_vec(order_by, &mut transform)?,
                     ))
                 }
                 AggregateFunctionDefinition::Name(_) => {
