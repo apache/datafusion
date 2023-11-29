@@ -374,7 +374,7 @@ fn agg_exprs_evaluation_result_on_empty_batch(
             let new_expr = match expr {
                 Expr::AggregateFunction(expr::AggregateFunction { func_def, .. }) => {
                     match func_def {
-                        AggregateFunctionDefinition::BuiltIn (fun) => {
+                        AggregateFunctionDefinition::BuiltIn(fun) => {
                             if matches!(fun, datafusion_expr::AggregateFunction::Count) {
                                 Transformed::Yes(Expr::Literal(ScalarValue::Int64(Some(
                                     0,

@@ -660,7 +660,7 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                 ref order_by,
             }) => {
                 match func_def {
-                    AggregateFunctionDefinition::BuiltIn (fun) => {
+                    AggregateFunctionDefinition::BuiltIn(fun) => {
                         let aggr_function = match fun {
                             AggregateFunction::ApproxDistinct => {
                                 protobuf::AggregateFunction::ApproxDistinct
