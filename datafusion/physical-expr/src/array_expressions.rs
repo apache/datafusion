@@ -2003,17 +2003,15 @@ pub fn general_array_distinct<OffsetSize: OffsetSizeTrait>(
     field: &FieldRef,
 ) -> Result<ArrayRef> {
     let dt = array.value_type();
-    let mut offsets = vec![OffsetSize::usize_as(0)];
-    let mut new_arrays = vec![];
+    let mut offsets = Vec::with_capacity(array.len());
+    offsets.push(OffsetSize::usize_as(0));
+    let mut new_arrays = Vec::with_capacity(array.len());
     let converter = RowConverter::new(vec![SortField::new(dt.clone())])?;
     // distinct for each list in ListArray
     for arr in array.iter().flatten() {
         let values = converter.convert_columns(&[arr])?;
-        let mut rows = Vec::with_capacity(values.num_rows());
         // sort elements in list and remove duplicates
-        for val in values.iter().sorted().dedup() {
-            rows.push(val);
-        }
+        let rows = values.iter().sorted().dedup().collect::<Vec<_>>();
         let last_offset: OffsetSize = match offsets.last().copied() {
             Some(offset) => offset,
             None => return internal_err!("offsets should not be empty"),
