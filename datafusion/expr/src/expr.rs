@@ -485,16 +485,13 @@ impl Sort {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 /// Defines which implementation of a function for DataFusion to call.
 pub enum AggregateFunctionDefinition {
-    /// Resolved to a `BuiltinScalarFunction`
-    /// There is plan to migrate `BuiltinScalarFunction` to UDF-based implementation (issue#8045)
-    /// This variant is planned to be removed in long term
     BuiltIn {
         fun: aggregate_function::AggregateFunction,
         name: Arc<str>,
     },
     /// Resolved to a user defined function
     UDF(Arc<crate::AggregateUDF>),
-    /// A scalar function constructed with name. This variant can not be executed directly
+    /// A aggregation function constructed with name. This variant can not be executed directly
     /// and instead must be resolved to one of the other variants prior to physical planning.
     Name(Arc<str>),
 }
