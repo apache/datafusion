@@ -1309,12 +1309,12 @@ select case when a = 'rust' then 1 when a == 'c++' then false end from (values('
 0
 
 # type coercion not supported in case expr (boolean <-> timestamp)
+#
+# DataFusion error: type_coercion
+# caused by
+# Error during planning: Failed to coerce then ([Timestamp(Nanosecond, None), Boolean]) and else (None) to common types in CASE WHEN expression
 query error
 select case when a = 'foo' then arrow_cast(500, 'Timestamp(Nanosecond, None)') when a = 'bar' then true end from (values('foo')) as t(a);
-----
-DataFusion error: type_coercion
-caused by
-Error during planning: Failed to coerce then ([Timestamp(Nanosecond, None), Boolean]) and else (None) to common types in CASE WHEN expression
 
 
 # csv_query_sum_cast() {
