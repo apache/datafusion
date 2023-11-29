@@ -47,7 +47,7 @@ use chrono::{DateTime, Utc};
 use datafusion_common::alias::AliasGenerator;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{DataFusionError, Result};
-use datafusion_expr::logical_plan::LogicalPlan;
+use datafusion_expr::LogicalPlan;
 use log::{debug, warn};
 use std::collections::HashSet;
 use std::sync::Arc;
