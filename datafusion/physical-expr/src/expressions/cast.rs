@@ -176,9 +176,17 @@ pub fn cast_column(
             kernels::cast::cast_with_options(array, cast_type, &cast_options)?,
         )),
         ColumnarValue::Scalar(scalar) => {
-            let scalar_array = if let ScalarValue::Float64(Some(float_ts)) = scalar {
-                ScalarValue::Int64(Some((float_ts * 1_000_000_000_f64).trunc() as i64))
+            let scalar_array = if cast_type
+                == &DataType::Timestamp(arrow_schema::TimeUnit::Nanosecond, None)
+            {
+                if let ScalarValue::Float64(Some(float_ts)) = scalar {
+                    ScalarValue::Int64(
+                        Some((float_ts * 1_000_000_000_f64).trunc() as i64),
+                    )
                     .to_array()?
+                } else {
+                    scalar.to_array()?
+                }
             } else {
                 scalar.to_array()?
             };
