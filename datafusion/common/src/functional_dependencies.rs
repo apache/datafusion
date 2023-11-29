@@ -427,62 +427,59 @@ pub fn aggregate_functional_dependencies(
     let target_indices = (0..aggr_schema.fields().len()).collect::<Vec<_>>();
     // Get functional dependencies of the schema:
     let func_dependencies = aggr_input_schema.functional_dependencies();
-    func_dependencies.deps.iter().for_each(
-        |FunctionalDependence {
-             source_indices,
-             nullable,
-             mode,
-             ..
-         }| {
-            // Keep source indices in a `HashSet` to prevent duplicate entries:
-            let mut new_source_indices = HashSet::new();
-            let mut new_source_field_names = vec![];
-            let source_field_names = source_indices
-                .iter()
-                .map(|&idx| aggr_input_fields[idx].qualified_name())
-                .collect::<Vec<_>>();
+    for FunctionalDependence {
+        source_indices,
+        nullable,
+        mode,
+        ..
+    } in &func_dependencies.deps
+    {
+        // Keep source indices in a `HashSet` to prevent duplicate entries:
+        let mut new_source_indices = HashSet::new();
+        let mut new_source_field_names = vec![];
+        let source_field_names = source_indices
+            .iter()
+            .map(|&idx| aggr_input_fields[idx].qualified_name())
+            .collect::<Vec<_>>();
 
-            for (idx, group_by_expr_name) in group_by_expr_names.iter().enumerate() {
-                // When one of the input determinant expressions matches with
-                // the GROUP BY expression, add the index of the GROUP BY
-                // expression as a new determinant key:
-                if source_field_names.contains(group_by_expr_name) {
-                    new_source_indices.insert(idx);
-                    if !new_source_field_names.contains(group_by_expr_name) {
-                        new_source_field_names.push(group_by_expr_name.clone());
-                    }
+        for (idx, group_by_expr_name) in group_by_expr_names.iter().enumerate() {
+            // When one of the input determinant expressions matches with
+            // the GROUP BY expression, add the index of the GROUP BY
+            // expression as a new determinant key:
+            if source_field_names.contains(group_by_expr_name) {
+                new_source_indices.insert(idx);
+                if !new_source_field_names.contains(group_by_expr_name) {
+                    new_source_field_names.push(group_by_expr_name.clone());
                 }
             }
-            let existing_target_indices = get_target_functional_dependencies(
-                aggr_input_schema,
-                group_by_expr_names,
+        }
+        let existing_target_indices =
+            get_target_functional_dependencies(aggr_input_schema, group_by_expr_names);
+        let new_target_indices = get_target_functional_dependencies(
+            aggr_input_schema,
+            &new_source_field_names,
+        );
+        let mode = if existing_target_indices == new_target_indices
+            && new_target_indices.is_some()
+        {
+            // If dependency covers all of the group by exprs, mode will be single
+            Dependency::Single
+        } else {
+            // Otherwise existing mode is preserved
+            *mode
+        };
+        // All of the composite indices occur in the GROUP BY expression:
+        if new_source_indices.len() == source_indices.len() {
+            aggregate_func_dependencies.push(
+                FunctionalDependence::new(
+                    new_source_indices.into_iter().collect(),
+                    target_indices.clone(),
+                    *nullable,
+                )
+                .with_mode(mode),
             );
-            let new_target_indices = get_target_functional_dependencies(
-                aggr_input_schema,
-                &new_source_field_names,
-            );
-            let mode = if existing_target_indices == new_target_indices
-                && new_target_indices.is_some()
-            {
-                // If dependency covers all of the group by exprs, mode will be single
-                Dependency::Single
-            } else {
-                // Otherwise existing mode is preserved
-                *mode
-            };
-            // All of the composite indices occur in the GROUP BY expression:
-            if new_source_indices.len() == source_indices.len() {
-                aggregate_func_dependencies.push(
-                    FunctionalDependence::new(
-                        new_source_indices.into_iter().collect(),
-                        target_indices.clone(),
-                        *nullable,
-                    )
-                    .with_mode(mode),
-                );
-            }
-        },
-    );
+        }
+    }
 
     // If we have a single GROUP BY key, we can guarantee uniqueness after aggregation:
     if group_by_expr_names.len() == 1 {
