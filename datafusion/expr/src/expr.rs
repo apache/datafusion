@@ -17,7 +17,6 @@
 
 //! Expr module contains core type definition for `Expr`.
 
-use crate::built_in_function;
 use crate::expr_fn::binary_expr;
 use crate::logical_plan::Subquery;
 use crate::udaf;
@@ -26,6 +25,7 @@ use crate::window_frame;
 use crate::window_function;
 use crate::Operator;
 use crate::{aggregate_function, ExprSchemable};
+use crate::{built_in_function, BuiltinScalarFunction};
 use arrow::datatypes::DataType;
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{internal_err, DFSchema, OwnedTableReference};
@@ -342,10 +342,7 @@ pub enum ScalarFunctionDefinition {
     /// Resolved to a `BuiltinScalarFunction`
     /// There is plan to migrate `BuiltinScalarFunction` to UDF-based implementation (issue#8045)
     /// This variant is planned to be removed in long term
-    BuiltIn {
-        fun: built_in_function::BuiltinScalarFunction,
-        name: Arc<str>,
-    },
+    BuiltIn(BuiltinScalarFunction),
     /// Resolved to a user defined function
     UDF(Arc<crate::ScalarUDF>),
     /// A scalar function constructed with name. This variant can not be executed directly
@@ -373,7 +370,7 @@ impl ScalarFunctionDefinition {
     /// Function's name for display
     pub fn name(&self) -> &str {
         match self {
-            ScalarFunctionDefinition::BuiltIn { name, .. } => name.as_ref(),
+            ScalarFunctionDefinition::BuiltIn(fun) => fun.name(),
             ScalarFunctionDefinition::UDF(udf) => udf.name(),
             ScalarFunctionDefinition::Name(func_name) => func_name.as_ref(),
         }
@@ -384,10 +381,7 @@ impl ScalarFunction {
     /// Create a new ScalarFunction expression
     pub fn new(fun: built_in_function::BuiltinScalarFunction, args: Vec<Expr>) -> Self {
         Self {
-            func_def: ScalarFunctionDefinition::BuiltIn {
-                fun,
-                name: Arc::from(fun.to_string()),
-            },
+            func_def: ScalarFunctionDefinition::BuiltIn(fun),
             args,
         }
     }

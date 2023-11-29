@@ -349,7 +349,7 @@ pub fn create_physical_expr(
         }
 
         Expr::ScalarFunction(ScalarFunction { func_def, args }) => match func_def {
-            ScalarFunctionDefinition::BuiltIn { fun, .. } => {
+            ScalarFunctionDefinition::BuiltIn(fun) => {
                 let physical_args = args
                     .iter()
                     .map(|e| {

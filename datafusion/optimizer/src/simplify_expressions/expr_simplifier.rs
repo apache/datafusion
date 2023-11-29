@@ -345,7 +345,7 @@ impl<'a> ConstEvaluator<'a> {
             | Expr::Wildcard { .. }
             | Expr::Placeholder(_) => false,
             Expr::ScalarFunction(ScalarFunction { func_def, .. }) => match func_def {
-                ScalarFunctionDefinition::BuiltIn { fun, .. } => {
+                ScalarFunctionDefinition::BuiltIn(fun) => {
                     Self::volatility_ok(fun.volatility())
                 }
                 ScalarFunctionDefinition::UDF(fun) => {
@@ -1203,41 +1203,28 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
 
             // log
             Expr::ScalarFunction(ScalarFunction {
-                func_def:
-                    ScalarFunctionDefinition::BuiltIn {
-                        fun: BuiltinScalarFunction::Log,
-                        ..
-                    },
+                func_def: ScalarFunctionDefinition::BuiltIn(BuiltinScalarFunction::Log),
                 args,
             }) => simpl_log(args, <&S>::clone(&info))?,
 
             // power
             Expr::ScalarFunction(ScalarFunction {
-                func_def:
-                    ScalarFunctionDefinition::BuiltIn {
-                        fun: BuiltinScalarFunction::Power,
-                        ..
-                    },
+                func_def: ScalarFunctionDefinition::BuiltIn(BuiltinScalarFunction::Power),
                 args,
             }) => simpl_power(args, <&S>::clone(&info))?,
 
             // concat
             Expr::ScalarFunction(ScalarFunction {
-                func_def:
-                    ScalarFunctionDefinition::BuiltIn {
-                        fun: BuiltinScalarFunction::Concat,
-                        ..
-                    },
+                func_def: ScalarFunctionDefinition::BuiltIn(BuiltinScalarFunction::Concat),
                 args,
             }) => simpl_concat(args)?,
 
             // concat_ws
             Expr::ScalarFunction(ScalarFunction {
                 func_def:
-                    ScalarFunctionDefinition::BuiltIn {
-                        fun: BuiltinScalarFunction::ConcatWithSeparator,
-                        ..
-                    },
+                    ScalarFunctionDefinition::BuiltIn(
+                        BuiltinScalarFunction::ConcatWithSeparator,
+                    ),
                 args,
             }) => match &args[..] {
                 [delimiter, vals @ ..] => simpl_concat_ws(delimiter, vals)?,
