@@ -17,8 +17,8 @@
 
 use super::{Between, Expr, Like};
 use crate::expr::{
-    AggregateFunction, AggregateUDF, Alias, BinaryExpr, Cast, GetFieldAccess,
-    GetIndexedField, InList, InSubquery, Placeholder, ScalarFunction,
+    AggregateFunction, AggregateFunctionDefinition, Alias, BinaryExpr, Cast,
+    GetFieldAccess, GetIndexedField, InList, InSubquery, Placeholder, ScalarFunction,
     ScalarFunctionDefinition, Sort, TryCast, WindowFunction,
 };
 use crate::field_util::GetFieldAccessSchema;
@@ -123,19 +123,26 @@ impl ExprSchemable for Expr {
                     .collect::<Result<Vec<_>>>()?;
                 fun.return_type(&data_types)
             }
-            Expr::AggregateFunction(AggregateFunction { fun, args, .. }) => {
-                let data_types = args
-                    .iter()
-                    .map(|e| e.get_type(schema))
-                    .collect::<Result<Vec<_>>>()?;
-                fun.return_type(&data_types)
-            }
-            Expr::AggregateUDF(AggregateUDF { fun, args, .. }) => {
-                let data_types = args
-                    .iter()
-                    .map(|e| e.get_type(schema))
-                    .collect::<Result<Vec<_>>>()?;
-                fun.return_type(&data_types)
+            Expr::AggregateFunction(AggregateFunction { func_def, args, .. }) => {
+                match func_def {
+                    AggregateFunctionDefinition::BuiltIn { fun, .. } => {
+                        let data_types = args
+                            .iter()
+                            .map(|e| e.get_type(schema))
+                            .collect::<Result<Vec<_>>>()?;
+                        fun.return_type(&data_types)
+                    }
+                    AggregateFunctionDefinition::UDF(fun) => {
+                        let data_types = args
+                            .iter()
+                            .map(|e| e.get_type(schema))
+                            .collect::<Result<Vec<_>>>()?;
+                        Ok(fun.return_type(&data_types)?)
+                    }
+                    AggregateFunctionDefinition::Name(_) => {
+                        internal_err!("Function `Expr` with name should be resolved.")
+                    }
+                }
             }
             Expr::Not(_)
             | Expr::IsNull(_)
@@ -252,7 +259,6 @@ impl ExprSchemable for Expr {
             | Expr::ScalarFunction(..)
             | Expr::WindowFunction { .. }
             | Expr::AggregateFunction { .. }
-            | Expr::AggregateUDF { .. }
             | Expr::Placeholder(_) => Ok(true),
             Expr::IsNull(_)
             | Expr::IsNotNull(_)

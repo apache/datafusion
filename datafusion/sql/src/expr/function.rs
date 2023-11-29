@@ -135,8 +135,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             // User defined aggregate functions (UDAF) have precedence in case it has the same name as a scalar built-in function
             if let Some(fm) = self.context_provider.get_aggregate_meta(&name) {
                 let args = self.function_args_to_expr(args, schema, planner_context)?;
-                return Ok(Expr::AggregateUDF(expr::AggregateUDF::new(
-                    fm, args, None, None,
+                return Ok(Expr::AggregateFunction(expr::AggregateFunction::new_udf(
+                    fm, args, false, None, None,
                 )));
             }
 

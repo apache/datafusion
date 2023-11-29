@@ -144,20 +144,20 @@ impl TreeNodeRewriter for CountWildcardRewriter {
                 _ => old_expr,
             },
             Expr::AggregateFunction(AggregateFunction {
-                fun: aggregate_function::AggregateFunction::Count,
+                func_def: _,
                 args,
                 distinct,
                 filter,
                 order_by,
             }) if args.len() == 1 => match args[0] {
                 Expr::Wildcard { qualifier: None } => {
-                    Expr::AggregateFunction(AggregateFunction {
-                        fun: aggregate_function::AggregateFunction::Count,
-                        args: vec![lit(COUNT_STAR_EXPANSION)],
+                    Expr::AggregateFunction(AggregateFunction::new(
+                        aggregate_function::AggregateFunction::Count,
+                        vec![lit(COUNT_STAR_EXPANSION)],
                         distinct,
                         filter,
                         order_by,
-                    })
+                    ))
                 }
                 _ => old_expr,
             },

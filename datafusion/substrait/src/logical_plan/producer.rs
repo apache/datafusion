@@ -33,8 +33,8 @@ use datafusion::common::{exec_err, internal_err, not_impl_err};
 #[allow(unused_imports)]
 use datafusion::logical_expr::aggregate_function;
 use datafusion::logical_expr::expr::{
-    Alias, BinaryExpr, Case, Cast, GroupingSet, InList, ScalarFunctionDefinition, Sort,
-    WindowFunction,
+    AggregateFunctionDefinition, Alias, BinaryExpr, Case, Cast, GroupingSet, InList,
+    ScalarFunction as DFScalarFunction, ScalarFunctionDefinition, Sort, WindowFunction,
 };
 use datafusion::logical_expr::{expr, Between, JoinConstraint, LogicalPlan, Operator};
 use datafusion::prelude::Expr;
@@ -578,65 +578,73 @@ pub fn to_substrait_agg_measure(
     ),
 ) -> Result<Measure> {
     match expr {
-        Expr::AggregateFunction(expr::AggregateFunction { fun, args, distinct, filter, order_by }) => {
-            let sorts = if let Some(order_by) = order_by {
-                order_by.iter().map(|expr| to_substrait_sort_field(expr, schema, extension_info)).collect::<Result<Vec<_>>>()?
-            } else {
-                vec![]
-            };
-            let mut arguments: Vec<FunctionArgument> = vec![];
-            for arg in args {
-                arguments.push(FunctionArgument { arg_type: Some(ArgType::Value(to_substrait_rex(arg, schema, 0, extension_info)?)) });
-            }
-            let function_anchor = _register_function(fun.to_string(), extension_info);
-            Ok(Measure {
-                measure: Some(AggregateFunction {
-                    function_reference: function_anchor,
-                    arguments,
-                    sorts,
-                    output_type: None,
-                    invocation: match distinct {
-                        true => AggregationInvocation::Distinct as i32,
-                        false => AggregationInvocation::All as i32,
-                    },
-                    phase: AggregationPhase::Unspecified as i32,
-                    args: vec![],
-                    options: vec![],
-                }),
-                filter: match filter {
-                    Some(f) => Some(to_substrait_rex(f, schema, 0, extension_info)?),
-                    None => None
+        Expr::AggregateFunction(expr::AggregateFunction { func_def, args, distinct, filter, order_by }) => {
+            match func_def {
+                AggregateFunctionDefinition::BuiltIn { fun, .. } => {
+                    let sorts = if let Some(order_by) = order_by {
+                        order_by.iter().map(|expr| to_substrait_sort_field(expr, schema, extension_info)).collect::<Result<Vec<_>>>()?
+                    } else {
+                        vec![]
+                    };
+                    let mut arguments: Vec<FunctionArgument> = vec![];
+                    for arg in args {
+                        arguments.push(FunctionArgument { arg_type: Some(ArgType::Value(to_substrait_rex(arg, schema, 0, extension_info)?)) });
+                    }
+                    let function_anchor = _register_function(fun.to_string(), extension_info);
+                    Ok(Measure {
+                        measure: Some(AggregateFunction {
+                            function_reference: function_anchor,
+                            arguments,
+                            sorts,
+                            output_type: None,
+                            invocation: match distinct {
+                                true => AggregationInvocation::Distinct as i32,
+                                false => AggregationInvocation::All as i32,
+                            },
+                            phase: AggregationPhase::Unspecified as i32,
+                            args: vec![],
+                            options: vec![],
+                        }),
+                        filter: match filter {
+                            Some(f) => Some(to_substrait_rex(f, schema, 0, extension_info)?),
+                            None => None
+                        }
+                    })
                 }
-            })
+                AggregateFunctionDefinition::UDF(fun) => {
+                    let sorts = if let Some(order_by) = order_by {
+                        order_by.iter().map(|expr| to_substrait_sort_field(expr, schema, extension_info)).collect::<Result<Vec<_>>>()?
+                    } else {
+                        vec![]
+                    };
+                    let mut arguments: Vec<FunctionArgument> = vec![];
+                    for arg in args {
+                        arguments.push(FunctionArgument { arg_type: Some(ArgType::Value(to_substrait_rex(arg, schema, 0, extension_info)?)) });
+                    }
+                    let function_anchor = _register_function(fun.name().to_string(), extension_info);
+                    Ok(Measure {
+                        measure: Some(AggregateFunction {
+                            function_reference: function_anchor,
+                            arguments,
+                            sorts,
+                            output_type: None,
+                            invocation: AggregationInvocation::All as i32,
+                            phase: AggregationPhase::Unspecified as i32,
+                            args: vec![],
+                            options: vec![],
+                        }),
+                        filter: match filter {
+                            Some(f) => Some(to_substrait_rex(f, schema, 0, extension_info)?),
+                            None => None
+                        }
+                    })
+                }
+                AggregateFunctionDefinition::Name(name) => {
+                    internal_err!("AggregateFunctionDefinition::Name({:?}) should be resolved during `AnalyzerRule`", name)
+                }
+            }
+
         }
-        Expr::AggregateUDF(expr::AggregateUDF{ fun, args, filter, order_by }) =>{
-            let sorts = if let Some(order_by) = order_by {
-                order_by.iter().map(|expr| to_substrait_sort_field(expr, schema, extension_info)).collect::<Result<Vec<_>>>()?
-            } else {
-                vec![]
-            };
-            let mut arguments: Vec<FunctionArgument> = vec![];
-            for arg in args {
-                arguments.push(FunctionArgument { arg_type: Some(ArgType::Value(to_substrait_rex(arg, schema, 0, extension_info)?)) });
-            }
-            let function_anchor = _register_function(fun.name().to_string(), extension_info);
-            Ok(Measure {
-                measure: Some(AggregateFunction {
-                    function_reference: function_anchor,
-                    arguments,
-                    sorts,
-                    output_type: None,
-                    invocation: AggregationInvocation::All as i32,
-                    phase: AggregationPhase::Unspecified as i32,
-                    args: vec![],
-                    options: vec![],
-                }),
-                filter: match filter {
-                    Some(f) => Some(to_substrait_rex(f, schema, 0, extension_info)?),
-                    None => None
-                }
-            })
-        },
         Expr::Alias(Alias{expr,..})=> {
             to_substrait_agg_measure(expr, schema, extension_info)
         }
