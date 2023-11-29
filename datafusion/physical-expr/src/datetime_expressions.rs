@@ -968,10 +968,12 @@ pub fn to_timestamp_invoke(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     match args[0].data_type() {
         DataType::Int64 => {
             cast_column(&args[0], &DataType::Timestamp(TimeUnit::Second, None), None)
-        },
-        DataType::Float64 => {
-            cast_column(&args[0], &DataType::Timestamp(TimeUnit::Nanosecond, None), None)
-        },
+        }
+        DataType::Float64 => cast_column(
+            &args[0],
+            &DataType::Timestamp(TimeUnit::Nanosecond, None),
+            None,
+        ),
         DataType::Timestamp(_, None) => cast_column(
             &args[0],
             &DataType::Timestamp(TimeUnit::Nanosecond, None),

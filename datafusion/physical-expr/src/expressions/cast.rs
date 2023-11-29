@@ -179,9 +179,8 @@ pub fn cast_column(
         )),
         ColumnarValue::Scalar(scalar) => {
             let scalar_array = if let ScalarValue::Float64(Some(float_ts)) = scalar {
-                ScalarValue::Int64(Some(
-                    (float_ts * 1_000_000_000_f64).trunc() as i64,
-                )).to_array()?
+                ScalarValue::Int64(Some((float_ts * 1_000_000_000_f64).trunc() as i64))
+                    .to_array()?
             } else {
                 scalar.to_array()?
             };
@@ -209,8 +208,9 @@ pub fn cast_with_options(
     let expr_type = expr.data_type(input_schema)?;
     if expr_type == cast_type {
         Ok(expr.clone())
-    } else if can_cast_types(&expr_type, &cast_type) ||
-        (expr_type == DataType::Float64 && cast_type == DataType::Timestamp(arrow_schema::TimeUnit::Nanosecond, None))
+    } else if can_cast_types(&expr_type, &cast_type)
+        || (expr_type == DataType::Float64
+            && cast_type == DataType::Timestamp(arrow_schema::TimeUnit::Nanosecond, None))
     {
         Ok(Arc::new(CastExpr::new(expr, cast_type, cast_options)))
     } else {
