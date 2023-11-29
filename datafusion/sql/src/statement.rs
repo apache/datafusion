@@ -33,7 +33,7 @@ use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{
     not_impl_err, plan_datafusion_err, plan_err, unqualified_field_not_found, Column,
     Constraints, DFField, DFSchema, DFSchemaRef, DataFusionError, OwnedTableReference,
-    Result, SchemaReference, TableReference, ToDFSchema,
+    Result, ScalarValue, SchemaReference, TableReference, ToDFSchema,
 };
 use datafusion_expr::dml::{CopyOptions, CopyTo};
 use datafusion_expr::expr_rewriter::normalize_col_with_schemas_and_ambiguity_check;
@@ -204,6 +204,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 let mut all_constraints = constraints;
                 let inline_constraints = calc_inline_constraints_from_columns(&columns);
                 all_constraints.extend(inline_constraints);
+                // Build column default values
+                let column_defaults =
+                    self.build_column_defaults(&columns, planner_context)?;
                 match query {
                     Some(query) => {
                         let plan = self.query_to_plan(*query, planner_context)?;
@@ -250,6 +253,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                                 input: Arc::new(plan),
                                 if_not_exists,
                                 or_replace,
+                                column_defaults,
                             },
                         )))
                     }
@@ -272,6 +276,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                                 input: Arc::new(plan),
                                 if_not_exists,
                                 or_replace,
+                                column_defaults,
                             },
                         )))
                     }
@@ -1087,9 +1092,14 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let arrow_schema = (*table_source.schema()).clone();
         let table_schema = DFSchema::try_from(arrow_schema)?;
 
-        // Get insert fields and index_mapping
-        // The i-th field of the table is `fields[index_mapping[i]]`
-        let (fields, index_mapping) = if columns.is_empty() {
+        // Get insert fields and target table's value indices
+        //
+        // if value_indices[i] = Some(j), it means that the value of the i-th target table's column is
+        // derived from the j-th output of the source.
+        //
+        // if value_indices[i] = None, it means that the value of the i-th target table's column is
+        // not provided, and should be filled with a default value later.
+        let (fields, value_indices) = if columns.is_empty() {
             // Empty means we're inserting into all columns of the table
             (
                 table_schema.fields().clone(),
@@ -1098,7 +1108,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     .collect::<Vec<_>>(),
             )
         } else {
-            let mut mapping = vec![None; table_schema.fields().len()];
+            let mut value_indices = vec![None; table_schema.fields().len()];
             let fields = columns
                 .into_iter()
                 .map(|c| self.normalizer.normalize(c))
@@ -1107,19 +1117,19 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     let column_index = table_schema
                         .index_of_column_by_name(None, &c)?
                         .ok_or_else(|| unqualified_field_not_found(&c, &table_schema))?;
-                    if mapping[column_index].is_some() {
+                    if value_indices[column_index].is_some() {
                         return Err(DataFusionError::SchemaError(
                             datafusion_common::SchemaError::DuplicateUnqualifiedField {
                                 name: c,
                             },
                         ));
                     } else {
-                        mapping[column_index] = Some(i);
+                        value_indices[column_index] = Some(i);
                     }
                     Ok(table_schema.field(column_index).clone())
                 })
                 .collect::<Result<Vec<DFField>>>()?;
-            (fields, mapping)
+            (fields, value_indices)
         };
 
         // infer types for Values clause... other types should be resolvable the regular way
@@ -1154,17 +1164,28 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             plan_err!("Column count doesn't match insert query!")?;
         }
 
-        let exprs = index_mapping
+        let exprs = value_indices
             .into_iter()
-            .flatten()
-            .map(|i| {
-                let target_field = &fields[i];
-                let source_field = source.schema().field(i);
-                let expr =
-                    datafusion_expr::Expr::Column(source_field.unqualified_column())
-                        .cast_to(target_field.data_type(), source.schema())?
-                        .alias(target_field.name());
-                Ok(expr)
+            .enumerate()
+            .map(|(i, value_index)| {
+                let target_field = table_schema.field(i);
+                let expr = match value_index {
+                    Some(v) => {
+                        let source_field = source.schema().field(v);
+                        datafusion_expr::Expr::Column(source_field.qualified_column())
+                            .cast_to(target_field.data_type(), source.schema())?
+                    }
+                    // The value is not specified. Fill in the default value for the column.
+                    None => table_source
+                        .get_column_default(target_field.name())
+                        .cloned()
+                        .unwrap_or_else(|| {
+                            // If there is no default for the column, then the default is NULL
+                            datafusion_expr::Expr::Literal(ScalarValue::Null)
+                        })
+                        .cast_to(target_field.data_type(), &DFSchema::empty())?,
+                };
+                Ok(expr.alias(target_field.name()))
             })
             .collect::<Result<Vec<datafusion_expr::Expr>>>()?;
         let source = project(source, exprs)?;

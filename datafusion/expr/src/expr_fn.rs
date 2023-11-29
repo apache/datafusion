@@ -590,6 +590,13 @@ scalar_expr!(
     "returns the array without the last element."
 );
 
+scalar_expr!(
+    ArrayPopFront,
+    array_pop_front,
+    array,
+    "returns the array without the first element."
+);
+
 nary_scalar_expr!(ArrayConcat, array_concat, "concatenates arrays.");
 scalar_expr!(
     ArrayHas,
@@ -632,6 +639,12 @@ scalar_expr!(
     array_element,
     array element,
     "extracts the element with the index n from the array."
+);
+scalar_expr!(
+    ArrayExcept,
+    array_except,
+    first_array second_array,
+    "Returns an array of the elements that appear in the first array but not in the second."
 );
 scalar_expr!(
     ArrayLength,
@@ -737,6 +750,12 @@ scalar_expr!(
     "Returns an array of the elements in the intersection of array1 and array2."
 );
 
+nary_scalar_expr!(
+    Range,
+    gen_range,
+    "Returns a list of values in the range between start and stop with step."
+);
+
 // string functions
 scalar_expr!(Ascii, ascii, chr, "ASCII code value of the character");
 scalar_expr!(
@@ -838,6 +857,11 @@ nary_scalar_expr!(
     "concatenates several strings, placing a seperator between each one"
 );
 nary_scalar_expr!(Concat, concat_expr, "concatenates several strings");
+nary_scalar_expr!(
+    OverLay,
+    overlay,
+    "replace the substring of string that starts at the start'th character and extends for count characters with new substring"
+);
 
 // date functions
 scalar_expr!(DatePart, date_part, part date, "extracts a subfield from the date");
@@ -891,6 +915,8 @@ scalar_expr!(
 );
 
 scalar_expr!(ArrowTypeof, arrow_typeof, val, "data type");
+scalar_expr!(Levenshtein, levenshtein, string1 string2, "Returns the Levenshtein distance between the two given strings");
+scalar_expr!(SubstrIndex, substr_index, string delimiter count, "Returns the substring from str before count occurrences of the delimiter");
 
 scalar_expr!(
     Struct,
@@ -989,7 +1015,7 @@ pub fn call_fn(name: impl AsRef<str>, args: Vec<Expr>) -> Result<Expr> {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::lit;
+    use crate::{lit, ScalarFunctionDefinition};
 
     #[test]
     fn filter_is_null_and_is_not_null() {
@@ -1004,8 +1030,10 @@ mod test {
 
     macro_rules! test_unary_scalar_expr {
         ($ENUM:ident, $FUNC:ident) => {{
-            if let Expr::ScalarFunction(ScalarFunction { fun, args }) =
-                $FUNC(col("tableA.a"))
+            if let Expr::ScalarFunction(ScalarFunction {
+                func_def: ScalarFunctionDefinition::BuiltIn { fun, .. },
+                args,
+            }) = $FUNC(col("tableA.a"))
             {
                 let name = built_in_function::BuiltinScalarFunction::$ENUM;
                 assert_eq!(name, fun);
@@ -1017,42 +1045,42 @@ mod test {
     }
 
     macro_rules! test_scalar_expr {
-        ($ENUM:ident, $FUNC:ident, $($arg:ident),*) => {
-            let expected = [$(stringify!($arg)),*];
-            let result = $FUNC(
+    ($ENUM:ident, $FUNC:ident, $($arg:ident),*) => {
+        let expected = [$(stringify!($arg)),*];
+        let result = $FUNC(
+            $(
+                col(stringify!($arg.to_string()))
+            ),*
+        );
+        if let Expr::ScalarFunction(ScalarFunction { func_def: ScalarFunctionDefinition::BuiltIn{fun, ..}, args }) = result {
+            let name = built_in_function::BuiltinScalarFunction::$ENUM;
+            assert_eq!(name, fun);
+            assert_eq!(expected.len(), args.len());
+        } else {
+            assert!(false, "unexpected: {:?}", result);
+        }
+    };
+}
+
+    macro_rules! test_nary_scalar_expr {
+    ($ENUM:ident, $FUNC:ident, $($arg:ident),*) => {
+        let expected = [$(stringify!($arg)),*];
+        let result = $FUNC(
+            vec![
                 $(
                     col(stringify!($arg.to_string()))
                 ),*
-            );
-            if let Expr::ScalarFunction(ScalarFunction { fun, args }) = result {
-                let name = built_in_function::BuiltinScalarFunction::$ENUM;
-                assert_eq!(name, fun);
-                assert_eq!(expected.len(), args.len());
-            } else {
-                assert!(false, "unexpected: {:?}", result);
-            }
-        };
-    }
-
-    macro_rules! test_nary_scalar_expr {
-        ($ENUM:ident, $FUNC:ident, $($arg:ident),*) => {
-            let expected = [$(stringify!($arg)),*];
-            let result = $FUNC(
-                vec![
-                    $(
-                        col(stringify!($arg.to_string()))
-                    ),*
-                ]
-            );
-            if let Expr::ScalarFunction(ScalarFunction { fun, args }) = result {
-                let name = built_in_function::BuiltinScalarFunction::$ENUM;
-                assert_eq!(name, fun);
-                assert_eq!(expected.len(), args.len());
-            } else {
-                assert!(false, "unexpected: {:?}", result);
-            }
-        };
-    }
+            ]
+        );
+        if let Expr::ScalarFunction(ScalarFunction { func_def: ScalarFunctionDefinition::BuiltIn{fun, ..}, args }) = result {
+            let name = built_in_function::BuiltinScalarFunction::$ENUM;
+            assert_eq!(name, fun);
+            assert_eq!(expected.len(), args.len());
+        } else {
+            assert!(false, "unexpected: {:?}", result);
+        }
+    };
+}
 
     #[test]
     fn scalar_function_definitions() {
@@ -1155,6 +1183,7 @@ mod test {
         test_scalar_expr!(FromUnixtime, from_unixtime, unixtime);
 
         test_scalar_expr!(ArrayAppend, array_append, array, element);
+        test_scalar_expr!(ArrayPopFront, array_pop_front, array);
         test_scalar_expr!(ArrayPopBack, array_pop_back, array);
         test_unary_scalar_expr!(ArrayDims, array_dims);
         test_scalar_expr!(ArrayLength, array_length, array, dimension);
@@ -1174,11 +1203,19 @@ mod test {
         test_nary_scalar_expr!(MakeArray, array, input);
 
         test_unary_scalar_expr!(ArrowTypeof, arrow_typeof);
+        test_nary_scalar_expr!(OverLay, overlay, string, characters, position, len);
+        test_nary_scalar_expr!(OverLay, overlay, string, characters, position);
+        test_scalar_expr!(Levenshtein, levenshtein, string1, string2);
+        test_scalar_expr!(SubstrIndex, substr_index, string, delimiter, count);
     }
 
     #[test]
     fn uuid_function_definitions() {
-        if let Expr::ScalarFunction(ScalarFunction { fun, args }) = uuid() {
+        if let Expr::ScalarFunction(ScalarFunction {
+            func_def: ScalarFunctionDefinition::BuiltIn { fun, .. },
+            args,
+        }) = uuid()
+        {
             let name = BuiltinScalarFunction::Uuid;
             assert_eq!(name, fun);
             assert_eq!(0, args.len());
@@ -1189,8 +1226,10 @@ mod test {
 
     #[test]
     fn digest_function_definitions() {
-        if let Expr::ScalarFunction(ScalarFunction { fun, args }) =
-            digest(col("tableA.a"), lit("md5"))
+        if let Expr::ScalarFunction(ScalarFunction {
+            func_def: ScalarFunctionDefinition::BuiltIn { fun, .. },
+            args,
+        }) = digest(col("tableA.a"), lit("md5"))
         {
             let name = BuiltinScalarFunction::Digest;
             assert_eq!(name, fun);
@@ -1202,8 +1241,10 @@ mod test {
 
     #[test]
     fn encode_function_definitions() {
-        if let Expr::ScalarFunction(ScalarFunction { fun, args }) =
-            encode(col("tableA.a"), lit("base64"))
+        if let Expr::ScalarFunction(ScalarFunction {
+            func_def: ScalarFunctionDefinition::BuiltIn { fun, .. },
+            args,
+        }) = encode(col("tableA.a"), lit("base64"))
         {
             let name = BuiltinScalarFunction::Encode;
             assert_eq!(name, fun);
@@ -1215,8 +1256,10 @@ mod test {
 
     #[test]
     fn decode_function_definitions() {
-        if let Expr::ScalarFunction(ScalarFunction { fun, args }) =
-            decode(col("tableA.a"), lit("hex"))
+        if let Expr::ScalarFunction(ScalarFunction {
+            func_def: ScalarFunctionDefinition::BuiltIn { fun, .. },
+            args,
+        }) = decode(col("tableA.a"), lit("hex"))
         {
             let name = BuiltinScalarFunction::Decode;
             assert_eq!(name, fun);

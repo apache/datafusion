@@ -788,7 +788,7 @@ INSERT INTO products (product_id, product_name, price) VALUES
 (1, 'OldBrand Product 1', 19.99),
 (2, 'OldBrand Product 2', 29.99),
 (3, 'OldBrand Product 3', 39.99),
-(4, 'OldBrand Product 4', 49.99)                    
+(4, 'OldBrand Product 4', 49.99)
 
 query ITR
 SELECT * REPLACE (price*2 AS price) FROM products
@@ -815,3 +815,140 @@ SELECT products.* REPLACE (price*2 AS price, product_id+1000 AS product_id) FROM
 1002 OldBrand Product 2 59.98
 1003 OldBrand Product 3 79.98
 1004 OldBrand Product 4 99.98
+
+#overlay tests
+statement ok
+CREATE TABLE over_test(
+  str TEXT,
+  characters TEXT,
+  pos INT,
+  len INT
+) as VALUES
+  ('123', 'abc', 4, 5),
+  ('abcdefg', 'qwertyasdfg', 1, 7),
+  ('xyz', 'ijk', 1, 2),
+  ('Txxxxas', 'hom', 2, 4),
+  (NULL, 'hom', 2, 4),
+  ('Txxxxas', 'hom', NULL, 4),
+  ('Txxxxas', 'hom', 2, NULL),
+  ('Txxxxas', NULL, 2, 4)
+;
+
+query T
+SELECT overlay(str placing characters from pos for len) from over_test
+----
+abc
+qwertyasdfg
+ijkz
+Thomas
+NULL
+NULL
+NULL
+NULL
+
+query T
+SELECT overlay(str placing characters from pos) from over_test
+----
+abc
+qwertyasdfg
+ijk
+Thomxas
+NULL
+NULL
+Thomxas
+NULL
+
+query I
+SELECT levenshtein('kitten', 'sitting')
+----
+3
+
+query I
+SELECT levenshtein('kitten', NULL)
+----
+NULL
+
+query ?
+SELECT levenshtein(NULL, 'sitting')
+----
+NULL
+
+query ?
+SELECT levenshtein(NULL, NULL)
+----
+NULL
+
+query T
+SELECT substr_index('www.apache.org', '.', 1)
+----
+www
+
+query T
+SELECT substr_index('www.apache.org', '.', 2)
+----
+www.apache
+
+query T
+SELECT substr_index('www.apache.org', '.', -1)
+----
+org
+
+query T
+SELECT substr_index('www.apache.org', '.', -2)
+----
+apache.org
+
+query T
+SELECT substr_index('www.apache.org', 'ac', 1)
+----
+www.ap
+
+query T
+SELECT substr_index('www.apache.org', 'ac', -1)
+----
+he.org
+
+query T
+SELECT substr_index('www.apache.org', 'ac', 2)
+----
+www.apache.org
+
+query T
+SELECT substr_index('www.apache.org', 'ac', -2)
+----
+www.apache.org
+
+query ?
+SELECT substr_index(NULL, 'ac', 1)
+----
+NULL
+
+query T
+SELECT substr_index('www.apache.org', NULL, 1)
+----
+NULL
+
+query T
+SELECT substr_index('www.apache.org', 'ac', NULL)
+----
+NULL
+
+query T
+SELECT substr_index('', 'ac', 1)
+----
+(empty)
+
+query T
+SELECT substr_index('www.apache.org', '', 1)
+----
+(empty)
+
+query T
+SELECT substr_index('www.apache.org', 'ac', 0)
+----
+(empty)
+
+query ?
+SELECT substr_index(NULL, NULL, NULL)
+----
+NULL

@@ -422,12 +422,11 @@ CopyTo: format=csv output_url=output.csv single_file_output=true options: ()
 fn plan_insert() {
     let sql =
         "insert into person (id, first_name, last_name) values (1, 'Alan', 'Turing')";
-    let plan = r#"
-Dml: op=[Insert Into] table=[person]
-  Projection: CAST(column1 AS UInt32) AS id, column2 AS first_name, column3 AS last_name
-    Values: (Int64(1), Utf8("Alan"), Utf8("Turing"))
-    "#
-    .trim();
+    let plan = "Dml: op=[Insert Into] table=[person]\
+                \n  Projection: CAST(column1 AS UInt32) AS id, column2 AS first_name, column3 AS last_name, \
+                        CAST(NULL AS Int32) AS age, CAST(NULL AS Utf8) AS state, CAST(NULL AS Float64) AS salary, \
+                        CAST(NULL AS Timestamp(Nanosecond, None)) AS birth_date, CAST(NULL AS Int32) AS 😀\
+                \n    Values: (Int64(1), Utf8(\"Alan\"), Utf8(\"Turing\"))";
     quick_test(sql, plan);
 }
 
@@ -607,11 +606,9 @@ fn select_compound_filter() {
 #[test]
 fn test_timestamp_filter() {
     let sql = "SELECT state FROM person WHERE birth_date < CAST (158412331400600000 as timestamp)";
-
     let expected = "Projection: person.state\
-            \n  Filter: person.birth_date < CAST(Int64(158412331400600000) AS Timestamp(Nanosecond, None))\
+            \n  Filter: person.birth_date < CAST(CAST(Int64(158412331400600000) AS Timestamp(Second, None)) AS Timestamp(Nanosecond, None))\
             \n    TableScan: person";
-
     quick_test(sql, expected);
 }
 
@@ -1385,18 +1382,6 @@ fn select_interval_out_of_range() {
 }
 
 #[test]
-fn select_array_no_common_type() {
-    let sql = "SELECT [1, true, null]";
-    let err = logical_plan(sql).expect_err("query should have failed");
-
-    // HashSet doesn't guarantee order
-    assert_contains!(
-        err.strip_backtrace(),
-        "This feature is not implemented: Arrays with different types are not supported: "
-    );
-}
-
-#[test]
 fn recursive_ctes() {
     let sql = "
         WITH RECURSIVE numbers AS (
@@ -1408,16 +1393,6 @@ fn recursive_ctes() {
     let err = logical_plan(sql).expect_err("query should have failed");
     assert_eq!(
         "This feature is not implemented: Recursive CTEs are not supported",
-        err.strip_backtrace()
-    );
-}
-
-#[test]
-fn select_array_non_literal_type() {
-    let sql = "SELECT [now()]";
-    let err = logical_plan(sql).expect_err("query should have failed");
-    assert_eq!(
-        "This feature is not implemented: Arrays with elements other than literal are not supported: now()",
         err.strip_backtrace()
     );
 }
@@ -4037,12 +4012,11 @@ Dml: op=[Update] table=[person]
 fn test_prepare_statement_insert_infer() {
     let sql = "insert into person (id, first_name, last_name) values ($1, $2, $3)";
 
-    let expected_plan = r#"
-Dml: op=[Insert Into] table=[person]
-  Projection: column1 AS id, column2 AS first_name, column3 AS last_name
-    Values: ($1, $2, $3)
-        "#
-    .trim();
+    let expected_plan = "Dml: op=[Insert Into] table=[person]\
+                        \n  Projection: column1 AS id, column2 AS first_name, column3 AS last_name, \
+                                    CAST(NULL AS Int32) AS age, CAST(NULL AS Utf8) AS state, CAST(NULL AS Float64) AS salary, \
+                                    CAST(NULL AS Timestamp(Nanosecond, None)) AS birth_date, CAST(NULL AS Int32) AS 😀\
+                        \n    Values: ($1, $2, $3)";
 
     let expected_dt = "[Int32]";
     let plan = prepare_stmt_quick_test(sql, expected_plan, expected_dt);
@@ -4061,12 +4035,11 @@ Dml: op=[Insert Into] table=[person]
         ScalarValue::Utf8(Some("Alan".to_string())),
         ScalarValue::Utf8(Some("Turing".to_string())),
     ];
-    let expected_plan = r#"
-Dml: op=[Insert Into] table=[person]
-  Projection: column1 AS id, column2 AS first_name, column3 AS last_name
-    Values: (UInt32(1), Utf8("Alan"), Utf8("Turing"))
-        "#
-    .trim();
+    let expected_plan = "Dml: op=[Insert Into] table=[person]\
+                        \n  Projection: column1 AS id, column2 AS first_name, column3 AS last_name, \
+                                    CAST(NULL AS Int32) AS age, CAST(NULL AS Utf8) AS state, CAST(NULL AS Float64) AS salary, \
+                                    CAST(NULL AS Timestamp(Nanosecond, None)) AS birth_date, CAST(NULL AS Int32) AS 😀\
+                        \n    Values: (UInt32(1), Utf8(\"Alan\"), Utf8(\"Turing\"))";
     let plan = plan.replace_params_with_values(&param_values).unwrap();
 
     prepare_stmt_replace_params_quick_test(plan, param_values, expected_plan);

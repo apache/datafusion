@@ -148,10 +148,8 @@ pub enum Expr {
     TryCast(TryCast),
     /// A sort expression, that can be used to sort values.
     Sort(Sort),
-    /// Represents the call of a built-in scalar function with a set of arguments.
+    /// Represents the call of a scalar function with a set of arguments.
     ScalarFunction(ScalarFunction),
-    /// Represents the call of a user-defined scalar function with arguments.
-    ScalarUDF(ScalarUDF),
     /// Represents the call of an aggregate built-in function with arguments.
     AggregateFunction(AggregateFunction),
     /// Represents the call of a window function with arguments.
@@ -338,35 +336,61 @@ impl Between {
     }
 }
 
-/// ScalarFunction expression
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+/// Defines which implementation of a function for DataFusion to call.
+pub enum ScalarFunctionDefinition {
+    /// Resolved to a `BuiltinScalarFunction`
+    /// There is plan to migrate `BuiltinScalarFunction` to UDF-based implementation (issue#8045)
+    /// This variant is planned to be removed in long term
+    BuiltIn {
+        fun: built_in_function::BuiltinScalarFunction,
+        name: Arc<str>,
+    },
+    /// Resolved to a user defined function
+    UDF(Arc<crate::ScalarUDF>),
+    /// A scalar function constructed with name. This variant can not be executed directly
+    /// and instead must be resolved to one of the other variants prior to physical planning.
+    Name(Arc<str>),
+}
+
+/// ScalarFunction expression invokes a built-in scalar function
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct ScalarFunction {
     /// The function
-    pub fun: built_in_function::BuiltinScalarFunction,
+    pub func_def: ScalarFunctionDefinition,
     /// List of expressions to feed to the functions as arguments
     pub args: Vec<Expr>,
+}
+
+impl ScalarFunctionDefinition {
+    /// Function's name for display
+    pub fn name(&self) -> &str {
+        match self {
+            ScalarFunctionDefinition::BuiltIn { name, .. } => name.as_ref(),
+            ScalarFunctionDefinition::UDF(udf) => udf.name(),
+            ScalarFunctionDefinition::Name(func_name) => func_name.as_ref(),
+        }
+    }
 }
 
 impl ScalarFunction {
     /// Create a new ScalarFunction expression
     pub fn new(fun: built_in_function::BuiltinScalarFunction, args: Vec<Expr>) -> Self {
-        Self { fun, args }
+        Self {
+            func_def: ScalarFunctionDefinition::BuiltIn {
+                fun,
+                name: Arc::from(fun.to_string()),
+            },
+            args,
+        }
     }
-}
 
-/// ScalarUDF expression
-#[derive(Clone, PartialEq, Eq, Hash, Debug)]
-pub struct ScalarUDF {
-    /// The function
-    pub fun: Arc<crate::ScalarUDF>,
-    /// List of expressions to feed to the functions as arguments
-    pub args: Vec<Expr>,
-}
-
-impl ScalarUDF {
-    /// Create a new ScalarUDF expression
-    pub fn new(fun: Arc<crate::ScalarUDF>, args: Vec<Expr>) -> Self {
-        Self { fun, args }
+    /// Create a new ScalarFunction expression with a user-defined function (UDF)
+    pub fn new_udf(udf: Arc<crate::ScalarUDF>, args: Vec<Expr>) -> Self {
+        Self {
+            func_def: ScalarFunctionDefinition::UDF(udf),
+            args,
+        }
     }
 }
 
@@ -734,7 +758,6 @@ impl Expr {
             Expr::Placeholder(_) => "Placeholder",
             Expr::ScalarFunction(..) => "ScalarFunction",
             Expr::ScalarSubquery { .. } => "ScalarSubquery",
-            Expr::ScalarUDF(..) => "ScalarUDF",
             Expr::ScalarVariable(..) => "ScalarVariable",
             Expr::Sort { .. } => "Sort",
             Expr::TryCast { .. } => "TryCast",
@@ -1196,11 +1219,8 @@ impl fmt::Display for Expr {
                     write!(f, " NULLS LAST")
                 }
             }
-            Expr::ScalarFunction(func) => {
-                fmt_function(f, &func.fun.to_string(), false, &func.args, true)
-            }
-            Expr::ScalarUDF(ScalarUDF { fun, args }) => {
-                fmt_function(f, &fun.name, false, args, true)
+            Expr::ScalarFunction(ScalarFunction { func_def, args }) => {
+                fmt_function(f, func_def.name(), false, args, true)
             }
             Expr::WindowFunction(WindowFunction {
                 fun,
@@ -1247,7 +1267,7 @@ impl fmt::Display for Expr {
                 order_by,
                 ..
             }) => {
-                fmt_function(f, &fun.name, false, args, true)?;
+                fmt_function(f, fun.name(), false, args, true)?;
                 if let Some(fe) = filter {
                     write!(f, " FILTER (WHERE {fe})")?;
                 }
@@ -1532,11 +1552,8 @@ fn create_name(e: &Expr) -> Result<String> {
                 }
             }
         }
-        Expr::ScalarFunction(func) => {
-            create_function_name(&func.fun.to_string(), false, &func.args)
-        }
-        Expr::ScalarUDF(ScalarUDF { fun, args }) => {
-            create_function_name(&fun.name, false, args)
+        Expr::ScalarFunction(ScalarFunction { func_def, args }) => {
+            create_function_name(func_def.name(), false, args)
         }
         Expr::WindowFunction(WindowFunction {
             fun,
@@ -1589,7 +1606,7 @@ fn create_name(e: &Expr) -> Result<String> {
             if let Some(ob) = order_by {
                 info += &format!(" ORDER BY ([{}])", expr_vec_fmt!(ob));
             }
-            Ok(format!("{}({}){}", fun.name, names.join(","), info))
+            Ok(format!("{}({}){}", fun.name(), names.join(","), info))
         }
         Expr::GroupingSet(grouping_set) => match grouping_set {
             GroupingSet::Rollup(exprs) => {

@@ -2115,7 +2115,7 @@ Projection: annotated_data_infinite2.a, annotated_data_infinite2.b, SUM(annotate
 physical_plan
 ProjectionExec: expr=[a@1 as a, b@0 as b, SUM(annotated_data_infinite2.c)@2 as summation1]
 --AggregateExec: mode=Single, gby=[b@1 as b, a@0 as a], aggr=[SUM(annotated_data_infinite2.c)], ordering_mode=Sorted
-----CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b, c], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST, c@2 ASC NULLS LAST], has_header=true
+----StreamingTableExec: partition_sizes=1, projection=[a, b, c], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST, c@2 ASC NULLS LAST]
 
 
 query III
@@ -2146,7 +2146,7 @@ Projection: annotated_data_infinite2.a, annotated_data_infinite2.d, SUM(annotate
 physical_plan
 ProjectionExec: expr=[a@1 as a, d@0 as d, SUM(annotated_data_infinite2.c) ORDER BY [annotated_data_infinite2.a DESC NULLS FIRST]@2 as summation1]
 --AggregateExec: mode=Single, gby=[d@2 as d, a@0 as a], aggr=[SUM(annotated_data_infinite2.c)], ordering_mode=PartiallySorted([1])
-----CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST], has_header=true
+----StreamingTableExec: partition_sizes=1, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST]
 
 query III
 SELECT a, d,
@@ -2179,7 +2179,7 @@ Projection: annotated_data_infinite2.a, annotated_data_infinite2.b, FIRST_VALUE(
 physical_plan
 ProjectionExec: expr=[a@0 as a, b@1 as b, FIRST_VALUE(annotated_data_infinite2.c) ORDER BY [annotated_data_infinite2.a DESC NULLS FIRST]@2 as first_c]
 --AggregateExec: mode=Single, gby=[a@0 as a, b@1 as b], aggr=[FIRST_VALUE(annotated_data_infinite2.c)], ordering_mode=Sorted
-----CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b, c], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST, c@2 ASC NULLS LAST], has_header=true
+----StreamingTableExec: partition_sizes=1, projection=[a, b, c], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST, c@2 ASC NULLS LAST]
 
 query III
 SELECT a, b, FIRST_VALUE(c ORDER BY a DESC) as first_c
@@ -2205,7 +2205,7 @@ Projection: annotated_data_infinite2.a, annotated_data_infinite2.b, LAST_VALUE(a
 physical_plan
 ProjectionExec: expr=[a@0 as a, b@1 as b, LAST_VALUE(annotated_data_infinite2.c) ORDER BY [annotated_data_infinite2.a DESC NULLS FIRST]@2 as last_c]
 --AggregateExec: mode=Single, gby=[a@0 as a, b@1 as b], aggr=[LAST_VALUE(annotated_data_infinite2.c)], ordering_mode=Sorted
-----CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b, c], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST, c@2 ASC NULLS LAST], has_header=true
+----StreamingTableExec: partition_sizes=1, projection=[a, b, c], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST, c@2 ASC NULLS LAST]
 
 query III
 SELECT a, b, LAST_VALUE(c ORDER BY a DESC) as last_c
@@ -2232,7 +2232,7 @@ Projection: annotated_data_infinite2.a, annotated_data_infinite2.b, LAST_VALUE(a
 physical_plan
 ProjectionExec: expr=[a@0 as a, b@1 as b, LAST_VALUE(annotated_data_infinite2.c)@2 as last_c]
 --AggregateExec: mode=Single, gby=[a@0 as a, b@1 as b], aggr=[LAST_VALUE(annotated_data_infinite2.c)], ordering_mode=Sorted
-----CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b, c], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST, c@2 ASC NULLS LAST], has_header=true
+----StreamingTableExec: partition_sizes=1, projection=[a, b, c], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST, c@2 ASC NULLS LAST]
 
 query III
 SELECT a, b, LAST_VALUE(c) as last_c
@@ -3628,7 +3628,7 @@ ProjectionExec: expr=[FIRST_VALUE(multiple_ordered_table.a) ORDER BY [multiple_o
 ------RepartitionExec: partitioning=Hash([d@0], 8), input_partitions=8
 --------AggregateExec: mode=Partial, gby=[d@2 as d], aggr=[FIRST_VALUE(multiple_ordered_table.a), FIRST_VALUE(multiple_ordered_table.c)]
 ----------RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
-------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, c, d], output_ordering=[a@0 ASC NULLS LAST], has_header=true
+------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, c, d], output_orderings=[[a@0 ASC NULLS LAST], [c@1 ASC NULLS LAST]], has_header=true
 
 query II rowsort
 SELECT FIRST_VALUE(a ORDER BY a ASC) as first_a,
@@ -3823,17 +3823,17 @@ query TT
 EXPLAIN SELECT SUM(DISTINCT CAST(x AS DOUBLE)), MAX(DISTINCT CAST(x AS DOUBLE)) FROM t1 GROUP BY y;
 ----
 logical_plan
-Projection: SUM(DISTINCT t1.x), MAX(DISTINCT t1.x)
---Aggregate: groupBy=[[t1.y]], aggr=[[SUM(alias1) AS SUM(DISTINCT t1.x), MAX(alias1) AS MAX(DISTINCT t1.x)]]
+Projection: SUM(alias1) AS SUM(DISTINCT t1.x), MAX(alias1) AS MAX(DISTINCT t1.x)
+--Aggregate: groupBy=[[t1.y]], aggr=[[SUM(alias1), MAX(alias1)]]
 ----Aggregate: groupBy=[[t1.y, CAST(t1.x AS Float64)t1.x AS t1.x AS alias1]], aggr=[[]]
 ------Projection: CAST(t1.x AS Float64) AS CAST(t1.x AS Float64)t1.x, t1.y
 --------TableScan: t1 projection=[x, y]
 physical_plan
-ProjectionExec: expr=[SUM(DISTINCT t1.x)@1 as SUM(DISTINCT t1.x), MAX(DISTINCT t1.x)@2 as MAX(DISTINCT t1.x)]
---AggregateExec: mode=FinalPartitioned, gby=[y@0 as y], aggr=[SUM(DISTINCT t1.x), MAX(DISTINCT t1.x)]
+ProjectionExec: expr=[SUM(alias1)@1 as SUM(DISTINCT t1.x), MAX(alias1)@2 as MAX(DISTINCT t1.x)]
+--AggregateExec: mode=FinalPartitioned, gby=[y@0 as y], aggr=[SUM(alias1), MAX(alias1)]
 ----CoalesceBatchesExec: target_batch_size=2
 ------RepartitionExec: partitioning=Hash([y@0], 8), input_partitions=8
---------AggregateExec: mode=Partial, gby=[y@0 as y], aggr=[SUM(DISTINCT t1.x), MAX(DISTINCT t1.x)]
+--------AggregateExec: mode=Partial, gby=[y@0 as y], aggr=[SUM(alias1), MAX(alias1)]
 ----------AggregateExec: mode=FinalPartitioned, gby=[y@0 as y, alias1@1 as alias1], aggr=[]
 ------------CoalesceBatchesExec: target_batch_size=2
 --------------RepartitionExec: partitioning=Hash([y@0, alias1@1], 8), input_partitions=8
@@ -3841,3 +3841,209 @@ ProjectionExec: expr=[SUM(DISTINCT t1.x)@1 as SUM(DISTINCT t1.x), MAX(DISTINCT t
 ------------------AggregateExec: mode=Partial, gby=[y@1 as y, CAST(t1.x AS Float64)t1.x@0 as alias1], aggr=[]
 --------------------ProjectionExec: expr=[CAST(x@0 AS Float64) as CAST(t1.x AS Float64)t1.x, y@1 as y]
 ----------------------MemoryExec: partitions=1, partition_sizes=[1]
+
+# create an unbounded table that contains ordered timestamp.
+statement ok
+CREATE UNBOUNDED EXTERNAL TABLE unbounded_csv_with_timestamps (
+  name VARCHAR,
+  ts TIMESTAMP
+)
+STORED AS CSV
+WITH ORDER (ts DESC)
+LOCATION '../core/tests/data/timestamps.csv'
+
+# below query should work in streaming mode.
+query TT
+EXPLAIN SELECT date_bin('15 minutes', ts) as time_chunks
+  FROM unbounded_csv_with_timestamps
+  GROUP BY date_bin('15 minutes', ts)
+  ORDER BY time_chunks DESC
+  LIMIT 5;
+----
+logical_plan
+Limit: skip=0, fetch=5
+--Sort: time_chunks DESC NULLS FIRST, fetch=5
+----Projection: date_bin(Utf8("15 minutes"),unbounded_csv_with_timestamps.ts) AS time_chunks
+------Aggregate: groupBy=[[date_bin(IntervalMonthDayNano("900000000000"), unbounded_csv_with_timestamps.ts) AS date_bin(Utf8("15 minutes"),unbounded_csv_with_timestamps.ts)]], aggr=[[]]
+--------TableScan: unbounded_csv_with_timestamps projection=[ts]
+physical_plan
+GlobalLimitExec: skip=0, fetch=5
+--SortPreservingMergeExec: [time_chunks@0 DESC], fetch=5
+----ProjectionExec: expr=[date_bin(Utf8("15 minutes"),unbounded_csv_with_timestamps.ts)@0 as time_chunks]
+------AggregateExec: mode=FinalPartitioned, gby=[date_bin(Utf8("15 minutes"),unbounded_csv_with_timestamps.ts)@0 as date_bin(Utf8("15 minutes"),unbounded_csv_with_timestamps.ts)], aggr=[], ordering_mode=Sorted
+--------CoalesceBatchesExec: target_batch_size=2
+----------SortPreservingRepartitionExec: partitioning=Hash([date_bin(Utf8("15 minutes"),unbounded_csv_with_timestamps.ts)@0], 8), input_partitions=8, sort_exprs=date_bin(Utf8("15 minutes"),unbounded_csv_with_timestamps.ts)@0 DESC
+------------AggregateExec: mode=Partial, gby=[date_bin(900000000000, ts@0) as date_bin(Utf8("15 minutes"),unbounded_csv_with_timestamps.ts)], aggr=[], ordering_mode=Sorted
+--------------RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+----------------StreamingTableExec: partition_sizes=1, projection=[ts], infinite_source=true, output_ordering=[ts@0 DESC]
+
+query P
+SELECT date_bin('15 minutes', ts) as time_chunks
+  FROM unbounded_csv_with_timestamps
+  GROUP BY date_bin('15 minutes', ts)
+  ORDER BY time_chunks DESC
+  LIMIT 5;
+----
+2018-12-13T12:00:00
+2018-11-13T17:00:00
+
+# Since extract is not a monotonic function, below query should not run.
+# when source is unbounded.
+query error
+SELECT extract(month from ts) as months
+  FROM unbounded_csv_with_timestamps
+  GROUP BY extract(month from ts)
+  ORDER BY months DESC
+  LIMIT 5;
+
+# Create a table where timestamp is ordered
+statement ok
+CREATE EXTERNAL TABLE csv_with_timestamps (
+  name VARCHAR,
+  ts TIMESTAMP
+)
+STORED AS CSV
+WITH ORDER (ts DESC)
+LOCATION '../core/tests/data/timestamps.csv';
+
+# below query should run since it operates on a bounded source and have a sort
+# at the top of its plan.
+query TT
+EXPLAIN SELECT extract(month from ts) as months
+  FROM csv_with_timestamps
+  GROUP BY extract(month from ts)
+  ORDER BY months DESC
+  LIMIT 5;
+----
+logical_plan
+Limit: skip=0, fetch=5
+--Sort: months DESC NULLS FIRST, fetch=5
+----Projection: date_part(Utf8("MONTH"),csv_with_timestamps.ts) AS months
+------Aggregate: groupBy=[[date_part(Utf8("MONTH"), csv_with_timestamps.ts)]], aggr=[[]]
+--------TableScan: csv_with_timestamps projection=[ts]
+physical_plan
+GlobalLimitExec: skip=0, fetch=5
+--SortPreservingMergeExec: [months@0 DESC], fetch=5
+----SortExec: TopK(fetch=5), expr=[months@0 DESC]
+------ProjectionExec: expr=[date_part(Utf8("MONTH"),csv_with_timestamps.ts)@0 as months]
+--------AggregateExec: mode=FinalPartitioned, gby=[date_part(Utf8("MONTH"),csv_with_timestamps.ts)@0 as date_part(Utf8("MONTH"),csv_with_timestamps.ts)], aggr=[]
+----------CoalesceBatchesExec: target_batch_size=2
+------------RepartitionExec: partitioning=Hash([date_part(Utf8("MONTH"),csv_with_timestamps.ts)@0], 8), input_partitions=8
+--------------AggregateExec: mode=Partial, gby=[date_part(MONTH, ts@0) as date_part(Utf8("MONTH"),csv_with_timestamps.ts)], aggr=[]
+----------------RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/timestamps.csv]]}, projection=[ts], output_ordering=[ts@0 DESC], has_header=false
+
+query R
+SELECT extract(month from ts) as months
+  FROM csv_with_timestamps
+  GROUP BY extract(month from ts)
+  ORDER BY months DESC
+  LIMIT 5;
+----
+12
+11
+
+statement ok
+drop table t1
+
+# Reproducer for https://github.com/apache/arrow-datafusion/issues/8175
+
+statement ok
+create table t1(state string, city string, min_temp float, area int, time timestamp) as values
+    ('MA', 'Boston', 70.4, 1, 50),
+    ('MA', 'Bedford', 71.59, 2, 150);
+
+query RI
+select date_part('year', time) as bla, count(distinct state) as count from t1 group by bla;
+----
+1970 1
+
+query PI
+select date_bin(interval '1 year', time) as bla, count(distinct state) as count from t1 group by bla;
+----
+1970-01-01T00:00:00 1
+
+statement ok
+drop table t1
+
+statement ok
+CREATE EXTERNAL TABLE aggregate_test_100 (
+  c1  VARCHAR NOT NULL,
+  c2  TINYINT NOT NULL,
+  c3  SMALLINT NOT NULL,
+  c4  SMALLINT,
+  c5  INT,
+  c6  BIGINT NOT NULL,
+  c7  SMALLINT NOT NULL,
+  c8  INT NOT NULL,
+  c9  INT UNSIGNED NOT NULL,
+  c10 BIGINT UNSIGNED NOT NULL,
+  c11 FLOAT NOT NULL,
+  c12 DOUBLE NOT NULL,
+  c13 VARCHAR NOT NULL
+)
+STORED AS CSV
+WITH HEADER ROW
+LOCATION '../../testing/data/csv/aggregate_test_100.csv'
+
+query TIIII
+SELECT c1, count(distinct c2), min(distinct c2), min(c3), max(c4) FROM aggregate_test_100 GROUP BY c1 ORDER BY c1;
+----
+a 5 1 -101 32064
+b 5 1 -117 25286
+c 5 1 -117 29106
+d 5 1 -99 31106
+e 5 1 -95 32514
+
+query TT
+EXPLAIN SELECT c1, count(distinct c2), min(distinct c2), sum(c3), max(c4) FROM aggregate_test_100 GROUP BY c1 ORDER BY c1;
+----
+logical_plan
+Sort: aggregate_test_100.c1 ASC NULLS LAST
+--Projection: aggregate_test_100.c1, COUNT(alias1) AS COUNT(DISTINCT aggregate_test_100.c2), MIN(alias1) AS MIN(DISTINCT aggregate_test_100.c2), SUM(alias2) AS SUM(aggregate_test_100.c3), MAX(alias3) AS MAX(aggregate_test_100.c4)
+----Aggregate: groupBy=[[aggregate_test_100.c1]], aggr=[[COUNT(alias1), MIN(alias1), SUM(alias2), MAX(alias3)]]
+------Aggregate: groupBy=[[aggregate_test_100.c1, aggregate_test_100.c2 AS alias1]], aggr=[[SUM(CAST(aggregate_test_100.c3 AS Int64)) AS alias2, MAX(aggregate_test_100.c4) AS alias3]]
+--------TableScan: aggregate_test_100 projection=[c1, c2, c3, c4]
+physical_plan
+SortPreservingMergeExec: [c1@0 ASC NULLS LAST]
+--SortExec: expr=[c1@0 ASC NULLS LAST]
+----ProjectionExec: expr=[c1@0 as c1, COUNT(alias1)@1 as COUNT(DISTINCT aggregate_test_100.c2), MIN(alias1)@2 as MIN(DISTINCT aggregate_test_100.c2), SUM(alias2)@3 as SUM(aggregate_test_100.c3), MAX(alias3)@4 as MAX(aggregate_test_100.c4)]
+------AggregateExec: mode=FinalPartitioned, gby=[c1@0 as c1], aggr=[COUNT(alias1), MIN(alias1), SUM(alias2), MAX(alias3)]
+--------CoalesceBatchesExec: target_batch_size=2
+----------RepartitionExec: partitioning=Hash([c1@0], 8), input_partitions=8
+------------AggregateExec: mode=Partial, gby=[c1@0 as c1], aggr=[COUNT(alias1), MIN(alias1), SUM(alias2), MAX(alias3)]
+--------------AggregateExec: mode=FinalPartitioned, gby=[c1@0 as c1, alias1@1 as alias1], aggr=[alias2, alias3]
+----------------CoalesceBatchesExec: target_batch_size=2
+------------------RepartitionExec: partitioning=Hash([c1@0, alias1@1], 8), input_partitions=8
+--------------------AggregateExec: mode=Partial, gby=[c1@0 as c1, c2@1 as alias1], aggr=[alias2, alias3]
+----------------------RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+------------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c2, c3, c4], has_header=true
+
+# Use PostgreSQL dialect
+statement ok
+set datafusion.sql_parser.dialect = 'Postgres';
+
+query II
+SELECT c2, count(distinct c3) FILTER (WHERE c1 != 'a') FROM aggregate_test_100 GROUP BY c2 ORDER BY c2;
+----
+1 17
+2 17
+3 13
+4 19
+5 11
+
+query III
+SELECT c2, count(distinct c3) FILTER (WHERE c1 != 'a'), count(c5) FILTER (WHERE c1 != 'b') FROM aggregate_test_100 GROUP BY c2 ORDER BY c2;
+----
+1 17 19
+2 17 18
+3 13 17
+4 19 18
+5 11 9
+
+# Restore the default dialect
+statement ok
+set datafusion.sql_parser.dialect = 'Generic';
+
+statement ok
+drop table aggregate_test_100;

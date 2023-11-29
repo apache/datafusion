@@ -46,7 +46,7 @@ use futures::stream;
 use futures::stream::BoxStream;
 use object_store::{
     path::Path, GetOptions, GetResult, GetResultPayload, ListResult, MultipartId,
-    ObjectMeta, ObjectStore,
+    ObjectMeta, ObjectStore, PutOptions, PutResult,
 };
 use tokio::io::AsyncWrite;
 use url::Url;
@@ -620,7 +620,12 @@ impl MirroringObjectStore {
 
 #[async_trait]
 impl ObjectStore for MirroringObjectStore {
-    async fn put(&self, _location: &Path, _bytes: Bytes) -> object_store::Result<()> {
+    async fn put_opts(
+        &self,
+        _location: &Path,
+        _bytes: Bytes,
+        _opts: PutOptions,
+    ) -> object_store::Result<PutResult> {
         unimplemented!()
     }
 
@@ -653,6 +658,7 @@ impl ObjectStore for MirroringObjectStore {
             last_modified: metadata.modified().map(chrono::DateTime::from).unwrap(),
             size: metadata.len() as usize,
             e_tag: None,
+            version: None,
         };
 
         Ok(GetResult {
@@ -680,26 +686,16 @@ impl ObjectStore for MirroringObjectStore {
         Ok(data.into())
     }
 
-    async fn head(&self, location: &Path) -> object_store::Result<ObjectMeta> {
-        self.files.iter().find(|x| *x == location).unwrap();
-        Ok(ObjectMeta {
-            location: location.clone(),
-            last_modified: Utc.timestamp_nanos(0),
-            size: self.file_size as usize,
-            e_tag: None,
-        })
-    }
-
     async fn delete(&self, _location: &Path) -> object_store::Result<()> {
         unimplemented!()
     }
 
-    async fn list(
+    fn list(
         &self,
         prefix: Option<&Path>,
-    ) -> object_store::Result<BoxStream<'_, object_store::Result<ObjectMeta>>> {
+    ) -> BoxStream<'_, object_store::Result<ObjectMeta>> {
         let prefix = prefix.cloned().unwrap_or_default();
-        Ok(Box::pin(stream::iter(self.files.iter().filter_map(
+        Box::pin(stream::iter(self.files.iter().filter_map(
             move |location| {
                 // Don't return for exact prefix match
                 let filter = location
@@ -713,10 +709,11 @@ impl ObjectStore for MirroringObjectStore {
                         last_modified: Utc.timestamp_nanos(0),
                         size: self.file_size as usize,
                         e_tag: None,
+                        version: None,
                     })
                 })
             },
-        ))))
+        )))
     }
 
     async fn list_with_delimiter(
@@ -750,6 +747,7 @@ impl ObjectStore for MirroringObjectStore {
                     last_modified: Utc.timestamp_nanos(0),
                     size: self.file_size as usize,
                     e_tag: None,
+                    version: None,
                 };
                 objects.push(object);
             }

@@ -811,6 +811,7 @@ impl LogicalPlan {
                 name,
                 if_not_exists,
                 or_replace,
+                column_defaults,
                 ..
             })) => Ok(LogicalPlan::Ddl(DdlStatement::CreateMemoryTable(
                 CreateMemoryTable {
@@ -819,6 +820,7 @@ impl LogicalPlan {
                     name: name.clone(),
                     if_not_exists: *if_not_exists,
                     or_replace: *or_replace,
+                    column_defaults: column_defaults.clone(),
                 },
             ))),
             LogicalPlan::Ddl(DdlStatement::CreateView(CreateView {
@@ -2294,13 +2296,25 @@ impl Aggregate {
         aggr_expr: Vec<Expr>,
     ) -> Result<Self> {
         let group_expr = enumerate_grouping_sets(group_expr)?;
-        let grouping_expr: Vec<Expr> = grouping_set_to_exprlist(group_expr.as_slice())?;
-        let all_expr = grouping_expr.iter().chain(aggr_expr.iter());
 
-        let schema = DFSchema::new_with_metadata(
-            exprlist_to_fields(all_expr, &input)?,
-            input.schema().metadata().clone(),
-        )?;
+        let is_grouping_set = matches!(group_expr.as_slice(), [Expr::GroupingSet(_)]);
+
+        let grouping_expr: Vec<Expr> = grouping_set_to_exprlist(group_expr.as_slice())?;
+
+        let mut fields = exprlist_to_fields(grouping_expr.iter(), &input)?;
+
+        // Even columns that cannot be null will become nullable when used in a grouping set.
+        if is_grouping_set {
+            fields = fields
+                .into_iter()
+                .map(|field| field.with_nullable(true))
+                .collect::<Vec<_>>();
+        }
+
+        fields.extend(exprlist_to_fields(aggr_expr.iter(), &input)?);
+
+        let schema =
+            DFSchema::new_with_metadata(fields, input.schema().metadata().clone())?;
 
         Self::try_new_with_schema(input, group_expr, aggr_expr, Arc::new(schema))
     }
@@ -2539,7 +2553,7 @@ pub struct Unnest {
 mod tests {
     use super::*;
     use crate::logical_plan::table_scan;
-    use crate::{col, exists, in_subquery, lit, placeholder};
+    use crate::{col, count, exists, in_subquery, lit, placeholder, GroupingSet};
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::tree_node::TreeNodeVisitor;
     use datafusion_common::{not_impl_err, DFSchema, TableReference};
@@ -3005,5 +3019,37 @@ digraph {
 
         plan.replace_params_with_values(&[42i32.into()])
             .expect_err("unexpectedly succeeded to replace an invalid placeholder");
+    }
+
+    #[test]
+    fn test_nullable_schema_after_grouping_set() {
+        let schema = Schema::new(vec![
+            Field::new("foo", DataType::Int32, false),
+            Field::new("bar", DataType::Int32, false),
+        ]);
+
+        let plan = table_scan(TableReference::none(), &schema, None)
+            .unwrap()
+            .aggregate(
+                vec![Expr::GroupingSet(GroupingSet::GroupingSets(vec![
+                    vec![col("foo")],
+                    vec![col("bar")],
+                ]))],
+                vec![count(lit(true))],
+            )
+            .unwrap()
+            .build()
+            .unwrap();
+
+        let output_schema = plan.schema();
+
+        assert!(output_schema
+            .field_with_name(None, "foo")
+            .unwrap()
+            .is_nullable(),);
+        assert!(output_schema
+            .field_with_name(None, "bar")
+            .unwrap()
+            .is_nullable());
     }
 }

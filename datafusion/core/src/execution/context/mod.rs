@@ -27,7 +27,6 @@ use crate::{
     catalog::{CatalogList, MemoryCatalogList},
     datasource::{
         listing::{ListingOptions, ListingTable},
-        listing_table_factory::ListingTableFactory,
         provider::TableProviderFactory,
     },
     datasource::{MemTable, ViewTable},
@@ -111,6 +110,7 @@ use datafusion_sql::planner::object_name_to_table_reference;
 use uuid::Uuid;
 
 // backwards compatibility
+use crate::datasource::provider::DefaultTableFactory;
 use crate::execution::options::ArrowReadOptions;
 pub use datafusion_execution::config::SessionConfig;
 pub use datafusion_execution::TaskContext;
@@ -529,6 +529,7 @@ impl SessionContext {
             if_not_exists,
             or_replace,
             constraints,
+            column_defaults,
         } = cmd;
 
         let input = Arc::try_unwrap(input).unwrap_or_else(|e| e.as_ref().clone());
@@ -542,7 +543,12 @@ impl SessionContext {
                 let physical = DataFrame::new(self.state(), input);
 
                 let batches: Vec<_> = physical.collect_partitioned().await?;
-                let table = Arc::new(MemTable::try_new(schema, batches)?);
+                let table = Arc::new(
+                    // pass constraints and column defaults to the mem table.
+                    MemTable::try_new(schema, batches)?
+                        .with_constraints(constraints)
+                        .with_column_defaults(column_defaults.into_iter().collect()),
+                );
 
                 self.register_table(&name, table)?;
                 self.return_empty_dataframe()
@@ -557,8 +563,10 @@ impl SessionContext {
 
                 let batches: Vec<_> = physical.collect_partitioned().await?;
                 let table = Arc::new(
-                    // pass constraints to the mem table.
-                    MemTable::try_new(schema, batches)?.with_constraints(constraints),
+                    // pass constraints and column defaults to the mem table.
+                    MemTable::try_new(schema, batches)?
+                        .with_constraints(constraints)
+                        .with_column_defaults(column_defaults.into_iter().collect()),
                 );
 
                 self.register_table(&name, table)?;
@@ -806,7 +814,7 @@ impl SessionContext {
         self.state
             .write()
             .scalar_functions
-            .insert(f.name.clone(), Arc::new(f));
+            .insert(f.name().to_string(), Arc::new(f));
     }
 
     /// Registers an aggregate UDF within this context.
@@ -820,7 +828,7 @@ impl SessionContext {
         self.state
             .write()
             .aggregate_functions
-            .insert(f.name.clone(), Arc::new(f));
+            .insert(f.name().to_string(), Arc::new(f));
     }
 
     /// Registers a window UDF within this context.
@@ -834,7 +842,7 @@ impl SessionContext {
         self.state
             .write()
             .window_functions
-            .insert(f.name.clone(), Arc::new(f));
+            .insert(f.name().to_string(), Arc::new(f));
     }
 
     /// Creates a [`DataFrame`] for reading a data source.
@@ -858,10 +866,12 @@ impl SessionContext {
 
         // check if the file extension matches the expected extension
         for path in &table_paths {
-            let file_name = path.prefix().filename().unwrap_or_default();
-            if !path.as_str().ends_with(&option_extension) && file_name.contains('.') {
+            let file_path = path.as_str();
+            if !file_path.ends_with(option_extension.clone().as_str())
+                && !path.is_collection()
+            {
                 return exec_err!(
-                    "File '{file_name}' does not match the expected extension '{option_extension}'"
+                    "File path '{file_path}' does not match the expected extension '{option_extension}'"
                 );
             }
         }
@@ -1285,12 +1295,12 @@ impl SessionState {
         let mut table_factories: HashMap<String, Arc<dyn TableProviderFactory>> =
             HashMap::new();
         #[cfg(feature = "parquet")]
-        table_factories.insert("PARQUET".into(), Arc::new(ListingTableFactory::new()));
-        table_factories.insert("CSV".into(), Arc::new(ListingTableFactory::new()));
-        table_factories.insert("JSON".into(), Arc::new(ListingTableFactory::new()));
-        table_factories.insert("NDJSON".into(), Arc::new(ListingTableFactory::new()));
-        table_factories.insert("AVRO".into(), Arc::new(ListingTableFactory::new()));
-        table_factories.insert("ARROW".into(), Arc::new(ListingTableFactory::new()));
+        table_factories.insert("PARQUET".into(), Arc::new(DefaultTableFactory::new()));
+        table_factories.insert("CSV".into(), Arc::new(DefaultTableFactory::new()));
+        table_factories.insert("JSON".into(), Arc::new(DefaultTableFactory::new()));
+        table_factories.insert("NDJSON".into(), Arc::new(DefaultTableFactory::new()));
+        table_factories.insert("AVRO".into(), Arc::new(DefaultTableFactory::new()));
+        table_factories.insert("ARROW".into(), Arc::new(DefaultTableFactory::new()));
 
         if config.create_default_catalog_and_schema() {
             let default_catalog = MemoryCatalogProvider::new();

@@ -49,10 +49,7 @@ use std::{
 
 use super::listing::ListingTableUrl;
 use crate::error::{DataFusionError, Result};
-use crate::{
-    datasource::file_format::write::FileWriterMode,
-    physical_plan::{DisplayAs, DisplayFormatType},
-};
+use crate::physical_plan::{DisplayAs, DisplayFormatType};
 use crate::{
     datasource::{
         listing::{FileRange, PartitionedFile},
@@ -90,8 +87,6 @@ pub struct FileSinkConfig {
     /// A vector of column names and their corresponding data types,
     /// representing the partitioning columns for the file
     pub table_partition_cols: Vec<(String, DataType)>,
-    /// A writer mode that determines how data is written to the file
-    pub writer_mode: FileWriterMode,
     /// If true, it is assumed there is a single table_path which is a file to which all data should be written
     /// regardless of input partitioning. Otherwise, each table path is assumed to be a directory
     /// to which each output partition is written to its own output file.
@@ -140,9 +135,24 @@ impl DisplayAs for FileScanConfig {
             write!(f, ", infinite_source=true")?;
         }
 
-        if let Some(ordering) = orderings.first() {
+        if let Some(ordering) = orderings.get(0) {
             if !ordering.is_empty() {
-                write!(f, ", output_ordering={}", OutputOrderingDisplay(ordering))?;
+                let start = if orderings.len() == 1 {
+                    ", output_ordering="
+                } else {
+                    ", output_orderings=["
+                };
+                write!(f, "{}", start)?;
+                for (idx, ordering) in
+                    orderings.iter().enumerate().filter(|(_, o)| !o.is_empty())
+                {
+                    match idx {
+                        0 => write!(f, "{}", OutputOrderingDisplay(ordering))?,
+                        _ => write!(f, ", {}", OutputOrderingDisplay(ordering))?,
+                    }
+                }
+                let end = if orderings.len() == 1 { "" } else { "]" };
+                write!(f, "{}", end)?;
             }
         }
 
@@ -789,6 +799,7 @@ mod tests {
             last_modified: Utc::now(),
             size: 42,
             e_tag: None,
+            version: None,
         };
 
         PartitionedFile {

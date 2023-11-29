@@ -219,6 +219,7 @@ Unlike to some databases the math functions in Datafusion works the same way as 
 | flatten(array)                        | Converts an array of arrays to a flat array `flatten([[1], [2, 3], [4, 5, 6]]) -> [1, 2, 3, 4, 5, 6]`                                                                    |
 | array_length(array, dimension)        | Returns the length of the array dimension. `array_length([1, 2, 3, 4, 5]) -> 5`                                                                                          |
 | array_ndims(array)                    | Returns the number of dimensions of the array. `array_ndims([[1, 2, 3], [4, 5, 6]]) -> 2`                                                                                |
+| array_pop_front(array)                | Returns the array without the first element. `array_pop_front([1, 2, 3]) -> [2, 3]`                                                                                      |
 | array_pop_back(array)                 | Returns the array without the last element. `array_pop_back([1, 2, 3]) -> [1, 2]`                                                                                        |
 | array_position(array, element)        | Searches for an element in the array, returns first occurrence. `array_position([1, 2, 2, 3, 4], 2) -> 2`                                                                |
 | array_positions(array, element)       | Searches for an element in the array, returns all occurrences. `array_positions([1, 2, 2, 3, 4], 2) -> [2, 3]`                                                           |
@@ -234,8 +235,10 @@ Unlike to some databases the math functions in Datafusion works the same way as 
 | array_to_string(array, delimiter)     | Converts each element to its text representation. `array_to_string([1, 2, 3, 4], ',') -> 1,2,3,4`                                                                        |
 | array_intersect(array1, array2)       | Returns an array of the elements in the intersection of array1 and array2. `array_intersect([1, 2, 3, 4], [5, 6, 3, 4]) -> [3, 4]`                                       |
 | array_union(array1, array2)           | Returns an array of the elements in the union of array1 and array2 without duplicates. `array_union([1, 2, 3, 4], [5, 6, 3, 4]) -> [1, 2, 3, 4, 5, 6]`                   |
+| array_except(array1, array2)          | Returns an array of the elements that appear in the first array but not in the second. `array_except([1, 2, 3, 4], [5, 6, 3, 4]) -> [3, 4]`                              |
 | cardinality(array)                    | Returns the total number of elements in the array. `cardinality([[1, 2, 3], [4, 5, 6]]) -> 6`                                                                            |
 | make_array(value1, [value2 [, ...]])  | Returns an Arrow array using the specified input expressions. `make_array(1, 2, 3) -> [1, 2, 3]`                                                                         |
+| range(start [, stop, step])           | Returns an Arrow array between start and stop with step. `SELECT range(2, 10, 3) -> [2, 5, 8]`                                                                           |
 | trim_array(array, n)                  | Deprecated                                                                                                                                                               |
 
 ## Regular Expressions

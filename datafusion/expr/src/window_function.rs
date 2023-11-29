@@ -171,12 +171,8 @@ impl WindowFunction {
             WindowFunction::BuiltInWindowFunction(fun) => {
                 fun.return_type(input_expr_types)
             }
-            WindowFunction::AggregateUDF(fun) => {
-                Ok((*(fun.return_type)(input_expr_types)?).clone())
-            }
-            WindowFunction::WindowUDF(fun) => {
-                Ok((*(fun.return_type)(input_expr_types)?).clone())
-            }
+            WindowFunction::AggregateUDF(fun) => fun.return_type(input_expr_types),
+            WindowFunction::WindowUDF(fun) => fun.return_type(input_expr_types),
         }
     }
 }
@@ -209,7 +205,7 @@ impl BuiltInWindowFunction {
             BuiltInWindowFunction::PercentRank | BuiltInWindowFunction::CumeDist => {
                 Ok(DataType::Float64)
             }
-            BuiltInWindowFunction::Ntile => Ok(DataType::UInt32),
+            BuiltInWindowFunction::Ntile => Ok(DataType::UInt64),
             BuiltInWindowFunction::Lag
             | BuiltInWindowFunction::Lead
             | BuiltInWindowFunction::FirstValue
@@ -234,8 +230,8 @@ impl WindowFunction {
         match self {
             WindowFunction::AggregateFunction(fun) => fun.signature(),
             WindowFunction::BuiltInWindowFunction(fun) => fun.signature(),
-            WindowFunction::AggregateUDF(fun) => fun.signature.clone(),
-            WindowFunction::WindowUDF(fun) => fun.signature.clone(),
+            WindowFunction::AggregateUDF(fun) => fun.signature().clone(),
+            WindowFunction::WindowUDF(fun) => fun.signature().clone(),
         }
     }
 }
@@ -369,6 +365,15 @@ mod tests {
         let fun = find_df_window_func("cume_dist").unwrap();
         let observed = fun.return_type(&[])?;
         assert_eq!(DataType::Float64, observed);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_ntile_return_type() -> Result<()> {
+        let fun = find_df_window_func("ntile").unwrap();
+        let observed = fun.return_type(&[DataType::Int16])?;
+        assert_eq!(DataType::UInt64, observed);
 
         Ok(())
     }

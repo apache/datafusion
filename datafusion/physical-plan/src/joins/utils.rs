@@ -18,12 +18,14 @@
 //! Join related functionality used both on logical and physical plans
 
 use std::collections::HashSet;
+use std::fmt::{self, Debug};
 use std::future::Future;
+use std::ops::IndexMut;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::usize;
 
-use crate::joins::hash_join_utils::{build_filter_input_order, SortedFilterExpr};
+use crate::joins::stream_join_utils::{build_filter_input_order, SortedFilterExpr};
 use crate::metrics::{self, ExecutionPlanMetricsSet, MetricBuilder};
 use crate::{ColumnStatistics, ExecutionPlan, Partitioning, Statistics};
 
@@ -40,9 +42,10 @@ use datafusion_common::{
     plan_datafusion_err, plan_err, DataFusionError, JoinSide, JoinType, Result,
     SharedResult,
 };
+use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_physical_expr::equivalence::add_offset_to_expr;
 use datafusion_physical_expr::expressions::Column;
-use datafusion_physical_expr::intervals::{ExprIntervalGraph, Interval, IntervalBound};
+use datafusion_physical_expr::intervals::cp_solver::ExprIntervalGraph;
 use datafusion_physical_expr::utils::merge_vectors;
 use datafusion_physical_expr::{
     LexOrdering, LexOrderingRef, PhysicalExpr, PhysicalSortExpr,
@@ -50,7 +53,134 @@ use datafusion_physical_expr::{
 
 use futures::future::{BoxFuture, Shared};
 use futures::{ready, FutureExt};
+use hashbrown::raw::RawTable;
 use parking_lot::Mutex;
+
+/// Maps a `u64` hash value based on the build side ["on" values] to a list of indices with this key's value.
+///
+/// By allocating a `HashMap` with capacity for *at least* the number of rows for entries at the build side,
+/// we make sure that we don't have to re-hash the hashmap, which needs access to the key (the hash in this case) value.
+///
+/// E.g. 1 -> [3, 6, 8] indicates that the column values map to rows 3, 6 and 8 for hash value 1
+/// As the key is a hash value, we need to check possible hash collisions in the probe stage
+/// During this stage it might be the case that a row is contained the same hashmap value,
+/// but the values don't match. Those are checked in the [`equal_rows_arr`](crate::joins::hash_join::equal_rows_arr) method.
+///
+/// The indices (values) are stored in a separate chained list stored in the `Vec<u64>`.
+///
+/// The first value (+1) is stored in the hashmap, whereas the next value is stored in array at the position value.
+///
+/// The chain can be followed until the value "0" has been reached, meaning the end of the list.
+/// Also see chapter 5.3 of [Balancing vectorized query execution with bandwidth-optimized storage](https://dare.uva.nl/search?identifier=5ccbb60a-38b8-4eeb-858a-e7735dd37487)
+///
+/// # Example
+///
+/// ``` text
+/// See the example below:
+///
+/// Insert (10,1)            <-- insert hash value 10 with row index 1
+/// map:
+/// ----------
+/// | 10 | 2 |
+/// ----------
+/// next:
+/// ---------------------
+/// | 0 | 0 | 0 | 0 | 0 |
+/// ---------------------
+/// Insert (20,2)
+/// map:
+/// ----------
+/// | 10 | 2 |
+/// | 20 | 3 |
+/// ----------
+/// next:
+/// ---------------------
+/// | 0 | 0 | 0 | 0 | 0 |
+/// ---------------------
+/// Insert (10,3)           <-- collision! row index 3 has a hash value of 10 as well
+/// map:
+/// ----------
+/// | 10 | 4 |
+/// | 20 | 3 |
+/// ----------
+/// next:
+/// ---------------------
+/// | 0 | 0 | 0 | 2 | 0 |  <--- hash value 10 maps to 4,2 (which means indices values 3,1)
+/// ---------------------
+/// Insert (10,4)          <-- another collision! row index 4 ALSO has a hash value of 10
+/// map:
+/// ---------
+/// | 10 | 5 |
+/// | 20 | 3 |
+/// ---------
+/// next:
+/// ---------------------
+/// | 0 | 0 | 0 | 2 | 4 | <--- hash value 10 maps to 5,4,2 (which means indices values 4,3,1)
+/// ---------------------
+/// ```
+pub struct JoinHashMap {
+    // Stores hash value to last row index
+    map: RawTable<(u64, u64)>,
+    // Stores indices in chained list data structure
+    next: Vec<u64>,
+}
+
+impl JoinHashMap {
+    #[cfg(test)]
+    pub(crate) fn new(map: RawTable<(u64, u64)>, next: Vec<u64>) -> Self {
+        Self { map, next }
+    }
+
+    pub(crate) fn with_capacity(capacity: usize) -> Self {
+        JoinHashMap {
+            map: RawTable::with_capacity(capacity),
+            next: vec![0; capacity],
+        }
+    }
+}
+
+// Trait defining methods that must be implemented by a hash map type to be used for joins.
+pub trait JoinHashMapType {
+    /// The type of list used to store the next list
+    type NextType: IndexMut<usize, Output = u64>;
+    /// Extend with zero
+    fn extend_zero(&mut self, len: usize);
+    /// Returns mutable references to the hash map and the next.
+    fn get_mut(&mut self) -> (&mut RawTable<(u64, u64)>, &mut Self::NextType);
+    /// Returns a reference to the hash map.
+    fn get_map(&self) -> &RawTable<(u64, u64)>;
+    /// Returns a reference to the next.
+    fn get_list(&self) -> &Self::NextType;
+}
+
+/// Implementation of `JoinHashMapType` for `JoinHashMap`.
+impl JoinHashMapType for JoinHashMap {
+    type NextType = Vec<u64>;
+
+    // Void implementation
+    fn extend_zero(&mut self, _: usize) {}
+
+    /// Get mutable references to the hash map and the next.
+    fn get_mut(&mut self) -> (&mut RawTable<(u64, u64)>, &mut Self::NextType) {
+        (&mut self.map, &mut self.next)
+    }
+
+    /// Get a reference to the hash map.
+    fn get_map(&self) -> &RawTable<(u64, u64)> {
+        &self.map
+    }
+
+    /// Get a reference to the next.
+    fn get_list(&self) -> &Self::NextType {
+        &self.next
+    }
+}
+
+impl fmt::Debug for JoinHashMap {
+    fn fmt(&self, _f: &mut fmt::Formatter) -> fmt::Result {
+        Ok(())
+    }
+}
 
 /// The on clause of the join, as vector of (left, right) columns.
 pub type JoinOn = Vec<(Column, Column)>;
@@ -584,8 +714,8 @@ fn estimate_inner_join_cardinality(
             );
         }
 
-        let left_max_distinct = max_distinct_count(&left_stats.num_rows, left_stat)?;
-        let right_max_distinct = max_distinct_count(&right_stats.num_rows, right_stat)?;
+        let left_max_distinct = max_distinct_count(&left_stats.num_rows, left_stat);
+        let right_max_distinct = max_distinct_count(&right_stats.num_rows, right_stat);
         let max_distinct = left_max_distinct.max(&right_max_distinct);
         if max_distinct.get_value().is_some() {
             // Seems like there are a few implementations of this algorithm that implement
@@ -616,48 +746,60 @@ fn estimate_inner_join_cardinality(
 }
 
 /// Estimate the number of maximum distinct values that can be present in the
-/// given column from its statistics.
-///
-/// If distinct_count is available, uses it directly. If the column numeric, and
-/// has min/max values, then they might be used as a fallback option. Otherwise,
-/// returns None.
+/// given column from its statistics. If distinct_count is available, uses it
+/// directly. Otherwise, if the column is numeric and has min/max values, it
+/// estimates the maximum distinct count from those.
 fn max_distinct_count(
     num_rows: &Precision<usize>,
     stats: &ColumnStatistics,
-) -> Option<Precision<usize>> {
-    match (
-        &stats.distinct_count,
-        stats.max_value.get_value(),
-        stats.min_value.get_value(),
-    ) {
-        (Precision::Exact(_), _, _) | (Precision::Inexact(_), _, _) => {
-            Some(stats.distinct_count.clone())
-        }
-        (_, Some(max), Some(min)) => {
-            let numeric_range = Interval::new(
-                IntervalBound::new(min.clone(), false),
-                IntervalBound::new(max.clone(), false),
-            )
-            .cardinality()
-            .ok()
-            .flatten()? as usize;
-
-            // The number can never be greater than the number of rows we have (minus
-            // the nulls, since they don't count as distinct values).
-            let ceiling =
-                num_rows.get_value()? - stats.null_count.get_value().unwrap_or(&0);
-            Some(
-                if num_rows.is_exact().unwrap_or(false)
-                    && stats.max_value.is_exact().unwrap_or(false)
-                    && stats.min_value.is_exact().unwrap_or(false)
+) -> Precision<usize> {
+    match &stats.distinct_count {
+        dc @ (Precision::Exact(_) | Precision::Inexact(_)) => dc.clone(),
+        _ => {
+            // The number can never be greater than the number of rows we have
+            // minus the nulls (since they don't count as distinct values).
+            let result = match num_rows {
+                Precision::Absent => Precision::Absent,
+                Precision::Inexact(count) => {
+                    Precision::Inexact(count - stats.null_count.get_value().unwrap_or(&0))
+                }
+                Precision::Exact(count) => {
+                    let count = count - stats.null_count.get_value().unwrap_or(&0);
+                    if stats.null_count.is_exact().unwrap_or(false) {
+                        Precision::Exact(count)
+                    } else {
+                        Precision::Inexact(count)
+                    }
+                }
+            };
+            // Cap the estimate using the number of possible values:
+            if let (Some(min), Some(max)) =
+                (stats.min_value.get_value(), stats.max_value.get_value())
+            {
+                if let Some(range_dc) = Interval::try_new(min.clone(), max.clone())
+                    .ok()
+                    .and_then(|e| e.cardinality())
                 {
-                    Precision::Exact(numeric_range.min(ceiling))
-                } else {
-                    Precision::Inexact(numeric_range.min(ceiling))
-                },
-            )
+                    let range_dc = range_dc as usize;
+                    // Note that the `unwrap` calls in the below statement are safe.
+                    return if matches!(result, Precision::Absent)
+                        || &range_dc < result.get_value().unwrap()
+                    {
+                        if stats.min_value.is_exact().unwrap()
+                            && stats.max_value.is_exact().unwrap()
+                        {
+                            Precision::Exact(range_dc)
+                        } else {
+                            Precision::Inexact(range_dc)
+                        }
+                    } else {
+                        result
+                    };
+                }
+            }
+
+            result
         }
-        _ => None,
     }
 }
 
@@ -1122,7 +1264,8 @@ pub fn prepare_sorted_exprs(
         vec![left_temp_sorted_filter_expr, right_temp_sorted_filter_expr];
 
     // Build the expression interval graph
-    let mut graph = ExprIntervalGraph::try_new(filter.expression().clone())?;
+    let mut graph =
+        ExprIntervalGraph::try_new(filter.expression().clone(), filter.schema())?;
 
     // Update sorted expressions with node indices
     update_sorted_exprs_with_node_indices(&mut graph, &mut sorted_exprs);
@@ -1568,7 +1711,7 @@ mod tests {
                     column_statistics: right_col_stats,
                 },
             ),
-            None
+            Some(Precision::Inexact(100))
         );
         Ok(())
     }

@@ -27,7 +27,6 @@ use crate::datasource::file_format::csv::CsvFormat;
 use crate::datasource::file_format::json::JsonFormat;
 #[cfg(feature = "parquet")]
 use crate::datasource::file_format::parquet::ParquetFormat;
-use crate::datasource::file_format::write::FileWriterMode;
 use crate::datasource::file_format::FileFormat;
 use crate::datasource::listing::ListingTableUrl;
 use crate::datasource::physical_plan::FileSinkConfig;
@@ -84,13 +83,13 @@ use datafusion_common::{
 use datafusion_expr::dml::{CopyOptions, CopyTo};
 use datafusion_expr::expr::{
     self, AggregateFunction, AggregateUDF, Alias, Between, BinaryExpr, Cast,
-    GetFieldAccess, GetIndexedField, GroupingSet, InList, Like, ScalarUDF, TryCast,
-    WindowFunction,
+    GetFieldAccess, GetIndexedField, GroupingSet, InList, Like, TryCast, WindowFunction,
 };
 use datafusion_expr::expr_rewriter::{unalias, unnormalize_cols};
 use datafusion_expr::logical_plan::builder::wrap_projection_for_join_if_necessary;
 use datafusion_expr::{
-    DescribeTable, DmlStatement, StringifiedPlan, WindowFrame, WindowFrameBound, WriteOp,
+    DescribeTable, DmlStatement, ScalarFunctionDefinition, StringifiedPlan, WindowFrame,
+    WindowFrameBound, WriteOp,
 };
 use datafusion_physical_expr::expressions::Literal;
 use datafusion_sql::utils::window_expr_common_partition_keys;
@@ -218,11 +217,13 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
 
             Ok(name)
         }
-        Expr::ScalarFunction(func) => {
-            create_function_physical_name(&func.fun.to_string(), false, &func.args)
-        }
-        Expr::ScalarUDF(ScalarUDF { fun, args }) => {
-            create_function_physical_name(&fun.name, false, args)
+        Expr::ScalarFunction(expr::ScalarFunction { func_def, args }) => {
+            // function should be resolved during `AnalyzerRule`s
+            if let ScalarFunctionDefinition::Name(_) = func_def {
+                return internal_err!("Function `Expr` with name should be resolved.");
+            }
+
+            create_function_physical_name(func_def.name(), false, args)
         }
         Expr::WindowFunction(WindowFunction { fun, args, .. }) => {
             create_function_physical_name(&fun.to_string(), false, args)
@@ -250,7 +251,7 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
             for e in args {
                 names.push(create_physical_name(e, false)?);
             }
-            Ok(format!("{}({})", fun.name, names.join(",")))
+            Ok(format!("{}({})", fun.name(), names.join(",")))
         }
         Expr::GroupingSet(grouping_set) => match grouping_set {
             GroupingSet::Rollup(exprs) => Ok(format!(
@@ -591,7 +592,6 @@ impl DefaultPhysicalPlanner {
                         output_schema: Arc::new(schema),
                         table_partition_cols: vec![],
                         unbounded_input: false,
-                        writer_mode: FileWriterMode::PutMultipart,
                         single_file_output: *single_file_output,
                         overwrite: false,
                         file_type_writer_options
@@ -820,16 +820,13 @@ impl DefaultPhysicalPlanner {
                     let updated_aggregates = initial_aggr.aggr_expr().to_vec();
                     let updated_order_bys = initial_aggr.order_by_expr().to_vec();
 
-                    let (initial_aggr, next_partition_mode): (
-                        Arc<dyn ExecutionPlan>,
-                        AggregateMode,
-                    ) = if can_repartition {
+                    let next_partition_mode = if can_repartition {
                         // construct a second aggregation with 'AggregateMode::FinalPartitioned'
-                        (initial_aggr, AggregateMode::FinalPartitioned)
+                        AggregateMode::FinalPartitioned
                     } else {
                         // construct a second aggregation, keeping the final column name equal to the
                         // first aggregation and the expressions corresponding to the respective aggregate
-                        (initial_aggr, AggregateMode::Final)
+                        AggregateMode::Final
                     };
 
                     let final_grouping_set = PhysicalGroupBy::new_single(

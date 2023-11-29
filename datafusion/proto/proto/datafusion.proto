@@ -636,6 +636,12 @@ enum ScalarFunction {
   ToTimestampNanos = 118;
   ArrayIntersect = 119;
   ArrayUnion = 120;
+  OverLay = 121;
+  Range = 122;
+  ArrayExcept = 123;
+  ArrayPopFront = 124;
+  Levenshtein = 125;
+  SubstrIndex = 126;
 }
 
 message ScalarFunctionNode {
@@ -681,6 +687,7 @@ enum AggregateFunction {
   REGR_SXX = 32;
   REGR_SYY = 33;
   REGR_SXY = 34;
+  STRING_AGG = 35;
 }
 
 message AggregateExprNode {
@@ -978,7 +985,9 @@ message ScalarValue{
     // Literal Date32 value always has a unit of day
     int32  date_32_value = 14;
     ScalarTime32Value time32_value = 15;
+    ScalarListValue large_list_value = 16;
     ScalarListValue list_value = 17;
+    ScalarListValue fixed_size_list_value = 18;
 
     Decimal128 decimal128_value = 20;
     Decimal256 decimal256_value = 39;
@@ -1148,13 +1157,8 @@ message PhysicalPlanNode {
     NestedLoopJoinExecNode nested_loop_join = 22;
     AnalyzeExecNode analyze = 23;
     JsonSinkExecNode json_sink = 24;
+    SymmetricHashJoinExecNode symmetric_hash_join = 25;
   }
-}
-
-enum FileWriterMode {
-  APPEND = 0;
-  PUT = 1;
-  PUT_MULTIPART = 2;
 }
 
 enum CompressionTypeVariant {
@@ -1181,12 +1185,13 @@ message JsonWriterOptions {
 }
 
 message FileSinkConfig {
+  reserved 6; // writer_mode
+
   string object_store_url = 1;
   repeated PartitionedFile file_groups = 2;
   repeated string table_paths = 3;
   Schema output_schema = 4;
   repeated PartitionColumn table_partition_cols = 5;
-  FileWriterMode writer_mode = 6;
   bool single_file_output = 7;
   bool unbounded_input = 8;
   bool overwrite = 9;
@@ -1426,6 +1431,21 @@ message HashJoinExecNode {
   repeated JoinOn on = 3;
   JoinType join_type = 4;
   PartitionMode partition_mode = 6;
+  bool null_equals_null = 7;
+  JoinFilter filter = 8;
+}
+
+enum StreamPartitionMode {
+  SINGLE_PARTITION = 0;
+  PARTITIONED_EXEC = 1;
+}
+
+message SymmetricHashJoinExecNode {
+  PhysicalPlanNode left = 1;
+  PhysicalPlanNode right = 2;
+  repeated JoinOn on = 3;
+  JoinType join_type = 4;
+  StreamPartitionMode partition_mode = 6;
   bool null_equals_null = 7;
   JoinFilter filter = 8;
 }

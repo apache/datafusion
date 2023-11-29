@@ -988,3 +988,27 @@ SELECT * FROM
   ON (severity.cron_job_name = jobs.cron_job_name);
 ----
 catan-prod1-daily success catan-prod1-daily high
+
+##correlated_scalar_subquery_sum_agg_bug
+#query TT
+#explain
+#select t1.t1_int from t1 where
+#    (select sum(t2_int) is null from t2 where t1.t1_id = t2.t2_id)
+#----
+#logical_plan
+#Projection: t1.t1_int
+#--Inner Join: t1.t1_id = __scalar_sq_1.t2_id
+#----TableScan: t1 projection=[t1_id, t1_int]
+#----SubqueryAlias: __scalar_sq_1
+#------Projection: t2.t2_id
+#--------Filter: SUM(t2.t2_int) IS NULL
+#----------Aggregate: groupBy=[[t2.t2_id]],  aggr=[[SUM(t2.t2_int)]]
+#------------TableScan: t2 projection=[t2_id, t2_int]
+
+#query I rowsort
+#select t1.t1_int from t1 where
+#    (select sum(t2_int) is null from t2 where t1.t1_id = t2.t2_id)
+#----
+#2
+#3
+#4

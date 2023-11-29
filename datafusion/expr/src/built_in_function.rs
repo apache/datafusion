@@ -138,6 +138,8 @@ pub enum BuiltinScalarFunction {
     ArrayHasAll,
     /// array_has_any
     ArrayHasAny,
+    /// array_pop_front
+    ArrayPopFront,
     /// array_pop_back
     ArrayPopBack,
     /// array_dims
@@ -178,12 +180,16 @@ pub enum BuiltinScalarFunction {
     ArrayIntersect,
     /// array_union
     ArrayUnion,
+    /// array_except
+    ArrayExcept,
     /// cardinality
     Cardinality,
     /// construct an array from columns
     MakeArray,
     /// Flatten
     Flatten,
+    /// Range
+    Range,
 
     // struct functions
     /// struct
@@ -292,6 +298,12 @@ pub enum BuiltinScalarFunction {
     RegexpMatch,
     /// arrow_typeof
     ArrowTypeof,
+    /// overlay
+    OverLay,
+    /// levenshtein
+    Levenshtein,
+    /// substr_index
+    SubstrIndex,
 }
 
 /// Maps the sql function name to `BuiltinScalarFunction`
@@ -386,8 +398,10 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::ArrayHas => Volatility::Immutable,
             BuiltinScalarFunction::ArrayDims => Volatility::Immutable,
             BuiltinScalarFunction::ArrayElement => Volatility::Immutable,
+            BuiltinScalarFunction::ArrayExcept => Volatility::Immutable,
             BuiltinScalarFunction::ArrayLength => Volatility::Immutable,
             BuiltinScalarFunction::ArrayNdims => Volatility::Immutable,
+            BuiltinScalarFunction::ArrayPopFront => Volatility::Immutable,
             BuiltinScalarFunction::ArrayPopBack => Volatility::Immutable,
             BuiltinScalarFunction::ArrayPosition => Volatility::Immutable,
             BuiltinScalarFunction::ArrayPositions => Volatility::Immutable,
@@ -404,6 +418,7 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::ArrayToString => Volatility::Immutable,
             BuiltinScalarFunction::ArrayIntersect => Volatility::Immutable,
             BuiltinScalarFunction::ArrayUnion => Volatility::Immutable,
+            BuiltinScalarFunction::Range => Volatility::Immutable,
             BuiltinScalarFunction::Cardinality => Volatility::Immutable,
             BuiltinScalarFunction::MakeArray => Volatility::Immutable,
             BuiltinScalarFunction::Ascii => Volatility::Immutable,
@@ -455,6 +470,9 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Struct => Volatility::Immutable,
             BuiltinScalarFunction::FromUnixtime => Volatility::Immutable,
             BuiltinScalarFunction::ArrowTypeof => Volatility::Immutable,
+            BuiltinScalarFunction::OverLay => Volatility::Immutable,
+            BuiltinScalarFunction::Levenshtein => Volatility::Immutable,
+            BuiltinScalarFunction::SubstrIndex => Volatility::Immutable,
 
             // Stable builtin functions
             BuiltinScalarFunction::Now => Volatility::Stable,
@@ -564,6 +582,7 @@ impl BuiltinScalarFunction {
             },
             BuiltinScalarFunction::ArrayLength => Ok(UInt64),
             BuiltinScalarFunction::ArrayNdims => Ok(UInt64),
+            BuiltinScalarFunction::ArrayPopFront => Ok(input_expr_types[0].clone()),
             BuiltinScalarFunction::ArrayPopBack => Ok(input_expr_types[0].clone()),
             BuiltinScalarFunction::ArrayPosition => Ok(UInt64),
             BuiltinScalarFunction::ArrayPositions => {
@@ -583,8 +602,24 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::ArrayReplaceAll => Ok(input_expr_types[0].clone()),
             BuiltinScalarFunction::ArraySlice => Ok(input_expr_types[0].clone()),
             BuiltinScalarFunction::ArrayToString => Ok(Utf8),
-            BuiltinScalarFunction::ArrayIntersect => Ok(input_expr_types[0].clone()),
-            BuiltinScalarFunction::ArrayUnion => Ok(input_expr_types[0].clone()),
+            BuiltinScalarFunction::ArrayUnion | BuiltinScalarFunction::ArrayIntersect => {
+                match (input_expr_types[0].clone(), input_expr_types[1].clone()) {
+                    (DataType::Null, dt) => Ok(dt),
+                    (dt, DataType::Null) => Ok(dt),
+                    (dt, _) => Ok(dt),
+                }
+            }
+            BuiltinScalarFunction::Range => {
+                Ok(List(Arc::new(Field::new("item", Int64, true))))
+            }
+            BuiltinScalarFunction::ArrayExcept => {
+                match (input_expr_types[0].clone(), input_expr_types[1].clone()) {
+                    (DataType::Null, _) | (_, DataType::Null) => {
+                        Ok(input_expr_types[0].clone())
+                    }
+                    (dt, _) => Ok(dt),
+                }
+            }
             BuiltinScalarFunction::Cardinality => Ok(UInt64),
             BuiltinScalarFunction::MakeArray => match input_expr_types.len() {
                 0 => Ok(List(Arc::new(Field::new("item", Null, true)))),
@@ -741,13 +776,13 @@ impl BuiltinScalarFunction {
                     return plan_err!("The to_hex function can only accept integers.");
                 }
             }),
-            BuiltinScalarFunction::ToTimestamp => Ok(match &input_expr_types[0] {
-                Int64 => Timestamp(Second, None),
-                _ => Timestamp(Nanosecond, None),
-            }),
+            BuiltinScalarFunction::SubstrIndex => {
+                utf8_to_str_type(&input_expr_types[0], "substr_index")
+            }
+            BuiltinScalarFunction::ToTimestamp
+            | BuiltinScalarFunction::ToTimestampNanos => Ok(Timestamp(Nanosecond, None)),
             BuiltinScalarFunction::ToTimestampMillis => Ok(Timestamp(Millisecond, None)),
             BuiltinScalarFunction::ToTimestampMicros => Ok(Timestamp(Microsecond, None)),
-            BuiltinScalarFunction::ToTimestampNanos => Ok(Timestamp(Nanosecond, None)),
             BuiltinScalarFunction::ToTimestampSeconds => Ok(Timestamp(Second, None)),
             BuiltinScalarFunction::FromUnixtime => Ok(Timestamp(Second, None)),
             BuiltinScalarFunction::Now => {
@@ -812,6 +847,14 @@ impl BuiltinScalarFunction {
 
             BuiltinScalarFunction::Abs => Ok(input_expr_types[0].clone()),
 
+            BuiltinScalarFunction::OverLay => {
+                utf8_to_str_type(&input_expr_types[0], "overlay")
+            }
+
+            BuiltinScalarFunction::Levenshtein => {
+                utf8_to_int_type(&input_expr_types[0], "levenshtein")
+            }
+
             BuiltinScalarFunction::Acos
             | BuiltinScalarFunction::Asin
             | BuiltinScalarFunction::Atan
@@ -855,6 +898,7 @@ impl BuiltinScalarFunction {
         // for now, the list is small, as we do not have many built-in functions.
         match self {
             BuiltinScalarFunction::ArrayAppend => Signature::any(2, self.volatility()),
+            BuiltinScalarFunction::ArrayPopFront => Signature::any(1, self.volatility()),
             BuiltinScalarFunction::ArrayPopBack => Signature::any(1, self.volatility()),
             BuiltinScalarFunction::ArrayConcat => {
                 Signature::variadic_any(self.volatility())
@@ -862,6 +906,7 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::ArrayDims => Signature::any(1, self.volatility()),
             BuiltinScalarFunction::ArrayEmpty => Signature::any(1, self.volatility()),
             BuiltinScalarFunction::ArrayElement => Signature::any(2, self.volatility()),
+            BuiltinScalarFunction::ArrayExcept => Signature::any(2, self.volatility()),
             BuiltinScalarFunction::Flatten => Signature::any(1, self.volatility()),
             BuiltinScalarFunction::ArrayHasAll
             | BuiltinScalarFunction::ArrayHasAny
@@ -895,6 +940,14 @@ impl BuiltinScalarFunction {
                 // 0 or more arguments of arbitrary type
                 Signature::one_of(vec![VariadicAny, Any(0)], self.volatility())
             }
+            BuiltinScalarFunction::Range => Signature::one_of(
+                vec![
+                    Exact(vec![Int64]),
+                    Exact(vec![Int64, Int64]),
+                    Exact(vec![Int64, Int64, Int64]),
+                ],
+                self.volatility(),
+            ),
             BuiltinScalarFunction::Struct => Signature::variadic(
                 struct_expressions::SUPPORTED_STRUCT_TYPES.to_vec(),
                 self.volatility(),
@@ -1186,6 +1239,14 @@ impl BuiltinScalarFunction {
                 self.volatility(),
             ),
 
+            BuiltinScalarFunction::SubstrIndex => Signature::one_of(
+                vec![
+                    Exact(vec![Utf8, Utf8, Int64]),
+                    Exact(vec![LargeUtf8, LargeUtf8, Int64]),
+                ],
+                self.volatility(),
+            ),
+
             BuiltinScalarFunction::Replace | BuiltinScalarFunction::Translate => {
                 Signature::one_of(vec![Exact(vec![Utf8, Utf8, Utf8])], self.volatility())
             }
@@ -1259,7 +1320,19 @@ impl BuiltinScalarFunction {
             }
             BuiltinScalarFunction::ArrowTypeof => Signature::any(1, self.volatility()),
             BuiltinScalarFunction::Abs => Signature::any(1, self.volatility()),
-
+            BuiltinScalarFunction::OverLay => Signature::one_of(
+                vec![
+                    Exact(vec![Utf8, Utf8, Int64, Int64]),
+                    Exact(vec![LargeUtf8, LargeUtf8, Int64, Int64]),
+                    Exact(vec![Utf8, Utf8, Int64]),
+                    Exact(vec![LargeUtf8, LargeUtf8, Int64]),
+                ],
+                self.volatility(),
+            ),
+            BuiltinScalarFunction::Levenshtein => Signature::one_of(
+                vec![Exact(vec![Utf8, Utf8]), Exact(vec![LargeUtf8, LargeUtf8])],
+                self.volatility(),
+            ),
             BuiltinScalarFunction::Acos
             | BuiltinScalarFunction::Asin
             | BuiltinScalarFunction::Atan
@@ -1424,6 +1497,8 @@ fn aliases(func: &BuiltinScalarFunction) -> &'static [&'static str] {
         BuiltinScalarFunction::Trim => &["trim"],
         BuiltinScalarFunction::Upper => &["upper"],
         BuiltinScalarFunction::Uuid => &["uuid"],
+        BuiltinScalarFunction::Levenshtein => &["levenshtein"],
+        BuiltinScalarFunction::SubstrIndex => &["substr_index", "substring_index"],
 
         // regex functions
         BuiltinScalarFunction::RegexpMatch => &["regexp_match"],
@@ -1476,6 +1551,7 @@ fn aliases(func: &BuiltinScalarFunction) -> &'static [&'static str] {
             "list_element",
             "list_extract",
         ],
+        BuiltinScalarFunction::ArrayExcept => &["array_except", "list_except"],
         BuiltinScalarFunction::Flatten => &["flatten"],
         BuiltinScalarFunction::ArrayHasAll => &["array_has_all", "list_has_all"],
         BuiltinScalarFunction::ArrayHasAny => &["array_has_any", "list_has_any"],
@@ -1484,6 +1560,7 @@ fn aliases(func: &BuiltinScalarFunction) -> &'static [&'static str] {
         }
         BuiltinScalarFunction::ArrayLength => &["array_length", "list_length"],
         BuiltinScalarFunction::ArrayNdims => &["array_ndims", "list_ndims"],
+        BuiltinScalarFunction::ArrayPopFront => &["array_pop_front", "list_pop_front"],
         BuiltinScalarFunction::ArrayPopBack => &["array_pop_back", "list_pop_back"],
         BuiltinScalarFunction::ArrayPosition => &[
             "array_position",
@@ -1518,6 +1595,8 @@ fn aliases(func: &BuiltinScalarFunction) -> &'static [&'static str] {
         BuiltinScalarFunction::Cardinality => &["cardinality"],
         BuiltinScalarFunction::MakeArray => &["make_array", "make_list"],
         BuiltinScalarFunction::ArrayIntersect => &["array_intersect", "list_intersect"],
+        BuiltinScalarFunction::OverLay => &["overlay"],
+        BuiltinScalarFunction::Range => &["range", "generate_series"],
 
         // struct functions
         BuiltinScalarFunction::Struct => &["struct"],
