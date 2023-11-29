@@ -309,7 +309,7 @@ impl TreeNode for Expr {
                 filter,
                 order_by,
             }) => match func_def {
-                AggregateFunctionDefinition::BuiltIn { fun, .. } => {
+                AggregateFunctionDefinition::BuiltIn (fun) => {
                     Expr::AggregateFunction(AggregateFunction::new(
                         fun,
                         transform_vec(args, &mut transform)?,

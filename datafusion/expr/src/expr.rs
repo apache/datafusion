@@ -483,13 +483,10 @@ impl Sort {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-/// Defines which implementation of a function for DataFusion to call.
+/// Defines which implementation of an aggregate function DataFusion should call.
 pub enum AggregateFunctionDefinition {
-    BuiltIn {
-        fun: aggregate_function::AggregateFunction,
-        name: Arc<str>,
-    },
-    /// Resolved to a user defined function
+    BuiltIn(aggregate_function::AggregateFunction),
+    /// Resolved to a user defined aggregate function
     UDF(Arc<crate::AggregateUDF>),
     /// A aggregation function constructed with name. This variant can not be executed directly
     /// and instead must be resolved to one of the other variants prior to physical planning.
@@ -500,10 +497,16 @@ impl AggregateFunctionDefinition {
     /// Function's name for display
     pub fn name(&self) -> &str {
         match self {
-            AggregateFunctionDefinition::BuiltIn { name, .. } => name.as_ref(),
+            AggregateFunctionDefinition::BuiltIn(fun) => fun.name(),
             AggregateFunctionDefinition::UDF(udf) => udf.name(),
             AggregateFunctionDefinition::Name(func_name) => func_name.as_ref(),
         }
+    }
+
+    pub fn new_builtin(
+        fun: aggregate_function::AggregateFunction,
+    ) -> AggregateFunctionDefinition {
+        Self::BuiltIn(fun)
     }
 }
 
@@ -531,10 +534,7 @@ impl AggregateFunction {
         order_by: Option<Vec<Expr>>,
     ) -> Self {
         Self {
-            func_def: AggregateFunctionDefinition::BuiltIn {
-                fun: fun.clone(),
-                name: Arc::from(fun.to_string()),
-            },
+            func_def: AggregateFunctionDefinition::new_builtin(fun),
             args,
             distinct,
             filter,
@@ -1610,33 +1610,28 @@ fn create_name(e: &Expr) -> Result<String> {
             args,
             filter,
             order_by,
-        }) => match func_def {
-            AggregateFunctionDefinition::BuiltIn { fun: _, name: _ }
-            | AggregateFunctionDefinition::Name(_) => {
-                let mut name = create_function_name(func_def.name(), *distinct, args)?;
-                if let Some(fe) = filter {
-                    name = format!("{name} FILTER (WHERE {fe})");
-                };
-                if let Some(order_by) = order_by {
-                    name = format!("{name} ORDER BY [{}]", expr_vec_fmt!(order_by));
-                };
-                Ok(name)
-            }
-            AggregateFunctionDefinition::UDF(fun) => {
-                let mut names = Vec::with_capacity(args.len());
-                for e in args {
-                    names.push(create_name(e)?);
+        }) => {
+            let mut name = match func_def {
+                AggregateFunctionDefinition::BuiltIn(..)
+                | AggregateFunctionDefinition::Name(..) => {
+                    create_function_name(func_def.name(), *distinct, args)?
                 }
-                let mut info = String::new();
-                if let Some(fe) = filter {
-                    info += &format!(" FILTER (WHERE {fe})");
+                AggregateFunctionDefinition::UDF(..) => {
+                    let mut names = Vec::with_capacity(args.len());
+                    for e in args {
+                        names.push(create_name(e)?);
+                    }
+                    names.join(",")
                 }
-                if let Some(ob) = order_by {
-                    info += &format!(" ORDER BY ([{}])", expr_vec_fmt!(ob));
-                }
-                Ok(format!("{}({}){}", fun.name(), names.join(","), info))
-            }
-        },
+            };
+            if let Some(fe) = filter {
+                name = format!("{name} FILTER (WHERE {fe})");
+            };
+            if let Some(order_by) = order_by {
+                name = format!("{name} ORDER BY [{}]", expr_vec_fmt!(order_by));
+            };
+            Ok(name)
+        }
         Expr::GroupingSet(grouping_set) => match grouping_set {
             GroupingSet::Rollup(exprs) => {
                 Ok(format!("ROLLUP ({})", create_names(exprs.as_slice())?))

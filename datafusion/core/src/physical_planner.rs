@@ -236,7 +236,7 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
             filter,
             order_by,
         }) => match func_def {
-            AggregateFunctionDefinition::BuiltIn { fun: _, name: _ } => {
+            AggregateFunctionDefinition::BuiltIn(..) => {
                 create_function_physical_name(func_def.name(), *distinct, args)
             }
             AggregateFunctionDefinition::UDF(fun) => {
@@ -251,10 +251,10 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
                         "aggregate expression with order_by is not supported"
                     );
                 }
-                let mut names = Vec::with_capacity(args.len());
-                for e in args {
-                    names.push(create_physical_name(e, false)?);
-                }
+                let names = args
+                    .iter()
+                    .map(|e| create_physical_name(e, false))
+                    .collect::<Result<Vec<_>>>()?;
                 Ok(format!("{}({})", fun.name(), names.join(",")))
             }
             AggregateFunctionDefinition::Name(_) => {
@@ -1718,100 +1718,72 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
             args,
             filter,
             order_by,
-        }) => match func_def {
-            AggregateFunctionDefinition::BuiltIn { fun, name: _ } => {
-                let args = args
-                    .iter()
-                    .map(|e| {
-                        create_physical_expr(
-                            e,
-                            logical_input_schema,
-                            physical_input_schema,
-                            execution_props,
-                        )
-                    })
-                    .collect::<Result<Vec<_>>>()?;
-                let filter = match filter {
-                    Some(e) => Some(create_physical_expr(
+        }) => {
+            let args = args
+                .iter()
+                .map(|e| {
+                    create_physical_expr(
                         e,
                         logical_input_schema,
                         physical_input_schema,
                         execution_props,
-                    )?),
-                    None => None,
-                };
-                let order_by = match order_by {
-                    Some(e) => Some(
-                        e.iter()
-                            .map(|expr| {
-                                create_physical_sort_expr(
-                                    expr,
-                                    logical_input_schema,
-                                    physical_input_schema,
-                                    execution_props,
-                                )
-                            })
-                            .collect::<Result<Vec<_>>>()?,
-                    ),
-                    None => None,
-                };
-                let ordering_reqs = order_by.clone().unwrap_or(vec![]);
-                let agg_expr = aggregates::create_aggregate_expr(
-                    fun,
-                    *distinct,
-                    &args,
-                    &ordering_reqs,
+                    )
+                })
+                .collect::<Result<Vec<_>>>()?;
+            let filter = match filter {
+                Some(e) => Some(create_physical_expr(
+                    e,
+                    logical_input_schema,
                     physical_input_schema,
-                    name,
-                )?;
-                Ok((agg_expr, filter, order_by))
-            }
-            AggregateFunctionDefinition::UDF(fun) => {
-                let args = args
-                    .iter()
-                    .map(|e| {
-                        create_physical_expr(
-                            e,
-                            logical_input_schema,
-                            physical_input_schema,
-                            execution_props,
-                        )
-                    })
-                    .collect::<Result<Vec<_>>>()?;
-
-                let filter = match filter {
-                    Some(e) => Some(create_physical_expr(
-                        e,
-                        logical_input_schema,
+                    execution_props,
+                )?),
+                None => None,
+            };
+            let order_by = match order_by {
+                Some(e) => Some(
+                    e.iter()
+                        .map(|expr| {
+                            create_physical_sort_expr(
+                                expr,
+                                logical_input_schema,
+                                physical_input_schema,
+                                execution_props,
+                            )
+                        })
+                        .collect::<Result<Vec<_>>>()?,
+                ),
+                None => None,
+            };
+            let (agg_expr, filter, order_by) = match func_def {
+                AggregateFunctionDefinition::BuiltIn(fun) => {
+                    let ordering_reqs = order_by.clone().unwrap_or(vec![]);
+                    let agg_expr = aggregates::create_aggregate_expr(
+                        fun,
+                        *distinct,
+                        &args,
+                        &ordering_reqs,
                         physical_input_schema,
-                        execution_props,
-                    )?),
-                    None => None,
-                };
-                let order_by = match order_by {
-                    Some(e) => Some(
-                        e.iter()
-                            .map(|expr| {
-                                create_physical_sort_expr(
-                                    expr,
-                                    logical_input_schema,
-                                    physical_input_schema,
-                                    execution_props,
-                                )
-                            })
-                            .collect::<Result<Vec<_>>>()?,
-                    ),
-                    None => None,
-                };
-
-                let agg_expr =
-                    udaf::create_aggregate_expr(fun, &args, physical_input_schema, name);
-                Ok((agg_expr?, filter, order_by))
-            }
-            AggregateFunctionDefinition::Name(_) => {
-                internal_err!("Aggregate function name should have been resolved")
-            }
-        },
+                        name,
+                    )?;
+                    (agg_expr, filter, order_by)
+                }
+                AggregateFunctionDefinition::UDF(fun) => {
+                    let agg_expr = udaf::create_aggregate_expr(
+                        fun,
+                        &args,
+                        physical_input_schema,
+                        name,
+                    );
+                    (agg_expr?, filter, order_by)
+                }
+                AggregateFunctionDefinition::Name(_) => {
+                    return internal_err!(
+                        "Aggregate function name should have been resolved"
+                    )
+                }
+            };
+            Ok((agg_expr, filter, order_by))
+        }
         other => internal_err!("Invalid aggregate expression '{other:?}'"),
     }
 }

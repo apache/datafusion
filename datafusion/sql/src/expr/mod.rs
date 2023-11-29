@@ -707,7 +707,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     ) -> Result<Expr> {
         match self.sql_expr_to_logical_expr(expr, schema, planner_context)? {
             Expr::AggregateFunction(expr::AggregateFunction {
-                func_def: AggregateFunctionDefinition::BuiltIn { fun, .. },
+                func_def: AggregateFunctionDefinition::BuiltIn(fun),
                 args,
                 distinct,
                 order_by,

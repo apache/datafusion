@@ -124,19 +124,15 @@ impl ExprSchemable for Expr {
                 fun.return_type(&data_types)
             }
             Expr::AggregateFunction(AggregateFunction { func_def, args, .. }) => {
+                let data_types = args
+                    .iter()
+                    .map(|e| e.get_type(schema))
+                    .collect::<Result<Vec<_>>>()?;
                 match func_def {
-                    AggregateFunctionDefinition::BuiltIn { fun, .. } => {
-                        let data_types = args
-                            .iter()
-                            .map(|e| e.get_type(schema))
-                            .collect::<Result<Vec<_>>>()?;
+                    AggregateFunctionDefinition::BuiltIn(fun) => {
                         fun.return_type(&data_types)
                     }
                     AggregateFunctionDefinition::UDF(fun) => {
-                        let data_types = args
-                            .iter()
-                            .map(|e| e.get_type(schema))
-                            .collect::<Result<Vec<_>>>()?;
                         Ok(fun.return_type(&data_types)?)
                     }
                     AggregateFunctionDefinition::Name(_) => {

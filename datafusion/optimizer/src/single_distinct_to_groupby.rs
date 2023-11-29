@@ -71,7 +71,7 @@ fn is_single_distinct_agg(plan: &LogicalPlan) -> Result<bool> {
             let mut aggregate_count = 0;
             for expr in aggr_expr {
                 if let Expr::AggregateFunction(AggregateFunction {
-                    func_def: AggregateFunctionDefinition::BuiltIn { fun, name: _ },
+                    func_def: AggregateFunctionDefinition::BuiltIn(fun),
                     distinct,
                     args,
                     filter,
@@ -171,8 +171,7 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                         .iter()
                         .map(|aggr_expr| match aggr_expr {
                             Expr::AggregateFunction(AggregateFunction {
-                                func_def:
-                                    AggregateFunctionDefinition::BuiltIn { fun, name: _ },
+                                func_def: AggregateFunctionDefinition::BuiltIn(fun),
                                 args,
                                 distinct,
                                 ..

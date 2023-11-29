@@ -34,7 +34,7 @@ use datafusion::common::{exec_err, internal_err, not_impl_err};
 use datafusion::logical_expr::aggregate_function;
 use datafusion::logical_expr::expr::{
     AggregateFunctionDefinition, Alias, BinaryExpr, Case, Cast, GroupingSet, InList,
-    ScalarFunction as DFScalarFunction, ScalarFunctionDefinition, Sort, WindowFunction,
+    ScalarFunctionDefinition, Sort, WindowFunction,
 };
 use datafusion::logical_expr::{expr, Between, JoinConstraint, LogicalPlan, Operator};
 use datafusion::prelude::Expr;
@@ -580,7 +580,7 @@ pub fn to_substrait_agg_measure(
     match expr {
         Expr::AggregateFunction(expr::AggregateFunction { func_def, args, distinct, filter, order_by }) => {
             match func_def {
-                AggregateFunctionDefinition::BuiltIn { fun, .. } => {
+                AggregateFunctionDefinition::BuiltIn (fun) => {
                     let sorts = if let Some(order_by) = order_by {
                         order_by.iter().map(|expr| to_substrait_sort_field(expr, schema, extension_info)).collect::<Result<Vec<_>>>()?
                     } else {

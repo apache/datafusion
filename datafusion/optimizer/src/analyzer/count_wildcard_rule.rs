@@ -145,10 +145,9 @@ impl TreeNodeRewriter for CountWildcardRewriter {
             },
             Expr::AggregateFunction(AggregateFunction {
                 func_def:
-                    AggregateFunctionDefinition::BuiltIn {
-                        fun: aggregate_function::AggregateFunction::Count,
-                        name: _,
-                    },
+                    AggregateFunctionDefinition::BuiltIn(
+                        aggregate_function::AggregateFunction::Count,
+                    ),
                 args,
                 distinct,
                 filter,

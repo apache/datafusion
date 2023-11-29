@@ -352,7 +352,7 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                 filter,
                 order_by,
             }) => match func_def {
-                AggregateFunctionDefinition::BuiltIn { fun, .. } => {
+                AggregateFunctionDefinition::BuiltIn (fun) => {
                     let new_expr = coerce_agg_exprs_for_signature(
                         &fun,
                         &args,
