@@ -548,9 +548,7 @@ impl BuiltinScalarFunction {
                         Ok(input_expr_types[0].clone())
                     }
                 } else {
-                    plan_err!(
-                        "The {self} function can only accept list as the first argument"
-                    )
+                    plan_err!("The {self} function expects LIST as the first argument")
                 }
             }
             BuiltinScalarFunction::ArrayConcat => {

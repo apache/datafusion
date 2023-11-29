@@ -227,14 +227,14 @@ fn compute_array_dims(arr: Option<ArrayRef>) -> Result<Option<Vec<Option<u64>>>>
 }
 
 fn check_datatypes(name: &str, args: &[&ArrayRef]) -> Result<()> {
-    let mut data_types = args
+    let data_types = args
         .iter()
         .map(|arg| arg.data_type())
         .collect::<HashSet<_>>();
     match data_types.len() {
         1 => Ok(()),
         2 => {
-            if data_types.remove(&DataType::Null) {
+            if data_types.contains(&DataType::Null) {
                 Ok(())
             } else {
                 let types = args.iter().map(|arg| arg.data_type()).collect::<Vec<_>>();
