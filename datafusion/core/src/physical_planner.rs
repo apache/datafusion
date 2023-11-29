@@ -217,13 +217,13 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
 
             Ok(name)
         }
-        Expr::ScalarFunction(expr::ScalarFunction { func_def, args }) => {
+        Expr::ScalarFunction(fun) => {
             // function should be resolved during `AnalyzerRule`s
-            if let ScalarFunctionDefinition::Name(_) = func_def {
+            if let ScalarFunctionDefinition::Name(_) = fun.func_def {
                 return internal_err!("Function `Expr` with name should be resolved.");
             }
 
-            create_function_physical_name(func_def.name(), false, args)
+            create_function_physical_name(fun.name(), false, &fun.args)
         }
         Expr::WindowFunction(WindowFunction { fun, args, .. }) => {
             create_function_physical_name(&fun.to_string(), false, args)
