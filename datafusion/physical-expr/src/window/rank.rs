@@ -40,6 +40,7 @@ use std::sync::Arc;
 #[derive(Debug)]
 pub struct Rank {
     name: String,
+    func_name: String,
     rank_type: RankType,
 }
 
@@ -61,6 +62,7 @@ pub enum RankType {
 pub fn rank(name: String) -> Rank {
     Rank {
         name,
+        func_name: "RANK".to_string(),
         rank_type: RankType::Basic,
     }
 }
@@ -69,6 +71,7 @@ pub fn rank(name: String) -> Rank {
 pub fn dense_rank(name: String) -> Rank {
     Rank {
         name,
+        func_name: "DENSE_RANK".to_string(),
         rank_type: RankType::Dense,
     }
 }
@@ -77,6 +80,7 @@ pub fn dense_rank(name: String) -> Rank {
 pub fn percent_rank(name: String) -> Rank {
     Rank {
         name,
+        func_name: "PERCENT_RANK".to_string(),
         rank_type: RankType::Percent,
     }
 }
@@ -102,6 +106,10 @@ impl BuiltInWindowFunctionExpr for Rank {
 
     fn name(&self) -> &str {
         &self.name
+    }
+
+    fn func_name(&self) -> &str {
+        &self.func_name
     }
 
     fn create_evaluator(&self) -> Result<Box<dyn PartitionEvaluator>> {

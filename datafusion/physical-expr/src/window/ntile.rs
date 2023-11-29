@@ -66,6 +66,10 @@ impl BuiltInWindowFunctionExpr for Ntile {
         &self.name
     }
 
+    fn func_name(&self) -> &str {
+        "NTILE"
+    }
+
     fn create_evaluator(&self) -> Result<Box<dyn PartitionEvaluator>> {
         Ok(Box::new(NtileEvaluator { n: self.n }))
     }

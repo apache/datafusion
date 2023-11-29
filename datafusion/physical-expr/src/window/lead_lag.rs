@@ -35,6 +35,7 @@ use std::sync::Arc;
 #[derive(Debug)]
 pub struct WindowShift {
     name: String,
+    func_name: String,
     data_type: DataType,
     shift_offset: i64,
     expr: Arc<dyn PhysicalExpr>,
@@ -63,6 +64,7 @@ pub fn lead(
 ) -> WindowShift {
     WindowShift {
         name,
+        func_name: "LEAD".to_string(),
         data_type,
         shift_offset: shift_offset.map(|v| v.neg()).unwrap_or(-1),
         expr,
@@ -80,6 +82,7 @@ pub fn lag(
 ) -> WindowShift {
     WindowShift {
         name,
+        func_name: "LAG".to_string(),
         data_type,
         shift_offset: shift_offset.unwrap_or(1),
         expr,
@@ -106,6 +109,10 @@ impl BuiltInWindowFunctionExpr for WindowShift {
         &self.name
     }
 
+    fn func_name(&self) -> &str {
+        &self.func_name
+    }
+
     fn create_evaluator(&self) -> Result<Box<dyn PartitionEvaluator>> {
         Ok(Box::new(WindowShiftEvaluator {
             shift_offset: self.shift_offset,
@@ -114,8 +121,16 @@ impl BuiltInWindowFunctionExpr for WindowShift {
     }
 
     fn reverse_expr(&self) -> Option<Arc<dyn BuiltInWindowFunctionExpr>> {
+        let reverse_func_name = if self.func_name == "LAG" {
+            "LEAD"
+        } else if self.func_name == "LEAD" {
+            "LAG"
+        } else {
+            unreachable!();
+        };
         Some(Arc::new(Self {
             name: self.name.clone(),
+            func_name: reverse_func_name.to_string(),
             data_type: self.data_type.clone(),
             shift_offset: -self.shift_offset,
             expr: self.expr.clone(),

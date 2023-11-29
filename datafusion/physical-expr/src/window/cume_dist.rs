@@ -61,6 +61,10 @@ impl BuiltInWindowFunctionExpr for CumeDist {
         &self.name
     }
 
+    fn func_name(&self) -> &str {
+        "CUME_DIST"
+    }
+
     fn create_evaluator(&self) -> Result<Box<dyn PartitionEvaluator>> {
         Ok(Box::new(CumeDistEvaluator {}))
     }

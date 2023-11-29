@@ -65,6 +65,10 @@ impl BuiltInWindowFunctionExpr for RowNumber {
         &self.name
     }
 
+    fn func_name(&self) -> &str {
+        "ROW_NUMBER"
+    }
+
     fn get_result_ordering(&self, schema: &SchemaRef) -> Option<PhysicalSortExpr> {
         // The built-in ROW_NUMBER window function introduces a new ordering:
         schema.column_with_name(self.name()).map(|(idx, field)| {

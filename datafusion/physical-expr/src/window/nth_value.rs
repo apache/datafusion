@@ -39,6 +39,7 @@ use datafusion_expr::PartitionEvaluator;
 #[derive(Debug)]
 pub struct NthValue {
     name: String,
+    func_name: String,
     expr: Arc<dyn PhysicalExpr>,
     data_type: DataType,
     kind: NthValueKind,
@@ -53,6 +54,7 @@ impl NthValue {
     ) -> Self {
         Self {
             name: name.into(),
+            func_name: "FIRST_VALUE".to_string(),
             expr,
             data_type,
             kind: NthValueKind::First,
@@ -67,6 +69,7 @@ impl NthValue {
     ) -> Self {
         Self {
             name: name.into(),
+            func_name: "LAST_VALUE".to_string(),
             expr,
             data_type,
             kind: NthValueKind::Last,
@@ -84,6 +87,7 @@ impl NthValue {
             0 => exec_err!("NTH_VALUE expects n to be non-zero"),
             _ => Ok(Self {
                 name: name.into(),
+                func_name: "NTH_VALUE".to_string(),
                 expr,
                 data_type,
                 kind: NthValueKind::Nth(n as i64),
@@ -124,6 +128,10 @@ impl BuiltInWindowFunctionExpr for NthValue {
         &self.name
     }
 
+    fn func_name(&self) -> &str {
+        &self.func_name
+    }
+
     fn create_evaluator(&self) -> Result<Box<dyn PartitionEvaluator>> {
         let state = NthValueState {
             range: Default::default(),
@@ -134,13 +142,14 @@ impl BuiltInWindowFunctionExpr for NthValue {
     }
 
     fn reverse_expr(&self) -> Option<Arc<dyn BuiltInWindowFunctionExpr>> {
-        let reversed_kind = match self.kind {
-            NthValueKind::First => NthValueKind::Last,
-            NthValueKind::Last => NthValueKind::First,
-            NthValueKind::Nth(idx) => NthValueKind::Nth(-idx),
+        let (reversed_kind, reverse_func_name) = match self.kind {
+            NthValueKind::First => (NthValueKind::Last, "LAST_VALUE"),
+            NthValueKind::Last => (NthValueKind::First, "FIRST_VALUE"),
+            NthValueKind::Nth(idx) => (NthValueKind::Nth(-idx), "NTH_VALUE"),
         };
         Some(Arc::new(Self {
             name: self.name.clone(),
+            func_name: reverse_func_name.to_string(),
             expr: self.expr.clone(),
             data_type: self.data_type.clone(),
             kind: reversed_kind,

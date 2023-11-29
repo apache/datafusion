@@ -297,6 +297,10 @@ impl BuiltInWindowFunctionExpr for WindowUDFExpr {
         &self.name
     }
 
+    fn func_name(&self) -> &str {
+        &self.name
+    }
+
     fn reverse_expr(&self) -> Option<Arc<dyn BuiltInWindowFunctionExpr>> {
         None
     }
