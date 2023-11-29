@@ -255,8 +255,8 @@ logical_plan
 Aggregate: groupBy=[[]], aggr=[[COUNT(UInt8(1)) AS COUNT(*)]]
 --TableScan: alltypes_plain projection=[]
 physical_plan
-AggregateExec: mode=Final, gby=[], aggr=[COUNT(*)]
+AggregateExec: mode=Final, gby=[], aggr=[COUNT(1)]
 --CoalescePartitionsExec
-----AggregateExec: mode=Partial, gby=[], aggr=[COUNT(*)]
+----AggregateExec: mode=Partial, gby=[], aggr=[COUNT(1)]
 ------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 --------AvroExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/avro/alltypes_plain.avro]]}
