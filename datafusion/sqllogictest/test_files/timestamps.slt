@@ -1812,7 +1812,7 @@ SELECT to_timestamp(null) is null as c1,
 ----
 true true true true true true true true true true true true true
 
-# verify timestamp output types
+# verify timestamp output types 
 query TTT
 SELECT arrow_typeof(to_timestamp(1)), arrow_typeof(to_timestamp(null)), arrow_typeof(to_timestamp('2023-01-10 12:34:56.000'))
 ----
