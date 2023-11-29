@@ -23,12 +23,13 @@ use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::datasource::function::TableFunctionImpl;
 use datafusion::datasource::TableProvider;
 use datafusion::error::Result;
-use datafusion::execution::context::SessionState;
+use datafusion::execution::context::{ExecutionProps, SessionState};
 use datafusion::physical_plan::memory::MemoryExec;
-use datafusion::physical_plan::{ExecutionPlan};
+use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::SessionContext;
 use datafusion_common::{plan_err, DataFusionError, ScalarValue};
 use datafusion_expr::{Expr, TableType};
+use datafusion_optimizer::simplify_expressions::{ExprSimplifier, SimplifyContext};
 use std::fs::File;
 use std::io::Seek;
 use std::path::Path;
@@ -51,9 +52,9 @@ async fn main() -> Result<()> {
     let testdata = datafusion::test_util::arrow_test_data();
     let csv_file = format!("{testdata}/csv/aggregate_test_100.csv");
 
-    // Pass 2 arguments, read csv with at most 2 rows
+    // Pass 2 arguments, read csv with at most 2 rows (simplify logic makes 1+1 --> 2)
     let df = ctx
-        .sql(format!("SELECT * FROM read_csv('{csv_file}', 2);").as_str())
+        .sql(format!("SELECT * FROM read_csv('{csv_file}', 1 + 1);").as_str())
         .await?;
     df.show().await?;
 
@@ -135,8 +136,13 @@ impl TableFunctionImpl for LocalCsvTableFunc {
         let limit = exprs
             .get(1)
             .map(|expr| {
+                // try to simpify the expression, so 1+2 becomes 3, for example
+                let execution_props = ExecutionProps::new();
+                let info = SimplifyContext::new(&execution_props);
+                let expr = ExprSimplifier::new(info).simplify(expr.clone())?;
+
                 if let Expr::Literal(ScalarValue::Int64(Some(limit))) = expr {
-                    Ok(*limit as usize)
+                    Ok(limit as usize)
                 } else {
                     plan_err!("Limit must be an integer")
                 }
