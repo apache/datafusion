@@ -164,6 +164,13 @@ SELECT 'a' a UNION ALL SELECT true a
 true
 a
 
+# union bool with integer
+query I
+SELECT 123 a UNION ALL SELECT true a
+----
+1
+123
+
 # union incompatible types (bool with interval)
 query error DataFusion error: Error during planning: UNION Column a \(type: Interval\(MonthDayNano\)\) is not compatible with column a \(type: Boolean\)
 SELECT true a UNION SELECT interval '1 minute' a 
