@@ -79,10 +79,10 @@ GlobalLimitExec: skip=0, fetch=10
 ----SortExec: TopK(fetch=10), expr=[value@1 DESC]
 ------ProjectionExec: expr=[ps_partkey@0 as ps_partkey, SUM(partsupp.ps_supplycost * partsupp.ps_availqty)@1 as value]
 --------NestedLoopJoinExec: join_type=Inner, filter=CAST(SUM(partsupp.ps_supplycost * partsupp.ps_availqty)@0 AS Decimal128(38, 15)) > SUM(partsupp.ps_supplycost * partsupp.ps_availqty) * Float64(0.0001)@1
-----------AggregateExec: mode=FinalPartitioned, gby=[ps_partkey@0 as ps_partkey], aggr=[SUM(partsupp.ps_supplycost * partsupp.ps_availqty)]
+----------AggregateExec: mode=FinalPartitioned, gby=[ps_partkey@0 as ps_partkey], aggr=[SUM(ps_supplycost@2 * CAST(ps_availqty@1 AS Decimal128(10, 0)))]
 ------------CoalesceBatchesExec: target_batch_size=8192
 --------------RepartitionExec: partitioning=Hash([ps_partkey@0], 4), input_partitions=4
-----------------AggregateExec: mode=Partial, gby=[ps_partkey@0 as ps_partkey], aggr=[SUM(partsupp.ps_supplycost * partsupp.ps_availqty)]
+----------------AggregateExec: mode=Partial, gby=[ps_partkey@0 as ps_partkey], aggr=[SUM(ps_supplycost@2 * CAST(ps_availqty@1 AS Decimal128(10, 0)))]
 ------------------ProjectionExec: expr=[ps_partkey@0 as ps_partkey, ps_availqty@1 as ps_availqty, ps_supplycost@2 as ps_supplycost]
 --------------------CoalesceBatchesExec: target_batch_size=8192
 ----------------------HashJoinExec: mode=Partitioned, join_type=Inner, on=[(s_nationkey@3, n_nationkey@0)]
@@ -106,9 +106,9 @@ GlobalLimitExec: skip=0, fetch=10
 ----------------------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 ------------------------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/nation.tbl]]}, projection=[n_nationkey, n_name], has_header=false
 ----------ProjectionExec: expr=[CAST(CAST(SUM(partsupp.ps_supplycost * partsupp.ps_availqty)@0 AS Float64) * 0.0001 AS Decimal128(38, 15)) as SUM(partsupp.ps_supplycost * partsupp.ps_availqty) * Float64(0.0001)]
-------------AggregateExec: mode=Final, gby=[], aggr=[SUM(partsupp.ps_supplycost * partsupp.ps_availqty)]
+------------AggregateExec: mode=Final, gby=[], aggr=[SUM(ps_supplycost@1 * CAST(ps_availqty@0 AS Decimal128(10, 0)))]
 --------------CoalescePartitionsExec
-----------------AggregateExec: mode=Partial, gby=[], aggr=[SUM(partsupp.ps_supplycost * partsupp.ps_availqty)]
+----------------AggregateExec: mode=Partial, gby=[], aggr=[SUM(ps_supplycost@1 * CAST(ps_availqty@0 AS Decimal128(10, 0)))]
 ------------------ProjectionExec: expr=[ps_availqty@0 as ps_availqty, ps_supplycost@1 as ps_supplycost]
 --------------------CoalesceBatchesExec: target_batch_size=8192
 ----------------------HashJoinExec: mode=Partitioned, join_type=Inner, on=[(s_nationkey@2, n_nationkey@0)]

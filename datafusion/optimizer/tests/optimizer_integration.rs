@@ -185,8 +185,9 @@ fn between_date32_plus_interval() -> Result<()> {
     let plan = test_sql(sql)?;
     let expected =
         "Aggregate: groupBy=[[]], aggr=[[COUNT(Int64(1))]]\
-        \n  Filter: test.col_date32 >= Date32(\"10303\") AND test.col_date32 <= Date32(\"10393\")\
-        \n    TableScan: test projection=[col_date32]";
+        \n  Projection: \
+        \n    Filter: test.col_date32 >= Date32(\"10303\") AND test.col_date32 <= Date32(\"10393\")\
+        \n      TableScan: test projection=[col_date32]";
     assert_eq!(expected, format!("{plan:?}"));
     Ok(())
 }
@@ -198,8 +199,9 @@ fn between_date64_plus_interval() -> Result<()> {
     let plan = test_sql(sql)?;
     let expected =
         "Aggregate: groupBy=[[]], aggr=[[COUNT(Int64(1))]]\
-        \n  Filter: test.col_date64 >= Date64(\"890179200000\") AND test.col_date64 <= Date64(\"897955200000\")\
-        \n    TableScan: test projection=[col_date64]";
+        \n  Projection: \
+        \n    Filter: test.col_date64 >= Date64(\"890179200000\") AND test.col_date64 <= Date64(\"897955200000\")\
+        \n      TableScan: test projection=[col_date64]";
     assert_eq!(expected, format!("{plan:?}"));
     Ok(())
 }

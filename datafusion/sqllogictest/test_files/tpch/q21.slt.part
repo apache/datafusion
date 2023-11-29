@@ -93,10 +93,10 @@ physical_plan
 SortPreservingMergeExec: [numwait@1 DESC,s_name@0 ASC NULLS LAST]
 --SortExec: expr=[numwait@1 DESC,s_name@0 ASC NULLS LAST]
 ----ProjectionExec: expr=[s_name@0 as s_name, COUNT(*)@1 as numwait]
-------AggregateExec: mode=FinalPartitioned, gby=[s_name@0 as s_name], aggr=[COUNT(*)]
+------AggregateExec: mode=FinalPartitioned, gby=[s_name@0 as s_name], aggr=[COUNT(1)]
 --------CoalesceBatchesExec: target_batch_size=8192
 ----------RepartitionExec: partitioning=Hash([s_name@0], 4), input_partitions=4
-------------AggregateExec: mode=Partial, gby=[s_name@0 as s_name], aggr=[COUNT(*)]
+------------AggregateExec: mode=Partial, gby=[s_name@0 as s_name], aggr=[COUNT(1)]
 --------------ProjectionExec: expr=[s_name@0 as s_name]
 ----------------CoalesceBatchesExec: target_batch_size=8192
 ------------------HashJoinExec: mode=Partitioned, join_type=LeftAnti, on=[(l_orderkey@1, l_orderkey@0)], filter=l_suppkey@1 != l_suppkey@0

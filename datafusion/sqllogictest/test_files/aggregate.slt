@@ -1327,36 +1327,128 @@ select avg(c1), arrow_typeof(avg(c1)) from d_table
 ----
 5 Decimal128(14, 7)
 
-# FIX: different test table
+
 # aggregate
-# query I
-# SELECT SUM(c1), SUM(c2) FROM test
-# ----
-# 60 220
+query II
+SELECT SUM(c1), SUM(c2) FROM test
+----
+7 6
 
-# TODO: aggregate_empty
+# aggregate_empty
 
-# TODO: aggregate_avg
+query II
+SELECT SUM(c1), SUM(c2) FROM test where c1 > 100000
+----
+NULL NULL
 
-# TODO: aggregate_max
+# aggregate_avg
+query RR
+SELECT AVG(c1), AVG(c2) FROM test
+----
+1.75 1.5
 
-# TODO: aggregate_min
+# aggregate_max
+query II
+SELECT MAX(c1), MAX(c2) FROM test
+----
+3 2
 
-# TODO: aggregate_grouped
+# aggregate_min
+query II
+SELECT MIN(c1), MIN(c2) FROM test
+----
+0 1
 
-# TODO: aggregate_grouped_avg
+# aggregate_grouped
+query II
+SELECT c1, SUM(c2) FROM test GROUP BY c1 order by c1
+----
+0 NULL
+1 1
+3 4
+NULL 1
 
-# TODO: aggregate_grouped_empty
+# aggregate_grouped_avg
+query IR
+SELECT c1, AVG(c2) FROM test GROUP BY c1 order by c1
+----
+0 NULL
+1 1
+3 2
+NULL 1
 
-# TODO: aggregate_grouped_max
+# aggregate_grouped_empty
+query IR
+SELECT c1, AVG(c2) FROM test WHERE c1 = 123 GROUP BY c1
+----
 
-# TODO: aggregate_grouped_min
+# aggregate_grouped_max
+query II
+SELECT c1, MAX(c2) FROM test GROUP BY c1 order by c1
+----
+0 NULL
+1 1
+3 2
+NULL 1
 
-# TODO: aggregate_avg_add
+# aggregate_grouped_min
+query II
+SELECT c1, MIN(c2) FROM test GROUP BY c1 order by c1
+----
+0 NULL
+1 1
+3 2
+NULL 1
 
-# TODO: case_sensitive_identifiers_aggregates
+# aggregate_min_max_w_custom_window_frames
+query RR
+SELECT
+MIN(c12) OVER (ORDER BY C12 RANGE BETWEEN 0.3 PRECEDING AND 0.2 FOLLOWING) as min1,
+MAX(c12) OVER (ORDER BY C11 RANGE BETWEEN 0.1 PRECEDING AND 0.2 FOLLOWING) as max1
+FROM aggregate_test_100
+ORDER BY C9
+LIMIT 5
+----
+0.014793053078 0.996540038759
+0.014793053078 0.980019341044
+0.014793053078 0.970671228336
+0.266717779508 0.996540038759
+0.360076636233 0.970671228336
 
-# TODO: count_basic
+# aggregate_min_max_with_custom_window_frames_unbounded_start
+query RR
+SELECT
+MIN(c12) OVER (ORDER BY C12 RANGE BETWEEN UNBOUNDED PRECEDING AND 0.2 FOLLOWING) as min1,
+MAX(c12) OVER (ORDER BY C11 RANGE BETWEEN UNBOUNDED PRECEDING AND 0.2 FOLLOWING) as max1
+FROM aggregate_test_100
+ORDER BY C9
+LIMIT 5
+----
+0.014793053078 0.996540038759
+0.014793053078 0.980019341044
+0.014793053078 0.980019341044
+0.014793053078 0.996540038759
+0.014793053078 0.980019341044
+
+# aggregate_avg_add
+query RRRR
+SELECT AVG(c1), AVG(c1) + 1, AVG(c1) + 2, 1 + AVG(c1) FROM test
+----
+1.75 2.75 3.75 2.75
+
+# case_sensitive_identifiers_aggregates
+query I
+SELECT max(c1) FROM test;
+----
+3
+
+
+
+# count_basic
+query II
+SELECT COUNT(c1), COUNT(c2) FROM test
+----
+4 4
 
 # TODO: count_partitioned
 
@@ -1364,9 +1456,44 @@ select avg(c1), arrow_typeof(avg(c1)) from d_table
 
 # TODO: count_aggregated_cube
 
-# TODO: simple_avg
+# count_multi_expr
+query I
+SELECT count(c1, c2) FROM test
+----
+3
 
-# TODO: simple_mean
+# count_multi_expr_group_by
+query I
+SELECT count(c1, c2) FROM test group by c1 order by c1
+----
+0
+1
+2
+0
+
+# aggreggte_with_alias
+query II
+select c1, sum(c2) as `Total Salary` from test group by c1 order by c1
+----
+0 NULL
+1 1
+3 4
+NULL 1
+
+# simple_avg
+
+query R
+select avg(c1) from test
+----
+1.75
+
+# simple_mean
+query R
+select mean(c1) from test
+----
+1.75
+
+
 
 # query_sum_distinct - 2 different aggregate functions: avg and sum(distinct)
 query RI
@@ -1396,7 +1523,7 @@ SELECT COUNT(DISTINCT c1) FROM test
 query ?
 SELECT ARRAY_AGG([])
 ----
-[]
+[[]]
 
 # array_agg_one
 query ?
@@ -1419,7 +1546,7 @@ e 4
 query ?
 SELECT ARRAY_AGG([]);
 ----
-[]
+[[]]
 
 # array_agg_one
 query ?
@@ -2672,10 +2799,9 @@ query TT
 EXPLAIN SELECT c2, c3 FROM aggregate_test_100 group by rollup(c2, c3) limit 3;
 ----
 logical_plan
-Projection: aggregate_test_100.c2, aggregate_test_100.c3
---Limit: skip=0, fetch=3
-----Aggregate: groupBy=[[ROLLUP (aggregate_test_100.c2, aggregate_test_100.c3)]], aggr=[[]]
-------TableScan: aggregate_test_100 projection=[c2, c3]
+Limit: skip=0, fetch=3
+--Aggregate: groupBy=[[ROLLUP (aggregate_test_100.c2, aggregate_test_100.c3)]], aggr=[[]]
+----TableScan: aggregate_test_100 projection=[c2, c3]
 physical_plan
 GlobalLimitExec: skip=0, fetch=3
 --AggregateExec: mode=Final, gby=[c2@0 as c2, c3@1 as c3], aggr=[], lim=[3]

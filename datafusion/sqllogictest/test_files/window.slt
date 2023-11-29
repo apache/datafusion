@@ -895,14 +895,14 @@ SELECT
 
 statement ok
 create table temp as values
-(1664264591000000000),
-(1664264592000000000),
-(1664264592000000000),
-(1664264593000000000),
-(1664264594000000000),
-(1664364594000000000),
-(1664464594000000000),
-(1664564594000000000);
+(1664264591),
+(1664264592),
+(1664264592),
+(1664264593),
+(1664264594),
+(1664364594),
+(1664464594),
+(1664564594);
 
 statement ok
 create table t as select cast(column1 as timestamp) as ts from temp;
@@ -1731,26 +1731,28 @@ logical_plan
 Projection: COUNT(*) AS global_count
 --Aggregate: groupBy=[[]], aggr=[[COUNT(UInt8(1)) AS COUNT(*)]]
 ----SubqueryAlias: a
-------Sort: aggregate_test_100.c1 ASC NULLS LAST
---------Aggregate: groupBy=[[aggregate_test_100.c1]], aggr=[[]]
-----------Projection: aggregate_test_100.c1
-------------Filter: aggregate_test_100.c13 != Utf8("C2GT5KVyOPZpgKVl110TyZO0NcJ434")
---------------TableScan: aggregate_test_100 projection=[c1, c13], partial_filters=[aggregate_test_100.c13 != Utf8("C2GT5KVyOPZpgKVl110TyZO0NcJ434")]
+------Projection:
+--------Sort: aggregate_test_100.c1 ASC NULLS LAST
+----------Aggregate: groupBy=[[aggregate_test_100.c1]], aggr=[[]]
+------------Projection: aggregate_test_100.c1
+--------------Filter: aggregate_test_100.c13 != Utf8("C2GT5KVyOPZpgKVl110TyZO0NcJ434")
+----------------TableScan: aggregate_test_100 projection=[c1, c13], partial_filters=[aggregate_test_100.c13 != Utf8("C2GT5KVyOPZpgKVl110TyZO0NcJ434")]
 physical_plan
 ProjectionExec: expr=[COUNT(*)@0 as global_count]
 --AggregateExec: mode=Final, gby=[], aggr=[COUNT(1)]
 ----CoalescePartitionsExec
 ------AggregateExec: mode=Partial, gby=[], aggr=[COUNT(1)]
 --------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=2
-----------AggregateExec: mode=FinalPartitioned, gby=[c1@0 as c1], aggr=[]
-------------CoalesceBatchesExec: target_batch_size=4096
---------------RepartitionExec: partitioning=Hash([c1@0], 2), input_partitions=2
-----------------AggregateExec: mode=Partial, gby=[c1@0 as c1], aggr=[]
-------------------ProjectionExec: expr=[c1@0 as c1]
---------------------CoalesceBatchesExec: target_batch_size=4096
-----------------------FilterExec: c13@1 != C2GT5KVyOPZpgKVl110TyZO0NcJ434
-------------------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
---------------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c13], has_header=true
+----------ProjectionExec: expr=[]
+------------AggregateExec: mode=FinalPartitioned, gby=[c1@0 as c1], aggr=[]
+--------------CoalesceBatchesExec: target_batch_size=4096
+----------------RepartitionExec: partitioning=Hash([c1@0], 2), input_partitions=2
+------------------AggregateExec: mode=Partial, gby=[c1@0 as c1], aggr=[]
+--------------------ProjectionExec: expr=[c1@0 as c1]
+----------------------CoalesceBatchesExec: target_batch_size=4096
+------------------------FilterExec: c13@1 != C2GT5KVyOPZpgKVl110TyZO0NcJ434
+--------------------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+----------------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c13], has_header=true
 
 query I
 SELECT count(*) as global_count FROM
@@ -3429,7 +3431,7 @@ ProjectionExec: expr=[MIN(multiple_ordered_table.d) ORDER BY [multiple_ordered_t
 --BoundedWindowAggExec: wdw=[MIN(d@1) ORDER BY [c@0 ASC NULLS LAST], frame: WindowFrame { units: Range, start_bound: Preceding(Int32(NULL)), end_bound: CurrentRow }], mode=[Sorted]
 ----ProjectionExec: expr=[c@2 as c, d@3 as d, MAX(multiple_ordered_table.d) PARTITION BY [multiple_ordered_table.b, multiple_ordered_table.a] ORDER BY [multiple_ordered_table.c ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@4 as MAX(multiple_ordered_table.d) PARTITION BY [multiple_ordered_table.b, multiple_ordered_table.a] ORDER BY [multiple_ordered_table.c ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]
 ------BoundedWindowAggExec: wdw=[MAX(d@3) PARTITION BY [b@1, a@0] ORDER BY [c@2 ASC NULLS LAST], frame: WindowFrame { units: Range, start_bound: Preceding(Int32(NULL)), end_bound: CurrentRow }], mode=[Sorted]
---------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b, c, d], output_ordering=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST], has_header=true
+--------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b, c, d], output_orderings=[[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST], [c@2 ASC NULLS LAST]], has_header=true
 
 query TT
 EXPLAIN SELECT MAX(c) OVER(PARTITION BY d ORDER BY c ASC) as max_c
@@ -3461,7 +3463,7 @@ Projection: SUM(multiple_ordered_table.d) PARTITION BY [multiple_ordered_table.c
 physical_plan
 ProjectionExec: expr=[SUM(multiple_ordered_table.d) PARTITION BY [multiple_ordered_table.c] ORDER BY [multiple_ordered_table.a ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3 as SUM(multiple_ordered_table.d) PARTITION BY [multiple_ordered_table.c] ORDER BY [multiple_ordered_table.a ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]
 --BoundedWindowAggExec: wdw=[SUM(CAST(d@2 AS Int64)) PARTITION BY [c@1] ORDER BY [a@0 ASC NULLS LAST], frame: WindowFrame { units: Range, start_bound: Preceding(Int32(NULL)), end_bound: CurrentRow }], mode=[Sorted]
-----CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, c, d], output_ordering=[a@0 ASC NULLS LAST], has_header=true
+----CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, c, d], output_orderings=[[a@0 ASC NULLS LAST], [c@1 ASC NULLS LAST]], has_header=true
 
 query TT
 explain SELECT SUM(d) OVER(PARTITION BY c, a ORDER BY b ASC)
@@ -3474,7 +3476,7 @@ Projection: SUM(multiple_ordered_table.d) PARTITION BY [multiple_ordered_table.c
 physical_plan
 ProjectionExec: expr=[SUM(multiple_ordered_table.d) PARTITION BY [multiple_ordered_table.c, multiple_ordered_table.a] ORDER BY [multiple_ordered_table.b ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@4 as SUM(multiple_ordered_table.d) PARTITION BY [multiple_ordered_table.c, multiple_ordered_table.a] ORDER BY [multiple_ordered_table.b ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]
 --BoundedWindowAggExec: wdw=[SUM(CAST(d@3 AS Int64)) PARTITION BY [c@2, a@0] ORDER BY [b@1 ASC NULLS LAST], frame: WindowFrame { units: Range, start_bound: Preceding(Int32(NULL)), end_bound: CurrentRow }], mode=[Sorted]
-----CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b, c, d], output_ordering=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST], has_header=true
+----CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b, c, d], output_orderings=[[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST], [c@2 ASC NULLS LAST]], has_header=true
 
 query I
 SELECT SUM(d) OVER(PARTITION BY c, a ORDER BY b ASC)
@@ -3499,8 +3501,6 @@ select sum(1) over() x, sum(1) over () y
 # Please note that: "NTH_VALUE(c, 2) OVER(order by c DESC ) as nv1" is same with
 #                   "NTH_VALUE(c, 2) OVER(order by c DESC RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) as nv1" "
 # we can produce same result without re-sorting the table.
-# Unfortunately since window expression names are string, this change is not seen the plan (we do not do string manipulation).
-# TODO: Reflect window expression reversal in the plans.
 query TT
 EXPLAIN SELECT c, NTH_VALUE(c, 2) OVER(order by c DESC) as nv1
   FROM multiple_ordered_table
@@ -3572,3 +3572,10 @@ SortPreservingMergeExec: [c@3 ASC NULLS LAST]
 --------SortPreservingRepartitionExec: partitioning=Hash([d@4], 2), input_partitions=2, sort_exprs=a@1 ASC NULLS LAST,b@2 ASC NULLS LAST
 ----------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
 ------------StreamingTableExec: partition_sizes=1, projection=[a0, a, b, c, d], infinite_source=true, output_ordering=[a@1 ASC NULLS LAST, b@2 ASC NULLS LAST]
+
+# CTAS with NTILE function
+statement ok
+CREATE TABLE new_table AS SELECT NTILE(2) OVER(ORDER BY c1) AS ntile_2 FROM aggregate_test_100;
+
+statement ok
+DROP TABLE new_table;

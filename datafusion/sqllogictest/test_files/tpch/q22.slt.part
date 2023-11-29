@@ -77,10 +77,10 @@ physical_plan
 SortPreservingMergeExec: [cntrycode@0 ASC NULLS LAST]
 --SortExec: expr=[cntrycode@0 ASC NULLS LAST]
 ----ProjectionExec: expr=[cntrycode@0 as cntrycode, COUNT(*)@1 as numcust, SUM(custsale.c_acctbal)@2 as totacctbal]
-------AggregateExec: mode=FinalPartitioned, gby=[cntrycode@0 as cntrycode], aggr=[COUNT(*), SUM(custsale.c_acctbal)]
+------AggregateExec: mode=FinalPartitioned, gby=[cntrycode@0 as cntrycode], aggr=[COUNT(1), SUM(c_acctbal@1)]
 --------CoalesceBatchesExec: target_batch_size=8192
 ----------RepartitionExec: partitioning=Hash([cntrycode@0], 4), input_partitions=4
-------------AggregateExec: mode=Partial, gby=[cntrycode@0 as cntrycode], aggr=[COUNT(*), SUM(custsale.c_acctbal)]
+------------AggregateExec: mode=Partial, gby=[cntrycode@0 as cntrycode], aggr=[COUNT(1), SUM(c_acctbal@1)]
 --------------ProjectionExec: expr=[substr(c_phone@0, 1, 2) as cntrycode, c_acctbal@1 as c_acctbal]
 ----------------NestedLoopJoinExec: join_type=Inner, filter=CAST(c_acctbal@0 AS Decimal128(19, 6)) > AVG(customer.c_acctbal)@1
 ------------------ProjectionExec: expr=[c_phone@1 as c_phone, c_acctbal@2 as c_acctbal]
@@ -95,9 +95,9 @@ SortPreservingMergeExec: [cntrycode@0 ASC NULLS LAST]
 ------------------------CoalesceBatchesExec: target_batch_size=8192
 --------------------------RepartitionExec: partitioning=Hash([o_custkey@0], 4), input_partitions=4
 ----------------------------CsvExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/orders.tbl:0..4223281], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/orders.tbl:4223281..8446562], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/orders.tbl:8446562..12669843], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/orders.tbl:12669843..16893122]]}, projection=[o_custkey], has_header=false
-------------------AggregateExec: mode=Final, gby=[], aggr=[AVG(customer.c_acctbal)]
+------------------AggregateExec: mode=Final, gby=[], aggr=[AVG(c_acctbal@0)]
 --------------------CoalescePartitionsExec
-----------------------AggregateExec: mode=Partial, gby=[], aggr=[AVG(customer.c_acctbal)]
+----------------------AggregateExec: mode=Partial, gby=[], aggr=[AVG(c_acctbal@0)]
 ------------------------ProjectionExec: expr=[c_acctbal@1 as c_acctbal]
 --------------------------CoalesceBatchesExec: target_batch_size=8192
 ----------------------------FilterExec: c_acctbal@1 > Some(0),15,2 AND Use substr(c_phone@0, 1, 2) IN (SET) ([Literal { value: Utf8("13") }, Literal { value: Utf8("31") }, Literal { value: Utf8("23") }, Literal { value: Utf8("29") }, Literal { value: Utf8("30") }, Literal { value: Utf8("18") }, Literal { value: Utf8("17") }])

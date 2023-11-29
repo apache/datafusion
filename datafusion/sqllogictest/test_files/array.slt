@@ -265,6 +265,14 @@ AS VALUES
   (make_array([28, 29, 30], [31, 32, 33], [34, 35, 36], [28, 29, 30], [31, 32, 33], [34, 35, 36], [28, 29, 30], [31, 32, 33], [34, 35, 36], [28, 29, 30]), [28, 29, 30], [37, 38, 39], 10)
 ;
 
+query ?
+select [1, true, null]
+----
+[1, 1, ]
+
+query error DataFusion error: This feature is not implemented: ScalarFunctions without MakeArray are not supported: now()
+SELECT [now()]
+
 query TTT
 select arrow_typeof(column1), arrow_typeof(column2), arrow_typeof(column3) from arrays;
 ----
@@ -934,7 +942,7 @@ select array_slice(make_array(1, 2, 3, 4, 5), 0, -4), array_slice(make_array('h'
 
 # array_slice scalar function #13 (with negative number and NULL)
 query error
-select array_slice(make_array(1, 2, 3, 4, 5), 2, NULL), array_slice(make_array('h', 'e', 'l', 'l', 'o'), 3, NULL);
+select array_slice(make_array(1, 2, 3, 4, 5), -2, NULL), array_slice(make_array('h', 'e', 'l', 'l', 'o'), -3, NULL);
 
 # array_slice scalar function #14 (with NULL and negative number)
 query error
@@ -971,10 +979,10 @@ select array_slice(make_array(1, 2, 3, 4, 5), -7, -2), array_slice(make_array('h
 [] []
 
 # array_slice scalar function #20 (with negative indexes; nested array)
-query ?
-select array_slice(make_array(make_array(1, 2, 3, 4, 5), make_array(6, 7, 8, 9, 10)), -2, -1);
+query ??
+select array_slice(make_array(make_array(1, 2, 3, 4, 5), make_array(6, 7, 8, 9, 10)), -2, -1), array_slice(make_array(make_array(1, 2, 3), make_array(6, 7, 8)), -1, -1);
 ----
-[[1, 2, 3, 4, 5]]
+[[1, 2, 3, 4, 5]] []
 
 # array_slice scalar function #21 (with first positive index and last negative index)
 query ??
@@ -2014,7 +2022,7 @@ drop table arrays_with_repeating_elements_for_union;
 query ?
 select array_union([], []);
 ----
-NULL
+[]
 
 # array_union scalar function #7
 query ?
@@ -2032,7 +2040,7 @@ select array_union([null], [null]);
 query ?
 select array_union(null, []);
 ----
-NULL
+[]
 
 # array_union scalar function #10
 query ?
@@ -2387,11 +2395,17 @@ select array_length(make_array()), array_length(make_array(), 1), array_length(m
 ----
 0 0 NULL
 
-# list_length scalar function #6 (function alias `array_length`)
+# array_length scalar function #6 nested array
 query III
-select list_length(make_array(1, 2, 3, 4, 5)), list_length(make_array(1, 2, 3)), list_length(make_array([1, 2], [3, 4], [5, 6]));
+select array_length([[1, 2, 3, 4], [5, 6, 7, 8]]), array_length([[1, 2, 3, 4], [5, 6, 7, 8]], 1), array_length([[1, 2, 3, 4], [5, 6, 7, 8]], 2);
 ----
-5 3 3
+2 2 4
+
+# list_length scalar function #7 (function alias `array_length`)
+query IIII
+select list_length(make_array(1, 2, 3, 4, 5)), list_length(make_array(1, 2, 3)), list_length(make_array([1, 2], [3, 4], [5, 6])), array_length([[1, 2, 3, 4], [5, 6, 7, 8]], 3);
+----
+5 3 3 NULL
 
 # array_length with columns
 query I
@@ -2687,6 +2701,26 @@ SELECT  array_intersect(make_array(1,2,3), make_array(2,3,4)),
 ----
 [2, 3] [] [aa, cc] [true] [2.2, 3.3] [[2, 2], [3, 3]]
 
+query ?
+select array_intersect([], []);
+----
+[]
+
+query ?
+select array_intersect([], null);
+----
+[]
+
+query ?
+select array_intersect(null, []);
+----
+[]
+
+query ?
+select array_intersect(null, null);
+----
+NULL
+
 query ??????
 SELECT  list_intersect(make_array(1,2,3), make_array(2,3,4)),
         list_intersect(make_array(1,3,5), make_array(2,4,6)),
@@ -2716,15 +2750,16 @@ from arrays_range;
 [0, 1, 2, 3, 4, 5, 6, 7, 8, 9] [3, 4, 5, 6, 7, 8, 9] [3, 5, 7, 9]
 [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12] [4, 5, 6, 7, 8, 9, 10, 11, 12] [4, 7, 10]
 
-query ?????
+query ??????
 select range(5),
        range(2, 5),
        range(2, 10, 3),
        range(1, 5, -1),
-       range(1, -5, 1)
+       range(1, -5, 1),
+       range(1, -5, -1)
 ;
 ----
-[0, 1, 2, 3, 4] [2, 3, 4] [2, 5, 8] [1] []
+[0, 1, 2, 3, 4] [2, 3, 4] [2, 5, 8] [] [] [1, 0, -1, -2, -3, -4]
 
 query ???
 select generate_series(5),
@@ -2841,6 +2876,26 @@ NULL
 
 statement ok
 drop table array_except_table_bool;
+
+query ?
+select array_except([], null);
+----
+[]
+
+query ?
+select array_except([], []);
+----
+[]
+
+query ?
+select array_except(null, []);
+----
+NULL
+
+query ?
+select array_except(null, null)
+----
+NULL
 
 ### Array operators tests
 

@@ -58,12 +58,12 @@ GlobalLimitExec: skip=0, fetch=10
 --SortPreservingMergeExec: [custdist@1 DESC,c_count@0 DESC], fetch=10
 ----SortExec: TopK(fetch=10), expr=[custdist@1 DESC,c_count@0 DESC]
 ------ProjectionExec: expr=[c_count@0 as c_count, COUNT(*)@1 as custdist]
---------AggregateExec: mode=FinalPartitioned, gby=[c_count@0 as c_count], aggr=[COUNT(*)]
+--------AggregateExec: mode=FinalPartitioned, gby=[c_count@0 as c_count], aggr=[COUNT(1)]
 ----------CoalesceBatchesExec: target_batch_size=8192
 ------------RepartitionExec: partitioning=Hash([c_count@0], 4), input_partitions=4
---------------AggregateExec: mode=Partial, gby=[c_count@0 as c_count], aggr=[COUNT(*)]
+--------------AggregateExec: mode=Partial, gby=[c_count@0 as c_count], aggr=[COUNT(1)]
 ----------------ProjectionExec: expr=[COUNT(orders.o_orderkey)@1 as c_count]
-------------------AggregateExec: mode=SinglePartitioned, gby=[c_custkey@0 as c_custkey], aggr=[COUNT(orders.o_orderkey)]
+------------------AggregateExec: mode=SinglePartitioned, gby=[c_custkey@0 as c_custkey], aggr=[COUNT(o_orderkey@1)]
 --------------------ProjectionExec: expr=[c_custkey@0 as c_custkey, o_orderkey@1 as o_orderkey]
 ----------------------CoalesceBatchesExec: target_batch_size=8192
 ------------------------HashJoinExec: mode=Partitioned, join_type=Left, on=[(c_custkey@0, o_custkey@1)]

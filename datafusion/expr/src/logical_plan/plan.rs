@@ -551,15 +551,9 @@ impl LogicalPlan {
                 Projection::try_new(projection.expr.to_vec(), Arc::new(inputs[0].clone()))
                     .map(LogicalPlan::Projection)
             }
-            LogicalPlan::Window(Window {
-                window_expr,
-                schema,
-                ..
-            }) => Ok(LogicalPlan::Window(Window {
-                input: Arc::new(inputs[0].clone()),
-                window_expr: window_expr.to_vec(),
-                schema: schema.clone(),
-            })),
+            LogicalPlan::Window(Window { window_expr, .. }) => Ok(LogicalPlan::Window(
+                Window::try_new(window_expr.to_vec(), Arc::new(inputs[0].clone()))?,
+            )),
             LogicalPlan::Aggregate(Aggregate {
                 group_expr,
                 aggr_expr,
@@ -811,6 +805,7 @@ impl LogicalPlan {
                 name,
                 if_not_exists,
                 or_replace,
+                column_defaults,
                 ..
             })) => Ok(LogicalPlan::Ddl(DdlStatement::CreateMemoryTable(
                 CreateMemoryTable {
@@ -819,6 +814,7 @@ impl LogicalPlan {
                     name: name.clone(),
                     if_not_exists: *if_not_exists,
                     or_replace: *or_replace,
+                    column_defaults: column_defaults.clone(),
                 },
             ))),
             LogicalPlan::Ddl(DdlStatement::CreateView(CreateView {
@@ -835,10 +831,19 @@ impl LogicalPlan {
             LogicalPlan::Extension(e) => Ok(LogicalPlan::Extension(Extension {
                 node: e.node.from_template(&expr, inputs),
             })),
-            LogicalPlan::Union(Union { schema, .. }) => Ok(LogicalPlan::Union(Union {
-                inputs: inputs.iter().cloned().map(Arc::new).collect(),
-                schema: schema.clone(),
-            })),
+            LogicalPlan::Union(Union { schema, .. }) => {
+                let input_schema = inputs[0].schema();
+                // If inputs are not pruned do not change schema.
+                let schema = if schema.fields().len() == input_schema.fields().len() {
+                    schema
+                } else {
+                    input_schema
+                };
+                Ok(LogicalPlan::Union(Union {
+                    inputs: inputs.iter().cloned().map(Arc::new).collect(),
+                    schema: schema.clone(),
+                }))
+            }
             LogicalPlan::Distinct(distinct) => {
                 let distinct = match distinct {
                     Distinct::All(_) => Distinct::All(Arc::new(inputs[0].clone())),
@@ -1790,11 +1795,8 @@ pub struct Projection {
 impl Projection {
     /// Create a new Projection
     pub fn try_new(expr: Vec<Expr>, input: Arc<LogicalPlan>) -> Result<Self> {
-        let schema = Arc::new(DFSchema::new_with_metadata(
-            exprlist_to_fields(&expr, &input)?,
-            input.schema().metadata().clone(),
-        )?);
-        Self::try_new_with_schema(expr, input, schema)
+        let projection_schema = projection_schema(&input, &expr)?;
+        Self::try_new_with_schema(expr, input, projection_schema)
     }
 
     /// Create a new Projection using the specified output schema
@@ -1806,11 +1808,6 @@ impl Projection {
         if expr.len() != schema.fields().len() {
             return plan_err!("Projection has mismatch between number of expressions ({}) and number of fields in schema ({})", expr.len(), schema.fields().len());
         }
-        // Update functional dependencies of `input` according to projection
-        // expressions:
-        let id_key_groups = calc_func_dependencies_for_project(&expr, &input)?;
-        let schema = schema.as_ref().clone();
-        let schema = Arc::new(schema.with_functional_dependencies(id_key_groups));
         Ok(Self {
             expr,
             input,
@@ -1832,6 +1829,29 @@ impl Projection {
             schema,
         }
     }
+}
+
+/// Computes the schema of the result produced by applying a projection to the input logical plan.
+///
+/// # Arguments
+///
+/// * `input`: A reference to the input `LogicalPlan` for which the projection schema
+/// will be computed.
+/// * `exprs`: A slice of `Expr` expressions representing the projection operation to apply.
+///
+/// # Returns
+///
+/// A `Result` containing an `Arc<DFSchema>` representing the schema of the result
+/// produced by the projection operation. If the schema computation is successful,
+/// the `Result` will contain the schema; otherwise, it will contain an error.
+pub fn projection_schema(input: &LogicalPlan, exprs: &[Expr]) -> Result<Arc<DFSchema>> {
+    let mut schema = DFSchema::new_with_metadata(
+        exprlist_to_fields(exprs, input)?,
+        input.schema().metadata().clone(),
+    )?;
+    schema = schema
+        .with_functional_dependencies(calc_func_dependencies_for_project(exprs, input)?);
+    Ok(Arc::new(schema))
 }
 
 /// Aliased subquery
@@ -1932,8 +1952,7 @@ impl Window {
     /// Create a new window operator.
     pub fn try_new(window_expr: Vec<Expr>, input: Arc<LogicalPlan>) -> Result<Self> {
         let mut window_fields: Vec<DFField> = input.schema().fields().clone();
-        window_fields
-            .extend_from_slice(&exprlist_to_fields(window_expr.iter(), input.as_ref())?);
+        window_fields.extend_from_slice(&exprlist_to_fields(window_expr.iter(), &input)?);
         let metadata = input.schema().metadata().clone();
 
         // Update functional dependencies for window:
@@ -2354,6 +2373,13 @@ impl Aggregate {
             aggr_expr,
             schema,
         })
+    }
+
+    /// Get the length of the group by expression in the output schema
+    /// This is not simply group by expression length. Expression may be
+    /// GroupingSet, etc. In these case we need to get inner expression lengths.
+    pub fn group_expr_len(&self) -> Result<usize> {
+        grouping_set_expr_count(&self.group_expr)
     }
 }
 

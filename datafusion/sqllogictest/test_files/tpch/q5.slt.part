@@ -70,10 +70,10 @@ physical_plan
 SortPreservingMergeExec: [revenue@1 DESC]
 --SortExec: expr=[revenue@1 DESC]
 ----ProjectionExec: expr=[n_name@0 as n_name, SUM(lineitem.l_extendedprice * Int64(1) - lineitem.l_discount)@1 as revenue]
-------AggregateExec: mode=FinalPartitioned, gby=[n_name@0 as n_name], aggr=[SUM(lineitem.l_extendedprice * Int64(1) - lineitem.l_discount)]
+------AggregateExec: mode=FinalPartitioned, gby=[n_name@0 as n_name], aggr=[SUM(l_extendedprice@0 * (Some(1),20,0 - l_discount@1))]
 --------CoalesceBatchesExec: target_batch_size=8192
 ----------RepartitionExec: partitioning=Hash([n_name@0], 4), input_partitions=4
-------------AggregateExec: mode=Partial, gby=[n_name@2 as n_name], aggr=[SUM(lineitem.l_extendedprice * Int64(1) - lineitem.l_discount)]
+------------AggregateExec: mode=Partial, gby=[n_name@2 as n_name], aggr=[SUM(l_extendedprice@0 * (Some(1),20,0 - l_discount@1))]
 --------------ProjectionExec: expr=[l_extendedprice@0 as l_extendedprice, l_discount@1 as l_discount, n_name@2 as n_name]
 ----------------CoalesceBatchesExec: target_batch_size=8192
 ------------------HashJoinExec: mode=Partitioned, join_type=Inner, on=[(n_regionkey@3, r_regionkey@0)]

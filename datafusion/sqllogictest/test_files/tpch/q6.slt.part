@@ -35,9 +35,9 @@ Projection: SUM(lineitem.l_extendedprice * lineitem.l_discount) AS revenue
 --------TableScan: lineitem projection=[l_quantity, l_extendedprice, l_discount, l_shipdate], partial_filters=[lineitem.l_shipdate >= Date32("8766"), lineitem.l_shipdate < Date32("9131"), lineitem.l_discount >= Decimal128(Some(5),15,2), lineitem.l_discount <= Decimal128(Some(7),15,2), lineitem.l_quantity < Decimal128(Some(2400),15,2)]
 physical_plan
 ProjectionExec: expr=[SUM(lineitem.l_extendedprice * lineitem.l_discount)@0 as revenue]
---AggregateExec: mode=Final, gby=[], aggr=[SUM(lineitem.l_extendedprice * lineitem.l_discount)]
+--AggregateExec: mode=Final, gby=[], aggr=[SUM(l_extendedprice@0 * l_discount@1)]
 ----CoalescePartitionsExec
-------AggregateExec: mode=Partial, gby=[], aggr=[SUM(lineitem.l_extendedprice * lineitem.l_discount)]
+------AggregateExec: mode=Partial, gby=[], aggr=[SUM(l_extendedprice@0 * l_discount@1)]
 --------ProjectionExec: expr=[l_extendedprice@1 as l_extendedprice, l_discount@2 as l_discount]
 ----------CoalesceBatchesExec: target_batch_size=8192
 ------------FilterExec: l_shipdate@3 >= 8766 AND l_shipdate@3 < 9131 AND l_discount@2 >= Some(5),15,2 AND l_discount@2 <= Some(7),15,2 AND l_quantity@0 < Some(2400),15,2
