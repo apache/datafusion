@@ -298,7 +298,9 @@ pub struct AggregateExec {
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
     required_input_ordering: Option<LexRequirement>,
+    /// Describes how the input is ordered relative to the group by columns
     partition_search_mode: PartitionSearchMode,
+    /// Describe how the output is ordered
     output_ordering: Option<LexOrdering>,
 }
 

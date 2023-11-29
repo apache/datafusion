@@ -15,17 +15,28 @@
 // specific language governing permissions and limitations
 // under the License.
 
-#[derive(Debug, Clone, PartialEq)]
-/// Specifies aggregation grouping and/or window partitioning properties of a
-/// set of expressions in terms of the existing ordering.
-/// For example, if the existing ordering is `[a ASC, b ASC, c ASC]`:
-/// - A `PARTITION BY b` clause will result in `Linear` mode.
-/// - A `PARTITION BY a, c` or a `PARTITION BY c, a` clause will result in
+/// Specifies how the input to an aggregation or window operator is ordered
+/// relative to their `GROUP BY` or  `PARTITION BY` expressions.
+///
+/// For example, if the existing ordering is `[a ASC, b ASC, c ASC]`
+///
+/// ## Window Functions
+/// - A `PARTITION BY b` clause can use `Linear` mode.
+/// - A `PARTITION BY a, c` or a `PARTITION BY c, a` can use
 ///   `PartiallySorted([0])` or `PartiallySorted([1])` modes, respectively.
-///   The vector stores the index of `a` in the respective PARTITION BY expression.
-/// - A `PARTITION BY a, b` or a `PARTITION BY b, a` clause will result in
-///   `Sorted` mode.
-/// Note that the examples above are applicable for `GROUP BY` clauses too.
+///   (The vector stores the index of `a` in the respective PARTITION BY expression.)
+/// - A `PARTITION BY a, b` or a `PARTITION BY b, a` can use `Sorted` mode.
+///
+/// ## Aggregations
+/// - A `GROUP BY b` clause can use `Linear` mode.
+/// - A `GROUP BY a, c` or a `GROUP BY BY c, a` can use
+///   `PartiallySorted([0])` or `PartiallySorted([1])` modes, respectively.
+///   (The vector stores the index of `a` in the respective PARTITION BY expression.)
+/// - A `GROUP BY a, b` or a `GROUP BY b, a` can use `Sorted` mode.
+///
+/// Note these are the same examples as above, but with `GROUP BY` instead of
+/// `PARTITION BY` to make the examples easier to read.
+#[derive(Debug, Clone, PartialEq)]
 pub enum PartitionSearchMode {
     /// There is no partial permutation of the expressions satisfying the
     /// existing ordering.
