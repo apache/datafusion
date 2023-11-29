@@ -16,13 +16,13 @@
 //! the plan.
 
 use crate::optimizer::ApplyOrder;
-use crate::utils::{conjunction, split_conjunction, split_conjunction_owned};
-use crate::{utils, OptimizerConfig, OptimizerRule};
+use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_common::tree_node::{Transformed, TreeNode, VisitRecursion};
 use datafusion_common::{
     internal_err, plan_datafusion_err, Column, DFSchema, DataFusionError, Result,
 };
 use datafusion_expr::expr::Alias;
+use datafusion_expr::utils::{conjunction, split_conjunction, split_conjunction_owned};
 use datafusion_expr::Volatility;
 use datafusion_expr::{
     and,
@@ -546,9 +546,7 @@ fn push_down_join(
     parent_predicate: Option<&Expr>,
 ) -> Result<Option<LogicalPlan>> {
     let predicates = match parent_predicate {
-        Some(parent_predicate) => {
-            utils::split_conjunction_owned(parent_predicate.clone())
-        }
+        Some(parent_predicate) => split_conjunction_owned(parent_predicate.clone()),
         None => vec![],
     };
 
@@ -556,7 +554,7 @@ fn push_down_join(
     let on_filters = join
         .filter
         .as_ref()
-        .map(|e| utils::split_conjunction_owned(e.clone()))
+        .map(|e| split_conjunction_owned(e.clone()))
         .unwrap_or_default();
 
     let mut is_inner_join = false;
@@ -805,7 +803,7 @@ impl OptimizerRule for PushDownFilter {
                     .map(|e| Ok(Column::from_qualified_name(e.display_name()?)))
                     .collect::<Result<HashSet<_>>>()?;
 
-                let predicates = utils::split_conjunction_owned(filter.predicate.clone());
+                let predicates = split_conjunction_owned(filter.predicate.clone());
 
                 let mut keep_predicates = vec![];
                 let mut push_predicates = vec![];
@@ -853,7 +851,7 @@ impl OptimizerRule for PushDownFilter {
                 }
             }
             LogicalPlan::CrossJoin(CrossJoin { left, right, .. }) => {
-                let predicates = utils::split_conjunction_owned(filter.predicate.clone());
+                let predicates = split_conjunction_owned(filter.predicate.clone());
                 push_down_all_join(
                     predicates,
                     vec![],
@@ -908,7 +906,7 @@ impl OptimizerRule for PushDownFilter {
                 let prevent_cols =
                     extension_plan.node.prevent_predicate_push_down_columns();
 
-                let predicates = utils::split_conjunction_owned(filter.predicate.clone());
+                let predicates = split_conjunction_owned(filter.predicate.clone());
 
                 let mut keep_predicates = vec![];
                 let mut push_predicates = vec![];
