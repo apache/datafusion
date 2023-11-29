@@ -1296,6 +1296,27 @@ NULL
 123
 NULL
 
+# integer with float
+query I
+select case when a = 'rust' then arrow_cast(1, 'Int32') when a == 'c++' then arrow_cast(2, 'Int64') else 1.5 end from (values('python')) as t(a);
+----
+1.5
+
+# integer with boolean
+query I
+select case when a = 'rust' then 1 when a == 'c++' then false end from (values('c++')) as t(a);
+----
+0
+
+# type coercion not supported in case expr (boolean <-> timestamp)
+query error
+select case when a = 'foo' then arrow_cast(500, 'Timestamp(Nanosecond, None)') when a = 'bar' then true end from (values('foo')) as t(a);
+----
+DataFusion error: type_coercion
+caused by
+Error during planning: Failed to coerce then ([Timestamp(Nanosecond, None), Boolean]) and else (None) to common types in CASE WHEN expression
+
+
 # csv_query_sum_cast() {
 
 statement ok
