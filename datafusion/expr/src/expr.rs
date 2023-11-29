@@ -542,7 +542,7 @@ impl AggregateFunction {
         }
     }
 
-    /// Create a new ScalarFunction expression with a user-defined function (UDF)
+    /// Create a new AggregateFunction expression with a user-defined function (UDF)
     pub fn new_udf(
         udf: Arc<crate::AggregateUDF>,
         args: Vec<Expr>,
@@ -1610,16 +1610,33 @@ fn create_name(e: &Expr) -> Result<String> {
             args,
             filter,
             order_by,
-        }) => {
-            let mut name = create_function_name(func_def.name(), *distinct, args)?;
-            if let Some(fe) = filter {
-                name = format!("{name} FILTER (WHERE {fe})");
-            };
-            if let Some(order_by) = order_by {
-                name = format!("{name} ORDER BY [{}]", expr_vec_fmt!(order_by));
-            };
-            Ok(name)
-        }
+        }) => match func_def {
+            AggregateFunctionDefinition::BuiltIn { fun: _, name: _ }
+            | AggregateFunctionDefinition::Name(_) => {
+                let mut name = create_function_name(func_def.name(), *distinct, args)?;
+                if let Some(fe) = filter {
+                    name = format!("{name} FILTER (WHERE {fe})");
+                };
+                if let Some(order_by) = order_by {
+                    name = format!("{name} ORDER BY [{}]", expr_vec_fmt!(order_by));
+                };
+                Ok(name)
+            }
+            AggregateFunctionDefinition::UDF(fun) => {
+                let mut names = Vec::with_capacity(args.len());
+                for e in args {
+                    names.push(create_name(e)?);
+                }
+                let mut info = String::new();
+                if let Some(fe) = filter {
+                    info += &format!(" FILTER (WHERE {fe})");
+                }
+                if let Some(ob) = order_by {
+                    info += &format!(" ORDER BY ([{}])", expr_vec_fmt!(ob));
+                }
+                Ok(format!("{}({}){}", fun.name(), names.join(","), info))
+            }
+        },
         Expr::GroupingSet(grouping_set) => match grouping_set {
             GroupingSet::Rollup(exprs) => {
                 Ok(format!("ROLLUP ({})", create_names(exprs.as_slice())?))

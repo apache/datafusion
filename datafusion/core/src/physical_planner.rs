@@ -233,8 +233,34 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
             func_def,
             distinct,
             args,
-            ..
-        }) => create_function_physical_name(func_def.name(), *distinct, args),
+            filter,
+            order_by,
+        }) => match func_def {
+            AggregateFunctionDefinition::BuiltIn { fun: _, name: _ } => {
+                create_function_physical_name(func_def.name(), *distinct, args)
+            }
+            AggregateFunctionDefinition::UDF(fun) => {
+                // TODO: Add support for filter and order by in AggregateUDF
+                if filter.is_some() {
+                    return exec_err!(
+                        "aggregate expression with filter is not supported"
+                    );
+                }
+                if order_by.is_some() {
+                    return exec_err!(
+                        "aggregate expression with order_by is not supported"
+                    );
+                }
+                let mut names = Vec::with_capacity(args.len());
+                for e in args {
+                    names.push(create_physical_name(e, false)?);
+                }
+                Ok(format!("{}({})", fun.name(), names.join(",")))
+            }
+            AggregateFunctionDefinition::Name(_) => {
+                internal_err!("Aggregate function `Expr` with name should be resolved.")
+            }
+        },
         Expr::GroupingSet(grouping_set) => match grouping_set {
             GroupingSet::Rollup(exprs) => Ok(format!(
                 "ROLLUP ({})",
@@ -1693,7 +1719,7 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
             filter,
             order_by,
         }) => match func_def {
-            AggregateFunctionDefinition::BuiltIn { fun, name } => {
+            AggregateFunctionDefinition::BuiltIn { fun, name: _ } => {
                 let args = args
                     .iter()
                     .map(|e| {
@@ -1736,7 +1762,7 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
                     &args,
                     &ordering_reqs,
                     physical_input_schema,
-                    name.to_string(),
+                    name,
                 )?;
                 Ok((agg_expr, filter, order_by))
             }

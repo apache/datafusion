@@ -19,7 +19,7 @@ use crate::analyzer::AnalyzerRule;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRewriter};
 use datafusion_common::Result;
-use datafusion_expr::expr::{AggregateFunction, InSubquery};
+use datafusion_expr::expr::{AggregateFunction, AggregateFunctionDefinition, InSubquery};
 use datafusion_expr::expr_rewriter::rewrite_preserving_name;
 use datafusion_expr::utils::COUNT_STAR_EXPANSION;
 use datafusion_expr::Expr::ScalarSubquery;
@@ -144,7 +144,11 @@ impl TreeNodeRewriter for CountWildcardRewriter {
                 _ => old_expr,
             },
             Expr::AggregateFunction(AggregateFunction {
-                func_def: _,
+                func_def:
+                    AggregateFunctionDefinition::BuiltIn {
+                        fun: aggregate_function::AggregateFunction::Count,
+                        name: _,
+                    },
                 args,
                 distinct,
                 filter,

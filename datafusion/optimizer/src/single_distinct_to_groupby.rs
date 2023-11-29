@@ -71,7 +71,7 @@ fn is_single_distinct_agg(plan: &LogicalPlan) -> Result<bool> {
             let mut aggregate_count = 0;
             for expr in aggr_expr {
                 if let Expr::AggregateFunction(AggregateFunction {
-                    func_def,
+                    func_def: AggregateFunctionDefinition::BuiltIn { fun, name: _ },
                     distinct,
                     args,
                     filter,
@@ -86,19 +86,8 @@ fn is_single_distinct_agg(plan: &LogicalPlan) -> Result<bool> {
                         for e in args {
                             fields_set.insert(e.canonical_name());
                         }
-                    } else {
-                        match func_def {
-                            AggregateFunctionDefinition::BuiltIn { fun, name: _ } => {
-                                if !matches!(fun, Sum | Min | Max) {
-                                    return Ok(false);
-                                } else {
-                                    return Ok(true);
-                                }
-                            }
-                            _ => {
-                                return Ok(false);
-                            }
-                        }
+                    } else if !matches!(fun, Sum | Min | Max) {
+                        return Ok(false);
                     }
                 }
             }
