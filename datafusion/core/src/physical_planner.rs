@@ -2541,6 +2541,27 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn aggregate_with_alias() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("c1", DataType::Utf8, false),
+            Field::new("c2", DataType::UInt32, false),
+        ]));
+
+        let logical_plan = scan_empty(None, schema.as_ref(), None)?
+            .aggregate(vec![col("c1")], vec![sum(col("c2"))])?
+            .project(vec![col("c1"), sum(col("c2")).alias("total_salary")])?
+            .build()?;
+
+        let physical_plan = plan(&logical_plan).await?;
+        assert_eq!("c1", physical_plan.schema().field(0).name().as_str());
+        assert_eq!(
+            "total_salary",
+            physical_plan.schema().field(1).name().as_str()
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn test_explain() {
         let schema = Schema::new(vec![Field::new("id", DataType::Int32, false)]);
 
