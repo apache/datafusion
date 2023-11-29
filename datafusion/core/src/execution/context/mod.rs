@@ -811,8 +811,14 @@ impl SessionContext {
     /// - `SELECT MY_FUNC(x)...` will look for a function named `"my_func"`
     /// - `SELECT "my_FUNC"(x)` will look for a function named `"my_FUNC"`
     pub fn register_udf(&self, f: ScalarUDF) {
-        self.state
-            .write()
+        let mut state = self.state.write();
+        let aliases = f.aliases();
+        for alias in aliases {
+            state
+                .scalar_functions
+                .insert(alias.to_string(), Arc::new(f.clone()));
+        }
+        state
             .scalar_functions
             .insert(f.name().to_string(), Arc::new(f));
     }

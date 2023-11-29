@@ -49,6 +49,8 @@ pub struct ScalarUDF {
     /// the batch's row count (so that the generative zero-argument function can know
     /// the result array size).
     fun: ScalarFunctionImplementation,
+    /// Optional aliases for the function
+    aliases: Vec<String>,
 }
 
 impl Debug for ScalarUDF {
@@ -89,6 +91,34 @@ impl ScalarUDF {
             signature: signature.clone(),
             return_type: return_type.clone(),
             fun: fun.clone(),
+            aliases: vec![],
+        }
+    }
+
+    /// Create a new ScalarUDF with aliases
+    pub fn new_with_aliases(
+        name: &str,
+        signature: &Signature,
+        return_type: &ReturnTypeFunction,
+        fun: &ScalarFunctionImplementation,
+        aliases: Vec<String>,
+    ) -> Self {
+        Self {
+            name: name.to_owned(),
+            signature: signature.clone(),
+            return_type: return_type.clone(),
+            fun: fun.clone(),
+            aliases,
+        }
+    }
+
+    pub fn with_aliases(self, aliases: Vec<&str>) -> Self {
+        Self {
+            name: self.name,
+            signature: self.signature,
+            return_type: self.return_type,
+            fun: self.fun,
+            aliases: aliases.iter().map(|s| s.to_string()).collect(),
         }
     }
 
@@ -104,6 +134,10 @@ impl ScalarUDF {
     /// Returns this function's name
     pub fn name(&self) -> &str {
         &self.name
+    }
+
+    pub fn aliases(&self) -> &[String] {
+        &self.aliases
     }
 
     /// Returns this function's signature (what input types are accepted)
