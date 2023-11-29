@@ -231,7 +231,7 @@ fn roundtrip_window() -> Result<()> {
     };
 
     let builtin_window_expr = Arc::new(BuiltInWindowExpr::new(
-        Arc::new(NthValue::first(
+            Arc::new(NthValue::first(
                 "FIRST_VALUE(a) PARTITION BY [b] ORDER BY [a ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW",
                 col("a", &schema)?,
                 DataType::Int64,
