@@ -79,7 +79,6 @@ pub mod explain_analyze;
 pub mod expr;
 pub mod group_by;
 pub mod joins;
-pub mod limit;
 pub mod order;
 pub mod parquet;
 pub mod parquet_schema;
@@ -544,18 +543,6 @@ fn populate_csv_partitions(
     }
 
     Ok(schema)
-}
-
-/// Return a RecordBatch with a single Int32 array with values (0..sz)
-pub fn make_partition(sz: i32) -> RecordBatch {
-    let seq_start = 0;
-    let seq_end = sz;
-    let values = (seq_start..seq_end).collect::<Vec<_>>();
-    let schema = Arc::new(Schema::new(vec![Field::new("i", DataType::Int32, true)]));
-    let arr = Arc::new(Int32Array::from(values));
-    let arr = arr as ArrayRef;
-
-    RecordBatch::try_new(schema, vec![arr]).unwrap()
 }
 
 /// Specialised String representation
