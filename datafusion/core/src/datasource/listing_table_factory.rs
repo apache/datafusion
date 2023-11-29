@@ -69,20 +69,17 @@ impl TableProviderFactory for ListingTableFactory {
         let file_format: Arc<dyn FileFormat> = match file_type {
             FileType::CSV => {
                 let mut statement_options = StatementOptions::from(&cmd.options);
-                let quote = statement_options
-                    .take_str_option("quote")
-                    .map_or(b'"', |x| x.as_bytes()[0]);
-                let escape = statement_options
-                    .take_str_option("escape")
-                    .map(|x| x.as_bytes()[0]);
-                Arc::new(
-                    CsvFormat::default()
-                        .with_has_header(cmd.has_header)
-                        .with_delimiter(cmd.delimiter as u8)
-                        .with_quote(quote)
-                        .with_escape(escape)
-                        .with_file_compression_type(file_compression_type),
-                )
+                let mut csv_format = CsvFormat::default()
+                    .with_has_header(cmd.has_header)
+                    .with_delimiter(cmd.delimiter as u8)
+                    .with_file_compression_type(file_compression_type);
+                if let Some(quote) = statement_options.take_str_option("quote") {
+                    csv_format = csv_format.with_quote(quote.as_bytes()[0])
+                }
+                if let Some(escape) = statement_options.take_str_option("escape") {
+                    csv_format = csv_format.with_escape(Some(escape.as_bytes()[0]))
+                }
+                Arc::new(csv_format)
             }
             #[cfg(feature = "parquet")]
             FileType::PARQUET => Arc::new(ParquetFormat::default()),
