@@ -102,7 +102,7 @@ pub trait AggregateExpr: Send + Sync + Debug + PartialEq<dyn Any> {
         "AggregateExpr: default name"
     }
 
-    /// Returns Aggregate Fucntion Name
+    /// Returns Aggregate Function Name
     fn func_name(&self) -> &str;
 
     /// Human readable name such as `"MIN(c2)"` or `"RANK()"`. The default
