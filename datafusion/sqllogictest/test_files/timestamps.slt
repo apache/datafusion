@@ -1812,7 +1812,7 @@ SELECT to_timestamp(null) is null as c1,
 ----
 true true true true true true true true true true true true true
 
-# verify timestamp output types
+# verify timestamp output types 
 query TTT
 SELECT arrow_typeof(to_timestamp(1)), arrow_typeof(to_timestamp(null)), arrow_typeof(to_timestamp('2023-01-10 12:34:56.000'))
 ----
@@ -1830,7 +1830,7 @@ SELECT arrow_typeof(to_timestamp(1)) = arrow_typeof(1::timestamp) as c1,
 true true true true true true
 
 # known issues. currently overflows (expects default precision to be microsecond instead of nanoseconds. Work pending)
-#verify extreme values
+#verify extreme values 
 #query PPPPPPPP
 #SELECT to_timestamp(-62125747200), to_timestamp(1926632005177), -62125747200::timestamp, 1926632005177::timestamp, cast(-62125747200 as timestamp), cast(1926632005177 as timestamp)
 #----
