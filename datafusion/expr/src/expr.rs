@@ -502,12 +502,6 @@ impl AggregateFunctionDefinition {
             AggregateFunctionDefinition::Name(func_name) => func_name.as_ref(),
         }
     }
-
-    pub fn new_builtin(
-        fun: aggregate_function::AggregateFunction,
-    ) -> AggregateFunctionDefinition {
-        Self::BuiltIn(fun)
-    }
 }
 
 /// Aggregate function
@@ -534,7 +528,7 @@ impl AggregateFunction {
         order_by: Option<Vec<Expr>>,
     ) -> Self {
         Self {
-            func_def: AggregateFunctionDefinition::new_builtin(fun),
+            func_def: AggregateFunctionDefinition::BuiltIn(fun),
             args,
             distinct,
             filter,
@@ -1611,26 +1605,33 @@ fn create_name(e: &Expr) -> Result<String> {
             filter,
             order_by,
         }) => {
-            let mut name = match func_def {
+            let name = match func_def {
                 AggregateFunctionDefinition::BuiltIn(..)
                 | AggregateFunctionDefinition::Name(..) => {
                     create_function_name(func_def.name(), *distinct, args)?
                 }
                 AggregateFunctionDefinition::UDF(..) => {
-                    let mut names = Vec::with_capacity(args.len());
-                    for e in args {
-                        names.push(create_name(e)?);
-                    }
+                    let names: Vec<String> =
+                        args.iter().map(|e| create_name(e)).collect::<Result<_>>()?;
                     names.join(",")
                 }
             };
+            let mut info = String::new();
             if let Some(fe) = filter {
-                name = format!("{name} FILTER (WHERE {fe})");
+                info += &format!(" FILTER (WHERE {fe})");
             };
             if let Some(order_by) = order_by {
-                name = format!("{name} ORDER BY [{}]", expr_vec_fmt!(order_by));
+                info += &format!(" ORDER BY [{}]", expr_vec_fmt!(order_by));
             };
-            Ok(name)
+            match func_def {
+                AggregateFunctionDefinition::BuiltIn(..)
+                | AggregateFunctionDefinition::Name(..) => {
+                    Ok(format!("{}{}", name, info))
+                }
+                AggregateFunctionDefinition::UDF(fun) => {
+                    Ok(format!("{}({}){}", fun.name(), name, info))
+                }
+            }
         }
         Expr::GroupingSet(grouping_set) => match grouping_set {
             GroupingSet::Rollup(exprs) => {
