@@ -381,7 +381,7 @@ fn merge_consecutive_projections(proj: &Projection) -> Result<Option<Projection>
         .flat_map(|expr| expr.to_columns())
         .fold(HashMap::new(), |mut map, cols| {
             cols.into_iter()
-                .for_each(|col| *map.entry(col.clone()).or_default() += 1);
+                .for_each(|col| *map.entry(col).or_default() += 1);
             map
         });
 
@@ -827,7 +827,7 @@ fn rewrite_projection_given_requirements(
         if &projection_schema(&input, &exprs_used)? == input.schema() {
             Ok(Some(input))
         } else {
-            let new_proj = Projection::try_new(exprs_used, Arc::new(input.clone()))?;
+            let new_proj = Projection::try_new(exprs_used, Arc::new(input))?;
             let new_proj = LogicalPlan::Projection(new_proj);
             Ok(Some(new_proj))
         }
