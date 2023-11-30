@@ -1584,6 +1584,7 @@ impl TryFrom<&BuiltinScalarFunction> for protobuf::ScalarFunction {
             BuiltinScalarFunction::OverLay => Self::OverLay,
             BuiltinScalarFunction::Levenshtein => Self::Levenshtein,
             BuiltinScalarFunction::SubstrIndex => Self::SubstrIndex,
+            BuiltinScalarFunction::FindInSet => Self::FindInSet,
         };
 
         Ok(scalar_function)
