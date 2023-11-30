@@ -1032,7 +1032,7 @@ mod test {
     macro_rules! test_unary_scalar_expr {
         ($ENUM:ident, $FUNC:ident) => {{
             if let Expr::ScalarFunction(ScalarFunction {
-                func_def: ScalarFunctionDefinition::BuiltIn { fun, .. },
+                func_def: ScalarFunctionDefinition::BuiltIn(fun),
                 args,
             }) = $FUNC(col("tableA.a"))
             {
@@ -1053,7 +1053,7 @@ mod test {
                 col(stringify!($arg.to_string()))
             ),*
         );
-        if let Expr::ScalarFunction(ScalarFunction { func_def: ScalarFunctionDefinition::BuiltIn{fun, ..}, args }) = result {
+        if let Expr::ScalarFunction(ScalarFunction { func_def: ScalarFunctionDefinition::BuiltIn(fun), args }) = result {
             let name = built_in_function::BuiltinScalarFunction::$ENUM;
             assert_eq!(name, fun);
             assert_eq!(expected.len(), args.len());
@@ -1073,7 +1073,7 @@ mod test {
                 ),*
             ]
         );
-        if let Expr::ScalarFunction(ScalarFunction { func_def: ScalarFunctionDefinition::BuiltIn{fun, ..}, args }) = result {
+        if let Expr::ScalarFunction(ScalarFunction { func_def: ScalarFunctionDefinition::BuiltIn(fun), args }) = result {
             let name = built_in_function::BuiltinScalarFunction::$ENUM;
             assert_eq!(name, fun);
             assert_eq!(expected.len(), args.len());
@@ -1214,7 +1214,7 @@ mod test {
     #[test]
     fn uuid_function_definitions() {
         if let Expr::ScalarFunction(ScalarFunction {
-            func_def: ScalarFunctionDefinition::BuiltIn { fun, .. },
+            func_def: ScalarFunctionDefinition::BuiltIn(fun),
             args,
         }) = uuid()
         {
@@ -1229,7 +1229,7 @@ mod test {
     #[test]
     fn digest_function_definitions() {
         if let Expr::ScalarFunction(ScalarFunction {
-            func_def: ScalarFunctionDefinition::BuiltIn { fun, .. },
+            func_def: ScalarFunctionDefinition::BuiltIn(fun),
             args,
         }) = digest(col("tableA.a"), lit("md5"))
         {
@@ -1244,7 +1244,7 @@ mod test {
     #[test]
     fn encode_function_definitions() {
         if let Expr::ScalarFunction(ScalarFunction {
-            func_def: ScalarFunctionDefinition::BuiltIn { fun, .. },
+            func_def: ScalarFunctionDefinition::BuiltIn(fun),
             args,
         }) = encode(col("tableA.a"), lit("base64"))
         {
@@ -1259,7 +1259,7 @@ mod test {
     #[test]
     fn decode_function_definitions() {
         if let Expr::ScalarFunction(ScalarFunction {
-            func_def: ScalarFunctionDefinition::BuiltIn { fun, .. },
+            func_def: ScalarFunctionDefinition::BuiltIn(fun),
             args,
         }) = decode(col("tableA.a"), lit("hex"))
         {

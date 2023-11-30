@@ -348,6 +348,12 @@ impl BuiltinScalarFunction {
         self.signature().type_signature.supports_zero_argument()
     }
 
+    /// Returns the name of this function
+    pub fn name(&self) -> &str {
+        // .unwrap is safe here because compiler makes sure the map will have matches for each BuiltinScalarFunction
+        function_to_name().get(self).unwrap()
+    }
+
     /// Returns the [Volatility] of the builtin function.
     pub fn volatility(&self) -> Volatility {
         match self {
@@ -1627,8 +1633,7 @@ impl BuiltinScalarFunction {
 
 impl fmt::Display for BuiltinScalarFunction {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        // .unwrap is safe here because compiler makes sure the map will have matches for each BuiltinScalarFunction
-        write!(f, "{}", function_to_name().get(self).unwrap())
+        write!(f, "{}", self.name())
     }
 }
 
