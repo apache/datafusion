@@ -97,7 +97,6 @@ impl ScalarFunctionDef for AgeFunction {
                 .signed_duration_since(end_value.unwrap());
             let days = duration.num_days();
             let millisecond = duration.num_milliseconds() - days * 24 * 60 * 60 * 1000;
-            dbg!(&millisecond);
             b.append_value(IntervalDayTimeType::make_value(
                 days as i32,
                 millisecond as i32,
