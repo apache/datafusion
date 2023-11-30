@@ -4594,9 +4594,9 @@ Can be a constant, column, or function.</p></li>
 <section id="to-timestamp">
 <h3><code class="docutils literal notranslate"><span class="pre">to_timestamp</span></code><a class="headerlink" href="#to-timestamp" title="Link to this heading">¶</a></h3>
 <p>Converts a value to a timestamp (<code class="docutils literal notranslate"><span class="pre">YYYY-MM-DDT00:00:00Z</span></code>).
-Supports strings, integer, and unsigned integer types as input.
+Supports strings, integer, unsigned integer, and double types as input.
 Strings are parsed as RFC3339 (e.g. ‘2023-07-20T05:44:00’)
-Integers and unsigned integers are interpreted as seconds since the unix epoch (<code class="docutils literal notranslate"><span class="pre">1970-01-01T00:00:00Z</span></code>)
+Integers, unsigned integers, and doubles are interpreted as seconds since the unix epoch (<code class="docutils literal notranslate"><span class="pre">1970-01-01T00:00:00Z</span></code>)
 return the corresponding timestamp.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">to_timestamp</span><span class="p">(</span><span class="n">expression</span><span class="p">)</span>
 </pre></div>

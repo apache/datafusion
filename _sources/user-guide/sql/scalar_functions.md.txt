@@ -1457,9 +1457,9 @@ extract(field FROM source)
 ### `to_timestamp`
 
 Converts a value to a timestamp (`YYYY-MM-DDT00:00:00Z`).
-Supports strings, integer, and unsigned integer types as input.
+Supports strings, integer, unsigned integer, and double types as input.
 Strings are parsed as RFC3339 (e.g. '2023-07-20T05:44:00')
-Integers and unsigned integers are interpreted as seconds since the unix epoch (`1970-01-01T00:00:00Z`)
+Integers, unsigned integers, and doubles are interpreted as seconds since the unix epoch (`1970-01-01T00:00:00Z`)
 return the corresponding timestamp.
 
 ```
