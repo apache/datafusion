@@ -31,9 +31,10 @@ use crate::{AggregateExpr, LexOrdering, PhysicalExpr, PhysicalSortExpr};
 use arrow::array::ArrayRef;
 use arrow::datatypes::{DataType, Field};
 use arrow_array::Array;
+use arrow_ord::sort::{lexsort_to_indices, SortColumn};
 use arrow_schema::{Fields, SortOptions};
 use datafusion_common::cast::as_list_array;
-use datafusion_common::utils::{compare_rows, get_row_at_idx};
+use datafusion_common::utils::{compare_rows, get_elem_at_indices, get_row_at_idx};
 use datafusion_common::{exec_err, DataFusionError, Result, ScalarValue};
 use datafusion_expr::Accumulator;
 
@@ -263,7 +264,8 @@ impl Accumulator for OrderSensitiveArrayAggAccumulator {
     }
 
     fn evaluate(&self) -> Result<ScalarValue> {
-        let arr = ScalarValue::new_list(&self.values, &self.datatypes[0]);
+        let (new_values, _new_ordering) = self.ordered_state()?;
+        let arr = ScalarValue::new_list(&new_values, &self.datatypes[0]);
         Ok(ScalarValue::List(arr))
     }
 
@@ -318,10 +320,10 @@ impl OrderSensitiveArrayAggAccumulator {
     }
 
     fn evaluate_orderings(&self) -> Result<ScalarValue> {
+        let (_new_values, new_ordering_values) = self.ordered_state()?;
         let fields = ordering_fields(&self.ordering_req, &self.datatypes[1..]);
         let struct_field = Fields::from(fields.clone());
-        let orderings: Vec<ScalarValue> = self
-            .ordering_values
+        let orderings: Vec<ScalarValue> = new_ordering_values
             .iter()
             .map(|ordering| {
                 ScalarValue::Struct(Some(ordering.clone()), struct_field.clone())
@@ -331,6 +333,37 @@ impl OrderSensitiveArrayAggAccumulator {
 
         let arr = ScalarValue::new_list(&orderings, &struct_type);
         Ok(ScalarValue::List(arr))
+    }
+
+    fn ordered_state(&self) -> Result<(Vec<ScalarValue>, Vec<Vec<ScalarValue>>)> {
+        let n_col = self.ordering_req.len();
+        let n_row = self.ordering_values.len();
+
+        // Transpose
+        let orderings = (0..n_col)
+            .map(|col_idx| {
+                (0..n_row)
+                    .map(|row_idx| self.ordering_values[row_idx][col_idx].clone())
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+
+        // Sort data according to requirements
+        let sort_columns = orderings
+            .into_iter()
+            .zip(self.ordering_req.iter())
+            .map(|(ordering, sort_expr)| {
+                let values = ScalarValue::convert_to_arr(&ordering, &self.datatypes[0]);
+                SortColumn {
+                    values,
+                    options: Some(sort_expr.options),
+                }
+            })
+            .collect::<Vec<_>>();
+        let indices = lexsort_to_indices(&sort_columns, None)?;
+        let new_values = get_elem_at_indices(&self.values, &indices);
+        let new_ordering_values = get_elem_at_indices(&self.ordering_values, &indices);
+        Ok((new_values, new_ordering_values))
     }
 }
 

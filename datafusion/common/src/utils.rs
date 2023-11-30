@@ -291,6 +291,19 @@ pub fn get_arrayref_at_indices(
         .collect()
 }
 
+/// Construct a new [`Vec`] of [`ArrayRef`] from the rows of the `arrays` at the `indices`.
+pub fn get_elem_at_indices<T: Clone>(
+    arrays: &[T],
+    indices: &PrimitiveArray<UInt32Type>,
+) -> Vec<T> {
+    (0..indices.len())
+        .map(|idx| {
+            let idx = indices.value(idx) as usize;
+            arrays[idx].clone()
+        })
+        .collect::<Vec<_>>()
+}
+
 pub(crate) fn parse_identifiers_normalized(s: &str, ignore_case: bool) -> Vec<String> {
     parse_identifiers(s)
         .unwrap_or_default()

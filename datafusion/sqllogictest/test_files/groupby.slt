@@ -2339,15 +2339,37 @@ FRA [200.0, 50.0] 250
 TUR [100.0, 75.0] 175
 GRC [80.0, 30.0] 110
 
-# test_ordering_sensitive_aggregation3
-# When different aggregators have conflicting requirements, we cannot satisfy all of them in current implementation.
-# test below should raise Plan Error.
-statement error DataFusion error: This feature is not implemented: Conflicting ordering requirements in aggregate functions is not supported
-SELECT ARRAY_AGG(s.amount ORDER BY s.amount DESC) AS amounts,
+query TT
+EXPLAIN SELECT s.country, ARRAY_AGG(s.amount ORDER BY s.amount DESC) AS amounts,
     ARRAY_AGG(s.amount ORDER BY s.amount ASC) AS amounts2,
     ARRAY_AGG(s.amount ORDER BY s.sn ASC) AS amounts3
   FROM sales_global AS s
   GROUP BY s.country
+  ORDER BY s.country
+----
+logical_plan
+Sort: s.country ASC NULLS LAST
+--Projection: s.country, ARRAY_AGG(s.amount) ORDER BY [s.amount DESC NULLS FIRST] AS amounts, ARRAY_AGG(s.amount) ORDER BY [s.amount ASC NULLS LAST] AS amounts2, ARRAY_AGG(s.amount) ORDER BY [s.sn ASC NULLS LAST] AS amounts3
+----Aggregate: groupBy=[[s.country]], aggr=[[ARRAY_AGG(s.amount) ORDER BY [s.amount DESC NULLS FIRST], ARRAY_AGG(s.amount) ORDER BY [s.amount ASC NULLS LAST], ARRAY_AGG(s.amount) ORDER BY [s.sn ASC NULLS LAST]]]
+------SubqueryAlias: s
+--------TableScan: sales_global projection=[country, sn, amount]
+physical_plan
+SortExec: expr=[country@0 ASC NULLS LAST]
+--ProjectionExec: expr=[country@0 as country, ARRAY_AGG(s.amount) ORDER BY [s.amount DESC NULLS FIRST]@1 as amounts, ARRAY_AGG(s.amount) ORDER BY [s.amount ASC NULLS LAST]@2 as amounts2, ARRAY_AGG(s.amount) ORDER BY [s.sn ASC NULLS LAST]@3 as amounts3]
+----AggregateExec: mode=Single, gby=[country@0 as country], aggr=[ARRAY_AGG(s.amount), ARRAY_AGG(s.amount), ARRAY_AGG(s.amount)]
+------MemoryExec: partitions=1, partition_sizes=[1]
+
+query T???
+SELECT s.country, ARRAY_AGG(s.amount ORDER BY s.amount DESC) AS amounts,
+    ARRAY_AGG(s.amount ORDER BY s.amount ASC) AS amounts2,
+    ARRAY_AGG(s.amount ORDER BY s.sn ASC) AS amounts3
+  FROM sales_global AS s
+  GROUP BY s.country
+  ORDER BY s.country
+----
+FRA [200.0, 50.0] [50.0, 200.0] [50.0, 200.0]
+GRC [80.0, 30.0] [30.0, 80.0] [30.0, 80.0]
+TUR [100.0, 75.0] [75.0, 100.0] [75.0, 100.0]
 
 # test_ordering_sensitive_aggregation4
 # If aggregators can work with bounded memory (Sorted or PartiallySorted mode), we should append requirement to
@@ -4047,3 +4069,53 @@ set datafusion.sql_parser.dialect = 'Generic';
 
 statement ok
 drop table aggregate_test_100;
+
+statement ok
+set datafusion.optimizer.prefer_existing_sort = true;
+
+query TT
+EXPLAIN SELECT a, b, ARRAY_AGG(d ORDER BY c DESC), ARRAY_AGG(d ORDER BY d DESC)
+  FROM multiple_ordered_table
+  GROUP BY a, b
+  ORDER BY a, b
+----
+logical_plan
+Sort: multiple_ordered_table.a ASC NULLS LAST, multiple_ordered_table.b ASC NULLS LAST
+--Aggregate: groupBy=[[multiple_ordered_table.a, multiple_ordered_table.b]], aggr=[[ARRAY_AGG(multiple_ordered_table.d) ORDER BY [multiple_ordered_table.c DESC NULLS FIRST], ARRAY_AGG(multiple_ordered_table.d) ORDER BY [multiple_ordered_table.d DESC NULLS FIRST]]]
+----TableScan: multiple_ordered_table projection=[a, b, c, d]
+physical_plan
+SortPreservingMergeExec: [a@0 ASC NULLS LAST,b@1 ASC NULLS LAST]
+--AggregateExec: mode=FinalPartitioned, gby=[a@0 as a, b@1 as b], aggr=[ARRAY_AGG(multiple_ordered_table.d), ARRAY_AGG(multiple_ordered_table.d)], ordering_mode=Sorted
+----CoalesceBatchesExec: target_batch_size=2
+------SortPreservingRepartitionExec: partitioning=Hash([a@0, b@1], 8), input_partitions=8, sort_exprs=a@0 ASC NULLS LAST,b@1 ASC NULLS LAST
+--------AggregateExec: mode=Partial, gby=[a@0 as a, b@1 as b], aggr=[ARRAY_AGG(multiple_ordered_table.d), ARRAY_AGG(multiple_ordered_table.d)], ordering_mode=Sorted
+----------RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b, c, d], output_ordering=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST], has_header=true
+
+statement ok
+set datafusion.execution.target_partitions = 1;
+
+query II??
+SELECT a, b, ARRAY_AGG(d ORDER BY c DESC), ARRAY_AGG(d ORDER BY d DESC)
+  FROM multiple_ordered_table
+  GROUP BY a, b
+  ORDER BY a, b
+----
+0 0 [4, 0, 0, 3, 0, 4, 1, 2, 3, 3, 2, 1, 2, 2, 4, 4, 1, 2, 0, 1, 1, 0, 0, 2, 0] [4, 4, 4, 4, 3, 3, 3, 2, 2, 2, 2, 2, 2, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0]
+0 1 [3, 1, 1, 0, 0, 3, 2, 3, 3, 1, 1, 0, 4, 1, 0, 4, 2, 2, 4, 3, 1, 1, 0, 2, 0] [4, 4, 4, 3, 3, 3, 3, 3, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0]
+1 2 [4, 1, 1, 2, 0, 1, 1, 4, 2, 0, 4, 4, 1, 3, 4, 2, 1, 1, 1, 2, 4, 1, 1, 3, 0] [4, 4, 4, 4, 4, 4, 3, 3, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0]
+1 3 [3, 4, 2, 4, 0, 2, 0, 0, 2, 1, 4, 3, 4, 1, 1, 1, 2, 4, 0, 2, 4, 1, 2, 0, 2] [4, 4, 4, 4, 4, 4, 3, 3, 2, 2, 2, 2, 2, 2, 2, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0]
+
+statement ok
+set datafusion.execution.target_partitions = 8;
+
+query II??
+SELECT a, b, ARRAY_AGG(d ORDER BY c DESC), ARRAY_AGG(d ORDER BY d DESC)
+  FROM multiple_ordered_table
+  GROUP BY a, b
+  ORDER BY a, b
+----
+0 0 [4, 0, 0, 3, 0, 4, 1, 2, 3, 3, 2, 1, 2, 2, 4, 4, 1, 2, 0, 1, 1, 0, 0, 2, 0] [4, 4, 4, 4, 3, 3, 3, 2, 2, 2, 2, 2, 2, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0]
+0 1 [3, 1, 1, 0, 0, 3, 2, 3, 3, 1, 1, 0, 4, 1, 0, 4, 2, 2, 4, 3, 1, 1, 0, 2, 0] [4, 4, 4, 3, 3, 3, 3, 3, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0]
+1 2 [4, 1, 1, 2, 0, 1, 1, 4, 2, 0, 4, 4, 1, 3, 4, 2, 1, 1, 1, 2, 4, 1, 1, 3, 0] [4, 4, 4, 4, 4, 4, 3, 3, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0]
+1 3 [3, 4, 2, 4, 0, 2, 0, 0, 2, 1, 4, 3, 4, 1, 1, 1, 2, 4, 0, 2, 4, 1, 2, 0, 2] [4, 4, 4, 4, 4, 4, 3, 3, 2, 2, 2, 2, 2, 2, 2, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0]

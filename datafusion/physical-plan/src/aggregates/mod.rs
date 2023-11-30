@@ -385,12 +385,13 @@ fn get_finest_requirement(
                     continue;
                 }
             }
-            // If neither of the requirements satisfy the other, this means
-            // requirements are conflicting. Currently, we do not support
-            // conflicting requirements.
-            return not_impl_err!(
-                "Conflicting ordering requirements in aggregate functions is not supported"
-            );
+            // // If neither of the requirements satisfy the other, this means
+            // // requirements are conflicting. Currently, we do not support
+            // // conflicting requirements.
+            // return not_impl_err!(
+            //     "Conflicting ordering requirements in aggregate functions is not supported"
+            // );
+            return Ok(None);
         } else {
             finest_req = Some(fn_req.clone());
         }
@@ -997,14 +998,21 @@ fn aggregate_expressions(
                 // In partial mode, append ordering requirements to expressions' results.
                 // Ordering requirements are used by subsequent executors to satisfy the required
                 // ordering for `AggregateMode::FinalPartitioned`/`AggregateMode::Final` modes.
-                if matches!(mode, AggregateMode::Partial) {
-                    if let Some(ordering_req) = agg.order_bys() {
-                        let ordering_exprs = ordering_req
-                            .iter()
-                            .map(|item| item.expr.clone())
-                            .collect::<Vec<_>>();
-                        result.extend(ordering_exprs);
-                    }
+                // if matches!(mode, AggregateMode::Partial) {
+                //     if let Some(ordering_req) = agg.order_bys() {
+                //         let ordering_exprs = ordering_req
+                //             .iter()
+                //             .map(|item| item.expr.clone())
+                //             .collect::<Vec<_>>();
+                //         result.extend(ordering_exprs);
+                //     }
+                // }
+                if let Some(ordering_req) = agg.order_bys() {
+                    let ordering_exprs = ordering_req
+                        .iter()
+                        .map(|item| item.expr.clone())
+                        .collect::<Vec<_>>();
+                    result.extend(ordering_exprs);
                 }
                 result
             })
