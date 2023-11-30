@@ -971,6 +971,11 @@ pub fn to_timestamp_invoke(args: &[ColumnarValue]) -> Result<ColumnarValue> {
             &DataType::Timestamp(TimeUnit::Nanosecond, None),
             None,
         ),
+        DataType::Float64 => cast_column(
+            &args[0],
+            &DataType::Timestamp(TimeUnit::Nanosecond, None),
+            None,
+        ),
         DataType::Timestamp(_, None) => cast_column(
             &args[0],
             &DataType::Timestamp(TimeUnit::Nanosecond, None),
