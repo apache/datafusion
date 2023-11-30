@@ -44,7 +44,7 @@ async fn test_simple_read_csv_udtf() -> Result<()> {
     ctx.register_udtf("read_csv", Arc::new(SimpleCsvTableFunc {}));
 
     let csv_file = "tests/tpch-csv/nation.csv";
-    // read csv with at most 2 rows
+    // read csv with at most 5 rows
     let rbs = ctx
         .sql(format!("SELECT * FROM read_csv('{csv_file}', 5);").as_str())
         .await?
