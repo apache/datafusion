@@ -16,7 +16,8 @@
 // under the License.
 
 use super::*;
-use datafusion_common::ScalarValue;
+use datafusion_common::{ParamValues, ScalarValue};
+use std::collections::HashMap;
 use tempfile::TempDir;
 
 #[tokio::test]
@@ -490,7 +491,8 @@ async fn test_prepare_statement() -> Result<()> {
         ctx.sql("PREPARE my_plan(INT, DOUBLE) AS SELECT c1, c2 FROM test WHERE c1 > $2 AND c1 < $1").await?;
 
     // prepare logical plan to logical plan without parameters
-    let param_values = vec![ScalarValue::Int32(Some(3)), ScalarValue::Float64(Some(0.0))];
+    let param_values: ParamValues =
+        vec![ScalarValue::Int32(Some(3)), ScalarValue::Float64(Some(0.0))].into();
     let dataframe = dataframe.with_param_values(param_values)?;
     let results = dataframe.collect().await?;
 
@@ -522,6 +524,56 @@ async fn test_prepare_statement() -> Result<()> {
     ];
     assert_batches_sorted_eq!(expected, &results);
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_named_query_parameters() -> Result<()> {
+    let tmp_dir = TempDir::new()?;
+    let partition_count = 4;
+    let ctx = partitioned_csv::create_ctx(&tmp_dir, partition_count).await?;
+
+    // sql to statement then to logical plan with parameters
+    // c1 defined as UINT32, c2 defined as UInt64
+    let dataframe = ctx
+        .sql("SELECT c1, c2 FROM test WHERE c1 > $coo AND c1 < $foo")
+        .await?;
+
+    // to logical plan without parameters
+    let param_values = vec![
+        ("foo".to_string(), ScalarValue::UInt32(Some(3))),
+        ("coo".to_string(), ScalarValue::UInt32(Some(0))),
+    ];
+    let param_values: HashMap<_, _> = param_values.into_iter().collect();
+    let dataframe = dataframe.with_param_values(param_values.into())?;
+    let results = dataframe.collect().await?;
+    let expected = vec![
+        "+----+----+",
+        "| c1 | c2 |",
+        "+----+----+",
+        "| 1  | 1  |",
+        "| 1  | 2  |",
+        "| 1  | 3  |",
+        "| 1  | 4  |",
+        "| 1  | 5  |",
+        "| 1  | 6  |",
+        "| 1  | 7  |",
+        "| 1  | 8  |",
+        "| 1  | 9  |",
+        "| 1  | 10 |",
+        "| 2  | 1  |",
+        "| 2  | 2  |",
+        "| 2  | 3  |",
+        "| 2  | 4  |",
+        "| 2  | 5  |",
+        "| 2  | 6  |",
+        "| 2  | 7  |",
+        "| 2  | 8  |",
+        "| 2  | 9  |",
+        "| 2  | 10 |",
+        "+----+----+",
+    ];
+    assert_batches_sorted_eq!(expected, &results);
     Ok(())
 }
 

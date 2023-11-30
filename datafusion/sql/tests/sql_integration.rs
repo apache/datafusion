@@ -22,11 +22,11 @@ use std::{sync::Arc, vec};
 use arrow_schema::*;
 use sqlparser::dialect::{Dialect, GenericDialect, HiveDialect, MySqlDialect};
 
-use datafusion_common::plan_err;
 use datafusion_common::{
     assert_contains, config::ConfigOptions, DataFusionError, Result, ScalarValue,
     TableReference,
 };
+use datafusion_common::{plan_err, ParamValues};
 use datafusion_expr::{
     logical_plan::{LogicalPlan, Prepare},
     AggregateUDF, ScalarUDF, TableSource, WindowUDF,
@@ -470,6 +470,10 @@ Dml: op=[Insert Into] table=[test_decimal]
 #[case::placeholder_type_unresolved(
     "INSERT INTO person (id, first_name, last_name) VALUES ($2, $4, $6)",
     "Error during planning: Placeholder type could not be resolved"
+)]
+#[case::placeholder_type_unresolved(
+    "INSERT INTO person (id, first_name, last_name) VALUES ($id, $first_name, $last_name)",
+    "Error during planning: Can't parse placeholder: $id"
 )]
 #[test]
 fn test_insert_schema_errors(#[case] sql: &str, #[case] error: &str) {
@@ -2674,7 +2678,7 @@ fn prepare_stmt_quick_test(
 
 fn prepare_stmt_replace_params_quick_test(
     plan: LogicalPlan,
-    param_values: Vec<ScalarValue>,
+    param_values: ParamValues,
     expected_plan: &str,
 ) -> LogicalPlan {
     // replace params
@@ -3704,7 +3708,7 @@ fn test_prepare_statement_to_plan_no_param() {
 
     ///////////////////
     // replace params with values
-    let param_values = vec![ScalarValue::Int32(Some(10))];
+    let param_values = vec![ScalarValue::Int32(Some(10))].into();
     let expected_plan = "Projection: person.id, person.age\
         \n  Filter: person.age = Int64(10)\
         \n    TableScan: person";
@@ -3726,7 +3730,7 @@ fn test_prepare_statement_to_plan_no_param() {
 
     ///////////////////
     // replace params with values
-    let param_values = vec![];
+    let param_values = vec![].into();
     let expected_plan = "Projection: person.id, person.age\
         \n  Filter: person.age = Int64(10)\
         \n    TableScan: person";
@@ -3740,7 +3744,7 @@ fn test_prepare_statement_to_plan_one_param_no_value_panic() {
     let sql = "PREPARE my_plan(INT) AS SELECT id, age  FROM person WHERE age = 10";
     let plan = logical_plan(sql).unwrap();
     // declare 1 param but provide 0
-    let param_values = vec![];
+    let param_values = vec![].into();
     assert_eq!(
         plan.with_param_values(param_values)
             .unwrap_err()
@@ -3755,7 +3759,7 @@ fn test_prepare_statement_to_plan_one_param_one_value_different_type_panic() {
     let sql = "PREPARE my_plan(INT) AS SELECT id, age  FROM person WHERE age = 10";
     let plan = logical_plan(sql).unwrap();
     // declare 1 param but provide 0
-    let param_values = vec![ScalarValue::Float64(Some(20.0))];
+    let param_values = vec![ScalarValue::Float64(Some(20.0))].into();
     assert_eq!(
         plan.with_param_values(param_values)
             .unwrap_err()
@@ -3770,7 +3774,7 @@ fn test_prepare_statement_to_plan_no_param_on_value_panic() {
     let sql = "PREPARE my_plan AS SELECT id, age  FROM person WHERE age = 10";
     let plan = logical_plan(sql).unwrap();
     // declare 1 param but provide 0
-    let param_values = vec![ScalarValue::Int32(Some(10))];
+    let param_values = vec![ScalarValue::Int32(Some(10))].into();
     assert_eq!(
         plan.with_param_values(param_values)
             .unwrap_err()
@@ -3791,7 +3795,7 @@ fn test_prepare_statement_to_plan_params_as_constants() {
 
     ///////////////////
     // replace params with values
-    let param_values = vec![ScalarValue::Int32(Some(10))];
+    let param_values = vec![ScalarValue::Int32(Some(10))].into();
     let expected_plan = "Projection: Int32(10)\n  EmptyRelation";
 
     prepare_stmt_replace_params_quick_test(plan, param_values, expected_plan);
@@ -3807,7 +3811,7 @@ fn test_prepare_statement_to_plan_params_as_constants() {
 
     ///////////////////
     // replace params with values
-    let param_values = vec![ScalarValue::Int32(Some(10))];
+    let param_values = vec![ScalarValue::Int32(Some(10))].into();
     let expected_plan = "Projection: Int64(1) + Int32(10)\n  EmptyRelation";
 
     prepare_stmt_replace_params_quick_test(plan, param_values, expected_plan);
@@ -3826,7 +3830,8 @@ fn test_prepare_statement_to_plan_params_as_constants() {
     let param_values = vec![
         ScalarValue::Int32(Some(10)),
         ScalarValue::Float64(Some(10.0)),
-    ];
+    ]
+    .into();
     let expected_plan = "Projection: Int64(1) + Int32(10) + Float64(10)\n  EmptyRelation";
 
     prepare_stmt_replace_params_quick_test(plan, param_values, expected_plan);
@@ -3853,7 +3858,7 @@ Projection: person.id, orders.order_id
     assert_eq!(actual_types, expected_types);
 
     // replace params with values
-    let param_values = vec![ScalarValue::Int32(Some(10))];
+    let param_values = vec![ScalarValue::Int32(Some(10))].into();
     let expected_plan = r#"
 Projection: person.id, orders.order_id
   Inner Join:  Filter: person.id = orders.customer_id AND person.age = Int32(10)
@@ -3885,7 +3890,7 @@ Projection: person.id, person.age
     assert_eq!(actual_types, expected_types);
 
     // replace params with values
-    let param_values = vec![ScalarValue::Int32(Some(10))];
+    let param_values = vec![ScalarValue::Int32(Some(10))].into();
     let expected_plan = r#"
 Projection: person.id, person.age
   Filter: person.age = Int32(10)
@@ -3919,7 +3924,8 @@ Projection: person.id, person.age
     assert_eq!(actual_types, expected_types);
 
     // replace params with values
-    let param_values = vec![ScalarValue::Int32(Some(10)), ScalarValue::Int32(Some(30))];
+    let param_values =
+        vec![ScalarValue::Int32(Some(10)), ScalarValue::Int32(Some(30))].into();
     let expected_plan = r#"
 Projection: person.id, person.age
   Filter: person.age BETWEEN Int32(10) AND Int32(30)
@@ -3955,7 +3961,7 @@ Projection: person.id, person.age
     assert_eq!(actual_types, expected_types);
 
     // replace params with values
-    let param_values = vec![ScalarValue::UInt32(Some(10))];
+    let param_values = vec![ScalarValue::UInt32(Some(10))].into();
     let expected_plan = r#"
 Projection: person.id, person.age
   Filter: person.age = (<subquery>)
@@ -3995,7 +4001,8 @@ Dml: op=[Update] table=[person]
     assert_eq!(actual_types, expected_types);
 
     // replace params with values
-    let param_values = vec![ScalarValue::Int32(Some(42)), ScalarValue::UInt32(Some(1))];
+    let param_values =
+        vec![ScalarValue::Int32(Some(42)), ScalarValue::UInt32(Some(1))].into();
     let expected_plan = r#"
 Dml: op=[Update] table=[person]
   Projection: person.id AS id, person.first_name AS first_name, person.last_name AS last_name, Int32(42) AS age, person.state AS state, person.salary AS salary, person.birth_date AS birth_date, person.😀 AS 😀
@@ -4034,7 +4041,8 @@ fn test_prepare_statement_insert_infer() {
         ScalarValue::UInt32(Some(1)),
         ScalarValue::Utf8(Some("Alan".to_string())),
         ScalarValue::Utf8(Some("Turing".to_string())),
-    ];
+    ]
+    .into();
     let expected_plan = "Dml: op=[Insert Into] table=[person]\
                         \n  Projection: column1 AS id, column2 AS first_name, column3 AS last_name, \
                                     CAST(NULL AS Int32) AS age, CAST(NULL AS Utf8) AS state, CAST(NULL AS Float64) AS salary, \
@@ -4060,7 +4068,7 @@ fn test_prepare_statement_to_plan_one_param() {
 
     ///////////////////
     // replace params with values
-    let param_values = vec![ScalarValue::Int32(Some(10))];
+    let param_values = vec![ScalarValue::Int32(Some(10))].into();
     let expected_plan = "Projection: person.id, person.age\
         \n  Filter: person.age = Int32(10)\
         \n    TableScan: person";
@@ -4085,7 +4093,7 @@ fn test_prepare_statement_to_plan_data_type() {
 
     ///////////////////
     // replace params with values still succeed and use Float64
-    let param_values = vec![ScalarValue::Float64(Some(10.0))];
+    let param_values = vec![ScalarValue::Float64(Some(10.0))].into();
     let expected_plan = "Projection: person.id, person.age\
         \n  Filter: person.age = Float64(10)\
         \n    TableScan: person";
@@ -4118,7 +4126,8 @@ fn test_prepare_statement_to_plan_multi_params() {
         ScalarValue::Int32(Some(20)),
         ScalarValue::Float64(Some(200.0)),
         ScalarValue::Utf8(Some("xyz".to_string())),
-    ];
+    ]
+    .into();
     let expected_plan =
             "Projection: person.id, person.age, Utf8(\"xyz\")\
         \n  Filter: person.age IN ([Int32(10), Int32(20)]) AND person.salary > Float64(100) AND person.salary < Float64(200) OR person.first_name < Utf8(\"abc\")\
@@ -4155,7 +4164,8 @@ fn test_prepare_statement_to_plan_having() {
         ScalarValue::Float64(Some(100.0)),
         ScalarValue::Float64(Some(200.0)),
         ScalarValue::Float64(Some(300.0)),
-    ];
+    ]
+    .into();
     let expected_plan =
             "Projection: person.id, SUM(person.age)\
         \n  Filter: SUM(person.age) < Int32(10) AND SUM(person.age) > Int64(10) OR SUM(person.age) IN ([Float64(200), Float64(300)])\
@@ -4185,7 +4195,8 @@ fn test_prepare_statement_to_plan_value_list() {
     let param_values = vec![
         ScalarValue::Utf8(Some("a".to_string())),
         ScalarValue::Utf8(Some("b".to_string())),
-    ];
+    ]
+    .into();
     let expected_plan = "Projection: t.num, t.letter\
         \n  SubqueryAlias: t\
         \n    Projection: column1 AS num, column2 AS letter\

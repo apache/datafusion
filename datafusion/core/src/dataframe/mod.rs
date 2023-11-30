@@ -32,11 +32,12 @@ use datafusion_common::file_options::csv_writer::CsvWriterOptions;
 use datafusion_common::file_options::json_writer::JsonWriterOptions;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{
-    DataFusionError, FileType, FileTypeWriterOptions, SchemaError, UnnestOptions,
+    DataFusionError, FileType, FileTypeWriterOptions, ParamValues, SchemaError,
+    UnnestOptions,
 };
 use datafusion_expr::dml::CopyOptions;
 
-use datafusion_common::{Column, DFSchema, ScalarValue};
+use datafusion_common::{Column, DFSchema};
 use datafusion_expr::{
     avg, count, is_null, max, median, min, stddev, utils::COUNT_STAR_EXPANSION,
     TableProviderFilterPushDown, UNNAMED_TABLE,
@@ -1214,7 +1215,7 @@ impl DataFrame {
     ///   .with_param_values(vec![
     ///      // value at index 0 --> $1
     ///      ScalarValue::from(2i64)
-    ///    ])?
+    ///    ].into())?
     ///   .collect()
     ///   .await?;
     /// assert_batches_eq!(
@@ -1230,8 +1231,8 @@ impl DataFrame {
     /// # Ok(())
     /// # }
     /// ```
-    pub fn with_param_values(self, param_values: Vec<ScalarValue>) -> Result<Self> {
-        let plan = self.plan.with_param_values(param_values)?;
+    pub fn with_param_values(self, query_values: ParamValues) -> Result<Self> {
+        let plan = self.plan.with_param_values(query_values)?;
         Ok(Self::new(self.session_state, plan))
     }
 
