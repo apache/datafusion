@@ -228,10 +228,10 @@ fn compute_array_dims(arr: Option<ArrayRef>) -> Result<Option<Vec<Option<u64>>>>
 
 fn check_datatypes(name: &str, args: &[&ArrayRef]) -> Result<()> {
     let data_type = args[0].data_type();
-    if !args
-        .iter()
-        .all(|arg| arg.data_type().equals_datatype(data_type))
-    {
+    if !args.iter().all(|arg| {
+        arg.data_type().equals_datatype(data_type)
+            || arg.data_type().equals_datatype(&DataType::Null)
+    }) {
         let types = args.iter().map(|arg| arg.data_type()).collect::<Vec<_>>();
         return plan_err!("{name} received incompatible types: '{types:?}'.");
     }
@@ -746,8 +746,14 @@ pub fn gen_range(args: &[ArrayRef]) -> Result<ArrayRef> {
         if step == 0 {
             return exec_err!("step can't be 0 for function range(start [, stop, step]");
         }
-        let value = (start..stop).step_by(step as usize);
-        values.extend(value);
+        if step < 0 {
+            // Decreasing range
+            values.extend((stop + 1..start + 1).rev().step_by((-step) as usize));
+        } else {
+            // Increasing range
+            values.extend((start..stop).step_by(step as usize));
+        }
+
         offsets.push(values.len() as i32);
     }
     let arr = Arc::new(ListArray::try_new(
@@ -1512,19 +1518,29 @@ pub fn array_union(args: &[ArrayRef]) -> Result<ArrayRef> {
     match (array1.data_type(), array2.data_type()) {
         (DataType::Null, _) => Ok(array2.clone()),
         (_, DataType::Null) => Ok(array1.clone()),
-        (DataType::List(field_ref), DataType::List(_)) => {
-            check_datatypes("array_union", &[array1, array2])?;
-            let list1 = array1.as_list::<i32>();
-            let list2 = array2.as_list::<i32>();
-            let result = union_generic_lists::<i32>(list1, list2, field_ref)?;
-            Ok(Arc::new(result))
+        (DataType::List(l_field_ref), DataType::List(r_field_ref)) => {
+            match (l_field_ref.data_type(), r_field_ref.data_type()) {
+                (DataType::Null, _) => Ok(array2.clone()),
+                (_, DataType::Null) => Ok(array1.clone()),
+                (_, _) => {
+                    let list1 = array1.as_list::<i32>();
+                    let list2 = array2.as_list::<i32>();
+                    let result = union_generic_lists::<i32>(list1, list2, l_field_ref)?;
+                    Ok(Arc::new(result))
+                }
+            }
         }
-        (DataType::LargeList(field_ref), DataType::LargeList(_)) => {
-            check_datatypes("array_union", &[array1, array2])?;
-            let list1 = array1.as_list::<i64>();
-            let list2 = array2.as_list::<i64>();
-            let result = union_generic_lists::<i64>(list1, list2, field_ref)?;
-            Ok(Arc::new(result))
+        (DataType::LargeList(l_field_ref), DataType::LargeList(r_field_ref)) => {
+            match (l_field_ref.data_type(), r_field_ref.data_type()) {
+                (DataType::Null, _) => Ok(array2.clone()),
+                (_, DataType::Null) => Ok(array1.clone()),
+                (_, _) => {
+                    let list1 = array1.as_list::<i64>();
+                    let list2 = array2.as_list::<i64>();
+                    let result = union_generic_lists::<i64>(list1, list2, l_field_ref)?;
+                    Ok(Arc::new(result))
+                }
+            }
         }
         _ => {
             internal_err!(
@@ -1748,70 +1764,27 @@ pub fn array_ndims(args: &[ArrayRef]) -> Result<ArrayRef> {
     Ok(Arc::new(result) as ArrayRef)
 }
 
-macro_rules! non_list_contains {
-    ($ARRAY:expr, $SUB_ARRAY:expr, $ARRAY_TYPE:ident) => {{
-        let sub_array = downcast_arg!($SUB_ARRAY, $ARRAY_TYPE);
-        let mut boolean_builder = BooleanArray::builder($ARRAY.len());
-
-        for (arr, elem) in $ARRAY.iter().zip(sub_array.iter()) {
-            if let (Some(arr), Some(elem)) = (arr, elem) {
-                let arr = downcast_arg!(arr, $ARRAY_TYPE);
-                let res = arr.iter().dedup().flatten().any(|x| x == elem);
-                boolean_builder.append_value(res);
-            }
-        }
-        Ok(Arc::new(boolean_builder.finish()))
-    }};
-}
-
 /// Array_has SQL function
 pub fn array_has(args: &[ArrayRef]) -> Result<ArrayRef> {
     let array = as_list_array(&args[0])?;
     let element = &args[1];
 
     check_datatypes("array_has", &[array.values(), element])?;
-    match element.data_type() {
-        DataType::List(_) => {
-            let sub_array = as_list_array(element)?;
-            let mut boolean_builder = BooleanArray::builder(array.len());
+    let mut boolean_builder = BooleanArray::builder(array.len());
 
-            for (arr, elem) in array.iter().zip(sub_array.iter()) {
-                if let (Some(arr), Some(elem)) = (arr, elem) {
-                    let list_arr = as_list_array(&arr)?;
-                    let res = list_arr.iter().dedup().flatten().any(|x| *x == *elem);
-                    boolean_builder.append_value(res);
-                }
-            }
-            Ok(Arc::new(boolean_builder.finish()))
-        }
-        data_type => {
-            macro_rules! array_function {
-                ($ARRAY_TYPE:ident) => {
-                    non_list_contains!(array, element, $ARRAY_TYPE)
-                };
-            }
-            call_array_function!(data_type, false)
+    let converter = RowConverter::new(vec![SortField::new(array.value_type())])?;
+    let r_values = converter.convert_columns(&[element.clone()])?;
+    for (row_idx, arr) in array.iter().enumerate() {
+        if let Some(arr) = arr {
+            let arr_values = converter.convert_columns(&[arr])?;
+            let res = arr_values
+                .iter()
+                .dedup()
+                .any(|x| x == r_values.row(row_idx));
+            boolean_builder.append_value(res);
         }
     }
-}
-
-macro_rules! array_has_any_non_list_check {
-    ($ARRAY:expr, $SUB_ARRAY:expr, $ARRAY_TYPE:ident) => {{
-        let arr = downcast_arg!($ARRAY, $ARRAY_TYPE);
-        let sub_arr = downcast_arg!($SUB_ARRAY, $ARRAY_TYPE);
-
-        let mut res = false;
-        for elem in sub_arr.iter().dedup() {
-            if let Some(elem) = elem {
-                res |= arr.iter().dedup().flatten().any(|x| x == elem);
-            } else {
-                return internal_err!(
-                    "array_has_any does not support Null type for element in sub_array"
-                );
-            }
-        }
-        res
-    }};
+    Ok(Arc::new(boolean_builder.finish()))
 }
 
 /// Array_has_any SQL function
@@ -1820,53 +1793,25 @@ pub fn array_has_any(args: &[ArrayRef]) -> Result<ArrayRef> {
 
     let array = as_list_array(&args[0])?;
     let sub_array = as_list_array(&args[1])?;
-
     let mut boolean_builder = BooleanArray::builder(array.len());
+
+    let converter = RowConverter::new(vec![SortField::new(array.value_type())])?;
     for (arr, sub_arr) in array.iter().zip(sub_array.iter()) {
         if let (Some(arr), Some(sub_arr)) = (arr, sub_arr) {
-            let res = match arr.data_type() {
-                DataType::List(_) => {
-                    let arr = downcast_arg!(arr, ListArray);
-                    let sub_arr = downcast_arg!(sub_arr, ListArray);
+            let arr_values = converter.convert_columns(&[arr])?;
+            let sub_arr_values = converter.convert_columns(&[sub_arr])?;
 
-                    let mut res = false;
-                    for elem in sub_arr.iter().dedup().flatten() {
-                        res |= arr.iter().dedup().flatten().any(|x| *x == *elem);
-                    }
-                    res
+            let mut res = false;
+            for elem in sub_arr_values.iter().dedup() {
+                res |= arr_values.iter().dedup().any(|x| x == elem);
+                if res {
+                    break;
                 }
-                data_type => {
-                    macro_rules! array_function {
-                        ($ARRAY_TYPE:ident) => {
-                            array_has_any_non_list_check!(arr, sub_arr, $ARRAY_TYPE)
-                        };
-                    }
-                    call_array_function!(data_type, false)
-                }
-            };
+            }
             boolean_builder.append_value(res);
         }
     }
     Ok(Arc::new(boolean_builder.finish()))
-}
-
-macro_rules! array_has_all_non_list_check {
-    ($ARRAY:expr, $SUB_ARRAY:expr, $ARRAY_TYPE:ident) => {{
-        let arr = downcast_arg!($ARRAY, $ARRAY_TYPE);
-        let sub_arr = downcast_arg!($SUB_ARRAY, $ARRAY_TYPE);
-
-        let mut res = true;
-        for elem in sub_arr.iter().dedup() {
-            if let Some(elem) = elem {
-                res &= arr.iter().dedup().flatten().any(|x| x == elem);
-            } else {
-                return internal_err!(
-                    "array_has_all does not support Null type for element in sub_array"
-                );
-            }
-        }
-        res
-    }};
 }
 
 /// Array_has_all SQL function
@@ -1877,28 +1822,20 @@ pub fn array_has_all(args: &[ArrayRef]) -> Result<ArrayRef> {
     let sub_array = as_list_array(&args[1])?;
 
     let mut boolean_builder = BooleanArray::builder(array.len());
+
+    let converter = RowConverter::new(vec![SortField::new(array.value_type())])?;
     for (arr, sub_arr) in array.iter().zip(sub_array.iter()) {
         if let (Some(arr), Some(sub_arr)) = (arr, sub_arr) {
-            let res = match arr.data_type() {
-                DataType::List(_) => {
-                    let arr = downcast_arg!(arr, ListArray);
-                    let sub_arr = downcast_arg!(sub_arr, ListArray);
+            let arr_values = converter.convert_columns(&[arr])?;
+            let sub_arr_values = converter.convert_columns(&[sub_arr])?;
 
-                    let mut res = true;
-                    for elem in sub_arr.iter().dedup().flatten() {
-                        res &= arr.iter().dedup().flatten().any(|x| *x == *elem);
-                    }
-                    res
+            let mut res = true;
+            for elem in sub_arr_values.iter().dedup() {
+                res &= arr_values.iter().dedup().any(|x| x == elem);
+                if !res {
+                    break;
                 }
-                data_type => {
-                    macro_rules! array_function {
-                        ($ARRAY_TYPE:ident) => {
-                            array_has_all_non_list_check!(arr, sub_arr, $ARRAY_TYPE)
-                        };
-                    }
-                    call_array_function!(data_type, false)
-                }
-            };
+            }
             boolean_builder.append_value(res);
         }
     }
@@ -1998,63 +1935,74 @@ pub fn string_to_array<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef
 pub fn array_intersect(args: &[ArrayRef]) -> Result<ArrayRef> {
     assert_eq!(args.len(), 2);
 
-    let first_array = as_list_array(&args[0])?;
-    let second_array = as_list_array(&args[1])?;
+    let first_array = &args[0];
+    let second_array = &args[1];
 
-    if first_array.value_type() != second_array.value_type() {
-        return internal_err!("array_intersect is not implemented for '{first_array:?}' and '{second_array:?}'");
-    }
-    let dt = first_array.value_type();
+    match (first_array.data_type(), second_array.data_type()) {
+        (DataType::Null, _) => Ok(second_array.clone()),
+        (_, DataType::Null) => Ok(first_array.clone()),
+        _ => {
+            let first_array = as_list_array(&first_array)?;
+            let second_array = as_list_array(&second_array)?;
 
-    let mut offsets = vec![0];
-    let mut new_arrays = vec![];
+            if first_array.value_type() != second_array.value_type() {
+                return internal_err!("array_intersect is not implemented for '{first_array:?}' and '{second_array:?}'");
+            }
 
-    let converter = RowConverter::new(vec![SortField::new(dt.clone())])?;
-    for (first_arr, second_arr) in first_array.iter().zip(second_array.iter()) {
-        if let (Some(first_arr), Some(second_arr)) = (first_arr, second_arr) {
-            let l_values = converter.convert_columns(&[first_arr])?;
-            let r_values = converter.convert_columns(&[second_arr])?;
+            let dt = first_array.value_type();
 
-            let values_set: HashSet<_> = l_values.iter().collect();
-            let mut rows = Vec::with_capacity(r_values.num_rows());
-            for r_val in r_values.iter().sorted().dedup() {
-                if values_set.contains(&r_val) {
-                    rows.push(r_val);
+            let mut offsets = vec![0];
+            let mut new_arrays = vec![];
+
+            let converter = RowConverter::new(vec![SortField::new(dt.clone())])?;
+            for (first_arr, second_arr) in first_array.iter().zip(second_array.iter()) {
+                if let (Some(first_arr), Some(second_arr)) = (first_arr, second_arr) {
+                    let l_values = converter.convert_columns(&[first_arr])?;
+                    let r_values = converter.convert_columns(&[second_arr])?;
+
+                    let values_set: HashSet<_> = l_values.iter().collect();
+                    let mut rows = Vec::with_capacity(r_values.num_rows());
+                    for r_val in r_values.iter().sorted().dedup() {
+                        if values_set.contains(&r_val) {
+                            rows.push(r_val);
+                        }
+                    }
+
+                    let last_offset: i32 = match offsets.last().copied() {
+                        Some(offset) => offset,
+                        None => return internal_err!("offsets should not be empty"),
+                    };
+                    offsets.push(last_offset + rows.len() as i32);
+                    let arrays = converter.convert_rows(rows)?;
+                    let array = match arrays.get(0) {
+                        Some(array) => array.clone(),
+                        None => {
+                            return internal_err!(
+                                "array_intersect: failed to get array from rows"
+                            )
+                        }
+                    };
+                    new_arrays.push(array);
                 }
             }
 
-            let last_offset: i32 = match offsets.last().copied() {
-                Some(offset) => offset,
-                None => return internal_err!("offsets should not be empty"),
-            };
-            offsets.push(last_offset + rows.len() as i32);
-            let arrays = converter.convert_rows(rows)?;
-            let array = match arrays.get(0) {
-                Some(array) => array.clone(),
-                None => {
-                    return internal_err!(
-                        "array_intersect: failed to get array from rows"
-                    )
-                }
-            };
-            new_arrays.push(array);
+            let field = Arc::new(Field::new("item", dt, true));
+            let offsets = OffsetBuffer::new(offsets.into());
+            let new_arrays_ref =
+                new_arrays.iter().map(|v| v.as_ref()).collect::<Vec<_>>();
+            let values = compute::concat(&new_arrays_ref)?;
+            let arr = Arc::new(ListArray::try_new(field, offsets, values, None)?);
+            Ok(arr)
         }
     }
-
-    let field = Arc::new(Field::new("item", dt, true));
-    let offsets = OffsetBuffer::new(offsets.into());
-    let new_arrays_ref = new_arrays.iter().map(|v| v.as_ref()).collect::<Vec<_>>();
-    let values = compute::concat(&new_arrays_ref)?;
-    let arr = Arc::new(ListArray::try_new(field, offsets, values, None)?);
-    Ok(arr)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use arrow::datatypes::Int64Type;
-    use datafusion_common::cast::as_uint64_array;
 
+    /// Only test internal functions, array-related sql functions will be tested in sqllogictest `array.slt`
     #[test]
     fn test_align_array_dimensions() {
         let array1d_1 =
@@ -2097,919 +2045,6 @@ mod tests {
     }
 
     #[test]
-    fn test_array() {
-        // make_array(1, 2, 3) = [1, 2, 3]
-        let args = [
-            Arc::new(Int64Array::from(vec![1])) as ArrayRef,
-            Arc::new(Int64Array::from(vec![2])),
-            Arc::new(Int64Array::from(vec![3])),
-        ];
-        let array = make_array(&args).expect("failed to initialize function array");
-        let result = as_list_array(&array).expect("failed to initialize function array");
-        assert_eq!(result.len(), 1);
-        assert_eq!(
-            &[1, 2, 3],
-            as_int64_array(&result.value(0))
-                .expect("failed to cast to primitive array")
-                .values()
-        )
-    }
-
-    #[test]
-    fn test_nested_array() {
-        // make_array([1, 3, 5], [2, 4, 6]) = [[1, 3, 5], [2, 4, 6]]
-        let args = [
-            Arc::new(Int64Array::from(vec![1, 2])) as ArrayRef,
-            Arc::new(Int64Array::from(vec![3, 4])),
-            Arc::new(Int64Array::from(vec![5, 6])),
-        ];
-        let array = make_array(&args).expect("failed to initialize function array");
-        let result = as_list_array(&array).expect("failed to initialize function array");
-        assert_eq!(result.len(), 2);
-        assert_eq!(
-            &[1, 3, 5],
-            as_int64_array(&result.value(0))
-                .expect("failed to cast to primitive array")
-                .values()
-        );
-        assert_eq!(
-            &[2, 4, 6],
-            as_int64_array(&result.value(1))
-                .expect("failed to cast to primitive array")
-                .values()
-        );
-    }
-
-    #[test]
-    fn test_array_element() {
-        // array_element([1, 2, 3, 4], 1) = 1
-        let list_array = return_array();
-        let arr = array_element(&[list_array, Arc::new(Int64Array::from_value(1, 1))])
-            .expect("failed to initialize function array_element");
-        let result =
-            as_int64_array(&arr).expect("failed to initialize function array_element");
-
-        assert_eq!(result, &Int64Array::from_value(1, 1));
-
-        // array_element([1, 2, 3, 4], 3) = 3
-        let list_array = return_array();
-        let arr = array_element(&[list_array, Arc::new(Int64Array::from_value(3, 1))])
-            .expect("failed to initialize function array_element");
-        let result =
-            as_int64_array(&arr).expect("failed to initialize function array_element");
-
-        assert_eq!(result, &Int64Array::from_value(3, 1));
-
-        // array_element([1, 2, 3, 4], 0) = NULL
-        let list_array = return_array();
-        let arr = array_element(&[list_array, Arc::new(Int64Array::from_value(0, 1))])
-            .expect("failed to initialize function array_element");
-        let result =
-            as_int64_array(&arr).expect("failed to initialize function array_element");
-
-        assert_eq!(result, &Int64Array::from(vec![None]));
-
-        // array_element([1, 2, 3, 4], NULL) = NULL
-        let list_array = return_array();
-        let arr = array_element(&[list_array, Arc::new(Int64Array::from(vec![None]))])
-            .expect("failed to initialize function array_element");
-        let result =
-            as_int64_array(&arr).expect("failed to initialize function array_element");
-
-        assert_eq!(result, &Int64Array::from(vec![None]));
-
-        // array_element([1, 2, 3, 4], -1) = 4
-        let list_array = return_array();
-        let arr = array_element(&[list_array, Arc::new(Int64Array::from_value(-1, 1))])
-            .expect("failed to initialize function array_element");
-        let result =
-            as_int64_array(&arr).expect("failed to initialize function array_element");
-
-        assert_eq!(result, &Int64Array::from_value(4, 1));
-
-        // array_element([1, 2, 3, 4], -3) = 2
-        let list_array = return_array();
-        let arr = array_element(&[list_array, Arc::new(Int64Array::from_value(-3, 1))])
-            .expect("failed to initialize function array_element");
-        let result =
-            as_int64_array(&arr).expect("failed to initialize function array_element");
-
-        assert_eq!(result, &Int64Array::from_value(2, 1));
-
-        // array_element([1, 2, 3, 4], 10) = NULL
-        let list_array = return_array();
-        let arr = array_element(&[list_array, Arc::new(Int64Array::from_value(10, 1))])
-            .expect("failed to initialize function array_element");
-        let result =
-            as_int64_array(&arr).expect("failed to initialize function array_element");
-
-        assert_eq!(result, &Int64Array::from(vec![None]));
-    }
-
-    #[test]
-    fn test_nested_array_element() {
-        // array_element([[1, 2, 3, 4], [5, 6, 7, 8]], 2) = [5, 6, 7, 8]
-        let list_array = return_nested_array();
-        let arr = array_element(&[list_array, Arc::new(Int64Array::from_value(2, 1))])
-            .expect("failed to initialize function array_element");
-        let result =
-            as_list_array(&arr).expect("failed to initialize function array_element");
-
-        assert_eq!(
-            &[5, 6, 7, 8],
-            result
-                .value(0)
-                .as_any()
-                .downcast_ref::<Int64Array>()
-                .unwrap()
-                .values()
-        );
-    }
-
-    #[test]
-    fn test_array_pop_back() {
-        // array_pop_back([1, 2, 3, 4]) = [1, 2, 3]
-        let list_array = return_array();
-        let arr = array_pop_back(&[list_array])
-            .expect("failed to initialize function array_pop_back");
-        let result =
-            as_list_array(&arr).expect("failed to initialize function array_pop_back");
-        assert_eq!(
-            &[1, 2, 3],
-            result
-                .value(0)
-                .as_any()
-                .downcast_ref::<Int64Array>()
-                .unwrap()
-                .values()
-        );
-
-        // array_pop_back([1, 2, 3]) = [1, 2]
-        let list_array = Arc::new(result.clone());
-        let arr = array_pop_back(&[list_array])
-            .expect("failed to initialize function array_pop_back");
-        let result =
-            as_list_array(&arr).expect("failed to initialize function array_pop_back");
-        assert_eq!(
-            &[1, 2],
-            result
-                .value(0)
-                .as_any()
-                .downcast_ref::<Int64Array>()
-                .unwrap()
-                .values()
-        );
-
-        // array_pop_back([1, 2]) = [1]
-        let list_array = Arc::new(result.clone());
-        let arr = array_pop_back(&[list_array])
-            .expect("failed to initialize function array_pop_back");
-        let result =
-            as_list_array(&arr).expect("failed to initialize function array_pop_back");
-        assert_eq!(
-            &[1],
-            result
-                .value(0)
-                .as_any()
-                .downcast_ref::<Int64Array>()
-                .unwrap()
-                .values()
-        );
-
-        // array_pop_back([1]) = []
-        let list_array = Arc::new(result.clone());
-        let arr = array_pop_back(&[list_array])
-            .expect("failed to initialize function array_pop_back");
-        let result =
-            as_list_array(&arr).expect("failed to initialize function array_pop_back");
-        assert_eq!(
-            &[],
-            result
-                .value(0)
-                .as_any()
-                .downcast_ref::<Int64Array>()
-                .unwrap()
-                .values()
-        );
-        // array_pop_back([]) = []
-        let list_array = Arc::new(result.clone());
-        let arr = array_pop_back(&[list_array])
-            .expect("failed to initialize function array_pop_back");
-        let result =
-            as_list_array(&arr).expect("failed to initialize function array_pop_back");
-        assert_eq!(
-            &[],
-            result
-                .value(0)
-                .as_any()
-                .downcast_ref::<Int64Array>()
-                .unwrap()
-                .values()
-        );
-
-        // array_pop_back([1, NULL, 3, NULL]) = [1, NULL, 3]
-        let list_array = return_array_with_nulls();
-        let arr = array_pop_back(&[list_array])
-            .expect("failed to initialize function array_pop_back");
-        let result =
-            as_list_array(&arr).expect("failed to initialize function array_pop_back");
-        assert_eq!(3, result.values().len());
-        assert_eq!(
-            &[false, true, false],
-            &[
-                result.values().is_null(0),
-                result.values().is_null(1),
-                result.values().is_null(2)
-            ]
-        );
-    }
-    #[test]
-    fn test_nested_array_pop_back() {
-        // array_pop_back([[1, 2, 3, 4], [5, 6, 7, 8]]) = [[1, 2, 3, 4]]
-        let list_array = return_nested_array();
-        let arr = array_pop_back(&[list_array])
-            .expect("failed to initialize function array_slice");
-        let result =
-            as_list_array(&arr).expect("failed to initialize function array_slice");
-        assert_eq!(
-            &[1, 2, 3, 4],
-            result
-                .value(0)
-                .as_any()
-                .downcast_ref::<ListArray>()
-                .unwrap()
-                .value(0)
-                .as_any()
-                .downcast_ref::<Int64Array>()
-                .unwrap()
-                .values()
-        );
-
-        // array_pop_back([[1, 2, 3, 4]]) = []
-        let list_array = Arc::new(result.clone());
-        let arr = array_pop_back(&[list_array])
-            .expect("failed to initialize function array_pop_back");
-        let result =
-            as_list_array(&arr).expect("failed to initialize function array_pop_back");
-        assert!(result
-            .value(0)
-            .as_any()
-            .downcast_ref::<ListArray>()
-            .unwrap()
-            .is_empty());
-        // array_pop_back([]) = []
-        let list_array = Arc::new(result.clone());
-        let arr = array_pop_back(&[list_array])
-            .expect("failed to initialize function array_pop_back");
-        let result =
-            as_list_array(&arr).expect("failed to initialize function array_pop_back");
-        assert!(result
-            .value(0)
-            .as_any()
-            .downcast_ref::<ListArray>()
-            .unwrap()
-            .is_empty());
-    }
-
-    #[test]
-    fn test_array_slice() {
-        // array_slice([1, 2, 3, 4], 1, 3) = [1, 2, 3]
-        let list_array = return_array();
-        let arr = array_slice(&[
-            list_array,
-            Arc::new(Int64Array::from_value(1, 1)),
-            Arc::new(Int64Array::from_value(3, 1)),
-        ])
-        .expect("failed to initialize function array_slice");
-        let result =
-            as_list_array(&arr).expect("failed to initialize function array_slice");
-
-        assert_eq!(
-            &[1, 2, 3],
-            result
-                .value(0)
-                .as_any()
-                .downcast_ref::<Int64Array>()
-                .unwrap()
-                .values()
-        );
-
-        // array_slice([1, 2, 3, 4], 2, 2) = [2]
-        let list_array = return_array();
-        let arr = array_slice(&[
-            list_array,
-            Arc::new(Int64Array::from_value(2, 1)),
-            Arc::new(Int64Array::from_value(2, 1)),
-        ])
-        .expect("failed to initialize function array_slice");
-        let result =
-            as_list_array(&arr).expect("failed to initialize function array_slice");
-
-        assert_eq!(
-            &[2],
-            result
-                .value(0)
-                .as_any()
-                .downcast_ref::<Int64Array>()
-                .unwrap()
-                .values()
-        );
-
-        // array_slice([1, 2, 3, 4], 0, 0) = []
-        let list_array = return_array();
-        let arr = array_slice(&[
-            list_array,
-            Arc::new(Int64Array::from_value(0, 1)),
-            Arc::new(Int64Array::from_value(0, 1)),
-        ])
-        .expect("failed to initialize function array_slice");
-        let result =
-            as_list_array(&arr).expect("failed to initialize function array_slice");
-
-        assert!(result
-            .value(0)
-            .as_any()
-            .downcast_ref::<Int64Array>()
-            .unwrap()
-            .is_empty());
-
-        // array_slice([1, 2, 3, 4], 0, 6) = [1, 2, 3, 4]
-        let list_array = return_array();
-        let arr = array_slice(&[
-            list_array,
-            Arc::new(Int64Array::from_value(0, 1)),
-            Arc::new(Int64Array::from_value(6, 1)),
-        ])
-        .expect("failed to initialize function array_slice");
-        let result =
-            as_list_array(&arr).expect("failed to initialize function array_slice");
-
-        assert_eq!(
-            &[1, 2, 3, 4],
-            result
-                .value(0)
-                .as_any()
-                .downcast_ref::<Int64Array>()
-                .unwrap()
-                .values()
-        );
-
-        // array_slice([1, 2, 3, 4], -2, -2) = []
-        let list_array = return_array();
-        let arr = array_slice(&[
-            list_array,
-            Arc::new(Int64Array::from_value(-2, 1)),
-            Arc::new(Int64Array::from_value(-2, 1)),
-        ])
-        .expect("failed to initialize function array_slice");
-        let result =
-            as_list_array(&arr).expect("failed to initialize function array_slice");
-
-        assert!(result
-            .value(0)
-            .as_any()
-            .downcast_ref::<Int64Array>()
-            .unwrap()
-            .is_empty());
-
-        // array_slice([1, 2, 3, 4], -3, -1) = [2, 3]
-        let list_array = return_array();
-        let arr = array_slice(&[
-            list_array,
-            Arc::new(Int64Array::from_value(-3, 1)),
-            Arc::new(Int64Array::from_value(-1, 1)),
-        ])
-        .expect("failed to initialize function array_slice");
-        let result =
-            as_list_array(&arr).expect("failed to initialize function array_slice");
-
-        assert_eq!(
-            &[2, 3],
-            result
-                .value(0)
-                .as_any()
-                .downcast_ref::<Int64Array>()
-                .unwrap()
-                .values()
-        );
-
-        // array_slice([1, 2, 3, 4], -3, 2) = [2]
-        let list_array = return_array();
-        let arr = array_slice(&[
-            list_array,
-            Arc::new(Int64Array::from_value(-3, 1)),
-            Arc::new(Int64Array::from_value(2, 1)),
-        ])
-        .expect("failed to initialize function array_slice");
-        let result =
-            as_list_array(&arr).expect("failed to initialize function array_slice");
-
-        assert_eq!(
-            &[2],
-            result
-                .value(0)
-                .as_any()
-                .downcast_ref::<Int64Array>()
-                .unwrap()
-                .values()
-        );
-
-        // array_slice([1, 2, 3, 4], 2, 11) = [2, 3, 4]
-        let list_array = return_array();
-        let arr = array_slice(&[
-            list_array,
-            Arc::new(Int64Array::from_value(2, 1)),
-            Arc::new(Int64Array::from_value(11, 1)),
-        ])
-        .expect("failed to initialize function array_slice");
-        let result =
-            as_list_array(&arr).expect("failed to initialize function array_slice");
-
-        assert_eq!(
-            &[2, 3, 4],
-            result
-                .value(0)
-                .as_any()
-                .downcast_ref::<Int64Array>()
-                .unwrap()
-                .values()
-        );
-
-        // array_slice([1, 2, 3, 4], 3, 1) = []
-        let list_array = return_array();
-        let arr = array_slice(&[
-            list_array,
-            Arc::new(Int64Array::from_value(3, 1)),
-            Arc::new(Int64Array::from_value(1, 1)),
-        ])
-        .expect("failed to initialize function array_slice");
-        let result =
-            as_list_array(&arr).expect("failed to initialize function array_slice");
-
-        assert!(result
-            .value(0)
-            .as_any()
-            .downcast_ref::<Int64Array>()
-            .unwrap()
-            .is_empty());
-
-        // array_slice([1, 2, 3, 4], -7, -2) = NULL
-        let list_array = return_array();
-        let arr = array_slice(&[
-            list_array,
-            Arc::new(Int64Array::from_value(-7, 1)),
-            Arc::new(Int64Array::from_value(-2, 1)),
-        ])
-        .expect("failed to initialize function array_slice");
-        let result =
-            as_list_array(&arr).expect("failed to initialize function array_slice");
-
-        assert!(result
-            .value(0)
-            .as_any()
-            .downcast_ref::<Int64Array>()
-            .unwrap()
-            .is_null(0));
-    }
-
-    #[test]
-    fn test_nested_array_slice() {
-        // array_slice([[1, 2, 3, 4], [5, 6, 7, 8]], 1, 1) = [[1, 2, 3, 4]]
-        let list_array = return_nested_array();
-        let arr = array_slice(&[
-            list_array,
-            Arc::new(Int64Array::from_value(1, 1)),
-            Arc::new(Int64Array::from_value(1, 1)),
-        ])
-        .expect("failed to initialize function array_slice");
-        let result =
-            as_list_array(&arr).expect("failed to initialize function array_slice");
-
-        assert_eq!(
-            &[1, 2, 3, 4],
-            result
-                .value(0)
-                .as_any()
-                .downcast_ref::<ListArray>()
-                .unwrap()
-                .value(0)
-                .as_any()
-                .downcast_ref::<Int64Array>()
-                .unwrap()
-                .values()
-        );
-
-        // array_slice([[1, 2, 3, 4], [5, 6, 7, 8]], -1, -1) = []
-        let list_array = return_nested_array();
-        let arr = array_slice(&[
-            list_array,
-            Arc::new(Int64Array::from_value(-1, 1)),
-            Arc::new(Int64Array::from_value(-1, 1)),
-        ])
-        .expect("failed to initialize function array_slice");
-        let result =
-            as_list_array(&arr).expect("failed to initialize function array_slice");
-
-        assert!(result
-            .value(0)
-            .as_any()
-            .downcast_ref::<ListArray>()
-            .unwrap()
-            .is_empty());
-
-        // array_slice([[1, 2, 3, 4], [5, 6, 7, 8]], -1, 2) = [[5, 6, 7, 8]]
-        let list_array = return_nested_array();
-        let arr = array_slice(&[
-            list_array,
-            Arc::new(Int64Array::from_value(-1, 1)),
-            Arc::new(Int64Array::from_value(2, 1)),
-        ])
-        .expect("failed to initialize function array_slice");
-        let result =
-            as_list_array(&arr).expect("failed to initialize function array_slice");
-
-        assert_eq!(
-            &[5, 6, 7, 8],
-            result
-                .value(0)
-                .as_any()
-                .downcast_ref::<ListArray>()
-                .unwrap()
-                .value(0)
-                .as_any()
-                .downcast_ref::<Int64Array>()
-                .unwrap()
-                .values()
-        );
-    }
-
-    #[test]
-    fn test_array_append() {
-        // array_append([1, 2, 3], 4) = [1, 2, 3, 4]
-        let data = vec![Some(vec![Some(1), Some(2), Some(3)])];
-        let list_array =
-            Arc::new(ListArray::from_iter_primitive::<Int64Type, _, _>(data)) as ArrayRef;
-        let int64_array = Arc::new(Int64Array::from(vec![Some(4)])) as ArrayRef;
-
-        let args = [list_array, int64_array];
-
-        let array =
-            array_append(&args).expect("failed to initialize function array_append");
-        let result =
-            as_list_array(&array).expect("failed to initialize function array_append");
-
-        assert_eq!(
-            &[1, 2, 3, 4],
-            result
-                .value(0)
-                .as_any()
-                .downcast_ref::<Int64Array>()
-                .unwrap()
-                .values()
-        );
-    }
-
-    #[test]
-    fn test_array_prepend() {
-        // array_prepend(1, [2, 3, 4]) = [1, 2, 3, 4]
-        let data = vec![Some(vec![Some(2), Some(3), Some(4)])];
-        let list_array =
-            Arc::new(ListArray::from_iter_primitive::<Int64Type, _, _>(data)) as ArrayRef;
-        let int64_array = Arc::new(Int64Array::from(vec![Some(1)])) as ArrayRef;
-
-        let args = [int64_array, list_array];
-
-        let array =
-            array_prepend(&args).expect("failed to initialize function array_append");
-        let result =
-            as_list_array(&array).expect("failed to initialize function array_append");
-
-        assert_eq!(
-            &[1, 2, 3, 4],
-            result
-                .value(0)
-                .as_any()
-                .downcast_ref::<Int64Array>()
-                .unwrap()
-                .values()
-        );
-    }
-
-    #[test]
-    fn test_array_concat() {
-        // array_concat([1, 2, 3], [4, 5, 6], [7, 8, 9]) = [1, 2, 3, 4, 5, 6, 7, 8, 9]
-        let data = vec![Some(vec![Some(1), Some(2), Some(3)])];
-        let list_array1 =
-            Arc::new(ListArray::from_iter_primitive::<Int64Type, _, _>(data)) as ArrayRef;
-        let data = vec![Some(vec![Some(4), Some(5), Some(6)])];
-        let list_array2 =
-            Arc::new(ListArray::from_iter_primitive::<Int64Type, _, _>(data)) as ArrayRef;
-        let data = vec![Some(vec![Some(7), Some(8), Some(9)])];
-        let list_array3 =
-            Arc::new(ListArray::from_iter_primitive::<Int64Type, _, _>(data)) as ArrayRef;
-
-        let args = [list_array1, list_array2, list_array3];
-
-        let array =
-            array_concat(&args).expect("failed to initialize function array_concat");
-        let result =
-            as_list_array(&array).expect("failed to initialize function array_concat");
-
-        assert_eq!(
-            &[1, 2, 3, 4, 5, 6, 7, 8, 9],
-            result
-                .value(0)
-                .as_any()
-                .downcast_ref::<Int64Array>()
-                .unwrap()
-                .values()
-        );
-    }
-
-    #[test]
-    fn test_nested_array_concat() {
-        // array_concat([1, 2, 3, 4], [1, 2, 3, 4]) = [1, 2, 3, 4, 1, 2, 3, 4]
-        let list_array = return_array();
-        let arr = array_concat(&[list_array.clone(), list_array.clone()])
-            .expect("failed to initialize function array_concat");
-        let result =
-            as_list_array(&arr).expect("failed to initialize function array_concat");
-
-        assert_eq!(
-            &[1, 2, 3, 4, 1, 2, 3, 4],
-            result
-                .value(0)
-                .as_any()
-                .downcast_ref::<Int64Array>()
-                .unwrap()
-                .values()
-        );
-
-        // array_concat([[1, 2, 3, 4], [5, 6, 7, 8]], [1, 2, 3, 4]) = [[1, 2, 3, 4], [5, 6, 7, 8], [1, 2, 3, 4]]
-        let list_nested_array = return_nested_array();
-        let list_array = return_array();
-        let arr = array_concat(&[list_nested_array, list_array])
-            .expect("failed to initialize function array_concat");
-        let result =
-            as_list_array(&arr).expect("failed to initialize function array_concat");
-
-        assert_eq!(
-            &[1, 2, 3, 4],
-            result
-                .value(0)
-                .as_any()
-                .downcast_ref::<ListArray>()
-                .unwrap()
-                .value(2)
-                .as_any()
-                .downcast_ref::<Int64Array>()
-                .unwrap()
-                .values()
-        );
-    }
-
-    #[test]
-    fn test_array_position() {
-        // array_position([1, 2, 3, 4], 3) = 3
-        let list_array = return_array();
-        let array = array_position(&[list_array, Arc::new(Int64Array::from_value(3, 1))])
-            .expect("failed to initialize function array_position");
-        let result = as_uint64_array(&array)
-            .expect("failed to initialize function array_position");
-
-        assert_eq!(result, &UInt64Array::from(vec![3]));
-    }
-
-    #[test]
-    fn test_array_positions() {
-        // array_positions([1, 2, 3, 4], 3) = [3]
-        let list_array = return_array();
-        let array =
-            array_positions(&[list_array, Arc::new(Int64Array::from_value(3, 1))])
-                .expect("failed to initialize function array_position");
-        let result =
-            as_list_array(&array).expect("failed to initialize function array_position");
-
-        assert_eq!(result.len(), 1);
-        assert_eq!(
-            &[3],
-            result
-                .value(0)
-                .as_any()
-                .downcast_ref::<UInt64Array>()
-                .unwrap()
-                .values()
-        );
-    }
-
-    #[test]
-    fn test_array_to_string() {
-        // array_to_string([1, 2, 3, 4], ',') = 1,2,3,4
-        let list_array = return_array();
-        let array =
-            array_to_string(&[list_array, Arc::new(StringArray::from(vec![Some(",")]))])
-                .expect("failed to initialize function array_to_string");
-        let result = as_string_array(&array)
-            .expect("failed to initialize function array_to_string");
-
-        assert_eq!(result.len(), 1);
-        assert_eq!("1,2,3,4", result.value(0));
-
-        // array_to_string([1, NULL, 3, NULL], ',', '*') = 1,*,3,*
-        let list_array = return_array_with_nulls();
-        let array = array_to_string(&[
-            list_array,
-            Arc::new(StringArray::from(vec![Some(",")])),
-            Arc::new(StringArray::from(vec![Some("*")])),
-        ])
-        .expect("failed to initialize function array_to_string");
-        let result = as_string_array(&array)
-            .expect("failed to initialize function array_to_string");
-
-        assert_eq!(result.len(), 1);
-        assert_eq!("1,*,3,*", result.value(0));
-    }
-
-    #[test]
-    fn test_nested_array_to_string() {
-        // array_to_string([[1, 2, 3, 4], [5, 6, 7, 8]], '-') = 1-2-3-4-5-6-7-8
-        let list_array = return_nested_array();
-        let array =
-            array_to_string(&[list_array, Arc::new(StringArray::from(vec![Some("-")]))])
-                .expect("failed to initialize function array_to_string");
-        let result = as_string_array(&array)
-            .expect("failed to initialize function array_to_string");
-
-        assert_eq!(result.len(), 1);
-        assert_eq!("1-2-3-4-5-6-7-8", result.value(0));
-
-        // array_to_string([[1, NULL, 3, NULL], [NULL, 6, 7, NULL]], '-', '*') = 1-*-3-*-*-6-7-*
-        let list_array = return_nested_array_with_nulls();
-        let array = array_to_string(&[
-            list_array,
-            Arc::new(StringArray::from(vec![Some("-")])),
-            Arc::new(StringArray::from(vec![Some("*")])),
-        ])
-        .expect("failed to initialize function array_to_string");
-        let result = as_string_array(&array)
-            .expect("failed to initialize function array_to_string");
-
-        assert_eq!(result.len(), 1);
-        assert_eq!("1-*-3-*-*-6-7-*", result.value(0));
-    }
-
-    #[test]
-    fn test_cardinality() {
-        // cardinality([1, 2, 3, 4]) = 4
-        let list_array = return_array();
-        let arr = cardinality(&[list_array])
-            .expect("failed to initialize function cardinality");
-        let result =
-            as_uint64_array(&arr).expect("failed to initialize function cardinality");
-
-        assert_eq!(result, &UInt64Array::from(vec![4]));
-    }
-
-    #[test]
-    fn test_nested_cardinality() {
-        // cardinality([[1, 2, 3, 4], [5, 6, 7, 8]]) = 8
-        let list_array = return_nested_array();
-        let arr = cardinality(&[list_array])
-            .expect("failed to initialize function cardinality");
-        let result =
-            as_uint64_array(&arr).expect("failed to initialize function cardinality");
-
-        assert_eq!(result, &UInt64Array::from(vec![8]));
-    }
-
-    #[test]
-    fn test_array_length() {
-        // array_length([1, 2, 3, 4]) = 4
-        let list_array = return_array();
-        let arr = array_length(&[list_array.clone()])
-            .expect("failed to initialize function array_ndims");
-        let result =
-            as_uint64_array(&arr).expect("failed to initialize function array_ndims");
-
-        assert_eq!(result, &UInt64Array::from_value(4, 1));
-
-        // array_length([1, 2, 3, 4], 1) = 4
-        let array = array_length(&[list_array, Arc::new(Int64Array::from_value(1, 1))])
-            .expect("failed to initialize function array_ndims");
-        let result =
-            as_uint64_array(&array).expect("failed to initialize function array_ndims");
-
-        assert_eq!(result, &UInt64Array::from_value(4, 1));
-    }
-
-    #[test]
-    fn test_nested_array_length() {
-        let list_array = return_nested_array();
-
-        // array_length([[1, 2, 3, 4], [5, 6, 7, 8]]) = 2
-        let arr = array_length(&[list_array.clone()])
-            .expect("failed to initialize function array_length");
-        let result =
-            as_uint64_array(&arr).expect("failed to initialize function array_length");
-
-        assert_eq!(result, &UInt64Array::from_value(2, 1));
-
-        // array_length([[1, 2, 3, 4], [5, 6, 7, 8]], 1) = 2
-        let arr =
-            array_length(&[list_array.clone(), Arc::new(Int64Array::from_value(1, 1))])
-                .expect("failed to initialize function array_length");
-        let result =
-            as_uint64_array(&arr).expect("failed to initialize function array_length");
-
-        assert_eq!(result, &UInt64Array::from_value(2, 1));
-
-        // array_length([[1, 2, 3, 4], [5, 6, 7, 8]], 2) = 4
-        let arr =
-            array_length(&[list_array.clone(), Arc::new(Int64Array::from_value(2, 1))])
-                .expect("failed to initialize function array_length");
-        let result =
-            as_uint64_array(&arr).expect("failed to initialize function array_length");
-
-        assert_eq!(result, &UInt64Array::from_value(4, 1));
-
-        // array_length([[1, 2, 3, 4], [5, 6, 7, 8]], 3) = NULL
-        let arr = array_length(&[list_array, Arc::new(Int64Array::from_value(3, 1))])
-            .expect("failed to initialize function array_length");
-        let result =
-            as_uint64_array(&arr).expect("failed to initialize function array_length");
-
-        assert_eq!(result, &UInt64Array::from(vec![None]));
-    }
-
-    #[test]
-    fn test_array_dims() {
-        // array_dims([1, 2, 3, 4]) = [4]
-        let list_array = return_array();
-
-        let array =
-            array_dims(&[list_array]).expect("failed to initialize function array_dims");
-        let result =
-            as_list_array(&array).expect("failed to initialize function array_dims");
-
-        assert_eq!(
-            &[4],
-            result
-                .value(0)
-                .as_any()
-                .downcast_ref::<UInt64Array>()
-                .unwrap()
-                .values()
-        );
-    }
-
-    #[test]
-    fn test_nested_array_dims() {
-        // array_dims([[1, 2, 3, 4], [5, 6, 7, 8]]) = [2, 4]
-        let list_array = return_nested_array();
-
-        let array =
-            array_dims(&[list_array]).expect("failed to initialize function array_dims");
-        let result =
-            as_list_array(&array).expect("failed to initialize function array_dims");
-
-        assert_eq!(
-            &[2, 4],
-            result
-                .value(0)
-                .as_any()
-                .downcast_ref::<UInt64Array>()
-                .unwrap()
-                .values()
-        );
-    }
-
-    #[test]
-    fn test_array_ndims() {
-        // array_ndims([1, 2, 3, 4]) = 1
-        let list_array = return_array();
-
-        let array = array_ndims(&[list_array])
-            .expect("failed to initialize function array_ndims");
-        let result =
-            as_uint64_array(&array).expect("failed to initialize function array_ndims");
-
-        assert_eq!(result, &UInt64Array::from_value(1, 1));
-    }
-
-    #[test]
-    fn test_nested_array_ndims() {
-        // array_ndims([[1, 2, 3, 4], [5, 6, 7, 8]]) = 2
-        let list_array = return_nested_array();
-
-        let array = array_ndims(&[list_array])
-            .expect("failed to initialize function array_ndims");
-        let result =
-            as_uint64_array(&array).expect("failed to initialize function array_ndims");
-
-        assert_eq!(result, &UInt64Array::from_value(2, 1));
-    }
-
-    #[test]
     fn test_check_invalid_datatypes() {
         let data = vec![Some(vec![Some(1), Some(2), Some(3)])];
         let list_array =
@@ -3021,69 +2056,5 @@ mod tests {
         let array = array_append(&args);
 
         assert_eq!(array.unwrap_err().strip_backtrace(), "Error during planning: array_append received incompatible types: '[Int64, Utf8]'.");
-    }
-
-    fn return_array() -> ArrayRef {
-        // Returns: [1, 2, 3, 4]
-        let args = [
-            Arc::new(Int64Array::from(vec![Some(1)])) as ArrayRef,
-            Arc::new(Int64Array::from(vec![Some(2)])) as ArrayRef,
-            Arc::new(Int64Array::from(vec![Some(3)])) as ArrayRef,
-            Arc::new(Int64Array::from(vec![Some(4)])) as ArrayRef,
-        ];
-        make_array(&args).expect("failed to initialize function array")
-    }
-
-    fn return_nested_array() -> ArrayRef {
-        // Returns: [[1, 2, 3, 4], [5, 6, 7, 8]]
-        let args = [
-            Arc::new(Int64Array::from(vec![Some(1)])) as ArrayRef,
-            Arc::new(Int64Array::from(vec![Some(2)])) as ArrayRef,
-            Arc::new(Int64Array::from(vec![Some(3)])) as ArrayRef,
-            Arc::new(Int64Array::from(vec![Some(4)])) as ArrayRef,
-        ];
-        let arr1 = make_array(&args).expect("failed to initialize function array");
-
-        let args = [
-            Arc::new(Int64Array::from(vec![Some(5)])) as ArrayRef,
-            Arc::new(Int64Array::from(vec![Some(6)])) as ArrayRef,
-            Arc::new(Int64Array::from(vec![Some(7)])) as ArrayRef,
-            Arc::new(Int64Array::from(vec![Some(8)])) as ArrayRef,
-        ];
-        let arr2 = make_array(&args).expect("failed to initialize function array");
-
-        make_array(&[arr1, arr2]).expect("failed to initialize function array")
-    }
-
-    fn return_array_with_nulls() -> ArrayRef {
-        // Returns: [1, NULL, 3, NULL]
-        let args = [
-            Arc::new(Int64Array::from(vec![Some(1)])) as ArrayRef,
-            Arc::new(Int64Array::from(vec![None])) as ArrayRef,
-            Arc::new(Int64Array::from(vec![Some(3)])) as ArrayRef,
-            Arc::new(Int64Array::from(vec![None])) as ArrayRef,
-        ];
-        make_array(&args).expect("failed to initialize function array")
-    }
-
-    fn return_nested_array_with_nulls() -> ArrayRef {
-        // Returns: [[1, NULL, 3, NULL], [NULL, 6, 7, NULL]]
-        let args = [
-            Arc::new(Int64Array::from(vec![Some(1)])) as ArrayRef,
-            Arc::new(Int64Array::from(vec![None])) as ArrayRef,
-            Arc::new(Int64Array::from(vec![Some(3)])) as ArrayRef,
-            Arc::new(Int64Array::from(vec![None])) as ArrayRef,
-        ];
-        let arr1 = make_array(&args).expect("failed to initialize function array");
-
-        let args = [
-            Arc::new(Int64Array::from(vec![None])) as ArrayRef,
-            Arc::new(Int64Array::from(vec![Some(6)])) as ArrayRef,
-            Arc::new(Int64Array::from(vec![Some(7)])) as ArrayRef,
-            Arc::new(Int64Array::from(vec![None])) as ArrayRef,
-        ];
-        let arr2 = make_array(&args).expect("failed to initialize function array");
-
-        make_array(&[arr1, arr2]).expect("failed to initialize function array")
     }
 }

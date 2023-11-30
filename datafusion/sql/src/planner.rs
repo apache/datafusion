@@ -21,8 +21,9 @@ use std::sync::Arc;
 use std::vec;
 
 use arrow_schema::*;
-use datafusion_common::field_not_found;
-use datafusion_common::internal_err;
+use datafusion_common::{
+    field_not_found, internal_err, plan_datafusion_err, SchemaError,
+};
 use datafusion_expr::WindowUDF;
 use sqlparser::ast::TimezoneInfo;
 use sqlparser::ast::{ArrayElemTypeDef, ExactNumberInfo};
@@ -237,6 +238,42 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         }
 
         Ok(Schema::new(fields))
+    }
+
+    /// Returns a vector of (column_name, default_expr) pairs
+    pub(super) fn build_column_defaults(
+        &self,
+        columns: &Vec<SQLColumnDef>,
+        planner_context: &mut PlannerContext,
+    ) -> Result<Vec<(String, Expr)>> {
+        let mut column_defaults = vec![];
+        // Default expressions are restricted, column references are not allowed
+        let empty_schema = DFSchema::empty();
+        let error_desc = |e: DataFusionError| match e {
+            DataFusionError::SchemaError(SchemaError::FieldNotFound { .. }) => {
+                plan_datafusion_err!(
+                    "Column reference is not allowed in the DEFAULT expression : {}",
+                    e
+                )
+            }
+            _ => e,
+        };
+
+        for column in columns {
+            if let Some(default_sql_expr) =
+                column.options.iter().find_map(|o| match &o.option {
+                    ColumnOption::Default(expr) => Some(expr),
+                    _ => None,
+                })
+            {
+                let default_expr = self
+                    .sql_to_expr(default_sql_expr.clone(), &empty_schema, planner_context)
+                    .map_err(error_desc)?;
+                column_defaults
+                    .push((self.normalizer.normalize(column.name.clone()), default_expr));
+            }
+        }
+        Ok(column_defaults)
     }
 
     /// Apply the given TableAlias to the input plan

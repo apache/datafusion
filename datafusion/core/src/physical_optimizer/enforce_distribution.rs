@@ -3787,7 +3787,7 @@ pub(crate) mod tests {
     fn repartition_transitively_past_sort_with_projection_and_filter() -> Result<()> {
         let schema = schema();
         let sort_key = vec![PhysicalSortExpr {
-            expr: col("c", &schema).unwrap(),
+            expr: col("a", &schema).unwrap(),
             options: SortOptions::default(),
         }];
         let plan = sort_exec(
@@ -3804,9 +3804,9 @@ pub(crate) mod tests {
         );
 
         let expected = &[
-            "SortPreservingMergeExec: [c@2 ASC]",
+            "SortPreservingMergeExec: [a@0 ASC]",
             // Expect repartition on the input to the sort (as it can benefit from additional parallelism)
-            "SortExec: expr=[c@2 ASC]",
+            "SortExec: expr=[a@0 ASC]",
             "ProjectionExec: expr=[a@0 as a, b@1 as b, c@2 as c]",
             "FilterExec: c@2 = 0",
             // repartition is lowest down
@@ -3817,7 +3817,7 @@ pub(crate) mod tests {
         assert_optimized!(expected, plan.clone(), true);
 
         let expected_first_sort_enforcement = &[
-            "SortExec: expr=[c@2 ASC]",
+            "SortExec: expr=[a@0 ASC]",
             "CoalescePartitionsExec",
             "ProjectionExec: expr=[a@0 as a, b@1 as b, c@2 as c]",
             "FilterExec: c@2 = 0",
