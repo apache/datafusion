@@ -217,13 +217,13 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
 
             Ok(name)
         }
-        Expr::ScalarFunction(expr::ScalarFunction { func_def, args }) => {
+        Expr::ScalarFunction(fun) => {
             // function should be resolved during `AnalyzerRule`s
-            if let ScalarFunctionDefinition::Name(_) = func_def {
+            if let ScalarFunctionDefinition::Name(_) = fun.func_def {
                 return internal_err!("Function `Expr` with name should be resolved.");
             }
 
-            create_function_physical_name(func_def.name(), false, args)
+            create_function_physical_name(fun.name(), false, &fun.args)
         }
         Expr::WindowFunction(WindowFunction { fun, args, .. }) => {
             create_function_physical_name(&fun.to_string(), false, args)
@@ -2537,6 +2537,27 @@ mod tests {
         // mode in Aggregate (which is slower)
         assert!(formatted.contains("FinalPartitioned"));
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn aggregate_with_alias() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("c1", DataType::Utf8, false),
+            Field::new("c2", DataType::UInt32, false),
+        ]));
+
+        let logical_plan = scan_empty(None, schema.as_ref(), None)?
+            .aggregate(vec![col("c1")], vec![sum(col("c2"))])?
+            .project(vec![col("c1"), sum(col("c2")).alias("total_salary")])?
+            .build()?;
+
+        let physical_plan = plan(&logical_plan).await?;
+        assert_eq!("c1", physical_plan.schema().field(0).name().as_str());
+        assert_eq!(
+            "total_salary",
+            physical_plan.schema().field(1).name().as_str()
+        );
         Ok(())
     }
 

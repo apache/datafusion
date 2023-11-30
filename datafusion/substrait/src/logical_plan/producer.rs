@@ -33,8 +33,8 @@ use datafusion::common::{exec_err, internal_err, not_impl_err};
 #[allow(unused_imports)]
 use datafusion::logical_expr::aggregate_function;
 use datafusion::logical_expr::expr::{
-    Alias, BinaryExpr, Case, Cast, GroupingSet, InList,
-    ScalarFunction as DFScalarFunction, ScalarFunctionDefinition, Sort, WindowFunction,
+    Alias, BinaryExpr, Case, Cast, GroupingSet, InList, ScalarFunctionDefinition, Sort,
+    WindowFunction,
 };
 use datafusion::logical_expr::{expr, Between, JoinConstraint, LogicalPlan, Operator};
 use datafusion::prelude::Expr;
@@ -822,9 +822,9 @@ pub fn to_substrait_rex(
                 Ok(substrait_or_list)
             }
         }
-        Expr::ScalarFunction(DFScalarFunction { func_def, args }) => {
+        Expr::ScalarFunction(fun) => {
             let mut arguments: Vec<FunctionArgument> = vec![];
-            for arg in args {
+            for arg in &fun.args {
                 arguments.push(FunctionArgument {
                     arg_type: Some(ArgType::Value(to_substrait_rex(
                         arg,
@@ -836,12 +836,12 @@ pub fn to_substrait_rex(
             }
 
             // function should be resolved during `AnalyzerRule`
-            if let ScalarFunctionDefinition::Name(_) = func_def {
+            if let ScalarFunctionDefinition::Name(_) = fun.func_def {
                 return internal_err!("Function `Expr` with name should be resolved.");
             }
 
             let function_anchor =
-                _register_function(func_def.name().to_string(), extension_info);
+                _register_function(fun.name().to_string(), extension_info);
             Ok(Expression {
                 rex_type: Some(RexType::ScalarFunction(ScalarFunction {
                     function_reference: function_anchor,

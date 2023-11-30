@@ -362,6 +362,13 @@ pub struct ScalarFunction {
     pub args: Vec<Expr>,
 }
 
+impl ScalarFunction {
+    // return the Function's name
+    pub fn name(&self) -> &str {
+        self.func_def.name()
+    }
+}
+
 impl ScalarFunctionDefinition {
     /// Function's name for display
     pub fn name(&self) -> &str {
@@ -1219,8 +1226,8 @@ impl fmt::Display for Expr {
                     write!(f, " NULLS LAST")
                 }
             }
-            Expr::ScalarFunction(ScalarFunction { func_def, args }) => {
-                fmt_function(f, func_def.name(), false, args, true)
+            Expr::ScalarFunction(fun) => {
+                fmt_function(f, fun.name(), false, &fun.args, true)
             }
             Expr::WindowFunction(WindowFunction {
                 fun,
@@ -1552,9 +1559,7 @@ fn create_name(e: &Expr) -> Result<String> {
                 }
             }
         }
-        Expr::ScalarFunction(ScalarFunction { func_def, args }) => {
-            create_function_name(func_def.name(), false, args)
-        }
+        Expr::ScalarFunction(fun) => create_function_name(fun.name(), false, &fun.args),
         Expr::WindowFunction(WindowFunction {
             fun,
             args,

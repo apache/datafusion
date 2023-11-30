@@ -386,7 +386,7 @@ statement ok
 drop table test_column_defaults
 
 
-# test create table as 
+# test create table as
 statement ok
 create table test_column_defaults(
   a int,

@@ -32,7 +32,7 @@ use datafusion::prelude::JoinType;
 use datafusion::sql::TableReference;
 use datafusion::{
     error::{DataFusionError, Result},
-    optimizer::utils::split_conjunction,
+    logical_expr::utils::split_conjunction,
     prelude::{Column, SessionContext},
     scalar::ScalarValue,
 };

@@ -16,15 +16,14 @@
 // under the License.
 
 use crate::simplify_expressions::{ExprSimplifier, SimplifyContext};
-use crate::utils::{
-    collect_subquery_cols, conjunction, find_join_exprs, split_conjunction,
-};
+use crate::utils::collect_subquery_cols;
 use datafusion_common::tree_node::{
     RewriteRecursion, Transformed, TreeNode, TreeNodeRewriter,
 };
 use datafusion_common::{plan_err, Result};
 use datafusion_common::{Column, DFSchemaRef, DataFusionError, ScalarValue};
 use datafusion_expr::expr::Alias;
+use datafusion_expr::utils::{conjunction, find_join_exprs, split_conjunction};
 use datafusion_expr::{expr, EmptyRelation, Expr, LogicalPlan, LogicalPlanBuilder};
 use datafusion_physical_expr::execution_props::ExecutionProps;
 use std::collections::{BTreeSet, HashMap};
