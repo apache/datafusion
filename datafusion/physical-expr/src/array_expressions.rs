@@ -30,7 +30,8 @@ use arrow_buffer::NullBuffer;
 
 use arrow_schema::FieldRef;
 use datafusion_common::cast::{
-    as_generic_string_array, as_int64_array, as_list_array, as_string_array,
+    as_generic_list_array, as_generic_string_array, as_int64_array, as_list_array,
+    as_null_array, as_string_array,
 };
 use datafusion_common::utils::array_into_list_array;
 use datafusion_common::{
@@ -939,12 +940,21 @@ pub fn array_concat(args: &[ArrayRef]) -> Result<ArrayRef> {
 
 /// Array_empty SQL function
 pub fn array_empty(args: &[ArrayRef]) -> Result<ArrayRef> {
-    if args[0].as_any().downcast_ref::<NullArray>().is_some() {
+    if as_null_array(&args[0]).is_ok() {
         // Make sure to return Boolean type.
         return Ok(Arc::new(BooleanArray::new_null(args[0].len())));
     }
+    let array_type = args[0].data_type();
 
-    let array = as_list_array(&args[0])?;
+    match array_type {
+        DataType::List(_) => array_empty_dispatch::<i32>(&args[0]),
+        DataType::LargeList(_) => array_empty_dispatch::<i64>(&args[0]),
+        _ => internal_err!("array_empty does not support type '{array_type:?}'."),
+    }
+}
+
+fn array_empty_dispatch<O: OffsetSizeTrait>(array: &ArrayRef) -> Result<ArrayRef> {
+    let array = as_generic_list_array::<O>(array)?;
     let builder = array
         .iter()
         .map(|arr| arr.map(|arr| arr.len() == arr.null_count()))
