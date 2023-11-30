@@ -4119,3 +4119,153 @@ SELECT a, b, ARRAY_AGG(d ORDER BY c DESC), ARRAY_AGG(d ORDER BY d DESC)
 0 1 [3, 1, 1, 0, 0, 3, 2, 3, 3, 1, 1, 0, 4, 1, 0, 4, 2, 2, 4, 3, 1, 1, 0, 2, 0] [4, 4, 4, 3, 3, 3, 3, 3, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0]
 1 2 [4, 1, 1, 2, 0, 1, 1, 4, 2, 0, 4, 4, 1, 3, 4, 2, 1, 1, 1, 2, 4, 1, 1, 3, 0] [4, 4, 4, 4, 4, 4, 3, 3, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0]
 1 3 [3, 4, 2, 4, 0, 2, 0, 0, 2, 1, 4, 3, 4, 1, 1, 1, 2, 4, 0, 2, 4, 1, 2, 0, 2] [4, 4, 4, 4, 4, 4, 3, 3, 2, 2, 2, 2, 2, 2, 2, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0]
+
+query TT
+EXPLAIN SELECT a, b, FIRST_VALUE(d ORDER BY c DESC), LAST_VALUE(d ORDER BY c DESC), ARRAY_AGG(d ORDER BY d DESC)
+  FROM multiple_ordered_table
+  GROUP BY a, b
+  ORDER BY a, b
+----
+logical_plan
+Sort: multiple_ordered_table.a ASC NULLS LAST, multiple_ordered_table.b ASC NULLS LAST
+--Aggregate: groupBy=[[multiple_ordered_table.a, multiple_ordered_table.b]], aggr=[[FIRST_VALUE(multiple_ordered_table.d) ORDER BY [multiple_ordered_table.c DESC NULLS FIRST], LAST_VALUE(multiple_ordered_table.d) ORDER BY [multiple_ordered_table.c DESC NULLS FIRST], ARRAY_AGG(multiple_ordered_table.d) ORDER BY [multiple_ordered_table.d DESC NULLS FIRST]]]
+----TableScan: multiple_ordered_table projection=[a, b, c, d]
+physical_plan
+SortPreservingMergeExec: [a@0 ASC NULLS LAST,b@1 ASC NULLS LAST]
+--AggregateExec: mode=FinalPartitioned, gby=[a@0 as a, b@1 as b], aggr=[LAST_VALUE(multiple_ordered_table.d), FIRST_VALUE(multiple_ordered_table.d), ARRAY_AGG(multiple_ordered_table.d)], ordering_mode=Sorted
+----CoalesceBatchesExec: target_batch_size=2
+------SortPreservingRepartitionExec: partitioning=Hash([a@0, b@1], 8), input_partitions=8, sort_exprs=a@0 ASC NULLS LAST,b@1 ASC NULLS LAST
+--------AggregateExec: mode=Partial, gby=[a@0 as a, b@1 as b], aggr=[LAST_VALUE(multiple_ordered_table.d), FIRST_VALUE(multiple_ordered_table.d), ARRAY_AGG(multiple_ordered_table.d)], ordering_mode=Sorted
+----------RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b, c, d], output_orderings=[[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST], [c@2 ASC NULLS LAST]], has_header=true
+
+statement ok
+set datafusion.execution.target_partitions = 1;
+
+query IIII?
+SELECT a, b, FIRST_VALUE(d ORDER BY c DESC), LAST_VALUE(d ORDER BY c DESC), ARRAY_AGG(d ORDER BY d DESC)
+  FROM multiple_ordered_table
+  GROUP BY a, b
+  ORDER BY a, b
+----
+0 0 4 0 [4, 4, 4, 4, 3, 3, 3, 2, 2, 2, 2, 2, 2, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0]
+0 1 3 0 [4, 4, 4, 3, 3, 3, 3, 3, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0]
+1 2 4 0 [4, 4, 4, 4, 4, 4, 3, 3, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0]
+1 3 3 2 [4, 4, 4, 4, 4, 4, 3, 3, 2, 2, 2, 2, 2, 2, 2, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0]
+
+statement ok
+set datafusion.execution.target_partitions = 8;
+
+query IIII?
+SELECT a, b, FIRST_VALUE(d ORDER BY c DESC), LAST_VALUE(d ORDER BY c DESC), ARRAY_AGG(d ORDER BY d DESC)
+  FROM multiple_ordered_table
+  GROUP BY a, b
+  ORDER BY a, b
+----
+0 0 4 0 [4, 4, 4, 4, 3, 3, 3, 2, 2, 2, 2, 2, 2, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0]
+0 1 3 0 [4, 4, 4, 3, 3, 3, 3, 3, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0]
+1 2 4 0 [4, 4, 4, 4, 4, 4, 3, 3, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0]
+1 3 3 2 [4, 4, 4, 4, 4, 4, 3, 3, 2, 2, 2, 2, 2, 2, 2, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0]
+
+# Test same queries where there is sort inserted
+statement ok
+set datafusion.optimizer.prefer_existing_sort = false;
+
+statement ok
+set datafusion.execution.batch_size = 20;
+
+query TT
+EXPLAIN SELECT a, b, ARRAY_AGG(d ORDER BY c DESC), ARRAY_AGG(d ORDER BY d DESC)
+  FROM multiple_ordered_table
+  GROUP BY a, b
+  ORDER BY a, b
+----
+logical_plan
+Sort: multiple_ordered_table.a ASC NULLS LAST, multiple_ordered_table.b ASC NULLS LAST
+--Aggregate: groupBy=[[multiple_ordered_table.a, multiple_ordered_table.b]], aggr=[[ARRAY_AGG(multiple_ordered_table.d) ORDER BY [multiple_ordered_table.c DESC NULLS FIRST], ARRAY_AGG(multiple_ordered_table.d) ORDER BY [multiple_ordered_table.d DESC NULLS FIRST]]]
+----TableScan: multiple_ordered_table projection=[a, b, c, d]
+physical_plan
+SortPreservingMergeExec: [a@0 ASC NULLS LAST,b@1 ASC NULLS LAST]
+--AggregateExec: mode=FinalPartitioned, gby=[a@0 as a, b@1 as b], aggr=[ARRAY_AGG(multiple_ordered_table.d), ARRAY_AGG(multiple_ordered_table.d)], ordering_mode=Sorted
+----SortExec: expr=[a@0 ASC NULLS LAST,b@1 ASC NULLS LAST]
+------CoalesceBatchesExec: target_batch_size=20
+--------RepartitionExec: partitioning=Hash([a@0, b@1], 8), input_partitions=8
+----------AggregateExec: mode=Partial, gby=[a@0 as a, b@1 as b], aggr=[ARRAY_AGG(multiple_ordered_table.d), ARRAY_AGG(multiple_ordered_table.d)], ordering_mode=Sorted
+------------RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+--------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b, c, d], output_orderings=[[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST], [c@2 ASC NULLS LAST]], has_header=true
+
+statement ok
+set datafusion.execution.target_partitions = 1;
+
+query II??
+SELECT a, b, ARRAY_AGG(d ORDER BY c DESC), ARRAY_AGG(d ORDER BY d DESC)
+  FROM multiple_ordered_table
+  GROUP BY a, b
+  ORDER BY a, b
+----
+0 0 [4, 0, 0, 3, 0, 4, 1, 2, 3, 3, 2, 1, 2, 2, 4, 4, 1, 2, 0, 1, 1, 0, 0, 2, 0] [4, 4, 4, 4, 3, 3, 3, 2, 2, 2, 2, 2, 2, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0]
+0 1 [3, 1, 1, 0, 0, 3, 2, 3, 3, 1, 1, 0, 4, 1, 0, 4, 2, 2, 4, 3, 1, 1, 0, 2, 0] [4, 4, 4, 3, 3, 3, 3, 3, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0]
+1 2 [4, 1, 1, 2, 0, 1, 1, 4, 2, 0, 4, 4, 1, 3, 4, 2, 1, 1, 1, 2, 4, 1, 1, 3, 0] [4, 4, 4, 4, 4, 4, 3, 3, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0]
+1 3 [3, 4, 2, 4, 0, 2, 0, 0, 2, 1, 4, 3, 4, 1, 1, 1, 2, 4, 0, 2, 4, 1, 2, 0, 2] [4, 4, 4, 4, 4, 4, 3, 3, 2, 2, 2, 2, 2, 2, 2, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0]
+
+statement ok
+set datafusion.execution.target_partitions = 8;
+
+query II??
+SELECT a, b, ARRAY_AGG(d ORDER BY c DESC), ARRAY_AGG(d ORDER BY d DESC)
+  FROM multiple_ordered_table
+  GROUP BY a, b
+  ORDER BY a, b
+----
+0 0 [4, 0, 0, 3, 0, 4, 1, 2, 3, 3, 2, 1, 2, 2, 4, 4, 1, 2, 0, 1, 1, 0, 0, 2, 0] [4, 4, 4, 4, 3, 3, 3, 2, 2, 2, 2, 2, 2, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0]
+0 1 [3, 1, 1, 0, 0, 3, 2, 3, 3, 1, 1, 0, 4, 1, 0, 4, 2, 2, 4, 3, 1, 1, 0, 2, 0] [4, 4, 4, 3, 3, 3, 3, 3, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0]
+1 2 [4, 1, 1, 2, 0, 1, 1, 4, 2, 0, 4, 4, 1, 3, 4, 2, 1, 1, 1, 2, 4, 1, 1, 3, 0] [4, 4, 4, 4, 4, 4, 3, 3, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0]
+1 3 [3, 4, 2, 4, 0, 2, 0, 0, 2, 1, 4, 3, 4, 1, 1, 1, 2, 4, 0, 2, 4, 1, 2, 0, 2] [4, 4, 4, 4, 4, 4, 3, 3, 2, 2, 2, 2, 2, 2, 2, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0]
+
+query TT
+EXPLAIN SELECT a, b, FIRST_VALUE(d ORDER BY c DESC), LAST_VALUE(d ORDER BY c DESC), ARRAY_AGG(d ORDER BY d DESC)
+  FROM multiple_ordered_table
+  GROUP BY a, b
+  ORDER BY a, b
+----
+logical_plan
+Sort: multiple_ordered_table.a ASC NULLS LAST, multiple_ordered_table.b ASC NULLS LAST
+--Aggregate: groupBy=[[multiple_ordered_table.a, multiple_ordered_table.b]], aggr=[[FIRST_VALUE(multiple_ordered_table.d) ORDER BY [multiple_ordered_table.c DESC NULLS FIRST], LAST_VALUE(multiple_ordered_table.d) ORDER BY [multiple_ordered_table.c DESC NULLS FIRST], ARRAY_AGG(multiple_ordered_table.d) ORDER BY [multiple_ordered_table.d DESC NULLS FIRST]]]
+----TableScan: multiple_ordered_table projection=[a, b, c, d]
+physical_plan
+SortPreservingMergeExec: [a@0 ASC NULLS LAST,b@1 ASC NULLS LAST]
+--AggregateExec: mode=FinalPartitioned, gby=[a@0 as a, b@1 as b], aggr=[LAST_VALUE(multiple_ordered_table.d), FIRST_VALUE(multiple_ordered_table.d), ARRAY_AGG(multiple_ordered_table.d)], ordering_mode=Sorted
+----SortExec: expr=[a@0 ASC NULLS LAST,b@1 ASC NULLS LAST]
+------CoalesceBatchesExec: target_batch_size=20
+--------RepartitionExec: partitioning=Hash([a@0, b@1], 8), input_partitions=8
+----------AggregateExec: mode=Partial, gby=[a@0 as a, b@1 as b], aggr=[LAST_VALUE(multiple_ordered_table.d), FIRST_VALUE(multiple_ordered_table.d), ARRAY_AGG(multiple_ordered_table.d)], ordering_mode=Sorted
+------------RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+--------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b, c, d], output_orderings=[[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST], [c@2 ASC NULLS LAST]], has_header=true
+
+statement ok
+set datafusion.execution.target_partitions = 1;
+
+query IIII?
+SELECT a, b, FIRST_VALUE(d ORDER BY c DESC), LAST_VALUE(d ORDER BY c DESC), ARRAY_AGG(d ORDER BY d DESC)
+  FROM multiple_ordered_table
+  GROUP BY a, b
+  ORDER BY a, b
+----
+0 0 4 0 [4, 4, 4, 4, 3, 3, 3, 2, 2, 2, 2, 2, 2, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0]
+0 1 3 0 [4, 4, 4, 3, 3, 3, 3, 3, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0]
+1 2 4 0 [4, 4, 4, 4, 4, 4, 3, 3, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0]
+1 3 3 2 [4, 4, 4, 4, 4, 4, 3, 3, 2, 2, 2, 2, 2, 2, 2, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0]
+
+statement ok
+set datafusion.execution.target_partitions = 8;
+
+query IIII?
+SELECT a, b, FIRST_VALUE(d ORDER BY c DESC), LAST_VALUE(d ORDER BY c DESC), ARRAY_AGG(d ORDER BY d DESC)
+  FROM multiple_ordered_table
+  GROUP BY a, b
+  ORDER BY a, b
+----
+0 0 4 0 [4, 4, 4, 4, 3, 3, 3, 2, 2, 2, 2, 2, 2, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0]
+0 1 3 0 [4, 4, 4, 3, 3, 3, 3, 3, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0]
+1 2 4 0 [4, 4, 4, 4, 4, 4, 3, 3, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0]
+1 3 3 2 [4, 4, 4, 4, 4, 4, 3, 3, 2, 2, 2, 2, 2, 2, 2, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0]

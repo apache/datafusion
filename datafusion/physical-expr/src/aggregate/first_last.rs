@@ -204,6 +204,11 @@ impl Accumulator for FirstValueAccumulator {
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         // If we have seen first value, we shouldn't update it
         if !values[0].is_empty() && !self.is_set {
+            println!("----------");
+            for value in values{
+                println!("value: {:?}", value);
+            }
+            println!("----------");
             let row = get_row_at_idx(values, 0)?;
             // Update with first value in the array.
             self.update_with_new_row(&row);
