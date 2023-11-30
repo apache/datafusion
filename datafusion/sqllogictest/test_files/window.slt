@@ -3581,3 +3581,165 @@ CREATE TABLE new_table AS SELECT NTILE(2) OVER(ORDER BY c1) AS ntile_2 FROM aggr
 
 statement ok
 DROP TABLE new_table;
+
+statement ok
+CREATE TABLE t1 (a int) AS VALUES (1), (2), (3);
+
+query I
+SELECT NTILE(9223377) OVER(ORDER BY a) FROM t1;
+----
+1
+2
+3
+
+query I
+SELECT NTILE(9223372036854775809) OVER(ORDER BY a) FROM t1;
+----
+1
+2
+3
+
+query error DataFusion error: Execution error: NTILE requires a positive integer
+SELECT NTILE(-922337203685477580) OVER(ORDER BY a) FROM t1;
+
+query error DataFusion error: Execution error: Table 't' doesn't exist\.
+DROP TABLE t;
+
+# NTILE with PARTITION BY, those tests from duckdb: https://github.com/duckdb/duckdb/blob/main/test/sql/window/test_ntile.test
+statement ok
+CREATE TABLE Scoreboard(TeamName VARCHAR, Player VARCHAR, Score INTEGER);
+
+statement ok
+INSERT INTO Scoreboard VALUES ('Mongrels', 'Apu', 350);
+
+statement ok
+INSERT INTO Scoreboard VALUES ('Mongrels', 'Ned', 666);
+
+statement ok
+INSERT INTO Scoreboard VALUES ('Mongrels', 'Meg', 1030);
+
+statement ok
+INSERT INTO Scoreboard VALUES ('Mongrels', 'Burns', 1270);
+
+statement ok
+INSERT INTO Scoreboard VALUES ('Simpsons', 'Homer', 1);
+
+statement ok
+INSERT INTO Scoreboard VALUES ('Simpsons', 'Lisa', 710);
+
+statement ok
+INSERT INTO Scoreboard VALUES ('Simpsons', 'Marge', 990);
+
+statement ok
+INSERT INTO Scoreboard VALUES ('Simpsons', 'Bart', 2010);
+
+query TTII
+SELECT
+  TeamName,
+  Player,
+  Score,
+  NTILE(2) OVER (PARTITION BY TeamName ORDER BY Score ASC) AS NTILE
+FROM ScoreBoard s
+ORDER BY TeamName, Score;
+----
+Mongrels	Apu	350	1
+Mongrels	Ned	666	1
+Mongrels	Meg	1030	2
+Mongrels	Burns	1270	2
+Simpsons	Homer	1	1
+Simpsons	Lisa	710	1
+Simpsons	Marge	990	2
+Simpsons	Bart	2010	2
+
+query TTII
+SELECT
+  TeamName,
+  Player,
+  Score,
+  NTILE(2) OVER (ORDER BY Score ASC) AS NTILE
+FROM ScoreBoard s
+ORDER BY Score;
+----
+Simpsons	Homer	1	1
+Mongrels	Apu	350	1
+Mongrels	Ned	666	1
+Simpsons	Lisa	710	1
+Simpsons	Marge	990	2
+Mongrels	Meg	1030	2
+Mongrels	Burns	1270	2
+Simpsons	Bart	2010	2
+
+query TTII
+SELECT
+  TeamName,
+  Player,
+  Score,
+  NTILE(1000) OVER (PARTITION BY TeamName ORDER BY Score ASC) AS NTILE
+FROM ScoreBoard s
+ORDER BY TeamName, Score;
+----
+Mongrels	Apu	350	1
+Mongrels	Ned	666	2
+Mongrels	Meg	1030	3
+Mongrels	Burns	1270	4
+Simpsons	Homer	1	1
+Simpsons	Lisa	710	2
+Simpsons	Marge	990	3
+Simpsons	Bart	2010	4
+
+query TTII
+SELECT
+  TeamName,
+  Player,
+  Score,
+  NTILE(1) OVER (PARTITION BY TeamName ORDER BY Score ASC) AS NTILE
+FROM ScoreBoard s
+ORDER BY TeamName, Score;
+----
+Mongrels	Apu	350	1
+Mongrels	Ned	666	1
+Mongrels	Meg	1030	1
+Mongrels	Burns	1270	1
+Simpsons	Homer	1	1
+Simpsons	Lisa	710	1
+Simpsons	Marge	990	1
+Simpsons	Bart	2010	1
+
+# incorrect number of parameters for ntile
+query error DataFusion error: Execution error: NTILE requires a positive integer, but finds NULL
+SELECT
+  NTILE(NULL) OVER (PARTITION BY TeamName ORDER BY Score ASC) AS NTILE
+FROM ScoreBoard s
+
+query error DataFusion error: Execution error: NTILE requires a positive integer
+SELECT
+  NTILE(-1) OVER (PARTITION BY TeamName ORDER BY Score ASC) AS NTILE
+FROM ScoreBoard s
+
+query error DataFusion error: Execution error: NTILE requires a positive integer
+SELECT
+  NTILE(0) OVER (PARTITION BY TeamName ORDER BY Score ASC) AS NTILE
+FROM ScoreBoard s
+
+statement error
+SELECT
+  NTILE() OVER (PARTITION BY TeamName ORDER BY Score ASC) AS NTILE
+FROM ScoreBoard s
+
+statement error
+SELECT
+  NTILE(1,2) OVER (PARTITION BY TeamName ORDER BY Score ASC) AS NTILE
+FROM ScoreBoard s
+
+statement error
+SELECT
+  NTILE(1,2,3) OVER (PARTITION BY TeamName ORDER BY Score ASC) AS NTILE
+FROM ScoreBoard s
+
+statement error
+SELECT
+  NTILE(1,2,3,4) OVER (PARTITION BY TeamName ORDER BY Score ASC) AS NTILE
+FROM ScoreBoard s
+
+statement ok
+DROP TABLE Scoreboard;
