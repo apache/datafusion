@@ -23,9 +23,9 @@ use crate::PhysicalExpr;
 use arrow::array::ArrayRef;
 use arrow::compute::{cast, cast_with_options, CastOptions};
 use arrow::datatypes::{DataType, Field};
-use datafusion_common::ScalarValue;
+use datafusion_common::{internal_err, ScalarValue};
 use datafusion_common::{DataFusionError, Result};
-use datafusion_expr::type_coercion::functions::can_coerce_from;
+use datafusion_expr::type_coercion::binary::comparison_coercion;
 use datafusion_expr::PartitionEvaluator;
 use std::any::Any;
 use std::cmp::min;
@@ -238,9 +238,8 @@ fn get_default_value(
 ) -> Result<ScalarValue> {
     if let Some(default_value) = default_value {
         let default_value_type = default_value.data_type();
-        if can_coerce_from(dtype, &default_value_type)
-            || (dtype.is_integer() && default_value_type.is_integer())
-        {
+
+        if comparison_coercion(&default_value_type, dtype).is_some() {
             ScalarValue::try_from_array(
                 &cast_with_options(
                     &default_value.to_array()?,
@@ -253,10 +252,12 @@ fn get_default_value(
                 0,
             )
         } else {
-            Err(DataFusionError::Internal(format!(
+            internal_err!(
                 "Cannot coerce default value {:?} {} to {:?}",
-                default_value, default_value_type, dtype
-            )))
+                default_value,
+                default_value_type,
+                dtype
+            )
         }
     } else {
         Ok(ScalarValue::try_from(dtype)?)

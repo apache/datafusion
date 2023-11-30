@@ -1170,8 +1170,7 @@ SELECT
   FROM aggregate_test_100
   LIMIT 1
 ----
-DataFusion error: Internal error: Cannot coerce default value Utf8("2000-11-22T16:17:06.624Z") Utf8 to UInt64.
-This was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker
+DataFusion error: Arrow error: Cast error: Cannot cast string '2000-11-22T16:17:06.624Z' to value of UInt64 type
 
 
 #fn test_window_frame_first_value_last_value_aggregate
