@@ -16,31 +16,21 @@
 // under the License.
 
 use arrow::array::*;
-// use arrow::array::{ArrayRef, BooleanArray, Int64Array,StringBuilder,Float64Array};
-// use arrow::array::{ StringArray,Array,};
+
 use arrow::array::{ArrayRef, TimestampNanosecondArray};
 use arrow::compute::cast;
-use arrow::datatypes::{self, IntervalUnit};
+use arrow::datatypes::IntervalDayTimeType;
+use arrow::datatypes::IntervalUnit;
 use arrow::datatypes::{DataType, TimeUnit};
-use arrow::datatypes::{Field, IntervalDayTimeType};
 use datafusion::error::Result;
-// use datafusion::scalar::ScalarFunctionDef;
-//use datafusion::physical_plan::functions::{Signature, Volatility};
-use chrono::prelude::*;
-use chrono::Months;
-use chrono::{Datelike, Duration, NaiveDate, NaiveDateTime};
+
+use chrono::NaiveDateTime;
 use datafusion::logical_expr::Volatility;
-use datafusion::physical_plan::expressions::Column;
-use datafusion_common::cast::{
-    as_date32_array, as_float64_array, as_string_array, as_timestamp_nanosecond_array,
-};
-use datafusion_common::scalar::ScalarValue;
+
 use datafusion_common::DataFusionError;
-use datafusion_expr::ColumnarValue;
 use datafusion_expr::{
     ReturnTypeFunction, ScalarFunctionDef, ScalarFunctionPackage, Signature,
 };
-use std::collections::HashSet;
 use std::sync::Arc;
 
 #[derive(Debug)]
@@ -122,7 +112,6 @@ impl ScalarFunctionPackage for FunctionPackage {
 
 #[cfg(test)]
 mod test {
-    use arrow::compute::kernels::substring;
     use datafusion::error::Result;
     use datafusion::prelude::SessionContext;
     use tokio;
@@ -132,7 +121,7 @@ mod test {
     use super::FunctionPackage;
     #[tokio::test]
     async fn test_age_function() -> Result<()> {
-        // // Test date difference within the same month
+        // Test date difference within the same month
         test_expression!(
             "age(timestamp '2001-04-10', timestamp '2001-04-11')",
             "0 years 0 mons -1 days 0 hours 0 mins 0.000 secs"
@@ -155,6 +144,11 @@ mod test {
         test_expression!(
             "age(timestamp '2001-04-13T02:00:00',timestamp '2000-04-10T01:00:00')",
             "0 years 0 mons 368 days 1 hours 0 mins 0.000 secs"
+        );
+        // Test timestamp difference
+        test_expression!(
+            "age(timestamp '2001-04-10T23:00:00.000006', timestamp '2001-04-11T22:00:00.000006')",
+            "0 years 0 mons 0 days -23 hours 0 mins 0.000 secs"
         );
 
         Ok(())
