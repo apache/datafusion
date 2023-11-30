@@ -510,9 +510,7 @@ fn rewrite_expr(expr: &Expr, input: &Projection) -> Result<Option<Expr>> {
             )))
         }
         Expr::ScalarFunction(scalar_fn) => {
-            let fun = if let ScalarFunctionDefinition::BuiltIn { fun, .. } =
-                scalar_fn.func_def
-            {
+            let fun = if let ScalarFunctionDefinition::BuiltIn(fun) = scalar_fn.func_def {
                 fun
             } else {
                 return Ok(None);

@@ -793,7 +793,7 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                 ))
             }
             Expr::ScalarFunction(ScalarFunction { func_def, args }) => match func_def {
-                ScalarFunctionDefinition::BuiltIn { fun, .. } => {
+                ScalarFunctionDefinition::BuiltIn(fun) => {
                     let fun: protobuf::ScalarFunction = fun.try_into()?;
                     let args: Vec<Self> = args
                         .iter()
