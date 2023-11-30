@@ -105,8 +105,8 @@ impl TableProvider for LocalCsvTable {
             let mut lines = 0;
             for batch in &self.batches {
                 let batch_lines = batch.num_rows();
-                if lines + batch_lines > max_return_lines as usize {
-                    let batch_lines = max_return_lines as usize - lines;
+                if lines + batch_lines > max_return_lines {
+                    let batch_lines = max_return_lines - lines;
                     batches.push(batch.slice(0, batch_lines));
                     break;
                 } else {
