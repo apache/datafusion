@@ -509,10 +509,9 @@ enum ExprMask {
     /// - [`Sort`](Expr::Sort)
     /// - [`Wildcard`](Expr::Wildcard)
     /// - [`AggregateFunction`](Expr::AggregateFunction)
-    /// - [`AggregateUDF`](Expr::AggregateUDF)
     Normal,
 
-    /// Like [`Normal`](Self::Normal), but includes [`AggregateFunction`](Expr::AggregateFunction) and [`AggregateUDF`](Expr::AggregateUDF).
+    /// Like [`Normal`](Self::Normal), but includes [`AggregateFunction`](Expr::AggregateFunction).
     NormalAndAggregates,
 }
 
@@ -528,10 +527,7 @@ impl ExprMask {
                 | Expr::Wildcard { .. }
         );
 
-        let is_aggr = matches!(
-            expr,
-            Expr::AggregateFunction(..) | Expr::AggregateUDF { .. }
-        );
+        let is_aggr = matches!(expr, Expr::AggregateFunction(..));
 
         match self {
             Self::Normal => is_normal_minus_aggregates || is_aggr,
@@ -908,7 +904,7 @@ mod test {
         let accumulator: AccumulatorFactoryFunction = Arc::new(|_| unimplemented!());
         let state_type: StateTypeFunction = Arc::new(|_| unimplemented!());
         let udf_agg = |inner: Expr| {
-            Expr::AggregateUDF(datafusion_expr::expr::AggregateUDF::new(
+            Expr::AggregateFunction(datafusion_expr::expr::AggregateFunction::new_udf(
                 Arc::new(AggregateUDF::new(
                     "my_agg",
                     &Signature::exact(vec![DataType::UInt32], Volatility::Stable),
@@ -917,6 +913,7 @@ mod test {
                     &state_type,
                 )),
                 vec![inner],
+                false,
                 None,
                 None,
             ))

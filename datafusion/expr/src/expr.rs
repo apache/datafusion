@@ -154,8 +154,6 @@ pub enum Expr {
     AggregateFunction(AggregateFunction),
     /// Represents the call of a window function with arguments.
     WindowFunction(WindowFunction),
-    /// aggregate function
-    AggregateUDF(AggregateUDF),
     /// Returns whether the list contains the expr value.
     InList(InList),
     /// EXISTS subquery
@@ -484,11 +482,33 @@ impl Sort {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+/// Defines which implementation of an aggregate function DataFusion should call.
+pub enum AggregateFunctionDefinition {
+    BuiltIn(aggregate_function::AggregateFunction),
+    /// Resolved to a user defined aggregate function
+    UDF(Arc<crate::AggregateUDF>),
+    /// A aggregation function constructed with name. This variant can not be executed directly
+    /// and instead must be resolved to one of the other variants prior to physical planning.
+    Name(Arc<str>),
+}
+
+impl AggregateFunctionDefinition {
+    /// Function's name for display
+    pub fn name(&self) -> &str {
+        match self {
+            AggregateFunctionDefinition::BuiltIn(fun) => fun.name(),
+            AggregateFunctionDefinition::UDF(udf) => udf.name(),
+            AggregateFunctionDefinition::Name(func_name) => func_name.as_ref(),
+        }
+    }
+}
+
 /// Aggregate function
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct AggregateFunction {
     /// Name of the function
-    pub fun: aggregate_function::AggregateFunction,
+    pub func_def: AggregateFunctionDefinition,
     /// List of expressions to feed to the functions as arguments
     pub args: Vec<Expr>,
     /// Whether this is a DISTINCT aggregation or not
@@ -508,7 +528,24 @@ impl AggregateFunction {
         order_by: Option<Vec<Expr>>,
     ) -> Self {
         Self {
-            fun,
+            func_def: AggregateFunctionDefinition::BuiltIn(fun),
+            args,
+            distinct,
+            filter,
+            order_by,
+        }
+    }
+
+    /// Create a new AggregateFunction expression with a user-defined function (UDF)
+    pub fn new_udf(
+        udf: Arc<crate::AggregateUDF>,
+        args: Vec<Expr>,
+        distinct: bool,
+        filter: Option<Box<Expr>>,
+        order_by: Option<Vec<Expr>>,
+    ) -> Self {
+        Self {
+            func_def: AggregateFunctionDefinition::UDF(udf),
             args,
             distinct,
             filter,
@@ -736,7 +773,6 @@ impl Expr {
     pub fn variant_name(&self) -> &str {
         match self {
             Expr::AggregateFunction { .. } => "AggregateFunction",
-            Expr::AggregateUDF { .. } => "AggregateUDF",
             Expr::Alias(..) => "Alias",
             Expr::Between { .. } => "Between",
             Expr::BinaryExpr { .. } => "BinaryExpr",
@@ -1251,30 +1287,14 @@ impl fmt::Display for Expr {
                 Ok(())
             }
             Expr::AggregateFunction(AggregateFunction {
-                fun,
+                func_def,
                 distinct,
                 ref args,
                 filter,
                 order_by,
                 ..
             }) => {
-                fmt_function(f, &fun.to_string(), *distinct, args, true)?;
-                if let Some(fe) = filter {
-                    write!(f, " FILTER (WHERE {fe})")?;
-                }
-                if let Some(ob) = order_by {
-                    write!(f, " ORDER BY [{}]", expr_vec_fmt!(ob))?;
-                }
-                Ok(())
-            }
-            Expr::AggregateUDF(AggregateUDF {
-                fun,
-                ref args,
-                filter,
-                order_by,
-                ..
-            }) => {
-                fmt_function(f, fun.name(), false, args, true)?;
+                fmt_function(f, func_def.name(), *distinct, args, true)?;
                 if let Some(fe) = filter {
                     write!(f, " FILTER (WHERE {fe})")?;
                 }
@@ -1579,39 +1599,39 @@ fn create_name(e: &Expr) -> Result<String> {
             Ok(parts.join(" "))
         }
         Expr::AggregateFunction(AggregateFunction {
-            fun,
+            func_def,
             distinct,
             args,
             filter,
             order_by,
         }) => {
-            let mut name = create_function_name(&fun.to_string(), *distinct, args)?;
-            if let Some(fe) = filter {
-                name = format!("{name} FILTER (WHERE {fe})");
+            let name = match func_def {
+                AggregateFunctionDefinition::BuiltIn(..)
+                | AggregateFunctionDefinition::Name(..) => {
+                    create_function_name(func_def.name(), *distinct, args)?
+                }
+                AggregateFunctionDefinition::UDF(..) => {
+                    let names: Vec<String> =
+                        args.iter().map(create_name).collect::<Result<_>>()?;
+                    names.join(",")
+                }
             };
-            if let Some(order_by) = order_by {
-                name = format!("{name} ORDER BY [{}]", expr_vec_fmt!(order_by));
-            };
-            Ok(name)
-        }
-        Expr::AggregateUDF(AggregateUDF {
-            fun,
-            args,
-            filter,
-            order_by,
-        }) => {
-            let mut names = Vec::with_capacity(args.len());
-            for e in args {
-                names.push(create_name(e)?);
-            }
             let mut info = String::new();
             if let Some(fe) = filter {
                 info += &format!(" FILTER (WHERE {fe})");
+            };
+            if let Some(order_by) = order_by {
+                info += &format!(" ORDER BY [{}]", expr_vec_fmt!(order_by));
+            };
+            match func_def {
+                AggregateFunctionDefinition::BuiltIn(..)
+                | AggregateFunctionDefinition::Name(..) => {
+                    Ok(format!("{}{}", name, info))
+                }
+                AggregateFunctionDefinition::UDF(fun) => {
+                    Ok(format!("{}({}){}", fun.name(), name, info))
+                }
             }
-            if let Some(ob) = order_by {
-                info += &format!(" ORDER BY ([{}])", expr_vec_fmt!(ob));
-            }
-            Ok(format!("{}({}){}", fun.name(), names.join(","), info))
         }
         Expr::GroupingSet(grouping_set) => match grouping_set {
             GroupingSet::Rollup(exprs) => {
