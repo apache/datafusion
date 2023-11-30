@@ -42,16 +42,15 @@ use datafusion_expr::type_coercion::other::{
     get_coerce_type_for_case_expression, get_coerce_type_for_list,
 };
 use datafusion_expr::type_coercion::{is_datetime, is_utf8_or_large_utf8};
+use datafusion_expr::utils::merge_schema;
 use datafusion_expr::{
     is_false, is_not_false, is_not_true, is_not_unknown, is_true, is_unknown,
     type_coercion, window_function, AggregateFunction, BuiltinScalarFunction, Expr,
-    LogicalPlan, Operator, Projection, ScalarFunctionDefinition, WindowFrame,
-    WindowFrameBound, WindowFrameUnits,
+    ExprSchemable, LogicalPlan, Operator, Projection, ScalarFunctionDefinition,
+    Signature, WindowFrame, WindowFrameBound, WindowFrameUnits,
 };
-use datafusion_expr::{ExprSchemable, Signature};
 
 use crate::analyzer::AnalyzerRule;
-use crate::utils::merge_schema;
 
 #[derive(Default)]
 pub struct TypeCoercion {}

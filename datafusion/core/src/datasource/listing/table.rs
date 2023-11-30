@@ -40,11 +40,10 @@ use crate::datasource::{
     physical_plan::{is_plan_streaming, FileScanConfig, FileSinkConfig},
     TableProvider, TableType,
 };
-use crate::logical_expr::TableProviderFilterPushDown;
 use crate::{
     error::{DataFusionError, Result},
     execution::context::SessionState,
-    logical_expr::Expr,
+    logical_expr::{utils::conjunction, Expr, TableProviderFilterPushDown},
     physical_plan::{empty::EmptyExec, ExecutionPlan, Statistics},
 };
 
@@ -56,7 +55,6 @@ use datafusion_common::{
 };
 use datafusion_execution::cache::cache_manager::FileStatisticsCache;
 use datafusion_execution::cache::cache_unit::DefaultFileStatisticsCache;
-use datafusion_optimizer::utils::conjunction;
 use datafusion_physical_expr::{
     create_physical_expr, LexOrdering, PhysicalSortRequirement,
 };
