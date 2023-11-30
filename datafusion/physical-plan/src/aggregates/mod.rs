@@ -29,7 +29,7 @@ use crate::aggregates::{
 use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::windows::{get_ordered_partition_by_indices, get_window_mode};
 use crate::{
-    DisplayFormatType, Distribution, ExecutionPlan, PartitionSearchMode, Partitioning,
+    DisplayFormatType, Distribution, ExecutionPlan, InputOrderMode, Partitioning,
     SendableRecordBatchStream, Statistics,
 };
 
@@ -299,7 +299,7 @@ pub struct AggregateExec {
     metrics: ExecutionPlanMetricsSet,
     required_input_ordering: Option<LexRequirement>,
     /// Describes how the input is ordered relative to the group by columns
-    partition_search_mode: PartitionSearchMode,
+    input_order_mode: InputOrderMode,
     /// Describe how the output is ordered
     output_ordering: Option<LexOrdering>,
 }
@@ -405,15 +405,15 @@ fn get_aggregate_search_mode(
     aggr_expr: &mut [Arc<dyn AggregateExpr>],
     order_by_expr: &mut [Option<LexOrdering>],
     ordering_req: &mut Vec<PhysicalSortExpr>,
-) -> PartitionSearchMode {
+) -> InputOrderMode {
     let groupby_exprs = group_by
         .expr
         .iter()
         .map(|(item, _)| item.clone())
         .collect::<Vec<_>>();
-    let mut partition_search_mode = PartitionSearchMode::Linear;
+    let mut input_order_mode = InputOrderMode::Linear;
     if !group_by.is_single() || groupby_exprs.is_empty() {
-        return partition_search_mode;
+        return input_order_mode;
     }
 
     if let Some((should_reverse, mode)) =
@@ -435,9 +435,9 @@ fn get_aggregate_search_mode(
             );
             *ordering_req = reverse_order_bys(ordering_req);
         }
-        partition_search_mode = mode;
+        input_order_mode = mode;
     }
-    partition_search_mode
+    input_order_mode
 }
 
 /// Check whether group by expression contains all of the expression inside `requirement`
@@ -507,7 +507,7 @@ impl AggregateExec {
             &input.equivalence_properties(),
         )?;
         let mut ordering_req = requirement.unwrap_or(vec![]);
-        let partition_search_mode = get_aggregate_search_mode(
+        let input_order_mode = get_aggregate_search_mode(
             &group_by,
             &input,
             &mut aggr_expr,
@@ -558,7 +558,7 @@ impl AggregateExec {
             metrics: ExecutionPlanMetricsSet::new(),
             required_input_ordering,
             limit: None,
-            partition_search_mode,
+            input_order_mode,
             output_ordering,
         })
     }
@@ -758,8 +758,8 @@ impl DisplayAs for AggregateExec {
                     write!(f, ", lim=[{limit}]")?;
                 }
 
-                if self.partition_search_mode != PartitionSearchMode::Linear {
-                    write!(f, ", ordering_mode={:?}", self.partition_search_mode)?;
+                if self.input_order_mode != InputOrderMode::Linear {
+                    write!(f, ", ordering_mode={:?}", self.input_order_mode)?;
                 }
             }
         }
@@ -810,7 +810,7 @@ impl ExecutionPlan for AggregateExec {
     /// infinite, returns an error to indicate this.
     fn unbounded_output(&self, children: &[bool]) -> Result<bool> {
         if children[0] {
-            if self.partition_search_mode == PartitionSearchMode::Linear {
+            if self.input_order_mode == InputOrderMode::Linear {
                 // Cannot run without breaking pipeline.
                 plan_err!(
                     "Aggregate Error: `GROUP BY` clauses with columns without ordering and GROUPING SETS are not supported for unbounded inputs."

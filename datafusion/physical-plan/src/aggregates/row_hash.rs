@@ -344,7 +344,7 @@ impl GroupedHashAggregateStream {
             .find_longest_permutation(&agg_group_by.output_exprs());
         let group_ordering = GroupOrdering::try_new(
             &group_schema,
-            &agg.partition_search_mode,
+            &agg.input_order_mode,
             ordering.as_slice(),
         )?;
 

@@ -54,7 +54,7 @@ use crate::physical_plan::windows::{
     get_best_fitting_window, BoundedWindowAggExec, WindowAggExec,
 };
 use crate::physical_plan::{
-    with_new_children_if_necessary, Distribution, ExecutionPlan, PartitionSearchMode,
+    with_new_children_if_necessary, Distribution, ExecutionPlan, InputOrderMode,
 };
 
 use datafusion_common::tree_node::{Transformed, TreeNode, VisitRecursion};
@@ -612,7 +612,7 @@ fn analyze_window_sort_removal(
                 window_expr.to_vec(),
                 window_child,
                 partitionby_exprs.to_vec(),
-                PartitionSearchMode::Sorted,
+                InputOrderMode::Sorted,
             )?) as _
         } else {
             Arc::new(WindowAggExec::try_new(

@@ -37,7 +37,7 @@
 /// Note these are the same examples as above, but with `GROUP BY` instead of
 /// `PARTITION BY` to make the examples easier to read.
 #[derive(Debug, Clone, PartialEq)]
-pub enum PartitionSearchMode {
+pub enum InputOrderMode {
     /// There is no partial permutation of the expressions satisfying the
     /// existing ordering.
     Linear,

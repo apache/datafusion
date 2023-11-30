@@ -73,7 +73,7 @@ pub mod windows;
 
 pub use crate::display::{DefaultDisplay, DisplayAs, DisplayFormatType, VerboseDisplay};
 pub use crate::metrics::Metric;
-pub use crate::ordering::PartitionSearchMode;
+pub use crate::ordering::InputOrderMode;
 pub use crate::topk::TopK;
 pub use crate::visitor::{accept, visit_execution_plan, ExecutionPlanVisitor};
 

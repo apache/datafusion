@@ -27,7 +27,7 @@ use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::physical_plan::windows::{
     create_window_expr, BoundedWindowAggExec, WindowAggExec,
 };
-use datafusion::physical_plan::{collect, ExecutionPlan, PartitionSearchMode};
+use datafusion::physical_plan::{collect, ExecutionPlan, InputOrderMode};
 use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::type_coercion::aggregates::coerce_types;
@@ -43,7 +43,7 @@ use hashbrown::HashMap;
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 
-use datafusion_physical_plan::PartitionSearchMode::{Linear, PartiallySorted, Sorted};
+use datafusion_physical_plan::InputOrderMode::{Linear, PartiallySorted, Sorted};
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
 async fn window_bounded_window_random_comparison() -> Result<()> {
@@ -383,9 +383,9 @@ async fn run_window_test(
     random_seed: u64,
     partition_by_columns: Vec<&str>,
     orderby_columns: Vec<&str>,
-    search_mode: PartitionSearchMode,
+    search_mode: InputOrderMode,
 ) -> Result<()> {
-    let is_linear = !matches!(search_mode, PartitionSearchMode::Sorted);
+    let is_linear = !matches!(search_mode, InputOrderMode::Sorted);
     let mut rng = StdRng::seed_from_u64(random_seed);
     let schema = input1[0].schema();
     let session_config = SessionConfig::new().with_batch_size(50);

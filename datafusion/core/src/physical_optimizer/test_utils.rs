@@ -35,7 +35,7 @@ use crate::physical_plan::sorts::sort::SortExec;
 use crate::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use crate::physical_plan::union::UnionExec;
 use crate::physical_plan::windows::create_window_expr;
-use crate::physical_plan::{ExecutionPlan, PartitionSearchMode, Partitioning};
+use crate::physical_plan::{ExecutionPlan, InputOrderMode, Partitioning};
 use crate::prelude::{CsvReadOptions, SessionContext};
 
 use arrow_schema::{Schema, SchemaRef, SortOptions};
@@ -239,7 +239,7 @@ pub fn bounded_window_exec(
             .unwrap()],
             input.clone(),
             vec![],
-            PartitionSearchMode::Sorted,
+            InputOrderMode::Sorted,
         )
         .unwrap(),
     )

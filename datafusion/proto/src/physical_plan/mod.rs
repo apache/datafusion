@@ -51,7 +51,7 @@ use datafusion::physical_plan::sorts::sort_preserving_merge::SortPreservingMerge
 use datafusion::physical_plan::union::UnionExec;
 use datafusion::physical_plan::windows::{BoundedWindowAggExec, WindowAggExec};
 use datafusion::physical_plan::{
-    udaf, AggregateExpr, ExecutionPlan, PartitionSearchMode, Partitioning, PhysicalExpr,
+    udaf, AggregateExpr, ExecutionPlan, InputOrderMode, Partitioning, PhysicalExpr,
     WindowExpr,
 };
 use datafusion_common::{internal_err, not_impl_err, DataFusionError, Result};
@@ -312,20 +312,18 @@ impl AsExecutionPlan for PhysicalPlanNode {
                     })
                     .collect::<Result<Vec<Arc<dyn PhysicalExpr>>>>()?;
 
-                if let Some(partition_search_mode) =
-                    window_agg.partition_search_mode.as_ref()
-                {
-                    let partition_search_mode = match partition_search_mode {
-                        window_agg_exec_node::PartitionSearchMode::Linear(_) => {
-                            PartitionSearchMode::Linear
+                if let Some(input_order_mode) = window_agg.input_order_mode.as_ref() {
+                    let input_order_mode = match input_order_mode {
+                        window_agg_exec_node::InputOrderMode::Linear(_) => {
+                            InputOrderMode::Linear
                         }
-                        window_agg_exec_node::PartitionSearchMode::PartiallySorted(
-                            protobuf::PartiallySortedPartitionSearchMode { columns },
-                        ) => PartitionSearchMode::PartiallySorted(
+                        window_agg_exec_node::InputOrderMode::PartiallySorted(
+                            protobuf::PartiallySortedInputOrderMode { columns },
+                        ) => InputOrderMode::PartiallySorted(
                             columns.iter().map(|c| *c as usize).collect(),
                         ),
-                        window_agg_exec_node::PartitionSearchMode::Sorted(_) => {
-                            PartitionSearchMode::Sorted
+                        window_agg_exec_node::InputOrderMode::Sorted(_) => {
+                            InputOrderMode::Sorted
                         }
                     };
 
@@ -333,7 +331,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
                         physical_window_expr,
                         input,
                         partition_keys,
-                        partition_search_mode,
+                        input_order_mode,
                     )?))
                 } else {
                     Ok(Arc::new(WindowAggExec::try_new(
@@ -1559,7 +1557,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
                         input: Some(Box::new(input)),
                         window_expr,
                         partition_keys,
-                        partition_search_mode: None,
+                        input_order_mode: None,
                     },
                 ))),
             });
@@ -1583,24 +1581,20 @@ impl AsExecutionPlan for PhysicalPlanNode {
                 .map(|e| e.clone().try_into())
                 .collect::<Result<Vec<protobuf::PhysicalExprNode>>>()?;
 
-            let partition_search_mode = match &exec.partition_search_mode {
-                PartitionSearchMode::Linear => {
-                    window_agg_exec_node::PartitionSearchMode::Linear(
-                        protobuf::EmptyMessage {},
-                    )
-                }
-                PartitionSearchMode::PartiallySorted(columns) => {
-                    window_agg_exec_node::PartitionSearchMode::PartiallySorted(
-                        protobuf::PartiallySortedPartitionSearchMode {
+            let input_order_mode = match &exec.input_order_mode {
+                InputOrderMode::Linear => window_agg_exec_node::InputOrderMode::Linear(
+                    protobuf::EmptyMessage {},
+                ),
+                InputOrderMode::PartiallySorted(columns) => {
+                    window_agg_exec_node::InputOrderMode::PartiallySorted(
+                        protobuf::PartiallySortedInputOrderMode {
                             columns: columns.iter().map(|c| *c as u64).collect(),
                         },
                     )
                 }
-                PartitionSearchMode::Sorted => {
-                    window_agg_exec_node::PartitionSearchMode::Sorted(
-                        protobuf::EmptyMessage {},
-                    )
-                }
+                InputOrderMode::Sorted => window_agg_exec_node::InputOrderMode::Sorted(
+                    protobuf::EmptyMessage {},
+                ),
             };
 
             return Ok(protobuf::PhysicalPlanNode {
@@ -1609,7 +1603,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
                         input: Some(Box::new(input)),
                         window_expr,
                         partition_keys,
-                        partition_search_mode: Some(partition_search_mode),
+                        input_order_mode: Some(input_order_mode),
                     },
                 ))),
             });

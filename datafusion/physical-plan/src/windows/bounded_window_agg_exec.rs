@@ -35,7 +35,7 @@ use crate::windows::{
 };
 use crate::{
     ColumnStatistics, DisplayAs, DisplayFormatType, Distribution, ExecutionPlan,
-    PartitionSearchMode, Partitioning, RecordBatchStream, SendableRecordBatchStream,
+    InputOrderMode, Partitioning, RecordBatchStream, SendableRecordBatchStream,
     Statistics, WindowExpr,
 };
 
@@ -82,8 +82,8 @@ pub struct BoundedWindowAggExec {
     pub partition_keys: Vec<Arc<dyn PhysicalExpr>>,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
-    /// Partition by search mode
-    pub partition_search_mode: PartitionSearchMode,
+    /// Describes how the input is ordered relative to the partition keys
+    pub input_order_mode: InputOrderMode,
     /// Partition by indices that define ordering
     // For example, if input ordering is ORDER BY a, b and window expression
     // contains PARTITION BY b, a; `ordered_partition_by_indices` would be 1, 0.
@@ -99,13 +99,13 @@ impl BoundedWindowAggExec {
         window_expr: Vec<Arc<dyn WindowExpr>>,
         input: Arc<dyn ExecutionPlan>,
         partition_keys: Vec<Arc<dyn PhysicalExpr>>,
-        partition_search_mode: PartitionSearchMode,
+        input_order_mode: InputOrderMode,
     ) -> Result<Self> {
         let schema = create_schema(&input.schema(), &window_expr)?;
         let schema = Arc::new(schema);
         let partition_by_exprs = window_expr[0].partition_by();
-        let ordered_partition_by_indices = match &partition_search_mode {
-            PartitionSearchMode::Sorted => {
+        let ordered_partition_by_indices = match &input_order_mode {
+            InputOrderMode::Sorted => {
                 let indices = get_ordered_partition_by_indices(
                     window_expr[0].partition_by(),
                     &input,
@@ -116,10 +116,8 @@ impl BoundedWindowAggExec {
                     (0..partition_by_exprs.len()).collect::<Vec<_>>()
                 }
             }
-            PartitionSearchMode::PartiallySorted(ordered_indices) => {
-                ordered_indices.clone()
-            }
-            PartitionSearchMode::Linear => {
+            InputOrderMode::PartiallySorted(ordered_indices) => ordered_indices.clone(),
+            InputOrderMode::Linear => {
                 vec![]
             }
         };
@@ -129,7 +127,7 @@ impl BoundedWindowAggExec {
             schema,
             partition_keys,
             metrics: ExecutionPlanMetricsSet::new(),
-            partition_search_mode,
+            input_order_mode,
             ordered_partition_by_indices,
         })
     }
@@ -163,8 +161,8 @@ impl BoundedWindowAggExec {
     fn get_search_algo(&self) -> Result<Box<dyn PartitionSearcher>> {
         let partition_by_sort_keys = self.partition_by_sort_keys()?;
         let ordered_partition_by_indices = self.ordered_partition_by_indices.clone();
-        Ok(match &self.partition_search_mode {
-            PartitionSearchMode::Sorted => {
+        Ok(match &self.input_order_mode {
+            InputOrderMode::Sorted => {
                 // In Sorted mode, all partition by columns should be ordered.
                 if self.window_expr()[0].partition_by().len()
                     != ordered_partition_by_indices.len()
@@ -176,7 +174,7 @@ impl BoundedWindowAggExec {
                     ordered_partition_by_indices,
                 })
             }
-            PartitionSearchMode::Linear | PartitionSearchMode::PartiallySorted(_) => {
+            InputOrderMode::Linear | InputOrderMode::PartiallySorted(_) => {
                 Box::new(LinearSearch::new(ordered_partition_by_indices))
             }
         })
@@ -204,7 +202,7 @@ impl DisplayAs for BoundedWindowAggExec {
                         )
                     })
                     .collect();
-                let mode = &self.partition_search_mode;
+                let mode = &self.input_order_mode;
                 write!(f, "wdw=[{}], mode=[{:?}]", g.join(", "), mode)?;
             }
         }
@@ -245,7 +243,7 @@ impl ExecutionPlan for BoundedWindowAggExec {
     fn required_input_ordering(&self) -> Vec<Option<Vec<PhysicalSortRequirement>>> {
         let partition_bys = self.window_expr()[0].partition_by();
         let order_keys = self.window_expr()[0].order_by();
-        if self.partition_search_mode != PartitionSearchMode::Sorted
+        if self.input_order_mode != InputOrderMode::Sorted
             || self.ordered_partition_by_indices.len() >= partition_bys.len()
         {
             let partition_bys = self
@@ -284,7 +282,7 @@ impl ExecutionPlan for BoundedWindowAggExec {
             self.window_expr.clone(),
             children[0].clone(),
             self.partition_keys.clone(),
-            self.partition_search_mode.clone(),
+            self.input_order_mode.clone(),
         )?))
     }
 
@@ -1115,7 +1113,7 @@ fn get_aggregate_result_out_column(
 mod tests {
     use crate::common::collect;
     use crate::memory::MemoryExec;
-    use crate::windows::{BoundedWindowAggExec, PartitionSearchMode};
+    use crate::windows::{BoundedWindowAggExec, InputOrderMode};
     use crate::{get_plan_string, ExecutionPlan};
     use arrow_array::RecordBatch;
     use arrow_schema::{DataType, Field, Schema};
@@ -1202,7 +1200,7 @@ mod tests {
             window_exprs,
             memory_exec,
             vec![],
-            PartitionSearchMode::Sorted,
+            InputOrderMode::Sorted,
         )
         .map(|e| Arc::new(e) as Arc<dyn ExecutionPlan>)?;
 
