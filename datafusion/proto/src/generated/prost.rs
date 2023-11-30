@@ -2116,9 +2116,7 @@ pub struct WindowAggExecNode {
     pub partition_keys: ::prost::alloc::vec::Vec<PhysicalExprNode>,
     /// Set optional to `None` for `BoundedWindowAggExec`.
     #[prost(oneof = "window_agg_exec_node::InputOrderMode", tags = "7, 8, 9")]
-    pub input_order_mode: ::core::option::Option<
-        window_agg_exec_node::InputOrderMode,
-    >,
+    pub input_order_mode: ::core::option::Option<window_agg_exec_node::InputOrderMode>,
 }
 /// Nested message and enum types in `WindowAggExecNode`.
 pub mod window_agg_exec_node {
