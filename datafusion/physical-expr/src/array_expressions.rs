@@ -2012,10 +2012,7 @@ pub fn general_array_distinct<OffsetSize: OffsetSizeTrait>(
         let values = converter.convert_columns(&[arr])?;
         // sort elements in list and remove duplicates
         let rows = values.iter().sorted().dedup().collect::<Vec<_>>();
-        let last_offset: OffsetSize = match offsets.last().copied() {
-            Some(offset) => offset,
-            None => return internal_err!("offsets should not be empty"),
-        };
+        let last_offset: OffsetSize = offsets.last().copied().unwrap();
         offsets.push(last_offset + OffsetSize::usize_as(rows.len()));
         let arrays = converter.convert_rows(rows)?;
         let array = match arrays.get(0) {

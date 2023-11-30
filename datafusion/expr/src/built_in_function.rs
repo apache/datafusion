@@ -1556,71 +1556,81 @@ impl BuiltinScalarFunction {
             // other functions
             BuiltinScalarFunction::ArrowTypeof => &["arrow_typeof"],
 
-        // array functions
-        BuiltinScalarFunction::ArrayAppend => &[
-            "array_append",
-            "list_append",
-            "array_push_back",
-            "list_push_back",
-        ],
-        BuiltinScalarFunction::ArrayConcat => {
-            &["array_concat", "array_cat", "list_concat", "list_cat"]
-        }
-        BuiltinScalarFunction::ArrayDims => &["array_dims", "list_dims"],
-		BuiltinScalarFunction::ArrayDistinct => &["array_distinct", "list_distinct"],
-        BuiltinScalarFunction::ArrayEmpty => &["empty"],
-        BuiltinScalarFunction::ArrayElement => &[
-            "array_element",
-            "array_extract",
-            "list_element",
-            "list_extract",
-        ],
-        BuiltinScalarFunction::ArrayExcept => &["array_except", "list_except"],
-        BuiltinScalarFunction::Flatten => &["flatten"],
-        BuiltinScalarFunction::ArrayHasAll => &["array_has_all", "list_has_all"],
-        BuiltinScalarFunction::ArrayHasAny => &["array_has_any", "list_has_any"],
-        BuiltinScalarFunction::ArrayHas => {
-            &["array_has", "list_has", "array_contains", "list_contains"]
-        }
-        BuiltinScalarFunction::ArrayLength => &["array_length", "list_length"],
-        BuiltinScalarFunction::ArrayNdims => &["array_ndims", "list_ndims"],
-        BuiltinScalarFunction::ArrayPopFront => &["array_pop_front", "list_pop_front"],
-        BuiltinScalarFunction::ArrayPopBack => &["array_pop_back", "list_pop_back"],
-        BuiltinScalarFunction::ArrayPosition => &[
-            "array_position",
-            "list_position",
-            "array_indexof",
-            "list_indexof",
-        ],
-        BuiltinScalarFunction::ArrayPositions => &["array_positions", "list_positions"],
-        BuiltinScalarFunction::ArrayPrepend => &[
-            "array_prepend",
-            "list_prepend",
-            "array_push_front",
-            "list_push_front",
-        ],
-        BuiltinScalarFunction::ArrayRepeat => &["array_repeat", "list_repeat"],
-        BuiltinScalarFunction::ArrayRemove => &["array_remove", "list_remove"],
-        BuiltinScalarFunction::ArrayRemoveN => &["array_remove_n", "list_remove_n"],
-        BuiltinScalarFunction::ArrayRemoveAll => &["array_remove_all", "list_remove_all"],
-        BuiltinScalarFunction::ArrayReplace => &["array_replace", "list_replace"],
-        BuiltinScalarFunction::ArrayReplaceN => &["array_replace_n", "list_replace_n"],
-        BuiltinScalarFunction::ArrayReplaceAll => {
-            &["array_replace_all", "list_replace_all"]
-        }
-        BuiltinScalarFunction::ArraySlice => &["array_slice", "list_slice"],
-        BuiltinScalarFunction::ArrayToString => &[
-            "array_to_string",
-            "list_to_string",
-            "array_join",
-            "list_join",
-        ],
-        BuiltinScalarFunction::ArrayUnion => &["array_union", "list_union"],
-        BuiltinScalarFunction::Cardinality => &["cardinality"],
-        BuiltinScalarFunction::MakeArray => &["make_array", "make_list"],
-        BuiltinScalarFunction::ArrayIntersect => &["array_intersect", "list_intersect"],
-        BuiltinScalarFunction::OverLay => &["overlay"],
-        BuiltinScalarFunction::Range => &["range", "generate_series"],
+            // array functions
+            BuiltinScalarFunction::ArrayAppend => &[
+                "array_append",
+                "list_append",
+                "array_push_back",
+                "list_push_back",
+            ],
+            BuiltinScalarFunction::ArrayConcat => {
+                &["array_concat", "array_cat", "list_concat", "list_cat"]
+            }
+            BuiltinScalarFunction::ArrayDims => &["array_dims", "list_dims"],
+            BuiltinScalarFunction::ArrayDistinct => &["array_distinct", "list_distinct"],
+            BuiltinScalarFunction::ArrayEmpty => &["empty"],
+            BuiltinScalarFunction::ArrayElement => &[
+                "array_element",
+                "array_extract",
+                "list_element",
+                "list_extract",
+            ],
+            BuiltinScalarFunction::ArrayExcept => &["array_except", "list_except"],
+            BuiltinScalarFunction::Flatten => &["flatten"],
+            BuiltinScalarFunction::ArrayHasAll => &["array_has_all", "list_has_all"],
+            BuiltinScalarFunction::ArrayHasAny => &["array_has_any", "list_has_any"],
+            BuiltinScalarFunction::ArrayHas => {
+                &["array_has", "list_has", "array_contains", "list_contains"]
+            }
+            BuiltinScalarFunction::ArrayLength => &["array_length", "list_length"],
+            BuiltinScalarFunction::ArrayNdims => &["array_ndims", "list_ndims"],
+            BuiltinScalarFunction::ArrayPopFront => {
+                &["array_pop_front", "list_pop_front"]
+            }
+            BuiltinScalarFunction::ArrayPopBack => &["array_pop_back", "list_pop_back"],
+            BuiltinScalarFunction::ArrayPosition => &[
+                "array_position",
+                "list_position",
+                "array_indexof",
+                "list_indexof",
+            ],
+            BuiltinScalarFunction::ArrayPositions => {
+                &["array_positions", "list_positions"]
+            }
+            BuiltinScalarFunction::ArrayPrepend => &[
+                "array_prepend",
+                "list_prepend",
+                "array_push_front",
+                "list_push_front",
+            ],
+            BuiltinScalarFunction::ArrayRepeat => &["array_repeat", "list_repeat"],
+            BuiltinScalarFunction::ArrayRemove => &["array_remove", "list_remove"],
+            BuiltinScalarFunction::ArrayRemoveN => &["array_remove_n", "list_remove_n"],
+            BuiltinScalarFunction::ArrayRemoveAll => {
+                &["array_remove_all", "list_remove_all"]
+            }
+            BuiltinScalarFunction::ArrayReplace => &["array_replace", "list_replace"],
+            BuiltinScalarFunction::ArrayReplaceN => {
+                &["array_replace_n", "list_replace_n"]
+            }
+            BuiltinScalarFunction::ArrayReplaceAll => {
+                &["array_replace_all", "list_replace_all"]
+            }
+            BuiltinScalarFunction::ArraySlice => &["array_slice", "list_slice"],
+            BuiltinScalarFunction::ArrayToString => &[
+                "array_to_string",
+                "list_to_string",
+                "array_join",
+                "list_join",
+            ],
+            BuiltinScalarFunction::ArrayUnion => &["array_union", "list_union"],
+            BuiltinScalarFunction::Cardinality => &["cardinality"],
+            BuiltinScalarFunction::MakeArray => &["make_array", "make_list"],
+            BuiltinScalarFunction::ArrayIntersect => {
+                &["array_intersect", "list_intersect"]
+            }
+            BuiltinScalarFunction::OverLay => &["overlay"],
+            BuiltinScalarFunction::Range => &["range", "generate_series"],
 
             // struct functions
             BuiltinScalarFunction::Struct => &["struct"],
