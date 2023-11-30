@@ -161,10 +161,6 @@ pub fn to_timestamp_micros(args: &[ColumnarValue]) -> Result<ColumnarValue> {
 }
 
 /// to_timestamp_nanos SQL function
-///
-/// Note: `to_timestamp_nanos` returns `Timestamp(Nanosecond)`. The supported range for integer input is between `-9223372037` and `9223372036`.
-/// Supported range for string input is between `1677-09-21T00:12:44.0` and `2262-04-11T23:47:16.0`.
-/// Please use `to_timestamp_seconds` for the input outside of supported bounds.
 pub fn to_timestamp_nanos(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     handle::<TimestampNanosecondType, _, TimestampNanosecondType>(
         args,
