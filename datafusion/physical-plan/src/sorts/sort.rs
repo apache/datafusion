@@ -1006,7 +1006,7 @@ mod tests {
 
         let result = collect(sort_exec.clone(), task_ctx.clone()).await?;
 
-        assert_eq!(result.len(), 2);
+        assert_eq!(result.len(), 1);
 
         // Now, validate metrics
         let metrics = sort_exec.metrics().unwrap();
@@ -1020,7 +1020,7 @@ mod tests {
 
         let i = as_primitive_array::<Int32Type>(&columns[0])?;
         assert_eq!(i.value(0), 0);
-        assert_eq!(i.value(i.len() - 1), 81);
+        assert_eq!(i.value(i.len() - 1), 99);
 
         assert_eq!(
             task_ctx.runtime_env().memory_pool.reserved(),
