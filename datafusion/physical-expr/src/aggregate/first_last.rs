@@ -220,7 +220,7 @@ impl Accumulator for FirstValueAccumulator {
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         // If we have seen first value, we shouldn't update it
         if !values[0].is_empty() {
-            let first_idx = self.get_first_value_idx(values)?;
+            let first_idx = get_value_idx::<true>(values, &self.ordering_req)?;
             let row = get_row_at_idx(values, first_idx)?;
             self.update_with_new_row(&row)?;
         }
@@ -271,25 +271,6 @@ impl Accumulator for FirstValueAccumulator {
             + self.first.size()
             + ScalarValue::size_of_vec(&self.orderings)
             - std::mem::size_of_val(&self.orderings)
-    }
-}
-
-impl FirstValueAccumulator {
-    fn get_first_value_idx(&self, values: &[ArrayRef]) -> Result<usize> {
-        Ok(if self.ordering_req.is_empty() {
-            values[0].len() - 1
-        } else {
-            let sort_columns = values[1..]
-                .iter()
-                .zip(self.ordering_req.iter())
-                .map(|(col, sort_expr)| SortColumn {
-                    values: col.clone(),
-                    options: Some(sort_expr.options),
-                })
-                .collect::<Vec<_>>();
-            let indices = lexsort_to_indices(&sort_columns, Some(1))?;
-            indices.value(0) as usize
-        })
     }
 }
 
@@ -478,7 +459,7 @@ impl Accumulator for LastValueAccumulator {
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         // If we have seen first value, we shouldn't update it
         if !values[0].is_empty() {
-            let last_idx = self.get_last_value_idx(values)?;
+            let last_idx = get_value_idx::<false>(values, &self.ordering_req)?;
             let row = get_row_at_idx(values, last_idx)?;
             self.update_with_new_row(&row)?;
         }
@@ -535,25 +516,6 @@ impl Accumulator for LastValueAccumulator {
     }
 }
 
-impl LastValueAccumulator {
-    fn get_last_value_idx(&self, values: &[ArrayRef]) -> Result<usize> {
-        Ok(if self.ordering_req.is_empty() {
-            values[0].len() - 1
-        } else {
-            let sort_columns = values[1..]
-                .iter()
-                .zip(self.ordering_req.iter())
-                .map(|(col, sort_expr)| SortColumn {
-                    values: col.clone(),
-                    options: Some(!sort_expr.options),
-                })
-                .collect::<Vec<_>>();
-            let indices = lexsort_to_indices(&sort_columns, Some(1))?;
-            indices.value(0) as usize
-        })
-    }
-}
-
 /// Filters states according to the `is_set` flag at the last column and returns
 /// the resulting states.
 fn filter_states_according_to_is_set(
@@ -586,6 +548,40 @@ fn get_sort_options(ordering_req: &[PhysicalSortExpr]) -> Vec<SortOptions> {
         .iter()
         .map(|item| item.options)
         .collect::<Vec<_>>()
+}
+
+/// Gets either first, or last value index inside values columns according to ordering requirements
+fn get_value_idx<const FIRST: bool>(
+    values: &[ArrayRef],
+    ordering_req: &[PhysicalSortExpr],
+) -> Result<usize> {
+    let value = &values[0];
+    let ordering_values = &values[1..];
+    Ok(if ordering_req.is_empty() {
+        value.len() - 1
+    } else {
+        let sort_options = if FIRST {
+            get_sort_options(ordering_req)
+        } else {
+            // last
+            // Reverse requirement options (e.g last, is the first entry in the reverse order)
+            ordering_req
+                .iter()
+                .map(|sort_expr| !sort_expr.options)
+                .collect()
+        };
+
+        let sort_columns = ordering_values
+            .iter()
+            .zip(sort_options)
+            .map(|(col, options)| SortColumn {
+                values: col.clone(),
+                options: Some(options),
+            })
+            .collect::<Vec<_>>();
+        let indices = lexsort_to_indices(&sort_columns, Some(1))?;
+        indices.value(0) as usize
+    })
 }
 
 #[cfg(test)]
