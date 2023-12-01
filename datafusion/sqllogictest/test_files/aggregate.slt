@@ -3066,7 +3066,7 @@ from aggregate_test_100;
 0.051534002628 0.48427355347 100 0.001929150558 0.479274948239 0.508972509913 6.707779292571 9.234223721582 0.345678715695
 
 statement ok
-set datafusion.execution.batch_size = 8192;
+set datafusion.execution.batch_size = 32768;
 
 
 

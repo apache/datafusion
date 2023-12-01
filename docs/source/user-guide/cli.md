@@ -405,7 +405,7 @@ Available commands inside DataFusion CLI are:
 +-------------------------------------------------+---------+
 | name                                            | value   |
 +-------------------------------------------------+---------+
-| datafusion.execution.batch_size                 | 8192    |
+| datafusion.execution.batch_size                 | 32768    |
 | datafusion.execution.coalesce_batches           | true    |
 | datafusion.execution.time_zone                  | UTC     |
 | datafusion.explain.logical_plan_only            | false   |
@@ -426,7 +426,7 @@ Available commands inside DataFusion CLI are:
 +-------------------------------------------------+---------+
 | name                                            | value   |
 +-------------------------------------------------+---------+
-| datafusion.execution.batch_size                 | 8192    |
+| datafusion.execution.batch_size                 | 32768    |
 +-------------------------------------------------+---------+
 
 ```
@@ -477,7 +477,7 @@ DataFusion CLI v13.0.0
 +---------------------------------+---------+
 | name                            | value   |
 +---------------------------------+---------+
-| datafusion.execution.batch_size | 8192    |
+| datafusion.execution.batch_size | 32768    |
 +---------------------------------+---------+
 1 row in set. Query took 0.011 seconds.
 

@@ -326,7 +326,7 @@ mod tests {
         let common = CommonOpt {
             iterations: 1,
             partitions: Some(2),
-            batch_size: 8192,
+            batch_size: 32768,
             debug: false,
         };
         let opt = RunOpt {
@@ -358,7 +358,7 @@ mod tests {
         let common = CommonOpt {
             iterations: 1,
             partitions: Some(2),
-            batch_size: 8192,
+            batch_size: 32768,
             debug: false,
         };
         let opt = RunOpt {

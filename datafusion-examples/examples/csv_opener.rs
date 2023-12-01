@@ -42,7 +42,7 @@ async fn main() -> Result<()> {
     let schema = aggr_test_schema();
 
     let config = CsvConfig::new(
-        8192,
+        32768,
         schema.clone(),
         Some(vec![12, 0]),
         true,

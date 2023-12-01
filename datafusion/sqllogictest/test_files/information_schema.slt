@@ -147,7 +147,7 @@ datafusion.catalog.has_header false
 datafusion.catalog.information_schema true
 datafusion.catalog.location NULL
 datafusion.execution.aggregate.scalar_update_factor 10
-datafusion.execution.batch_size 8192
+datafusion.execution.batch_size 32768
 datafusion.execution.coalesce_batches true
 datafusion.execution.collect_statistics false
 datafusion.execution.max_buffered_batches_per_output_file 2
@@ -220,7 +220,7 @@ datafusion.catalog.has_header false If the file has a header
 datafusion.catalog.information_schema true Should DataFusion provide access to `information_schema` virtual tables for displaying schema information
 datafusion.catalog.location NULL Location scanned to load tables for `default` schema
 datafusion.execution.aggregate.scalar_update_factor 10 Specifies the threshold for using `ScalarValue`s to update accumulators during high-cardinality aggregations for each input batch. The aggregation is considered high-cardinality if the number of affected groups is greater than or equal to `batch_size / scalar_update_factor`. In such cases, `ScalarValue`s are utilized for updating accumulators, rather than the default batch-slice approach. This can lead to performance improvements. By adjusting the `scalar_update_factor`, you can balance the trade-off between more efficient accumulator updates and the number of groups affected.
-datafusion.execution.batch_size 8192 Default batch size while creating new batches, it's especially useful for buffer-in-memory batches since creating tiny batches would result in too much metadata memory consumption
+datafusion.execution.batch_size 32768 Default batch size while creating new batches, it's especially useful for buffer-in-memory batches since creating tiny batches would result in too much metadata memory consumption
 datafusion.execution.coalesce_batches true When set to true, record batches will be examined between each operator and small batches will be coalesced into larger batches. This is helpful when there are highly selective filters or joins that could produce tiny output batches. The target batch size is determined by the configuration setting
 datafusion.execution.collect_statistics false Should DataFusion collect statistics after listing files
 datafusion.execution.max_buffered_batches_per_output_file 2 This is the maximum number of RecordBatches buffered for each output file being worked. Higher values can potentially give faster write performance at the cost of higher peak memory consumption
@@ -285,13 +285,13 @@ datafusion.sql_parser.parse_float_as_decimal false When set to true, SQL parser 
 query TT
 SHOW datafusion.execution.batch_size
 ----
-datafusion.execution.batch_size 8192
+datafusion.execution.batch_size 32768
 
 # show_variable_in_config_options_verbose
 query TTT
 SHOW datafusion.execution.batch_size VERBOSE
 ----
-datafusion.execution.batch_size 8192 Default batch size while creating new batches, it's especially useful for buffer-in-memory batches since creating tiny batches would result in too much metadata memory consumption
+datafusion.execution.batch_size 32768 Default batch size while creating new batches, it's especially useful for buffer-in-memory batches since creating tiny batches would result in too much metadata memory consumption
 
 # show_time_zone_default_utc
 # https://github.com/apache/arrow-datafusion/issues/3255

@@ -53,7 +53,7 @@ fn create_context(
 fn criterion_benchmark_limited_distinct(c: &mut Criterion) {
     let partitions_len = 10;
     let array_len = 1 << 26; // 64 M
-    let batch_size = 8192;
+    let batch_size = 32768;
     let ctx = create_context(partitions_len, array_len, batch_size).unwrap();
 
     let mut group = c.benchmark_group("custom-measurement-time");

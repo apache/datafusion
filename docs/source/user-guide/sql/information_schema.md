@@ -60,7 +60,7 @@ To show the current session configuration options, use the `SHOW ALL` command or
 +-------------------------------------------------+---------+
 | name                                            | setting |
 +-------------------------------------------------+---------+
-| datafusion.execution.batch_size                 | 8192    |
+| datafusion.execution.batch_size                 | 32768    |
 | datafusion.execution.coalesce_batches           | true    |
 | datafusion.execution.time_zone                  | UTC     |
 | datafusion.explain.logical_plan_only            | false   |

@@ -55,7 +55,7 @@ async fn main() -> Result<()> {
     let projected = Arc::new(schema.clone().project(&[1, 0])?);
 
     let opener = JsonOpener::new(
-        8192,
+        32768,
         projected,
         FileCompressionType::UNCOMPRESSED,
         Arc::new(object_store),

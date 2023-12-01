@@ -78,7 +78,7 @@ CoalesceBatchesExec: target_batch_size=1234
 
 
 statement ok
-set datafusion.execution.batch_size = 8192;
+set datafusion.execution.batch_size = 32768;
 
 statement ok
 drop table a

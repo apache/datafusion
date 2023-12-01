@@ -293,7 +293,7 @@ Example output:
 
 ```
 Running benchmarks with the following options: Opt { debug: false, iterations: 3, partitions: 2, path: "./data",
-batch_size: 8192, scale_factor: 1.0 }
+batch_size: 32768, scale_factor: 1.0 }
 Generated test dataset with 10699521 rows
 Executing with filter 'request_method = Utf8("GET")'
 Using scan options ParquetScanOptions { pushdown_filters: false, reorder_predicates: false, enable_page_index: false }
