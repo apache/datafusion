@@ -43,7 +43,6 @@ use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{DataFusionError, JoinType};
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::PhysicalExpr;
-use itertools::Itertools;
 
 /// The [`JoinSelection`] rule tries to modify a given plan so that it can
 /// accommodate infinite sources and optimize joins in the plan according to
@@ -435,7 +434,7 @@ fn hash_join_convert_symmetric_subrule(
     config_options: &ConfigOptions,
 ) -> Option<Result<PipelineStatePropagator>> {
     if let Some(hash_join) = input.plan.as_any().downcast_ref::<HashJoinExec>() {
-        let ub_flags = input.children.iter().map(|c| c.unbounded).collect_vec();
+        let ub_flags = input.children_unbounded();
         let (left_unbounded, right_unbounded) = (ub_flags[0], ub_flags[1]);
         input.unbounded = left_unbounded || right_unbounded;
         let result = if left_unbounded && right_unbounded {
@@ -512,7 +511,7 @@ fn hash_join_swap_subrule(
     _config_options: &ConfigOptions,
 ) -> Option<Result<PipelineStatePropagator>> {
     if let Some(hash_join) = input.plan.as_any().downcast_ref::<HashJoinExec>() {
-        let ub_flags = input.children.iter().map(|c| c.unbounded).collect_vec();
+        let ub_flags = input.children_unbounded();
         let (left_unbounded, right_unbounded) = (ub_flags[0], ub_flags[1]);
         input.unbounded = left_unbounded || right_unbounded;
         let result = if left_unbounded
@@ -578,7 +577,7 @@ fn apply_subrules(
     }
     let is_unbounded = input
         .plan
-        .unbounded_output(&input.children.iter().map(|c| c.unbounded).collect_vec())
+        .unbounded_output(&input.children_unbounded())
         // Treat the case where an operator can not run on unbounded data as
         // if it can and it outputs unbounded data. Do not raise an error yet.
         // Such operators may be fixed, adjusted or replaced later on during

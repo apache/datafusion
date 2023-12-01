@@ -83,6 +83,14 @@ impl PipelineStatePropagator {
             children: children.into_iter().map(Self::new).collect(),
         }
     }
+
+    /// Returns the children unboundedness information.
+    pub fn children_unbounded(&self) -> Vec<bool> {
+        self.children
+            .iter()
+            .map(|c| c.unbounded)
+            .collect::<Vec<_>>()
+    }
 }
 
 impl TreeNode for PipelineStatePropagator {
@@ -141,13 +149,7 @@ pub fn check_finiteness_requirements(
     }
     input
         .plan
-        .unbounded_output(
-            &input
-                .children
-                .iter()
-                .map(|c| c.unbounded)
-                .collect::<Vec<_>>(),
-        )
+        .unbounded_output(&input.children_unbounded())
         .map(|value| {
             input.unbounded = value;
             Transformed::Yes(input)
