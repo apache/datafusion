@@ -35,13 +35,11 @@
 use std::sync::Arc;
 
 use arrow::{
-    array::{ArrayRef, Time32MillisecondArray, TimestampMillisecondArray},
+    array::{ArrayRef, Time32MillisecondArray},
     datatypes::{DataType, TimeUnit},
 };
-use chrono::{DateTime, Local, Timelike, Utc};
+use chrono::Timelike;
 use datafusion::error::Result;
-use datafusion::physical_expr::datetime_expressions::{self, to_timestamp_millis};
-use datafusion_common::{DataFusionError, ScalarValue};
 use datafusion_expr::{
     ReturnTypeFunction, ScalarFunctionDef, ScalarFunctionPackage, Signature, Volatility,
 };
