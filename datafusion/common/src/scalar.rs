@@ -64,7 +64,7 @@ use arrow_array::{ArrowNativeTypeOp, Scalar};
 /// // Create single scalar value for an Int32 value
 /// let s1 = ScalarValue::Int32(Some(10));
 ///
-/// // You an also create values using the From impl:
+/// // You can also create values using the From impl:
 /// let s2 = ScalarValue::from(10i32);
 /// assert_eq!(s1, s2);
 /// ```
