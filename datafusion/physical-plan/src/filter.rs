@@ -151,7 +151,7 @@ impl ExecutionPlan for FilterExec {
     }
 
     fn equivalence_properties(&self) -> EquivalenceProperties {
-        let stats = self.input().statistics().unwrap();
+        let stats = self.statistics().unwrap();
         // Combine the equal predicates with the input equivalence properties
         let mut result = self.input.equivalence_properties();
 
