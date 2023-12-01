@@ -189,10 +189,13 @@ impl FirstValueAccumulator {
     fn update_with_new_row(&mut self, row: &[ScalarValue]) -> Result<()> {
         let value = &row[0];
         let orderings = &row[1..];
+        // Update when
+        // - no entry in the state
+        // - There is an earlier entry in according to requirements
         if !self.is_set
             || compare_rows(
                 &self.orderings,
-                &orderings,
+                orderings,
                 &get_sort_options(&self.ordering_req),
             )?
             .is_gt()
@@ -424,10 +427,15 @@ impl LastValueAccumulator {
     fn update_with_new_row(&mut self, row: &[ScalarValue]) -> Result<()> {
         let value = &row[0];
         let orderings = &row[1..];
+        // Update when
+        // - no value in the state
+        // - There is no specific requirement, but a new value (most recent entry in terms of execution)
+        // - There is a more recent entry in terms of requirement
         if !self.is_set
+            || self.orderings.is_empty()
             || compare_rows(
                 &self.orderings,
-                &orderings,
+                orderings,
                 &get_sort_options(&self.ordering_req),
             )?
             .is_lt()
