@@ -70,17 +70,17 @@ impl PhysicalOptimizerRule for PipelineChecker {
 pub struct PipelineStatePropagator {
     pub(crate) plan: Arc<dyn ExecutionPlan>,
     pub(crate) unbounded: bool,
-    pub(crate) children_unbounded: Vec<bool>,
+    pub(crate) children: Vec<PipelineStatePropagator>,
 }
 
 impl PipelineStatePropagator {
     /// Constructs a new, default pipelining state.
     pub fn new(plan: Arc<dyn ExecutionPlan>) -> Self {
-        let length = plan.children().len();
+        let children = plan.children();
         PipelineStatePropagator {
             plan,
             unbounded: false,
-            children_unbounded: vec![false; length],
+            children: children.into_iter().map(Self::new).collect(),
         }
     }
 }
@@ -90,9 +90,8 @@ impl TreeNode for PipelineStatePropagator {
     where
         F: FnMut(&Self) -> Result<VisitRecursion>,
     {
-        let children = self.plan.children();
-        for child in children {
-            match op(&PipelineStatePropagator::new(child))? {
+        for child in &self.children {
+            match op(child)? {
                 VisitRecursion::Continue => {}
                 VisitRecursion::Skip => return Ok(VisitRecursion::Continue),
                 VisitRecursion::Stop => return Ok(VisitRecursion::Stop),
@@ -106,25 +105,18 @@ impl TreeNode for PipelineStatePropagator {
     where
         F: FnMut(Self) -> Result<Self>,
     {
-        let children = self.plan.children();
-        if !children.is_empty() {
-            let new_children = children
+        if !self.children.is_empty() {
+            let new_children = self
+                .children
                 .into_iter()
-                .map(PipelineStatePropagator::new)
                 .map(transform)
                 .collect::<Result<Vec<_>>>()?;
-            let children_unbounded = new_children
-                .iter()
-                .map(|c| c.unbounded)
-                .collect::<Vec<bool>>();
-            let children_plans = new_children
-                .into_iter()
-                .map(|child| child.plan)
-                .collect::<Vec<_>>();
+            let children_plans = new_children.iter().map(|c| c.plan.clone()).collect();
+
             Ok(PipelineStatePropagator {
                 plan: with_new_children_if_necessary(self.plan, children_plans)?.into(),
                 unbounded: self.unbounded,
-                children_unbounded,
+                children: new_children,
             })
         } else {
             Ok(self)
@@ -149,7 +141,13 @@ pub fn check_finiteness_requirements(
     }
     input
         .plan
-        .unbounded_output(&input.children_unbounded)
+        .unbounded_output(
+            &input
+                .children
+                .iter()
+                .map(|c| c.unbounded)
+                .collect::<Vec<_>>(),
+        )
         .map(|value| {
             input.unbounded = value;
             Transformed::Yes(input)
