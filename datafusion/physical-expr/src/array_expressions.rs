@@ -1525,32 +1525,33 @@ pub fn array_union(args: &[ArrayRef]) -> Result<ArrayRef> {
     }
     let array1 = &args[0];
     let array2 = &args[1];
+
+    fn union_arrays<O: OffsetSizeTrait>(
+        array1: &ArrayRef,
+        array2: &ArrayRef,
+        l_field_ref: &Arc<Field>,
+        r_field_ref: &Arc<Field>,
+    ) -> Result<ArrayRef> {
+        match (l_field_ref.data_type(), r_field_ref.data_type()) {
+            (DataType::Null, _) => Ok(array2.clone()),
+            (_, DataType::Null) => Ok(array1.clone()),
+            (_, _) => {
+                let list1 = array1.as_list::<O>();
+                let list2 = array2.as_list::<O>();
+                let result = union_generic_lists::<O>(list1, list2, l_field_ref)?;
+                Ok(Arc::new(result))
+            }
+        }
+    }
+
     match (array1.data_type(), array2.data_type()) {
         (DataType::Null, _) => Ok(array2.clone()),
         (_, DataType::Null) => Ok(array1.clone()),
         (DataType::List(l_field_ref), DataType::List(r_field_ref)) => {
-            match (l_field_ref.data_type(), r_field_ref.data_type()) {
-                (DataType::Null, _) => Ok(array2.clone()),
-                (_, DataType::Null) => Ok(array1.clone()),
-                (_, _) => {
-                    let list1 = array1.as_list::<i32>();
-                    let list2 = array2.as_list::<i32>();
-                    let result = union_generic_lists::<i32>(list1, list2, l_field_ref)?;
-                    Ok(Arc::new(result))
-                }
-            }
+            union_arrays::<i32>(array1, array2, l_field_ref, r_field_ref)
         }
         (DataType::LargeList(l_field_ref), DataType::LargeList(r_field_ref)) => {
-            match (l_field_ref.data_type(), r_field_ref.data_type()) {
-                (DataType::Null, _) => Ok(array2.clone()),
-                (_, DataType::Null) => Ok(array1.clone()),
-                (_, _) => {
-                    let list1 = array1.as_list::<i64>();
-                    let list2 = array2.as_list::<i64>();
-                    let result = union_generic_lists::<i64>(list1, list2, l_field_ref)?;
-                    Ok(Arc::new(result))
-                }
-            }
+            union_arrays::<i64>(array1, array2, l_field_ref, r_field_ref)
         }
         _ => {
             internal_err!(
