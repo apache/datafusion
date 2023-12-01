@@ -82,14 +82,15 @@ use datafusion_common::{
 };
 use datafusion_expr::dml::{CopyOptions, CopyTo};
 use datafusion_expr::expr::{
-    self, AggregateFunction, AggregateUDF, Alias, Between, BinaryExpr, Cast,
-    GetFieldAccess, GetIndexedField, GroupingSet, InList, Like, ScalarUDF, TryCast,
+    self, AggregateFunction, AggregateFunctionDefinition, Alias, Between, BinaryExpr,
+    Cast, GetFieldAccess, GetIndexedField, GroupingSet, InList, Like, TryCast,
     WindowFunction,
 };
 use datafusion_expr::expr_rewriter::{unalias, unnormalize_cols};
 use datafusion_expr::logical_plan::builder::wrap_projection_for_join_if_necessary;
 use datafusion_expr::{
-    DescribeTable, DmlStatement, StringifiedPlan, WindowFrame, WindowFrameBound, WriteOp,
+    DescribeTable, DmlStatement, ScalarFunctionDefinition, StringifiedPlan, WindowFrame,
+    WindowFrameBound, WriteOp,
 };
 use datafusion_physical_expr::expressions::Literal;
 use datafusion_sql::utils::window_expr_common_partition_keys;
@@ -217,40 +218,49 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
 
             Ok(name)
         }
-        Expr::ScalarFunction(func) => {
-            create_function_physical_name(&func.fun.to_string(), false, &func.args)
-        }
-        Expr::ScalarUDF(ScalarUDF { fun, args }) => {
-            create_function_physical_name(fun.name(), false, args)
+        Expr::ScalarFunction(fun) => {
+            // function should be resolved during `AnalyzerRule`s
+            if let ScalarFunctionDefinition::Name(_) = fun.func_def {
+                return internal_err!("Function `Expr` with name should be resolved.");
+            }
+
+            create_function_physical_name(fun.name(), false, &fun.args)
         }
         Expr::WindowFunction(WindowFunction { fun, args, .. }) => {
             create_function_physical_name(&fun.to_string(), false, args)
         }
         Expr::AggregateFunction(AggregateFunction {
-            fun,
+            func_def,
             distinct,
-            args,
-            ..
-        }) => create_function_physical_name(&fun.to_string(), *distinct, args),
-        Expr::AggregateUDF(AggregateUDF {
-            fun,
             args,
             filter,
             order_by,
-        }) => {
-            // TODO: Add support for filter and order by in AggregateUDF
-            if filter.is_some() {
-                return exec_err!("aggregate expression with filter is not supported");
+        }) => match func_def {
+            AggregateFunctionDefinition::BuiltIn(..) => {
+                create_function_physical_name(func_def.name(), *distinct, args)
             }
-            if order_by.is_some() {
-                return exec_err!("aggregate expression with order_by is not supported");
+            AggregateFunctionDefinition::UDF(fun) => {
+                // TODO: Add support for filter and order by in AggregateUDF
+                if filter.is_some() {
+                    return exec_err!(
+                        "aggregate expression with filter is not supported"
+                    );
+                }
+                if order_by.is_some() {
+                    return exec_err!(
+                        "aggregate expression with order_by is not supported"
+                    );
+                }
+                let names = args
+                    .iter()
+                    .map(|e| create_physical_name(e, false))
+                    .collect::<Result<Vec<_>>>()?;
+                Ok(format!("{}({})", fun.name(), names.join(",")))
             }
-            let mut names = Vec::with_capacity(args.len());
-            for e in args {
-                names.push(create_physical_name(e, false)?);
+            AggregateFunctionDefinition::Name(_) => {
+                internal_err!("Aggregate function `Expr` with name should be resolved.")
             }
-            Ok(format!("{}({})", fun.name(), names.join(",")))
-        }
+        },
         Expr::GroupingSet(grouping_set) => match grouping_set {
             GroupingSet::Rollup(exprs) => Ok(format!(
                 "ROLLUP ({})",
@@ -1703,7 +1713,7 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
 ) -> Result<AggregateExprWithOptionalArgs> {
     match e {
         Expr::AggregateFunction(AggregateFunction {
-            fun,
+            func_def,
             distinct,
             args,
             filter,
@@ -1744,63 +1754,35 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
                 ),
                 None => None,
             };
-            let ordering_reqs = order_by.clone().unwrap_or(vec![]);
-            let agg_expr = aggregates::create_aggregate_expr(
-                fun,
-                *distinct,
-                &args,
-                &ordering_reqs,
-                physical_input_schema,
-                name,
-            )?;
-            Ok((agg_expr, filter, order_by))
-        }
-        Expr::AggregateUDF(AggregateUDF {
-            fun,
-            args,
-            filter,
-            order_by,
-        }) => {
-            let args = args
-                .iter()
-                .map(|e| {
-                    create_physical_expr(
-                        e,
-                        logical_input_schema,
+            let (agg_expr, filter, order_by) = match func_def {
+                AggregateFunctionDefinition::BuiltIn(fun) => {
+                    let ordering_reqs = order_by.clone().unwrap_or(vec![]);
+                    let agg_expr = aggregates::create_aggregate_expr(
+                        fun,
+                        *distinct,
+                        &args,
+                        &ordering_reqs,
                         physical_input_schema,
-                        execution_props,
+                        name,
+                    )?;
+                    (agg_expr, filter, order_by)
+                }
+                AggregateFunctionDefinition::UDF(fun) => {
+                    let agg_expr = udaf::create_aggregate_expr(
+                        fun,
+                        &args,
+                        physical_input_schema,
+                        name,
+                    );
+                    (agg_expr?, filter, order_by)
+                }
+                AggregateFunctionDefinition::Name(_) => {
+                    return internal_err!(
+                        "Aggregate function name should have been resolved"
                     )
-                })
-                .collect::<Result<Vec<_>>>()?;
-
-            let filter = match filter {
-                Some(e) => Some(create_physical_expr(
-                    e,
-                    logical_input_schema,
-                    physical_input_schema,
-                    execution_props,
-                )?),
-                None => None,
+                }
             };
-            let order_by = match order_by {
-                Some(e) => Some(
-                    e.iter()
-                        .map(|expr| {
-                            create_physical_sort_expr(
-                                expr,
-                                logical_input_schema,
-                                physical_input_schema,
-                                execution_props,
-                            )
-                        })
-                        .collect::<Result<Vec<_>>>()?,
-                ),
-                None => None,
-            };
-
-            let agg_expr =
-                udaf::create_aggregate_expr(fun, &args, physical_input_schema, name);
-            Ok((agg_expr?, filter, order_by))
+            Ok((agg_expr, filter, order_by))
         }
         other => internal_err!("Invalid aggregate expression '{other:?}'"),
     }
@@ -2535,6 +2517,27 @@ mod tests {
         // mode in Aggregate (which is slower)
         assert!(formatted.contains("FinalPartitioned"));
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn aggregate_with_alias() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("c1", DataType::Utf8, false),
+            Field::new("c2", DataType::UInt32, false),
+        ]));
+
+        let logical_plan = scan_empty(None, schema.as_ref(), None)?
+            .aggregate(vec![col("c1")], vec![sum(col("c2"))])?
+            .project(vec![col("c1"), sum(col("c2")).alias("total_salary")])?
+            .build()?;
+
+        let physical_plan = plan(&logical_plan).await?;
+        assert_eq!("c1", physical_plan.schema().field(0).name().as_str());
+        assert_eq!(
+            "total_salary",
+            physical_plan.schema().field(1).name().as_str()
+        );
         Ok(())
     }
 

@@ -32,7 +32,7 @@ use datafusion::prelude::JoinType;
 use datafusion::sql::TableReference;
 use datafusion::{
     error::{DataFusionError, Result},
-    optimizer::utils::split_conjunction,
+    logical_expr::utils::split_conjunction,
     prelude::{Column, SessionContext},
     scalar::ScalarValue,
 };
@@ -692,21 +692,14 @@ pub async fn from_substrait_agg_func(
 
     // try udaf first, then built-in aggr fn.
     if let Ok(fun) = ctx.udaf(function_name) {
-        Ok(Arc::new(Expr::AggregateUDF(expr::AggregateUDF {
-            fun,
-            args,
-            filter,
-            order_by,
-        })))
+        Ok(Arc::new(Expr::AggregateFunction(
+            expr::AggregateFunction::new_udf(fun, args, distinct, filter, order_by),
+        )))
     } else if let Ok(fun) = aggregate_function::AggregateFunction::from_str(function_name)
     {
-        Ok(Arc::new(Expr::AggregateFunction(expr::AggregateFunction {
-            fun,
-            args,
-            distinct,
-            filter,
-            order_by,
-        })))
+        Ok(Arc::new(Expr::AggregateFunction(
+            expr::AggregateFunction::new(fun, args, distinct, filter, order_by),
+        )))
     } else {
         not_impl_err!(
             "Aggregated function {} is not supported: function anchor = {:?}",
@@ -843,10 +836,9 @@ pub async fn from_substrait_rex(
                         };
                         args.push(arg_expr?.as_ref().clone());
                     }
-                    Ok(Arc::new(Expr::ScalarFunction(expr::ScalarFunction {
-                        fun,
-                        args,
-                    })))
+                    Ok(Arc::new(Expr::ScalarFunction(expr::ScalarFunction::new(
+                        fun, args,
+                    ))))
                 }
                 ScalarFunctionType::Op(op) => {
                     if f.arguments.len() != 2 {

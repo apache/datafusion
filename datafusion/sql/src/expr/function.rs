@@ -19,7 +19,7 @@ use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use datafusion_common::{
     not_impl_err, plan_datafusion_err, plan_err, DFSchema, DataFusionError, Result,
 };
-use datafusion_expr::expr::{ScalarFunction, ScalarUDF};
+use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::function::suggest_valid_function;
 use datafusion_expr::window_frame::regularize;
 use datafusion_expr::{
@@ -66,7 +66,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         // user-defined function (UDF) should have precedence in case it has the same name as a scalar built-in function
         if let Some(fm) = self.context_provider.get_function_meta(&name) {
             let args = self.function_args_to_expr(args, schema, planner_context)?;
-            return Ok(Expr::ScalarUDF(ScalarUDF::new(fm, args)));
+            return Ok(Expr::ScalarFunction(ScalarFunction::new_udf(fm, args)));
         }
 
         // next, scalar built-in
@@ -135,8 +135,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             // User defined aggregate functions (UDAF) have precedence in case it has the same name as a scalar built-in function
             if let Some(fm) = self.context_provider.get_aggregate_meta(&name) {
                 let args = self.function_args_to_expr(args, schema, planner_context)?;
-                return Ok(Expr::AggregateUDF(expr::AggregateUDF::new(
-                    fm, args, None, None,
+                return Ok(Expr::AggregateFunction(expr::AggregateFunction::new_udf(
+                    fm, args, false, None, None,
                 )));
             }
 

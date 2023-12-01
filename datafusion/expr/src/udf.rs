@@ -49,6 +49,8 @@ pub struct ScalarUDF {
     /// the batch's row count (so that the generative zero-argument function can know
     /// the result array size).
     fun: ScalarFunctionImplementation,
+    /// Optional aliases for the function. This list should NOT include the value of `name` as well
+    aliases: Vec<String>,
 }
 
 impl Debug for ScalarUDF {
@@ -89,18 +91,37 @@ impl ScalarUDF {
             signature: signature.clone(),
             return_type: return_type.clone(),
             fun: fun.clone(),
+            aliases: vec![],
         }
+    }
+
+    /// Adds additional names that can be used to invoke this function, in addition to `name`
+    pub fn with_aliases(
+        mut self,
+        aliases: impl IntoIterator<Item = &'static str>,
+    ) -> Self {
+        self.aliases
+            .extend(aliases.into_iter().map(|s| s.to_string()));
+        self
     }
 
     /// creates a logical expression with a call of the UDF
     /// This utility allows using the UDF without requiring access to the registry.
     pub fn call(&self, args: Vec<Expr>) -> Expr {
-        Expr::ScalarUDF(crate::expr::ScalarUDF::new(Arc::new(self.clone()), args))
+        Expr::ScalarFunction(crate::expr::ScalarFunction::new_udf(
+            Arc::new(self.clone()),
+            args,
+        ))
     }
 
     /// Returns this function's name
     pub fn name(&self) -> &str {
         &self.name
+    }
+
+    /// Returns the aliases for this function. See [`ScalarUDF::with_aliases`] for more details
+    pub fn aliases(&self) -> &[String] {
+        &self.aliases
     }
 
     /// Returns this function's signature (what input types are accepted)

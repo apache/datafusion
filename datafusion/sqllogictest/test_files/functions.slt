@@ -877,3 +877,121 @@ query ?
 SELECT levenshtein(NULL, NULL)
 ----
 NULL
+
+query T
+SELECT substr_index('www.apache.org', '.', 1)
+----
+www
+
+query T
+SELECT substr_index('www.apache.org', '.', 2)
+----
+www.apache
+
+query T
+SELECT substr_index('www.apache.org', '.', -1)
+----
+org
+
+query T
+SELECT substr_index('www.apache.org', '.', -2)
+----
+apache.org
+
+query T
+SELECT substr_index('www.apache.org', 'ac', 1)
+----
+www.ap
+
+query T
+SELECT substr_index('www.apache.org', 'ac', -1)
+----
+he.org
+
+query T
+SELECT substr_index('www.apache.org', 'ac', 2)
+----
+www.apache.org
+
+query T
+SELECT substr_index('www.apache.org', 'ac', -2)
+----
+www.apache.org
+
+query ?
+SELECT substr_index(NULL, 'ac', 1)
+----
+NULL
+
+query T
+SELECT substr_index('www.apache.org', NULL, 1)
+----
+NULL
+
+query T
+SELECT substr_index('www.apache.org', 'ac', NULL)
+----
+NULL
+
+query T
+SELECT substr_index('', 'ac', 1)
+----
+(empty)
+
+query T
+SELECT substr_index('www.apache.org', '', 1)
+----
+(empty)
+
+query T
+SELECT substr_index('www.apache.org', 'ac', 0)
+----
+(empty)
+
+query ?
+SELECT substr_index(NULL, NULL, NULL)
+----
+NULL
+
+query I
+SELECT find_in_set('b', 'a,b,c,d')
+----
+2
+
+
+query I
+SELECT find_in_set('a', 'a,b,c,d,a')
+----
+1
+
+query I
+SELECT find_in_set('', 'a,b,c,d,a')
+----
+0
+
+query I
+SELECT find_in_set('a', '')
+----
+0
+
+
+query I
+SELECT find_in_set('', '')
+----
+1
+
+query ?
+SELECT find_in_set(NULL, 'a,b,c,d')
+----
+NULL
+
+query I
+SELECT find_in_set('a', NULL)
+----
+NULL
+
+
+query ?
+SELECT find_in_set(NULL, NULL)
+----
+NULL

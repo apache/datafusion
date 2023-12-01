@@ -637,6 +637,8 @@ nullif(expression1, expression2)
 - [uuid](#uuid)
 - [overlay](#overlay)
 - [levenshtein](#levenshtein)
+- [substr_index](#substr_index)
+- [find_in_set](#find_in_set)
 
 ### `ascii`
 
@@ -1152,6 +1154,37 @@ levenshtein(str1, str2)
 - **str1**: String expression to compute Levenshtein distance with str2.
 - **str2**: String expression to compute Levenshtein distance with str1.
 
+### `substr_index`
+
+Returns the substring from str before count occurrences of the delimiter delim.
+If count is positive, everything to the left of the final delimiter (counting from the left) is returned.
+If count is negative, everything to the right of the final delimiter (counting from the right) is returned.
+For example, `substr_index('www.apache.org', '.', 1) = www`, `substr_index('www.apache.org', '.', -1) = org`
+
+```
+substr_index(str, delim, count)
+```
+
+#### Arguments
+
+- **str**: String expression to operate on.
+- **delim**: the string to find in str to split str.
+- **count**: The number of times to search for the delimiter. Can be both a positive or negative number.
+
+### `find_in_set`
+
+Returns a value in the range of 1 to N if the string str is in the string list strlist consisting of N substrings.
+For example, `find_in_set('b', 'a,b,c,d') = 2`
+
+```
+find_in_set(str, strlist)
+```
+
+#### Arguments
+
+- **str**: String expression to find in strlist.
+- **strlist**: A string list is a string composed of substrings separated by , characters.
+
 ## Binary String Functions
 
 - [decode](#decode)
@@ -1424,10 +1457,13 @@ extract(field FROM source)
 ### `to_timestamp`
 
 Converts a value to a timestamp (`YYYY-MM-DDT00:00:00Z`).
-Supports strings, integer, and unsigned integer types as input.
+Supports strings, integer, unsigned integer, and double types as input.
 Strings are parsed as RFC3339 (e.g. '2023-07-20T05:44:00')
-Integers and unsigned integers are interpreted as seconds since the unix epoch (`1970-01-01T00:00:00Z`)
+Integers, unsigned integers, and doubles are interpreted as seconds since the unix epoch (`1970-01-01T00:00:00Z`)
 return the corresponding timestamp.
+
+Note: `to_timestamp` returns `Timestamp(Nanosecond)`. The supported range for integer input is between `-9223372037` and `9223372036`.
+Supported range for string input is between `1677-09-21T00:12:44.0` and `2262-04-11T23:47:16.0`. Please use `to_timestamp_seconds` for the input outside of supported bounds.
 
 ```
 to_timestamp(expression)
@@ -2297,7 +2333,7 @@ array_union(array1, array2)
 +----------------------------------------------------+
 | array_union([1, 2, 3, 4], [5, 6, 7, 8]);           |
 +----------------------------------------------------+
-| [1, 2, 3, 4, 5, 6]                                 |
+| [1, 2, 3, 4, 5, 6, 7, 8]                           |
 +----------------------------------------------------+
 ```
 

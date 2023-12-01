@@ -49,15 +49,15 @@ use datafusion_expr::{
     chr, coalesce, concat_expr, concat_ws_expr, cos, cosh, cot, current_date,
     current_time, date_bin, date_part, date_trunc, decode, degrees, digest, encode, exp,
     expr::{self, InList, Sort, WindowFunction},
-    factorial, flatten, floor, from_unixtime, gcd, gen_range, isnan, iszero, lcm, left,
-    levenshtein, ln, log, log10, log2,
+    factorial, find_in_set, flatten, floor, from_unixtime, gcd, gen_range, isnan, iszero,
+    lcm, left, levenshtein, ln, log, log10, log2,
     logical_plan::{PlanType, StringifiedPlan},
     lower, lpad, ltrim, md5, nanvl, now, nullif, octet_length, overlay, pi, power,
     radians, random, regexp_match, regexp_replace, repeat, replace, reverse, right,
     round, rpad, rtrim, sha224, sha256, sha384, sha512, signum, sin, sinh, split_part,
-    sqrt, starts_with, string_to_array, strpos, struct_fun, substr, substring, tan, tanh,
-    to_hex, to_timestamp_micros, to_timestamp_millis, to_timestamp_nanos,
-    to_timestamp_seconds, translate, trim, trunc, upper, uuid,
+    sqrt, starts_with, string_to_array, strpos, struct_fun, substr, substr_index,
+    substring, tan, tanh, to_hex, to_timestamp_micros, to_timestamp_millis,
+    to_timestamp_nanos, to_timestamp_seconds, translate, trim, trunc, upper, uuid,
     window_frame::regularize,
     AggregateFunction, Between, BinaryExpr, BuiltInWindowFunction, BuiltinScalarFunction,
     Case, Cast, Expr, GetFieldAccess, GetIndexedField, GroupingSet,
@@ -551,6 +551,8 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::ArrowTypeof => Self::ArrowTypeof,
             ScalarFunction::OverLay => Self::OverLay,
             ScalarFunction::Levenshtein => Self::Levenshtein,
+            ScalarFunction::SubstrIndex => Self::SubstrIndex,
+            ScalarFunction::FindInSet => Self::FindInSet,
         }
     }
 }
@@ -1716,6 +1718,15 @@ pub fn parse_expr(
                         .map(|expr| parse_expr(expr, registry))
                         .collect::<Result<Vec<_>, _>>()?,
                 )),
+                ScalarFunction::SubstrIndex => Ok(substr_index(
+                    parse_expr(&args[0], registry)?,
+                    parse_expr(&args[1], registry)?,
+                    parse_expr(&args[2], registry)?,
+                )),
+                ScalarFunction::FindInSet => Ok(find_in_set(
+                    parse_expr(&args[0], registry)?,
+                    parse_expr(&args[1], registry)?,
+                )),
                 ScalarFunction::StructFun => {
                     Ok(struct_fun(parse_expr(&args[0], registry)?))
                 }
@@ -1723,7 +1734,7 @@ pub fn parse_expr(
         }
         ExprType::ScalarUdfExpr(protobuf::ScalarUdfExprNode { fun_name, args }) => {
             let scalar_fn = registry.udf(fun_name.as_str())?;
-            Ok(Expr::ScalarUDF(expr::ScalarUDF::new(
+            Ok(Expr::ScalarFunction(expr::ScalarFunction::new_udf(
                 scalar_fn,
                 args.iter()
                     .map(|expr| parse_expr(expr, registry))
@@ -1733,12 +1744,13 @@ pub fn parse_expr(
         ExprType::AggregateUdfExpr(pb) => {
             let agg_fn = registry.udaf(pb.fun_name.as_str())?;
 
-            Ok(Expr::AggregateUDF(expr::AggregateUDF::new(
+            Ok(Expr::AggregateFunction(expr::AggregateFunction::new_udf(
                 agg_fn,
                 pb.args
                     .iter()
                     .map(|expr| parse_expr(expr, registry))
                     .collect::<Result<Vec<_>, Error>>()?,
+                false,
                 parse_optional_expr(pb.filter.as_deref(), registry)?.map(Box::new),
                 parse_vec_expr(&pb.order_by, registry)?,
             )))

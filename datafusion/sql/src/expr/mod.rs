@@ -29,10 +29,12 @@ mod value;
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use arrow_schema::DataType;
+use arrow_schema::TimeUnit;
 use datafusion_common::{
     internal_err, not_impl_err, plan_err, Column, DFSchema, DataFusionError, Result,
     ScalarValue,
 };
+use datafusion_expr::expr::AggregateFunctionDefinition;
 use datafusion_expr::expr::InList;
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::{
@@ -224,14 +226,27 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
             SQLExpr::Cast {
                 expr, data_type, ..
-            } => Ok(Expr::Cast(Cast::new(
-                Box::new(self.sql_expr_to_logical_expr(
-                    *expr,
-                    schema,
-                    planner_context,
-                )?),
-                self.convert_data_type(&data_type)?,
-            ))),
+            } => {
+                let dt = self.convert_data_type(&data_type)?;
+                let expr =
+                    self.sql_expr_to_logical_expr(*expr, schema, planner_context)?;
+
+                // numeric constants are treated as seconds (rather as nanoseconds)
+                // to align with postgres / duckdb semantics
+                let expr = match &dt {
+                    DataType::Timestamp(TimeUnit::Nanosecond, tz)
+                        if expr.get_type(schema)? == DataType::Int64 =>
+                    {
+                        Expr::Cast(Cast::new(
+                            Box::new(expr),
+                            DataType::Timestamp(TimeUnit::Second, tz.clone()),
+                        ))
+                    }
+                    _ => expr,
+                };
+
+                Ok(Expr::Cast(Cast::new(Box::new(expr), dt)))
+            }
 
             SQLExpr::TryCast {
                 expr, data_type, ..
@@ -692,7 +707,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     ) -> Result<Expr> {
         match self.sql_expr_to_logical_expr(expr, schema, planner_context)? {
             Expr::AggregateFunction(expr::AggregateFunction {
-                fun,
+                func_def: AggregateFunctionDefinition::BuiltIn(fun),
                 args,
                 distinct,
                 order_by,

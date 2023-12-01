@@ -170,11 +170,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             select_exprs
                 .iter()
                 .filter(|select_expr| match select_expr {
-                    Expr::AggregateFunction(_) | Expr::AggregateUDF(_) => false,
-                    Expr::Alias(Alias { expr, name: _, .. }) => !matches!(
-                        **expr,
-                        Expr::AggregateFunction(_) | Expr::AggregateUDF(_)
-                    ),
+                    Expr::AggregateFunction(_) => false,
+                    Expr::Alias(Alias { expr, name: _, .. }) => {
+                        !matches!(**expr, Expr::AggregateFunction(_))
+                    }
                     _ => true,
                 })
                 .cloned()
