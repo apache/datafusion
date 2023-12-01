@@ -3607,31 +3607,15 @@ DROP TABLE t;
 
 # NTILE with PARTITION BY, those tests from duckdb: https://github.com/duckdb/duckdb/blob/main/test/sql/window/test_ntile.test
 statement ok
-CREATE TABLE score_board(team_name VARCHAR, player VARCHAR, score INTEGER);
-
-statement ok
-INSERT INTO score_board VALUES ('Mongrels', 'Apu', 350);
-
-statement ok
-INSERT INTO score_board VALUES ('Mongrels', 'Ned', 666);
-
-statement ok
-INSERT INTO score_board VALUES ('Mongrels', 'Meg', 1030);
-
-statement ok
-INSERT INTO score_board VALUES ('Mongrels', 'Burns', 1270);
-
-statement ok
-INSERT INTO score_board VALUES ('Simpsons', 'Homer', 1);
-
-statement ok
-INSERT INTO score_board VALUES ('Simpsons', 'Lisa', 710);
-
-statement ok
-INSERT INTO score_board VALUES ('Simpsons', 'Marge', 990);
-
-statement ok
-INSERT INTO score_board VALUES ('Simpsons', 'Bart', 2010);
+CREATE TABLE score_board (team_name VARCHAR, player VARCHAR, score INTEGER) as VALUES
+          ('Mongrels', 'Apu', 350),
+          ('Mongrels', 'Ned', 666),
+          ('Mongrels', 'Meg', 1030),
+          ('Mongrels', 'Burns', 1270),
+          ('Simpsons', 'Homer', 1),
+          ('Simpsons', 'Lisa', 710),
+          ('Simpsons', 'Marge', 990),
+          ('Simpsons', 'Bart', 2010)
 
 query TTII
 SELECT
