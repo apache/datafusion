@@ -75,39 +75,39 @@ GlobalLimitExec: skip=0, fetch=10
 ----SortExec: TopK(fetch=10), expr=[revenue@2 DESC]
 ------ProjectionExec: expr=[c_custkey@0 as c_custkey, c_name@1 as c_name, SUM(lineitem.l_extendedprice * Int64(1) - lineitem.l_discount)@7 as revenue, c_acctbal@2 as c_acctbal, n_name@4 as n_name, c_address@5 as c_address, c_phone@3 as c_phone, c_comment@6 as c_comment]
 --------AggregateExec: mode=FinalPartitioned, gby=[c_custkey@0 as c_custkey, c_name@1 as c_name, c_acctbal@2 as c_acctbal, c_phone@3 as c_phone, n_name@4 as n_name, c_address@5 as c_address, c_comment@6 as c_comment], aggr=[SUM(lineitem.l_extendedprice * Int64(1) - lineitem.l_discount)]
-----------CoalesceBatchesExec: 32768
+----------CoalesceBatchesExec: target_batch_size=32768
 ------------RepartitionExec: partitioning=Hash([c_custkey@0, c_name@1, c_acctbal@2, c_phone@3, n_name@4, c_address@5, c_comment@6], 4), input_partitions=4
 --------------AggregateExec: mode=Partial, gby=[c_custkey@0 as c_custkey, c_name@1 as c_name, c_acctbal@4 as c_acctbal, c_phone@3 as c_phone, n_name@8 as n_name, c_address@2 as c_address, c_comment@5 as c_comment], aggr=[SUM(lineitem.l_extendedprice * Int64(1) - lineitem.l_discount)]
 ----------------ProjectionExec: expr=[c_custkey@0 as c_custkey, c_name@1 as c_name, c_address@2 as c_address, c_phone@4 as c_phone, c_acctbal@5 as c_acctbal, c_comment@6 as c_comment, l_extendedprice@7 as l_extendedprice, l_discount@8 as l_discount, n_name@10 as n_name]
-------------------CoalesceBatchesExec: 32768
+------------------CoalesceBatchesExec: target_batch_size=32768
 --------------------HashJoinExec: mode=Partitioned, join_type=Inner, on=[(c_nationkey@3, n_nationkey@0)]
-----------------------CoalesceBatchesExec: 32768
+----------------------CoalesceBatchesExec: target_batch_size=32768
 ------------------------RepartitionExec: partitioning=Hash([c_nationkey@3], 4), input_partitions=4
 --------------------------ProjectionExec: expr=[c_custkey@0 as c_custkey, c_name@1 as c_name, c_address@2 as c_address, c_nationkey@3 as c_nationkey, c_phone@4 as c_phone, c_acctbal@5 as c_acctbal, c_comment@6 as c_comment, l_extendedprice@9 as l_extendedprice, l_discount@10 as l_discount]
-----------------------------CoalesceBatchesExec: 32768
+----------------------------CoalesceBatchesExec: target_batch_size=32768
 ------------------------------HashJoinExec: mode=Partitioned, join_type=Inner, on=[(o_orderkey@7, l_orderkey@0)]
---------------------------------CoalesceBatchesExec: 32768
+--------------------------------CoalesceBatchesExec: target_batch_size=32768
 ----------------------------------RepartitionExec: partitioning=Hash([o_orderkey@7], 4), input_partitions=4
 ------------------------------------ProjectionExec: expr=[c_custkey@0 as c_custkey, c_name@1 as c_name, c_address@2 as c_address, c_nationkey@3 as c_nationkey, c_phone@4 as c_phone, c_acctbal@5 as c_acctbal, c_comment@6 as c_comment, o_orderkey@7 as o_orderkey]
---------------------------------------CoalesceBatchesExec: 32768
+--------------------------------------CoalesceBatchesExec: target_batch_size=32768
 ----------------------------------------HashJoinExec: mode=Partitioned, join_type=Inner, on=[(c_custkey@0, o_custkey@1)]
-------------------------------------------CoalesceBatchesExec: 32768
+------------------------------------------CoalesceBatchesExec: target_batch_size=32768
 --------------------------------------------RepartitionExec: partitioning=Hash([c_custkey@0], 4), input_partitions=4
 ----------------------------------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 ------------------------------------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/customer.tbl]]}, projection=[c_custkey, c_name, c_address, c_nationkey, c_phone, c_acctbal, c_comment], has_header=false
-------------------------------------------CoalesceBatchesExec: 32768
+------------------------------------------CoalesceBatchesExec: target_batch_size=32768
 --------------------------------------------RepartitionExec: partitioning=Hash([o_custkey@1], 4), input_partitions=4
 ----------------------------------------------ProjectionExec: expr=[o_orderkey@0 as o_orderkey, o_custkey@1 as o_custkey]
-------------------------------------------------CoalesceBatchesExec: 32768
+------------------------------------------------CoalesceBatchesExec: target_batch_size=32768
 --------------------------------------------------FilterExec: o_orderdate@2 >= 8674 AND o_orderdate@2 < 8766
 ----------------------------------------------------CsvExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/orders.tbl:0..4223281], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/orders.tbl:4223281..8446562], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/orders.tbl:8446562..12669843], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/orders.tbl:12669843..16893122]]}, projection=[o_orderkey, o_custkey, o_orderdate], has_header=false
---------------------------------CoalesceBatchesExec: 32768
+--------------------------------CoalesceBatchesExec: target_batch_size=32768
 ----------------------------------RepartitionExec: partitioning=Hash([l_orderkey@0], 4), input_partitions=4
 ------------------------------------ProjectionExec: expr=[l_orderkey@0 as l_orderkey, l_extendedprice@1 as l_extendedprice, l_discount@2 as l_discount]
---------------------------------------CoalesceBatchesExec: 32768
+--------------------------------------CoalesceBatchesExec: target_batch_size=32768
 ----------------------------------------FilterExec: l_returnflag@3 = R
 ------------------------------------------CsvExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:0..18561749], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:18561749..37123498], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:37123498..55685247], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:55685247..74246996]]}, projection=[l_orderkey, l_extendedprice, l_discount, l_returnflag], has_header=false
-----------------------CoalesceBatchesExec: 32768
+----------------------CoalesceBatchesExec: target_batch_size=32768
 ------------------------RepartitionExec: partitioning=Hash([n_nationkey@0], 4), input_partitions=4
 --------------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 ----------------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/nation.tbl]]}, projection=[n_nationkey, n_name], has_header=false

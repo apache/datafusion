@@ -74,38 +74,38 @@ physical_plan
 SortPreservingMergeExec: [s_suppkey@0 ASC NULLS LAST]
 --SortExec: expr=[s_suppkey@0 ASC NULLS LAST]
 ----ProjectionExec: expr=[s_suppkey@0 as s_suppkey, s_name@1 as s_name, s_address@2 as s_address, s_phone@3 as s_phone, total_revenue@4 as total_revenue]
-------CoalesceBatchesExec: 32768
+------CoalesceBatchesExec: target_batch_size=32768
 --------HashJoinExec: mode=Partitioned, join_type=Inner, on=[(total_revenue@4, MAX(revenue0.total_revenue)@0)]
-----------CoalesceBatchesExec: 32768
+----------CoalesceBatchesExec: target_batch_size=32768
 ------------RepartitionExec: partitioning=Hash([total_revenue@4], 4), input_partitions=4
 --------------ProjectionExec: expr=[s_suppkey@0 as s_suppkey, s_name@1 as s_name, s_address@2 as s_address, s_phone@3 as s_phone, total_revenue@5 as total_revenue]
-----------------CoalesceBatchesExec: 32768
+----------------CoalesceBatchesExec: target_batch_size=32768
 ------------------HashJoinExec: mode=Partitioned, join_type=Inner, on=[(s_suppkey@0, supplier_no@0)]
---------------------CoalesceBatchesExec: 32768
+--------------------CoalesceBatchesExec: target_batch_size=32768
 ----------------------RepartitionExec: partitioning=Hash([s_suppkey@0], 4), input_partitions=4
 ------------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 --------------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/supplier.tbl]]}, projection=[s_suppkey, s_name, s_address, s_phone], has_header=false
 --------------------ProjectionExec: expr=[l_suppkey@0 as supplier_no, SUM(lineitem.l_extendedprice * Int64(1) - lineitem.l_discount)@1 as total_revenue]
 ----------------------AggregateExec: mode=FinalPartitioned, gby=[l_suppkey@0 as l_suppkey], aggr=[SUM(lineitem.l_extendedprice * Int64(1) - lineitem.l_discount)]
-------------------------CoalesceBatchesExec: 32768
+------------------------CoalesceBatchesExec: target_batch_size=32768
 --------------------------RepartitionExec: partitioning=Hash([l_suppkey@0], 4), input_partitions=4
 ----------------------------AggregateExec: mode=Partial, gby=[l_suppkey@0 as l_suppkey], aggr=[SUM(lineitem.l_extendedprice * Int64(1) - lineitem.l_discount)]
 ------------------------------ProjectionExec: expr=[l_suppkey@0 as l_suppkey, l_extendedprice@1 as l_extendedprice, l_discount@2 as l_discount]
---------------------------------CoalesceBatchesExec: 32768
+--------------------------------CoalesceBatchesExec: target_batch_size=32768
 ----------------------------------FilterExec: l_shipdate@3 >= 9496 AND l_shipdate@3 < 9587
 ------------------------------------CsvExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:0..18561749], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:18561749..37123498], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:37123498..55685247], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:55685247..74246996]]}, projection=[l_suppkey, l_extendedprice, l_discount, l_shipdate], has_header=false
-----------CoalesceBatchesExec: 32768
+----------CoalesceBatchesExec: target_batch_size=32768
 ------------RepartitionExec: partitioning=Hash([MAX(revenue0.total_revenue)@0], 4), input_partitions=1
 --------------AggregateExec: mode=Final, gby=[], aggr=[MAX(revenue0.total_revenue)]
 ----------------CoalescePartitionsExec
 ------------------AggregateExec: mode=Partial, gby=[], aggr=[MAX(revenue0.total_revenue)]
 --------------------ProjectionExec: expr=[SUM(lineitem.l_extendedprice * Int64(1) - lineitem.l_discount)@1 as total_revenue]
 ----------------------AggregateExec: mode=FinalPartitioned, gby=[l_suppkey@0 as l_suppkey], aggr=[SUM(lineitem.l_extendedprice * Int64(1) - lineitem.l_discount)]
-------------------------CoalesceBatchesExec: 32768
+------------------------CoalesceBatchesExec: target_batch_size=32768
 --------------------------RepartitionExec: partitioning=Hash([l_suppkey@0], 4), input_partitions=4
 ----------------------------AggregateExec: mode=Partial, gby=[l_suppkey@0 as l_suppkey], aggr=[SUM(lineitem.l_extendedprice * Int64(1) - lineitem.l_discount)]
 ------------------------------ProjectionExec: expr=[l_suppkey@0 as l_suppkey, l_extendedprice@1 as l_extendedprice, l_discount@2 as l_discount]
---------------------------------CoalesceBatchesExec: 32768
+--------------------------------CoalesceBatchesExec: target_batch_size=32768
 ----------------------------------FilterExec: l_shipdate@3 >= 9496 AND l_shipdate@3 < 9587
 ------------------------------------CsvExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:0..18561749], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:18561749..37123498], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:37123498..55685247], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:55685247..74246996]]}, projection=[l_suppkey, l_extendedprice, l_discount, l_shipdate], has_header=false
 

@@ -274,7 +274,7 @@ SortPreservingMergeExec: [b@0 ASC NULLS LAST]
 --SortExec: expr=[b@0 ASC NULLS LAST]
 ----ProjectionExec: expr=[b@0 as b, MAX(d.a)@1 as max_a]
 ------AggregateExec: mode=FinalPartitioned, gby=[b@0 as b], aggr=[MAX(d.a)]
---------CoalesceBatchesExec: 32768
+--------CoalesceBatchesExec: target_batch_size=32768
 ----------RepartitionExec: partitioning=Hash([b@0], 4), input_partitions=4
 ------------AggregateExec: mode=Partial, gby=[b@1 as b], aggr=[MAX(d.a)]
 --------------UnionExec
@@ -361,7 +361,7 @@ SortPreservingMergeExec: [b@0 ASC NULLS LAST]
 ------ProjectionExec: expr=[ROW_NUMBER() PARTITION BY [s.b] ORDER BY [s.a ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@2 as seq, a@0 as a, b@1 as b]
 --------BoundedWindowAggExec: wdw=[ROW_NUMBER() PARTITION BY [s.b] ORDER BY [s.a ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Ok(Field { name: "ROW_NUMBER() PARTITION BY [s.b] ORDER BY [s.a ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW", data_type: UInt64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(Int64(NULL)), end_bound: CurrentRow }], mode=[Sorted]
 ----------SortExec: expr=[b@1 ASC NULLS LAST,a@0 ASC NULLS LAST]
-------------CoalesceBatchesExec: 32768
+------------CoalesceBatchesExec: target_batch_size=32768
 --------------RepartitionExec: partitioning=Hash([b@1], 4), input_partitions=4
 ----------------UnionExec
 ------------------ProjectionExec: expr=[1 as a, aa as b]

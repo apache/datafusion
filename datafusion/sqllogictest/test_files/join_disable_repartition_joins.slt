@@ -58,7 +58,7 @@ physical_plan
 GlobalLimitExec: skip=0, fetch=5
 --SortPreservingMergeExec: [a@0 ASC NULLS LAST], fetch=5
 ----ProjectionExec: expr=[a@1 as a]
-------CoalesceBatchesExec: 32768
+------CoalesceBatchesExec: target_batch_size=32768
 --------HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(c@0, c@1)]
 ----------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[c], has_header=true
 ----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
@@ -101,10 +101,10 @@ physical_plan
 GlobalLimitExec: skip=0, fetch=10
 --SortPreservingMergeExec: [a2@0 ASC NULLS LAST,b@1 ASC NULLS LAST], fetch=10
 ----ProjectionExec: expr=[a@0 as a2, b@1 as b]
-------CoalesceBatchesExec: 32768
+------CoalesceBatchesExec: target_batch_size=32768
 --------HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(d@1, d@3), (c@0, c@2)]
 ----------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[c, d], has_header=true
-----------CoalesceBatchesExec: 32768
+----------CoalesceBatchesExec: target_batch_size=32768
 ------------FilterExec: d@3 = 3
 --------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 ----------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b, c, d], output_ordering=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST, c@2 ASC NULLS LAST], has_header=true

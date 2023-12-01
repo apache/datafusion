@@ -57,22 +57,22 @@ SortPreservingMergeExec: [o_orderpriority@0 ASC NULLS LAST]
 --SortExec: expr=[o_orderpriority@0 ASC NULLS LAST]
 ----ProjectionExec: expr=[o_orderpriority@0 as o_orderpriority, COUNT(*)@1 as order_count]
 ------AggregateExec: mode=FinalPartitioned, gby=[o_orderpriority@0 as o_orderpriority], aggr=[COUNT(*)]
---------CoalesceBatchesExec: 32768
+--------CoalesceBatchesExec: target_batch_size=32768
 ----------RepartitionExec: partitioning=Hash([o_orderpriority@0], 4), input_partitions=4
 ------------AggregateExec: mode=Partial, gby=[o_orderpriority@0 as o_orderpriority], aggr=[COUNT(*)]
 --------------ProjectionExec: expr=[o_orderpriority@1 as o_orderpriority]
-----------------CoalesceBatchesExec: 32768
+----------------CoalesceBatchesExec: target_batch_size=32768
 ------------------HashJoinExec: mode=Partitioned, join_type=LeftSemi, on=[(o_orderkey@0, l_orderkey@0)]
---------------------CoalesceBatchesExec: 32768
+--------------------CoalesceBatchesExec: target_batch_size=32768
 ----------------------RepartitionExec: partitioning=Hash([o_orderkey@0], 4), input_partitions=4
 ------------------------ProjectionExec: expr=[o_orderkey@0 as o_orderkey, o_orderpriority@2 as o_orderpriority]
---------------------------CoalesceBatchesExec: 32768
+--------------------------CoalesceBatchesExec: target_batch_size=32768
 ----------------------------FilterExec: o_orderdate@1 >= 8582 AND o_orderdate@1 < 8674
 ------------------------------CsvExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/orders.tbl:0..4223281], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/orders.tbl:4223281..8446562], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/orders.tbl:8446562..12669843], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/orders.tbl:12669843..16893122]]}, projection=[o_orderkey, o_orderdate, o_orderpriority], has_header=false
---------------------CoalesceBatchesExec: 32768
+--------------------CoalesceBatchesExec: target_batch_size=32768
 ----------------------RepartitionExec: partitioning=Hash([l_orderkey@0], 4), input_partitions=4
 ------------------------ProjectionExec: expr=[l_orderkey@0 as l_orderkey]
---------------------------CoalesceBatchesExec: 32768
+--------------------------CoalesceBatchesExec: target_batch_size=32768
 ----------------------------FilterExec: l_commitdate@1 < l_receiptdate@2
 ------------------------------CsvExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:0..18561749], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:18561749..37123498], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:37123498..55685247], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:55685247..74246996]]}, projection=[l_orderkey, l_commitdate, l_receiptdate], has_header=false
 

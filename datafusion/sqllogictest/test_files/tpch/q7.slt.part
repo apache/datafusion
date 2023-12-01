@@ -88,57 +88,57 @@ SortPreservingMergeExec: [supp_nation@0 ASC NULLS LAST,cust_nation@1 ASC NULLS L
 --SortExec: expr=[supp_nation@0 ASC NULLS LAST,cust_nation@1 ASC NULLS LAST,l_year@2 ASC NULLS LAST]
 ----ProjectionExec: expr=[supp_nation@0 as supp_nation, cust_nation@1 as cust_nation, l_year@2 as l_year, SUM(shipping.volume)@3 as revenue]
 ------AggregateExec: mode=FinalPartitioned, gby=[supp_nation@0 as supp_nation, cust_nation@1 as cust_nation, l_year@2 as l_year], aggr=[SUM(shipping.volume)]
---------CoalesceBatchesExec: 32768
+--------CoalesceBatchesExec: target_batch_size=32768
 ----------RepartitionExec: partitioning=Hash([supp_nation@0, cust_nation@1, l_year@2], 4), input_partitions=4
 ------------AggregateExec: mode=Partial, gby=[supp_nation@0 as supp_nation, cust_nation@1 as cust_nation, l_year@2 as l_year], aggr=[SUM(shipping.volume)]
 --------------ProjectionExec: expr=[n_name@4 as supp_nation, n_name@6 as cust_nation, date_part(YEAR, l_shipdate@2) as l_year, l_extendedprice@0 * (Some(1),20,0 - l_discount@1) as volume]
-----------------CoalesceBatchesExec: 32768
+----------------CoalesceBatchesExec: target_batch_size=32768
 ------------------HashJoinExec: mode=Partitioned, join_type=Inner, on=[(c_nationkey@3, n_nationkey@0)], filter=n_name@0 = FRANCE AND n_name@1 = GERMANY OR n_name@0 = GERMANY AND n_name@1 = FRANCE
---------------------CoalesceBatchesExec: 32768
+--------------------CoalesceBatchesExec: target_batch_size=32768
 ----------------------RepartitionExec: partitioning=Hash([c_nationkey@3], 4), input_partitions=4
 ------------------------ProjectionExec: expr=[l_extendedprice@1 as l_extendedprice, l_discount@2 as l_discount, l_shipdate@3 as l_shipdate, c_nationkey@4 as c_nationkey, n_name@6 as n_name]
---------------------------CoalesceBatchesExec: 32768
+--------------------------CoalesceBatchesExec: target_batch_size=32768
 ----------------------------HashJoinExec: mode=Partitioned, join_type=Inner, on=[(s_nationkey@0, n_nationkey@0)]
-------------------------------CoalesceBatchesExec: 32768
+------------------------------CoalesceBatchesExec: target_batch_size=32768
 --------------------------------RepartitionExec: partitioning=Hash([s_nationkey@0], 4), input_partitions=4
 ----------------------------------ProjectionExec: expr=[s_nationkey@0 as s_nationkey, l_extendedprice@1 as l_extendedprice, l_discount@2 as l_discount, l_shipdate@3 as l_shipdate, c_nationkey@6 as c_nationkey]
-------------------------------------CoalesceBatchesExec: 32768
+------------------------------------CoalesceBatchesExec: target_batch_size=32768
 --------------------------------------HashJoinExec: mode=Partitioned, join_type=Inner, on=[(o_custkey@4, c_custkey@0)]
-----------------------------------------CoalesceBatchesExec: 32768
+----------------------------------------CoalesceBatchesExec: target_batch_size=32768
 ------------------------------------------RepartitionExec: partitioning=Hash([o_custkey@4], 4), input_partitions=4
 --------------------------------------------ProjectionExec: expr=[s_nationkey@0 as s_nationkey, l_extendedprice@2 as l_extendedprice, l_discount@3 as l_discount, l_shipdate@4 as l_shipdate, o_custkey@6 as o_custkey]
-----------------------------------------------CoalesceBatchesExec: 32768
+----------------------------------------------CoalesceBatchesExec: target_batch_size=32768
 ------------------------------------------------HashJoinExec: mode=Partitioned, join_type=Inner, on=[(l_orderkey@1, o_orderkey@0)]
---------------------------------------------------CoalesceBatchesExec: 32768
+--------------------------------------------------CoalesceBatchesExec: target_batch_size=32768
 ----------------------------------------------------RepartitionExec: partitioning=Hash([l_orderkey@1], 4), input_partitions=4
 ------------------------------------------------------ProjectionExec: expr=[s_nationkey@1 as s_nationkey, l_orderkey@2 as l_orderkey, l_extendedprice@4 as l_extendedprice, l_discount@5 as l_discount, l_shipdate@6 as l_shipdate]
---------------------------------------------------------CoalesceBatchesExec: 32768
+--------------------------------------------------------CoalesceBatchesExec: target_batch_size=32768
 ----------------------------------------------------------HashJoinExec: mode=Partitioned, join_type=Inner, on=[(s_suppkey@0, l_suppkey@1)]
-------------------------------------------------------------CoalesceBatchesExec: 32768
+------------------------------------------------------------CoalesceBatchesExec: target_batch_size=32768
 --------------------------------------------------------------RepartitionExec: partitioning=Hash([s_suppkey@0], 4), input_partitions=4
 ----------------------------------------------------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 ------------------------------------------------------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/supplier.tbl]]}, projection=[s_suppkey, s_nationkey], has_header=false
-------------------------------------------------------------CoalesceBatchesExec: 32768
+------------------------------------------------------------CoalesceBatchesExec: target_batch_size=32768
 --------------------------------------------------------------RepartitionExec: partitioning=Hash([l_suppkey@1], 4), input_partitions=4
-----------------------------------------------------------------CoalesceBatchesExec: 32768
+----------------------------------------------------------------CoalesceBatchesExec: target_batch_size=32768
 ------------------------------------------------------------------FilterExec: l_shipdate@4 >= 9131 AND l_shipdate@4 <= 9861
 --------------------------------------------------------------------CsvExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:0..18561749], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:18561749..37123498], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:37123498..55685247], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:55685247..74246996]]}, projection=[l_orderkey, l_suppkey, l_extendedprice, l_discount, l_shipdate], has_header=false
---------------------------------------------------CoalesceBatchesExec: 32768
+--------------------------------------------------CoalesceBatchesExec: target_batch_size=32768
 ----------------------------------------------------RepartitionExec: partitioning=Hash([o_orderkey@0], 4), input_partitions=4
 ------------------------------------------------------CsvExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/orders.tbl:0..4223281], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/orders.tbl:4223281..8446562], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/orders.tbl:8446562..12669843], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/orders.tbl:12669843..16893122]]}, projection=[o_orderkey, o_custkey], has_header=false
-----------------------------------------CoalesceBatchesExec: 32768
+----------------------------------------CoalesceBatchesExec: target_batch_size=32768
 ------------------------------------------RepartitionExec: partitioning=Hash([c_custkey@0], 4), input_partitions=4
 --------------------------------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 ----------------------------------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/customer.tbl]]}, projection=[c_custkey, c_nationkey], has_header=false
-------------------------------CoalesceBatchesExec: 32768
+------------------------------CoalesceBatchesExec: target_batch_size=32768
 --------------------------------RepartitionExec: partitioning=Hash([n_nationkey@0], 4), input_partitions=4
-----------------------------------CoalesceBatchesExec: 32768
+----------------------------------CoalesceBatchesExec: target_batch_size=32768
 ------------------------------------FilterExec: n_name@1 = FRANCE OR n_name@1 = GERMANY
 --------------------------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 ----------------------------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/nation.tbl]]}, projection=[n_nationkey, n_name], has_header=false
---------------------CoalesceBatchesExec: 32768
+--------------------CoalesceBatchesExec: target_batch_size=32768
 ----------------------RepartitionExec: partitioning=Hash([n_nationkey@0], 4), input_partitions=4
-------------------------CoalesceBatchesExec: 32768
+------------------------CoalesceBatchesExec: target_batch_size=32768
 --------------------------FilterExec: n_name@1 = GERMANY OR n_name@1 = FRANCE
 ----------------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 ------------------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/nation.tbl]]}, projection=[n_nationkey, n_name], has_header=false

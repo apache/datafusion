@@ -80,28 +80,28 @@ GlobalLimitExec: skip=0, fetch=10
 ------ProjectionExec: expr=[ps_partkey@0 as ps_partkey, SUM(partsupp.ps_supplycost * partsupp.ps_availqty)@1 as value]
 --------NestedLoopJoinExec: join_type=Inner, filter=CAST(SUM(partsupp.ps_supplycost * partsupp.ps_availqty)@0 AS Decimal128(38, 15)) > SUM(partsupp.ps_supplycost * partsupp.ps_availqty) * Float64(0.0001)@1
 ----------AggregateExec: mode=FinalPartitioned, gby=[ps_partkey@0 as ps_partkey], aggr=[SUM(partsupp.ps_supplycost * partsupp.ps_availqty)]
-------------CoalesceBatchesExec: 32768
+------------CoalesceBatchesExec: target_batch_size=32768
 --------------RepartitionExec: partitioning=Hash([ps_partkey@0], 4), input_partitions=4
 ----------------AggregateExec: mode=Partial, gby=[ps_partkey@0 as ps_partkey], aggr=[SUM(partsupp.ps_supplycost * partsupp.ps_availqty)]
 ------------------ProjectionExec: expr=[ps_partkey@0 as ps_partkey, ps_availqty@1 as ps_availqty, ps_supplycost@2 as ps_supplycost]
---------------------CoalesceBatchesExec: 32768
+--------------------CoalesceBatchesExec: target_batch_size=32768
 ----------------------HashJoinExec: mode=Partitioned, join_type=Inner, on=[(s_nationkey@3, n_nationkey@0)]
-------------------------CoalesceBatchesExec: 32768
+------------------------CoalesceBatchesExec: target_batch_size=32768
 --------------------------RepartitionExec: partitioning=Hash([s_nationkey@3], 4), input_partitions=4
 ----------------------------ProjectionExec: expr=[ps_partkey@0 as ps_partkey, ps_availqty@2 as ps_availqty, ps_supplycost@3 as ps_supplycost, s_nationkey@5 as s_nationkey]
-------------------------------CoalesceBatchesExec: 32768
+------------------------------CoalesceBatchesExec: target_batch_size=32768
 --------------------------------HashJoinExec: mode=Partitioned, join_type=Inner, on=[(ps_suppkey@1, s_suppkey@0)]
-----------------------------------CoalesceBatchesExec: 32768
+----------------------------------CoalesceBatchesExec: target_batch_size=32768
 ------------------------------------RepartitionExec: partitioning=Hash([ps_suppkey@1], 4), input_partitions=4
 --------------------------------------CsvExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/partsupp.tbl:0..2932049], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/partsupp.tbl:2932049..5864098], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/partsupp.tbl:5864098..8796147], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/partsupp.tbl:8796147..11728193]]}, projection=[ps_partkey, ps_suppkey, ps_availqty, ps_supplycost], has_header=false
-----------------------------------CoalesceBatchesExec: 32768
+----------------------------------CoalesceBatchesExec: target_batch_size=32768
 ------------------------------------RepartitionExec: partitioning=Hash([s_suppkey@0], 4), input_partitions=4
 --------------------------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 ----------------------------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/supplier.tbl]]}, projection=[s_suppkey, s_nationkey], has_header=false
-------------------------CoalesceBatchesExec: 32768
+------------------------CoalesceBatchesExec: target_batch_size=32768
 --------------------------RepartitionExec: partitioning=Hash([n_nationkey@0], 4), input_partitions=4
 ----------------------------ProjectionExec: expr=[n_nationkey@0 as n_nationkey]
-------------------------------CoalesceBatchesExec: 32768
+------------------------------CoalesceBatchesExec: target_batch_size=32768
 --------------------------------FilterExec: n_name@1 = GERMANY
 ----------------------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 ------------------------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/nation.tbl]]}, projection=[n_nationkey, n_name], has_header=false
@@ -110,24 +110,24 @@ GlobalLimitExec: skip=0, fetch=10
 --------------CoalescePartitionsExec
 ----------------AggregateExec: mode=Partial, gby=[], aggr=[SUM(partsupp.ps_supplycost * partsupp.ps_availqty)]
 ------------------ProjectionExec: expr=[ps_availqty@0 as ps_availqty, ps_supplycost@1 as ps_supplycost]
---------------------CoalesceBatchesExec: 32768
+--------------------CoalesceBatchesExec: target_batch_size=32768
 ----------------------HashJoinExec: mode=Partitioned, join_type=Inner, on=[(s_nationkey@2, n_nationkey@0)]
-------------------------CoalesceBatchesExec: 32768
+------------------------CoalesceBatchesExec: target_batch_size=32768
 --------------------------RepartitionExec: partitioning=Hash([s_nationkey@2], 4), input_partitions=4
 ----------------------------ProjectionExec: expr=[ps_availqty@1 as ps_availqty, ps_supplycost@2 as ps_supplycost, s_nationkey@4 as s_nationkey]
-------------------------------CoalesceBatchesExec: 32768
+------------------------------CoalesceBatchesExec: target_batch_size=32768
 --------------------------------HashJoinExec: mode=Partitioned, join_type=Inner, on=[(ps_suppkey@0, s_suppkey@0)]
-----------------------------------CoalesceBatchesExec: 32768
+----------------------------------CoalesceBatchesExec: target_batch_size=32768
 ------------------------------------RepartitionExec: partitioning=Hash([ps_suppkey@0], 4), input_partitions=4
 --------------------------------------CsvExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/partsupp.tbl:0..2932049], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/partsupp.tbl:2932049..5864098], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/partsupp.tbl:5864098..8796147], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/partsupp.tbl:8796147..11728193]]}, projection=[ps_suppkey, ps_availqty, ps_supplycost], has_header=false
-----------------------------------CoalesceBatchesExec: 32768
+----------------------------------CoalesceBatchesExec: target_batch_size=32768
 ------------------------------------RepartitionExec: partitioning=Hash([s_suppkey@0], 4), input_partitions=4
 --------------------------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 ----------------------------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/supplier.tbl]]}, projection=[s_suppkey, s_nationkey], has_header=false
-------------------------CoalesceBatchesExec: 32768
+------------------------CoalesceBatchesExec: target_batch_size=32768
 --------------------------RepartitionExec: partitioning=Hash([n_nationkey@0], 4), input_partitions=4
 ----------------------------ProjectionExec: expr=[n_nationkey@0 as n_nationkey]
-------------------------------CoalesceBatchesExec: 32768
+------------------------------CoalesceBatchesExec: target_batch_size=32768
 --------------------------------FilterExec: n_name@1 = GERMANY
 ----------------------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 ------------------------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/nation.tbl]]}, projection=[n_nationkey, n_name], has_header=false
