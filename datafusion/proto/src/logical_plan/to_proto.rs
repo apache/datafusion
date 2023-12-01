@@ -792,40 +792,39 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                         .to_string(),
                 ))
             }
-            Expr::ScalarFunction(ScalarFunction { func_def, args }) => match func_def {
-                ScalarFunctionDefinition::BuiltIn(fun) => {
-                    let fun: protobuf::ScalarFunction = fun.try_into()?;
-                    let args: Vec<Self> = args
-                        .iter()
-                        .map(|e| e.try_into())
-                        .collect::<Result<Vec<Self>, Error>>()?;
-                    Self {
-                        expr_type: Some(ExprType::ScalarFunction(
-                            protobuf::ScalarFunctionNode {
-                                fun: fun.into(),
+            Expr::ScalarFunction(ScalarFunction { func_def, args }) => {
+                let args = args
+                    .iter()
+                    .map(|expr| expr.try_into())
+                    .collect::<Result<Vec<_>, Error>>()?;
+                match func_def {
+                    ScalarFunctionDefinition::BuiltIn(fun) => {
+                        let fun: protobuf::ScalarFunction = fun.try_into()?;
+                        Self {
+                            expr_type: Some(ExprType::ScalarFunction(
+                                protobuf::ScalarFunctionNode {
+                                    fun: fun.into(),
+                                    args,
+                                },
+                            )),
+                        }
+                    }
+                    ScalarFunctionDefinition::UDF(fun) => Self {
+                        expr_type: Some(ExprType::ScalarUdfExpr(
+                            protobuf::ScalarUdfExprNode {
+                                fun_name: fun.name().to_string(),
                                 args,
                             },
                         )),
-                    }
-                }
-                ScalarFunctionDefinition::UDF(fun) => Self {
-                    expr_type: Some(ExprType::ScalarUdfExpr(
-                        protobuf::ScalarUdfExprNode {
-                            fun_name: fun.name().to_string(),
-                            args: args
-                                .iter()
-                                .map(|expr| expr.try_into())
-                                .collect::<Result<Vec<_>, Error>>()?,
-                        },
-                    )),
-                },
-                ScalarFunctionDefinition::Name(_) => {
-                    return Err(Error::NotImplemented(
+                    },
+                    ScalarFunctionDefinition::Name(_) => {
+                        return Err(Error::NotImplemented(
                     "Proto serialization error: Trying to serialize a unresolved function"
                         .to_string(),
                 ));
+                    }
                 }
-            },
+            }
             Expr::Not(expr) => {
                 let expr = Box::new(protobuf::Not {
                     expr: Some(Box::new(expr.as_ref().try_into()?)),
