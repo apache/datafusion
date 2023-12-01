@@ -308,18 +308,18 @@ struct FilterExecStream {
 }
 
 pub(crate) fn batch_filter(
-    batch: RecordBatch,
+    batch: &RecordBatch,
     predicate: &Arc<dyn PhysicalExpr>,
     projection: &Option<Vec<usize>>,
 ) -> Result<RecordBatch> {
     predicate
-        .evaluate(&batch)
+        .evaluate(batch)
         .and_then(|v| v.into_array(batch.num_rows()))
         .and_then(|array| {
             //load just the columns requested
             let batch = match projection.as_ref() {
                 Some(columns) => batch.project(columns)?,
-                None => batch,
+                None => batch.clone(),
             };
             Ok(as_boolean_array(&array)?)
                 // apply filter array to record batch
@@ -342,7 +342,7 @@ impl Stream for FilterExecStream {
                         let timer: crate::metrics::ScopedTimerGuard<'_> =
                             self.baseline_metrics.elapsed_compute().timer();
                         let filtered_batch =
-                            batch_filter(batch, &self.predicate, &self.projection)?;
+                            batch_filter(&batch, &self.predicate, &self.projection)?;
                         // skip entirely filtered batches
                         if filtered_batch.num_rows() == 0 {
                             continue;
