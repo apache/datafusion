@@ -4598,6 +4598,8 @@ Supports strings, integer, unsigned integer, and double types as input.
 Strings are parsed as RFC3339 (e.g. ‘2023-07-20T05:44:00’)
 Integers, unsigned integers, and doubles are interpreted as seconds since the unix epoch (<code class="docutils literal notranslate"><span class="pre">1970-01-01T00:00:00Z</span></code>)
 return the corresponding timestamp.</p>
+<p>Note: <code class="docutils literal notranslate"><span class="pre">to_timestamp</span></code> returns <code class="docutils literal notranslate"><span class="pre">Timestamp(Nanosecond)</span></code>. The supported range for integer input is between <code class="docutils literal notranslate"><span class="pre">-9223372037</span></code> and <code class="docutils literal notranslate"><span class="pre">9223372036</span></code>.
+Supported range for string input is between <code class="docutils literal notranslate"><span class="pre">1677-09-21T00:12:44.0</span></code> and <code class="docutils literal notranslate"><span class="pre">2262-04-11T23:47:16.0</span></code>. Please use <code class="docutils literal notranslate"><span class="pre">to_timestamp_seconds</span></code> for the input outside of supported bounds.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">to_timestamp</span><span class="p">(</span><span class="n">expression</span><span class="p">)</span>
 </pre></div>
 </div>
