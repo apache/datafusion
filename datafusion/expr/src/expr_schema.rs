@@ -341,6 +341,9 @@ impl ExprSchemable for Expr {
             return Ok(self);
         }
 
+        println!("this_type: {:?}", this_type);
+        println!("cast_to_type: {:?}", cast_to_type);
+
         // TODO(kszucs): most of the operations do not validate the type correctness
         // like all of the binary expressions below. Perhaps Expr should track the
         // type of the expression?

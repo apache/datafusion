@@ -1927,6 +1927,109 @@ B false
 C false
 D false
 
+# Test Numeric Coercion
+
+query TTTTTT
+select
+  arrow_typeof(arrow_cast(1.2, 'Float64') + arrow_cast(3, 'UInt64')),
+  arrow_typeof(arrow_cast(1.2, 'Float64') + arrow_cast(-3, 'Int64')),
+  arrow_typeof(arrow_cast(64, 'UInt64') + arrow_cast(2.3, 'Float32')),
+  arrow_typeof(arrow_cast(-64, 'Int64') + arrow_cast(2.3, 'Float32')),
+  arrow_typeof(arrow_cast(32, 'UInt32') + arrow_cast(2.3, 'Float32')),
+  arrow_typeof(arrow_cast(-32, 'Int32') + arrow_cast(2.3, 'Float32'))
+;
+----
+Float64 Float64 Float64 Float64 Float64 Float64
+
+query TTTT
+select
+  arrow_typeof(arrow_cast(1, 'UInt64') + arrow_cast(3, 'UInt64')),
+  arrow_typeof(arrow_cast(2, 'UInt32') + arrow_cast(3, 'UInt64')),
+  arrow_typeof(arrow_cast(3, 'UInt16') + arrow_cast(3, 'UInt64')),
+  arrow_typeof(arrow_cast(4, 'UInt8') + arrow_cast(3, 'UInt64'))
+;
+----
+UInt64 UInt64 UInt64 UInt64
+
+query TTTTTTTTTTTTTT
+select
+  arrow_typeof(arrow_cast(-1, 'Int64') + arrow_cast(3, 'UInt64')),
+  arrow_typeof(arrow_cast(-2, 'Int32') + arrow_cast(3, 'UInt64')),
+  arrow_typeof(arrow_cast(-3, 'Int16') + arrow_cast(3, 'UInt64')),
+  arrow_typeof(arrow_cast(-4, 'Int8') + arrow_cast(3, 'UInt64')),
+  arrow_typeof(arrow_cast(-64, 'Int64') + arrow_cast(3, 'Int64')),
+  arrow_typeof(arrow_cast(32, 'UInt32') + arrow_cast(3, 'Int64')),
+  arrow_typeof(arrow_cast(-32, 'Int32') + arrow_cast(3, 'Int64')),
+  arrow_typeof(arrow_cast(16, 'UInt16') + arrow_cast(3, 'Int64')),
+  arrow_typeof(arrow_cast(-16, 'Int16') + arrow_cast(3, 'Int64')),
+  arrow_typeof(arrow_cast(8, 'UInt8') + arrow_cast(3, 'Int64')),
+  arrow_typeof(arrow_cast(-8, 'Int8') + arrow_cast(3, 'Int64')),
+  arrow_typeof(arrow_cast(-9, 'Int32') + arrow_cast(3, 'UInt32')),
+  arrow_typeof(arrow_cast(-10, 'Int16') + arrow_cast(3, 'UInt32')),
+  arrow_typeof(arrow_cast(-11, 'Int8') + arrow_cast(3, 'UInt32'))
+;
+----
+Int64 Int64 Int64 Int64 Int64 Int64 Int64 Int64 Int64 Int64 Int64 Int64 Int64 Int64
+
+query TTTTT
+select
+  arrow_typeof(arrow_cast(1.2, 'Float32') + arrow_cast(3.4, 'Float32')),
+  arrow_typeof(arrow_cast(16, 'UInt16') + arrow_cast(3.4, 'Float32')),
+  arrow_typeof(arrow_cast(-16, 'Int16') + arrow_cast(3.4, 'Float32')),
+  arrow_typeof(arrow_cast(8, 'UInt8') + arrow_cast(3.4, 'Float32')),
+  arrow_typeof(arrow_cast(-8, 'Int8') + arrow_cast(3.4, 'Float32'))
+;
+----
+Float32 Float32 Float32 Float32 Float32
+
+query TTT
+select
+  arrow_typeof(arrow_cast(1, 'UInt32') + arrow_cast(2, 'UInt32')),
+  arrow_typeof(arrow_cast(2, 'UInt32') + arrow_cast(2, 'UInt16')),
+  arrow_typeof(arrow_cast(3, 'UInt32') + arrow_cast(2, 'UInt8'))
+;
+----
+UInt32 UInt32 UInt32
+
+query TTTTT
+select
+  arrow_typeof(arrow_cast(1, 'Int32') + arrow_cast(2, 'Int32')),
+  arrow_typeof(arrow_cast(2, 'Int32') + arrow_cast(2, 'Int16')),
+  arrow_typeof(arrow_cast(3, 'Int32') + arrow_cast(2, 'Int8')),
+  arrow_typeof(arrow_cast(4, 'UInt16') + arrow_cast(2, 'Int16')),
+  arrow_typeof(arrow_cast(5, 'UInt16') + arrow_cast(2, 'Int8'))
+;
+----
+Int32 Int32 Int32 Int32 Int32
+
+query TT
+select
+  arrow_typeof(arrow_cast(1, 'UInt16') + arrow_cast(2, 'UInt16')),
+  arrow_typeof(arrow_cast(2, 'UInt8') + arrow_cast(2, 'UInt16'))
+;
+----
+UInt16 UInt16
+
+query TTTT
+select
+  arrow_typeof(arrow_cast(1, 'Int16') + arrow_cast(2, 'Int16')),
+  arrow_typeof(arrow_cast(2, 'Int16') + arrow_cast(2, 'UInt8')),
+  arrow_typeof(arrow_cast(3, 'Int16') + arrow_cast(2, 'Int8')),
+  arrow_typeof(arrow_cast(4, 'UInt8') + arrow_cast(2, 'Int8'))
+;
+----
+Int16 Int16 Int16 Int16
+
+query T
+select arrow_typeof(arrow_cast(1, 'UInt8') + arrow_cast(2, 'UInt8'));
+----
+UInt8
+
+query T
+select arrow_typeof(arrow_cast(1, 'Int8') + arrow_cast(2, 'Int8'));
+----
+Int8
+
 # test string_temporal_coercion
 query BBBBBBBBBB
 select 
