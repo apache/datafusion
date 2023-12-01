@@ -144,7 +144,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     values.push(value);
                 }
                 Expr::ScalarFunction(ScalarFunction {
-                    func_def: ScalarFunctionDefinition::BuiltIn { fun, .. },
+                    func_def: ScalarFunctionDefinition::BuiltIn(fun),
                     ..
                 }) => {
                     if fun == BuiltinScalarFunction::MakeArray {

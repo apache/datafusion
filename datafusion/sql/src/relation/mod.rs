@@ -16,9 +16,11 @@
 // under the License.
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
-use datafusion_common::{not_impl_err, DataFusionError, Result};
+use datafusion_common::{
+    not_impl_err, plan_err, DFSchema, DataFusionError, Result, TableReference,
+};
 use datafusion_expr::{LogicalPlan, LogicalPlanBuilder};
-use sqlparser::ast::TableFactor;
+use sqlparser::ast::{FunctionArg, FunctionArgExpr, TableFactor};
 
 mod join;
 
@@ -30,24 +32,58 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         planner_context: &mut PlannerContext,
     ) -> Result<LogicalPlan> {
         let (plan, alias) = match relation {
-            TableFactor::Table { name, alias, .. } => {
-                // normalize name and alias
-                let table_ref = self.object_name_to_table_reference(name)?;
-                let table_name = table_ref.to_string();
-                let cte = planner_context.get_cte(&table_name);
-                (
-                    match (
-                        cte,
-                        self.context_provider.get_table_source(table_ref.clone()),
-                    ) {
-                        (Some(cte_plan), _) => Ok(cte_plan.clone()),
-                        (_, Ok(provider)) => {
-                            LogicalPlanBuilder::scan(table_ref, provider, None)?.build()
-                        }
-                        (None, Err(e)) => Err(e),
-                    }?,
-                    alias,
-                )
+            TableFactor::Table {
+                name, alias, args, ..
+            } => {
+                if let Some(func_args) = args {
+                    let tbl_func_name = name.0.get(0).unwrap().value.to_string();
+                    let args = func_args
+                        .into_iter()
+                        .flat_map(|arg| {
+                            if let FunctionArg::Unnamed(FunctionArgExpr::Expr(expr)) = arg
+                            {
+                                self.sql_expr_to_logical_expr(
+                                    expr,
+                                    &DFSchema::empty(),
+                                    planner_context,
+                                )
+                            } else {
+                                plan_err!("Unsupported function argument type: {:?}", arg)
+                            }
+                        })
+                        .collect::<Vec<_>>();
+                    let provider = self
+                        .context_provider
+                        .get_table_function_source(&tbl_func_name, args)?;
+                    let plan = LogicalPlanBuilder::scan(
+                        TableReference::Bare {
+                            table: std::borrow::Cow::Borrowed("tmp_table"),
+                        },
+                        provider,
+                        None,
+                    )?
+                    .build()?;
+                    (plan, alias)
+                } else {
+                    // normalize name and alias
+                    let table_ref = self.object_name_to_table_reference(name)?;
+                    let table_name = table_ref.to_string();
+                    let cte = planner_context.get_cte(&table_name);
+                    (
+                        match (
+                            cte,
+                            self.context_provider.get_table_source(table_ref.clone()),
+                        ) {
+                            (Some(cte_plan), _) => Ok(cte_plan.clone()),
+                            (_, Ok(provider)) => {
+                                LogicalPlanBuilder::scan(table_ref, provider, None)?
+                                    .build()
+                            }
+                            (None, Err(e)) => Err(e),
+                        }?,
+                        alias,
+                    )
+                }
             }
             TableFactor::Derived {
                 subquery, alias, ..

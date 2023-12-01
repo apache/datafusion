@@ -5,9 +5,9 @@
 # to you under the Apache License, Version 2.0 (the
 # "License"); you may not use this file except in compliance
 # with the License.  You may obtain a copy of the License at
-#
+
 #   http://www.apache.org/licenses/LICENSE-2.0
-#
+
 # Unless required by applicable law or agreed to in writing,
 # software distributed under the License is distributed on an
 # "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
@@ -15,28 +15,51 @@
 # specific language governing permissions and limitations
 # under the License.
 
-[package]
-name = "datafusion-substrait"
-description = "DataFusion Substrait Producer and Consumer"
-readme = "README.md"
-version = { workspace = true }
-edition = { workspace = true }
-homepage = { workspace = true }
-repository = { workspace = true }
-license = { workspace = true }
-authors = { workspace = true }
-rust-version = "1.70"
+# create_external_table_with_quote_escape
+statement ok
+CREATE EXTERNAL TABLE csv_with_quote (
+c1 VARCHAR,
+c2 VARCHAR
+) STORED AS CSV
+WITH HEADER ROW
+DELIMITER ','
+OPTIONS ('quote' '~')
+LOCATION '../core/tests/data/quote.csv';
 
-[dependencies]
-async-recursion = "1.0"
-chrono = { workspace = true }
-datafusion = { workspace = true }
-itertools = { workspace = true }
-object_store = { workspace = true }
-prost = "0.12"
-prost-types = "0.12"
-substrait = "0.20.0"
-tokio = "1.17"
+statement ok
+CREATE EXTERNAL TABLE csv_with_escape (
+c1 VARCHAR,
+c2 VARCHAR
+) STORED AS CSV
+WITH HEADER ROW
+DELIMITER ','
+OPTIONS ('escape' '\"')
+LOCATION '../core/tests/data/escape.csv';
 
-[features]
-protoc = ["substrait/protoc"]
+query TT
+select * from csv_with_quote;
+----
+id0 value0
+id1 value1
+id2 value2
+id3 value3
+id4 value4
+id5 value5
+id6 value6
+id7 value7
+id8 value8
+id9 value9
+
+query TT
+select * from csv_with_escape;
+----
+id0 value"0
+id1 value"1
+id2 value"2
+id3 value"3
+id4 value"4
+id5 value"5
+id6 value"6
+id7 value"7
+id8 value"8
+id9 value"9

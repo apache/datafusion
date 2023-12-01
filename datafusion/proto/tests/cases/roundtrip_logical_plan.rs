@@ -1375,9 +1375,10 @@ fn roundtrip_aggregate_udf() {
         Arc::new(vec![DataType::Float64, DataType::UInt32]),
     );
 
-    let test_expr = Expr::AggregateUDF(expr::AggregateUDF::new(
+    let test_expr = Expr::AggregateFunction(expr::AggregateFunction::new_udf(
         Arc::new(dummy_agg.clone()),
         vec![lit(1.0_f64)],
+        false,
         Some(Box::new(lit(true))),
         None,
     ));

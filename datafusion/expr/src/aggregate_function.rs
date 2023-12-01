@@ -105,7 +105,7 @@ pub enum AggregateFunction {
 }
 
 impl AggregateFunction {
-    fn name(&self) -> &str {
+    pub fn name(&self) -> &str {
         use AggregateFunction::*;
         match self {
             Count => "COUNT",

@@ -942,7 +942,7 @@ select array_slice(make_array(1, 2, 3, 4, 5), 0, -4), array_slice(make_array('h'
 
 # array_slice scalar function #13 (with negative number and NULL)
 query error
-select array_slice(make_array(1, 2, 3, 4, 5), 2, NULL), array_slice(make_array('h', 'e', 'l', 'l', 'o'), 3, NULL);
+select array_slice(make_array(1, 2, 3, 4, 5), -2, NULL), array_slice(make_array('h', 'e', 'l', 'l', 'o'), -3, NULL);
 
 # array_slice scalar function #14 (with NULL and negative number)
 query error
@@ -979,10 +979,10 @@ select array_slice(make_array(1, 2, 3, 4, 5), -7, -2), array_slice(make_array('h
 [] []
 
 # array_slice scalar function #20 (with negative indexes; nested array)
-query ?
-select array_slice(make_array(make_array(1, 2, 3, 4, 5), make_array(6, 7, 8, 9, 10)), -2, -1);
+query ??
+select array_slice(make_array(make_array(1, 2, 3, 4, 5), make_array(6, 7, 8, 9, 10)), -2, -1), array_slice(make_array(make_array(1, 2, 3), make_array(6, 7, 8)), -1, -1);
 ----
-[[1, 2, 3, 4, 5]]
+[[1, 2, 3, 4, 5]] []
 
 # array_slice scalar function #21 (with first positive index and last negative index)
 query ??
@@ -2395,11 +2395,17 @@ select array_length(make_array()), array_length(make_array(), 1), array_length(m
 ----
 0 0 NULL
 
-# list_length scalar function #6 (function alias `array_length`)
+# array_length scalar function #6 nested array
 query III
-select list_length(make_array(1, 2, 3, 4, 5)), list_length(make_array(1, 2, 3)), list_length(make_array([1, 2], [3, 4], [5, 6]));
+select array_length([[1, 2, 3, 4], [5, 6, 7, 8]]), array_length([[1, 2, 3, 4], [5, 6, 7, 8]], 1), array_length([[1, 2, 3, 4], [5, 6, 7, 8]], 2);
 ----
-5 3 3
+2 2 4
+
+# list_length scalar function #7 (function alias `array_length`)
+query IIII
+select list_length(make_array(1, 2, 3, 4, 5)), list_length(make_array(1, 2, 3)), list_length(make_array([1, 2], [3, 4], [5, 6])), array_length([[1, 2, 3, 4], [5, 6, 7, 8]], 3);
+----
+5 3 3 NULL
 
 # array_length with columns
 query I
@@ -2744,15 +2750,16 @@ from arrays_range;
 [0, 1, 2, 3, 4, 5, 6, 7, 8, 9] [3, 4, 5, 6, 7, 8, 9] [3, 5, 7, 9]
 [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12] [4, 5, 6, 7, 8, 9, 10, 11, 12] [4, 7, 10]
 
-query ?????
+query ??????
 select range(5),
        range(2, 5),
        range(2, 10, 3),
        range(1, 5, -1),
-       range(1, -5, 1)
+       range(1, -5, 1),
+       range(1, -5, -1)
 ;
 ----
-[0, 1, 2, 3, 4] [2, 3, 4] [2, 5, 8] [1] []
+[0, 1, 2, 3, 4] [2, 3, 4] [2, 5, 8] [] [] [1, 0, -1, -2, -3, -4]
 
 query ???
 select generate_series(5),
@@ -3049,15 +3056,30 @@ select empty(make_array(1));
 ----
 false
 
+query B
+select empty(arrow_cast(make_array(1), 'LargeList(Int64)'));
+----
+false
+
 # empty scalar function #2
 query B
 select empty(make_array());
 ----
 true
 
+query B
+select empty(arrow_cast(make_array(), 'LargeList(Null)'));
+----
+true
+
 # empty scalar function #3
 query B
 select empty(make_array(NULL));
+----
+false
+
+query B
+select empty(arrow_cast(make_array(NULL), 'LargeList(Null)'));
 ----
 false
 
@@ -3070,6 +3092,17 @@ NULL
 # empty scalar function #5
 query B
 select empty(column1) from arrays;
+----
+false
+false
+false
+false
+NULL
+false
+false
+
+query B
+select empty(arrow_cast(column1, 'LargeList(List(Int64))')) from arrays;
 ----
 false
 false
