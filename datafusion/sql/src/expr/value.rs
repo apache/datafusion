@@ -113,7 +113,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 } else {
                     // when PREPARE Statement, param_data_types length is always 0
                     plan_err!("Invalid placeholder, not a number: {param}")
-                }
+                };
             }
         };
         // Check if the placeholder is in the parameter list
