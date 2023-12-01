@@ -187,23 +187,19 @@ impl FirstValueAccumulator {
 
     // Updates state with the values in the given row.
     fn update_with_new_row(&mut self, row: &[ScalarValue]) -> Result<()> {
-        if !self.is_set {
-            self.first = row[0].clone();
-            self.orderings = row[1..].to_vec();
-            self.is_set = true;
-        } else if compare_rows(
-            &self.orderings,
-            &row[1..],
-            &self
-                .ordering_req
-                .iter()
-                .map(|sort_expr| sort_expr.options)
-                .collect::<Vec<_>>(),
-        )?
-        .is_gt()
+        let value = &row[0];
+        let orderings = &row[1..];
+        if !self.is_set
+            || compare_rows(
+                &self.orderings,
+                &orderings,
+                &get_sort_options(&self.ordering_req),
+            )?
+            .is_gt()
         {
-            self.first = row[0].clone();
-            self.orderings = row[1..].to_vec();
+            self.first = value.clone();
+            self.orderings = orderings.to_vec();
+            self.is_set = true;
         }
         Ok(())
     }
@@ -218,7 +214,7 @@ impl Accumulator for FirstValueAccumulator {
     }
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
-        // If we have seen first value, we shouldn't update it
+        // For empty batches there is nothing to update
         if !values[0].is_empty() {
             let first_idx = get_value_idx::<true>(values, &self.ordering_req)?;
             let row = get_row_at_idx(values, first_idx)?;
@@ -457,7 +453,7 @@ impl Accumulator for LastValueAccumulator {
     }
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
-        // If we have seen first value, we shouldn't update it
+        // For empty batches there is nothing to update
         if !values[0].is_empty() {
             let last_idx = get_value_idx::<false>(values, &self.ordering_req)?;
             let row = get_row_at_idx(values, last_idx)?;
