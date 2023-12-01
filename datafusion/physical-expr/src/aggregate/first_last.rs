@@ -214,9 +214,9 @@ impl Accumulator for FirstValueAccumulator {
     }
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
-        // For empty batches there is nothing to update
-        if !values[0].is_empty() {
-            let first_idx = get_value_idx::<true>(values, &self.ordering_req)?;
+        if let Some(first_idx) =
+            get_value_idx::<true>(values, &self.ordering_req, self.is_set)?
+        {
             let row = get_row_at_idx(values, first_idx)?;
             self.update_with_new_row(&row)?;
         }
@@ -449,9 +449,9 @@ impl Accumulator for LastValueAccumulator {
     }
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
-        // For empty batches there is nothing to update
-        if !values[0].is_empty() {
-            let last_idx = get_value_idx::<false>(values, &self.ordering_req)?;
+        if let Some(last_idx) =
+            get_value_idx::<false>(values, &self.ordering_req, self.is_set)?
+        {
             let row = get_row_at_idx(values, last_idx)?;
             self.update_with_new_row(&row)?;
         }
@@ -546,12 +546,25 @@ fn get_sort_options(ordering_req: &[PhysicalSortExpr]) -> Vec<SortOptions> {
 fn get_value_idx<const FIRST: bool>(
     values: &[ArrayRef],
     ordering_req: &[PhysicalSortExpr],
-) -> Result<usize> {
+    is_set: bool,
+) -> Result<Option<usize>> {
     let value = &values[0];
     let ordering_values = &values[1..];
-    Ok(if ordering_req.is_empty() {
+    if value.is_empty() {
+        // For empty batches there is nothing to update
+        return Ok(None);
+    }
+
+    Ok(Some(if ordering_req.is_empty() && !is_set && FIRST {
+        0
+    } else if ordering_req.is_empty() && is_set && FIRST {
+        // No need to overwrite existing value, when no ordering is specified
+        // Just use first value encountered
+        return Ok(None);
+    } else if ordering_req.is_empty() && !FIRST {
         value.len() - 1
     } else {
+        // Calculate real first, or last value according to requirement.
         let sort_options = if FIRST {
             get_sort_options(ordering_req)
         } else {
@@ -573,7 +586,7 @@ fn get_value_idx<const FIRST: bool>(
             .collect::<Vec<_>>();
         let indices = lexsort_to_indices(&sort_columns, Some(1))?;
         indices.value(0) as usize
-    })
+    }))
 }
 
 #[cfg(test)]
