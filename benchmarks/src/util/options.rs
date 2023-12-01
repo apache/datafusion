@@ -31,7 +31,7 @@ pub struct CommonOpt {
     pub partitions: Option<usize>,
 
     /// Batch size when reading CSV or Parquet files
-    #[structopt(short = "s", long = "batch-size", default_value = "8192")]
+    #[structopt(short = "s", long = "batch-size", default_value = "32768")]
     pub batch_size: usize,
 
     /// Activate debug mode to see more details
