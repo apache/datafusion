@@ -35,12 +35,13 @@ use arrow::{
     datatypes::{DataType, Field, Schema, SchemaRef},
     record_batch::RecordBatch,
 };
-use datafusion_common::{downcast_value, plan_datafusion_err, ScalarValue};
+use arrow_array::cast::AsArray;
 use datafusion_common::{
     internal_err, plan_err,
     tree_node::{Transformed, TreeNode},
 };
-use datafusion_physical_expr::utils::collect_columns;
+use datafusion_common::{plan_datafusion_err, ScalarValue};
+use datafusion_physical_expr::utils::{collect_columns, Guarantee, LiteralGuarantee};
 use datafusion_physical_expr::{expressions as phys_expr, PhysicalExprRef};
 use log::trace;
 
@@ -68,11 +69,15 @@ use log::trace;
 pub trait PruningStatistics {
     /// return the minimum values for the named column, if known.
     /// Note: the returned array must contain `num_containers()` rows
-    fn min_values(&self, column: &Column) -> Option<ArrayRef>;
+    fn min_values(&self, _column: &Column) -> Option<ArrayRef> {
+        None
+    }
 
     /// return the maximum values for the named column, if known.
     /// Note: the returned array must contain `num_containers()` rows.
-    fn max_values(&self, column: &Column) -> Option<ArrayRef>;
+    fn max_values(&self, _column: &Column) -> Option<ArrayRef> {
+        None
+    }
 
     /// return the number of containers (e.g. row groups) being
     /// pruned with these statistics
@@ -82,7 +87,32 @@ pub trait PruningStatistics {
     /// `Option<UInt64Array>`.
     ///
     /// Note: the returned array must contain `num_containers()` rows.
-    fn null_counts(&self, column: &Column) -> Option<ArrayRef>;
+    fn null_counts(&self, _column: &Column) -> Option<ArrayRef> {
+        None
+    }
+
+    /// Returns an array where each element represents if the value of the
+    /// column CERTAINLY DOES NOT contain any of the specified `values`.
+    ///
+    /// This can be used to prune containers based on structures such as Bloom
+    /// Filters which can test set membership quickly.
+    ///
+    /// The returned array has one row for each container, with the following:
+    /// * `true` if the value of column CERTAINLY IS one of `values`
+    /// * `false` if the value of column CERTAINLY IS NOT one of  `values`
+    /// * `null` if the value of column may or may not be in values
+    ///
+    /// If these statistics can not determine column membership for any
+    /// container, return `None` (the default).
+    ///
+    /// Note: the returned array must contain [`Self::num_containers`] rows
+    fn contains(
+        &self,
+        _column: &Column,
+        _values: &HashSet<ScalarValue>,
+    ) -> Option<BooleanArray> {
+        None
+    }
 }
 
 /// Evaluates filter expressions on statistics, rather than the actual data. If
@@ -129,10 +159,12 @@ pub struct PruningPredicate {
     schema: SchemaRef,
     /// Actual pruning predicate (rewritten in terms of column min/max statistics)
     predicate_expr: Arc<dyn PhysicalExpr>,
-    /// The statistics required to evaluate this predicate
-    required_columns: RequiredStatColumns,
+    /// The statistics required to evaluate `predicate_expr`
+    required_columns: RequiredColumns,
     /// Original physical predicate from which this predicate expr is derived (required for serialization)
     orig_expr: Arc<dyn PhysicalExpr>,
+    /// Any col = literal expressions
+    literal_guarantees: Vec<LiteralGuarantee>,
 }
 
 impl PruningPredicate {
@@ -157,14 +189,18 @@ impl PruningPredicate {
     /// `(column_min / 2) <= 4 && 4 <= (column_max / 2))`
     pub fn try_new(expr: Arc<dyn PhysicalExpr>, schema: SchemaRef) -> Result<Self> {
         // build predicate expression once
-        let mut required_columns = RequiredStatColumns::new();
+        let mut required_columns = RequiredColumns::new();
         let predicate_expr =
             build_predicate_expression(&expr, schema.as_ref(), &mut required_columns);
+
+        let literal_guarantees = LiteralGuarantee::analyze(&expr);
+
         Ok(Self {
             schema,
             predicate_expr,
             required_columns,
             orig_expr: expr,
+            literal_guarantees,
         })
     }
 
@@ -183,40 +219,36 @@ impl PruningPredicate {
     ///
     /// [`ExprSimplifier`]: crate::optimizer::simplify_expressions::ExprSimplifier
     pub fn prune<S: PruningStatistics>(&self, statistics: &S) -> Result<Vec<bool>> {
+        let mut builder = BoolVecBuilder::new(statistics.num_containers());
+
+        // First, check any expr_op_literals
+        for literal_guarantee in &self.literal_guarantees {
+            let LiteralGuarantee {
+                column,
+                guarantee,
+                literals,
+            } = literal_guarantee;
+            // Can the statistics tell us anything about this column?
+            if let Some(results) = statistics.contains(column, literals) {
+                match guarantee {
+                    Guarantee::In => builder.append_array(&results),
+                    Guarantee::NotIn => {
+                        let results = arrow::compute::not(&results)?;
+                        builder.append_array(&results)
+                    }
+                }
+            }
+        }
+
         // build a RecordBatch that contains the min/max values in the
-        // appropriate statistics columns
+        // appropriate statistics columns for the min/max predicate
         let statistics_batch =
             build_statistics_record_batch(statistics, &self.required_columns)?;
 
-        // Evaluate the pruning predicate on that record batch.
-        //
-        // Use true when the result of evaluating a predicate
-        // expression on a row group is null (aka `None`). Null can
-        // arise when the statistics are unknown or some calculation
-        // in the predicate means we don't know for sure if the row
-        // group can be filtered out or not. To maintain correctness
-        // the row group must be kept and thus `true` is returned.
-        match self.predicate_expr.evaluate(&statistics_batch)? {
-            ColumnarValue::Array(array) => {
-                let predicate_array = downcast_value!(array, BooleanArray);
+        // Evaluate the pruning predicate on that record batch and append any results to the builder
+        builder.append_value(self.predicate_expr.evaluate(&statistics_batch)?);
 
-                Ok(predicate_array
-                    .into_iter()
-                    .map(|x| x.unwrap_or(true)) // None -> true per comments above
-                    .collect::<Vec<_>>())
-            }
-            // result was a column
-            ColumnarValue::Scalar(ScalarValue::Boolean(v)) => {
-                let v = v.unwrap_or(true); // None -> true per comments above
-                Ok(vec![v; statistics.num_containers()])
-            }
-            other => {
-                internal_err!(
-                    "Unexpected result of pruning predicate evaluation. Expected Boolean array \
-                     or scalar but got {other:?}"
-                )
-            }
-        }
+        Ok(builder.build())
     }
 
     /// Return a reference to the input schema
@@ -239,8 +271,78 @@ impl PruningPredicate {
         is_always_true(&self.predicate_expr)
     }
 
-    pub(crate) fn required_columns(&self) -> &RequiredStatColumns {
+    pub(crate) fn required_columns(&self) -> &RequiredColumns {
         &self.required_columns
+    }
+
+    /// returns the names of the columns that are known to be a constant (and
+    /// that may be used as part of a Contains query
+    pub fn literal_columns(&self) -> Vec<String> {
+        let mut seen = HashSet::new();
+        self.literal_guarantees
+            .iter()
+            .map(|e| &e.column.name)
+            // avoid duplicates
+            .filter(|name| seen.insert(*name))
+            .map(|s| s.to_string())
+            .collect()
+    }
+}
+
+/// Builds a Vec that is true if container CERTAINLY DOES NOT pass the
+/// predicate, and false if it MAY pass the predicate
+///
+/// Use true when the result of evaluating a predicate
+/// expression on a row group is null (aka `None`). Null can
+/// arise when the statistics are unknown or some calculation
+/// in the predicate means we don't know for sure if the row
+/// group can be filtered out or not. To maintain correctness
+/// the row group must be kept and thus `true` is returned.
+#[derive(Debug)]
+struct BoolVecBuilder {
+    // true if the container may pass the predicate, false if we know for sure
+    // it did not pass the predicate
+    inner: Vec<bool>,
+}
+
+impl BoolVecBuilder {
+    fn new(num_containers: usize) -> Self {
+        Self {
+            inner: vec![true; num_containers],
+        }
+    }
+
+    /// Combines the results in an array to the currently in progress array
+    fn append_array(&mut self, array: &BooleanArray) {
+        assert_eq!(array.len(), self.inner.len());
+        // set any locations to false if we know for sure they did not pass the predicate
+        for (cur, new) in self.inner.iter_mut().zip(array.iter()) {
+            if let Some(false) = new {
+                *cur = false;
+            }
+        }
+    }
+
+    /// Combines the results in the [`ColumnarValue`] to the currently in progress array
+    fn append_value(&mut self, value: ColumnarValue) {
+        match value {
+            ColumnarValue::Array(array) => {
+                self.append_array(array.as_boolean());
+            }
+            ColumnarValue::Scalar(ScalarValue::Boolean(Some(false))) => {
+                // False means all containers can not pass the predicate
+                self.inner = vec![false; self.inner.len()];
+            }
+            _ => {
+                // Null or true means we don't know if the container can pass the predicate
+                // so we must keep it
+            }
+        }
+    }
+
+    /// Convert this builder into a Vec of bools
+    fn build(self) -> Vec<bool> {
+        self.inner
     }
 }
 
@@ -257,21 +359,21 @@ fn is_always_true(expr: &Arc<dyn PhysicalExpr>) -> bool {
 /// Handles creating references to the min/max statistics
 /// for columns as well as recording which statistics are needed
 #[derive(Debug, Default, Clone)]
-pub(crate) struct RequiredStatColumns {
+pub(crate) struct RequiredColumns {
     /// The statistics required to evaluate this predicate:
     /// * The unqualified column in the input schema
     /// * Statistics type (e.g. Min or Max or Null_Count)
     /// * The field the statistics value should be placed in for
-    ///   pruning predicate evaluation
+    ///   pruning predicate evaluation (e.g. `min_value` or `max_value`)
     columns: Vec<(phys_expr::Column, StatisticsType, Field)>,
 }
 
-impl RequiredStatColumns {
+impl RequiredColumns {
     fn new() -> Self {
         Self::default()
     }
 
-    /// Returns number of unique columns.
+    /// Returns number of unique columns
     pub(crate) fn n_columns(&self) -> usize {
         self.iter()
             .map(|(c, _s, _f)| c)
@@ -325,11 +427,10 @@ impl RequiredStatColumns {
 
         // only add statistics column if not previously added
         if need_to_insert {
-            let stat_field = Field::new(
-                stat_column.name(),
-                field.data_type().clone(),
-                field.is_nullable(),
-            );
+            // may be null if statistics are not present
+            let nullable = true;
+            let stat_field =
+                Field::new(stat_column.name(), field.data_type().clone(), nullable);
             self.columns.push((column.clone(), stat_type, stat_field));
         }
         rewrite_column_expr(column_expr.clone(), column, &stat_column)
@@ -372,7 +473,7 @@ impl RequiredStatColumns {
     }
 }
 
-impl From<Vec<(phys_expr::Column, StatisticsType, Field)>> for RequiredStatColumns {
+impl From<Vec<(phys_expr::Column, StatisticsType, Field)>> for RequiredColumns {
     fn from(columns: Vec<(phys_expr::Column, StatisticsType, Field)>) -> Self {
         Self { columns }
     }
@@ -405,7 +506,7 @@ impl From<Vec<(phys_expr::Column, StatisticsType, Field)>> for RequiredStatColum
 /// ```
 fn build_statistics_record_batch<S: PruningStatistics>(
     statistics: &S,
-    required_columns: &RequiredStatColumns,
+    required_columns: &RequiredColumns,
 ) -> Result<RecordBatch> {
     let mut fields = Vec::<Field>::new();
     let mut arrays = Vec::<ArrayRef>::new();
@@ -461,7 +562,7 @@ struct PruningExpressionBuilder<'a> {
     op: Operator,
     scalar_expr: Arc<dyn PhysicalExpr>,
     field: &'a Field,
-    required_columns: &'a mut RequiredStatColumns,
+    required_columns: &'a mut RequiredColumns,
 }
 
 impl<'a> PruningExpressionBuilder<'a> {
@@ -470,7 +571,7 @@ impl<'a> PruningExpressionBuilder<'a> {
         right: &'a Arc<dyn PhysicalExpr>,
         op: Operator,
         schema: &'a Schema,
-        required_columns: &'a mut RequiredStatColumns,
+        required_columns: &'a mut RequiredColumns,
     ) -> Result<Self> {
         // find column name; input could be a more complicated expression
         let left_columns = collect_columns(left);
@@ -685,7 +786,7 @@ fn reverse_operator(op: Operator) -> Result<Operator> {
 fn build_single_column_expr(
     column: &phys_expr::Column,
     schema: &Schema,
-    required_columns: &mut RequiredStatColumns,
+    required_columns: &mut RequiredColumns,
     is_not: bool, // if true, treat as !col
 ) -> Option<Arc<dyn PhysicalExpr>> {
     let field = schema.field_with_name(column.name()).ok()?;
@@ -726,7 +827,7 @@ fn build_single_column_expr(
 fn build_is_null_column_expr(
     expr: &Arc<dyn PhysicalExpr>,
     schema: &Schema,
-    required_columns: &mut RequiredStatColumns,
+    required_columns: &mut RequiredColumns,
 ) -> Option<Arc<dyn PhysicalExpr>> {
     if let Some(col) = expr.as_any().downcast_ref::<phys_expr::Column>() {
         let field = schema.field_with_name(col.name()).ok()?;
@@ -756,7 +857,7 @@ fn build_is_null_column_expr(
 fn build_predicate_expression(
     expr: &Arc<dyn PhysicalExpr>,
     schema: &Schema,
-    required_columns: &mut RequiredStatColumns,
+    required_columns: &mut RequiredColumns,
 ) -> Arc<dyn PhysicalExpr> {
     // Returned for unsupported expressions. Such expressions are
     // converted to TRUE.
@@ -1184,7 +1285,7 @@ mod tests {
     #[test]
     fn test_build_statistics_record_batch() {
         // Request a record batch with of s1_min, s2_max, s3_max, s3_min
-        let required_columns = RequiredStatColumns::from(vec![
+        let required_columns = RequiredColumns::from(vec![
             // min of original column s1, named s1_min
             (
                 phys_expr::Column::new("s1", 1),
@@ -1256,7 +1357,7 @@ mod tests {
         // which is what Parquet does
 
         // Request a record batch with of s1_min as a timestamp
-        let required_columns = RequiredStatColumns::from(vec![(
+        let required_columns = RequiredColumns::from(vec![(
             phys_expr::Column::new("s3", 3),
             StatisticsType::Min,
             Field::new(
@@ -1288,7 +1389,7 @@ mod tests {
 
     #[test]
     fn test_build_statistics_no_required_stats() {
-        let required_columns = RequiredStatColumns::new();
+        let required_columns = RequiredColumns::new();
 
         let statistics = OneContainerStats {
             min_values: Some(Arc::new(Int64Array::from(vec![Some(10)]))),
@@ -1306,7 +1407,7 @@ mod tests {
         // Test requesting a Utf8 column when the stats return some other type
 
         // Request a record batch with of s1_min as a timestamp
-        let required_columns = RequiredStatColumns::from(vec![(
+        let required_columns = RequiredColumns::from(vec![(
             phys_expr::Column::new("s3", 3),
             StatisticsType::Min,
             Field::new("s1_min", DataType::Utf8, true),
@@ -1335,7 +1436,7 @@ mod tests {
     #[test]
     fn test_build_statistics_inconsistent_length() {
         // return an inconsistent length to the actual statistics arrays
-        let required_columns = RequiredStatColumns::from(vec![(
+        let required_columns = RequiredColumns::from(vec![(
             phys_expr::Column::new("s1", 3),
             StatisticsType::Min,
             Field::new("s1_min", DataType::Int64, true),
@@ -1366,20 +1467,14 @@ mod tests {
 
         // test column on the left
         let expr = col("c1").eq(lit(1));
-        let predicate_expr = test_build_predicate_expression(
-            &expr,
-            &schema,
-            &mut RequiredStatColumns::new(),
-        );
+        let predicate_expr =
+            test_build_predicate_expression(&expr, &schema, &mut RequiredColumns::new());
         assert_eq!(predicate_expr.to_string(), expected_expr);
 
         // test column on the right
         let expr = lit(1).eq(col("c1"));
-        let predicate_expr = test_build_predicate_expression(
-            &expr,
-            &schema,
-            &mut RequiredStatColumns::new(),
-        );
+        let predicate_expr =
+            test_build_predicate_expression(&expr, &schema, &mut RequiredColumns::new());
         assert_eq!(predicate_expr.to_string(), expected_expr);
 
         Ok(())
@@ -1392,20 +1487,14 @@ mod tests {
 
         // test column on the left
         let expr = col("c1").not_eq(lit(1));
-        let predicate_expr = test_build_predicate_expression(
-            &expr,
-            &schema,
-            &mut RequiredStatColumns::new(),
-        );
+        let predicate_expr =
+            test_build_predicate_expression(&expr, &schema, &mut RequiredColumns::new());
         assert_eq!(predicate_expr.to_string(), expected_expr);
 
         // test column on the right
         let expr = lit(1).not_eq(col("c1"));
-        let predicate_expr = test_build_predicate_expression(
-            &expr,
-            &schema,
-            &mut RequiredStatColumns::new(),
-        );
+        let predicate_expr =
+            test_build_predicate_expression(&expr, &schema, &mut RequiredColumns::new());
         assert_eq!(predicate_expr.to_string(), expected_expr);
 
         Ok(())
@@ -1418,20 +1507,14 @@ mod tests {
 
         // test column on the left
         let expr = col("c1").gt(lit(1));
-        let predicate_expr = test_build_predicate_expression(
-            &expr,
-            &schema,
-            &mut RequiredStatColumns::new(),
-        );
+        let predicate_expr =
+            test_build_predicate_expression(&expr, &schema, &mut RequiredColumns::new());
         assert_eq!(predicate_expr.to_string(), expected_expr);
 
         // test column on the right
         let expr = lit(1).lt(col("c1"));
-        let predicate_expr = test_build_predicate_expression(
-            &expr,
-            &schema,
-            &mut RequiredStatColumns::new(),
-        );
+        let predicate_expr =
+            test_build_predicate_expression(&expr, &schema, &mut RequiredColumns::new());
         assert_eq!(predicate_expr.to_string(), expected_expr);
 
         Ok(())
@@ -1444,19 +1527,13 @@ mod tests {
 
         // test column on the left
         let expr = col("c1").gt_eq(lit(1));
-        let predicate_expr = test_build_predicate_expression(
-            &expr,
-            &schema,
-            &mut RequiredStatColumns::new(),
-        );
+        let predicate_expr =
+            test_build_predicate_expression(&expr, &schema, &mut RequiredColumns::new());
         assert_eq!(predicate_expr.to_string(), expected_expr);
         // test column on the right
         let expr = lit(1).lt_eq(col("c1"));
-        let predicate_expr = test_build_predicate_expression(
-            &expr,
-            &schema,
-            &mut RequiredStatColumns::new(),
-        );
+        let predicate_expr =
+            test_build_predicate_expression(&expr, &schema, &mut RequiredColumns::new());
         assert_eq!(predicate_expr.to_string(), expected_expr);
 
         Ok(())
@@ -1469,20 +1546,14 @@ mod tests {
 
         // test column on the left
         let expr = col("c1").lt(lit(1));
-        let predicate_expr = test_build_predicate_expression(
-            &expr,
-            &schema,
-            &mut RequiredStatColumns::new(),
-        );
+        let predicate_expr =
+            test_build_predicate_expression(&expr, &schema, &mut RequiredColumns::new());
         assert_eq!(predicate_expr.to_string(), expected_expr);
 
         // test column on the right
         let expr = lit(1).gt(col("c1"));
-        let predicate_expr = test_build_predicate_expression(
-            &expr,
-            &schema,
-            &mut RequiredStatColumns::new(),
-        );
+        let predicate_expr =
+            test_build_predicate_expression(&expr, &schema, &mut RequiredColumns::new());
         assert_eq!(predicate_expr.to_string(), expected_expr);
 
         Ok(())
@@ -1495,19 +1566,13 @@ mod tests {
 
         // test column on the left
         let expr = col("c1").lt_eq(lit(1));
-        let predicate_expr = test_build_predicate_expression(
-            &expr,
-            &schema,
-            &mut RequiredStatColumns::new(),
-        );
+        let predicate_expr =
+            test_build_predicate_expression(&expr, &schema, &mut RequiredColumns::new());
         assert_eq!(predicate_expr.to_string(), expected_expr);
         // test column on the right
         let expr = lit(1).gt_eq(col("c1"));
-        let predicate_expr = test_build_predicate_expression(
-            &expr,
-            &schema,
-            &mut RequiredStatColumns::new(),
-        );
+        let predicate_expr =
+            test_build_predicate_expression(&expr, &schema, &mut RequiredColumns::new());
         assert_eq!(predicate_expr.to_string(), expected_expr);
 
         Ok(())
@@ -1523,11 +1588,8 @@ mod tests {
         // test AND operator joining supported c1 < 1 expression and unsupported c2 > c3 expression
         let expr = col("c1").lt(lit(1)).and(col("c2").lt(col("c3")));
         let expected_expr = "c1_min@0 < 1";
-        let predicate_expr = test_build_predicate_expression(
-            &expr,
-            &schema,
-            &mut RequiredStatColumns::new(),
-        );
+        let predicate_expr =
+            test_build_predicate_expression(&expr, &schema, &mut RequiredColumns::new());
         assert_eq!(predicate_expr.to_string(), expected_expr);
 
         Ok(())
@@ -1542,11 +1604,8 @@ mod tests {
         // test OR operator joining supported c1 < 1 expression and unsupported c2 % 2 = 0 expression
         let expr = col("c1").lt(lit(1)).or(col("c2").rem(lit(2)).eq(lit(0)));
         let expected_expr = "true";
-        let predicate_expr = test_build_predicate_expression(
-            &expr,
-            &schema,
-            &mut RequiredStatColumns::new(),
-        );
+        let predicate_expr =
+            test_build_predicate_expression(&expr, &schema, &mut RequiredColumns::new());
         assert_eq!(predicate_expr.to_string(), expected_expr);
 
         Ok(())
@@ -1558,11 +1617,8 @@ mod tests {
         let expected_expr = "true";
 
         let expr = col("c1").not();
-        let predicate_expr = test_build_predicate_expression(
-            &expr,
-            &schema,
-            &mut RequiredStatColumns::new(),
-        );
+        let predicate_expr =
+            test_build_predicate_expression(&expr, &schema, &mut RequiredColumns::new());
         assert_eq!(predicate_expr.to_string(), expected_expr);
 
         Ok(())
@@ -1574,11 +1630,8 @@ mod tests {
         let expected_expr = "NOT c1_min@0 AND c1_max@1";
 
         let expr = col("c1").not();
-        let predicate_expr = test_build_predicate_expression(
-            &expr,
-            &schema,
-            &mut RequiredStatColumns::new(),
-        );
+        let predicate_expr =
+            test_build_predicate_expression(&expr, &schema, &mut RequiredColumns::new());
         assert_eq!(predicate_expr.to_string(), expected_expr);
 
         Ok(())
@@ -1590,11 +1643,8 @@ mod tests {
         let expected_expr = "c1_min@0 OR c1_max@1";
 
         let expr = col("c1");
-        let predicate_expr = test_build_predicate_expression(
-            &expr,
-            &schema,
-            &mut RequiredStatColumns::new(),
-        );
+        let predicate_expr =
+            test_build_predicate_expression(&expr, &schema, &mut RequiredColumns::new());
         assert_eq!(predicate_expr.to_string(), expected_expr);
 
         Ok(())
@@ -1608,11 +1658,8 @@ mod tests {
         // DF doesn't support arithmetic on boolean columns so
         // this predicate will error when evaluated
         let expr = col("c1").lt(lit(true));
-        let predicate_expr = test_build_predicate_expression(
-            &expr,
-            &schema,
-            &mut RequiredStatColumns::new(),
-        );
+        let predicate_expr =
+            test_build_predicate_expression(&expr, &schema, &mut RequiredColumns::new());
         assert_eq!(predicate_expr.to_string(), expected_expr);
 
         Ok(())
@@ -1624,7 +1671,7 @@ mod tests {
             Field::new("c1", DataType::Int32, false),
             Field::new("c2", DataType::Int32, false),
         ]);
-        let mut required_columns = RequiredStatColumns::new();
+        let mut required_columns = RequiredColumns::new();
         // c1 < 1 and (c2 = 2 or c2 = 3)
         let expr = col("c1")
             .lt(lit(1))
@@ -1640,7 +1687,7 @@ mod tests {
             (
                 phys_expr::Column::new("c1", 0),
                 StatisticsType::Min,
-                c1_min_field
+                c1_min_field.with_nullable(true) // could be nullable if stats are not present
             )
         );
         // c2 = 2 should add c2_min and c2_max
@@ -1650,7 +1697,7 @@ mod tests {
             (
                 phys_expr::Column::new("c2", 1),
                 StatisticsType::Min,
-                c2_min_field
+                c2_min_field.with_nullable(true) // could be nullable if stats are not present
             )
         );
         let c2_max_field = Field::new("c2_max", DataType::Int32, false);
@@ -1659,7 +1706,7 @@ mod tests {
             (
                 phys_expr::Column::new("c2", 1),
                 StatisticsType::Max,
-                c2_max_field
+                c2_max_field.with_nullable(true) // could be nullable if stats are not present
             )
         );
         // c2 = 3 shouldn't add any new statistics fields
@@ -1681,11 +1728,8 @@ mod tests {
             false,
         ));
         let expected_expr = "c1_min@0 <= 1 AND 1 <= c1_max@1 OR c1_min@0 <= 2 AND 2 <= c1_max@1 OR c1_min@0 <= 3 AND 3 <= c1_max@1";
-        let predicate_expr = test_build_predicate_expression(
-            &expr,
-            &schema,
-            &mut RequiredStatColumns::new(),
-        );
+        let predicate_expr =
+            test_build_predicate_expression(&expr, &schema, &mut RequiredColumns::new());
         assert_eq!(predicate_expr.to_string(), expected_expr);
 
         Ok(())
@@ -1700,11 +1744,8 @@ mod tests {
         // test c1 in()
         let expr = Expr::InList(InList::new(Box::new(col("c1")), vec![], false));
         let expected_expr = "true";
-        let predicate_expr = test_build_predicate_expression(
-            &expr,
-            &schema,
-            &mut RequiredStatColumns::new(),
-        );
+        let predicate_expr =
+            test_build_predicate_expression(&expr, &schema, &mut RequiredColumns::new());
         assert_eq!(predicate_expr.to_string(), expected_expr);
 
         Ok(())
@@ -1725,11 +1766,8 @@ mod tests {
         let expected_expr = "(c1_min@0 != 1 OR 1 != c1_max@1) \
         AND (c1_min@0 != 2 OR 2 != c1_max@1) \
         AND (c1_min@0 != 3 OR 3 != c1_max@1)";
-        let predicate_expr = test_build_predicate_expression(
-            &expr,
-            &schema,
-            &mut RequiredStatColumns::new(),
-        );
+        let predicate_expr =
+            test_build_predicate_expression(&expr, &schema, &mut RequiredColumns::new());
         assert_eq!(predicate_expr.to_string(), expected_expr);
 
         Ok(())
@@ -1743,20 +1781,14 @@ mod tests {
 
         // test column on the left
         let expr = cast(col("c1"), DataType::Int64).eq(lit(ScalarValue::Int64(Some(1))));
-        let predicate_expr = test_build_predicate_expression(
-            &expr,
-            &schema,
-            &mut RequiredStatColumns::new(),
-        );
+        let predicate_expr =
+            test_build_predicate_expression(&expr, &schema, &mut RequiredColumns::new());
         assert_eq!(predicate_expr.to_string(), expected_expr);
 
         // test column on the right
         let expr = lit(ScalarValue::Int64(Some(1))).eq(cast(col("c1"), DataType::Int64));
-        let predicate_expr = test_build_predicate_expression(
-            &expr,
-            &schema,
-            &mut RequiredStatColumns::new(),
-        );
+        let predicate_expr =
+            test_build_predicate_expression(&expr, &schema, &mut RequiredColumns::new());
         assert_eq!(predicate_expr.to_string(), expected_expr);
 
         let expected_expr = "TRY_CAST(c1_max@0 AS Int64) > 1";
@@ -1764,21 +1796,15 @@ mod tests {
         // test column on the left
         let expr =
             try_cast(col("c1"), DataType::Int64).gt(lit(ScalarValue::Int64(Some(1))));
-        let predicate_expr = test_build_predicate_expression(
-            &expr,
-            &schema,
-            &mut RequiredStatColumns::new(),
-        );
+        let predicate_expr =
+            test_build_predicate_expression(&expr, &schema, &mut RequiredColumns::new());
         assert_eq!(predicate_expr.to_string(), expected_expr);
 
         // test column on the right
         let expr =
             lit(ScalarValue::Int64(Some(1))).lt(try_cast(col("c1"), DataType::Int64));
-        let predicate_expr = test_build_predicate_expression(
-            &expr,
-            &schema,
-            &mut RequiredStatColumns::new(),
-        );
+        let predicate_expr =
+            test_build_predicate_expression(&expr, &schema, &mut RequiredColumns::new());
         assert_eq!(predicate_expr.to_string(), expected_expr);
 
         Ok(())
@@ -1798,11 +1824,8 @@ mod tests {
             false,
         ));
         let expected_expr = "CAST(c1_min@0 AS Int64) <= 1 AND 1 <= CAST(c1_max@1 AS Int64) OR CAST(c1_min@0 AS Int64) <= 2 AND 2 <= CAST(c1_max@1 AS Int64) OR CAST(c1_min@0 AS Int64) <= 3 AND 3 <= CAST(c1_max@1 AS Int64)";
-        let predicate_expr = test_build_predicate_expression(
-            &expr,
-            &schema,
-            &mut RequiredStatColumns::new(),
-        );
+        let predicate_expr =
+            test_build_predicate_expression(&expr, &schema, &mut RequiredColumns::new());
         assert_eq!(predicate_expr.to_string(), expected_expr);
 
         let expr = Expr::InList(InList::new(
@@ -1818,11 +1841,8 @@ mod tests {
             "(CAST(c1_min@0 AS Int64) != 1 OR 1 != CAST(c1_max@1 AS Int64)) \
         AND (CAST(c1_min@0 AS Int64) != 2 OR 2 != CAST(c1_max@1 AS Int64)) \
         AND (CAST(c1_min@0 AS Int64) != 3 OR 3 != CAST(c1_max@1 AS Int64))";
-        let predicate_expr = test_build_predicate_expression(
-            &expr,
-            &schema,
-            &mut RequiredStatColumns::new(),
-        );
+        let predicate_expr =
+            test_build_predicate_expression(&expr, &schema, &mut RequiredColumns::new());
         assert_eq!(predicate_expr.to_string(), expected_expr);
 
         Ok(())
@@ -2468,7 +2488,7 @@ mod tests {
     fn test_build_predicate_expression(
         expr: &Expr,
         schema: &Schema,
-        required_columns: &mut RequiredStatColumns,
+        required_columns: &mut RequiredColumns,
     ) -> Arc<dyn PhysicalExpr> {
         let expr = logical2physical(expr, schema);
         build_predicate_expression(&expr, schema, required_columns)
