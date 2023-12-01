@@ -139,19 +139,7 @@ jobs:
           # test datafusion-sql examples
           cargo run --example sql
           # test datafusion-examples
-          cargo run --example avro_sql --features=datafusion/avro
-          cargo run --example csv_sql
-          cargo run --example custom_datasource
-          cargo run --example dataframe
-          cargo run --example dataframe_in_memory
-          cargo run --example deserialize_to_struct
-          cargo run --example expr_api
-          cargo run --example parquet_sql
-          cargo run --example parquet_sql_multiple_files
-          cargo run --example memtable
-          cargo run --example rewrite_expr
-          cargo run --example simple_udf
-          cargo run --example simple_udaf
+          ci/scripts/rust_example.sh
       - name: Verify Working Directory Clean
         run: git diff --exit-code
 

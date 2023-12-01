@@ -17,7 +17,7 @@
 
 use crate::decorrelate::PullUpCorrelatedExpr;
 use crate::optimizer::ApplyOrder;
-use crate::utils::{conjunction, replace_qualified_name, split_conjunction};
+use crate::utils::replace_qualified_name;
 use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_common::alias::AliasGenerator;
 use datafusion_common::tree_node::TreeNode;
@@ -25,6 +25,7 @@ use datafusion_common::{plan_err, DataFusionError, Result};
 use datafusion_expr::expr::{Exists, InSubquery};
 use datafusion_expr::expr_rewriter::create_col_from_scalar_expr;
 use datafusion_expr::logical_plan::{JoinType, Subquery};
+use datafusion_expr::utils::{conjunction, split_conjunction};
 use datafusion_expr::{
     exists, in_subquery, not_exists, not_in_subquery, BinaryExpr, Expr, Filter,
     LogicalPlan, LogicalPlanBuilder, Operator,

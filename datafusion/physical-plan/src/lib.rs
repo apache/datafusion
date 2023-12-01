@@ -203,7 +203,23 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
             .collect()
     }
 
-    /// Get the [`EquivalenceProperties`] within the plan
+    /// Get the [`EquivalenceProperties`] within the plan.
+    ///
+    /// Equivalence properties tell DataFusion what columns are known to be
+    /// equal, during various optimization passes. By default, this returns "no
+    /// known equivalences" which is always correct, but may cause DataFusion to
+    /// unnecessarily resort data.
+    ///
+    /// If this ExecutionPlan makes no changes to the schema of the rows flowing
+    /// through it or how columns within each row relate to each other, it
+    /// should return the equivalence properties of its input. For
+    /// example, since `FilterExec` may remove rows from its input, but does not
+    /// otherwise modify them, it preserves its input equivalence properties.
+    /// However, since `ProjectionExec` may calculate derived expressions, it
+    /// needs special handling.
+    ///
+    /// See also [`Self::maintains_input_order`] and [`Self::output_ordering`]
+    /// for related concepts.
     fn equivalence_properties(&self) -> EquivalenceProperties {
         EquivalenceProperties::new(self.schema())
     }
@@ -552,6 +568,13 @@ pub fn unbounded_output(plan: &Arc<dyn ExecutionPlan>) -> bool {
         .collect::<Vec<_>>();
     plan.unbounded_output(&children_unbounded_output)
         .unwrap_or(true)
+}
+
+/// Utility function yielding a string representation of the given [`ExecutionPlan`].
+pub fn get_plan_string(plan: &Arc<dyn ExecutionPlan>) -> Vec<String> {
+    let formatted = displayable(plan.as_ref()).indent(true).to_string();
+    let actual: Vec<&str> = formatted.trim().lines().collect();
+    actual.iter().map(|elem| elem.to_string()).collect()
 }
 
 #[cfg(test)]

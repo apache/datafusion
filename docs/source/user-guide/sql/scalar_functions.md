@@ -635,6 +635,10 @@ nullif(expression1, expression2)
 - [trim](#trim)
 - [upper](#upper)
 - [uuid](#uuid)
+- [overlay](#overlay)
+- [levenshtein](#levenshtein)
+- [substr_index](#substr_index)
+- [find_in_set](#find_in_set)
 
 ### `ascii`
 
@@ -1120,6 +1124,67 @@ Returns UUID v4 string value which is unique per row.
 uuid()
 ```
 
+### `overlay`
+
+Returns the string which is replaced by another string from the specified position and specified count length.
+For example, `overlay('Txxxxas' placing 'hom' from 2 for 4) → Thomas`
+
+```
+overlay(str PLACING substr FROM pos [FOR count])
+```
+
+#### Arguments
+
+- **str**: String expression to operate on.
+- **substr**: the string to replace part of str.
+- **pos**: the start position to replace of str.
+- **count**: the count of characters to be replaced from start position of str. If not specified, will use substr length instead.
+
+### `levenshtein`
+
+Returns the Levenshtein distance between the two given strings.
+For example, `levenshtein('kitten', 'sitting') = 3`
+
+```
+levenshtein(str1, str2)
+```
+
+#### Arguments
+
+- **str1**: String expression to compute Levenshtein distance with str2.
+- **str2**: String expression to compute Levenshtein distance with str1.
+
+### `substr_index`
+
+Returns the substring from str before count occurrences of the delimiter delim.
+If count is positive, everything to the left of the final delimiter (counting from the left) is returned.
+If count is negative, everything to the right of the final delimiter (counting from the right) is returned.
+For example, `substr_index('www.apache.org', '.', 1) = www`, `substr_index('www.apache.org', '.', -1) = org`
+
+```
+substr_index(str, delim, count)
+```
+
+#### Arguments
+
+- **str**: String expression to operate on.
+- **delim**: the string to find in str to split str.
+- **count**: The number of times to search for the delimiter. Can be both a positive or negative number.
+
+### `find_in_set`
+
+Returns a value in the range of 1 to N if the string str is in the string list strlist consisting of N substrings.
+For example, `find_in_set('b', 'a,b,c,d') = 2`
+
+```
+find_in_set(str, strlist)
+```
+
+#### Arguments
+
+- **str**: String expression to find in strlist.
+- **strlist**: A string list is a string composed of substrings separated by , characters.
+
 ## Binary String Functions
 
 - [decode](#decode)
@@ -1392,9 +1457,9 @@ extract(field FROM source)
 ### `to_timestamp`
 
 Converts a value to a timestamp (`YYYY-MM-DDT00:00:00Z`).
-Supports strings, integer, and unsigned integer types as input.
+Supports strings, integer, unsigned integer, and double types as input.
 Strings are parsed as RFC3339 (e.g. '2023-07-20T05:44:00')
-Integers and unsigned integers are interpreted as seconds since the unix epoch (`1970-01-01T00:00:00Z`)
+Integers, unsigned integers, and doubles are interpreted as seconds since the unix epoch (`1970-01-01T00:00:00Z`)
 return the corresponding timestamp.
 
 ```
@@ -1498,6 +1563,7 @@ from_unixtime(expression)
 - [array_length](#array_length)
 - [array_ndims](#array_ndims)
 - [array_prepend](#array_prepend)
+- [array_pop_front](#array_pop_front)
 - [array_pop_back](#array_pop_back)
 - [array_position](#array_position)
 - [array_positions](#array_positions)
@@ -1543,6 +1609,7 @@ from_unixtime(expression)
 - [string_to_array](#string_to_array)
 - [string_to_list](#string_to_list)
 - [trim_array](#trim_array)
+- [range](#range)
 
 ### `array_append`
 
@@ -1849,6 +1916,30 @@ array_prepend(element, array)
 - array_push_front
 - list_prepend
 - list_push_front
+
+### `array_pop_front`
+
+Returns the array without the first element.
+
+```
+array_pop_first(array)
+```
+
+#### Arguments
+
+- **array**: Array expression.
+  Can be a constant, column, or function, and any combination of array operators.
+
+#### Example
+
+```
+❯ select array_pop_first([1, 2, 3]);
++-------------------------------+
+| array_pop_first(List([1,2,3])) |
++-------------------------------+
+| [2, 3]                        |
++-------------------------------+
+```
 
 ### `array_pop_back`
 
@@ -2211,6 +2302,82 @@ array_to_string(array, delimiter)
 - list_join
 - list_to_string
 
+### `array_union`
+
+Returns an array of elements that are present in both arrays (all elements from both arrays) with out duplicates.
+
+```
+array_union(array1, array2)
+```
+
+#### Arguments
+
+- **array1**: Array expression.
+  Can be a constant, column, or function, and any combination of array operators.
+- **array2**: Array expression.
+  Can be a constant, column, or function, and any combination of array operators.
+
+#### Example
+
+```
+❯ select array_union([1, 2, 3, 4], [5, 6, 3, 4]);
++----------------------------------------------------+
+| array_union([1, 2, 3, 4], [5, 6, 3, 4]);           |
++----------------------------------------------------+
+| [1, 2, 3, 4, 5, 6]                                 |
++----------------------------------------------------+
+❯ select array_union([1, 2, 3, 4], [5, 6, 7, 8]);
++----------------------------------------------------+
+| array_union([1, 2, 3, 4], [5, 6, 7, 8]);           |
++----------------------------------------------------+
+| [1, 2, 3, 4, 5, 6, 7, 8]                           |
++----------------------------------------------------+
+```
+
+---
+
+#### Aliases
+
+- list_union
+
+### `array_except`
+
+Returns an array of the elements that appear in the first array but not in the second.
+
+```
+array_except(array1, array2)
+```
+
+#### Arguments
+
+- **array1**: Array expression.
+  Can be a constant, column, or function, and any combination of array operators.
+- **array2**: Array expression.
+  Can be a constant, column, or function, and any combination of array operators.
+
+#### Example
+
+```
+❯ select array_except([1, 2, 3, 4], [5, 6, 3, 4]);
++----------------------------------------------------+
+| array_except([1, 2, 3, 4], [5, 6, 3, 4]);           |
++----------------------------------------------------+
+| [1, 2]                                 |
++----------------------------------------------------+
+❯ select array_except([1, 2, 3, 4], [3, 4, 5, 6]);
++----------------------------------------------------+
+| array_except([1, 2, 3, 4], [3, 4, 5, 6]);           |
++----------------------------------------------------+
+| [3, 4]                                 |
++----------------------------------------------------+
+```
+
+---
+
+#### Aliases
+
+- list_except
+
 ### `cardinality`
 
 Returns the total number of elements in the array.
@@ -2425,6 +2592,20 @@ trim_array(array, n)
 - **array**: Array expression.
   Can be a constant, column, or function, and any combination of array operators.
 - **n**: Element to trim the array.
+
+### `range`
+
+Returns an Arrow array between start and stop with step. `SELECT range(2, 10, 3) -> [2, 5, 8]`
+
+The range start..end contains all values with start <= x < end. It is empty if start >= end.
+
+Step can not be 0 (then the range will be nonsense.).
+
+#### Arguments
+
+- **start**: start of the range
+- **end**: end of the range (not included)
+- **step**: increase by step (can not be 0)
 
 ## Struct Functions
 

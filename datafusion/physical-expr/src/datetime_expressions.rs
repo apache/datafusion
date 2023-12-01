@@ -17,6 +17,8 @@
 
 //! DateTime expressions
 
+use crate::datetime_expressions;
+use crate::expressions::cast_column;
 use arrow::array::Float64Builder;
 use arrow::compute::cast;
 use arrow::{
@@ -850,7 +852,7 @@ pub fn date_part(args: &[ColumnarValue]) -> Result<ColumnarValue> {
 
     let array = match array {
         ColumnarValue::Array(array) => array.clone(),
-        ColumnarValue::Scalar(scalar) => scalar.to_array(),
+        ColumnarValue::Scalar(scalar) => scalar.to_array()?,
     };
 
     let arr = match date_part.to_lowercase().as_str() {
@@ -952,6 +954,161 @@ where
         _ => return internal_err!("Can not convert {:?} to epoch", array.data_type()),
     }
     Ok(b.finish())
+}
+
+/// to_timestammp() SQL function implementation
+pub fn to_timestamp_invoke(args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    if args.len() != 1 {
+        return internal_err!(
+            "to_timestamp function requires 1 arguments, got {}",
+            args.len()
+        );
+    }
+
+    match args[0].data_type() {
+        DataType::Int64 => cast_column(
+            &cast_column(&args[0], &DataType::Timestamp(TimeUnit::Second, None), None)?,
+            &DataType::Timestamp(TimeUnit::Nanosecond, None),
+            None,
+        ),
+        DataType::Float64 => cast_column(
+            &args[0],
+            &DataType::Timestamp(TimeUnit::Nanosecond, None),
+            None,
+        ),
+        DataType::Timestamp(_, None) => cast_column(
+            &args[0],
+            &DataType::Timestamp(TimeUnit::Nanosecond, None),
+            None,
+        ),
+        DataType::Utf8 => datetime_expressions::to_timestamp(args),
+        other => {
+            internal_err!(
+                "Unsupported data type {:?} for function to_timestamp",
+                other
+            )
+        }
+    }
+}
+
+/// to_timestamp_millis() SQL function implementation
+pub fn to_timestamp_millis_invoke(args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    if args.len() != 1 {
+        return internal_err!(
+            "to_timestamp_millis function requires 1 argument, got {}",
+            args.len()
+        );
+    }
+
+    match args[0].data_type() {
+        DataType::Int64 | DataType::Timestamp(_, None) => cast_column(
+            &args[0],
+            &DataType::Timestamp(TimeUnit::Millisecond, None),
+            None,
+        ),
+        DataType::Utf8 => datetime_expressions::to_timestamp_millis(args),
+        other => {
+            internal_err!(
+                "Unsupported data type {:?} for function to_timestamp_millis",
+                other
+            )
+        }
+    }
+}
+
+/// to_timestamp_micros() SQL function implementation
+pub fn to_timestamp_micros_invoke(args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    if args.len() != 1 {
+        return internal_err!(
+            "to_timestamp_micros function requires 1 argument, got {}",
+            args.len()
+        );
+    }
+
+    match args[0].data_type() {
+        DataType::Int64 | DataType::Timestamp(_, None) => cast_column(
+            &args[0],
+            &DataType::Timestamp(TimeUnit::Microsecond, None),
+            None,
+        ),
+        DataType::Utf8 => datetime_expressions::to_timestamp_micros(args),
+        other => {
+            internal_err!(
+                "Unsupported data type {:?} for function to_timestamp_micros",
+                other
+            )
+        }
+    }
+}
+
+/// to_timestamp_nanos() SQL function implementation
+pub fn to_timestamp_nanos_invoke(args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    if args.len() != 1 {
+        return internal_err!(
+            "to_timestamp_nanos function requires 1 argument, got {}",
+            args.len()
+        );
+    }
+
+    match args[0].data_type() {
+        DataType::Int64 | DataType::Timestamp(_, None) => cast_column(
+            &args[0],
+            &DataType::Timestamp(TimeUnit::Nanosecond, None),
+            None,
+        ),
+        DataType::Utf8 => datetime_expressions::to_timestamp_nanos(args),
+        other => {
+            internal_err!(
+                "Unsupported data type {:?} for function to_timestamp_nanos",
+                other
+            )
+        }
+    }
+}
+
+/// to_timestamp_seconds() SQL function implementation
+pub fn to_timestamp_seconds_invoke(args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    if args.len() != 1 {
+        return internal_err!(
+            "to_timestamp_seconds function requires 1 argument, got {}",
+            args.len()
+        );
+    }
+
+    match args[0].data_type() {
+        DataType::Int64 | DataType::Timestamp(_, None) => {
+            cast_column(&args[0], &DataType::Timestamp(TimeUnit::Second, None), None)
+        }
+        DataType::Utf8 => datetime_expressions::to_timestamp_seconds(args),
+        other => {
+            internal_err!(
+                "Unsupported data type {:?} for function to_timestamp_seconds",
+                other
+            )
+        }
+    }
+}
+
+/// from_unixtime() SQL function implementation
+pub fn from_unixtime_invoke(args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    if args.len() != 1 {
+        return internal_err!(
+            "from_unixtime function requires 1 argument, got {}",
+            args.len()
+        );
+    }
+
+    match args[0].data_type() {
+        DataType::Int64 => {
+            cast_column(&args[0], &DataType::Timestamp(TimeUnit::Second, None), None)
+        }
+        other => {
+            internal_err!(
+                "Unsupported data type {:?} for function from_unixtime",
+                other
+            )
+        }
+    }
 }
 
 #[cfg(test)]

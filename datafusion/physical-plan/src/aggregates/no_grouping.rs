@@ -217,8 +217,10 @@ fn aggregate_batch(
             // 1.3
             let values = &expr
                 .iter()
-                .map(|e| e.evaluate(&batch))
-                .map(|r| r.map(|v| v.into_array(batch.num_rows())))
+                .map(|e| {
+                    e.evaluate(&batch)
+                        .and_then(|v| v.into_array(batch.num_rows()))
+                })
                 .collect::<Result<Vec<_>>>()?;
 
             // 1.4

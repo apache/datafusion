@@ -20,7 +20,6 @@ use std::fmt::{Debug, Display};
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
-use crate::intervals::Interval;
 use crate::sort_properties::SortProperties;
 use crate::utils::scatter;
 
@@ -30,6 +29,7 @@ use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::utils::DataPtr;
 use datafusion_common::{internal_err, not_impl_err, DataFusionError, Result};
+use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::ColumnarValue;
 
 use itertools::izip;
@@ -95,36 +95,34 @@ pub trait PhysicalExpr: Send + Sync + Display + Debug + PartialEq<dyn Any> {
     /// Updates bounds for child expressions, given a known interval for this
     /// expression.
     ///
-    /// This is used to propagate constraints down through an
-    /// expression tree.
+    /// This is used to propagate constraints down through an expression tree.
     ///
     /// # Arguments
     ///
     /// * `interval` is the currently known interval for this expression.
-    /// * `children` are the current intervals for the children of this expression
+    /// * `children` are the current intervals for the children of this expression.
     ///
     /// # Returns
     ///
-    /// A Vec of new intervals for the children, in order.
+    /// A `Vec` of new intervals for the children, in order.
     ///
-    /// If constraint propagation reveals an infeasibility, returns [None] for
-    /// the child causing infeasibility.
-    ///
-    /// If none of the child intervals change as a result of propagation, may
-    /// return an empty vector instead of cloning `children`.
+    /// If constraint propagation reveals an infeasibility for any child, returns
+    /// [`None`]. If none of the children intervals change as a result of propagation,
+    /// may return an empty vector instead of cloning `children`. This is the default
+    /// (and conservative) return value.
     ///
     /// # Example
     ///
-    /// If the expression is `a + b`, the current `interval` is `[4, 5] and the
-    /// inputs are given [`a: [0, 2], `b: [-∞, 4]]`, then propagation would
-    /// would return `[a: [0, 2], b: [2, 4]]` as `b` must be at least 2 to
-    /// make the output at least `4`.
+    /// If the expression is `a + b`, the current `interval` is `[4, 5]` and the
+    /// inputs `a` and `b` are respectively given as `[0, 2]` and `[-∞, 4]`, then
+    /// propagation would would return `[0, 2]` and `[2, 4]` as `b` must be at
+    /// least `2` to make the output at least `4`.
     fn propagate_constraints(
         &self,
         _interval: &Interval,
         _children: &[&Interval],
-    ) -> Result<Vec<Option<Interval>>> {
-        not_impl_err!("Not implemented for {self}")
+    ) -> Result<Option<Vec<Interval>>> {
+        Ok(Some(vec![]))
     }
 
     /// Update the hash `state` with this expression requirements from
@@ -228,14 +226,6 @@ pub fn physical_exprs_contains(
         .any(|physical_expr| physical_expr.eq(expr))
 }
 
-/// Checks whether the given slices have any common entries.
-pub fn have_common_entries(
-    lhs: &[Arc<dyn PhysicalExpr>],
-    rhs: &[Arc<dyn PhysicalExpr>],
-) -> bool {
-    lhs.iter().any(|expr| physical_exprs_contains(rhs, expr))
-}
-
 /// Checks whether the given physical expression slices are equal.
 pub fn physical_exprs_equal(
     lhs: &[Arc<dyn PhysicalExpr>],
@@ -293,8 +283,8 @@ mod tests {
 
     use crate::expressions::{Column, Literal};
     use crate::physical_expr::{
-        deduplicate_physical_exprs, have_common_entries, physical_exprs_bag_equal,
-        physical_exprs_contains, physical_exprs_equal, PhysicalExpr,
+        deduplicate_physical_exprs, physical_exprs_bag_equal, physical_exprs_contains,
+        physical_exprs_equal, PhysicalExpr,
     };
 
     use datafusion_common::ScalarValue;
@@ -332,29 +322,6 @@ mod tests {
         // below expressions are not inside physical_exprs
         assert!(!physical_exprs_contains(&physical_exprs, &col_c_expr));
         assert!(!physical_exprs_contains(&physical_exprs, &lit1));
-    }
-
-    #[test]
-    fn test_have_common_entries() {
-        let lit_true = Arc::new(Literal::new(ScalarValue::Boolean(Some(true))))
-            as Arc<dyn PhysicalExpr>;
-        let lit_false = Arc::new(Literal::new(ScalarValue::Boolean(Some(false))))
-            as Arc<dyn PhysicalExpr>;
-        let lit2 =
-            Arc::new(Literal::new(ScalarValue::Int32(Some(2)))) as Arc<dyn PhysicalExpr>;
-        let lit1 =
-            Arc::new(Literal::new(ScalarValue::Int32(Some(1)))) as Arc<dyn PhysicalExpr>;
-        let col_b_expr = Arc::new(Column::new("b", 1)) as Arc<dyn PhysicalExpr>;
-
-        let vec1 = vec![lit_true.clone(), lit_false.clone()];
-        let vec2 = vec![lit_true.clone(), col_b_expr.clone()];
-        let vec3 = vec![lit2.clone(), lit1.clone()];
-
-        // lit_true is common
-        assert!(have_common_entries(&vec1, &vec2));
-        // there is no common entry
-        assert!(!have_common_entries(&vec1, &vec3));
-        assert!(!have_common_entries(&vec2, &vec3));
     }
 
     #[test]

@@ -16,10 +16,11 @@
 // under the License.
 
 use crate::analyzer::check_plan;
-use crate::utils::{collect_subquery_cols, split_conjunction};
+use crate::utils::collect_subquery_cols;
 use datafusion_common::tree_node::{TreeNode, VisitRecursion};
 use datafusion_common::{plan_err, DataFusionError, Result};
 use datafusion_expr::expr_rewriter::strip_outer_reference;
+use datafusion_expr::utils::split_conjunction;
 use datafusion_expr::{
     Aggregate, BinaryExpr, Cast, Expr, Filter, Join, JoinType, LogicalPlan, Operator,
     Window,

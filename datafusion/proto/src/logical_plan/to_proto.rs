@@ -24,7 +24,8 @@ use crate::protobuf::{
     arrow_type::ArrowTypeEnum,
     plan_type::PlanTypeEnum::{
         AnalyzedLogicalPlan, FinalAnalyzedLogicalPlan, FinalLogicalPlan,
-        FinalPhysicalPlan, InitialLogicalPlan, InitialPhysicalPlan, OptimizedLogicalPlan,
+        FinalPhysicalPlan, FinalPhysicalPlanWithStats, InitialLogicalPlan,
+        InitialPhysicalPlan, InitialPhysicalPlanWithStats, OptimizedLogicalPlan,
         OptimizedPhysicalPlan,
     },
     AnalyzedLogicalPlanType, CubeNode, EmptyMessage, GroupingSetNode, LogicalExprList,
@@ -43,8 +44,9 @@ use datafusion_common::{
     ScalarValue,
 };
 use datafusion_expr::expr::{
-    self, Alias, Between, BinaryExpr, Cast, GetFieldAccess, GetIndexedField, GroupingSet,
-    InList, Like, Placeholder, ScalarFunction, ScalarUDF, Sort,
+    self, AggregateFunctionDefinition, Alias, Between, BinaryExpr, Cast, GetFieldAccess,
+    GetIndexedField, GroupingSet, InList, Like, Placeholder, ScalarFunction,
+    ScalarFunctionDefinition, Sort,
 };
 use datafusion_expr::{
     logical_plan::PlanType, logical_plan::StringifiedPlan, AggregateFunction,
@@ -352,6 +354,12 @@ impl From<&StringifiedPlan> for protobuf::StringifiedPlan {
                 PlanType::FinalPhysicalPlan => Some(protobuf::PlanType {
                     plan_type_enum: Some(FinalPhysicalPlan(EmptyMessage {})),
                 }),
+                PlanType::InitialPhysicalPlanWithStats => Some(protobuf::PlanType {
+                    plan_type_enum: Some(InitialPhysicalPlanWithStats(EmptyMessage {})),
+                }),
+                PlanType::FinalPhysicalPlanWithStats => Some(protobuf::PlanType {
+                    plan_type_enum: Some(FinalPhysicalPlanWithStats(EmptyMessage {})),
+                }),
             },
             plan: stringified_plan.plan.to_string(),
         }
@@ -398,6 +406,7 @@ impl From<&AggregateFunction> for protobuf::AggregateFunction {
             AggregateFunction::Median => Self::Median,
             AggregateFunction::FirstValue => Self::FirstValueAgg,
             AggregateFunction::LastValue => Self::LastValueAgg,
+            AggregateFunction::StringAgg => Self::StringAgg,
         }
     }
 }
@@ -476,9 +485,17 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
             Expr::Column(c) => Self {
                 expr_type: Some(ExprType::Column(c.into())),
             },
-            Expr::Alias(Alias { expr, name, .. }) => {
+            Expr::Alias(Alias {
+                expr,
+                relation,
+                name,
+            }) => {
                 let alias = Box::new(protobuf::AliasNode {
                     expr: Some(Box::new(expr.as_ref().try_into()?)),
+                    relation: relation
+                        .to_owned()
+                        .map(|r| vec![r.into()])
+                        .unwrap_or(vec![]),
                     alias: name.to_owned(),
                 });
                 Self {
@@ -598,12 +615,12 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                     }
                     WindowFunction::AggregateUDF(aggr_udf) => {
                         protobuf::window_expr_node::WindowFunction::Udaf(
-                            aggr_udf.name.clone(),
+                            aggr_udf.name().to_string(),
                         )
                     }
                     WindowFunction::WindowUDF(window_udf) => {
                         protobuf::window_expr_node::WindowFunction::Udwf(
-                            window_udf.name.clone(),
+                            window_udf.name().to_string(),
                         )
                     }
                 };
@@ -636,158 +653,178 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                 }
             }
             Expr::AggregateFunction(expr::AggregateFunction {
-                ref fun,
+                ref func_def,
                 ref args,
                 ref distinct,
                 ref filter,
                 ref order_by,
             }) => {
-                let aggr_function = match fun {
-                    AggregateFunction::ApproxDistinct => {
-                        protobuf::AggregateFunction::ApproxDistinct
-                    }
-                    AggregateFunction::ApproxPercentileCont => {
-                        protobuf::AggregateFunction::ApproxPercentileCont
-                    }
-                    AggregateFunction::ApproxPercentileContWithWeight => {
-                        protobuf::AggregateFunction::ApproxPercentileContWithWeight
-                    }
-                    AggregateFunction::ArrayAgg => protobuf::AggregateFunction::ArrayAgg,
-                    AggregateFunction::Min => protobuf::AggregateFunction::Min,
-                    AggregateFunction::Max => protobuf::AggregateFunction::Max,
-                    AggregateFunction::Sum => protobuf::AggregateFunction::Sum,
-                    AggregateFunction::BitAnd => protobuf::AggregateFunction::BitAnd,
-                    AggregateFunction::BitOr => protobuf::AggregateFunction::BitOr,
-                    AggregateFunction::BitXor => protobuf::AggregateFunction::BitXor,
-                    AggregateFunction::BoolAnd => protobuf::AggregateFunction::BoolAnd,
-                    AggregateFunction::BoolOr => protobuf::AggregateFunction::BoolOr,
-                    AggregateFunction::Avg => protobuf::AggregateFunction::Avg,
-                    AggregateFunction::Count => protobuf::AggregateFunction::Count,
-                    AggregateFunction::Variance => protobuf::AggregateFunction::Variance,
-                    AggregateFunction::VariancePop => {
-                        protobuf::AggregateFunction::VariancePop
-                    }
-                    AggregateFunction::Covariance => {
-                        protobuf::AggregateFunction::Covariance
-                    }
-                    AggregateFunction::CovariancePop => {
-                        protobuf::AggregateFunction::CovariancePop
-                    }
-                    AggregateFunction::Stddev => protobuf::AggregateFunction::Stddev,
-                    AggregateFunction::StddevPop => {
-                        protobuf::AggregateFunction::StddevPop
-                    }
-                    AggregateFunction::Correlation => {
-                        protobuf::AggregateFunction::Correlation
-                    }
-                    AggregateFunction::RegrSlope => {
-                        protobuf::AggregateFunction::RegrSlope
-                    }
-                    AggregateFunction::RegrIntercept => {
-                        protobuf::AggregateFunction::RegrIntercept
-                    }
-                    AggregateFunction::RegrR2 => protobuf::AggregateFunction::RegrR2,
-                    AggregateFunction::RegrAvgx => protobuf::AggregateFunction::RegrAvgx,
-                    AggregateFunction::RegrAvgy => protobuf::AggregateFunction::RegrAvgy,
-                    AggregateFunction::RegrCount => {
-                        protobuf::AggregateFunction::RegrCount
-                    }
-                    AggregateFunction::RegrSXX => protobuf::AggregateFunction::RegrSxx,
-                    AggregateFunction::RegrSYY => protobuf::AggregateFunction::RegrSyy,
-                    AggregateFunction::RegrSXY => protobuf::AggregateFunction::RegrSxy,
-                    AggregateFunction::ApproxMedian => {
-                        protobuf::AggregateFunction::ApproxMedian
-                    }
-                    AggregateFunction::Grouping => protobuf::AggregateFunction::Grouping,
-                    AggregateFunction::Median => protobuf::AggregateFunction::Median,
-                    AggregateFunction::FirstValue => {
-                        protobuf::AggregateFunction::FirstValueAgg
-                    }
-                    AggregateFunction::LastValue => {
-                        protobuf::AggregateFunction::LastValueAgg
-                    }
-                };
+                match func_def {
+                    AggregateFunctionDefinition::BuiltIn(fun) => {
+                        let aggr_function = match fun {
+                            AggregateFunction::ApproxDistinct => {
+                                protobuf::AggregateFunction::ApproxDistinct
+                            }
+                            AggregateFunction::ApproxPercentileCont => {
+                                protobuf::AggregateFunction::ApproxPercentileCont
+                            }
+                            AggregateFunction::ApproxPercentileContWithWeight => {
+                                protobuf::AggregateFunction::ApproxPercentileContWithWeight
+                            }
+                            AggregateFunction::ArrayAgg => protobuf::AggregateFunction::ArrayAgg,
+                            AggregateFunction::Min => protobuf::AggregateFunction::Min,
+                            AggregateFunction::Max => protobuf::AggregateFunction::Max,
+                            AggregateFunction::Sum => protobuf::AggregateFunction::Sum,
+                            AggregateFunction::BitAnd => protobuf::AggregateFunction::BitAnd,
+                            AggregateFunction::BitOr => protobuf::AggregateFunction::BitOr,
+                            AggregateFunction::BitXor => protobuf::AggregateFunction::BitXor,
+                            AggregateFunction::BoolAnd => protobuf::AggregateFunction::BoolAnd,
+                            AggregateFunction::BoolOr => protobuf::AggregateFunction::BoolOr,
+                            AggregateFunction::Avg => protobuf::AggregateFunction::Avg,
+                            AggregateFunction::Count => protobuf::AggregateFunction::Count,
+                            AggregateFunction::Variance => protobuf::AggregateFunction::Variance,
+                            AggregateFunction::VariancePop => {
+                                protobuf::AggregateFunction::VariancePop
+                            }
+                            AggregateFunction::Covariance => {
+                                protobuf::AggregateFunction::Covariance
+                            }
+                            AggregateFunction::CovariancePop => {
+                                protobuf::AggregateFunction::CovariancePop
+                            }
+                            AggregateFunction::Stddev => protobuf::AggregateFunction::Stddev,
+                            AggregateFunction::StddevPop => {
+                                protobuf::AggregateFunction::StddevPop
+                            }
+                            AggregateFunction::Correlation => {
+                                protobuf::AggregateFunction::Correlation
+                            }
+                            AggregateFunction::RegrSlope => {
+                                protobuf::AggregateFunction::RegrSlope
+                            }
+                            AggregateFunction::RegrIntercept => {
+                                protobuf::AggregateFunction::RegrIntercept
+                            }
+                            AggregateFunction::RegrR2 => protobuf::AggregateFunction::RegrR2,
+                            AggregateFunction::RegrAvgx => protobuf::AggregateFunction::RegrAvgx,
+                            AggregateFunction::RegrAvgy => protobuf::AggregateFunction::RegrAvgy,
+                            AggregateFunction::RegrCount => {
+                                protobuf::AggregateFunction::RegrCount
+                            }
+                            AggregateFunction::RegrSXX => protobuf::AggregateFunction::RegrSxx,
+                            AggregateFunction::RegrSYY => protobuf::AggregateFunction::RegrSyy,
+                            AggregateFunction::RegrSXY => protobuf::AggregateFunction::RegrSxy,
+                            AggregateFunction::ApproxMedian => {
+                                protobuf::AggregateFunction::ApproxMedian
+                            }
+                            AggregateFunction::Grouping => protobuf::AggregateFunction::Grouping,
+                            AggregateFunction::Median => protobuf::AggregateFunction::Median,
+                            AggregateFunction::FirstValue => {
+                                protobuf::AggregateFunction::FirstValueAgg
+                            }
+                            AggregateFunction::LastValue => {
+                                protobuf::AggregateFunction::LastValueAgg
+                            }
+                            AggregateFunction::StringAgg => {
+                                protobuf::AggregateFunction::StringAgg
+                            }
+                        };
 
-                let aggregate_expr = protobuf::AggregateExprNode {
-                    aggr_function: aggr_function.into(),
-                    expr: args
-                        .iter()
-                        .map(|v| v.try_into())
-                        .collect::<Result<Vec<_>, _>>()?,
-                    distinct: *distinct,
-                    filter: match filter {
-                        Some(e) => Some(Box::new(e.as_ref().try_into()?)),
-                        None => None,
+                        let aggregate_expr = protobuf::AggregateExprNode {
+                            aggr_function: aggr_function.into(),
+                            expr: args
+                                .iter()
+                                .map(|v| v.try_into())
+                                .collect::<Result<Vec<_>, _>>()?,
+                            distinct: *distinct,
+                            filter: match filter {
+                                Some(e) => Some(Box::new(e.as_ref().try_into()?)),
+                                None => None,
+                            },
+                            order_by: match order_by {
+                                Some(e) => e
+                                    .iter()
+                                    .map(|expr| expr.try_into())
+                                    .collect::<Result<Vec<_>, _>>()?,
+                                None => vec![],
+                            },
+                        };
+                        Self {
+                            expr_type: Some(ExprType::AggregateExpr(Box::new(
+                                aggregate_expr,
+                            ))),
+                        }
+                    }
+                    AggregateFunctionDefinition::UDF(fun) => Self {
+                        expr_type: Some(ExprType::AggregateUdfExpr(Box::new(
+                            protobuf::AggregateUdfExprNode {
+                                fun_name: fun.name().to_string(),
+                                args: args
+                                    .iter()
+                                    .map(|expr| expr.try_into())
+                                    .collect::<Result<Vec<_>, Error>>()?,
+                                filter: match filter {
+                                    Some(e) => Some(Box::new(e.as_ref().try_into()?)),
+                                    None => None,
+                                },
+                                order_by: match order_by {
+                                    Some(e) => e
+                                        .iter()
+                                        .map(|expr| expr.try_into())
+                                        .collect::<Result<Vec<_>, _>>()?,
+                                    None => vec![],
+                                },
+                            },
+                        ))),
                     },
-                    order_by: match order_by {
-                        Some(e) => e
-                            .iter()
-                            .map(|expr| expr.try_into())
-                            .collect::<Result<Vec<_>, _>>()?,
-                        None => vec![],
-                    },
-                };
-                Self {
-                    expr_type: Some(ExprType::AggregateExpr(Box::new(aggregate_expr))),
+                    AggregateFunctionDefinition::Name(_) => {
+                        return Err(Error::NotImplemented(
+                    "Proto serialization error: Trying to serialize a unresolved function"
+                        .to_string(),
+                ));
+                    }
                 }
             }
+
             Expr::ScalarVariable(_, _) => {
                 return Err(Error::General(
                     "Proto serialization error: Scalar Variable not supported"
                         .to_string(),
                 ))
             }
-            Expr::ScalarFunction(ScalarFunction { fun, args }) => {
-                let fun: protobuf::ScalarFunction = fun.try_into()?;
-                let args: Vec<Self> = args
-                    .iter()
-                    .map(|e| e.try_into())
-                    .collect::<Result<Vec<Self>, Error>>()?;
-                Self {
-                    expr_type: Some(ExprType::ScalarFunction(
-                        protobuf::ScalarFunctionNode {
-                            fun: fun.into(),
-                            args,
-                        },
-                    )),
-                }
-            }
-            Expr::ScalarUDF(ScalarUDF { fun, args }) => Self {
-                expr_type: Some(ExprType::ScalarUdfExpr(protobuf::ScalarUdfExprNode {
-                    fun_name: fun.name.clone(),
-                    args: args
+            Expr::ScalarFunction(ScalarFunction { func_def, args }) => match func_def {
+                ScalarFunctionDefinition::BuiltIn(fun) => {
+                    let fun: protobuf::ScalarFunction = fun.try_into()?;
+                    let args: Vec<Self> = args
                         .iter()
-                        .map(|expr| expr.try_into())
-                        .collect::<Result<Vec<_>, Error>>()?,
-                })),
-            },
-            Expr::AggregateUDF(expr::AggregateUDF {
-                fun,
-                args,
-                filter,
-                order_by,
-            }) => Self {
-                expr_type: Some(ExprType::AggregateUdfExpr(Box::new(
-                    protobuf::AggregateUdfExprNode {
-                        fun_name: fun.name.clone(),
-                        args: args.iter().map(|expr| expr.try_into()).collect::<Result<
-                            Vec<_>,
-                            Error,
-                        >>(
-                        )?,
-                        filter: match filter {
-                            Some(e) => Some(Box::new(e.as_ref().try_into()?)),
-                            None => None,
-                        },
-                        order_by: match order_by {
-                            Some(e) => e
+                        .map(|e| e.try_into())
+                        .collect::<Result<Vec<Self>, Error>>()?;
+                    Self {
+                        expr_type: Some(ExprType::ScalarFunction(
+                            protobuf::ScalarFunctionNode {
+                                fun: fun.into(),
+                                args,
+                            },
+                        )),
+                    }
+                }
+                ScalarFunctionDefinition::UDF(fun) => Self {
+                    expr_type: Some(ExprType::ScalarUdfExpr(
+                        protobuf::ScalarUdfExprNode {
+                            fun_name: fun.name().to_string(),
+                            args: args
                                 .iter()
                                 .map(|expr| expr.try_into())
-                                .collect::<Result<Vec<_>, _>>()?,
-                            None => vec![],
+                                .collect::<Result<Vec<_>, Error>>()?,
                         },
-                    },
-                ))),
+                    )),
+                },
+                ScalarFunctionDefinition::Name(_) => {
+                    return Err(Error::NotImplemented(
+                    "Proto serialization error: Trying to serialize a unresolved function"
+                        .to_string(),
+                ));
+                }
             },
             Expr::Not(expr) => {
                 let expr = Box::new(protobuf::Not {
@@ -960,8 +997,10 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                     expr_type: Some(ExprType::InList(expr)),
                 }
             }
-            Expr::Wildcard => Self {
-                expr_type: Some(ExprType::Wildcard(true)),
+            Expr::Wildcard { qualifier } => Self {
+                expr_type: Some(ExprType::Wildcard(protobuf::Wildcard {
+                    qualifier: qualifier.clone(),
+                })),
             },
             Expr::ScalarSubquery(_)
             | Expr::InSubquery(_)
@@ -1052,11 +1091,6 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                     })),
                 }
             }
-
-            Expr::QualifiedWildcard { .. } => return Err(Error::General(
-                "Proto serialization error: Expr::QualifiedWildcard { .. } not supported"
-                    .to_string(),
-            )),
         };
 
         Ok(expr_node)
@@ -1122,13 +1156,11 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
                     Value::LargeUtf8Value(s.to_owned())
                 })
             }
-            ScalarValue::Fixedsizelist(..) => Err(Error::General(
-                "Proto serialization error: ScalarValue::Fixedsizelist not supported"
-                    .to_string(),
-            )),
-            // ScalarValue::List is serialized using Arrow IPC messages.
-            // as a single column RecordBatch
-            ScalarValue::List(arr) => {
+            // ScalarValue::List and ScalarValue::FixedSizeList are serialized using
+            // Arrow IPC messages as a single column RecordBatch
+            ScalarValue::List(arr)
+            | ScalarValue::LargeList(arr)
+            | ScalarValue::FixedSizeList(arr) => {
                 // Wrap in a "field_name" column
                 let batch = RecordBatch::try_from_iter(vec![(
                     "field_name",
@@ -1156,11 +1188,24 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
                     schema: Some(schema),
                 };
 
-                Ok(protobuf::ScalarValue {
-                    value: Some(protobuf::scalar_value::Value::ListValue(
-                        scalar_list_value,
-                    )),
-                })
+                match val {
+                    ScalarValue::List(_) => Ok(protobuf::ScalarValue {
+                        value: Some(protobuf::scalar_value::Value::ListValue(
+                            scalar_list_value,
+                        )),
+                    }),
+                    ScalarValue::LargeList(_) => Ok(protobuf::ScalarValue {
+                        value: Some(protobuf::scalar_value::Value::LargeListValue(
+                            scalar_list_value,
+                        )),
+                    }),
+                    ScalarValue::FixedSizeList(_) => Ok(protobuf::ScalarValue {
+                        value: Some(protobuf::scalar_value::Value::FixedSizeListValue(
+                            scalar_list_value,
+                        )),
+                    }),
+                    _ => unreachable!(),
+                }
             }
             ScalarValue::Date32(val) => {
                 create_proto_scalar(val.as_ref(), &data_type, |s| Value::Date32Value(*s))
@@ -1460,6 +1505,7 @@ impl TryFrom<&BuiltinScalarFunction> for protobuf::ScalarFunction {
             BuiltinScalarFunction::ArrayAppend => Self::ArrayAppend,
             BuiltinScalarFunction::ArrayConcat => Self::ArrayConcat,
             BuiltinScalarFunction::ArrayEmpty => Self::ArrayEmpty,
+            BuiltinScalarFunction::ArrayExcept => Self::ArrayExcept,
             BuiltinScalarFunction::ArrayHasAll => Self::ArrayHasAll,
             BuiltinScalarFunction::ArrayHasAny => Self::ArrayHasAny,
             BuiltinScalarFunction::ArrayHas => Self::ArrayHas,
@@ -1468,6 +1514,7 @@ impl TryFrom<&BuiltinScalarFunction> for protobuf::ScalarFunction {
             BuiltinScalarFunction::Flatten => Self::Flatten,
             BuiltinScalarFunction::ArrayLength => Self::ArrayLength,
             BuiltinScalarFunction::ArrayNdims => Self::ArrayNdims,
+            BuiltinScalarFunction::ArrayPopFront => Self::ArrayPopFront,
             BuiltinScalarFunction::ArrayPopBack => Self::ArrayPopBack,
             BuiltinScalarFunction::ArrayPosition => Self::ArrayPosition,
             BuiltinScalarFunction::ArrayPositions => Self::ArrayPositions,
@@ -1481,6 +1528,9 @@ impl TryFrom<&BuiltinScalarFunction> for protobuf::ScalarFunction {
             BuiltinScalarFunction::ArrayReplaceAll => Self::ArrayReplaceAll,
             BuiltinScalarFunction::ArraySlice => Self::ArraySlice,
             BuiltinScalarFunction::ArrayToString => Self::ArrayToString,
+            BuiltinScalarFunction::ArrayIntersect => Self::ArrayIntersect,
+            BuiltinScalarFunction::ArrayUnion => Self::ArrayUnion,
+            BuiltinScalarFunction::Range => Self::Range,
             BuiltinScalarFunction::Cardinality => Self::Cardinality,
             BuiltinScalarFunction::MakeArray => Self::Array,
             BuiltinScalarFunction::NullIf => Self::NullIf,
@@ -1539,6 +1589,10 @@ impl TryFrom<&BuiltinScalarFunction> for protobuf::ScalarFunction {
             BuiltinScalarFunction::Isnan => Self::Isnan,
             BuiltinScalarFunction::Iszero => Self::Iszero,
             BuiltinScalarFunction::ArrowTypeof => Self::ArrowTypeof,
+            BuiltinScalarFunction::OverLay => Self::OverLay,
+            BuiltinScalarFunction::Levenshtein => Self::Levenshtein,
+            BuiltinScalarFunction::SubstrIndex => Self::SubstrIndex,
+            BuiltinScalarFunction::FindInSet => Self::FindInSet,
         };
 
         Ok(scalar_function)

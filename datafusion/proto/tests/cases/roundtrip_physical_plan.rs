@@ -21,15 +21,18 @@ use std::sync::Arc;
 use datafusion::arrow::array::ArrayRef;
 use datafusion::arrow::compute::kernels::sort::SortOptions;
 use datafusion::arrow::datatypes::{DataType, Field, Fields, IntervalUnit, Schema};
-use datafusion::datasource::listing::PartitionedFile;
+use datafusion::datasource::file_format::json::JsonSink;
+use datafusion::datasource::listing::{ListingTableUrl, PartitionedFile};
 use datafusion::datasource::object_store::ObjectStoreUrl;
-use datafusion::datasource::physical_plan::{FileScanConfig, ParquetExec};
+use datafusion::datasource::physical_plan::{
+    FileScanConfig, FileSinkConfig, ParquetExec,
+};
 use datafusion::execution::context::ExecutionProps;
 use datafusion::logical_expr::{
     create_udf, BuiltinScalarFunction, JoinType, Operator, Volatility,
 };
 use datafusion::physical_expr::window::SlidingAggregateWindowExpr;
-use datafusion::physical_expr::ScalarFunctionExpr;
+use datafusion::physical_expr::{PhysicalSortRequirement, ScalarFunctionExpr};
 use datafusion::physical_plan::aggregates::{
     AggregateExec, AggregateMode, PhysicalGroupBy,
 };
@@ -41,7 +44,10 @@ use datafusion::physical_plan::expressions::{
 };
 use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::functions::make_scalar_function;
-use datafusion::physical_plan::joins::{HashJoinExec, NestedLoopJoinExec, PartitionMode};
+use datafusion::physical_plan::insert::FileSinkExec;
+use datafusion::physical_plan::joins::{
+    HashJoinExec, NestedLoopJoinExec, PartitionMode, StreamJoinPartitionMode,
+};
 use datafusion::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::sorts::sort::SortExec;
@@ -53,8 +59,10 @@ use datafusion::physical_plan::{
 };
 use datafusion::prelude::SessionContext;
 use datafusion::scalar::ScalarValue;
+use datafusion_common::file_options::json_writer::JsonWriterOptions;
+use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::stats::Precision;
-use datafusion_common::Result;
+use datafusion_common::{FileTypeWriterOptions, Result};
 use datafusion_expr::{
     Accumulator, AccumulatorFactoryFunction, AggregateUDF, ReturnTypeFunction, Signature,
     StateTypeFunction, WindowFrame, WindowFrameBound,
@@ -516,7 +524,7 @@ fn roundtrip_builtin_scalar_function() -> Result<()> {
         "acos",
         fun_expr,
         vec![col("a", &schema)?],
-        &DataType::Int64,
+        DataType::Int64,
         None,
     );
 
@@ -550,7 +558,7 @@ fn roundtrip_scalar_udf() -> Result<()> {
         "dummy",
         scalar_fn,
         vec![col("a", &schema)?],
-        &DataType::Int64,
+        DataType::Int64,
         None,
     );
 
@@ -699,7 +707,7 @@ fn roundtrip_get_indexed_field_list_range() -> Result<()> {
 }
 
 #[test]
-fn rountrip_analyze() -> Result<()> {
+fn roundtrip_analyze() -> Result<()> {
     let field_a = Field::new("plan_type", DataType::Utf8, false);
     let field_b = Field::new("plan", DataType::Utf8, false);
     let schema = Schema::new(vec![field_a, field_b]);
@@ -711,4 +719,83 @@ fn rountrip_analyze() -> Result<()> {
         input,
         Arc::new(schema),
     )))
+}
+
+#[test]
+fn roundtrip_json_sink() -> Result<()> {
+    let field_a = Field::new("plan_type", DataType::Utf8, false);
+    let field_b = Field::new("plan", DataType::Utf8, false);
+    let schema = Arc::new(Schema::new(vec![field_a, field_b]));
+    let input = Arc::new(EmptyExec::new(true, schema.clone()));
+
+    let file_sink_config = FileSinkConfig {
+        object_store_url: ObjectStoreUrl::local_filesystem(),
+        file_groups: vec![PartitionedFile::new("/tmp".to_string(), 1)],
+        table_paths: vec![ListingTableUrl::parse("file:///")?],
+        output_schema: schema.clone(),
+        table_partition_cols: vec![("plan_type".to_string(), DataType::Utf8)],
+        single_file_output: true,
+        unbounded_input: false,
+        overwrite: true,
+        file_type_writer_options: FileTypeWriterOptions::JSON(JsonWriterOptions::new(
+            CompressionTypeVariant::UNCOMPRESSED,
+        )),
+    };
+    let data_sink = Arc::new(JsonSink::new(file_sink_config));
+    let sort_order = vec![PhysicalSortRequirement::new(
+        Arc::new(Column::new("plan_type", 0)),
+        Some(SortOptions {
+            descending: true,
+            nulls_first: false,
+        }),
+    )];
+
+    roundtrip_test(Arc::new(FileSinkExec::new(
+        input,
+        data_sink,
+        schema.clone(),
+        Some(sort_order),
+    )))
+}
+
+#[test]
+fn roundtrip_sym_hash_join() -> Result<()> {
+    let field_a = Field::new("col", DataType::Int64, false);
+    let schema_left = Schema::new(vec![field_a.clone()]);
+    let schema_right = Schema::new(vec![field_a]);
+    let on = vec![(
+        Column::new("col", schema_left.index_of("col")?),
+        Column::new("col", schema_right.index_of("col")?),
+    )];
+
+    let schema_left = Arc::new(schema_left);
+    let schema_right = Arc::new(schema_right);
+    for join_type in &[
+        JoinType::Inner,
+        JoinType::Left,
+        JoinType::Right,
+        JoinType::Full,
+        JoinType::LeftAnti,
+        JoinType::RightAnti,
+        JoinType::LeftSemi,
+        JoinType::RightSemi,
+    ] {
+        for partition_mode in &[
+            StreamJoinPartitionMode::Partitioned,
+            StreamJoinPartitionMode::SinglePartition,
+        ] {
+            roundtrip_test(Arc::new(
+                datafusion::physical_plan::joins::SymmetricHashJoinExec::try_new(
+                    Arc::new(EmptyExec::new(false, schema_left.clone())),
+                    Arc::new(EmptyExec::new(false, schema_right.clone())),
+                    on.clone(),
+                    None,
+                    join_type,
+                    false,
+                    *partition_mode,
+                )?,
+            ))?;
+        }
+    }
+    Ok(())
 }

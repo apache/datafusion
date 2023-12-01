@@ -18,7 +18,6 @@
 use std::{ops::Neg, sync::Arc};
 
 use crate::PhysicalExpr;
-
 use arrow_schema::SortOptions;
 use datafusion_common::tree_node::{TreeNode, VisitRecursion};
 use datafusion_common::Result;
@@ -99,7 +98,7 @@ impl SortProperties {
         }
     }
 
-    pub fn and(&self, rhs: &Self) -> Self {
+    pub fn and_or(&self, rhs: &Self) -> Self {
         match (self, rhs) {
             (Self::Ordered(lhs), Self::Ordered(rhs))
                 if lhs.descending == rhs.descending =>

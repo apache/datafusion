@@ -19,7 +19,7 @@ use std::collections::HashMap;
 use std::ops::Deref;
 use std::sync::Arc;
 
-use datafusion::logical_expr::{Like, WindowFrameUnits};
+use datafusion::logical_expr::{Distinct, Like, WindowFrameUnits};
 use datafusion::{
     arrow::datatypes::{DataType, TimeUnit},
     error::{DataFusionError, Result},
@@ -33,8 +33,8 @@ use datafusion::common::{exec_err, internal_err, not_impl_err};
 #[allow(unused_imports)]
 use datafusion::logical_expr::aggregate_function;
 use datafusion::logical_expr::expr::{
-    Alias, BinaryExpr, Case, Cast, GroupingSet, InList,
-    ScalarFunction as DFScalarFunction, Sort, WindowFunction,
+    AggregateFunctionDefinition, Alias, BinaryExpr, Case, Cast, GroupingSet, InList,
+    ScalarFunctionDefinition, Sort, WindowFunction,
 };
 use datafusion::logical_expr::{expr, Between, JoinConstraint, LogicalPlan, Operator};
 use datafusion::prelude::Expr;
@@ -244,11 +244,11 @@ pub fn to_substrait_rel(
                 }))),
             }))
         }
-        LogicalPlan::Distinct(distinct) => {
+        LogicalPlan::Distinct(Distinct::All(plan)) => {
             // Use Substrait's AggregateRel with empty measures to represent `select distinct`
-            let input = to_substrait_rel(distinct.input.as_ref(), ctx, extension_info)?;
+            let input = to_substrait_rel(plan.as_ref(), ctx, extension_info)?;
             // Get grouping keys from the input relation's number of output fields
-            let grouping = (0..distinct.input.schema().fields().len())
+            let grouping = (0..plan.schema().fields().len())
                 .map(substrait_field_ref)
                 .collect::<Result<Vec<_>>>()?;
 
@@ -578,37 +578,72 @@ pub fn to_substrait_agg_measure(
     ),
 ) -> Result<Measure> {
     match expr {
-        Expr::AggregateFunction(expr::AggregateFunction { fun, args, distinct, filter, order_by }) => {
-            let sorts = if let Some(order_by) = order_by {
-                order_by.iter().map(|expr| to_substrait_sort_field(expr, schema, extension_info)).collect::<Result<Vec<_>>>()?
-            } else {
-                vec![]
-            };
-            let mut arguments: Vec<FunctionArgument> = vec![];
-            for arg in args {
-                arguments.push(FunctionArgument { arg_type: Some(ArgType::Value(to_substrait_rex(arg, schema, 0, extension_info)?)) });
-            }
-            let function_name = fun.to_string().to_lowercase();
-            let function_anchor = _register_function(function_name, extension_info);
-            Ok(Measure {
-                measure: Some(AggregateFunction {
-                    function_reference: function_anchor,
-                    arguments,
-                    sorts,
-                    output_type: None,
-                    invocation: match distinct {
-                        true => AggregationInvocation::Distinct as i32,
-                        false => AggregationInvocation::All as i32,
-                    },
-                    phase: AggregationPhase::Unspecified as i32,
-                    args: vec![],
-                    options: vec![],
-                }),
-                filter: match filter {
-                    Some(f) => Some(to_substrait_rex(f, schema, 0, extension_info)?),
-                    None => None
+        Expr::AggregateFunction(expr::AggregateFunction { func_def, args, distinct, filter, order_by }) => {
+            match func_def {
+                AggregateFunctionDefinition::BuiltIn (fun) => {
+                    let sorts = if let Some(order_by) = order_by {
+                        order_by.iter().map(|expr| to_substrait_sort_field(expr, schema, extension_info)).collect::<Result<Vec<_>>>()?
+                    } else {
+                        vec![]
+                    };
+                    let mut arguments: Vec<FunctionArgument> = vec![];
+                    for arg in args {
+                        arguments.push(FunctionArgument { arg_type: Some(ArgType::Value(to_substrait_rex(arg, schema, 0, extension_info)?)) });
+                    }
+                    let function_anchor = _register_function(fun.to_string(), extension_info);
+                    Ok(Measure {
+                        measure: Some(AggregateFunction {
+                            function_reference: function_anchor,
+                            arguments,
+                            sorts,
+                            output_type: None,
+                            invocation: match distinct {
+                                true => AggregationInvocation::Distinct as i32,
+                                false => AggregationInvocation::All as i32,
+                            },
+                            phase: AggregationPhase::Unspecified as i32,
+                            args: vec![],
+                            options: vec![],
+                        }),
+                        filter: match filter {
+                            Some(f) => Some(to_substrait_rex(f, schema, 0, extension_info)?),
+                            None => None
+                        }
+                    })
                 }
-            })
+                AggregateFunctionDefinition::UDF(fun) => {
+                    let sorts = if let Some(order_by) = order_by {
+                        order_by.iter().map(|expr| to_substrait_sort_field(expr, schema, extension_info)).collect::<Result<Vec<_>>>()?
+                    } else {
+                        vec![]
+                    };
+                    let mut arguments: Vec<FunctionArgument> = vec![];
+                    for arg in args {
+                        arguments.push(FunctionArgument { arg_type: Some(ArgType::Value(to_substrait_rex(arg, schema, 0, extension_info)?)) });
+                    }
+                    let function_anchor = _register_function(fun.name().to_string(), extension_info);
+                    Ok(Measure {
+                        measure: Some(AggregateFunction {
+                            function_reference: function_anchor,
+                            arguments,
+                            sorts,
+                            output_type: None,
+                            invocation: AggregationInvocation::All as i32,
+                            phase: AggregationPhase::Unspecified as i32,
+                            args: vec![],
+                            options: vec![],
+                        }),
+                        filter: match filter {
+                            Some(f) => Some(to_substrait_rex(f, schema, 0, extension_info)?),
+                            None => None
+                        }
+                    })
+                }
+                AggregateFunctionDefinition::Name(name) => {
+                    internal_err!("AggregateFunctionDefinition::Name({:?}) should be resolved during `AnalyzerRule`", name)
+                }
+            }
+
         }
         Expr::Alias(Alias{expr,..})=> {
             to_substrait_agg_measure(expr, schema, extension_info)
@@ -703,8 +738,8 @@ pub fn make_binary_op_scalar_func(
         HashMap<String, u32>,
     ),
 ) -> Expression {
-    let function_name = operator_to_name(op).to_string().to_lowercase();
-    let function_anchor = _register_function(function_name, extension_info);
+    let function_anchor =
+        _register_function(operator_to_name(op).to_string(), extension_info);
     Expression {
         rex_type: Some(RexType::ScalarFunction(ScalarFunction {
             function_reference: function_anchor,
@@ -795,9 +830,9 @@ pub fn to_substrait_rex(
                 Ok(substrait_or_list)
             }
         }
-        Expr::ScalarFunction(DFScalarFunction { fun, args }) => {
+        Expr::ScalarFunction(fun) => {
             let mut arguments: Vec<FunctionArgument> = vec![];
-            for arg in args {
+            for arg in &fun.args {
                 arguments.push(FunctionArgument {
                     arg_type: Some(ArgType::Value(to_substrait_rex(
                         arg,
@@ -807,8 +842,14 @@ pub fn to_substrait_rex(
                     )?)),
                 });
             }
-            let function_name = fun.to_string().to_lowercase();
-            let function_anchor = _register_function(function_name, extension_info);
+
+            // function should be resolved during `AnalyzerRule`
+            if let ScalarFunctionDefinition::Name(_) = fun.func_def {
+                return internal_err!("Function `Expr` with name should be resolved.");
+            }
+
+            let function_anchor =
+                _register_function(fun.name().to_string(), extension_info);
             Ok(Expression {
                 rex_type: Some(RexType::ScalarFunction(ScalarFunction {
                     function_reference: function_anchor,
@@ -973,8 +1014,7 @@ pub fn to_substrait_rex(
             window_frame,
         }) => {
             // function reference
-            let function_name = fun.to_string().to_lowercase();
-            let function_anchor = _register_function(function_name, extension_info);
+            let function_anchor = _register_function(fun.to_string(), extension_info);
             // arguments
             let mut arguments: Vec<FunctionArgument> = vec![];
             for arg in args {
@@ -1025,7 +1065,53 @@ pub fn to_substrait_rex(
             col_ref_offset,
             extension_info,
         ),
-        _ => not_impl_err!("Unsupported expression: {expr:?}"),
+        Expr::IsNull(arg) => {
+            let arguments: Vec<FunctionArgument> = vec![FunctionArgument {
+                arg_type: Some(ArgType::Value(to_substrait_rex(
+                    arg,
+                    schema,
+                    col_ref_offset,
+                    extension_info,
+                )?)),
+            }];
+
+            let function_name = "is_null".to_string();
+            let function_anchor = _register_function(function_name, extension_info);
+            Ok(Expression {
+                rex_type: Some(RexType::ScalarFunction(ScalarFunction {
+                    function_reference: function_anchor,
+                    arguments,
+                    output_type: None,
+                    args: vec![],
+                    options: vec![],
+                })),
+            })
+        }
+        Expr::IsNotNull(arg) => {
+            let arguments: Vec<FunctionArgument> = vec![FunctionArgument {
+                arg_type: Some(ArgType::Value(to_substrait_rex(
+                    arg,
+                    schema,
+                    col_ref_offset,
+                    extension_info,
+                )?)),
+            }];
+
+            let function_name = "is_not_null".to_string();
+            let function_anchor = _register_function(function_name, extension_info);
+            Ok(Expression {
+                rex_type: Some(RexType::ScalarFunction(ScalarFunction {
+                    function_reference: function_anchor,
+                    arguments,
+                    output_type: None,
+                    args: vec![],
+                    options: vec![],
+                })),
+            })
+        }
+        _ => {
+            not_impl_err!("Unsupported expression: {expr:?}")
+        }
     }
 }
 

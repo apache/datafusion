@@ -19,7 +19,7 @@ use crate::analyzer::AnalyzerRule;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRewriter};
 use datafusion_common::Result;
-use datafusion_expr::expr::{AggregateFunction, InSubquery};
+use datafusion_expr::expr::{AggregateFunction, AggregateFunctionDefinition, InSubquery};
 use datafusion_expr::expr_rewriter::rewrite_preserving_name;
 use datafusion_expr::utils::COUNT_STAR_EXPANSION;
 use datafusion_expr::Expr::ScalarSubquery;
@@ -134,32 +134,39 @@ impl TreeNodeRewriter for CountWildcardRewriter {
                 order_by,
                 window_frame,
             }) if args.len() == 1 => match args[0] {
-                Expr::Wildcard => Expr::WindowFunction(expr::WindowFunction {
-                    fun: window_function::WindowFunction::AggregateFunction(
-                        aggregate_function::AggregateFunction::Count,
-                    ),
-                    args: vec![lit(COUNT_STAR_EXPANSION)],
-                    partition_by,
-                    order_by,
-                    window_frame,
-                }),
+                Expr::Wildcard { qualifier: None } => {
+                    Expr::WindowFunction(expr::WindowFunction {
+                        fun: window_function::WindowFunction::AggregateFunction(
+                            aggregate_function::AggregateFunction::Count,
+                        ),
+                        args: vec![lit(COUNT_STAR_EXPANSION)],
+                        partition_by,
+                        order_by,
+                        window_frame,
+                    })
+                }
 
                 _ => old_expr,
             },
             Expr::AggregateFunction(AggregateFunction {
-                fun: aggregate_function::AggregateFunction::Count,
+                func_def:
+                    AggregateFunctionDefinition::BuiltIn(
+                        aggregate_function::AggregateFunction::Count,
+                    ),
                 args,
                 distinct,
                 filter,
                 order_by,
             }) if args.len() == 1 => match args[0] {
-                Expr::Wildcard => Expr::AggregateFunction(AggregateFunction {
-                    fun: aggregate_function::AggregateFunction::Count,
-                    args: vec![lit(COUNT_STAR_EXPANSION)],
-                    distinct,
-                    filter,
-                    order_by,
-                }),
+                Expr::Wildcard { qualifier: None } => {
+                    Expr::AggregateFunction(AggregateFunction::new(
+                        aggregate_function::AggregateFunction::Count,
+                        vec![lit(COUNT_STAR_EXPANSION)],
+                        distinct,
+                        filter,
+                        order_by,
+                    ))
+                }
                 _ => old_expr,
             },
 
@@ -226,8 +233,8 @@ mod tests {
     use datafusion_expr::expr::Sort;
     use datafusion_expr::{
         col, count, exists, expr, in_subquery, lit, logical_plan::LogicalPlanBuilder,
-        max, out_ref_col, scalar_subquery, AggregateFunction, Expr, WindowFrame,
-        WindowFrameBound, WindowFrameUnits, WindowFunction,
+        max, out_ref_col, scalar_subquery, wildcard, AggregateFunction, Expr,
+        WindowFrame, WindowFrameBound, WindowFrameUnits, WindowFunction,
     };
 
     fn assert_plan_eq(plan: &LogicalPlan, expected: &str) -> Result<()> {
@@ -242,9 +249,9 @@ mod tests {
     fn test_count_wildcard_on_sort() -> Result<()> {
         let table_scan = test_table_scan()?;
         let plan = LogicalPlanBuilder::from(table_scan)
-            .aggregate(vec![col("b")], vec![count(Expr::Wildcard)])?
-            .project(vec![count(Expr::Wildcard)])?
-            .sort(vec![count(Expr::Wildcard).sort(true, false)])?
+            .aggregate(vec![col("b")], vec![count(wildcard())])?
+            .project(vec![count(wildcard())])?
+            .sort(vec![count(wildcard()).sort(true, false)])?
             .build()?;
         let expected = "Sort: COUNT(*) ASC NULLS LAST [COUNT(*):Int64;N]\
         \n  Projection: COUNT(*) [COUNT(*):Int64;N]\
@@ -263,8 +270,8 @@ mod tests {
                 col("a"),
                 Arc::new(
                     LogicalPlanBuilder::from(table_scan_t2)
-                        .aggregate(Vec::<Expr>::new(), vec![count(Expr::Wildcard)])?
-                        .project(vec![count(Expr::Wildcard)])?
+                        .aggregate(Vec::<Expr>::new(), vec![count(wildcard())])?
+                        .project(vec![count(wildcard())])?
                         .build()?,
                 ),
             ))?
@@ -287,8 +294,8 @@ mod tests {
         let plan = LogicalPlanBuilder::from(table_scan_t1)
             .filter(exists(Arc::new(
                 LogicalPlanBuilder::from(table_scan_t2)
-                    .aggregate(Vec::<Expr>::new(), vec![count(Expr::Wildcard)])?
-                    .project(vec![count(Expr::Wildcard)])?
+                    .aggregate(Vec::<Expr>::new(), vec![count(wildcard())])?
+                    .project(vec![count(wildcard())])?
                     .build()?,
             )))?
             .build()?;
@@ -341,7 +348,7 @@ mod tests {
         let plan = LogicalPlanBuilder::from(table_scan)
             .window(vec![Expr::WindowFunction(expr::WindowFunction::new(
                 WindowFunction::AggregateFunction(AggregateFunction::Count),
-                vec![Expr::Wildcard],
+                vec![wildcard()],
                 vec![],
                 vec![Expr::Sort(Sort::new(Box::new(col("a")), false, true))],
                 WindowFrame {
@@ -352,7 +359,7 @@ mod tests {
                     end_bound: WindowFrameBound::Following(ScalarValue::UInt32(Some(2))),
                 },
             ))])?
-            .project(vec![count(Expr::Wildcard)])?
+            .project(vec![count(wildcard())])?
             .build()?;
 
         let expected = "Projection: COUNT(UInt8(1)) AS COUNT(*) [COUNT(*):Int64;N]\
@@ -365,8 +372,8 @@ mod tests {
     fn test_count_wildcard_on_aggregate() -> Result<()> {
         let table_scan = test_table_scan()?;
         let plan = LogicalPlanBuilder::from(table_scan)
-            .aggregate(Vec::<Expr>::new(), vec![count(Expr::Wildcard)])?
-            .project(vec![count(Expr::Wildcard)])?
+            .aggregate(Vec::<Expr>::new(), vec![count(wildcard())])?
+            .project(vec![count(wildcard())])?
             .build()?;
 
         let expected = "Projection: COUNT(*) [COUNT(*):Int64;N]\
@@ -379,8 +386,8 @@ mod tests {
     fn test_count_wildcard_on_nesting() -> Result<()> {
         let table_scan = test_table_scan()?;
         let plan = LogicalPlanBuilder::from(table_scan)
-            .aggregate(Vec::<Expr>::new(), vec![max(count(Expr::Wildcard))])?
-            .project(vec![count(Expr::Wildcard)])?
+            .aggregate(Vec::<Expr>::new(), vec![max(count(wildcard()))])?
+            .project(vec![count(wildcard())])?
             .build()?;
 
         let expected = "Projection: COUNT(UInt8(1)) AS COUNT(*) [COUNT(*):Int64;N]\

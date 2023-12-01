@@ -64,7 +64,7 @@ Dml: op=[Insert Into] table=[table_without_values]
 --------WindowAggr: windowExpr=[[SUM(CAST(aggregate_test_100.c4 AS Int64)) PARTITION BY [aggregate_test_100.c1] ORDER BY [aggregate_test_100.c9 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING, COUNT(UInt8(1)) PARTITION BY [aggregate_test_100.c1] ORDER BY [aggregate_test_100.c9 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING AS COUNT(*) PARTITION BY [aggregate_test_100.c1] ORDER BY [aggregate_test_100.c9 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING]]
 ----------TableScan: aggregate_test_100 projection=[c1, c4, c9]
 physical_plan
-InsertExec: sink=MemoryTable (partitions=1)
+FileSinkExec: sink=MemoryTable (partitions=1)
 --ProjectionExec: expr=[SUM(aggregate_test_100.c4) PARTITION BY [aggregate_test_100.c1] ORDER BY [aggregate_test_100.c9 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING@0 as field1, COUNT(*) PARTITION BY [aggregate_test_100.c1] ORDER BY [aggregate_test_100.c9 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING@1 as field2]
 ----SortPreservingMergeExec: [c1@2 ASC NULLS LAST]
 ------ProjectionExec: expr=[SUM(aggregate_test_100.c4) PARTITION BY [aggregate_test_100.c1] ORDER BY [aggregate_test_100.c9 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING@3 as SUM(aggregate_test_100.c4) PARTITION BY [aggregate_test_100.c1] ORDER BY [aggregate_test_100.c9 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING, COUNT(*) PARTITION BY [aggregate_test_100.c1] ORDER BY [aggregate_test_100.c9 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING@4 as COUNT(*) PARTITION BY [aggregate_test_100.c1] ORDER BY [aggregate_test_100.c9 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING, c1@0 as c1]
@@ -125,7 +125,7 @@ Dml: op=[Insert Into] table=[table_without_values]
 ----WindowAggr: windowExpr=[[SUM(CAST(aggregate_test_100.c4 AS Int64)) PARTITION BY [aggregate_test_100.c1] ORDER BY [aggregate_test_100.c9 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING, COUNT(UInt8(1)) PARTITION BY [aggregate_test_100.c1] ORDER BY [aggregate_test_100.c9 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING AS COUNT(*) PARTITION BY [aggregate_test_100.c1] ORDER BY [aggregate_test_100.c9 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING]]
 ------TableScan: aggregate_test_100 projection=[c1, c4, c9]
 physical_plan
-InsertExec: sink=MemoryTable (partitions=1)
+FileSinkExec: sink=MemoryTable (partitions=1)
 --CoalescePartitionsExec
 ----ProjectionExec: expr=[SUM(aggregate_test_100.c4) PARTITION BY [aggregate_test_100.c1] ORDER BY [aggregate_test_100.c9 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING@3 as field1, COUNT(*) PARTITION BY [aggregate_test_100.c1] ORDER BY [aggregate_test_100.c9 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING@4 as field2]
 ------BoundedWindowAggExec: wdw=[SUM(aggregate_test_100.c4) PARTITION BY [aggregate_test_100.c1] ORDER BY [aggregate_test_100.c9 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING: Ok(Field { name: "SUM(aggregate_test_100.c4) PARTITION BY [aggregate_test_100.c1] ORDER BY [aggregate_test_100.c9 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(1)), end_bound: Following(UInt64(1)) }, COUNT(*) PARTITION BY [aggregate_test_100.c1] ORDER BY [aggregate_test_100.c9 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING: Ok(Field { name: "COUNT(*) PARTITION BY [aggregate_test_100.c1] ORDER BY [aggregate_test_100.c9 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(1)), end_bound: Following(UInt64(1)) }], mode=[Sorted]
@@ -175,7 +175,7 @@ Dml: op=[Insert Into] table=[table_without_values]
 --------WindowAggr: windowExpr=[[SUM(CAST(aggregate_test_100.c4 AS Int64)) PARTITION BY [aggregate_test_100.c1] ORDER BY [aggregate_test_100.c9 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING, COUNT(UInt8(1)) PARTITION BY [aggregate_test_100.c1] ORDER BY [aggregate_test_100.c9 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING AS COUNT(*) PARTITION BY [aggregate_test_100.c1] ORDER BY [aggregate_test_100.c9 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING]]
 ----------TableScan: aggregate_test_100 projection=[c1, c4, c9]
 physical_plan
-InsertExec: sink=MemoryTable (partitions=8)
+FileSinkExec: sink=MemoryTable (partitions=8)
 --ProjectionExec: expr=[a1@0 as a1, a2@1 as a2]
 ----SortPreservingMergeExec: [c1@2 ASC NULLS LAST]
 ------ProjectionExec: expr=[SUM(aggregate_test_100.c4) PARTITION BY [aggregate_test_100.c1] ORDER BY [aggregate_test_100.c9 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING@3 as a1, COUNT(*) PARTITION BY [aggregate_test_100.c1] ORDER BY [aggregate_test_100.c9 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING@4 as a2, c1@0 as c1]
@@ -217,10 +217,9 @@ Dml: op=[Insert Into] table=[table_without_values]
 ----Sort: aggregate_test_100.c1 ASC NULLS LAST
 ------TableScan: aggregate_test_100 projection=[c1]
 physical_plan
-InsertExec: sink=MemoryTable (partitions=1)
---ProjectionExec: expr=[c1@0 as c1]
-----SortExec: expr=[c1@0 ASC NULLS LAST]
-------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1], has_header=true
+FileSinkExec: sink=MemoryTable (partitions=1)
+--SortExec: expr=[c1@0 ASC NULLS LAST]
+----CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1], has_header=true
 
 query T
 insert into table_without_values select c1 from aggregate_test_100 order by c1;
@@ -259,14 +258,18 @@ insert into table_without_values(name, id) values(4, 'zoo');
 statement error Error during planning: Column count doesn't match insert query!
 insert into table_without_values(id) values(4, 'zoo');
 
-statement error Error during planning: Inserting query must have the same schema with the table.
+# insert NULL values for the missing column (name)
+query IT
 insert into table_without_values(id) values(4);
+----
+1
 
 query IT rowsort
 select * from table_without_values;
 ----
 1 foo
 2 bar
+4 NULL
 
 statement ok
 drop table table_without_values;
@@ -286,6 +289,16 @@ insert into table_without_values values(2, NULL);
 ----
 1
 
+# insert NULL values for the missing column (field2)
+query II
+insert into table_without_values(field1) values(3);
+----
+1
+
+# insert NULL values for the missing column (field1), but column is non-nullable
+statement error Execution error: Invalid batch column at '0' has null but schema specifies non-nullable
+insert into table_without_values(field2) values(300);
+
 statement error Execution error: Invalid batch column at '0' has null but schema specifies non-nullable
 insert into table_without_values values(NULL, 300);
 
@@ -297,6 +310,105 @@ select * from table_without_values;
 ----
 1 100
 2 NULL
+3 NULL
 
 statement ok
 drop table table_without_values;
+
+
+### Test for creating tables into directories that do not already exist
+# note use of `scratch` directory (which is cleared between runs)
+
+statement ok
+create external table new_empty_table(x int) stored as parquet  location 'test_files/scratch/insert/new_empty_table/'; -- needs trailing slash
+
+# should start empty
+query I
+select * from new_empty_table;
+----
+
+# should succeed and the table should create the direectory
+statement ok
+insert into new_empty_table values (1);
+
+# Now has values
+query I
+select * from new_empty_table;
+----
+1
+
+statement ok
+drop table new_empty_table;
+
+## test we get an error if the path doesn't end in slash
+statement ok
+create external table bad_new_empty_table(x int) stored as parquet  location 'test_files/scratch/insert/bad_new_empty_table'; -- no trailing slash
+
+# should fail
+query error DataFusion error: Error during planning: Inserting into a ListingTable backed by a single file is not supported, URL is possibly missing a trailing `/`\. To append to an existing file use StreamTable, e\.g\. by using CREATE UNBOUNDED EXTERNAL TABLE
+insert into bad_new_empty_table values (1);
+
+statement ok
+drop table bad_new_empty_table;
+
+
+### Test for specifying column's default value
+
+statement ok
+create table test_column_defaults(
+  a int,
+  b int not null default null,
+  c int default 100*2+300, 
+  d text default lower('DEFAULT_TEXT'),
+  e timestamp default now()
+)
+
+query IIITP
+insert into test_column_defaults values(1, 10, 100, 'ABC', now())
+----
+1
+
+statement error DataFusion error: Execution error: Invalid batch column at '1' has null but schema specifies non-nullable
+insert into test_column_defaults(a) values(2)
+
+query IIITP
+insert into test_column_defaults(b) values(20)
+----
+1
+
+query IIIT rowsort
+select a,b,c,d from test_column_defaults
+----
+1 10 100 ABC
+NULL 20 500 default_text
+
+statement ok
+drop table test_column_defaults
+
+
+# test create table as
+statement ok
+create table test_column_defaults(
+  a int,
+  b int not null default null,
+  c int default 100*2+300, 
+  d text default lower('DEFAULT_TEXT'),
+  e timestamp default now()
+) as values(1, 10, 100, 'ABC', now())
+
+query IIITP
+insert into test_column_defaults(b) values(20)
+----
+1
+
+query IIIT rowsort
+select a,b,c,d from test_column_defaults
+----
+1 10 100 ABC
+NULL 20 500 default_text
+
+statement ok
+drop table test_column_defaults
+
+statement error DataFusion error: Error during planning: Column reference is not allowed in the DEFAULT expression : Schema error: No field named a.
+create table test_column_defaults(a int, b int default a+1)

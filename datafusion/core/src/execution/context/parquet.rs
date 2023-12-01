@@ -74,7 +74,13 @@ impl SessionContext {
 mod tests {
     use async_trait::async_trait;
 
+    use crate::arrow::array::{Float32Array, Int32Array};
+    use crate::arrow::datatypes::{DataType, Field, Schema};
+    use crate::arrow::record_batch::RecordBatch;
+    use crate::dataframe::DataFrameWriteOptions;
+    use crate::parquet::basic::Compression;
     use crate::test_util::parquet_test_data;
+    use tempfile::tempdir;
 
     use super::*;
 
@@ -129,6 +135,206 @@ mod tests {
         let total_rows: usize = results.iter().map(|rb| rb.num_rows()).sum();
         // alltypes_plain.parquet = 8 rows, alltypes_plain.snappy.parquet = 2 rows, alltypes_dictionary.parquet = 2 rows
         assert_eq!(total_rows, 10);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn read_from_different_file_extension() -> Result<()> {
+        let ctx = SessionContext::new();
+        let sep = std::path::MAIN_SEPARATOR.to_string();
+
+        // Make up a new dataframe.
+        let write_df = ctx.read_batch(RecordBatch::try_new(
+            Arc::new(Schema::new(vec![
+                Field::new("purchase_id", DataType::Int32, false),
+                Field::new("price", DataType::Float32, false),
+                Field::new("quantity", DataType::Int32, false),
+            ])),
+            vec![
+                Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5])),
+                Arc::new(Float32Array::from(vec![1.12, 3.40, 2.33, 9.10, 6.66])),
+                Arc::new(Int32Array::from(vec![1, 3, 2, 4, 3])),
+            ],
+        )?)?;
+
+        let temp_dir = tempdir()?;
+        let temp_dir_path = temp_dir.path();
+        let path1 = temp_dir_path
+            .join("output1.parquet")
+            .to_str()
+            .unwrap()
+            .to_string();
+        let path2 = temp_dir_path
+            .join("output2.parquet.snappy")
+            .to_str()
+            .unwrap()
+            .to_string();
+        let path3 = temp_dir_path
+            .join("output3.parquet.snappy.parquet")
+            .to_str()
+            .unwrap()
+            .to_string();
+
+        let path4 = temp_dir_path
+            .join("output4.parquet".to_owned() + &sep)
+            .to_str()
+            .unwrap()
+            .to_string();
+
+        let path5 = temp_dir_path
+            .join("bbb..bbb")
+            .join("filename.parquet")
+            .to_str()
+            .unwrap()
+            .to_string();
+        let dir = temp_dir_path
+            .join("bbb..bbb".to_owned() + &sep)
+            .to_str()
+            .unwrap()
+            .to_string();
+        std::fs::create_dir(dir).expect("create dir failed");
+
+        // Write the dataframe to a parquet file named 'output1.parquet'
+        write_df
+            .clone()
+            .write_parquet(
+                &path1,
+                DataFrameWriteOptions::new().with_single_file_output(true),
+                Some(
+                    WriterProperties::builder()
+                        .set_compression(Compression::SNAPPY)
+                        .build(),
+                ),
+            )
+            .await?;
+
+        // Write the dataframe to a parquet file named 'output2.parquet.snappy'
+        write_df
+            .clone()
+            .write_parquet(
+                &path2,
+                DataFrameWriteOptions::new().with_single_file_output(true),
+                Some(
+                    WriterProperties::builder()
+                        .set_compression(Compression::SNAPPY)
+                        .build(),
+                ),
+            )
+            .await?;
+
+        // Write the dataframe to a parquet file named 'output3.parquet.snappy.parquet'
+        write_df
+            .clone()
+            .write_parquet(
+                &path3,
+                DataFrameWriteOptions::new().with_single_file_output(true),
+                Some(
+                    WriterProperties::builder()
+                        .set_compression(Compression::SNAPPY)
+                        .build(),
+                ),
+            )
+            .await?;
+
+        // Write the dataframe to a parquet file named 'bbb..bbb/filename.parquet'
+        write_df
+            .write_parquet(
+                &path5,
+                DataFrameWriteOptions::new().with_single_file_output(true),
+                Some(
+                    WriterProperties::builder()
+                        .set_compression(Compression::SNAPPY)
+                        .build(),
+                ),
+            )
+            .await?;
+
+        // Read the dataframe from 'output1.parquet' with the default file extension.
+        let read_df = ctx
+            .read_parquet(
+                &path1,
+                ParquetReadOptions {
+                    ..Default::default()
+                },
+            )
+            .await?;
+
+        let results = read_df.collect().await?;
+        let total_rows: usize = results.iter().map(|rb| rb.num_rows()).sum();
+        assert_eq!(total_rows, 5);
+
+        // Read the dataframe from 'output2.parquet.snappy' with the correct file extension.
+        let read_df = ctx
+            .read_parquet(
+                &path2,
+                ParquetReadOptions {
+                    file_extension: "snappy",
+                    ..Default::default()
+                },
+            )
+            .await?;
+        let results = read_df.collect().await?;
+        let total_rows: usize = results.iter().map(|rb| rb.num_rows()).sum();
+        assert_eq!(total_rows, 5);
+
+        // Read the dataframe from 'output3.parquet.snappy.parquet' with the wrong file extension.
+        let read_df = ctx
+            .read_parquet(
+                &path2,
+                ParquetReadOptions {
+                    ..Default::default()
+                },
+            )
+            .await;
+        let binding = DataFilePaths::to_urls(&path2).unwrap();
+        let expexted_path = binding[0].as_str();
+        assert_eq!(
+            read_df.unwrap_err().strip_backtrace(),
+            format!("Execution error: File path '{}' does not match the expected extension '.parquet'", expexted_path)
+        );
+
+        // Read the dataframe from 'output3.parquet.snappy.parquet' with the correct file extension.
+        let read_df = ctx
+            .read_parquet(
+                &path3,
+                ParquetReadOptions {
+                    ..Default::default()
+                },
+            )
+            .await?;
+
+        let results = read_df.collect().await?;
+        let total_rows: usize = results.iter().map(|rb| rb.num_rows()).sum();
+        assert_eq!(total_rows, 5);
+
+        // Read the dataframe from 'output4/'
+        std::fs::create_dir(&path4)?;
+        let read_df = ctx
+            .read_parquet(
+                &path4,
+                ParquetReadOptions {
+                    ..Default::default()
+                },
+            )
+            .await?;
+
+        let results = read_df.collect().await?;
+        let total_rows: usize = results.iter().map(|rb| rb.num_rows()).sum();
+        assert_eq!(total_rows, 0);
+
+        // Read the datafram from doule dot folder;
+        let read_df = ctx
+            .read_parquet(
+                &path5,
+                ParquetReadOptions {
+                    ..Default::default()
+                },
+            )
+            .await?;
+
+        let results = read_df.collect().await?;
+        let total_rows: usize = results.iter().map(|rb| rb.num_rows()).sum();
+        assert_eq!(total_rows, 5);
         Ok(())
     }
 

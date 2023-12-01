@@ -405,7 +405,7 @@ fn get_aggregate_search_mode(
     aggr_expr: &mut [Arc<dyn AggregateExpr>],
     order_by_expr: &mut [Option<LexOrdering>],
     ordering_req: &mut Vec<PhysicalSortExpr>,
-) -> Result<PartitionSearchMode> {
+) -> PartitionSearchMode {
     let groupby_exprs = group_by
         .expr
         .iter()
@@ -413,11 +413,11 @@ fn get_aggregate_search_mode(
         .collect::<Vec<_>>();
     let mut partition_search_mode = PartitionSearchMode::Linear;
     if !group_by.is_single() || groupby_exprs.is_empty() {
-        return Ok(partition_search_mode);
+        return partition_search_mode;
     }
 
     if let Some((should_reverse, mode)) =
-        get_window_mode(&groupby_exprs, ordering_req, input)?
+        get_window_mode(&groupby_exprs, ordering_req, input)
     {
         let all_reversible = aggr_expr
             .iter()
@@ -437,7 +437,7 @@ fn get_aggregate_search_mode(
         }
         partition_search_mode = mode;
     }
-    Ok(partition_search_mode)
+    partition_search_mode
 }
 
 /// Check whether group by expression contains all of the expression inside `requirement`
@@ -513,7 +513,7 @@ impl AggregateExec {
             &mut aggr_expr,
             &mut order_by_expr,
             &mut ordering_req,
-        )?;
+        );
 
         // Get GROUP BY expressions:
         let groupby_exprs = group_by.input_exprs();
@@ -608,6 +608,11 @@ impl AggregateExec {
         self.input_schema.clone()
     }
 
+    /// number of rows soft limit of the AggregateExec
+    pub fn limit(&self) -> Option<usize> {
+        self.limit
+    }
+
     fn execute_typed(
         &self,
         partition: usize,
@@ -622,9 +627,11 @@ impl AggregateExec {
 
         // grouping by an expression that has a sort/limit upstream
         if let Some(limit) = self.limit {
-            return Ok(StreamType::GroupedPriorityQueue(
-                GroupedTopKAggregateStream::new(self, context, partition, limit)?,
-            ));
+            if !self.is_unordered_unfiltered_group_by_distinct() {
+                return Ok(StreamType::GroupedPriorityQueue(
+                    GroupedTopKAggregateStream::new(self, context, partition, limit)?,
+                ));
+            }
         }
 
         // grouping by something else and we need to just materialize all results
@@ -647,6 +654,39 @@ impl AggregateExec {
 
     pub fn group_by(&self) -> &PhysicalGroupBy {
         &self.group_by
+    }
+
+    /// true, if this Aggregate has a group-by with no required or explicit ordering,
+    /// no filtering and no aggregate expressions
+    /// This method qualifies the use of the LimitedDistinctAggregation rewrite rule
+    /// on an AggregateExec.
+    pub fn is_unordered_unfiltered_group_by_distinct(&self) -> bool {
+        // ensure there is a group by
+        if self.group_by().is_empty() {
+            return false;
+        }
+        // ensure there are no aggregate expressions
+        if !self.aggr_expr().is_empty() {
+            return false;
+        }
+        // ensure there are no filters on aggregate expressions; the above check
+        // may preclude this case
+        if self.filter_expr().iter().any(|e| e.is_some()) {
+            return false;
+        }
+        // ensure there are no order by expressions
+        if self.order_by_expr().iter().any(|e| e.is_some()) {
+            return false;
+        }
+        // ensure there is no output ordering; can this rule be relaxed?
+        if self.output_ordering().is_some() {
+            return false;
+        }
+        // ensure no ordering is required on the input
+        if self.required_input_ordering()[0].is_some() {
+            return false;
+        }
+        true
     }
 }
 
@@ -1024,10 +1064,11 @@ fn finalize_aggregation(
             // build the vector of states
             let a = accumulators
                 .iter()
-                .map(|accumulator| accumulator.state())
-                .map(|value| {
-                    value.map(|e| {
-                        e.iter().map(|v| v.to_array()).collect::<Vec<ArrayRef>>()
+                .map(|accumulator| {
+                    accumulator.state().and_then(|e| {
+                        e.iter()
+                            .map(|v| v.to_array())
+                            .collect::<Result<Vec<ArrayRef>>>()
                     })
                 })
                 .collect::<Result<Vec<_>>>()?;
@@ -1040,7 +1081,7 @@ fn finalize_aggregation(
             // merge the state to the final value
             accumulators
                 .iter()
-                .map(|accumulator| accumulator.evaluate().map(|v| v.to_array()))
+                .map(|accumulator| accumulator.evaluate().and_then(|v| v.to_array()))
                 .collect::<Result<Vec<ArrayRef>>>()
         }
     }
@@ -1052,9 +1093,11 @@ fn evaluate(
     batch: &RecordBatch,
 ) -> Result<Vec<ArrayRef>> {
     expr.iter()
-        .map(|expr| expr.evaluate(batch))
-        .map(|r| r.map(|v| v.into_array(batch.num_rows())))
-        .collect::<Result<Vec<_>>>()
+        .map(|expr| {
+            expr.evaluate(batch)
+                .and_then(|v| v.into_array(batch.num_rows()))
+        })
+        .collect()
 }
 
 /// Evaluates expressions against a record batch.
@@ -1074,9 +1117,11 @@ fn evaluate_optional(
     expr.iter()
         .map(|expr| {
             expr.as_ref()
-                .map(|expr| expr.evaluate(batch))
+                .map(|expr| {
+                    expr.evaluate(batch)
+                        .and_then(|v| v.into_array(batch.num_rows()))
+                })
                 .transpose()
-                .map(|r| r.map(|v| v.into_array(batch.num_rows())))
         })
         .collect::<Result<Vec<_>>>()
 }
@@ -1100,7 +1145,7 @@ pub(crate) fn evaluate_group_by(
         .iter()
         .map(|(expr, _)| {
             let value = expr.evaluate(batch)?;
-            Ok(value.into_array(batch.num_rows()))
+            value.into_array(batch.num_rows())
         })
         .collect::<Result<Vec<_>>>()?;
 
@@ -1109,7 +1154,7 @@ pub(crate) fn evaluate_group_by(
         .iter()
         .map(|(expr, _)| {
             let value = expr.evaluate(batch)?;
-            Ok(value.into_array(batch.num_rows()))
+            value.into_array(batch.num_rows())
         })
         .collect::<Result<Vec<_>>>()?;
 
@@ -1171,6 +1216,7 @@ mod tests {
         AggregateExpr, EquivalenceProperties, PhysicalExpr, PhysicalSortExpr,
     };
 
+    use datafusion_execution::memory_pool::FairSpillPool;
     use futures::{FutureExt, Stream};
 
     // Generate a schema which consists of 5 columns (a, b, c, d, e)
@@ -1271,8 +1317,11 @@ mod tests {
     fn new_spill_ctx(batch_size: usize, max_memory: usize) -> Arc<TaskContext> {
         let session_config = SessionConfig::new().with_batch_size(batch_size);
         let runtime = Arc::new(
-            RuntimeEnv::new(RuntimeConfig::default().with_memory_limit(max_memory, 1.0))
-                .unwrap(),
+            RuntimeEnv::new(
+                RuntimeConfig::default()
+                    .with_memory_pool(Arc::new(FairSpillPool::new(max_memory))),
+            )
+            .unwrap(),
         );
         let task_ctx = TaskContext::default()
             .with_session_config(session_config)

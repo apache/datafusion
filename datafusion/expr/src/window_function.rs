@@ -171,12 +171,8 @@ impl WindowFunction {
             WindowFunction::BuiltInWindowFunction(fun) => {
                 fun.return_type(input_expr_types)
             }
-            WindowFunction::AggregateUDF(fun) => {
-                Ok((*(fun.return_type)(input_expr_types)?).clone())
-            }
-            WindowFunction::WindowUDF(fun) => {
-                Ok((*(fun.return_type)(input_expr_types)?).clone())
-            }
+            WindowFunction::AggregateUDF(fun) => fun.return_type(input_expr_types),
+            WindowFunction::WindowUDF(fun) => fun.return_type(input_expr_types),
         }
     }
 }
@@ -209,7 +205,7 @@ impl BuiltInWindowFunction {
             BuiltInWindowFunction::PercentRank | BuiltInWindowFunction::CumeDist => {
                 Ok(DataType::Float64)
             }
-            BuiltInWindowFunction::Ntile => Ok(DataType::UInt32),
+            BuiltInWindowFunction::Ntile => Ok(DataType::UInt64),
             BuiltInWindowFunction::Lag
             | BuiltInWindowFunction::Lead
             | BuiltInWindowFunction::FirstValue
@@ -234,8 +230,8 @@ impl WindowFunction {
         match self {
             WindowFunction::AggregateFunction(fun) => fun.signature(),
             WindowFunction::BuiltInWindowFunction(fun) => fun.signature(),
-            WindowFunction::AggregateUDF(fun) => fun.signature.clone(),
-            WindowFunction::WindowUDF(fun) => fun.signature.clone(),
+            WindowFunction::AggregateUDF(fun) => fun.signature().clone(),
+            WindowFunction::WindowUDF(fun) => fun.signature().clone(),
         }
     }
 }
@@ -281,6 +277,7 @@ impl BuiltInWindowFunction {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use strum::IntoEnumIterator;
 
     #[test]
     fn test_count_return_type() -> Result<()> {
@@ -373,6 +370,15 @@ mod tests {
     }
 
     #[test]
+    fn test_ntile_return_type() -> Result<()> {
+        let fun = find_df_window_func("ntile").unwrap();
+        let observed = fun.return_type(&[DataType::Int16])?;
+        assert_eq!(DataType::UInt64, observed);
+
+        Ok(())
+    }
+
+    #[test]
     fn test_window_function_case_insensitive() -> Result<()> {
         let names = vec![
             "row_number",
@@ -446,5 +452,19 @@ mod tests {
             ))
         );
         assert_eq!(find_df_window_func("not_exist"), None)
+    }
+
+    #[test]
+    // Test for BuiltInWindowFunction's Display and from_str() implementations.
+    // For each variant in BuiltInWindowFunction, it converts the variant to a string
+    // and then back to a variant. The test asserts that the original variant and
+    // the reconstructed variant are the same. This assertion is also necessary for
+    // function suggestion. See https://github.com/apache/arrow-datafusion/issues/8082
+    fn test_display_and_from_str() {
+        for func_original in BuiltInWindowFunction::iter() {
+            let func_name = func_original.to_string();
+            let func_from_str = BuiltInWindowFunction::from_str(&func_name).unwrap();
+            assert_eq!(func_from_str, func_original);
+        }
     }
 }

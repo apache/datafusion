@@ -16,15 +16,14 @@
 // under the License.
 
 use crate::simplify_expressions::{ExprSimplifier, SimplifyContext};
-use crate::utils::{
-    collect_subquery_cols, conjunction, find_join_exprs, split_conjunction,
-};
+use crate::utils::collect_subquery_cols;
 use datafusion_common::tree_node::{
     RewriteRecursion, Transformed, TreeNode, TreeNodeRewriter,
 };
 use datafusion_common::{plan_err, Result};
 use datafusion_common::{Column, DFSchemaRef, DataFusionError, ScalarValue};
-use datafusion_expr::expr::Alias;
+use datafusion_expr::expr::{AggregateFunctionDefinition, Alias};
+use datafusion_expr::utils::{conjunction, find_join_exprs, split_conjunction};
 use datafusion_expr::{expr, EmptyRelation, Expr, LogicalPlan, LogicalPlanBuilder};
 use datafusion_physical_expr::execution_props::ExecutionProps;
 use std::collections::{BTreeSet, HashMap};
@@ -227,10 +226,9 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                     )?;
                     if !expr_result_map_for_count_bug.is_empty() {
                         // has count bug
-                        let un_matched_row = Expr::Alias(Alias::new(
-                            Expr::Literal(ScalarValue::Boolean(Some(true))),
-                            UN_MATCHED_ROW_INDICATOR.to_string(),
-                        ));
+                        let un_matched_row =
+                            Expr::Literal(ScalarValue::Boolean(Some(true)))
+                                .alias(UN_MATCHED_ROW_INDICATOR);
                         // add the unmatched rows indicator to the Aggregation's group expressions
                         missing_exprs.push(un_matched_row);
                     }
@@ -374,15 +372,24 @@ fn agg_exprs_evaluation_result_on_empty_batch(
     for e in agg_expr.iter() {
         let result_expr = e.clone().transform_up(&|expr| {
             let new_expr = match expr {
-                Expr::AggregateFunction(expr::AggregateFunction { fun, .. }) => {
-                    if matches!(fun, datafusion_expr::AggregateFunction::Count) {
-                        Transformed::Yes(Expr::Literal(ScalarValue::Int64(Some(0))))
-                    } else {
-                        Transformed::Yes(Expr::Literal(ScalarValue::Null))
+                Expr::AggregateFunction(expr::AggregateFunction { func_def, .. }) => {
+                    match func_def {
+                        AggregateFunctionDefinition::BuiltIn(fun) => {
+                            if matches!(fun, datafusion_expr::AggregateFunction::Count) {
+                                Transformed::Yes(Expr::Literal(ScalarValue::Int64(Some(
+                                    0,
+                                ))))
+                            } else {
+                                Transformed::Yes(Expr::Literal(ScalarValue::Null))
+                            }
+                        }
+                        AggregateFunctionDefinition::UDF { .. } => {
+                            Transformed::Yes(Expr::Literal(ScalarValue::Null))
+                        }
+                        AggregateFunctionDefinition::Name(_) => {
+                            Transformed::Yes(Expr::Literal(ScalarValue::Null))
+                        }
                     }
-                }
-                Expr::AggregateUDF(_) => {
-                    Transformed::Yes(Expr::Literal(ScalarValue::Null))
                 }
                 _ => Transformed::No(expr),
             };

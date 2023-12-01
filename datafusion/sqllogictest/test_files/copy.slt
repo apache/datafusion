@@ -32,7 +32,7 @@ logical_plan
 CopyTo: format=parquet output_url=test_files/scratch/copy/table single_file_output=false options: (compression 'zstd(10)')
 --TableScan: source_table projection=[col1, col2]
 physical_plan
-InsertExec: sink=ParquetSink(writer_mode=PutMultipart, file_groups=[])
+FileSinkExec: sink=ParquetSink(file_groups=[])
 --MemoryExec: partitions=1, partition_sizes=[1]
 
 # Error case
@@ -66,8 +66,8 @@ select * from validate_parquet;
 
 # Copy parquet with all supported statment overrides
 query IT
-COPY source_table 
-TO 'test_files/scratch/copy/table_with_options' 
+COPY source_table
+TO 'test_files/scratch/copy/table_with_options'
 (format parquet,
 single_file_output false,
 compression snappy,
@@ -206,11 +206,11 @@ select * from validate_single_json;
 
 # COPY csv files with all options set
 query IT
-COPY source_table 
-to 'test_files/scratch/copy/table_csv_with_options' 
-(format csv, 
-single_file_output false, 
-header false, 
+COPY source_table
+to 'test_files/scratch/copy/table_csv_with_options'
+(format csv,
+single_file_output false,
+header false,
 compression 'uncompressed',
 datetime_format '%FT%H:%M:%S.%9f',
 delimiter ';',
@@ -220,8 +220,8 @@ null_value 'NULLVAL');
 
 # Validate single csv output
 statement ok
-CREATE EXTERNAL TABLE validate_csv_with_options 
-STORED AS csv 
+CREATE EXTERNAL TABLE validate_csv_with_options
+STORED AS csv
 LOCATION 'test_files/scratch/copy/table_csv_with_options';
 
 query T

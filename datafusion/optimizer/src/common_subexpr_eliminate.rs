@@ -239,6 +239,14 @@ impl CommonSubexprEliminate {
         let rewritten = pop_expr(&mut rewritten)?;
 
         if affected_id.is_empty() {
+            // Alias aggregation expressions if they have changed
+            let new_aggr_expr = new_aggr_expr
+                .iter()
+                .zip(aggr_expr.iter())
+                .map(|(new_expr, old_expr)| {
+                    new_expr.clone().alias_if_changed(old_expr.display_name()?)
+                })
+                .collect::<Result<Vec<Expr>>>()?;
             // Since group_epxr changes, schema changes also. Use try_new method.
             Aggregate::try_new(Arc::new(new_input), new_group_expr, new_aggr_expr)
                 .map(LogicalPlan::Aggregate)
@@ -368,7 +376,7 @@ impl OptimizerRule for CommonSubexprEliminate {
                 Ok(Some(build_recover_project_plan(
                     &original_schema,
                     optimized_plan,
-                )))
+                )?))
             }
             plan => Ok(plan),
         }
@@ -459,16 +467,19 @@ fn build_common_expr_project_plan(
 /// the "intermediate" projection plan built in [build_common_expr_project_plan].
 ///
 /// This is for those plans who don't keep its own output schema like `Filter` or `Sort`.
-fn build_recover_project_plan(schema: &DFSchema, input: LogicalPlan) -> LogicalPlan {
+fn build_recover_project_plan(
+    schema: &DFSchema,
+    input: LogicalPlan,
+) -> Result<LogicalPlan> {
     let col_exprs = schema
         .fields()
         .iter()
         .map(|field| Expr::Column(field.qualified_column()))
         .collect();
-    LogicalPlan::Projection(
-        Projection::try_new(col_exprs, Arc::new(input))
-            .expect("Cannot build projection plan from an invalid schema"),
-    )
+    Ok(LogicalPlan::Projection(Projection::try_new(
+        col_exprs,
+        Arc::new(input),
+    )?))
 }
 
 fn extract_expressions(
@@ -499,10 +510,9 @@ enum ExprMask {
     /// - [`Sort`](Expr::Sort)
     /// - [`Wildcard`](Expr::Wildcard)
     /// - [`AggregateFunction`](Expr::AggregateFunction)
-    /// - [`AggregateUDF`](Expr::AggregateUDF)
     Normal,
 
-    /// Like [`Normal`](Self::Normal), but includes [`AggregateFunction`](Expr::AggregateFunction) and [`AggregateUDF`](Expr::AggregateUDF).
+    /// Like [`Normal`](Self::Normal), but includes [`AggregateFunction`](Expr::AggregateFunction).
     NormalAndAggregates,
 }
 
@@ -515,13 +525,10 @@ impl ExprMask {
                 | Expr::ScalarVariable(..)
                 | Expr::Alias(..)
                 | Expr::Sort { .. }
-                | Expr::Wildcard
+                | Expr::Wildcard { .. }
         );
 
-        let is_aggr = matches!(
-            expr,
-            Expr::AggregateFunction(..) | Expr::AggregateUDF { .. }
-        );
+        let is_aggr = matches!(expr, Expr::AggregateFunction(..));
 
         match self {
             Self::Normal => is_normal_minus_aggregates || is_aggr,
@@ -898,7 +905,7 @@ mod test {
         let accumulator: AccumulatorFactoryFunction = Arc::new(|_| unimplemented!());
         let state_type: StateTypeFunction = Arc::new(|_| unimplemented!());
         let udf_agg = |inner: Expr| {
-            Expr::AggregateUDF(datafusion_expr::expr::AggregateUDF::new(
+            Expr::AggregateFunction(datafusion_expr::expr::AggregateFunction::new_udf(
                 Arc::new(AggregateUDF::new(
                     "my_agg",
                     &Signature::exact(vec![DataType::UInt32], Volatility::Stable),
@@ -907,6 +914,7 @@ mod test {
                     &state_type,
                 )),
                 vec![inner],
+                false,
                 None,
                 None,
             ))

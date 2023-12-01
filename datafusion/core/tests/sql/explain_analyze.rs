@@ -550,7 +550,7 @@ async fn csv_explain_verbose_plans() {
     // Since the plan contains path that are environmentally
     // dependant(e.g. full path of the test file), only verify
     // important content
-    assert_contains!(&actual, "logical_plan after push_down_projection");
+    assert_contains!(&actual, "logical_plan after optimize_projections");
     assert_contains!(&actual, "physical_plan");
     assert_contains!(&actual, "FilterExec: c2@1 > 10");
 }
@@ -816,5 +816,8 @@ async fn csv_explain_analyze_with_statistics() {
         .to_string();
 
     // should contain scan statistics
-    assert_contains!(&formatted, ", statistics=[Rows=Absent, Bytes=Absent]");
+    assert_contains!(
+        &formatted,
+        ", statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:)]]"
+    );
 }

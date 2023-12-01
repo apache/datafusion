@@ -23,7 +23,7 @@ use datafusion_common::{
     not_impl_err, plan_err, sql_err, Constraints, DataFusionError, Result, ScalarValue,
 };
 use datafusion_expr::{
-    CreateMemoryTable, DdlStatement, Expr, LogicalPlan, LogicalPlanBuilder,
+    CreateMemoryTable, DdlStatement, Distinct, Expr, LogicalPlan, LogicalPlanBuilder,
 };
 use sqlparser::ast::{
     Expr as SQLExpr, Offset as SQLOffset, OrderByExpr, Query, SetExpr, Value,
@@ -90,6 +90,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     input: Arc::new(plan),
                     if_not_exists: false,
                     or_replace: false,
+                    column_defaults: vec![],
                 }))
             }
             _ => plan,
@@ -161,6 +162,14 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
         let order_by_rex =
             self.order_by_to_sort_expr(&order_by, plan.schema(), planner_context)?;
-        LogicalPlanBuilder::from(plan).sort(order_by_rex)?.build()
+
+        if let LogicalPlan::Distinct(Distinct::On(ref distinct_on)) = plan {
+            // In case of `DISTINCT ON` we must capture the sort expressions since during the plan
+            // optimization we're effectively doing a `first_value` aggregation according to them.
+            let distinct_on = distinct_on.clone().with_sort_expr(order_by_rex)?;
+            Ok(LogicalPlan::Distinct(Distinct::On(distinct_on)))
+        } else {
+            LogicalPlanBuilder::from(plan).sort(order_by_rex)?.build()
+        }
     }
 }

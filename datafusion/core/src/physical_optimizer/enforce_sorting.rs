@@ -476,7 +476,9 @@ fn ensure_sorting(
                     update_child_to_remove_unnecessary_sort(child, sort_onwards, &plan)?;
                 }
             }
-            (None, None) => {}
+            (None, None) => {
+                update_child_to_remove_unnecessary_sort(child, sort_onwards, &plan)?;
+            }
         }
     }
     // For window expressions, we can remove some sorts when we can
@@ -703,11 +705,11 @@ fn remove_corresponding_sort_from_sub_plan(
         } else if let Some(repartition) = plan.as_any().downcast_ref::<RepartitionExec>()
         {
             Arc::new(
+                // By default, RepartitionExec does not preserve order
                 RepartitionExec::try_new(
                     children.swap_remove(0),
                     repartition.partitioning().clone(),
-                )?
-                .with_preserve_order(false),
+                )?,
             )
         } else {
             plan.clone().with_new_children(children)?
@@ -763,9 +765,8 @@ mod tests {
         repartition_exec, sort_exec, sort_expr, sort_expr_options, sort_merge_join_exec,
         sort_preserving_merge_exec, spr_repartition_exec, union_exec,
     };
-    use crate::physical_optimizer::utils::get_plan_string;
     use crate::physical_plan::repartition::RepartitionExec;
-    use crate::physical_plan::{displayable, Partitioning};
+    use crate::physical_plan::{displayable, get_plan_string, Partitioning};
     use crate::prelude::{SessionConfig, SessionContext};
     use crate::test::csv_exec_sorted;
 

@@ -26,7 +26,7 @@ use std::{any::Any, usize, vec};
 use crate::joins::utils::{
     adjust_indices_by_join_type, apply_join_filter_to_indices, build_batch_from_indices,
     calculate_join_output_ordering, get_final_indices_from_bit_map,
-    need_produce_result_in_final,
+    need_produce_result_in_final, JoinHashMap, JoinHashMapType,
 };
 use crate::DisplayAs;
 use crate::{
@@ -35,7 +35,6 @@ use crate::{
     expressions::Column,
     expressions::PhysicalSortExpr,
     hash_utils::create_hashes,
-    joins::hash_join_utils::{JoinHashMap, JoinHashMapType},
     joins::utils::{
         adjust_right_output_partitioning, build_join_schema, check_join_is_valid,
         estimate_join_statistics, partitioned_join_output_partitioning,
@@ -73,7 +72,47 @@ use datafusion_physical_expr::EquivalenceProperties;
 use ahash::RandomState;
 use futures::{ready, Stream, StreamExt, TryStreamExt};
 
-type JoinLeftData = (JoinHashMap, RecordBatch, MemoryReservation);
+/// HashTable and input data for the left (build side) of a join
+struct JoinLeftData {
+    /// The hash table with indices into `batch`
+    hash_map: JoinHashMap,
+    /// The input rows for the build side
+    batch: RecordBatch,
+    /// Memory reservation that tracks memory used by `hash_map` hash table
+    /// `batch`. Cleared on drop.
+    #[allow(dead_code)]
+    reservation: MemoryReservation,
+}
+
+impl JoinLeftData {
+    /// Create a new `JoinLeftData` from its parts
+    fn new(
+        hash_map: JoinHashMap,
+        batch: RecordBatch,
+        reservation: MemoryReservation,
+    ) -> Self {
+        Self {
+            hash_map,
+            batch,
+            reservation,
+        }
+    }
+
+    /// Returns the number of rows in the build side
+    fn num_rows(&self) -> usize {
+        self.batch.num_rows()
+    }
+
+    /// return a reference to the hash map
+    fn hash_map(&self) -> &JoinHashMap {
+        &self.hash_map
+    }
+
+    /// returns a reference to the build side batch
+    fn batch(&self) -> &RecordBatch {
+        &self.batch
+    }
+}
 
 /// Join execution plan: Evaluates eqijoin predicates in parallel on multiple
 /// partitions using a hash table and an optional filter list to apply post
@@ -206,7 +245,7 @@ pub struct HashJoinExec {
     pub join_type: JoinType,
     /// The output schema for the join
     schema: SchemaRef,
-    /// Build-side data
+    /// Future that consumes left input and builds the hash table
     left_fut: OnceAsync<JoinLeftData>,
     /// Shared the `RandomState` for the hashing algorithm
     random_state: RandomState,
@@ -609,6 +648,8 @@ impl ExecutionPlan for HashJoinExec {
     }
 }
 
+/// Reads the left (build) side of the input, buffering it in memory, to build a
+/// hash table (`LeftJoinData`)
 async fn collect_left_input(
     partition: Option<usize>,
     random_state: RandomState,
@@ -692,8 +733,9 @@ async fn collect_left_input(
     // Merge all batches into a single batch, so we
     // can directly index into the arrays
     let single_batch = concat_batches(&schema, &batches, num_rows)?;
+    let data = JoinLeftData::new(hashmap, single_batch, reservation);
 
-    Ok((hashmap, single_batch, reservation))
+    Ok(data)
 }
 
 /// Updates `hash` with new entries from [RecordBatch] evaluated against the expressions `on`,
@@ -713,7 +755,7 @@ where
     // evaluate the keys
     let keys_values = on
         .iter()
-        .map(|c| Ok(c.evaluate(batch)?.into_array(batch.num_rows())))
+        .map(|c| c.evaluate(batch)?.into_array(batch.num_rows()))
         .collect::<Result<Vec<_>>>()?;
 
     // calculate the hash values
@@ -747,27 +789,38 @@ where
     Ok(())
 }
 
-/// A stream that issues [RecordBatch]es as they arrive from the right  of the join.
+/// [`Stream`] for [`HashJoinExec`] that does the actual join.
+///
+/// This stream:
+///
+/// 1. Reads the entire left input (build) and constructs a hash table
+///
+/// 2. Streams [RecordBatch]es as they arrive from the right input (probe) and joins
+/// them with the contents of the hash table
 struct HashJoinStream {
     /// Input schema
     schema: Arc<Schema>,
-    /// columns from the left
+    /// equijoin columns from the left (build side)
     on_left: Vec<Column>,
-    /// columns from the right used to compute the hash
+    /// equijoin columns from the right (probe side)
     on_right: Vec<Column>,
-    /// join filter
+    /// optional join filter
     filter: Option<JoinFilter>,
-    /// type of the join
+    /// type of the join (left, right, semi, etc)
     join_type: JoinType,
-    /// future for data from left side
+    /// future which builds hash table from left side
     left_fut: OnceFut<JoinLeftData>,
-    /// Keeps track of the left side rows whether they are visited
+    /// Which left (probe) side rows have been matches while creating output.
+    /// For some OUTER joins, we need to know which rows have not been matched
+    /// to produce the correct output.
     visited_left_side: Option<BooleanBufferBuilder>,
-    /// right
+    /// right (probe) input
     right: SendableRecordBatchStream,
     /// Random state used for hashing initialization
     random_state: RandomState,
-    /// There is nothing to process anymore and left side is processed in case of left join
+    /// The join output is complete. For outer joins, this is used to
+    /// distinguish when the input stream is exhausted and when any unmatched
+    /// rows are output.
     is_exhausted: bool,
     /// Metrics
     join_metrics: BuildProbeJoinMetrics,
@@ -785,37 +838,51 @@ impl RecordBatchStream for HashJoinStream {
     }
 }
 
-// Returns build/probe indices satisfying the equality condition.
-// On LEFT.b1 = RIGHT.b2
-// LEFT Table:
-//  a1  b1  c1
-//  1   1   10
-//  3   3   30
-//  5   5   50
-//  7   7   70
-//  9   8   90
-//  11  8   110
-// 13   10  130
-// RIGHT Table:
-//  a2   b2  c2
-//  2    2   20
-//  4    4   40
-//  6    6   60
-//  8    8   80
-// 10   10  100
-// 12   10  120
-// The result is
-// "+----+----+-----+----+----+-----+",
-// "| a1 | b1 | c1  | a2 | b2 | c2  |",
-// "+----+----+-----+----+----+-----+",
-// "| 9  | 8  | 90  | 8  | 8  | 80  |",
-// "| 11 | 8  | 110 | 8  | 8  | 80  |",
-// "| 13 | 10 | 130 | 10 | 10 | 100 |",
-// "| 13 | 10 | 130 | 12 | 10 | 120 |",
-// "+----+----+-----+----+----+-----+"
-// And the result of build and probe indices are:
-// Build indices: 4, 5, 6, 6
-// Probe indices: 3, 3, 4, 5
+/// Returns build/probe indices satisfying the equality condition.
+///
+/// # Example
+///
+/// For `LEFT.b1 = RIGHT.b2`:
+/// LEFT (build) Table:
+/// ```text
+///  a1  b1  c1
+///  1   1   10
+///  3   3   30
+///  5   5   50
+///  7   7   70
+///  9   8   90
+///  11  8   110
+///  13   10  130
+/// ```
+///
+/// RIGHT (probe) Table:
+/// ```text
+///  a2   b2  c2
+///  2    2   20
+///  4    4   40
+///  6    6   60
+///  8    8   80
+/// 10   10  100
+/// 12   10  120
+/// ```
+///
+/// The result is
+/// ```text
+/// "+----+----+-----+----+----+-----+",
+/// "| a1 | b1 | c1  | a2 | b2 | c2  |",
+/// "+----+----+-----+----+----+-----+",
+/// "| 9  | 8  | 90  | 8  | 8  | 80  |",
+/// "| 11 | 8  | 110 | 8  | 8  | 80  |",
+/// "| 13 | 10 | 130 | 10 | 10 | 100 |",
+/// "| 13 | 10 | 130 | 12 | 10 | 120 |",
+/// "+----+----+-----+----+----+-----+"
+/// ```
+///
+/// And the result of build and probe indices are:
+/// ```text
+/// Build indices: 4, 5, 6, 6
+/// Probe indices: 3, 3, 4, 5
+/// ```
 #[allow(clippy::too_many_arguments)]
 pub fn build_equal_condition_join_indices<T: JoinHashMapType>(
     build_hashmap: &T,
@@ -832,13 +899,13 @@ pub fn build_equal_condition_join_indices<T: JoinHashMapType>(
 ) -> Result<(UInt64Array, UInt32Array)> {
     let keys_values = probe_on
         .iter()
-        .map(|c| Ok(c.evaluate(probe_batch)?.into_array(probe_batch.num_rows())))
+        .map(|c| c.evaluate(probe_batch)?.into_array(probe_batch.num_rows()))
         .collect::<Result<Vec<_>>>()?;
     let build_join_values = build_on
         .iter()
         .map(|c| {
-            Ok(c.evaluate(build_input_buffer)?
-                .into_array(build_input_buffer.num_rows()))
+            c.evaluate(build_input_buffer)?
+                .into_array(build_input_buffer.num_rows())
         })
         .collect::<Result<Vec<_>>>()?;
     hashes_buffer.clear();
@@ -1003,32 +1070,33 @@ impl HashJoinStream {
         cx: &mut std::task::Context<'_>,
     ) -> Poll<Option<Result<RecordBatch>>> {
         let build_timer = self.join_metrics.build_time.timer();
+        // build hash table from left (build) side, if not yet done
         let left_data = match ready!(self.left_fut.get(cx)) {
             Ok(left_data) => left_data,
             Err(e) => return Poll::Ready(Some(Err(e))),
         };
         build_timer.done();
 
-        // Reserving memory for visited_left_side bitmap in case it hasn't been initialied yet
+        // Reserving memory for visited_left_side bitmap in case it hasn't been initialized yet
         // and join_type requires to store it
         if self.visited_left_side.is_none()
             && need_produce_result_in_final(self.join_type)
         {
             // TODO: Replace `ceil` wrapper with stable `div_cell` after
             // https://github.com/rust-lang/rust/issues/88581
-            let visited_bitmap_size = bit_util::ceil(left_data.1.num_rows(), 8);
+            let visited_bitmap_size = bit_util::ceil(left_data.num_rows(), 8);
             self.reservation.try_grow(visited_bitmap_size)?;
             self.join_metrics.build_mem_used.add(visited_bitmap_size);
         }
 
         let visited_left_side = self.visited_left_side.get_or_insert_with(|| {
-            let num_rows = left_data.1.num_rows();
+            let num_rows = left_data.num_rows();
             if need_produce_result_in_final(self.join_type) {
-                // these join type need the bitmap to identify which row has be matched or unmatched.
-                // For the `left semi` join, need to use the bitmap to produce the matched row in the left side
-                // For the `left` join, need to use the bitmap to produce the unmatched row in the left side with null
-                // For the `left anti` join, need to use the bitmap to produce the unmatched row in the left side
-                // For the `full` join, need to use the bitmap to produce the unmatched row in the left side with null
+                // Some join types need to track which row has be matched or unmatched:
+                // `left semi` join:  need to use the bitmap to produce the matched row in the left side
+                // `left` join:       need to use the bitmap to produce the unmatched row in the left side with null
+                // `left anti` join:  need to use the bitmap to produce the unmatched row in the left side
+                // `full` join:       need to use the bitmap to produce the unmatched row in the left side with null
                 let mut buffer = BooleanBufferBuilder::new(num_rows);
                 buffer.append_n(num_rows, false);
                 buffer
@@ -1037,6 +1105,7 @@ impl HashJoinStream {
             }
         });
         let mut hashes_buffer = vec![];
+        // get next right (probe) input batch
         self.right
             .poll_next_unpin(cx)
             .map(|maybe_batch| match maybe_batch {
@@ -1048,8 +1117,8 @@ impl HashJoinStream {
 
                     // get the matched two indices for the on condition
                     let left_right_indices = build_equal_condition_join_indices(
-                        &left_data.0,
-                        &left_data.1,
+                        left_data.hash_map(),
+                        left_data.batch(),
                         &batch,
                         &self.on_left,
                         &self.on_right,
@@ -1081,7 +1150,7 @@ impl HashJoinStream {
 
                             let result = build_batch_from_indices(
                                 &self.schema,
-                                &left_data.1,
+                                left_data.batch(),
                                 &batch,
                                 &left_side,
                                 &right_side,
@@ -1113,7 +1182,7 @@ impl HashJoinStream {
                         // use the left and right indices to produce the batch result
                         let result = build_batch_from_indices(
                             &self.schema,
-                            &left_data.1,
+                            left_data.batch(),
                             &empty_right_batch,
                             &left_side,
                             &right_side,
@@ -2492,16 +2561,11 @@ mod tests {
             ("c", &vec![30, 40]),
         );
 
-        let left_data = (
-            JoinHashMap {
-                map: hashmap_left,
-                next,
-            },
-            left,
-        );
+        let join_hash_map = JoinHashMap::new(hashmap_left, next);
+
         let (l, r) = build_equal_condition_join_indices(
-            &left_data.0,
-            &left_data.1,
+            &join_hash_map,
+            &left,
             &right,
             &[Column::new("a", 0)],
             &[Column::new("a", 0)],

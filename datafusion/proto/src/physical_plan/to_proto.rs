@@ -28,8 +28,12 @@ use crate::protobuf::{
     ScalarValue,
 };
 
-use datafusion::datasource::listing::{FileRange, PartitionedFile};
-use datafusion::datasource::physical_plan::FileScanConfig;
+use datafusion::datasource::{
+    file_format::json::JsonSink,
+    listing::{FileRange, PartitionedFile},
+    physical_plan::FileScanConfig,
+    physical_plan::FileSinkConfig,
+};
 use datafusion::logical_expr::BuiltinScalarFunction;
 use datafusion::physical_expr::expressions::{GetFieldAccessExpr, GetIndexedFieldExpr};
 use datafusion::physical_expr::window::{NthValueKind, SlidingAggregateWindowExpr};
@@ -50,7 +54,15 @@ use datafusion::physical_plan::{
     AggregateExpr, ColumnStatistics, PhysicalExpr, Statistics, WindowExpr,
 };
 use datafusion_common::{
-    internal_err, not_impl_err, stats::Precision, DataFusionError, JoinSide, Result,
+    file_options::{
+        arrow_writer::ArrowWriterOptions, avro_writer::AvroWriterOptions,
+        csv_writer::CsvWriterOptions, json_writer::JsonWriterOptions,
+        parquet_writer::ParquetWriterOptions,
+    },
+    internal_err, not_impl_err,
+    parsers::CompressionTypeVariant,
+    stats::Precision,
+    DataFusionError, FileTypeWriterOptions, JoinSide, Result,
 };
 
 impl TryFrom<Arc<dyn AggregateExpr>> for protobuf::PhysicalExprNode {
@@ -71,10 +83,11 @@ impl TryFrom<Arc<dyn AggregateExpr>> for protobuf::PhysicalExprNode {
             .collect::<Result<Vec<_>>>()?;
 
         if let Some(a) = a.as_any().downcast_ref::<AggregateFunctionExpr>() {
+            let name = a.fun().name().to_string();
             return Ok(protobuf::PhysicalExprNode {
                     expr_type: Some(protobuf::physical_expr_node::ExprType::AggregateExpr(
                         protobuf::PhysicalAggregateExprNode {
-                            aggregate_function: Some(physical_aggregate_expr_node::AggregateFunction::UserDefinedAggrFunction(a.fun().name.clone())),
+                            aggregate_function: Some(physical_aggregate_expr_node::AggregateFunction::UserDefinedAggrFunction(name)),
                             expr: expressions,
                             ordering_req,
                             distinct: false,
@@ -167,7 +180,7 @@ impl TryFrom<Arc<dyn WindowExpr>> for protobuf::PhysicalWindowExprNode {
                         args.insert(
                             1,
                             Arc::new(Literal::new(
-                                datafusion_common::ScalarValue::Int64(Some(n as i64)),
+                                datafusion_common::ScalarValue::Int64(Some(n)),
                             )),
                         );
                         protobuf::BuiltInWindowFunction::NthValue
@@ -787,6 +800,101 @@ impl TryFrom<PhysicalSortExpr> for protobuf::PhysicalSortExprNode {
             expr: Some(Box::new(sort_expr.expr.try_into()?)),
             asc: !sort_expr.options.descending,
             nulls_first: sort_expr.options.nulls_first,
+        })
+    }
+}
+
+impl TryFrom<&JsonSink> for protobuf::JsonSink {
+    type Error = DataFusionError;
+
+    fn try_from(value: &JsonSink) -> Result<Self, Self::Error> {
+        Ok(Self {
+            config: Some(value.config().try_into()?),
+        })
+    }
+}
+
+impl TryFrom<&FileSinkConfig> for protobuf::FileSinkConfig {
+    type Error = DataFusionError;
+
+    fn try_from(conf: &FileSinkConfig) -> Result<Self, Self::Error> {
+        let file_groups = conf
+            .file_groups
+            .iter()
+            .map(TryInto::try_into)
+            .collect::<Result<Vec<_>>>()?;
+        let table_paths = conf
+            .table_paths
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>();
+        let table_partition_cols = conf
+            .table_partition_cols
+            .iter()
+            .map(|(name, data_type)| {
+                Ok(protobuf::PartitionColumn {
+                    name: name.to_owned(),
+                    arrow_type: Some(data_type.try_into()?),
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let file_type_writer_options = &conf.file_type_writer_options;
+        Ok(Self {
+            object_store_url: conf.object_store_url.to_string(),
+            file_groups,
+            table_paths,
+            output_schema: Some(conf.output_schema.as_ref().try_into()?),
+            table_partition_cols,
+            single_file_output: conf.single_file_output,
+            unbounded_input: conf.unbounded_input,
+            overwrite: conf.overwrite,
+            file_type_writer_options: Some(file_type_writer_options.try_into()?),
+        })
+    }
+}
+
+impl From<&CompressionTypeVariant> for protobuf::CompressionTypeVariant {
+    fn from(value: &CompressionTypeVariant) -> Self {
+        match value {
+            CompressionTypeVariant::GZIP => Self::Gzip,
+            CompressionTypeVariant::BZIP2 => Self::Bzip2,
+            CompressionTypeVariant::XZ => Self::Xz,
+            CompressionTypeVariant::ZSTD => Self::Zstd,
+            CompressionTypeVariant::UNCOMPRESSED => Self::Uncompressed,
+        }
+    }
+}
+
+impl TryFrom<&FileTypeWriterOptions> for protobuf::FileTypeWriterOptions {
+    type Error = DataFusionError;
+
+    fn try_from(opts: &FileTypeWriterOptions) -> Result<Self, Self::Error> {
+        let file_type = match opts {
+            #[cfg(feature = "parquet")]
+            FileTypeWriterOptions::Parquet(ParquetWriterOptions {
+                writer_options: _,
+            }) => return not_impl_err!("Parquet file sink protobuf serialization"),
+            FileTypeWriterOptions::CSV(CsvWriterOptions {
+                writer_options: _,
+                compression: _,
+            }) => return not_impl_err!("CSV file sink protobuf serialization"),
+            FileTypeWriterOptions::JSON(JsonWriterOptions { compression }) => {
+                let compression: protobuf::CompressionTypeVariant = compression.into();
+                protobuf::file_type_writer_options::FileType::JsonOptions(
+                    protobuf::JsonWriterOptions {
+                        compression: compression.into(),
+                    },
+                )
+            }
+            FileTypeWriterOptions::Avro(AvroWriterOptions {}) => {
+                return not_impl_err!("Avro file sink protobuf serialization")
+            }
+            FileTypeWriterOptions::Arrow(ArrowWriterOptions {}) => {
+                return not_impl_err!("Arrow file sink protobuf serialization")
+            }
+        };
+        Ok(Self {
+            file_type: Some(file_type),
         })
     }
 }
