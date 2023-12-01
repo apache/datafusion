@@ -17,12 +17,11 @@
 
 use std::{ops::Neg, sync::Arc};
 
-use crate::PhysicalExpr;
 use arrow_schema::SortOptions;
+
+use crate::PhysicalExpr;
 use datafusion_common::tree_node::{TreeNode, VisitRecursion};
 use datafusion_common::Result;
-
-use itertools::Itertools;
 
 /// To propagate [`SortOptions`] across the [`PhysicalExpr`], it is insufficient
 /// to simply use `Option<SortOptions>`: There must be a differentiation between
@@ -35,11 +34,12 @@ use itertools::Itertools;
 /// sorted data; however the ((a_ordered + 999) + c_ordered) expression can. Therefore,
 /// we need two different variants for literals and unordered columns as literals are
 /// often more ordering-friendly under most mathematical operations.
-#[derive(PartialEq, Debug, Clone, Copy)]
+#[derive(PartialEq, Debug, Clone, Copy, Default)]
 pub enum SortProperties {
     /// Use the ordinary [`SortOptions`] struct to represent ordered data:
     Ordered(SortOptions),
     // This alternative represents unordered data:
+    #[default]
     Unordered,
     // Singleton is used for single-valued literal numbers:
     Singleton,
@@ -151,34 +151,19 @@ impl Neg for SortProperties {
 pub struct ExprOrdering {
     pub expr: Arc<dyn PhysicalExpr>,
     pub state: SortProperties,
-    pub children_states: Vec<SortProperties>,
+    pub children: Vec<ExprOrdering>,
 }
 
 impl ExprOrdering {
     /// Creates a new [`ExprOrdering`] with [`SortProperties::Unordered`] states
     /// for `expr` and its children.
     pub fn new(expr: Arc<dyn PhysicalExpr>) -> Self {
-        let size = expr.children().len();
+        let children = expr.children();
         Self {
             expr,
-            state: SortProperties::Unordered,
-            children_states: vec![SortProperties::Unordered; size],
+            state: Default::default(),
+            children: children.into_iter().map(Self::new).collect(),
         }
-    }
-
-    /// Updates this [`ExprOrdering`]'s children states with the given states.
-    pub fn with_new_children(mut self, children_states: Vec<SortProperties>) -> Self {
-        self.children_states = children_states;
-        self
-    }
-
-    /// Creates new [`ExprOrdering`] objects for each child of the expression.
-    pub fn children_expr_orderings(&self) -> Vec<ExprOrdering> {
-        self.expr
-            .children()
-            .into_iter()
-            .map(ExprOrdering::new)
-            .collect()
     }
 }
 
@@ -187,8 +172,8 @@ impl TreeNode for ExprOrdering {
     where
         F: FnMut(&Self) -> Result<VisitRecursion>,
     {
-        for child in self.children_expr_orderings() {
-            match op(&child)? {
+        for child in &self.children {
+            match op(child)? {
                 VisitRecursion::Continue => {}
                 VisitRecursion::Skip => return Ok(VisitRecursion::Continue),
                 VisitRecursion::Stop => return Ok(VisitRecursion::Stop),
@@ -197,25 +182,19 @@ impl TreeNode for ExprOrdering {
         Ok(VisitRecursion::Continue)
     }
 
-    fn map_children<F>(self, transform: F) -> Result<Self>
+    fn map_children<F>(mut self, transform: F) -> Result<Self>
     where
         F: FnMut(Self) -> Result<Self>,
     {
-        if self.children_states.is_empty() {
+        if self.children.is_empty() {
             Ok(self)
         } else {
-            let child_expr_orderings = self.children_expr_orderings();
-            // After mapping over the children, the function `F` applies to the
-            // current object and updates its state.
-            Ok(self.with_new_children(
-                child_expr_orderings
-                    .into_iter()
-                    // Update children states after this transformation:
-                    .map(transform)
-                    // Extract the state (i.e. sort properties) information:
-                    .map_ok(|c| c.state)
-                    .collect::<Result<Vec<_>>>()?,
-            ))
+            self.children = self
+                .children
+                .into_iter()
+                .map(transform)
+                .collect::<Result<Vec<_>>>()?;
+            Ok(self)
         }
     }
 }

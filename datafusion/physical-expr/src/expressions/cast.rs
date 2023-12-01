@@ -145,8 +145,8 @@ impl PhysicalExpr for CastExpr {
     }
 
     /// A [`CastExpr`] preserves the ordering of its child.
-    fn get_ordering(&self, children: &[SortProperties]) -> SortProperties {
-        children[0]
+    fn get_ordering(&self, children: &[&SortProperties]) -> SortProperties {
+        *children[0]
     }
 }
 

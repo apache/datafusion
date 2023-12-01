@@ -921,7 +921,7 @@ pub fn get_func_monotonicity(fun: &BuiltinScalarFunction) -> Option<FuncMonotoni
 /// and the function's behavior depending on its arguments.
 pub fn out_ordering(
     func: &FuncMonotonicity,
-    arg_orderings: &[SortProperties],
+    arg_orderings: &[&SortProperties],
 ) -> SortProperties {
     func.iter().zip(arg_orderings).fold(
         SortProperties::Singleton,

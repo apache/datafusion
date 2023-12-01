@@ -444,8 +444,8 @@ impl PhysicalExpr for BinaryExpr {
 
     /// For each operator, [`BinaryExpr`] has distinct ordering rules.
     /// TODO: There may be rules specific to some data types (such as division and multiplication on unsigned integers)
-    fn get_ordering(&self, children: &[SortProperties]) -> SortProperties {
-        let (left_child, right_child) = (&children[0], &children[1]);
+    fn get_ordering(&self, children: &[&SortProperties]) -> SortProperties {
+        let (left_child, right_child) = (children[0], children[1]);
         match self.op() {
             Operator::Plus => left_child.add(right_child),
             Operator::Minus => left_child.sub(right_child),

@@ -166,7 +166,7 @@ pub trait PhysicalExpr: Send + Sync + Display + Debug + PartialEq<dyn Any> {
     /// information of the PhysicalExpr. Since `SortOptions` cannot fully handle
     /// the propagation of unordered columns and literals, the `SortProperties`
     /// struct is used.
-    fn get_ordering(&self, _children: &[SortProperties]) -> SortProperties {
+    fn get_ordering(&self, _children: &[&SortProperties]) -> SortProperties {
         SortProperties::Unordered
     }
 }
