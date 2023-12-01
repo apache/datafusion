@@ -35,7 +35,7 @@ use std::sync::Arc;
 
 #[derive(Debug)]
 pub struct AgeFunction;
-
+/// Postgres `age` function ([https://www.postgresql.org/docs/9.1/functions-datetime.html])
 impl ScalarFunctionDef for AgeFunction {
     fn name(&self) -> &str {
         "age"
