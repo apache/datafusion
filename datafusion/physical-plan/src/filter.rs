@@ -1016,7 +1016,7 @@ mod tests {
             Arc::new(Literal::new(ScalarValue::Int32(Some(10)))),
         ));
         let filter: Arc<dyn ExecutionPlan> =
-            Arc::new(FilterExec::try_new(predicate, input)?);
+            Arc::new(FilterExec::try_new(predicate, None, input)?);
         let filter_statistics = filter.statistics()?;
         // First column is "a", and it is a column with only one value after the filter.
         assert!(filter_statistics.column_statistics[0].is_singleton());

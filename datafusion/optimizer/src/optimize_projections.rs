@@ -21,9 +21,9 @@
 //! - Adds projection to decrease table column size before operators that benefits from less memory at its input.
 //! - Removes unnecessary [LogicalPlan::Projection] from the [LogicalPlan].
 use crate::optimizer::ApplyOrder;
-use datafusion_common::{Column, DFSchema, DFSchemaRef, JoinType, Result, DFField};
-use datafusion_expr::Filter;
+use datafusion_common::{Column, DFField, DFSchema, DFSchemaRef, JoinType, Result};
 use datafusion_expr::expr::{Alias, ScalarFunction};
+use datafusion_expr::Filter;
 use datafusion_expr::{
     logical_plan::LogicalPlan, projection_schema, Aggregate, BinaryExpr, Cast, Distinct,
     Expr, Projection, ScalarFunctionDefinition, TableScan, Window,
@@ -352,25 +352,23 @@ fn optimize_projections(
             LogicalPlan::Filter(f) => {
                 let schema = res.schema();
                 let fields: Vec<DFField> = indices
-                .iter()
-                .map(|c| {
-                    plan.schema().field(*c).clone()
-                })
-                .collect();
-                let new_schema = DFSchema::new_with_metadata(fields, schema.metadata().clone())?;
-                let new_schema = if !schema.logically_equivalent_names_and_types(&new_schema) {
-                    Some(Arc::new(new_schema))
-                } else {
-                    None
-                };
+                    .iter()
+                    .map(|c| plan.schema().field(*c).clone())
+                    .collect();
+                let new_schema =
+                    DFSchema::new_with_metadata(fields, schema.metadata().clone())?;
+                let new_schema =
+                    if !schema.logically_equivalent_names_and_types(&new_schema) {
+                        Some(Arc::new(new_schema))
+                    } else {
+                        None
+                    };
 
-                Ok(Some(Filter::try_new(
-                    f.predicate.clone(),
-                    f.input.clone(),
-                    new_schema,
-                ).map(LogicalPlan::Filter)?))
-
-            },
+                Ok(Some(
+                    Filter::try_new(f.predicate.clone(), f.input.clone(), new_schema)
+                        .map(LogicalPlan::Filter)?,
+                ))
+            }
             _ => Ok(Some(res)),
         }
     }
