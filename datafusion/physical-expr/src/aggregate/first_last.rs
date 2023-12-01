@@ -422,23 +422,19 @@ impl LastValueAccumulator {
 
     // Updates state with the values in the given row.
     fn update_with_new_row(&mut self, row: &[ScalarValue]) -> Result<()> {
-        if !self.is_set {
-            self.last = row[0].clone();
-            self.orderings = row[1..].to_vec();
-            self.is_set = true;
-        } else if compare_rows(
-            &self.orderings,
-            &row[1..],
-            &self
-                .ordering_req
-                .iter()
-                .map(|sort_expr| sort_expr.options)
-                .collect::<Vec<_>>(),
-        )?
-        .is_lt()
+        let value = &row[0];
+        let orderings = &row[1..];
+        if !self.is_set
+            || compare_rows(
+                &self.orderings,
+                &orderings,
+                &get_sort_options(&self.ordering_req),
+            )?
+            .is_lt()
         {
-            self.last = row[0].clone();
-            self.orderings = row[1..].to_vec();
+            self.last = value.clone();
+            self.orderings = orderings.to_vec();
+            self.is_set = true;
         }
         Ok(())
     }
