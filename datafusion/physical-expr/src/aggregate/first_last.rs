@@ -186,10 +186,26 @@ impl FirstValueAccumulator {
     }
 
     // Updates state with the values in the given row.
-    fn update_with_new_row(&mut self, row: &[ScalarValue]) {
-        self.first = row[0].clone();
-        self.orderings = row[1..].to_vec();
-        self.is_set = true;
+    fn update_with_new_row(&mut self, row: &[ScalarValue]) -> Result<()> {
+        if !self.is_set {
+            self.first = row[0].clone();
+            self.orderings = row[1..].to_vec();
+            self.is_set = true;
+        } else if compare_rows(
+            &self.orderings,
+            &row[1..],
+            &self
+                .ordering_req
+                .iter()
+                .map(|sort_expr| sort_expr.options)
+                .collect::<Vec<_>>(),
+        )?
+        .is_gt()
+        {
+            self.first = row[0].clone();
+            self.orderings = row[1..].to_vec();
+        }
+        Ok(())
     }
 }
 
@@ -204,24 +220,10 @@ impl Accumulator for FirstValueAccumulator {
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         // If we have seen first value, we shouldn't update it
         if !values[0].is_empty() {
-            let sort_columns = values[1..].iter().zip(self.ordering_req.iter()).map(|(col, sort_expr)| {
-                SortColumn { values: col.clone(), options: Some(sort_expr.options) }
-            }).collect::<Vec<_>>();
-            let indices = lexsort_to_indices(&sort_columns, Some(1))?;
-            let first_idx = indices.value(0) as usize;
+            let first_idx = self.get_first_value_idx(values)?;
             let row = get_row_at_idx(values, first_idx)?;
-            self.update_with_new_row(&row);
+            self.update_with_new_row(&row)?;
         }
-        // if !values[0].is_empty() && !self.is_set {
-        //     println!("----------");
-        //     for value in values{
-        //         println!("value: {:?}", value);
-        //     }
-        //     println!("----------");
-        //     let row = get_row_at_idx(values, 0)?;
-        //     // Update with first value in the array.
-        //     self.update_with_new_row(&row);
-        // }
         Ok(())
     }
 
@@ -254,7 +256,7 @@ impl Accumulator for FirstValueAccumulator {
                 // Update with first value in the state. Note that we should exclude the
                 // is_set flag from the state. Otherwise, we will end up with a state
                 // containing two is_set flags.
-                self.update_with_new_row(&first_row[0..is_set_idx]);
+                self.update_with_new_row(&first_row[0..is_set_idx])?;
             }
         }
         Ok(())
@@ -269,6 +271,25 @@ impl Accumulator for FirstValueAccumulator {
             + self.first.size()
             + ScalarValue::size_of_vec(&self.orderings)
             - std::mem::size_of_val(&self.orderings)
+    }
+}
+
+impl FirstValueAccumulator {
+    fn get_first_value_idx(&self, values: &[ArrayRef]) -> Result<usize> {
+        Ok(if self.ordering_req.is_empty() {
+            values[0].len() - 1
+        } else {
+            let sort_columns = values[1..]
+                .iter()
+                .zip(self.ordering_req.iter())
+                .map(|(col, sort_expr)| SortColumn {
+                    values: col.clone(),
+                    options: Some(sort_expr.options),
+                })
+                .collect::<Vec<_>>();
+            let indices = lexsort_to_indices(&sort_columns, Some(1))?;
+            indices.value(0) as usize
+        })
     }
 }
 
@@ -423,10 +444,26 @@ impl LastValueAccumulator {
     }
 
     // Updates state with the values in the given row.
-    fn update_with_new_row(&mut self, row: &[ScalarValue]) {
-        self.last = row[0].clone();
-        self.orderings = row[1..].to_vec();
-        self.is_set = true;
+    fn update_with_new_row(&mut self, row: &[ScalarValue]) -> Result<()> {
+        if !self.is_set {
+            self.last = row[0].clone();
+            self.orderings = row[1..].to_vec();
+            self.is_set = true;
+        } else if compare_rows(
+            &self.orderings,
+            &row[1..],
+            &self
+                .ordering_req
+                .iter()
+                .map(|sort_expr| sort_expr.options)
+                .collect::<Vec<_>>(),
+        )?
+        .is_lt()
+        {
+            self.last = row[0].clone();
+            self.orderings = row[1..].to_vec();
+        }
+        Ok(())
     }
 }
 
@@ -439,10 +476,11 @@ impl Accumulator for LastValueAccumulator {
     }
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        // If we have seen first value, we shouldn't update it
         if !values[0].is_empty() {
-            let row = get_row_at_idx(values, values[0].len() - 1)?;
-            // Update with last value in the array.
-            self.update_with_new_row(&row);
+            let last_idx = self.get_last_value_idx(values)?;
+            let row = get_row_at_idx(values, last_idx)?;
+            self.update_with_new_row(&row)?;
         }
         Ok(())
     }
@@ -479,7 +517,7 @@ impl Accumulator for LastValueAccumulator {
                 // Update with last value in the state. Note that we should exclude the
                 // is_set flag from the state. Otherwise, we will end up with a state
                 // containing two is_set flags.
-                self.update_with_new_row(&last_row[0..is_set_idx]);
+                self.update_with_new_row(&last_row[0..is_set_idx])?;
             }
         }
         Ok(())
@@ -494,6 +532,25 @@ impl Accumulator for LastValueAccumulator {
             + self.last.size()
             + ScalarValue::size_of_vec(&self.orderings)
             - std::mem::size_of_val(&self.orderings)
+    }
+}
+
+impl LastValueAccumulator {
+    fn get_last_value_idx(&self, values: &[ArrayRef]) -> Result<usize> {
+        Ok(if self.ordering_req.is_empty() {
+            values[0].len() - 1
+        } else {
+            let sort_columns = values[1..]
+                .iter()
+                .zip(self.ordering_req.iter())
+                .map(|(col, sort_expr)| SortColumn {
+                    values: col.clone(),
+                    options: Some(!sort_expr.options),
+                })
+                .collect::<Vec<_>>();
+            let indices = lexsort_to_indices(&sort_columns, Some(1))?;
+            indices.value(0) as usize
+        })
     }
 }
 

@@ -2212,10 +2212,10 @@ SELECT a, b, LAST_VALUE(c ORDER BY a DESC) as last_c
   FROM annotated_data_infinite2
   GROUP BY a, b
 ----
-0 0 24
-0 1 49
-1 2 74
-1 3 99
+0 0 0
+0 1 25
+1 2 50
+1 3 75
 
 # when LAST_VALUE, or FIRST_VALUE value do not contain ordering requirement
 # queries should still work, However, result depends on the scanning order and
@@ -2261,7 +2261,7 @@ CREATE TABLE sales_global (zip_code INT,
           (1, 'TUR', 2, '2022-01-01 11:30:00'::timestamp, 'TRY', 75.0),
           (1, 'FRA', 3, '2022-01-02 12:00:00'::timestamp, 'EUR', 200.0),
           (1, 'TUR', 4, '2022-01-03 10:00:00'::timestamp, 'TRY', 100.0),
-          (0, 'GRC', 4, '2022-01-03 10:00:00'::timestamp, 'EUR', 80.0)
+          (0, 'GRC', 4, '2022-01-03 11:00:00'::timestamp, 'EUR', 80.0)
 
 # create a new table named exchange rates
 statement ok
@@ -2703,8 +2703,8 @@ SELECT country, FIRST_VALUE(amount ORDER BY ts DESC) as fv1,
   FROM sales_global
   GROUP BY country
 ----
-TUR 100 75 175
 GRC 80 30 110
+TUR 100 75 175
 FRA 200 50 250
 
 query TT
@@ -2750,7 +2750,7 @@ ORDER BY s.sn
 1 FRA 1 2022-01-01T08:00:00 EUR 50
 1 TUR 2 2022-01-01T11:30:00 TRY 75
 1 FRA 3 2022-01-02T12:00:00 EUR 200
-0 GRC 4 2022-01-03T10:00:00 EUR 80
+0 GRC 4 2022-01-03T11:00:00 EUR 80
 1 TUR 4 2022-01-03T10:00:00 TRY 100
 
 # Run order-sensitive aggregators in multiple partitions
@@ -2936,7 +2936,7 @@ query ?
 SELECT ARRAY_AGG(amount ORDER BY ts DESC) AS array_agg1
   FROM sales_global
 ----
-[100.0, 80.0, 200.0, 75.0, 50.0, 30.0]
+[80.0, 100.0, 200.0, 75.0, 50.0, 30.0]
 
 # ARRAY_AGG should work in multiple partitions
 query TT
@@ -3080,7 +3080,7 @@ ORDER BY s.sn
 1 FRA 1 2022-01-01T08:00:00 EUR 50
 1 TUR 2 2022-01-01T11:30:00 TRY 75
 1 FRA 3 2022-01-02T12:00:00 EUR 200
-0 GRC 4 2022-01-03T10:00:00 EUR 80
+0 GRC 4 2022-01-03T11:00:00 EUR 80
 1 TUR 4 2022-01-03T10:00:00 TRY 100
 
 # create a table for testing
