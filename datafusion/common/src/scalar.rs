@@ -2112,40 +2112,6 @@ impl ScalarValue {
         Arc::new(array_into_large_list_array(values))
     }
 
-    /// Converts `Vec<ScalarValue>` where each element has type corresponding to
-    /// `data_type`, to corresponding [`PrimitiveArray`].
-    ///
-    /// Example
-    /// ```
-    /// use std::sync::Arc;
-    /// use datafusion_common::ScalarValue;
-    /// use arrow::array::{ListArray, Int32Array};
-    /// use arrow::datatypes::{DataType, Int32Type};
-    /// use arrow_array::ArrayRef;
-    /// use datafusion_common::cast::as_list_array;
-    ///
-    /// let scalars = vec![
-    ///    ScalarValue::Int32(Some(1)),
-    ///    ScalarValue::Int32(None),
-    ///    ScalarValue::Int32(Some(2))
-    /// ];
-    ///
-    /// let array = ScalarValue::convert_to_arr(&scalars, &DataType::Int32);
-    ///
-    /// let expected = Arc::new(Int32Array::from(
-    ///        vec![Some(1), None, Some(2)]
-    ///     )) as ArrayRef;
-    ///
-    /// assert_eq!(&array, &expected);
-    /// ```
-    pub fn convert_to_arr(values: &[ScalarValue], data_type: &DataType) -> ArrayRef {
-        if values.is_empty() {
-            new_empty_array(data_type)
-        } else {
-            Self::iter_to_array(values.iter().cloned()).unwrap()
-        }
-    }
-
     /// Converts a scalar value into an array of `size` rows.
     ///
     /// # Errors
