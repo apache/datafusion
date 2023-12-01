@@ -46,6 +46,32 @@ brew install datafusion
 datafusion-cli
 ```
 
+### Install and run using PyPI (on MacOS)
+
+DataFusion CLI can also be installed via PyPI (on MacOS). Install it as any other pre-built software like this:
+
+```bash
+pip3 install datafusion
+# Defaulting to user installation because normal site-packages is not writeable
+# Collecting datafusion
+#   Downloading datafusion-33.0.0-cp38-abi3-macosx_11_0_arm64.whl.metadata (9.6 kB)
+# Collecting pyarrow>=11.0.0 (from datafusion)
+#   Downloading pyarrow-14.0.1-cp39-cp39-macosx_11_0_arm64.whl.metadata (3.0 kB)
+# Requirement already satisfied: numpy>=1.16.6 in /Users/huangweijun/Library/Python/3.9/lib/python/site-packages (from pyarrow>=11.0.0->datafusion) (1.23.4)
+# Downloading datafusion-33.0.0-cp38-abi3-macosx_11_0_arm64.whl (13.5 MB)
+#    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 13.5/13.5 MB 3.6 MB/s eta 0:00:00
+# Downloading pyarrow-14.0.1-cp39-cp39-macosx_11_0_arm64.whl (24.0 MB)
+#    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 24.0/24.0 MB 36.4 MB/s eta 0:00:00
+# Installing collected packages: pyarrow, datafusion
+#   Attempting uninstall: pyarrow
+#     Found existing installation: pyarrow 10.0.1
+#     Uninstalling pyarrow-10.0.1:
+#       Successfully uninstalled pyarrow-10.0.1
+# Successfully installed datafusion-33.0.0 pyarrow-14.0.1
+
+datafusion-cli
+```
+
 ### Run using Docker
 
 There is no officially published Docker image for the DataFusion CLI, so it is necessary to build from source
