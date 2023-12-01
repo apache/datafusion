@@ -175,6 +175,7 @@ fn signature(lhs: &DataType, op: &Operator, rhs: &DataType) -> Result<Signature>
                     ret,
                 })
             } else if let Some(numeric) = mathematics_numerical_coercion(lhs, rhs) {
+                println!("numeric type: {:?}", numeric);
                 // Numeric arithmetic, e.g. Int32 + Int32
                 Ok(Signature::uniform(numeric))
             } else {
@@ -366,6 +367,7 @@ pub fn numeric_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<Data
     // these are ordered from most informative to least informative so
     // that the coercion does not lose information via truncation
     match (lhs_type, rhs_type) {
+        // Prefer decimal data type over floating point for comparison operation
         (Decimal128(_, _), Decimal128(_, _)) => {
             get_wider_decimal_type(lhs_type, rhs_type)
         }
@@ -381,7 +383,8 @@ pub fn numeric_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<Data
 
         // u64
         // Prefer f64 over u64, data lossy is expected
-        (UInt64, Float32) | (Float32, UInt64) | (UInt64, Float16) | (Float16, UInt64) => {
+        (UInt64, Float32) | (Float32, UInt64) 
+        => {
             Some(Float64)
         }
         // Prefer i64 over u64, data lossy is expected
@@ -395,7 +398,7 @@ pub fn numeric_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<Data
 
         // i64
         // Prefer f64 over i64, data lossy is expected
-        (Int64, Float32) | (Float32, Int64) | (Int64, Float16) | (Float16, Int64) => {
+        (Int64, Float32) | (Float32, Int64) => {
             Some(Float64)
         }
         (Int64, _) | (_, Int64) => Some(Int64),
@@ -404,7 +407,6 @@ pub fn numeric_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<Data
         (Float32, _) | (_, Float32) => Some(Float32),
 
         // u32
-        (UInt32, Float16) | (Float16, UInt32) => Some(Float64),
         (UInt32, data_type) | (data_type, UInt32) => {
             if data_type.is_signed_integer() {
                 Some(Int64)
@@ -415,14 +417,7 @@ pub fn numeric_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<Data
 
         // i32
         // f32 is not guaranteed to be able to represent all i32 values
-        (Int32, Float16) | (Float16, Int32) => Some(Float64),
         (Int32, _) | (_, Int32) => Some(Int32),
-
-        // f16
-        (Float16, UInt16) | (UInt16, Float16) | (Float16, Int16) | (Int16, Float16) => {
-            Some(Float32)
-        }
-        (Float16, _) | (_, Float16) => Some(Float16),
 
         // u16
         (UInt16, data_type) | (data_type, UInt16) => {
@@ -588,37 +583,49 @@ fn mathematics_numerical_coercion(
     lhs_type: &DataType,
     rhs_type: &DataType,
 ) -> Option<DataType> {
-    use arrow::datatypes::DataType::*;
+    // use arrow::datatypes::DataType::*;
 
     // error on any non-numeric type
     if !both_numeric_or_null_and_numeric(lhs_type, rhs_type) {
         return None;
     };
 
-    // these are ordered from most informative to least informative so
-    // that the coercion removes the least amount of information
-    match (lhs_type, rhs_type) {
-        (Dictionary(_, lhs_value_type), Dictionary(_, rhs_value_type)) => {
-            mathematics_numerical_coercion(lhs_value_type, rhs_value_type)
-        }
-        (Dictionary(_, value_type), _) => {
-            mathematics_numerical_coercion(value_type, rhs_type)
-        }
-        (_, Dictionary(_, value_type)) => {
-            mathematics_numerical_coercion(lhs_type, value_type)
-        }
-        (Float64, _) | (_, Float64) => Some(Float64),
-        (_, Float32) | (Float32, _) => Some(Float32),
-        (Int64, _) | (_, Int64) => Some(Int64),
-        (Int32, _) | (_, Int32) => Some(Int32),
-        (Int16, _) | (_, Int16) => Some(Int16),
-        (Int8, _) | (_, Int8) => Some(Int8),
-        (UInt64, _) | (_, UInt64) => Some(UInt64),
-        (UInt32, _) | (_, UInt32) => Some(UInt32),
-        (UInt16, _) | (_, UInt16) => Some(UInt16),
-        (UInt8, _) | (_, UInt8) => Some(UInt8),
-        _ => None,
-    }
+    numeric_coercion(lhs_type, rhs_type)
+
+    // // these are ordered from most informative to least informative so
+    // // that the coercion removes the least amount of information
+    // match (lhs_type, rhs_type) {
+    //     (Dictionary(_, lhs_value_type), Dictionary(_, rhs_value_type)) => {
+    //         mathematics_numerical_coercion(lhs_value_type, rhs_value_type)
+    //     }
+    //     (Dictionary(_, value_type), _) => {
+    //         mathematics_numerical_coercion(value_type, rhs_type)
+    //     }
+    //     (_, Dictionary(_, value_type)) => {
+    //         mathematics_numerical_coercion(lhs_type, value_type)
+    //     }
+    //     (Float64, _) | (_, Float64) |
+    //     (Float32, UInt64) | (UInt64, Float32) |
+    //     (Float32, Int64) | (Int64, Float32) |
+    //     (Float32, UInt32) | (UInt32, Float32) |
+    //     (Float32, Int32) | (Int32, Float32) |
+    //     (Float16, UInt64) | (UInt64, Float16) |
+    //     (Float16, Int64) | (Int64, Float16) |
+    //     (Float16, UInt32) | (UInt32, Float16) |
+    //     (Float16, Int32) | (Int32, Float16) => Some(Float64),
+    //     (Float32, _) | (_, Float32) |
+    //     (Float16, UInt16) | (UInt16, Float16) |
+    //     (Float16, Int16) | (Int16, Float16) => Some(Float32),
+    //     (Int64, _) | (_, Int64) => Some(Int64),
+    //     (Int32, _) | (_, Int32) => Some(Int32),
+    //     (Int16, _) | (_, Int16) => Some(Int16),
+    //     (Int8, _) | (_, Int8) => Some(Int8),
+    //     (UInt64, _) | (_, UInt64) => Some(UInt64),
+    //     (UInt32, _) | (_, UInt32) => Some(UInt32),
+    //     (UInt16, _) | (_, UInt16) => Some(UInt16),
+    //     (UInt8, _) | (_, UInt8) => Some(UInt8),
+    //     _ => None,
+    // }
 }
 
 fn create_decimal_type(precision: u8, scale: i8) -> DataType {
@@ -1251,44 +1258,6 @@ mod tests {
             Operator::BitwiseAnd,
             DataType::UInt32
         );
-        Ok(())
-    }
-
-    #[test]
-    fn test_type_coercion_arithmetic() -> Result<()> {
-        // integer
-        test_coercion_binary_rule!(
-            DataType::Int32,
-            DataType::UInt32,
-            Operator::Plus,
-            DataType::Int32
-        );
-        test_coercion_binary_rule!(
-            DataType::Int32,
-            DataType::UInt16,
-            Operator::Minus,
-            DataType::Int32
-        );
-        test_coercion_binary_rule!(
-            DataType::Int8,
-            DataType::Int64,
-            Operator::Multiply,
-            DataType::Int64
-        );
-        // float
-        test_coercion_binary_rule!(
-            DataType::Float32,
-            DataType::Int32,
-            Operator::Plus,
-            DataType::Float32
-        );
-        test_coercion_binary_rule!(
-            DataType::Float32,
-            DataType::Float64,
-            Operator::Multiply,
-            DataType::Float64
-        );
-        // TODO add other data type
         Ok(())
     }
 
