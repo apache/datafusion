@@ -98,7 +98,7 @@ ProjectionExec: expr=[FIRST_VALUE(aggregate_test_100.c3) ORDER BY [aggregate_tes
 --SortPreservingMergeExec: [c1@0 ASC NULLS LAST]
 ----SortExec: expr=[c1@0 ASC NULLS LAST]
 ------AggregateExec: mode=FinalPartitioned, gby=[c1@0 as c1], aggr=[FIRST_VALUE(aggregate_test_100.c3), FIRST_VALUE(aggregate_test_100.c2)]
---------CoalesceBatchesExec: target_batch_size=8192
+--------CoalesceBatchesExec: 32768
 ----------RepartitionExec: partitioning=Hash([c1@0], 4), input_partitions=4
 ------------AggregateExec: mode=Partial, gby=[c1@0 as c1], aggr=[FIRST_VALUE(aggregate_test_100.c3), FIRST_VALUE(aggregate_test_100.c2)], ordering_mode=Sorted
 --------------SortExec: expr=[c1@0 ASC NULLS LAST,c3@2 ASC NULLS LAST]

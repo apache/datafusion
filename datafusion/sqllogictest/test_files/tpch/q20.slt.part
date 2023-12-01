@@ -84,50 +84,50 @@ physical_plan
 SortPreservingMergeExec: [s_name@0 ASC NULLS LAST]
 --SortExec: expr=[s_name@0 ASC NULLS LAST]
 ----ProjectionExec: expr=[s_name@1 as s_name, s_address@2 as s_address]
-------CoalesceBatchesExec: target_batch_size=8192
+------CoalesceBatchesExec: 32768
 --------HashJoinExec: mode=Partitioned, join_type=LeftSemi, on=[(s_suppkey@0, ps_suppkey@0)]
-----------CoalesceBatchesExec: target_batch_size=8192
+----------CoalesceBatchesExec: 32768
 ------------RepartitionExec: partitioning=Hash([s_suppkey@0], 4), input_partitions=4
 --------------ProjectionExec: expr=[s_suppkey@0 as s_suppkey, s_name@1 as s_name, s_address@2 as s_address]
-----------------CoalesceBatchesExec: target_batch_size=8192
+----------------CoalesceBatchesExec: 32768
 ------------------HashJoinExec: mode=Partitioned, join_type=Inner, on=[(s_nationkey@3, n_nationkey@0)]
---------------------CoalesceBatchesExec: target_batch_size=8192
+--------------------CoalesceBatchesExec: 32768
 ----------------------RepartitionExec: partitioning=Hash([s_nationkey@3], 4), input_partitions=4
 ------------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 --------------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/supplier.tbl]]}, projection=[s_suppkey, s_name, s_address, s_nationkey], has_header=false
---------------------CoalesceBatchesExec: target_batch_size=8192
+--------------------CoalesceBatchesExec: 32768
 ----------------------RepartitionExec: partitioning=Hash([n_nationkey@0], 4), input_partitions=4
 ------------------------ProjectionExec: expr=[n_nationkey@0 as n_nationkey]
---------------------------CoalesceBatchesExec: target_batch_size=8192
+--------------------------CoalesceBatchesExec: 32768
 ----------------------------FilterExec: n_name@1 = CANADA
 ------------------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 --------------------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/nation.tbl]]}, projection=[n_nationkey, n_name], has_header=false
-----------CoalesceBatchesExec: target_batch_size=8192
+----------CoalesceBatchesExec: 32768
 ------------RepartitionExec: partitioning=Hash([ps_suppkey@0], 4), input_partitions=4
 --------------ProjectionExec: expr=[ps_suppkey@1 as ps_suppkey]
-----------------CoalesceBatchesExec: target_batch_size=8192
+----------------CoalesceBatchesExec: 32768
 ------------------HashJoinExec: mode=Partitioned, join_type=Inner, on=[(ps_partkey@0, l_partkey@1), (ps_suppkey@1, l_suppkey@2)], filter=CAST(ps_availqty@0 AS Float64) > Float64(0.5) * SUM(lineitem.l_quantity)@1
---------------------CoalesceBatchesExec: target_batch_size=8192
+--------------------CoalesceBatchesExec: 32768
 ----------------------RepartitionExec: partitioning=Hash([ps_partkey@0, ps_suppkey@1], 4), input_partitions=4
-------------------------CoalesceBatchesExec: target_batch_size=8192
+------------------------CoalesceBatchesExec: 32768
 --------------------------HashJoinExec: mode=Partitioned, join_type=LeftSemi, on=[(ps_partkey@0, p_partkey@0)]
-----------------------------CoalesceBatchesExec: target_batch_size=8192
+----------------------------CoalesceBatchesExec: 32768
 ------------------------------RepartitionExec: partitioning=Hash([ps_partkey@0], 4), input_partitions=4
 --------------------------------CsvExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/partsupp.tbl:0..2932049], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/partsupp.tbl:2932049..5864098], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/partsupp.tbl:5864098..8796147], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/partsupp.tbl:8796147..11728193]]}, projection=[ps_partkey, ps_suppkey, ps_availqty], has_header=false
-----------------------------CoalesceBatchesExec: target_batch_size=8192
+----------------------------CoalesceBatchesExec: 32768
 ------------------------------RepartitionExec: partitioning=Hash([p_partkey@0], 4), input_partitions=4
 --------------------------------ProjectionExec: expr=[p_partkey@0 as p_partkey]
-----------------------------------CoalesceBatchesExec: target_batch_size=8192
+----------------------------------CoalesceBatchesExec: 32768
 ------------------------------------FilterExec: p_name@1 LIKE forest%
 --------------------------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 ----------------------------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/part.tbl]]}, projection=[p_partkey, p_name], has_header=false
 --------------------ProjectionExec: expr=[0.5 * CAST(SUM(lineitem.l_quantity)@2 AS Float64) as Float64(0.5) * SUM(lineitem.l_quantity), l_partkey@0 as l_partkey, l_suppkey@1 as l_suppkey]
 ----------------------AggregateExec: mode=FinalPartitioned, gby=[l_partkey@0 as l_partkey, l_suppkey@1 as l_suppkey], aggr=[SUM(lineitem.l_quantity)]
-------------------------CoalesceBatchesExec: target_batch_size=8192
+------------------------CoalesceBatchesExec: 32768
 --------------------------RepartitionExec: partitioning=Hash([l_partkey@0, l_suppkey@1], 4), input_partitions=4
 ----------------------------AggregateExec: mode=Partial, gby=[l_partkey@0 as l_partkey, l_suppkey@1 as l_suppkey], aggr=[SUM(lineitem.l_quantity)]
 ------------------------------ProjectionExec: expr=[l_partkey@0 as l_partkey, l_suppkey@1 as l_suppkey, l_quantity@2 as l_quantity]
---------------------------------CoalesceBatchesExec: target_batch_size=8192
+--------------------------------CoalesceBatchesExec: 32768
 ----------------------------------FilterExec: l_shipdate@3 >= 8766 AND l_shipdate@3 < 9131
 ------------------------------------CsvExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:0..18561749], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:18561749..37123498], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:37123498..55685247], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:55685247..74246996]]}, projection=[l_partkey, l_suppkey, l_quantity, l_shipdate], has_header=false
 

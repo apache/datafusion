@@ -126,11 +126,11 @@ async fn join_change_in_planner() -> Result<()> {
     let expected = {
         [
             "SymmetricHashJoinExec: mode=Partitioned, join_type=Full, on=[(a2@1, a2@1)], filter=CAST(a1@0 AS Int64) > CAST(a1@1 AS Int64) + 3 AND CAST(a1@0 AS Int64) < CAST(a1@1 AS Int64) + 10",
-            "  CoalesceBatchesExec: target_batch_size=8192",
+            "  CoalesceBatchesExec: target_batch_size=32768",
             "    RepartitionExec: partitioning=Hash([a2@1], 8), input_partitions=8",
             "      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
             // "     CsvExec: file_groups={1 group: [[tempdir/left.csv]]}, projection=[a1, a2], has_header=false",
-            "  CoalesceBatchesExec: target_batch_size=8192",
+            "  CoalesceBatchesExec: target_batch_size=32768",
             "    RepartitionExec: partitioning=Hash([a2@1], 8), input_partitions=8",
             "      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
             // "     CsvExec: file_groups={1 group: [[tempdir/right.csv]]}, projection=[a1, a2], has_header=false"
@@ -181,11 +181,11 @@ async fn join_change_in_planner_without_sort() -> Result<()> {
     let expected = {
         [
             "SymmetricHashJoinExec: mode=Partitioned, join_type=Full, on=[(a2@1, a2@1)], filter=CAST(a1@0 AS Int64) > CAST(a1@1 AS Int64) + 3 AND CAST(a1@0 AS Int64) < CAST(a1@1 AS Int64) + 10",
-            "  CoalesceBatchesExec: target_batch_size=8192",
+            "  CoalesceBatchesExec: target_batch_size=32768",
             "    RepartitionExec: partitioning=Hash([a2@1], 8), input_partitions=8",
             "      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
             // "     CsvExec: file_groups={1 group: [[tempdir/left.csv]]}, projection=[a1, a2], has_header=false",
-            "  CoalesceBatchesExec: target_batch_size=8192",
+            "  CoalesceBatchesExec: target_batch_size=32768",
             "    RepartitionExec: partitioning=Hash([a2@1], 8), input_partitions=8",
             "      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
             // "     CsvExec: file_groups={1 group: [[tempdir/right.csv]]}, projection=[a1, a2], has_header=false"

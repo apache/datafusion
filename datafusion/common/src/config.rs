@@ -200,7 +200,7 @@ config_namespace! {
         /// Default batch size while creating new batches, it's especially useful for
         /// buffer-in-memory batches since creating tiny batches would result in too much
         /// metadata memory consumption
-        pub batch_size: usize, default = 8192
+        pub batch_size: usize, default = 32768
 
         /// When set to true, record batches will be examined between each operator and
         /// small batches will be coalesced into larger batches. This is helpful when there

@@ -923,7 +923,7 @@ Sort: annotated_data_finite2.b ASC NULLS LAST, annotated_data_finite2.c ASC NULL
 ----TableScan: annotated_data_finite2 projection=[a0, a, b, c, d], partial_filters=[annotated_data_finite2.a = Int32(0)]
 physical_plan
 SortPreservingMergeExec: [b@2 ASC NULLS LAST,c@3 ASC NULLS LAST]
---CoalesceBatchesExec: target_batch_size=8192
+--CoalesceBatchesExec: 32768
 ----FilterExec: a@1 = 0
 ------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
 --------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a0, a, b, c, d], output_ordering=[a@1 ASC NULLS LAST, b@2 ASC NULLS LAST, c@3 ASC NULLS LAST], has_header=true
@@ -944,7 +944,7 @@ Sort: annotated_data_finite2.c ASC NULLS LAST
 ----TableScan: annotated_data_finite2 projection=[a0, a, b, c, d], partial_filters=[annotated_data_finite2.a = Int32(0), annotated_data_finite2.b = Int32(0)]
 physical_plan
 SortPreservingMergeExec: [c@3 ASC NULLS LAST]
---CoalesceBatchesExec: target_batch_size=8192
+--CoalesceBatchesExec: 32768
 ----FilterExec: a@1 = 0 AND b@2 = 0
 ------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
 --------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a0, a, b, c, d], output_ordering=[a@1 ASC NULLS LAST, b@2 ASC NULLS LAST, c@3 ASC NULLS LAST], has_header=true
@@ -965,7 +965,7 @@ Sort: annotated_data_finite2.b ASC NULLS LAST, annotated_data_finite2.c ASC NULL
 ----TableScan: annotated_data_finite2 projection=[a0, a, b, c, d], partial_filters=[annotated_data_finite2.a = Int32(0), annotated_data_finite2.b = Int32(0)]
 physical_plan
 SortPreservingMergeExec: [b@2 ASC NULLS LAST,c@3 ASC NULLS LAST]
---CoalesceBatchesExec: target_batch_size=8192
+--CoalesceBatchesExec: 32768
 ----FilterExec: a@1 = 0 AND b@2 = 0
 ------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
 --------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a0, a, b, c, d], output_ordering=[a@1 ASC NULLS LAST, b@2 ASC NULLS LAST, c@3 ASC NULLS LAST], has_header=true
@@ -986,7 +986,7 @@ Sort: annotated_data_finite2.a ASC NULLS LAST, annotated_data_finite2.b ASC NULL
 ----TableScan: annotated_data_finite2 projection=[a0, a, b, c, d], partial_filters=[annotated_data_finite2.a = Int32(0), annotated_data_finite2.b = Int32(0)]
 physical_plan
 SortPreservingMergeExec: [a@1 ASC NULLS LAST,b@2 ASC NULLS LAST,c@3 ASC NULLS LAST]
---CoalesceBatchesExec: target_batch_size=8192
+--CoalesceBatchesExec: 32768
 ----FilterExec: a@1 = 0 AND b@2 = 0
 ------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
 --------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a0, a, b, c, d], output_ordering=[a@1 ASC NULLS LAST, b@2 ASC NULLS LAST, c@3 ASC NULLS LAST], has_header=true
@@ -1008,7 +1008,7 @@ Sort: annotated_data_finite2.c ASC NULLS LAST
 physical_plan
 SortPreservingMergeExec: [c@3 ASC NULLS LAST]
 --SortExec: expr=[c@3 ASC NULLS LAST]
-----CoalesceBatchesExec: target_batch_size=8192
+----CoalesceBatchesExec: 32768
 ------FilterExec: a@1 = 0 OR b@2 = 0
 --------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
 ----------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a0, a, b, c, d], output_ordering=[a@1 ASC NULLS LAST, b@2 ASC NULLS LAST, c@3 ASC NULLS LAST], has_header=true
@@ -1030,7 +1030,7 @@ Aggregate: groupBy=[[aggregate_test_100.c2]], aggr=[[COUNT(UInt8(1)) AS COUNT(*)
 --------TableScan: aggregate_test_100 projection=[c1, c2]
 physical_plan
 AggregateExec: mode=FinalPartitioned, gby=[c2@0 as c2], aggr=[COUNT(*)]
---CoalesceBatchesExec: target_batch_size=8192
+--CoalesceBatchesExec: 32768
 ----RepartitionExec: partitioning=Hash([c2@0], 2), input_partitions=2
 ------AggregateExec: mode=Partial, gby=[c2@0 as c2], aggr=[COUNT(*)]
 --------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1

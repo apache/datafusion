@@ -54,7 +54,7 @@ pub struct ConvertOpt {
     partitions: usize,
 
     /// Batch size when reading CSV or Parquet files
-    #[structopt(short = "s", long = "batch-size", default_value = "8192")]
+    #[structopt(short = "s", long = "batch-size", default_value = "32768")]
     batch_size: usize,
 }
 

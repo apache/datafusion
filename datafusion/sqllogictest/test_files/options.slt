@@ -31,7 +31,7 @@ logical_plan
 Filter: a.c0 < Int32(1)
 --TableScan: a projection=[c0]
 physical_plan
-CoalesceBatchesExec: target_batch_size=8192
+CoalesceBatchesExec: 32768
 --FilterExec: c0@0 < 1
 ----MemoryExec: partitions=1, partition_sizes=[1]
 
