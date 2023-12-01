@@ -203,16 +203,25 @@ impl Accumulator for FirstValueAccumulator {
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         // If we have seen first value, we shouldn't update it
-        if !values[0].is_empty() && !self.is_set {
-            println!("----------");
-            for value in values{
-                println!("value: {:?}", value);
-            }
-            println!("----------");
-            let row = get_row_at_idx(values, 0)?;
-            // Update with first value in the array.
+        if !values[0].is_empty() {
+            let sort_columns = values[1..].iter().zip(self.ordering_req.iter()).map(|(col, sort_expr)| {
+                SortColumn { values: col.clone(), options: Some(sort_expr.options) }
+            }).collect::<Vec<_>>();
+            let indices = lexsort_to_indices(&sort_columns, Some(1))?;
+            let first_idx = indices.value(0) as usize;
+            let row = get_row_at_idx(values, first_idx)?;
             self.update_with_new_row(&row);
         }
+        // if !values[0].is_empty() && !self.is_set {
+        //     println!("----------");
+        //     for value in values{
+        //         println!("value: {:?}", value);
+        //     }
+        //     println!("----------");
+        //     let row = get_row_at_idx(values, 0)?;
+        //     // Update with first value in the array.
+        //     self.update_with_new_row(&row);
+        // }
         Ok(())
     }
 
