@@ -66,43 +66,57 @@ use log::trace;
 /// min_values("X") -> None
 /// ```
 pub trait PruningStatistics {
-    /// return the minimum values for the named column, if known.
-    /// Note: the returned array must contain `num_containers()` rows
+    /// Return the minimum values for the named column, if known.
+    ///
+    /// If the minimum value for a particular container is not known, the
+    /// returned array should have `null` in that row. If the minimum value is
+    /// not know for any row, return `None`.
+    ///
+    /// Note: the returned array must contain [`Self::num_containers`] rows
     fn min_values(&self, column: &Column) -> Option<ArrayRef>;
 
-    /// return the maximum values for the named column, if known.
-    /// Note: the returned array must contain `num_containers()` rows.
+    /// Return the maximum values for the named column, if known.
+    ///
+    /// see [`Self::min_values`] for when to return `None` and null values.
+    ///
+    /// Note: the returned array must contain [`Self::num_containers`] rows
     fn max_values(&self, column: &Column) -> Option<ArrayRef>;
 
-    /// return the number of containers (e.g. row groups) being
-    /// pruned with these statistics
+    /// Return the number of containers (e.g. row groups) being
+    /// pruned with these statistics (the number of rows in each returned array)
     fn num_containers(&self) -> usize;
 
-    /// return the number of null values for the named column as an
+    /// Return the number of null values for the named column as an
     /// `Option<UInt64Array>`.
+    ///
+    /// see [`Self::min_values`] for when to return `None` and null values.
     ///
     /// Note: the returned array must contain `num_containers()` rows.
     fn null_counts(&self, column: &Column) -> Option<ArrayRef>;
 }
 
-/// Evaluates filter expressions on statistics, rather than the actual data. If
-/// no rows could possibly pass the filter entire containers can be "pruned"
-/// (skipped), without reading any actual data, leading to significant
+/// Evaluates filter expressions on statistics such as min/max values and null
+/// counts, attempting to prove a "container" (e.g. Parquet Row Group) can be
+/// skipped without reading the actual data, potentially leading to significant
 /// performance improvements.
 ///
-/// [`PruningPredicate`]s are used to prune (avoid scanning) Parquet Row Groups
+/// For example, [`PruningPredicate`]s are used to prune Parquet Row Groups
 /// based on the min/max values found in the Parquet metadata. If the
 /// `PruningPredicate` can guarantee that no rows in the Row Group match the
 /// filter, the entire Row Group is skipped during query execution.
 ///
-/// Note that this API is designed to be general, as it works:
+/// The `PruningPredicate` API is general, allowing it to be used for pruning
+/// other types of containers (e.g. files) based on  statistics that may be
+/// known from external catalogs (e.g. Delta Lake) or other sources. Thus it
+/// supports:
 ///
 /// 1. Arbitrary expressions expressions (including user defined functions)
 ///
-/// 2. Anything that implements the [`PruningStatistics`] trait, not just
-/// Parquet metadata, allowing it to be used by other systems to prune entities
-/// (e.g. entire files) if the statistics are known via some other source, such
-/// as a catalog.
+/// 2. Vectorized evaluation (provide more than one set of statistics at a time)
+/// so it is suitable for pruning 1000s of containers.
+///
+/// 3. Anything that implements the [`PruningStatistics`] trait, not just
+/// Parquet metadata.
 ///
 /// # Example
 ///
@@ -122,6 +136,7 @@ pub trait PruningStatistics {
 /// B: true  (rows might match x = 5)
 /// C: true  (rows might match x = 5)
 /// ```
+///
 /// See [`PruningPredicate::try_new`] and [`PruningPredicate::prune`] for more information.
 #[derive(Debug, Clone)]
 pub struct PruningPredicate {
@@ -251,8 +266,12 @@ fn is_always_true(expr: &Arc<dyn PhysicalExpr>) -> bool {
         .unwrap_or_default()
 }
 
-/// Records for which columns statistics are necessary to evaluate a
-/// pruning predicate.
+/// Describes which columns statistics are necessary to evaluate a
+/// [`PruningPredicate`].
+///
+/// This structure permits reading and creating the minimum number statistics,
+/// which is important since statistics may be non trivial to read (e.g. large
+/// strings or when there are 1000s of columns.
 ///
 /// Handles creating references to the min/max statistics
 /// for columns as well as recording which statistics are needed
