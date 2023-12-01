@@ -77,7 +77,7 @@ pub trait PruningStatistics {
 
     /// Return the maximum values for the named column, if known.
     ///
-    /// see [`Self::min_values`] for when to return `None` and null values.
+    /// See [`Self::min_values`] for when to return `None` and null values.
     ///
     /// Note: the returned array must contain [`Self::num_containers`] rows
     fn max_values(&self, column: &Column) -> Option<ArrayRef>;
@@ -89,9 +89,9 @@ pub trait PruningStatistics {
     /// Return the number of null values for the named column as an
     /// `Option<UInt64Array>`.
     ///
-    /// see [`Self::min_values`] for when to return `None` and null values.
+    /// See [`Self::min_values`] for when to return `None` and null values.
     ///
-    /// Note: the returned array must contain `num_containers()` rows.
+    /// Note: the returned array must contain [`Self::num_containers`] rows
     fn null_counts(&self, column: &Column) -> Option<ArrayRef>;
 }
 
