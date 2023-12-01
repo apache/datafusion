@@ -290,7 +290,8 @@ pub fn comparison_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<D
         // same type => equality is possible
         return Some(lhs_type.clone());
     }
-    comparison_binary_numeric_coercion(lhs_type, rhs_type)
+
+    numeric_coercion(lhs_type, rhs_type)
         .or_else(|| dictionary_coercion(lhs_type, rhs_type, true))
         .or_else(|| temporal_coercion(lhs_type, rhs_type))
         .or_else(|| string_coercion(lhs_type, rhs_type))
@@ -355,70 +356,101 @@ fn string_temporal_coercion(
 }
 
 /// Coerce `lhs_type` and `rhs_type` to a common type for the purposes of a comparison operation
-/// where one both are numeric
-fn comparison_binary_numeric_coercion(
-    lhs_type: &DataType,
-    rhs_type: &DataType,
-) -> Option<DataType> {
+/// where both are numeric and the coerced type MAY not be the same as either input type.
+pub fn numeric_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
     use arrow::datatypes::DataType::*;
     if !lhs_type.is_numeric() || !rhs_type.is_numeric() {
         return None;
     };
 
-    // same type => all good
-    if lhs_type == rhs_type {
-        return Some(lhs_type.clone());
-    }
-
     // these are ordered from most informative to least informative so
     // that the coercion does not lose information via truncation
     match (lhs_type, rhs_type) {
-        // Prefer decimal data type over floating point for comparison operation
         (Decimal128(_, _), Decimal128(_, _)) => {
             get_wider_decimal_type(lhs_type, rhs_type)
         }
         (Decimal128(_, _), _) => get_comparison_common_decimal_type(lhs_type, rhs_type),
-        (_, Decimal128(_, _)) => get_comparison_common_decimal_type(rhs_type, lhs_type),
         (Decimal256(_, _), Decimal256(_, _)) => {
             get_wider_decimal_type(lhs_type, rhs_type)
         }
         (Decimal256(_, _), _) => get_comparison_common_decimal_type(lhs_type, rhs_type),
-        (_, Decimal256(_, _)) => get_comparison_common_decimal_type(rhs_type, lhs_type),
+
+        // f64
+        // Prefer f64 over u64 and i64, data lossy is expected
         (Float64, _) | (_, Float64) => Some(Float64),
-        (_, Float32) | (Float32, _) => Some(Float32),
-        // The following match arms encode the following logic: Given the two
-        // integral types, we choose the narrowest possible integral type that
-        // accommodates all values of both types. Note that some information
-        // loss is inevitable when we have a signed type and a `UInt64`, in
-        // which case we use `Int64`;i.e. the widest signed integral type.
-        (Int64, _)
-        | (_, Int64)
-        | (UInt64, Int8)
-        | (Int8, UInt64)
-        | (UInt64, Int16)
-        | (Int16, UInt64)
-        | (UInt64, Int32)
-        | (Int32, UInt64)
-        | (UInt32, Int8)
-        | (Int8, UInt32)
-        | (UInt32, Int16)
-        | (Int16, UInt32)
-        | (UInt32, Int32)
-        | (Int32, UInt32) => Some(Int64),
-        (UInt64, _) | (_, UInt64) => Some(UInt64),
-        (Int32, _)
-        | (_, Int32)
-        | (UInt16, Int16)
-        | (Int16, UInt16)
-        | (UInt16, Int8)
-        | (Int8, UInt16) => Some(Int32),
-        (UInt32, _) | (_, UInt32) => Some(UInt32),
-        (Int16, _) | (_, Int16) | (Int8, UInt8) | (UInt8, Int8) => Some(Int16),
-        (UInt16, _) | (_, UInt16) => Some(UInt16),
-        (Int8, _) | (_, Int8) => Some(Int8),
-        (UInt8, _) | (_, UInt8) => Some(UInt8),
+
+        // u64
+        // Prefer f64 over u64, data lossy is expected
+        (UInt64, Float32) | (Float32, UInt64) | (UInt64, Float16) | (Float16, UInt64) => {
+            Some(Float64)
+        }
+        // Prefer i64 over u64, data lossy is expected
+        (UInt64, data_type) | (data_type, UInt64) => {
+            if data_type.is_signed_integer() {
+                Some(Int64)
+            } else {
+                Some(UInt64)
+            }
+        }
+
+        // i64
+        // Prefer f64 over i64, data lossy is expected
+        (Int64, Float32) | (Float32, Int64) | (Int64, Float16) | (Float16, Int64) => {
+            Some(Float64)
+        }
+        (Int64, _) | (_, Int64) => Some(Int64),
+
+        // f32
+        (Float32, _) | (_, Float32) => Some(Float32),
+
+        // u32
+        (UInt32, Float16) | (Float16, UInt32) => Some(Float64),
+        (UInt32, data_type) | (data_type, UInt32) => {
+            if data_type.is_signed_integer() {
+                Some(Int64)
+            } else {
+                Some(UInt32)
+            }
+        }
+
+        // i32
+        // f32 is not guaranteed to be able to represent all i32 values
+        (Int32, Float16) | (Float16, Int32) => Some(Float64),
+        (Int32, _) | (_, Int32) => Some(Int32),
+
+        // f16
+        (Float16, UInt16) | (UInt16, Float16) | (Float16, Int16) | (Int16, Float16) => {
+            Some(Float32)
+        }
+        (Float16, _) | (_, Float16) => Some(Float16),
+
+        // u16
+        (UInt16, data_type) | (data_type, UInt16) => {
+            if data_type.is_signed_integer() {
+                Some(Int32)
+            } else {
+                Some(UInt16)
+            }
+        }
+
+        // i16
+        (Int16, _) | (_, Int16) => Some(Int16),
+
+        // u8
+        (UInt8, UInt8) => Some(UInt8),
+        (UInt8, Int8) | (Int8, UInt8) => Some(Int16),
+
+        // i8
+        (Int8, Int8) => Some(Int8),
+
         _ => None,
     }
+}
+
+/// Coerce `lhs_type` and `rhs_type` to a common type for the purposes of a comparison operation
+/// where both are numeric and the coerced type SHOULD be one of the input types.
+pub fn exact_numeric_coercion(_: &DataType, _: &DataType) -> Option<DataType> {
+    todo!("exact_numeric_coercion")
 }
 
 /// Coerce `lhs_type` and `rhs_type` to a common type for the purposes of

@@ -2975,6 +2975,18 @@ select make_array(1.0, '2', null)
 ----
 [1.0, 2, ]
 
+# make_array scalar function #5
+query error
+select 
+  make_array(arrow_cast(1, 'Int8'), arrow_cast(18446744073709551610, 'UInt64')),
+  arrow_typeof(make_array(arrow_cast(1, 'Int8'), arrow_cast(18446744073709551610, 'UInt64')))
+;
+----
+DataFusion error: Optimizer rule 'simplify_expressions' failed
+caused by
+Arrow error: Cast error: Can't cast value 18446744073709551610 to type Int64
+
+
 ### FixedSizeListArray
 
 statement ok
