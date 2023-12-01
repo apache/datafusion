@@ -165,6 +165,11 @@ impl ExprOrdering {
             children: children.into_iter().map(Self::new).collect(),
         }
     }
+
+    /// Get a reference to each child state.
+    pub fn children_state(&self) -> Vec<SortProperties> {
+        self.children.iter().map(|c| c.state).collect()
+    }
 }
 
 impl TreeNode for ExprOrdering {
