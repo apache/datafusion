@@ -35,19 +35,16 @@
 use std::sync::Arc;
 
 use arrow::{
-    array::{
-        ArrayRef,
-        Time32MillisecondArray, TimestampMillisecondArray,
-    },
+    array::{ArrayRef, Time32MillisecondArray, TimestampMillisecondArray},
     datatypes::{DataType, TimeUnit},
 };
-use chrono::{DateTime, Timelike, Utc, Local};
-use datafusion_common::{ScalarValue, DataFusionError};
+use chrono::{DateTime, Local, Timelike, Utc};
+use datafusion::error::Result;
+use datafusion::physical_expr::datetime_expressions::{self, to_timestamp_millis};
+use datafusion_common::{DataFusionError, ScalarValue};
 use datafusion_expr::{
     ReturnTypeFunction, ScalarFunctionDef, ScalarFunctionPackage, Signature, Volatility,
 };
-use datafusion::physical_expr::datetime_expressions::{self, to_timestamp_millis};
-use datafusion::error::Result;
 
 #[derive(Debug)]
 pub struct CurrentTimeFunction;
@@ -74,7 +71,6 @@ impl ScalarFunctionDef for CurrentTimeFunction {
         Ok(Arc::new(array) as ArrayRef)
     }
 }
-
 
 // Function package declaration
 pub struct FunctionPackage;
@@ -103,5 +99,4 @@ mod test {
         test_expression!("current_time()", formatted);
         Ok(())
     }
-
 }
