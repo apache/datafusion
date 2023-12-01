@@ -191,7 +191,7 @@ fn create_built_in_window_expr(
         BuiltInWindowFunction::Ntile => {
             let n = get_scalar_value_from_args(args, 0)?.ok_or_else(|| {
                 DataFusionError::Execution(
-                    "NTILE requires at least 1 argument".to_string(),
+                    "NTILE requires a positive integer".to_string(),
                 )
             })?;
 
