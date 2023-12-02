@@ -32,6 +32,12 @@ use datafusion_common::{
     exec_datafusion_err, plan_datafusion_err, plan_err, DataFusionError, Result,
 };
 
+/// Returns true if this type is Decimal.
+fn is_decimal(data_type: &DataType) -> bool {
+    use DataType::*;
+    matches!(data_type, Decimal128(_, _) | Decimal256(_, _))
+}
+
 /// The type signature of an instantiation of binary operator expression such as
 /// `lhs + rhs`
 ///
@@ -291,7 +297,7 @@ pub fn comparison_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<D
         return Some(lhs_type.clone());
     }
 
-    comparison_binary_numeric_coercion(lhs_type, rhs_type)
+    numeric_coercion(lhs_type, rhs_type)
         .or_else(|| dictionary_coercion(lhs_type, rhs_type, true))
         .or_else(|| temporal_coercion(lhs_type, rhs_type))
         .or_else(|| string_coercion(lhs_type, rhs_type))
@@ -355,19 +361,15 @@ fn string_temporal_coercion(
     match_rule(lhs_type, rhs_type).or_else(|| match_rule(rhs_type, lhs_type))
 }
 
-/// Coerce `lhs_type` and `rhs_type` to a common type for the purposes of a comparison operation
-/// where both are numeric and the coerced type MAY not be the same as either input type.
-pub fn comparison_binary_numeric_coercion(
-    lhs_type: &DataType,
-    rhs_type: &DataType,
-) -> Option<DataType> {
+/// Decimal coercion rules for comparison operations, including comparison between decimal and non-decimal types.
+fn binary_decimal_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
     use arrow::datatypes::DataType::*;
-    if !lhs_type.is_numeric() || !rhs_type.is_numeric() {
+
+    // At least on should be decimal
+    if !is_decimal(lhs_type) && !is_decimal(rhs_type) {
         return None;
     };
 
-    // these are ordered from most informative to least informative so
-    // that the coercion does not lose information via truncation
     match (lhs_type, rhs_type) {
         // Prefer decimal data type over floating point for comparison operation
         (Decimal128(_, _), Decimal128(_, _)) | (Decimal256(_, _), Decimal256(_, _)) => {
@@ -379,7 +381,28 @@ pub fn comparison_binary_numeric_coercion(
         | (other_type, decimal_type @ Decimal256(_, _)) => {
             get_comparison_common_decimal_type(decimal_type, other_type)
         }
+        _ => None,
+    }
+}
 
+/// Coerce non decimal numeric types to a common type for the purposes of a comparison operation and math operation
+///
+/// We tend to find the narrowest type that can represent both inputs if possible,
+/// so the return type MAY not be the same as either input type.
+///
+/// For example, `Int64` and `Float32` will coerce to `Float64`.
+///
+/// Also, since there might not be perfect type for both inputs, so data lossy is expected.
+/// For example, `UInt64` and `Float64` will coerce to `Float64`, so casting `UInt64` to `Float64` will lose data.
+fn non_decimal_numeric_coercion(
+    lhs_type: &DataType,
+    rhs_type: &DataType,
+) -> Option<DataType> {
+    use arrow::datatypes::DataType::*;
+
+    // these are ordered from most informative to least informative so
+    // that the coercion does not lose information via truncation
+    match (lhs_type, rhs_type) {
         // f64
         // Prefer f64 over u64 and i64, data lossy is expected
         (Float64, _) | (_, Float64) => Some(Float64),
@@ -457,9 +480,23 @@ pub fn comparison_binary_numeric_coercion(
 }
 
 /// Coerce `lhs_type` and `rhs_type` to a common type for the purposes of a comparison operation
+/// where both are numeric and the coerced type MAY not be the same as either input type.
+fn numeric_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
+    if !lhs_type.is_numeric() || !rhs_type.is_numeric() {
+        return None;
+    };
+
+    if is_decimal(lhs_type) || is_decimal(rhs_type) {
+        return binary_decimal_coercion(lhs_type, rhs_type);
+    };
+
+    non_decimal_numeric_coercion(lhs_type, rhs_type)
+}
+
+/// Coerce `lhs_type` and `rhs_type` to a common type for the purposes of a comparison operation
 /// where both are numeric and the coerced type SHOULD be one of the input types.
 pub fn exact_numeric_coercion(_: &DataType, _: &DataType) -> Option<DataType> {
-    todo!("exact_numeric_coercion")
+    todo!("Implement this when we have a use case for it")
 }
 
 /// Coerce `lhs_type` and `rhs_type` to a common type for the purposes of
@@ -616,15 +653,18 @@ fn mathematics_numerical_coercion(
         (_, Dictionary(_, value_type)) => {
             mathematics_numerical_coercion(lhs_type, value_type)
         }
-
-        // Dont match Decimal type
-        (lhs_type, rhs_type)
-            if (lhs_type.is_integer() || lhs_type.is_floating())
-                && (rhs_type.is_integer() || rhs_type.is_floating()) =>
-        {
-            comparison_binary_numeric_coercion(lhs_type, rhs_type)
+        _ => {
+            if is_decimal(lhs_type) && is_decimal(rhs_type) {
+                unreachable!("Should be handled in `math_decimal_coercion`")
+            } else if is_decimal(lhs_type) {
+                Some(rhs_type.to_owned())
+            } else if is_decimal(rhs_type) {
+                Some(lhs_type.to_owned())
+            } else {
+                // Both are non decimal numeric type
+                non_decimal_numeric_coercion(lhs_type, rhs_type)
+            }
         }
-        _ => None,
     }
 }
 
@@ -1324,7 +1364,7 @@ mod tests {
             DataType::Float32,
             DataType::Int64,
             Operator::Eq,
-            DataType::Float32
+            DataType::Float64
         );
         test_coercion_binary_rule!(
             DataType::Float32,
