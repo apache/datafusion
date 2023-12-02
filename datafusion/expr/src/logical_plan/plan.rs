@@ -981,14 +981,18 @@ impl LogicalPlan {
     /// // Fill in the parameter $1 with a literal 3
     /// let plan = plan.with_param_values(vec![
     ///   ScalarValue::from(3i32) // value at index 0 --> $1
-    /// ].into()).unwrap();
+    /// ]).unwrap();
     ///
     /// assert_eq!("Filter: t1.id = Int32(3)\
     ///             \n  TableScan: t1",
     ///             plan.display_indent().to_string()
     ///  );
     /// ```
-    pub fn with_param_values(self, param_values: ParamValues) -> Result<LogicalPlan> {
+    pub fn with_param_values(
+        self,
+        param_values: impl Into<ParamValues>,
+    ) -> Result<LogicalPlan> {
+        let param_values = param_values.into();
         match self {
             LogicalPlan::Prepare(prepare_lp) => {
                 param_values.verify(&prepare_lp.data_types)?;

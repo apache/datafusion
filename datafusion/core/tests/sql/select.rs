@@ -16,8 +16,7 @@
 // under the License.
 
 use super::*;
-use datafusion_common::{ParamValues, ScalarValue};
-use std::collections::HashMap;
+use datafusion_common::ScalarValue;
 use tempfile::TempDir;
 
 #[tokio::test]
@@ -491,8 +490,7 @@ async fn test_prepare_statement() -> Result<()> {
         ctx.sql("PREPARE my_plan(INT, DOUBLE) AS SELECT c1, c2 FROM test WHERE c1 > $2 AND c1 < $1").await?;
 
     // prepare logical plan to logical plan without parameters
-    let param_values: ParamValues =
-        vec![ScalarValue::Int32(Some(3)), ScalarValue::Float64(Some(0.0))].into();
+    let param_values = vec![ScalarValue::Int32(Some(3)), ScalarValue::Float64(Some(0.0))];
     let dataframe = dataframe.with_param_values(param_values)?;
     let results = dataframe.collect().await?;
 
@@ -535,18 +533,15 @@ async fn test_named_query_parameters() -> Result<()> {
 
     // sql to statement then to logical plan with parameters
     // c1 defined as UINT32, c2 defined as UInt64
-    let dataframe = ctx
+    let results = ctx
         .sql("SELECT c1, c2 FROM test WHERE c1 > $coo AND c1 < $foo")
+        .await?
+        .with_param_values(vec![
+            ("foo", ScalarValue::UInt32(Some(3))),
+            ("coo", ScalarValue::UInt32(Some(0))),
+        ])?
+        .collect()
         .await?;
-
-    // to logical plan without parameters
-    let param_values = vec![
-        ("foo".to_string(), ScalarValue::UInt32(Some(3))),
-        ("coo".to_string(), ScalarValue::UInt32(Some(0))),
-    ];
-    let param_values: HashMap<_, _> = param_values.into_iter().collect();
-    let dataframe = dataframe.with_param_values(param_values.into())?;
-    let results = dataframe.collect().await?;
     let expected = vec![
         "+----+----+",
         "| c1 | c2 |",

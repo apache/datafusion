@@ -126,8 +126,24 @@ impl From<Vec<ScalarValue>> for ParamValues {
     }
 }
 
-impl From<HashMap<String, ScalarValue>> for ParamValues {
-    fn from(value: HashMap<String, ScalarValue>) -> Self {
+impl<K> From<Vec<(K, ScalarValue)>> for ParamValues
+where
+    K: Into<String>,
+{
+    fn from(value: Vec<(K, ScalarValue)>) -> Self {
+        let value: HashMap<String, ScalarValue> =
+            value.into_iter().map(|(k, v)| (k.into(), v)).collect();
+        Self::MAP(value)
+    }
+}
+
+impl<K> From<HashMap<K, ScalarValue>> for ParamValues
+where
+    K: Into<String>,
+{
+    fn from(value: HashMap<K, ScalarValue>) -> Self {
+        let value: HashMap<String, ScalarValue> =
+            value.into_iter().map(|(k, v)| (k.into(), v)).collect();
         Self::MAP(value)
     }
 }

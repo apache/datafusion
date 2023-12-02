@@ -1215,7 +1215,7 @@ impl DataFrame {
     ///   .with_param_values(vec![
     ///      // value at index 0 --> $1
     ///      ScalarValue::from(2i64)
-    ///    ].into())?
+    ///    ])?
     ///   .collect()
     ///   .await?;
     /// assert_batches_eq!(
@@ -1231,7 +1231,7 @@ impl DataFrame {
     /// # Ok(())
     /// # }
     /// ```
-    pub fn with_param_values(self, query_values: ParamValues) -> Result<Self> {
+    pub fn with_param_values(self, query_values: impl Into<ParamValues>) -> Result<Self> {
         let plan = self.plan.with_param_values(query_values)?;
         Ok(Self::new(self.session_state, plan))
     }
