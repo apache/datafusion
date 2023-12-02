@@ -268,7 +268,20 @@ impl BuiltInWindowFunction {
             BuiltInWindowFunction::FirstValue | BuiltInWindowFunction::LastValue => {
                 Signature::any(1, Volatility::Immutable)
             }
-            BuiltInWindowFunction::Ntile => Signature::any(1, Volatility::Immutable),
+            BuiltInWindowFunction::Ntile => Signature::uniform(
+                1,
+                vec![
+                    DataType::UInt64,
+                    DataType::UInt32,
+                    DataType::UInt16,
+                    DataType::UInt8,
+                    DataType::Int64,
+                    DataType::Int32,
+                    DataType::Int16,
+                    DataType::Int8,
+                ],
+                Volatility::Immutable,
+            ),
             BuiltInWindowFunction::NthValue => Signature::any(2, Volatility::Immutable),
         }
     }

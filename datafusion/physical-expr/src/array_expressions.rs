@@ -33,10 +33,9 @@ use datafusion_common::cast::{
     as_generic_list_array, as_generic_string_array, as_int64_array, as_list_array,
     as_null_array, as_string_array,
 };
-use datafusion_common::utils::array_into_list_array;
+use datafusion_common::utils::{array_into_list_array, list_ndims};
 use datafusion_common::{
-    exec_err, internal_datafusion_err, internal_err, not_impl_err, plan_err,
-    DataFusionError, Result,
+    exec_err, internal_err, not_impl_err, plan_err, DataFusionError, Result,
 };
 
 use itertools::Itertools;
@@ -103,6 +102,7 @@ fn compare_element_to_list(
 ) -> Result<BooleanArray> {
     let indices = UInt32Array::from(vec![row_index as u32]);
     let element_array_row = arrow::compute::take(element_array, &indices, None)?;
+
     // Compute all positions in list_row_array (that is itself an
     // array) that are equal to `from_array_row`
     let res = match element_array_row.data_type() {
@@ -172,35 +172,6 @@ fn compute_array_length(
                 current_dimension += 1;
             }
             _ => return Ok(None),
-        }
-    }
-}
-
-/// Returns the dimension of the array
-fn compute_array_ndims(arr: Option<ArrayRef>) -> Result<Option<u64>> {
-    Ok(compute_array_ndims_with_datatype(arr)?.0)
-}
-
-/// Returns the dimension and the datatype of elements of the array
-fn compute_array_ndims_with_datatype(
-    arr: Option<ArrayRef>,
-) -> Result<(Option<u64>, DataType)> {
-    let mut res: u64 = 1;
-    let mut value = match arr {
-        Some(arr) => arr,
-        None => return Ok((None, DataType::Null)),
-    };
-    if value.is_empty() {
-        return Ok((None, DataType::Null));
-    }
-
-    loop {
-        match value.data_type() {
-            DataType::List(..) => {
-                value = downcast_arg!(value, ListArray).value(0);
-                res += 1;
-            }
-            data_type => return Ok((Some(res), data_type.clone())),
         }
     }
 }
@@ -825,10 +796,7 @@ pub fn array_prepend(args: &[ArrayRef]) -> Result<ArrayRef> {
 fn align_array_dimensions(args: Vec<ArrayRef>) -> Result<Vec<ArrayRef>> {
     let args_ndim = args
         .iter()
-        .map(|arg| compute_array_ndims(Some(arg.to_owned())))
-        .collect::<Result<Vec<_>>>()?
-        .into_iter()
-        .map(|x| x.unwrap_or(0))
+        .map(|arg| datafusion_common::utils::list_ndims(arg.data_type()))
         .collect::<Vec<_>>();
     let max_ndim = args_ndim.iter().max().unwrap_or(&0);
 
@@ -919,6 +887,7 @@ fn concat_internal(args: &[ArrayRef]) -> Result<ArrayRef> {
         Arc::new(compute::concat(elements.as_slice())?),
         Some(NullBuffer::new(buffer)),
     );
+
     Ok(Arc::new(list_arr))
 }
 
@@ -926,11 +895,11 @@ fn concat_internal(args: &[ArrayRef]) -> Result<ArrayRef> {
 pub fn array_concat(args: &[ArrayRef]) -> Result<ArrayRef> {
     let mut new_args = vec![];
     for arg in args {
-        let (ndim, lower_data_type) =
-            compute_array_ndims_with_datatype(Some(arg.clone()))?;
-        if ndim.is_none() || ndim == Some(1) {
-            return not_impl_err!("Array is not type '{lower_data_type:?}'.");
-        } else if !lower_data_type.equals_datatype(&DataType::Null) {
+        let ndim = list_ndims(arg.data_type());
+        let base_type = datafusion_common::utils::base_type(arg.data_type());
+        if ndim == 0 {
+            return not_impl_err!("Array is not type '{base_type:?}'.");
+        } else if !base_type.eq(&DataType::Null) {
             new_args.push(arg.clone());
         }
     }
@@ -1350,84 +1319,76 @@ fn general_replace(
 ) -> Result<ArrayRef> {
     // Build up the offsets for the final output array
     let mut offsets: Vec<i32> = vec![0];
-    let data_type = list_array.value_type();
-    let mut new_values = vec![];
+    let values = list_array.values();
+    let original_data = values.to_data();
+    let to_data = to_array.to_data();
+    let capacity = Capacities::Array(original_data.len());
 
-    // n is the number of elements to replace in this row
-    for (row_index, (list_array_row, n)) in
-        list_array.iter().zip(arr_n.iter()).enumerate()
-    {
-        let last_offset: i32 = offsets
-            .last()
-            .copied()
-            .ok_or_else(|| internal_datafusion_err!("offsets should not be empty"))?;
+    // First array is the original array, second array is the element to replace with.
+    let mut mutable = MutableArrayData::with_capacities(
+        vec![&original_data, &to_data],
+        false,
+        capacity,
+    );
 
-        match list_array_row {
-            Some(list_array_row) => {
-                // Compute all positions in list_row_array (that is itself an
-                // array) that are equal to `from_array_row`
-                let eq_array = compare_element_to_list(
-                    &list_array_row,
-                    &from_array,
-                    row_index,
-                    true,
-                )?;
+    let mut valid = BooleanBufferBuilder::new(list_array.len());
 
-                // Use MutableArrayData to build the replaced array
-                let original_data = list_array_row.to_data();
-                let to_data = to_array.to_data();
-                let capacity = Capacities::Array(original_data.len() + to_data.len());
+    for (row_index, offset_window) in list_array.offsets().windows(2).enumerate() {
+        if list_array.is_null(row_index) {
+            offsets.push(offsets[row_index]);
+            valid.append(false);
+            continue;
+        }
 
-                // First array is the original array, second array is the element to replace with.
-                let mut mutable = MutableArrayData::with_capacities(
-                    vec![&original_data, &to_data],
-                    false,
-                    capacity,
-                );
-                let original_idx = 0;
-                let replace_idx = 1;
+        let start = offset_window[0] as usize;
+        let end = offset_window[1] as usize;
 
-                let mut counter = 0;
-                for (i, to_replace) in eq_array.iter().enumerate() {
-                    if let Some(true) = to_replace {
-                        mutable.extend(replace_idx, row_index, row_index + 1);
-                        counter += 1;
-                        if counter == *n {
-                            // copy original data for any matches past n
-                            mutable.extend(original_idx, i + 1, eq_array.len());
-                            break;
-                        }
-                    } else {
-                        // copy original data for false / null matches
-                        mutable.extend(original_idx, i, i + 1);
-                    }
+        let list_array_row = list_array.value(row_index);
+
+        // Compute all positions in list_row_array (that is itself an
+        // array) that are equal to `from_array_row`
+        let eq_array =
+            compare_element_to_list(&list_array_row, &from_array, row_index, true)?;
+
+        let original_idx = 0;
+        let replace_idx = 1;
+        let n = arr_n[row_index];
+        let mut counter = 0;
+
+        // All elements are false, no need to replace, just copy original data
+        if eq_array.false_count() == eq_array.len() {
+            mutable.extend(original_idx, start, end);
+            offsets.push(offsets[row_index] + (end - start) as i32);
+            valid.append(true);
+            continue;
+        }
+
+        for (i, to_replace) in eq_array.iter().enumerate() {
+            if let Some(true) = to_replace {
+                mutable.extend(replace_idx, row_index, row_index + 1);
+                counter += 1;
+                if counter == n {
+                    // copy original data for any matches past n
+                    mutable.extend(original_idx, start + i + 1, end);
+                    break;
                 }
-
-                let data = mutable.freeze();
-                let replaced_array = arrow_array::make_array(data);
-
-                offsets.push(last_offset + replaced_array.len() as i32);
-                new_values.push(replaced_array);
-            }
-            None => {
-                // Null element results in a null row (no new offsets)
-                offsets.push(last_offset);
+            } else {
+                // copy original data for false / null matches
+                mutable.extend(original_idx, start + i, start + i + 1);
             }
         }
+
+        offsets.push(offsets[row_index] + (end - start) as i32);
+        valid.append(true);
     }
 
-    let values = if new_values.is_empty() {
-        new_empty_array(&data_type)
-    } else {
-        let new_values: Vec<_> = new_values.iter().map(|a| a.as_ref()).collect();
-        arrow::compute::concat(&new_values)?
-    };
+    let data = mutable.freeze();
 
     Ok(Arc::new(ListArray::try_new(
-        Arc::new(Field::new("item", data_type, true)),
+        Arc::new(Field::new("item", list_array.value_type(), true)),
         OffsetBuffer::new(offsets.into()),
-        values,
-        list_array.nulls().cloned(),
+        arrow_array::make_array(data),
+        Some(NullBuffer::new(valid.finish())),
     )?))
 }
 
@@ -1525,32 +1486,33 @@ pub fn array_union(args: &[ArrayRef]) -> Result<ArrayRef> {
     }
     let array1 = &args[0];
     let array2 = &args[1];
+
+    fn union_arrays<O: OffsetSizeTrait>(
+        array1: &ArrayRef,
+        array2: &ArrayRef,
+        l_field_ref: &Arc<Field>,
+        r_field_ref: &Arc<Field>,
+    ) -> Result<ArrayRef> {
+        match (l_field_ref.data_type(), r_field_ref.data_type()) {
+            (DataType::Null, _) => Ok(array2.clone()),
+            (_, DataType::Null) => Ok(array1.clone()),
+            (_, _) => {
+                let list1 = array1.as_list::<O>();
+                let list2 = array2.as_list::<O>();
+                let result = union_generic_lists::<O>(list1, list2, l_field_ref)?;
+                Ok(Arc::new(result))
+            }
+        }
+    }
+
     match (array1.data_type(), array2.data_type()) {
         (DataType::Null, _) => Ok(array2.clone()),
         (_, DataType::Null) => Ok(array1.clone()),
         (DataType::List(l_field_ref), DataType::List(r_field_ref)) => {
-            match (l_field_ref.data_type(), r_field_ref.data_type()) {
-                (DataType::Null, _) => Ok(array2.clone()),
-                (_, DataType::Null) => Ok(array1.clone()),
-                (_, _) => {
-                    let list1 = array1.as_list::<i32>();
-                    let list2 = array2.as_list::<i32>();
-                    let result = union_generic_lists::<i32>(list1, list2, l_field_ref)?;
-                    Ok(Arc::new(result))
-                }
-            }
+            union_arrays::<i32>(array1, array2, l_field_ref, r_field_ref)
         }
         (DataType::LargeList(l_field_ref), DataType::LargeList(r_field_ref)) => {
-            match (l_field_ref.data_type(), r_field_ref.data_type()) {
-                (DataType::Null, _) => Ok(array2.clone()),
-                (_, DataType::Null) => Ok(array1.clone()),
-                (_, _) => {
-                    let list1 = array1.as_list::<i64>();
-                    let list2 = array2.as_list::<i64>();
-                    let result = union_generic_lists::<i64>(list1, list2, l_field_ref)?;
-                    Ok(Arc::new(result))
-                }
-            }
+            union_arrays::<i64>(array1, array2, l_field_ref, r_field_ref)
         }
         _ => {
             internal_err!(
@@ -1764,14 +1726,22 @@ pub fn array_dims(args: &[ArrayRef]) -> Result<ArrayRef> {
 
 /// Array_ndims SQL function
 pub fn array_ndims(args: &[ArrayRef]) -> Result<ArrayRef> {
-    let list_array = as_list_array(&args[0])?;
+    if let Some(list_array) = args[0].as_list_opt::<i32>() {
+        let ndims = datafusion_common::utils::list_ndims(list_array.data_type());
 
-    let result = list_array
-        .iter()
-        .map(compute_array_ndims)
-        .collect::<Result<UInt64Array>>()?;
+        let mut data = vec![];
+        for arr in list_array.iter() {
+            if arr.is_some() {
+                data.push(Some(ndims))
+            } else {
+                data.push(None)
+            }
+        }
 
-    Ok(Arc::new(result) as ArrayRef)
+        Ok(Arc::new(UInt64Array::from(data)) as ArrayRef)
+    } else {
+        Ok(Arc::new(UInt64Array::from(vec![0; args[0].len()])) as ArrayRef)
+    }
 }
 
 /// Array_has SQL function
@@ -2033,10 +2003,10 @@ mod tests {
                 .unwrap();
 
         let expected = as_list_array(&array2d_1).unwrap();
-        let expected_dim = compute_array_ndims(Some(array2d_1.to_owned())).unwrap();
+        let expected_dim = datafusion_common::utils::list_ndims(array2d_1.data_type());
         assert_ne!(as_list_array(&res[0]).unwrap(), expected);
         assert_eq!(
-            compute_array_ndims(Some(res[0].clone())).unwrap(),
+            datafusion_common::utils::list_ndims(res[0].data_type()),
             expected_dim
         );
 
@@ -2046,10 +2016,10 @@ mod tests {
             align_array_dimensions(vec![array1d_1, Arc::new(array3d_2.clone())]).unwrap();
 
         let expected = as_list_array(&array3d_1).unwrap();
-        let expected_dim = compute_array_ndims(Some(array3d_1.to_owned())).unwrap();
+        let expected_dim = datafusion_common::utils::list_ndims(array3d_1.data_type());
         assert_ne!(as_list_array(&res[0]).unwrap(), expected);
         assert_eq!(
-            compute_array_ndims(Some(res[0].clone())).unwrap(),
+            datafusion_common::utils::list_ndims(res[0].data_type()),
             expected_dim
         );
     }
