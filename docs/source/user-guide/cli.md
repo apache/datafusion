@@ -31,7 +31,9 @@ The easiest way to install DataFusion CLI a spin is via `cargo install datafusio
 
 ### Install and run using Homebrew (on MacOS)
 
-DataFusion CLI can also be installed via Homebrew (on MacOS). Install it as any other pre-built software like this:
+DataFusion CLI can also be installed via Homebrew (on MacOS). If you don't have Homebrew installed, you can check how to install it [here](https://docs.brew.sh/Installation).
+
+Install it as any other pre-built software like this:
 
 ```bash
 brew install datafusion
