@@ -33,9 +33,7 @@ use datafusion_common::cast::{
     as_generic_list_array, as_generic_string_array, as_int64_array, as_list_array,
     as_null_array, as_string_array,
 };
-use datafusion_common::utils::{
-    array_into_large_list_array, array_into_list_array, list_ndims,
-};
+use datafusion_common::utils::{array_into_list_array, list_ndims};
 use datafusion_common::{
     exec_err, internal_err, not_impl_err, plan_err, DataFusionError, Result,
 };
@@ -360,28 +358,14 @@ pub fn make_array(arrays: &[ArrayRef]) -> Result<ArrayRef> {
         }
     }
 
-    let len = arrays.len();
     match data_type {
         // Either an empty array or all nulls:
         DataType::Null => {
             let array = new_null_array(&DataType::Null, arrays.len());
-            if len <= i32::MAX as usize {
-                Ok(Arc::new(array_into_list_array(array)))
-            } else if len <= i64::MAX as usize {
-                Ok(Arc::new(array_into_large_list_array(array)))
-            } else {
-                exec_err!("The number of elements {} in the array exceed the maximum number of elements supported by DataFusion",len)
-            }
+            Ok(Arc::new(array_into_list_array(array)))
         }
-        data_type => {
-            if len <= i32::MAX as usize {
-                array_array::<i32>(arrays, data_type)
-            } else if len <= i64::MAX as usize {
-                array_array::<i64>(arrays, data_type)
-            } else {
-                exec_err!("The number of elements {} in the array exceed the maximum number of elements supported by DataFusion",len)
-            }
-        }
+        DataType::LargeList(..) => array_array::<i64>(arrays, data_type),
+        _ => array_array::<i32>(arrays, data_type),
     }
 }
 
