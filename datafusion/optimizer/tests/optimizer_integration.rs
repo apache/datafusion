@@ -313,8 +313,8 @@ fn push_down_filter_groupby_expr_contains_alias() {
     let sql = "SELECT * FROM (SELECT (col_int32 + col_uint32) AS c, count(*) FROM test GROUP BY 1) where c > 3";
     let plan = test_sql(sql).unwrap();
     let expected = "Projection: test.col_int32 + test.col_uint32 AS c, COUNT(*)\
-    \n  Aggregate: groupBy=[[test.col_int32 + CAST(test.col_uint32 AS Int32)]], aggr=[[COUNT(UInt8(1)) AS COUNT(*)]]\
-    \n    Filter: test.col_int32 + CAST(test.col_uint32 AS Int32) > Int32(3)\
+    \n  Aggregate: groupBy=[[CAST(test.col_int32 AS Int64) + CAST(test.col_uint32 AS Int64)]], aggr=[[COUNT(UInt8(1)) AS COUNT(*)]]\
+    \n    Filter: CAST(test.col_int32 AS Int64) + CAST(test.col_uint32 AS Int64) > Int64(3)\
     \n      TableScan: test projection=[col_int32, col_uint32]";
     assert_eq!(expected, format!("{plan:?}"));
 }
