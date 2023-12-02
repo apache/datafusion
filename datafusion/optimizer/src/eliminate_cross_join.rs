@@ -115,7 +115,7 @@ impl OptimizerRule for EliminateCrossJoin {
                     // remove join expressions from filter
                     match remove_join_expressions(predicate, &all_join_keys)? {
                         Some(filter_expr) => Ok(Some(LogicalPlan::Filter(
-                            Filter::try_new(filter_expr, Arc::new(left), None)?,
+                            Filter::try_new(filter_expr, Arc::new(left), filter.projected_schema.clone())?,
                         ))),
                         _ => Ok(Some(left)),
                     }

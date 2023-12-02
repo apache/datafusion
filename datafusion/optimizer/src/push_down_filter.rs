@@ -683,7 +683,7 @@ impl OptimizerRule for PushDownFilter {
                 let new_filter = LogicalPlan::Filter(Filter::try_new(
                     new_predicate,
                     child_filter.input.clone(),
-                    None,
+                    child_filter.projected_schema.clone(),
                 )?);
                 self.try_optimize(&new_filter, _config)?
                     .unwrap_or(new_filter)
