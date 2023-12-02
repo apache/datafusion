@@ -46,9 +46,11 @@ brew install datafusion
 datafusion-cli
 ```
 
-### Install and run using PyPI (on MacOS)
+### Install and run using PyPI
 
-DataFusion CLI can also be installed via PyPI (on MacOS). Install it as any other pre-built software like this:
+DataFusion CLI can also be installed via PyPI. You can check how to install PyPI [here](https://pip.pypa.io/en/latest/installation/).
+
+Install it as any other pre-built software like this:
 
 ```bash
 pip3 install datafusion
