@@ -1927,7 +1927,10 @@ B false
 C false
 D false
 
-# Test Numeric Coercion
+
+# Test Binary Coercion
+
+## Numeric Coercion
 
 query TTTTTT
 select
@@ -2030,6 +2033,33 @@ select arrow_typeof(arrow_cast(1, 'Int8') + arrow_cast(2, 'Int8'));
 ----
 Int8
 
+# test decimal coercion
+query BB
+select 
+  arrow_cast(1, 'Decimal128(10, 0)') == arrow_cast(1, 'Int64'),
+  arrow_cast(2, 'Int64') < arrow_cast(1, 'Decimal128(10, 0)')
+;
+----
+true false
+
+## decimal precision and scale
+query TRTR
+select 
+  arrow_typeof(arrow_cast(1, 'Decimal128(10, 0)') + arrow_cast(1, 'Int64')),
+  arrow_cast(1, 'Decimal128(10, 0)') + arrow_cast(1, 'Int64'),
+  arrow_typeof(arrow_cast(1, 'Decimal128(10, 2)') + arrow_cast(0, 'Int64')),
+  arrow_cast(1, 'Decimal128(10, 2)') + arrow_cast(0, 'Int64')
+;
+----
+Decimal128(21, 0) 2 Decimal128(23, 2) 1
+
+query B
+select
+  arrow_cast(2, 'Int64') < arrow_cast(1, 'Decimal128(10, 0)')
+;
+----
+false
+
 # test string_temporal_coercion
 query BBBBBBBBBB
 select 
@@ -2046,3 +2076,7 @@ select
 ;
 ----
 true true true true true true true true true true
+
+# test coercion error
+query error DataFusion error: Error during planning: Cannot coerce arithmetic expression Float32 \+ Utf8 to valid types
+select arrow_cast(1.2, 'Float32') + arrow_cast('2.1', 'Utf8');

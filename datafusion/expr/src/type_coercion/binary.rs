@@ -175,7 +175,6 @@ fn signature(lhs: &DataType, op: &Operator, rhs: &DataType) -> Result<Signature>
                     ret,
                 })
             } else if let Some(numeric) = mathematics_numerical_coercion(lhs, rhs) {
-                println!("numeric type: {:?}", numeric);
                 // Numeric arithmetic, e.g. Int32 + Int32
                 Ok(Signature::uniform(numeric))
             } else {
@@ -292,7 +291,7 @@ pub fn comparison_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<D
         return Some(lhs_type.clone());
     }
 
-    numeric_coercion(lhs_type, rhs_type)
+    compare_binary_numeric_coercion(lhs_type, rhs_type)
         .or_else(|| dictionary_coercion(lhs_type, rhs_type, true))
         .or_else(|| temporal_coercion(lhs_type, rhs_type))
         .or_else(|| string_coercion(lhs_type, rhs_type))
@@ -358,7 +357,10 @@ fn string_temporal_coercion(
 
 /// Coerce `lhs_type` and `rhs_type` to a common type for the purposes of a comparison operation
 /// where both are numeric and the coerced type MAY not be the same as either input type.
-pub fn numeric_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
+pub fn compare_binary_numeric_coercion(
+    lhs_type: &DataType,
+    rhs_type: &DataType,
+) -> Option<DataType> {
     use arrow::datatypes::DataType::*;
     if !lhs_type.is_numeric() || !rhs_type.is_numeric() {
         return None;
@@ -368,14 +370,15 @@ pub fn numeric_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<Data
     // that the coercion does not lose information via truncation
     match (lhs_type, rhs_type) {
         // Prefer decimal data type over floating point for comparison operation
-        (Decimal128(_, _), Decimal128(_, _)) => {
+        (Decimal128(_, _), Decimal128(_, _)) | (Decimal256(_, _), Decimal256(_, _)) => {
             get_wider_decimal_type(lhs_type, rhs_type)
         }
-        (Decimal128(_, _), _) => get_comparison_common_decimal_type(lhs_type, rhs_type),
-        (Decimal256(_, _), Decimal256(_, _)) => {
-            get_wider_decimal_type(lhs_type, rhs_type)
+        (decimal_type @ Decimal128(_, _), other_type)
+        | (other_type, decimal_type @ Decimal128(_, _))
+        | (decimal_type @ Decimal256(_, _), other_type)
+        | (other_type, decimal_type @ Decimal256(_, _)) => {
+            get_comparison_common_decimal_type(decimal_type, other_type)
         }
-        (Decimal256(_, _), _) => get_comparison_common_decimal_type(lhs_type, rhs_type),
 
         // f64
         // Prefer f64 over u64 and i64, data lossy is expected
@@ -613,7 +616,7 @@ fn mathematics_numerical_coercion(
         (_, Dictionary(_, value_type)) => {
             mathematics_numerical_coercion(lhs_type, value_type)
         }
-        _ => numeric_coercion(lhs_type, rhs_type),
+        _ => compare_binary_numeric_coercion(lhs_type, rhs_type),
     }
 }
 
@@ -881,16 +884,6 @@ mod tests {
 
     use arrow::datatypes::DataType;
     use datafusion_common::{assert_contains, Result};
-
-    #[test]
-    fn test_coercion_error() -> Result<()> {
-        let result_type =
-            get_input_types(&DataType::Float32, &Operator::Plus, &DataType::Utf8);
-
-        let e = result_type.unwrap_err();
-        assert_eq!(e.strip_backtrace(), "Error during planning: Cannot coerce arithmetic expression Float32 + Utf8 to valid types");
-        Ok(())
-    }
 
     #[test]
     fn test_decimal_binary_comparison_coercion() -> Result<()> {
@@ -1317,6 +1310,13 @@ mod tests {
             DataType::Boolean,
             Operator::Eq,
             DataType::Boolean
+        );
+        // float
+        test_coercion_binary_rule!(
+            DataType::Float32,
+            DataType::Int64,
+            Operator::Eq,
+            DataType::Float32
         );
         test_coercion_binary_rule!(
             DataType::Float32,
