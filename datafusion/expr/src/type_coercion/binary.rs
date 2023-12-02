@@ -291,7 +291,7 @@ pub fn comparison_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<D
         return Some(lhs_type.clone());
     }
 
-    compare_binary_numeric_coercion(lhs_type, rhs_type)
+    comparison_binary_numeric_coercion(lhs_type, rhs_type)
         .or_else(|| dictionary_coercion(lhs_type, rhs_type, true))
         .or_else(|| temporal_coercion(lhs_type, rhs_type))
         .or_else(|| string_coercion(lhs_type, rhs_type))
@@ -357,7 +357,7 @@ fn string_temporal_coercion(
 
 /// Coerce `lhs_type` and `rhs_type` to a common type for the purposes of a comparison operation
 /// where both are numeric and the coerced type MAY not be the same as either input type.
-pub fn compare_binary_numeric_coercion(
+pub fn comparison_binary_numeric_coercion(
     lhs_type: &DataType,
     rhs_type: &DataType,
 ) -> Option<DataType> {
@@ -616,7 +616,7 @@ fn mathematics_numerical_coercion(
         (_, Dictionary(_, value_type)) => {
             mathematics_numerical_coercion(lhs_type, value_type)
         }
-        _ => compare_binary_numeric_coercion(lhs_type, rhs_type),
+        _ => comparison_binary_numeric_coercion(lhs_type, rhs_type),
     }
 }
 
