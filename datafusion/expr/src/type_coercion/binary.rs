@@ -616,7 +616,15 @@ fn mathematics_numerical_coercion(
         (_, Dictionary(_, value_type)) => {
             mathematics_numerical_coercion(lhs_type, value_type)
         }
-        _ => comparison_binary_numeric_coercion(lhs_type, rhs_type),
+
+        // Dont match Decimal type
+        (lhs_type, rhs_type)
+            if (lhs_type.is_integer() || lhs_type.is_floating())
+                && (rhs_type.is_integer() || rhs_type.is_floating()) =>
+        {
+            comparison_binary_numeric_coercion(lhs_type, rhs_type)
+        }
+        _ => None,
     }
 }
 
