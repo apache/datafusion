@@ -877,19 +877,20 @@ impl LogicalPlan {
                     input: Arc::new(inputs[0].clone()),
                 }))
             }
-            LogicalPlan::Explain(_) => {
+            LogicalPlan::Explain(e) => {
                 // Explain should be handled specially in the optimizers;
-                // If this check cannot pass it means some optimizer pass is
-                // trying to optimize Explain directly
-                if expr.is_empty() {
-                    return plan_err!("Invalid EXPLAIN command. Expression is empty");
-                }
-
-                if inputs.is_empty() {
-                    return plan_err!("Invalid EXPLAIN command. Inputs are empty");
-                }
-
-                Ok(self.clone())
+                assert!(
+                    expr.is_empty(),
+                    "Invalid EXPLAIN command. Expression should empty"
+                );
+                assert_eq!(inputs.len(), 1, "Invalid EXPLAIN command. Inputs are empty");
+                Ok(LogicalPlan::Explain(Explain {
+                    verbose: e.verbose,
+                    plan: Arc::new(inputs[0].clone()),
+                    stringified_plans: e.stringified_plans.clone(),
+                    schema: e.schema.clone(),
+                    logical_optimization_succeeded: e.logical_optimization_succeeded,
+                }))
             }
             LogicalPlan::Prepare(Prepare {
                 name, data_types, ..
@@ -3075,5 +3076,45 @@ digraph {
             .field_with_name(None, "bar")
             .unwrap()
             .is_nullable());
+    }
+
+    #[test]
+    fn test_transform_explain() {
+        let schema = Schema::new(vec![
+            Field::new("foo", DataType::Int32, false),
+            Field::new("bar", DataType::Int32, false),
+        ]);
+
+        let plan = table_scan(TableReference::none(), &schema, None)
+            .unwrap()
+            .explain(false, false)
+            .unwrap()
+            .build()
+            .unwrap();
+
+        let external_filter =
+            col("foo").eq(Expr::Literal(ScalarValue::Boolean(Some(true))));
+
+        // after transformation, because plan is not the same anymore,
+        // the parent plan is built again with call to LogicalPlan::with_new_inputs -> with_new_exprs
+        let plan = plan
+            .transform(&|plan| match plan {
+                LogicalPlan::TableScan(table) => {
+                    let filter = Filter::try_new(
+                        external_filter.clone(),
+                        Arc::new(LogicalPlan::TableScan(table)),
+                    )
+                    .unwrap();
+                    Ok(Transformed::Yes(LogicalPlan::Filter(filter)))
+                }
+                x => Ok(Transformed::No(x)),
+            })
+            .unwrap();
+
+        let expected = "Explain\
+                        \n  Filter: foo = Boolean(true)\
+                        \n    TableScan: ?table?";
+        let actual = format!("{}", plan.display_indent());
+        assert_eq!(expected.to_string(), actual)
     }
 }
