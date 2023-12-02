@@ -654,6 +654,7 @@ fn mathematics_numerical_coercion(
             mathematics_numerical_coercion(lhs_type, value_type)
         }
         _ => {
+            // `math_decimal_coercion` does not handle coercion between Decimal and Float and Uint.
             if is_decimal(lhs_type) && is_decimal(rhs_type) {
                 unreachable!("Should be handled in `math_decimal_coercion`")
             } else if is_decimal(lhs_type) {
