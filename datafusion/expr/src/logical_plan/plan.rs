@@ -878,7 +878,6 @@ impl LogicalPlan {
                 }))
             }
             LogicalPlan::Explain(e) => {
-                // Explain should be handled specially in the optimizers;
                 assert!(
                     expr.is_empty(),
                     "Invalid EXPLAIN command. Expression should empty"
