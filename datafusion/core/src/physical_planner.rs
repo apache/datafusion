@@ -919,17 +919,10 @@ impl DefaultPhysicalPlanner {
                     )?;
                     Ok(Arc::new(FilterExec::try_new(runtime_expr, physical_input)?))
                 }
-                LogicalPlan::Union(Union { inputs, schema }) => {
+                LogicalPlan::Union(Union { inputs, .. }) => {
                     let physical_plans = self.create_initial_plan_multi(inputs.iter().map(|lp| lp.as_ref()), session_state).await?;
 
-                    if schema.fields().len() < physical_plans[0].schema().fields().len() {
-                        // `schema` could be a subset of the child schema. For example
-                        // for query "select count(*) from (select a from t union all select a from t)"
-                        // `schema` is empty but child schema contains one field `a`.
-                        Ok(Arc::new(UnionExec::try_new_with_schema(physical_plans, schema.clone())?))
-                    } else {
-                        Ok(Arc::new(UnionExec::new(physical_plans)))
-                    }
+                    Ok(Arc::new(UnionExec::new(physical_plans)))
                 }
                 LogicalPlan::Repartition(Repartition {
                     input,
