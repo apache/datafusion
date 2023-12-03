@@ -221,14 +221,11 @@ async fn exec_and_print(
                 | LogicalPlan::Analyze(_)
         );
 
-        let df = match &plan {
-            LogicalPlan::Ddl(DdlStatement::CreateExternalTable(cmd)) => {
-                create_external_table(ctx, cmd).await?;
-                ctx.execute_logical_plan(plan).await?
-            }
-            _ => ctx.execute_logical_plan(plan).await?,
-        };
+        if let LogicalPlan::Ddl(DdlStatement::CreateExternalTable(cmd)) = &plan {
+            create_external_table(ctx, cmd).await?;
+        }
 
+        let df = ctx.execute_logical_plan(plan).await?;
         let results = df.collect().await?;
 
         let print_options = if should_ignore_maxrows {

@@ -595,14 +595,14 @@ fn general_array_pop(
 ) -> Result<(Vec<i64>, Vec<i64>)> {
     if from_back {
         let key = vec![0; list_array.len()];
-        // Atttetion: `arr.len() - 1` in extra key defines the last element position (position = index + 1, not inclusive) we want in the new array.
+        // Attention: `arr.len() - 1` in extra key defines the last element position (position = index + 1, not inclusive) we want in the new array.
         let extra_key: Vec<_> = list_array
             .iter()
             .map(|x| x.map_or(0, |arr| arr.len() as i64 - 1))
             .collect();
         Ok((key, extra_key))
     } else {
-        // Atttetion: 2 in the `key`` defines the first element position (position = index + 1) we want in the new array.
+        // Attention: 2 in the `key`` defines the first element position (position = index + 1) we want in the new array.
         // We only handle two cases of the first element index: if the old array has any elements, starts from 2 (index + 1), or starts from initial.
         let key: Vec<_> = list_array.iter().map(|x| x.map_or(0, |_| 2)).collect();
         let extra_key: Vec<_> = list_array
@@ -1414,7 +1414,7 @@ pub fn array_replace_n(args: &[ArrayRef]) -> Result<ArrayRef> {
 }
 
 pub fn array_replace_all(args: &[ArrayRef]) -> Result<ArrayRef> {
-    // replace all occurences (up to "i64::MAX")
+    // replace all occurrences (up to "i64::MAX")
     let arr_n = vec![i64::MAX; args[0].len()];
     general_replace(as_list_array(&args[0])?, &args[1], &args[2], arr_n)
 }
