@@ -503,6 +503,7 @@ pub fn array_element(args: &[ArrayRef]) -> Result<ArrayRef> {
     let original_data = values.to_data();
     let capacity = Capacities::Array(original_data.len());
 
+    // use_nulls: true, we don't construct List for array_element, so we need explicit nulls.
     let mut mutable =
         MutableArrayData::with_capacities(vec![&original_data], true, capacity);
 
@@ -627,9 +628,104 @@ pub fn array_except(args: &[ArrayRef]) -> Result<ArrayRef> {
 
 pub fn array_slice(args: &[ArrayRef]) -> Result<ArrayRef> {
     let list_array = as_list_array(&args[0])?;
-    let key = as_int64_array(&args[1])?;
-    let extra_key = as_int64_array(&args[2])?;
-    define_array_slice(list_array, key, extra_key, false)
+    let from_array = as_int64_array(&args[1])?;
+    let to_array = as_int64_array(&args[2])?;
+
+    let values = list_array.values();
+    let original_data = values.to_data();
+    let capacity = Capacities::Array(original_data.len());
+
+    // use_nulls: false, we don't need nulls but empty array for array_slice, so we don't need explicit nulls but adjust offset to indicate nulls.
+    let mut mutable =
+        MutableArrayData::with_capacities(vec![&original_data], false, capacity);
+
+    // We have the slice syntax compatible with DuckDB v0.8.1.
+    // The rule `adjusted_from_index` and `adjusted_to_index` follows the rule of array_slice in duckdb.
+
+    fn adjusted_from_index(index: i64, len: usize) -> Option<i64> {
+        // 0 ~ len - 1
+        let adjusted_zero_index = if index < 0 {
+            index + len as i64
+        } else {
+            // array_slice(arr, 1, to) is the same as array_slice(arr, 0, to)
+            std::cmp::max(index - 1, 0)
+        };
+
+        if 0 <= adjusted_zero_index && adjusted_zero_index < len as i64 {
+            Some(adjusted_zero_index)
+        } else {
+            // Out of bounds
+            None
+        }
+    }
+
+    fn adjusted_to_index(index: i64, len: usize) -> Option<i64> {
+        // 0 ~ len - 1
+        let adjusted_zero_index = if index < 0 {
+            // array_slice in duckdb with negative to_index is python-like, so index itself is exclusive
+            index + len as i64 - 1
+        } else {
+            // array_slice(arr, from, len + 1) is the same as array_slice(arr, from, len)
+            std::cmp::min(index - 1, len as i64 - 1)
+        };
+
+        if 0 <= adjusted_zero_index && adjusted_zero_index < len as i64 {
+            Some(adjusted_zero_index)
+        } else {
+            // Out of bounds
+            None
+        }
+    }
+
+    let mut offsets = vec![0];
+
+    for (row_index, offset_window) in list_array.offsets().windows(2).enumerate() {
+        let start = offset_window[0] as usize;
+        let end = offset_window[1] as usize;
+        let len = end - start;
+
+        // len 0 indicate array is null, return empty array in this row.
+        if len == 0 {
+            offsets.push(offsets[row_index]);
+            continue;
+        }
+
+        // If index is null, we consider it as the minimum / maximum index of the array.
+        let from_index = if from_array.is_null(row_index) {
+            Some(0)
+        } else {
+            adjusted_from_index(from_array.value(row_index), len)
+        };
+
+        let to_index = if to_array.is_null(row_index) {
+            Some(len as i64 - 1)
+        } else {
+            adjusted_to_index(to_array.value(row_index), len)
+        };
+
+        if let (Some(from), Some(to)) = (from_index, to_index) {
+            if from <= to {
+                assert!(start + to as usize <= end);
+                mutable.extend(0, start + from as usize, start + to as usize + 1);
+                offsets.push(offsets[row_index] + (to - from + 1) as i32);
+            } else {
+                // invalid range, return empty array
+                offsets.push(offsets[row_index]);
+            }
+        } else {
+            // invalid range, return empty array
+            offsets.push(offsets[row_index]);
+        }
+    }
+
+    let data = mutable.freeze();
+
+    Ok(Arc::new(ListArray::try_new(
+        Arc::new(Field::new("item", list_array.value_type(), true)),
+        OffsetBuffer::new(offsets.into()),
+        arrow_array::make_array(data),
+        None,
+    )?))
 }
 
 fn general_array_pop(
