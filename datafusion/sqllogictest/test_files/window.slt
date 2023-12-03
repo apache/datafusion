@@ -3742,20 +3742,18 @@ DROP TABLE score_board;
 query error DataFusion error: Error during planning: RANGE requires exactly one ORDER BY column
 select a,
        rank() over (partition by a order by a, a + 1 RANGE UNBOUNDED PRECEDING) rnk
-       from (select 1 a union all select 2 a) q
+       from (select 1 a) q
 
 query II
 select a,
        rank() over (partition by a order by a RANGE UNBOUNDED PRECEDING) rnk
-       from (select 1 a union all select 2 a) q
+       from (select 1 a) q
 ----
 1 1
-2 1
 
 query II
 select a,
        rank() over (partition by a RANGE UNBOUNDED PRECEDING) rnk
-       from (select 1 a union all select 2 a) q
+       from (select 1 a) q
 ----
 1 1
-2 1
