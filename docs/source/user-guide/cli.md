@@ -61,7 +61,7 @@ pip3 install datafusion
 #   Downloading datafusion-33.0.0-cp38-abi3-macosx_11_0_arm64.whl.metadata (9.6 kB)
 # Collecting pyarrow>=11.0.0 (from datafusion)
 #   Downloading pyarrow-14.0.1-cp39-cp39-macosx_11_0_arm64.whl.metadata (3.0 kB)
-# Requirement already satisfied: numpy>=1.16.6 in /Users/huangweijun/Library/Python/3.9/lib/python/site-packages (from pyarrow>=11.0.0->datafusion) (1.23.4)
+# Requirement already satisfied: numpy>=1.16.6 in /Users/Library/Python/3.9/lib/python/site-packages (from pyarrow>=11.0.0->datafusion) (1.23.4)
 # Downloading datafusion-33.0.0-cp38-abi3-macosx_11_0_arm64.whl (13.5 MB)
 #    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 13.5/13.5 MB 3.6 MB/s eta 0:00:00
 # Downloading pyarrow-14.0.1-cp39-cp39-macosx_11_0_arm64.whl (24.0 MB)
