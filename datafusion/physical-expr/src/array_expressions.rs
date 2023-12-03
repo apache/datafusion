@@ -526,14 +526,20 @@ pub fn array_element(args: &[ArrayRef]) -> Result<ArrayRef> {
         let start = offset_window[0] as usize;
         let end = offset_window[1] as usize;
         let len = end - start;
+
+        // array is null
+        if len == 0 {
+            mutable.extend_nulls(1);
+            continue;
+        }
+
         let index = adjusted_array_index(indexes.value(row_index), len);
 
-        // Index out of bounds or array is null
-        if index.is_none() || len == 0 {
-            mutable.extend_nulls(1);
+        if let Some(index) = index {
+            mutable.extend(0, start + index as usize, start + index as usize + 1);
         } else {
-            let index = index.unwrap() as usize;
-            mutable.extend(0, start + index, start + index + 1);
+            // Index out of bounds
+            mutable.extend_nulls(1);
         }
     }
 
