@@ -497,8 +497,48 @@ fn define_array_slice(
 
 pub fn array_element(args: &[ArrayRef]) -> Result<ArrayRef> {
     let list_array = as_list_array(&args[0])?;
-    let key = as_int64_array(&args[1])?;
-    define_array_slice(list_array, key, key, true)
+    let indexes = as_int64_array(&args[1])?;
+
+    let values = list_array.values();
+    let original_data = values.to_data();
+    let capacity = Capacities::Array(original_data.len());
+
+    let mut mutable =
+        MutableArrayData::with_capacities(vec![&original_data], true, capacity);
+
+    fn adjusted_array_index(index: i64, len: usize) -> Option<i64> {
+        // 0 ~ len - 1
+        let adjusted_zero_index = if index < 0 {
+            index + len as i64
+        } else {
+            index - 1
+        };
+
+        if 0 <= adjusted_zero_index && adjusted_zero_index < len as i64 {
+            Some(adjusted_zero_index)
+        } else {
+            // Out of bounds
+            None
+        }
+    }
+
+    for (row_index, offset_window) in list_array.offsets().windows(2).enumerate() {
+        let start = offset_window[0] as usize;
+        let end = offset_window[1] as usize;
+        let len = end - start;
+        let index = adjusted_array_index(indexes.value(row_index), len);
+
+        // Index out of bounds or array is null
+        if index.is_none() || len == 0 {
+            mutable.extend_nulls(1);
+        } else {
+            let index = index.unwrap() as usize;
+            mutable.extend(0, start + index, start + index + 1);
+        }
+    }
+
+    let data = mutable.freeze();
+    Ok(arrow_array::make_array(data))
 }
 
 fn general_except<OffsetSize: OffsetSizeTrait>(
