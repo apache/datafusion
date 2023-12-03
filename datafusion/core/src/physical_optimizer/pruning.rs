@@ -70,7 +70,7 @@ pub trait PruningStatistics {
     ///
     /// If the minimum value for a particular container is not known, the
     /// returned array should have `null` in that row. If the minimum value is
-    /// not know for any row, return `None`.
+    /// not known for any row, return `None`.
     ///
     /// Note: the returned array must contain [`Self::num_containers`] rows
     fn min_values(&self, column: &Column) -> Option<ArrayRef>;
@@ -106,7 +106,7 @@ pub trait PruningStatistics {
 /// filter, the entire Row Group is skipped during query execution.
 ///
 /// The `PruningPredicate` API is general, allowing it to be used for pruning
-/// other types of containers (e.g. files) based on  statistics that may be
+/// other types of containers (e.g. files) based on statistics that may be
 /// known from external catalogs (e.g. Delta Lake) or other sources. Thus it
 /// supports:
 ///
@@ -271,7 +271,7 @@ fn is_always_true(expr: &Arc<dyn PhysicalExpr>) -> bool {
 ///
 /// This structure permits reading and creating the minimum number statistics,
 /// which is important since statistics may be non trivial to read (e.g. large
-/// strings or when there are 1000s of columns.
+/// strings or when there are 1000s of columns).
 ///
 /// Handles creating references to the min/max statistics
 /// for columns as well as recording which statistics are needed
