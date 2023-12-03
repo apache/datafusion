@@ -1080,7 +1080,7 @@ SELECT
 794 95 95
 
 #fn test_window_range_equivalent_frames
-query IIIIIII
+query error DataFusion error: Error during planning: RANGE requires exactly one ORDER BY column
 SELECT
   c9,
   COUNT(*) OVER(ORDER BY c9, c1 RANGE BETWEEN CURRENT ROW AND CURRENT ROW) AS cnt1,
@@ -1092,12 +1092,22 @@ SELECT
   FROM aggregate_test_100
   ORDER BY c9
   LIMIT 5
+
+query IIII
+SELECT
+  c9,
+  COUNT(*) OVER(RANGE BETWEEN CURRENT ROW AND CURRENT ROW) AS cnt4,
+  COUNT(*) OVER(RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS cnt5,
+  COUNT(*) OVER(RANGE BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING) AS cnt6
+  FROM aggregate_test_100
+  ORDER BY c9
+  LIMIT 5
 ----
-28774375 1 1 1 100 100 100
-63044568 1 2 1 100 100 100
-141047417 1 3 1 100 100 100
-141680161 1 4 1 100 100 100
-145294611 1 5 1 100 100 100
+28774375 100 100 100
+63044568 100 100 100
+141047417 100 100 100
+141680161 100 100 100
+145294611 100 100 100
 
 #fn test_window_cume_dist
 query IRR
@@ -3727,3 +3737,25 @@ FROM score_board s
 
 statement ok
 DROP TABLE score_board;
+
+# RANGE frame with/without (multiple) ORDER BY
+query error DataFusion error: Error during planning: RANGE requires exactly one ORDER BY column
+select a,
+       rank() over (partition by a order by a, a + 1 RANGE UNBOUNDED PRECEDING) rnk
+       from (select 1 a union all select 2 a) q
+
+query II
+select a,
+       rank() over (partition by a order by a RANGE UNBOUNDED PRECEDING) rnk
+       from (select 1 a union all select 2 a) q
+----
+1 1
+2 1
+
+query II
+select a,
+       rank() over (partition by a RANGE UNBOUNDED PRECEDING) rnk
+       from (select 1 a union all select 2 a) q
+----
+1 1
+2 1
