@@ -171,6 +171,10 @@ fn compute_array_length(
                 value = downcast_arg!(value, ListArray).value(0);
                 current_dimension += 1;
             }
+            DataType::LargeList(..) => {
+                value = downcast_arg!(value, LargeListArray).value(0);
+                current_dimension += 1;
+            }
             _ => return Ok(None),
         }
     }
@@ -252,7 +256,7 @@ macro_rules! call_array_function {
 }
 
 /// Convert one or more [`ArrayRef`] of the same type into a
-/// `ListArray`
+/// `ListArray` or 'LargeListArray' depending on the offset size.
 ///
 /// # Example (non nested)
 ///
@@ -291,7 +295,10 @@ macro_rules! call_array_function {
 /// └──────────────┘   └──────────────┘        └─────────────────────────────┘
 ///      col1               col2                         output
 /// ```
-fn array_array(args: &[ArrayRef], data_type: DataType) -> Result<ArrayRef> {
+fn array_array<O: OffsetSizeTrait>(
+    args: &[ArrayRef],
+    data_type: DataType,
+) -> Result<ArrayRef> {
     // do not accept 0 arguments.
     if args.is_empty() {
         return plan_err!("Array requires at least one argument");
@@ -308,8 +315,9 @@ fn array_array(args: &[ArrayRef], data_type: DataType) -> Result<ArrayRef> {
         total_len += arg_data.len();
         data.push(arg_data);
     }
-    let mut offsets = Vec::with_capacity(total_len);
-    offsets.push(0);
+
+    let mut offsets: Vec<O> = Vec::with_capacity(total_len);
+    offsets.push(O::usize_as(0));
 
     let capacity = Capacities::Array(total_len);
     let data_ref = data.iter().collect::<Vec<_>>();
@@ -327,11 +335,11 @@ fn array_array(args: &[ArrayRef], data_type: DataType) -> Result<ArrayRef> {
                 mutable.extend_nulls(1);
             }
         }
-        offsets.push(mutable.len() as i32);
+        offsets.push(O::usize_as(mutable.len()));
     }
-
     let data = mutable.freeze();
-    Ok(Arc::new(ListArray::try_new(
+
+    Ok(Arc::new(GenericListArray::<O>::try_new(
         Arc::new(Field::new("item", data_type, true)),
         OffsetBuffer::new(offsets.into()),
         arrow_array::make_array(data),
@@ -356,7 +364,8 @@ pub fn make_array(arrays: &[ArrayRef]) -> Result<ArrayRef> {
             let array = new_null_array(&DataType::Null, arrays.len());
             Ok(Arc::new(array_into_list_array(array)))
         }
-        data_type => array_array(arrays, data_type),
+        DataType::LargeList(..) => array_array::<i64>(arrays, data_type),
+        _ => array_array::<i32>(arrays, data_type),
     }
 }
 
@@ -1693,11 +1702,11 @@ pub fn flatten(args: &[ArrayRef]) -> Result<ArrayRef> {
     Ok(Arc::new(flattened_array) as ArrayRef)
 }
 
-/// Array_length SQL function
-pub fn array_length(args: &[ArrayRef]) -> Result<ArrayRef> {
-    let list_array = as_list_array(&args[0])?;
-    let dimension = if args.len() == 2 {
-        as_int64_array(&args[1])?.clone()
+/// Dispatch array length computation based on the offset type.
+fn array_length_dispatch<O: OffsetSizeTrait>(array: &[ArrayRef]) -> Result<ArrayRef> {
+    let list_array = as_generic_list_array::<O>(&array[0])?;
+    let dimension = if array.len() == 2 {
+        as_int64_array(&array[1])?.clone()
     } else {
         Int64Array::from_value(1, list_array.len())
     };
@@ -1709,6 +1718,18 @@ pub fn array_length(args: &[ArrayRef]) -> Result<ArrayRef> {
         .collect::<Result<UInt64Array>>()?;
 
     Ok(Arc::new(result) as ArrayRef)
+}
+
+/// Array_length SQL function
+pub fn array_length(args: &[ArrayRef]) -> Result<ArrayRef> {
+    match &args[0].data_type() {
+        DataType::List(_) => array_length_dispatch::<i32>(args),
+        DataType::LargeList(_) => array_length_dispatch::<i64>(args),
+        _ => internal_err!(
+            "array_length does not support type '{:?}'",
+            args[0].data_type()
+        ),
+    }
 }
 
 /// Array_dims SQL function
