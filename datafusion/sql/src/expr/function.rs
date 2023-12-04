@@ -92,8 +92,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 .into_iter()
                 .map(|e| self.sql_expr_to_logical_expr(e, schema, planner_context))
                 .collect::<Result<Vec<_>>>()?;
-            let order_by =
-                self.order_by_to_sort_expr(&window.order_by, schema, planner_context)?;
+            let order_by = self.order_by_to_sort_expr(
+                &window.order_by,
+                schema,
+                planner_context,
+                false,
+            )?;
             let window_frame = window
                 .window_frame
                 .as_ref()
@@ -143,7 +147,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             // next, aggregate built-ins
             if let Ok(fun) = AggregateFunction::from_str(&name) {
                 let order_by =
-                    self.order_by_to_sort_expr(&order_by, schema, planner_context)?;
+                    self.order_by_to_sort_expr(&order_by, schema, planner_context, true)?;
                 let order_by = (!order_by.is_empty()).then_some(order_by);
                 let args = self.function_args_to_expr(args, schema, planner_context)?;
                 let filter: Option<Box<Expr>> = filter

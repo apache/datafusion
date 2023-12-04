@@ -586,7 +586,7 @@ impl LinearSearch {
             .map(|item| match item.evaluate(record_batch)? {
                 ColumnarValue::Array(array) => Ok(array),
                 ColumnarValue::Scalar(scalar) => {
-                    plan_err!("Sort operation is not applicable to scalar value {scalar}")
+                    scalar.to_array_of_size(record_batch.num_rows())
                 }
             })
             .collect()

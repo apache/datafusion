@@ -30,6 +30,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         exprs: &[OrderByExpr],
         schema: &DFSchema,
         planner_context: &mut PlannerContext,
+        literal_to_column: bool,
     ) -> Result<Vec<Expr>> {
         let mut expr_vec = vec![];
         for e in exprs {
@@ -40,7 +41,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             } = e;
 
             let expr = match expr {
-                SQLExpr::Value(Value::Number(v, _)) => {
+                SQLExpr::Value(Value::Number(v, _)) if literal_to_column => {
                     let field_index = v
                         .parse::<usize>()
                         .map_err(|err| plan_datafusion_err!("{}", err))?;
