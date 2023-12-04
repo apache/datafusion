@@ -689,7 +689,7 @@ impl InSubquery {
     }
 }
 
-/// Placeholder, representing bind parameter values such as `$1`.
+/// Placeholder, representing bind parameter values such as `$1` or `$name`.
 ///
 /// The type of these parameters is inferred using [`Expr::infer_placeholder_types`]
 /// or can be specified directly using `PREPARE` statements.
