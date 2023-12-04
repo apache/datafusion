@@ -3738,7 +3738,7 @@ FROM score_board s
 statement ok
 DROP TABLE score_board;
 
-# RANGE frame with/without (multiple) ORDER BY
+# RANGE frame can be regularized to ROWS frame only if empty ORDER BY clause
 query error DataFusion error: Error during planning: RANGE requires exactly one ORDER BY column
 select a,
        rank() over (partition by a order by a, a + 1 RANGE UNBOUNDED PRECEDING) rnk
