@@ -153,7 +153,7 @@ Looking at the `EXPLAIN` output we can see that the optimizer has effectively re
 | logical_plan  | Projection: Int64(3) AS Int64(1) + Int64(2)     |
 |               |   EmptyRelation                                 |
 | physical_plan | ProjectionExec: expr=[3 as Int64(1) + Int64(2)] |
-|               |   EmptyExec: produce_one_row=true               |
+|               |   MemoryExec: partitions=1, partition_sizes=[1] |
 |               |                                                 |
 +---------------+-------------------------------------------------+
 ```
@@ -318,7 +318,7 @@ In the following example, the `type_coercion` and `simplify_expressions` passes 
 | logical_plan                                               | Projection: Utf8("3.2") AS foo                                            |
 |                                                            |   EmptyRelation                                                           |
 | initial_physical_plan                                      | ProjectionExec: expr=[3.2 as foo]                                         |
-|                                                            |   EmptyExec: produce_one_row=true                                         |
+|                                                            |   MemoryExec: partitions=1, partition_sizes=[1]                           |
 |                                                            |                                                                           |
 | physical_plan after aggregate_statistics                   | SAME TEXT AS ABOVE                                                        |
 | physical_plan after join_selection                         | SAME TEXT AS ABOVE                                                        |
@@ -326,7 +326,7 @@ In the following example, the `type_coercion` and `simplify_expressions` passes 
 | physical_plan after repartition                            | SAME TEXT AS ABOVE                                                        |
 | physical_plan after add_merge_exec                         | SAME TEXT AS ABOVE                                                        |
 | physical_plan                                              | ProjectionExec: expr=[3.2 as foo]                                         |
-|                                                            |   EmptyExec: produce_one_row=true                                         |
+|                                                            |   MemoryExec: partitions=1, partition_sizes=[1]                           |
 |                                                            |                                                                           |
 +------------------------------------------------------------+---------------------------------------------------------------------------+
 ```
