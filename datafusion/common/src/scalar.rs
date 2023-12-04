@@ -4680,63 +4680,37 @@ mod tests {
         assert_eq!(array, &expected);
     }
 
+    fn build_2d_list(data: Vec<Option<i32>>) -> ListArray {
+        let a1 = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![Some(data)]);
+        ListArray::new(
+            Arc::new(Field::new(
+                "item",
+                DataType::List(Arc::new(Field::new("item", DataType::Int32, true))),
+                true,
+            )),
+            OffsetBuffer::<i32>::from_lengths([1]),
+            Arc::new(a1),
+            None,
+        )
+    }
+
     #[test]
     fn test_nested_lists() {
         // Define inner list scalars
-        let a1 = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![Some(vec![
-            Some(1),
-            Some(2),
-            Some(3),
-        ])]);
-        let l1 = ListArray::new(
-            Arc::new(Field::new(
-                "item",
-                DataType::List(Arc::new(Field::new("item", DataType::Int32, true))),
-                true,
-            )),
-            OffsetBuffer::<i32>::from_lengths([1]),
-            arrow::compute::concat(&[&a1]).unwrap(),
-            None,
-        );
-
-        let a2 = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![Some(vec![
-            Some(7),
-            Some(8),
-        ])]);
-        let l2 = ListArray::new(
-            Arc::new(Field::new(
-                "item",
-                DataType::List(Arc::new(Field::new("item", DataType::Int32, true))),
-                true,
-            )),
-            OffsetBuffer::<i32>::from_lengths([1]),
-            arrow::compute::concat(&[&a2]).unwrap(),
-            None,
-        );
-
-        let a1 =
-            ListArray::from_iter_primitive::<Int32Type, _, _>(vec![Some(vec![Some(9)])]);
-        let l3 = ListArray::new(
-            Arc::new(Field::new(
-                "item",
-                DataType::List(Arc::new(Field::new("item", DataType::Int32, true))),
-                true,
-            )),
-            OffsetBuffer::<i32>::from_lengths([1]),
-            arrow::compute::concat(&[&a1]).unwrap(),
-            None,
-        );
+        let arr1 = build_2d_list(vec![Some(1), Some(2), Some(3)]);
+        let arr2 = build_2d_list(vec![Some(4), Some(5)]);
+        let arr3 = build_2d_list(vec![Some(6)]);
 
         let array = ScalarValue::iter_to_array(vec![
-            ScalarValue::List(Arc::new(l1)),
-            ScalarValue::List(Arc::new(l2)),
-            ScalarValue::List(Arc::new(l3)),
+            ScalarValue::List(Arc::new(arr1)),
+            ScalarValue::List(Arc::new(arr2)),
+            ScalarValue::List(Arc::new(arr3)),
         ])
         .unwrap();
         let array = as_list_array(&array);
 
         // Construct expected array with array builders
-        let inner_builder = Int32Array::builder(8);
+        let inner_builder = Int32Array::builder(6);
         let middle_builder = ListBuilder::new(inner_builder);
         let mut outer_builder = ListBuilder::new(middle_builder);
 
@@ -4746,12 +4720,12 @@ mod tests {
         outer_builder.values().append(true);
         outer_builder.append(true);
 
-        outer_builder.values().values().append_value(7);
-        outer_builder.values().values().append_value(8);
+        outer_builder.values().values().append_value(4);
+        outer_builder.values().values().append_value(5);
         outer_builder.values().append(true);
         outer_builder.append(true);
 
-        outer_builder.values().values().append_value(9);
+        outer_builder.values().values().append_value(6);
         outer_builder.values().append(true);
         outer_builder.append(true);
 
