@@ -116,10 +116,6 @@ pub(crate) async fn prune_row_groups_by_bloom_filters<
     predicate: &PruningPredicate,
     metrics: &ParquetFileMetrics,
 ) -> Vec<usize> {
-    println!(
-        "prune_row_groups_by_bloom_filters with pruning predicate: {:#?}",
-        predicate
-    );
     let mut filtered = Vec::with_capacity(groups.len());
     for idx in row_groups {
         let rg_metadata = &groups[*idx];
@@ -158,7 +154,6 @@ pub(crate) async fn prune_row_groups_by_bloom_filters<
 
         // Can this group be pruned?
         let prune_result = predicate.prune(&stats);
-        println!("prune result: {:?}", prune_result);
         let prune_group = match prune_result {
             Ok(values) => !values[0],
             Err(e) => {
@@ -167,8 +162,6 @@ pub(crate) async fn prune_row_groups_by_bloom_filters<
                 false
             }
         };
-
-        println!("prune group: {}", prune_group);
 
         if prune_group {
             metrics.row_groups_pruned.add(1);
@@ -194,9 +187,7 @@ impl PruningStatistics for BloomFilterStatistics {
         column: &Column,
         values: &HashSet<ScalarValue>,
     ) -> Option<BooleanArray> {
-        println!("Checking column {} for values {:?}", column.name, values);
         let sbbf = self.column_sbbf.get(column.name.as_str())?;
-        println!(" have sbbf: {:?}", sbbf);
 
         // if true, means column probably contains value
         // if false, means column definitely DOES NOT contain value
@@ -216,7 +207,6 @@ impl PruningStatistics for BloomFilterStatistics {
             // We know the row group doesn't contain any of the values if the checks are all
             // false
             .all(|v| !v);
-        println!("known_not_present result: {}", known_not_present);
 
         let contains = if known_not_present {
             Some(false)
@@ -225,9 +215,7 @@ impl PruningStatistics for BloomFilterStatistics {
             None
         };
 
-        let result = Some(BooleanArray::from(vec![contains]));
-        println!("result: {:?}", result);
-        result
+        Some(BooleanArray::from(vec![contains]))
     }
 }
 
