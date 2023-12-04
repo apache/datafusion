@@ -28,6 +28,7 @@ in-memory format. [Python Bindings](https://github.com/apache/arrow-datafusion-p
 Here are links to some important information
 
 - [Project Site](https://arrow.apache.org/datafusion)
+- [Installation](https://arrow.apache.org/datafusion/user-guide/cli.html#installation)
 - [Rust Getting Started](https://arrow.apache.org/datafusion/user-guide/example-usage.html)
 - [Rust DataFrame API](https://arrow.apache.org/datafusion/user-guide/dataframe.html)
 - [Rust API docs](https://docs.rs/datafusion/latest/datafusion)
