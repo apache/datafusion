@@ -42,6 +42,7 @@ use datafusion_common::project_schema;
 use datafusion_common::stats::Precision;
 
 use async_trait::async_trait;
+use datafusion_physical_plan::memory::MemoryExec;
 use futures::stream::Stream;
 
 /// Also run all tests that are found in the `custom_sources_cases` directory
@@ -258,7 +259,7 @@ async fn optimizers_catch_all_statistics() {
 
     // when the optimization kicks in, the source is replaced by an EmptyExec
     assert!(
-        contains_empty_exec(Arc::clone(&physical_plan)),
+        contains_memory_exec(Arc::clone(&physical_plan)),
         "Expected aggregate_statistics optimizations missing: {physical_plan:?}"
     );
 
@@ -283,12 +284,12 @@ async fn optimizers_catch_all_statistics() {
     assert_eq!(format!("{:?}", actual[0]), format!("{expected:?}"));
 }
 
-fn contains_empty_exec(plan: Arc<dyn ExecutionPlan>) -> bool {
-    if plan.as_any().is::<EmptyExec>() {
+fn contains_memory_exec(plan: Arc<dyn ExecutionPlan>) -> bool {
+    if plan.as_any().is::<MemoryExec>() {
         true
     } else if plan.children().len() != 1 {
         false
     } else {
-        contains_empty_exec(Arc::clone(&plan.children()[0]))
+        contains_memory_exec(Arc::clone(&plan.children()[0]))
     }
 }
