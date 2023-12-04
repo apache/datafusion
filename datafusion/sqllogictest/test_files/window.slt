@@ -1080,7 +1080,7 @@ SELECT
 794 95 95
 
 #fn test_window_range_equivalent_frames
-query error DataFusion error: Error during planning: RANGE requires exactly one ORDER BY column
+query IIIIIII
 SELECT
   c9,
   COUNT(*) OVER(ORDER BY c9, c1 RANGE BETWEEN CURRENT ROW AND CURRENT ROW) AS cnt1,
@@ -1092,22 +1092,12 @@ SELECT
   FROM aggregate_test_100
   ORDER BY c9
   LIMIT 5
-
-query IIII
-SELECT
-  c9,
-  COUNT(*) OVER(RANGE BETWEEN CURRENT ROW AND CURRENT ROW) AS cnt4,
-  COUNT(*) OVER(RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS cnt5,
-  COUNT(*) OVER(RANGE BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING) AS cnt6
-  FROM aggregate_test_100
-  ORDER BY c9
-  LIMIT 5
 ----
-28774375 100 100 100
-63044568 100 100 100
-141047417 100 100 100
-141680161 100 100 100
-145294611 100 100 100
+28774375 1 1 1 100 100 100
+63044568 1 2 1 100 100 100
+141047417 1 3 1 100 100 100
+141680161 1 4 1 100 100 100
+145294611 1 5 1 100 100 100
 
 #fn test_window_cume_dist
 query IRR
@@ -3738,22 +3728,60 @@ FROM score_board s
 statement ok
 DROP TABLE score_board;
 
-# RANGE frame can be regularized to ROWS frame only if empty ORDER BY clause
+# Regularize RANGE frame
 query error DataFusion error: Error during planning: RANGE requires exactly one ORDER BY column
 select a,
-       rank() over (partition by a order by a, a + 1 RANGE UNBOUNDED PRECEDING) rnk
-       from (select 1 a) q
+       rank() over (order by a, a + 1 RANGE BETWEEN UNBOUNDED PRECEDING AND 1 FOLLOWING) rnk
+       from (select 1 a union select 2 a) q ORDER BY a
 
 query II
 select a,
-       rank() over (partition by a order by a RANGE UNBOUNDED PRECEDING) rnk
-       from (select 1 a) q
+       rank() over (order by a RANGE BETWEEN UNBOUNDED PRECEDING AND 1 FOLLOWING) rnk
+       from (select 1 a union select 2 a) q ORDER BY a
 ----
 1 1
+2 2
+
+query error DataFusion error: Error during planning: RANGE requires exactly one ORDER BY column
+select a,
+       rank() over (RANGE BETWEEN UNBOUNDED PRECEDING AND 1 FOLLOWING) rnk
+       from (select 1 a union select 2 a) q ORDER BY a
 
 query II
 select a,
-       rank() over (partition by a RANGE UNBOUNDED PRECEDING) rnk
-       from (select 1 a) q
+       rank() over (order by a, a + 1 RANGE BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) rnk
+       from (select 1 a union select 2 a) q ORDER BY a
 ----
 1 1
+2 2
+
+query II
+select a,
+       rank() over (order by a RANGE BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) rnk
+       from (select 1 a union select 2 a) q ORDER BY a
+----
+1 1
+2 2
+
+# TODO: this is different to Postgres which returns [1, 1] for `rnk`.
+# Comment it because it is flaky now as it depends on the order of the `a` column.
+# query II
+# select a,
+#       rank() over (RANGE BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) rnk
+#       from (select 1 a union select 2 a) q ORDER BY rnk
+# ----
+# 1 1
+# 2 2
+
+# TODO: this works in Postgres which returns [1, 1].
+query error DataFusion error: Arrow error: Invalid argument error: must either specify a row count or at least one column
+select rank() over (RANGE between UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) rnk
+       from (select 1 a union select 2 a) q;
+
+# TODO: this is different to Postgres which returns [1, 1] for `rnk`.
+query I
+select rank() over (order by 1 RANGE BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) rnk
+       from (select 1 a union select 2 a) q ORDER BY rnk
+----
+1
+2

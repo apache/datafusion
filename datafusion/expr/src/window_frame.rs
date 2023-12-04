@@ -148,7 +148,8 @@ impl WindowFrame {
 pub fn regularize(mut frame: WindowFrame, order_bys: usize) -> Result<WindowFrame> {
     if frame.units == WindowFrameUnits::Range && order_bys != 1 {
         // Normally, RANGE frames require an ORDER BY clause with exactly one
-        // column. However, an ORDER BY clause may be absent in two edge cases:
+        // column. However, an ORDER BY clause may be absent or present but with
+        // more than one column in two edge cases:
         // 1. start bound is UNBOUNDED or CURRENT ROW
         // 2. end bound is CURRENT ROW or UNBOUNDED.
         // In these cases, we regularize the RANGE frame to be equivalent to a ROWS
@@ -158,11 +159,17 @@ pub fn regularize(mut frame: WindowFrame, order_bys: usize) -> Result<WindowFram
             || frame.start_bound == WindowFrameBound::CurrentRow)
             && (frame.end_bound == WindowFrameBound::CurrentRow
                 || frame.end_bound.is_unbounded())
-            && order_bys == 0
         {
-            frame.units = WindowFrameUnits::Rows;
-            frame.start_bound = WindowFrameBound::Preceding(ScalarValue::UInt64(None));
-            frame.end_bound = WindowFrameBound::Following(ScalarValue::UInt64(None));
+            // If an ORDER BY clause is absent, the frame is equivalent to a ROWS
+            // frame with the UNBOUNDED bounds.
+            // If an ORDER BY clause is present but has more than one column, the
+            // frame is unchanged.
+            if order_bys == 0 {
+                frame.units = WindowFrameUnits::Rows;
+                frame.start_bound =
+                    WindowFrameBound::Preceding(ScalarValue::UInt64(None));
+                frame.end_bound = WindowFrameBound::Following(ScalarValue::UInt64(None));
+            }
         } else {
             plan_err!("RANGE requires exactly one ORDER BY column")?
         }
