@@ -153,6 +153,7 @@ pub fn regularize(mut frame: WindowFrame, order_bys: usize) -> Result<WindowFram
         // 2. end bound is CURRENT ROW or UNBOUNDED.
         // In these cases, we regularize the RANGE frame to be equivalent to a ROWS
         // frame with the UNBOUNDED bounds.
+        // Note that this follows Postgres behavior.
         if (frame.start_bound.is_unbounded()
             || frame.start_bound == WindowFrameBound::CurrentRow)
             && (frame.end_bound == WindowFrameBound::CurrentRow
