@@ -2084,8 +2084,6 @@ pub struct JoinOn {
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct EmptyExecNode {
-    #[prost(bool, tag = "1")]
-    pub produce_one_row: bool,
     #[prost(message, optional, tag = "2")]
     pub schema: ::core::option::Option<Schema>,
 }

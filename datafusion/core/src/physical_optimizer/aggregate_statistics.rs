@@ -22,7 +22,7 @@ use super::optimizer::PhysicalOptimizerRule;
 use crate::config::ConfigOptions;
 use crate::error::Result;
 use crate::physical_plan::aggregates::AggregateExec;
-use crate::physical_plan::empty::EmptyExec;
+use crate::physical_plan::memory::MemoryExec;
 use crate::physical_plan::projection::ProjectionExec;
 use crate::physical_plan::{expressions, AggregateExpr, ExecutionPlan, Statistics};
 use crate::scalar::ScalarValue;
@@ -82,7 +82,7 @@ impl PhysicalOptimizerRule for AggregateStatistics {
                 // input can be entirely removed
                 Ok(Arc::new(ProjectionExec::try_new(
                     projections,
-                    Arc::new(EmptyExec::new(true, plan.schema())),
+                    Arc::new(MemoryExec::try_new_with_dummy_row(plan.schema(), 1)?),
                 )?))
             } else {
                 plan.map_children(|child| self.optimize(child, _config))

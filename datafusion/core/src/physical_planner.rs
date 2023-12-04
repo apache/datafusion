@@ -1203,12 +1203,17 @@ impl DefaultPhysicalPlanner {
                 }
                 LogicalPlan::Subquery(_) => todo!(),
                 LogicalPlan::EmptyRelation(EmptyRelation {
-                    produce_one_row,
+                    produce_one_row: false,
                     schema,
                 }) => Ok(Arc::new(EmptyExec::new(
-                    *produce_one_row,
                     SchemaRef::new(schema.as_ref().to_owned().into()),
                 ))),
+                LogicalPlan::EmptyRelation(EmptyRelation {
+                    produce_one_row: true,
+                    schema,
+                }) => Ok(Arc::new(
+                    MemoryExec::try_new_with_dummy_row(SchemaRef::new(schema.as_ref().to_owned().into()), 1)?
+                )),
                 LogicalPlan::SubqueryAlias(SubqueryAlias { input, .. }) => {
                     self.create_initial_plan(input, session_state).await
                 }

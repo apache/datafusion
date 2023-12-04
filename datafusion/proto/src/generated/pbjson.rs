@@ -6369,16 +6369,10 @@ impl serde::Serialize for EmptyExecNode {
     {
         use serde::ser::SerializeStruct;
         let mut len = 0;
-        if self.produce_one_row {
-            len += 1;
-        }
         if self.schema.is_some() {
             len += 1;
         }
         let mut struct_ser = serializer.serialize_struct("datafusion.EmptyExecNode", len)?;
-        if self.produce_one_row {
-            struct_ser.serialize_field("produceOneRow", &self.produce_one_row)?;
-        }
         if let Some(v) = self.schema.as_ref() {
             struct_ser.serialize_field("schema", v)?;
         }
@@ -6392,14 +6386,11 @@ impl<'de> serde::Deserialize<'de> for EmptyExecNode {
         D: serde::Deserializer<'de>,
     {
         const FIELDS: &[&str] = &[
-            "produce_one_row",
-            "produceOneRow",
             "schema",
         ];
 
         #[allow(clippy::enum_variant_names)]
         enum GeneratedField {
-            ProduceOneRow,
             Schema,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
@@ -6422,7 +6413,6 @@ impl<'de> serde::Deserialize<'de> for EmptyExecNode {
                         E: serde::de::Error,
                     {
                         match value {
-                            "produceOneRow" | "produce_one_row" => Ok(GeneratedField::ProduceOneRow),
                             "schema" => Ok(GeneratedField::Schema),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
@@ -6443,16 +6433,9 @@ impl<'de> serde::Deserialize<'de> for EmptyExecNode {
                 where
                     V: serde::de::MapAccess<'de>,
             {
-                let mut produce_one_row__ = None;
                 let mut schema__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
-                        GeneratedField::ProduceOneRow => {
-                            if produce_one_row__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("produceOneRow"));
-                            }
-                            produce_one_row__ = Some(map_.next_value()?);
-                        }
                         GeneratedField::Schema => {
                             if schema__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("schema"));
@@ -6462,7 +6445,6 @@ impl<'de> serde::Deserialize<'de> for EmptyExecNode {
                     }
                 }
                 Ok(EmptyExecNode {
-                    produce_one_row: produce_one_row__.unwrap_or_default(),
                     schema: schema__,
                 })
             }

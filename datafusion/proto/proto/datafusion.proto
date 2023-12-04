@@ -1484,7 +1484,6 @@ message JoinOn {
 }
 
 message EmptyExecNode {
-  bool produce_one_row = 1;
   Schema schema = 2;
 }
 

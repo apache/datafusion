@@ -704,7 +704,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
             }
             PhysicalPlanType::Empty(empty) => {
                 let schema = Arc::new(convert_required!(empty.schema)?);
-                Ok(Arc::new(EmptyExec::new(empty.produce_one_row, schema)))
+                Ok(Arc::new(EmptyExec::new(schema)))
             }
             PhysicalPlanType::Sort(sort) => {
                 let input: Arc<dyn ExecutionPlan> =
@@ -1289,7 +1289,6 @@ impl AsExecutionPlan for PhysicalPlanNode {
             return Ok(protobuf::PhysicalPlanNode {
                 physical_plan_type: Some(PhysicalPlanType::Empty(
                     protobuf::EmptyExecNode {
-                        produce_one_row: empty.produce_one_row(),
                         schema: Some(schema),
                     },
                 )),

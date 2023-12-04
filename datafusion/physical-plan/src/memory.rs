@@ -28,7 +28,9 @@ use super::{
     SendableRecordBatchStream, Statistics,
 };
 
+use arrow::array::{ArrayRef, NullArray};
 use arrow::datatypes::SchemaRef;
+use arrow::datatypes::{DataType, Field, Fields, Schema};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{internal_err, project_schema, DataFusionError, Result};
 use datafusion_execution::TaskContext;
@@ -177,6 +179,26 @@ impl MemoryExec {
         })
     }
 
+    pub fn try_new_with_dummy_row(schema: SchemaRef, partitions: usize) -> Result<Self> {
+        let n_field = schema.fields.len();
+        // hack for https://github.com/apache/arrow-datafusion/pull/3242
+        let n_field = if n_field == 0 { 1 } else { n_field };
+        let part = vec![RecordBatch::try_new(
+            Arc::new(Schema::new(
+                (0..n_field)
+                    .map(|i| Field::new(format!("placeholder_{i}"), DataType::Null, true))
+                    .collect::<Fields>(),
+            )),
+            (0..n_field)
+                .map(|_i| {
+                    let ret: ArrayRef = Arc::new(NullArray::new(1));
+                    ret
+                })
+                .collect(),
+        )?];
+        Self::try_new(&vec![part; partitions], schema, None)
+    }
+
     pub fn partitions(&self) -> &[Vec<RecordBatch>] {
         &self.partitions
     }
@@ -280,10 +302,13 @@ mod tests {
 
     use crate::memory::MemoryExec;
     use crate::ExecutionPlan;
+    use crate::{common, test};
 
     use arrow_schema::{DataType, Field, Schema, SortOptions};
     use datafusion_physical_expr::expressions::col;
     use datafusion_physical_expr::PhysicalSortExpr;
+
+    use datafusion_execution::TaskContext;
 
     #[test]
     fn test_memory_order_eq() -> datafusion_common::Result<()> {
@@ -314,6 +339,39 @@ mod tests {
         assert_eq!(mem_exec.output_ordering().unwrap(), expected_output_order);
         let eq_properties = mem_exec.equivalence_properties();
         assert!(eq_properties.oeq_class().contains(&expected_order_eq));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn dummy_row() -> datafusion_common::Result<()> {
+        let task_ctx = Arc::new(TaskContext::default());
+        let schema = test::aggr_test_schema();
+        let dummy: MemoryExec = MemoryExec::try_new_with_dummy_row(schema, 1)?;
+
+        let iter = dummy.execute(0, task_ctx)?;
+        let batches = common::collect(iter).await?;
+
+        // should have one item
+        assert_eq!(batches.len(), 1);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn dummy_row_multiple_partition() -> datafusion_common::Result<()> {
+        let task_ctx = Arc::new(TaskContext::default());
+        let schema = test::aggr_test_schema();
+        let partitions = 3;
+        let dummy: MemoryExec = MemoryExec::try_new_with_dummy_row(schema, partitions)?;
+
+        for n in 0..partitions {
+            let iter = dummy.execute(n, task_ctx.clone())?;
+            let batches = common::collect(iter).await?;
+
+            // should have one item
+            assert_eq!(batches.len(), 1);
+        }
+
         Ok(())
     }
 }
