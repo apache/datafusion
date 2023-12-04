@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-
 use std::sync::Arc;
 
 use arrow::{
@@ -125,7 +124,6 @@ impl ScalarFunctionDef for HumanReadableSecondsFunction {
     }
 }
 
-
 #[derive(Debug)]
 pub struct CurrentTimeFunction;
 
@@ -157,7 +155,10 @@ pub struct FunctionPackage;
 
 impl ScalarFunctionPackage for FunctionPackage {
     fn functions(&self) -> Vec<Box<dyn ScalarFunctionDef>> {
-        vec![Box::new(HumanReadableSecondsFunction), Box::new(CurrentTimeFunction)]
+        vec![
+            Box::new(HumanReadableSecondsFunction),
+            Box::new(CurrentTimeFunction),
+        ]
     }
 }
 
@@ -189,9 +190,10 @@ mod test {
             "human_readable_seconds(56363463)",
             "93 weeks, 1 day, 8 hours, 31 minutes, 3 seconds"
         );
-         Ok(())
+        Ok(())
     }
 
+    #[tokio::test]
     async fn test_current_time() -> Result<()> {
         let current = Local::now();
         let formatted = current.format("%H:%M:%S").to_string();
