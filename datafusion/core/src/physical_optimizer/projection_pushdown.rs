@@ -340,46 +340,45 @@ fn try_swapping_with_filter(
     filter: &FilterExec,
 ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
     // If the projection does not narrow the the schema, we should not try to push down the projection below the filter
-    if projection.expr().len() >= projection.input().schema().fields().len() {
-        // if projection are all columns
-        let mut all_columns = HashSet::new();
-        for (expr, _) in projection.expr().iter() {
-            let cols = collect_columns(expr);
-            all_columns.extend(cols.into_iter());
-        }
-        let indices = all_columns
-            .iter()
-            .flat_map(|c| {
-                filter
-                    .input()
-                    .schema()
-                    .column_with_name(c.name())
-                    .map(|x| x.0)
-            })
-            .collect::<Vec<usize>>();
+    let mut all_columns = HashSet::new();
+    for (expr, _) in projection.expr().iter() {
+        let cols = collect_columns(expr);
+        all_columns.extend(cols.into_iter());
+    }
+    let indices = all_columns
+        .iter()
+        .flat_map(|c| {
+            filter
+                .input()
+                .schema()
+                .column_with_name(c.name())
+                .map(|x| x.0)
+        })
+        .collect::<Vec<usize>>();
 
+    let mapping: Vec<(Arc<dyn PhysicalExpr>, String)> = indices
+        .iter()
+        .map(|index| {
+            (
+                Arc::new(Column::new(
+                    filter.input().schema().field(*index).name(),
+                    *index,
+                )) as Arc<dyn PhysicalExpr + 'static>,
+                filter.input().schema().field(*index).name().to_string(),
+            )
+        })
+        .collect::<Vec<_>>();
+    let updated = projection
+        .expr()
+        .iter()
+        .map(|(e, s)| {
+            update_expr(&e, &mapping, false).map(|x| (x.unwrap(), s.to_string()))
+        })
+        .try_collect()?;
+    if projection.expr().len() >= projection.input().schema().fields().len() {
         if Some(indices.as_ref()) == filter.projection() {
             return Ok(None);
         }
-        let mapping = indices
-            .iter()
-            .map(|index| {
-                (
-                    Arc::new(Column::new(
-                        filter.input().schema().field(*index).name(),
-                        *index,
-                    )) as Arc<dyn PhysicalExpr + 'static>,
-                    filter.input().schema().field(*index).name().to_string(),
-                )
-            })
-            .collect::<Vec<_>>();
-        let updated = projection
-            .expr()
-            .iter()
-            .map(|(e, s)| {
-                update_expr(&e, &mapping, false).map(|x| (x.unwrap(), s.to_string()))
-            })
-            .try_collect()?;
 
         return ProjectionExec::try_new(
             updated,
@@ -394,12 +393,23 @@ fn try_swapping_with_filter(
     // Each column in the predicate expression must exist after the projection.
     let Some(new_predicate) = update_expr(filter.predicate(), projection.expr(), false)?
     else {
-        return Ok(None);
+        if Some(indices.as_ref()) == filter.projection() {
+            return Ok(None);
+        }
+        return ProjectionExec::try_new(
+            updated,
+            Arc::new(FilterExec::try_new(
+                filter.predicate().clone(),
+                Some(indices),
+                filter.input().clone(),
+            )?),
+        )
+        .map(|e| Some(Arc::new(e) as _));
     };
 
     FilterExec::try_new(
         new_predicate,
-        None,
+        Some(indices),
         make_with_child(projection, filter.input())?,
     )
     .map(|e| Some(Arc::new(e) as _))

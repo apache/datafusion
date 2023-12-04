@@ -40,6 +40,7 @@ use datafusion_common::stats::Precision;
 use datafusion_common::{plan_err, project_schema, DataFusionError, Result};
 use datafusion_execution::TaskContext;
 use datafusion_expr::Operator;
+use datafusion_physical_expr::equivalence::ProjectionMapping;
 use datafusion_physical_expr::expressions::BinaryExpr;
 use datafusion_physical_expr::intervals::utils::check_support;
 use datafusion_physical_expr::utils::collect_columns;
@@ -113,7 +114,11 @@ impl DisplayAs for FilterExec {
     ) -> std::fmt::Result {
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
-                write!(f, "FilterExec: {}", self.predicate)
+                write!(
+                    f,
+                    "FilterExec: {}, projection: {:?}",
+                    self.predicate, self.projection
+                )
             }
         }
     }
@@ -158,8 +163,12 @@ impl ExecutionPlan for FilterExec {
     fn equivalence_properties(&self) -> EquivalenceProperties {
         let stats = self.statistics().unwrap();
         // Combine the equal predicates with the input equivalence properties
-        let mut result = self.input.equivalence_properties();
-        let (equal_pairs, _) = collect_columns_from_predicate(&self.predicate);
+        let mut result = self.input.equivalence_properties().project(
+            &ProjectionMapping::try_new(&[], &self.input().schema()).unwrap(),
+            self.schema(),
+        );
+        let (equal_pairs, _) =
+            collect_columns_from_predicate(&self.predicate, self.schema());
         for (lhs, rhs) in equal_pairs {
             let lhs_expr = Arc::new(lhs.clone()) as _;
             let rhs_expr = Arc::new(rhs.clone()) as _;
@@ -168,7 +177,11 @@ impl ExecutionPlan for FilterExec {
         // Add the columns that have only one value (singleton) after filtering to constants.
         let constants = collect_columns(self.predicate())
             .into_iter()
-            .filter(|column| stats.column_statistics[column.index()].is_singleton())
+            .filter(|x| self.schema().column_with_name(x.name()).is_some())
+            .filter(|column| {
+                stats.column_statistics[self.schema().index_of(column.name()).unwrap()]
+                    .is_singleton()
+            })
             .map(|column| Arc::new(column) as _);
         result.add_constants(constants)
     }
@@ -209,14 +222,19 @@ impl ExecutionPlan for FilterExec {
     fn statistics(&self) -> Result<Statistics> {
         let predicate = self.predicate();
 
-        let input_stats = self.input.statistics()?;
+        let input_stats = self.input.statistics()?.clone();
         let schema = self.input.schema();
+        let projected_stats = self
+            .projection
+            .as_ref()
+            .map(|x| input_stats.clone().project(&x, &self.input().schema()))
+            .unwrap_or(input_stats);
         if !check_support(predicate, &schema) {
             // assume filter selects 20% of rows if we cannot do anything smarter
             // tracking issue for making this configurable:
             // https://github.com/apache/arrow-datafusion/issues/8133
             let selectivity = 0.2_f64;
-            let mut stats = input_stats.into_inexact();
+            let mut stats = projected_stats.into_inexact();
             stats.num_rows = stats.num_rows.with_estimated_selectivity(selectivity);
             stats.total_byte_size = stats
                 .total_byte_size
@@ -224,11 +242,11 @@ impl ExecutionPlan for FilterExec {
             return Ok(stats);
         }
 
-        let num_rows = input_stats.num_rows;
-        let total_byte_size = input_stats.total_byte_size;
+        let num_rows = projected_stats.num_rows;
+        let total_byte_size = projected_stats.total_byte_size;
         let input_analysis_ctx = AnalysisContext::try_from_statistics(
             &self.input().schema(),
-            &input_stats.column_statistics,
+            &projected_stats.column_statistics,
         )?;
 
         let analysis_ctx = analyze(predicate, input_analysis_ctx, &schema)?;
@@ -236,10 +254,11 @@ impl ExecutionPlan for FilterExec {
         // Estimate (inexact) selectivity of predicate
         let selectivity = analysis_ctx.selectivity.unwrap_or(1.0);
         let num_rows = num_rows.with_estimated_selectivity(selectivity);
+        // TODO: projection alters the estimated size of the output
         let total_byte_size = total_byte_size.with_estimated_selectivity(selectivity);
 
         let column_statistics = collect_new_statistics(
-            &input_stats.column_statistics,
+            &projected_stats.column_statistics,
             analysis_ctx.boundaries,
         );
         Ok(Statistics {
@@ -376,7 +395,10 @@ impl RecordBatchStream for FilterExecStream {
 }
 
 /// Return the equals Column-Pairs and Non-equals Column-Pairs
-fn collect_columns_from_predicate(predicate: &Arc<dyn PhysicalExpr>) -> EqualAndNonEqual {
+fn collect_columns_from_predicate(
+    predicate: &Arc<dyn PhysicalExpr>,
+    schema: SchemaRef,
+) -> EqualAndNonEqual {
     let mut eq_predicate_columns = Vec::<(&Column, &Column)>::new();
     let mut ne_predicate_columns = Vec::<(&Column, &Column)>::new();
 
@@ -387,6 +409,12 @@ fn collect_columns_from_predicate(predicate: &Arc<dyn PhysicalExpr>) -> EqualAnd
                 binary.left().as_any().downcast_ref::<Column>(),
                 binary.right().as_any().downcast_ref::<Column>(),
             ) {
+                if schema.column_with_name(left_column.name()).is_none()
+                    || schema.column_with_name(right_column.name()).is_none()
+                {
+                    // skip columns not in target schema
+                    return;
+                }
                 match binary.op() {
                     Operator::Eq => {
                         eq_predicate_columns.push((left_column, right_column))
@@ -451,7 +479,7 @@ mod tests {
             &schema,
         )?;
 
-        let (equal_pairs, ne_pairs) = collect_columns_from_predicate(&predicate);
+        let (equal_pairs, ne_pairs) = collect_columns_from_predicate(&predicate, schema);
 
         assert_eq!(1, equal_pairs.len());
         assert_eq!(equal_pairs[0].0.name(), "c2");
