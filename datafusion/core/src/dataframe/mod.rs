@@ -1228,6 +1228,27 @@ impl DataFrame {
     ///  ],
     ///  &results
     /// );
+    /// // Note you can also provide named parameters
+    /// let results = ctx
+    ///   .sql("SELECT a FROM example WHERE b = $my_param")
+    ///   .await?
+    ///    // replace $my_param with value 2
+    ///    // Note you can also use a HashMap as well
+    ///   .with_param_values(vec![
+    ///       ("my_param", ScalarValue::from(2i64))
+    ///    ])?
+    ///   .collect()
+    ///   .await?;
+    /// assert_batches_eq!(
+    ///  &[
+    ///    "+---+",
+    ///    "| a |",
+    ///    "+---+",
+    ///    "| 1 |",
+    ///    "+---+",
+    ///  ],
+    ///  &results
+    /// );
     /// # Ok(())
     /// # }
     /// ```
