@@ -3024,7 +3024,7 @@ impl FromStr for ScalarValue {
 
 impl From<String> for ScalarValue {
     fn from(value: String) -> Self {
-        value.as_str().into()
+        ScalarValue::Utf8(Some(value))
     }
 }
 
