@@ -1032,4 +1032,36 @@ mod tests {
         assert!(filter.with_default_selectivity(120).is_err());
         Ok(())
     }
+
+    #[tokio::test]
+    async fn test_custom_filter_selectivity() -> Result<()> {
+        // Need a decimal to trigger inexact selectivity
+        let schema =
+            Schema::new(vec![Field::new("a", DataType::Decimal128(2, 3), false)]);
+        let input = Arc::new(StatisticsExec::new(
+            Statistics {
+                num_rows: Precision::Inexact(1000),
+                total_byte_size: Precision::Inexact(4000),
+                column_statistics: vec![ColumnStatistics {
+                    ..Default::default()
+                }],
+            },
+            schema,
+        ));
+        // WHERE a = 10
+        let predicate = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("a", 0)),
+            Operator::Eq,
+            Arc::new(Literal::new(ScalarValue::Decimal128(Some(10), 10, 10))),
+        ));
+        let filter = FilterExec::try_new(predicate, input)?;
+        let statistics = filter.statistics()?;
+        assert_eq!(statistics.num_rows, Precision::Inexact(200));
+        assert_eq!(statistics.total_byte_size, Precision::Inexact(800));
+        let filter = filter.with_default_selectivity(40)?;
+        let statistics = filter.statistics()?;
+        assert_eq!(statistics.num_rows, Precision::Inexact(400));
+        assert_eq!(statistics.total_byte_size, Precision::Inexact(1600));
+        Ok(())
+    }
 }
