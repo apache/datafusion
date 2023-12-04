@@ -15,12 +15,20 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Optimizer rule to prune unnecessary Columns from the intermediate schemas inside the [LogicalPlan].
-//! This rule
-//! - Removes unnecessary columns that are not showed at the output, and that are not used during computation.
-//! - Adds projection to decrease table column size before operators that benefits from less memory at its input.
-//! - Removes unnecessary [LogicalPlan::Projection] from the [LogicalPlan].
+//! Optimizer rule to prune unnecessary columns from intermediate schemas
+//! inside the [`LogicalPlan`]. This rule:
+//! - Removes unnecessary columns that do not appear at the output and/or are
+//!   not used during any computation step.
+//! - Adds projections to decrease table column size before operators that
+//!   benefit from a smaller memory footprint at its input.
+//! - Removes unnecessary [`LogicalPlan::Projection`]s from the [`LogicalPlan`].
+
+use std::collections::HashSet;
+use std::sync::Arc;
+
 use crate::optimizer::ApplyOrder;
+use crate::{OptimizerConfig, OptimizerRule};
+
 use datafusion_common::{
     get_required_group_by_exprs_indices, Column, DFSchema, DFSchemaRef, JoinType, Result,
 };
@@ -29,21 +37,19 @@ use datafusion_expr::{
     logical_plan::LogicalPlan, projection_schema, Aggregate, BinaryExpr, Cast, Distinct,
     Expr, Projection, TableScan, Window,
 };
+
 use hashbrown::HashMap;
 use itertools::{izip, Itertools};
-use std::collections::HashSet;
-use std::sync::Arc;
 
-use crate::{OptimizerConfig, OptimizerRule};
-
-/// A rule for optimizing logical plans by removing unused Columns/Fields.
+/// A rule for optimizing logical plans by removing unused columns/fields.
 ///
-/// `OptimizeProjections` is an optimizer rule that identifies and eliminates columns from a logical plan
-/// that are not used in any downstream operations. This can improve query performance and reduce unnecessary
-/// data processing.
+/// `OptimizeProjections` is an optimizer rule that identifies and eliminates
+/// columns from a logical plan that are not used by downstream operations.
+/// This can improve query performance and reduce unnecessary data processing.
 ///
-/// The rule analyzes the input logical plan, determines the necessary column indices, and then removes any
-/// unnecessary columns. Additionally, it eliminates any unnecessary projections in the plan.
+/// The rule analyzes the input logical plan, determines the necessary column
+/// indices, and then removes any unnecessary columns. It also removes any
+/// unnecessary projections from the plan tree.
 #[derive(Default)]
 pub struct OptimizeProjections {}
 
@@ -60,7 +66,7 @@ impl OptimizerRule for OptimizeProjections {
         plan: &LogicalPlan,
         config: &dyn OptimizerConfig,
     ) -> Result<Option<LogicalPlan>> {
-        // All of the fields at the output are necessary.
+        // All output fields are necessary:
         let indices = require_all_indices(plan);
         optimize_projections(plan, config, &indices)
     }
@@ -74,30 +80,35 @@ impl OptimizerRule for OptimizeProjections {
     }
 }
 
-/// Removes unnecessary columns (e.g Columns that are not referred at the output schema and
-/// Columns that are not used during any computation, expression evaluation) from the logical plan and its inputs.
+/// Removes unnecessary columns (e.g. columns that do not appear in the output
+/// schema and/or are not used during any computation step such as expression
+/// evaluation) from the logical plan and its inputs.
 ///
-/// # Arguments
+/// # Parameters
 ///
-/// - `plan`: A reference to the input `LogicalPlan` to be optimized.
-/// - `_config`: A reference to the optimizer configuration (not currently used).
-/// - `indices`: A slice of column indices that represent the necessary column indices for downstream operations.
+/// - `plan`: A reference to the input `LogicalPlan` to optimize.
+/// - `config`: A reference to the optimizer configuration.
+/// - `indices`: A slice of column indices that represent the necessary column
+///   indices for downstream operations.
 ///
 /// # Returns
 ///
-/// - `Ok(Some(LogicalPlan))`: An optimized `LogicalPlan` with unnecessary columns removed.
-/// - `Ok(None)`: If the optimization process results in a logical plan that doesn't require further propagation.
-/// - `Err(error)`: If an error occurs during the optimization process.
+/// A `Result` object with the following semantics:
+///
+/// - `Ok(Some(LogicalPlan))`: An optimized `LogicalPlan` without unnecessary
+///   columns.
+/// - `Ok(None)`: Signal that the given logical plan did not require any change.
+/// - `Err(error)`: An error occured during the optimization process.
 fn optimize_projections(
     plan: &LogicalPlan,
-    _config: &dyn OptimizerConfig,
+    config: &dyn OptimizerConfig,
     indices: &[usize],
 ) -> Result<Option<LogicalPlan>> {
     // `child_required_indices` stores
     // - indices of the columns required for each child
     // - a flag indicating whether putting a projection above children is beneficial for the parent.
     // As an example LogicalPlan::Filter benefits from small tables. Hence for filter child this flag would be `true`.
-    let child_required_indices: Option<Vec<(Vec<usize>, bool)>> = match plan {
+    let child_required_indices: Vec<(Vec<usize>, bool)> = match plan {
         LogicalPlan::Sort(_)
         | LogicalPlan::Filter(_)
         | LogicalPlan::Repartition(_)
@@ -105,36 +116,32 @@ fn optimize_projections(
         | LogicalPlan::Union(_)
         | LogicalPlan::SubqueryAlias(_)
         | LogicalPlan::Distinct(Distinct::On(_)) => {
-            // Re-route required indices from the parent + column indices referred by expressions in the plan
-            // to the child.
-            // All of these operators benefits from small tables at their inputs. Hence projection_beneficial flag is `true`.
+            // Pass index requirements from the parent as well as column indices
+            // that appear in this plan's expressions to its child. All these
+            // operators benefit from "small" inputs, so the projection_beneficial
+            // flag is `true`.
             let exprs = plan.expressions();
-            let child_req_indices = plan
-                .inputs()
+            plan.inputs()
                 .into_iter()
                 .map(|input| {
-                    let required_indices =
-                        get_all_required_indices(indices, input, exprs.iter())?;
-                    Ok((required_indices, true))
+                    get_all_required_indices(indices, input, exprs.iter())
+                        .map(|idxs| (idxs, true))
                 })
-                .collect::<Result<Vec<_>>>()?;
-            Some(child_req_indices)
+                .collect::<Result<_>>()?
         }
         LogicalPlan::Limit(_) | LogicalPlan::Prepare(_) => {
-            // Re-route required indices from the parent + column indices referred by expressions in the plan
-            // to the child.
-            // Limit, Prepare doesn't benefit from small column numbers. Hence projection_beneficial flag is `false`.
+            // Pass index requirements from the parent as well as column indices
+            // that appear in this plan's expressions to its child. These operators
+            // do not benefit from "small" inputs, so the projection_beneficial
+            // flag is `false`.
             let exprs = plan.expressions();
-            let child_req_indices = plan
-                .inputs()
+            plan.inputs()
                 .into_iter()
                 .map(|input| {
-                    let required_indices =
-                        get_all_required_indices(indices, input, exprs.iter())?;
-                    Ok((required_indices, false))
+                    get_all_required_indices(indices, input, exprs.iter())
+                        .map(|idxs| (idxs, false))
                 })
-                .collect::<Result<Vec<_>>>()?;
-            Some(child_req_indices)
+                .collect::<Result<_>>()?
         }
         LogicalPlan::Copy(_)
         | LogicalPlan::Ddl(_)
@@ -143,54 +150,48 @@ fn optimize_projections(
         | LogicalPlan::Analyze(_)
         | LogicalPlan::Subquery(_)
         | LogicalPlan::Distinct(Distinct::All(_)) => {
-            // Require all of the fields of the Dml, Ddl, Copy, Explain, Analyze, Subquery, Distinct::All input(s).
-            // Their child plan can be treated as final plan. Otherwise expected schema may not match.
-            // TODO: For some subquery variants we may not need to require all indices for its input.
-            // such as Exists<SubQuery>.
-            let child_requirements = plan
-                .inputs()
+            // These plans require all their fields, and their children should
+            // be treated as final plans -- otherwise, we may have schema a
+            // mismatch.
+            // TODO: For some subquery variants (e.g. a subquery arising from an
+            //       EXISTS expression), we may not need to require all indices.
+            plan.inputs()
                 .iter()
-                .map(|input| {
-                    // Require all of the fields for each input.
-                    // No projection since all of the fields at the child is required
-                    (require_all_indices(input), false)
-                })
-                .collect::<Vec<_>>();
-            Some(child_requirements)
+                .map(|input| (require_all_indices(input), false))
+                .collect::<Vec<_>>()
         }
         LogicalPlan::EmptyRelation(_)
         | LogicalPlan::Statement(_)
         | LogicalPlan::Values(_)
         | LogicalPlan::Extension(_)
         | LogicalPlan::DescribeTable(_) => {
-            // EmptyRelation, Values, DescribeTable, Statement has no inputs stop iteration
-
-            // TODO: Add support for extension
-            // It is not known how to direct requirements to children for LogicalPlan::Extension.
-            // Safest behaviour is to stop propagation.
-            None
+            // These operators have no inputs, so stop the optimization process.
+            // TODO: Add support for `LogicalPlan::Extension`.
+            return Ok(None);
         }
         LogicalPlan::Projection(proj) => {
             return if let Some(proj) = merge_consecutive_projections(proj)? {
-                rewrite_projection_given_requirements(&proj, _config, indices)?
-                    .map(|res| Ok(Some(res)))
-                    // Even if projection cannot be optimized, return merged version
-                    .unwrap_or_else(|| Ok(Some(LogicalPlan::Projection(proj))))
+                Ok(Some(
+                    rewrite_projection_given_requirements(&proj, config, indices)?
+                        // Even if we cannot optimize the projection, merge if possible:
+                        .unwrap_or_else(|| LogicalPlan::Projection(proj)),
+                ))
             } else {
-                rewrite_projection_given_requirements(proj, _config, indices)
+                rewrite_projection_given_requirements(proj, config, indices)
             };
         }
         LogicalPlan::Aggregate(aggregate) => {
-            // Split parent requirements to group by and aggregate sections
-            let group_expr_len = aggregate.group_expr_len()?;
+            // Split parent requirements to GROUP BY and aggregate sections:
+            let n_group_exprs = aggregate.group_expr_len()?;
             let (group_by_reqs, mut aggregate_reqs): (Vec<usize>, Vec<usize>) =
-                indices.iter().partition(|&&idx| idx < group_expr_len);
-            // Offset aggregate indices so that they point to valid indices at the `aggregate.aggr_expr`
-            aggregate_reqs
-                .iter_mut()
-                .for_each(|idx| *idx -= group_expr_len);
+                indices.iter().partition(|&&idx| idx < n_group_exprs);
+            // Offset aggregate indices so that they point to valid indices at
+            // `aggregate.aggr_expr`:
+            for idx in aggregate_reqs.iter_mut() {
+                *idx -= n_group_exprs;
+            }
 
-            // Get absolutely necessary group by fields.
+            // Get absolutely necessary GROUP BY fields:
             let group_by_expr_existing = aggregate
                 .group_expr
                 .iter()
@@ -201,8 +202,9 @@ fn optimize_projections(
                     aggregate.input.schema(),
                     &group_by_expr_existing,
                 ) {
-                // Some of the fields in the group by may be required by parent, even if these fields
-                // are unnecessary in terms of functional dependency.
+                // Some of the fields in the GROUP BY may be required by the
+                // parent even if these fields are unnecessary in terms of
+                // functional dependency.
                 let required_indices =
                     merge_vectors(&simplest_groupby_indices, &group_by_reqs);
                 get_at_indices(&aggregate.group_expr, &required_indices)
@@ -210,29 +212,32 @@ fn optimize_projections(
                 aggregate.group_expr.clone()
             };
 
-            // Only use absolutely necessary aggregate expressions required by parent.
+            // Only use the absolutely necessary aggregate expressions required
+            // by the parent:
             let new_aggr_expr = get_at_indices(&aggregate.aggr_expr, &aggregate_reqs);
             let all_exprs_iter = new_group_bys.iter().chain(new_aggr_expr.iter());
             let necessary_indices =
                 indices_referred_by_exprs(&aggregate.input, all_exprs_iter)?;
 
             let aggregate_input = if let Some(input) =
-                optimize_projections(&aggregate.input, _config, &necessary_indices)?
+                optimize_projections(&aggregate.input, config, &necessary_indices)?
             {
                 input
             } else {
                 aggregate.input.as_ref().clone()
             };
 
-            // Simplify input of the aggregation by adding a projection so that its input only contains
-            // absolutely necessary columns for the aggregate expressions. Please no that we use aggregate.input.schema()
-            // because necessary_indices refers to fields in this schema.
+            // Simplify the input of the aggregation by adding a projection so
+            // that its input only contains absolutely necessary columns for
+            // the aggregate expressions. Note that necessary_indices refer to
+            // fields in `aggregate.input.schema()`.
             let necessary_exprs =
                 get_required_exprs(aggregate.input.schema(), &necessary_indices);
-            let (aggregate_input, _is_added) =
+            let (aggregate_input, _) =
                 add_projection_on_top_if_helpful(aggregate_input, necessary_exprs, true)?;
 
-            // Create new aggregate plan with updated input, and absolutely necessary fields.
+            // Create new aggregate plan with the updated input and only the
+            // absolutely necessary fields:
             return Aggregate::try_new(
                 Arc::new(aggregate_input),
                 new_group_bys,
@@ -241,43 +246,48 @@ fn optimize_projections(
             .map(|aggregate| Some(LogicalPlan::Aggregate(aggregate)));
         }
         LogicalPlan::Window(window) => {
-            // Split parent requirements to child and window expression sections.
+            // Split parent requirements to child and window expression sections:
             let n_input_fields = window.input.schema().fields().len();
             let (child_reqs, mut window_reqs): (Vec<usize>, Vec<usize>) =
                 indices.iter().partition(|&&idx| idx < n_input_fields);
-            // Offset window expr indices so that they point to valid indices at the `window.window_expr`
-            window_reqs
-                .iter_mut()
-                .for_each(|idx| *idx -= n_input_fields);
+            // Offset window expression indices so that they point to valid
+            // indices at `window.window_expr`:
+            for idx in window_reqs.iter_mut() {
+                *idx -= n_input_fields;
+            }
 
-            // Only use window expressions that are absolutely necessary by parent requirements.
+            // Only use window expressions that are absolutely necessary according
+            // to parent requirements:
             let new_window_expr = get_at_indices(&window.window_expr, &window_reqs);
 
-            // All of the required column indices at the input of the window by parent, and window expression requirements.
+            // Get all the required column indices at the input, either by the
+            // parent or window expression requirements.
             let required_indices = get_all_required_indices(
                 &child_reqs,
                 &window.input,
                 new_window_expr.iter(),
             )?;
             let window_child = if let Some(new_window_child) =
-                optimize_projections(&window.input, _config, &required_indices)?
+                optimize_projections(&window.input, config, &required_indices)?
             {
                 new_window_child
             } else {
                 window.input.as_ref().clone()
             };
-            // When no window expression is necessary, just use window input. (Remove window operator)
+
             return if new_window_expr.is_empty() {
+                // When no window expression is necessary, use the input directly:
                 Ok(Some(window_child))
             } else {
                 // Calculate required expressions at the input of the window.
-                // Please note that we use `old_child`, because `required_indices` refers to `old_child`.
+                // Please note that we use `old_child`, because `required_indices`
+                // refers to `old_child`.
                 let required_exprs =
                     get_required_exprs(window.input.schema(), &required_indices);
                 let (window_child, _is_added) =
                     add_projection_on_top_if_helpful(window_child, required_exprs, true)?;
-                let window = Window::try_new(new_window_expr, Arc::new(window_child))?;
-                Ok(Some(LogicalPlan::Window(window)))
+                Window::try_new(new_window_expr, Arc::new(window_child))
+                    .map(|window| Some(LogicalPlan::Window(window)))
             };
         }
         LogicalPlan::Join(join) => {
@@ -289,27 +299,25 @@ fn optimize_projections(
                 get_all_required_indices(&left_req_indices, &join.left, exprs.iter())?;
             let right_indices =
                 get_all_required_indices(&right_req_indices, &join.right, exprs.iter())?;
-            // Join benefits from small columns numbers at its input (decreases memory usage)
-            // Hence each child benefits from projection.
-            Some(vec![(left_indices, true), (right_indices, true)])
+            // Joins benefit from "small" input tables (lower memory usage).
+            // Therefore, each child benefits from projection:
+            vec![(left_indices, true), (right_indices, true)]
         }
         LogicalPlan::CrossJoin(cross_join) => {
             let left_len = cross_join.left.schema().fields().len();
             let (left_child_indices, right_child_indices) =
                 split_join_requirements(left_len, indices, &JoinType::Inner);
-            // Join benefits from small columns numbers at its input (decreases memory usage)
-            // Hence each child benefits from projection.
-            Some(vec![
-                (left_child_indices, true),
-                (right_child_indices, true),
-            ])
+            // Joins benefit from "small" input tables (lower memory usage).
+            // Therefore, each child benefits from projection:
+            vec![(left_child_indices, true), (right_child_indices, true)]
         }
         LogicalPlan::TableScan(table_scan) => {
             let projection_fields = table_scan.projected_schema.fields();
             let schema = table_scan.source.schema();
-            // We expect to find all of the required indices of the projected schema fields.
-            // among original schema. If at least one of them cannot be found. Use all of the fields in the file.
-            // (No projection at the source)
+            // We expect to find all required indices of the projected schema
+            // within the original schema. If this is not true, use all of the
+            // source fields.
+            // TODO: Fix the following quadratic search.
             let projection = indices
                 .iter()
                 .map(|&idx| {
@@ -319,43 +327,35 @@ fn optimize_projections(
                 })
                 .collect::<Option<Vec<_>>>();
 
-            return Ok(Some(LogicalPlan::TableScan(TableScan::try_new(
+            return TableScan::try_new(
                 table_scan.table_name.clone(),
                 table_scan.source.clone(),
                 projection,
                 table_scan.filters.clone(),
                 table_scan.fetch,
-            )?)));
+            )
+            .map(|table| Some(LogicalPlan::TableScan(table)));
         }
     };
 
-    let child_required_indices =
-        if let Some(child_required_indices) = child_required_indices {
-            child_required_indices
-        } else {
-            // Stop iteration, cannot propagate requirement down below this operator.
-            return Ok(None);
-        };
-
     let new_inputs = izip!(child_required_indices, plan.inputs().into_iter())
         .map(|((required_indices, projection_beneficial), child)| {
-            let (input, mut is_changed) = if let Some(new_input) =
-                optimize_projections(child, _config, &required_indices)?
+            let (input, is_changed) = if let Some(new_input) =
+                optimize_projections(child, config, &required_indices)?
             {
                 (new_input, true)
             } else {
                 (child.clone(), false)
             };
             let project_exprs = get_required_exprs(child.schema(), &required_indices);
-            let (input, is_projection_added) = add_projection_on_top_if_helpful(
+            let (input, proj_added) = add_projection_on_top_if_helpful(
                 input,
                 project_exprs,
                 projection_beneficial,
             )?;
-            is_changed |= is_projection_added;
-            Ok(is_changed.then_some(input))
+            Ok((is_changed || proj_added).then_some(input))
         })
-        .collect::<Result<Vec<Option<_>>>>()?;
+        .collect::<Result<Vec<_>>>()?;
     // All of the children are same in this case, no need to change plan
     if new_inputs.iter().all(|child| child.is_none()) {
         Ok(None)
@@ -365,100 +365,98 @@ fn optimize_projections(
             // If new_input is `None`, this means child is not changed. Hence use `old_child` during construction.
             .map(|(new_input, old_child)| new_input.unwrap_or_else(|| old_child.clone()))
             .collect::<Vec<_>>();
-        let res = plan.with_new_inputs(&new_inputs)?;
-        Ok(Some(res))
+        plan.with_new_inputs(&new_inputs).map(Some)
     }
 }
 
-/// Merge Consecutive Projections
+/// Merges consecutive projections.
 ///
 /// Given a projection `proj`, this function attempts to merge it with a previous
-/// projection if it exists and if the merging is beneficial. Merging is considered
-/// beneficial when expressions in the current projection are non-trivial and referred to
-/// more than once in its input fields. This can act as a caching mechanism for non-trivial
-/// computations.
+/// projection if it exists and if merging is beneficial. Merging is considered
+/// beneficial when expressions in the current projection are non-trivial and
+/// appear more than once in its input fields. This can act as a caching mechanism
+/// for non-trivial computations.
 ///
-/// # Arguments
+/// # Parameters
 ///
 /// * `proj` - A reference to the `Projection` to be merged.
 ///
 /// # Returns
 ///
-/// A `Result` containing an `Option` of the merged `Projection`. If merging is not beneficial
-/// it returns `Ok(None)`.
+/// A `Result` object with the following semantics:
+///
+/// - `Ok(Some(Projection))`: Merge was beneficial and successful. Contains the
+///   merged projection.
+/// - `Ok(None)`: Signals that merge is not beneficial (and has not taken place).
+/// - `Err(error)`: An error occured during the function call.
 fn merge_consecutive_projections(proj: &Projection) -> Result<Option<Projection>> {
-    let prev_projection = if let LogicalPlan::Projection(prev) = proj.input.as_ref() {
-        prev
-    } else {
+    let LogicalPlan::Projection(prev_projection) = proj.input.as_ref() else {
         return Ok(None);
     };
 
-    // Count usages (referral counts) of each projection expression in its input fields
+    // Count usages (referrals) of each projection expression in its input fields:
     let column_referral_map: HashMap<Column, usize> = proj
         .expr
         .iter()
         .flat_map(|expr| expr.to_columns())
         .fold(HashMap::new(), |mut map, cols| {
-            cols.into_iter()
-                .for_each(|col| *map.entry(col.clone()).or_default() += 1);
+            for col in cols.into_iter() {
+                *map.entry(col.clone()).or_default() += 1;
+            }
             map
         });
 
-    // Merging these projections is not beneficial, e.g
-    // If an expression is not trivial and it is referred more than 1, consecutive projections will be
-    // beneficial as caching mechanism for non-trivial computations.
-    // See discussion in: https://github.com/apache/arrow-datafusion/issues/8296
-    if column_referral_map.iter().any(|(col, usage)| {
-        *usage > 1
+    // If an expression is non-trivial and appears more than once, consecutive
+    // projections will benefit from a compute-once approach. For details, see:
+    // https://github.com/apache/arrow-datafusion/issues/8296
+    if column_referral_map.into_iter().any(|(col, usage)| {
+        usage > 1
             && !is_expr_trivial(
                 &prev_projection.expr
-                    [prev_projection.schema.index_of_column(col).unwrap()],
+                    [prev_projection.schema.index_of_column(&col).unwrap()],
             )
     }) {
         return Ok(None);
     }
 
-    // If all of the expression of the top projection can be rewritten. Rewrite expressions and create a new projection
-    let new_exprs = proj
-        .expr
+    // If all the expression of the top projection can be rewritten, do so and
+    // create a new projection:
+    proj.expr
         .iter()
         .map(|expr| rewrite_expr(expr, prev_projection))
-        .collect::<Result<Option<Vec<_>>>>()?;
-    new_exprs
+        .collect::<Result<Option<_>>>()?
         .map(|exprs| Projection::try_new(exprs, prev_projection.input.clone()))
         .transpose()
 }
 
-/// Trim Expression
-///
-/// Trim the given expression by removing any unnecessary layers of abstraction.
+/// Trim the given expression by removing any unnecessary layers of aliasing.
 /// If the expression is an alias, the function returns the underlying expression.
-/// Otherwise, it returns the original expression unchanged.
+/// Otherwise, it returns the given expression as is.
 ///
-/// # Arguments
+/// Without trimming, we can end up with unnecessary indirections inside expressions
+/// during projection merges.
 ///
-/// * `expr` - The input expression to be trimmed.
-///
-/// # Returns
-///
-/// The trimmed expression. If the input is an alias, the underlying expression is returned.
-///
-/// Without trimming, during projection merge we can end up unnecessary indirections inside the expressions.
 /// Consider:
 ///
+/// ```text
 /// Projection (a1 + b1 as sum1)
 /// --Projection (a as a1, b as b1)
 /// ----Source (a, b)
+/// ```
 ///
-/// After merge we want to produce
+/// After merge, we want to produce:
 ///
+/// ```text
 /// Projection (a + b as sum1)
 /// --Source(a, b)
+/// ```
 ///
-/// Without trimming we would end up
+/// Without trimming, we would end up with:
 ///
+/// ```text
 /// Projection (a as a1 + b as b1 as sum1)
 /// --Source(a, b)
+/// ```
 fn trim_expr(expr: Expr) -> Expr {
     match expr {
         Expr::Alias(alias) => *alias.expr,
@@ -466,36 +464,38 @@ fn trim_expr(expr: Expr) -> Expr {
     }
 }
 
-// Check whether expression is trivial (e.g it doesn't include computation.)
+// Check whether `expr` is trivial (e.g it doesn't imply any computation).
 fn is_expr_trivial(expr: &Expr) -> bool {
     matches!(expr, Expr::Column(_) | Expr::Literal(_))
 }
 
-// Exit early when None is seen.
+// Exit early when there is no rewrite to do.
 macro_rules! rewrite_expr_with_check {
     ($expr:expr, $input:expr) => {
-        if let Some(val) = rewrite_expr($expr, $input)? {
-            val
+        if let Some(value) = rewrite_expr($expr, $input)? {
+            value
         } else {
             return Ok(None);
         }
     };
 }
 
-// Rewrites expression using its input projection (Merges consecutive projection expressions).
-/// Rewrites an projections expression using its input projection
-/// (Helper during merging consecutive projection expressions).
+/// Rewrites a projection expression using the projection before it (i.e. its input)
+/// This is a subroutine to the `merge_consecutive_projections` function.
 ///
-/// # Arguments
+/// # Parameters
 ///
-/// * `expr` - A reference to the expression to be rewritten.
-/// * `input` - A reference to the input (itself a projection) of the projection expression.
+/// * `expr` - A reference to the expression to rewrite.
+/// * `input` - A reference to the input of the projection expression (itself
+///   a projection).
 ///
 /// # Returns
 ///
-/// A `Result` containing an `Option` of the rewritten expression. If the rewrite is successful,
-/// it returns `Ok(Some)` with the modified expression. If the expression cannot be rewritten
-/// it returns `Ok(None)`.
+/// A `Result` object with the following semantics:
+///
+/// - `Ok(Some(Expr))`: Rewrite was successful. Contains the rewritten result.
+/// - `Ok(None)`: Signals that `expr` can not be rewritten.
+/// - `Err(error)`: An error occured during the function call.
 fn rewrite_expr(expr: &Expr, input: &Projection) -> Result<Option<Expr>> {
     Ok(match expr {
         Expr::Column(col) => {
@@ -529,22 +529,18 @@ fn rewrite_expr(expr: &Expr, input: &Projection) -> Result<Option<Expr>> {
             )))
         }
         Expr::ScalarFunction(scalar_fn) => {
-            let fun = if let ScalarFunctionDefinition::BuiltIn { fun, .. } =
-                scalar_fn.func_def
-            {
-                fun
-            } else {
+            let ScalarFunctionDefinition::BuiltIn { fun, .. } = scalar_fn.func_def else {
                 return Ok(None);
             };
             scalar_fn
                 .args
                 .iter()
                 .map(|expr| rewrite_expr(expr, input))
-                .collect::<Result<Option<Vec<_>>>>()?
+                .collect::<Result<Option<_>>>()?
                 .map(|new_args| Expr::ScalarFunction(ScalarFunction::new(fun, new_args)))
         }
         _ => {
-            // Unsupported type to merge in consecutive projections
+            // Unsupported type for consecutive projection merge analysis.
             None
         }
     })

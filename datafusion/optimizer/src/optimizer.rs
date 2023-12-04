@@ -17,6 +17,10 @@
 
 //! Query optimizer traits
 
+use std::collections::HashSet;
+use std::sync::Arc;
+use std::time::Instant;
+
 use crate::common_subexpr_eliminate::CommonSubexprEliminate;
 use crate::decorrelate_predicate_subquery::DecorrelatePredicateSubquery;
 use crate::eliminate_cross_join::EliminateCrossJoin;
@@ -41,15 +45,14 @@ use crate::simplify_expressions::SimplifyExpressions;
 use crate::single_distinct_to_groupby::SingleDistinctToGroupBy;
 use crate::unwrap_cast_in_comparison::UnwrapCastInComparison;
 use crate::utils::log_plan;
-use chrono::{DateTime, Utc};
+
 use datafusion_common::alias::AliasGenerator;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::logical_plan::LogicalPlan;
+
+use chrono::{DateTime, Utc};
 use log::{debug, warn};
-use std::collections::HashSet;
-use std::sync::Arc;
-use std::time::Instant;
 
 /// `OptimizerRule` transforms one [`LogicalPlan`] into another which
 /// computes the same results, but in a potentially more efficient
@@ -447,17 +450,18 @@ pub(crate) fn assert_schema_is_the_same(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{Arc, Mutex};
+
+    use super::ApplyOrder;
     use crate::optimizer::Optimizer;
     use crate::test::test_table_scan;
     use crate::{OptimizerConfig, OptimizerContext, OptimizerRule};
+
     use datafusion_common::{
         plan_err, DFField, DFSchema, DFSchemaRef, DataFusionError, Result,
     };
     use datafusion_expr::logical_plan::EmptyRelation;
     use datafusion_expr::{col, lit, LogicalPlan, LogicalPlanBuilder, Projection};
-    use std::sync::{Arc, Mutex};
-
-    use super::ApplyOrder;
 
     #[test]
     fn skip_failing_rule() {
