@@ -49,6 +49,7 @@ use datafusion_physical_expr::{
     physical_exprs_contains, reverse_order_bys, AggregateExpr, EquivalenceProperties,
     LexOrdering, LexRequirement, PhysicalExpr, PhysicalSortExpr, PhysicalSortRequirement,
 };
+use futures::StreamExt;
 
 use itertools::{izip, Itertools};
 
@@ -269,6 +270,23 @@ impl From<StreamType> for SendableRecordBatchStream {
     }
 }
 
+// pub struct AggregateGroup{
+//     /// Aggregate expressions
+//     aggr_expr: Vec<Arc<dyn AggregateExpr>>,
+//     /// FILTER (WHERE clause) expression for each aggregate expression
+//     filter_expr: Vec<Option<Arc<dyn PhysicalExpr>>>,
+//     /// (ORDER BY clause) expression for each aggregate expression
+//     /// TODO: Make below variable LexOrdering
+//     order_by_expr: Vec<Option<LexOrdering>>,
+// }
+
+pub struct AggregateGroup {
+    aggregate_expressions: Vec<Vec<Arc<dyn PhysicalExpr>>>,
+    filter_expressions: Vec<Option<Arc<dyn PhysicalExpr>>>,
+    accumulators: Vec<AccumulatorItem>,
+    requirement: LexOrdering,
+}
+
 /// Hash aggregate execution plan
 #[derive(Debug)]
 pub struct AggregateExec {
@@ -335,6 +353,7 @@ fn get_finest_requirement(
     order_by_expr: &mut [Option<LexOrdering>],
     eq_properties: &EquivalenceProperties,
 ) -> Result<Option<LexOrdering>> {
+    return Ok(None);
     // First, we check if all the requirements are satisfied by the existing
     // ordering. If so, we return `None` to indicate this.
     let mut all_satisfied = true;
@@ -979,6 +998,28 @@ fn group_schema(schema: &Schema, group_count: usize) -> SchemaRef {
     Arc::new(Schema::new(group_fields))
 }
 
+fn get_groups_indices(
+    aggr_exprs: &[Arc<dyn AggregateExpr>],
+    group_by: &PhysicalGroupBy,
+) -> Vec<(Vec<usize>, LexOrdering)> {
+    let mut initial_groups = vec![];
+    for idx in 0..aggr_exprs.len() {
+        let aggr_expr = &aggr_exprs[idx];
+        let mut req = aggr_expr.order_bys().unwrap_or_default().to_vec();
+        if !is_order_sensitive(aggr_expr)
+            || group_by_contains_all_requirements(&group_by, &req)
+        {
+            // No requirement.
+            req.clear();
+        }
+        // let req = aggr_expr[idx].order_bys().unwrap_or_default().to_vec();
+        initial_groups.push((vec![idx], req));
+    }
+    // TODO: Add merge groups logic.
+
+    initial_groups
+}
+
 /// returns physical expressions for arguments to evaluate against a batch
 /// The expressions are different depending on `mode`:
 /// * Partial: AggregateExpr::expressions
@@ -1059,6 +1100,27 @@ fn create_accumulators(
         .iter()
         .map(|expr| expr.create_accumulator())
         .collect::<Result<Vec<_>>>()
+}
+
+/// returns a vector of ArrayRefs, where each entry corresponds to either the
+/// final value (mode = Final, FinalPartitioned and Single) or states (mode = Partial)
+fn finalize_aggregation_groups(
+    // accumulators: &[AccumulatorItem],
+    aggregate_groups: &[AggregateGroup],
+    // TODO: Use Mapping indices
+    mode: &AggregateMode,
+) -> Result<Vec<ArrayRef>> {
+    let elems = aggregate_groups
+        .iter()
+        .map(|aggregate_group| finalize_aggregation(&aggregate_group.accumulators, mode))
+        .collect::<Result<Vec<_>>>()?;
+    // TODO: Add proper indices
+    // Convert Vec<Vec<ArrayRef>> to Vec<ArrayRef>.
+    let res = elems
+        .into_iter()
+        .flat_map(|elems| elems)
+        .collect::<Vec<_>>();
+    Ok(res)
 }
 
 /// returns a vector of ArrayRefs, where each entry corresponds to either the
@@ -1237,6 +1299,29 @@ mod tests {
         let schema = Arc::new(Schema::new(vec![a, b, c, d, e]));
 
         Ok(schema)
+    }
+
+    // Convert each tuple to PhysicalSortExpr
+    fn convert_to_sort_exprs(
+        in_data: &[(&Arc<dyn PhysicalExpr>, SortOptions)],
+    ) -> Vec<PhysicalSortExpr> {
+        in_data
+            .iter()
+            .map(|(expr, options)| PhysicalSortExpr {
+                expr: (*expr).clone(),
+                options: *options,
+            })
+            .collect::<Vec<_>>()
+    }
+
+    // Convert each inner tuple to PhysicalSortExpr
+    fn convert_to_orderings(
+        orderings: &[Vec<(&Arc<dyn PhysicalExpr>, SortOptions)>],
+    ) -> Vec<Vec<PhysicalSortExpr>> {
+        orderings
+            .iter()
+            .map(|sort_exprs| convert_to_sort_exprs(sort_exprs))
+            .collect()
     }
 
     /// some mock data to aggregates
@@ -2161,6 +2246,55 @@ mod tests {
         let res =
             get_finest_requirement(&mut aggr_exprs, &mut order_by_exprs, &eq_properties)?;
         assert_eq!(res, common_requirement);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_calc_aggregate_groups() -> Result<()> {
+        let test_schema = create_test_schema()?;
+        // Assume column a and b are aliases
+        // Assume also that a ASC and c DESC describe the same global ordering for the table. (Since they are ordering equivalent).
+        let option_asc = SortOptions {
+            descending: false,
+            nulls_first: false,
+        };
+        // This is the reverse requirement of options1
+        let options_dess = SortOptions {
+            descending: true,
+            nulls_first: true,
+        };
+        let col_a = &col("a", &test_schema)?;
+        let col_b = &col("b", &test_schema)?;
+        let col_c = &col("c", &test_schema)?;
+
+        let test_cases = vec![
+            // ------- TEST CASE 1 -----------
+            (
+                // Ordering requirements
+                vec![vec![(col_a, option_asc)]],
+                // expected
+                vec![vec![0]],
+            ),
+        ];
+        for (ordering_reqs, expected) in test_cases {
+            let aggr_exprs = ordering_reqs
+                .into_iter()
+                .map(|req| {
+                    let req = convert_to_sort_exprs(&req);
+                    let aggr_expr = Arc::new(FirstValue::new(
+                        col_a.clone(),
+                        "first1",
+                        DataType::Int32,
+                        req,
+                        vec![],
+                    )) as _;
+                    aggr_expr
+                })
+                .collect::<Vec<_>>();
+
+            let res = get_groups_indices(&aggr_exprs);
+            assert_eq!(res, expected);
+        }
         Ok(())
     }
 }

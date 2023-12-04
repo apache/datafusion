@@ -29,13 +29,11 @@ use crate::expressions::format_state_name;
 use crate::{AggregateExpr, LexOrdering, PhysicalExpr, PhysicalSortExpr};
 
 use arrow::array::ArrayRef;
-use arrow::compute;
 use arrow::datatypes::{DataType, Field};
 use arrow_array::Array;
-use arrow_ord::sort::{lexsort_to_indices, SortColumn};
 use arrow_schema::{Fields, SortOptions};
 use datafusion_common::cast::as_list_array;
-use datafusion_common::utils::{compare_rows, get_arrayref_at_indices, get_row_at_idx};
+use datafusion_common::utils::{compare_rows, get_row_at_idx};
 use datafusion_common::{exec_err, DataFusionError, Result, ScalarValue};
 use datafusion_expr::Accumulator;
 
@@ -194,8 +192,10 @@ impl Accumulator for OrderSensitiveArrayAggAccumulator {
         if values.is_empty() {
             return Ok(());
         }
-
-        let (new_values, new_ordering_values) = self.reorder_according_to_reqs(values)?;
+        let value = &values[0];
+        let orderings = &values[1..];
+        let (new_values, new_ordering_values) =
+            Self::convert_arr_to_vec(value, orderings)?;
         let sort_options = get_sort_options(&self.ordering_req);
 
         // Merge new values and new orderings
@@ -333,39 +333,6 @@ impl OrderSensitiveArrayAggAccumulator {
 
         let arr = ScalarValue::new_list(&orderings, &struct_type);
         Ok(ScalarValue::List(arr))
-    }
-
-    fn reorder_according_to_reqs(
-        &self,
-        values: &[ArrayRef],
-    ) -> Result<(Vec<ScalarValue>, Vec<Vec<ScalarValue>>)> {
-        let value = &values[0];
-        let orderings = &values[1..];
-
-        if self.ordering_req.is_empty() {
-            // No requirement
-            Self::convert_arr_to_vec(value, orderings)
-        } else {
-            let sort_options = get_sort_options(&self.ordering_req);
-            // Sort data according to requirements
-            let sort_columns = orderings
-                .iter()
-                .zip(sort_options)
-                .map(|(ordering, options)| SortColumn {
-                    values: ordering.clone(),
-                    options: Some(options),
-                })
-                .collect::<Vec<_>>();
-            let indices = lexsort_to_indices(&sort_columns, None)?;
-            let sorted_value = compute::take(
-                value.as_ref(),
-                &indices,
-                None, // None: no index check
-            )?;
-            let orderings = get_arrayref_at_indices(orderings, &indices)?;
-
-            Self::convert_arr_to_vec(&sorted_value, &orderings)
-        }
     }
 
     fn convert_arr_to_vec(

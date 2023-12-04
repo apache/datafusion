@@ -23,7 +23,8 @@ use std::sync::Arc;
 use crate::aggregate::utils::{down_cast_any_ref, ordering_fields};
 use crate::expressions::format_state_name;
 use crate::{
-    reverse_order_bys, AggregateExpr, LexOrdering, PhysicalExpr, PhysicalSortExpr,
+    reverse_order_bys, AggregateExpr, LexOrdering, LexOrderingRef, PhysicalExpr,
+    PhysicalSortExpr,
 };
 
 use arrow::array::{Array, ArrayRef, AsArray, BooleanArray};
@@ -550,50 +551,76 @@ fn get_sort_options(ordering_req: &[PhysicalSortExpr]) -> Vec<SortOptions> {
         .collect::<Vec<_>>()
 }
 
+// /// Gets either first, or last value index inside values columns according to ordering requirements
+// fn get_value_idx<const FIRST: bool>(
+//     values: &[ArrayRef],
+//     ordering_req: &[PhysicalSortExpr],
+//     is_set: bool,
+// ) -> Result<Option<usize>> {
+//     let value = &values[0];
+//     let ordering_values = &values[1..];
+//     if value.is_empty() {
+//         // For empty batches there is nothing to update
+//         return Ok(None);
+//     }
+//
+//     Ok(Some(if ordering_req.is_empty() && !is_set && FIRST {
+//         0
+//     } else if ordering_req.is_empty() && is_set && FIRST {
+//         // No need to overwrite existing value, when no ordering is specified
+//         // Just use first value encountered
+//         return Ok(None);
+//     } else if ordering_req.is_empty() && !FIRST {
+//         value.len() - 1
+//     } else {
+//         // Calculate real first, or last value according to requirement.
+//         let sort_options = if FIRST {
+//             get_sort_options(ordering_req)
+//         } else {
+//             // last
+//             // Reverse requirement options (e.g last, is the first entry in the reverse order)
+//             ordering_req
+//                 .iter()
+//                 .map(|sort_expr| !sort_expr.options)
+//                 .collect()
+//         };
+//
+//         let sort_columns = ordering_values
+//             .iter()
+//             .zip(sort_options)
+//             .map(|(col, options)| SortColumn {
+//                 values: col.clone(),
+//                 options: Some(options),
+//             })
+//             .collect::<Vec<_>>();
+//         let indices = lexsort_to_indices(&sort_columns, Some(1))?;
+//         indices.value(0) as usize
+//     }))
+// }
+
 /// Gets either first, or last value index inside values columns according to ordering requirements
 fn get_value_idx<const FIRST: bool>(
     values: &[ArrayRef],
-    ordering_req: &[PhysicalSortExpr],
+    ordering_req: LexOrderingRef,
     is_set: bool,
 ) -> Result<Option<usize>> {
     let value = &values[0];
-    let ordering_values = &values[1..];
+    let _ordering_values = &values[1..];
     if value.is_empty() {
         // For empty batches there is nothing to update
         return Ok(None);
     }
-
-    Ok(Some(if ordering_req.is_empty() && !is_set && FIRST {
-        0
-    } else if ordering_req.is_empty() && is_set && FIRST {
+    if is_set && FIRST && ordering_req.is_empty() {
         // No need to overwrite existing value, when no ordering is specified
         // Just use first value encountered
         return Ok(None);
-    } else if ordering_req.is_empty() && !FIRST {
-        value.len() - 1
-    } else {
-        // Calculate real first, or last value according to requirement.
-        let sort_options = if FIRST {
-            get_sort_options(ordering_req)
-        } else {
-            // last
-            // Reverse requirement options (e.g last, is the first entry in the reverse order)
-            ordering_req
-                .iter()
-                .map(|sort_expr| !sort_expr.options)
-                .collect()
-        };
+    }
 
-        let sort_columns = ordering_values
-            .iter()
-            .zip(sort_options)
-            .map(|(col, options)| SortColumn {
-                values: col.clone(),
-                options: Some(options),
-            })
-            .collect::<Vec<_>>();
-        let indices = lexsort_to_indices(&sort_columns, Some(1))?;
-        indices.value(0) as usize
+    Ok(Some(if FIRST {
+        0
+    } else {
+        // LAST
+        value.len() - 1
     }))
 }
 

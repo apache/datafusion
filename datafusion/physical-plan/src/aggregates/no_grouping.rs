@@ -18,7 +18,8 @@
 //! Aggregate without grouping columns
 
 use crate::aggregates::{
-    aggregate_expressions, create_accumulators, finalize_aggregation, AccumulatorItem,
+    aggregate_expressions, create_accumulators, finalize_aggregation,
+    finalize_aggregation_groups, get_groups_indices, AccumulatorItem, AggregateGroup,
     AggregateMode,
 };
 use crate::metrics::{BaselineMetrics, RecordOutput};
@@ -34,6 +35,8 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use crate::filter::batch_filter;
+use crate::sorts::sort::sort_batch;
+use datafusion_common::utils::get_at_indices;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use futures::stream::{Stream, StreamExt};
 
@@ -57,12 +60,19 @@ struct AggregateStreamInner {
     mode: AggregateMode,
     input: SendableRecordBatchStream,
     baseline_metrics: BaselineMetrics,
-    aggregate_expressions: Vec<Vec<Arc<dyn PhysicalExpr>>>,
-    filter_expressions: Vec<Option<Arc<dyn PhysicalExpr>>>,
-    accumulators: Vec<AccumulatorItem>,
+    // aggregate_expressions: Vec<Vec<Arc<dyn PhysicalExpr>>>,
+    // filter_expressions: Vec<Option<Arc<dyn PhysicalExpr>>>,
+    // accumulators: Vec<AccumulatorItem>,
+    aggregate_groups: Vec<AggregateGroup>,
     reservation: MemoryReservation,
     finished: bool,
 }
+
+// struct AggregateGroup{
+//     aggregate_expressions: Vec<Vec<Arc<dyn PhysicalExpr>>>,
+//     filter_expressions: Vec<Option<Arc<dyn PhysicalExpr>>>,
+//     accumulators: Vec<AccumulatorItem>,
+// }
 
 impl AggregateStream {
     /// Create a new AggregateStream
@@ -76,7 +86,7 @@ impl AggregateStream {
 
         let baseline_metrics = BaselineMetrics::new(&agg.metrics, partition);
         let input = agg.input.execute(partition, Arc::clone(&context))?;
-
+        let group_indices = get_groups_indices(&agg.aggr_expr, agg.group_by());
         let aggregate_expressions = aggregate_expressions(&agg.aggr_expr, &agg.mode, 0)?;
         let filter_expressions = match agg.mode {
             AggregateMode::Partial
@@ -90,15 +100,34 @@ impl AggregateStream {
 
         let reservation = MemoryConsumer::new(format!("AggregateStream[{partition}]"))
             .register(context.memory_pool());
-
+        let aggregate_groups = group_indices
+            .into_iter()
+            .map(|(indices, requirement)| {
+                let aggr_exprs = get_at_indices(&agg.aggr_expr, &indices)?;
+                let aggregate_expressions =
+                    get_at_indices(&aggregate_expressions, &indices)?;
+                let filter_expressions = get_at_indices(&filter_expressions, &indices)?;
+                // let accumulators = get_at_indices(&accumulators, &indices)?;
+                let accumulators = create_accumulators(&aggr_exprs)?;
+                Ok(AggregateGroup {
+                    aggregate_expressions,
+                    filter_expressions,
+                    accumulators,
+                    requirement,
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        // let aggregate_groups = vec![AggregateGroup {
+        //     aggregate_expressions,
+        //     filter_expressions,
+        //     accumulators,
+        // }];
         let inner = AggregateStreamInner {
             schema: Arc::clone(&agg.schema),
             mode: agg.mode,
             input,
             baseline_metrics,
-            aggregate_expressions,
-            filter_expressions,
-            accumulators,
+            aggregate_groups,
             reservation,
             finished: false,
         };
@@ -116,9 +145,7 @@ impl AggregateStream {
                         let result = aggregate_batch(
                             &this.mode,
                             batch,
-                            &mut this.accumulators,
-                            &this.aggregate_expressions,
-                            &this.filter_expressions,
+                            &mut this.aggregate_groups,
                         );
 
                         timer.done();
@@ -137,12 +164,15 @@ impl AggregateStream {
                     None => {
                         this.finished = true;
                         let timer = this.baseline_metrics.elapsed_compute().timer();
-                        let result = finalize_aggregation(&this.accumulators, &this.mode)
-                            .and_then(|columns| {
-                                RecordBatch::try_new(this.schema.clone(), columns)
-                                    .map_err(Into::into)
-                            })
-                            .record_output(&this.baseline_metrics);
+                        let result = finalize_aggregation_groups(
+                            &this.aggregate_groups,
+                            &this.mode,
+                        )
+                        .and_then(|columns| {
+                            RecordBatch::try_new(this.schema.clone(), columns)
+                                .map_err(Into::into)
+                        })
+                        .record_output(&this.baseline_metrics);
 
                         timer.done();
 
@@ -192,9 +222,9 @@ impl RecordBatchStream for AggregateStream {
 fn aggregate_batch(
     mode: &AggregateMode,
     batch: RecordBatch,
-    accumulators: &mut [AccumulatorItem],
-    expressions: &[Vec<Arc<dyn PhysicalExpr>>],
-    filters: &[Option<Arc<dyn PhysicalExpr>>],
+    aggregate_groups: &mut [AggregateGroup],
+    // expressions: &[Vec<Arc<dyn PhysicalExpr>>],
+    // filters: &[Option<Arc<dyn PhysicalExpr>>],
 ) -> Result<usize> {
     let mut allocated = 0usize;
 
@@ -203,39 +233,52 @@ fn aggregate_batch(
     // 1.3 evaluate expressions
     // 1.4 update / merge accumulators with the expressions' values
 
-    // 1.1
-    accumulators
+    aggregate_groups
         .iter_mut()
-        .zip(expressions)
-        .zip(filters)
-        .try_for_each(|((accum, expr), filter)| {
-            // 1.2
-            let batch = match filter {
-                Some(filter) => Cow::Owned(batch_filter(&batch, filter)?),
-                None => Cow::Borrowed(&batch),
+        .try_for_each(|aggregate_group| {
+            let accumulators = &mut aggregate_group.accumulators;
+            let expressions = &mut aggregate_group.aggregate_expressions;
+            let filters = &mut aggregate_group.filter_expressions;
+            let requirement = &aggregate_group.requirement;
+            let batch = if requirement.is_empty() {
+                batch.clone()
+            } else {
+                sort_batch(&batch, requirement, None)?
             };
-            // 1.3
-            let values = &expr
-                .iter()
-                .map(|e| {
-                    e.evaluate(&batch)
-                        .and_then(|v| v.into_array(batch.num_rows()))
-                })
-                .collect::<Result<Vec<_>>>()?;
+            // 1.1
+            accumulators
+                .iter_mut()
+                .zip(expressions)
+                .zip(filters)
+                .try_for_each(|((accum, expr), filter)| {
+                    // 1.2
+                    let batch = match filter {
+                        Some(filter) => Cow::Owned(batch_filter(&batch, filter)?),
+                        None => Cow::Borrowed(&batch),
+                    };
+                    // 1.3
+                    let values = &expr
+                        .iter()
+                        .map(|e| {
+                            e.evaluate(&batch)
+                                .and_then(|v| v.into_array(batch.num_rows()))
+                        })
+                        .collect::<Result<Vec<_>>>()?;
 
-            // 1.4
-            let size_pre = accum.size();
-            let res = match mode {
-                AggregateMode::Partial
-                | AggregateMode::Single
-                | AggregateMode::SinglePartitioned => accum.update_batch(values),
-                AggregateMode::Final | AggregateMode::FinalPartitioned => {
-                    accum.merge_batch(values)
-                }
-            };
-            let size_post = accum.size();
-            allocated += size_post.saturating_sub(size_pre);
-            res
+                    // 1.4
+                    let size_pre = accum.size();
+                    let res = match mode {
+                        AggregateMode::Partial
+                        | AggregateMode::Single
+                        | AggregateMode::SinglePartitioned => accum.update_batch(values),
+                        AggregateMode::Final | AggregateMode::FinalPartitioned => {
+                            accum.merge_batch(values)
+                        }
+                    };
+                    let size_post = accum.size();
+                    allocated += size_post.saturating_sub(size_pre);
+                    res
+                })
         })?;
 
     Ok(allocated)
