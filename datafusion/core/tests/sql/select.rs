@@ -526,6 +526,53 @@ async fn test_prepare_statement() -> Result<()> {
 }
 
 #[tokio::test]
+async fn test_named_query_parameters() -> Result<()> {
+    let tmp_dir = TempDir::new()?;
+    let partition_count = 4;
+    let ctx = partitioned_csv::create_ctx(&tmp_dir, partition_count).await?;
+
+    // sql to statement then to logical plan with parameters
+    // c1 defined as UINT32, c2 defined as UInt64
+    let results = ctx
+        .sql("SELECT c1, c2 FROM test WHERE c1 > $coo AND c1 < $foo")
+        .await?
+        .with_param_values(vec![
+            ("foo", ScalarValue::UInt32(Some(3))),
+            ("coo", ScalarValue::UInt32(Some(0))),
+        ])?
+        .collect()
+        .await?;
+    let expected = vec![
+        "+----+----+",
+        "| c1 | c2 |",
+        "+----+----+",
+        "| 1  | 1  |",
+        "| 1  | 2  |",
+        "| 1  | 3  |",
+        "| 1  | 4  |",
+        "| 1  | 5  |",
+        "| 1  | 6  |",
+        "| 1  | 7  |",
+        "| 1  | 8  |",
+        "| 1  | 9  |",
+        "| 1  | 10 |",
+        "| 2  | 1  |",
+        "| 2  | 2  |",
+        "| 2  | 3  |",
+        "| 2  | 4  |",
+        "| 2  | 5  |",
+        "| 2  | 6  |",
+        "| 2  | 7  |",
+        "| 2  | 8  |",
+        "| 2  | 9  |",
+        "| 2  | 10 |",
+        "+----+----+",
+    ];
+    assert_batches_sorted_eq!(expected, &results);
+    Ok(())
+}
+
+#[tokio::test]
 async fn parallel_query_with_filter() -> Result<()> {
     let tmp_dir = TempDir::new()?;
     let partition_count = 4;

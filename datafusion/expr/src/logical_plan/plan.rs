@@ -48,7 +48,7 @@ use datafusion_common::tree_node::{
 use datafusion_common::{
     aggregate_functional_dependencies, internal_err, plan_err, Column, Constraints,
     DFField, DFSchema, DFSchemaRef, DataFusionError, FunctionalDependencies,
-    OwnedTableReference, Result, ScalarValue, UnnestOptions,
+    OwnedTableReference, ParamValues, Result, UnnestOptions,
 };
 // backwards compatibility
 pub use datafusion_common::display::{PlanType, StringifiedPlan, ToStringifiedPlan};
@@ -877,19 +877,19 @@ impl LogicalPlan {
                     input: Arc::new(inputs[0].clone()),
                 }))
             }
-            LogicalPlan::Explain(_) => {
-                // Explain should be handled specially in the optimizers;
-                // If this check cannot pass it means some optimizer pass is
-                // trying to optimize Explain directly
-                if expr.is_empty() {
-                    return plan_err!("Invalid EXPLAIN command. Expression is empty");
-                }
-
-                if inputs.is_empty() {
-                    return plan_err!("Invalid EXPLAIN command. Inputs are empty");
-                }
-
-                Ok(self.clone())
+            LogicalPlan::Explain(e) => {
+                assert!(
+                    expr.is_empty(),
+                    "Invalid EXPLAIN command. Expression should empty"
+                );
+                assert_eq!(inputs.len(), 1, "Invalid EXPLAIN command. Inputs are empty");
+                Ok(LogicalPlan::Explain(Explain {
+                    verbose: e.verbose,
+                    plan: Arc::new(inputs[0].clone()),
+                    stringified_plans: e.stringified_plans.clone(),
+                    schema: e.schema.clone(),
+                    logical_optimization_succeeded: e.logical_optimization_succeeded,
+                }))
             }
             LogicalPlan::Prepare(Prepare {
                 name, data_types, ..
@@ -993,32 +993,12 @@ impl LogicalPlan {
     /// ```
     pub fn with_param_values(
         self,
-        param_values: Vec<ScalarValue>,
+        param_values: impl Into<ParamValues>,
     ) -> Result<LogicalPlan> {
+        let param_values = param_values.into();
         match self {
             LogicalPlan::Prepare(prepare_lp) => {
-                // Verify if the number of params matches the number of values
-                if prepare_lp.data_types.len() != param_values.len() {
-                    return plan_err!(
-                        "Expected {} parameters, got {}",
-                        prepare_lp.data_types.len(),
-                        param_values.len()
-                    );
-                }
-
-                // Verify if the types of the params matches the types of the values
-                let iter = prepare_lp.data_types.iter().zip(param_values.iter());
-                for (i, (param_type, value)) in iter.enumerate() {
-                    if *param_type != value.data_type() {
-                        return plan_err!(
-                            "Expected parameter of type {:?}, got {:?} at index {}",
-                            param_type,
-                            value.data_type(),
-                            i
-                        );
-                    }
-                }
-
+                param_values.verify(&prepare_lp.data_types)?;
                 let input_plan = prepare_lp.input;
                 input_plan.replace_params_with_values(&param_values)
             }
@@ -1182,7 +1162,7 @@ impl LogicalPlan {
     /// See [`Self::with_param_values`] for examples and usage
     pub fn replace_params_with_values(
         &self,
-        param_values: &[ScalarValue],
+        param_values: &ParamValues,
     ) -> Result<LogicalPlan> {
         let new_exprs = self
             .expressions()
@@ -1239,36 +1219,15 @@ impl LogicalPlan {
     /// corresponding values provided in the params_values
     fn replace_placeholders_with_values(
         expr: Expr,
-        param_values: &[ScalarValue],
+        param_values: &ParamValues,
     ) -> Result<Expr> {
         expr.transform(&|expr| {
             match &expr {
                 Expr::Placeholder(Placeholder { id, data_type }) => {
-                    if id.is_empty() || id == "$0" {
-                        return plan_err!("Empty placeholder id");
-                    }
-                    // convert id (in format $1, $2, ..) to idx (0, 1, ..)
-                    let idx = id[1..].parse::<usize>().map_err(|e| {
-                        DataFusionError::Internal(format!(
-                            "Failed to parse placeholder id: {e}"
-                        ))
-                    })? - 1;
-                    // value at the idx-th position in param_values should be the value for the placeholder
-                    let value = param_values.get(idx).ok_or_else(|| {
-                        DataFusionError::Internal(format!(
-                            "No value found for placeholder with id {id}"
-                        ))
-                    })?;
-                    // check if the data type of the value matches the data type of the placeholder
-                    if Some(value.data_type()) != *data_type {
-                        return internal_err!(
-                            "Placeholder value type mismatch: expected {:?}, got {:?}",
-                            data_type,
-                            value.data_type()
-                        );
-                    }
+                    let value =
+                        param_values.get_placeholders_with_values(id, data_type)?;
                     // Replace the placeholder with the value
-                    Ok(Transformed::Yes(Expr::Literal(value.clone())))
+                    Ok(Transformed::Yes(Expr::Literal(value)))
                 }
                 Expr::ScalarSubquery(qry) => {
                     let subquery =
@@ -2580,7 +2539,7 @@ mod tests {
     use crate::{col, count, exists, in_subquery, lit, placeholder, GroupingSet};
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::tree_node::TreeNodeVisitor;
-    use datafusion_common::{not_impl_err, DFSchema, TableReference};
+    use datafusion_common::{not_impl_err, DFSchema, ScalarValue, TableReference};
     use std::collections::HashMap;
 
     fn employee_schema() -> Schema {
@@ -3028,7 +2987,8 @@ digraph {
             .build()
             .unwrap();
 
-        plan.replace_params_with_values(&[42i32.into()])
+        let param_values = vec![ScalarValue::Int32(Some(42))];
+        plan.replace_params_with_values(&param_values.clone().into())
             .expect_err("unexpectedly succeeded to replace an invalid placeholder");
 
         // test $0 placeholder
@@ -3041,7 +3001,7 @@ digraph {
             .build()
             .unwrap();
 
-        plan.replace_params_with_values(&[42i32.into()])
+        plan.replace_params_with_values(&param_values.into())
             .expect_err("unexpectedly succeeded to replace an invalid placeholder");
     }
 
@@ -3075,5 +3035,45 @@ digraph {
             .field_with_name(None, "bar")
             .unwrap()
             .is_nullable());
+    }
+
+    #[test]
+    fn test_transform_explain() {
+        let schema = Schema::new(vec![
+            Field::new("foo", DataType::Int32, false),
+            Field::new("bar", DataType::Int32, false),
+        ]);
+
+        let plan = table_scan(TableReference::none(), &schema, None)
+            .unwrap()
+            .explain(false, false)
+            .unwrap()
+            .build()
+            .unwrap();
+
+        let external_filter =
+            col("foo").eq(Expr::Literal(ScalarValue::Boolean(Some(true))));
+
+        // after transformation, because plan is not the same anymore,
+        // the parent plan is built again with call to LogicalPlan::with_new_inputs -> with_new_exprs
+        let plan = plan
+            .transform(&|plan| match plan {
+                LogicalPlan::TableScan(table) => {
+                    let filter = Filter::try_new(
+                        external_filter.clone(),
+                        Arc::new(LogicalPlan::TableScan(table)),
+                    )
+                    .unwrap();
+                    Ok(Transformed::Yes(LogicalPlan::Filter(filter)))
+                }
+                x => Ok(Transformed::No(x)),
+            })
+            .unwrap();
+
+        let expected = "Explain\
+                        \n  Filter: foo = Boolean(true)\
+                        \n    TableScan: ?table?";
+        let actual = format!("{}", plan.display_indent());
+        assert_eq!(expected.to_string(), actual)
     }
 }
