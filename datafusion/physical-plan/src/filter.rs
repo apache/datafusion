@@ -337,7 +337,9 @@ pub(crate) fn batch_filter(
             };
             Ok(as_boolean_array(&array)?)
                 // apply filter array to record batch
-                .and_then(|filter_array| Ok(filter_record_batch(&projected_batch, filter_array)?))
+                .and_then(|filter_array| {
+                    Ok(filter_record_batch(&projected_batch, filter_array)?)
+                })
         })
 }
 
