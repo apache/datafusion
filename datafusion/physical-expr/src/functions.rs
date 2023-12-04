@@ -885,6 +885,27 @@ pub fn create_physical_fun(
                 ))),
             })
         }
+        BuiltinScalarFunction::FindInSet => Arc::new(|args| match args[0].data_type() {
+            DataType::Utf8 => {
+                let func = invoke_if_unicode_expressions_feature_flag!(
+                    find_in_set,
+                    Int32Type,
+                    "find_in_set"
+                );
+                make_scalar_function(func)(args)
+            }
+            DataType::LargeUtf8 => {
+                let func = invoke_if_unicode_expressions_feature_flag!(
+                    find_in_set,
+                    Int64Type,
+                    "find_in_set"
+                );
+                make_scalar_function(func)(args)
+            }
+            other => Err(DataFusionError::Internal(format!(
+                "Unsupported data type {other:?} for function find_in_set",
+            ))),
+        }),
     })
 }
 

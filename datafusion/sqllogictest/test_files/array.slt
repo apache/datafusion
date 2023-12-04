@@ -2371,9 +2371,19 @@ select array_length(make_array(1, 2, 3, 4, 5)), array_length(make_array(1, 2, 3)
 ----
 5 3 3
 
+query III
+select array_length(arrow_cast(make_array(1, 2, 3, 4, 5), 'LargeList(Int64)')), array_length(arrow_cast(make_array(1, 2, 3), 'LargeList(Int64)')), array_length(arrow_cast(make_array([1, 2], [3, 4], [5, 6]), 'LargeList(List(Int64))'));
+----
+5 3 3
+
 # array_length scalar function #2
 query III
 select array_length(make_array(1, 2, 3, 4, 5), 1), array_length(make_array(1, 2, 3), 1), array_length(make_array([1, 2], [3, 4], [5, 6]), 1);
+----
+5 3 3
+
+query III
+select array_length(arrow_cast(make_array(1, 2, 3, 4, 5), 'LargeList(Int64)'), 1), array_length(arrow_cast(make_array(1, 2, 3), 'LargeList(Int64)'), 1), array_length(arrow_cast(make_array([1, 2], [3, 4], [5, 6]), 'LargeList(List(Int64))'), 1);
 ----
 5 3 3
 
@@ -2383,9 +2393,19 @@ select array_length(make_array(1, 2, 3, 4, 5), 2), array_length(make_array(1, 2,
 ----
 NULL NULL 2
 
+query III
+select array_length(arrow_cast(make_array(1, 2, 3, 4, 5), 'LargeList(Int64)'), 2), array_length(arrow_cast(make_array(1, 2, 3), 'LargeList(Int64)'), 2), array_length(arrow_cast(make_array([1, 2], [3, 4], [5, 6]), 'LargeList(List(Int64))'), 2);
+----
+NULL NULL 2
+
 # array_length scalar function #4
 query II
 select array_length(array_repeat(array_repeat(array_repeat(3, 5), 2), 3), 1), array_length(array_repeat(array_repeat(array_repeat(3, 5), 2), 3), 2);
+----
+3 2
+
+query II
+select array_length(arrow_cast(array_repeat(array_repeat(array_repeat(3, 5), 2), 3), 'LargeList(List(List(Int64)))'), 1), array_length(arrow_cast(array_repeat(array_repeat(array_repeat(3, 5), 2), 3), 'LargeList(List(List(Int64)))'), 2);
 ----
 3 2
 
@@ -2407,6 +2427,11 @@ select list_length(make_array(1, 2, 3, 4, 5)), list_length(make_array(1, 2, 3)),
 ----
 5 3 3 NULL
 
+query III
+select list_length(arrow_cast(make_array(1, 2, 3, 4, 5), 'LargeList(Int64)')), list_length(arrow_cast(make_array(1, 2, 3), 'LargeList(Int64)')), list_length(arrow_cast(make_array([1, 2], [3, 4], [5, 6]), 'LargeList(List(Int64))'));
+----
+5 3 3
+
 # array_length with columns
 query I
 select array_length(column1, column3) from arrays_values;
@@ -2420,9 +2445,33 @@ NULL
 NULL
 NULL
 
+query I
+select array_length(arrow_cast(column1, 'LargeList(Int64)'), column3) from arrays_values;
+----
+10
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+
 # array_length with columns and scalars
 query II
 select array_length(array[array[1, 2], array[3, 4]], column3), array_length(column1, 1) from arrays_values;
+----
+2 10
+2 10
+NULL 10
+NULL 10
+NULL NULL
+NULL 10
+NULL 10
+NULL 10
+
+query II
+select array_length(arrow_cast(array[array[1, 2], array[3, 4]], 'LargeList(List(Int64))'), column3), array_length(arrow_cast(column1, 'LargeList(Int64)'), 1) from arrays_values;
 ----
 2 10
 2 10
@@ -2479,10 +2528,44 @@ NULL [3] [4]
 ## array_ndims (aliases: `list_ndims`)
 
 # array_ndims scalar function #1
+
 query III
-select array_ndims(make_array(1, 2, 3)), array_ndims(make_array([1, 2], [3, 4])), array_ndims(make_array([[[[1], [2]]]]));
+select 
+  array_ndims(1),
+  array_ndims(null),
+  array_ndims([2, 3]);
 ----
-1 2 5
+0 0 1
+
+statement ok
+CREATE TABLE array_ndims_table
+AS VALUES
+  (1, [1, 2, 3], [[7]], [[[[[10]]]]]),
+  (2, [4, 5], [[8]], [[[[[10]]]]]),
+  (null, [6], [[9]], [[[[[10]]]]]),
+  (3, [6], [[9]], [[[[[10]]]]])
+;
+
+query IIII
+select 
+  array_ndims(column1),
+  array_ndims(column2),
+  array_ndims(column3),
+  array_ndims(column4)
+from array_ndims_table;
+----
+0 1 2 5
+0 1 2 5
+0 1 2 5
+0 1 2 5
+
+statement ok
+drop table array_ndims_table;
+
+query I
+select array_ndims(arrow_cast([null], 'List(List(List(Int64)))'));
+----
+3
 
 # array_ndims scalar function #2
 query II
@@ -2494,7 +2577,7 @@ select array_ndims(array_repeat(array_repeat(array_repeat(1, 3), 2), 1)), array_
 query II
 select array_ndims(make_array()), array_ndims(make_array(make_array()))
 ----
-NULL 2
+1 2
 
 # list_ndims scalar function #4 (function alias `array_ndims`)
 query III
@@ -2505,7 +2588,7 @@ select list_ndims(make_array(1, 2, 3)), list_ndims(make_array([1, 2], [3, 4])), 
 query II
 select array_ndims(make_array()), array_ndims(make_array(make_array()))
 ----
-NULL 2
+1 2
 
 # array_ndims with columns
 query III
@@ -3056,15 +3139,30 @@ select empty(make_array(1));
 ----
 false
 
+query B
+select empty(arrow_cast(make_array(1), 'LargeList(Int64)'));
+----
+false
+
 # empty scalar function #2
 query B
 select empty(make_array());
 ----
 true
 
+query B
+select empty(arrow_cast(make_array(), 'LargeList(Null)'));
+----
+true
+
 # empty scalar function #3
 query B
 select empty(make_array(NULL));
+----
+false
+
+query B
+select empty(arrow_cast(make_array(NULL), 'LargeList(Null)'));
 ----
 false
 
@@ -3077,6 +3175,17 @@ NULL
 # empty scalar function #5
 query B
 select empty(column1) from arrays;
+----
+false
+false
+false
+false
+NULL
+false
+false
+
+query B
+select empty(arrow_cast(column1, 'LargeList(List(Int64))')) from arrays;
 ----
 false
 false

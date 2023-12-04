@@ -529,7 +529,7 @@ fn rewrite_expr(expr: &Expr, input: &Projection) -> Result<Option<Expr>> {
             )))
         }
         Expr::ScalarFunction(scalar_fn) => {
-            let ScalarFunctionDefinition::BuiltIn { fun, .. } = scalar_fn.func_def else {
+            let ScalarFunctionDefinition::BuiltIn(fun) = scalar_fn.func_def else {
                 return Ok(None);
             };
             scalar_fn
@@ -842,7 +842,7 @@ fn rewrite_projection_given_requirements(
         if &projection_schema(&input, &exprs_used)? == input.schema() {
             Ok(Some(input))
         } else {
-            let new_proj = Projection::try_new(exprs_used, Arc::new(input.clone()))?;
+            let new_proj = Projection::try_new(exprs_used, Arc::new(input))?;
             let new_proj = LogicalPlan::Projection(new_proj);
             Ok(Some(new_proj))
         }
@@ -860,4 +860,61 @@ fn rewrite_projection_given_requirements(
         // Projection doesn't change.
         Ok(None)
     };
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::optimize_projections::OptimizeProjections;
+    use datafusion_common::Result;
+    use datafusion_expr::{
+        binary_expr, col, lit, logical_plan::builder::LogicalPlanBuilder, LogicalPlan,
+        Operator,
+    };
+    use std::sync::Arc;
+
+    use crate::test::*;
+
+    fn assert_optimized_plan_equal(plan: &LogicalPlan, expected: &str) -> Result<()> {
+        assert_optimized_plan_eq(Arc::new(OptimizeProjections::new()), plan, expected)
+    }
+
+    #[test]
+    fn merge_two_projection() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .project(vec![col("a")])?
+            .project(vec![binary_expr(lit(1), Operator::Plus, col("a"))])?
+            .build()?;
+
+        let expected = "Projection: Int32(1) + test.a\
+        \n  TableScan: test projection=[a]";
+        assert_optimized_plan_equal(&plan, expected)
+    }
+
+    #[test]
+    fn merge_three_projection() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .project(vec![col("a"), col("b")])?
+            .project(vec![col("a")])?
+            .project(vec![binary_expr(lit(1), Operator::Plus, col("a"))])?
+            .build()?;
+
+        let expected = "Projection: Int32(1) + test.a\
+        \n  TableScan: test projection=[a]";
+        assert_optimized_plan_equal(&plan, expected)
+    }
+
+    #[test]
+    fn merge_alias() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .project(vec![col("a")])?
+            .project(vec![col("a").alias("alias")])?
+            .build()?;
+
+        let expected = "Projection: test.a AS alias\
+        \n  TableScan: test projection=[a]";
+        assert_optimized_plan_equal(&plan, expected)
+    }
 }
