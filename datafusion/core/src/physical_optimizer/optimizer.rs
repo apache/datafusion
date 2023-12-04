@@ -97,9 +97,6 @@ impl PhysicalOptimizer {
             // Note that one should always run this rule after running the EnforceDistribution rule
             // as the latter may break local sorting requirements.
             Arc::new(EnforceSorting::new()),
-            // The CoalesceBatches rule will not influence the distribution and ordering of the
-            // whole plan tree. Therefore, to avoid influencing other rules, it should run last.
-            Arc::new(CoalesceBatches::new()),
             // Remove the ancillary output requirement operator since we are done with the planning
             // phase.
             Arc::new(OutputRequirements::new_remove_mode()),
@@ -120,6 +117,9 @@ impl PhysicalOptimizer {
             // are not present, the load of executors such as join or union will be
             // reduced by narrowing their input tables.
             Arc::new(ProjectionPushdown::new()),
+            // The CoalesceBatches rule will not influence the distribution and ordering of the
+            // whole plan tree. Therefore, to avoid influencing other rules, it should run last.
+            Arc::new(CoalesceBatches::new()),
         ];
 
         Self::with_rules(rules)

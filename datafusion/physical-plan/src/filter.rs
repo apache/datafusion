@@ -75,7 +75,7 @@ impl FilterExec {
         input: Arc<dyn ExecutionPlan>,
     ) -> Result<Self> {
         let projected_schema = project_schema(&input.schema(), projection.as_ref())?;
-        match predicate.data_type(projected_schema.as_ref())? {
+        match predicate.data_type(input.schema().as_ref())? {
             DataType::Boolean => Ok(Self {
                 predicate,
                 projection,
@@ -97,6 +97,11 @@ impl FilterExec {
     /// The input plan
     pub fn input(&self) -> &Arc<dyn ExecutionPlan> {
         &self.input
+    }
+
+    /// Projected indices
+    pub fn projection(&self) -> Option<&Vec<usize>> {
+        self.projection.as_ref()
     }
 }
 
@@ -122,7 +127,6 @@ impl ExecutionPlan for FilterExec {
 
     /// Get the schema for this execution plan
     fn schema(&self) -> SchemaRef {
-        // The filter operator does not make any changes to the schema of its input
         self.projected_schema.clone()
     }
 
@@ -206,7 +210,7 @@ impl ExecutionPlan for FilterExec {
         let predicate = self.predicate();
 
         let input_stats = self.input.statistics()?;
-        let schema = self.schema();
+        let schema = self.input.schema();
         if !check_support(predicate, &schema) {
             // assume filter selects 20% of rows if we cannot do anything smarter
             // tracking issue for making this configurable:
@@ -223,11 +227,11 @@ impl ExecutionPlan for FilterExec {
         let num_rows = input_stats.num_rows;
         let total_byte_size = input_stats.total_byte_size;
         let input_analysis_ctx = AnalysisContext::try_from_statistics(
-            &self.schema(),
+            &self.input().schema(),
             &input_stats.column_statistics,
         )?;
 
-        let analysis_ctx = analyze(predicate, input_analysis_ctx, &self.schema())?;
+        let analysis_ctx = analyze(predicate, input_analysis_ctx, &schema)?;
 
         // Estimate (inexact) selectivity of predicate
         let selectivity = analysis_ctx.selectivity.unwrap_or(1.0);
@@ -301,14 +305,20 @@ struct FilterExecStream {
 pub(crate) fn batch_filter(
     batch: &RecordBatch,
     predicate: &Arc<dyn PhysicalExpr>,
+    projection: Option<&Vec<usize>>,
 ) -> Result<RecordBatch> {
     predicate
         .evaluate(batch)
         .and_then(|v| v.into_array(batch.num_rows()))
         .and_then(|array| {
+            //load just the columns requested
+            let batch = match projection.as_ref() {
+                Some(columns) => batch.project(columns)?,
+                None => batch.clone(),
+            };
             Ok(as_boolean_array(&array)?)
                 // apply filter array to record batch
-                .and_then(|filter_array| Ok(filter_record_batch(batch, filter_array)?))
+                .and_then(|filter_array| Ok(filter_record_batch(&batch, filter_array)?))
         })
 }
 
@@ -326,11 +336,11 @@ impl Stream for FilterExecStream {
                     Some(Ok(batch)) => {
                         let timer = self.baseline_metrics.elapsed_compute().timer();
                         // load just the columns requested
-                        let batch = match self.projection.as_ref() {
-                            Some(columns) => batch.project(columns)?,
-                            None => batch.clone(),
-                        };
-                        let filtered_batch = batch_filter(&batch, &self.predicate)?;
+                        let filtered_batch = batch_filter(
+                            &batch,
+                            &self.predicate,
+                            self.projection.as_ref(),
+                        )?;
                         // skip entirely filtered batches
                         if filtered_batch.num_rows() == 0 {
                             continue;
