@@ -582,4 +582,9 @@ drop table test_column_defaults
 
 # test invalid default value
 statement error DataFusion error: Error during planning: Column reference is not allowed in the DEFAULT expression : Schema error: No field named a.
-create table test_column_defaults(a int, b int default a+1)
+CREATE EXTERNAL TABLE test_column_defaults(
+  a int,
+  b int default a+1
+) STORED AS parquet
+LOCATION 'test_files/scratch/insert_to_external/external_parquet_table_q7'
+OPTIONS (create_local_path 'true');
