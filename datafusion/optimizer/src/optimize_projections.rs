@@ -439,22 +439,22 @@ fn merge_consecutive_projections(proj: &Projection) -> Result<Option<Projection>
 /// Consider:
 ///
 /// ```text
-/// Projection (a1 + b1 as sum1)
-/// --Projection (a as a1, b as b1)
-/// ----Source (a, b)
+/// Projection(a1 + b1 as sum1)
+/// --Projection(a as a1, b as b1)
+/// ----Source(a, b)
 /// ```
 ///
 /// After merge, we want to produce:
 ///
 /// ```text
-/// Projection (a + b as sum1)
+/// Projection(a + b as sum1)
 /// --Source(a, b)
 /// ```
 ///
 /// Without trimming, we would end up with:
 ///
 /// ```text
-/// Projection (a as a1 + b as b1 as sum1)
+/// Projection((a as a1 + b as b1) as sum1)
 /// --Source(a, b)
 /// ```
 fn trim_expr(expr: Expr) -> Expr {
@@ -464,7 +464,7 @@ fn trim_expr(expr: Expr) -> Expr {
     }
 }
 
-// Check whether `expr` is trivial (e.g it doesn't imply any computation).
+// Check whether `expr` is trivial; i.e. it doesn't imply any computation.
 fn is_expr_trivial(expr: &Expr) -> bool {
     matches!(expr, Expr::Column(_) | Expr::Literal(_))
 }
@@ -497,77 +497,70 @@ macro_rules! rewrite_expr_with_check {
 /// - `Ok(None)`: Signals that `expr` can not be rewritten.
 /// - `Err(error)`: An error occured during the function call.
 fn rewrite_expr(expr: &Expr, input: &Projection) -> Result<Option<Expr>> {
-    Ok(match expr {
+    let result = match expr {
         Expr::Column(col) => {
-            // Find index of column
+            // Find index of column:
             let idx = input.schema.index_of_column(col)?;
-            Some(input.expr[idx].clone())
+            input.expr[idx].clone()
         }
-        Expr::BinaryExpr(binary) => {
-            let lhs = trim_expr(rewrite_expr_with_check!(&binary.left, input));
-            let rhs = trim_expr(rewrite_expr_with_check!(&binary.right, input));
-            Some(Expr::BinaryExpr(BinaryExpr::new(
-                Box::new(lhs),
-                binary.op,
-                Box::new(rhs),
-            )))
-        }
-        Expr::Alias(alias) => {
-            let new_expr = trim_expr(rewrite_expr_with_check!(&alias.expr, input));
-            Some(Expr::Alias(Alias::new(
-                new_expr,
-                alias.relation.clone(),
-                alias.name.clone(),
-            )))
-        }
-        Expr::Literal(_val) => Some(expr.clone()),
+        Expr::BinaryExpr(binary) => Expr::BinaryExpr(BinaryExpr::new(
+            Box::new(trim_expr(rewrite_expr_with_check!(&binary.left, input))),
+            binary.op,
+            Box::new(trim_expr(rewrite_expr_with_check!(&binary.right, input))),
+        )),
+        Expr::Alias(alias) => Expr::Alias(Alias::new(
+            trim_expr(rewrite_expr_with_check!(&alias.expr, input)),
+            alias.relation.clone(),
+            alias.name.clone(),
+        )),
+        Expr::Literal(_) => expr.clone(),
         Expr::Cast(cast) => {
             let new_expr = rewrite_expr_with_check!(&cast.expr, input);
-            Some(Expr::Cast(Cast::new(
-                Box::new(new_expr),
-                cast.data_type.clone(),
-            )))
+            Expr::Cast(Cast::new(Box::new(new_expr), cast.data_type.clone()))
         }
         Expr::ScalarFunction(scalar_fn) => {
+            // TODO: Support UDFs.
             let ScalarFunctionDefinition::BuiltIn(fun) = scalar_fn.func_def else {
                 return Ok(None);
             };
-            scalar_fn
+            return Ok(scalar_fn
                 .args
                 .iter()
                 .map(|expr| rewrite_expr(expr, input))
                 .collect::<Result<Option<_>>>()?
-                .map(|new_args| Expr::ScalarFunction(ScalarFunction::new(fun, new_args)))
+                .map(|new_args| {
+                    Expr::ScalarFunction(ScalarFunction::new(fun, new_args))
+                }));
         }
-        _ => {
-            // Unsupported type for consecutive projection merge analysis.
-            None
-        }
-    })
+        // Unsupported type for consecutive projection merge analysis.
+        _ => return Ok(None),
+    };
+    Ok(Some(result))
 }
 
-/// Retrieves a set of outer-referenced columns from an expression.
-/// Please note that `expr.to_columns()` API doesn't return these columns.
+/// Retrieves a set of outer-referenced columns by expression `expr`. Note that
+/// the `Expr::to_columns()` function doesn't return these columns.
 ///
-/// # Arguments
+/// # Parameters
 ///
-/// * `expr` - The expression to be analyzed for outer-referenced columns.
+/// * `expr` - The expression to analyze for outer-referenced columns.
 ///
 /// # Returns
 ///
-/// A `HashSet<Column>` containing columns that are referenced by the expression.
+/// A `HashSet<Column>` containing columns that are referenced by `expr`.
 fn outer_columns(expr: &Expr) -> HashSet<Column> {
     let mut columns = HashSet::new();
     outer_columns_helper(expr, &mut columns);
     columns
 }
 
-/// Helper function to accumulate outer-referenced columns referred by the `expr`.
+/// Helper function to accumulate outer-referenced columns by expression `expr`.
 ///
-/// # Arguments
+/// # Parameters
 ///
-/// * `expr` - The expression to be analyzed for outer-referenced columns.
-/// * `columns` - A mutable reference to a `HashSet<Column>` where the detected columns are collected.
+/// * `expr` - The expression to analyze for outer-referenced columns.
+/// * `columns` - A mutable reference to a `HashSet<Column>` where detected
+///   columns are collected.
 fn outer_columns_helper(expr: &Expr, columns: &mut HashSet<Column>) {
     match expr {
         Expr::OuterReferenceColumn(_, col) => {
