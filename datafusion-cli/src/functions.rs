@@ -16,12 +16,25 @@
 // under the License.
 
 //! Functions that are query-able and searchable via the `\h` command
-use arrow::array::StringArray;
-use arrow::datatypes::{DataType, Field, Schema};
+use arrow::array::Int32Array;
+use arrow::array::{Int64Array, StringArray};
+use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use arrow::util::pretty::pretty_format_batches;
+use async_trait::async_trait;
+use datafusion::common::DataFusionError;
+use datafusion::common::{plan_err, Column};
+use datafusion::datasource::function::TableFunctionImpl;
+use datafusion::datasource::TableProvider;
 use datafusion::error::Result;
+use datafusion::execution::context::SessionState;
+use datafusion::logical_expr::Expr;
+use datafusion::physical_plan::memory::MemoryExec;
+use datafusion::physical_plan::ExecutionPlan;
+use parquet::file::reader::FileReader;
+use parquet::file::serialized_reader::SerializedFileReader;
 use std::fmt;
+use std::fs::File;
 use std::str::FromStr;
 use std::sync::Arc;
 
@@ -195,4 +208,111 @@ pub fn display_all_functions() -> Result<()> {
     let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(array)])?;
     println!("{}", pretty_format_batches(&[batch]).unwrap());
     Ok(())
+}
+
+/// PARQUET_META table function
+struct ParquetMetadataTable {
+    schema: SchemaRef,
+    batch: RecordBatch,
+}
+
+#[async_trait]
+impl TableProvider for ParquetMetadataTable {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn schema(&self) -> arrow::datatypes::SchemaRef {
+        self.schema.clone()
+    }
+
+    fn table_type(&self) -> datafusion::logical_expr::TableType {
+        datafusion::logical_expr::TableType::Base
+    }
+
+    async fn scan(
+        &self,
+        _state: &SessionState,
+        projection: Option<&Vec<usize>>,
+        _filters: &[Expr],
+        _limit: Option<usize>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        Ok(Arc::new(MemoryExec::try_new(
+            &[vec![self.batch.clone()]],
+            TableProvider::schema(self),
+            projection.cloned(),
+        )?))
+    }
+}
+
+pub struct ParquetMetadataFunc {}
+
+impl TableFunctionImpl for ParquetMetadataFunc {
+    fn call(&self, exprs: &[Expr]) -> Result<Arc<dyn TableProvider>> {
+        let Some(Expr::Column(Column { name, .. })) = exprs.get(0) else {
+            return plan_err!("read_csv requires at least one string argument");
+        };
+
+        let file = File::open(name)?;
+        let reader = SerializedFileReader::new(file)?;
+        let metadata = reader.metadata();
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("version", DataType::Int32, false),
+            Field::new("num_rows", DataType::Int64, false),
+            Field::new("created_by", DataType::Utf8, false),
+            Field::new("columns_order", DataType::Utf8, false),
+            Field::new("num_row_groups", DataType::Int64, false),
+            Field::new("row_groups", DataType::Utf8, false),
+        ]));
+
+        // construct recordbatch from metadata
+        let num_groups = metadata.num_row_groups();
+        let row_groups = metadata
+            .row_groups()
+            .iter()
+            .map(|rg| {
+                format!(
+                    "num_columns: {}, num_rows: {}, total_byte_size: {}, sorting_columns: {:?}",
+                    rg.num_columns(),
+                    rg.num_rows(),
+                    rg.total_byte_size(),
+                    rg.sorting_columns()
+                )
+            })
+            .collect::<Vec<String>>();
+
+        let rb = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(Int32Array::from(vec![
+                    metadata.file_metadata().version();
+                    num_groups
+                ])),
+                Arc::new(Int64Array::from(vec![
+                    metadata.file_metadata().num_rows();
+                    num_groups
+                ])),
+                Arc::new(StringArray::from(vec![
+                    format!(
+                        "{:?}",
+                        metadata.file_metadata().created_by()
+                    );
+                    num_groups
+                ])),
+                Arc::new(StringArray::from(vec![
+                    format!(
+                        "{:?}",
+                        metadata.file_metadata().column_orders()
+                    );
+                    num_groups
+                ])),
+                Arc::new(Int64Array::from(vec![num_groups as i64; num_groups])),
+                Arc::new(StringArray::from(row_groups)),
+            ],
+        )?;
+
+        let parquet_metadata = ParquetMetadataTable { schema, batch: rb };
+        Ok(Arc::new(parquet_metadata))
+    }
 }
