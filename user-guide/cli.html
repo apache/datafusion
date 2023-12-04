@@ -362,6 +362,11 @@
     </a>
    </li>
    <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#install-and-run-using-pypi">
+     Install and run using PyPI
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
     <a class="reference internal nav-link" href="#run-using-docker">
      Run using Docker
     </a>
@@ -482,7 +487,8 @@ try DataFusion’s SQL support with your own data.</p>
 </section>
 <section id="install-and-run-using-homebrew-on-macos">
 <h3>Install and run using Homebrew (on MacOS)<a class="headerlink" href="#install-and-run-using-homebrew-on-macos" title="Link to this heading">¶</a></h3>
-<p>DataFusion CLI can also be installed via Homebrew (on MacOS). Install it as any other pre-built software like this:</p>
+<p>DataFusion CLI can also be installed via Homebrew (on MacOS). If you don’t have Homebrew installed, you can check how to install it <a class="reference external" href="https://docs.brew.sh/Installation">here</a>.</p>
+<p>Install it as any other pre-built software like this:</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>brew<span class="w"> </span>install<span class="w"> </span>datafusion
 <span class="c1"># ==&gt; Downloading https://ghcr.io/v2/homebrew/core/datafusion/manifests/12.0.0</span>
 <span class="c1"># ######################################################################## 100.0%</span>
@@ -491,6 +497,32 @@ try DataFusion’s SQL support with your own data.</p>
 <span class="c1"># ######################################################################## 100.0%</span>
 <span class="c1"># ==&gt; Pouring datafusion--12.0.0.big_sur.bottle.tar.gz</span>
 <span class="c1"># 🍺  /usr/local/Cellar/datafusion/12.0.0: 9 files, 17.4MB</span>
+
+datafusion-cli
+</pre></div>
+</div>
+</section>
+<section id="install-and-run-using-pypi">
+<h3>Install and run using PyPI<a class="headerlink" href="#install-and-run-using-pypi" title="Link to this heading">¶</a></h3>
+<p>DataFusion CLI can also be installed via PyPI. You can check how to install PyPI <a class="reference external" href="https://pip.pypa.io/en/latest/installation/">here</a>.</p>
+<p>Install it as any other pre-built software like this:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>pip3<span class="w"> </span>install<span class="w"> </span>datafusion
+<span class="c1"># Defaulting to user installation because normal site-packages is not writeable</span>
+<span class="c1"># Collecting datafusion</span>
+<span class="c1">#   Downloading datafusion-33.0.0-cp38-abi3-macosx_11_0_arm64.whl.metadata (9.6 kB)</span>
+<span class="c1"># Collecting pyarrow&gt;=11.0.0 (from datafusion)</span>
+<span class="c1">#   Downloading pyarrow-14.0.1-cp39-cp39-macosx_11_0_arm64.whl.metadata (3.0 kB)</span>
+<span class="c1"># Requirement already satisfied: numpy&gt;=1.16.6 in /Users/Library/Python/3.9/lib/python/site-packages (from pyarrow&gt;=11.0.0-&gt;datafusion) (1.23.4)</span>
+<span class="c1"># Downloading datafusion-33.0.0-cp38-abi3-macosx_11_0_arm64.whl (13.5 MB)</span>
+<span class="c1">#    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 13.5/13.5 MB 3.6 MB/s eta 0:00:00</span>
+<span class="c1"># Downloading pyarrow-14.0.1-cp39-cp39-macosx_11_0_arm64.whl (24.0 MB)</span>
+<span class="c1">#    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 24.0/24.0 MB 36.4 MB/s eta 0:00:00</span>
+<span class="c1"># Installing collected packages: pyarrow, datafusion</span>
+<span class="c1">#   Attempting uninstall: pyarrow</span>
+<span class="c1">#     Found existing installation: pyarrow 10.0.1</span>
+<span class="c1">#     Uninstalling pyarrow-10.0.1:</span>
+<span class="c1">#       Successfully uninstalled pyarrow-10.0.1</span>
+<span class="c1"># Successfully installed datafusion-33.0.0 pyarrow-14.0.1</span>
 
 datafusion-cli
 </pre></div>
