@@ -15,12 +15,18 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::{array::*, datatypes::DataType};
+
+use std::sync::Arc;
+
+use arrow::{
+    array::*,
+    datatypes::{DataType, TimeUnit},
+};
+use chrono::Timelike;
 use datafusion::error::Result;
 use datafusion_expr::{
     ReturnTypeFunction, ScalarFunctionDef, ScalarFunctionPackage, Signature, Volatility,
 };
-use std::sync::Arc;
 
 #[derive(Debug)]
 pub struct HumanReadableSecondsFunction;
@@ -115,7 +121,33 @@ impl ScalarFunctionDef for HumanReadableSecondsFunction {
                 Some(formatted)
             })
             .collect::<StringArray>();
+        Ok(Arc::new(array) as ArrayRef)
+    }
+}
 
+
+#[derive(Debug)]
+pub struct CurrentTimeFunction;
+
+impl ScalarFunctionDef for CurrentTimeFunction {
+    fn name(&self) -> &str {
+        "current_time"
+    }
+
+    fn signature(&self) -> Signature {
+        Signature::exact(vec![], Volatility::Immutable)
+    }
+
+    fn return_type(&self) -> ReturnTypeFunction {
+        let return_type = Arc::new(DataType::Time32(TimeUnit::Millisecond));
+        Arc::new(move |_| Ok(return_type.clone()))
+    }
+
+    fn execute(&self, _args: &[ArrayRef]) -> Result<ArrayRef> {
+        let current_time = chrono::Local::now().time();
+        let milliseconds_since_midnight = current_time.num_seconds_from_midnight() * 1000;
+        let array =
+            Time32MillisecondArray::from(vec![Some(milliseconds_since_midnight as i32)]);
         Ok(Arc::new(array) as ArrayRef)
     }
 }
@@ -125,12 +157,13 @@ pub struct FunctionPackage;
 
 impl ScalarFunctionPackage for FunctionPackage {
     fn functions(&self) -> Vec<Box<dyn ScalarFunctionDef>> {
-        vec![Box::new(HumanReadableSecondsFunction)]
+        vec![Box::new(HumanReadableSecondsFunction), Box::new(CurrentTimeFunction)]
     }
 }
 
 #[cfg(test)]
 mod test {
+    use chrono::Local;
     use datafusion::error::Result;
     use datafusion::prelude::SessionContext;
     use tokio;
@@ -156,6 +189,14 @@ mod test {
             "human_readable_seconds(56363463)",
             "93 weeks, 1 day, 8 hours, 31 minutes, 3 seconds"
         );
+         Ok(())
+    }
+
+    async fn test_current_time() -> Result<()> {
+        let current = Local::now();
+        let formatted = current.format("%H:%M:%S").to_string();
+        test_expression!("current_time()", formatted);
+
         Ok(())
     }
 }

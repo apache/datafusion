@@ -36,6 +36,7 @@ arrow = { workspace = true }
 #arrow-flight = { workspace = true }
 #arrow-schema = { workspace = true }
 tokio = "1.33.0"
+chrono = "0.4"
 
 [features]
 example = []

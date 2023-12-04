@@ -95,7 +95,7 @@ jobs:
         with:
           rust-version: stable
       - name: Run tests (excluding doctests)
-        run: cargo test --lib --tests --bins --features avro,json,backtrace
+        run: cargo test --lib --tests --bins --features avro,json,backtrace,postgres,presto
       - name: Verify Working Directory Clean
         run: git diff --exit-code
 
@@ -306,7 +306,7 @@ jobs:
         shell: bash
         run: |
           export PATH=$PATH:$HOME/d/protoc/bin
-          cargo test --lib --tests --bins --features avro,json,backtrace
+          cargo test --lib --tests --bins --features avro,json,backtrace,postgres,presto
           cd datafusion-cli
           cargo test --lib --tests --bins --all-features
         env:
@@ -342,7 +342,7 @@ jobs:
       - name: Run tests (excluding doctests)
         shell: bash
         run: |
-          cargo test --lib --tests --bins --features avro,json,backtrace
+          cargo test --lib --tests --bins --features avro,json,backtrace,postgres,presto
           cd datafusion-cli
           cargo test --lib --tests --bins --all-features
         env:
