@@ -26,7 +26,7 @@ use arrow::{array::ArrayRef, datatypes::SchemaRef, error::ArrowError};
 use datafusion_common::{DataFusionError, Result};
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::{split_conjunction, PhysicalExpr};
-use log::{debug, trace};
+use log::{debug, trace, info};
 use parquet::schema::types::ColumnDescriptor;
 use parquet::{
     arrow::arrow_reader::{RowSelection, RowSelector},
@@ -515,6 +515,7 @@ macro_rules! get_min_max_values_for_page_index {
 
 impl<'a> PruningStatistics for PagesPruningStatistics<'a> {
     fn min_values(&self, _column: &datafusion_common::Column) -> Option<ArrayRef> {
+        info!("DF min_values for PagesPruningStatistics");
         get_min_max_values_for_page_index!(self, min)
     }
 

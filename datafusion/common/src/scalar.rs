@@ -1249,6 +1249,9 @@ impl ScalarValue {
     pub fn iter_to_array(
         scalars: impl IntoIterator<Item = ScalarValue>,
     ) -> Result<ArrayRef> {
+
+        // println!("iter_to_array input: {:?}", scalars);
+
         let mut scalars = scalars.into_iter().peekable();
 
         // figure out the type based on the first element
@@ -1260,6 +1263,8 @@ impl ScalarValue {
             }
             Some(sv) => sv.data_type(),
         };
+
+        println!("---------- iter_to_array data_type: {:?}", data_type);
 
         /// Creates an array of $ARRAY_TY by unpacking values of
         /// SCALAR_TY for primitive types

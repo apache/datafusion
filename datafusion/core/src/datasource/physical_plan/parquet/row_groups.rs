@@ -21,6 +21,7 @@ use arrow::{
 };
 use datafusion_common::tree_node::{TreeNode, VisitRecursion};
 use datafusion_common::{Column, DataFusionError, Result, ScalarValue};
+use log::info;
 use parquet::{
     arrow::{async_reader::AsyncFileReader, ParquetRecordBatchStreamBuilder},
     bloom_filter::Sbbf,
@@ -431,6 +432,7 @@ macro_rules! get_null_count_values {
 
 impl<'a> PruningStatistics for RowGroupPruningStatistics<'a> {
     fn min_values(&self, column: &Column) -> Option<ArrayRef> {
+        info!("DF min_values for RowGroupPruningStatistics");
         get_min_max_values!(self, column, min, min_bytes)
     }
 

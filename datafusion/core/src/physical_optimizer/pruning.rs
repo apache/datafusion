@@ -42,7 +42,7 @@ use datafusion_common::{
 };
 use datafusion_physical_expr::utils::collect_columns;
 use datafusion_physical_expr::{expressions as phys_expr, PhysicalExprRef};
-use log::trace;
+use log::{trace, info};
 
 /// Interface to pass statistics (min/max/nulls) information to [`PruningPredicate`].
 ///
@@ -183,10 +183,21 @@ impl PruningPredicate {
     ///
     /// [`ExprSimplifier`]: crate::optimizer::simplify_expressions::ExprSimplifier
     pub fn prune<S: PruningStatistics>(&self, statistics: &S) -> Result<Vec<bool>> {
+
         // build a RecordBatch that contains the min/max values in the
         // appropriate statistics columns
         let statistics_batch =
             build_statistics_record_batch(statistics, &self.required_columns)?;
+
+        info!(
+            "DF Pruning predicate: {:#?}",
+            self.predicate_expr
+        );
+
+        info!(
+            "DF statistics_batch: {:#?}",
+            statistics_batch
+        );
 
         // Evaluate the pruning predicate on that record batch.
         //
@@ -407,21 +418,50 @@ fn build_statistics_record_batch<S: PruningStatistics>(
     statistics: &S,
     required_columns: &RequiredStatColumns,
 ) -> Result<RecordBatch> {
+
+    info!("DF required columns for build_statistics_record_batch: {:#?}",
+            required_columns
+        );
+
     let mut fields = Vec::<Field>::new();
     let mut arrays = Vec::<ArrayRef>::new();
     // For each needed statistics column:
     for (column, statistics_type, stat_field) in required_columns.iter() {
+
         let column = Column::from_name(column.name());
         let data_type = stat_field.data_type();
 
-        let num_containers = statistics.num_containers();
+        info!("DF column for build_statistics_record_batch: {:#?}, data_type: {:#?}",
+            column, data_type
+        );
 
+        info!("DF statistics_type for build_statistics_record_batch: {:#?}",
+            statistics_type);
+
+        info!("DF stat_field for build_statistics_record_batch: {:#?}",
+            stat_field);
+
+
+        let num_containers = statistics.num_containers();
+        info!("DF num_containers for build_statistics_record_batch: {:#?}",
+            num_containers);
+
+        // HACK step 1: Return 2 lists:
+        //  1. List 1: stats values including the one without stats. We can use any value for that non-stats
+        //  2. List 2: indexes of values that have no stats
         let array = match statistics_type {
             StatisticsType::Min => statistics.min_values(&column),
             StatisticsType::Max => statistics.max_values(&column),
             StatisticsType::NullCount => statistics.null_counts(&column),
         };
+        info!("DF array for build_statistics_record_batch BEFORE: {:#?}",
+            array);
+
+        // HACK step 2: Use first list for this. There will be no nulls in the list
         let array = array.unwrap_or_else(|| new_null_array(data_type, num_containers));
+
+        info!("DF array for build_statistics_record_batch AFTER: {:#?}",
+            array);
 
         if num_containers != array.len() {
             return internal_err!(
@@ -434,17 +474,25 @@ fn build_statistics_record_batch<S: PruningStatistics>(
         // cast statistics array to required data type (e.g. parquet
         // provides timestamp statistics as "Int64")
         let array = arrow::compute::cast(&array, data_type)?;
+        info!("DF array for build_statistics_record_batch AFTER CASTING: {:#?}",
+            array);
+
+        // // HACK step 3: Make values of  `array` at index of list 2 to be 0 (false)
 
         fields.push(stat_field.clone());
         arrays.push(array);
     }
+
+    info!("DF fields for build_statistics_record_batch: {:#?}",
+            fields
+        );
 
     let schema = Arc::new(Schema::new(fields));
     // provide the count in case there were no needed statistics
     let mut options = RecordBatchOptions::default();
     options.row_count = Some(statistics.num_containers());
 
-    trace!(
+    info!(
         "Creating statistics batch for {:#?} with {:#?}",
         required_columns,
         arrays
@@ -1165,6 +1213,8 @@ mod tests {
 
     impl PruningStatistics for OneContainerStats {
         fn min_values(&self, _column: &Column) -> Option<ArrayRef> {
+            info!("DF min_values for OneContainerStats: {:#?}",
+                self.min_values.clone());
             self.min_values.clone()
         }
 
