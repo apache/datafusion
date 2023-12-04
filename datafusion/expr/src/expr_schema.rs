@@ -83,13 +83,12 @@ impl ExprSchemable for Expr {
             Expr::Cast(Cast { data_type, .. })
             | Expr::TryCast(TryCast { data_type, .. }) => Ok(data_type.clone()),
             Expr::ScalarFunction(ScalarFunction { func_def, args }) => {
+                let arg_data_types = args
+                    .iter()
+                    .map(|e| e.get_type(schema))
+                    .collect::<Result<Vec<_>>>()?;
                 match func_def {
                     ScalarFunctionDefinition::BuiltIn(fun) => {
-                        let arg_data_types = args
-                            .iter()
-                            .map(|e| e.get_type(schema))
-                            .collect::<Result<Vec<_>>>()?;
-
                         // verify that input data types is consistent with function's `TypeSignature`
                         data_types(&arg_data_types, &fun.signature()).map_err(|_| {
                             plan_datafusion_err!(
@@ -105,11 +104,7 @@ impl ExprSchemable for Expr {
                         fun.return_type(&arg_data_types)
                     }
                     ScalarFunctionDefinition::UDF(fun) => {
-                        let data_types = args
-                            .iter()
-                            .map(|e| e.get_type(schema))
-                            .collect::<Result<Vec<_>>>()?;
-                        Ok(fun.return_type(&data_types)?)
+                        Ok(fun.return_type(&arg_data_types)?)
                     }
                     ScalarFunctionDefinition::Name(_) => {
                         internal_err!("Function `Expr` with name should be resolved.")

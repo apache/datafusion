@@ -86,7 +86,7 @@ use datafusion_expr::expr::{
     Cast, GetFieldAccess, GetIndexedField, GroupingSet, InList, Like, TryCast,
     WindowFunction,
 };
-use datafusion_expr::expr_rewriter::{unalias, unnormalize_cols};
+use datafusion_expr::expr_rewriter::unnormalize_cols;
 use datafusion_expr::logical_plan::builder::wrap_projection_for_join_if_necessary;
 use datafusion_expr::{
     DescribeTable, DmlStatement, ScalarFunctionDefinition, StringifiedPlan, WindowFrame,
@@ -562,8 +562,7 @@ impl DefaultPhysicalPlanner {
                     // doesn't know (nor should care) how the relation was
                     // referred to in the query
                     let filters = unnormalize_cols(filters.iter().cloned());
-                    let unaliased: Vec<Expr> = filters.into_iter().map(unalias).collect();
-                    source.scan(session_state, projection.as_ref(), &unaliased, *fetch).await
+                    source.scan(session_state, projection.as_ref(), &filters, *fetch).await
                 }
                 LogicalPlan::Copy(CopyTo{
                     input,

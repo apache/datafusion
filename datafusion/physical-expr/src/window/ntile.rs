@@ -96,8 +96,9 @@ impl PartitionEvaluator for NtileEvaluator {
     ) -> Result<ArrayRef> {
         let num_rows = num_rows as u64;
         let mut vec: Vec<u64> = Vec::new();
+        let n = u64::min(self.n, num_rows);
         for i in 0..num_rows {
-            let res = i * self.n / num_rows;
+            let res = i * n / num_rows;
             vec.push(res + 1)
         }
         Ok(Arc::new(UInt64Array::from(vec)))

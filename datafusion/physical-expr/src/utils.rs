@@ -129,10 +129,11 @@ pub struct ExprTreeNode<T> {
 
 impl<T> ExprTreeNode<T> {
     pub fn new(expr: Arc<dyn PhysicalExpr>) -> Self {
+        let children = expr.children();
         ExprTreeNode {
             expr,
             data: None,
-            child_nodes: vec![],
+            child_nodes: children.into_iter().map(Self::new).collect_vec(),
         }
     }
 
@@ -140,12 +141,8 @@ impl<T> ExprTreeNode<T> {
         &self.expr
     }
 
-    pub fn children(&self) -> Vec<ExprTreeNode<T>> {
-        self.expr
-            .children()
-            .into_iter()
-            .map(ExprTreeNode::new)
-            .collect()
+    pub fn children(&self) -> &[ExprTreeNode<T>] {
+        &self.child_nodes
     }
 }
 
@@ -155,7 +152,7 @@ impl<T: Clone> TreeNode for ExprTreeNode<T> {
         F: FnMut(&Self) -> Result<VisitRecursion>,
     {
         for child in self.children() {
-            match op(&child)? {
+            match op(child)? {
                 VisitRecursion::Continue => {}
                 VisitRecursion::Skip => return Ok(VisitRecursion::Continue),
                 VisitRecursion::Stop => return Ok(VisitRecursion::Stop),
@@ -170,7 +167,7 @@ impl<T: Clone> TreeNode for ExprTreeNode<T> {
         F: FnMut(Self) -> Result<Self>,
     {
         self.child_nodes = self
-            .children()
+            .child_nodes
             .into_iter()
             .map(transform)
             .collect::<Result<Vec<_>>>()?;
