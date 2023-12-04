@@ -755,11 +755,18 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             )?;
         }
 
+        let mut planner_context = PlannerContext::new();
+
+        let column_defaults = self
+            .build_column_defaults(&columns, &mut planner_context)?
+            .into_iter()
+            .collect();
+
         let schema = self.build_schema(columns)?;
         let df_schema = schema.to_dfschema_ref()?;
 
         let ordered_exprs =
-            self.build_order_by(order_exprs, &df_schema, &mut PlannerContext::new())?;
+            self.build_order_by(order_exprs, &df_schema, &mut planner_context)?;
 
         // External tables do not support schemas at the moment, so the name is just a table name
         let name = OwnedTableReference::bare(name);
@@ -781,6 +788,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 unbounded,
                 options,
                 constraints,
+                column_defaults,
             },
         )))
     }
