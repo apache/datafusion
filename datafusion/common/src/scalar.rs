@@ -3497,7 +3497,6 @@ impl ScalarType<i64> for TimestampNanosecondType {
 }
 
 #[cfg(test)]
-#[cfg(feature = "parquet")]
 mod tests {
     use std::cmp::Ordering;
     use std::sync::Arc;
