@@ -2829,38 +2829,36 @@ mod tests {
             col("s1").eq(lit("foo")).and(col("s2").not_eq(lit("bar"))),
             &schema,
             &statistics,
-            // can only rule out container where we know the first is not present (Some(false)) and the second is (Some(true))
-            vec![true, false, true, true, true, true, true, true, true],
+            // can only rule out container where we know s1 is NOT present or s2 IS preset
+            vec![false, false, false, true, false, true, true, false, true],
         );
 
-        /*
         // s1 != 'foo' AND s2 != 'bar'
-        let expr = col("s1").eq(lit("foo")).and(col("s2").not_eq(lit("bar")));
-        let expr = logical2physical(&expr, &schema);
-        let p = PruningPredicate::try_new(expr, schema).unwrap();
-        // Can only rule out container where we know values are present (both are Some(true))
-        let expected_ret = vec![false, true, true, true, true, true, true, true, true];
-        let result = p.prune(&statistics).unwrap();
-        assert_eq!(result, expected_ret);
+        prune_with_expr(
+            col("s1").not_eq(lit("foo")).and(col("s2").not_eq(lit("bar"))),
+            &schema,
+            &statistics,
+            // Can  rule out any container where we know either values is present for sure
+            vec![false, false, false, false, true, true, false, true, true],
+        );
 
         // s1 like '%foo%bar%'
-        let expr = col("s1").like("foo%bar%");
-        let expr = logical2physical(&expr, &schema);
-        let p = PruningPredicate::try_new(expr, schema).unwrap();
-        // cant rule out anything (unknown predicate)
-        let expected_ret = vec![true, true, true, true, true, true, true, true, true];
-        let result = p.prune(&statistics).unwrap();
-        assert_eq!(result, expected_ret);
+        prune_with_expr(
+            col("s1").like(lit("foo%bar%")),
+            &schema,
+            &statistics,
+            // cant rule out anything (unknown predicate)
+            vec![true, true, true, true, true, true, true, true, true],
+        );
 
         // s1 like '%foo%bar%' AND s2 = 'bar'
-        let expr = col("s1").like("foo%bar%").and(col("s2").eq(lit("bar")));
-        let expr = logical2physical(&expr, &schema);
-        let p = PruningPredicate::try_new(expr, schema).unwrap();
-        // cant rule out all results when we know second column is false
-        let expected_ret = vec![true, true, true, false, false, false, true, true, true];
-        let result = p.prune(&statistics).unwrap();
-        assert_eq!(result, expected_ret);
-        */
+        prune_with_expr(
+            col("s1").like(lit("foo%bar%")).and(col("s2").eq(lit("bar"))),
+            &schema,
+            &statistics,
+            // can rule out all results when we know second column is false
+            vec![true, true, true, false, false, false, true, true, true],
+        );
     }
 
     #[test]
