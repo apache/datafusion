@@ -194,8 +194,18 @@ impl Accumulator for OrderSensitiveArrayAggAccumulator {
         }
         let value = &values[0];
         let orderings = &values[1..];
-        let (new_values, new_ordering_values) =
-            Self::convert_arr_to_vec(value, orderings)?;
+
+        let n_row = value.len();
+        // Convert &[ArrayRef] to Vec<Vec<ScalarValue>>
+        let new_ordering_values = (0..n_row)
+            .map(|idx| get_row_at_idx(orderings, idx))
+            .collect::<Result<Vec<_>>>()?;
+
+        // Convert ArrayRef to Vec<ScalarValue>
+        let new_values = (0..n_row)
+            .map(|idx| ScalarValue::try_from_array(value, idx))
+            .collect::<Result<Vec<_>>>()?;
+
         let sort_options = get_sort_options(&self.ordering_req);
 
         // Merge new values and new orderings
@@ -333,24 +343,6 @@ impl OrderSensitiveArrayAggAccumulator {
 
         let arr = ScalarValue::new_list(&orderings, &struct_type);
         Ok(ScalarValue::List(arr))
-    }
-
-    fn convert_arr_to_vec(
-        value: &ArrayRef,
-        orderings: &[ArrayRef],
-    ) -> Result<(Vec<ScalarValue>, Vec<Vec<ScalarValue>>)> {
-        let n_row = value.len();
-        // Convert &[ArrayRef] to Vec<Vec<ScalarValue>>
-        let orderings = (0..n_row)
-            .map(|idx| get_row_at_idx(orderings, idx))
-            .collect::<Result<Vec<_>>>()?;
-
-        // Convert ArrayRef to Vec<ScalarValue>
-        let value = (0..n_row)
-            .map(|idx| ScalarValue::try_from_array(value, idx))
-            .collect::<Result<Vec<_>>>()?;
-
-        Ok((value, orderings))
     }
 }
 
