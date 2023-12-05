@@ -1085,7 +1085,7 @@ mod tests {
     use std::collections::HashMap;
     use std::ops::{Not, Rem};
 
-    #[derive(Debug)]
+    #[derive(Debug, Default)]
     /// Mock statistic provider for tests
     ///
     /// Each row represents the statistics for a "container" (which
@@ -1094,94 +1094,82 @@ mod tests {
     ///
     /// Note All `ArrayRefs` must be the same size.
     struct ContainerStats {
-        min: ArrayRef,
-        max: ArrayRef,
+        min: Option<ArrayRef>,
+        max: Option<ArrayRef>,
         /// Optional values
         null_counts: Option<ArrayRef>,
         /// Optional known values (e.g. mimic a bloom filter)
         /// If present, must be the same size as min/max
-        known_values: Option<ArrayRef>,
+        contains: Option<ArrayRef>,
     }
 
     impl ContainerStats {
+        fn new() -> Self {
+            Default::default()
+        }
         fn new_decimal128(
             min: impl IntoIterator<Item = Option<i128>>,
             max: impl IntoIterator<Item = Option<i128>>,
             precision: u8,
             scale: i8,
         ) -> Self {
-            Self {
-                min: Arc::new(
+            Self::new()
+                .with_min(Arc::new(
                     min.into_iter()
                         .collect::<Decimal128Array>()
                         .with_precision_and_scale(precision, scale)
                         .unwrap(),
-                ),
-                max: Arc::new(
+                ))
+                .with_max(Arc::new(
                     max.into_iter()
                         .collect::<Decimal128Array>()
                         .with_precision_and_scale(precision, scale)
                         .unwrap(),
-                ),
-                null_counts: None,
-                known_values: None,
-            }
+                ))
         }
 
         fn new_i64(
             min: impl IntoIterator<Item = Option<i64>>,
             max: impl IntoIterator<Item = Option<i64>>,
         ) -> Self {
-            Self {
-                min: Arc::new(min.into_iter().collect::<Int64Array>()),
-                max: Arc::new(max.into_iter().collect::<Int64Array>()),
-                null_counts: None,
-                known_values: None,
-            }
+            Self::new()
+                .with_min(Arc::new(min.into_iter().collect::<Int64Array>()))
+                .with_max(Arc::new(max.into_iter().collect::<Int64Array>()))
         }
 
         fn new_i32(
             min: impl IntoIterator<Item = Option<i32>>,
             max: impl IntoIterator<Item = Option<i32>>,
         ) -> Self {
-            Self {
-                min: Arc::new(min.into_iter().collect::<Int32Array>()),
-                max: Arc::new(max.into_iter().collect::<Int32Array>()),
-                null_counts: None,
-                known_values: None,
-            }
+            Self::new()
+                .with_min(Arc::new(min.into_iter().collect::<Int32Array>()))
+                .with_max(Arc::new(max.into_iter().collect::<Int32Array>()))
         }
 
         fn new_utf8<'a>(
             min: impl IntoIterator<Item = Option<&'a str>>,
             max: impl IntoIterator<Item = Option<&'a str>>,
         ) -> Self {
-            Self {
-                min: Arc::new(min.into_iter().collect::<StringArray>()),
-                max: Arc::new(max.into_iter().collect::<StringArray>()),
-                null_counts: None,
-                known_values: None,
-            }
+            Self::new()
+                .with_min(Arc::new(min.into_iter().collect::<StringArray>()))
+                .with_max(Arc::new(max.into_iter().collect::<StringArray>()))
         }
 
         fn new_bool(
             min: impl IntoIterator<Item = Option<bool>>,
             max: impl IntoIterator<Item = Option<bool>>,
         ) -> Self {
-            Self {
-                min: Arc::new(min.into_iter().collect::<BooleanArray>()),
-                max: Arc::new(max.into_iter().collect::<BooleanArray>()),
-                null_counts: None,
-                known_values: None,
-            }
+            Self::new()
+                .with_min(Arc::new(min.into_iter().collect::<BooleanArray>()))
+                .with_max(Arc::new(max.into_iter().collect::<BooleanArray>()))
         }
 
         fn min(&self) -> Option<ArrayRef> {
-            Some(self.min.clone())
+            self.min.clone()
         }
 
         fn max(&self) -> Option<ArrayRef> {
-            Some(self.max.clone())
+            self.max.clone()
         }
 
         fn null_counts(&self) -> Option<ArrayRef> {
@@ -1189,8 +1177,53 @@ mod tests {
         }
 
         fn len(&self) -> usize {
-            assert_eq!(self.min.len(), self.max.len());
-            self.min.len()
+            // pick the first non zero length
+            self.min
+                .as_ref()
+                .map(|m| m.len())
+                .or_else(|| self.max.as_ref().map(|m| m.len()))
+                .or_else(|| self.null_counts.as_ref().map(|m| m.len()))
+                .or_else(|| self.contains.as_ref().map(|m| m.len()))
+                .unwrap_or(0)
+        }
+
+        /// Ensure that the lengths of all arrays are consistent
+        fn assert_invariants(&self) {
+            let lens = vec![
+                self.min.as_ref().map(|m| m.len()),
+                self.max.as_ref().map(|m| m.len()),
+                self.null_counts.as_ref().map(|m| m.len()),
+                self.contains.as_ref().map(|m| m.len()),
+            ];
+
+            let mut prev_len = None;
+
+            for maybe_len in lens {
+                // Get a length, if we don't already have one
+                match (prev_len, maybe_len) {
+                    (None, _) => {
+                        prev_len = maybe_len;
+                    }
+                    (Some(_), None) => {
+                        // no length to check
+                    }
+                    (Some(prev_len), Some(len)) => {
+                        assert_eq!(prev_len, len);
+                    }
+                }
+            }
+        }
+
+        /// Add min values
+        fn with_min(mut self, min: ArrayRef) -> Self {
+            self.min = Some(min);
+            self
+        }
+
+        /// Add max values
+        fn with_max(mut self, max: ArrayRef) -> Self {
+            self.max = Some(max);
+            self
         }
 
         /// Add null counts. There must be the same number of null counts as
@@ -1202,21 +1235,21 @@ mod tests {
             let null_counts: ArrayRef =
                 Arc::new(counts.into_iter().collect::<Int64Array>());
 
-            assert_eq!(null_counts.len(), self.len());
+            self.assert_invariants();
             self.null_counts = Some(null_counts);
             self
         }
 
         /// Add contains informaation.
-        pub fn with_known_values(
+        pub fn with_contains(
             mut self,
             values: impl IntoIterator<Item = Option<bool>>,
         ) -> Self {
-            let known_values: ArrayRef =
+            let contains: ArrayRef =
                 Arc::new(values.into_iter().collect::<BooleanArray>());
 
-            assert_eq!(known_values.len(), self.len());
-            self.known_values = Some(known_values);
+            self.assert_invariants();
+            self.contains = Some(contains);
             self
         }
     }
@@ -1256,7 +1289,7 @@ mod tests {
             let container_stats = self
                 .stats
                 .remove(&col)
-                .expect("Can not find stats for column")
+                .unwrap_or_else(|| ContainerStats::new())
                 .with_null_counts(counts);
 
             // put stats back in
@@ -1265,7 +1298,7 @@ mod tests {
         }
 
         /// Add contains informaation for the specified columm.
-        fn with_known_values(
+        fn with_contains(
             mut self,
             name: impl Into<String>,
             values: impl IntoIterator<Item = Option<bool>>,
@@ -1276,8 +1309,8 @@ mod tests {
             let container_stats = self
                 .stats
                 .remove(&col)
-                .expect("Can not find stats for column")
-                .with_known_values(values);
+                .unwrap_or_else(|| ContainerStats::new())
+                .with_contains(values);
 
             // put stats back in
             self.stats.insert(col, container_stats);
@@ -2554,7 +2587,7 @@ mod tests {
 
         // Model having information like bloom filters for s1 and s2
         let statistics = TestStatistics::new()
-            .with_known_values(
+            .with_contains(
                 "s1",
                 [
                     // container 0 known to contain value, 1 not contains, 2 unknown
@@ -2571,7 +2604,7 @@ mod tests {
                     None,
                 ],
             )
-            .with_known_values(
+            .with_contains(
                 "s2",
                 [
                     // container 0,1,2 contains
@@ -2678,7 +2711,7 @@ mod tests {
                 ),
             )
             // Add contains information about the containers
-            .with_known_values(
+            .with_contains(
                 "b",
                 [
                     // container 0, 1,2 contain value
