@@ -1100,7 +1100,7 @@ mod tests {
         null_counts: Option<ArrayRef>,
         /// Optional known values (e.g. mimic a bloom filter)
         /// If present, must be the same size as min/max
-        contains: Option<ArrayRef>,
+        contains: Option<BooleanArray>,
     }
 
     impl ContainerStats {
@@ -1245,8 +1245,7 @@ mod tests {
             mut self,
             values: impl IntoIterator<Item = Option<bool>>,
         ) -> Self {
-            let contains: ArrayRef =
-                Arc::new(values.into_iter().collect::<BooleanArray>());
+            let contains: BooleanArray = values.into_iter().collect();
 
             self.assert_invariants();
             self.contains = Some(contains);
@@ -1346,6 +1345,18 @@ mod tests {
                 .get(column)
                 .map(|container_stats| container_stats.null_counts())
                 .unwrap_or(None)
+        }
+
+        fn contains(
+            &self,
+            column: &Column,
+            _values: &HashSet<ScalarValue>,
+        ) -> Option<BooleanArray> {
+            // ignore values, just return the contains array for this column
+            // the testing the values is checked in more integration tests (e.g. bloom filter)
+            self.stats
+                .get(column)
+                .and_then(|container_stats| container_stats.contains.clone())
         }
     }
 
@@ -2621,6 +2632,15 @@ mod tests {
                     None,
                 ],
             );
+
+        // s1 = 'foo'
+        prune_with_expr(
+            col("s1").eq(lit("foo")),
+            &schema,
+            &statistics,
+            // rule out containers where we know s1 is not present
+            vec![true, false, true, true, false, true, true, false, true],
+        );
 
         // s1 = 'foo' OR s2 = 'bar'
         let expr = col("s1").eq(lit("foo")).or(col("s2").eq(lit("bar")));
