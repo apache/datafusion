@@ -1765,82 +1765,119 @@ pub fn array_ndims(args: &[ArrayRef]) -> Result<ArrayRef> {
     }
 }
 
-/// Array_has SQL function
-pub fn array_has(args: &[ArrayRef]) -> Result<ArrayRef> {
-    let array = as_list_array(&args[0])?;
-    let element = &args[1];
+/// Represents the type of comparison for array_has.
+#[derive(Debug, PartialEq)]
+enum ComparisonType {
+    // array_has_all
+    All,
+    // array_has_any
+    Any,
+    // array_has
+    Single,
+}
 
-    check_datatypes("array_has", &[array.values(), element])?;
+fn general_array_has_dispatch<O: OffsetSizeTrait>(
+    array: &ArrayRef,
+    sub_array: &ArrayRef,
+    comparison_type: ComparisonType,
+) -> Result<ArrayRef> {
+    let array = if comparison_type == ComparisonType::Single {
+        let arr = as_generic_list_array::<O>(array)?;
+        check_datatypes("array_has", &[arr.values(), sub_array])?;
+        arr
+    } else {
+        check_datatypes("array_has", &[array, sub_array])?;
+        as_generic_list_array::<O>(array)?
+    };
+
     let mut boolean_builder = BooleanArray::builder(array.len());
 
     let converter = RowConverter::new(vec![SortField::new(array.value_type())])?;
-    let r_values = converter.convert_columns(&[element.clone()])?;
-    for (row_idx, arr) in array.iter().enumerate() {
-        if let Some(arr) = arr {
+
+    let element = sub_array.clone();
+    let sub_array = if comparison_type != ComparisonType::Single {
+        as_generic_list_array::<O>(sub_array)?
+    } else {
+        array
+    };
+
+    for (row_idx, (arr, sub_arr)) in array.iter().zip(sub_array.iter()).enumerate() {
+        if let (Some(arr), Some(sub_arr)) = (arr, sub_arr) {
             let arr_values = converter.convert_columns(&[arr])?;
-            let res = arr_values
-                .iter()
-                .dedup()
-                .any(|x| x == r_values.row(row_idx));
+            let sub_arr_values = if comparison_type != ComparisonType::Single {
+                converter.convert_columns(&[sub_arr])?
+            } else {
+                converter.convert_columns(&[element.clone()])?
+            };
+
+            let mut res = match comparison_type {
+                ComparisonType::All => sub_arr_values
+                    .iter()
+                    .dedup()
+                    .all(|elem| arr_values.iter().dedup().any(|x| x == elem)),
+                ComparisonType::Any => sub_arr_values
+                    .iter()
+                    .dedup()
+                    .any(|elem| arr_values.iter().dedup().any(|x| x == elem)),
+                ComparisonType::Single => arr_values
+                    .iter()
+                    .dedup()
+                    .any(|x| x == sub_arr_values.row(row_idx)),
+            };
+
+            if comparison_type == ComparisonType::Any {
+                res |= res;
+            }
+
             boolean_builder.append_value(res);
         }
     }
     Ok(Arc::new(boolean_builder.finish()))
+}
+
+/// Array_has SQL function
+pub fn array_has(args: &[ArrayRef]) -> Result<ArrayRef> {
+    let array_type = args[0].data_type();
+
+    match array_type {
+        DataType::List(_) => {
+            general_array_has_dispatch::<i32>(&args[0], &args[1], ComparisonType::Single)
+        }
+        DataType::LargeList(_) => {
+            general_array_has_dispatch::<i64>(&args[0], &args[1], ComparisonType::Single)
+        }
+        _ => internal_err!("array_has does not support type '{array_type:?}'."),
+    }
 }
 
 /// Array_has_any SQL function
 pub fn array_has_any(args: &[ArrayRef]) -> Result<ArrayRef> {
-    check_datatypes("array_has_any", &[&args[0], &args[1]])?;
+    let array_type = args[0].data_type();
 
-    let array = as_list_array(&args[0])?;
-    let sub_array = as_list_array(&args[1])?;
-    let mut boolean_builder = BooleanArray::builder(array.len());
-
-    let converter = RowConverter::new(vec![SortField::new(array.value_type())])?;
-    for (arr, sub_arr) in array.iter().zip(sub_array.iter()) {
-        if let (Some(arr), Some(sub_arr)) = (arr, sub_arr) {
-            let arr_values = converter.convert_columns(&[arr])?;
-            let sub_arr_values = converter.convert_columns(&[sub_arr])?;
-
-            let mut res = false;
-            for elem in sub_arr_values.iter().dedup() {
-                res |= arr_values.iter().dedup().any(|x| x == elem);
-                if res {
-                    break;
-                }
-            }
-            boolean_builder.append_value(res);
+    match array_type {
+        DataType::List(_) => {
+            general_array_has_dispatch::<i32>(&args[0], &args[1], ComparisonType::Any)
         }
+        DataType::LargeList(_) => {
+            general_array_has_dispatch::<i64>(&args[0], &args[1], ComparisonType::Any)
+        }
+        _ => internal_err!("array_has_any does not support type '{array_type:?}'."),
     }
-    Ok(Arc::new(boolean_builder.finish()))
 }
 
 /// Array_has_all SQL function
 pub fn array_has_all(args: &[ArrayRef]) -> Result<ArrayRef> {
-    check_datatypes("array_has_all", &[&args[0], &args[1]])?;
+    let array_type = args[0].data_type();
 
-    let array = as_list_array(&args[0])?;
-    let sub_array = as_list_array(&args[1])?;
-
-    let mut boolean_builder = BooleanArray::builder(array.len());
-
-    let converter = RowConverter::new(vec![SortField::new(array.value_type())])?;
-    for (arr, sub_arr) in array.iter().zip(sub_array.iter()) {
-        if let (Some(arr), Some(sub_arr)) = (arr, sub_arr) {
-            let arr_values = converter.convert_columns(&[arr])?;
-            let sub_arr_values = converter.convert_columns(&[sub_arr])?;
-
-            let mut res = true;
-            for elem in sub_arr_values.iter().dedup() {
-                res &= arr_values.iter().dedup().any(|x| x == elem);
-                if !res {
-                    break;
-                }
-            }
-            boolean_builder.append_value(res);
+    match array_type {
+        DataType::List(_) => {
+            general_array_has_dispatch::<i32>(&args[0], &args[1], ComparisonType::All)
         }
+        DataType::LargeList(_) => {
+            general_array_has_dispatch::<i64>(&args[0], &args[1], ComparisonType::All)
+        }
+        _ => internal_err!("array_has_all does not support type '{array_type:?}'."),
     }
-    Ok(Arc::new(boolean_builder.finish()))
 }
 
 /// Splits string at occurrences of delimiter and returns an array of parts
