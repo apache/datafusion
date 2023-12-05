@@ -911,6 +911,26 @@ mod tests {
         create_physical_expr(expr, &df_schema, schema, &execution_props).unwrap()
     }
 
+    // Note the values in the `String` column are:
+    // ❯ select * from './parquet-testing/data/data_index_bloom_encoding_stats.parquet';
+    // +-----------+
+    // | String    |
+    // +-----------+
+    // | Hello     |
+    // | This is   |
+    // | a         |
+    // | test      |
+    // | How       |
+    // | are you   |
+    // | doing     |
+    // | today     |
+    // | the quick |
+    // | brown fox |
+    // | jumps     |
+    // | over      |
+    // | the lazy  |
+    // | dog       |
+    // +-----------+
     #[tokio::test]
     async fn test_row_group_bloom_filter_pruning_predicate_simple_expr() {
         // load parquet file
@@ -919,7 +939,7 @@ mod tests {
         let path = format!("{testdata}/{file_name}");
         let data = bytes::Bytes::from(std::fs::read(path).unwrap());
 
-        // generate pruning predicate
+        // generate pruning predicate `(String = "Hello_Not_exists")`
         let schema = Schema::new(vec![Field::new("String", DataType::Utf8, false)]);
         let expr = col(r#""String""#).eq(lit("Hello_Not_Exists"));
         let expr = logical2physical(&expr, &schema);
@@ -946,7 +966,7 @@ mod tests {
         let path = format!("{testdata}/{file_name}");
         let data = bytes::Bytes::from(std::fs::read(path).unwrap());
 
-        // generate pruning predicate
+        // generate pruning predicate `(String = "Hello_Not_exists" OR String = "Hello_Not_exists2")`
         let schema = Schema::new(vec![Field::new("String", DataType::Utf8, false)]);
         let expr = lit("1").eq(lit("1")).and(
             col(r#""String""#)
@@ -1008,7 +1028,7 @@ mod tests {
         let path = format!("{testdata}/{file_name}");
         let data = bytes::Bytes::from(std::fs::read(path).unwrap());
 
-        // generate pruning predicate
+        // generate pruning predicate `(String = "Hello")`
         let schema = Schema::new(vec![Field::new("String", DataType::Utf8, false)]);
         let expr = col(r#""String""#).eq(lit("Hello"));
         let expr = logical2physical(&expr, &schema);
@@ -1028,6 +1048,33 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_row_group_bloom_filter_pruning_predicate_with_exists_values() {
+        // load parquet file
+        let testdata = datafusion_common::test_util::parquet_test_data();
+        let file_name = "data_index_bloom_encoding_stats.parquet";
+        let path = format!("{testdata}/{file_name}");
+        let data = bytes::Bytes::from(std::fs::read(path).unwrap());
+
+        // generate pruning predicate `(String = "Hello") OR (String = "This is")`
+        let schema = Schema::new(vec![Field::new("String", DataType::Utf8, false)]);
+        let expr = col(r#""String""#).eq(lit("Hello")).or(col(r#""String""#).eq(lit("the quick")));
+        let expr = logical2physical(&expr, &schema);
+        let pruning_predicate =
+            PruningPredicate::try_new(expr, Arc::new(schema)).unwrap();
+
+        let row_groups = vec![0];
+        let pruned_row_groups = test_row_group_bloom_filter_pruning_predicate(
+            file_name,
+            data,
+            &pruning_predicate,
+            &row_groups,
+        )
+            .await
+            .unwrap();
+        assert_eq!(pruned_row_groups, row_groups);
+    }
+
+    #[tokio::test]
     async fn test_row_group_bloom_filter_pruning_predicate_without_bloom_filter() {
         // load parquet file
         let testdata = datafusion_common::test_util::parquet_test_data();
@@ -1035,7 +1082,7 @@ mod tests {
         let path = format!("{testdata}/{file_name}");
         let data = bytes::Bytes::from(std::fs::read(path).unwrap());
 
-        // generate pruning predicate
+        // generate pruning predicate on a column without a bloom filter
         let schema = Schema::new(vec![Field::new("string_col", DataType::Utf8, false)]);
         let expr = col(r#""string_col""#).eq(lit("0"));
         let expr = logical2physical(&expr, &schema);
