@@ -1082,18 +1082,9 @@ fn aggregate_expressions(
             .iter()
             .map(|agg| {
                 let mut result = agg.expressions().clone();
-                // In partial mode, append ordering requirements to expressions' results.
-                // Ordering requirements are used by subsequent executors to satisfy the required
-                // ordering for `AggregateMode::FinalPartitioned`/`AggregateMode::Final` modes.
-                // if matches!(mode, AggregateMode::Partial) {
-                //     if let Some(ordering_req) = agg.order_bys() {
-                //         let ordering_exprs = ordering_req
-                //             .iter()
-                //             .map(|item| item.expr.clone())
-                //             .collect::<Vec<_>>();
-                //         result.extend(ordering_exprs);
-                //     }
-                // }
+                // Append ordering requirements to expressions' results.
+                // This way order sensitive aggregators can satisfy requirement
+                // themselves.
                 if let Some(ordering_req) = agg.order_bys() {
                     let ordering_exprs = ordering_req
                         .iter()
