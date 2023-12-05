@@ -2662,10 +2662,30 @@ mod tests {
             // rule out containers where we know bar is not present
             vec![true, true, true, false, false, false, true, true, true],
         );
+
+        // s1 = 'foo' AND s1 = 'bar'
+        prune_with_expr(
+            col("s1").eq(lit("foo")).and(col("s1").eq(lit("bar"))),
+            &schema,
+            &statistics,
+            // this can't possibly be true (the column can't take on both values)
+            // but we can certainly rule it out if the stats tell us that both values are not present
+            vec![true, true, true, true, true, true,true, true, true]
+        );
+
+        // s1 = 'foo' OR s1 = 'bar'
+        prune_with_expr(
+            col("s1").eq(lit("foo")).or(col("s1").eq(lit("bar"))),
+            &schema,
+            &statistics,
+            // can rule out only when we know both are not present
+            vec![true, true, true, true, false, true, true, true, true],
+        );
+
     }
 
     #[test]
-    fn prune_with_contains() {
+    fn prune_with_contains_two_columns() {
         // contains filters for s1 and s2
         let schema = Arc::new(Schema::new(vec![
             Field::new("s1", DataType::Utf8, true),
