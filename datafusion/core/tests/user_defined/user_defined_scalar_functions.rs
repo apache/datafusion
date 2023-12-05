@@ -341,6 +341,43 @@ async fn case_sensitive_identifiers_user_defined_functions() -> Result<()> {
     Ok(())
 }
 
+#[tokio::test]
+async fn test_user_defined_functions_with_alias() -> Result<()> {
+    let ctx = SessionContext::new();
+    let arr = Int32Array::from(vec![1]);
+    let batch = RecordBatch::try_from_iter(vec![("i", Arc::new(arr) as _)])?;
+    ctx.register_batch("t", batch).unwrap();
+
+    let myfunc = |args: &[ArrayRef]| Ok(Arc::clone(&args[0]));
+    let myfunc = make_scalar_function(myfunc);
+
+    let udf = create_udf(
+        "dummy",
+        vec![DataType::Int32],
+        Arc::new(DataType::Int32),
+        Volatility::Immutable,
+        myfunc,
+    )
+    .with_aliases(vec!["dummy_alias"]);
+
+    ctx.register_udf(udf);
+
+    let expected = [
+        "+------------+",
+        "| dummy(t.i) |",
+        "+------------+",
+        "| 1          |",
+        "+------------+",
+    ];
+    let result = plan_and_collect(&ctx, "SELECT dummy(i) FROM t").await?;
+    assert_batches_eq!(expected, &result);
+
+    let alias_result = plan_and_collect(&ctx, "SELECT dummy_alias(i) FROM t").await?;
+    assert_batches_eq!(expected, &alias_result);
+
+    Ok(())
+}
+
 fn create_udf_context() -> SessionContext {
     let ctx = SessionContext::new();
     // register a custom UDF

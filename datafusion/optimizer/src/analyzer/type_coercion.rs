@@ -28,8 +28,8 @@ use datafusion_common::{
     DataFusionError, Result, ScalarValue,
 };
 use datafusion_expr::expr::{
-    self, Between, BinaryExpr, Case, Exists, InList, InSubquery, Like, ScalarFunction,
-    WindowFunction,
+    self, AggregateFunctionDefinition, Between, BinaryExpr, Case, Exists, InList,
+    InSubquery, Like, ScalarFunction, WindowFunction,
 };
 use datafusion_expr::expr_rewriter::rewrite_preserving_name;
 use datafusion_expr::expr_schema::cast_subquery;
@@ -320,7 +320,7 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                 Ok(Expr::Case(case))
             }
             Expr::ScalarFunction(ScalarFunction { func_def, args }) => match func_def {
-                ScalarFunctionDefinition::BuiltIn { fun, .. } => {
+                ScalarFunctionDefinition::BuiltIn(fun) => {
                     let new_args = coerce_arguments_for_signature(
                         args.as_slice(),
                         &self.schema,
@@ -346,39 +346,39 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                 }
             },
             Expr::AggregateFunction(expr::AggregateFunction {
-                fun,
+                func_def,
                 args,
                 distinct,
                 filter,
                 order_by,
-            }) => {
-                let new_expr = coerce_agg_exprs_for_signature(
-                    &fun,
-                    &args,
-                    &self.schema,
-                    &fun.signature(),
-                )?;
-                let expr = Expr::AggregateFunction(expr::AggregateFunction::new(
-                    fun, new_expr, distinct, filter, order_by,
-                ));
-                Ok(expr)
-            }
-            Expr::AggregateUDF(expr::AggregateUDF {
-                fun,
-                args,
-                filter,
-                order_by,
-            }) => {
-                let new_expr = coerce_arguments_for_signature(
-                    args.as_slice(),
-                    &self.schema,
-                    fun.signature(),
-                )?;
-                let expr = Expr::AggregateUDF(expr::AggregateUDF::new(
-                    fun, new_expr, filter, order_by,
-                ));
-                Ok(expr)
-            }
+            }) => match func_def {
+                AggregateFunctionDefinition::BuiltIn(fun) => {
+                    let new_expr = coerce_agg_exprs_for_signature(
+                        &fun,
+                        &args,
+                        &self.schema,
+                        &fun.signature(),
+                    )?;
+                    let expr = Expr::AggregateFunction(expr::AggregateFunction::new(
+                        fun, new_expr, distinct, filter, order_by,
+                    ));
+                    Ok(expr)
+                }
+                AggregateFunctionDefinition::UDF(fun) => {
+                    let new_expr = coerce_arguments_for_signature(
+                        args.as_slice(),
+                        &self.schema,
+                        fun.signature(),
+                    )?;
+                    let expr = Expr::AggregateFunction(expr::AggregateFunction::new_udf(
+                        fun, new_expr, false, filter, order_by,
+                    ));
+                    Ok(expr)
+                }
+                AggregateFunctionDefinition::Name(_) => {
+                    internal_err!("Function `Expr` with name should be resolved.")
+                }
+            },
             Expr::WindowFunction(WindowFunction {
                 fun,
                 args,
@@ -914,9 +914,10 @@ mod test {
             Arc::new(|_| Ok(Box::<AvgAccumulator>::default())),
             Arc::new(vec![DataType::UInt64, DataType::Float64]),
         );
-        let udaf = Expr::AggregateUDF(expr::AggregateUDF::new(
+        let udaf = Expr::AggregateFunction(expr::AggregateFunction::new_udf(
             Arc::new(my_avg),
             vec![lit(10i64)],
+            false,
             None,
             None,
         ));
@@ -941,9 +942,10 @@ mod test {
             &accumulator,
             &state_type,
         );
-        let udaf = Expr::AggregateUDF(expr::AggregateUDF::new(
+        let udaf = Expr::AggregateFunction(expr::AggregateFunction::new_udf(
             Arc::new(my_avg),
             vec![lit("10")],
+            false,
             None,
             None,
         ));

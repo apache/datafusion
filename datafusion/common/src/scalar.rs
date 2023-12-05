@@ -50,9 +50,52 @@ use arrow::{
 use arrow_array::cast::as_list_array;
 use arrow_array::{ArrowNativeTypeOp, Scalar};
 
-/// Represents a dynamically typed, nullable single value.
-/// This is the single-valued counter-part to arrow's [`Array`].
+/// A dynamically typed, nullable single value, (the single-valued counter-part
+/// to arrow's [`Array`])
 ///
+/// # Performance
+///
+/// In general, please use arrow [`Array`]s rather than [`ScalarValue`] whenever
+/// possible, as it is far more efficient for multiple values.
+///
+/// # Example
+/// ```
+/// # use datafusion_common::ScalarValue;
+/// // Create single scalar value for an Int32 value
+/// let s1 = ScalarValue::Int32(Some(10));
+///
+/// // You can also create values using the From impl:
+/// let s2 = ScalarValue::from(10i32);
+/// assert_eq!(s1, s2);
+/// ```
+///
+/// # Null Handling
+///
+/// `ScalarValue` represents null values in the same way as Arrow. Nulls are
+/// "typed" in the sense that a null value in an [`Int32Array`] is different
+/// than a null value in a [`Float64Array`], and is different than the values in
+/// a [`NullArray`].
+///
+/// ```
+/// # fn main() -> datafusion_common::Result<()> {
+/// # use std::collections::hash_set::Difference;
+/// # use datafusion_common::ScalarValue;
+/// # use arrow::datatypes::DataType;
+/// // You can create a 'null' Int32 value directly:
+/// let s1 = ScalarValue::Int32(None);
+///
+/// // You can also create a null value for a given datatype:
+/// let s2 = ScalarValue::try_from(&DataType::Int32)?;
+/// assert_eq!(s1, s2);
+///
+/// // Note that this is DIFFERENT than a `ScalarValue::Null`
+/// let s3 = ScalarValue::Null;
+/// assert_ne!(s1, s3);
+/// # Ok(())
+/// # }
+/// ```
+///
+/// # Further Reading
 /// See [datatypes](https://arrow.apache.org/docs/python/api/datatypes.html) for
 /// details on datatypes and the [format](https://github.com/apache/arrow/blob/master/format/Schema.fbs#L354-L375)
 /// for the definitive reference.
