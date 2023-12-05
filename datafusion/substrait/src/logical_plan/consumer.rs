@@ -434,6 +434,16 @@ pub async fn from_substrait_rel(
                 None => plan_err!("JoinRel without join condition is not allowed"),
             }
         }
+        Some(RelType::Cross(cross)) => {
+            let left: LogicalPlanBuilder = LogicalPlanBuilder::from(
+                from_substrait_rel(ctx, cross.left.as_ref().unwrap(), extensions).await?,
+            );
+            let right = LogicalPlanBuilder::from(
+                from_substrait_rel(ctx, cross.right.as_ref().unwrap(), extensions)
+                    .await?,
+            );
+            left.cross_join(right.build()?)?.build()
+        }
         Some(RelType::Read(read)) => match &read.as_ref().read_type {
             Some(ReadType::NamedTable(nt)) => {
                 let table_reference = match nt.names.len() {
