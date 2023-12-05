@@ -298,20 +298,21 @@ impl GroupedHashAggregateStream {
 
         let timer = baseline_metrics.elapsed_compute().timer();
 
-        let aggregate_exprs = agg.aggr_expr.clone();
+        let mut aggregate_exprs = agg.aggr_expr.clone();
+        let eq_properties = agg.equivalence_properties();
 
-        let group_indices = get_groups_indices(&aggregate_exprs, agg.group_by());
-
+        let group_indices =
+            get_groups_indices(&mut aggregate_exprs, agg.group_by(), &eq_properties);
         // arguments for each aggregate, one vec of expressions per
         // aggregate
         let aggregate_arguments = aggregates::aggregate_expressions(
-            &agg.aggr_expr,
+            &aggregate_exprs,
             &agg.mode,
             agg_group_by.expr.len(),
         )?;
         // arguments for aggregating spilled data is the same as the one for final aggregation
         let merging_aggregate_arguments = aggregates::aggregate_expressions(
-            &agg.aggr_expr,
+            &aggregate_exprs,
             &AggregateMode::Final,
             agg_group_by.expr.len(),
         )?;

@@ -23,7 +23,7 @@ use crate::aggregates::{
     AggregateMode,
 };
 use crate::metrics::{BaselineMetrics, RecordOutput};
-use crate::{RecordBatchStream, SendableRecordBatchStream};
+use crate::{ExecutionPlan, RecordBatchStream, SendableRecordBatchStream};
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::Result;
@@ -86,8 +86,12 @@ impl AggregateStream {
 
         let baseline_metrics = BaselineMetrics::new(&agg.metrics, partition);
         let input = agg.input.execute(partition, Arc::clone(&context))?;
-        let group_indices = get_groups_indices(&agg.aggr_expr, agg.group_by());
-        let aggregate_expressions = aggregate_expressions(&agg.aggr_expr, &agg.mode, 0)?;
+        let mut aggregate_exprs = agg.aggr_expr.to_vec();
+        let eq_properties = agg.equivalence_properties();
+        let group_indices =
+            get_groups_indices(&mut aggregate_exprs, agg.group_by(), &eq_properties);
+        let aggregate_expressions =
+            aggregate_expressions(&aggregate_exprs, &agg.mode, 0)?;
         let filter_expressions = match agg.mode {
             AggregateMode::Partial
             | AggregateMode::Single
@@ -96,14 +100,14 @@ impl AggregateStream {
                 vec![None; agg.aggr_expr.len()]
             }
         };
-        let accumulators = create_accumulators(&agg.aggr_expr)?;
+        let accumulators = create_accumulators(&aggregate_exprs)?;
 
         let reservation = MemoryConsumer::new(format!("AggregateStream[{partition}]"))
             .register(context.memory_pool());
         let aggregate_groups = group_indices
             .into_iter()
             .map(|(indices, requirement)| {
-                let aggr_exprs = get_at_indices(&agg.aggr_expr, &indices)?;
+                let aggr_exprs = get_at_indices(&aggregate_exprs, &indices)?;
                 let aggregate_expressions =
                     get_at_indices(&aggregate_expressions, &indices)?;
                 let filter_expressions = get_at_indices(&filter_expressions, &indices)?;

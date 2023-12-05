@@ -50,6 +50,7 @@ use datafusion_physical_expr::{
     LexOrdering, LexRequirement, PhysicalExpr, PhysicalSortExpr, PhysicalSortRequirement,
 };
 use futures::StreamExt;
+use hashbrown::HashSet;
 
 use itertools::{izip, Itertools};
 
@@ -998,26 +999,71 @@ fn group_schema(schema: &Schema, group_count: usize) -> SchemaRef {
     Arc::new(Schema::new(group_fields))
 }
 
-fn get_groups_indices(
-    aggr_exprs: &[Arc<dyn AggregateExpr>],
+fn get_req(
+    aggr_expr: &Arc<dyn AggregateExpr>,
     group_by: &PhysicalGroupBy,
+) -> LexOrdering {
+    let mut req = aggr_expr.order_bys().unwrap_or_default().to_vec();
+    if !is_order_sensitive(aggr_expr)
+        || group_by_contains_all_requirements(&group_by, &req)
+    {
+        // No requirement.
+        req.clear();
+    }
+    req
+}
+
+fn get_groups_indices(
+    aggr_exprs: &mut [Arc<dyn AggregateExpr>],
+    group_by: &PhysicalGroupBy,
+    eq_properties: &EquivalenceProperties,
 ) -> Vec<(Vec<usize>, LexOrdering)> {
     let mut initial_groups = vec![];
     for idx in 0..aggr_exprs.len() {
         let aggr_expr = &aggr_exprs[idx];
-        let mut req = aggr_expr.order_bys().unwrap_or_default().to_vec();
-        if !is_order_sensitive(aggr_expr)
-            || group_by_contains_all_requirements(&group_by, &req)
-        {
-            // No requirement.
-            req.clear();
-        }
-        // let req = aggr_expr[idx].order_bys().unwrap_or_default().to_vec();
+        let req = get_req(&aggr_expr, group_by);
         initial_groups.push((vec![idx], req));
     }
-    // TODO: Add merge groups logic.
 
-    initial_groups
+    let mut used_indices: HashSet<usize> = HashSet::new();
+    let mut groups = vec![];
+    while used_indices.len() != aggr_exprs.len() {
+        let mut group: Option<(Vec<usize>, LexOrdering)> = None;
+        for idx in 0..aggr_exprs.len() {
+            let aggr_expr = &mut aggr_exprs[idx];
+            // Group is empty and index is not already in another group.
+            if used_indices.contains(&idx) {
+                // Skip this group, it is already inserted.
+                continue;
+            }
+            let aggr_req = get_req(&aggr_expr, group_by);
+            if let Some((group_indices, req)) = &mut group {
+                if let Some(finer) = eq_properties.get_finer_ordering(req, &aggr_req) {
+                    *req = finer;
+                    group_indices.push(idx);
+                } else if let Some(reverse) = aggr_expr.reverse_expr() {
+                    let reverse_req = get_req(&reverse, group_by);
+                    if let Some(finer) =
+                        eq_properties.get_finer_ordering(req, &reverse_req)
+                    {
+                        *aggr_expr = reverse;
+                        *req = finer;
+                        group_indices.push(idx);
+                    }
+                }
+            } else {
+                group = Some((vec![idx], aggr_req));
+            }
+        }
+        if let Some((group_indices, req)) = group {
+            used_indices.extend(group_indices.iter());
+            groups.push((group_indices, req));
+        } else {
+            unreachable!();
+        }
+    }
+
+    groups
 }
 
 /// returns physical expressions for arguments to evaluate against a batch
@@ -1288,6 +1334,7 @@ mod tests {
 
     use datafusion_execution::memory_pool::FairSpillPool;
     use futures::{FutureExt, Stream};
+    use itertools::GroupBy;
 
     // Generate a schema which consists of 5 columns (a, b, c, d, e)
     fn create_test_schema() -> Result<SchemaRef> {
@@ -2259,7 +2306,7 @@ mod tests {
             nulls_first: false,
         };
         // This is the reverse requirement of options1
-        let options_dess = SortOptions {
+        let option_desc = SortOptions {
             descending: true,
             nulls_first: true,
         };
@@ -2273,11 +2320,45 @@ mod tests {
                 // Ordering requirements
                 vec![vec![(col_a, option_asc)]],
                 // expected
-                vec![vec![0]],
+                vec![(vec![0], vec![(col_a, option_asc)])],
+            ),
+            // ------- TEST CASE 2 -----------
+            (
+                // Ordering requirements
+                vec![vec![(col_a, option_asc)], vec![(col_a, option_asc)]],
+                // expected
+                vec![(vec![0, 1], vec![(col_a, option_asc)])],
+            ),
+            // ------- TEST CASE 3 -----------
+            (
+                // Ordering requirements
+                vec![
+                    vec![(col_a, option_asc), (col_b, option_asc)],
+                    vec![(col_a, option_asc)],
+                ],
+                // expected
+                vec![(vec![0, 1], vec![(col_a, option_asc), (col_b, option_asc)])],
+            ),
+            // ------- TEST CASE 4 -----------
+            (
+                // Ordering requirements
+                vec![vec![(col_a, option_asc)], vec![(col_a, option_desc)]],
+                // expected
+                vec![(vec![0, 1], vec![(col_a, option_asc)])],
+            ),
+            // ------- TEST CASE 5 -----------
+            (
+                // Ordering requirements
+                vec![vec![(col_a, option_asc)], vec![(col_c, option_asc)]],
+                // expected
+                vec![
+                    (vec![0], vec![(col_a, option_asc)]),
+                    (vec![1], vec![(col_c, option_asc)]),
+                ],
             ),
         ];
         for (ordering_reqs, expected) in test_cases {
-            let aggr_exprs = ordering_reqs
+            let mut aggr_exprs = ordering_reqs
                 .into_iter()
                 .map(|req| {
                     let req = convert_to_sort_exprs(&req);
@@ -2292,7 +2373,17 @@ mod tests {
                 })
                 .collect::<Vec<_>>();
 
-            let res = get_groups_indices(&aggr_exprs);
+            let group_by = PhysicalGroupBy::new_single(vec![]);
+
+            // Empty equivalence Properties
+            let eq_properties = EquivalenceProperties::new(test_schema.clone());
+
+            let res = get_groups_indices(&mut aggr_exprs, &group_by, &eq_properties);
+
+            let expected = expected
+                .into_iter()
+                .map(|(indices, req)| (indices, convert_to_sort_exprs(&req)))
+                .collect::<Vec<_>>();
             assert_eq!(res, expected);
         }
         Ok(())
