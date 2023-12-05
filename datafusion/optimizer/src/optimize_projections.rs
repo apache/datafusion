@@ -312,20 +312,19 @@ fn optimize_projections(
             vec![(left_child_indices, true), (right_child_indices, true)]
         }
         LogicalPlan::TableScan(table_scan) => {
-            let projection_fields = table_scan.projected_schema.fields();
             let schema = table_scan.source.schema();
-            // We expect to find all required indices of the projected schema
-            // within the original schema. If this is not true, use all of the
-            // source fields.
-            // TODO: Fix the following quadratic search.
-            let projection = indices
-                .iter()
-                .map(|&idx| {
-                    schema.fields().iter().position(|field_source| {
-                        projection_fields[idx].field() == field_source
-                    })
-                })
-                .collect::<Option<Vec<_>>>();
+            // Get indices referred in the original (schema with all fields)
+            // given projected indices.
+            let source_indices = table_scan
+                .projection
+                .clone()
+                .unwrap_or((0..schema.fields.len()).collect());
+            let projection = Some(
+                indices
+                    .iter()
+                    .map(|&idx| source_indices[idx])
+                    .collect::<Vec<_>>(),
+            );
 
             return TableScan::try_new(
                 table_scan.table_name.clone(),
@@ -459,7 +458,7 @@ fn merge_consecutive_projections(proj: &Projection) -> Result<Option<Projection>
 /// ```
 fn trim_expr(expr: Expr) -> Expr {
     match expr {
-        Expr::Alias(alias) => *alias.expr,
+        Expr::Alias(alias) => trim_expr(*alias.expr),
         _ => expr,
     }
 }
@@ -904,6 +903,19 @@ mod tests {
         let plan = LogicalPlanBuilder::from(table_scan)
             .project(vec![col("a")])?
             .project(vec![col("a").alias("alias")])?
+            .build()?;
+
+        let expected = "Projection: test.a AS alias\
+        \n  TableScan: test projection=[a]";
+        assert_optimized_plan_equal(&plan, expected)
+    }
+
+    #[test]
+    fn merge_nested_alias() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .project(vec![col("a").alias("alias1").alias("alias2")])?
+            .project(vec![col("alias2").alias("alias")])?
             .build()?;
 
         let expected = "Projection: test.a AS alias\
