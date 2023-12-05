@@ -16,35 +16,55 @@
 # under the License.
 
 development-process:
-  - dev/**.*
-  - .github/**.*
-  - ci/**.*
-  - .asf.yaml
+- any:
+  - changed-files:
+    - AnyGlobToAnyFile: ['dev/**.*', '.github/**.*', 'ci/**.*', '.asf.yaml']
+  - base-branch: 'main'
 
 documentation:
-  - docs/**.*
-  - README.md
-  - ./**/README.md
-  - DEVELOPERS.md
-  - datafusion/docs/**.*
+- any:
+  - changed-files:
+    - AnyGlobToAnyFile: ['docs/**.*', 'README.md', './**/README.md', 'DEVELOPERS.md', 'datafusion/docs/**.*']
+  - base-branch: 'main'
 
 sql:
-  - datafusion/sql/**/*
+- any:
+  - changed-files:
+    - AnyGlobToAnyFile: ['datafusion/sql/**/*']
+  - base-branch: 'main'
 
 logical-expr:
-  - datafusion/expr/**/*
+- any:
+  - changed-files:
+    - AnyGlobToAnyFile: ['datafusion/expr/**/*']
+  - base-branch: 'main'
 
 physical-expr:
-  - datafusion/physical-expr/**/*
+- any:
+  - changed-files:
+    - AnyGlobToAnyFile: ['datafusion/physical-expr/**/*']
+  - base-branch: 'main'
 
 optimizer:
-  - datafusion/optimizer/**/*
+- any:
+  - changed-files:
+    - AnyGlobToAnyFile: ['datafusion/optimizer/**/*']
+  - base-branch: 'main'
 
 core:
-  - datafusion/core/**/*
+- any:
+  - changed-files:
+    - AnyGlobToAnyFile: ['datafusion/core/**/*']
+  - base-branch: 'main'
 
 substrait:
-  - datafusion/substrait/**/*
+- any:
+  - changed-files:
+    - AnyGlobToAnyFile: ['datafusion/substrait/**/*']
+  - base-branch: 'main'
 
 sqllogictest:
-  - datafusion/sqllogictest/**/*
+- any:
+  - changed-files:
+    - AnyGlobToAnyFile: ['datafusion/sqllogictest/**/*']
+  - base-branch: 'main'
