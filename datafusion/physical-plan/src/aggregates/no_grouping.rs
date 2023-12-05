@@ -19,8 +19,8 @@
 
 use crate::aggregates::{
     aggregate_expressions, create_accumulators, finalize_aggregation,
-    finalize_aggregation_groups, get_groups_indices, AccumulatorItem, AggregateExprGroup,
-    AggregateGroup, AggregateMode,
+    finalize_aggregation_groups, AccumulatorItem, AggregateExprGroup, AggregateGroup,
+    AggregateMode,
 };
 use crate::metrics::{BaselineMetrics, RecordOutput};
 use crate::{ExecutionPlan, RecordBatchStream, SendableRecordBatchStream};
@@ -86,12 +86,7 @@ impl AggregateStream {
 
         let baseline_metrics = BaselineMetrics::new(&agg.metrics, partition);
         let input = agg.input.execute(partition, Arc::clone(&context))?;
-        let mut aggregate_exprs = agg.aggr_expr.to_vec();
-        let eq_properties = agg.equivalence_properties();
-        let group_indices =
-            get_groups_indices(&mut aggregate_exprs, agg.group_by(), &eq_properties);
-        let aggregate_expressions =
-            aggregate_expressions(&aggregate_exprs, &agg.mode, 0)?;
+        let aggregate_expressions = aggregate_expressions(&agg.aggr_expr, &agg.mode, 0)?;
         let filter_expressions = match agg.mode {
             AggregateMode::Partial
             | AggregateMode::Single
@@ -100,38 +95,35 @@ impl AggregateStream {
                 vec![None; agg.aggr_expr.len()]
             }
         };
-        let accumulators = create_accumulators(&aggregate_exprs)?;
+        let accumulators = create_accumulators(&agg.aggr_expr)?;
 
         let reservation = MemoryConsumer::new(format!("AggregateStream[{partition}]"))
             .register(context.memory_pool());
-        let aggregate_groups = group_indices
-            .into_iter()
+        let aggregate_groups = agg
+            .aggregate_groups
+            .iter()
             .map(
                 |AggregateExprGroup {
                      indices,
                      requirement,
                  }| {
-                    let aggr_exprs = get_at_indices(&aggregate_exprs, &indices)?;
+                    let aggr_exprs = get_at_indices(&agg.aggr_expr, indices)?;
                     let aggregate_expressions =
-                        get_at_indices(&aggregate_expressions, &indices)?;
+                        get_at_indices(&aggregate_expressions, indices)?;
                     let filter_expressions =
-                        get_at_indices(&filter_expressions, &indices)?;
+                        get_at_indices(&filter_expressions, indices)?;
                     // let accumulators = get_at_indices(&accumulators, &indices)?;
                     let accumulators = create_accumulators(&aggr_exprs)?;
                     Ok(AggregateGroup {
                         aggregate_expressions,
                         filter_expressions,
                         accumulators,
-                        requirement,
+                        requirement: requirement.to_vec(),
                     })
                 },
             )
             .collect::<Result<Vec<_>>>()?;
-        // let aggregate_groups = vec![AggregateGroup {
-        //     aggregate_expressions,
-        //     filter_expressions,
-        //     accumulators,
-        // }];
+
         let inner = AggregateStreamInner {
             schema: Arc::clone(&agg.schema),
             mode: agg.mode,

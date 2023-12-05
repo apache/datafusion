@@ -278,7 +278,7 @@ pub struct AggregateGroup {
     requirement: LexOrdering,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct AggregateExprGroup {
     /// Aggregate expressions indices
     indices: Vec<usize>,
@@ -498,7 +498,7 @@ impl AggregateExec {
         )?;
         let eq_properties = input.equivalence_properties();
         let aggregate_groups =
-            get_groups_indices(&mut aggr_expr, &group_by, &eq_properties);
+            get_groups_indices(&mut aggr_expr, &group_by, &eq_properties, &mode);
 
         let schema = Arc::new(schema);
         // Reset ordering requirement to `None` if aggregator is not order-sensitive
@@ -1005,12 +1005,14 @@ fn group_schema(schema: &Schema, group_count: usize) -> SchemaRef {
 fn get_req(
     aggr_expr: &Arc<dyn AggregateExpr>,
     group_by: &PhysicalGroupBy,
+    agg_mode: &AggregateMode,
 ) -> LexOrdering {
     let mut req = aggr_expr.order_bys().unwrap_or_default().to_vec();
     if !is_order_sensitive(aggr_expr)
         || group_by_contains_all_requirements(&group_by, &req)
+        // For final stages there is no requirement
+        || !agg_mode.is_first_stage()
     {
-        // No requirement.
         req.clear();
     }
     req
@@ -1020,11 +1022,12 @@ fn get_groups_indices(
     aggr_exprs: &mut [Arc<dyn AggregateExpr>],
     group_by: &PhysicalGroupBy,
     eq_properties: &EquivalenceProperties,
+    agg_mode: &AggregateMode,
 ) -> Vec<AggregateExprGroup> {
     let mut initial_groups = vec![];
     for idx in 0..aggr_exprs.len() {
         let aggr_expr = &aggr_exprs[idx];
-        let req = get_req(&aggr_expr, group_by);
+        let req = get_req(&aggr_expr, group_by, agg_mode);
         initial_groups.push((vec![idx], req));
     }
 
@@ -1039,13 +1042,13 @@ fn get_groups_indices(
                 // Skip this group, it is already inserted.
                 continue;
             }
-            let aggr_req = get_req(&aggr_expr, group_by);
+            let aggr_req = get_req(&aggr_expr, group_by, agg_mode);
             if let Some((group_indices, req)) = &mut group {
                 if let Some(finer) = eq_properties.get_finer_ordering(req, &aggr_req) {
                     *req = finer;
                     group_indices.push(idx);
                 } else if let Some(reverse) = aggr_expr.reverse_expr() {
-                    let reverse_req = get_req(&reverse, group_by);
+                    let reverse_req = get_req(&reverse, group_by, agg_mode);
                     if let Some(finer) =
                         eq_properties.get_finer_ordering(req, &reverse_req)
                     {
@@ -2375,11 +2378,19 @@ mod tests {
             // Empty equivalence Properties
             let eq_properties = EquivalenceProperties::new(test_schema.clone());
 
-            let res = get_groups_indices(&mut aggr_exprs, &group_by, &eq_properties);
+            let res = get_groups_indices(
+                &mut aggr_exprs,
+                &group_by,
+                &eq_properties,
+                &AggregateMode::Partial,
+            );
 
             let expected = expected
                 .into_iter()
-                .map(|(indices, req)| (indices, convert_to_sort_exprs(&req)))
+                .map(|(indices, req)| AggregateExprGroup {
+                    indices,
+                    requirement: convert_to_sort_exprs(&req),
+                })
                 .collect::<Vec<_>>();
             assert_eq!(res, expected);
         }
