@@ -16,55 +16,37 @@
 # under the License.
 
 development-process:
-- all:
-  - changed-files:
-    - any-glob-to-any-file: ['dev/**.*', '.github/**.*', 'ci/**.*', '.asf.yaml']
-  - base-branch: 'main'
+- changed-files:
+  - any-glob-to-any-file: ['dev/**.*', '.github/**.*', 'ci/**.*', '.asf.yaml']
 
 documentation:
-- all:
-  - changed-files:
-    - any-glob-to-any-file: ['docs/**.*', 'README.md', './**/README.md', 'DEVELOPERS.md', 'datafusion/docs/**.*']
-  - base-branch: 'main'
+- changed-files:
+  - any-glob-to-any-file: ['docs/**.*', 'README.md', './**/README.md', 'DEVELOPERS.md', 'datafusion/docs/**.*']
 
 sql:
-- all:
-  - changed-files:
-    - any-glob-to-any-file: ['datafusion/sql/**/*']
-  - base-branch: 'main'
+- changed-files:
+  - any-glob-to-any-file: ['datafusion/sql/**/*']
 
 logical-expr:
-- all:
-  - changed-files:
-    - any-glob-to-any-file: ['datafusion/expr/**/*']
-  - base-branch: 'main'
+- changed-files:
+  - any-glob-to-any-file: ['datafusion/expr/**/*']
 
 physical-expr:
-- all:
-  - changed-files:
-    - any-glob-to-any-file: ['datafusion/physical-expr/**/*']
-  - base-branch: 'main'
+- changed-files:
+  - any-glob-to-any-file: ['datafusion/physical-expr/**/*']
 
 optimizer:
-- all:
-  - changed-files:
-    - any-glob-to-any-file: ['datafusion/optimizer/**/*']
-  - base-branch: 'main'
+- changed-files:
+  - any-glob-to-any-file: ['datafusion/optimizer/**/*']
 
 core:
-- all:
-  - changed-files:
-    - any-glob-to-any-file: ['datafusion/core/**/*']
-  - base-branch: 'main'
+- changed-files:
+  - any-glob-to-any-file: ['datafusion/core/**/*']
 
 substrait:
-- all:
-  - changed-files:
-    - any-glob-to-any-file: ['datafusion/substrait/**/*']
-  - base-branch: 'main'
+- changed-files:
+  - any-glob-to-any-file: ['datafusion/substrait/**/*']
 
 sqllogictest:
-- all:
-  - changed-files:
-    - any-glob-to-any-file: ['datafusion/sqllogictest/**/*']
-  - base-branch: 'main'
+- changed-files:
+  - any-glob-to-any-file: ['datafusion/sqllogictest/**/*']
