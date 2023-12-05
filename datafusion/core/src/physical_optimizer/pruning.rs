@@ -2835,7 +2835,9 @@ mod tests {
 
         // s1 != 'foo' AND s2 != 'bar'
         prune_with_expr(
-            col("s1").not_eq(lit("foo")).and(col("s2").not_eq(lit("bar"))),
+            col("s1")
+                .not_eq(lit("foo"))
+                .and(col("s2").not_eq(lit("bar"))),
             &schema,
             &statistics,
             // Can  rule out any container where we know either values is present for sure
@@ -2853,7 +2855,9 @@ mod tests {
 
         // s1 like '%foo%bar%' AND s2 = 'bar'
         prune_with_expr(
-            col("s1").like(lit("foo%bar%")).and(col("s2").eq(lit("bar"))),
+            col("s1")
+                .like(lit("foo%bar%"))
+                .and(col("s2").eq(lit("bar"))),
             &schema,
             &statistics,
             // can rule out all results when we know second column is false
@@ -2900,16 +2904,16 @@ mod tests {
                     ], // max
                 ),
             )
-            // Add contains information about the containers
+            // Add contains information about the containers with the foo value
             .with_contains(
-                "b",
-                [ScalarValue::from("bar")],
+                "s",
+                [ScalarValue::from("foo")],
                 [
-                    // container 0, 1,2 contain value
+                    // container 0, 1,2 contains foo for sure
                     Some(true),
                     Some(true),
                     Some(true),
-                    // container 3,4,5 does not contain value
+                    // container 3,4,5 does not contain "foo" for sure
                     Some(false),
                     Some(false),
                     Some(false),
@@ -2925,8 +2929,9 @@ mod tests {
             col("i").eq(lit(0)).and(col("s").eq(lit("foo"))),
             &schema,
             &statistics,
-            // Can only rule out container where we know values are not present (range is false, and contains is false)
-            vec![true, true, true, true, false, true, true, true, true],
+            // Can only rule out container where we know values are not present
+            // (range is false, and contains is false)
+            vec![true, false, true, false, false, false, true, false, true],
         );
 
         /*
