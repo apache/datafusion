@@ -44,7 +44,7 @@ use arrow_array::{
 use chrono::prelude::*;
 use chrono::{Duration, Months, NaiveDate};
 use datafusion_common::cast::{
-    as_date32_array, as_date64_array, as_generic_string_array,
+    as_date32_array, as_date64_array, as_generic_string_array, as_primitive_array,
     as_timestamp_microsecond_array, as_timestamp_millisecond_array,
     as_timestamp_nanosecond_array, as_timestamp_second_array,
 };
@@ -410,7 +410,7 @@ pub fn date_trunc(args: &[ColumnarValue]) -> Result<ColumnarValue> {
         tz_opt: &Option<Arc<str>>,
     ) -> Result<ColumnarValue> {
         let parsed_tz = parse_tz(tz_opt)?;
-        let array = as_timestamp_nanosecond_array(array)?;
+        let array = as_primitive_array::<T>(array)?;
         let array = array
             .iter()
             .map(|x| general_date_trunc(T::UNIT, &x, parsed_tz, granularity.as_str()))
@@ -435,7 +435,7 @@ pub fn date_trunc(args: &[ColumnarValue]) -> Result<ColumnarValue> {
             process_scalr::<TimestampNanosecondType>(v, granularity, tz_opt)?
         }
         ColumnarValue::Scalar(ScalarValue::TimestampMicrosecond(v, tz_opt)) => {
-            process_scalr::<TimestampNanosecondType>(v, granularity, tz_opt)?
+            process_scalr::<TimestampMicrosecondType>(v, granularity, tz_opt)?
         }
         ColumnarValue::Scalar(ScalarValue::TimestampMillisecond(v, tz_opt)) => {
             process_scalr::<TimestampMillisecondType>(v, granularity, tz_opt)?
