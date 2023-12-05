@@ -552,6 +552,7 @@ fn get_sort_options(ordering_req: &[PhysicalSortExpr]) -> Vec<SortOptions> {
 }
 
 /// Gets either first, or last value index inside values columns according to ordering requirements
+/// Assumes values is ordered according to ordering_req already.
 fn get_value_idx<const FIRST: bool>(
     values: &[ArrayRef],
     ordering_req: LexOrderingRef,
