@@ -17,7 +17,7 @@
 
 development-process:
 - changed-files:
-  - any-glob-to-any-file: ['dev/**.*', '.github/**.*', 'ci/**.*', '.asf.yaml']
+  - any-glob-to-any-file: 'dev/**.*'
 
 documentation:
 - changed-files:
