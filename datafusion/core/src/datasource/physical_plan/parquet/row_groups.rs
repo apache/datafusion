@@ -169,6 +169,7 @@ pub(crate) async fn prune_row_groups_by_bloom_filters<
 }
 
 struct BloomFilterStatistics {
+    /// Maps column name to the parquet bloom filter
     column_sbbf: HashMap<String, Sbbf>,
 }
 
@@ -177,7 +178,8 @@ impl PruningStatistics for BloomFilterStatistics {
         1
     }
 
-    /// Use bloom filters to determine if we are sure this column can not contain `value`
+    /// Use bloom filters to determine if we are sure this column can not
+    /// possibly contain `values`
     fn contains(
         &self,
         column: &Column,
