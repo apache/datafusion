@@ -211,7 +211,7 @@ async fn exec_and_print(
     })?;
     let statements = DFParser::parse_sql_with_dialect(&sql, dialect.as_ref())?;
     for statement in statements {
-        let plan = ctx.state().statement_to_plan(statement).await?;
+        let mut plan = ctx.state().statement_to_plan(statement).await?;
 
         // For plans like `Explain` ignore `MaxRows` option and always display all rows
         let should_ignore_maxrows = matches!(
@@ -221,10 +221,9 @@ async fn exec_and_print(
                 | LogicalPlan::Analyze(_)
         );
 
-        if let LogicalPlan::Ddl(DdlStatement::CreateExternalTable(cmd)) = &plan {
+        if let LogicalPlan::Ddl(DdlStatement::CreateExternalTable(cmd)) = &mut plan {
             create_external_table(ctx, cmd).await?;
         }
-
         let df = ctx.execute_logical_plan(plan).await?;
         let results = df.collect().await?;
 
@@ -244,7 +243,7 @@ async fn exec_and_print(
 
 async fn create_external_table(
     ctx: &SessionContext,
-    cmd: &CreateExternalTable,
+    cmd: &mut CreateExternalTable,
 ) -> Result<()> {
     let table_path = ListingTableUrl::parse(&cmd.location)?;
     let scheme = table_path.scheme();
@@ -290,9 +289,9 @@ mod tests {
 
     async fn create_external_table_test(location: &str, sql: &str) -> Result<()> {
         let ctx = SessionContext::new();
-        let plan = ctx.state().create_logical_plan(sql).await?;
+        let mut plan = ctx.state().create_logical_plan(sql).await?;
 
-        if let LogicalPlan::Ddl(DdlStatement::CreateExternalTable(cmd)) = &plan {
+        if let LogicalPlan::Ddl(DdlStatement::CreateExternalTable(cmd)) = &mut plan {
             create_external_table(&ctx, cmd).await?;
         } else {
             return plan_err!("LogicalPlan is not a CreateExternalTable");
