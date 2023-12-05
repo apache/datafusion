@@ -797,7 +797,7 @@ impl ScalarValue {
         ScalarValue::IntervalMonthDayNano(Some(val))
     }
 
-    /// Returns a [`ScalarValue::Timestamp`] representing
+    /// Returns a [`ScalarValue`] representing
     /// `value` and `tz_opt` timezone
     pub fn new_timestamp<T: ArrowTimestampType>(
         value: Option<i64>,
