@@ -1520,7 +1520,7 @@ fn update_ordering(
         node.state = SortProperties::Ordered(options);
     } else if !node.expr.children().is_empty() {
         // We have an intermediate (non-leaf) node, account for its children:
-        node.state = node.expr.get_ordering(&node.children_states);
+        node.state = node.expr.get_ordering(&node.children_state());
     } else if node.expr.as_any().is::<Literal>() {
         // We have a Literal, which is the other possible leaf node type:
         node.state = node.expr.get_ordering(&[]);

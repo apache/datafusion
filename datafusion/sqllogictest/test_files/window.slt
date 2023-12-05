@@ -3581,3 +3581,207 @@ CREATE TABLE new_table AS SELECT NTILE(2) OVER(ORDER BY c1) AS ntile_2 FROM aggr
 
 statement ok
 DROP TABLE new_table;
+
+statement ok
+CREATE TABLE t1 (a int) AS VALUES (1), (2), (3);
+
+query I
+SELECT NTILE(9223377) OVER(ORDER BY a) FROM t1;
+----
+1
+2
+3
+
+query I
+SELECT NTILE(9223372036854775809) OVER(ORDER BY a) FROM t1;
+----
+1
+2
+3
+
+query error DataFusion error: Execution error: NTILE requires a positive integer
+SELECT NTILE(-922337203685477580) OVER(ORDER BY a) FROM t1;
+
+query error DataFusion error: Execution error: Table 't' doesn't exist\.
+DROP TABLE t;
+
+# NTILE with PARTITION BY, those tests from duckdb: https://github.com/duckdb/duckdb/blob/main/test/sql/window/test_ntile.test
+statement ok
+CREATE TABLE score_board (team_name VARCHAR, player VARCHAR, score INTEGER) as VALUES
+          ('Mongrels', 'Apu', 350),
+          ('Mongrels', 'Ned', 666),
+          ('Mongrels', 'Meg', 1030),
+          ('Mongrels', 'Burns', 1270),
+          ('Simpsons', 'Homer', 1),
+          ('Simpsons', 'Lisa', 710),
+          ('Simpsons', 'Marge', 990),
+          ('Simpsons', 'Bart', 2010)
+
+query TTII
+SELECT
+  team_name,
+  player,
+  score,
+  NTILE(2) OVER (PARTITION BY team_name ORDER BY score ASC) AS NTILE
+FROM score_board s
+ORDER BY team_name, score;
+----
+Mongrels	Apu	350	1
+Mongrels	Ned	666	1
+Mongrels	Meg	1030	2
+Mongrels	Burns	1270	2
+Simpsons	Homer	1	1
+Simpsons	Lisa	710	1
+Simpsons	Marge	990	2
+Simpsons	Bart	2010	2
+
+query TTII
+SELECT
+  team_name,
+  player,
+  score,
+  NTILE(2) OVER (ORDER BY score ASC) AS NTILE
+FROM score_board s
+ORDER BY score;
+----
+Simpsons	Homer	1	1
+Mongrels	Apu	350	1
+Mongrels	Ned	666	1
+Simpsons	Lisa	710	1
+Simpsons	Marge	990	2
+Mongrels	Meg	1030	2
+Mongrels	Burns	1270	2
+Simpsons	Bart	2010	2
+
+query TTII
+SELECT
+  team_name,
+  player,
+  score,
+  NTILE(1000) OVER (PARTITION BY team_name ORDER BY score ASC) AS NTILE
+FROM score_board s
+ORDER BY team_name, score;
+----
+Mongrels	Apu	350	1
+Mongrels	Ned	666	2
+Mongrels	Meg	1030	3
+Mongrels	Burns	1270	4
+Simpsons	Homer	1	1
+Simpsons	Lisa	710	2
+Simpsons	Marge	990	3
+Simpsons	Bart	2010	4
+
+query TTII
+SELECT
+  team_name,
+  player,
+  score,
+  NTILE(1) OVER (PARTITION BY team_name ORDER BY score ASC) AS NTILE
+FROM score_board s
+ORDER BY team_name, score;
+----
+Mongrels	Apu	350	1
+Mongrels	Ned	666	1
+Mongrels	Meg	1030	1
+Mongrels	Burns	1270	1
+Simpsons	Homer	1	1
+Simpsons	Lisa	710	1
+Simpsons	Marge	990	1
+Simpsons	Bart	2010	1
+
+# incorrect number of parameters for ntile
+query error DataFusion error: Execution error: NTILE requires a positive integer, but finds NULL
+SELECT
+  NTILE(NULL) OVER (PARTITION BY team_name ORDER BY score ASC) AS NTILE
+FROM score_board s
+
+query error DataFusion error: Execution error: NTILE requires a positive integer
+SELECT
+  NTILE(-1) OVER (PARTITION BY team_name ORDER BY score ASC) AS NTILE
+FROM score_board s
+
+query error DataFusion error: Execution error: NTILE requires a positive integer
+SELECT
+  NTILE(0) OVER (PARTITION BY team_name ORDER BY score ASC) AS NTILE
+FROM score_board s
+
+statement error
+SELECT
+  NTILE() OVER (PARTITION BY team_name ORDER BY score ASC) AS NTILE
+FROM score_board s
+
+statement error
+SELECT
+  NTILE(1,2) OVER (PARTITION BY team_name ORDER BY score ASC) AS NTILE
+FROM score_board s
+
+statement error
+SELECT
+  NTILE(1,2,3) OVER (PARTITION BY team_name ORDER BY score ASC) AS NTILE
+FROM score_board s
+
+statement error
+SELECT
+  NTILE(1,2,3,4) OVER (PARTITION BY team_name ORDER BY score ASC) AS NTILE
+FROM score_board s
+
+statement ok
+DROP TABLE score_board;
+
+# Regularize RANGE frame
+query error DataFusion error: Error during planning: RANGE requires exactly one ORDER BY column
+select a,
+       rank() over (order by a, a + 1 RANGE BETWEEN UNBOUNDED PRECEDING AND 1 FOLLOWING) rnk
+       from (select 1 a union select 2 a) q ORDER BY a
+
+query II
+select a,
+       rank() over (order by a RANGE BETWEEN UNBOUNDED PRECEDING AND 1 FOLLOWING) rnk
+       from (select 1 a union select 2 a) q ORDER BY a
+----
+1 1
+2 2
+
+query error DataFusion error: Error during planning: RANGE requires exactly one ORDER BY column
+select a,
+       rank() over (RANGE BETWEEN UNBOUNDED PRECEDING AND 1 FOLLOWING) rnk
+       from (select 1 a union select 2 a) q ORDER BY a
+
+query II
+select a,
+       rank() over (order by a, a + 1 RANGE BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) rnk
+       from (select 1 a union select 2 a) q ORDER BY a
+----
+1 1
+2 2
+
+query II
+select a,
+       rank() over (order by a RANGE BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) rnk
+       from (select 1 a union select 2 a) q ORDER BY a
+----
+1 1
+2 2
+
+# TODO: this is different to Postgres which returns [1, 1] for `rnk`.
+# Comment it because it is flaky now as it depends on the order of the `a` column.
+# query II
+# select a,
+#       rank() over (RANGE BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) rnk
+#       from (select 1 a union select 2 a) q ORDER BY rnk
+# ----
+# 1 1
+# 2 2
+
+# TODO: this works in Postgres which returns [1, 1].
+query error DataFusion error: Arrow error: Invalid argument error: must either specify a row count or at least one column
+select rank() over (RANGE between UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) rnk
+       from (select 1 a union select 2 a) q;
+
+# TODO: this is different to Postgres which returns [1, 1] for `rnk`.
+query I
+select rank() over (order by 1 RANGE BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) rnk
+       from (select 1 a union select 2 a) q ORDER BY rnk
+----
+1
+2
