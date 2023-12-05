@@ -911,10 +911,6 @@ impl Expr {
                 asc,
                 nulls_first,
             }) => Expr::Sort(Sort::new(Box::new(expr.alias(name)), asc, nulls_first)),
-            Expr::Column(Column { ref relation, .. }) => {
-                let expr = self.clone();
-                Expr::Alias(Alias::new(expr, relation.clone(), name.into()))
-            }
             _ => Expr::Alias(Alias::new(self, None::<&str>, name.into())),
         }
     }
