@@ -3065,6 +3065,12 @@ impl FromStr for ScalarValue {
     }
 }
 
+impl From<String> for ScalarValue {
+    fn from(value: String) -> Self {
+        ScalarValue::Utf8(Some(value))
+    }
+}
+
 impl From<Vec<(&str, ScalarValue)>> for ScalarValue {
     fn from(value: Vec<(&str, ScalarValue)>) -> Self {
         let (fields, scalars): (SchemaBuilder, Vec<_>) = value
@@ -4686,6 +4692,16 @@ mod tests {
             ])),
             None
         );
+    }
+
+    #[test]
+    fn test_scalar_value_from_string() {
+        let scalar = ScalarValue::from("foo");
+        assert_eq!(scalar, ScalarValue::Utf8(Some("foo".to_string())));
+        let scalar = ScalarValue::from("foo".to_string());
+        assert_eq!(scalar, ScalarValue::Utf8(Some("foo".to_string())));
+        let scalar = ScalarValue::from_str("foo").unwrap();
+        assert_eq!(scalar, ScalarValue::Utf8(Some("foo".to_string())));
     }
 
     #[test]
