@@ -34,6 +34,7 @@ use datafusion_common::{
     internal_err, not_impl_err, plan_err, Column, DFSchema, DataFusionError, Result,
     ScalarValue,
 };
+use datafusion_expr::expr::AggregateFunctionDefinition;
 use datafusion_expr::expr::InList;
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::{
@@ -706,7 +707,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     ) -> Result<Expr> {
         match self.sql_expr_to_logical_expr(expr, schema, planner_context)? {
             Expr::AggregateFunction(expr::AggregateFunction {
-                fun,
+                func_def: AggregateFunctionDefinition::BuiltIn(fun),
                 args,
                 distinct,
                 order_by,

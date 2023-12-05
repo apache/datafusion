@@ -18,9 +18,9 @@
 //! Tree node implementation for logical expr
 
 use crate::expr::{
-    AggregateFunction, AggregateUDF, Alias, Between, BinaryExpr, Case, Cast,
-    GetIndexedField, GroupingSet, InList, InSubquery, Like, Placeholder, ScalarFunction,
-    ScalarFunctionDefinition, Sort, TryCast, WindowFunction,
+    AggregateFunction, AggregateFunctionDefinition, Alias, Between, BinaryExpr, Case,
+    Cast, GetIndexedField, GroupingSet, InList, InSubquery, Like, Placeholder,
+    ScalarFunction, ScalarFunctionDefinition, Sort, TryCast, WindowFunction,
 };
 use crate::{Expr, GetFieldAccess};
 
@@ -108,7 +108,7 @@ impl TreeNode for Expr {
                 expr_vec
             }
             Expr::AggregateFunction(AggregateFunction { args, filter, order_by, .. })
-            | Expr::AggregateUDF(AggregateUDF { args, filter, order_by, .. }) => {
+             => {
                 let mut expr_vec = args.clone();
 
                 if let Some(f) = filter {
@@ -277,7 +277,7 @@ impl TreeNode for Expr {
                 nulls_first,
             )),
             Expr::ScalarFunction(ScalarFunction { func_def, args }) => match func_def {
-                ScalarFunctionDefinition::BuiltIn { fun, .. } => Expr::ScalarFunction(
+                ScalarFunctionDefinition::BuiltIn(fun) => Expr::ScalarFunction(
                     ScalarFunction::new(fun, transform_vec(args, &mut transform)?),
                 ),
                 ScalarFunctionDefinition::UDF(fun) => Expr::ScalarFunction(
@@ -304,17 +304,40 @@ impl TreeNode for Expr {
             )),
             Expr::AggregateFunction(AggregateFunction {
                 args,
-                fun,
+                func_def,
                 distinct,
                 filter,
                 order_by,
-            }) => Expr::AggregateFunction(AggregateFunction::new(
-                fun,
-                transform_vec(args, &mut transform)?,
-                distinct,
-                transform_option_box(filter, &mut transform)?,
-                transform_option_vec(order_by, &mut transform)?,
-            )),
+            }) => match func_def {
+                AggregateFunctionDefinition::BuiltIn(fun) => {
+                    Expr::AggregateFunction(AggregateFunction::new(
+                        fun,
+                        transform_vec(args, &mut transform)?,
+                        distinct,
+                        transform_option_box(filter, &mut transform)?,
+                        transform_option_vec(order_by, &mut transform)?,
+                    ))
+                }
+                AggregateFunctionDefinition::UDF(fun) => {
+                    let order_by = if let Some(order_by) = order_by {
+                        Some(transform_vec(order_by, &mut transform)?)
+                    } else {
+                        None
+                    };
+                    Expr::AggregateFunction(AggregateFunction::new_udf(
+                        fun,
+                        transform_vec(args, &mut transform)?,
+                        false,
+                        transform_option_box(filter, &mut transform)?,
+                        transform_option_vec(order_by, &mut transform)?,
+                    ))
+                }
+                AggregateFunctionDefinition::Name(_) => {
+                    return internal_err!(
+                        "Function `Expr` with name should be resolved."
+                    );
+                }
+            },
             Expr::GroupingSet(grouping_set) => match grouping_set {
                 GroupingSet::Rollup(exprs) => Expr::GroupingSet(GroupingSet::Rollup(
                     transform_vec(exprs, &mut transform)?,
@@ -331,24 +354,7 @@ impl TreeNode for Expr {
                     ))
                 }
             },
-            Expr::AggregateUDF(AggregateUDF {
-                args,
-                fun,
-                filter,
-                order_by,
-            }) => {
-                let order_by = if let Some(order_by) = order_by {
-                    Some(transform_vec(order_by, &mut transform)?)
-                } else {
-                    None
-                };
-                Expr::AggregateUDF(AggregateUDF::new(
-                    fun,
-                    transform_vec(args, &mut transform)?,
-                    transform_option_box(filter, &mut transform)?,
-                    transform_option_vec(order_by, &mut transform)?,
-                ))
-            }
+
             Expr::InList(InList {
                 expr,
                 list,

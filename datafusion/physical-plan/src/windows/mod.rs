@@ -189,15 +189,26 @@ fn create_built_in_window_expr(
         BuiltInWindowFunction::PercentRank => Arc::new(percent_rank(name)),
         BuiltInWindowFunction::CumeDist => Arc::new(cume_dist(name)),
         BuiltInWindowFunction::Ntile => {
-            let n: i64 = get_scalar_value_from_args(args, 0)?
-                .ok_or_else(|| {
-                    DataFusionError::Execution(
-                        "NTILE requires at least 1 argument".to_string(),
-                    )
-                })?
-                .try_into()?;
-            let n: u64 = n as u64;
-            Arc::new(Ntile::new(name, n))
+            let n = get_scalar_value_from_args(args, 0)?.ok_or_else(|| {
+                DataFusionError::Execution(
+                    "NTILE requires a positive integer".to_string(),
+                )
+            })?;
+
+            if n.is_null() {
+                return exec_err!("NTILE requires a positive integer, but finds NULL");
+            }
+
+            if n.is_unsigned() {
+                let n: u64 = n.try_into()?;
+                Arc::new(Ntile::new(name, n))
+            } else {
+                let n: i64 = n.try_into()?;
+                if n <= 0 {
+                    return exec_err!("NTILE requires a positive integer");
+                }
+                Arc::new(Ntile::new(name, n as u64))
+            }
         }
         BuiltInWindowFunction::Lag => {
             let arg = args[0].clone();

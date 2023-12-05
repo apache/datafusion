@@ -26,6 +26,7 @@ use arrow::compute::{partition, SortColumn, SortOptions};
 use arrow::datatypes::{Field, SchemaRef, UInt32Type};
 use arrow::record_batch::RecordBatch;
 use arrow_array::{Array, LargeListArray, ListArray};
+use arrow_schema::DataType;
 use sqlparser::ast::Ident;
 use sqlparser::dialect::GenericDialect;
 use sqlparser::parser::Parser;
@@ -400,6 +401,37 @@ pub fn arrays_into_list_array(
         arrow::compute::concat(values.as_slice())?,
         None,
     ))
+}
+
+/// Get the base type of a data type.
+///
+/// Example
+/// ```
+/// use arrow::datatypes::{DataType, Field};
+/// use datafusion_common::utils::base_type;
+/// use std::sync::Arc;
+///
+/// let data_type = DataType::List(Arc::new(Field::new("item", DataType::Int32, true)));
+/// assert_eq!(base_type(&data_type), DataType::Int32);
+///
+/// let data_type = DataType::Int32;
+/// assert_eq!(base_type(&data_type), DataType::Int32);
+/// ```
+pub fn base_type(data_type: &DataType) -> DataType {
+    if let DataType::List(field) = data_type {
+        base_type(field.data_type())
+    } else {
+        data_type.to_owned()
+    }
+}
+
+/// Compute the number of dimensions in a list data type.
+pub fn list_ndims(data_type: &DataType) -> u64 {
+    if let DataType::List(field) = data_type {
+        1 + list_ndims(field.data_type())
+    } else {
+        0
+    }
 }
 
 /// An extension trait for smart pointers. Provides an interface to get a

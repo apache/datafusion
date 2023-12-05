@@ -642,6 +642,7 @@ enum ScalarFunction {
   ArrayPopFront = 124;
   Levenshtein = 125;
   SubstrIndex = 126;
+  FindInSet = 127;
 }
 
 message ScalarFunctionNode {
