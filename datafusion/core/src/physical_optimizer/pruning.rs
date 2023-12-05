@@ -1302,7 +1302,7 @@ mod tests {
             let container_stats = self
                 .stats
                 .remove(&col)
-                .unwrap_or_else(ContainerStats::new)
+                .unwrap_or_default()
                 .with_null_counts(counts);
 
             // put stats back in
@@ -1323,7 +1323,7 @@ mod tests {
             let container_stats = self
                 .stats
                 .remove(&col)
-                .unwrap_or_else(ContainerStats::new)
+                .unwrap_or_default()
                 .with_contains(values, contains);
 
             // put stats back in
