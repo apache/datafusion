@@ -2659,7 +2659,7 @@ LOCATION '../core/tests/data/window_2.csv';";
 
         let expected = vec![
             "ProjectionExec: expr=[FIRST_VALUE(sales_global.amount) ORDER BY [sales_global.ts ASC NULLS LAST]@0 as fv1, LAST_VALUE(sales_global.amount) ORDER BY [sales_global.ts ASC NULLS LAST]@1 as lv1, FIRST_VALUE(sales_global.amount) ORDER BY [sales_global.ts DESC NULLS FIRST]@2 as fv2, LAST_VALUE(sales_global.amount) ORDER BY [sales_global.ts DESC NULLS FIRST]@3 as lv2]",
-            "  AggregateExec: mode=Single, gby=[], aggr=[FIRST_VALUE(sales_global.amount), LAST_VALUE(sales_global.amount), FIRST_VALUE(sales_global.amount), LAST_VALUE(sales_global.amount)]",
+            "  AggregateExec: mode=Single, gby=[], aggr=[FIRST_VALUE(sales_global.amount), LAST_VALUE(sales_global.amount), LAST_VALUE(sales_global.amount), FIRST_VALUE(sales_global.amount)]",
             "    MemoryExec: partitions=1, partition_sizes=[1]",
         ];
         // Get string representation of the plan
@@ -2709,7 +2709,7 @@ LOCATION '../core/tests/data/window_2.csv';";
             "ProjectionExec: expr=[fv1@0 as fv1, lv1@1 as lv1, fv2@2 as fv2, lv2@3 as lv2]",
             "  SortExec: expr=[country@4 ASC NULLS LAST]",
             "    ProjectionExec: expr=[FIRST_VALUE(sales_global.amount) ORDER BY [sales_global.ts ASC NULLS LAST]@1 as fv1, LAST_VALUE(sales_global.amount) ORDER BY [sales_global.ts ASC NULLS LAST]@2 as lv1, FIRST_VALUE(sales_global.amount) ORDER BY [sales_global.ts DESC NULLS FIRST]@3 as fv2, LAST_VALUE(sales_global.amount) ORDER BY [sales_global.ts DESC NULLS FIRST]@4 as lv2, country@0 as country]",
-            "      AggregateExec: mode=Single, gby=[country@0 as country], aggr=[FIRST_VALUE(sales_global.amount), LAST_VALUE(sales_global.amount), FIRST_VALUE(sales_global.amount), LAST_VALUE(sales_global.amount)]",
+            "      AggregateExec: mode=Single, gby=[country@0 as country], aggr=[FIRST_VALUE(sales_global.amount), LAST_VALUE(sales_global.amount), LAST_VALUE(sales_global.amount), FIRST_VALUE(sales_global.amount)]",
             "        MemoryExec: partitions=1, partition_sizes=[1]",
         ];
         // Get string representation of the plan

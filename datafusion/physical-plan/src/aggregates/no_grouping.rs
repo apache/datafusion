@@ -19,8 +19,8 @@
 
 use crate::aggregates::{
     aggregate_expressions, create_accumulators, finalize_aggregation,
-    finalize_aggregation_groups, get_groups_indices, AccumulatorItem, AggregateGroup,
-    AggregateMode,
+    finalize_aggregation_groups, get_groups_indices, AccumulatorItem, AggregateExprGroup,
+    AggregateGroup, AggregateMode,
 };
 use crate::metrics::{BaselineMetrics, RecordOutput};
 use crate::{ExecutionPlan, RecordBatchStream, SendableRecordBatchStream};
@@ -106,20 +106,26 @@ impl AggregateStream {
             .register(context.memory_pool());
         let aggregate_groups = group_indices
             .into_iter()
-            .map(|(indices, requirement)| {
-                let aggr_exprs = get_at_indices(&aggregate_exprs, &indices)?;
-                let aggregate_expressions =
-                    get_at_indices(&aggregate_expressions, &indices)?;
-                let filter_expressions = get_at_indices(&filter_expressions, &indices)?;
-                // let accumulators = get_at_indices(&accumulators, &indices)?;
-                let accumulators = create_accumulators(&aggr_exprs)?;
-                Ok(AggregateGroup {
-                    aggregate_expressions,
-                    filter_expressions,
-                    accumulators,
-                    requirement,
-                })
-            })
+            .map(
+                |AggregateExprGroup {
+                     indices,
+                     requirement,
+                 }| {
+                    let aggr_exprs = get_at_indices(&aggregate_exprs, &indices)?;
+                    let aggregate_expressions =
+                        get_at_indices(&aggregate_expressions, &indices)?;
+                    let filter_expressions =
+                        get_at_indices(&filter_expressions, &indices)?;
+                    // let accumulators = get_at_indices(&accumulators, &indices)?;
+                    let accumulators = create_accumulators(&aggr_exprs)?;
+                    Ok(AggregateGroup {
+                        aggregate_expressions,
+                        filter_expressions,
+                        accumulators,
+                        requirement,
+                    })
+                },
+            )
             .collect::<Result<Vec<_>>>()?;
         // let aggregate_groups = vec![AggregateGroup {
         //     aggregate_expressions,

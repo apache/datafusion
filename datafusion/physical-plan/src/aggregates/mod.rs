@@ -271,20 +271,18 @@ impl From<StreamType> for SendableRecordBatchStream {
     }
 }
 
-// pub struct AggregateGroup{
-//     /// Aggregate expressions
-//     aggr_expr: Vec<Arc<dyn AggregateExpr>>,
-//     /// FILTER (WHERE clause) expression for each aggregate expression
-//     filter_expr: Vec<Option<Arc<dyn PhysicalExpr>>>,
-//     /// (ORDER BY clause) expression for each aggregate expression
-//     /// TODO: Make below variable LexOrdering
-//     order_by_expr: Vec<Option<LexOrdering>>,
-// }
-
 pub struct AggregateGroup {
     aggregate_expressions: Vec<Vec<Arc<dyn PhysicalExpr>>>,
     filter_expressions: Vec<Option<Arc<dyn PhysicalExpr>>>,
     accumulators: Vec<AccumulatorItem>,
+    requirement: LexOrdering,
+}
+
+#[derive(Debug)]
+pub struct AggregateExprGroup {
+    /// Aggregate expressions indices
+    indices: Vec<usize>,
+    /// Requirement
     requirement: LexOrdering,
 }
 
@@ -301,6 +299,7 @@ pub struct AggregateExec {
     filter_expr: Vec<Option<Arc<dyn PhysicalExpr>>>,
     /// (ORDER BY clause) expression for each aggregate expression
     order_by_expr: Vec<Option<LexOrdering>>,
+    aggregate_groups: Vec<AggregateExprGroup>,
     /// Set if the output of this aggregation is truncated by a upstream sort/limit clause
     limit: Option<usize>,
     /// Input plan, could be a partial aggregate or the input to the aggregate
@@ -497,6 +496,9 @@ impl AggregateExec {
             group_by.contains_null(),
             mode,
         )?;
+        let eq_properties = input.equivalence_properties();
+        let aggregate_groups =
+            get_groups_indices(&mut aggr_expr, &group_by, &eq_properties);
 
         let schema = Arc::new(schema);
         // Reset ordering requirement to `None` if aggregator is not order-sensitive
@@ -572,6 +574,7 @@ impl AggregateExec {
             aggr_expr,
             filter_expr,
             order_by_expr,
+            aggregate_groups,
             input,
             schema,
             input_schema,
@@ -1017,7 +1020,7 @@ fn get_groups_indices(
     aggr_exprs: &mut [Arc<dyn AggregateExpr>],
     group_by: &PhysicalGroupBy,
     eq_properties: &EquivalenceProperties,
-) -> Vec<(Vec<usize>, LexOrdering)> {
+) -> Vec<AggregateExprGroup> {
     let mut initial_groups = vec![];
     for idx in 0..aggr_exprs.len() {
         let aggr_expr = &aggr_exprs[idx];
@@ -1055,9 +1058,12 @@ fn get_groups_indices(
                 group = Some((vec![idx], aggr_req));
             }
         }
-        if let Some((group_indices, req)) = group {
-            used_indices.extend(group_indices.iter());
-            groups.push((group_indices, req));
+        if let Some((indices, requirement)) = group {
+            used_indices.extend(indices.iter());
+            groups.push(AggregateExprGroup {
+                indices,
+                requirement,
+            });
         } else {
             unreachable!();
         }

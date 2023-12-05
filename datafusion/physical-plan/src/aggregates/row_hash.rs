@@ -25,7 +25,7 @@ use crate::aggregates::group_values::{new_group_values, GroupValues};
 use crate::aggregates::order::GroupOrderingFull;
 use crate::aggregates::{
     evaluate_group_by, evaluate_many, evaluate_optional, get_groups_indices,
-    group_schema, AggregateMode, PhysicalGroupBy,
+    group_schema, AggregateExprGroup, AggregateMode, PhysicalGroupBy,
 };
 use crate::common::IPCWriter;
 use crate::metrics::{BaselineMetrics, RecordOutput};
@@ -328,30 +328,37 @@ impl GroupedHashAggregateStream {
 
         let mut aggregate_groups = group_indices
             .into_iter()
-            .map(|(indices, mut requirement)| {
-                let aggregate_arguments = get_at_indices(&aggregate_arguments, &indices)?;
-                let merging_aggregate_arguments =
-                    get_at_indices(&merging_aggregate_arguments, &indices)?;
-                let filter_expressions = get_at_indices(&filter_expressions, &indices)?;
-                let aggr_exprs = get_at_indices(&aggregate_exprs, &indices)?;
-                // Instantiate the accumulators
-                let accumulators: Vec<_> = aggr_exprs
-                    .iter()
-                    .map(create_group_accumulator)
-                    .collect::<Result<_>>()?;
-                // For final stages there is no requirement
-                if !agg.mode.is_first_stage() {
-                    requirement.clear();
-                }
+            .map(
+                |AggregateExprGroup {
+                     indices,
+                     mut requirement,
+                 }| {
+                    let aggregate_arguments =
+                        get_at_indices(&aggregate_arguments, &indices)?;
+                    let merging_aggregate_arguments =
+                        get_at_indices(&merging_aggregate_arguments, &indices)?;
+                    let filter_expressions =
+                        get_at_indices(&filter_expressions, &indices)?;
+                    let aggr_exprs = get_at_indices(&aggregate_exprs, &indices)?;
+                    // Instantiate the accumulators
+                    let accumulators: Vec<_> = aggr_exprs
+                        .iter()
+                        .map(create_group_accumulator)
+                        .collect::<Result<_>>()?;
+                    // For final stages there is no requirement
+                    if !agg.mode.is_first_stage() {
+                        requirement.clear();
+                    }
 
-                Ok(HashAggregateGroup {
-                    accumulators,
-                    aggregate_arguments,
-                    merging_aggregate_arguments,
-                    filter_expressions,
-                    requirement,
-                })
-            })
+                    Ok(HashAggregateGroup {
+                        accumulators,
+                        aggregate_arguments,
+                        merging_aggregate_arguments,
+                        filter_expressions,
+                        requirement,
+                    })
+                },
+            )
             .collect::<Result<Vec<_>>>()?;
         if aggregate_groups.is_empty() {
             aggregate_groups = vec![HashAggregateGroup {
