@@ -238,6 +238,8 @@ impl PruningPredicate {
 
         // First, check any expr_op_literals
         for literal_guarantee in &self.literal_guarantees {
+            println!("Considering guarantee {:#?}", literal_guarantee);
+            println!("builder at start  {:#?}", builder);
             let LiteralGuarantee {
                 column,
                 guarantee,
@@ -245,13 +247,17 @@ impl PruningPredicate {
             } = literal_guarantee;
             // Can the statistics tell us anything about this column?
             if let Some(results) = statistics.contains(column, literals) {
-                match guarantee {
+                println!("  got results {:#?}", results);
+
+                let builder = match guarantee {
                     Guarantee::In => builder.append_array(&results),
                     Guarantee::NotIn => {
                         let results = arrow::compute::not(&results)?;
                         builder.append_array(&results)
                     }
-                }
+                };
+                println!("builder is now {:#?}", builder);
+                builder
             }
         }
 
@@ -2630,11 +2636,11 @@ mod tests {
                 "s1",
                 [ScalarValue::from("bar")],
                 [
-                    // container 0,1,2 contains
+                    // container 0,1,2 contains "bar"
                     Some(true),
                     Some(true),
                     Some(true),
-                    // container 3,4,5 not contains
+                    // container 3,4,5 does not contain "bar"
                     Some(false),
                     Some(false),
                     Some(false),
@@ -2642,6 +2648,26 @@ mod tests {
                     None,
                     None,
                     None,
+                ],
+            )
+            .with_contains(
+                // the way the tests are setup, this contains is
+                // consulted if the "foo" and "bar" are being checked at the same time
+                "s1",
+                [ScalarValue::from("foo"), ScalarValue::from("bar")],
+                [
+                    // container 0,1,2 unknown
+                    None,
+                    None,
+                    None,
+                    // container 3,4,5 does not contains either "foo" and "bar"
+                    Some(true),
+                    Some(true),
+                    Some(true),
+                    // container 6,7,8  contains either "foo" and "bar"
+                    Some(false),
+                    Some(false),
+                    Some(false),
                 ],
             );
 
@@ -2663,6 +2689,15 @@ mod tests {
             vec![true, true, true, false, false, false, true, true, true],
         );
 
+        // s1 = 'baz' (unknown value)
+        prune_with_expr(
+            col("s1").eq(lit("baz")),
+            &schema,
+            &statistics,
+            // can't rule out anything
+            vec![true, true, true, true, true, true, true, true, true],
+        );
+
         // s1 = 'foo' AND s1 = 'bar'
         prune_with_expr(
             col("s1").eq(lit("foo")).and(col("s1").eq(lit("bar"))),
@@ -2670,7 +2705,7 @@ mod tests {
             &statistics,
             // this can't possibly be true (the column can't take on both values)
             // but we can certainly rule it out if the stats tell us that both values are not present
-            vec![true, true, true, true, true, true,true, true, true]
+            vec![true, true, true, true, true, true, true, true, true],
         );
 
         // s1 = 'foo' OR s1 = 'bar'
@@ -2678,10 +2713,49 @@ mod tests {
             col("s1").eq(lit("foo")).or(col("s1").eq(lit("bar"))),
             &schema,
             &statistics,
-            // can rule out only when we know both are not present
-            vec![true, true, true, true, false, true, true, true, true],
+            // returns the check with foo and bar constants
+            vec![true, true, true, true, true, true, false, false, false],
         );
 
+        // s1 != foo
+        prune_with_expr(
+            col("s1").not_eq(lit("foo")),
+            &schema,
+            &statistics,
+            // rule out when we know for sure s1 does the value
+            vec![false, true, true, false, true, true, false, true, true],
+        );
+
+        // s1 != bar
+        prune_with_expr(
+            col("s1").not_eq(lit("bar")),
+            &schema,
+            &statistics,
+            // rule out when we know for sure s1 does have the value
+            vec![false, false, false, true, true, true, true, true, true],
+        );
+
+        // s1 != foo AND s1 != bar
+        prune_with_expr(
+            col("s1")
+                .not_eq(lit("foo"))
+                .and(col("s1").not_eq(lit("bar"))),
+            &schema,
+            &statistics,
+            // can rule out any container where we know s1 does have either value
+            vec![true, true, true, false, false, false, true, true, true],
+        );
+
+        // s1 != foo OR s1 != bar
+        prune_with_expr(
+            col("s1")
+                .not_eq(lit("foo"))
+                .or(col("s1").not_eq(lit("bar"))),
+            &schema,
+            &statistics,
+            // cant' rule out anything
+            vec![true, true, true, true, true, true, true, true, true],
+        );
     }
 
     #[test]
@@ -2892,6 +2966,7 @@ mod tests {
         statistics: &TestStatistics,
         expected: Vec<bool>,
     ) {
+        println!("Pruning with expr: {}", expr);
         let expr = logical2physical(&expr, &schema);
         let p = PruningPredicate::try_new(expr, schema.clone()).unwrap();
         let result = p.prune(statistics).unwrap();
