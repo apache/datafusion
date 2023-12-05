@@ -1098,7 +1098,9 @@ mod tests {
         max: ArrayRef,
         /// Optional values
         null_counts: Option<ArrayRef>,
-        // /// Optional known values (e.g. mimic a bloom filter)
+        /// Optional known values (e.g. mimic a bloom filter)
+        /// If present, must be the same size as min/max
+        known_values: Option<ArrayRef>,
     }
 
     impl ContainerStats {
@@ -1122,6 +1124,7 @@ mod tests {
                         .unwrap(),
                 ),
                 null_counts: None,
+                known_values: None,
             }
         }
 
@@ -1133,6 +1136,7 @@ mod tests {
                 min: Arc::new(min.into_iter().collect::<Int64Array>()),
                 max: Arc::new(max.into_iter().collect::<Int64Array>()),
                 null_counts: None,
+                known_values: None,
             }
         }
 
@@ -1144,6 +1148,7 @@ mod tests {
                 min: Arc::new(min.into_iter().collect::<Int32Array>()),
                 max: Arc::new(max.into_iter().collect::<Int32Array>()),
                 null_counts: None,
+                known_values: None,
             }
         }
 
@@ -1155,6 +1160,7 @@ mod tests {
                 min: Arc::new(min.into_iter().collect::<StringArray>()),
                 max: Arc::new(max.into_iter().collect::<StringArray>()),
                 null_counts: None,
+                known_values: None,
             }
         }
 
@@ -1166,6 +1172,7 @@ mod tests {
                 min: Arc::new(min.into_iter().collect::<BooleanArray>()),
                 max: Arc::new(max.into_iter().collect::<BooleanArray>()),
                 null_counts: None,
+                known_values: None,
             }
         }
 
@@ -1192,12 +1199,24 @@ mod tests {
             mut self,
             counts: impl IntoIterator<Item = Option<i64>>,
         ) -> Self {
-            // take stats out and update them
             let null_counts: ArrayRef =
                 Arc::new(counts.into_iter().collect::<Int64Array>());
 
             assert_eq!(null_counts.len(), self.len());
             self.null_counts = Some(null_counts);
+            self
+        }
+
+        /// Add contains informaation.
+        pub fn with_known_values(
+            mut self,
+            values: impl IntoIterator<Item = Option<bool>>,
+        ) -> Self {
+            let known_values: ArrayRef =
+                Arc::new(values.into_iter().collect::<BooleanArray>());
+
+            assert_eq!(known_values.len(), self.len());
+            self.known_values = Some(known_values);
             self
         }
     }
@@ -1239,6 +1258,26 @@ mod tests {
                 .remove(&col)
                 .expect("Can not find stats for column")
                 .with_null_counts(counts);
+
+            // put stats back in
+            self.stats.insert(col, container_stats);
+            self
+        }
+
+        /// Add contains informaation for the specified columm.
+        fn with_known_values(
+            mut self,
+            name: impl Into<String>,
+            values: impl IntoIterator<Item = Option<bool>>,
+        ) -> Self {
+            let col = Column::from_name(name.into());
+
+            // take stats out and update them
+            let container_stats = self
+                .stats
+                .remove(&col)
+                .expect("Can not find stats for column")
+                .with_known_values(values);
 
             // put stats back in
             self.stats.insert(col, container_stats);
@@ -2517,7 +2556,6 @@ mod tests {
         let statistics = TestStatistics::new()
             .with_known_values(
                 "s1",
-                ScalarValue::from(0i32),
                 [
                     // container 0 known to contain value, 1 not contains, 2 unknown
                     Some(true),
@@ -2535,7 +2573,6 @@ mod tests {
             )
             .with_known_values(
                 "s2",
-                ScalarValue::from(0i32),
                 [
                     // container 0,1,2 contains
                     Some(true),
@@ -2609,56 +2646,55 @@ mod tests {
             Field::new("s", DataType::Utf8, true),
         ]));
 
-        let statistics = TestStatistics::new().with(
-            "i",
-            ContainerStats::new_i32(
-                // Container 0, 3 ,6, contains range
-                // Container 1, 4, 7, does not contain range
-                // Container 2, 5, 9, unknown
-                vec![
-                    Some(-5),
-                    Some(10),
+        let statistics = TestStatistics::new()
+            .with(
+                "i",
+                ContainerStats::new_i32(
+                    // Container 0, 3 ,6, contains range
+                    // Container 1, 4, 7, does not contain range
+                    // Container 2, 5, 9, unknown
+                    vec![
+                        Some(-5),
+                        Some(10),
+                        None,
+                        Some(-5),
+                        Some(10),
+                        None,
+                        Some(-5),
+                        Some(10),
+                        None,
+                    ], // min
+                    vec![
+                        Some(5),
+                        Some(20),
+                        None,
+                        Some(5),
+                        Some(20),
+                        None,
+                        Some(5),
+                        Some(20),
+                        None,
+                    ], // max
+                ),
+            )
+            // Add contains information about the containers
+            .with_known_values(
+                "b",
+                [
+                    // container 0, 1,2 contain value
+                    Some(true),
+                    Some(true),
+                    Some(true),
+                    // container 3,4,5 does not contain value
+                    Some(false),
+                    Some(false),
+                    Some(false),
+                    // container 6,7,8 unknown
                     None,
-                    Some(-5),
-                    Some(10),
                     None,
-                    Some(-5),
-                    Some(10),
                     None,
-                ], // min
-                vec![
-                    Some(5),
-                    Some(20),
-                    None,
-                    Some(5),
-                    Some(20),
-                    None,
-                    Some(5),
-                    Some(20),
-                    None,
-                ], // max
-            ),
-        );
-
-        // Add contains information about the containers
-        let statistics = statistics.with_known_values(
-            "b",
-            ScalarValue::from(0i32),
-            [
-                // container 0, 1,2 contain value
-                Some(true),
-                Some(true),
-                Some(true),
-                // container 3,4,5 does not contain value
-                Some(false),
-                Some(false),
-                Some(false),
-                /// container 6,7,8 unknown
-                None,
-                None,
-                None,
-            ],
-        );
+                ],
+            );
 
         // i = 0 and s = 'foo'
         prune_with_expr(
@@ -2703,11 +2739,10 @@ mod tests {
         schema: &SchemaRef,
         statistics: &TestStatistics,
         expected: Vec<bool>,
-    ) -> Vec<bool> {
+    ) {
         let expr = logical2physical(&expr, &schema);
-        let p = PruningPredicate::try_new(expr, schema).unwrap();
-        p.prune(&statistics).unwrap();
-        let result = p.prune(&statistics).unwrap();
+        let p = PruningPredicate::try_new(expr, schema.clone()).unwrap();
+        let result = p.prune(statistics).unwrap();
         assert_eq!(result, expected);
     }
 
