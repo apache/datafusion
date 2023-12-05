@@ -4038,8 +4038,8 @@ fn test_prepare_statement_insert_infer() {
     // replace params with values
     let param_values = vec![
         ScalarValue::UInt32(Some(1)),
-        ScalarValue::Utf8(Some("Alan".to_string())),
-        ScalarValue::Utf8(Some("Turing".to_string())),
+        ScalarValue::from("Alan"),
+        ScalarValue::from("Turing"),
     ]
     .into();
     let expected_plan = "Dml: op=[Insert Into] table=[person]\
@@ -4120,11 +4120,11 @@ fn test_prepare_statement_to_plan_multi_params() {
     // replace params with values
     let param_values = vec![
         ScalarValue::Int32(Some(10)),
-        ScalarValue::Utf8(Some("abc".to_string())),
+        ScalarValue::from("abc"),
         ScalarValue::Float64(Some(100.0)),
         ScalarValue::Int32(Some(20)),
         ScalarValue::Float64(Some(200.0)),
-        ScalarValue::Utf8(Some("xyz".to_string())),
+        ScalarValue::from("xyz"),
     ];
     let expected_plan =
             "Projection: person.id, person.age, Utf8(\"xyz\")\
@@ -4190,8 +4190,8 @@ fn test_prepare_statement_to_plan_value_list() {
     ///////////////////
     // replace params with values
     let param_values = vec![
-        ScalarValue::Utf8(Some("a".to_string())),
-        ScalarValue::Utf8(Some("b".to_string())),
+        ScalarValue::from("a".to_string()),
+        ScalarValue::from("b".to_string()),
     ];
     let expected_plan = "Projection: t.num, t.letter\
         \n  SubqueryAlias: t\

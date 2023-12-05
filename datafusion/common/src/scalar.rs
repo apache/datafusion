@@ -774,7 +774,7 @@ impl ScalarValue {
 
     /// Returns a [`ScalarValue::Utf8`] representing `val`
     pub fn new_utf8(val: impl Into<String>) -> Self {
-        ScalarValue::Utf8(Some(val.into()))
+        ScalarValue::from(val.into())
     }
 
     /// Returns a [`ScalarValue::IntervalYearMonth`] representing
@@ -2699,7 +2699,7 @@ impl ScalarValue {
 
     /// Try to parse `value` into a ScalarValue of type `target_type`
     pub fn try_from_string(value: String, target_type: &DataType) -> Result<Self> {
-        let value = ScalarValue::Utf8(Some(value));
+        let value = ScalarValue::from(value);
         let cast_options = CastOptions {
             safe: false,
             format_options: Default::default(),
@@ -3581,9 +3581,9 @@ mod tests {
     #[test]
     fn test_list_to_array_string() {
         let scalars = vec![
-            ScalarValue::Utf8(Some(String::from("rust"))),
-            ScalarValue::Utf8(Some(String::from("arrow"))),
-            ScalarValue::Utf8(Some(String::from("data-fusion"))),
+            ScalarValue::from("rust"),
+            ScalarValue::from("arrow"),
+            ScalarValue::from("data-fusion"),
         ];
 
         let array = ScalarValue::new_list(scalars.as_slice(), &DataType::Utf8);
@@ -4722,7 +4722,7 @@ mod tests {
             Some(vec![
                 ScalarValue::Int32(Some(23)),
                 ScalarValue::Boolean(Some(false)),
-                ScalarValue::Utf8(Some("Hello".to_string())),
+                ScalarValue::from("Hello"),
                 ScalarValue::from(vec![
                     ("e", ScalarValue::from(2i16)),
                     ("f", ScalarValue::from(3i64)),
@@ -4915,17 +4915,17 @@ mod tests {
 
         // Define struct scalars
         let s0 = ScalarValue::from(vec![
-            ("A", ScalarValue::Utf8(Some(String::from("First")))),
+            ("A", ScalarValue::from("First")),
             ("primitive_list", l0),
         ]);
 
         let s1 = ScalarValue::from(vec![
-            ("A", ScalarValue::Utf8(Some(String::from("Second")))),
+            ("A", ScalarValue::from("Second")),
             ("primitive_list", l1),
         ]);
 
         let s2 = ScalarValue::from(vec![
-            ("A", ScalarValue::Utf8(Some(String::from("Third")))),
+            ("A", ScalarValue::from("Third")),
             ("primitive_list", l2),
         ]);
 
@@ -5212,7 +5212,7 @@ mod tests {
         check_scalar_cast(ScalarValue::Float64(None), DataType::Int16);
 
         check_scalar_cast(
-            ScalarValue::Utf8(Some("foo".to_string())),
+            ScalarValue::from("foo"),
             DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
         );
 
@@ -5493,10 +5493,7 @@ mod tests {
             (ScalarValue::Int8(None), ScalarValue::Int16(Some(1))),
             (ScalarValue::Int8(Some(1)), ScalarValue::Int16(None)),
             // Unsupported types
-            (
-                ScalarValue::Utf8(Some("foo".to_string())),
-                ScalarValue::Utf8(Some("bar".to_string())),
-            ),
+            (ScalarValue::from("foo"), ScalarValue::from("bar")),
             (
                 ScalarValue::Boolean(Some(true)),
                 ScalarValue::Boolean(Some(false)),
