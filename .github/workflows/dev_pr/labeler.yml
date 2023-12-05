@@ -16,55 +16,55 @@
 # under the License.
 
 development-process:
-- any:
+- all:
   - changed-files:
     - AnyGlobToAnyFile: ['dev/**.*', '.github/**.*', 'ci/**.*', '.asf.yaml']
   - base-branch: 'main'
 
 documentation:
-- any:
+- all:
   - changed-files:
     - AnyGlobToAnyFile: ['docs/**.*', 'README.md', './**/README.md', 'DEVELOPERS.md', 'datafusion/docs/**.*']
   - base-branch: 'main'
 
 sql:
-- any:
+- all:
   - changed-files:
     - AnyGlobToAnyFile: ['datafusion/sql/**/*']
   - base-branch: 'main'
 
 logical-expr:
-- any:
+- all:
   - changed-files:
     - AnyGlobToAnyFile: ['datafusion/expr/**/*']
   - base-branch: 'main'
 
 physical-expr:
-- any:
+- all:
   - changed-files:
     - AnyGlobToAnyFile: ['datafusion/physical-expr/**/*']
   - base-branch: 'main'
 
 optimizer:
-- any:
+- all:
   - changed-files:
     - AnyGlobToAnyFile: ['datafusion/optimizer/**/*']
   - base-branch: 'main'
 
 core:
-- any:
+- all:
   - changed-files:
     - AnyGlobToAnyFile: ['datafusion/core/**/*']
   - base-branch: 'main'
 
 substrait:
-- any:
+- all:
   - changed-files:
     - AnyGlobToAnyFile: ['datafusion/substrait/**/*']
   - base-branch: 'main'
 
 sqllogictest:
-- any:
+- all:
   - changed-files:
     - AnyGlobToAnyFile: ['datafusion/sqllogictest/**/*']
   - base-branch: 'main'
