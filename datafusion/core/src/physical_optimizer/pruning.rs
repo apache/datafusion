@@ -1185,9 +1185,9 @@ mod tests {
                 .map(|(_values, contains)| Arc::new(contains.clone()) as ArrayRef);
 
             [
-                self.min.as_ref().map(|a| a.clone()),
-                self.max.as_ref().map(|a| a.clone()),
-                self.null_counts.as_ref().map(|a| a.clone()),
+                self.min.as_ref().cloned(),
+                self.max.as_ref().cloned(),
+                self.null_counts.as_ref().cloned(),
             ]
             .into_iter()
             .flatten()
@@ -1302,7 +1302,7 @@ mod tests {
             let container_stats = self
                 .stats
                 .remove(&col)
-                .unwrap_or_else(|| ContainerStats::new())
+                .unwrap_or_else(ContainerStats::new)
                 .with_null_counts(counts);
 
             // put stats back in
@@ -1323,7 +1323,7 @@ mod tests {
             let container_stats = self
                 .stats
                 .remove(&col)
-                .unwrap_or_else(|| ContainerStats::new())
+                .unwrap_or_else(ContainerStats::new)
                 .with_contains(values, contains);
 
             // put stats back in
@@ -2961,7 +2961,7 @@ mod tests {
         expected: Vec<bool>,
     ) {
         println!("Pruning with expr: {}", expr);
-        let expr = logical2physical(&expr, &schema);
+        let expr = logical2physical(&expr, schema);
         let p = PruningPredicate::try_new(expr, schema.clone()).unwrap();
         let result = p.prune(statistics).unwrap();
         assert_eq!(result, expected);
