@@ -2660,7 +2660,8 @@ LOCATION '../core/tests/data/window_2.csv';";
         let expected = vec![
             "ProjectionExec: expr=[FIRST_VALUE(sales_global.amount) ORDER BY [sales_global.ts ASC NULLS LAST]@0 as fv1, LAST_VALUE(sales_global.amount) ORDER BY [sales_global.ts ASC NULLS LAST]@1 as lv1, FIRST_VALUE(sales_global.amount) ORDER BY [sales_global.ts DESC NULLS FIRST]@2 as fv2, LAST_VALUE(sales_global.amount) ORDER BY [sales_global.ts DESC NULLS FIRST]@3 as lv2]",
             "  AggregateExec: mode=Single, gby=[], aggr=[FIRST_VALUE(sales_global.amount), LAST_VALUE(sales_global.amount), LAST_VALUE(sales_global.amount), FIRST_VALUE(sales_global.amount)]",
-            "    MemoryExec: partitions=1, partition_sizes=[1]",
+            "    SortExec: expr=[ts@0 ASC NULLS LAST]",
+            "      MemoryExec: partitions=1, partition_sizes=[1]",
         ];
         // Get string representation of the plan
         let actual = get_plan_string(&physical_plan);
@@ -2710,7 +2711,8 @@ LOCATION '../core/tests/data/window_2.csv';";
             "  SortExec: expr=[country@4 ASC NULLS LAST]",
             "    ProjectionExec: expr=[FIRST_VALUE(sales_global.amount) ORDER BY [sales_global.ts ASC NULLS LAST]@1 as fv1, LAST_VALUE(sales_global.amount) ORDER BY [sales_global.ts ASC NULLS LAST]@2 as lv1, FIRST_VALUE(sales_global.amount) ORDER BY [sales_global.ts DESC NULLS FIRST]@3 as fv2, LAST_VALUE(sales_global.amount) ORDER BY [sales_global.ts DESC NULLS FIRST]@4 as lv2, country@0 as country]",
             "      AggregateExec: mode=Single, gby=[country@0 as country], aggr=[FIRST_VALUE(sales_global.amount), LAST_VALUE(sales_global.amount), LAST_VALUE(sales_global.amount), FIRST_VALUE(sales_global.amount)]",
-            "        MemoryExec: partitions=1, partition_sizes=[1]",
+            "        SortExec: expr=[ts@1 ASC NULLS LAST]",
+            "          MemoryExec: partitions=1, partition_sizes=[1]",
         ];
         // Get string representation of the plan
         let actual = get_plan_string(&physical_plan);
@@ -2845,7 +2847,8 @@ GROUP BY d";
         let expected = vec![
             "ProjectionExec: expr=[d@0 as d, FIRST_VALUE(multiple_ordered_table.c) ORDER BY [multiple_ordered_table.a DESC NULLS FIRST, multiple_ordered_table.c DESC NULLS FIRST]@1 as first_a, LAST_VALUE(multiple_ordered_table.c) ORDER BY [multiple_ordered_table.c DESC NULLS FIRST]@2 as last_c]",
             "  AggregateExec: mode=Single, gby=[d@2 as d], aggr=[FIRST_VALUE(multiple_ordered_table.c), LAST_VALUE(multiple_ordered_table.c)]",
-            "    CsvExec: file_groups={1 group: [[Users/akurmustafa/projects/synnada/arrow-datafusion-synnada/datafusion/core/tests/data/window_2.csv]]}, projection=[a, c, d], output_orderings=[[a@0 ASC NULLS LAST], [c@1 ASC NULLS LAST]], has_header=true",
+            "    SortExec: expr=[a@0 DESC,c@1 DESC]",
+            "      CsvExec: file_groups={1 group: [[Users/akurmustafa/projects/synnada/arrow-datafusion-synnada/datafusion/core/tests/data/window_2.csv]]}, projection=[a, c, d], output_orderings=[[a@0 ASC NULLS LAST], [c@1 ASC NULLS LAST]], has_header=true",
         ];
         // Get string representation of the plan
         let actual = get_plan_string(&physical_plan);
@@ -2899,9 +2902,9 @@ ORDER BY d";
             "        CoalesceBatchesExec: target_batch_size=2",
             "          RepartitionExec: partitioning=Hash([d@0], 8), input_partitions=8",
             "            AggregateExec: mode=Partial, gby=[d@2 as d], aggr=[FIRST_VALUE(multiple_ordered_table.c), LAST_VALUE(multiple_ordered_table.c)]",
-            "              RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            "                CsvExec: file_groups={1 group: [[Users/akurmustafa/projects/synnada/arrow-datafusion-synnada/datafusion/core/tests/data/window_2.csv]]}, projection=[a, c, d], output_orderings=[[a@0 ASC NULLS LAST], [c@1 ASC NULLS LAST]], has_header=true",
-        ];
+            "              SortExec: expr=[a@0 DESC,c@1 DESC]",
+            "                RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
+            "                  CsvExec: file_groups={1 group: [[Users/akurmustafa/projects/synnada/arrow-datafusion-synnada/datafusion/core/tests/data/window_2.csv]]}, projection=[a, c, d], output_orderings=[[a@0 ASC NULLS LAST], [c@1 ASC NULLS LAST]], has_header=true",        ];
         // Get string representation of the plan
         let actual = get_plan_string(&physical_plan);
         assert_eq!(

@@ -497,46 +497,56 @@ impl AggregateExec {
             mode,
         )?;
         let eq_properties = input.equivalence_properties();
-        let aggregate_groups =
+        let mut aggregate_groups =
             get_groups_indices(&mut aggr_expr, &group_by, &eq_properties, &mode);
 
         let schema = Arc::new(schema);
-        // Reset ordering requirement to `None` if aggregator is not order-sensitive
-        order_by_expr = aggr_expr
-            .iter()
-            .zip(order_by_expr)
-            .map(|(aggr_expr, fn_reqs)| {
-                // If
-                // - aggregation function is order-sensitive and
-                // - aggregation is performing a "first stage" calculation, and
-                // - at least one of the aggregate function requirement is not inside group by expression
-                // keep the ordering requirement as is; otherwise ignore the ordering requirement.
-                // In non-first stage modes, we accumulate data (using `merge_batch`)
-                // from different partitions (i.e. merge partial results). During
-                // this merge, we consider the ordering of each partial result.
-                // Hence, we do not need to use the ordering requirement in such
-                // modes as long as partial results are generated with the
-                // correct ordering.
-                fn_reqs.filter(|req| {
-                    is_order_sensitive(aggr_expr)
-                        && mode.is_first_stage()
-                        && !group_by_contains_all_requirements(&group_by, req)
-                })
-            })
-            .collect::<Vec<_>>();
-        let requirement = get_finest_requirement(
-            &mut aggr_expr,
-            &mut order_by_expr,
-            &input.equivalence_properties(),
-        )?;
-        let mut ordering_req = requirement.unwrap_or(vec![]);
-        let partition_search_mode = get_aggregate_search_mode(
-            &group_by,
-            &input,
-            &mut aggr_expr,
-            &mut order_by_expr,
-            &mut ordering_req,
-        );
+        // // Reset ordering requirement to `None` if aggregator is not order-sensitive
+        // order_by_expr = aggr_expr
+        //     .iter()
+        //     .zip(order_by_expr)
+        //     .map(|(aggr_expr, fn_reqs)| {
+        //         // If
+        //         // - aggregation function is order-sensitive and
+        //         // - aggregation is performing a "first stage" calculation, and
+        //         // - at least one of the aggregate function requirement is not inside group by expression
+        //         // keep the ordering requirement as is; otherwise ignore the ordering requirement.
+        //         // In non-first stage modes, we accumulate data (using `merge_batch`)
+        //         // from different partitions (i.e. merge partial results). During
+        //         // this merge, we consider the ordering of each partial result.
+        //         // Hence, we do not need to use the ordering requirement in such
+        //         // modes as long as partial results are generated with the
+        //         // correct ordering.
+        //         fn_reqs.filter(|req| {
+        //             is_order_sensitive(aggr_expr)
+        //                 && mode.is_first_stage()
+        //                 && !group_by_contains_all_requirements(&group_by, req)
+        //         })
+        //     })
+        //     .collect::<Vec<_>>();
+        // let requirement = get_finest_requirement(
+        //     &mut aggr_expr,
+        //     &mut order_by_expr,
+        //     &input.equivalence_properties(),
+        // )?;
+        // let mut ordering_req = requirement.unwrap_or(vec![]);
+        // let partition_search_mode = get_aggregate_search_mode(
+        //     &group_by,
+        //     &input,
+        //     &mut aggr_expr,
+        //     &mut order_by_expr,
+        //     &mut ordering_req,
+        // );
+
+        let mut ordering_req = vec![];
+        if let Some(max_group) = aggregate_groups
+            .iter_mut()
+            .max_by(|lhs, rhs| lhs.indices.len().cmp(&rhs.indices.len()))
+        {
+            ordering_req = max_group.requirement.to_vec();
+            // No longer require this, this requirement will be satisfied by outside mechanism.
+            max_group.requirement.clear();
+        }
 
         // Get GROUP BY expressions:
         let groupby_exprs = group_by.input_exprs();
@@ -545,8 +555,8 @@ impl AggregateExec {
         // work more efficiently.
         let indices = get_ordered_partition_by_indices(&groupby_exprs, &input);
         let mut new_requirement = indices
-            .into_iter()
-            .map(|idx| PhysicalSortRequirement {
+            .iter()
+            .map(|&idx| PhysicalSortRequirement {
                 expr: groupby_exprs[idx].clone(),
                 options: None,
             })
@@ -555,6 +565,15 @@ impl AggregateExec {
         let req = PhysicalSortRequirement::from_sort_exprs(&ordering_req);
         new_requirement.extend(req);
         new_requirement = collapse_lex_req(new_requirement);
+
+        let partition_search_mode =
+            if indices.len() == groupby_exprs.len() && !groupby_exprs.is_empty() {
+                PartitionSearchMode::Sorted
+            } else if indices.len() > 0 {
+                PartitionSearchMode::PartiallySorted(indices)
+            } else {
+                PartitionSearchMode::Linear
+            };
 
         // construct a map from the input expression to the output expression of the Aggregation group by
         let projection_mapping =
