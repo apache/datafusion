@@ -58,6 +58,7 @@ pub mod joins;
 pub mod limit;
 pub mod memory;
 pub mod metrics;
+mod ordering;
 pub mod projection;
 pub mod repartition;
 pub mod sorts;
@@ -72,6 +73,7 @@ pub mod windows;
 
 pub use crate::display::{DefaultDisplay, DisplayAs, DisplayFormatType, VerboseDisplay};
 pub use crate::metrics::Metric;
+pub use crate::ordering::InputOrderMode;
 pub use crate::topk::TopK;
 pub use crate::visitor::{accept, visit_execution_plan, ExecutionPlanVisitor};
 
