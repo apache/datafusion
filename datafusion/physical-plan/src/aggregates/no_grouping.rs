@@ -18,17 +18,15 @@
 //! Aggregate without grouping columns
 
 use crate::aggregates::{
-    aggregate_expressions, create_accumulators, finalize_aggregation,
-    finalize_aggregation_groups, AccumulatorItem, AggregateExprGroup, AggregateGroup,
-    AggregateMode,
+    aggregate_expressions, create_accumulators, finalize_aggregation_groups,
+    AggregateExprGroup, AggregateGroup, AggregateMode,
 };
 use crate::metrics::{BaselineMetrics, RecordOutput};
-use crate::{ExecutionPlan, RecordBatchStream, SendableRecordBatchStream};
+use crate::{RecordBatchStream, SendableRecordBatchStream};
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::Result;
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr::PhysicalExpr;
 use futures::stream::BoxStream;
 use std::borrow::Cow;
 use std::sync::Arc;
@@ -95,7 +93,6 @@ impl AggregateStream {
                 vec![None; agg.aggr_expr.len()]
             }
         };
-        let accumulators = create_accumulators(&agg.aggr_expr)?;
 
         let reservation = MemoryConsumer::new(format!("AggregateStream[{partition}]"))
             .register(context.memory_pool());

@@ -2356,284 +2356,6 @@ WITH HEADER ROW
 WITH ORDER (a ASC, b ASC, c ASC)
 LOCATION '../core/tests/data/window_2.csv';";
 
-    //   #[tokio::test]
-    //   async fn test_query() -> Result<()> {
-    //       let config = SessionConfig::new().with_target_partitions(1);
-    //       let ctx = SessionContext::new_with_config(config);
-    //
-    //       ctx.sql(ANNOTATED_DATA_FINITE2).await?;
-    //
-    //       let sql =
-    //           "SELECT a, b, ARRAY_AGG(d ORDER BY c DESC), ARRAY_AGG(d ORDER BY d DESC)
-    //         FROM annotated_data_finite2
-    //         GROUP BY a, b
-    //         ORDER BY a, b";
-    //
-    //       // let sql = "SELECT ARRAY_AGG(d ORDER BY c ASC)
-    //       //   FROM annotated_data_finite2
-    //       //   GROUP BY a
-    //       //   ORDER BY a";
-    //
-    //       let msg = format!("Creating logical plan for '{sql}'");
-    //       let dataframe = ctx.sql(sql).await.expect(&msg);
-    //       let physical_plan = dataframe.create_physical_plan().await?;
-    //       print_plan(&physical_plan)?;
-    //       let batches = collect(physical_plan.clone(), ctx.task_ctx()).await?;
-    //       print_batches(&batches)?;
-    //
-    //       let expected = vec![
-    //           "AggregateExec: mode=Single, gby=[a@0 as a, b@1 as b], aggr=[ARRAY_AGG(annotated_data_finite2.d), ARRAY_AGG(annotated_data_finite2.d)], ordering_mode=Sorted",
-    //           "  CsvExec: file_groups={1 group: [[Users/akurmustafa/projects/synnada/arrow-datafusion-synnada/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b, c, d], output_ordering=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST, c@2 ASC NULLS LAST], has_header=true",
-    //       ];
-    //       // Get string representation of the plan
-    //       let actual = get_plan_string(&physical_plan);
-    //       assert_eq!(
-    //           expected, actual,
-    //           "\n**Optimized Plan Mismatch\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
-    //       );
-    //
-    //       let expected = [
-    //           "+---+---+-----------------------------------------------------------------------------+-----------------------------------------------------------------------------+",
-    //           "| a | b | ARRAY_AGG(annotated_data_finite2.d)                                         | ARRAY_AGG(annotated_data_finite2.d)                                         |",
-    //           "+---+---+-----------------------------------------------------------------------------+-----------------------------------------------------------------------------+",
-    //           "| 0 | 0 | [4, 0, 0, 3, 0, 4, 1, 2, 3, 3, 2, 1, 2, 2, 4, 4, 1, 2, 0, 1, 1, 0, 0, 2, 0] | [4, 4, 4, 4, 3, 3, 3, 2, 2, 2, 2, 2, 2, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0] |",
-    //           "| 0 | 1 | [3, 1, 1, 0, 0, 3, 2, 3, 3, 1, 1, 0, 4, 1, 0, 4, 2, 2, 4, 3, 1, 1, 0, 2, 0] | [4, 4, 4, 3, 3, 3, 3, 3, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0] |",
-    //           "| 1 | 2 | [4, 1, 1, 2, 0, 1, 1, 4, 2, 0, 4, 4, 1, 3, 4, 2, 1, 1, 1, 2, 4, 1, 1, 3, 0] | [4, 4, 4, 4, 4, 4, 3, 3, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0] |",
-    //           "| 1 | 3 | [3, 4, 2, 4, 0, 2, 0, 0, 2, 1, 4, 3, 4, 1, 1, 1, 2, 4, 0, 2, 4, 1, 2, 0, 2] | [4, 4, 4, 4, 4, 4, 3, 3, 2, 2, 2, 2, 2, 2, 2, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0] |",
-    //           "+---+---+-----------------------------------------------------------------------------+-----------------------------------------------------------------------------+",
-    //       ];
-    //       assert_batches_eq!(expected, &batches);
-    //       Ok(())
-    //   }
-    //
-    //   #[tokio::test]
-    //   async fn test_query2() -> Result<()> {
-    //       let config = SessionConfig::new()
-    //           .with_target_partitions(8)
-    //           .with_batch_size(4);
-    //       let ctx = SessionContext::new_with_config(config);
-    //
-    //       ctx.sql(SALES_GLOBAL).await?;
-    //
-    //       let sql = "SELECT ARRAY_AGG(amount ORDER BY ts ASC) AS array_agg1
-    // FROM sales_global";
-    //
-    //       let msg = format!("Creating logical plan for '{sql}'");
-    //       let dataframe = ctx.sql(sql).await.expect(&msg);
-    //       let physical_plan = dataframe.create_physical_plan().await?;
-    //       print_plan(&physical_plan)?;
-    //       let batches = collect(physical_plan.clone(), ctx.task_ctx()).await?;
-    //       print_batches(&batches)?;
-    //
-    //       let expected = vec![
-    //           "AggregateExec: mode=Single, gby=[a@0 as a, b@1 as b], aggr=[ARRAY_AGG(annotated_data_finite2.d), ARRAY_AGG(annotated_data_finite2.d)], ordering_mode=Sorted",
-    //           "  CsvExec: file_groups={1 group: [[Users/akurmustafa/projects/synnada/arrow-datafusion-synnada/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b, c, d], output_ordering=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST, c@2 ASC NULLS LAST], has_header=true",
-    //       ];
-    //       // Get string representation of the plan
-    //       let actual = get_plan_string(&physical_plan);
-    //       assert_eq!(
-    //           expected, actual,
-    //           "\n**Optimized Plan Mismatch\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
-    //       );
-    //
-    //       let expected = [
-    //           "+---+---+-----------------------------------------------------------------------------+-----------------------------------------------------------------------------+",
-    //           "| a | b | ARRAY_AGG(annotated_data_finite2.d)                                         | ARRAY_AGG(annotated_data_finite2.d)                                         |",
-    //           "+---+---+-----------------------------------------------------------------------------+-----------------------------------------------------------------------------+",
-    //           "| 0 | 0 | [4, 0, 0, 3, 0, 4, 1, 2, 3, 3, 2, 1, 2, 2, 4, 4, 1, 2, 0, 1, 1, 0, 0, 2, 0] | [4, 4, 4, 4, 3, 3, 3, 2, 2, 2, 2, 2, 2, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0] |",
-    //           "| 0 | 1 | [3, 1, 1, 0, 0, 3, 2, 3, 3, 1, 1, 0, 4, 1, 0, 4, 2, 2, 4, 3, 1, 1, 0, 2, 0] | [4, 4, 4, 3, 3, 3, 3, 3, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0] |",
-    //           "| 1 | 2 | [4, 1, 1, 2, 0, 1, 1, 4, 2, 0, 4, 4, 1, 3, 4, 2, 1, 1, 1, 2, 4, 1, 1, 3, 0] | [4, 4, 4, 4, 4, 4, 3, 3, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0] |",
-    //           "| 1 | 3 | [3, 4, 2, 4, 0, 2, 0, 0, 2, 1, 4, 3, 4, 1, 1, 1, 2, 4, 0, 2, 4, 1, 2, 0, 2] | [4, 4, 4, 4, 4, 4, 3, 3, 2, 2, 2, 2, 2, 2, 2, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0] |",
-    //           "+---+---+-----------------------------------------------------------------------------+-----------------------------------------------------------------------------+",
-    //       ];
-    //       assert_batches_eq!(expected, &batches);
-    //       Ok(())
-    //   }
-    //
-    //   #[tokio::test]
-    //   async fn test_query3() -> Result<()> {
-    //       let config = SessionConfig::new()
-    //           .with_target_partitions(8)
-    //           .with_batch_size(1000);
-    //       let ctx = SessionContext::new_with_config(config);
-    //
-    //       ctx.sql(MULTIPLE_ORDERED_TABLE).await?;
-    //
-    //       let sql = "SELECT a, b, FIRST_VALUE(d ORDER BY c DESC), LAST_VALUE(d ORDER BY c DESC), ARRAY_AGG(d ORDER BY d DESC)
-    // FROM multiple_ordered_table
-    // GROUP BY a, b
-    // ORDER BY a, b";
-    //
-    //       let msg = format!("Creating logical plan for '{sql}'");
-    //       let dataframe = ctx.sql(sql).await.expect(&msg);
-    //       let physical_plan = dataframe.create_physical_plan().await?;
-    //       print_plan(&physical_plan)?;
-    //       let batches = collect(physical_plan.clone(), ctx.task_ctx()).await?;
-    //       print_batches(&batches)?;
-    //
-    //       let expected = vec![
-    //           "AggregateExec: mode=Single, gby=[a@0 as a, b@1 as b], aggr=[ARRAY_AGG(annotated_data_finite2.d), ARRAY_AGG(annotated_data_finite2.d)], ordering_mode=Sorted",
-    //           "  CsvExec: file_groups={1 group: [[Users/akurmustafa/projects/synnada/arrow-datafusion-synnada/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b, c, d], output_ordering=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST, c@2 ASC NULLS LAST], has_header=true",
-    //       ];
-    //       // Get string representation of the plan
-    //       let actual = get_plan_string(&physical_plan);
-    //       assert_eq!(
-    //           expected, actual,
-    //           "\n**Optimized Plan Mismatch\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
-    //       );
-    //
-    //       let expected = [
-    //           "+---+---+-----------------------------------------------------------------------------+-----------------------------------------------------------------------------+",
-    //           "| a | b | ARRAY_AGG(annotated_data_finite2.d)                                         | ARRAY_AGG(annotated_data_finite2.d)                                         |",
-    //           "+---+---+-----------------------------------------------------------------------------+-----------------------------------------------------------------------------+",
-    //           "| 0 | 0 | [4, 0, 0, 3, 0, 4, 1, 2, 3, 3, 2, 1, 2, 2, 4, 4, 1, 2, 0, 1, 1, 0, 0, 2, 0] | [4, 4, 4, 4, 3, 3, 3, 2, 2, 2, 2, 2, 2, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0] |",
-    //           "| 0 | 1 | [3, 1, 1, 0, 0, 3, 2, 3, 3, 1, 1, 0, 4, 1, 0, 4, 2, 2, 4, 3, 1, 1, 0, 2, 0] | [4, 4, 4, 3, 3, 3, 3, 3, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0] |",
-    //           "| 1 | 2 | [4, 1, 1, 2, 0, 1, 1, 4, 2, 0, 4, 4, 1, 3, 4, 2, 1, 1, 1, 2, 4, 1, 1, 3, 0] | [4, 4, 4, 4, 4, 4, 3, 3, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0] |",
-    //           "| 1 | 3 | [3, 4, 2, 4, 0, 2, 0, 0, 2, 1, 4, 3, 4, 1, 1, 1, 2, 4, 0, 2, 4, 1, 2, 0, 2] | [4, 4, 4, 4, 4, 4, 3, 3, 2, 2, 2, 2, 2, 2, 2, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0] |",
-    //           "+---+---+-----------------------------------------------------------------------------+-----------------------------------------------------------------------------+",
-    //       ];
-    //       assert_batches_eq!(expected, &batches);
-    //       Ok(())
-    //   }
-    //
-    //   #[tokio::test]
-    //   async fn test_query4() -> Result<()> {
-    //       let config = SessionConfig::new()
-    //           .with_target_partitions(8)
-    //           .with_batch_size(1000);
-    //       let ctx = SessionContext::new_with_config(config);
-    //
-    //       ctx.sql(MULTIPLE_ORDERED_TABLE).await?;
-    //
-    //       let sql =
-    //           "SELECT a, b, FIRST_VALUE(d ORDER BY c DESC), LAST_VALUE(d ORDER BY d DESC)
-    // FROM multiple_ordered_table
-    // GROUP BY a, b
-    // ORDER BY a, b";
-    //
-    //       let msg = format!("Creating logical plan for '{sql}'");
-    //       let dataframe = ctx.sql(sql).await.expect(&msg);
-    //       let physical_plan = dataframe.create_physical_plan().await?;
-    //       print_plan(&physical_plan)?;
-    //       let batches = collect(physical_plan.clone(), ctx.task_ctx()).await?;
-    //       print_batches(&batches)?;
-    //
-    //       let expected = vec![
-    //           "AggregateExec: mode=Single, gby=[a@0 as a, b@1 as b], aggr=[ARRAY_AGG(annotated_data_finite2.d), ARRAY_AGG(annotated_data_finite2.d)], ordering_mode=Sorted",
-    //           "  CsvExec: file_groups={1 group: [[Users/akurmustafa/projects/synnada/arrow-datafusion-synnada/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b, c, d], output_ordering=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST, c@2 ASC NULLS LAST], has_header=true",
-    //       ];
-    //       // Get string representation of the plan
-    //       let actual = get_plan_string(&physical_plan);
-    //       assert_eq!(
-    //           expected, actual,
-    //           "\n**Optimized Plan Mismatch\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
-    //       );
-    //
-    //       let expected = [
-    //           "+---+---+-----------------------------------------------------------------------------+-----------------------------------------------------------------------------+",
-    //           "| a | b | ARRAY_AGG(annotated_data_finite2.d)                                         | ARRAY_AGG(annotated_data_finite2.d)                                         |",
-    //           "+---+---+-----------------------------------------------------------------------------+-----------------------------------------------------------------------------+",
-    //           "| 0 | 0 | [4, 0, 0, 3, 0, 4, 1, 2, 3, 3, 2, 1, 2, 2, 4, 4, 1, 2, 0, 1, 1, 0, 0, 2, 0] | [4, 4, 4, 4, 3, 3, 3, 2, 2, 2, 2, 2, 2, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0] |",
-    //           "| 0 | 1 | [3, 1, 1, 0, 0, 3, 2, 3, 3, 1, 1, 0, 4, 1, 0, 4, 2, 2, 4, 3, 1, 1, 0, 2, 0] | [4, 4, 4, 3, 3, 3, 3, 3, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0] |",
-    //           "| 1 | 2 | [4, 1, 1, 2, 0, 1, 1, 4, 2, 0, 4, 4, 1, 3, 4, 2, 1, 1, 1, 2, 4, 1, 1, 3, 0] | [4, 4, 4, 4, 4, 4, 3, 3, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0] |",
-    //           "| 1 | 3 | [3, 4, 2, 4, 0, 2, 0, 0, 2, 1, 4, 3, 4, 1, 1, 1, 2, 4, 0, 2, 4, 1, 2, 0, 2] | [4, 4, 4, 4, 4, 4, 3, 3, 2, 2, 2, 2, 2, 2, 2, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0] |",
-    //           "+---+---+-----------------------------------------------------------------------------+-----------------------------------------------------------------------------+",
-    //       ];
-    //       assert_batches_eq!(expected, &batches);
-    //       Ok(())
-    //   }
-    //
-    //   #[tokio::test]
-    //   async fn test_query5() -> Result<()> {
-    //       let config = SessionConfig::new()
-    //           .with_target_partitions(1)
-    //           .with_batch_size(4);
-    //       let ctx = SessionContext::new_with_config(config);
-    //
-    //       ctx.sql(MULTIPLE_ORDERED_TABLE).await?;
-    //
-    //       let sql = "SELECT a, b, FIRST_VALUE(d ORDER BY c DESC), LAST_VALUE(d ORDER BY c DESC), ARRAY_AGG(d ORDER BY d DESC)
-    // FROM multiple_ordered_table
-    // GROUP BY a, b
-    // ORDER BY a, b";
-    //
-    //       let msg = format!("Creating logical plan for '{sql}'");
-    //       let dataframe = ctx.sql(sql).await.expect(&msg);
-    //       let physical_plan = dataframe.create_physical_plan().await?;
-    //       print_plan(&physical_plan)?;
-    //       let batches = collect(physical_plan.clone(), ctx.task_ctx()).await?;
-    //       print_batches(&batches)?;
-    //
-    //       let expected = vec![
-    //           "AggregateExec: mode=Single, gby=[a@0 as a, b@1 as b], aggr=[ARRAY_AGG(annotated_data_finite2.d), ARRAY_AGG(annotated_data_finite2.d)], ordering_mode=Sorted",
-    //           "  CsvExec: file_groups={1 group: [[Users/akurmustafa/projects/synnada/arrow-datafusion-synnada/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b, c, d], output_ordering=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST, c@2 ASC NULLS LAST], has_header=true",
-    //       ];
-    //       // Get string representation of the plan
-    //       let actual = get_plan_string(&physical_plan);
-    //       assert_eq!(
-    //           expected, actual,
-    //           "\n**Optimized Plan Mismatch\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
-    //       );
-    //
-    //       let expected = [
-    //           "+---+---+-----------------------------------------------------------------------------+-----------------------------------------------------------------------------+",
-    //           "| a | b | ARRAY_AGG(annotated_data_finite2.d)                                         | ARRAY_AGG(annotated_data_finite2.d)                                         |",
-    //           "+---+---+-----------------------------------------------------------------------------+-----------------------------------------------------------------------------+",
-    //           "| 0 | 0 | [4, 0, 0, 3, 0, 4, 1, 2, 3, 3, 2, 1, 2, 2, 4, 4, 1, 2, 0, 1, 1, 0, 0, 2, 0] | [4, 4, 4, 4, 3, 3, 3, 2, 2, 2, 2, 2, 2, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0] |",
-    //           "| 0 | 1 | [3, 1, 1, 0, 0, 3, 2, 3, 3, 1, 1, 0, 4, 1, 0, 4, 2, 2, 4, 3, 1, 1, 0, 2, 0] | [4, 4, 4, 3, 3, 3, 3, 3, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0] |",
-    //           "| 1 | 2 | [4, 1, 1, 2, 0, 1, 1, 4, 2, 0, 4, 4, 1, 3, 4, 2, 1, 1, 1, 2, 4, 1, 1, 3, 0] | [4, 4, 4, 4, 4, 4, 3, 3, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0] |",
-    //           "| 1 | 3 | [3, 4, 2, 4, 0, 2, 0, 0, 2, 1, 4, 3, 4, 1, 1, 1, 2, 4, 0, 2, 4, 1, 2, 0, 2] | [4, 4, 4, 4, 4, 4, 3, 3, 2, 2, 2, 2, 2, 2, 2, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0] |",
-    //           "+---+---+-----------------------------------------------------------------------------+-----------------------------------------------------------------------------+",
-    //       ];
-    //       assert_batches_eq!(expected, &batches);
-    //       Ok(())
-    //   }
-    //
-    //   #[tokio::test]
-    //   async fn test_query6() -> Result<()> {
-    //       let config = SessionConfig::new()
-    //           .with_target_partitions(8)
-    //           .with_batch_size(1000);
-    //       let ctx = SessionContext::new_with_config(config);
-    //
-    //       ctx.sql(SALES_GLOBAL).await?;
-    //
-    //       let sql = "SELECT FIRST_VALUE(amount ORDER BY ts ASC) AS fv1,
-    // LAST_VALUE(amount ORDER BY ts ASC) AS fv2
-    // FROM sales_global";
-    //
-    //       let msg = format!("Creating logical plan for '{sql}'");
-    //       let dataframe = ctx.sql(sql).await.expect(&msg);
-    //       let physical_plan = dataframe.create_physical_plan().await?;
-    //       print_plan(&physical_plan)?;
-    //       let batches = collect(physical_plan.clone(), ctx.task_ctx()).await?;
-    //       print_batches(&batches)?;
-    //
-    //       let expected = vec![
-    //           "AggregateExec: mode=Single, gby=[a@0 as a, b@1 as b], aggr=[ARRAY_AGG(annotated_data_finite2.d), ARRAY_AGG(annotated_data_finite2.d)], ordering_mode=Sorted",
-    //           "  CsvExec: file_groups={1 group: [[Users/akurmustafa/projects/synnada/arrow-datafusion-synnada/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b, c, d], output_ordering=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST, c@2 ASC NULLS LAST], has_header=true",
-    //       ];
-    //       // Get string representation of the plan
-    //       let actual = get_plan_string(&physical_plan);
-    //       assert_eq!(
-    //           expected, actual,
-    //           "\n**Optimized Plan Mismatch\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
-    //       );
-    //
-    //       let expected = [
-    //           "+---+---+-----------------------------------------------------------------------------+-----------------------------------------------------------------------------+",
-    //           "| a | b | ARRAY_AGG(annotated_data_finite2.d)                                         | ARRAY_AGG(annotated_data_finite2.d)                                         |",
-    //           "+---+---+-----------------------------------------------------------------------------+-----------------------------------------------------------------------------+",
-    //           "| 0 | 0 | [4, 0, 0, 3, 0, 4, 1, 2, 3, 3, 2, 1, 2, 2, 4, 4, 1, 2, 0, 1, 1, 0, 0, 2, 0] | [4, 4, 4, 4, 3, 3, 3, 2, 2, 2, 2, 2, 2, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0] |",
-    //           "| 0 | 1 | [3, 1, 1, 0, 0, 3, 2, 3, 3, 1, 1, 0, 4, 1, 0, 4, 2, 2, 4, 3, 1, 1, 0, 2, 0] | [4, 4, 4, 3, 3, 3, 3, 3, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0] |",
-    //           "| 1 | 2 | [4, 1, 1, 2, 0, 1, 1, 4, 2, 0, 4, 4, 1, 3, 4, 2, 1, 1, 1, 2, 4, 1, 1, 3, 0] | [4, 4, 4, 4, 4, 4, 3, 3, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0] |",
-    //           "| 1 | 3 | [3, 4, 2, 4, 0, 2, 0, 0, 2, 1, 4, 3, 4, 1, 1, 1, 2, 4, 0, 2, 4, 1, 2, 0, 2] | [4, 4, 4, 4, 4, 4, 3, 3, 2, 2, 2, 2, 2, 2, 2, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0] |",
-    //           "+---+---+-----------------------------------------------------------------------------+-----------------------------------------------------------------------------+",
-    //       ];
-    //       assert_batches_eq!(expected, &batches);
-    //       Ok(())
-    //   }
-
     #[tokio::test]
     async fn test_query7() -> Result<()> {
         let config = SessionConfig::new()
@@ -2847,7 +2569,7 @@ GROUP BY d";
         let expected = vec![
             "ProjectionExec: expr=[d@0 as d, FIRST_VALUE(multiple_ordered_table.c) ORDER BY [multiple_ordered_table.a DESC NULLS FIRST, multiple_ordered_table.c DESC NULLS FIRST]@1 as first_a, LAST_VALUE(multiple_ordered_table.c) ORDER BY [multiple_ordered_table.c DESC NULLS FIRST]@2 as last_c]",
             "  AggregateExec: mode=Single, gby=[d@2 as d], aggr=[FIRST_VALUE(multiple_ordered_table.c), LAST_VALUE(multiple_ordered_table.c)]",
-            "    SortExec: expr=[a@0 DESC,c@1 DESC]",
+            "    SortExec: expr=[c@1 DESC]",
             "      CsvExec: file_groups={1 group: [[Users/akurmustafa/projects/synnada/arrow-datafusion-synnada/datafusion/core/tests/data/window_2.csv]]}, projection=[a, c, d], output_orderings=[[a@0 ASC NULLS LAST], [c@1 ASC NULLS LAST]], has_header=true",
         ];
         // Get string representation of the plan
@@ -2902,9 +2624,10 @@ ORDER BY d";
             "        CoalesceBatchesExec: target_batch_size=2",
             "          RepartitionExec: partitioning=Hash([d@0], 8), input_partitions=8",
             "            AggregateExec: mode=Partial, gby=[d@2 as d], aggr=[FIRST_VALUE(multiple_ordered_table.c), LAST_VALUE(multiple_ordered_table.c)]",
-            "              SortExec: expr=[a@0 DESC,c@1 DESC]",
+            "              SortExec: expr=[c@1 DESC]",
             "                RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            "                  CsvExec: file_groups={1 group: [[Users/akurmustafa/projects/synnada/arrow-datafusion-synnada/datafusion/core/tests/data/window_2.csv]]}, projection=[a, c, d], output_orderings=[[a@0 ASC NULLS LAST], [c@1 ASC NULLS LAST]], has_header=true",        ];
+            "                  CsvExec: file_groups={1 group: [[Users/akurmustafa/projects/synnada/arrow-datafusion-synnada/datafusion/core/tests/data/window_2.csv]]}, projection=[a, c, d], output_orderings=[[a@0 ASC NULLS LAST], [c@1 ASC NULLS LAST]], has_header=true",
+        ];
         // Get string representation of the plan
         let actual = get_plan_string(&physical_plan);
         assert_eq!(
@@ -2956,8 +2679,9 @@ ORDER BY d";
             "      CoalesceBatchesExec: target_batch_size=2",
             "        RepartitionExec: partitioning=Hash([a@0, b@1], 8), input_partitions=8",
             "          AggregateExec: mode=Partial, gby=[a@0 as a, b@1 as b], aggr=[ARRAY_AGG(multiple_ordered_table.d), ARRAY_AGG(multiple_ordered_table.d)], ordering_mode=Sorted",
-            "            RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            "              CsvExec: file_groups={1 group: [[Users/akurmustafa/projects/synnada/arrow-datafusion-synnada/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b, c, d], output_orderings=[[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST], [c@2 ASC NULLS LAST]], has_header=true",
+            "            SortExec: expr=[a@0 ASC NULLS LAST,b@1 ASC NULLS LAST,d@3 DESC]",
+            "              RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
+            "                CsvExec: file_groups={1 group: [[Users/akurmustafa/projects/synnada/arrow-datafusion-synnada/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b, c, d], output_orderings=[[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST], [c@2 ASC NULLS LAST]], has_header=true",
         ];
         // Get string representation of the plan
         let actual = get_plan_string(&physical_plan);
