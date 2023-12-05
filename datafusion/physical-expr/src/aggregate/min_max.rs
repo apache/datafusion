@@ -1314,7 +1314,7 @@ mod tests {
     #[test]
     fn min_utf8() -> Result<()> {
         let a: ArrayRef = Arc::new(StringArray::from(vec!["d", "a", "c", "b"]));
-        generic_test_op!(a, DataType::Utf8, Min, ScalarValue::from("a"),)
+        generic_test_op!(a, DataType::Utf8, Min, ScalarValue::from("a"))
     }
 
     #[test]
