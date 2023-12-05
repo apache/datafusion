@@ -86,9 +86,6 @@ struct SpillState {
     /// true when streaming merge is in progress
     is_stream_merging: bool,
 
-    /// aggregate_arguments for merging spilled data
-    merging_aggregate_arguments: Vec<Vec<Arc<dyn PhysicalExpr>>>,
-
     /// GROUP BY expressions for merging spilled data
     merging_group_by: PhysicalGroupBy,
 }
@@ -396,7 +393,6 @@ impl GroupedHashAggregateStream {
             spill_expr,
             spill_schema: agg_schema.clone(),
             is_stream_merging: false,
-            merging_aggregate_arguments,
             merging_group_by: PhysicalGroupBy::new_single(agg_group_by.expr.clone()),
         };
 
@@ -437,6 +433,8 @@ pub struct HashAggregateGroup {
     /// some aggregates such as `CORR` can accept more than one
     /// argument.
     aggregate_arguments: Vec<Vec<Arc<dyn PhysicalExpr>>>,
+
+    /// aggregate_arguments at the input of the merging (may have additional fields)
     merging_aggregate_arguments: Vec<Vec<Arc<dyn PhysicalExpr>>>,
 
     /// Optional filter expression to evaluate, one for each for
