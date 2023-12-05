@@ -1099,8 +1099,9 @@ mod tests {
         /// Optional values
         null_counts: Option<ArrayRef>,
         /// Optional known values (e.g. mimic a bloom filter)
-        /// If present, must be the same size as min/max
-        contains: Option<BooleanArray>,
+        /// (value, contains)
+        /// If present, all BooleanArrays must be the same size as min/max
+        contains: Vec<(HashSet<ScalarValue>, BooleanArray)>,
     }
 
     impl ContainerStats {
@@ -1176,38 +1177,40 @@ mod tests {
             self.null_counts.clone()
         }
 
+        /// return an iterator over all arrays in this statistics
+        fn arrays(&self) -> Vec<ArrayRef> {
+            let contains_arrays = self
+                .contains
+                .iter()
+                .map(|(_values, contains)| Arc::new(contains.clone()) as ArrayRef);
+
+            [
+                self.min.as_ref().map(|a| a.clone()),
+                self.max.as_ref().map(|a| a.clone()),
+                self.null_counts.as_ref().map(|a| a.clone()),
+            ]
+            .into_iter()
+            .flatten()
+            .chain(contains_arrays)
+            .collect()
+        }
+
         fn len(&self) -> usize {
             // pick the first non zero length
-            self.min
-                .as_ref()
-                .map(|m| m.len())
-                .or_else(|| self.max.as_ref().map(|m| m.len()))
-                .or_else(|| self.null_counts.as_ref().map(|m| m.len()))
-                .or_else(|| self.contains.as_ref().map(|m| m.len()))
-                .unwrap_or(0)
+            self.arrays().iter().map(|a| a.len()).next().unwrap_or(0)
         }
 
         /// Ensure that the lengths of all arrays are consistent
         fn assert_invariants(&self) {
-            let lens = vec![
-                self.min.as_ref().map(|m| m.len()),
-                self.max.as_ref().map(|m| m.len()),
-                self.null_counts.as_ref().map(|m| m.len()),
-                self.contains.as_ref().map(|m| m.len()),
-            ];
-
             let mut prev_len = None;
 
-            for maybe_len in lens {
+            for len in self.arrays().iter().map(|a| a.len()) {
                 // Get a length, if we don't already have one
-                match (prev_len, maybe_len) {
-                    (None, _) => {
-                        prev_len = maybe_len;
+                match prev_len {
+                    None => {
+                        prev_len = Some(len);
                     }
-                    (Some(_), None) => {
-                        // no length to check
-                    }
-                    (Some(prev_len), Some(len)) => {
+                    Some(prev_len) => {
                         assert_eq!(prev_len, len);
                     }
                 }
@@ -1243,13 +1246,24 @@ mod tests {
         /// Add contains informaation.
         pub fn with_contains(
             mut self,
-            values: impl IntoIterator<Item = Option<bool>>,
+            values: impl IntoIterator<Item = ScalarValue>,
+            contains: impl IntoIterator<Item = Option<bool>>,
         ) -> Self {
-            let contains: BooleanArray = values.into_iter().collect();
+            let contains: BooleanArray = contains.into_iter().collect();
+            let values: HashSet<_> = values.into_iter().collect();
 
+            self.contains.push((values, contains));
             self.assert_invariants();
-            self.contains = Some(contains);
             self
+        }
+
+        /// get any contains information for the specified values
+        fn contains(&self, find_values: &HashSet<ScalarValue>) -> Option<BooleanArray> {
+            // find the one with the matching values
+            self.contains
+                .iter()
+                .find(|(values, _contains)| values == find_values)
+                .map(|(_values, contains)| contains.clone())
         }
     }
 
@@ -1300,7 +1314,8 @@ mod tests {
         fn with_contains(
             mut self,
             name: impl Into<String>,
-            values: impl IntoIterator<Item = Option<bool>>,
+            values: impl IntoIterator<Item = ScalarValue>,
+            contains: impl IntoIterator<Item = Option<bool>>,
         ) -> Self {
             let col = Column::from_name(name.into());
 
@@ -1309,7 +1324,7 @@ mod tests {
                 .stats
                 .remove(&col)
                 .unwrap_or_else(|| ContainerStats::new())
-                .with_contains(values);
+                .with_contains(values, contains);
 
             // put stats back in
             self.stats.insert(col, container_stats);
@@ -1350,13 +1365,11 @@ mod tests {
         fn contains(
             &self,
             column: &Column,
-            _values: &HashSet<ScalarValue>,
+            values: &HashSet<ScalarValue>,
         ) -> Option<BooleanArray> {
-            // ignore values, just return the contains array for this column
-            // the testing the values is checked in more integration tests (e.g. bloom filter)
             self.stats
                 .get(column)
-                .and_then(|container_stats| container_stats.contains.clone())
+                .and_then(|container_stats| container_stats.contains(values))
         }
     }
 
@@ -2589,6 +2602,69 @@ mod tests {
     }
 
     #[test]
+    fn prune_with_contains_one_column() {
+        // contains filters for s1 and s2
+        let schema = Arc::new(Schema::new(vec![Field::new("s1", DataType::Utf8, true)]));
+
+        // Model having information like bloom filters for s1 and s2
+        let statistics = TestStatistics::new()
+            .with_contains(
+                "s1",
+                [ScalarValue::from("foo")],
+                [
+                    // container 0 known to contain "foo"", 1 not contains, 2 unknown
+                    Some(true),
+                    Some(false),
+                    None,
+                    // container 3 known to contain "foo", 4 not contains, 5 unknown
+                    Some(true),
+                    Some(false),
+                    None,
+                    // container 6 known to contain "foo", 7 not contains, 8 unknown
+                    Some(true),
+                    Some(false),
+                    None,
+                ],
+            )
+            .with_contains(
+                "s1",
+                [ScalarValue::from("bar")],
+                [
+                    // container 0,1,2 contains
+                    Some(true),
+                    Some(true),
+                    Some(true),
+                    // container 3,4,5 not contains
+                    Some(false),
+                    Some(false),
+                    Some(false),
+                    // container 5,6,7 unknown
+                    None,
+                    None,
+                    None,
+                ],
+            );
+
+        // s1 = 'foo'
+        prune_with_expr(
+            col("s1").eq(lit("foo")),
+            &schema,
+            &statistics,
+            // rule out containers where we know foo is not present
+            vec![true, false, true, true, false, true, true, false, true],
+        );
+
+        // s1 = 'bar'
+        prune_with_expr(
+            col("s1").eq(lit("bar")),
+            &schema,
+            &statistics,
+            // rule out containers where we know bar is not present
+            vec![true, true, true, false, false, false, true, true, true],
+        );
+    }
+
+    #[test]
     fn prune_with_contains() {
         // contains filters for s1 and s2
         let schema = Arc::new(Schema::new(vec![
@@ -2600,16 +2676,17 @@ mod tests {
         let statistics = TestStatistics::new()
             .with_contains(
                 "s1",
+                [ScalarValue::from("foo")],
                 [
-                    // container 0 known to contain value, 1 not contains, 2 unknown
+                    // container 0 known to contain "foo"", 1 not contains, 2 unknown
                     Some(true),
                     Some(false),
                     None,
-                    // container 3 known to contain value, 4 not contains, 5 unknown
+                    // container 3 known to contain "foo", 4 not contains, 5 unknown
                     Some(true),
                     Some(false),
                     None,
-                    // container 6 known to contain value, 7 not contains, 8 unknown
+                    // container 6 known to contain "foo", 7 not contains, 8 unknown
                     Some(true),
                     Some(false),
                     None,
@@ -2617,6 +2694,7 @@ mod tests {
             )
             .with_contains(
                 "s2",
+                [ScalarValue::from("bar")],
                 [
                     // container 0,1,2 contains
                     Some(true),
@@ -2648,8 +2726,8 @@ mod tests {
             expr,
             &schema,
             &statistics,
-            // can only rule out container where we know values are not present (both are Some(false))
-            vec![true, true, true, true, false, true, true, true, true],
+            //  can't rule out any container (predicate is on both columns)
+            vec![true, true, true, true, true, true, true, true, true],
         );
 
         // s1 = 'foo' AND s2 != 'bar'
@@ -2733,6 +2811,7 @@ mod tests {
             // Add contains information about the containers
             .with_contains(
                 "b",
+                [ScalarValue::from("bar")],
                 [
                     // container 0, 1,2 contain value
                     Some(true),
