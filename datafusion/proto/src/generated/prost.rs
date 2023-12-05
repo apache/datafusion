@@ -1916,6 +1916,8 @@ pub struct FilterExecNode {
     pub input: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalPlanNode>>,
     #[prost(message, optional, tag = "2")]
     pub expr: ::core::option::Option<PhysicalExprNode>,
+    #[prost(uint32, tag = "3")]
+    pub default_filter_selectivity: u32,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]

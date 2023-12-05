@@ -158,7 +158,16 @@ impl AsExecutionPlan for PhysicalPlanNode {
                                 .to_owned(),
                         )
                     })?;
-                Ok(Arc::new(FilterExec::try_new(predicate, input)?))
+                let filter_selectivity = filter.default_filter_selectivity.try_into();
+                let filter = FilterExec::try_new(predicate, input)?;
+                match filter_selectivity {
+                    Ok(filter_selectivity) => Ok(Arc::new(
+                        filter.with_default_selectivity(filter_selectivity)?,
+                    )),
+                    Err(_) => Err(DataFusionError::Internal(
+                        "filter_selectivity in PhysicalPlanNode is invalid ".to_owned(),
+                    )),
+                }
             }
             PhysicalPlanType::CsvScan(scan) => Ok(Arc::new(CsvExec::new(
                 parse_protobuf_file_scan_config(
@@ -988,6 +997,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
                     protobuf::FilterExecNode {
                         input: Some(Box::new(input)),
                         expr: Some(exec.predicate().clone().try_into()?),
+                        default_filter_selectivity: exec.default_selectivity() as u32,
                     },
                 ))),
             });
