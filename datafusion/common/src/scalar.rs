@@ -3199,32 +3199,30 @@ mod tests {
         values
             .into_iter()
             .map(|v| {
-                let arr = if let Some(_) = v {
+                let arr = if v.is_some() {
                     Arc::new(
                         GenericListArray::<O>::from_iter_primitive::<Int64Type, _, _>(
                             vec![v],
                         ),
                     )
+                } else if O::IS_LARGE {
+                    new_null_array(
+                        &DataType::LargeList(Arc::new(Field::new(
+                            "item",
+                            DataType::Int64,
+                            true,
+                        ))),
+                        1,
+                    )
                 } else {
-                    if O::IS_LARGE {
-                        new_null_array(
-                            &DataType::LargeList(Arc::new(Field::new(
-                                "item",
-                                DataType::Int64,
-                                true,
-                            ))),
-                            1,
-                        )
-                    } else {
-                        new_null_array(
-                            &DataType::List(Arc::new(Field::new(
-                                "item",
-                                DataType::Int64,
-                                true,
-                            ))),
-                            1,
-                        )
-                    }
+                    new_null_array(
+                        &DataType::List(Arc::new(Field::new(
+                            "item",
+                            DataType::Int64,
+                            true,
+                        ))),
+                        1,
+                    )
                 };
 
                 if O::IS_LARGE {
