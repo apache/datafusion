@@ -118,20 +118,16 @@ pub(crate) async fn prune_row_groups_by_bloom_filters<
 ) -> Vec<usize> {
     let mut filtered = Vec::with_capacity(groups.len());
     for idx in row_groups {
-        let rg_metadata = &groups[*idx];
         // get all columns bloom filter
         let literal_columns = predicate.literal_columns();
         let mut column_sbbf = HashMap::with_capacity(literal_columns.len());
 
         for column_name in literal_columns {
-            // This is very likely incorrect as it will not work for nested columns
-            // should use parquet_column instead
-            let Some((column_idx, _)) = rg_metadata
-                .columns()
-                .iter()
-                .enumerate()
-                .find(|(_, column)| column.column_path().string().eq(&column_name))
-            else {
+            let Some((column_idx, _field)) = parquet_column(
+                builder.parquet_schema(),
+                predicate.schema(),
+                &column_name,
+            ) else {
                 continue;
             };
 
@@ -142,7 +138,7 @@ pub(crate) async fn prune_row_groups_by_bloom_filters<
                 Ok(Some(bf)) => bf,
                 Ok(None) => continue, // no bloom filter for this column
                 Err(e) => {
-                    log::error!("Ignoring error reading bloom filter: {e}");
+                    log::debug!("Ignoring error reading bloom filter: {e}");
                     metrics.predicate_evaluation_errors.add(1);
                     continue;
                 }
