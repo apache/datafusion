@@ -238,8 +238,6 @@ impl PruningPredicate {
 
         // First, check any expr_op_literals
         for literal_guarantee in &self.literal_guarantees {
-            println!("Considering guarantee {:#?}", literal_guarantee);
-            println!("builder at start  {:#?}", builder);
             let LiteralGuarantee {
                 column,
                 guarantee,
@@ -247,17 +245,13 @@ impl PruningPredicate {
             } = literal_guarantee;
             // Can the statistics tell us anything about this column?
             if let Some(results) = statistics.contains(column, literals) {
-                println!("  got results {:#?}", results);
-
-                let builder = match guarantee {
+                match guarantee {
                     Guarantee::In => builder.append_array(&results),
                     Guarantee::NotIn => {
                         let results = arrow::compute::not(&results)?;
                         builder.append_array(&results)
                     }
-                };
-                println!("builder is now {:#?}", builder);
-                builder
+                }
             }
         }
 
@@ -2934,26 +2928,23 @@ mod tests {
             vec![true, false, true, false, false, false, true, false, true],
         );
 
-        /*
         // i = 0 and s != 'foo'
-        let expr = col("i").eq(lit(0)).and(col("s").not_eq(lit("foo")));
-        let expr = logical2physical(&expr, &schema);
-        let p = PruningPredicate::try_new(expr, schema).unwrap();
-        // Can only rule out container where we know range is false, and contains is true)
-        let expected_ret = vec![true, false, true, true, true, true, true, true, true];
-        let result = p.prune(&statistics).unwrap();
-        assert_eq!(result, expected_ret);
+        prune_with_expr(
+            col("i").eq(lit(0)).and(col("s").not_eq(lit("foo"))),
+            &schema,
+            &statistics,
+            // Can only rule out container where we know range is false, or contains is true)
+            vec![false, false, false, true, false, true, true, false, true],
+        );
 
         // i = 0 OR s = 'foo'
-        let expr = col("i").eq(lit(0)).or(col("s").not_eq(lit("foo")));
-        let expr = logical2physical(&expr, &schema);
-        let p = PruningPredicate::try_new(expr, schema).unwrap();
-        // cant rule out anything (as connected by OR)
-        let expected_ret = vec![true, true, true, true, true, true, true, true, true];
-        let result = p.prune(&statistics).unwrap();
-        assert_eq!(result, expected_ret);
-
-         */
+        prune_with_expr(
+            col("i").eq(lit(0)).or(col("s").not_eq(lit("foo"))),
+            &schema,
+            &statistics,
+            // cant rule out anything (as connected by OR)
+            vec![true, true, true, true, true, true, true, true, true],
+        );
     }
 
     /// prunes the specified expr with the specified schema and statistics, and
