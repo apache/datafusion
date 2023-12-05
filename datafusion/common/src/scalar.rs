@@ -46,6 +46,7 @@ use arrow::{
     },
 };
 use arrow_array::cast::as_list_array;
+use arrow_array::types::ArrowTimestampType;
 use arrow_array::{ArrowNativeTypeOp, Scalar};
 
 /// A dynamically typed, nullable single value, (the single-valued counter-part
@@ -794,6 +795,20 @@ impl ScalarValue {
     pub fn new_interval_mdn(months: i32, days: i32, nanos: i64) -> Self {
         let val = IntervalMonthDayNanoType::make_value(months, days, nanos);
         ScalarValue::IntervalMonthDayNano(Some(val))
+    }
+
+    /// Returns a [`ScalarValue::Timestamp`] representing
+    /// `value` and `tz_opt` timezone
+    pub fn new_timestamp<T: ArrowTimestampType>(
+        value: Option<i64>,
+        tz_opt: Option<Arc<str>>,
+    ) -> Self {
+        match T::UNIT {
+            TimeUnit::Second => ScalarValue::TimestampSecond(value, tz_opt),
+            TimeUnit::Millisecond => ScalarValue::TimestampMillisecond(value, tz_opt),
+            TimeUnit::Microsecond => ScalarValue::TimestampMicrosecond(value, tz_opt),
+            TimeUnit::Nanosecond => ScalarValue::TimestampNanosecond(value, tz_opt),
+        }
     }
 
     /// Create a zero value in the given type.

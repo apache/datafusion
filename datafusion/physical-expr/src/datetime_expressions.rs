@@ -426,7 +426,7 @@ pub fn date_trunc(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     ) -> Result<ColumnarValue> {
         let parsed_tz = parse_tz(tz_opt)?;
         let value = general_date_trunc(T::UNIT, v, parsed_tz, granularity.as_str())?;
-        let value = ScalarValue::TimestampNanosecond(value, tz_opt.clone());
+        let value = ScalarValue::new_timestamp::<T>(value, tz_opt.clone());
         Ok(ColumnarValue::Scalar(value))
     }
 
