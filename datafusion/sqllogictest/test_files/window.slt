@@ -3727,3 +3727,61 @@ FROM score_board s
 
 statement ok
 DROP TABLE score_board;
+
+# Regularize RANGE frame
+query error DataFusion error: Error during planning: RANGE requires exactly one ORDER BY column
+select a,
+       rank() over (order by a, a + 1 RANGE BETWEEN UNBOUNDED PRECEDING AND 1 FOLLOWING) rnk
+       from (select 1 a union select 2 a) q ORDER BY a
+
+query II
+select a,
+       rank() over (order by a RANGE BETWEEN UNBOUNDED PRECEDING AND 1 FOLLOWING) rnk
+       from (select 1 a union select 2 a) q ORDER BY a
+----
+1 1
+2 2
+
+query error DataFusion error: Error during planning: RANGE requires exactly one ORDER BY column
+select a,
+       rank() over (RANGE BETWEEN UNBOUNDED PRECEDING AND 1 FOLLOWING) rnk
+       from (select 1 a union select 2 a) q ORDER BY a
+
+query II
+select a,
+       rank() over (order by a, a + 1 RANGE BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) rnk
+       from (select 1 a union select 2 a) q ORDER BY a
+----
+1 1
+2 2
+
+query II
+select a,
+       rank() over (order by a RANGE BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) rnk
+       from (select 1 a union select 2 a) q ORDER BY a
+----
+1 1
+2 2
+
+# TODO: this is different to Postgres which returns [1, 1] for `rnk`.
+# Comment it because it is flaky now as it depends on the order of the `a` column.
+# query II
+# select a,
+#       rank() over (RANGE BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) rnk
+#       from (select 1 a union select 2 a) q ORDER BY rnk
+# ----
+# 1 1
+# 2 2
+
+# TODO: this works in Postgres which returns [1, 1].
+query error DataFusion error: Arrow error: Invalid argument error: must either specify a row count or at least one column
+select rank() over (RANGE between UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) rnk
+       from (select 1 a union select 2 a) q;
+
+# TODO: this is different to Postgres which returns [1, 1] for `rnk`.
+query I
+select rank() over (order by 1 RANGE BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) rnk
+       from (select 1 a union select 2 a) q ORDER BY rnk
+----
+1
+2
