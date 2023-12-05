@@ -1057,7 +1057,9 @@ mod tests {
 
         // generate pruning predicate `(String = "Hello") OR (String = "This is")`
         let schema = Schema::new(vec![Field::new("String", DataType::Utf8, false)]);
-        let expr = col(r#""String""#).eq(lit("Hello")).or(col(r#""String""#).eq(lit("the quick")));
+        let expr = col(r#""String""#)
+            .eq(lit("Hello"))
+            .or(col(r#""String""#).eq(lit("the quick")));
         let expr = logical2physical(&expr, &schema);
         let pruning_predicate =
             PruningPredicate::try_new(expr, Arc::new(schema)).unwrap();
@@ -1069,8 +1071,8 @@ mod tests {
             &pruning_predicate,
             &row_groups,
         )
-            .await
-            .unwrap();
+        .await
+        .unwrap();
         assert_eq!(pruned_row_groups, row_groups);
     }
 
@@ -1084,7 +1086,9 @@ mod tests {
 
         // generate pruning predicate `(String = "foo") OR (String != "bar")`
         let schema = Schema::new(vec![Field::new("String", DataType::Utf8, false)]);
-        let expr = col(r#""String""#).not_eq(lit("foo")).or(col(r#""String""#).not_eq(lit("bar")));
+        let expr = col(r#""String""#)
+            .not_eq(lit("foo"))
+            .or(col(r#""String""#).not_eq(lit("bar")));
         let expr = logical2physical(&expr, &schema);
         let pruning_predicate =
             PruningPredicate::try_new(expr, Arc::new(schema)).unwrap();
@@ -1096,8 +1100,8 @@ mod tests {
             &pruning_predicate,
             &row_groups,
         )
-            .await
-            .unwrap();
+        .await
+        .unwrap();
         assert_eq!(pruned_row_groups, row_groups);
     }
 
