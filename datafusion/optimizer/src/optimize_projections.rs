@@ -29,6 +29,7 @@ use std::sync::Arc;
 use crate::optimizer::ApplyOrder;
 use crate::{OptimizerConfig, OptimizerRule};
 
+use arrow::datatypes::SchemaRef;
 use datafusion_common::{
     get_required_group_by_exprs_indices, Column, DFSchema, DFSchemaRef, JoinType, Result,
 };
@@ -216,8 +217,8 @@ fn optimize_projections(
             // by the parent:
             let new_aggr_expr = get_at_indices(&aggregate.aggr_expr, &aggregate_reqs);
             let all_exprs_iter = new_group_bys.iter().chain(new_aggr_expr.iter());
-            let necessary_indices =
-                indices_referred_by_exprs(&aggregate.input, all_exprs_iter)?;
+            let schema = aggregate.input.schema();
+            let necessary_indices = indices_referred_by_exprs(schema, all_exprs_iter)?;
 
             let aggregate_input = if let Some(input) =
                 optimize_projections(&aggregate.input, config, &necessary_indices)?
@@ -231,10 +232,9 @@ fn optimize_projections(
             // that its input only contains absolutely necessary columns for
             // the aggregate expressions. Note that necessary_indices refer to
             // fields in `aggregate.input.schema()`.
-            let necessary_exprs =
-                get_required_exprs(aggregate.input.schema(), &necessary_indices);
+            let necessary_exprs = get_required_exprs(schema, &necessary_indices);
             let (aggregate_input, _) =
-                add_projection_on_top_if_helpful(aggregate_input, necessary_exprs, true)?;
+                add_projection_on_top_if_helpful(aggregate_input, necessary_exprs)?;
 
             // Create new aggregate plan with the updated input and only the
             // absolutely necessary fields:
@@ -284,8 +284,8 @@ fn optimize_projections(
                 // refers to `old_child`.
                 let required_exprs =
                     get_required_exprs(window.input.schema(), &required_indices);
-                let (window_child, _is_added) =
-                    add_projection_on_top_if_helpful(window_child, required_exprs, true)?;
+                let (window_child, _) =
+                    add_projection_on_top_if_helpful(window_child, required_exprs)?;
                 Window::try_new(new_window_expr, Arc::new(window_child))
                     .map(|window| Some(LogicalPlan::Window(window)))
             };
@@ -313,23 +313,16 @@ fn optimize_projections(
         }
         LogicalPlan::TableScan(table_scan) => {
             let schema = table_scan.source.schema();
-            // Get indices referred in the original (schema with all fields)
+            // Get indices referred to in the original (schema with all fields)
             // given projected indices.
-            let source_indices = table_scan
-                .projection
-                .clone()
-                .unwrap_or((0..schema.fields.len()).collect());
-            let projection = Some(
-                indices
-                    .iter()
-                    .map(|&idx| source_indices[idx])
-                    .collect::<Vec<_>>(),
-            );
+            let projection = with_indices(&table_scan.projection, schema, |map| {
+                indices.iter().map(|&idx| map[idx]).collect()
+            });
 
             return TableScan::try_new(
                 table_scan.table_name.clone(),
                 table_scan.source.clone(),
-                projection,
+                Some(projection),
                 table_scan.filters.clone(),
                 table_scan.fetch,
             )
@@ -347,24 +340,45 @@ fn optimize_projections(
                 (child.clone(), false)
             };
             let project_exprs = get_required_exprs(child.schema(), &required_indices);
-            let (input, proj_added) = add_projection_on_top_if_helpful(
-                input,
-                project_exprs,
-                projection_beneficial,
-            )?;
+            let (input, proj_added) = if projection_beneficial {
+                add_projection_on_top_if_helpful(input, project_exprs)?
+            } else {
+                (input, false)
+            };
             Ok((is_changed || proj_added).then_some(input))
         })
         .collect::<Result<Vec<_>>>()?;
-    // All of the children are same in this case, no need to change plan
     if new_inputs.iter().all(|child| child.is_none()) {
+        // All children are the same in this case, no need to change the plan:
         Ok(None)
     } else {
-        // At least one of the children is changed.
+        // At least one of the children is changed:
         let new_inputs = izip!(new_inputs, plan.inputs())
-            // If new_input is `None`, this means child is not changed. Hence use `old_child` during construction.
+            // If new_input is `None`, this means child is not changed, so use
+            // `old_child` during construction:
             .map(|(new_input, old_child)| new_input.unwrap_or_else(|| old_child.clone()))
             .collect::<Vec<_>>();
         plan.with_new_inputs(&new_inputs).map(Some)
+    }
+}
+
+/// This function applies the given function `f` to the projection indices
+/// `proj_indices` if they exist. Otherwise, applies `f` to a default set
+/// of indices according to `schema`.
+fn with_indices<F>(
+    proj_indices: &Option<Vec<usize>>,
+    schema: SchemaRef,
+    mut f: F,
+) -> Vec<usize>
+where
+    F: FnMut(&[usize]) -> Vec<usize>,
+{
+    match proj_indices {
+        Some(indices) => f(indices.as_slice()),
+        None => {
+            let range: Vec<usize> = (0..schema.fields.len()).collect();
+            f(range.as_slice())
+        }
     }
 }
 
@@ -394,16 +408,12 @@ fn merge_consecutive_projections(proj: &Projection) -> Result<Option<Projection>
     };
 
     // Count usages (referrals) of each projection expression in its input fields:
-    let column_referral_map: HashMap<Column, usize> = proj
-        .expr
-        .iter()
-        .flat_map(|expr| expr.to_columns())
-        .fold(HashMap::new(), |mut map, cols| {
-            for col in cols.into_iter() {
-                *map.entry(col.clone()).or_default() += 1;
-            }
-            map
-        });
+    let mut column_referral_map = HashMap::<Column, usize>::new();
+    for columns in proj.expr.iter().flat_map(|expr| expr.to_columns()) {
+        for col in columns.into_iter() {
+            *column_referral_map.entry(col.clone()).or_default() += 1;
+        }
+    }
 
     // If an expression is non-trivial and appears more than once, consecutive
     // projections will benefit from a compute-once approach. For details, see:
@@ -586,16 +596,17 @@ fn outer_columns_helper(expr: &Expr, columns: &mut HashSet<Column>) {
     }
 }
 
-/// Generates the required expressions(Column) that resides at `indices` of the `input_schema`.
+/// Generates the required expressions (columns) that reside at `indices` of
+/// the given `input_schema`.
 ///
 /// # Arguments
 ///
 /// * `input_schema` - A reference to the input schema.
-/// * `indices` - A slice of `usize` indices specifying which columns are required.
+/// * `indices` - A slice of `usize` indices specifying required columns.
 ///
 /// # Returns
 ///
-/// A vector of `Expr::Column` expressions, that sits at `indices` of the `input_schema`.
+/// A vector of `Expr::Column` expressions residing at `indices` of the `input_schema`.
 fn get_required_exprs(input_schema: &Arc<DFSchema>, indices: &[usize]) -> Vec<Expr> {
     let fields = input_schema.fields();
     indices
@@ -604,29 +615,30 @@ fn get_required_exprs(input_schema: &Arc<DFSchema>, indices: &[usize]) -> Vec<Ex
         .collect()
 }
 
-/// Get indices of the necessary fields referred by all of the `exprs` among input LogicalPlan.
+/// Get indices of the fields referred to by any expression in `exprs` within
+/// the input `LogicalPlan`.
 ///
 /// # Arguments
 ///
 /// * `input`: The input logical plan to analyze for index requirements.
-/// * `exprs`: An iterator of expressions for which we want to find necessary field indices at the input.
+/// * `exprs`: An iterator of expressions for which we want to find necessary
+///   field indices at the input.
 ///
 /// # Returns
 ///
-/// A [Result] object that contains the required field indices for the `input` operator, to be able to calculate
-/// successfully all of the `exprs`.
+/// A [`Result`] object containing the indices of all required fields for the
+/// `input` operator to calculate all `exprs` successfully.
 fn indices_referred_by_exprs<'a, I: Iterator<Item = &'a Expr>>(
-    input: &LogicalPlan,
+    input_schema: &DFSchemaRef,
     exprs: I,
 ) -> Result<Vec<usize>> {
-    let new_indices = exprs
-        .flat_map(|expr| indices_referred_by_expr(input.schema(), expr))
+    Ok(exprs
+        .flat_map(|expr| indices_referred_by_expr(input_schema, expr))
         .flatten()
-        // Make sure no duplicate entries exists and indices are ordered.
+        // Make sure no duplicate entries exist and indices are ordered:
         .sorted()
         .dedup()
-        .collect::<Vec<_>>();
-    Ok(new_indices)
+        .collect())
 }
 
 /// Get indices of the necessary fields referred by the `expr` among input schema.
@@ -650,7 +662,7 @@ fn indices_referred_by_expr(
     cols.iter()
         .filter(|&col| input_schema.has_column(col))
         .map(|col| input_schema.index_of_column(col))
-        .collect::<Result<Vec<_>>>()
+        .collect()
 }
 
 /// Get all required indices for the input (indices required by parent + indices referred by `exprs`)
@@ -669,7 +681,7 @@ fn get_all_required_indices<'a, I: Iterator<Item = &'a Expr>>(
     input: &LogicalPlan,
     exprs: I,
 ) -> Result<Vec<usize>> {
-    let referred_indices = indices_referred_by_exprs(input, exprs)?;
+    let referred_indices = indices_referred_by_exprs(input.schema(), exprs)?;
     Ok(merge_vectors(parent_required_indices, &referred_indices))
 }
 
@@ -762,7 +774,8 @@ fn split_join_requirements(
     }
 }
 
-/// Adds a projection on top of a logical plan if it is beneficial and reduces the number of columns for the parent operator.
+/// Adds a projection on top of a logical plan if it reduces the number of
+/// columns for the parent operator.
 ///
 /// This function takes a `LogicalPlan`, a list of projection expressions, and a flag indicating whether
 /// the projection is beneficial. If the projection is beneficial and reduces the number of columns in
@@ -774,7 +787,6 @@ fn split_join_requirements(
 ///
 /// * `plan` - The input `LogicalPlan` to potentially add a projection to.
 /// * `project_exprs` - A list of expressions for the projection.
-/// * `projection_beneficial` - A flag indicating whether the projection is beneficial.
 ///
 /// # Returns
 ///
@@ -783,15 +795,13 @@ fn split_join_requirements(
 fn add_projection_on_top_if_helpful(
     plan: LogicalPlan,
     project_exprs: Vec<Expr>,
-    projection_beneficial: bool,
 ) -> Result<(LogicalPlan, bool)> {
-    // Make sure projection decreases table column size, otherwise it is unnecessary.
-    if !projection_beneficial || project_exprs.len() >= plan.schema().fields().len() {
+    // Make sure projection decreases the number of columns, otherwise it is unnecessary.
+    if project_exprs.len() >= plan.schema().fields().len() {
         Ok((plan, false))
     } else {
-        let new_plan = Projection::try_new(project_exprs, Arc::new(plan))
-            .map(LogicalPlan::Projection)?;
-        Ok((new_plan, true))
+        let proj = Projection::try_new(project_exprs, Arc::new(plan))?;
+        Ok((LogicalPlan::Projection(proj), true))
     }
 }
 
@@ -827,7 +837,8 @@ fn rewrite_projection_given_requirements(
     indices: &[usize],
 ) -> Result<Option<LogicalPlan>> {
     let exprs_used = get_at_indices(&proj.expr, indices);
-    let required_indices = indices_referred_by_exprs(&proj.input, exprs_used.iter())?;
+    let required_indices =
+        indices_referred_by_exprs(proj.input.schema(), exprs_used.iter())?;
     return if let Some(input) =
         optimize_projections(&proj.input, _config, &required_indices)?
     {
