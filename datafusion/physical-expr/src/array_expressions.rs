@@ -18,6 +18,7 @@
 //! Array expressions
 
 use std::any::type_name;
+use std::cmp::Ordering;
 use std::collections::HashSet;
 use std::sync::Arc;
 
@@ -377,54 +378,45 @@ fn return_empty(return_null: bool, data_type: DataType) -> Arc<dyn Array> {
     }
 }
 
-macro_rules! list_slice {
-    ($ARRAY:expr, $I:expr, $J:expr, $RETURN_ELEMENT:expr, $ARRAY_TYPE:ident) => {{
-        let array = $ARRAY.as_any().downcast_ref::<$ARRAY_TYPE>().unwrap();
-        if $I == 0 && $J == 0 || $ARRAY.is_empty() {
-            return return_empty($RETURN_ELEMENT, $ARRAY.data_type().clone());
+fn list_slice(array: &dyn Array, i: i64, j: i64, return_element: bool) -> ArrayRef {
+    let array_type = array.data_type().clone();
+
+    if i == 0 && j == 0 || array.is_empty() {
+        return return_empty(return_element, array_type);
+    }
+
+    let i = match i.cmp(&0) {
+        Ordering::Less => {
+            if i.unsigned_abs() > array.len() as u64 {
+                return return_empty(true, array_type);
+            }
+
+            (array.len() as i64 + i + 1) as usize
         }
+        Ordering::Equal => 1,
+        Ordering::Greater => i as usize,
+    };
 
-        let i = if $I < 0 {
-            if $I.abs() as usize > array.len() {
-                return return_empty(true, $ARRAY.data_type().clone());
+    let j = match j.cmp(&0) {
+        Ordering::Less => {
+            if j.unsigned_abs() as usize > array.len() {
+                return return_empty(true, array_type);
             }
-
-            (array.len() as i64 + $I + 1) as usize
-        } else {
-            if $I == 0 {
-                1
+            if return_element {
+                (array.len() as i64 + j + 1) as usize
             } else {
-                $I as usize
+                (array.len() as i64 + j) as usize
             }
-        };
-        let j = if $J < 0 {
-            if $J.abs() as usize > array.len() {
-                return return_empty(true, $ARRAY.data_type().clone());
-            }
-
-            if $RETURN_ELEMENT {
-                (array.len() as i64 + $J + 1) as usize
-            } else {
-                (array.len() as i64 + $J) as usize
-            }
-        } else {
-            if $J == 0 {
-                1
-            } else {
-                if $J as usize > array.len() {
-                    array.len()
-                } else {
-                    $J as usize
-                }
-            }
-        };
-
-        if i > j || i as usize > $ARRAY.len() {
-            return_empty($RETURN_ELEMENT, $ARRAY.data_type().clone())
-        } else {
-            Arc::new(array.slice((i - 1), (j + 1 - i)))
         }
-    }};
+        Ordering::Equal => 1,
+        Ordering::Greater => j.min(array.len() as i64) as usize,
+    };
+
+    if i > j || i > array.len() {
+        return_empty(return_element, array_type)
+    } else {
+        Arc::new(array.slice(i - 1, j + 1 - i))
+    }
 }
 
 macro_rules! slice {
@@ -435,13 +427,16 @@ macro_rules! slice {
             .zip($EXTRA_KEY.iter())
             .map(|((arr, i), j)| match (arr, i, j) {
                 (Some(arr), Some(i), Some(j)) => {
-                    list_slice!(arr, i, j, $RETURN_ELEMENT, $ARRAY_TYPE)
+                    let arr = arr.as_any().downcast_ref::<$ARRAY_TYPE>().unwrap();
+                    list_slice(arr, i, j, $RETURN_ELEMENT)
                 }
                 (Some(arr), None, Some(j)) => {
-                    list_slice!(arr, 1i64, j, $RETURN_ELEMENT, $ARRAY_TYPE)
+                    let arr = arr.as_any().downcast_ref::<$ARRAY_TYPE>().unwrap();
+                    list_slice(arr, 1i64, j, $RETURN_ELEMENT)
                 }
                 (Some(arr), Some(i), None) => {
-                    list_slice!(arr, i, arr.len() as i64, $RETURN_ELEMENT, $ARRAY_TYPE)
+                    let arr = arr.as_any().downcast_ref::<$ARRAY_TYPE>().unwrap();
+                    list_slice(arr, i, arr.len() as i64, $RETURN_ELEMENT)
                 }
                 (Some(arr), None, None) if !$RETURN_ELEMENT => arr,
                 _ => return_empty($RETURN_ELEMENT, $ARRAY.value_type().clone()),
