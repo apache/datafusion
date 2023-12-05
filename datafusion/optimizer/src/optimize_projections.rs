@@ -36,7 +36,7 @@ use datafusion_common::{
 use datafusion_expr::expr::{Alias, ScalarFunction, ScalarFunctionDefinition};
 use datafusion_expr::{
     logical_plan::LogicalPlan, projection_schema, Aggregate, BinaryExpr, Cast, Distinct,
-    Expr, Projection, TableScan, Window,
+    Expr, GroupingSet, Projection, TableScan, Window,
 };
 
 use hashbrown::HashMap;
@@ -557,10 +557,28 @@ fn rewrite_expr(expr: &Expr, input: &Projection) -> Result<Option<Expr>> {
 /// # Returns
 ///
 /// A `HashSet<Column>` containing columns that are referenced by `expr`.
-fn outer_columns(expr: &Expr) -> HashSet<Column> {
+fn outer_columns(expr: &Expr) -> Option<HashSet<Column>> {
     let mut columns = HashSet::new();
-    outer_columns_helper(expr, &mut columns);
-    columns
+    outer_columns_helper(expr, &mut columns)?;
+    Some(columns)
+}
+
+/// Helper function to accumulate outer-referenced columns by expression `expr`s.
+///
+/// # Parameters
+///
+/// * `exprs` - The expressions to analyze for outer-referenced columns.
+/// * `columns` - A mutable reference to a `HashSet<Column>` where detected
+///   columns are collected.
+/// Return value `None` indicates, it is not known whether expression contains outer column or not.
+fn outer_columns_helper_multi(
+    exprs: &[Expr],
+    columns: &mut HashSet<Column>,
+) -> Option<()> {
+    for expr in exprs {
+        outer_columns_helper(expr, columns)?;
+    }
+    Some(())
 }
 
 /// Helper function to accumulate outer-referenced columns by expression `expr`.
@@ -570,7 +588,8 @@ fn outer_columns(expr: &Expr) -> HashSet<Column> {
 /// * `expr` - The expression to analyze for outer-referenced columns.
 /// * `columns` - A mutable reference to a `HashSet<Column>` where detected
 ///   columns are collected.
-fn outer_columns_helper(expr: &Expr, columns: &mut HashSet<Column>) {
+/// Return value `None` indicates, it is not known whether expression contains outer column or not.
+fn outer_columns_helper(expr: &Expr, columns: &mut HashSet<Column>) -> Option<()> {
     match expr {
         Expr::OuterReferenceColumn(_, col) => {
             columns.insert(col.clone());
@@ -592,8 +611,51 @@ fn outer_columns_helper(expr: &Expr, columns: &mut HashSet<Column>) {
         Expr::Alias(alias) => {
             outer_columns_helper(&alias.expr, columns);
         }
-        _ => {}
+        Expr::InSubquery(insubquery) => {
+            outer_columns_helper_multi(&insubquery.subquery.outer_ref_columns, columns);
+        }
+        Expr::IsNotNull(expr) | Expr::IsNull(expr) => {
+            outer_columns_helper(expr, columns);
+        }
+        Expr::Cast(cast) => {
+            outer_columns_helper(&cast.expr, columns);
+        }
+        Expr::Sort(sort) => {
+            outer_columns_helper(&sort.expr, columns);
+        }
+        Expr::AggregateFunction(aggregate_fn) => {
+            outer_columns_helper_multi(&aggregate_fn.args, columns);
+            if let Some(obs) = &aggregate_fn.order_by {
+                outer_columns_helper_multi(obs, columns);
+            }
+            if let Some(filter) = &aggregate_fn.filter {
+                outer_columns_helper(filter, columns);
+            }
+        }
+        Expr::WindowFunction(window_fn) => {
+            outer_columns_helper_multi(&window_fn.args, columns);
+            outer_columns_helper_multi(&window_fn.order_by, columns);
+            outer_columns_helper_multi(&window_fn.partition_by, columns);
+        }
+        Expr::GroupingSet(groupingset) => match groupingset {
+            GroupingSet::GroupingSets(multi_exprs) => {
+                for exprs in multi_exprs {
+                    outer_columns_helper_multi(exprs, columns);
+                }
+            }
+            GroupingSet::Cube(exprs) | GroupingSet::Rollup(exprs) => {
+                outer_columns_helper_multi(exprs, columns);
+            }
+        },
+        Expr::ScalarFunction(scalar_fn) => {
+            outer_columns_helper_multi(&scalar_fn.args, columns);
+        }
+        Expr::Column(_) | Expr::Literal(_) | Expr::Wildcard { .. } => {}
+        _ => {
+            return None;
+        }
     }
+    Some(())
 }
 
 /// Generates the required expressions (columns) that reside at `indices` of
@@ -632,8 +694,11 @@ fn indices_referred_by_exprs<'a, I: Iterator<Item = &'a Expr>>(
     input_schema: &DFSchemaRef,
     exprs: I,
 ) -> Result<Vec<usize>> {
-    Ok(exprs
-        .flat_map(|expr| indices_referred_by_expr(input_schema, expr))
+    let indices_referred = exprs
+        .map(|expr| indices_referred_by_expr(input_schema, expr))
+        .collect::<Result<Vec<_>>>()?;
+    Ok(indices_referred
+        .into_iter()
         .flatten()
         // Make sure no duplicate entries exist and indices are ordered:
         .sorted()
@@ -658,7 +723,13 @@ fn indices_referred_by_expr(
 ) -> Result<Vec<usize>> {
     let mut cols = expr.to_columns()?;
     // Get outer referenced columns (expr.to_columns() doesn't return these columns).
-    cols.extend(outer_columns(expr));
+    if let Some(outer_cols) = outer_columns(expr) {
+        cols.extend(outer_cols);
+    } else {
+        // expression is not known to contain outer column or not. Hence do not assume anything
+        // require all of the schema indices at the input.
+        return Ok((0..input_schema.fields().len()).collect());
+    }
     cols.iter()
         .filter(|&col| input_schema.has_column(col))
         .map(|col| input_schema.index_of_column(col))
