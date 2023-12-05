@@ -96,7 +96,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 &window.order_by,
                 schema,
                 planner_context,
-                false,
+                // Numeric literals in window function ORDER BY are treated as constants
+                false, 
             )?;
             let window_frame = window
                 .window_frame
