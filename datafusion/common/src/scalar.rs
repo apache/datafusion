@@ -1373,16 +1373,26 @@ impl ScalarValue {
                 .into_iter()
                 .map(|s| s.to_array())
                 .collect::<Result<Vec<_>>>()?;
+
             let capacity = Capacities::Array(arrays.iter().map(|arr| arr.len()).sum());
+            // ScalarValue::List contains a single element ListArray.
+            let nulls = arrays
+                .iter()
+                .map(|arr| arr.is_null(0))
+                .collect::<Vec<bool>>();
             let arrays_data = arrays.iter().map(|arr| arr.to_data()).collect::<Vec<_>>();
 
             let arrays_ref = arrays_data.iter().collect::<Vec<_>>();
             let mut mutable =
-                MutableArrayData::with_capacities(arrays_ref, false, capacity);
+                MutableArrayData::with_capacities(arrays_ref, true, capacity);
 
             // ScalarValue::List contains a single element ListArray.
-            for i in 0..arrays.len() {
-                mutable.extend(i, 0, 1);
+            for (index, is_null) in (0..arrays.len()).zip(nulls.into_iter()) {
+                if is_null {
+                    mutable.extend_nulls(1)
+                } else {
+                    mutable.extend(index, 0, 1);
+                }
             }
             let data = mutable.freeze();
             Ok(arrow_array::make_array(data))
@@ -3183,15 +3193,39 @@ mod tests {
         assert_eq!(result, &expected);
     }
 
-    fn build_list<O: OffsetSizeTrait>(values: Vec<Vec<Option<i64>>>) -> Vec<ScalarValue> {
+    fn build_list<O: OffsetSizeTrait>(
+        values: Vec<Option<Vec<Option<i64>>>>,
+    ) -> Vec<ScalarValue> {
         values
             .into_iter()
             .map(|v| {
-                let arr = Arc::new(GenericListArray::<O>::from_iter_primitive::<
-                    Int64Type,
-                    _,
-                    _,
-                >(vec![Some(v)]));
+                let arr = if let Some(_) = v {
+                    Arc::new(
+                        GenericListArray::<O>::from_iter_primitive::<Int64Type, _, _>(
+                            vec![v],
+                        ),
+                    )
+                } else {
+                    if O::IS_LARGE {
+                        new_null_array(
+                            &DataType::LargeList(Arc::new(Field::new(
+                                "item",
+                                DataType::Int64,
+                                true,
+                            ))),
+                            1,
+                        )
+                    } else {
+                        new_null_array(
+                            &DataType::List(Arc::new(Field::new(
+                                "item",
+                                DataType::Int64,
+                                true,
+                            ))),
+                            1,
+                        )
+                    }
+                };
 
                 if O::IS_LARGE {
                     ScalarValue::LargeList(arr)
@@ -3204,28 +3238,34 @@ mod tests {
 
     #[test]
     fn iter_to_array_primitive_test() {
+        // List[[1,2,3]], List[null], List[[4,5]]
         let scalars = build_list::<i32>(vec![
-            vec![Some(1), Some(2), Some(3)],
-            vec![Some(4), Some(5)],
+            Some(vec![Some(1), Some(2), Some(3)]),
+            None,
+            Some(vec![Some(4), Some(5)]),
         ]);
 
         let array = ScalarValue::iter_to_array(scalars).unwrap();
         let list_array = as_list_array(&array);
+        // List[[1,2,3], null, [4,5]]
         let expected = ListArray::from_iter_primitive::<Int64Type, _, _>(vec![
             Some(vec![Some(1), Some(2), Some(3)]),
+            None,
             Some(vec![Some(4), Some(5)]),
         ]);
         assert_eq!(list_array, &expected);
 
         let scalars = build_list::<i64>(vec![
-            vec![Some(1), Some(2), Some(3)],
-            vec![Some(4), Some(5)],
+            Some(vec![Some(1), Some(2), Some(3)]),
+            None,
+            Some(vec![Some(4), Some(5)]),
         ]);
 
         let array = ScalarValue::iter_to_array(scalars).unwrap();
         let list_array = as_large_list_array(&array);
         let expected = LargeListArray::from_iter_primitive::<Int64Type, _, _>(vec![
             Some(vec![Some(1), Some(2), Some(3)]),
+            None,
             Some(vec![Some(4), Some(5)]),
         ]);
         assert_eq!(list_array, &expected);
