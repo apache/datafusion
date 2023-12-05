@@ -20,6 +20,7 @@ mod dfschema;
 mod error;
 mod functional_dependencies;
 mod join_type;
+mod param_value;
 #[cfg(feature = "pyarrow")]
 mod pyarrow;
 mod schema_reference;
@@ -60,6 +61,7 @@ pub use functional_dependencies::{
     FunctionalDependence, FunctionalDependencies,
 };
 pub use join_type::{JoinConstraint, JoinSide, JoinType};
+pub use param_value::ParamValues;
 pub use scalar::{ScalarType, ScalarValue};
 pub use schema_reference::{OwnedSchemaReference, SchemaReference};
 pub use stats::{ColumnStatistics, Statistics};
