@@ -1098,6 +1098,7 @@ mod tests {
         max: ArrayRef,
         /// Optional values
         null_counts: Option<ArrayRef>,
+        // /// Optional known values (e.g. mimic a bloom filter)
     }
 
     impl ContainerStats {
@@ -2502,6 +2503,212 @@ mod tests {
             rewrite_expr_to_prunable(&left_input, Operator::Gt, &right_input, df_schema);
         assert!(result.is_err());
         // TODO: add other negative test for other case and op
+    }
+
+    #[test]
+    fn prune_with_contains() {
+        // contains filters for s1 and s2
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("s1", DataType::Utf8, true),
+            Field::new("s2", DataType::Utf8, true),
+        ]));
+
+        // Model having information like bloom filters for s1 and s2
+        let statistics = TestStatistics::new()
+            .with_known_values(
+                "s1",
+                ScalarValue::from(0i32),
+                [
+                    // container 0 known to contain value, 1 not contains, 2 unknown
+                    Some(true),
+                    Some(false),
+                    None,
+                    // container 3 known to contain value, 4 not contains, 5 unknown
+                    Some(true),
+                    Some(false),
+                    None,
+                    // container 6 known to contain value, 7 not contains, 8 unknown
+                    Some(true),
+                    Some(false),
+                    None,
+                ],
+            )
+            .with_known_values(
+                "s2",
+                ScalarValue::from(0i32),
+                [
+                    // container 0,1,2 contains
+                    Some(true),
+                    Some(true),
+                    Some(true),
+                    // container 3,4,5 not contains
+                    Some(false),
+                    Some(false),
+                    Some(false),
+                    // container 5,6,7 unknown
+                    None,
+                    None,
+                    None,
+                ],
+            );
+
+        // s1 = 'foo' OR s2 = 'bar'
+        let expr = col("s1").eq(lit("foo")).or(col("s2").eq(lit("bar")));
+        prune_with_expr(
+            expr,
+            &schema,
+            &statistics,
+            // can only rule out container where we know values are not present (both are Some(false))
+            vec![true, true, true, true, false, true, true, true, true],
+        );
+
+        // s1 = 'foo' AND s2 != 'bar'
+        prune_with_expr(
+            col("s1").eq(lit("foo")).and(col("s2").not_eq(lit("bar"))),
+            &schema,
+            &statistics,
+            // can only rule out container where we know the first is not present (Some(false)) and the second is (Some(true))
+            vec![true, false, true, true, true, true, true, true, true],
+        );
+
+        /*
+        // s1 != 'foo' AND s2 != 'bar'
+        let expr = col("s1").eq(lit("foo")).and(col("s2").not_eq(lit("bar")));
+        let expr = logical2physical(&expr, &schema);
+        let p = PruningPredicate::try_new(expr, schema).unwrap();
+        // Can only rule out container where we know values are present (both are Some(true))
+        let expected_ret = vec![false, true, true, true, true, true, true, true, true];
+        let result = p.prune(&statistics).unwrap();
+        assert_eq!(result, expected_ret);
+
+        // s1 like '%foo%bar%'
+        let expr = col("s1").like("foo%bar%");
+        let expr = logical2physical(&expr, &schema);
+        let p = PruningPredicate::try_new(expr, schema).unwrap();
+        // cant rule out anything (unknown predicate)
+        let expected_ret = vec![true, true, true, true, true, true, true, true, true];
+        let result = p.prune(&statistics).unwrap();
+        assert_eq!(result, expected_ret);
+
+        // s1 like '%foo%bar%' AND s2 = 'bar'
+        let expr = col("s1").like("foo%bar%").and(col("s2").eq(lit("bar")));
+        let expr = logical2physical(&expr, &schema);
+        let p = PruningPredicate::try_new(expr, schema).unwrap();
+        // cant rule out all results when we know second column is false
+        let expected_ret = vec![true, true, true, false, false, false, true, true, true];
+        let result = p.prune(&statistics).unwrap();
+        assert_eq!(result, expected_ret);
+        */
+    }
+
+    #[test]
+    fn prune_with_range_and_contains() {
+        // Setup mimics range information for i, a bloom filter for s
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("i", DataType::Int32, true),
+            Field::new("s", DataType::Utf8, true),
+        ]));
+
+        let statistics = TestStatistics::new().with(
+            "i",
+            ContainerStats::new_i32(
+                // Container 0, 3 ,6, contains range
+                // Container 1, 4, 7, does not contain range
+                // Container 2, 5, 9, unknown
+                vec![
+                    Some(-5),
+                    Some(10),
+                    None,
+                    Some(-5),
+                    Some(10),
+                    None,
+                    Some(-5),
+                    Some(10),
+                    None,
+                ], // min
+                vec![
+                    Some(5),
+                    Some(20),
+                    None,
+                    Some(5),
+                    Some(20),
+                    None,
+                    Some(5),
+                    Some(20),
+                    None,
+                ], // max
+            ),
+        );
+
+        // Add contains information about the containers
+        let statistics = statistics.with_known_values(
+            "b",
+            ScalarValue::from(0i32),
+            [
+                // container 0, 1,2 contain value
+                Some(true),
+                Some(true),
+                Some(true),
+                // container 3,4,5 does not contain value
+                Some(false),
+                Some(false),
+                Some(false),
+                /// container 6,7,8 unknown
+                None,
+                None,
+                None,
+            ],
+        );
+
+        // i = 0 and s = 'foo'
+        prune_with_expr(
+            col("i").eq(lit(0)).and(col("s").eq(lit("foo"))),
+            &schema,
+            &statistics,
+            // Can only rule out container where we know values are not present (range is false, and contains is false)
+            vec![true, true, true, true, false, true, true, true, true],
+        );
+
+        /*
+        // i = 0 and s != 'foo'
+        let expr = col("i").eq(lit(0)).and(col("s").not_eq(lit("foo")));
+        let expr = logical2physical(&expr, &schema);
+        let p = PruningPredicate::try_new(expr, schema).unwrap();
+        // Can only rule out container where we know range is false, and contains is true)
+        let expected_ret = vec![true, false, true, true, true, true, true, true, true];
+        let result = p.prune(&statistics).unwrap();
+        assert_eq!(result, expected_ret);
+
+        // i = 0 OR s = 'foo'
+        let expr = col("i").eq(lit(0)).or(col("s").not_eq(lit("foo")));
+        let expr = logical2physical(&expr, &schema);
+        let p = PruningPredicate::try_new(expr, schema).unwrap();
+        // cant rule out anything (as connected by OR)
+        let expected_ret = vec![true, true, true, true, true, true, true, true, true];
+        let result = p.prune(&statistics).unwrap();
+        assert_eq!(result, expected_ret);
+
+         */
+    }
+
+    /// prunes the specified expr with the specified schema and statistics, and
+    /// ensures it returns expected.
+    ///
+    /// `expected` is a vector of bools, where true means the row group should
+    /// be kept, and false means it should be pruned.
+    ///
+    // TODO refactor other tests to use this to reduce boiler plate
+    fn prune_with_expr(
+        expr: Expr,
+        schema: &SchemaRef,
+        statistics: &TestStatistics,
+        expected: Vec<bool>,
+    ) -> Vec<bool> {
+        let expr = logical2physical(&expr, &schema);
+        let p = PruningPredicate::try_new(expr, schema).unwrap();
+        p.prune(&statistics).unwrap();
+        let result = p.prune(&statistics).unwrap();
+        assert_eq!(result, expected);
     }
 
     fn test_build_predicate_expression(
