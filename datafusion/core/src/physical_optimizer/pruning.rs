@@ -91,11 +91,11 @@ pub trait PruningStatistics {
         None
     }
 
-    /// Returns an array where each element represents if the value of the
-    /// column CERTAINLY DOES NOT contain any of the specified `values`.
+    /// Returns an array where each row represents if the value of the
+    /// column is known to contain or not contain any of the set of `values`.
     ///
-    /// This can be used to prune containers based on structures such as Bloom
-    /// Filters which can test set membership quickly.
+    /// This is used to prune containers using structures such as Bloom
+    /// Filters which can quickly test set membership.
     ///
     /// The returned array has one row for each container, with the following:
     /// * `true` if the value of column CERTAINLY IS one of `values`
