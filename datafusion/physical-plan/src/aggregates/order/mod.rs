@@ -23,7 +23,7 @@ use datafusion_physical_expr::{EmitTo, PhysicalSortExpr};
 mod full;
 mod partial;
 
-use crate::windows::PartitionSearchMode;
+use crate::InputOrderMode;
 pub(crate) use full::GroupOrderingFull;
 pub(crate) use partial::GroupOrderingPartial;
 
@@ -42,18 +42,16 @@ impl GroupOrdering {
     /// Create a `GroupOrdering` for the the specified ordering
     pub fn try_new(
         input_schema: &Schema,
-        mode: &PartitionSearchMode,
+        mode: &InputOrderMode,
         ordering: &[PhysicalSortExpr],
     ) -> Result<Self> {
         match mode {
-            PartitionSearchMode::Linear => Ok(GroupOrdering::None),
-            PartitionSearchMode::PartiallySorted(order_indices) => {
+            InputOrderMode::Linear => Ok(GroupOrdering::None),
+            InputOrderMode::PartiallySorted(order_indices) => {
                 GroupOrderingPartial::try_new(input_schema, order_indices, ordering)
                     .map(GroupOrdering::Partial)
             }
-            PartitionSearchMode::Sorted => {
-                Ok(GroupOrdering::Full(GroupOrderingFull::new()))
-            }
+            InputOrderMode::Sorted => Ok(GroupOrdering::Full(GroupOrderingFull::new())),
         }
     }
 
