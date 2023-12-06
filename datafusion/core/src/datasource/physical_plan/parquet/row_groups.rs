@@ -1185,8 +1185,8 @@ mod tests {
             &pruning_predicate,
             &row_groups,
         )
-            .await
-            .unwrap();
+        .await
+        .unwrap();
         assert_eq!(pruned_row_groups, row_groups);
     }
 
