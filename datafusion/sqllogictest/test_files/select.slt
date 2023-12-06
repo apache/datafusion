@@ -885,7 +885,6 @@ physical_plan
 SortExec: expr=[a@0 ASC NULLS LAST]
 --MemoryExec: partitions=1, partition_sizes=[1]
 
-
 # run below query in multi partitions
 statement ok
 set datafusion.execution.target_partitions = 2;
