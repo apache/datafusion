@@ -559,8 +559,7 @@ fn rewrite_expr(expr: &Expr, input: &Projection) -> Result<Option<Expr>> {
 /// A `HashSet<Column>` containing columns that are referenced by `expr`.
 fn outer_columns(expr: &Expr) -> Option<HashSet<Column>> {
     let mut columns = HashSet::new();
-    outer_columns_helper(expr, &mut columns)?;
-    Some(columns)
+    outer_columns_helper(expr, &mut columns).then_some(columns)
 }
 
 /// Helper function to accumulate outer-referenced columns by expression `expr`s.
@@ -571,14 +570,8 @@ fn outer_columns(expr: &Expr) -> Option<HashSet<Column>> {
 /// * `columns` - A mutable reference to a `HashSet<Column>` where detected
 ///   columns are collected.
 /// Return value `None` indicates, it is not known whether expression contains outer column or not.
-fn outer_columns_helper_multi(
-    exprs: &[Expr],
-    columns: &mut HashSet<Column>,
-) -> Option<()> {
-    for expr in exprs {
-        outer_columns_helper(expr, columns)?;
-    }
-    Some(())
+fn outer_columns_helper_multi(exprs: &[Expr], columns: &mut HashSet<Column>) -> bool {
+    exprs.iter().all(|e| outer_columns_helper(e, columns))
 }
 
 /// Helper function to accumulate outer-referenced columns by expression `expr`.
@@ -589,81 +582,67 @@ fn outer_columns_helper_multi(
 /// * `columns` - A mutable reference to a `HashSet<Column>` where detected
 ///   columns are collected.
 /// Return value `None` indicates, it is not known whether expression contains outer column or not.
-fn outer_columns_helper(expr: &Expr, columns: &mut HashSet<Column>) -> Option<()> {
+fn outer_columns_helper(expr: &Expr, columns: &mut HashSet<Column>) -> bool {
     match expr {
         Expr::OuterReferenceColumn(_, col) => {
             columns.insert(col.clone());
+            true
         }
         Expr::BinaryExpr(binary_expr) => {
-            outer_columns_helper(&binary_expr.left, columns);
-            outer_columns_helper(&binary_expr.right, columns);
+            outer_columns_helper(&binary_expr.left, columns)
+                && outer_columns_helper(&binary_expr.right, columns)
         }
         Expr::ScalarSubquery(subquery) => {
-            for expr in &subquery.outer_ref_columns {
-                outer_columns_helper(expr, columns);
-            }
+            outer_columns_helper_multi(&subquery.outer_ref_columns, columns)
         }
         Expr::Exists(exists) => {
-            for expr in &exists.subquery.outer_ref_columns {
-                outer_columns_helper(expr, columns);
-            }
+            outer_columns_helper_multi(&exists.subquery.outer_ref_columns, columns)
         }
-        Expr::Alias(alias) => {
-            outer_columns_helper(&alias.expr, columns);
-        }
+        Expr::Alias(alias) => outer_columns_helper(&alias.expr, columns),
         Expr::InSubquery(insubquery) => {
-            outer_columns_helper_multi(&insubquery.subquery.outer_ref_columns, columns);
+            outer_columns_helper_multi(&insubquery.subquery.outer_ref_columns, columns)
         }
-        Expr::IsNotNull(expr) | Expr::IsNull(expr) => {
-            outer_columns_helper(expr, columns);
-        }
-        Expr::Cast(cast) => {
-            outer_columns_helper(&cast.expr, columns);
-        }
-        Expr::Sort(sort) => {
-            outer_columns_helper(&sort.expr, columns);
-        }
+        Expr::IsNotNull(expr) | Expr::IsNull(expr) => outer_columns_helper(expr, columns),
+        Expr::Cast(cast) => outer_columns_helper(&cast.expr, columns),
+        Expr::Sort(sort) => outer_columns_helper(&sort.expr, columns),
         Expr::AggregateFunction(aggregate_fn) => {
-            outer_columns_helper_multi(&aggregate_fn.args, columns);
-            if let Some(obs) = &aggregate_fn.order_by {
-                outer_columns_helper_multi(obs, columns);
-            }
-            if let Some(filter) = &aggregate_fn.filter {
-                outer_columns_helper(filter, columns);
-            }
+            outer_columns_helper_multi(&aggregate_fn.args, columns)
+                && aggregate_fn
+                    .order_by
+                    .as_ref()
+                    .map_or(true, |obs| outer_columns_helper_multi(obs, columns))
+                && aggregate_fn
+                    .filter
+                    .as_ref()
+                    .map_or(true, |filter| outer_columns_helper(filter, columns))
         }
         Expr::WindowFunction(window_fn) => {
-            outer_columns_helper_multi(&window_fn.args, columns);
-            outer_columns_helper_multi(&window_fn.order_by, columns);
-            outer_columns_helper_multi(&window_fn.partition_by, columns);
+            outer_columns_helper_multi(&window_fn.args, columns)
+                && outer_columns_helper_multi(&window_fn.order_by, columns)
+                && outer_columns_helper_multi(&window_fn.partition_by, columns)
         }
         Expr::GroupingSet(groupingset) => match groupingset {
-            GroupingSet::GroupingSets(multi_exprs) => {
-                for exprs in multi_exprs {
-                    outer_columns_helper_multi(exprs, columns);
-                }
-            }
+            GroupingSet::GroupingSets(multi_exprs) => multi_exprs
+                .iter()
+                .all(|e| outer_columns_helper_multi(e, columns)),
             GroupingSet::Cube(exprs) | GroupingSet::Rollup(exprs) => {
-                outer_columns_helper_multi(exprs, columns);
+                outer_columns_helper_multi(exprs, columns)
             }
         },
         Expr::ScalarFunction(scalar_fn) => {
-            outer_columns_helper_multi(&scalar_fn.args, columns);
+            outer_columns_helper_multi(&scalar_fn.args, columns)
         }
         Expr::Like(like) => {
-            outer_columns_helper(&like.expr, columns);
-            outer_columns_helper(&like.pattern, columns);
+            outer_columns_helper(&like.expr, columns)
+                && outer_columns_helper(&like.pattern, columns)
         }
         Expr::InList(in_list) => {
-            outer_columns_helper(&in_list.expr, columns);
-            outer_columns_helper_multi(&in_list.list, columns);
+            outer_columns_helper(&in_list.expr, columns)
+                && outer_columns_helper_multi(&in_list.list, columns)
         }
-        Expr::Column(_) | Expr::Literal(_) | Expr::Wildcard { .. } => {}
-        _ => {
-            return None;
-        }
+        Expr::Column(_) | Expr::Literal(_) | Expr::Wildcard { .. } => true,
+        _ => false,
     }
-    Some(())
 }
 
 /// Generates the required expressions (columns) that reside at `indices` of
