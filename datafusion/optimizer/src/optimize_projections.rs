@@ -70,11 +70,6 @@ impl OptimizerRule for OptimizeProjections {
     fn apply_order(&self) -> Option<ApplyOrder> {
         None
     }
-
-    // This rule may produce schemas with different field names.
-    fn exact_schema_check(&self) -> bool {
-        false
-    }
 }
 
 /// Removes unnecessary columns (e.g Columns that are not referred at the output schema and
@@ -410,9 +405,25 @@ fn merge_consecutive_projections(proj: &Projection) -> Result<Option<Projection>
         .iter()
         .map(|expr| rewrite_expr(expr, prev_projection))
         .collect::<Result<Option<Vec<_>>>>()?;
-    new_exprs
-        .map(|exprs| Projection::try_new(exprs, prev_projection.input.clone()))
-        .transpose()
+    if let Some(new_exprs) = new_exprs {
+        let new_exprs = new_exprs
+            .into_iter()
+            .zip(proj.expr.iter())
+            .map(|(new_expr, old_expr)| {
+                let new_name = new_expr.name_for_alias()?;
+                let old_name = old_expr.name_for_alias()?;
+                Ok(if new_name != old_name {
+                    // Make sure name is preserved after merging
+                    new_expr.alias(old_name)
+                } else {
+                    new_expr
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Projection::try_new(new_exprs, prev_projection.input.clone()).map(Some)
+    } else {
+        Ok(None)
+    }
 }
 
 /// Trim Expression
