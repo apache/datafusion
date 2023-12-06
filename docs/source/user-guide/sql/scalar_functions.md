@@ -1312,6 +1312,10 @@ current_date()
 
 - today
 
+### `today`
+
+_Alias of [current_date](#current_date)._
+
 ### `current_time`
 
 Returns the current UTC time.

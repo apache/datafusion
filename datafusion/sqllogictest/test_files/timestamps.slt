@@ -46,6 +46,20 @@ statement ok
 create table ts_data_secs as select arrow_cast(ts / 1000000000, 'Timestamp(Second, None)') as ts, value from ts_data;
 
 
+##########
+## Current date Tests
+##########
+
+query B
+select cast(now() as date) = current_date();
+----
+true
+
+query B
+select now() = current_date();
+----
+false
+
 
 ##########
 ## Timestamp Handling Tests
