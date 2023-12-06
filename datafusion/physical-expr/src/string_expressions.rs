@@ -37,8 +37,11 @@ use datafusion_common::{
 };
 use datafusion_common::{internal_err, DataFusionError, Result};
 use datafusion_expr::ColumnarValue;
-use std::iter;
 use std::sync::Arc;
+use std::{
+    fmt::{Display, Formatter},
+    iter,
+};
 use uuid::Uuid;
 
 /// applies a unary expression to `args[0]` that is expected to be downcastable to
@@ -305,6 +308,16 @@ enum TrimType {
     Both,
 }
 
+impl Display for TrimType {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            TrimType::Left => write!(f, "ltrim"),
+            TrimType::Right => write!(f, "rtrim"),
+            TrimType::Both => write!(f, "btrim"),
+        }
+    }
+}
+
 fn general_trim<T: OffsetSizeTrait>(
     args: &[ArrayRef],
     trim_type: TrimType,
@@ -343,13 +356,8 @@ fn general_trim<T: OffsetSizeTrait>(
             Ok(Arc::new(result) as ArrayRef)
         }
         other => {
-            let trim = match trim_type {
-                TrimType::Left => "ltrim",
-                TrimType::Right => "rtrim",
-                TrimType::Both => "btrim",
-            };
             internal_err!(
-            "{trim} was called with {other} arguments. It requires at least 1 and at most 2."
+            "{trim_type} was called with {other} arguments. It requires at least 1 and at most 2."
         )
         }
     }
