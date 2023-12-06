@@ -551,8 +551,19 @@ fn get_sort_options(ordering_req: &[PhysicalSortExpr]) -> Vec<SortOptions> {
         .collect::<Vec<_>>()
 }
 
-/// Gets either first, or last value index inside values columns according to ordering requirements
-/// Assumes values is ordered according to ordering_req already.
+/// Gets either first, or last value index inside `values` batch according to ordering requirements
+/// Assumes `values` batch is ordered according to ordering_req already.
+///
+/// # Parameters
+///
+/// - `values`: A slice of `ArrayRef` representing the values to be processed. (Columns of record batch)
+/// - `ordering_req`: A lexical ordering reference specifying the required ordering of values.
+/// - `is_set`: Whether any value is stored in the state for `first value` or `last value` (At the beginning this is false.).
+///
+/// # Returns
+///
+/// A `Result` containing an `Option<usize>`. If successful, the `Option` holds the index of the
+/// desired value. Returns `None` to indicate no existing value doesn't need to be updated.
 fn get_value_idx<const FIRST: bool>(
     values: &[ArrayRef],
     ordering_req: LexOrderingRef,

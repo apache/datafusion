@@ -18,13 +18,14 @@
 //! Aggregate without grouping columns
 
 use crate::aggregates::{
-    aggregate_expressions, create_accumulators, finalize_aggregation_groups,
-    AggregateExprGroup, AggregateGroup, AggregateMode,
+    aggregate_expressions, create_accumulators, finalize_aggregation, AccumulatorItem,
+    AggregateExprGroup, AggregateMode,
 };
 use crate::metrics::{BaselineMetrics, RecordOutput};
 use crate::{RecordBatchStream, SendableRecordBatchStream};
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
+use arrow_array::ArrayRef;
 use datafusion_common::Result;
 use datafusion_execution::TaskContext;
 use futures::stream::BoxStream;
@@ -36,6 +37,7 @@ use crate::filter::batch_filter;
 use crate::sorts::sort::sort_batch;
 use datafusion_common::utils::get_at_indices;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
+use datafusion_physical_expr::{LexOrdering, PhysicalExpr};
 use futures::stream::{Stream, StreamExt};
 
 use super::AggregateExec;
@@ -58,19 +60,17 @@ struct AggregateStreamInner {
     mode: AggregateMode,
     input: SendableRecordBatchStream,
     baseline_metrics: BaselineMetrics,
-    // aggregate_expressions: Vec<Vec<Arc<dyn PhysicalExpr>>>,
-    // filter_expressions: Vec<Option<Arc<dyn PhysicalExpr>>>,
-    // accumulators: Vec<AccumulatorItem>,
     aggregate_groups: Vec<AggregateGroup>,
     reservation: MemoryReservation,
     finished: bool,
 }
 
-// struct AggregateGroup{
-//     aggregate_expressions: Vec<Vec<Arc<dyn PhysicalExpr>>>,
-//     filter_expressions: Vec<Option<Arc<dyn PhysicalExpr>>>,
-//     accumulators: Vec<AccumulatorItem>,
-// }
+pub struct AggregateGroup {
+    aggregate_expressions: Vec<Vec<Arc<dyn PhysicalExpr>>>,
+    filter_expressions: Vec<Option<Arc<dyn PhysicalExpr>>>,
+    accumulators: Vec<AccumulatorItem>,
+    requirement: LexOrdering,
+}
 
 impl AggregateStream {
     /// Create a new AggregateStream
@@ -281,4 +281,21 @@ fn aggregate_batch(
         })?;
 
     Ok(allocated)
+}
+
+/// returns a vector of ArrayRefs, where each entry corresponds to either the
+/// final value (mode = Final, FinalPartitioned and Single) or states (mode = Partial)
+fn finalize_aggregation_groups(
+    aggregate_groups: &[AggregateGroup],
+    // TODO: Use Mapping indices
+    mode: &AggregateMode,
+) -> Result<Vec<ArrayRef>> {
+    let elems = aggregate_groups
+        .iter()
+        .map(|aggregate_group| finalize_aggregation(&aggregate_group.accumulators, mode))
+        .collect::<Result<Vec<_>>>()?;
+    // TODO: Add proper indices
+    // Convert Vec<Vec<ArrayRef>> to Vec<ArrayRef>.
+    let res = elems.into_iter().flatten().collect::<Vec<_>>();
+    Ok(res)
 }
