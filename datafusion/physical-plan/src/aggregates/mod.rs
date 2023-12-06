@@ -316,23 +316,6 @@ pub struct AggregateExec {
     output_ordering: Option<LexOrdering>,
 }
 
-/// Check whether group by expression contains all of the expression inside `requirement`
-// As an example Group By (c,b,a) contains all of the expressions in the `requirement`: (a ASC, b DESC)
-fn group_by_contains_all_requirements(
-    group_by: &PhysicalGroupBy,
-    requirement: &LexOrdering,
-) -> bool {
-    let physical_exprs = group_by.input_exprs();
-    // When we have multiple groups (grouping set)
-    // since group by may be calculated on the subset of the group_by.expr()
-    // it is not guaranteed to have all of the requirements among group by expressions.
-    // Hence do the analysis: whether group by contains all requirements in the single group case.
-    group_by.is_single()
-        && requirement
-            .iter()
-            .all(|req| physical_exprs_contains(&physical_exprs, &req.expr))
-}
-
 impl AggregateExec {
     /// Create a new hash aggregate execution plan
     pub fn try_new(
@@ -353,20 +336,10 @@ impl AggregateExec {
             mode,
         )?;
         let eq_properties = input.equivalence_properties();
-        let mut aggregate_groups =
+        let aggregate_groups =
             get_aggregate_expr_groups(&mut aggr_expr, &group_by, &eq_properties, &mode)?;
 
         let schema = Arc::new(schema);
-
-        let mut ordering_req = vec![];
-        if let Some(max_group) = aggregate_groups
-            .iter_mut()
-            .max_by(|lhs, rhs| lhs.indices.len().cmp(&rhs.indices.len()))
-        {
-            ordering_req = max_group.requirement.to_vec();
-            // No longer require this, this requirement will be satisfied by outside mechanism.
-            max_group.requirement.clear();
-        }
 
         // Get GROUP BY expressions:
         let groupby_exprs = group_by.input_exprs();
@@ -381,9 +354,6 @@ impl AggregateExec {
                 options: None,
             })
             .collect::<Vec<_>>();
-        // Postfix ordering requirement of the aggregation to the requirement.
-        let req = PhysicalSortRequirement::from_sort_exprs(&ordering_req);
-        new_requirement.extend(req);
         new_requirement = collapse_lex_req(new_requirement);
 
         let partition_search_mode =
@@ -869,11 +839,15 @@ fn get_aggregate_expr_req(
     // Hence, we do not need to use the ordering requirement in such
     // modes as long as partial results are generated with the
     // correct ordering.
-    //  TODO: Remove all orderings that occur in the group by.
-    if !is_order_sensitive(aggr_expr)
-        || group_by_contains_all_requirements(group_by, &req)
-        || !agg_mode.is_first_stage()
-    {
+    if group_by.is_single() {
+        // Remove all orderings that occur in the group by. These requirements will be satisfied definitely
+        // (Per group each group by expression will have distinct values. Hence all requirements are satisfied).
+        let physical_exprs = group_by.input_exprs();
+        req.retain(|sort_expr| {
+            !physical_exprs_contains(&physical_exprs, &sort_expr.expr)
+        });
+    }
+    if !is_order_sensitive(aggr_expr) || !agg_mode.is_first_stage() {
         req.clear();
     }
     req
@@ -925,6 +899,7 @@ fn get_aggregate_expr_groups(
                     }
                 }
             } else {
+                // Initialize group with current aggregate expression
                 group = Some((vec![idx], aggr_req));
             }
         }
