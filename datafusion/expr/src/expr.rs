@@ -1062,7 +1062,7 @@ impl Expr {
         Expr::GetIndexedField(GetIndexedField {
             expr: Box::new(self),
             field: GetFieldAccess::NamedStructField {
-                name: ScalarValue::Utf8(Some(name.into())),
+                name: ScalarValue::from(name.into()),
             },
         })
     }

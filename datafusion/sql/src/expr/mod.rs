@@ -171,7 +171,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 Ok(Expr::ScalarFunction(ScalarFunction::new(
                     BuiltinScalarFunction::DatePart,
                     vec![
-                        Expr::Literal(ScalarValue::Utf8(Some(format!("{field}")))),
+                        Expr::Literal(ScalarValue::from(format!("{field}"))),
                         self.sql_expr_to_logical_expr(*expr, schema, planner_context)?,
                     ],
                 )))
@@ -739,7 +739,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             SQLExpr::Value(
                 Value::SingleQuotedString(s) | Value::DoubleQuotedString(s),
             ) => GetFieldAccess::NamedStructField {
-                name: ScalarValue::Utf8(Some(s)),
+                name: ScalarValue::from(s),
             },
             SQLExpr::JsonAccess {
                 left,

@@ -3297,10 +3297,7 @@ mod tests {
                 col("c4"),
                 NullableInterval::from(ScalarValue::UInt32(Some(9))),
             ),
-            (
-                col("c1"),
-                NullableInterval::from(ScalarValue::Utf8(Some("a".to_string()))),
-            ),
+            (col("c1"), NullableInterval::from(ScalarValue::from("a"))),
         ];
         let output = simplify_with_guarantee(expr.clone(), guarantees);
         assert_eq!(output, lit(false));
@@ -3323,8 +3320,8 @@ mod tests {
                 col("c1"),
                 NullableInterval::NotNull {
                     values: Interval::try_new(
-                        ScalarValue::Utf8(Some("d".to_string())),
-                        ScalarValue::Utf8(Some("f".to_string())),
+                        ScalarValue::from("d"),
+                        ScalarValue::from("f"),
                     )
                     .unwrap(),
                 },

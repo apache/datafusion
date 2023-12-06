@@ -834,9 +834,9 @@ pub fn create_physical_fun(
             }
 
             let input_data_type = args[0].data_type();
-            Ok(ColumnarValue::Scalar(ScalarValue::Utf8(Some(format!(
+            Ok(ColumnarValue::Scalar(ScalarValue::from(format!(
                 "{input_data_type}"
-            )))))
+            ))))
         }),
         BuiltinScalarFunction::OverLay => Arc::new(|args| match args[0].data_type() {
             DataType::Utf8 => {

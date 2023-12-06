@@ -1606,11 +1606,11 @@ mod tests {
         let partitioned_file = PartitionedFile {
             object_meta: meta,
             partition_values: vec![
-                ScalarValue::Utf8(Some("2021".to_owned())),
+                ScalarValue::from("2021"),
                 ScalarValue::UInt8(Some(10)),
                 ScalarValue::Dictionary(
                     Box::new(DataType::UInt16),
-                    Box::new(ScalarValue::Utf8(Some("26".to_owned()))),
+                    Box::new(ScalarValue::from("26")),
                 ),
             ],
             range: None,
