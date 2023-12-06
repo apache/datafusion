@@ -1308,6 +1308,10 @@ no matter when in the query plan the function executes.
 current_date()
 ```
 
+#### Aliases
+
+- today
+
 ### `current_time`
 
 Returns the current UTC time.
