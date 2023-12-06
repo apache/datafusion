@@ -640,6 +640,23 @@ fn outer_columns_helper(expr: &Expr, columns: &mut HashSet<Column>) -> bool {
             outer_columns_helper(&in_list.expr, columns)
                 && outer_columns_helper_multi(&in_list.list, columns)
         }
+        Expr::Case(case) => {
+            let when_then_exprs = case
+                .when_then_expr
+                .iter()
+                .cloned()
+                .flat_map(|(first, second)| vec![(*first), (*second)])
+                .collect::<Vec<Expr>>();
+            outer_columns_helper_multi(&when_then_exprs, columns)
+                && case
+                    .expr
+                    .as_ref()
+                    .map_or(true, |expr| outer_columns_helper(expr, columns))
+                && case
+                    .else_expr
+                    .as_ref()
+                    .map_or(true, |expr| outer_columns_helper(expr, columns))
+        }
         Expr::Column(_) | Expr::Literal(_) | Expr::Wildcard { .. } => true,
         _ => false,
     }
