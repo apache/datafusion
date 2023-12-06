@@ -879,6 +879,7 @@ physical_plan
 SortExec: expr=[a@0 ASC NULLS LAST]
 --MemoryExec: partitions=1, partition_sizes=[1]
 
+# ambiguous column references in on join
 query error DataFusion error: Schema error: Ambiguous reference to unqualified field a
 EXPLAIN select a as a FROM table1 t1 CROSS JOIN table1 t2 order by a
 
