@@ -650,6 +650,14 @@ fn outer_columns_helper(expr: &Expr, columns: &mut HashSet<Column>) -> Option<()
         Expr::ScalarFunction(scalar_fn) => {
             outer_columns_helper_multi(&scalar_fn.args, columns);
         }
+        Expr::Like(like) => {
+            outer_columns_helper(&like.expr, columns);
+            outer_columns_helper(&like.pattern, columns);
+        }
+        Expr::InList(in_list) => {
+            outer_columns_helper(&in_list.expr, columns);
+            outer_columns_helper_multi(&in_list.list, columns);
+        }
         Expr::Column(_) | Expr::Literal(_) | Expr::Wildcard { .. } => {}
         _ => {
             return None;
