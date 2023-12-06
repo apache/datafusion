@@ -458,6 +458,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 if ignore {
                     plan_err!("Insert-ignore clause not supported")?;
                 }
+                let Some(source) = source else {
+                    plan_err!("Inserts without a source not supported")?
+                };
                 let _ = into; // optional keyword doesn't change behavior
                 self.insert_to_plan(table_name, columns, source, overwrite)
             }
@@ -566,7 +569,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 });
                 Ok(LogicalPlan::Statement(statement))
             }
-            Statement::Rollback { chain } => {
+            Statement::Rollback { chain, savepoint } => {
+                if savepoint.is_some() {
+                    plan_err!("Savepoints not supported")?;
+                }
                 let statement = PlanStatement::TransactionEnd(TransactionEnd {
                     conclusion: TransactionConclusion::Rollback,
                     chain,

@@ -188,6 +188,7 @@ datafusion.explain.logical_plan_only false
 datafusion.explain.physical_plan_only false
 datafusion.explain.show_statistics false
 datafusion.optimizer.allow_symmetric_joins_without_pruning true
+datafusion.optimizer.default_filter_selectivity 20
 datafusion.optimizer.enable_distinct_aggregation_soft_limit true
 datafusion.optimizer.enable_round_robin_repartition true
 datafusion.optimizer.enable_topk_aggregation true
@@ -261,6 +262,7 @@ datafusion.explain.logical_plan_only false When set to true, the explain stateme
 datafusion.explain.physical_plan_only false When set to true, the explain statement will only print physical plans
 datafusion.explain.show_statistics false When set to true, the explain statement will print operator statistics for physical plans
 datafusion.optimizer.allow_symmetric_joins_without_pruning true Should DataFusion allow symmetric hash joins for unbounded data sources even when its inputs do not have any ordering or filtering If the flag is not enabled, the SymmetricHashJoin operator will be unable to prune its internal buffers, resulting in certain join types - such as Full, Left, LeftAnti, LeftSemi, Right, RightAnti, and RightSemi - being produced only at the end of the execution. This is not typical in stream processing. Additionally, without proper design for long runner execution, all types of joins may encounter out-of-memory errors.
+datafusion.optimizer.default_filter_selectivity 20 The default filter selectivity used by Filter Statistics when an exact selectivity cannot be determined. Valid values are between 0 (no selectivity) and 100 (all rows are selected).
 datafusion.optimizer.enable_distinct_aggregation_soft_limit true When set to true, the optimizer will push a limit operation into grouped aggregations which have no aggregate expressions, as a soft limit, emitting groups once the limit is reached, before all rows in the group are read.
 datafusion.optimizer.enable_round_robin_repartition true When set to true, the physical plan optimizer will try to add round robin repartitioning to increase parallelism to leverage more CPU cores
 datafusion.optimizer.enable_topk_aggregation true When set to true, the optimizer will attempt to perform limit operations during aggregations, if possible

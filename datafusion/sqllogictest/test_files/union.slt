@@ -82,6 +82,11 @@ SELECT 2 as x
 1
 2
 
+query I
+select count(*) from (select id from t1 union all select id from t2)
+----
+6
+
 # csv_union_all
 statement ok
 CREATE EXTERNAL TABLE aggregate_test_100 (

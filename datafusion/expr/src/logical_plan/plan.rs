@@ -976,9 +976,10 @@ impl LogicalPlan {
     ///     .filter(col("id").eq(placeholder("$1"))).unwrap()
     ///     .build().unwrap();
     ///
-    /// assert_eq!("Filter: t1.id = $1\
-    ///            \n  TableScan: t1",
-    ///             plan.display_indent().to_string()
+    /// assert_eq!(
+    ///   "Filter: t1.id = $1\
+    ///   \n  TableScan: t1",
+    ///   plan.display_indent().to_string()
     /// );
     ///
     /// // Fill in the parameter $1 with a literal 3
@@ -986,10 +987,28 @@ impl LogicalPlan {
     ///   ScalarValue::from(3i32) // value at index 0 --> $1
     /// ]).unwrap();
     ///
-    /// assert_eq!("Filter: t1.id = Int32(3)\
-    ///             \n  TableScan: t1",
-    ///             plan.display_indent().to_string()
+    /// assert_eq!(
+    ///    "Filter: t1.id = Int32(3)\
+    ///    \n  TableScan: t1",
+    ///    plan.display_indent().to_string()
     ///  );
+    ///
+    /// // Note you can also used named parameters
+    /// // Build SELECT * FROM t1 WHRERE id = $my_param
+    /// let plan = table_scan(Some("t1"), &schema, None).unwrap()
+    ///     .filter(col("id").eq(placeholder("$my_param"))).unwrap()
+    ///     .build().unwrap()
+    ///     // Fill in the parameter $my_param with a literal 3
+    ///     .with_param_values(vec![
+    ///       ("my_param", ScalarValue::from(3i32)),
+    ///     ]).unwrap();
+    ///
+    /// assert_eq!(
+    ///    "Filter: t1.id = Int32(3)\
+    ///    \n  TableScan: t1",
+    ///    plan.display_indent().to_string()
+    ///  );
+    ///
     /// ```
     pub fn with_param_values(
         self,

@@ -1916,6 +1916,8 @@ pub struct FilterExecNode {
     pub input: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalPlanNode>>,
     #[prost(message, optional, tag = "2")]
     pub expr: ::core::option::Option<PhysicalExprNode>,
+    #[prost(uint32, tag = "3")]
+    pub default_filter_selectivity: u32,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -2101,7 +2103,7 @@ pub struct ProjectionExecNode {
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
-pub struct PartiallySortedPartitionSearchMode {
+pub struct PartiallySortedInputOrderMode {
     #[prost(uint64, repeated, tag = "6")]
     pub columns: ::prost::alloc::vec::Vec<u64>,
 }
@@ -2115,21 +2117,19 @@ pub struct WindowAggExecNode {
     #[prost(message, repeated, tag = "5")]
     pub partition_keys: ::prost::alloc::vec::Vec<PhysicalExprNode>,
     /// Set optional to `None` for `BoundedWindowAggExec`.
-    #[prost(oneof = "window_agg_exec_node::PartitionSearchMode", tags = "7, 8, 9")]
-    pub partition_search_mode: ::core::option::Option<
-        window_agg_exec_node::PartitionSearchMode,
-    >,
+    #[prost(oneof = "window_agg_exec_node::InputOrderMode", tags = "7, 8, 9")]
+    pub input_order_mode: ::core::option::Option<window_agg_exec_node::InputOrderMode>,
 }
 /// Nested message and enum types in `WindowAggExecNode`.
 pub mod window_agg_exec_node {
     /// Set optional to `None` for `BoundedWindowAggExec`.
     #[allow(clippy::derive_partial_eq_without_eq)]
     #[derive(Clone, PartialEq, ::prost::Oneof)]
-    pub enum PartitionSearchMode {
+    pub enum InputOrderMode {
         #[prost(message, tag = "7")]
         Linear(super::EmptyMessage),
         #[prost(message, tag = "8")]
-        PartiallySorted(super::PartiallySortedPartitionSearchMode),
+        PartiallySorted(super::PartiallySortedInputOrderMode),
         #[prost(message, tag = "9")]
         Sorted(super::EmptyMessage),
     }
