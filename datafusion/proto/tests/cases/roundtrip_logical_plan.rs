@@ -217,11 +217,10 @@ async fn roundtrip_custom_memory_tables() -> Result<()> {
 async fn roundtrip_custom_listing_tables() -> Result<()> {
     let ctx = SessionContext::new();
 
-    // Make sure during round-trip, constraint information is preserved
     let query = "CREATE EXTERNAL TABLE multiple_ordered_table_with_pk (
               a0 INTEGER,
-              a INTEGER,
-              b INTEGER,
+              a INTEGER DEFAULT 1*2 + 3,
+              b INTEGER DEFAULT NULL,
               c INTEGER,
               d INTEGER,
               primary key(c)
@@ -232,11 +231,13 @@ async fn roundtrip_custom_listing_tables() -> Result<()> {
             WITH ORDER (c ASC)
             LOCATION '../core/tests/data/window_2.csv';";
 
-    let plan = ctx.sql(query).await?.into_optimized_plan()?;
+    let plan = ctx.state().create_logical_plan(query).await?;
 
     let bytes = logical_plan_to_bytes(&plan)?;
     let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx)?;
-    assert_eq!(format!("{plan:?}"), format!("{logical_round_trip:?}"));
+    // Use exact matching to verify everything. Make sure during round-trip,
+    // information like constraints, column defaults, and other aspects of the plan are preserved.
+    assert_eq!(plan, logical_round_trip);
 
     Ok(())
 }
