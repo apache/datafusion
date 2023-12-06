@@ -18,7 +18,6 @@
 //! Array expressions
 
 use std::any::type_name;
-use std::cmp::Ordering;
 use std::collections::HashSet;
 use std::sync::Arc;
 
