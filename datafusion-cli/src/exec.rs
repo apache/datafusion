@@ -291,7 +291,7 @@ mod tests {
 
     use super::*;
     use datafusion::common::plan_err;
-    use datafusion_common::{FileTypeWriterOptions, file_options::StatementOptions};
+    use datafusion_common::{file_options::StatementOptions, FileTypeWriterOptions};
 
     async fn create_external_table_test(location: &str, sql: &str) -> Result<()> {
         let ctx = SessionContext::new();
@@ -299,9 +299,14 @@ mod tests {
 
         if let LogicalPlan::Ddl(DdlStatement::CreateExternalTable(cmd)) = &mut plan {
             create_external_table(&ctx, cmd).await?;
-            let options: Vec<_> = cmd.options.iter().map(|(k,v)| (k.clone(), v.clone())).collect();
+            let options: Vec<_> = cmd
+                .options
+                .iter()
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect();
             let statement_options = StatementOptions::new(options);
-            let file_type = datafusion_common::FileType::from_str(cmd.file_type.as_str())?;
+            let file_type =
+                datafusion_common::FileType::from_str(cmd.file_type.as_str())?;
 
             let _file_type_writer_options = FileTypeWriterOptions::build(
                 &file_type,
