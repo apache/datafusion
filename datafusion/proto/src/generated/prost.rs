@@ -360,6 +360,11 @@ pub struct CreateExternalTableNode {
     >,
     #[prost(message, optional, tag = "15")]
     pub constraints: ::core::option::Option<Constraints>,
+    #[prost(map = "string, message", tag = "16")]
+    pub column_defaults: ::std::collections::HashMap<
+        ::prost::alloc::string::String,
+        LogicalExprNode,
+    >,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
