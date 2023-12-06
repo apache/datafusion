@@ -211,7 +211,7 @@ async fn exec_and_print(
     })?;
     let statements = DFParser::parse_sql_with_dialect(&sql, dialect.as_ref())?;
     for statement in statements {
-        let plan = ctx.state().statement_to_plan(statement).await?;
+        let mut plan = ctx.state().statement_to_plan(statement).await?;
 
         // For plans like `Explain` ignore `MaxRows` option and always display all rows
         let should_ignore_maxrows = matches!(
@@ -221,10 +221,12 @@ async fn exec_and_print(
                 | LogicalPlan::Analyze(_)
         );
 
-        if let LogicalPlan::Ddl(DdlStatement::CreateExternalTable(cmd)) = &plan {
+        // Note that cmd is a mutable reference so that create_external_table function can remove all
+        // datafusion-cli specific options before passing through to datafusion. Otherwise, datafusion
+        // will raise Configuration errors.
+        if let LogicalPlan::Ddl(DdlStatement::CreateExternalTable(cmd)) = &mut plan {
             create_external_table(ctx, cmd).await?;
         }
-
         let df = ctx.execute_logical_plan(plan).await?;
         let results = df.collect().await?;
 
@@ -244,7 +246,7 @@ async fn exec_and_print(
 
 async fn create_external_table(
     ctx: &SessionContext,
-    cmd: &CreateExternalTable,
+    cmd: &mut CreateExternalTable,
 ) -> Result<()> {
     let table_path = ListingTableUrl::parse(&cmd.location)?;
     let scheme = table_path.scheme();
@@ -285,15 +287,32 @@ async fn create_external_table(
 
 #[cfg(test)]
 mod tests {
+    use std::str::FromStr;
+
     use super::*;
     use datafusion::common::plan_err;
+    use datafusion_common::{file_options::StatementOptions, FileTypeWriterOptions};
 
     async fn create_external_table_test(location: &str, sql: &str) -> Result<()> {
         let ctx = SessionContext::new();
-        let plan = ctx.state().create_logical_plan(sql).await?;
+        let mut plan = ctx.state().create_logical_plan(sql).await?;
 
-        if let LogicalPlan::Ddl(DdlStatement::CreateExternalTable(cmd)) = &plan {
+        if let LogicalPlan::Ddl(DdlStatement::CreateExternalTable(cmd)) = &mut plan {
             create_external_table(&ctx, cmd).await?;
+            let options: Vec<_> = cmd
+                .options
+                .iter()
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect();
+            let statement_options = StatementOptions::new(options);
+            let file_type =
+                datafusion_common::FileType::from_str(cmd.file_type.as_str())?;
+
+            let _file_type_writer_options = FileTypeWriterOptions::build(
+                &file_type,
+                ctx.state().config_options(),
+                &statement_options,
+            )?;
         } else {
             return plan_err!("LogicalPlan is not a CreateExternalTable");
         }
