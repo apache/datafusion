@@ -50,6 +50,13 @@ CREATE TABLE t2(t2_id INT, t2_name TEXT, t2_int INT) AS VALUES
 (55, 'w', 3);
 
 statement ok
+CREATE TABLE t3(t3_id INT PRIMARY KEY, t3_name TEXT, t3_int INT) AS VALUES
+(11, 'e', 3),
+(22, 'f', 1),
+(44, 'g', 3),
+(55, 'h', 3);
+
+statement ok
 CREATE EXTERNAL TABLE IF NOT EXISTS customer (
         c_custkey BIGINT,
         c_name VARCHAR,
@@ -419,6 +426,17 @@ SELECT t1_id, t1_name, t1_int FROM t1 order by t1_int in (SELECT t2_int FROM t2 
 statement error DataFusion error: check_analyzed_plan\ncaused by\nError during planning: Correlated scalar subquery must be aggregated to return at most one row
 SELECT t1_id, (SELECT t2_int FROM t2 WHERE t2.t2_int = t1.t1_int) as t2_int from t1
 
+#non_aggregated_correlated_scalar_subquery_unique
+query II rowsort
+SELECT t1_id, (SELECT t3_int FROM t3 WHERE t3.t3_id = t1.t1_id) as t3_int from t1
+----
+11 3
+22 1
+33 NULL
+44 3
+
+
+#non_aggregated_correlated_scalar_subquery
 statement error DataFusion error: check_analyzed_plan\ncaused by\nError during planning: Correlated scalar subquery must be aggregated to return at most one row
 SELECT t1_id, (SELECT t2_int FROM t2 WHERE t2.t2_int = t1_int group by t2_int) as t2_int from t1
 

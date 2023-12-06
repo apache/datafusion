@@ -413,6 +413,14 @@ impl FunctionalDependencies {
     }
 }
 
+impl Deref for FunctionalDependencies {
+    type Target = [FunctionalDependence];
+
+    fn deref(&self) -> &Self::Target {
+        self.deps.as_slice()
+    }
+}
+
 /// Calculates functional dependencies for aggregate output, when there is a GROUP BY expression.
 pub fn aggregate_functional_dependencies(
     aggr_input_schema: &DFSchema,
