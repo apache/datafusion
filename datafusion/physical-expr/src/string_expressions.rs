@@ -133,53 +133,6 @@ pub fn ascii<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
     Ok(Arc::new(result) as ArrayRef)
 }
 
-/// Removes the longest string containing only characters in characters (a space by default) from the start and end of string.
-/// btrim('xyxtrimyyx', 'xyz') = 'trim'
-pub fn btrim<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
-    match args.len() {
-        1 => {
-            let string_array = as_generic_string_array::<T>(&args[0])?;
-
-            let result = string_array
-                .iter()
-                .map(|string| {
-                    string.map(|string: &str| {
-                        string.trim_start_matches(' ').trim_end_matches(' ')
-                    })
-                })
-                .collect::<GenericStringArray<T>>();
-
-            Ok(Arc::new(result) as ArrayRef)
-        }
-        2 => {
-            let string_array = as_generic_string_array::<T>(&args[0])?;
-            let characters_array = as_generic_string_array::<T>(&args[1])?;
-
-            let result = string_array
-                .iter()
-                .zip(characters_array.iter())
-                .map(|(string, characters)| match (string, characters) {
-                    (None, _) => None,
-                    (_, None) => None,
-                    (Some(string), Some(characters)) => {
-                        let chars: Vec<char> = characters.chars().collect();
-                        Some(
-                            string
-                                .trim_start_matches(&chars[..])
-                                .trim_end_matches(&chars[..]),
-                        )
-                    }
-                })
-                .collect::<GenericStringArray<T>>();
-
-            Ok(Arc::new(result) as ArrayRef)
-        }
-        other => internal_err!(
-            "btrim was called with {other} arguments. It requires at least 1 and at most 2."
-        ),
-    }
-}
-
 /// Returns the character with the given code. chr(0) is disallowed because text data types cannot store that character.
 /// chr(65) = 'A'
 pub fn chr(args: &[ArrayRef]) -> Result<ArrayRef> {
@@ -346,42 +299,78 @@ pub fn lower(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     handle(args, |string| string.to_ascii_lowercase(), "lower")
 }
 
-/// Removes the longest string containing only characters in characters (a space by default) from the start of string.
-/// ltrim('zzzytest', 'xyz') = 'test'
-pub fn ltrim<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
+enum TrimType {
+    Left,
+    Right,
+    Both,
+}
+
+fn general_trim<T: OffsetSizeTrait>(
+    args: &[ArrayRef],
+    trim_type: TrimType,
+) -> Result<ArrayRef> {
+    let func = match trim_type {
+        TrimType::Left => str::trim_start_matches::<&str>,
+        TrimType::Right => str::trim_end_matches::<&str>,
+        TrimType::Both => |input, pattern| {
+            str::trim_end_matches(str::trim_start_matches(input, pattern), pattern)
+        },
+    };
+
+    let string_array = as_generic_string_array::<T>(&args[0])?;
+
     match args.len() {
         1 => {
-            let string_array = as_generic_string_array::<T>(&args[0])?;
-
             let result = string_array
                 .iter()
-                .map(|string| string.map(|string: &str| string.trim_start_matches(' ')))
+                .map(|string| string.map(|string: &str| func(string, " ")))
                 .collect::<GenericStringArray<T>>();
 
             Ok(Arc::new(result) as ArrayRef)
         }
         2 => {
-            let string_array = as_generic_string_array::<T>(&args[0])?;
             let characters_array = as_generic_string_array::<T>(&args[1])?;
 
             let result = string_array
                 .iter()
                 .zip(characters_array.iter())
                 .map(|(string, characters)| match (string, characters) {
-                    (Some(string), Some(characters)) => {
-                        let chars: Vec<char> = characters.chars().collect();
-                        Some(string.trim_start_matches(&chars[..]))
-                    }
+                    (Some(string), Some(characters)) => Some(func(string, characters)),
                     _ => None,
                 })
                 .collect::<GenericStringArray<T>>();
 
             Ok(Arc::new(result) as ArrayRef)
         }
-        other => internal_err!(
-            "ltrim was called with {other} arguments. It requires at least 1 and at most 2."
-        ),
+        other => {
+            let trim = match trim_type {
+                TrimType::Left => "ltrim",
+                TrimType::Right => "rtrim",
+                TrimType::Both => "btrim",
+            };
+            internal_err!(
+            "{trim} was called with {other} arguments. It requires at least 1 and at most 2."
+        )
+        }
     }
+}
+
+/// Removes the longest string containing only characters in characters (a space by default) from the start and end of string.
+/// btrim('xyxtrimyyx', 'xyz') = 'trim'
+pub fn btrim<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
+    general_trim::<T>(args, TrimType::Both)
+}
+
+/// Removes the longest string containing only characters in characters (a space by default) from the start of string.
+/// ltrim('zzzytest', 'xyz') = 'test'
+pub fn ltrim<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
+    general_trim::<T>(args, TrimType::Left)
+}
+
+/// Removes the longest string containing only characters in characters (a space by default) from the end of string.
+/// rtrim('testxxzx', 'xyz') = 'test'
+pub fn rtrim<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
+    general_trim::<T>(args, TrimType::Right)
 }
 
 /// Repeats string the specified number of times.
@@ -420,44 +409,6 @@ pub fn replace<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
         .collect::<GenericStringArray<T>>();
 
     Ok(Arc::new(result) as ArrayRef)
-}
-
-/// Removes the longest string containing only characters in characters (a space by default) from the end of string.
-/// rtrim('testxxzx', 'xyz') = 'test'
-pub fn rtrim<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
-    match args.len() {
-        1 => {
-            let string_array = as_generic_string_array::<T>(&args[0])?;
-
-            let result = string_array
-                .iter()
-                .map(|string| string.map(|string: &str| string.trim_end_matches(' ')))
-                .collect::<GenericStringArray<T>>();
-
-            Ok(Arc::new(result) as ArrayRef)
-        }
-        2 => {
-            let string_array = as_generic_string_array::<T>(&args[0])?;
-            let characters_array = as_generic_string_array::<T>(&args[1])?;
-
-            let result = string_array
-                .iter()
-                .zip(characters_array.iter())
-                .map(|(string, characters)| match (string, characters) {
-                    (Some(string), Some(characters)) => {
-                        let chars: Vec<char> = characters.chars().collect();
-                        Some(string.trim_end_matches(&chars[..]))
-                    }
-                    _ => None,
-                })
-                .collect::<GenericStringArray<T>>();
-
-            Ok(Arc::new(result) as ArrayRef)
-        }
-        other => internal_err!(
-            "rtrim was called with {other} arguments. It requires at least 1 and at most 2."
-        ),
-    }
 }
 
 /// Splits string at occurrences of delimiter and returns the n'th field (counting from one).
