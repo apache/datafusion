@@ -329,6 +329,9 @@ pub fn create_physical_fun(
         BuiltinScalarFunction::ArrayAppend => {
             Arc::new(|args| make_scalar_function(array_expressions::array_append)(args))
         }
+        BuiltinScalarFunction::ArraySort => {
+            Arc::new(|args| make_scalar_function(array_expressions::array_sort)(args))
+        }
         BuiltinScalarFunction::ArrayConcat => {
             Arc::new(|args| make_scalar_function(array_expressions::array_concat)(args))
         }
