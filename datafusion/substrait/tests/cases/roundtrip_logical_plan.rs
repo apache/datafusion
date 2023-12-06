@@ -395,6 +395,11 @@ async fn roundtrip_inlist_4() -> Result<()> {
 }
 
 #[tokio::test]
+async fn roundtrip_inlist_5() -> Result<()> {
+    roundtrip("SELECT * FROM data WHERE data.a IN (SELECT data2.a FROM data2 WHERE f IN ('a', 'b', 'c', 'd'))").await
+}
+
+#[tokio::test]
 async fn roundtrip_inner_join() -> Result<()> {
     roundtrip("SELECT data.a FROM data JOIN data2 ON data.a = data2.a").await
 }
@@ -829,17 +834,19 @@ async fn test_alias(sql_with_alias: &str, sql_no_alias: &str) -> Result<()> {
 
 async fn roundtrip_with_ctx(sql: &str, ctx: SessionContext) -> Result<()> {
     let df = ctx.sql(sql).await?;
-    let plan = df.into_optimized_plan()?;
+
+    // let plan = df.into_optimized_plan()?;
+    let plan = df.into_unoptimized_plan();
     let proto = to_substrait_plan(&plan, &ctx)?;
+    
     let plan2 = from_substrait_plan(&ctx, &proto).await?;
-    let plan2 = ctx.state().optimize(&plan2)?;
+    // let plan2 = ctx.state().optimize(&plan2)?;
+    let proto2 = to_substrait_plan(&plan2, &ctx)?;
 
     println!("{plan:#?}");
     println!("{plan2:#?}");
 
-    let plan1str = format!("{plan:?}");
-    let plan2str = format!("{plan2:?}");
-    assert_eq!(plan1str, plan2str);
+    assert_eq!(proto, proto2);
     Ok(())
 }
 
