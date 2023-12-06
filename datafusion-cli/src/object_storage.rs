@@ -36,6 +36,8 @@ pub async fn get_s3_object_store_builder(
     let mut builder = AmazonS3Builder::from_env().with_bucket_name(bucket_name);
 
     if let (Some(access_key_id), Some(secret_access_key)) = (
+        // These options are datafusion-cli specific and must be removed before passing through to datafusion.
+        // Otherwise, a Configuration error will be raised.
         cmd.options.remove("access_key_id"),
         cmd.options.remove("secret_access_key"),
     ) {

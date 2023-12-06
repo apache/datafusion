@@ -221,6 +221,9 @@ async fn exec_and_print(
                 | LogicalPlan::Analyze(_)
         );
 
+        // Note that cmd is a mutable reference so that create_external_table function can remove all
+        // datafusion-cli specific options before passing through to datafusion. Otherwise, datafusion
+        // will raise Configuration errors.
         if let LogicalPlan::Ddl(DdlStatement::CreateExternalTable(cmd)) = &mut plan {
             create_external_table(ctx, cmd).await?;
         }
@@ -284,8 +287,11 @@ async fn create_external_table(
 
 #[cfg(test)]
 mod tests {
+    use std::str::FromStr;
+
     use super::*;
     use datafusion::common::plan_err;
+    use datafusion_common::{FileTypeWriterOptions, file_options::StatementOptions};
 
     async fn create_external_table_test(location: &str, sql: &str) -> Result<()> {
         let ctx = SessionContext::new();
@@ -293,6 +299,15 @@ mod tests {
 
         if let LogicalPlan::Ddl(DdlStatement::CreateExternalTable(cmd)) = &mut plan {
             create_external_table(&ctx, cmd).await?;
+            let options: Vec<_> = cmd.options.iter().map(|(k,v)| (k.clone(), v.clone())).collect();
+            let statement_options = StatementOptions::new(options);
+            let file_type = datafusion_common::FileType::from_str(cmd.file_type.as_str())?;
+
+            let _file_type_writer_options = FileTypeWriterOptions::build(
+                &file_type,
+                ctx.state().config_options(),
+                &statement_options,
+            )?;
         } else {
             return plan_err!("LogicalPlan is not a CreateExternalTable");
         }
