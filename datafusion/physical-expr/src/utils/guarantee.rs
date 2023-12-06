@@ -156,8 +156,12 @@ impl<'a> GuaranteeBuilder<'a> {
         Default::default()
     }
 
-    /// Aggregate a new single guarantee to this builder  combining with existing guarantees
-    /// if possible
+    /// Aggregate a new single `AND col <op> literal` term to this builder
+    /// combining with existing guarantees if possible.
+    ///
+    /// # Examples
+    /// * `AND (a = 1)`: `a` is guaranteed to be 1
+    /// * `AND (a != 1)`: a is guaranteed to not be 1
     fn aggregate_conjunct(self, col_op_lit: ColOpLit<'a>) -> Self {
         self.aggregate_multi_conjunct(
             col_op_lit.col,
@@ -166,7 +170,14 @@ impl<'a> GuaranteeBuilder<'a> {
         )
     }
 
-    /// Aggreates a new single new guarantee with multiple literals `a IN (1,2,3)` or `a NOT IN (1,2,3)`. So the new values are combined with OR
+    /// Aggregates a new single multi column term to ths builder
+    /// combining with existing guarantees if possible.
+    ///
+    /// # Examples
+    /// * (`AND (a = 1 OR a = 2 OR a = 3)`): a is guaranteed to be 1, 2, or 3
+    /// * `AND (a IN (1,2,3))`: a is guaranteed to be 1, 2, or 3
+    /// * `AND (a != 1 OR a != 2 OR a != 3)`: a is guaranteed to not be 1, 2, or 3
+    /// * `AND (a NOT IN (1,2,3))`: a is guaranteed to not be 1, 2, or 3
     fn aggregate_multi_conjunct(
         mut self,
         col: &'a crate::expressions::Column,
