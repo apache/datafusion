@@ -1139,6 +1139,8 @@ pub(crate) fn evaluate_group_by(
         .collect())
 }
 
+/// Inserts each aggregate expression result inside aggregate groups
+/// to correct indices in the output.
 fn reorder_aggregate_expr_results(
     aggregate_group_results: Vec<Vec<Vec<ArrayRef>>>,
     aggregate_group_indices: Vec<Vec<usize>>,

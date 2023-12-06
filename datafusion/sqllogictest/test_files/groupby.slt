@@ -2261,7 +2261,7 @@ CREATE TABLE sales_global (zip_code INT,
           (1, 'TUR', 2, '2022-01-01 11:30:00'::timestamp, 'TRY', 75.0),
           (1, 'FRA', 3, '2022-01-02 12:00:00'::timestamp, 'EUR', 200.0),
           (1, 'TUR', 4, '2022-01-03 10:00:00'::timestamp, 'TRY', 100.0),
-          (0, 'GRC', 4, '2022-01-03 11:00:00'::timestamp, 'EUR', 80.0)
+          (0, 'GRC', 4, '2022-01-03 10:00:00'::timestamp, 'EUR', 80.0)
 
 # create a new table named exchange rates
 statement ok
@@ -2697,16 +2697,16 @@ ProjectionExec: expr=[country@0 as country, FIRST_VALUE(sales_global.amount) ORD
 ----SortExec: expr=[ts@1 DESC]
 ------MemoryExec: partitions=1, partition_sizes=[1]
 
-query TRRR
+query TRRR rowsort
 SELECT country, FIRST_VALUE(amount ORDER BY ts DESC) as fv1,
     LAST_VALUE(amount ORDER BY ts DESC) as lv1,
     SUM(amount ORDER BY ts DESC) as sum1
   FROM sales_global
   GROUP BY country
 ----
+FRA 200 50 250
 GRC 80 30 110
 TUR 100 75 175
-FRA 200 50 250
 
 query TT
 EXPLAIN SELECT s.zip_code, s.country, s.sn, s.ts, s.currency, LAST_VALUE(e.amount ORDER BY e.sn) AS last_rate
@@ -2738,7 +2738,7 @@ SortExec: expr=[sn@2 ASC NULLS LAST]
 --------------MemoryExec: partitions=1, partition_sizes=[1]
 --------------MemoryExec: partitions=1, partition_sizes=[1]
 
-query ITIPTR
+query ITIPTR rowsort
 SELECT s.zip_code, s.country, s.sn, s.ts, s.currency, LAST_VALUE(e.amount ORDER BY e.sn) AS last_rate
 FROM sales_global AS s
 JOIN sales_global AS e
@@ -2748,10 +2748,10 @@ GROUP BY s.sn, s.zip_code, s.country, s.ts, s.currency
 ORDER BY s.sn
 ----
 0 GRC 0 2022-01-01T06:00:00 EUR 30
+0 GRC 4 2022-01-03T10:00:00 EUR 80
 1 FRA 1 2022-01-01T08:00:00 EUR 50
-1 TUR 2 2022-01-01T11:30:00 TRY 75
 1 FRA 3 2022-01-02T12:00:00 EUR 200
-0 GRC 4 2022-01-03T11:00:00 EUR 80
+1 TUR 2 2022-01-01T11:30:00 TRY 75
 1 TUR 4 2022-01-03T10:00:00 TRY 100
 
 # Run order-sensitive aggregators in multiple partitions
@@ -2937,7 +2937,7 @@ query ?
 SELECT ARRAY_AGG(amount ORDER BY ts DESC) AS array_agg1
   FROM sales_global
 ----
-[80.0, 100.0, 200.0, 75.0, 50.0, 30.0]
+[100.0, 80.0, 200.0, 75.0, 50.0, 30.0]
 
 # ARRAY_AGG should work in multiple partitions
 query TT
@@ -3081,7 +3081,7 @@ ORDER BY s.sn
 1 FRA 1 2022-01-01T08:00:00 EUR 50
 1 TUR 2 2022-01-01T11:30:00 TRY 75
 1 FRA 3 2022-01-02T12:00:00 EUR 200
-0 GRC 4 2022-01-03T11:00:00 EUR 80
+0 GRC 4 2022-01-03T10:00:00 EUR 80
 1 TUR 4 2022-01-03T10:00:00 TRY 100
 
 # create a table for testing
