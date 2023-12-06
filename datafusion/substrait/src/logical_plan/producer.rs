@@ -19,7 +19,7 @@ use std::collections::HashMap;
 use std::ops::Deref;
 use std::sync::Arc;
 
-use datafusion::logical_expr::{Distinct, Like, WindowFrameUnits};
+use datafusion::logical_expr::{CrossJoin, Distinct, Like, WindowFrameUnits};
 use datafusion::{
     arrow::datatypes::{DataType, TimeUnit},
     error::{DataFusionError, Result},
@@ -40,6 +40,7 @@ use datafusion::logical_expr::{expr, Between, JoinConstraint, LogicalPlan, Opera
 use datafusion::prelude::Expr;
 use prost_types::Any as ProtoAny;
 use substrait::proto::expression::window_function::BoundsType;
+use substrait::proto::CrossRel;
 use substrait::{
     proto::{
         aggregate_function::AggregationInvocation,
@@ -328,6 +329,23 @@ pub fn to_substrait_rel(
                     r#type: join_type as i32,
                     expression: join_expr,
                     post_join_filter: None,
+                    advanced_extension: None,
+                }))),
+            }))
+        }
+        LogicalPlan::CrossJoin(cross_join) => {
+            let CrossJoin {
+                left,
+                right,
+                schema: _,
+            } = cross_join;
+            let left = to_substrait_rel(left.as_ref(), ctx, extension_info)?;
+            let right = to_substrait_rel(right.as_ref(), ctx, extension_info)?;
+            Ok(Box::new(Rel {
+                rel_type: Some(RelType::Cross(Box::new(CrossRel {
+                    common: None,
+                    left: Some(left),
+                    right: Some(right),
                     advanced_extension: None,
                 }))),
             }))

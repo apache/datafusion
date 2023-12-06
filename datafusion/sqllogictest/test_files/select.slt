@@ -868,6 +868,21 @@ statement error DataFusion error: Error during planning: EXCLUDE or EXCEPT conta
 SELECT * EXCLUDE(d, b, c, a, a, b, c, d)
 FROM table1
 
+# avoiding adding an alias if the column name is the same
+query TT
+EXPLAIN select a as a FROM table1 order by a
+----
+logical_plan
+Sort: table1.a ASC NULLS LAST
+--TableScan: table1 projection=[a]
+physical_plan
+SortExec: expr=[a@0 ASC NULLS LAST]
+--MemoryExec: partitions=1, partition_sizes=[1]
+
+# ambiguous column references in on join
+query error DataFusion error: Schema error: Ambiguous reference to unqualified field a
+EXPLAIN select a as a FROM table1 t1 CROSS JOIN table1 t2 order by a
+
 # run below query in multi partitions
 statement ok
 set datafusion.execution.target_partitions = 2;

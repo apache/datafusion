@@ -526,19 +526,13 @@ mod tests {
             f1.object_meta.location.as_ref(),
             "tablepath/mypartition=val1/file.parquet"
         );
-        assert_eq!(
-            &f1.partition_values,
-            &[ScalarValue::Utf8(Some(String::from("val1"))),]
-        );
+        assert_eq!(&f1.partition_values, &[ScalarValue::from("val1")]);
         let f2 = &pruned[1];
         assert_eq!(
             f2.object_meta.location.as_ref(),
             "tablepath/mypartition=val1/other=val3/file.parquet"
         );
-        assert_eq!(
-            f2.partition_values,
-            &[ScalarValue::Utf8(Some(String::from("val1"))),]
-        );
+        assert_eq!(f2.partition_values, &[ScalarValue::from("val1"),]);
     }
 
     #[tokio::test]
@@ -579,10 +573,7 @@ mod tests {
         );
         assert_eq!(
             &f1.partition_values,
-            &[
-                ScalarValue::Utf8(Some(String::from("p1v2"))),
-                ScalarValue::Utf8(Some(String::from("p2v1")))
-            ]
+            &[ScalarValue::from("p1v2"), ScalarValue::from("p2v1"),]
         );
         let f2 = &pruned[1];
         assert_eq!(
@@ -591,10 +582,7 @@ mod tests {
         );
         assert_eq!(
             &f2.partition_values,
-            &[
-                ScalarValue::Utf8(Some(String::from("p1v2"))),
-                ScalarValue::Utf8(Some(String::from("p2v1")))
-            ]
+            &[ScalarValue::from("p1v2"), ScalarValue::from("p2v1")]
         );
     }
 
