@@ -25,7 +25,7 @@ use crate::aggregates::group_values::{new_group_values, GroupValues};
 use crate::aggregates::order::GroupOrderingFull;
 use crate::aggregates::{
     evaluate_group_by, evaluate_many, evaluate_optional, group_schema,
-    AggregateExprGroup, AggregateMode, PhysicalGroupBy,
+    reorder_aggregate_expr_results, AggregateExprGroup, AggregateMode, PhysicalGroupBy,
 };
 use crate::common::IPCWriter;
 use crate::metrics::{BaselineMetrics, RecordOutput};
@@ -345,6 +345,7 @@ impl GroupedHashAggregateStream {
                         merging_aggregate_arguments,
                         filter_expressions,
                         requirement: requirement.to_vec(),
+                        group_indices: indices.to_vec(),
                     })
                 },
             )
@@ -356,6 +357,7 @@ impl GroupedHashAggregateStream {
                 merging_aggregate_arguments: vec![],
                 filter_expressions: vec![],
                 requirement: vec![],
+                group_indices: vec![],
             }]
         }
 
@@ -445,6 +447,7 @@ pub struct HashAggregateGroup {
     /// the filter expression is  `x > 100`.
     filter_expressions: Vec<Option<Arc<dyn PhysicalExpr>>>,
     requirement: LexOrdering,
+    group_indices: Vec<usize>,
 }
 
 /// Create an accumulator for `agg_expr` -- a [`GroupsAccumulator`] if
@@ -734,26 +737,32 @@ impl GroupedHashAggregateStream {
                 for acc in aggregate_group.accumulators.iter_mut() {
                     match self.mode {
                         AggregateMode::Partial => {
-                            aggregate_group_output.extend(acc.state(emit_to)?)
+                            aggregate_group_output.push(acc.state(emit_to)?)
                         }
                         _ if spilling => {
                             // If spilling, output partial state because the spilled data will be
                             // merged and re-evaluated later.
-                            aggregate_group_output.extend(acc.state(emit_to)?)
+                            aggregate_group_output.push(acc.state(emit_to)?)
                         }
                         AggregateMode::Final
                         | AggregateMode::FinalPartitioned
                         | AggregateMode::Single
                         | AggregateMode::SinglePartitioned => {
-                            aggregate_group_output.push(acc.evaluate(emit_to)?)
+                            aggregate_group_output.push(vec![acc.evaluate(emit_to)?])
                         }
                     }
                 }
                 Ok(aggregate_group_output)
             })
             .collect::<Result<Vec<_>>>()?;
-        // TODO: Consider proper indices during merging.
-        let aggregate_outputs = outputs.into_iter().flatten().collect::<Vec<_>>();
+        let group_indices = self
+            .aggregate_groups
+            .iter()
+            .map(|aggregate_group| aggregate_group.group_indices.to_vec())
+            .collect::<Vec<_>>();
+        let aggregate_outputs = reorder_aggregate_expr_results(outputs, group_indices);
+        // // TODO: Consider proper indices during merging.
+        // let aggregate_outputs = outputs.into_iter().flatten().collect::<Vec<_>>();
         output.extend(aggregate_outputs);
         // emit reduces the memory usage. Ignore Err from update_memory_reservation. Even if it is
         // over the target memory size after emission, we can emit again rather than returning Err.

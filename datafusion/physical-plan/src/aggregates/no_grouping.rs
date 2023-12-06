@@ -18,8 +18,8 @@
 //! Aggregate without grouping columns
 
 use crate::aggregates::{
-    aggregate_expressions, create_accumulators, finalize_aggregation, AccumulatorItem,
-    AggregateExprGroup, AggregateMode,
+    aggregate_expressions, create_accumulators, finalize_aggregation,
+    reorder_aggregate_expr_results, AccumulatorItem, AggregateExprGroup, AggregateMode,
 };
 use crate::metrics::{BaselineMetrics, RecordOutput};
 use crate::{RecordBatchStream, SendableRecordBatchStream};
@@ -70,6 +70,7 @@ pub struct AggregateGroup {
     filter_expressions: Vec<Option<Arc<dyn PhysicalExpr>>>,
     accumulators: Vec<AccumulatorItem>,
     requirement: LexOrdering,
+    group_indices: Vec<usize>,
 }
 
 impl AggregateStream {
@@ -116,6 +117,7 @@ impl AggregateStream {
                         filter_expressions,
                         accumulators,
                         requirement: requirement.to_vec(),
+                        group_indices: indices.to_vec(),
                     })
                 },
             )
@@ -287,15 +289,19 @@ fn aggregate_batch(
 /// final value (mode = Final, FinalPartitioned and Single) or states (mode = Partial)
 fn finalize_aggregation_groups(
     aggregate_groups: &[AggregateGroup],
-    // TODO: Use Mapping indices
     mode: &AggregateMode,
 ) -> Result<Vec<ArrayRef>> {
-    let elems = aggregate_groups
+    let aggregate_group_results = aggregate_groups
         .iter()
         .map(|aggregate_group| finalize_aggregation(&aggregate_group.accumulators, mode))
         .collect::<Result<Vec<_>>>()?;
-    // TODO: Add proper indices
-    // Convert Vec<Vec<ArrayRef>> to Vec<ArrayRef>.
-    let res = elems.into_iter().flatten().collect::<Vec<_>>();
-    Ok(res)
+    let aggregate_group_indices = aggregate_groups
+        .iter()
+        .map(|aggregate_group| aggregate_group.group_indices.to_vec())
+        .collect::<Vec<_>>();
+
+    Ok(reorder_aggregate_expr_results(
+        aggregate_group_results,
+        aggregate_group_indices,
+    ))
 }

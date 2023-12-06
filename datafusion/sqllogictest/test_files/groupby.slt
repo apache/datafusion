@@ -4286,3 +4286,27 @@ SELECT a, b, FIRST_VALUE(d ORDER BY c DESC), LAST_VALUE(d ORDER BY c DESC), ARRA
 0 1 3 0 [4, 4, 4, 3, 3, 3, 3, 3, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0]
 1 2 4 0 [4, 4, 4, 4, 4, 4, 3, 3, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0]
 1 3 3 2 [4, 4, 4, 4, 4, 4, 3, 3, 2, 2, 2, 2, 2, 2, 2, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0]
+
+# query IIII rowsort
+# SELECT a, b, FIRST_VALUE(d ORDER BY c DESC), FIRST_VALUE(d ORDER BY d DESC, c DESC)
+#   FROM multiple_ordered_table
+#   GROUP BY a, b
+#   ORDER BY a, b
+# ----
+
+query III rowsort
+SELECT FIRST_VALUE(d ORDER BY c DESC), FIRST_VALUE(d ORDER BY d DESC, c DESC), FIRST_VALUE(d ORDER BY c ASC)
+  FROM multiple_ordered_table
+----
+3 4 0
+
+query IIIII rowsort
+SELECT a, b, FIRST_VALUE(d ORDER BY c DESC), FIRST_VALUE(d ORDER BY d DESC, c DESC), FIRST_VALUE(d ORDER BY c ASC)
+  FROM multiple_ordered_table
+  GROUP BY a, b
+  ORDER BY a, b
+----
+0 0 4 4 0
+0 1 3 4 0
+1 2 4 4 0
+1 3 3 4 2

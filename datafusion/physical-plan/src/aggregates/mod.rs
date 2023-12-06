@@ -350,7 +350,7 @@ impl AggregateExec {
         )?;
         let eq_properties = input.equivalence_properties();
         let mut aggregate_groups =
-            get_groups_indices(&mut aggr_expr, &group_by, &eq_properties, &mode);
+            get_aggregate_expr_groups(&mut aggr_expr, &group_by, &eq_properties, &mode);
 
         let schema = Arc::new(schema);
 
@@ -863,7 +863,7 @@ fn get_req(
     req
 }
 
-fn get_groups_indices(
+fn get_aggregate_expr_groups(
     aggr_exprs: &mut [Arc<dyn AggregateExpr>],
     group_by: &PhysicalGroupBy,
     eq_properties: &EquivalenceProperties,
@@ -990,7 +990,7 @@ fn create_accumulators(
 fn finalize_aggregation(
     accumulators: &[AccumulatorItem],
     mode: &AggregateMode,
-) -> Result<Vec<ArrayRef>> {
+) -> Result<Vec<Vec<ArrayRef>>> {
     match mode {
         AggregateMode::Partial => {
             // build the vector of states
@@ -1004,7 +1004,8 @@ fn finalize_aggregation(
                     })
                 })
                 .collect::<Result<Vec<_>>>()?;
-            Ok(a.iter().flatten().cloned().collect::<Vec<_>>())
+            Ok(a)
+            // Ok(a.iter().flatten().cloned().collect::<Vec<_>>())
         }
         AggregateMode::Final
         | AggregateMode::FinalPartitioned
@@ -1013,8 +1014,10 @@ fn finalize_aggregation(
             // merge the state to the final value
             accumulators
                 .iter()
-                .map(|accumulator| accumulator.evaluate().and_then(|v| v.to_array()))
-                .collect::<Result<Vec<ArrayRef>>>()
+                .map(|accumulator| {
+                    accumulator.evaluate().and_then(|v| Ok(vec![v.to_array()?]))
+                })
+                .collect::<Result<Vec<Vec<ArrayRef>>>>()
         }
     }
 }
@@ -1107,6 +1110,31 @@ pub(crate) fn evaluate_group_by(
                 .collect()
         })
         .collect())
+}
+
+fn reorder_aggregate_expr_results(
+    aggregate_group_results: Vec<Vec<Vec<ArrayRef>>>,
+    aggregate_group_indices: Vec<Vec<usize>>,
+) -> Vec<ArrayRef> {
+    let n_aggregate = aggregate_group_indices
+        .iter()
+        .map(|group_indices| group_indices.len())
+        .sum();
+
+    let mut result = vec![vec![]; n_aggregate];
+    // Insert each aggregation result inside an aggregation group, to the proper places in the result
+    for (aggregate_group_result, group_indices) in aggregate_group_results
+        .into_iter()
+        .zip(aggregate_group_indices.iter())
+    {
+        group_indices
+            .iter()
+            .zip(aggregate_group_result.into_iter())
+            .for_each(|(&idx, aggr_state)| {
+                result[idx] = aggr_state;
+            })
+    }
+    result.into_iter().flatten().collect()
 }
 
 #[cfg(test)]
@@ -2100,7 +2128,7 @@ mod tests {
         // let res =
         //     get_finest_requirement(&mut aggr_exprs, &mut order_by_exprs, &eq_properties)?;
         let group_by = PhysicalGroupBy::new_single(vec![]);
-        let res = get_groups_indices(
+        let res = get_aggregate_expr_groups(
             &mut aggr_exprs,
             &group_by,
             &eq_properties,
@@ -2171,6 +2199,20 @@ mod tests {
                     (vec![1], vec![(col_c, option_asc)]),
                 ],
             ),
+            // ------- TEST CASE 6 -----------
+            (
+                // Ordering requirements
+                vec![
+                    vec![(col_a, option_asc)],
+                    vec![(col_c, option_asc)],
+                    vec![(col_a, option_desc)],
+                ],
+                // expected
+                vec![
+                    (vec![0, 2], vec![(col_a, option_asc)]),
+                    (vec![1], vec![(col_c, option_asc)]),
+                ],
+            ),
         ];
         for (ordering_reqs, expected) in test_cases {
             let mut aggr_exprs = ordering_reqs
@@ -2192,7 +2234,7 @@ mod tests {
             // Empty equivalence Properties
             let eq_properties = EquivalenceProperties::new(test_schema.clone());
 
-            let res = get_groups_indices(
+            let res = get_aggregate_expr_groups(
                 &mut aggr_exprs,
                 &group_by,
                 &eq_properties,
