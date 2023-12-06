@@ -23,6 +23,8 @@
 //! - An ending frame boundary,
 //! - An EXCLUDE clause.
 
+use crate::expr::Sort;
+use crate::Expr;
 use datafusion_common::{plan_err, sql_err, DataFusionError, Result, ScalarValue};
 use sqlparser::ast;
 use sqlparser::parser::ParserError::ParserError;
@@ -142,41 +144,57 @@ impl WindowFrame {
     }
 }
 
-/// Construct equivalent explicit window frames for implicit corner cases.
-/// With this processing, we may assume in downstream code that RANGE/GROUPS
-/// frames contain an appropriate ORDER BY clause.
-pub fn regularize(mut frame: WindowFrame, order_bys: usize) -> Result<WindowFrame> {
-    if frame.units == WindowFrameUnits::Range && order_bys != 1 {
+/// Regularizes ORDER BY clause for window definition for implicit corner cases.
+pub fn regularize_window_order_by(
+    frame: &WindowFrame,
+    order_by: &mut Vec<Expr>,
+) -> Result<()> {
+    if frame.units == WindowFrameUnits::Range && order_by.len() != 1 {
         // Normally, RANGE frames require an ORDER BY clause with exactly one
         // column. However, an ORDER BY clause may be absent or present but with
         // more than one column in two edge cases:
         // 1. start bound is UNBOUNDED or CURRENT ROW
         // 2. end bound is CURRENT ROW or UNBOUNDED.
-        // In these cases, we regularize the RANGE frame to be equivalent to a ROWS
-        // frame with the UNBOUNDED bounds.
-        // Note that this follows Postgres behavior.
+        // In these cases, we regularize the ORDER BY clause if the ORDER BY clause
+        // is absent. If an ORDER BY clause is present but has more than one column,
+        // the ORDER BY clause is unchanged. Note that this follows Postgres behavior.
         if (frame.start_bound.is_unbounded()
             || frame.start_bound == WindowFrameBound::CurrentRow)
             && (frame.end_bound == WindowFrameBound::CurrentRow
                 || frame.end_bound.is_unbounded())
         {
-            // If an ORDER BY clause is absent, the frame is equivalent to a ROWS
-            // frame with the UNBOUNDED bounds.
-            // If an ORDER BY clause is present but has more than one column, the
-            // frame is unchanged.
-            if order_bys == 0 {
-                frame.units = WindowFrameUnits::Rows;
-                frame.start_bound =
-                    WindowFrameBound::Preceding(ScalarValue::UInt64(None));
-                frame.end_bound = WindowFrameBound::Following(ScalarValue::UInt64(None));
+            // If an ORDER BY clause is absent, it is equivalent to a ORDER BY clause
+            // with constant value as sort key.
+            // If an ORDER BY clause is present but has more than one column, it is
+            // unchanged.
+            if order_by.len() == 0 {
+                order_by.push(Expr::Sort(Sort::new(
+                    Box::new(Expr::Literal(ScalarValue::UInt64(Some(1)))),
+                    true,
+                    false,
+                )));
             }
-        } else {
+        }
+    }
+    Ok(())
+}
+
+/// Checks if given window frame is valid. In particular, if the frame is RANGE
+/// with offset PRECEDING/FOLLOWING, it must have exactly one ORDER BY column.
+pub fn check_window_frame(frame: &WindowFrame, order_bys: usize) -> Result<()> {
+    if frame.units == WindowFrameUnits::Range && order_bys != 1 {
+        // See `regularize_window_order_by`.
+        if !(frame.start_bound.is_unbounded()
+            || frame.start_bound == WindowFrameBound::CurrentRow)
+            || !(frame.end_bound == WindowFrameBound::CurrentRow
+                || frame.end_bound.is_unbounded())
+        {
             plan_err!("RANGE requires exactly one ORDER BY column")?
         }
     } else if frame.units == WindowFrameUnits::Groups && order_bys == 0 {
         plan_err!("GROUPS requires an ORDER BY clause")?
     };
-    Ok(frame)
+    Ok(())
 }
 
 /// There are five ways to describe starting and ending frame boundaries:

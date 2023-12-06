@@ -39,6 +39,7 @@ use datafusion_common::{
     internal_err, plan_datafusion_err, Column, Constraint, Constraints, DFField,
     DFSchema, DFSchemaRef, DataFusionError, OwnedTableReference, Result, ScalarValue,
 };
+use datafusion_expr::window_frame::{check_window_frame, regularize_window_order_by};
 use datafusion_expr::{
     abs, acos, acosh, array, array_append, array_concat, array_dims, array_element,
     array_except, array_has, array_has_all, array_has_any, array_intersect, array_length,
@@ -1070,7 +1071,7 @@ pub fn parse_expr(
                 .iter()
                 .map(|e| parse_expr(e, registry))
                 .collect::<Result<Vec<_>, _>>()?;
-            let order_by = expr
+            let mut order_by = expr
                 .order_by
                 .iter()
                 .map(|e| parse_expr(e, registry))
@@ -1080,7 +1081,8 @@ pub fn parse_expr(
                 .as_ref()
                 .map::<Result<WindowFrame, _>, _>(|window_frame| {
                     let window_frame = window_frame.clone().try_into()?;
-                    regularize(window_frame, order_by.len())
+                    check_window_frame(&window_frame, order_by.len())
+                        .map(|_| window_frame)
                 })
                 .transpose()?
                 .ok_or_else(|| {
@@ -1088,6 +1090,7 @@ pub fn parse_expr(
                         "missing window frame during deserialization".to_string(),
                     )
                 })?;
+            regularize_window_order_by(&window_frame, &mut order_by)?;
 
             match window_function {
                 window_expr_node::WindowFunction::AggrFunction(i) => {
