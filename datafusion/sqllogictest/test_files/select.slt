@@ -1041,3 +1041,12 @@ drop table annotated_data_finite2;
 
 statement ok
 drop table t;
+
+statement ok
+create table t(x bigint, y bigint) as values (1,2), (1,3);
+
+query II
+select z+1, y from (select x+1 as z, y from t) where y > 1;
+----
+3 2
+3 3

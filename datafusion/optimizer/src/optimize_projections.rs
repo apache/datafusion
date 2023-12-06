@@ -70,6 +70,11 @@ impl OptimizerRule for OptimizeProjections {
     fn apply_order(&self) -> Option<ApplyOrder> {
         None
     }
+
+    // This rule may produce schemas with different field names.
+    fn exact_schema_check(&self) -> bool {
+        false
+    }
 }
 
 /// Removes unnecessary columns (e.g Columns that are not referred at the output schema and

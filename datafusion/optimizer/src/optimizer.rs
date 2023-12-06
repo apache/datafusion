@@ -73,6 +73,13 @@ pub trait OptimizerRule {
     fn apply_order(&self) -> Option<ApplyOrder> {
         None
     }
+
+    /// Flag indicates whether schema check will be done
+    /// in exact mode (names, and types are equal).
+    /// Otherwise only types will be checked.
+    fn exact_schema_check(&self) -> bool {
+        true
+    }
 }
 
 /// Options to control the DataFusion Optimizer.
@@ -287,11 +294,24 @@ impl Optimizer {
             log_plan(&format!("Optimizer input (pass {i})"), &new_plan);
 
             for rule in &self.rules {
+                let exact_check = rule.exact_schema_check();
                 let result =
                     self.optimize_recursively(rule, &new_plan, config)
                         .and_then(|plan| {
                             if let Some(plan) = &plan {
-                                assert_schema_is_the_same(rule.name(), &new_plan, plan)?;
+                                if exact_check {
+                                    assert_schema_is_the_same(
+                                        rule.name(),
+                                        &new_plan,
+                                        plan,
+                                    )?;
+                                } else {
+                                    assert_schema_is_the_same_relax(
+                                        rule.name(),
+                                        &new_plan,
+                                        plan,
+                                    )?;
+                                }
                             }
                             Ok(plan)
                         });
@@ -429,6 +449,30 @@ pub(crate) fn assert_schema_is_the_same(
     let equivalent = new_plan
         .schema()
         .equivalent_names_and_types(prev_plan.schema());
+
+    if !equivalent {
+        let e = DataFusionError::Internal(format!(
+            "Failed due to a difference in schemas, original schema: {:?}, new schema: {:?}",
+            prev_plan.schema(),
+            new_plan.schema()
+        ));
+        Err(DataFusionError::Context(
+            String::from(rule_name),
+            Box::new(e),
+        ))
+    } else {
+        Ok(())
+    }
+}
+
+/// Returns an error if plans have different schemas.
+/// It only considers field types during comparison.
+pub(crate) fn assert_schema_is_the_same_relax(
+    rule_name: &str,
+    prev_plan: &LogicalPlan,
+    new_plan: &LogicalPlan,
+) -> Result<()> {
+    let equivalent = new_plan.schema().equivalent_types(prev_plan.schema());
 
     if !equivalent {
         let e = DataFusionError::Internal(format!(
