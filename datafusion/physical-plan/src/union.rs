@@ -674,12 +674,8 @@ mod tests {
                 },
                 ColumnStatistics {
                     distinct_count: Precision::Exact(1),
-                    max_value: Precision::Exact(ScalarValue::Utf8(Some(String::from(
-                        "x",
-                    )))),
-                    min_value: Precision::Exact(ScalarValue::Utf8(Some(String::from(
-                        "a",
-                    )))),
+                    max_value: Precision::Exact(ScalarValue::from("x")),
+                    min_value: Precision::Exact(ScalarValue::from("a")),
                     null_count: Precision::Exact(3),
                 },
                 ColumnStatistics {
@@ -703,12 +699,8 @@ mod tests {
                 },
                 ColumnStatistics {
                     distinct_count: Precision::Absent,
-                    max_value: Precision::Exact(ScalarValue::Utf8(Some(String::from(
-                        "c",
-                    )))),
-                    min_value: Precision::Exact(ScalarValue::Utf8(Some(String::from(
-                        "b",
-                    )))),
+                    max_value: Precision::Exact(ScalarValue::from("c")),
+                    min_value: Precision::Exact(ScalarValue::from("b")),
                     null_count: Precision::Absent,
                 },
                 ColumnStatistics {
@@ -733,12 +725,8 @@ mod tests {
                 },
                 ColumnStatistics {
                     distinct_count: Precision::Absent,
-                    max_value: Precision::Exact(ScalarValue::Utf8(Some(String::from(
-                        "x",
-                    )))),
-                    min_value: Precision::Exact(ScalarValue::Utf8(Some(String::from(
-                        "a",
-                    )))),
+                    max_value: Precision::Exact(ScalarValue::from("x")),
+                    min_value: Precision::Exact(ScalarValue::from("a")),
                     null_count: Precision::Absent,
                 },
                 ColumnStatistics {

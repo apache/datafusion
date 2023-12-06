@@ -636,7 +636,7 @@ fn roundtrip_get_indexed_field_named_struct_field() -> Result<()> {
     let get_indexed_field_expr = Arc::new(GetIndexedFieldExpr::new(
         col_arg,
         GetFieldAccessExpr::NamedStructField {
-            name: ScalarValue::Utf8(Some(String::from("name"))),
+            name: ScalarValue::from("name"),
         },
     ));
 

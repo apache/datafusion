@@ -730,7 +730,7 @@ fn round_trip_scalar_values() {
         ))),
         ScalarValue::Dictionary(
             Box::new(DataType::Int32),
-            Box::new(ScalarValue::Utf8(Some("foo".into()))),
+            Box::new(ScalarValue::from("foo")),
         ),
         ScalarValue::Dictionary(
             Box::new(DataType::Int32),
