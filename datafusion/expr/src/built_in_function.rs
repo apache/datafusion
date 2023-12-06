@@ -971,8 +971,7 @@ impl BuiltinScalarFunction {
                 ],
                 self.volatility(),
             ),
-            BuiltinScalarFunction::Struct => Signature::variadic(
-                struct_expressions::SUPPORTED_STRUCT_TYPES.to_vec(),
+            BuiltinScalarFunction::Struct => Signature::variadic_any(
                 self.volatility(),
             ),
             BuiltinScalarFunction::Concat

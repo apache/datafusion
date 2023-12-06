@@ -34,31 +34,14 @@ fn array_struct(args: &[ArrayRef]) -> Result<ArrayRef> {
         .enumerate()
         .map(|(i, arg)| {
             let field_name = format!("c{i}");
-            match arg.data_type() {
-                DataType::Utf8
-                | DataType::LargeUtf8
-                | DataType::Boolean
-                | DataType::Float32
-                | DataType::Float64
-                | DataType::Int8
-                | DataType::Int16
-                | DataType::Int32
-                | DataType::Int64
-                | DataType::UInt8
-                | DataType::UInt16
-                | DataType::UInt32
-                | DataType::UInt64 => Ok((
-                    Arc::new(Field::new(
-                        field_name.as_str(),
-                        arg.data_type().clone(),
-                        true,
-                    )),
-                    arg.clone(),
+            Ok((
+                Arc::new(Field::new(
+                    field_name.as_str(),
+                    arg.data_type().clone(),
+                    true,
                 )),
-                data_type => {
-                    not_impl_err!("Struct is not implemented for type '{data_type:?}'.")
-                }
-            }
+                arg.clone(),
+            ))
         })
         .collect::<Result<Vec<_>>>()?;
 
