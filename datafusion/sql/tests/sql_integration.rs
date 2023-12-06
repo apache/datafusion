@@ -3554,6 +3554,17 @@ fn select_order_by_with_cast() {
 }
 
 #[test]
+fn test_avoid_add_alias() {
+    // avoiding adding an alias if the column name is the same.
+    // plan1 = plan2
+    let sql = "select person.id as id from person order by person.id";
+    let plan1 = logical_plan(sql).unwrap();
+    let sql = "select id from person order by id";
+    let plan2 = logical_plan(sql).unwrap();
+    assert_eq!(format!("{plan1:?}"), format!("{plan2:?}"));
+}
+
+#[test]
 fn test_duplicated_left_join_key_inner_join() {
     //  person.id * 2 happen twice in left side.
     let sql = "SELECT person.id, person.age
