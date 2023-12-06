@@ -919,6 +919,7 @@ scalar_expr!(
 scalar_expr!(ArrowTypeof, arrow_typeof, val, "data type");
 scalar_expr!(Levenshtein, levenshtein, string1 string2, "Returns the Levenshtein distance between the two given strings");
 scalar_expr!(SubstrIndex, substr_index, string delimiter count, "Returns the substring from str before count occurrences of the delimiter");
+scalar_expr!(FindInSet, find_in_set, str strlist, "Returns a value in the range of 1 to N if the string str is in the string list strlist consisting of N substrings");
 
 scalar_expr!(
     Struct,
@@ -1033,7 +1034,7 @@ mod test {
     macro_rules! test_unary_scalar_expr {
         ($ENUM:ident, $FUNC:ident) => {{
             if let Expr::ScalarFunction(ScalarFunction {
-                func_def: ScalarFunctionDefinition::BuiltIn { fun, .. },
+                func_def: ScalarFunctionDefinition::BuiltIn(fun),
                 args,
             }) = $FUNC(col("tableA.a"))
             {
@@ -1054,7 +1055,7 @@ mod test {
                 col(stringify!($arg.to_string()))
             ),*
         );
-        if let Expr::ScalarFunction(ScalarFunction { func_def: ScalarFunctionDefinition::BuiltIn{fun, ..}, args }) = result {
+        if let Expr::ScalarFunction(ScalarFunction { func_def: ScalarFunctionDefinition::BuiltIn(fun), args }) = result {
             let name = built_in_function::BuiltinScalarFunction::$ENUM;
             assert_eq!(name, fun);
             assert_eq!(expected.len(), args.len());
@@ -1074,7 +1075,7 @@ mod test {
                 ),*
             ]
         );
-        if let Expr::ScalarFunction(ScalarFunction { func_def: ScalarFunctionDefinition::BuiltIn{fun, ..}, args }) = result {
+        if let Expr::ScalarFunction(ScalarFunction { func_def: ScalarFunctionDefinition::BuiltIn(fun), args }) = result {
             let name = built_in_function::BuiltinScalarFunction::$ENUM;
             assert_eq!(name, fun);
             assert_eq!(expected.len(), args.len());
@@ -1210,12 +1211,13 @@ mod test {
         test_nary_scalar_expr!(OverLay, overlay, string, characters, position);
         test_scalar_expr!(Levenshtein, levenshtein, string1, string2);
         test_scalar_expr!(SubstrIndex, substr_index, string, delimiter, count);
+        test_scalar_expr!(FindInSet, find_in_set, string, stringlist);
     }
 
     #[test]
     fn uuid_function_definitions() {
         if let Expr::ScalarFunction(ScalarFunction {
-            func_def: ScalarFunctionDefinition::BuiltIn { fun, .. },
+            func_def: ScalarFunctionDefinition::BuiltIn(fun),
             args,
         }) = uuid()
         {
@@ -1230,7 +1232,7 @@ mod test {
     #[test]
     fn digest_function_definitions() {
         if let Expr::ScalarFunction(ScalarFunction {
-            func_def: ScalarFunctionDefinition::BuiltIn { fun, .. },
+            func_def: ScalarFunctionDefinition::BuiltIn(fun),
             args,
         }) = digest(col("tableA.a"), lit("md5"))
         {
@@ -1245,7 +1247,7 @@ mod test {
     #[test]
     fn encode_function_definitions() {
         if let Expr::ScalarFunction(ScalarFunction {
-            func_def: ScalarFunctionDefinition::BuiltIn { fun, .. },
+            func_def: ScalarFunctionDefinition::BuiltIn(fun),
             args,
         }) = encode(col("tableA.a"), lit("base64"))
         {
@@ -1260,7 +1262,7 @@ mod test {
     #[test]
     fn decode_function_definitions() {
         if let Expr::ScalarFunction(ScalarFunction {
-            func_def: ScalarFunctionDefinition::BuiltIn { fun, .. },
+            func_def: ScalarFunctionDefinition::BuiltIn(fun),
             args,
         }) = decode(col("tableA.a"), lit("hex"))
         {

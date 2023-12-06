@@ -27,11 +27,11 @@ use crate::protobuf::{
     physical_aggregate_expr_node, PhysicalSortExprNode, PhysicalSortExprNodeCollection,
     ScalarValue,
 };
+
 use datafusion::datasource::{
-    file_format::json::JsonSink, physical_plan::FileScanConfig,
-};
-use datafusion::datasource::{
+    file_format::json::JsonSink,
     listing::{FileRange, PartitionedFile},
+    physical_plan::FileScanConfig,
     physical_plan::FileSinkConfig,
 };
 use datafusion::logical_expr::BuiltinScalarFunction;
@@ -180,7 +180,7 @@ impl TryFrom<Arc<dyn WindowExpr>> for protobuf::PhysicalWindowExprNode {
                         args.insert(
                             1,
                             Arc::new(Literal::new(
-                                datafusion_common::ScalarValue::Int64(Some(n as i64)),
+                                datafusion_common::ScalarValue::Int64(Some(n)),
                             )),
                         );
                         protobuf::BuiltInWindowFunction::NthValue

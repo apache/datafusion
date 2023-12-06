@@ -50,8 +50,8 @@ use datafusion_expr::{
     current_date, current_time, date_bin, date_part, date_trunc, decode, degrees, digest,
     encode, exp,
     expr::{self, InList, Sort, WindowFunction},
-    factorial, flatten, floor, from_unixtime, gcd, gen_range, isnan, iszero, lcm, left,
-    levenshtein, ln, log, log10, log2,
+    factorial, find_in_set, flatten, floor, from_unixtime, gcd, gen_range, isnan, iszero,
+    lcm, left, levenshtein, ln, log, log10, log2,
     logical_plan::{PlanType, StringifiedPlan},
     lower, lpad, ltrim, md5, nanvl, now, nullif, octet_length, overlay, pi, power,
     radians, random, regexp_match, regexp_replace, repeat, replace, reverse, right,
@@ -554,6 +554,7 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::OverLay => Self::OverLay,
             ScalarFunction::Levenshtein => Self::Levenshtein,
             ScalarFunction::SubstrIndex => Self::SubstrIndex,
+            ScalarFunction::FindInSet => Self::FindInSet,
         }
     }
 }
@@ -1729,6 +1730,10 @@ pub fn parse_expr(
                     parse_expr(&args[1], registry)?,
                     parse_expr(&args[2], registry)?,
                 )),
+                ScalarFunction::FindInSet => Ok(find_in_set(
+                    parse_expr(&args[0], registry)?,
+                    parse_expr(&args[1], registry)?,
+                )),
                 ScalarFunction::StructFun => {
                     Ok(struct_fun(parse_expr(&args[0], registry)?))
                 }
@@ -1746,12 +1751,13 @@ pub fn parse_expr(
         ExprType::AggregateUdfExpr(pb) => {
             let agg_fn = registry.udaf(pb.fun_name.as_str())?;
 
-            Ok(Expr::AggregateUDF(expr::AggregateUDF::new(
+            Ok(Expr::AggregateFunction(expr::AggregateFunction::new_udf(
                 agg_fn,
                 pb.args
                     .iter()
                     .map(|expr| parse_expr(expr, registry))
                     .collect::<Result<Vec<_>, Error>>()?,
+                false,
                 parse_optional_expr(pb.filter.as_deref(), registry)?.map(Box::new),
                 parse_vec_expr(&pb.order_by, registry)?,
             )))

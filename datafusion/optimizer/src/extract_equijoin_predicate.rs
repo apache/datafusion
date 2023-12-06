@@ -17,11 +17,10 @@
 
 //! [`ExtractEquijoinPredicate`] rule that extracts equijoin predicates
 use crate::optimizer::ApplyOrder;
-use crate::utils::split_conjunction;
 use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_common::DFSchema;
 use datafusion_common::Result;
-use datafusion_expr::utils::{can_hash, find_valid_equijoin_key_pair};
+use datafusion_expr::utils::{can_hash, find_valid_equijoin_key_pair, split_conjunction};
 use datafusion_expr::{BinaryExpr, Expr, ExprSchemable, Join, LogicalPlan, Operator};
 use std::sync::Arc;
 

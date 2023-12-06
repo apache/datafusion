@@ -19,7 +19,6 @@
 //! of expr can be added if needed.
 //! This rule can reduce adding the `Expr::Cast` the expr instead of adding the `Expr::Cast` to literal expr.
 use crate::optimizer::ApplyOrder;
-use crate::utils::merge_schema;
 use crate::{OptimizerConfig, OptimizerRule};
 use arrow::datatypes::{
     DataType, TimeUnit, MAX_DECIMAL_FOR_EACH_PRECISION, MIN_DECIMAL_FOR_EACH_PRECISION,
@@ -31,6 +30,7 @@ use datafusion_common::{
 };
 use datafusion_expr::expr::{BinaryExpr, Cast, InList, TryCast};
 use datafusion_expr::expr_rewriter::rewrite_preserving_name;
+use datafusion_expr::utils::merge_schema;
 use datafusion_expr::{
     binary_expr, in_list, lit, Expr, ExprSchemable, LogicalPlan, Operator,
 };

@@ -306,6 +306,8 @@ pub enum BuiltinScalarFunction {
     Levenshtein,
     /// substr_index
     SubstrIndex,
+    /// find_in_set
+    FindInSet,
 }
 
 /// Maps the sql function name to `BuiltinScalarFunction`
@@ -315,8 +317,7 @@ fn name_to_function() -> &'static HashMap<&'static str, BuiltinScalarFunction> {
     NAME_TO_FUNCTION_LOCK.get_or_init(|| {
         let mut map = HashMap::new();
         BuiltinScalarFunction::iter().for_each(|func| {
-            let a = aliases(&func);
-            a.iter().for_each(|&a| {
+            func.aliases().iter().for_each(|&a| {
                 map.insert(a, func);
             });
         });
@@ -332,7 +333,7 @@ fn function_to_name() -> &'static HashMap<BuiltinScalarFunction, &'static str> {
     FUNCTION_TO_NAME_LOCK.get_or_init(|| {
         let mut map = HashMap::new();
         BuiltinScalarFunction::iter().for_each(|func| {
-            map.insert(func, *aliases(&func).first().unwrap_or(&"NO_ALIAS"));
+            map.insert(func, *func.aliases().first().unwrap_or(&"NO_ALIAS"));
         });
         map
     })
@@ -347,6 +348,12 @@ impl BuiltinScalarFunction {
     )]
     pub fn supports_zero_argument(&self) -> bool {
         self.signature().type_signature.supports_zero_argument()
+    }
+
+    /// Returns the name of this function
+    pub fn name(&self) -> &str {
+        // .unwrap is safe here because compiler makes sure the map will have matches for each BuiltinScalarFunction
+        function_to_name().get(self).unwrap()
     }
 
     /// Returns the [Volatility] of the builtin function.
@@ -476,6 +483,7 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::OverLay => Volatility::Immutable,
             BuiltinScalarFunction::Levenshtein => Volatility::Immutable,
             BuiltinScalarFunction::SubstrIndex => Volatility::Immutable,
+            BuiltinScalarFunction::FindInSet => Volatility::Immutable,
 
             // Stable builtin functions
             BuiltinScalarFunction::Now => Volatility::Stable,
@@ -783,6 +791,9 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::SubstrIndex => {
                 utf8_to_str_type(&input_expr_types[0], "substr_index")
             }
+            BuiltinScalarFunction::FindInSet => {
+                utf8_to_int_type(&input_expr_types[0], "find_in_set")
+            }
             BuiltinScalarFunction::ToTimestamp
             | BuiltinScalarFunction::ToTimestampNanos => Ok(Timestamp(Nanosecond, None)),
             BuiltinScalarFunction::ToTimestampMillis => Ok(Timestamp(Millisecond, None)),
@@ -1019,6 +1030,7 @@ impl BuiltinScalarFunction {
                 1,
                 vec![
                     Int64,
+                    Float64,
                     Timestamp(Nanosecond, None),
                     Timestamp(Microsecond, None),
                     Timestamp(Millisecond, None),
@@ -1252,6 +1264,10 @@ impl BuiltinScalarFunction {
                 ],
                 self.volatility(),
             ),
+            BuiltinScalarFunction::FindInSet => Signature::one_of(
+                vec![Exact(vec![Utf8, Utf8]), Exact(vec![LargeUtf8, LargeUtf8])],
+                self.volatility(),
+            ),
 
             BuiltinScalarFunction::Replace | BuiltinScalarFunction::Translate => {
                 Signature::one_of(vec![Exact(vec![Utf8, Utf8, Utf8])], self.volatility())
@@ -1424,196 +1440,209 @@ impl BuiltinScalarFunction {
             None
         }
     }
-}
 
-fn aliases(func: &BuiltinScalarFunction) -> &'static [&'static str] {
-    match func {
-        BuiltinScalarFunction::Abs => &["abs"],
-        BuiltinScalarFunction::Acos => &["acos"],
-        BuiltinScalarFunction::Acosh => &["acosh"],
-        BuiltinScalarFunction::Asin => &["asin"],
-        BuiltinScalarFunction::Asinh => &["asinh"],
-        BuiltinScalarFunction::Atan => &["atan"],
-        BuiltinScalarFunction::Atanh => &["atanh"],
-        BuiltinScalarFunction::Atan2 => &["atan2"],
-        BuiltinScalarFunction::Cbrt => &["cbrt"],
-        BuiltinScalarFunction::Ceil => &["ceil"],
-        BuiltinScalarFunction::Cos => &["cos"],
-        BuiltinScalarFunction::Cot => &["cot"],
-        BuiltinScalarFunction::Cosh => &["cosh"],
-        BuiltinScalarFunction::Degrees => &["degrees"],
-        BuiltinScalarFunction::Exp => &["exp"],
-        BuiltinScalarFunction::Factorial => &["factorial"],
-        BuiltinScalarFunction::Floor => &["floor"],
-        BuiltinScalarFunction::Gcd => &["gcd"],
-        BuiltinScalarFunction::Isnan => &["isnan"],
-        BuiltinScalarFunction::Iszero => &["iszero"],
-        BuiltinScalarFunction::Lcm => &["lcm"],
-        BuiltinScalarFunction::Ln => &["ln"],
-        BuiltinScalarFunction::Log => &["log"],
-        BuiltinScalarFunction::Log10 => &["log10"],
-        BuiltinScalarFunction::Log2 => &["log2"],
-        BuiltinScalarFunction::Nanvl => &["nanvl"],
-        BuiltinScalarFunction::Pi => &["pi"],
-        BuiltinScalarFunction::Power => &["power", "pow"],
-        BuiltinScalarFunction::Radians => &["radians"],
-        BuiltinScalarFunction::Random => &["random"],
-        BuiltinScalarFunction::Round => &["round"],
-        BuiltinScalarFunction::Signum => &["signum"],
-        BuiltinScalarFunction::Sin => &["sin"],
-        BuiltinScalarFunction::Sinh => &["sinh"],
-        BuiltinScalarFunction::Sqrt => &["sqrt"],
-        BuiltinScalarFunction::Tan => &["tan"],
-        BuiltinScalarFunction::Tanh => &["tanh"],
-        BuiltinScalarFunction::Trunc => &["trunc"],
+    /// Returns all names that can be used to call this function
+    pub fn aliases(&self) -> &'static [&'static str] {
+        match self {
+            BuiltinScalarFunction::Abs => &["abs"],
+            BuiltinScalarFunction::Acos => &["acos"],
+            BuiltinScalarFunction::Acosh => &["acosh"],
+            BuiltinScalarFunction::Asin => &["asin"],
+            BuiltinScalarFunction::Asinh => &["asinh"],
+            BuiltinScalarFunction::Atan => &["atan"],
+            BuiltinScalarFunction::Atanh => &["atanh"],
+            BuiltinScalarFunction::Atan2 => &["atan2"],
+            BuiltinScalarFunction::Cbrt => &["cbrt"],
+            BuiltinScalarFunction::Ceil => &["ceil"],
+            BuiltinScalarFunction::Cos => &["cos"],
+            BuiltinScalarFunction::Cot => &["cot"],
+            BuiltinScalarFunction::Cosh => &["cosh"],
+            BuiltinScalarFunction::Degrees => &["degrees"],
+            BuiltinScalarFunction::Exp => &["exp"],
+            BuiltinScalarFunction::Factorial => &["factorial"],
+            BuiltinScalarFunction::Floor => &["floor"],
+            BuiltinScalarFunction::Gcd => &["gcd"],
+            BuiltinScalarFunction::Isnan => &["isnan"],
+            BuiltinScalarFunction::Iszero => &["iszero"],
+            BuiltinScalarFunction::Lcm => &["lcm"],
+            BuiltinScalarFunction::Ln => &["ln"],
+            BuiltinScalarFunction::Log => &["log"],
+            BuiltinScalarFunction::Log10 => &["log10"],
+            BuiltinScalarFunction::Log2 => &["log2"],
+            BuiltinScalarFunction::Nanvl => &["nanvl"],
+            BuiltinScalarFunction::Pi => &["pi"],
+            BuiltinScalarFunction::Power => &["power", "pow"],
+            BuiltinScalarFunction::Radians => &["radians"],
+            BuiltinScalarFunction::Random => &["random"],
+            BuiltinScalarFunction::Round => &["round"],
+            BuiltinScalarFunction::Signum => &["signum"],
+            BuiltinScalarFunction::Sin => &["sin"],
+            BuiltinScalarFunction::Sinh => &["sinh"],
+            BuiltinScalarFunction::Sqrt => &["sqrt"],
+            BuiltinScalarFunction::Tan => &["tan"],
+            BuiltinScalarFunction::Tanh => &["tanh"],
+            BuiltinScalarFunction::Trunc => &["trunc"],
 
-        // conditional functions
-        BuiltinScalarFunction::Coalesce => &["coalesce"],
-        BuiltinScalarFunction::NullIf => &["nullif"],
+            // conditional functions
+            BuiltinScalarFunction::Coalesce => &["coalesce"],
+            BuiltinScalarFunction::NullIf => &["nullif"],
 
-        // string functions
-        BuiltinScalarFunction::Ascii => &["ascii"],
-        BuiltinScalarFunction::BitLength => &["bit_length"],
-        BuiltinScalarFunction::Btrim => &["btrim"],
-        BuiltinScalarFunction::CharacterLength => {
-            &["character_length", "char_length", "length"]
+            // string functions
+            BuiltinScalarFunction::Ascii => &["ascii"],
+            BuiltinScalarFunction::BitLength => &["bit_length"],
+            BuiltinScalarFunction::Btrim => &["btrim"],
+            BuiltinScalarFunction::CharacterLength => {
+                &["character_length", "char_length", "length"]
+            }
+            BuiltinScalarFunction::Concat => &["concat"],
+            BuiltinScalarFunction::ConcatWithSeparator => &["concat_ws"],
+            BuiltinScalarFunction::Chr => &["chr"],
+            BuiltinScalarFunction::InitCap => &["initcap"],
+            BuiltinScalarFunction::Left => &["left"],
+            BuiltinScalarFunction::Lower => &["lower"],
+            BuiltinScalarFunction::Lpad => &["lpad"],
+            BuiltinScalarFunction::Ltrim => &["ltrim"],
+            BuiltinScalarFunction::OctetLength => &["octet_length"],
+            BuiltinScalarFunction::Repeat => &["repeat"],
+            BuiltinScalarFunction::Replace => &["replace"],
+            BuiltinScalarFunction::Reverse => &["reverse"],
+            BuiltinScalarFunction::Right => &["right"],
+            BuiltinScalarFunction::Rpad => &["rpad"],
+            BuiltinScalarFunction::Rtrim => &["rtrim"],
+            BuiltinScalarFunction::SplitPart => &["split_part"],
+            BuiltinScalarFunction::StringToArray => {
+                &["string_to_array", "string_to_list"]
+            }
+            BuiltinScalarFunction::StartsWith => &["starts_with"],
+            BuiltinScalarFunction::Strpos => &["strpos"],
+            BuiltinScalarFunction::Substr => &["substr"],
+            BuiltinScalarFunction::ToHex => &["to_hex"],
+            BuiltinScalarFunction::Translate => &["translate"],
+            BuiltinScalarFunction::Trim => &["trim"],
+            BuiltinScalarFunction::Upper => &["upper"],
+            BuiltinScalarFunction::Uuid => &["uuid"],
+            BuiltinScalarFunction::Levenshtein => &["levenshtein"],
+            BuiltinScalarFunction::SubstrIndex => &["substr_index", "substring_index"],
+            BuiltinScalarFunction::FindInSet => &["find_in_set"],
+
+            // regex functions
+            BuiltinScalarFunction::RegexpMatch => &["regexp_match"],
+            BuiltinScalarFunction::RegexpReplace => &["regexp_replace"],
+
+            // time/date functions
+            BuiltinScalarFunction::Now => &["now"],
+            BuiltinScalarFunction::CurrentDate => &["current_date"],
+            BuiltinScalarFunction::CurrentTime => &["current_time"],
+            BuiltinScalarFunction::DateBin => &["date_bin"],
+            BuiltinScalarFunction::DateTrunc => &["date_trunc", "datetrunc"],
+            BuiltinScalarFunction::DatePart => &["date_part", "datepart"],
+            BuiltinScalarFunction::ToTimestamp => &["to_timestamp"],
+            BuiltinScalarFunction::ToTimestampMillis => &["to_timestamp_millis"],
+            BuiltinScalarFunction::ToTimestampMicros => &["to_timestamp_micros"],
+            BuiltinScalarFunction::ToTimestampSeconds => &["to_timestamp_seconds"],
+            BuiltinScalarFunction::ToTimestampNanos => &["to_timestamp_nanos"],
+            BuiltinScalarFunction::FromUnixtime => &["from_unixtime"],
+
+            // hashing functions
+            BuiltinScalarFunction::Digest => &["digest"],
+            BuiltinScalarFunction::MD5 => &["md5"],
+            BuiltinScalarFunction::SHA224 => &["sha224"],
+            BuiltinScalarFunction::SHA256 => &["sha256"],
+            BuiltinScalarFunction::SHA384 => &["sha384"],
+            BuiltinScalarFunction::SHA512 => &["sha512"],
+
+            // encode/decode
+            BuiltinScalarFunction::Encode => &["encode"],
+            BuiltinScalarFunction::Decode => &["decode"],
+
+            // other functions
+            BuiltinScalarFunction::ArrowTypeof => &["arrow_typeof"],
+
+            // array functions
+            BuiltinScalarFunction::ArrayAppend => &[
+                "array_append",
+                "list_append",
+                "array_push_back",
+                "list_push_back",
+            ],
+            BuiltinScalarFunction::ArraySort => &["array_sort", "list_sort"],
+            BuiltinScalarFunction::ArrayConcat => {
+                &["array_concat", "array_cat", "list_concat", "list_cat"]
+            }
+            BuiltinScalarFunction::ArrayDims => &["array_dims", "list_dims"],
+            BuiltinScalarFunction::ArrayEmpty => &["empty"],
+            BuiltinScalarFunction::ArrayElement => &[
+                "array_element",
+                "array_extract",
+                "list_element",
+                "list_extract",
+            ],
+            BuiltinScalarFunction::ArrayExcept => &["array_except", "list_except"],
+            BuiltinScalarFunction::Flatten => &["flatten"],
+            BuiltinScalarFunction::ArrayHasAll => &["array_has_all", "list_has_all"],
+            BuiltinScalarFunction::ArrayHasAny => &["array_has_any", "list_has_any"],
+            BuiltinScalarFunction::ArrayHas => {
+                &["array_has", "list_has", "array_contains", "list_contains"]
+            }
+            BuiltinScalarFunction::ArrayLength => &["array_length", "list_length"],
+            BuiltinScalarFunction::ArrayNdims => &["array_ndims", "list_ndims"],
+            BuiltinScalarFunction::ArrayPopFront => {
+                &["array_pop_front", "list_pop_front"]
+            }
+            BuiltinScalarFunction::ArrayPopBack => &["array_pop_back", "list_pop_back"],
+            BuiltinScalarFunction::ArrayPosition => &[
+                "array_position",
+                "list_position",
+                "array_indexof",
+                "list_indexof",
+            ],
+            BuiltinScalarFunction::ArrayPositions => {
+                &["array_positions", "list_positions"]
+            }
+            BuiltinScalarFunction::ArrayPrepend => &[
+                "array_prepend",
+                "list_prepend",
+                "array_push_front",
+                "list_push_front",
+            ],
+            BuiltinScalarFunction::ArrayRepeat => &["array_repeat", "list_repeat"],
+            BuiltinScalarFunction::ArrayRemove => &["array_remove", "list_remove"],
+            BuiltinScalarFunction::ArrayRemoveN => &["array_remove_n", "list_remove_n"],
+            BuiltinScalarFunction::ArrayRemoveAll => {
+                &["array_remove_all", "list_remove_all"]
+            }
+            BuiltinScalarFunction::ArrayReplace => &["array_replace", "list_replace"],
+            BuiltinScalarFunction::ArrayReplaceN => {
+                &["array_replace_n", "list_replace_n"]
+            }
+            BuiltinScalarFunction::ArrayReplaceAll => {
+                &["array_replace_all", "list_replace_all"]
+            }
+            BuiltinScalarFunction::ArraySlice => &["array_slice", "list_slice"],
+            BuiltinScalarFunction::ArrayToString => &[
+                "array_to_string",
+                "list_to_string",
+                "array_join",
+                "list_join",
+            ],
+            BuiltinScalarFunction::ArrayUnion => &["array_union", "list_union"],
+            BuiltinScalarFunction::Cardinality => &["cardinality"],
+            BuiltinScalarFunction::MakeArray => &["make_array", "make_list"],
+            BuiltinScalarFunction::ArrayIntersect => {
+                &["array_intersect", "list_intersect"]
+            }
+            BuiltinScalarFunction::OverLay => &["overlay"],
+            BuiltinScalarFunction::Range => &["range", "generate_series"],
+
+            // struct functions
+            BuiltinScalarFunction::Struct => &["struct"],
         }
-        BuiltinScalarFunction::Concat => &["concat"],
-        BuiltinScalarFunction::ConcatWithSeparator => &["concat_ws"],
-        BuiltinScalarFunction::Chr => &["chr"],
-        BuiltinScalarFunction::InitCap => &["initcap"],
-        BuiltinScalarFunction::Left => &["left"],
-        BuiltinScalarFunction::Lower => &["lower"],
-        BuiltinScalarFunction::Lpad => &["lpad"],
-        BuiltinScalarFunction::Ltrim => &["ltrim"],
-        BuiltinScalarFunction::OctetLength => &["octet_length"],
-        BuiltinScalarFunction::Repeat => &["repeat"],
-        BuiltinScalarFunction::Replace => &["replace"],
-        BuiltinScalarFunction::Reverse => &["reverse"],
-        BuiltinScalarFunction::Right => &["right"],
-        BuiltinScalarFunction::Rpad => &["rpad"],
-        BuiltinScalarFunction::Rtrim => &["rtrim"],
-        BuiltinScalarFunction::SplitPart => &["split_part"],
-        BuiltinScalarFunction::StringToArray => &["string_to_array", "string_to_list"],
-        BuiltinScalarFunction::StartsWith => &["starts_with"],
-        BuiltinScalarFunction::Strpos => &["strpos"],
-        BuiltinScalarFunction::Substr => &["substr"],
-        BuiltinScalarFunction::ToHex => &["to_hex"],
-        BuiltinScalarFunction::Translate => &["translate"],
-        BuiltinScalarFunction::Trim => &["trim"],
-        BuiltinScalarFunction::Upper => &["upper"],
-        BuiltinScalarFunction::Uuid => &["uuid"],
-        BuiltinScalarFunction::Levenshtein => &["levenshtein"],
-        BuiltinScalarFunction::SubstrIndex => &["substr_index", "substring_index"],
-
-        // regex functions
-        BuiltinScalarFunction::RegexpMatch => &["regexp_match"],
-        BuiltinScalarFunction::RegexpReplace => &["regexp_replace"],
-
-        // time/date functions
-        BuiltinScalarFunction::Now => &["now"],
-        BuiltinScalarFunction::CurrentDate => &["current_date"],
-        BuiltinScalarFunction::CurrentTime => &["current_time"],
-        BuiltinScalarFunction::DateBin => &["date_bin"],
-        BuiltinScalarFunction::DateTrunc => &["date_trunc", "datetrunc"],
-        BuiltinScalarFunction::DatePart => &["date_part", "datepart"],
-        BuiltinScalarFunction::ToTimestamp => &["to_timestamp"],
-        BuiltinScalarFunction::ToTimestampMillis => &["to_timestamp_millis"],
-        BuiltinScalarFunction::ToTimestampMicros => &["to_timestamp_micros"],
-        BuiltinScalarFunction::ToTimestampSeconds => &["to_timestamp_seconds"],
-        BuiltinScalarFunction::ToTimestampNanos => &["to_timestamp_nanos"],
-        BuiltinScalarFunction::FromUnixtime => &["from_unixtime"],
-
-        // hashing functions
-        BuiltinScalarFunction::Digest => &["digest"],
-        BuiltinScalarFunction::MD5 => &["md5"],
-        BuiltinScalarFunction::SHA224 => &["sha224"],
-        BuiltinScalarFunction::SHA256 => &["sha256"],
-        BuiltinScalarFunction::SHA384 => &["sha384"],
-        BuiltinScalarFunction::SHA512 => &["sha512"],
-
-        // encode/decode
-        BuiltinScalarFunction::Encode => &["encode"],
-        BuiltinScalarFunction::Decode => &["decode"],
-
-        // other functions
-        BuiltinScalarFunction::ArrowTypeof => &["arrow_typeof"],
-
-        // array functions
-        BuiltinScalarFunction::ArrayAppend => &[
-            "array_append",
-            "list_append",
-            "array_push_back",
-            "list_push_back",
-        ],
-        BuiltinScalarFunction::ArraySort => &["array_sort", "list_sort"],
-        BuiltinScalarFunction::ArrayConcat => {
-            &["array_concat", "array_cat", "list_concat", "list_cat"]
-        }
-        BuiltinScalarFunction::ArrayDims => &["array_dims", "list_dims"],
-        BuiltinScalarFunction::ArrayEmpty => &["empty"],
-        BuiltinScalarFunction::ArrayElement => &[
-            "array_element",
-            "array_extract",
-            "list_element",
-            "list_extract",
-        ],
-        BuiltinScalarFunction::ArrayExcept => &["array_except", "list_except"],
-        BuiltinScalarFunction::Flatten => &["flatten"],
-        BuiltinScalarFunction::ArrayHasAll => &["array_has_all", "list_has_all"],
-        BuiltinScalarFunction::ArrayHasAny => &["array_has_any", "list_has_any"],
-        BuiltinScalarFunction::ArrayHas => {
-            &["array_has", "list_has", "array_contains", "list_contains"]
-        }
-        BuiltinScalarFunction::ArrayLength => &["array_length", "list_length"],
-        BuiltinScalarFunction::ArrayNdims => &["array_ndims", "list_ndims"],
-        BuiltinScalarFunction::ArrayPopFront => &["array_pop_front", "list_pop_front"],
-        BuiltinScalarFunction::ArrayPopBack => &["array_pop_back", "list_pop_back"],
-        BuiltinScalarFunction::ArrayPosition => &[
-            "array_position",
-            "list_position",
-            "array_indexof",
-            "list_indexof",
-        ],
-        BuiltinScalarFunction::ArrayPositions => &["array_positions", "list_positions"],
-        BuiltinScalarFunction::ArrayPrepend => &[
-            "array_prepend",
-            "list_prepend",
-            "array_push_front",
-            "list_push_front",
-        ],
-        BuiltinScalarFunction::ArrayRepeat => &["array_repeat", "list_repeat"],
-        BuiltinScalarFunction::ArrayRemove => &["array_remove", "list_remove"],
-        BuiltinScalarFunction::ArrayRemoveN => &["array_remove_n", "list_remove_n"],
-        BuiltinScalarFunction::ArrayRemoveAll => &["array_remove_all", "list_remove_all"],
-        BuiltinScalarFunction::ArrayReplace => &["array_replace", "list_replace"],
-        BuiltinScalarFunction::ArrayReplaceN => &["array_replace_n", "list_replace_n"],
-        BuiltinScalarFunction::ArrayReplaceAll => {
-            &["array_replace_all", "list_replace_all"]
-        }
-        BuiltinScalarFunction::ArraySlice => &["array_slice", "list_slice"],
-        BuiltinScalarFunction::ArrayToString => &[
-            "array_to_string",
-            "list_to_string",
-            "array_join",
-            "list_join",
-        ],
-        BuiltinScalarFunction::ArrayUnion => &["array_union", "list_union"],
-        BuiltinScalarFunction::Cardinality => &["cardinality"],
-        BuiltinScalarFunction::MakeArray => &["make_array", "make_list"],
-        BuiltinScalarFunction::ArrayIntersect => &["array_intersect", "list_intersect"],
-        BuiltinScalarFunction::OverLay => &["overlay"],
-        BuiltinScalarFunction::Range => &["range", "generate_series"],
-
-        // struct functions
-        BuiltinScalarFunction::Struct => &["struct"],
     }
 }
 
 impl fmt::Display for BuiltinScalarFunction {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        // .unwrap is safe here because compiler makes sure the map will have matches for each BuiltinScalarFunction
-        write!(f, "{}", function_to_name().get(self).unwrap())
+        write!(f, "{}", self.name())
     }
 }
 
