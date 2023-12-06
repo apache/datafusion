@@ -869,12 +869,6 @@ SELECT * EXCLUDE(d, b, c, a, a, b, c, d)
 FROM table1
 
 # avoiding adding an alias if the column name is the same
-query I
-select a as a FROM table1 order by a
-----
-1
-2
-
 query TT
 EXPLAIN select a as a FROM table1 order by a
 ----
@@ -884,6 +878,9 @@ Sort: table1.a ASC NULLS LAST
 physical_plan
 SortExec: expr=[a@0 ASC NULLS LAST]
 --MemoryExec: partitions=1, partition_sizes=[1]
+
+query error DataFusion error: Schema error: Ambiguous reference to unqualified field a
+EXPLAIN select a as a FROM table1 t1 CROSS JOIN table1 t2 order by a
 
 # run below query in multi partitions
 statement ok
