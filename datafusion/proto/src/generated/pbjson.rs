@@ -20905,6 +20905,7 @@ impl serde::Serialize for ScalarFunction {
             Self::Levenshtein => "Levenshtein",
             Self::SubstrIndex => "SubstrIndex",
             Self::FindInSet => "FindInSet",
+            Self::ArraySort => "ArraySort",
         };
         serializer.serialize_str(variant)
     }
@@ -21044,6 +21045,7 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
             "Levenshtein",
             "SubstrIndex",
             "FindInSet",
+            "ArraySort",
         ];
 
         struct GeneratedVisitor;
@@ -21212,6 +21214,7 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
                     "Levenshtein" => Ok(ScalarFunction::Levenshtein),
                     "SubstrIndex" => Ok(ScalarFunction::SubstrIndex),
                     "FindInSet" => Ok(ScalarFunction::FindInSet),
+                    "ArraySort" => Ok(ScalarFunction::ArraySort),
                     _ => Err(serde::de::Error::unknown_variant(value, FIELDS)),
                 }
             }
