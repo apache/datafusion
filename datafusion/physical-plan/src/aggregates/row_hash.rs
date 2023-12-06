@@ -36,7 +36,6 @@ use crate::{aggregates, ExecutionPlan, PhysicalExpr};
 use crate::{RecordBatchStream, SendableRecordBatchStream};
 
 use arrow::array::*;
-use arrow::util::pretty::print_batches;
 use arrow::{datatypes::SchemaRef, record_batch::RecordBatch};
 use arrow_schema::SortOptions;
 use datafusion_common::{DataFusionError, Result};
@@ -55,8 +54,6 @@ use datafusion_common::utils::get_at_indices;
 use futures::ready;
 use futures::stream::{Stream, StreamExt};
 use log::debug;
-
-const PRINT_ON: bool = false;
 
 #[derive(Debug, Clone)]
 /// This object tracks the aggregation phase (input/output)
@@ -210,30 +207,9 @@ pub(crate) struct GroupedHashAggregateStream {
     input: SendableRecordBatchStream,
     mode: AggregateMode,
 
+    /// Stores aggregate groups that have different ordering requirements
+    /// Aggregate groups are calculated using `get_aggregate_expr_groups` function.
     aggregate_groups: Vec<HashAggregateGroup>,
-    // /// Accumulators, one for each `AggregateExpr` in the query
-    // ///
-    // /// For example, if the query has aggregates, `SUM(x)`,
-    // /// `COUNT(y)`, there will be two accumulators, each one
-    // /// specialized for that particular aggregate and its input types
-    // accumulators: Vec<Box<dyn GroupsAccumulator>>,
-    //
-    // /// Arguments to pass to each accumulator.
-    // ///
-    // /// The arguments in `accumulator[i]` is passed `aggregate_arguments[i]`
-    // ///
-    // /// The argument to each accumulator is itself a `Vec` because
-    // /// some aggregates such as `CORR` can accept more than one
-    // /// argument.
-    // aggregate_arguments: Vec<Vec<Arc<dyn PhysicalExpr>>>,
-    //
-    // /// Optional filter expression to evaluate, one for each for
-    // /// accumulator. If present, only those rows for which the filter
-    // /// evaluate to true should be included in the aggregate results.
-    // ///
-    // /// For example, for an aggregate like `SUM(x) FILTER (WHERE x >= 100)`,
-    // /// the filter expression is  `x > 100`.
-    // filter_expressions: Vec<Option<Arc<dyn PhysicalExpr>>>,
     /// GROUP BY expressions
     group_by: PhysicalGroupBy,
 
@@ -586,23 +562,11 @@ impl GroupedHashAggregateStream {
     /// Perform group-by aggregation for the given [`RecordBatch`].
     fn group_aggregate_batch(&mut self, batch: RecordBatch) -> Result<()> {
         for aggregate_group in &mut self.aggregate_groups {
-            if PRINT_ON {
-                println!(
-                    "aggregate_group.requirement: {:?}",
-                    aggregate_group.requirement
-                );
-                println!("before sort");
-                print_batches(&[batch.clone()])?;
-            }
             let batch = if aggregate_group.requirement.is_empty() {
                 batch.clone()
             } else {
                 sort_batch(&batch, &aggregate_group.requirement, None)?
             };
-            if PRINT_ON {
-                print_batches(&[batch.clone()])?;
-                println!("after sort");
-            }
             // Evaluate the grouping expressions
             let group_by_values = if self.spill_state.is_stream_merging {
                 evaluate_group_by(&self.spill_state.merging_group_by, &batch)?
