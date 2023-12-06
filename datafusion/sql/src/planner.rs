@@ -52,6 +52,15 @@ pub trait ContextProvider {
     }
     /// Getter for a datasource
     fn get_table_source(&self, name: TableReference) -> Result<Arc<dyn TableSource>>;
+    /// Getter for a table function
+    fn get_table_function_source(
+        &self,
+        _name: &str,
+        _args: Vec<Expr>,
+    ) -> Result<Arc<dyn TableSource>> {
+        not_impl_err!("Table Functions are not supported")
+    }
+
     /// Getter for a UDF description
     fn get_function_meta(&self, name: &str) -> Option<Arc<ScalarUDF>>;
     /// Getter for a UDAF description

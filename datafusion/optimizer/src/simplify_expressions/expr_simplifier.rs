@@ -332,7 +332,6 @@ impl<'a> ConstEvaluator<'a> {
             // Has no runtime cost, but needed during planning
             Expr::Alias(..)
             | Expr::AggregateFunction { .. }
-            | Expr::AggregateUDF { .. }
             | Expr::ScalarVariable(_, _)
             | Expr::Column(_)
             | Expr::OuterReferenceColumn(_, _)
@@ -345,7 +344,7 @@ impl<'a> ConstEvaluator<'a> {
             | Expr::Wildcard { .. }
             | Expr::Placeholder(_) => false,
             Expr::ScalarFunction(ScalarFunction { func_def, .. }) => match func_def {
-                ScalarFunctionDefinition::BuiltIn { fun, .. } => {
+                ScalarFunctionDefinition::BuiltIn(fun) => {
                     Self::volatility_ok(fun.volatility())
                 }
                 ScalarFunctionDefinition::UDF(fun) => {
@@ -1203,41 +1202,28 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
 
             // log
             Expr::ScalarFunction(ScalarFunction {
-                func_def:
-                    ScalarFunctionDefinition::BuiltIn {
-                        fun: BuiltinScalarFunction::Log,
-                        ..
-                    },
+                func_def: ScalarFunctionDefinition::BuiltIn(BuiltinScalarFunction::Log),
                 args,
             }) => simpl_log(args, <&S>::clone(&info))?,
 
             // power
             Expr::ScalarFunction(ScalarFunction {
-                func_def:
-                    ScalarFunctionDefinition::BuiltIn {
-                        fun: BuiltinScalarFunction::Power,
-                        ..
-                    },
+                func_def: ScalarFunctionDefinition::BuiltIn(BuiltinScalarFunction::Power),
                 args,
             }) => simpl_power(args, <&S>::clone(&info))?,
 
             // concat
             Expr::ScalarFunction(ScalarFunction {
-                func_def:
-                    ScalarFunctionDefinition::BuiltIn {
-                        fun: BuiltinScalarFunction::Concat,
-                        ..
-                    },
+                func_def: ScalarFunctionDefinition::BuiltIn(BuiltinScalarFunction::Concat),
                 args,
             }) => simpl_concat(args)?,
 
             // concat_ws
             Expr::ScalarFunction(ScalarFunction {
                 func_def:
-                    ScalarFunctionDefinition::BuiltIn {
-                        fun: BuiltinScalarFunction::ConcatWithSeparator,
-                        ..
-                    },
+                    ScalarFunctionDefinition::BuiltIn(
+                        BuiltinScalarFunction::ConcatWithSeparator,
+                    ),
                 args,
             }) => match &args[..] {
                 [delimiter, vals @ ..] => simpl_concat_ws(delimiter, vals)?,
@@ -3311,10 +3297,7 @@ mod tests {
                 col("c4"),
                 NullableInterval::from(ScalarValue::UInt32(Some(9))),
             ),
-            (
-                col("c1"),
-                NullableInterval::from(ScalarValue::Utf8(Some("a".to_string()))),
-            ),
+            (col("c1"), NullableInterval::from(ScalarValue::from("a"))),
         ];
         let output = simplify_with_guarantee(expr.clone(), guarantees);
         assert_eq!(output, lit(false));
@@ -3337,8 +3320,8 @@ mod tests {
                 col("c1"),
                 NullableInterval::NotNull {
                     values: Interval::try_new(
-                        ScalarValue::Utf8(Some("d".to_string())),
-                        ScalarValue::Utf8(Some("f".to_string())),
+                        ScalarValue::from("d"),
+                        ScalarValue::from("f"),
                     )
                     .unwrap(),
                 },

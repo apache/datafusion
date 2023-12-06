@@ -304,6 +304,8 @@ pub enum BuiltinScalarFunction {
     Levenshtein,
     /// substr_index
     SubstrIndex,
+    /// find_in_set
+    FindInSet,
 }
 
 /// Maps the sql function name to `BuiltinScalarFunction`
@@ -344,6 +346,12 @@ impl BuiltinScalarFunction {
     )]
     pub fn supports_zero_argument(&self) -> bool {
         self.signature().type_signature.supports_zero_argument()
+    }
+
+    /// Returns the name of this function
+    pub fn name(&self) -> &str {
+        // .unwrap is safe here because compiler makes sure the map will have matches for each BuiltinScalarFunction
+        function_to_name().get(self).unwrap()
     }
 
     /// Returns the [Volatility] of the builtin function.
@@ -472,6 +480,7 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::OverLay => Volatility::Immutable,
             BuiltinScalarFunction::Levenshtein => Volatility::Immutable,
             BuiltinScalarFunction::SubstrIndex => Volatility::Immutable,
+            BuiltinScalarFunction::FindInSet => Volatility::Immutable,
 
             // Stable builtin functions
             BuiltinScalarFunction::Now => Volatility::Stable,
@@ -778,6 +787,9 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::SubstrIndex => {
                 utf8_to_str_type(&input_expr_types[0], "substr_index")
             }
+            BuiltinScalarFunction::FindInSet => {
+                utf8_to_int_type(&input_expr_types[0], "find_in_set")
+            }
             BuiltinScalarFunction::ToTimestamp
             | BuiltinScalarFunction::ToTimestampNanos => Ok(Timestamp(Nanosecond, None)),
             BuiltinScalarFunction::ToTimestampMillis => Ok(Timestamp(Millisecond, None)),
@@ -1011,6 +1023,7 @@ impl BuiltinScalarFunction {
                 1,
                 vec![
                     Int64,
+                    Float64,
                     Timestamp(Nanosecond, None),
                     Timestamp(Microsecond, None),
                     Timestamp(Millisecond, None),
@@ -1242,6 +1255,10 @@ impl BuiltinScalarFunction {
                     Exact(vec![Utf8, Utf8, Int64]),
                     Exact(vec![LargeUtf8, LargeUtf8, Int64]),
                 ],
+                self.volatility(),
+            ),
+            BuiltinScalarFunction::FindInSet => Signature::one_of(
+                vec![Exact(vec![Utf8, Utf8]), Exact(vec![LargeUtf8, LargeUtf8])],
                 self.volatility(),
             ),
 
@@ -1499,6 +1516,7 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Uuid => &["uuid"],
             BuiltinScalarFunction::Levenshtein => &["levenshtein"],
             BuiltinScalarFunction::SubstrIndex => &["substr_index", "substring_index"],
+            BuiltinScalarFunction::FindInSet => &["find_in_set"],
 
             // regex functions
             BuiltinScalarFunction::RegexpMatch => &["regexp_match"],
@@ -1616,8 +1634,7 @@ impl BuiltinScalarFunction {
 
 impl fmt::Display for BuiltinScalarFunction {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        // .unwrap is safe here because compiler makes sure the map will have matches for each BuiltinScalarFunction
-        write!(f, "{}", function_to_name().get(self).unwrap())
+        write!(f, "{}", self.name())
     }
 }
 

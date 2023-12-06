@@ -395,6 +395,11 @@ async fn roundtrip_inlist_4() -> Result<()> {
 }
 
 #[tokio::test]
+async fn roundtrip_cross_join() -> Result<()> {
+    roundtrip("SELECT * FROM data CROSS JOIN data2").await
+}
+
+#[tokio::test]
 async fn roundtrip_inner_join() -> Result<()> {
     roundtrip("SELECT data.a FROM data JOIN data2 ON data.a = data2.a").await
 }

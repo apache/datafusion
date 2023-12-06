@@ -92,7 +92,7 @@ pub fn expr_applicable_for_cols(col_names: &[String], expr: &Expr) -> bool {
 
             Expr::ScalarFunction(scalar_function) => {
                 match &scalar_function.func_def {
-                    ScalarFunctionDefinition::BuiltIn { fun, .. } => {
+                    ScalarFunctionDefinition::BuiltIn(fun) => {
                         match fun.volatility() {
                             Volatility::Immutable => Ok(VisitRecursion::Continue),
                             // TODO: Stable functions could be `applicable`, but that would require access to the context
@@ -122,8 +122,7 @@ pub fn expr_applicable_for_cols(col_names: &[String], expr: &Expr) -> bool {
             // - AGGREGATE, WINDOW and SORT should not end up in filter conditions, except maybe in some edge cases
             // - Can `Wildcard` be considered as a `Literal`?
             // - ScalarVariable could be `applicable`, but that would require access to the context
-            Expr::AggregateUDF { .. }
-            | Expr::AggregateFunction { .. }
+            Expr::AggregateFunction { .. }
             | Expr::Sort { .. }
             | Expr::WindowFunction { .. }
             | Expr::Wildcard { .. }
@@ -527,19 +526,13 @@ mod tests {
             f1.object_meta.location.as_ref(),
             "tablepath/mypartition=val1/file.parquet"
         );
-        assert_eq!(
-            &f1.partition_values,
-            &[ScalarValue::Utf8(Some(String::from("val1"))),]
-        );
+        assert_eq!(&f1.partition_values, &[ScalarValue::from("val1")]);
         let f2 = &pruned[1];
         assert_eq!(
             f2.object_meta.location.as_ref(),
             "tablepath/mypartition=val1/other=val3/file.parquet"
         );
-        assert_eq!(
-            f2.partition_values,
-            &[ScalarValue::Utf8(Some(String::from("val1"))),]
-        );
+        assert_eq!(f2.partition_values, &[ScalarValue::from("val1"),]);
     }
 
     #[tokio::test]
@@ -580,10 +573,7 @@ mod tests {
         );
         assert_eq!(
             &f1.partition_values,
-            &[
-                ScalarValue::Utf8(Some(String::from("p1v2"))),
-                ScalarValue::Utf8(Some(String::from("p2v1")))
-            ]
+            &[ScalarValue::from("p1v2"), ScalarValue::from("p2v1"),]
         );
         let f2 = &pruned[1];
         assert_eq!(
@@ -592,10 +582,7 @@ mod tests {
         );
         assert_eq!(
             &f2.partition_values,
-            &[
-                ScalarValue::Utf8(Some(String::from("p1v2"))),
-                ScalarValue::Utf8(Some(String::from("p2v1")))
-            ]
+            &[ScalarValue::from("p1v2"), ScalarValue::from("p2v1")]
         );
     }
 

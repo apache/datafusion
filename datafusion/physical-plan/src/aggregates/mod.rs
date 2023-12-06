@@ -27,17 +27,16 @@ use crate::aggregates::{
 };
 
 use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet};
-use crate::windows::{
-    get_ordered_partition_by_indices, get_window_mode, PartitionSearchMode,
-};
+use crate::windows::{get_ordered_partition_by_indices, get_window_mode};
 use crate::{
-    DisplayFormatType, Distribution, ExecutionPlan, Partitioning,
+    DisplayFormatType, Distribution, ExecutionPlan, InputOrderMode, Partitioning,
     SendableRecordBatchStream, Statistics,
 };
 
 use arrow::array::ArrayRef;
 use arrow::datatypes::{Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
+use arrow_schema::DataType;
 use datafusion_common::stats::Precision;
 use datafusion_common::{not_impl_err, plan_err, DataFusionError, Result};
 use datafusion_execution::TaskContext;
@@ -286,6 +285,9 @@ pub struct AggregateExec {
     limit: Option<usize>,
     /// Input plan, could be a partial aggregate or the input to the aggregate
     pub input: Arc<dyn ExecutionPlan>,
+    /// Original aggregation schema, could be different from `schema` before dictionary group
+    /// keys get materialized
+    original_schema: SchemaRef,
     /// Schema after the aggregate is applied
     schema: SchemaRef,
     /// Input schema before any aggregation is applied. For partial aggregate this will be the
@@ -300,7 +302,9 @@ pub struct AggregateExec {
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
     required_input_ordering: Option<LexRequirement>,
-    partition_search_mode: PartitionSearchMode,
+    /// Describes how the input is ordered relative to the group by columns
+    input_order_mode: InputOrderMode,
+    /// Describe how the output is ordered
     output_ordering: Option<LexOrdering>,
 }
 
@@ -405,15 +409,15 @@ fn get_aggregate_search_mode(
     aggr_expr: &mut [Arc<dyn AggregateExpr>],
     order_by_expr: &mut [Option<LexOrdering>],
     ordering_req: &mut Vec<PhysicalSortExpr>,
-) -> PartitionSearchMode {
+) -> InputOrderMode {
     let groupby_exprs = group_by
         .expr
         .iter()
         .map(|(item, _)| item.clone())
         .collect::<Vec<_>>();
-    let mut partition_search_mode = PartitionSearchMode::Linear;
+    let mut input_order_mode = InputOrderMode::Linear;
     if !group_by.is_single() || groupby_exprs.is_empty() {
-        return partition_search_mode;
+        return input_order_mode;
     }
 
     if let Some((should_reverse, mode)) =
@@ -435,9 +439,9 @@ fn get_aggregate_search_mode(
             );
             *ordering_req = reverse_order_bys(ordering_req);
         }
-        partition_search_mode = mode;
+        input_order_mode = mode;
     }
-    partition_search_mode
+    input_order_mode
 }
 
 /// Check whether group by expression contains all of the expression inside `requirement`
@@ -469,7 +473,7 @@ impl AggregateExec {
         input: Arc<dyn ExecutionPlan>,
         input_schema: SchemaRef,
     ) -> Result<Self> {
-        let schema = create_schema(
+        let original_schema = create_schema(
             &input.schema(),
             &group_by.expr,
             &aggr_expr,
@@ -477,7 +481,11 @@ impl AggregateExec {
             mode,
         )?;
 
-        let schema = Arc::new(schema);
+        let schema = Arc::new(materialize_dict_group_keys(
+            &original_schema,
+            group_by.expr.len(),
+        ));
+        let original_schema = Arc::new(original_schema);
         // Reset ordering requirement to `None` if aggregator is not order-sensitive
         order_by_expr = aggr_expr
             .iter()
@@ -507,7 +515,7 @@ impl AggregateExec {
             &input.equivalence_properties(),
         )?;
         let mut ordering_req = requirement.unwrap_or(vec![]);
-        let partition_search_mode = get_aggregate_search_mode(
+        let input_order_mode = get_aggregate_search_mode(
             &group_by,
             &input,
             &mut aggr_expr,
@@ -552,13 +560,14 @@ impl AggregateExec {
             filter_expr,
             order_by_expr,
             input,
+            original_schema,
             schema,
             input_schema,
             projection_mapping,
             metrics: ExecutionPlanMetricsSet::new(),
             required_input_ordering,
             limit: None,
-            partition_search_mode,
+            input_order_mode,
             output_ordering,
         })
     }
@@ -758,8 +767,8 @@ impl DisplayAs for AggregateExec {
                     write!(f, ", lim=[{limit}]")?;
                 }
 
-                if self.partition_search_mode != PartitionSearchMode::Linear {
-                    write!(f, ", ordering_mode={:?}", self.partition_search_mode)?;
+                if self.input_order_mode != InputOrderMode::Linear {
+                    write!(f, ", ordering_mode={:?}", self.input_order_mode)?;
                 }
             }
         }
@@ -810,7 +819,7 @@ impl ExecutionPlan for AggregateExec {
     /// infinite, returns an error to indicate this.
     fn unbounded_output(&self, children: &[bool]) -> Result<bool> {
         if children[0] {
-            if self.partition_search_mode == PartitionSearchMode::Linear {
+            if self.input_order_mode == InputOrderMode::Linear {
                 // Cannot run without breaking pipeline.
                 plan_err!(
                     "Aggregate Error: `GROUP BY` clauses with columns without ordering and GROUPING SETS are not supported for unbounded inputs."
@@ -971,6 +980,24 @@ fn create_schema(
     }
 
     Ok(Schema::new(fields))
+}
+
+/// returns schema with dictionary group keys materialized as their value types
+/// The actual convertion happens in `RowConverter` and we don't do unnecessary
+/// conversion back into dictionaries
+fn materialize_dict_group_keys(schema: &Schema, group_count: usize) -> Schema {
+    let fields = schema
+        .fields
+        .iter()
+        .enumerate()
+        .map(|(i, field)| match field.data_type() {
+            DataType::Dictionary(_, value_data_type) if i < group_count => {
+                Field::new(field.name(), *value_data_type.clone(), field.is_nullable())
+            }
+            _ => Field::clone(field),
+        })
+        .collect::<Vec<_>>();
+    Schema::new(fields)
 }
 
 fn group_schema(schema: &Schema, group_count: usize) -> SchemaRef {

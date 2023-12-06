@@ -194,6 +194,8 @@ pub struct CreateExternalTable {
     pub options: HashMap<String, String>,
     /// The list of constraints in the schema, such as primary key, unique, etc.
     pub constraints: Constraints,
+    /// Default values for columns
+    pub column_defaults: HashMap<String, Expr>,
 }
 
 // Hashing refers to a subset of fields considered in PartialEq.

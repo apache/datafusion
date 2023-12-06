@@ -253,7 +253,6 @@ fn can_evaluate_as_join_condition(predicate: &Expr) -> Result<bool> {
         Expr::Sort(_)
         | Expr::AggregateFunction(_)
         | Expr::WindowFunction(_)
-        | Expr::AggregateUDF { .. }
         | Expr::Wildcard { .. }
         | Expr::GroupingSet(_) => internal_err!("Unsupported predicate type"),
     })?;
@@ -980,7 +979,7 @@ fn is_volatile_expression(e: &Expr) -> bool {
     e.apply(&mut |expr| {
         Ok(match expr {
             Expr::ScalarFunction(f) => match &f.func_def {
-                ScalarFunctionDefinition::BuiltIn { fun, .. }
+                ScalarFunctionDefinition::BuiltIn(fun)
                     if fun.volatility() == Volatility::Volatile =>
                 {
                     is_volatile = true;

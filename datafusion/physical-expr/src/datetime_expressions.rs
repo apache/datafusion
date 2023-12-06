@@ -130,6 +130,10 @@ fn string_to_timestamp_nanos_shim(s: &str) -> Result<i64> {
 }
 
 /// to_timestamp SQL function
+///
+/// Note: `to_timestamp` returns `Timestamp(Nanosecond)` though its arguments are interpreted as **seconds**. The supported range for integer input is between `-9223372037` and `9223372036`.
+/// Supported range for string input is between `1677-09-21T00:12:44.0` and `2262-04-11T23:47:16.0`.
+/// Please use `to_timestamp_seconds` for the input outside of supported bounds.
 pub fn to_timestamp(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     handle::<TimestampNanosecondType, _, TimestampNanosecondType>(
         args,
@@ -971,6 +975,11 @@ pub fn to_timestamp_invoke(args: &[ColumnarValue]) -> Result<ColumnarValue> {
             &DataType::Timestamp(TimeUnit::Nanosecond, None),
             None,
         ),
+        DataType::Float64 => cast_column(
+            &args[0],
+            &DataType::Timestamp(TimeUnit::Nanosecond, None),
+            None,
+        ),
         DataType::Timestamp(_, None) => cast_column(
             &args[0],
             &DataType::Timestamp(TimeUnit::Nanosecond, None),
@@ -1340,7 +1349,7 @@ mod tests {
                 .collect::<TimestampNanosecondArray>()
                 .with_timezone_opt(tz_opt.clone());
             let result = date_trunc(&[
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some("day".to_string()))),
+                ColumnarValue::Scalar(ScalarValue::from("day")),
                 ColumnarValue::Array(Arc::new(input)),
             ])
             .unwrap();

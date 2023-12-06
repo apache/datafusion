@@ -4026,6 +4026,9 @@ impl serde::Serialize for CreateExternalTableNode {
         if self.constraints.is_some() {
             len += 1;
         }
+        if !self.column_defaults.is_empty() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion.CreateExternalTableNode", len)?;
         if let Some(v) = self.name.as_ref() {
             struct_ser.serialize_field("name", v)?;
@@ -4069,6 +4072,9 @@ impl serde::Serialize for CreateExternalTableNode {
         if let Some(v) = self.constraints.as_ref() {
             struct_ser.serialize_field("constraints", v)?;
         }
+        if !self.column_defaults.is_empty() {
+            struct_ser.serialize_field("columnDefaults", &self.column_defaults)?;
+        }
         struct_ser.end()
     }
 }
@@ -4099,6 +4105,8 @@ impl<'de> serde::Deserialize<'de> for CreateExternalTableNode {
             "unbounded",
             "options",
             "constraints",
+            "column_defaults",
+            "columnDefaults",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -4117,6 +4125,7 @@ impl<'de> serde::Deserialize<'de> for CreateExternalTableNode {
             Unbounded,
             Options,
             Constraints,
+            ColumnDefaults,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -4152,6 +4161,7 @@ impl<'de> serde::Deserialize<'de> for CreateExternalTableNode {
                             "unbounded" => Ok(GeneratedField::Unbounded),
                             "options" => Ok(GeneratedField::Options),
                             "constraints" => Ok(GeneratedField::Constraints),
+                            "columnDefaults" | "column_defaults" => Ok(GeneratedField::ColumnDefaults),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -4185,6 +4195,7 @@ impl<'de> serde::Deserialize<'de> for CreateExternalTableNode {
                 let mut unbounded__ = None;
                 let mut options__ = None;
                 let mut constraints__ = None;
+                let mut column_defaults__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Name => {
@@ -4273,6 +4284,14 @@ impl<'de> serde::Deserialize<'de> for CreateExternalTableNode {
                             }
                             constraints__ = map_.next_value()?;
                         }
+                        GeneratedField::ColumnDefaults => {
+                            if column_defaults__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("columnDefaults"));
+                            }
+                            column_defaults__ = Some(
+                                map_.next_value::<std::collections::HashMap<_, _>>()?
+                            );
+                        }
                     }
                 }
                 Ok(CreateExternalTableNode {
@@ -4290,6 +4309,7 @@ impl<'de> serde::Deserialize<'de> for CreateExternalTableNode {
                     unbounded: unbounded__.unwrap_or_default(),
                     options: options__.unwrap_or_default(),
                     constraints: constraints__,
+                    column_defaults: column_defaults__.unwrap_or_default(),
                 })
             }
         }
@@ -7797,12 +7817,18 @@ impl serde::Serialize for FilterExecNode {
         if self.expr.is_some() {
             len += 1;
         }
+        if self.default_filter_selectivity != 0 {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion.FilterExecNode", len)?;
         if let Some(v) = self.input.as_ref() {
             struct_ser.serialize_field("input", v)?;
         }
         if let Some(v) = self.expr.as_ref() {
             struct_ser.serialize_field("expr", v)?;
+        }
+        if self.default_filter_selectivity != 0 {
+            struct_ser.serialize_field("defaultFilterSelectivity", &self.default_filter_selectivity)?;
         }
         struct_ser.end()
     }
@@ -7816,12 +7842,15 @@ impl<'de> serde::Deserialize<'de> for FilterExecNode {
         const FIELDS: &[&str] = &[
             "input",
             "expr",
+            "default_filter_selectivity",
+            "defaultFilterSelectivity",
         ];
 
         #[allow(clippy::enum_variant_names)]
         enum GeneratedField {
             Input,
             Expr,
+            DefaultFilterSelectivity,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -7845,6 +7874,7 @@ impl<'de> serde::Deserialize<'de> for FilterExecNode {
                         match value {
                             "input" => Ok(GeneratedField::Input),
                             "expr" => Ok(GeneratedField::Expr),
+                            "defaultFilterSelectivity" | "default_filter_selectivity" => Ok(GeneratedField::DefaultFilterSelectivity),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -7866,6 +7896,7 @@ impl<'de> serde::Deserialize<'de> for FilterExecNode {
             {
                 let mut input__ = None;
                 let mut expr__ = None;
+                let mut default_filter_selectivity__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Input => {
@@ -7880,11 +7911,20 @@ impl<'de> serde::Deserialize<'de> for FilterExecNode {
                             }
                             expr__ = map_.next_value()?;
                         }
+                        GeneratedField::DefaultFilterSelectivity => {
+                            if default_filter_selectivity__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("defaultFilterSelectivity"));
+                            }
+                            default_filter_selectivity__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
                     }
                 }
                 Ok(FilterExecNode {
                     input: input__,
                     expr: expr__,
+                    default_filter_selectivity: default_filter_selectivity__.unwrap_or_default(),
                 })
             }
         }
@@ -14967,7 +15007,7 @@ impl<'de> serde::Deserialize<'de> for PartialTableReference {
         deserializer.deserialize_struct("datafusion.PartialTableReference", FIELDS, GeneratedVisitor)
     }
 }
-impl serde::Serialize for PartiallySortedPartitionSearchMode {
+impl serde::Serialize for PartiallySortedInputOrderMode {
     #[allow(deprecated)]
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
     where
@@ -14978,14 +15018,14 @@ impl serde::Serialize for PartiallySortedPartitionSearchMode {
         if !self.columns.is_empty() {
             len += 1;
         }
-        let mut struct_ser = serializer.serialize_struct("datafusion.PartiallySortedPartitionSearchMode", len)?;
+        let mut struct_ser = serializer.serialize_struct("datafusion.PartiallySortedInputOrderMode", len)?;
         if !self.columns.is_empty() {
             struct_ser.serialize_field("columns", &self.columns.iter().map(ToString::to_string).collect::<Vec<_>>())?;
         }
         struct_ser.end()
     }
 }
-impl<'de> serde::Deserialize<'de> for PartiallySortedPartitionSearchMode {
+impl<'de> serde::Deserialize<'de> for PartiallySortedInputOrderMode {
     #[allow(deprecated)]
     fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
     where
@@ -15029,13 +15069,13 @@ impl<'de> serde::Deserialize<'de> for PartiallySortedPartitionSearchMode {
         }
         struct GeneratedVisitor;
         impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
-            type Value = PartiallySortedPartitionSearchMode;
+            type Value = PartiallySortedInputOrderMode;
 
             fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                formatter.write_str("struct datafusion.PartiallySortedPartitionSearchMode")
+                formatter.write_str("struct datafusion.PartiallySortedInputOrderMode")
             }
 
-            fn visit_map<V>(self, mut map_: V) -> std::result::Result<PartiallySortedPartitionSearchMode, V::Error>
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<PartiallySortedInputOrderMode, V::Error>
                 where
                     V: serde::de::MapAccess<'de>,
             {
@@ -15053,12 +15093,12 @@ impl<'de> serde::Deserialize<'de> for PartiallySortedPartitionSearchMode {
                         }
                     }
                 }
-                Ok(PartiallySortedPartitionSearchMode {
+                Ok(PartiallySortedInputOrderMode {
                     columns: columns__.unwrap_or_default(),
                 })
             }
         }
-        deserializer.deserialize_struct("datafusion.PartiallySortedPartitionSearchMode", FIELDS, GeneratedVisitor)
+        deserializer.deserialize_struct("datafusion.PartiallySortedInputOrderMode", FIELDS, GeneratedVisitor)
     }
 }
 impl serde::Serialize for PartitionColumn {
@@ -20864,6 +20904,7 @@ impl serde::Serialize for ScalarFunction {
             Self::ArrayPopFront => "ArrayPopFront",
             Self::Levenshtein => "Levenshtein",
             Self::SubstrIndex => "SubstrIndex",
+            Self::FindInSet => "FindInSet",
         };
         serializer.serialize_str(variant)
     }
@@ -21002,6 +21043,7 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
             "ArrayPopFront",
             "Levenshtein",
             "SubstrIndex",
+            "FindInSet",
         ];
 
         struct GeneratedVisitor;
@@ -21169,6 +21211,7 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
                     "ArrayPopFront" => Ok(ScalarFunction::ArrayPopFront),
                     "Levenshtein" => Ok(ScalarFunction::Levenshtein),
                     "SubstrIndex" => Ok(ScalarFunction::SubstrIndex),
+                    "FindInSet" => Ok(ScalarFunction::FindInSet),
                     _ => Err(serde::de::Error::unknown_variant(value, FIELDS)),
                 }
             }
@@ -25636,7 +25679,7 @@ impl serde::Serialize for WindowAggExecNode {
         if !self.partition_keys.is_empty() {
             len += 1;
         }
-        if self.partition_search_mode.is_some() {
+        if self.input_order_mode.is_some() {
             len += 1;
         }
         let mut struct_ser = serializer.serialize_struct("datafusion.WindowAggExecNode", len)?;
@@ -25649,15 +25692,15 @@ impl serde::Serialize for WindowAggExecNode {
         if !self.partition_keys.is_empty() {
             struct_ser.serialize_field("partitionKeys", &self.partition_keys)?;
         }
-        if let Some(v) = self.partition_search_mode.as_ref() {
+        if let Some(v) = self.input_order_mode.as_ref() {
             match v {
-                window_agg_exec_node::PartitionSearchMode::Linear(v) => {
+                window_agg_exec_node::InputOrderMode::Linear(v) => {
                     struct_ser.serialize_field("linear", v)?;
                 }
-                window_agg_exec_node::PartitionSearchMode::PartiallySorted(v) => {
+                window_agg_exec_node::InputOrderMode::PartiallySorted(v) => {
                     struct_ser.serialize_field("partiallySorted", v)?;
                 }
-                window_agg_exec_node::PartitionSearchMode::Sorted(v) => {
+                window_agg_exec_node::InputOrderMode::Sorted(v) => {
                     struct_ser.serialize_field("sorted", v)?;
                 }
             }
@@ -25740,7 +25783,7 @@ impl<'de> serde::Deserialize<'de> for WindowAggExecNode {
                 let mut input__ = None;
                 let mut window_expr__ = None;
                 let mut partition_keys__ = None;
-                let mut partition_search_mode__ = None;
+                let mut input_order_mode__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Input => {
@@ -25762,24 +25805,24 @@ impl<'de> serde::Deserialize<'de> for WindowAggExecNode {
                             partition_keys__ = Some(map_.next_value()?);
                         }
                         GeneratedField::Linear => {
-                            if partition_search_mode__.is_some() {
+                            if input_order_mode__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("linear"));
                             }
-                            partition_search_mode__ = map_.next_value::<::std::option::Option<_>>()?.map(window_agg_exec_node::PartitionSearchMode::Linear)
+                            input_order_mode__ = map_.next_value::<::std::option::Option<_>>()?.map(window_agg_exec_node::InputOrderMode::Linear)
 ;
                         }
                         GeneratedField::PartiallySorted => {
-                            if partition_search_mode__.is_some() {
+                            if input_order_mode__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("partiallySorted"));
                             }
-                            partition_search_mode__ = map_.next_value::<::std::option::Option<_>>()?.map(window_agg_exec_node::PartitionSearchMode::PartiallySorted)
+                            input_order_mode__ = map_.next_value::<::std::option::Option<_>>()?.map(window_agg_exec_node::InputOrderMode::PartiallySorted)
 ;
                         }
                         GeneratedField::Sorted => {
-                            if partition_search_mode__.is_some() {
+                            if input_order_mode__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("sorted"));
                             }
-                            partition_search_mode__ = map_.next_value::<::std::option::Option<_>>()?.map(window_agg_exec_node::PartitionSearchMode::Sorted)
+                            input_order_mode__ = map_.next_value::<::std::option::Option<_>>()?.map(window_agg_exec_node::InputOrderMode::Sorted)
 ;
                         }
                     }
@@ -25788,7 +25831,7 @@ impl<'de> serde::Deserialize<'de> for WindowAggExecNode {
                     input: input__,
                     window_expr: window_expr__.unwrap_or_default(),
                     partition_keys: partition_keys__.unwrap_or_default(),
-                    partition_search_mode: partition_search_mode__,
+                    input_order_mode: input_order_mode__,
                 })
             }
         }

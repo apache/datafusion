@@ -17,6 +17,7 @@
 
 //! The table implementation.
 
+use std::collections::HashMap;
 use std::str::FromStr;
 use std::{any::Any, sync::Arc};
 
@@ -558,6 +559,7 @@ pub struct ListingTable {
     collected_statistics: FileStatisticsCache,
     infinite_source: bool,
     constraints: Constraints,
+    column_defaults: HashMap<String, Expr>,
 }
 
 impl ListingTable {
@@ -596,6 +598,7 @@ impl ListingTable {
             collected_statistics: Arc::new(DefaultFileStatisticsCache::default()),
             infinite_source,
             constraints: Constraints::empty(),
+            column_defaults: HashMap::new(),
         };
 
         Ok(table)
@@ -604,6 +607,15 @@ impl ListingTable {
     /// Assign constraints
     pub fn with_constraints(mut self, constraints: Constraints) -> Self {
         self.constraints = constraints;
+        self
+    }
+
+    /// Assign column defaults
+    pub fn with_column_defaults(
+        mut self,
+        column_defaults: HashMap<String, Expr>,
+    ) -> Self {
+        self.column_defaults = column_defaults;
         self
     }
 
@@ -843,6 +855,10 @@ impl TableProvider for ListingTable {
             .format
             .create_writer_physical_plan(input, state, config, order_requirements)
             .await
+    }
+
+    fn get_column_default(&self, column: &str) -> Option<&Expr> {
+        self.column_defaults.get(column)
     }
 }
 

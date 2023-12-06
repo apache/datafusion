@@ -170,11 +170,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             select_exprs
                 .iter()
                 .filter(|select_expr| match select_expr {
-                    Expr::AggregateFunction(_) | Expr::AggregateUDF(_) => false,
-                    Expr::Alias(Alias { expr, name: _, .. }) => !matches!(
-                        **expr,
-                        Expr::AggregateFunction(_) | Expr::AggregateUDF(_)
-                    ),
+                    Expr::AggregateFunction(_) => false,
+                    Expr::Alias(Alias { expr, name: _, .. }) => {
+                        !matches!(**expr, Expr::AggregateFunction(_))
+                    }
                     _ => true,
                 })
                 .cloned()
@@ -385,7 +384,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     &[&[plan.schema()]],
                     &plan.using_columns()?,
                 )?;
-                let expr = col.alias(self.normalizer.normalize(alias));
+                let name = self.normalizer.normalize(alias);
+                // avoiding adding an alias if the column name is the same.
+                let expr = match &col {
+                    Expr::Column(column) if column.name.eq(&name) => col,
+                    _ => col.alias(name),
+                };
                 Ok(vec![expr])
             }
             SelectItem::Wildcard(options) => {
