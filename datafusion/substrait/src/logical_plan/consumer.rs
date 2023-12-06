@@ -438,11 +438,10 @@ pub async fn from_substrait_rel(
             let left: LogicalPlanBuilder = LogicalPlanBuilder::from(
                 from_substrait_rel(ctx, cross.left.as_ref().unwrap(), extensions).await?,
             );
-            let right = LogicalPlanBuilder::from(
+            let right =
                 from_substrait_rel(ctx, cross.right.as_ref().unwrap(), extensions)
-                    .await?,
-            );
-            left.cross_join(right.build()?)?.build()
+                    .await?;
+            left.cross_join(right)?.build()
         }
         Some(RelType::Read(read)) => match &read.as_ref().read_type {
             Some(ReadType::NamedTable(nt)) => {
