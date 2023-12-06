@@ -87,6 +87,40 @@ struct SpillState {
     merging_group_by: PhysicalGroupBy,
 }
 
+pub struct HashAggregateGroup {
+    /// Accumulators, one for each `AggregateExpr` in the query
+    ///
+    /// For example, if the query has aggregates, `SUM(x)`,
+    /// `COUNT(y)`, there will be two accumulators, each one
+    /// specialized for that particular aggregate and its input types
+    accumulators: Vec<Box<dyn GroupsAccumulator>>,
+
+    /// Arguments to pass to each accumulator.
+    ///
+    /// The arguments in `accumulator[i]` is passed `aggregate_arguments[i]`
+    ///
+    /// The argument to each accumulator is itself a `Vec` because
+    /// some aggregates such as `CORR` can accept more than one
+    /// argument.
+    aggregate_arguments: Vec<Vec<Arc<dyn PhysicalExpr>>>,
+
+    /// aggregate_arguments at the input of the merging (may have additional fields)
+    merging_aggregate_arguments: Vec<Vec<Arc<dyn PhysicalExpr>>>,
+
+    /// Optional filter expression to evaluate, one for each for
+    /// accumulator. If present, only those rows for which the filter
+    /// evaluate to true should be included in the aggregate results.
+    ///
+    /// For example, for an aggregate like `SUM(x) FILTER (WHERE x >= 100)`,
+    /// the filter expression is  `x > 100`.
+    filter_expressions: Vec<Option<Arc<dyn PhysicalExpr>>>,
+    /// Ordering Requirement for the aggregate group
+    requirement: LexOrdering,
+    /// Indices stores the position of the each aggregate expression
+    /// among all aggregate expressions (prior to grouping).
+    group_indices: Vec<usize>,
+}
+
 /// HashTable based Grouping Aggregator
 ///
 /// # Design Goals
@@ -395,37 +429,6 @@ impl GroupedHashAggregateStream {
     }
 }
 
-pub struct HashAggregateGroup {
-    /// Accumulators, one for each `AggregateExpr` in the query
-    ///
-    /// For example, if the query has aggregates, `SUM(x)`,
-    /// `COUNT(y)`, there will be two accumulators, each one
-    /// specialized for that particular aggregate and its input types
-    accumulators: Vec<Box<dyn GroupsAccumulator>>,
-
-    /// Arguments to pass to each accumulator.
-    ///
-    /// The arguments in `accumulator[i]` is passed `aggregate_arguments[i]`
-    ///
-    /// The argument to each accumulator is itself a `Vec` because
-    /// some aggregates such as `CORR` can accept more than one
-    /// argument.
-    aggregate_arguments: Vec<Vec<Arc<dyn PhysicalExpr>>>,
-
-    /// aggregate_arguments at the input of the merging (may have additional fields)
-    merging_aggregate_arguments: Vec<Vec<Arc<dyn PhysicalExpr>>>,
-
-    /// Optional filter expression to evaluate, one for each for
-    /// accumulator. If present, only those rows for which the filter
-    /// evaluate to true should be included in the aggregate results.
-    ///
-    /// For example, for an aggregate like `SUM(x) FILTER (WHERE x >= 100)`,
-    /// the filter expression is  `x > 100`.
-    filter_expressions: Vec<Option<Arc<dyn PhysicalExpr>>>,
-    requirement: LexOrdering,
-    group_indices: Vec<usize>,
-}
-
 /// Create an accumulator for `agg_expr` -- a [`GroupsAccumulator`] if
 /// that is supported by the aggregate, or a
 /// [`GroupsAccumulatorAdapter`] if not.
@@ -725,8 +728,6 @@ impl GroupedHashAggregateStream {
             .map(|aggregate_group| aggregate_group.group_indices.to_vec())
             .collect::<Vec<_>>();
         let aggregate_outputs = reorder_aggregate_expr_results(outputs, group_indices);
-        // // TODO: Consider proper indices during merging.
-        // let aggregate_outputs = outputs.into_iter().flatten().collect::<Vec<_>>();
         output.extend(aggregate_outputs);
         // emit reduces the memory usage. Ignore Err from update_memory_reservation. Even if it is
         // over the target memory size after emission, we can emit again rather than returning Err.

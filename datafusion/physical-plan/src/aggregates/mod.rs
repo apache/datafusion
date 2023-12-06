@@ -37,7 +37,7 @@ use arrow::array::ArrayRef;
 use arrow::datatypes::{Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::stats::Precision;
-use datafusion_common::{plan_err, DataFusionError, Result};
+use datafusion_common::{exec_datafusion_err, plan_err, DataFusionError, Result};
 use datafusion_execution::TaskContext;
 use datafusion_expr::Accumulator;
 use datafusion_physical_expr::{
@@ -268,6 +268,9 @@ impl From<StreamType> for SendableRecordBatchStream {
     }
 }
 
+/// A structure representing a group of aggregate expressions where each group has different
+/// ordering requirements. Aggregate groups are calculated using `get_aggregate_expr_groups` function.
+/// Indices refers to the position of each aggregate expressions among all aggregate expressions (prior to grouping).
 #[derive(Clone, Debug, PartialEq)]
 pub struct AggregateExprGroup {
     /// Aggregate expressions indices
@@ -289,6 +292,7 @@ pub struct AggregateExec {
     filter_expr: Vec<Option<Arc<dyn PhysicalExpr>>>,
     /// (ORDER BY clause) expression for each aggregate expression
     order_by_expr: Vec<Option<LexOrdering>>,
+    /// Stores aggregate groups where each group has different ordering requirement.
     aggregate_groups: Vec<AggregateExprGroup>,
     /// Set if the output of this aggregation is truncated by a upstream sort/limit clause
     limit: Option<usize>,
@@ -350,7 +354,7 @@ impl AggregateExec {
         )?;
         let eq_properties = input.equivalence_properties();
         let mut aggregate_groups =
-            get_aggregate_expr_groups(&mut aggr_expr, &group_by, &eq_properties, &mode);
+            get_aggregate_expr_groups(&mut aggr_expr, &group_by, &eq_properties, &mode)?;
 
         let schema = Arc::new(schema);
 
@@ -837,7 +841,18 @@ fn group_schema(schema: &Schema, group_count: usize) -> SchemaRef {
     Arc::new(Schema::new(group_fields))
 }
 
-fn get_req(
+/// Determines the lexical ordering requirement for an aggregate expression.
+///
+/// # Parameters
+///
+/// - `aggr_expr`: A reference to an `Arc<dyn AggregateExpr>` representing the aggregate expression.
+/// - `group_by`: A reference to a `PhysicalGroupBy` instance representing the physical group-by expression.
+/// - `agg_mode`: A reference to an `AggregateMode` instance representing the mode of aggregation.
+///
+/// # Returns
+///
+/// A `LexOrdering` instance indicating the lexical ordering requirement for the aggregate expression.
+fn get_aggregate_expr_req(
     aggr_expr: &Arc<dyn AggregateExpr>,
     group_by: &PhysicalGroupBy,
     agg_mode: &AggregateMode,
@@ -854,6 +869,7 @@ fn get_req(
     // Hence, we do not need to use the ordering requirement in such
     // modes as long as partial results are generated with the
     // correct ordering.
+    //  TODO: Remove all orderings that occur in the group by.
     if !is_order_sensitive(aggr_expr)
         || group_by_contains_all_requirements(group_by, &req)
         || !agg_mode.is_first_stage()
@@ -863,12 +879,25 @@ fn get_req(
     req
 }
 
+/// Groups aggregate expressions based on their ordering requirements.
+///
+/// # Parameters
+///
+/// - `aggr_exprs`: A mutable slice of `Arc<dyn AggregateExpr>` representing the aggregate expressions to be grouped.
+/// - `group_by`: A reference to a `PhysicalGroupBy` instance representing the physical group-by expression.
+/// - `eq_properties`: A reference to an `EquivalenceProperties` instance representing equivalence properties for ordering.
+/// - `agg_mode`: A reference to an `AggregateMode` instance representing the mode of aggregation.
+///
+/// # Returns
+///
+/// A vector of `AggregateExprGroup` instances, each containing indices and ordering requirements for a group of
+/// related aggregate expressions.
 fn get_aggregate_expr_groups(
     aggr_exprs: &mut [Arc<dyn AggregateExpr>],
     group_by: &PhysicalGroupBy,
     eq_properties: &EquivalenceProperties,
     agg_mode: &AggregateMode,
-) -> Vec<AggregateExprGroup> {
+) -> Result<Vec<AggregateExprGroup>> {
     let mut used_indices: HashSet<usize> = HashSet::new();
     let mut groups = vec![];
     while used_indices.len() != aggr_exprs.len() {
@@ -879,13 +908,14 @@ fn get_aggregate_expr_groups(
                 // Skip this group, it is already inserted.
                 continue;
             }
-            let aggr_req = get_req(aggr_expr, group_by, agg_mode);
+            let aggr_req = get_aggregate_expr_req(aggr_expr, group_by, agg_mode);
             if let Some((group_indices, req)) = &mut group {
                 if let Some(finer) = eq_properties.get_finer_ordering(req, &aggr_req) {
                     *req = finer;
                     group_indices.push(idx);
                 } else if let Some(reverse) = aggr_expr.reverse_expr() {
-                    let reverse_req = get_req(&reverse, group_by, agg_mode);
+                    let reverse_req =
+                        get_aggregate_expr_req(&reverse, group_by, agg_mode);
                     if let Some(finer) =
                         eq_properties.get_finer_ordering(req, &reverse_req)
                     {
@@ -898,18 +928,17 @@ fn get_aggregate_expr_groups(
                 group = Some((vec![idx], aggr_req));
             }
         }
-        if let Some((indices, requirement)) = group {
-            used_indices.extend(indices.iter());
-            groups.push(AggregateExprGroup {
-                indices,
-                requirement,
-            });
-        } else {
-            unreachable!();
-        }
+        // We cannot received None here.
+        let (indices, requirement) =
+            group.ok_or_else(|| exec_datafusion_err!("Cannot Receive empty group"))?;
+        used_indices.extend(indices.iter());
+        groups.push(AggregateExprGroup {
+            indices,
+            requirement,
+        });
     }
 
-    groups
+    Ok(groups)
 }
 
 /// returns physical expressions for arguments to evaluate against a batch
@@ -994,7 +1023,7 @@ fn finalize_aggregation(
     match mode {
         AggregateMode::Partial => {
             // build the vector of states
-            let a = accumulators
+            accumulators
                 .iter()
                 .map(|accumulator| {
                     accumulator.state().and_then(|e| {
@@ -1003,9 +1032,7 @@ fn finalize_aggregation(
                             .collect::<Result<Vec<ArrayRef>>>()
                     })
                 })
-                .collect::<Result<Vec<_>>>()?;
-            Ok(a)
-            // Ok(a.iter().flatten().cloned().collect::<Vec<_>>())
+                .collect::<Result<Vec<_>>>()
         }
         AggregateMode::Final
         | AggregateMode::FinalPartitioned
@@ -2133,7 +2160,7 @@ mod tests {
             &group_by,
             &eq_properties,
             &AggregateMode::Partial,
-        );
+        )?;
         let res = res[0].requirement.clone();
         assert_eq!(res, common_requirement);
         Ok(())
@@ -2239,7 +2266,7 @@ mod tests {
                 &group_by,
                 &eq_properties,
                 &AggregateMode::Partial,
-            );
+            )?;
 
             let expected = expected
                 .into_iter()
