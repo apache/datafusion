@@ -29,7 +29,7 @@ use arrow::datatypes::{DataType, Field, UInt64Type};
 use arrow::row::{RowConverter, SortField};
 use arrow_buffer::NullBuffer;
 
-use arrow_schema::FieldRef;
+use arrow_schema::{FieldRef, SortOptions};
 use datafusion_common::cast::{
     as_generic_list_array, as_generic_string_array, as_int64_array, as_list_array,
     as_null_array, as_string_array,
@@ -693,7 +693,7 @@ fn general_append_and_prepend(
 /// # Arguments
 ///
 /// * `args` - An array of 1 to 3 ArrayRefs representing start, stop, and step(step value can not be zero.) values.
-///    
+///
 /// # Examples
 ///
 /// gen_range(3) => [0, 1, 2]
@@ -775,6 +775,85 @@ pub fn array_append(args: &[ArrayRef]) -> Result<ArrayRef> {
     };
 
     Ok(res)
+}
+
+/// Array_sort SQL function
+pub fn array_sort(args: &[ArrayRef]) -> Result<ArrayRef> {
+    let sort_option = match args.len() {
+        1 => None,
+        2 => {
+            let sort = as_string_array(&args[1])?.value(0);
+            Some(SortOptions {
+                descending: order_desc(sort)?,
+                nulls_first: true,
+            })
+        }
+        3 => {
+            let sort = as_string_array(&args[1])?.value(0);
+            let nulls_first = as_string_array(&args[2])?.value(0);
+            Some(SortOptions {
+                descending: order_desc(sort)?,
+                nulls_first: order_nulls_first(nulls_first)?,
+            })
+        }
+        _ => return internal_err!("array_sort expects 1 to 3 arguments"),
+    };
+
+    let list_array = as_list_array(&args[0])?;
+    let row_count = list_array.len();
+
+    let mut array_lengths = vec![];
+    let mut arrays = vec![];
+    let mut valid = BooleanBufferBuilder::new(row_count);
+    for i in 0..row_count {
+        if list_array.is_null(i) {
+            array_lengths.push(0);
+            valid.append(false);
+        } else {
+            let arr_ref = list_array.value(i);
+            let arr_ref = arr_ref.as_ref();
+
+            let sorted_array = compute::sort(arr_ref, sort_option)?;
+            array_lengths.push(sorted_array.len());
+            arrays.push(sorted_array);
+            valid.append(true);
+        }
+    }
+
+    // Assume all arrays have the same data type
+    let data_type = list_array.value_type();
+    let buffer = valid.finish();
+
+    let elements = arrays
+        .iter()
+        .map(|a| a.as_ref())
+        .collect::<Vec<&dyn Array>>();
+
+    let list_arr = ListArray::new(
+        Arc::new(Field::new("item", data_type, true)),
+        OffsetBuffer::from_lengths(array_lengths),
+        Arc::new(compute::concat(elements.as_slice())?),
+        Some(NullBuffer::new(buffer)),
+    );
+    Ok(Arc::new(list_arr))
+}
+
+fn order_desc(modifier: &str) -> Result<bool> {
+    match modifier.to_uppercase().as_str() {
+        "DESC" => Ok(true),
+        "ASC" => Ok(false),
+        _ => internal_err!("the second parameter of array_sort expects DESC or ASC"),
+    }
+}
+
+fn order_nulls_first(modifier: &str) -> Result<bool> {
+    match modifier.to_uppercase().as_str() {
+        "NULLS FIRST" => Ok(true),
+        "NULLS LAST" => Ok(false),
+        _ => internal_err!(
+            "the third parameter of array_sort expects NULLS FIRST or NULLS LAST"
+        ),
+    }
 }
 
 /// Array_prepend SQL function

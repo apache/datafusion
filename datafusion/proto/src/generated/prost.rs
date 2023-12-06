@@ -2601,6 +2601,7 @@ pub enum ScalarFunction {
     Levenshtein = 125,
     SubstrIndex = 126,
     FindInSet = 127,
+    ArraySort = 128,
 }
 impl ScalarFunction {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -2737,6 +2738,7 @@ impl ScalarFunction {
             ScalarFunction::Levenshtein => "Levenshtein",
             ScalarFunction::SubstrIndex => "SubstrIndex",
             ScalarFunction::FindInSet => "FindInSet",
+            ScalarFunction::ArraySort => "ArraySort",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -2870,6 +2872,7 @@ impl ScalarFunction {
             "Levenshtein" => Some(Self::Levenshtein),
             "SubstrIndex" => Some(Self::SubstrIndex),
             "FindInSet" => Some(Self::FindInSet),
+            "ArraySort" => Some(Self::ArraySort),
             _ => None,
         }
     }
