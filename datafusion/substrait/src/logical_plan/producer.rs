@@ -19,7 +19,7 @@ use std::collections::HashMap;
 use std::ops::Deref;
 use std::sync::Arc;
 
-use datafusion::logical_expr::{Distinct, Like, WindowFrameUnits};
+use datafusion::logical_expr::{CrossJoin, Distinct, Like, WindowFrameUnits};
 use datafusion::{
     arrow::datatypes::{DataType, TimeUnit},
     error::{DataFusionError, Result},
@@ -334,8 +334,13 @@ pub fn to_substrait_rel(
             }))
         }
         LogicalPlan::CrossJoin(cross_join) => {
-            let left = to_substrait_rel(cross_join.left.as_ref(), ctx, extension_info)?;
-            let right = to_substrait_rel(cross_join.right.as_ref(), ctx, extension_info)?;
+            let CrossJoin {
+                left,
+                right,
+                schema: _,
+            } = cross_join;
+            let left = to_substrait_rel(left.as_ref(), ctx, extension_info)?;
+            let right = to_substrait_rel(right.as_ref(), ctx, extension_info)?;
             Ok(Box::new(Rel {
                 rel_type: Some(RelType::Cross(Box::new(CrossRel {
                     common: None,
