@@ -42,6 +42,28 @@ use futures::stream::{Stream, StreamExt};
 
 use super::AggregateExec;
 
+/// A structure representing an aggregate group.
+///
+/// The `AggregateGroup` struct is all aggregate expressions
+/// where ordering requirement is satisfied by `requirement`.
+/// This struct divides aggregate expressions according to their requirements.
+/// Aggregate groups are constructed using `get_aggregate_expr_groups` function.
+///
+/// # Fields
+///
+/// - `aggregate_expressions`: A vector of vectors containing aggregate expressions.
+/// - `filter_expressions`: A vector of optional filter expressions associated with each aggregate expression.
+/// - `accumulators`: A vector of `AccumulatorItem` instances representing accumulators for the group.
+/// - `requirement`: A `LexOrdering` instance specifying the lexical ordering requirement of the group.
+/// - `group_indices`: A vector of indices indicating position of each aggregation in the original aggregate expression.
+pub struct AggregateGroup {
+    aggregate_expressions: Vec<Vec<Arc<dyn PhysicalExpr>>>,
+    filter_expressions: Vec<Option<Arc<dyn PhysicalExpr>>>,
+    accumulators: Vec<AccumulatorItem>,
+    requirement: LexOrdering,
+    group_indices: Vec<usize>,
+}
+
 /// stream struct for aggregation without grouping columns
 pub(crate) struct AggregateStream {
     stream: BoxStream<'static, Result<RecordBatch>>,
@@ -63,14 +85,6 @@ struct AggregateStreamInner {
     aggregate_groups: Vec<AggregateGroup>,
     reservation: MemoryReservation,
     finished: bool,
-}
-
-pub struct AggregateGroup {
-    aggregate_expressions: Vec<Vec<Arc<dyn PhysicalExpr>>>,
-    filter_expressions: Vec<Option<Arc<dyn PhysicalExpr>>>,
-    accumulators: Vec<AccumulatorItem>,
-    requirement: LexOrdering,
-    group_indices: Vec<usize>,
 }
 
 impl AggregateStream {
@@ -110,7 +124,6 @@ impl AggregateStream {
                         get_at_indices(&aggregate_expressions, indices)?;
                     let filter_expressions =
                         get_at_indices(&filter_expressions, indices)?;
-                    // let accumulators = get_at_indices(&accumulators, &indices)?;
                     let accumulators = create_accumulators(&aggr_exprs)?;
                     Ok(AggregateGroup {
                         aggregate_expressions,
@@ -143,7 +156,7 @@ impl AggregateStream {
                 let result = match this.input.next().await {
                     Some(Ok(batch)) => {
                         let timer = elapsed_compute.timer();
-                        let result = aggregate_batch(
+                        let result = aggregate_batch_groups(
                             &this.mode,
                             batch,
                             &mut this.aggregate_groups,
@@ -215,17 +228,30 @@ impl RecordBatchStream for AggregateStream {
     }
 }
 
-/// Perform group-by aggregation for the given [`RecordBatch`].
+/// Perform group-by aggregation for the given [`RecordBatch`] on all aggregate groups.
+///
+/// If successful, this returns the additional number of bytes that were allocated during this process.
+fn aggregate_batch_groups(
+    mode: &AggregateMode,
+    batch: RecordBatch,
+    aggregate_groups: &mut [AggregateGroup],
+) -> Result<usize> {
+    let allocated = aggregate_groups
+        .iter_mut()
+        .map(|aggregate_group| aggregate_batch(mode, &batch, aggregate_group))
+        .collect::<Result<Vec<_>>>()?;
+    Ok(allocated.into_iter().sum())
+}
+
+/// Perform group-by aggregation for the given [`RecordBatch`] on the aggregate group.
 ///
 /// If successful, this returns the additional number of bytes that were allocated during this process.
 ///
 /// TODO: Make this a member function
 fn aggregate_batch(
     mode: &AggregateMode,
-    batch: RecordBatch,
-    aggregate_groups: &mut [AggregateGroup],
-    // expressions: &[Vec<Arc<dyn PhysicalExpr>>],
-    // filters: &[Option<Arc<dyn PhysicalExpr>>],
+    batch: &RecordBatch,
+    aggregate_group: &mut AggregateGroup,
 ) -> Result<usize> {
     let mut allocated = 0usize;
 
@@ -234,52 +260,48 @@ fn aggregate_batch(
     // 1.3 evaluate expressions
     // 1.4 update / merge accumulators with the expressions' values
 
-    aggregate_groups
+    let accumulators = &mut aggregate_group.accumulators;
+    let expressions = &mut aggregate_group.aggregate_expressions;
+    let filters = &mut aggregate_group.filter_expressions;
+    let requirement = &aggregate_group.requirement;
+    let batch = if requirement.is_empty() {
+        batch.clone()
+    } else {
+        sort_batch(batch, requirement, None)?
+    };
+    // 1.1
+    accumulators
         .iter_mut()
-        .try_for_each(|aggregate_group| {
-            let accumulators = &mut aggregate_group.accumulators;
-            let expressions = &mut aggregate_group.aggregate_expressions;
-            let filters = &mut aggregate_group.filter_expressions;
-            let requirement = &aggregate_group.requirement;
-            let batch = if requirement.is_empty() {
-                batch.clone()
-            } else {
-                sort_batch(&batch, requirement, None)?
+        .zip(expressions)
+        .zip(filters)
+        .try_for_each(|((accum, expr), filter)| {
+            // 1.2
+            let batch = match filter {
+                Some(filter) => Cow::Owned(batch_filter(&batch, filter)?),
+                None => Cow::Borrowed(&batch),
             };
-            // 1.1
-            accumulators
-                .iter_mut()
-                .zip(expressions)
-                .zip(filters)
-                .try_for_each(|((accum, expr), filter)| {
-                    // 1.2
-                    let batch = match filter {
-                        Some(filter) => Cow::Owned(batch_filter(&batch, filter)?),
-                        None => Cow::Borrowed(&batch),
-                    };
-                    // 1.3
-                    let values = &expr
-                        .iter()
-                        .map(|e| {
-                            e.evaluate(&batch)
-                                .and_then(|v| v.into_array(batch.num_rows()))
-                        })
-                        .collect::<Result<Vec<_>>>()?;
-
-                    // 1.4
-                    let size_pre = accum.size();
-                    let res = match mode {
-                        AggregateMode::Partial
-                        | AggregateMode::Single
-                        | AggregateMode::SinglePartitioned => accum.update_batch(values),
-                        AggregateMode::Final | AggregateMode::FinalPartitioned => {
-                            accum.merge_batch(values)
-                        }
-                    };
-                    let size_post = accum.size();
-                    allocated += size_post.saturating_sub(size_pre);
-                    res
+            // 1.3
+            let values = &expr
+                .iter()
+                .map(|e| {
+                    e.evaluate(&batch)
+                        .and_then(|v| v.into_array(batch.num_rows()))
                 })
+                .collect::<Result<Vec<_>>>()?;
+
+            // 1.4
+            let size_pre = accum.size();
+            let res = match mode {
+                AggregateMode::Partial
+                | AggregateMode::Single
+                | AggregateMode::SinglePartitioned => accum.update_batch(values),
+                AggregateMode::Final | AggregateMode::FinalPartitioned => {
+                    accum.merge_batch(values)
+                }
+            };
+            let size_post = accum.size();
+            allocated += size_post.saturating_sub(size_pre);
+            res
         })?;
 
     Ok(allocated)
