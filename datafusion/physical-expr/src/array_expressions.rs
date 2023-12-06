@@ -378,14 +378,7 @@ fn return_empty(return_null: bool, data_type: DataType) -> Arc<dyn Array> {
     }
 }
 
-fn list_slice<T: Array + 'static>(
-    array: &dyn Array,
-    i: i64,
-    j: i64,
-    return_element: bool,
-) -> ArrayRef {
-    let array = array.as_any().downcast_ref::<T>().unwrap();
-
+fn list_slice(array: &dyn Array, i: i64, j: i64, return_element: bool) -> ArrayRef {
     let array_type = array.data_type().clone();
 
     if i == 0 && j == 0 || array.is_empty() {
@@ -426,7 +419,7 @@ fn list_slice<T: Array + 'static>(
     }
 }
 
-fn slice<T: Array + 'static>(
+fn slice(
     array: &ListArray,
     key: &Int64Array,
     extra_key: &Int64Array,
@@ -437,10 +430,10 @@ fn slice<T: Array + 'static>(
         .zip(key.iter())
         .zip(extra_key.iter())
         .map(|((arr, i), j)| match (arr, i, j) {
-            (Some(arr), Some(i), Some(j)) => list_slice::<T>(&arr, i, j, return_element),
-            (Some(arr), None, Some(j)) => list_slice::<T>(&arr, 1i64, j, return_element),
+            (Some(arr), Some(i), Some(j)) => list_slice(&arr, i, j, return_element),
+            (Some(arr), None, Some(j)) => list_slice(&arr, 1i64, j, return_element),
             (Some(arr), Some(i), None) => {
-                list_slice::<T>(&arr, i, arr.len() as i64, return_element)
+                list_slice(&arr, i, arr.len() as i64, return_element)
             }
             (Some(arr), None, None) if !return_element => arr.clone(),
             _ => return_empty(return_element, array.value_type()),
@@ -487,12 +480,7 @@ fn define_array_slice(
     extra_key: &Int64Array,
     return_element: bool,
 ) -> Result<ArrayRef> {
-    macro_rules! array_function {
-        ($ARRAY_TYPE:ident) => {
-            slice::<$ARRAY_TYPE>(list_array, key, extra_key, return_element)
-        };
-    }
-    call_array_function!(list_array.value_type(), true)
+    slice(list_array, key, extra_key, return_element)
 }
 
 pub fn array_element(args: &[ArrayRef]) -> Result<ArrayRef> {
