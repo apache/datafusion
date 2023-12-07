@@ -935,7 +935,6 @@ mod tests {
             .build()
             .unwrap();
 
-        // let output_schema = plan.schema();
 
         let expected = "Aggregate: groupBy=[[]], aggr=[[COUNT(Int32(1))]]\
         \n  Projection: \
