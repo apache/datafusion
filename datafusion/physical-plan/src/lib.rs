@@ -51,6 +51,7 @@ pub mod coalesce_partitions;
 pub mod common;
 pub mod display;
 pub mod empty;
+pub mod placeholder_row;
 pub mod explain;
 pub mod filter;
 pub mod insert;
