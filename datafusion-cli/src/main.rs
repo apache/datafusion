@@ -331,6 +331,8 @@ fn extract_memory_pool_size(size: &str) -> Result<usize, String> {
 
 #[cfg(test)]
 mod tests {
+    use datafusion::assert_batches_eq;
+
     use super::*;
 
     fn assert_conversion(input: &str, expected: Result<usize, String>) {
@@ -385,6 +387,36 @@ mod tests {
             "12k12k",
             Err("Invalid memory pool size '12k12k'".to_string()),
         );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_parquet_metadata_works() -> Result<(), DataFusionError> {
+        let ctx = SessionContext::new();
+        ctx.register_udtf("parquet_metadata", Arc::new(ParquetMetadataFunc {}));
+
+        // input with single quote
+        let sql =
+            "SELECT * FROM parquet_metadata('../datafusion/core/tests/data/fixed_size_list_array.parquet')";
+        let df = ctx.sql(sql).await?;
+        let rbs = df.collect().await?;
+
+        let excepted = [
+            "+-------------------------------------------------------------+--------------+--------------------+-----------------------+-----------------+-----------+-------------+------------+----------------+-------+-----------+-----------+------------------+----------------------+-----------------+-----------------+-------------+------------------------------+-------------------+------------------------+------------------+-----------------------+-------------------------+",
+            "| filename                                                    | row_group_id | row_group_num_rows | row_group_num_columns | row_group_bytes | column_id | file_offset | num_values | path_in_schema | type  | stats_min | stats_max | stats_null_count | stats_distinct_count | stats_min_value | stats_max_value | compression | encodings                    | index_page_offset | dictionary_page_offset | data_page_offset | total_compressed_size | total_uncompressed_size |",
+            "+-------------------------------------------------------------+--------------+--------------------+-----------------------+-----------------+-----------+-------------+------------+----------------+-------+-----------+-----------+------------------+----------------------+-----------------+-----------------+-------------+------------------------------+-------------------+------------------------+------------------+-----------------------+-------------------------+",
+            "| ../datafusion/core/tests/data/fixed_size_list_array.parquet | 0            | 2                  | 1                     | 123             | 0         | 125         | 4          | \"f0.list.item\" | INT64 | 1         | 4         | 0                |                      | 1               | 4               | SNAPPY      | [RLE_DICTIONARY, PLAIN, RLE] |                   | 4                      | 46               | 121                   | 123                     |",
+            "+-------------------------------------------------------------+--------------+--------------------+-----------------------+-----------------+-----------+-------------+------------+----------------+-------+-----------+-----------+------------------+----------------------+-----------------+-----------------+-------------+------------------------------+-------------------+------------------------+------------------+-----------------------+-------------------------+",
+        ];
+        assert_batches_eq!(excepted, &rbs);
+
+        // input with double quote
+        let sql =
+            "SELECT * FROM parquet_metadata(\"../datafusion/core/tests/data/fixed_size_list_array.parquet\")";
+        let df = ctx.sql(sql).await?;
+        let rbs = df.collect().await?;
+        assert_batches_eq!(excepted, &rbs);
 
         Ok(())
     }
