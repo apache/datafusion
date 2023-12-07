@@ -360,6 +360,11 @@ pub struct CreateExternalTableNode {
     >,
     #[prost(message, optional, tag = "15")]
     pub constraints: ::core::option::Option<Constraints>,
+    #[prost(map = "string, message", tag = "16")]
+    pub column_defaults: ::std::collections::HashMap<
+        ::prost::alloc::string::String,
+        LogicalExprNode,
+    >,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -2596,6 +2601,7 @@ pub enum ScalarFunction {
     Levenshtein = 125,
     SubstrIndex = 126,
     FindInSet = 127,
+    ArraySort = 128,
 }
 impl ScalarFunction {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -2732,6 +2738,7 @@ impl ScalarFunction {
             ScalarFunction::Levenshtein => "Levenshtein",
             ScalarFunction::SubstrIndex => "SubstrIndex",
             ScalarFunction::FindInSet => "FindInSet",
+            ScalarFunction::ArraySort => "ArraySort",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -2865,6 +2872,7 @@ impl ScalarFunction {
             "Levenshtein" => Some(Self::Levenshtein),
             "SubstrIndex" => Some(Self::SubstrIndex),
             "FindInSet" => Some(Self::FindInSet),
+            "ArraySort" => Some(Self::ArraySort),
             _ => None,
         }
     }

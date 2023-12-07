@@ -4026,6 +4026,9 @@ impl serde::Serialize for CreateExternalTableNode {
         if self.constraints.is_some() {
             len += 1;
         }
+        if !self.column_defaults.is_empty() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion.CreateExternalTableNode", len)?;
         if let Some(v) = self.name.as_ref() {
             struct_ser.serialize_field("name", v)?;
@@ -4069,6 +4072,9 @@ impl serde::Serialize for CreateExternalTableNode {
         if let Some(v) = self.constraints.as_ref() {
             struct_ser.serialize_field("constraints", v)?;
         }
+        if !self.column_defaults.is_empty() {
+            struct_ser.serialize_field("columnDefaults", &self.column_defaults)?;
+        }
         struct_ser.end()
     }
 }
@@ -4099,6 +4105,8 @@ impl<'de> serde::Deserialize<'de> for CreateExternalTableNode {
             "unbounded",
             "options",
             "constraints",
+            "column_defaults",
+            "columnDefaults",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -4117,6 +4125,7 @@ impl<'de> serde::Deserialize<'de> for CreateExternalTableNode {
             Unbounded,
             Options,
             Constraints,
+            ColumnDefaults,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -4152,6 +4161,7 @@ impl<'de> serde::Deserialize<'de> for CreateExternalTableNode {
                             "unbounded" => Ok(GeneratedField::Unbounded),
                             "options" => Ok(GeneratedField::Options),
                             "constraints" => Ok(GeneratedField::Constraints),
+                            "columnDefaults" | "column_defaults" => Ok(GeneratedField::ColumnDefaults),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -4185,6 +4195,7 @@ impl<'de> serde::Deserialize<'de> for CreateExternalTableNode {
                 let mut unbounded__ = None;
                 let mut options__ = None;
                 let mut constraints__ = None;
+                let mut column_defaults__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Name => {
@@ -4273,6 +4284,14 @@ impl<'de> serde::Deserialize<'de> for CreateExternalTableNode {
                             }
                             constraints__ = map_.next_value()?;
                         }
+                        GeneratedField::ColumnDefaults => {
+                            if column_defaults__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("columnDefaults"));
+                            }
+                            column_defaults__ = Some(
+                                map_.next_value::<std::collections::HashMap<_, _>>()?
+                            );
+                        }
                     }
                 }
                 Ok(CreateExternalTableNode {
@@ -4290,6 +4309,7 @@ impl<'de> serde::Deserialize<'de> for CreateExternalTableNode {
                     unbounded: unbounded__.unwrap_or_default(),
                     options: options__.unwrap_or_default(),
                     constraints: constraints__,
+                    column_defaults: column_defaults__.unwrap_or_default(),
                 })
             }
         }
@@ -20885,6 +20905,7 @@ impl serde::Serialize for ScalarFunction {
             Self::Levenshtein => "Levenshtein",
             Self::SubstrIndex => "SubstrIndex",
             Self::FindInSet => "FindInSet",
+            Self::ArraySort => "ArraySort",
         };
         serializer.serialize_str(variant)
     }
@@ -21024,6 +21045,7 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
             "Levenshtein",
             "SubstrIndex",
             "FindInSet",
+            "ArraySort",
         ];
 
         struct GeneratedVisitor;
@@ -21192,6 +21214,7 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
                     "Levenshtein" => Ok(ScalarFunction::Levenshtein),
                     "SubstrIndex" => Ok(ScalarFunction::SubstrIndex),
                     "FindInSet" => Ok(ScalarFunction::FindInSet),
+                    "ArraySort" => Ok(ScalarFunction::ArraySort),
                     _ => Err(serde::de::Error::unknown_variant(value, FIELDS)),
                 }
             }

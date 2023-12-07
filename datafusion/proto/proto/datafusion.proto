@@ -216,6 +216,7 @@ message CreateExternalTableNode {
   bool unbounded = 14;
   map<string, string> options = 11;
   Constraints constraints = 15;
+  map<string, LogicalExprNode> column_defaults = 16;
 }
 
 message PrepareNode {
@@ -643,6 +644,7 @@ enum ScalarFunction {
   Levenshtein = 125;
   SubstrIndex = 126;
   FindInSet = 127;
+  ArraySort = 128;
 }
 
 message ScalarFunctionNode {

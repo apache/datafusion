@@ -228,7 +228,8 @@ impl TableProviderFactory for ListingTableFactory {
             .with_cache(state.runtime_env().cache_manager.get_file_statistic_cache());
         let table = provider
             .with_definition(cmd.definition.clone())
-            .with_constraints(cmd.constraints.clone());
+            .with_constraints(cmd.constraints.clone())
+            .with_column_defaults(cmd.column_defaults.clone());
         Ok(Arc::new(table))
     }
 }
@@ -279,6 +280,7 @@ mod tests {
             unbounded: false,
             options: HashMap::new(),
             constraints: Constraints::empty(),
+            column_defaults: HashMap::new(),
         };
         let table_provider = factory.create(&state, &cmd).await.unwrap();
         let listing_table = table_provider
