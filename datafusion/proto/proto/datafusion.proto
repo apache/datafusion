@@ -216,6 +216,7 @@ message CreateExternalTableNode {
   bool unbounded = 14;
   map<string, string> options = 11;
   Constraints constraints = 15;
+  map<string, LogicalExprNode> column_defaults = 16;
 }
 
 message PrepareNode {
@@ -643,7 +644,8 @@ enum ScalarFunction {
   Levenshtein = 125;
   SubstrIndex = 126;
   FindInSet = 127;
-  ArrayDistinct = 128;
+  ArraySort = 128;
+  ArrayDistinct = 129;
 }
 
 message ScalarFunctionNode {
@@ -1369,6 +1371,7 @@ message PhysicalNegativeNode {
 message FilterExecNode {
   PhysicalPlanNode input = 1;
   PhysicalExprNode expr = 2;
+  uint32 default_filter_selectivity = 3;
 }
 
 message FileGroup {
@@ -1503,7 +1506,7 @@ enum AggregateMode {
   SINGLE_PARTITIONED = 4;
 }
 
-message PartiallySortedPartitionSearchMode {
+message PartiallySortedInputOrderMode {
   repeated uint64 columns = 6;
 }
 
@@ -1512,9 +1515,9 @@ message WindowAggExecNode {
   repeated PhysicalWindowExprNode window_expr = 2;
   repeated PhysicalExprNode partition_keys = 5;
   // Set optional to `None` for `BoundedWindowAggExec`.
-  oneof partition_search_mode {
+  oneof input_order_mode {
     EmptyMessage linear = 7;
-    PartiallySortedPartitionSearchMode partially_sorted = 8;
+    PartiallySortedInputOrderMode partially_sorted = 8;
     EmptyMessage sorted = 9;
   }
 }

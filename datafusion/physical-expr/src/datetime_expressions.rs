@@ -1349,7 +1349,7 @@ mod tests {
                 .collect::<TimestampNanosecondArray>()
                 .with_timezone_opt(tz_opt.clone());
             let result = date_trunc(&[
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some("day".to_string()))),
+                ColumnarValue::Scalar(ScalarValue::from("day")),
                 ColumnarValue::Array(Arc::new(input)),
             ])
             .unwrap();

@@ -48,5 +48,6 @@ url = "2.2"
 [dev-dependencies]
 assert_cmd = "2.0"
 ctor = "0.2.0"
+datafusion-common = { path = "../datafusion/common" }
 predicates = "3.0"
 rstest = "0.17"

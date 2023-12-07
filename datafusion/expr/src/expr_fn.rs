@@ -583,6 +583,8 @@ scalar_expr!(
     "appends an element to the end of an array."
 );
 
+scalar_expr!(ArraySort, array_sort, array desc null_first, "returns sorted array.");
+
 scalar_expr!(
     ArrayPopBack,
     array_pop_back,
@@ -1190,6 +1192,7 @@ mod test {
         test_scalar_expr!(FromUnixtime, from_unixtime, unixtime);
 
         test_scalar_expr!(ArrayAppend, array_append, array, element);
+        test_scalar_expr!(ArraySort, array_sort, array, desc, null_first);
         test_scalar_expr!(ArrayPopFront, array_pop_front, array);
         test_scalar_expr!(ArrayPopBack, array_pop_back, array);
         test_unary_scalar_expr!(ArrayDims, array_dims);

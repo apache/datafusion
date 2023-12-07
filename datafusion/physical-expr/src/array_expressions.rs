@@ -18,6 +18,7 @@
 //! Array expressions
 
 use std::any::type_name;
+use std::cmp::Ordering;
 use std::collections::HashSet;
 use std::sync::Arc;
 
@@ -28,7 +29,7 @@ use arrow::datatypes::{DataType, Field, UInt64Type};
 use arrow::row::{RowConverter, SortField};
 use arrow_buffer::NullBuffer;
 
-use arrow_schema::FieldRef;
+use arrow_schema::{FieldRef, SortOptions};
 use datafusion_common::cast::{
     as_generic_list_array, as_generic_string_array, as_int64_array, as_large_list_array,
     as_list_array, as_null_array, as_string_array,
@@ -377,111 +378,107 @@ fn return_empty(return_null: bool, data_type: DataType) -> Arc<dyn Array> {
     }
 }
 
-macro_rules! list_slice {
-    ($ARRAY:expr, $I:expr, $J:expr, $RETURN_ELEMENT:expr, $ARRAY_TYPE:ident) => {{
-        let array = $ARRAY.as_any().downcast_ref::<$ARRAY_TYPE>().unwrap();
-        if $I == 0 && $J == 0 || $ARRAY.is_empty() {
-            return return_empty($RETURN_ELEMENT, $ARRAY.data_type().clone());
+fn list_slice<T: Array + 'static>(
+    array: &dyn Array,
+    i: i64,
+    j: i64,
+    return_element: bool,
+) -> ArrayRef {
+    let array = array.as_any().downcast_ref::<T>().unwrap();
+
+    let array_type = array.data_type().clone();
+
+    if i == 0 && j == 0 || array.is_empty() {
+        return return_empty(return_element, array_type);
+    }
+
+    let i = match i.cmp(&0) {
+        Ordering::Less => {
+            if i.unsigned_abs() > array.len() as u64 {
+                return return_empty(true, array_type);
+            }
+
+            (array.len() as i64 + i + 1) as usize
         }
+        Ordering::Equal => 1,
+        Ordering::Greater => i as usize,
+    };
 
-        let i = if $I < 0 {
-            if $I.abs() as usize > array.len() {
-                return return_empty(true, $ARRAY.data_type().clone());
+    let j = match j.cmp(&0) {
+        Ordering::Less => {
+            if j.unsigned_abs() as usize > array.len() {
+                return return_empty(true, array_type);
             }
-
-            (array.len() as i64 + $I + 1) as usize
-        } else {
-            if $I == 0 {
-                1
+            if return_element {
+                (array.len() as i64 + j + 1) as usize
             } else {
-                $I as usize
+                (array.len() as i64 + j) as usize
             }
-        };
-        let j = if $J < 0 {
-            if $J.abs() as usize > array.len() {
-                return return_empty(true, $ARRAY.data_type().clone());
-            }
-
-            if $RETURN_ELEMENT {
-                (array.len() as i64 + $J + 1) as usize
-            } else {
-                (array.len() as i64 + $J) as usize
-            }
-        } else {
-            if $J == 0 {
-                1
-            } else {
-                if $J as usize > array.len() {
-                    array.len()
-                } else {
-                    $J as usize
-                }
-            }
-        };
-
-        if i > j || i as usize > $ARRAY.len() {
-            return_empty($RETURN_ELEMENT, $ARRAY.data_type().clone())
-        } else {
-            Arc::new(array.slice((i - 1), (j + 1 - i)))
         }
-    }};
+        Ordering::Equal => 1,
+        Ordering::Greater => j.min(array.len() as i64) as usize,
+    };
+
+    if i > j || i > array.len() {
+        return_empty(return_element, array_type)
+    } else {
+        Arc::new(array.slice(i - 1, j + 1 - i))
+    }
 }
 
-macro_rules! slice {
-    ($ARRAY:expr, $KEY:expr, $EXTRA_KEY:expr, $RETURN_ELEMENT:expr, $ARRAY_TYPE:ident) => {{
-        let sliced_array: Vec<Arc<dyn Array>> = $ARRAY
-            .iter()
-            .zip($KEY.iter())
-            .zip($EXTRA_KEY.iter())
-            .map(|((arr, i), j)| match (arr, i, j) {
-                (Some(arr), Some(i), Some(j)) => {
-                    list_slice!(arr, i, j, $RETURN_ELEMENT, $ARRAY_TYPE)
-                }
-                (Some(arr), None, Some(j)) => {
-                    list_slice!(arr, 1i64, j, $RETURN_ELEMENT, $ARRAY_TYPE)
-                }
-                (Some(arr), Some(i), None) => {
-                    list_slice!(arr, i, arr.len() as i64, $RETURN_ELEMENT, $ARRAY_TYPE)
-                }
-                (Some(arr), None, None) if !$RETURN_ELEMENT => arr,
-                _ => return_empty($RETURN_ELEMENT, $ARRAY.value_type().clone()),
-            })
-            .collect();
-
-        // concat requires input of at least one array
-        if sliced_array.is_empty() {
-            Ok(return_empty($RETURN_ELEMENT, $ARRAY.value_type()))
-        } else {
-            let vec = sliced_array
-                .iter()
-                .map(|a| a.as_ref())
-                .collect::<Vec<&dyn Array>>();
-            let mut i: i32 = 0;
-            let mut offsets = vec![i];
-            offsets.extend(
-                vec.iter()
-                    .map(|a| {
-                        i += a.len() as i32;
-                        i
-                    })
-                    .collect::<Vec<_>>(),
-            );
-            let values = compute::concat(vec.as_slice()).unwrap();
-
-            if $RETURN_ELEMENT {
-                Ok(values)
-            } else {
-                let field =
-                    Arc::new(Field::new("item", $ARRAY.value_type().clone(), true));
-                Ok(Arc::new(ListArray::try_new(
-                    field,
-                    OffsetBuffer::new(offsets.into()),
-                    values,
-                    None,
-                )?))
+fn slice<T: Array + 'static>(
+    array: &ListArray,
+    key: &Int64Array,
+    extra_key: &Int64Array,
+    return_element: bool,
+) -> Result<Arc<dyn Array>> {
+    let sliced_array: Vec<Arc<dyn Array>> = array
+        .iter()
+        .zip(key.iter())
+        .zip(extra_key.iter())
+        .map(|((arr, i), j)| match (arr, i, j) {
+            (Some(arr), Some(i), Some(j)) => list_slice::<T>(&arr, i, j, return_element),
+            (Some(arr), None, Some(j)) => list_slice::<T>(&arr, 1i64, j, return_element),
+            (Some(arr), Some(i), None) => {
+                list_slice::<T>(&arr, i, arr.len() as i64, return_element)
             }
+            (Some(arr), None, None) if !return_element => arr.clone(),
+            _ => return_empty(return_element, array.value_type()),
+        })
+        .collect();
+
+    // concat requires input of at least one array
+    if sliced_array.is_empty() {
+        Ok(return_empty(return_element, array.value_type()))
+    } else {
+        let vec = sliced_array
+            .iter()
+            .map(|a| a.as_ref())
+            .collect::<Vec<&dyn Array>>();
+        let mut i: i32 = 0;
+        let mut offsets = vec![i];
+        offsets.extend(
+            vec.iter()
+                .map(|a| {
+                    i += a.len() as i32;
+                    i
+                })
+                .collect::<Vec<_>>(),
+        );
+        let values = compute::concat(vec.as_slice()).unwrap();
+
+        if return_element {
+            Ok(values)
+        } else {
+            let field = Arc::new(Field::new("item", array.value_type(), true));
+            Ok(Arc::new(ListArray::try_new(
+                field,
+                OffsetBuffer::new(offsets.into()),
+                values,
+                None,
+            )?))
         }
-    }};
+    }
 }
 
 fn define_array_slice(
@@ -492,7 +489,7 @@ fn define_array_slice(
 ) -> Result<ArrayRef> {
     macro_rules! array_function {
         ($ARRAY_TYPE:ident) => {
-            slice!(list_array, key, extra_key, return_element, $ARRAY_TYPE)
+            slice::<$ARRAY_TYPE>(list_array, key, extra_key, return_element)
         };
     }
     call_array_function!(list_array.value_type(), true)
@@ -696,7 +693,7 @@ fn general_append_and_prepend(
 /// # Arguments
 ///
 /// * `args` - An array of 1 to 3 ArrayRefs representing start, stop, and step(step value can not be zero.) values.
-///    
+///
 /// # Examples
 ///
 /// gen_range(3) => [0, 1, 2]
@@ -778,6 +775,85 @@ pub fn array_append(args: &[ArrayRef]) -> Result<ArrayRef> {
     };
 
     Ok(res)
+}
+
+/// Array_sort SQL function
+pub fn array_sort(args: &[ArrayRef]) -> Result<ArrayRef> {
+    let sort_option = match args.len() {
+        1 => None,
+        2 => {
+            let sort = as_string_array(&args[1])?.value(0);
+            Some(SortOptions {
+                descending: order_desc(sort)?,
+                nulls_first: true,
+            })
+        }
+        3 => {
+            let sort = as_string_array(&args[1])?.value(0);
+            let nulls_first = as_string_array(&args[2])?.value(0);
+            Some(SortOptions {
+                descending: order_desc(sort)?,
+                nulls_first: order_nulls_first(nulls_first)?,
+            })
+        }
+        _ => return internal_err!("array_sort expects 1 to 3 arguments"),
+    };
+
+    let list_array = as_list_array(&args[0])?;
+    let row_count = list_array.len();
+
+    let mut array_lengths = vec![];
+    let mut arrays = vec![];
+    let mut valid = BooleanBufferBuilder::new(row_count);
+    for i in 0..row_count {
+        if list_array.is_null(i) {
+            array_lengths.push(0);
+            valid.append(false);
+        } else {
+            let arr_ref = list_array.value(i);
+            let arr_ref = arr_ref.as_ref();
+
+            let sorted_array = compute::sort(arr_ref, sort_option)?;
+            array_lengths.push(sorted_array.len());
+            arrays.push(sorted_array);
+            valid.append(true);
+        }
+    }
+
+    // Assume all arrays have the same data type
+    let data_type = list_array.value_type();
+    let buffer = valid.finish();
+
+    let elements = arrays
+        .iter()
+        .map(|a| a.as_ref())
+        .collect::<Vec<&dyn Array>>();
+
+    let list_arr = ListArray::new(
+        Arc::new(Field::new("item", data_type, true)),
+        OffsetBuffer::from_lengths(array_lengths),
+        Arc::new(compute::concat(elements.as_slice())?),
+        Some(NullBuffer::new(buffer)),
+    );
+    Ok(Arc::new(list_arr))
+}
+
+fn order_desc(modifier: &str) -> Result<bool> {
+    match modifier.to_uppercase().as_str() {
+        "DESC" => Ok(true),
+        "ASC" => Ok(false),
+        _ => internal_err!("the second parameter of array_sort expects DESC or ASC"),
+    }
+}
+
+fn order_nulls_first(modifier: &str) -> Result<bool> {
+    match modifier.to_uppercase().as_str() {
+        "NULLS FIRST" => Ok(true),
+        "NULLS LAST" => Ok(false),
+        _ => internal_err!(
+            "the third parameter of array_sort expects NULLS FIRST or NULLS LAST"
+        ),
+    }
 }
 
 /// Array_prepend SQL function
@@ -1765,82 +1841,119 @@ pub fn array_ndims(args: &[ArrayRef]) -> Result<ArrayRef> {
     }
 }
 
-/// Array_has SQL function
-pub fn array_has(args: &[ArrayRef]) -> Result<ArrayRef> {
-    let array = as_list_array(&args[0])?;
-    let element = &args[1];
+/// Represents the type of comparison for array_has.
+#[derive(Debug, PartialEq)]
+enum ComparisonType {
+    // array_has_all
+    All,
+    // array_has_any
+    Any,
+    // array_has
+    Single,
+}
 
-    check_datatypes("array_has", &[array.values(), element])?;
+fn general_array_has_dispatch<O: OffsetSizeTrait>(
+    array: &ArrayRef,
+    sub_array: &ArrayRef,
+    comparison_type: ComparisonType,
+) -> Result<ArrayRef> {
+    let array = if comparison_type == ComparisonType::Single {
+        let arr = as_generic_list_array::<O>(array)?;
+        check_datatypes("array_has", &[arr.values(), sub_array])?;
+        arr
+    } else {
+        check_datatypes("array_has", &[array, sub_array])?;
+        as_generic_list_array::<O>(array)?
+    };
+
     let mut boolean_builder = BooleanArray::builder(array.len());
 
     let converter = RowConverter::new(vec![SortField::new(array.value_type())])?;
-    let r_values = converter.convert_columns(&[element.clone()])?;
-    for (row_idx, arr) in array.iter().enumerate() {
-        if let Some(arr) = arr {
+
+    let element = sub_array.clone();
+    let sub_array = if comparison_type != ComparisonType::Single {
+        as_generic_list_array::<O>(sub_array)?
+    } else {
+        array
+    };
+
+    for (row_idx, (arr, sub_arr)) in array.iter().zip(sub_array.iter()).enumerate() {
+        if let (Some(arr), Some(sub_arr)) = (arr, sub_arr) {
             let arr_values = converter.convert_columns(&[arr])?;
-            let res = arr_values
-                .iter()
-                .dedup()
-                .any(|x| x == r_values.row(row_idx));
+            let sub_arr_values = if comparison_type != ComparisonType::Single {
+                converter.convert_columns(&[sub_arr])?
+            } else {
+                converter.convert_columns(&[element.clone()])?
+            };
+
+            let mut res = match comparison_type {
+                ComparisonType::All => sub_arr_values
+                    .iter()
+                    .dedup()
+                    .all(|elem| arr_values.iter().dedup().any(|x| x == elem)),
+                ComparisonType::Any => sub_arr_values
+                    .iter()
+                    .dedup()
+                    .any(|elem| arr_values.iter().dedup().any(|x| x == elem)),
+                ComparisonType::Single => arr_values
+                    .iter()
+                    .dedup()
+                    .any(|x| x == sub_arr_values.row(row_idx)),
+            };
+
+            if comparison_type == ComparisonType::Any {
+                res |= res;
+            }
+
             boolean_builder.append_value(res);
         }
     }
     Ok(Arc::new(boolean_builder.finish()))
+}
+
+/// Array_has SQL function
+pub fn array_has(args: &[ArrayRef]) -> Result<ArrayRef> {
+    let array_type = args[0].data_type();
+
+    match array_type {
+        DataType::List(_) => {
+            general_array_has_dispatch::<i32>(&args[0], &args[1], ComparisonType::Single)
+        }
+        DataType::LargeList(_) => {
+            general_array_has_dispatch::<i64>(&args[0], &args[1], ComparisonType::Single)
+        }
+        _ => internal_err!("array_has does not support type '{array_type:?}'."),
+    }
 }
 
 /// Array_has_any SQL function
 pub fn array_has_any(args: &[ArrayRef]) -> Result<ArrayRef> {
-    check_datatypes("array_has_any", &[&args[0], &args[1]])?;
+    let array_type = args[0].data_type();
 
-    let array = as_list_array(&args[0])?;
-    let sub_array = as_list_array(&args[1])?;
-    let mut boolean_builder = BooleanArray::builder(array.len());
-
-    let converter = RowConverter::new(vec![SortField::new(array.value_type())])?;
-    for (arr, sub_arr) in array.iter().zip(sub_array.iter()) {
-        if let (Some(arr), Some(sub_arr)) = (arr, sub_arr) {
-            let arr_values = converter.convert_columns(&[arr])?;
-            let sub_arr_values = converter.convert_columns(&[sub_arr])?;
-
-            let mut res = false;
-            for elem in sub_arr_values.iter().dedup() {
-                res |= arr_values.iter().dedup().any(|x| x == elem);
-                if res {
-                    break;
-                }
-            }
-            boolean_builder.append_value(res);
+    match array_type {
+        DataType::List(_) => {
+            general_array_has_dispatch::<i32>(&args[0], &args[1], ComparisonType::Any)
         }
+        DataType::LargeList(_) => {
+            general_array_has_dispatch::<i64>(&args[0], &args[1], ComparisonType::Any)
+        }
+        _ => internal_err!("array_has_any does not support type '{array_type:?}'."),
     }
-    Ok(Arc::new(boolean_builder.finish()))
 }
 
 /// Array_has_all SQL function
 pub fn array_has_all(args: &[ArrayRef]) -> Result<ArrayRef> {
-    check_datatypes("array_has_all", &[&args[0], &args[1]])?;
+    let array_type = args[0].data_type();
 
-    let array = as_list_array(&args[0])?;
-    let sub_array = as_list_array(&args[1])?;
-
-    let mut boolean_builder = BooleanArray::builder(array.len());
-
-    let converter = RowConverter::new(vec![SortField::new(array.value_type())])?;
-    for (arr, sub_arr) in array.iter().zip(sub_array.iter()) {
-        if let (Some(arr), Some(sub_arr)) = (arr, sub_arr) {
-            let arr_values = converter.convert_columns(&[arr])?;
-            let sub_arr_values = converter.convert_columns(&[sub_arr])?;
-
-            let mut res = true;
-            for elem in sub_arr_values.iter().dedup() {
-                res &= arr_values.iter().dedup().any(|x| x == elem);
-                if !res {
-                    break;
-                }
-            }
-            boolean_builder.append_value(res);
+    match array_type {
+        DataType::List(_) => {
+            general_array_has_dispatch::<i32>(&args[0], &args[1], ComparisonType::All)
         }
+        DataType::LargeList(_) => {
+            general_array_has_dispatch::<i64>(&args[0], &args[1], ComparisonType::All)
+        }
+        _ => internal_err!("array_has_all does not support type '{array_type:?}'."),
     }
-    Ok(Arc::new(boolean_builder.finish()))
 }
 
 /// Splits string at occurrences of delimiter and returns an array of parts

@@ -3778,10 +3778,10 @@ query error DataFusion error: Arrow error: Invalid argument error: must either s
 select rank() over (RANGE between UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) rnk
        from (select 1 a union select 2 a) q;
 
-# TODO: this is different to Postgres which returns [1, 1] for `rnk`.
-query I
-select rank() over (order by 1 RANGE BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) rnk
-       from (select 1 a union select 2 a) q ORDER BY rnk
+query II
+select a,
+       rank() over (order by 1 RANGE BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) rnk
+       from (select 1 a union select 2 a) q ORDER BY a
 ----
-1
-2
+1 1
+2 1
