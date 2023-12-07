@@ -912,9 +912,16 @@ impl BuiltinScalarFunction {
 
         // for now, the list is small, as we do not have many built-in functions.
         match self {
-            BuiltinScalarFunction::ArrayAppend => Signature::any(2, self.volatility()),
             BuiltinScalarFunction::ArraySort => {
                 Signature::variadic_any(self.volatility())
+            }
+            BuiltinScalarFunction::ArrayAppend => Signature {
+                type_signature: ArrayAppendLikeSignature,
+                volatility: self.volatility(),
+            },
+            BuiltinScalarFunction::MakeArray => {
+                // 0 or more arguments of arbitrary type
+                Signature::one_of(vec![VariadicCoerced, Any(0)], self.volatility())
             }
             BuiltinScalarFunction::ArrayPopFront => Signature::any(1, self.volatility()),
             BuiltinScalarFunction::ArrayPopBack => Signature::any(1, self.volatility()),
@@ -954,10 +961,6 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::ArrayIntersect => Signature::any(2, self.volatility()),
             BuiltinScalarFunction::ArrayUnion => Signature::any(2, self.volatility()),
             BuiltinScalarFunction::Cardinality => Signature::any(1, self.volatility()),
-            BuiltinScalarFunction::MakeArray => {
-                // 0 or more arguments of arbitrary type
-                Signature::one_of(vec![VariadicAny, Any(0)], self.volatility())
-            }
             BuiltinScalarFunction::Range => Signature::one_of(
                 vec![
                     Exact(vec![Int64]),

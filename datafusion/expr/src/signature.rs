@@ -95,6 +95,8 @@ pub enum TypeSignature {
     VariadicEqual,
     /// One or more arguments with arbitrary types
     VariadicAny,
+    /// A function such as `make_array` should be coerced to the same type
+    VariadicCoerced,
     /// fixed number of arguments of an arbitrary but equal type out of a list of valid types.
     ///
     /// # Examples
@@ -113,6 +115,8 @@ pub enum TypeSignature {
     /// Function `make_array` takes 0 or more arguments with arbitrary types, its `TypeSignature`
     /// is `OneOf(vec![Any(0), VariadicAny])`.
     OneOf(Vec<TypeSignature>),
+    /// Specialized Signature for ArrayAppend and similar functions
+    ArrayAppendLikeSignature,
 }
 
 impl TypeSignature {
@@ -136,10 +140,16 @@ impl TypeSignature {
                     .collect::<Vec<&str>>()
                     .join(", ")]
             }
+            TypeSignature::VariadicCoerced => {
+                vec!["CoercibleT, .., CoercibleT".to_string()]
+            }
             TypeSignature::VariadicEqual => vec!["T, .., T".to_string()],
             TypeSignature::VariadicAny => vec!["Any, .., Any".to_string()],
             TypeSignature::OneOf(sigs) => {
                 sigs.iter().flat_map(|s| s.to_string_repr()).collect()
+            }
+            TypeSignature::ArrayAppendLikeSignature => {
+                vec!["ArrayAppendLikeSignature(List<T>, T)".to_string()]
             }
         }
     }

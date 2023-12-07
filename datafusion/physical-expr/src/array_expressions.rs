@@ -362,7 +362,8 @@ pub fn make_array(arrays: &[ArrayRef]) -> Result<ArrayRef> {
     match data_type {
         // Either an empty array or all nulls:
         DataType::Null => {
-            let array = new_null_array(&DataType::Null, arrays.len());
+            let array =
+                new_null_array(&DataType::Null, arrays.iter().map(|a| a.len()).sum());
             Ok(Arc::new(array_into_list_array(array)))
         }
         DataType::LargeList(..) => array_array::<i64>(arrays, data_type),
@@ -763,7 +764,12 @@ pub fn array_append(args: &[ArrayRef]) -> Result<ArrayRef> {
     check_datatypes("array_append", &[list_array.values(), element_array])?;
     let res = match list_array.value_type() {
         DataType::List(_) => concat_internal(args)?,
-        DataType::Null => return make_array(&[element_array.to_owned()]),
+        DataType::Null => {
+            return make_array(&[
+                list_array.values().to_owned(),
+                element_array.to_owned(),
+            ]);
+        }
         data_type => {
             return general_append_and_prepend(
                 list_array,
