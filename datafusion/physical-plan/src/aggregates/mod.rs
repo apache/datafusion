@@ -27,15 +27,16 @@ use crate::aggregates::{
 };
 
 use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet};
-use crate::windows::{get_ordered_partition_by_indices, PartitionSearchMode};
+use crate::windows::get_ordered_partition_by_indices;
 use crate::{
-    DisplayFormatType, Distribution, ExecutionPlan, Partitioning,
+    DisplayFormatType, Distribution, ExecutionPlan, InputOrderMode, Partitioning,
     SendableRecordBatchStream, Statistics,
 };
 
 use arrow::array::ArrayRef;
 use arrow::datatypes::{Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
+use arrow_schema::DataType;
 use datafusion_common::stats::Precision;
 use datafusion_common::{exec_datafusion_err, plan_err, DataFusionError, Result};
 use datafusion_execution::TaskContext;
@@ -298,6 +299,9 @@ pub struct AggregateExec {
     limit: Option<usize>,
     /// Input plan, could be a partial aggregate or the input to the aggregate
     pub input: Arc<dyn ExecutionPlan>,
+    /// Original aggregation schema, could be different from `schema` before dictionary group
+    /// keys get materialized
+    original_schema: SchemaRef,
     /// Schema after the aggregate is applied
     schema: SchemaRef,
     /// Input schema before any aggregation is applied. For partial aggregate this will be the
@@ -312,7 +316,9 @@ pub struct AggregateExec {
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
     required_input_ordering: Option<LexRequirement>,
-    partition_search_mode: PartitionSearchMode,
+    /// Describes how the input is ordered relative to the group by columns
+    input_order_mode: InputOrderMode,
+    /// Describe how the output is ordered
     output_ordering: Option<LexOrdering>,
 }
 
@@ -328,7 +334,7 @@ impl AggregateExec {
         input: Arc<dyn ExecutionPlan>,
         input_schema: SchemaRef,
     ) -> Result<Self> {
-        let schema = create_schema(
+        let original_schema = create_schema(
             &input.schema(),
             &group_by.expr,
             &aggr_expr,
@@ -339,7 +345,11 @@ impl AggregateExec {
         let aggregate_groups =
             get_aggregate_expr_groups(&mut aggr_expr, &group_by, &eq_properties, &mode)?;
 
-        let schema = Arc::new(schema);
+        let schema = Arc::new(materialize_dict_group_keys(
+            &original_schema,
+            group_by.expr.len(),
+        ));
+        let original_schema = Arc::new(original_schema);
 
         // Get GROUP BY expressions:
         let groupby_exprs = group_by.input_exprs();
@@ -356,13 +366,13 @@ impl AggregateExec {
             .collect::<Vec<_>>();
         new_requirement = collapse_lex_req(new_requirement);
 
-        let partition_search_mode =
+        let input_order_mode =
             if indices.len() == groupby_exprs.len() && !indices.is_empty() {
-                PartitionSearchMode::Sorted
+                InputOrderMode::Sorted
             } else if !indices.is_empty() {
-                PartitionSearchMode::PartiallySorted(indices)
+                InputOrderMode::PartiallySorted(indices)
             } else {
-                PartitionSearchMode::Linear
+                InputOrderMode::Linear
             };
 
         // construct a map from the input expression to the output expression of the Aggregation group by
@@ -385,13 +395,14 @@ impl AggregateExec {
             order_by_expr,
             aggregate_groups,
             input,
+            original_schema,
             schema,
             input_schema,
             projection_mapping,
             metrics: ExecutionPlanMetricsSet::new(),
             required_input_ordering,
             limit: None,
-            partition_search_mode,
+            input_order_mode,
             output_ordering,
         })
     }
@@ -591,8 +602,8 @@ impl DisplayAs for AggregateExec {
                     write!(f, ", lim=[{limit}]")?;
                 }
 
-                if self.partition_search_mode != PartitionSearchMode::Linear {
-                    write!(f, ", ordering_mode={:?}", self.partition_search_mode)?;
+                if self.input_order_mode != InputOrderMode::Linear {
+                    write!(f, ", ordering_mode={:?}", self.input_order_mode)?;
                 }
             }
         }
@@ -643,7 +654,7 @@ impl ExecutionPlan for AggregateExec {
     /// infinite, returns an error to indicate this.
     fn unbounded_output(&self, children: &[bool]) -> Result<bool> {
         if children[0] {
-            if self.partition_search_mode == PartitionSearchMode::Linear {
+            if self.input_order_mode == InputOrderMode::Linear {
                 // Cannot run without breaking pipeline.
                 plan_err!(
                     "Aggregate Error: `GROUP BY` clauses with columns without ordering and GROUPING SETS are not supported for unbounded inputs."
@@ -804,6 +815,24 @@ fn create_schema(
     }
 
     Ok(Schema::new(fields))
+}
+
+/// returns schema with dictionary group keys materialized as their value types
+/// The actual convertion happens in `RowConverter` and we don't do unnecessary
+/// conversion back into dictionaries
+fn materialize_dict_group_keys(schema: &Schema, group_count: usize) -> Schema {
+    let fields = schema
+        .fields
+        .iter()
+        .enumerate()
+        .map(|(i, field)| match field.data_type() {
+            DataType::Dictionary(_, value_data_type) if i < group_count => {
+                Field::new(field.name(), *value_data_type.clone(), field.is_nullable())
+            }
+            _ => Field::clone(field),
+        })
+        .collect::<Vec<_>>();
+    Schema::new(fields)
 }
 
 fn group_schema(schema: &Schema, group_count: usize) -> SchemaRef {

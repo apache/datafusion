@@ -130,6 +130,8 @@ pub enum BuiltinScalarFunction {
     // array functions
     /// array_append
     ArrayAppend,
+    /// array_sort
+    ArraySort,
     /// array_concat
     ArrayConcat,
     /// array_has
@@ -304,6 +306,8 @@ pub enum BuiltinScalarFunction {
     Levenshtein,
     /// substr_index
     SubstrIndex,
+    /// find_in_set
+    FindInSet,
 }
 
 /// Maps the sql function name to `BuiltinScalarFunction`
@@ -344,6 +348,12 @@ impl BuiltinScalarFunction {
     )]
     pub fn supports_zero_argument(&self) -> bool {
         self.signature().type_signature.supports_zero_argument()
+    }
+
+    /// Returns the name of this function
+    pub fn name(&self) -> &str {
+        // .unwrap is safe here because compiler makes sure the map will have matches for each BuiltinScalarFunction
+        function_to_name().get(self).unwrap()
     }
 
     /// Returns the [Volatility] of the builtin function.
@@ -390,6 +400,7 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Tanh => Volatility::Immutable,
             BuiltinScalarFunction::Trunc => Volatility::Immutable,
             BuiltinScalarFunction::ArrayAppend => Volatility::Immutable,
+            BuiltinScalarFunction::ArraySort => Volatility::Immutable,
             BuiltinScalarFunction::ArrayConcat => Volatility::Immutable,
             BuiltinScalarFunction::ArrayEmpty => Volatility::Immutable,
             BuiltinScalarFunction::ArrayHasAll => Volatility::Immutable,
@@ -472,6 +483,7 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::OverLay => Volatility::Immutable,
             BuiltinScalarFunction::Levenshtein => Volatility::Immutable,
             BuiltinScalarFunction::SubstrIndex => Volatility::Immutable,
+            BuiltinScalarFunction::FindInSet => Volatility::Immutable,
 
             // Stable builtin functions
             BuiltinScalarFunction::Now => Volatility::Stable,
@@ -536,6 +548,7 @@ impl BuiltinScalarFunction {
                 Ok(data_type)
             }
             BuiltinScalarFunction::ArrayAppend => Ok(input_expr_types[0].clone()),
+            BuiltinScalarFunction::ArraySort => Ok(input_expr_types[0].clone()),
             BuiltinScalarFunction::ArrayConcat => {
                 let mut expr_type = Null;
                 let mut max_dims = 0;
@@ -778,6 +791,9 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::SubstrIndex => {
                 utf8_to_str_type(&input_expr_types[0], "substr_index")
             }
+            BuiltinScalarFunction::FindInSet => {
+                utf8_to_int_type(&input_expr_types[0], "find_in_set")
+            }
             BuiltinScalarFunction::ToTimestamp
             | BuiltinScalarFunction::ToTimestampNanos => Ok(Timestamp(Nanosecond, None)),
             BuiltinScalarFunction::ToTimestampMillis => Ok(Timestamp(Millisecond, None)),
@@ -897,6 +913,9 @@ impl BuiltinScalarFunction {
         // for now, the list is small, as we do not have many built-in functions.
         match self {
             BuiltinScalarFunction::ArrayAppend => Signature::any(2, self.volatility()),
+            BuiltinScalarFunction::ArraySort => {
+                Signature::variadic_any(self.volatility())
+            }
             BuiltinScalarFunction::ArrayPopFront => Signature::any(1, self.volatility()),
             BuiltinScalarFunction::ArrayPopBack => Signature::any(1, self.volatility()),
             BuiltinScalarFunction::ArrayConcat => {
@@ -1011,6 +1030,7 @@ impl BuiltinScalarFunction {
                 1,
                 vec![
                     Int64,
+                    Float64,
                     Timestamp(Nanosecond, None),
                     Timestamp(Microsecond, None),
                     Timestamp(Millisecond, None),
@@ -1242,6 +1262,10 @@ impl BuiltinScalarFunction {
                     Exact(vec![Utf8, Utf8, Int64]),
                     Exact(vec![LargeUtf8, LargeUtf8, Int64]),
                 ],
+                self.volatility(),
+            ),
+            BuiltinScalarFunction::FindInSet => Signature::one_of(
+                vec![Exact(vec![Utf8, Utf8]), Exact(vec![LargeUtf8, LargeUtf8])],
                 self.volatility(),
             ),
 
@@ -1499,6 +1523,7 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Uuid => &["uuid"],
             BuiltinScalarFunction::Levenshtein => &["levenshtein"],
             BuiltinScalarFunction::SubstrIndex => &["substr_index", "substring_index"],
+            BuiltinScalarFunction::FindInSet => &["find_in_set"],
 
             // regex functions
             BuiltinScalarFunction::RegexpMatch => &["regexp_match"],
@@ -1540,6 +1565,7 @@ impl BuiltinScalarFunction {
                 "array_push_back",
                 "list_push_back",
             ],
+            BuiltinScalarFunction::ArraySort => &["array_sort", "list_sort"],
             BuiltinScalarFunction::ArrayConcat => {
                 &["array_concat", "array_cat", "list_concat", "list_cat"]
             }
@@ -1616,8 +1642,7 @@ impl BuiltinScalarFunction {
 
 impl fmt::Display for BuiltinScalarFunction {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        // .unwrap is safe here because compiler makes sure the map will have matches for each BuiltinScalarFunction
-        write!(f, "{}", function_to_name().get(self).unwrap())
+        write!(f, "{}", self.name())
     }
 }
 

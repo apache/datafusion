@@ -32,11 +32,12 @@ use datafusion_common::file_options::csv_writer::CsvWriterOptions;
 use datafusion_common::file_options::json_writer::JsonWriterOptions;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{
-    DataFusionError, FileType, FileTypeWriterOptions, SchemaError, UnnestOptions,
+    DataFusionError, FileType, FileTypeWriterOptions, ParamValues, SchemaError,
+    UnnestOptions,
 };
 use datafusion_expr::dml::CopyOptions;
 
-use datafusion_common::{Column, DFSchema, ScalarValue};
+use datafusion_common::{Column, DFSchema};
 use datafusion_expr::{
     avg, count, is_null, max, median, min, stddev, utils::COUNT_STAR_EXPANSION,
     TableProviderFilterPushDown, UNNAMED_TABLE,
@@ -1227,11 +1228,32 @@ impl DataFrame {
     ///  ],
     ///  &results
     /// );
+    /// // Note you can also provide named parameters
+    /// let results = ctx
+    ///   .sql("SELECT a FROM example WHERE b = $my_param")
+    ///   .await?
+    ///    // replace $my_param with value 2
+    ///    // Note you can also use a HashMap as well
+    ///   .with_param_values(vec![
+    ///       ("my_param", ScalarValue::from(2i64))
+    ///    ])?
+    ///   .collect()
+    ///   .await?;
+    /// assert_batches_eq!(
+    ///  &[
+    ///    "+---+",
+    ///    "| a |",
+    ///    "+---+",
+    ///    "| 1 |",
+    ///    "+---+",
+    ///  ],
+    ///  &results
+    /// );
     /// # Ok(())
     /// # }
     /// ```
-    pub fn with_param_values(self, param_values: Vec<ScalarValue>) -> Result<Self> {
-        let plan = self.plan.with_param_values(param_values)?;
+    pub fn with_param_values(self, query_values: impl Into<ParamValues>) -> Result<Self> {
+        let plan = self.plan.with_param_values(query_values)?;
         Ok(Self::new(self.session_state, plan))
     }
 

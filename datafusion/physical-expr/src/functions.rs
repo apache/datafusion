@@ -329,6 +329,9 @@ pub fn create_physical_fun(
         BuiltinScalarFunction::ArrayAppend => {
             Arc::new(|args| make_scalar_function(array_expressions::array_append)(args))
         }
+        BuiltinScalarFunction::ArraySort => {
+            Arc::new(|args| make_scalar_function(array_expressions::array_sort)(args))
+        }
         BuiltinScalarFunction::ArrayConcat => {
             Arc::new(|args| make_scalar_function(array_expressions::array_concat)(args))
         }
@@ -834,9 +837,9 @@ pub fn create_physical_fun(
             }
 
             let input_data_type = args[0].data_type();
-            Ok(ColumnarValue::Scalar(ScalarValue::Utf8(Some(format!(
+            Ok(ColumnarValue::Scalar(ScalarValue::from(format!(
                 "{input_data_type}"
-            )))))
+            ))))
         }),
         BuiltinScalarFunction::OverLay => Arc::new(|args| match args[0].data_type() {
             DataType::Utf8 => {
@@ -885,6 +888,27 @@ pub fn create_physical_fun(
                 ))),
             })
         }
+        BuiltinScalarFunction::FindInSet => Arc::new(|args| match args[0].data_type() {
+            DataType::Utf8 => {
+                let func = invoke_if_unicode_expressions_feature_flag!(
+                    find_in_set,
+                    Int32Type,
+                    "find_in_set"
+                );
+                make_scalar_function(func)(args)
+            }
+            DataType::LargeUtf8 => {
+                let func = invoke_if_unicode_expressions_feature_flag!(
+                    find_in_set,
+                    Int64Type,
+                    "find_in_set"
+                );
+                make_scalar_function(func)(args)
+            }
+            other => Err(DataFusionError::Internal(format!(
+                "Unsupported data type {other:?} for function find_in_set",
+            ))),
+        }),
     })
 }
 
