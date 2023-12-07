@@ -405,9 +405,18 @@ fn merge_consecutive_projections(proj: &Projection) -> Result<Option<Projection>
         .iter()
         .map(|expr| rewrite_expr(expr, prev_projection))
         .collect::<Result<Option<Vec<_>>>>()?;
-    new_exprs
-        .map(|exprs| Projection::try_new(exprs, prev_projection.input.clone()))
-        .transpose()
+    if let Some(new_exprs) = new_exprs {
+        let new_exprs = new_exprs
+            .into_iter()
+            .zip(proj.expr.iter())
+            .map(|(new_expr, old_expr)| {
+                new_expr.alias_if_changed(old_expr.name_for_alias()?)
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Projection::try_new(new_exprs, prev_projection.input.clone()).map(Some)
+    } else {
+        Ok(None)
+    }
 }
 
 /// Trim Expression
