@@ -1161,6 +1161,7 @@ message PhysicalPlanNode {
     AnalyzeExecNode analyze = 23;
     JsonSinkExecNode json_sink = 24;
     SymmetricHashJoinExecNode symmetric_hash_join = 25;
+    InterleaveExecNode  interleave = 26;
   }
 }
 
@@ -1452,6 +1453,10 @@ message SymmetricHashJoinExecNode {
   StreamPartitionMode partition_mode = 6;
   bool null_equals_null = 7;
   JoinFilter filter = 8;
+}
+
+message InterleaveExecNode {
+  repeated PhysicalPlanNode inputs = 1;
 }
 
 message UnionExecNode {
