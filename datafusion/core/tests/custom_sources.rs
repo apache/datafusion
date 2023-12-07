@@ -30,7 +30,6 @@ use datafusion::execution::context::{SessionContext, SessionState, TaskContext};
 use datafusion::logical_expr::{
     col, Expr, LogicalPlan, LogicalPlanBuilder, TableScan, UNNAMED_TABLE,
 };
-use datafusion::physical_plan::empty::EmptyExec;
 use datafusion::physical_plan::expressions::PhysicalSortExpr;
 use datafusion::physical_plan::{
     collect, ColumnStatistics, DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning,
@@ -42,6 +41,7 @@ use datafusion_common::project_schema;
 use datafusion_common::stats::Precision;
 
 use async_trait::async_trait;
+use datafusion_physical_plan::placeholder_row::PlaceHolderRowExec;
 use futures::stream::Stream;
 
 /// Also run all tests that are found in the `custom_sources_cases` directory
@@ -256,9 +256,9 @@ async fn optimizers_catch_all_statistics() {
 
     let physical_plan = df.create_physical_plan().await.unwrap();
 
-    // when the optimization kicks in, the source is replaced by an EmptyExec
+    // when the optimization kicks in, the source is replaced by an PlaceHolderRowExec
     assert!(
-        contains_empty_exec(Arc::clone(&physical_plan)),
+        contains_place_holder_exec(Arc::clone(&physical_plan)),
         "Expected aggregate_statistics optimizations missing: {physical_plan:?}"
     );
 
@@ -283,12 +283,12 @@ async fn optimizers_catch_all_statistics() {
     assert_eq!(format!("{:?}", actual[0]), format!("{expected:?}"));
 }
 
-fn contains_empty_exec(plan: Arc<dyn ExecutionPlan>) -> bool {
-    if plan.as_any().is::<EmptyExec>() {
+fn contains_place_holder_exec(plan: Arc<dyn ExecutionPlan>) -> bool {
+    if plan.as_any().is::<PlaceHolderRowExec>() {
         true
     } else if plan.children().len() != 1 {
         false
     } else {
-        contains_empty_exec(Arc::clone(&plan.children()[0]))
+        contains_place_holder_exec(Arc::clone(&plan.children()[0]))
     }
 }

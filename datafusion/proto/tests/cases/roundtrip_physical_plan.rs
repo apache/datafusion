@@ -103,7 +103,7 @@ fn roundtrip_test_with_context(
 
 #[test]
 fn roundtrip_empty() -> Result<()> {
-    roundtrip_test(Arc::new(EmptyExec::new(false, Arc::new(Schema::empty()))))
+    roundtrip_test(Arc::new(EmptyExec::new(Arc::new(Schema::empty()))))
 }
 
 #[test]
@@ -116,7 +116,7 @@ fn roundtrip_date_time_interval() -> Result<()> {
             false,
         ),
     ]);
-    let input = Arc::new(EmptyExec::new(false, Arc::new(schema.clone())));
+    let input = Arc::new(EmptyExec::new(Arc::new(schema.clone())));
     let date_expr = col("some_date", &schema)?;
     let literal_expr = col("some_interval", &schema)?;
     let date_time_interval_expr =
@@ -131,7 +131,7 @@ fn roundtrip_date_time_interval() -> Result<()> {
 #[test]
 fn roundtrip_local_limit() -> Result<()> {
     roundtrip_test(Arc::new(LocalLimitExec::new(
-        Arc::new(EmptyExec::new(false, Arc::new(Schema::empty()))),
+        Arc::new(EmptyExec::new(Arc::new(Schema::empty()))),
         25,
     )))
 }
@@ -139,7 +139,7 @@ fn roundtrip_local_limit() -> Result<()> {
 #[test]
 fn roundtrip_global_limit() -> Result<()> {
     roundtrip_test(Arc::new(GlobalLimitExec::new(
-        Arc::new(EmptyExec::new(false, Arc::new(Schema::empty()))),
+        Arc::new(EmptyExec::new(Arc::new(Schema::empty()))),
         0,
         Some(25),
     )))
@@ -148,7 +148,7 @@ fn roundtrip_global_limit() -> Result<()> {
 #[test]
 fn roundtrip_global_skip_no_limit() -> Result<()> {
     roundtrip_test(Arc::new(GlobalLimitExec::new(
-        Arc::new(EmptyExec::new(false, Arc::new(Schema::empty()))),
+        Arc::new(EmptyExec::new(Arc::new(Schema::empty()))),
         10,
         None, // no limit
     )))
@@ -178,8 +178,8 @@ fn roundtrip_hash_join() -> Result<()> {
     ] {
         for partition_mode in &[PartitionMode::Partitioned, PartitionMode::CollectLeft] {
             roundtrip_test(Arc::new(HashJoinExec::try_new(
-                Arc::new(EmptyExec::new(false, schema_left.clone())),
-                Arc::new(EmptyExec::new(false, schema_right.clone())),
+                Arc::new(EmptyExec::new(schema_left.clone())),
+                Arc::new(EmptyExec::new(schema_right.clone())),
                 on.clone(),
                 None,
                 join_type,
@@ -210,8 +210,8 @@ fn roundtrip_nested_loop_join() -> Result<()> {
         JoinType::RightSemi,
     ] {
         roundtrip_test(Arc::new(NestedLoopJoinExec::try_new(
-            Arc::new(EmptyExec::new(false, schema_left.clone())),
-            Arc::new(EmptyExec::new(false, schema_right.clone())),
+            Arc::new(EmptyExec::new(schema_left.clone())),
+            Arc::new(EmptyExec::new(schema_right.clone())),
             None,
             join_type,
         )?))?;
@@ -276,7 +276,7 @@ fn roundtrip_window() -> Result<()> {
         Arc::new(window_frame),
     ));
 
-    let input = Arc::new(EmptyExec::new(false, schema.clone()));
+    let input = Arc::new(EmptyExec::new(schema.clone()));
 
     roundtrip_test(Arc::new(WindowAggExec::try_new(
         vec![
@@ -310,7 +310,7 @@ fn rountrip_aggregate() -> Result<()> {
         aggregates.clone(),
         vec![None],
         vec![None],
-        Arc::new(EmptyExec::new(false, schema.clone())),
+        Arc::new(EmptyExec::new(schema.clone())),
         schema,
     )?))
 }
@@ -378,7 +378,7 @@ fn roundtrip_aggregate_udaf() -> Result<()> {
             aggregates.clone(),
             vec![None],
             vec![None],
-            Arc::new(EmptyExec::new(false, schema.clone())),
+            Arc::new(EmptyExec::new(schema.clone())),
             schema,
         )?),
         ctx,
@@ -404,7 +404,7 @@ fn roundtrip_filter_with_not_and_in_list() -> Result<()> {
     let and = binary(not, Operator::And, in_list, &schema)?;
     roundtrip_test(Arc::new(FilterExec::try_new(
         and,
-        Arc::new(EmptyExec::new(false, schema.clone())),
+        Arc::new(EmptyExec::new(schema.clone())),
     )?))
 }
 
@@ -431,7 +431,7 @@ fn roundtrip_sort() -> Result<()> {
     ];
     roundtrip_test(Arc::new(SortExec::new(
         sort_exprs,
-        Arc::new(EmptyExec::new(false, schema)),
+        Arc::new(EmptyExec::new(schema)),
     )))
 }
 
@@ -459,11 +459,11 @@ fn roundtrip_sort_preserve_partitioning() -> Result<()> {
 
     roundtrip_test(Arc::new(SortExec::new(
         sort_exprs.clone(),
-        Arc::new(EmptyExec::new(false, schema.clone())),
+        Arc::new(EmptyExec::new(schema.clone())),
     )))?;
 
     roundtrip_test(Arc::new(
-        SortExec::new(sort_exprs, Arc::new(EmptyExec::new(false, schema)))
+        SortExec::new(sort_exprs, Arc::new(EmptyExec::new(schema)))
             .with_preserve_partitioning(true),
     ))
 }
@@ -513,7 +513,7 @@ fn roundtrip_builtin_scalar_function() -> Result<()> {
     let field_b = Field::new("b", DataType::Int64, false);
     let schema = Arc::new(Schema::new(vec![field_a, field_b]));
 
-    let input = Arc::new(EmptyExec::new(false, schema.clone()));
+    let input = Arc::new(EmptyExec::new(schema.clone()));
 
     let execution_props = ExecutionProps::new();
 
@@ -540,7 +540,7 @@ fn roundtrip_scalar_udf() -> Result<()> {
     let field_b = Field::new("b", DataType::Int64, false);
     let schema = Arc::new(Schema::new(vec![field_a, field_b]));
 
-    let input = Arc::new(EmptyExec::new(false, schema.clone()));
+    let input = Arc::new(EmptyExec::new(schema.clone()));
 
     let fn_impl = |args: &[ArrayRef]| Ok(Arc::new(args[0].clone()) as ArrayRef);
 
@@ -593,7 +593,7 @@ fn roundtrip_distinct_count() -> Result<()> {
         aggregates.clone(),
         vec![None],
         vec![None],
-        Arc::new(EmptyExec::new(false, schema.clone())),
+        Arc::new(EmptyExec::new(schema.clone())),
         schema,
     )?))
 }
@@ -604,7 +604,7 @@ fn roundtrip_like() -> Result<()> {
         Field::new("a", DataType::Utf8, false),
         Field::new("b", DataType::Utf8, false),
     ]);
-    let input = Arc::new(EmptyExec::new(false, Arc::new(schema.clone())));
+    let input = Arc::new(EmptyExec::new(Arc::new(schema.clone())));
     let like_expr = like(
         false,
         false,
@@ -631,7 +631,7 @@ fn roundtrip_get_indexed_field_named_struct_field() -> Result<()> {
     ];
 
     let schema = Schema::new(fields);
-    let input = Arc::new(EmptyExec::new(false, Arc::new(schema.clone())));
+    let input = Arc::new(EmptyExec::new(Arc::new(schema.clone())));
 
     let col_arg = col("arg", &schema)?;
     let get_indexed_field_expr = Arc::new(GetIndexedFieldExpr::new(
@@ -685,7 +685,7 @@ fn roundtrip_get_indexed_field_list_range() -> Result<()> {
     ];
 
     let schema = Schema::new(fields);
-    let input = Arc::new(EmptyExec::new(false, Arc::new(schema.clone())));
+    let input = Arc::new(EmptyExec::new(Arc::new(schema.clone())));
 
     let col_arg = col("arg", &schema)?;
     let col_start = col("start", &schema)?;
@@ -786,8 +786,8 @@ fn roundtrip_sym_hash_join() -> Result<()> {
         ] {
             roundtrip_test(Arc::new(
                 datafusion::physical_plan::joins::SymmetricHashJoinExec::try_new(
-                    Arc::new(EmptyExec::new(false, schema_left.clone())),
-                    Arc::new(EmptyExec::new(false, schema_right.clone())),
+                    Arc::new(EmptyExec::new(schema_left.clone())),
+                    Arc::new(EmptyExec::new(schema_right.clone())),
                     on.clone(),
                     None,
                     join_type,

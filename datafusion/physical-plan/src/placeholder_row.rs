@@ -121,9 +121,7 @@ impl ExecutionPlan for PlaceHolderRowExec {
         self: Arc<Self>,
         _: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(Arc::new(PlaceHolderRowExec::new(
-            self.schema.clone(),
-        )))
+        Ok(Arc::new(PlaceHolderRowExec::new(self.schema.clone())))
     }
 
     fn execute(

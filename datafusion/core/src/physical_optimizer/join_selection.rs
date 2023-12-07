@@ -1623,12 +1623,12 @@ mod hash_join_tests {
 
         let children = vec![
             PipelineStatePropagator {
-                plan: Arc::new(EmptyExec::new(false, Arc::new(Schema::empty()))),
+                plan: Arc::new(EmptyExec::new(Arc::new(Schema::empty()))),
                 unbounded: left_unbounded,
                 children: vec![],
             },
             PipelineStatePropagator {
-                plan: Arc::new(EmptyExec::new(false, Arc::new(Schema::empty()))),
+                plan: Arc::new(EmptyExec::new(Arc::new(Schema::empty()))),
                 unbounded: right_unbounded,
                 children: vec![],
             },

@@ -1161,6 +1161,7 @@ message PhysicalPlanNode {
     AnalyzeExecNode analyze = 23;
     JsonSinkExecNode json_sink = 24;
     SymmetricHashJoinExecNode symmetric_hash_join = 25;
+    PlaceHolderRowExecNode placeholder_row = 26;
   }
 }
 
@@ -1487,8 +1488,11 @@ message JoinOn {
 }
 
 message EmptyExecNode {
-  bool produce_one_row = 1;
-  Schema schema = 2;
+  Schema schema = 1;
+}
+
+message PlaceHolderRowExecNode {
+  Schema schema = 1;
 }
 
 message ProjectionExecNode {
