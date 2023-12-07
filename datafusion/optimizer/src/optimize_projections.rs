@@ -214,7 +214,10 @@ fn optimize_projections(
                 add_projection_on_top_if_helpful(aggregate_input, necessary_exprs, true)?;
 
             // Aggregate always needs at least one aggregate expr
-            if new_aggr_expr.len() == 0 && new_group_bys.len() == 0 && aggregate.aggr_expr.len() > 0  {
+            if new_aggr_expr.len() == 0
+                && new_group_bys.len() == 0
+                && aggregate.aggr_expr.len() > 0
+            {
                 new_aggr_expr = vec![aggregate.aggr_expr[0].clone()];
             }
 
@@ -862,11 +865,11 @@ fn rewrite_projection_given_requirements(
 #[cfg(test)]
 mod tests {
     use crate::optimize_projections::OptimizeProjections;
-    use arrow::datatypes::{Schema, Field, DataType};
+    use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::{Result, TableReference};
     use datafusion_expr::{
-        binary_expr, col, lit, logical_plan::builder::LogicalPlanBuilder, LogicalPlan,
-        Operator, count, Expr, table_scan,
+        binary_expr, col, count, lit, logical_plan::builder::LogicalPlanBuilder,
+        table_scan, Expr, LogicalPlan, Operator,
     };
     use std::sync::Arc;
 
@@ -917,23 +920,15 @@ mod tests {
     }
     #[test]
     fn test_nested_count() -> Result<()> {
-        let schema = Schema::new(vec![
-            Field::new("foo", DataType::Int32, false),
-        ]);
+        let schema = Schema::new(vec![Field::new("foo", DataType::Int32, false)]);
 
-        let groups : Vec<Expr> = vec![];
+        let groups: Vec<Expr> = vec![];
 
         let plan = table_scan(TableReference::none(), &schema, None)
             .unwrap()
-            .aggregate(
-                groups.clone(),
-                vec![count(lit(1))],
-            )
+            .aggregate(groups.clone(), vec![count(lit(1))])
             .unwrap()
-            .aggregate(
-                groups,
-                vec![count(lit(1))],
-            )
+            .aggregate(groups, vec![count(lit(1))])
             .unwrap()
             .build()
             .unwrap();
