@@ -343,7 +343,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
 // TODO make interval parsing better in arrow-rs / expose `IntervalType`
 fn has_units(val: &str) -> bool {
-    val.ends_with("century")
+    val.to_lowercase().ends_with("century")
         || val.ends_with("centuries")
         || val.ends_with("decade")
         || val.ends_with("decades")
