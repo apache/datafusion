@@ -143,7 +143,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             JoinConstraint::Using(idents) => {
                 let keys: Vec<Column> = idents
                     .into_iter()
-                    .map(|x| Column::from_name(self.normalizer.normalize(x)))
+                    .map(|x| Column::from_name(self.normalizer.normalize_column(x)))
                     .collect();
                 LogicalPlanBuilder::from(left)
                     .join_using(right, join_type, keys)?
