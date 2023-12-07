@@ -410,14 +410,7 @@ fn merge_consecutive_projections(proj: &Projection) -> Result<Option<Projection>
             .into_iter()
             .zip(proj.expr.iter())
             .map(|(new_expr, old_expr)| {
-                let new_name = new_expr.name_for_alias()?;
-                let old_name = old_expr.name_for_alias()?;
-                Ok(if new_name != old_name {
-                    // Make sure name is preserved after merging
-                    new_expr.alias(old_name)
-                } else {
-                    new_expr
-                })
+                new_expr.alias_if_changed(old_expr.name_for_alias()?)
             })
             .collect::<Result<Vec<_>>>()?;
         Projection::try_new(new_exprs, prev_projection.input.clone()).map(Some)
