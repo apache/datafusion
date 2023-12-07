@@ -59,7 +59,6 @@ use datafusion_expr::{
     sqrt, starts_with, string_to_array, strpos, struct_fun, substr, substr_index,
     substring, tan, tanh, to_hex, to_timestamp_micros, to_timestamp_millis,
     to_timestamp_nanos, to_timestamp_seconds, translate, trim, trunc, upper, uuid,
-    window_frame::regularize,
     AggregateFunction, Between, BinaryExpr, BuiltInWindowFunction, BuiltinScalarFunction,
     Case, Cast, Expr, GetFieldAccess, GetIndexedField, GroupingSet,
     GroupingSet::GroupingSets,
