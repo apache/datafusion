@@ -213,7 +213,9 @@ fn optimize_projections(
             let (aggregate_input, _is_added) =
                 add_projection_on_top_if_helpful(aggregate_input, necessary_exprs, true)?;
 
-            // Aggregate always needs at least one aggregate expr
+            // Aggregate always needs at least one aggregate expression.
+            // With a nested count we don't require any column as input, but still need to create a correct aggregate
+            // The aggregate may be optimized out later (select count(*) from (select count(*) from [...]) always returns 1
             if new_aggr_expr.len() == 0
                 && new_group_bys.len() == 0
                 && aggregate.aggr_expr.len() > 0
