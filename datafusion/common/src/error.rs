@@ -564,18 +564,16 @@ mod test {
         assert_eq!(
             err.split(DataFusionError::BACK_TRACE_SEP)
                 .collect::<Vec<&str>>()
-                .get(0)
+                .first()
                 .unwrap(),
             &"Error during planning: Err"
         );
-        assert!(
-            err.split(DataFusionError::BACK_TRACE_SEP)
-                .collect::<Vec<&str>>()
-                .get(1)
-                .unwrap()
-                .len()
-                > 0
-        );
+        assert!(!err
+            .split(DataFusionError::BACK_TRACE_SEP)
+            .collect::<Vec<&str>>()
+            .get(1)
+            .unwrap()
+            .is_empty());
     }
 
     #[cfg(not(feature = "backtrace"))]

@@ -501,7 +501,6 @@ pub fn generate_sort_key(
     let res = final_sort_keys
         .into_iter()
         .zip(is_partition_flag)
-        .map(|(lhs, rhs)| (lhs, rhs))
         .collect::<Vec<_>>();
     Ok(res)
 }

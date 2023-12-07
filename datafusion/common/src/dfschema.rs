@@ -1476,8 +1476,8 @@ mod tests {
             DFSchema::new_with_metadata([a, b].to_vec(), HashMap::new()).unwrap(),
         );
         let schema: Schema = df_schema.as_ref().clone().into();
-        let a_df = df_schema.fields.get(0).unwrap().field();
-        let a_arrow = schema.fields.get(0).unwrap();
+        let a_df = df_schema.fields.first().unwrap().field();
+        let a_arrow = schema.fields.first().unwrap();
         assert_eq!(a_df.metadata(), a_arrow.metadata())
     }
 

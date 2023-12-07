@@ -40,7 +40,7 @@ async fn main() -> Result<()> {
 
     timeout(Duration::from_secs(10), async move {
         let result = dataframe.collect().await.unwrap();
-        let record_batch = result.get(0).unwrap();
+        let record_batch = result.first().unwrap();
 
         assert_eq!(1, record_batch.column(0).len());
         dbg!(record_batch.columns());
