@@ -1062,7 +1062,7 @@ mod tests {
         ]);
         let mut optimized_plan = optimizer
             .optimize_recursively(
-                optimizer.rules.get(0).unwrap(),
+                optimizer.rules.first().unwrap(),
                 plan,
                 &OptimizerContext::new(),
             )?
