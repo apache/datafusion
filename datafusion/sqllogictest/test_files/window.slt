@@ -3766,7 +3766,7 @@ select a,
 query II
 select a,
       rank() over (RANGE BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) rnk
-      from (select 1 a union select 2 a) q ORDER BY rnk
+      from (select 1 a union select 2 a) q ORDER BY a
 ----
 1 1
 2 1
