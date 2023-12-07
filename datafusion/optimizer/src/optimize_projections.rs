@@ -935,7 +935,6 @@ mod tests {
             .build()
             .unwrap();
 
-
         let expected = "Aggregate: groupBy=[[]], aggr=[[COUNT(Int32(1))]]\
         \n  Projection: \
         \n    Aggregate: groupBy=[[]], aggr=[[COUNT(Int32(1))]]\
