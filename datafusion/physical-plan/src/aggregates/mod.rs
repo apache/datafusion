@@ -882,6 +882,32 @@ fn get_aggregate_expr_req(
     req
 }
 
+/// Computes the finer ordering for between given existing ordering requirement of aggregate expression.
+///
+/// # Parameters
+///
+/// * `existing_req` - The existing lexical ordering that needs refinement.
+/// * `aggr_expr` - A reference to an aggregate expression trait object.
+/// * `group_by` - Information about the physical grouping (e.g group by expression).
+/// * `eq_properties` - Equivalence properties relevant to the computation.
+/// * `agg_mode` - The mode of aggregation (e.g., Partial, Final, etc.).
+///
+/// # Returns
+///
+/// An `Option<LexOrdering>` representing the computed finer lexical ordering,
+/// or `None` if there is no finer ordering, e.g existing requirement and requirement of the
+/// aggregator is incompatible.
+fn finer_ordering(
+    existing_req: &LexOrdering,
+    aggr_expr: &Arc<dyn AggregateExpr>,
+    group_by: &PhysicalGroupBy,
+    eq_properties: &EquivalenceProperties,
+    agg_mode: &AggregateMode,
+) -> Option<LexOrdering> {
+    let aggr_req = get_aggregate_expr_req(aggr_expr, group_by, agg_mode);
+    eq_properties.get_finer_ordering(existing_req, &aggr_req)
+}
+
 /// Groups aggregate expressions based on their ordering requirements.
 ///
 /// # Parameters
@@ -911,16 +937,15 @@ fn get_aggregate_expr_groups(
                 // Skip this group, it is already inserted.
                 continue;
             }
-            let aggr_req = get_aggregate_expr_req(aggr_expr, group_by, agg_mode);
             if let Some((group_indices, req)) = &mut group {
-                if let Some(finer) = eq_properties.get_finer_ordering(req, &aggr_req) {
+                if let Some(finer) =
+                    finer_ordering(req, aggr_expr, group_by, eq_properties, agg_mode)
+                {
                     *req = finer;
                     group_indices.push(idx);
                 } else if let Some(reverse) = aggr_expr.reverse_expr() {
-                    let reverse_req =
-                        get_aggregate_expr_req(&reverse, group_by, agg_mode);
                     if let Some(finer) =
-                        eq_properties.get_finer_ordering(req, &reverse_req)
+                        finer_ordering(req, &reverse, group_by, eq_properties, agg_mode)
                     {
                         *aggr_expr = reverse;
                         *req = finer;
@@ -928,6 +953,7 @@ fn get_aggregate_expr_groups(
                     }
                 }
             } else {
+                let aggr_req = get_aggregate_expr_req(aggr_expr, group_by, agg_mode);
                 // Initialize group with current aggregate expression
                 group = Some((vec![idx], aggr_req));
             }
