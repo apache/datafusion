@@ -68,7 +68,7 @@ impl OptimizerRule for OptimizeProjections {
         config: &dyn OptimizerConfig,
     ) -> Result<Option<LogicalPlan>> {
         // All output fields are necessary:
-        let indices = require_all_indices(plan);
+        let indices = (0..plan.schema().fields().len()).collect::<Vec<_>>();
         optimize_projections(plan, config, &indices)
     }
 
@@ -158,7 +158,7 @@ fn optimize_projections(
             //       EXISTS expression), we may not need to require all indices.
             plan.inputs()
                 .iter()
-                .map(|input| (require_all_indices(input), false))
+                .map(|input| ((0..input.schema().fields().len()).collect_vec(), false))
                 .collect::<Vec<_>>()
         }
         LogicalPlan::EmptyRelation(_)
@@ -207,7 +207,7 @@ fn optimize_projections(
                 // parent even if these fields are unnecessary in terms of
                 // functional dependency.
                 let required_indices =
-                    merge_vectors(&simplest_groupby_indices, &group_by_reqs);
+                    merge_slices(&simplest_groupby_indices, &group_by_reqs);
                 get_at_indices(&aggregate.group_expr, &required_indices)
             } else {
                 aggregate.group_expr.clone()
@@ -547,8 +547,8 @@ fn rewrite_expr(expr: &Expr, input: &Projection) -> Result<Option<Expr>> {
     Ok(Some(result))
 }
 
-/// Retrieves a set of outer-referenced columns by expression `expr`. Note that
-/// the `Expr::to_columns()` function doesn't return these columns.
+/// Retrieves a set of outer-referenced columns by the given expression, `expr`.
+/// Note that the `Expr::to_columns()` function doesn't return these columns.
 ///
 /// # Parameters
 ///
@@ -556,32 +556,24 @@ fn rewrite_expr(expr: &Expr, input: &Projection) -> Result<Option<Expr>> {
 ///
 /// # Returns
 ///
-/// A `HashSet<Column>` containing columns that are referenced by `expr`.
+/// If the function can safely infer all outer-referenced columns, returns a
+/// `Some(HashSet<Column>)` containing these columns. Otherwise, returns `None`.
 fn outer_columns(expr: &Expr) -> Option<HashSet<Column>> {
     let mut columns = HashSet::new();
     outer_columns_helper(expr, &mut columns).then_some(columns)
 }
 
-/// Helper function to accumulate outer-referenced columns by expression `expr`s.
-///
-/// # Parameters
-///
-/// * `exprs` - The expressions to analyze for outer-referenced columns.
-/// * `columns` - A mutable reference to a `HashSet<Column>` where detected
-///   columns are collected.
-/// Return value `None` indicates, it is not known whether expression contains outer column or not.
-fn outer_columns_helper_multi(exprs: &[Expr], columns: &mut HashSet<Column>) -> bool {
-    exprs.iter().all(|e| outer_columns_helper(e, columns))
-}
-
-/// Helper function to accumulate outer-referenced columns by expression `expr`.
+/// A recursive subroutine that accumulates outer-referenced columns by the
+/// given expression, `expr`.
 ///
 /// # Parameters
 ///
 /// * `expr` - The expression to analyze for outer-referenced columns.
 /// * `columns` - A mutable reference to a `HashSet<Column>` where detected
 ///   columns are collected.
-/// Return value `None` indicates, it is not known whether expression contains outer column or not.
+///
+/// Returns `true` if it can safely collect all outer-referenced columns.
+/// Otherwise, returns `false`.
 fn outer_columns_helper(expr: &Expr, columns: &mut HashSet<Column>) -> bool {
     match expr {
         Expr::OuterReferenceColumn(_, col) => {
@@ -593,44 +585,47 @@ fn outer_columns_helper(expr: &Expr, columns: &mut HashSet<Column>) -> bool {
                 && outer_columns_helper(&binary_expr.right, columns)
         }
         Expr::ScalarSubquery(subquery) => {
-            outer_columns_helper_multi(&subquery.outer_ref_columns, columns)
+            let exprs = subquery.outer_ref_columns.iter();
+            outer_columns_helper_multi(exprs, columns)
         }
         Expr::Exists(exists) => {
-            outer_columns_helper_multi(&exists.subquery.outer_ref_columns, columns)
+            let exprs = exists.subquery.outer_ref_columns.iter();
+            outer_columns_helper_multi(exprs, columns)
         }
         Expr::Alias(alias) => outer_columns_helper(&alias.expr, columns),
         Expr::InSubquery(insubquery) => {
-            outer_columns_helper_multi(&insubquery.subquery.outer_ref_columns, columns)
+            let exprs = insubquery.subquery.outer_ref_columns.iter();
+            outer_columns_helper_multi(exprs, columns)
         }
         Expr::IsNotNull(expr) | Expr::IsNull(expr) => outer_columns_helper(expr, columns),
         Expr::Cast(cast) => outer_columns_helper(&cast.expr, columns),
         Expr::Sort(sort) => outer_columns_helper(&sort.expr, columns),
         Expr::AggregateFunction(aggregate_fn) => {
-            outer_columns_helper_multi(&aggregate_fn.args, columns)
+            outer_columns_helper_multi(aggregate_fn.args.iter(), columns)
                 && aggregate_fn
                     .order_by
                     .as_ref()
-                    .map_or(true, |obs| outer_columns_helper_multi(obs, columns))
+                    .map_or(true, |obs| outer_columns_helper_multi(obs.iter(), columns))
                 && aggregate_fn
                     .filter
                     .as_ref()
                     .map_or(true, |filter| outer_columns_helper(filter, columns))
         }
         Expr::WindowFunction(window_fn) => {
-            outer_columns_helper_multi(&window_fn.args, columns)
-                && outer_columns_helper_multi(&window_fn.order_by, columns)
-                && outer_columns_helper_multi(&window_fn.partition_by, columns)
+            outer_columns_helper_multi(window_fn.args.iter(), columns)
+                && outer_columns_helper_multi(window_fn.order_by.iter(), columns)
+                && outer_columns_helper_multi(window_fn.partition_by.iter(), columns)
         }
         Expr::GroupingSet(groupingset) => match groupingset {
             GroupingSet::GroupingSets(multi_exprs) => multi_exprs
                 .iter()
-                .all(|e| outer_columns_helper_multi(e, columns)),
+                .all(|e| outer_columns_helper_multi(e.iter(), columns)),
             GroupingSet::Cube(exprs) | GroupingSet::Rollup(exprs) => {
-                outer_columns_helper_multi(exprs, columns)
+                outer_columns_helper_multi(exprs.iter(), columns)
             }
         },
         Expr::ScalarFunction(scalar_fn) => {
-            outer_columns_helper_multi(&scalar_fn.args, columns)
+            outer_columns_helper_multi(scalar_fn.args.iter(), columns)
         }
         Expr::Like(like) => {
             outer_columns_helper(&like.expr, columns)
@@ -638,16 +633,14 @@ fn outer_columns_helper(expr: &Expr, columns: &mut HashSet<Column>) -> bool {
         }
         Expr::InList(in_list) => {
             outer_columns_helper(&in_list.expr, columns)
-                && outer_columns_helper_multi(&in_list.list, columns)
+                && outer_columns_helper_multi(in_list.list.iter(), columns)
         }
         Expr::Case(case) => {
             let when_then_exprs = case
                 .when_then_expr
                 .iter()
-                .cloned()
-                .flat_map(|(first, second)| vec![(*first), (*second)])
-                .collect::<Vec<Expr>>();
-            outer_columns_helper_multi(&when_then_exprs, columns)
+                .flat_map(|(first, second)| [first.as_ref(), second.as_ref()]);
+            outer_columns_helper_multi(when_then_exprs, columns)
                 && case
                     .expr
                     .as_ref()
@@ -660,6 +653,24 @@ fn outer_columns_helper(expr: &Expr, columns: &mut HashSet<Column>) -> bool {
         Expr::Column(_) | Expr::Literal(_) | Expr::Wildcard { .. } => true,
         _ => false,
     }
+}
+
+/// A recursive subroutine that accumulates outer-referenced columns by the
+/// given expressions (`exprs`).
+///
+/// # Parameters
+///
+/// * `exprs` - The expressions to analyze for outer-referenced columns.
+/// * `columns` - A mutable reference to a `HashSet<Column>` where detected
+///   columns are collected.
+///
+/// Returns `true` if it can safely collect all outer-referenced columns.
+/// Otherwise, returns `false`.
+fn outer_columns_helper_multi<'a>(
+    mut exprs: impl Iterator<Item = &'a Expr>,
+    columns: &mut HashSet<Column>,
+) -> bool {
+    exprs.all(|e| outer_columns_helper(e, columns))
 }
 
 /// Generates the required expressions (columns) that reside at `indices` of
@@ -682,26 +693,26 @@ fn get_required_exprs(input_schema: &Arc<DFSchema>, indices: &[usize]) -> Vec<Ex
 }
 
 /// Get indices of the fields referred to by any expression in `exprs` within
-/// the input `LogicalPlan`.
+/// the given schema (`input_schema`).
 ///
 /// # Arguments
 ///
-/// * `input`: The input logical plan to analyze for index requirements.
+/// * `input_schema`: The input schema to analyze for index requirements.
 /// * `exprs`: An iterator of expressions for which we want to find necessary
-///   field indices at the input.
+///   field indices.
 ///
 /// # Returns
 ///
-/// A [`Result`] object containing the indices of all required fields for the
-/// `input` operator to calculate all `exprs` successfully.
-fn indices_referred_by_exprs<'a, I: Iterator<Item = &'a Expr>>(
+/// A [`Result`] object containing the indices of all required fields in
+/// `input_schema` to calculate all `exprs` successfully.
+fn indices_referred_by_exprs<'a>(
     input_schema: &DFSchemaRef,
-    exprs: I,
+    exprs: impl Iterator<Item = &'a Expr>,
 ) -> Result<Vec<usize>> {
-    let indices_referred = exprs
+    let indices = exprs
         .map(|expr| indices_referred_by_expr(input_schema, expr))
         .collect::<Result<Vec<_>>>()?;
-    Ok(indices_referred
+    Ok(indices
         .into_iter()
         .flatten()
         // Make sure no duplicate entries exist and indices are ordered:
@@ -710,39 +721,41 @@ fn indices_referred_by_exprs<'a, I: Iterator<Item = &'a Expr>>(
         .collect())
 }
 
-/// Get indices of the necessary fields referred by the `expr` among input schema.
+/// Get indices of the fields referred to by the given expression `expr` within
+/// the given schema (`input_schema`).
 ///
-/// # Arguments
+/// # Parameters
 ///
-/// * `input_schema`: The input schema to search for indices referred by expr.
-/// * `expr`: An expression for which we want to find necessary field indices at the input schema.
+/// * `input_schema`: The input schema to analyze for index requirements.
+/// * `expr`: An expression for which we want to find necessary field indices.
 ///
 /// # Returns
 ///
-/// A [Result] object that contains the required field indices of the `input_schema`, to be able to calculate
-/// the `expr` successfully.
+/// A [`Result`] object containing the indices of all required fields in
+/// `input_schema` to calculate `expr` successfully.
 fn indices_referred_by_expr(
     input_schema: &DFSchemaRef,
     expr: &Expr,
 ) -> Result<Vec<usize>> {
     let mut cols = expr.to_columns()?;
-    // Get outer referenced columns (expr.to_columns() doesn't return these columns).
+    // Get outer-referenced columns:
     if let Some(outer_cols) = outer_columns(expr) {
         cols.extend(outer_cols);
     } else {
-        // expression is not known to contain outer column or not. Hence do not assume anything
-        // require all of the schema indices at the input.
+        // Expression is not known to contain outer columns or not. Hence, do
+        // not assume anything and require all the schema indices at the input:
         return Ok((0..input_schema.fields().len()).collect());
     }
-    cols.iter()
-        .filter(|&col| input_schema.has_column(col))
-        .map(|col| input_schema.index_of_column(col))
-        .collect()
+    Ok(cols
+        .iter()
+        .flat_map(|col| input_schema.index_of_column(col))
+        .collect())
 }
 
-/// Get all required indices for the input (indices required by parent + indices referred by `exprs`)
+/// Gets all required indices for the input; i.e. those required by the parent
+/// and those referred to by `exprs`.
 ///
-/// # Arguments
+/// # Parameters
 ///
 /// * `parent_required_indices` - A slice of indices required by the parent plan.
 /// * `input` - The input logical plan to analyze for index requirements.
@@ -750,30 +763,28 @@ fn indices_referred_by_expr(
 ///
 /// # Returns
 ///
-/// A `Result` containing a vector of `usize` indices containing all required indices.
-fn get_all_required_indices<'a, I: Iterator<Item = &'a Expr>>(
+/// A `Result` containing a vector of `usize` indices containing all the required
+/// indices.
+fn get_all_required_indices<'a>(
     parent_required_indices: &[usize],
     input: &LogicalPlan,
-    exprs: I,
+    exprs: impl Iterator<Item = &'a Expr>,
 ) -> Result<Vec<usize>> {
-    let referred_indices = indices_referred_by_exprs(input.schema(), exprs)?;
-    Ok(merge_vectors(parent_required_indices, &referred_indices))
+    indices_referred_by_exprs(input.schema(), exprs)
+        .map(|indices| merge_slices(parent_required_indices, &indices))
 }
 
-/// Retrieves a list of expressions at specified indices from a slice of expressions.
+/// Retrieves the expressions at specified indices within the given slice. Ignores
+/// any invalid indices.
 ///
-/// This function takes a slice of expressions `exprs` and a slice of `usize` indices `indices`.
-/// It returns a new vector containing the expressions from `exprs` that correspond to the provided indices (with bound check).
+/// # Parameters
 ///
-/// # Arguments
-///
-/// * `exprs` - A slice of expressions from which expressions are to be retrieved.
-/// * `indices` - A slice of `usize` indices specifying the positions of the expressions to be retrieved.
+/// * `exprs` - A slice of expressions to index into.
+/// * `indices` - A slice of indices specifying the positions of expressions sought.
 ///
 /// # Returns
 ///
-/// A vector of expressions that correspond to the specified indices. If any index is out of bounds,
-/// the associated expression is skipped in the result.
+/// A vector of expressions corresponding to specified indices.
 fn get_at_indices(exprs: &[Expr], indices: &[usize]) -> Vec<Expr> {
     indices
         .iter()
@@ -782,91 +793,92 @@ fn get_at_indices(exprs: &[Expr], indices: &[usize]) -> Vec<Expr> {
         .collect()
 }
 
-/// Merges two slices of `usize` values into a single vector with sorted (ascending) and deduplicated elements.
-///
-/// # Arguments
-///
-/// * `lhs` - The first slice of `usize` values to be merged.
-/// * `rhs` - The second slice of `usize` values to be merged.
-///
-/// # Returns
-///
-/// A vector of `usize` values containing the merged, sorted, and deduplicated elements from `lhs` and `rhs`.
-/// As an example merge of [3, 2, 4] and [3, 6, 1] will produce [1, 2, 3, 6]
-fn merge_vectors(lhs: &[usize], rhs: &[usize]) -> Vec<usize> {
-    let mut merged = lhs.to_vec();
-    merged.extend(rhs);
-    // Make sure to run sort before dedup.
-    // Dedup removes consecutive same entries
-    // If sort is run before it, all duplicates are removed.
-    merged.sort();
-    merged.dedup();
-    merged
+/// Merges two slices into a single vector with sorted (ascending) and
+/// deduplicated elements. For example, merging `[3, 2, 4]` and `[3, 6, 1]`
+/// will produce `[1, 2, 3, 6]`.
+fn merge_slices<T: Clone + Ord>(left: &[T], right: &[T]) -> Vec<T> {
+    // Make sure to sort before deduping, which removes the duplicates:
+    left.iter()
+        .cloned()
+        .chain(right.iter().cloned())
+        .sorted()
+        .dedup()
+        .collect()
 }
 
-/// Splits requirement indices for a join into left and right children based on the join type.
+/// Splits requirement indices for a join into left and right children based on
+/// the join type.
 ///
-/// This function takes the length of the left child, a slice of requirement indices, and the type
-/// of join (e.g., INNER, LEFT, RIGHT, etc.) as arguments. Depending on the join type, it divides
-/// the requirement indices into those that apply to the left child and those that apply to the right child.
+/// This function takes the length of the left child, a slice of requirement
+/// indices, and the type of join (e.g. `INNER`, `LEFT`, `RIGHT`) as arguments.
+/// Depending on the join type, it divides the requirement indices into those
+/// that apply to the left child and those that apply to the right child.
 ///
-/// - For INNER, LEFT, RIGHT, and FULL joins, the requirements are split between left and right children.
-///   The right child indices are adjusted to point to valid positions in the right child by subtracting
-///   the length of the left child.
+/// - For `INNER`, `LEFT`, `RIGHT` and `FULL` joins, the requirements are split
+///   between left and right children. The right child indices are adjusted to
+///   point to valid positions within the right child by subtracting the length
+///   of the left child.
 ///
-/// - For LEFT ANTI, LEFT SEMI, RIGHT SEMI, and RIGHT ANTI joins, all requirements are re-routed to either
-///   the left child or the right child directly, depending on the join type.
+/// - For `LEFT ANTI`, `LEFT SEMI`, `RIGHT SEMI` and `RIGHT ANTI` joins, all
+///   requirements are re-routed to either the left child or the right child
+///   directly, depending on the join type.
 ///
-/// # Arguments
+/// # Parameters
 ///
 /// * `left_len` - The length of the left child.
 /// * `indices` - A slice of requirement indices.
-/// * `join_type` - The type of join (e.g., INNER, LEFT, RIGHT, etc.).
+/// * `join_type` - The type of join (e.g. `INNER`, `LEFT`, `RIGHT`).
 ///
 /// # Returns
 ///
-/// A tuple containing two vectors of `usize` indices: the first vector represents the requirements for
-/// the left child, and the second vector represents the requirements for the right child. The indices
-/// are appropriately split and adjusted based on the join type.
+/// A tuple containing two vectors of `usize` indices: The first vector represents
+/// the requirements for the left child, and the second vector represents the
+/// requirements for the right child. The indices are appropriately split and
+/// adjusted based on the join type.
 fn split_join_requirements(
     left_len: usize,
     indices: &[usize],
     join_type: &JoinType,
 ) -> (Vec<usize>, Vec<usize>) {
     match join_type {
-        // In these cases requirements split to left and right child.
+        // In these cases requirements are split between left/right children:
         JoinType::Inner | JoinType::Left | JoinType::Right | JoinType::Full => {
-            let (left_child_reqs, mut right_child_reqs): (Vec<usize>, Vec<usize>) =
+            let (left_reqs, mut right_reqs): (Vec<usize>, Vec<usize>) =
                 indices.iter().partition(|&&idx| idx < left_len);
-            // Decrease right side index by `left_len` so that they point to valid positions in the right child.
-            right_child_reqs.iter_mut().for_each(|idx| *idx -= left_len);
-            (left_child_reqs, right_child_reqs)
+            // Decrease right side indices by `left_len` so that they point to valid
+            // positions within the right child:
+            for idx in right_reqs.iter_mut() {
+                *idx -= left_len;
+            }
+            (left_reqs, right_reqs)
         }
         // All requirements can be re-routed to left child directly.
         JoinType::LeftAnti | JoinType::LeftSemi => (indices.to_vec(), vec![]),
-        // All requirements can be re-routed to right side directly. (No need to change index, join schema is right child schema.)
+        // All requirements can be re-routed to right side directly.
+        // No need to change index, join schema is right child schema.
         JoinType::RightSemi | JoinType::RightAnti => (vec![], indices.to_vec()),
     }
 }
 
-/// Adds a projection on top of a logical plan if it reduces the number of
-/// columns for the parent operator.
+/// Adds a projection on top of a logical plan if doing so reduces the number
+/// of columns for the parent operator.
 ///
-/// This function takes a `LogicalPlan`, a list of projection expressions, and a flag indicating whether
-/// the projection is beneficial. If the projection is beneficial and reduces the number of columns in
-/// the plan, a new `LogicalPlan` with the projection is created and returned, along with a `true` flag.
-/// If the projection is unnecessary or doesn't reduce the number of columns, the original plan is returned
-/// with a `false` flag.
+/// This function takes a `LogicalPlan` and a list of projection expressions.
+/// If the projection is beneficial (it reduces the number of columns in the
+/// plan) a new `LogicalPlan` with the projection is created and returned, along
+/// with a `true` flag. If the projection doesn't reduce the number of columns,
+/// the original plan is returned with a `false` flag.
 ///
-/// # Arguments
+/// # Parameters
 ///
 /// * `plan` - The input `LogicalPlan` to potentially add a projection to.
 /// * `project_exprs` - A list of expressions for the projection.
 ///
 /// # Returns
 ///
-/// A `Result` containing a tuple with two values: the resulting `LogicalPlan` (with or without
-/// the added projection) and a `bool` flag indicating whether the projection was added (`true`) or not (`false`).
+/// A `Result` containing a tuple with two values: The resulting `LogicalPlan`
+/// (with or without the added projection) and a `bool` flag indicating if a
+/// projection was added (`true`) or not (`false`).
 fn add_projection_on_top_if_helpful(
     plan: LogicalPlan,
     project_exprs: Vec<Expr>,
@@ -875,64 +887,54 @@ fn add_projection_on_top_if_helpful(
     if project_exprs.len() >= plan.schema().fields().len() {
         Ok((plan, false))
     } else {
-        let proj = Projection::try_new(project_exprs, Arc::new(plan))?;
-        Ok((LogicalPlan::Projection(proj), true))
+        Projection::try_new(project_exprs, Arc::new(plan))
+            .map(|proj| (LogicalPlan::Projection(proj), true))
     }
 }
 
-/// Collects and returns a vector of all indices of the fields in the schema of a logical plan.
+/// Rewrite the given projection according to the fields required by its
+/// ancestors.
 ///
-/// # Arguments
+/// # Parameters
 ///
-/// * `plan` - A reference to the `LogicalPlan` for which indices are required.
-///
-/// # Returns
-///
-/// A vector of `usize` indices representing all fields in the schema of the provided logical plan.
-fn require_all_indices(plan: &LogicalPlan) -> Vec<usize> {
-    (0..plan.schema().fields().len()).collect()
-}
-
-/// Rewrite Projection Given Required fields by its parent(s).
-///
-/// # Arguments
-///
-/// * `proj` - A reference to the original projection to be rewritten.
-/// * `_config` - A reference to the optimizer configuration (unused in the function).
-/// * `indices` - A slice of indices representing the required columns by the parent(s) of projection.
+/// * `proj` - A reference to the original projection to rewrite.
+/// * `config` - A reference to the optimizer configuration.
+/// * `indices` - A slice of indices representing the columns required by the
+///   ancestors of the given projection.
 ///
 /// # Returns
 ///
-/// A `Result` containing an `Option` of the rewritten logical plan. If the
-/// rewrite is successful, it returns `Some` with the optimized logical plan.
-/// If the logical plan remains unchanged it returns `Ok(None)`.
+/// A `Result` object with the following semantics:
+///
+/// - `Ok(Some(LogicalPlan))`: Contains the rewritten projection
+/// - `Ok(None)`: No rewrite necessary.
+/// - `Err(error)`: An error occured during the function call.
 fn rewrite_projection_given_requirements(
     proj: &Projection,
-    _config: &dyn OptimizerConfig,
+    config: &dyn OptimizerConfig,
     indices: &[usize],
 ) -> Result<Option<LogicalPlan>> {
     let exprs_used = get_at_indices(&proj.expr, indices);
     let required_indices =
         indices_referred_by_exprs(proj.input.schema(), exprs_used.iter())?;
     return if let Some(input) =
-        optimize_projections(&proj.input, _config, &required_indices)?
+        optimize_projections(&proj.input, config, &required_indices)?
     {
         if &projection_schema(&input, &exprs_used)? == input.schema() {
             Ok(Some(input))
         } else {
-            let new_proj = Projection::try_new(exprs_used, Arc::new(input))?;
-            let new_proj = LogicalPlan::Projection(new_proj);
-            Ok(Some(new_proj))
+            Projection::try_new(exprs_used, Arc::new(input))
+                .map(|proj| Some(LogicalPlan::Projection(proj)))
         }
     } else if exprs_used.len() < proj.expr.len() {
-        // Projection expression used is different than the existing projection
-        // In this case, even if child doesn't change we should update projection to use less columns.
+        // Projection expression used is different than the existing projection.
+        // In this case, even if the child doesn't change, we should update the
+        // projection to use fewer columns:
         if &projection_schema(&proj.input, &exprs_used)? == proj.input.schema() {
             Ok(Some(proj.input.as_ref().clone()))
         } else {
-            let new_proj = Projection::try_new(exprs_used, proj.input.clone())?;
-            let new_proj = LogicalPlan::Projection(new_proj);
-            Ok(Some(new_proj))
+            Projection::try_new(exprs_used, proj.input.clone())
+                .map(|proj| Some(LogicalPlan::Projection(proj)))
         }
     } else {
         // Projection doesn't change.
@@ -942,15 +944,16 @@ fn rewrite_projection_given_requirements(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use crate::optimize_projections::OptimizeProjections;
+    use crate::test::*;
+
     use datafusion_common::Result;
     use datafusion_expr::{
         binary_expr, col, lit, logical_plan::builder::LogicalPlanBuilder, LogicalPlan,
         Operator,
     };
-    use std::sync::Arc;
-
-    use crate::test::*;
 
     fn assert_optimized_plan_equal(plan: &LogicalPlan, expected: &str) -> Result<()> {
         assert_optimized_plan_eq(Arc::new(OptimizeProjections::new()), plan, expected)
