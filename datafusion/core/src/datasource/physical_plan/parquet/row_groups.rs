@@ -1202,7 +1202,7 @@ mod tests {
 
         // hard code the return value of now()
         let config = OptimizerContext::new().with_skip_failing_rules(false);
-        let analyzer = Analyzer::new();
+        let analyzer = Analyzer::new(panic);
         let optimizer = Optimizer::new();
         // analyze and optimize the logical plan
         let plan = analyzer.execute_and_check(&plan, config.options(), |_, _| {})?;

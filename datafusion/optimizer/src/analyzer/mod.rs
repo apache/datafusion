@@ -16,11 +16,13 @@
 // under the License.
 
 pub mod count_wildcard_rule;
+pub mod function_name_resolver;
 pub mod inline_table_scan;
 pub mod subquery;
 pub mod type_coercion;
 
 use crate::analyzer::count_wildcard_rule::CountWildcardRule;
+use crate::analyzer::function_name_resolver::ResolveFunctionByName;
 use crate::analyzer::inline_table_scan::InlineTableScan;
 
 use crate::analyzer::subquery::check_subquery_expr;
@@ -29,6 +31,7 @@ use crate::utils::log_plan;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{TreeNode, VisitRecursion};
 use datafusion_common::{DataFusionError, Result};
+use datafusion_execution::FunctionRegistry;
 use datafusion_expr::expr::Exists;
 use datafusion_expr::expr::InSubquery;
 use datafusion_expr::utils::inspect_expr_pre;
@@ -61,19 +64,14 @@ pub struct Analyzer {
     pub rules: Vec<Arc<dyn AnalyzerRule + Send + Sync>>,
 }
 
-impl Default for Analyzer {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl Analyzer {
     /// Create a new analyzer using the recommended list of rules
-    pub fn new() -> Self {
+    pub fn new(registry: impl FunctionRegistry + 'static + Send + Sync) -> Self {
         let rules: Vec<Arc<dyn AnalyzerRule + Send + Sync>> = vec![
             Arc::new(InlineTableScan::new()),
             Arc::new(TypeCoercion::new()),
             Arc::new(CountWildcardRule::new()),
+            Arc::new(ResolveFunctionByName::new(registry)),
         ];
         Self::with_rules(rules)
     }

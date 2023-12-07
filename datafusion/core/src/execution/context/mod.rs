@@ -1345,7 +1345,7 @@ impl SessionState {
 
         SessionState {
             session_id,
-            analyzer: Analyzer::new(),
+            analyzer: Analyzer::new(panic!("circular deps")),
             optimizer: Optimizer::new(),
             physical_optimizers: PhysicalOptimizer::new(),
             query_planner: Arc::new(DefaultQueryPlanner {}),
