@@ -406,8 +406,8 @@ mod tests {
                 col("x"),
                 NullableInterval::MaybeNull {
                     values: Interval::try_new(
-                        ScalarValue::Utf8(Some("abc".to_string())),
-                        ScalarValue::Utf8(Some("def".to_string())),
+                        ScalarValue::from("abc"),
+                        ScalarValue::from("def"),
                     )
                     .unwrap(),
                 },
@@ -463,7 +463,7 @@ mod tests {
             ScalarValue::Int32(Some(1)),
             ScalarValue::Boolean(Some(true)),
             ScalarValue::Boolean(None),
-            ScalarValue::Utf8(Some("abc".to_string())),
+            ScalarValue::from("abc"),
             ScalarValue::LargeUtf8(Some("def".to_string())),
             ScalarValue::Date32(Some(18628)),
             ScalarValue::Date32(None),

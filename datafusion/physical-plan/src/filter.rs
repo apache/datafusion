@@ -61,6 +61,8 @@ pub struct FilterExec {
     input: Arc<dyn ExecutionPlan>,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
+    /// Selectivity for statistics. 0 = no rows, 100 all rows
+    default_selectivity: u8,
 }
 
 impl FilterExec {
@@ -74,11 +76,23 @@ impl FilterExec {
                 predicate,
                 input: input.clone(),
                 metrics: ExecutionPlanMetricsSet::new(),
+                default_selectivity: 20,
             }),
             other => {
                 plan_err!("Filter predicate must return boolean values, not {other:?}")
             }
         }
+    }
+
+    pub fn with_default_selectivity(
+        mut self,
+        default_selectivity: u8,
+    ) -> Result<Self, DataFusionError> {
+        if default_selectivity > 100 {
+            return plan_err!("Default flter selectivity needs to be less than 100");
+        }
+        self.default_selectivity = default_selectivity;
+        Ok(self)
     }
 
     /// The expression to filter on. This expression must evaluate to a boolean value.
@@ -89,6 +103,11 @@ impl FilterExec {
     /// The input plan
     pub fn input(&self) -> &Arc<dyn ExecutionPlan> {
         &self.input
+    }
+
+    /// The default selectivity
+    pub fn default_selectivity(&self) -> u8 {
+        self.default_selectivity
     }
 }
 
@@ -166,6 +185,10 @@ impl ExecutionPlan for FilterExec {
         mut children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         FilterExec::try_new(self.predicate.clone(), children.swap_remove(0))
+            .and_then(|e| {
+                let selectivity = e.default_selectivity();
+                e.with_default_selectivity(selectivity)
+            })
             .map(|e| Arc::new(e) as _)
     }
 
@@ -196,10 +219,7 @@ impl ExecutionPlan for FilterExec {
         let input_stats = self.input.statistics()?;
         let schema = self.schema();
         if !check_support(predicate, &schema) {
-            // assume filter selects 20% of rows if we cannot do anything smarter
-            // tracking issue for making this configurable:
-            // https://github.com/apache/arrow-datafusion/issues/8133
-            let selectivity = 0.2_f64;
+            let selectivity = self.default_selectivity as f64 / 100.0;
             let mut stats = input_stats.into_inexact();
             stats.num_rows = stats.num_rows.with_estimated_selectivity(selectivity);
             stats.total_byte_size = stats
@@ -985,6 +1005,56 @@ mod tests {
         // First column is "a", and it is a column with only one value after the filter.
         assert!(filter_statistics.column_statistics[0].is_singleton());
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_validation_filter_selectivity() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+        let input = Arc::new(StatisticsExec::new(
+            Statistics::new_unknown(&schema),
+            schema,
+        ));
+        // WHERE a = 10
+        let predicate = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("a", 0)),
+            Operator::Eq,
+            Arc::new(Literal::new(ScalarValue::Int32(Some(10)))),
+        ));
+        let filter = FilterExec::try_new(predicate, input)?;
+        assert!(filter.with_default_selectivity(120).is_err());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_custom_filter_selectivity() -> Result<()> {
+        // Need a decimal to trigger inexact selectivity
+        let schema =
+            Schema::new(vec![Field::new("a", DataType::Decimal128(2, 3), false)]);
+        let input = Arc::new(StatisticsExec::new(
+            Statistics {
+                num_rows: Precision::Inexact(1000),
+                total_byte_size: Precision::Inexact(4000),
+                column_statistics: vec![ColumnStatistics {
+                    ..Default::default()
+                }],
+            },
+            schema,
+        ));
+        // WHERE a = 10
+        let predicate = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("a", 0)),
+            Operator::Eq,
+            Arc::new(Literal::new(ScalarValue::Decimal128(Some(10), 10, 10))),
+        ));
+        let filter = FilterExec::try_new(predicate, input)?;
+        let statistics = filter.statistics()?;
+        assert_eq!(statistics.num_rows, Precision::Inexact(200));
+        assert_eq!(statistics.total_byte_size, Precision::Inexact(800));
+        let filter = filter.with_default_selectivity(40)?;
+        let statistics = filter.statistics()?;
+        assert_eq!(statistics.num_rows, Precision::Inexact(400));
+        assert_eq!(statistics.total_byte_size, Precision::Inexact(1600));
         Ok(())
     }
 }

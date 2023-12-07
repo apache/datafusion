@@ -430,12 +430,23 @@ fn merge_consecutive_projections(proj: &Projection) -> Result<Option<Projection>
 
     // If all the expression of the top projection can be rewritten, do so and
     // create a new projection:
-    proj.expr
+    let new_exprs = proj
+        .expr
         .iter()
         .map(|expr| rewrite_expr(expr, prev_projection))
-        .collect::<Result<Option<_>>>()?
-        .map(|exprs| Projection::try_new(exprs, prev_projection.input.clone()))
-        .transpose()
+        .collect::<Result<Option<Vec<_>>>>()?;
+    if let Some(new_exprs) = new_exprs {
+        let new_exprs = new_exprs
+            .into_iter()
+            .zip(proj.expr.iter())
+            .map(|(new_expr, old_expr)| {
+                new_expr.alias_if_changed(old_expr.name_for_alias()?)
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Projection::try_new(new_exprs, prev_projection.input.clone()).map(Some)
+    } else {
+        Ok(None)
+    }
 }
 
 /// Trim the given expression by removing any unnecessary layers of aliasing.

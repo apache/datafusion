@@ -433,7 +433,7 @@ pub fn expand_qualified_wildcard(
     let qualified_schema =
         DFSchema::new_with_metadata(qualified_fields, schema.metadata().clone())?
             // We can use the functional dependencies as is, since it only stores indices:
-            .with_functional_dependencies(schema.functional_dependencies().clone());
+            .with_functional_dependencies(schema.functional_dependencies().clone())?;
     let excluded_columns = if let Some(WildcardAdditionalOptions {
         opt_exclude,
         opt_except,

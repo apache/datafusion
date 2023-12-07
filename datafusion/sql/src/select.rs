@@ -381,7 +381,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     &[&[plan.schema()]],
                     &plan.using_columns()?,
                 )?;
-                let expr = col.alias(self.normalizer.normalize(alias));
+                let name = self.normalizer.normalize(alias);
+                // avoiding adding an alias if the column name is the same.
+                let expr = match &col {
+                    Expr::Column(column) if column.name.eq(&name) => col,
+                    _ => col.alias(name),
+                };
                 Ok(vec![expr])
             }
             SelectItem::Wildcard(options) => {

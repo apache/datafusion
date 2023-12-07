@@ -84,7 +84,7 @@ impl OperatorMode {
         let like = Like {
             negated: self.not,
             expr,
-            pattern: Box::new(Expr::Literal(ScalarValue::Utf8(Some(pattern)))),
+            pattern: Box::new(Expr::Literal(ScalarValue::from(pattern))),
             escape_char: None,
             case_insensitive: self.i,
         };

@@ -199,11 +199,17 @@ impl DFSchema {
     pub fn with_functional_dependencies(
         mut self,
         functional_dependencies: FunctionalDependencies,
-    ) -> Self {
-        // TODO: Add validity for functional dependency
-        // Such as if table size is 10, functional dependency cannot contain 11, etc.
-        self.functional_dependencies = functional_dependencies;
-        self
+    ) -> Result<Self> {
+        let n_field = self.fields.len();
+        if functional_dependencies.are_dependencies_valid(n_field) {
+            self.functional_dependencies = functional_dependencies;
+            Ok(self)
+        } else {
+            Err(DataFusionError::Plan(format!(
+                "Invalid functional dependency:{:?}",
+                functional_dependencies
+            )))
+        }
     }
 
     /// Create a new schema that contains the fields from this schema followed by the fields

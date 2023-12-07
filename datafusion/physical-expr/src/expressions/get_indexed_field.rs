@@ -110,7 +110,7 @@ impl GetIndexedFieldExpr {
         Self::new(
             arg,
             GetFieldAccessExpr::NamedStructField {
-                name: ScalarValue::Utf8(Some(name.into())),
+                name: ScalarValue::from(name.into()),
             },
         )
     }

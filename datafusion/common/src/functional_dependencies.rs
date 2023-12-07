@@ -272,6 +272,29 @@ impl FunctionalDependencies {
         self.deps.extend(other.deps);
     }
 
+    /// Sanity check whether functional dependencies are valid
+    /// e.g if field size is 10, we cannot receive any index further than 9.
+    pub fn are_dependencies_valid(&self, n_field: usize) -> bool {
+        self.deps.iter().all(
+            |FunctionalDependence {
+                 source_indices,
+                 target_indices,
+                 ..
+             }| {
+                source_indices
+                    .iter()
+                    .max()
+                    .map(|&max_index| max_index < n_field)
+                    .unwrap_or(true)
+                    && target_indices
+                        .iter()
+                        .max()
+                        .map(|&max_index| max_index < n_field)
+                        .unwrap_or(true)
+            },
+        )
+    }
+
     /// Adds the `offset` value to `source_indices` and `target_indices` for
     /// each functional dependency.
     pub fn add_offset(&mut self, offset: usize) {
@@ -411,6 +434,14 @@ impl FunctionalDependencies {
                 }
             },
         )
+    }
+}
+
+impl Deref for FunctionalDependencies {
+    type Target = [FunctionalDependence];
+
+    fn deref(&self) -> &Self::Target {
+        self.deps.as_slice()
     }
 }
 

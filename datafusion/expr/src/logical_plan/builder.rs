@@ -1185,8 +1185,8 @@ pub fn build_join_schema(
     );
     let mut metadata = left.metadata().clone();
     metadata.extend(right.metadata().clone());
-    DFSchema::new_with_metadata(fields, metadata)
-        .map(|schema| schema.with_functional_dependencies(func_dependencies))
+    let schema = DFSchema::new_with_metadata(fields, metadata)?;
+    schema.with_functional_dependencies(func_dependencies)
 }
 
 /// Errors if one or more expressions have equal names.
@@ -1510,7 +1510,7 @@ pub fn unnest_with_options(
     let df_schema = DFSchema::new_with_metadata(fields, metadata)?;
     // We can use the existing functional dependencies:
     let deps = input_schema.functional_dependencies().clone();
-    let schema = Arc::new(df_schema.with_functional_dependencies(deps));
+    let schema = Arc::new(df_schema.with_functional_dependencies(deps)?);
 
     Ok(LogicalPlan::Unnest(Unnest {
         input: Arc::new(input),
