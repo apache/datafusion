@@ -39,8 +39,22 @@ use datafusion_common::utils::get_at_indices;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_physical_expr::{LexOrdering, PhysicalExpr};
 use futures::stream::{Stream, StreamExt};
+use itertools::izip;
 
 use super::AggregateExec;
+
+/// A structure storing necessary data for aggregate expr evaluation.
+///
+/// # Fields
+///
+/// - `expressions`: A vector expressions that aggregate expression refers e.g for CORR(a, b) this will be a, b.
+/// - `filter_expression`: A vector of optional filter expression associated with aggregate expression.
+/// - `accumulator`: The accumulator used to calculate aggregate expression result.
+pub struct AggregateExprData {
+    expressions: Vec<Arc<dyn PhysicalExpr>>,
+    filter_expression: Option<Arc<dyn PhysicalExpr>>,
+    accumulator: AccumulatorItem,
+}
 
 /// A structure representing an aggregate group.
 ///
@@ -51,15 +65,11 @@ use super::AggregateExec;
 ///
 /// # Fields
 ///
-/// - `aggregate_expressions`: A vector of vectors containing aggregate expressions.
-/// - `filter_expressions`: A vector of optional filter expressions associated with each aggregate expression.
-/// - `accumulators`: A vector of `AccumulatorItem` instances representing accumulators for the group.
+/// - `aggregates`: A vector of `AggregateExprData` which stores necessary fields for successful evaluation of the each aggregate expression.
 /// - `requirement`: A `LexOrdering` instance specifying the lexical ordering requirement of the group.
 /// - `group_indices`: A vector of indices indicating position of each aggregation in the original aggregate expression.
 pub struct AggregateGroup {
-    aggregate_expressions: Vec<Vec<Arc<dyn PhysicalExpr>>>,
-    filter_expressions: Vec<Option<Arc<dyn PhysicalExpr>>>,
-    accumulators: Vec<AccumulatorItem>,
+    aggregates: Vec<AggregateExprData>,
     requirement: LexOrdering,
     group_indices: Vec<usize>,
 }
@@ -126,10 +136,21 @@ impl AggregateStream {
                     let filter_expressions =
                         get_at_indices(&filter_expressions, indices)?;
                     let accumulators = create_accumulators(&aggr_exprs)?;
+                    let aggregates = izip!(
+                        aggregate_expressions.into_iter(),
+                        filter_expressions.into_iter(),
+                        accumulators.into_iter()
+                    )
+                    .map(|(expressions, filter_expression, accumulator)| {
+                        AggregateExprData {
+                            expressions,
+                            filter_expression,
+                            accumulator,
+                        }
+                    })
+                    .collect::<Vec<_>>();
                     Ok(AggregateGroup {
-                        aggregate_expressions,
-                        filter_expressions,
-                        accumulators,
+                        aggregates,
                         requirement: requirement.to_vec(),
                         group_indices: indices.to_vec(),
                     })
@@ -261,9 +282,6 @@ fn aggregate_batch(
     // 1.3 evaluate expressions
     // 1.4 update / merge accumulators with the expressions' values
 
-    let accumulators = &mut aggregate_group.accumulators;
-    let expressions = &mut aggregate_group.aggregate_expressions;
-    let filters = &mut aggregate_group.filter_expressions;
     let requirement = &aggregate_group.requirement;
     let batch = if requirement.is_empty() {
         batch.clone()
@@ -271,11 +289,12 @@ fn aggregate_batch(
         sort_batch(batch, requirement, None)?
     };
     // 1.1
-    accumulators
-        .iter_mut()
-        .zip(expressions)
-        .zip(filters)
-        .try_for_each(|((accum, expr), filter)| {
+    aggregate_group.aggregates.iter_mut().try_for_each(
+        |AggregateExprData {
+             expressions: expr,
+             filter_expression: filter,
+             accumulator: accum,
+         }| {
             // 1.2
             let batch = match filter {
                 Some(filter) => Cow::Owned(batch_filter(&batch, filter)?),
@@ -303,7 +322,8 @@ fn aggregate_batch(
             let size_post = accum.size();
             allocated += size_post.saturating_sub(size_pre);
             res
-        })?;
+        },
+    )?;
 
     Ok(allocated)
 }
@@ -316,7 +336,14 @@ fn finalize_aggregation_groups(
 ) -> Result<Vec<ArrayRef>> {
     let aggregate_group_results = aggregate_groups
         .iter()
-        .map(|aggregate_group| finalize_aggregation(&aggregate_group.accumulators, mode))
+        .map(|aggregate_group| {
+            let accumulators = aggregate_group
+                .aggregates
+                .iter()
+                .map(|elem| &elem.accumulator)
+                .collect::<Vec<_>>();
+            finalize_aggregation(&accumulators, mode)
+        })
         .collect::<Result<Vec<_>>>()?;
     let aggregate_group_indices = aggregate_groups
         .iter()

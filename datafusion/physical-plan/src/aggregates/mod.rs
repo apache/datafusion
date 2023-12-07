@@ -1049,7 +1049,7 @@ fn create_accumulators(
 /// returns a vector of ArrayRefs, where each entry corresponds to either the
 /// final value (mode = Final, FinalPartitioned and Single) or states (mode = Partial)
 fn finalize_aggregation(
-    accumulators: &[AccumulatorItem],
+    accumulators: &[&AccumulatorItem],
     mode: &AggregateMode,
 ) -> Result<Vec<Vec<ArrayRef>>> {
     match mode {
