@@ -973,6 +973,37 @@ fn round_trip_datatype() {
 }
 
 #[test]
+fn roundtrip_dict_id() -> Result<()> {
+    let dict_id = 42;
+    let field = Field::new(
+        "keys",
+        DataType::List(Arc::new(Field::new_dict(
+            "item",
+            DataType::Dictionary(Box::new(DataType::UInt16), Box::new(DataType::Utf8)),
+            true,
+            dict_id,
+            false,
+        ))),
+        false,
+    );
+    let schema = Arc::new(Schema::new(vec![field]));
+
+    // encode
+    let mut buf: Vec<u8> = vec![];
+    let schema_proto: datafusion_proto::generated::datafusion::Schema = schema.try_into().unwrap();
+    schema_proto.encode(&mut buf).unwrap();
+
+    // decode
+    let schema_proto = datafusion_proto::generated::datafusion::Schema::decode(buf.as_slice()).unwrap();
+    let decoded: Schema = (&schema_proto).try_into()?;
+
+    let decoded_field = decoded.fields().iter().last().unwrap();
+    assert_eq!(decoded_field.dict_id(), Some(dict_id), "dict_id should be retained");
+
+    Ok(())
+}
+
+#[test]
 fn roundtrip_null_scalar_values() {
     let test_types = vec![
         ScalarValue::Boolean(None),
