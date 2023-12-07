@@ -216,9 +216,9 @@ fn optimize_projections(
             // Aggregate always needs at least one aggregate expression.
             // With a nested count we don't require any column as input, but still need to create a correct aggregate
             // The aggregate may be optimized out later (select count(*) from (select count(*) from [...]) always returns 1
-            if new_aggr_expr.len() == 0
-                && new_group_bys.len() == 0
-                && aggregate.aggr_expr.len() > 0
+            if new_aggr_expr.is_empty()
+                && new_group_bys.is_empty()
+                && !aggregate.aggr_expr.is_empty()
             {
                 new_aggr_expr = vec![aggregate.aggr_expr[0].clone()];
             }
