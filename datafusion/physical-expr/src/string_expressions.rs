@@ -323,10 +323,20 @@ fn general_trim<T: OffsetSizeTrait>(
     trim_type: TrimType,
 ) -> Result<ArrayRef> {
     let func = match trim_type {
-        TrimType::Left => str::trim_start_matches::<&str>,
-        TrimType::Right => str::trim_end_matches::<&str>,
-        TrimType::Both => |input, pattern| {
-            str::trim_end_matches(str::trim_start_matches(input, pattern), pattern)
+        TrimType::Left => |input, pattern: &str| {
+            let pattern = pattern.chars().collect::<Vec<char>>();
+            str::trim_start_matches::<&[char]>(input, pattern.as_ref())
+        },
+        TrimType::Right => |input, pattern: &str| {
+            let pattern = pattern.chars().collect::<Vec<char>>();
+            str::trim_end_matches::<&[char]>(input, pattern.as_ref())
+        },
+        TrimType::Both => |input, pattern: &str| {
+            let pattern = pattern.chars().collect::<Vec<char>>();
+            str::trim_end_matches::<&[char]>(
+                str::trim_start_matches::<&[char]>(input, pattern.as_ref()),
+                pattern.as_ref(),
+            )
         },
     };
 
