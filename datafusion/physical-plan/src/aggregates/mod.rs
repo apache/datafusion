@@ -937,26 +937,28 @@ fn get_aggregate_expr_groups(
                 // Skip this group, it is already inserted.
                 continue;
             }
-            if let Some((group_indices, req)) = &mut group {
-                if let Some(finer) =
-                    finer_ordering(req, aggr_expr, group_by, eq_properties, agg_mode)
-                {
-                    *req = finer;
-                    group_indices.push(idx);
-                } else if let Some(reverse) = aggr_expr.reverse_expr() {
-                    if let Some(finer) =
-                        finer_ordering(req, &reverse, group_by, eq_properties, agg_mode)
-                    {
-                        *aggr_expr = reverse;
-                        *req = finer;
-                        group_indices.push(idx);
-                    }
-                }
+            let (mut group_indices, mut req) = if let Some((group_indices, req)) = group {
+                (group_indices, req)
             } else {
-                let aggr_req = get_aggregate_expr_req(aggr_expr, group_by, agg_mode);
-                // Initialize group with current aggregate expression
-                group = Some((vec![idx], aggr_req));
+                // Initialize an empty group with empty requirement
+                (vec![], vec![])
+            };
+            if let Some(finer) =
+                finer_ordering(&req, aggr_expr, group_by, eq_properties, agg_mode)
+            {
+                req = finer;
+                group_indices.push(idx);
+            } else if let Some(reverse) = aggr_expr.reverse_expr() {
+                if let Some(finer) =
+                    finer_ordering(&req, &reverse, group_by, eq_properties, agg_mode)
+                {
+                    *aggr_expr = reverse;
+                    req = finer;
+                    group_indices.push(idx);
+                }
             }
+            // Update group with new entries
+            group = Some((group_indices, req));
         }
         // We cannot received None here.
         let (indices, requirement) =

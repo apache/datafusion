@@ -121,6 +121,20 @@ pub struct HashAggregateGroup {
     group_indices: Vec<usize>,
 }
 
+impl HashAggregateGroup {
+    /// Initialize an empty group.
+    fn empty() -> Self {
+        HashAggregateGroup {
+            accumulators: vec![],
+            aggregate_arguments: vec![],
+            merging_aggregate_arguments: vec![],
+            filter_expressions: vec![],
+            requirement: vec![],
+            group_indices: vec![],
+        }
+    }
+}
+
 /// HashTable based Grouping Aggregator
 ///
 /// # Design Goals
@@ -361,14 +375,13 @@ impl GroupedHashAggregateStream {
             )
             .collect::<Result<Vec<_>>>()?;
         if aggregate_groups.is_empty() {
-            aggregate_groups = vec![HashAggregateGroup {
-                accumulators: vec![],
-                aggregate_arguments: vec![],
-                merging_aggregate_arguments: vec![],
-                filter_expressions: vec![],
-                requirement: vec![],
-                group_indices: vec![],
-            }]
+            // Make sure there is at least one empty group.
+            // This situations can arise in queries in following form
+            // SELECT a, b
+            // FROM table
+            // GROUP BY a,b
+            // where there is no aggregate expression.
+            aggregate_groups = vec![HashAggregateGroup::empty()]
         }
 
         // we need to use original schema so RowConverter in group_values below
