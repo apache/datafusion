@@ -653,13 +653,11 @@ fn roundtrip_get_indexed_field_named_struct_field() -> Result<()> {
 
 #[test]
 fn roundtrip_get_indexed_field_list_index() -> Result<()> {
-    let fields = vec![
+    let schema = Schema::new(vec![
         Field::new("id", DataType::Int64, true),
         Field::new_list("arg", Field::new("item", DataType::Float64, true), true),
         Field::new("key", DataType::Int64, true),
-    ];
-
-    let schema = Schema::new(fields);
+    ]);
     let input = Arc::new(MemoryExec::try_new_with_dummy_row(
         SchemaRef::new(schema.clone()),
         1,

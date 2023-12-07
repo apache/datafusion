@@ -1025,6 +1025,22 @@ pub struct Field {
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
+pub struct RecordBatch {
+    #[prost(message, optional, tag = "1")]
+    pub schema: ::core::option::Option<Schema>,
+    #[prost(string, repeated, tag = "2")]
+    pub columns: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    #[prost(int32, tag = "3")]
+    pub row_count: i32,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct RecordBatchList {
+    #[prost(message, repeated, tag = "1")]
+    pub record_batchs: ::prost::alloc::vec::Vec<RecordBatch>,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct FixedSizeBinary {
     #[prost(int32, tag = "1")]
     pub length: i32,
@@ -1516,7 +1532,7 @@ pub mod owned_table_reference {
 pub struct PhysicalPlanNode {
     #[prost(
         oneof = "physical_plan_node::PhysicalPlanType",
-        tags = "1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25"
+        tags = "1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26"
     )]
     pub physical_plan_type: ::core::option::Option<physical_plan_node::PhysicalPlanType>,
 }
@@ -1575,6 +1591,8 @@ pub mod physical_plan_node {
         JsonSink(::prost::alloc::boxed::Box<super::JsonSinkExecNode>),
         #[prost(message, tag = "25")]
         SymmetricHashJoin(::prost::alloc::boxed::Box<super::SymmetricHashJoinExecNode>),
+        #[prost(message, tag = "26")]
+        Memory(super::MemoryExecNode),
     }
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
@@ -1713,6 +1731,12 @@ pub mod physical_expr_node {
             ::prost::alloc::boxed::Box<super::PhysicalGetIndexedFieldExprNode>,
         ),
     }
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PhysicalExprNodeList {
+    #[prost(message, repeated, tag = "1")]
+    pub expr_nodes: ::prost::alloc::vec::Vec<PhysicalExprNode>,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -2084,7 +2108,7 @@ pub struct JoinOn {
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct EmptyExecNode {
-    #[prost(message, optional, tag = "2")]
+    #[prost(message, optional, tag = "1")]
     pub schema: ::core::option::Option<Schema>,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
@@ -2392,6 +2416,20 @@ pub mod physical_get_indexed_field_expr_node {
         #[prost(message, tag = "4")]
         ListRangeExpr(::prost::alloc::boxed::Box<super::ListRangeExpr>),
     }
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct MemoryExecNode {
+    #[prost(message, repeated, tag = "1")]
+    pub partitions: ::prost::alloc::vec::Vec<RecordBatchList>,
+    #[prost(message, optional, tag = "2")]
+    pub schema: ::core::option::Option<Schema>,
+    #[prost(message, optional, tag = "3")]
+    pub projected_schema: ::core::option::Option<Schema>,
+    #[prost(uint32, repeated, tag = "4")]
+    pub projection: ::prost::alloc::vec::Vec<u32>,
+    #[prost(message, repeated, tag = "5")]
+    pub sort_information: ::prost::alloc::vec::Vec<PhysicalExprNodeList>,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]

@@ -19,6 +19,7 @@ use std::convert::TryInto;
 use std::fmt::Debug;
 use std::sync::Arc;
 
+use arrow::record_batch::RecordBatch;
 use datafusion::arrow::compute::SortOptions;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::datasource::file_format::file_compression_type::FileCompressionType;
@@ -44,6 +45,7 @@ use datafusion::physical_plan::joins::{
 };
 use datafusion::physical_plan::joins::{HashJoinExec, PartitionMode};
 use datafusion::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
+use datafusion::physical_plan::memory::MemoryExec;
 use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::repartition::RepartitionExec;
 use datafusion::physical_plan::sorts::sort::SortExec;
@@ -55,6 +57,7 @@ use datafusion::physical_plan::windows::{
 use datafusion::physical_plan::{
     udaf, AggregateExpr, ExecutionPlan, Partitioning, PhysicalExpr, WindowExpr,
 };
+use datafusion::sql::sqlparser::dialect::dialect_from_str;
 use datafusion_common::{internal_err, not_impl_err, DataFusionError, Result};
 use prost::bytes::BufMut;
 use prost::Message;
@@ -69,7 +72,7 @@ use crate::protobuf::physical_expr_node::ExprType;
 use crate::protobuf::physical_plan_node::PhysicalPlanType;
 use crate::protobuf::repartition_exec_node::PartitionMethod;
 use crate::protobuf::{
-    self, window_agg_exec_node, PhysicalPlanNode, PhysicalSortExprNodeCollection,
+    self, window_agg_exec_node, PhysicalPlanNode, PhysicalSortExprNodeCollection, Schema,
 };
 use crate::{convert_required, into_required};
 
@@ -706,6 +709,40 @@ impl AsExecutionPlan for PhysicalPlanNode {
                 let schema = Arc::new(convert_required!(empty.schema)?);
                 Ok(Arc::new(EmptyExec::new(schema)))
             }
+            PhysicalPlanType::Memory(memory) => {
+                println!("{:?}", memory);
+                todo!("not implemented")
+                // let partitions = memory.partitions.iter().map(
+                //     |record_batchs| {
+                //         record_batchs.record_batchs.iter().map(
+                //             |record| {
+                //                 let schema: Result<Schema, DataFusionError> = record.schema
+                //                     .ok_or_else(|| DataFusionError::Internal("No Schema".to_string()))
+                //                     .and_then(|s| s.try_into().map_err(|_| DataFusionError::Internal("Schema conversion error".to_string())));                                
+                                
+                //                 let cols = record.columns.iter().map(
+                //                     |col| {
+                //                         todo!("what")
+                //                     }
+                //                 ).collect();
+                                
+                //                 schema.and_then(|s| {
+                //                     RecordBatch::try_new(s,cols).map_err(DataFusionError::Internal("Can't Instantiate RecordBatch".to_string()))
+                //                 })
+                //             }
+                //         ).collect::<Result<Vec<RecordBatch>,_>>()
+                //     } 
+                // ).collect::<Result<Vec<Vec<RecordBatch>>,_>>().map_err(|e| DataFusionError::ArrowError(e));
+
+                // let schema = todo!("put schema");
+                // let projection = todo!("projection");
+
+                // partitions.and_then(|p| {
+                //     MemoryExec::try_new(&p, schema, projection)
+                // }).map( |e| {
+                //     Arc::new(e) as _
+                // })
+            }
             PhysicalPlanType::Sort(sort) => {
                 let input: Arc<dyn ExecutionPlan> =
                     into_physical_plan(&sort.input, registry, runtime, extension_codec)?;
@@ -1291,6 +1328,75 @@ impl AsExecutionPlan for PhysicalPlanNode {
                     protobuf::EmptyExecNode {
                         schema: Some(schema),
                     },
+                )),
+            });
+        }
+
+        if let Some(memory) = plan.downcast_ref::<MemoryExec>() {
+            let projected_schema = memory.schema().as_ref().try_into()?;
+        
+            let expr = memory.sort_information()
+                .iter()
+                .map(|exprs| {
+                    let expr_nodes = exprs.iter().map(|expr| {
+                        let converted_expr = expr.expr.to_owned().try_into()?;
+                        Ok(protobuf::PhysicalExprNode {
+                            expr_type: Some(protobuf::physical_expr_node::ExprType::Sort(
+                                Box::new(protobuf::PhysicalSortExprNode {
+                                    expr: Some(Box::new(converted_expr)),
+                                    asc: !expr.options.descending,
+                                    nulls_first: expr.options.nulls_first,
+                                }),
+                            )),
+                        })
+                    }).collect::<Result<Vec<protobuf::PhysicalExprNode>, DataFusionError>>()?;
+                    Ok(protobuf::PhysicalExprNodeList { expr_nodes })
+                }).collect::<Result<Vec<_>, DataFusionError>>()?;
+        
+            let original_schema: protobuf::Schema = memory.original_schema().as_ref().try_into()?;
+        
+            let partitions = memory.partitions().iter().map(
+              |partition| {
+                let records = partition.iter().map(|record| {
+                    let schema = record.schema().try_into().ok();
+                    let cols = record.columns().into_iter().map(
+                        |col| {
+                            format!("{:?}", col)
+                        }
+                    ).collect();
+                    protobuf::RecordBatch {
+                        schema: schema,
+                        columns: cols,
+                        row_count: record.num_rows() as i32,
+                    }
+                }).collect::<Vec<protobuf::RecordBatch>>();
+                protobuf::RecordBatchList{
+                    record_batchs: records
+                }
+              }  
+            ).collect::<Vec<protobuf::RecordBatchList>>();
+                                                                                    
+        
+            let projections = memory.projection().as_ref().map_or_else(
+                Vec::new, 
+                |projs| {
+                    projs.into_iter().filter_map(
+                        |proj| {
+                            let value_u32: u32 = (*proj).try_into().expect("Value is too large for u32");
+                            Some(value_u32)
+                        }
+                    ).collect()
+                });
+        
+            return Ok(protobuf::PhysicalPlanNode {
+                physical_plan_type: Some(PhysicalPlanType::Memory(
+                    protobuf::MemoryExecNode {
+                        partitions,
+                        schema: Some(original_schema),
+                        projected_schema: Some(projected_schema),
+                        projection: projections,
+                        sort_information: expr,
+                    }
                 )),
             });
         }

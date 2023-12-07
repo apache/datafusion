@@ -30,7 +30,6 @@ use datafusion::execution::context::{SessionContext, SessionState, TaskContext};
 use datafusion::logical_expr::{
     col, Expr, LogicalPlan, LogicalPlanBuilder, TableScan, UNNAMED_TABLE,
 };
-use datafusion::physical_plan::empty::EmptyExec;
 use datafusion::physical_plan::expressions::PhysicalSortExpr;
 use datafusion::physical_plan::{
     collect, ColumnStatistics, DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning,

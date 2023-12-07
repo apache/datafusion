@@ -840,6 +840,16 @@ message Field {
   map<string, string> metadata = 5;
 }
 
+message RecordBatch {
+  Schema schema = 1;
+  repeated string columns = 2;
+  int32 row_count = 3;
+}
+
+message RecordBatchList {
+  repeated RecordBatch record_batchs = 1;
+}
+
 message FixedSizeBinary{
   int32 length = 1;
 }
@@ -1159,6 +1169,7 @@ message PhysicalPlanNode {
     AnalyzeExecNode analyze = 23;
     JsonSinkExecNode json_sink = 24;
     SymmetricHashJoinExecNode symmetric_hash_join = 25;
+    MemoryExecNode memory = 26;
   }
 }
 
@@ -1254,6 +1265,10 @@ message PhysicalExprNode {
 
     PhysicalGetIndexedFieldExprNode get_indexed_field_expr = 19;
   }
+}
+
+message PhysicalExprNodeList {
+  repeated PhysicalExprNode expr_nodes = 1;
 }
 
 message PhysicalScalarUdfNode {
@@ -1484,7 +1499,7 @@ message JoinOn {
 }
 
 message EmptyExecNode {
-  Schema schema = 2;
+  Schema schema = 1;
 }
 
 message ProjectionExecNode {
@@ -1678,4 +1693,12 @@ message PhysicalGetIndexedFieldExprNode {
     ListIndexExpr list_index_expr = 3;
     ListRangeExpr list_range_expr = 4;
   }
+}
+
+message MemoryExecNode {
+  repeated RecordBatchList partitions = 1;
+  Schema schema = 2;
+  Schema projected_schema = 3;
+  repeated uint32 projection = 4;
+  repeated PhysicalExprNodeList sort_information = 5;
 }

@@ -231,6 +231,10 @@ impl MemoryExec {
     pub fn original_schema(&self) -> SchemaRef {
         self.schema.clone()
     }
+
+    pub fn sort_information(&self) -> Vec<LexOrdering> {
+        self.sort_information.clone()
+    }
 }
 
 /// Iterator over batches
