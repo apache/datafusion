@@ -1065,3 +1065,42 @@ select z+1, y from (select x+1 as z, y from t) where y > 1;
 ----
 3 2
 3 3
+
+query TT
+EXPLAIN SELECT x/2, x/2+1 FROM t;
+----
+logical_plan
+Projection: t.x / Int64(2)Int64(2)t.x AS t.x / Int64(2), t.x / Int64(2)Int64(2)t.x AS t.x / Int64(2) + Int64(1)
+--Projection: t.x / Int64(2) AS t.x / Int64(2)Int64(2)t.x
+----TableScan: t projection=[x]
+physical_plan
+ProjectionExec: expr=[t.x / Int64(2)Int64(2)t.x@0 as t.x / Int64(2), t.x / Int64(2)Int64(2)t.x@0 + 1 as t.x / Int64(2) + Int64(1)]
+--ProjectionExec: expr=[x@0 / 2 as t.x / Int64(2)Int64(2)t.x]
+----MemoryExec: partitions=1, partition_sizes=[1]
+
+query II
+SELECT x/2, x/2+1 FROM t;
+----
+0 1
+0 1
+
+query TT
+EXPLAIN SELECT abs(x), abs(x) + abs(y) FROM t;
+----
+logical_plan
+Projection: abs(t.x)t.x AS abs(t.x), abs(t.x)t.x AS abs(t.x) + abs(t.y)
+--Projection: abs(t.x) AS abs(t.x)t.x, t.y
+----TableScan: t projection=[x, y]
+physical_plan
+ProjectionExec: expr=[abs(t.x)t.x@0 as abs(t.x), abs(t.x)t.x@0 + abs(y@1) as abs(t.x) + abs(t.y)]
+--ProjectionExec: expr=[abs(x@0) as abs(t.x)t.x, y@1 as y]
+----MemoryExec: partitions=1, partition_sizes=[1]
+
+query II
+SELECT abs(x), abs(x) + abs(y) FROM t;
+----
+1 3
+1 4
+
+statement ok
+DROP TABLE t;
