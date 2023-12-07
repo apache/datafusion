@@ -108,6 +108,8 @@ impl TryFrom<&Field> for protobuf::Field {
             nullable: field.is_nullable(),
             children: Vec::new(),
             metadata: field.metadata().clone(),
+            dict_id: field.dict_id().unwrap_or(0),
+            dict_ordered: field.dict_is_ordered().unwrap_or(false),
         })
     }
 }

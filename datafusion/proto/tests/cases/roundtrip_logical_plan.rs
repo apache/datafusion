@@ -990,15 +990,23 @@ fn roundtrip_dict_id() -> Result<()> {
 
     // encode
     let mut buf: Vec<u8> = vec![];
-    let schema_proto: datafusion_proto::generated::datafusion::Schema = schema.try_into().unwrap();
+    let schema_proto: datafusion_proto::generated::datafusion::Schema =
+        schema.try_into().unwrap();
     schema_proto.encode(&mut buf).unwrap();
 
     // decode
-    let schema_proto = datafusion_proto::generated::datafusion::Schema::decode(buf.as_slice()).unwrap();
+    let schema_proto =
+        datafusion_proto::generated::datafusion::Schema::decode(buf.as_slice()).unwrap();
     let decoded: Schema = (&schema_proto).try_into()?;
 
-    let decoded_field = decoded.fields().iter().last().unwrap();
-    assert_eq!(decoded_field.dict_id(), Some(dict_id), "dict_id should be retained");
+    // assert
+    let keys = decoded.fields().iter().last().unwrap();
+    match keys.data_type() {
+        DataType::List(field) => {
+            assert_eq!(field.dict_id(), Some(dict_id), "dict_id should be retained");
+        }
+        _ => panic!("Invalid type"),
+    }
 
     Ok(())
 }
