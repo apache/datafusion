@@ -167,7 +167,7 @@ pub fn regularize_window_order_by(
             // with constant value as sort key.
             // If an ORDER BY clause is present but has more than one column, it is
             // unchanged.
-            if order_by.len() == 0 {
+            if order_by.is_empty() {
                 order_by.push(Expr::Sort(Sort::new(
                     Box::new(Expr::Literal(ScalarValue::UInt64(Some(1)))),
                     true,
