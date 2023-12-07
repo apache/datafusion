@@ -312,7 +312,7 @@ Aggregate: groupBy=[[]], aggr=[[COUNT(UInt8(1)) AS COUNT(*)]]
 ----TableScan: t1 projection=[], fetch=14
 physical_plan
 ProjectionExec: expr=[0 as COUNT(*)]
---PlaceHolderRowExec
+--PlaceholderRowExec
 
 query I
 SELECT COUNT(*) FROM (SELECT a FROM t1 LIMIT 3 OFFSET 11);
@@ -330,7 +330,7 @@ Aggregate: groupBy=[[]], aggr=[[COUNT(UInt8(1)) AS COUNT(*)]]
 ----TableScan: t1 projection=[], fetch=11
 physical_plan
 ProjectionExec: expr=[2 as COUNT(*)]
---PlaceHolderRowExec
+--PlaceholderRowExec
 
 query I
 SELECT COUNT(*) FROM (SELECT a FROM t1 LIMIT 3 OFFSET 8);
@@ -348,7 +348,7 @@ Aggregate: groupBy=[[]], aggr=[[COUNT(UInt8(1)) AS COUNT(*)]]
 ----TableScan: t1 projection=[]
 physical_plan
 ProjectionExec: expr=[2 as COUNT(*)]
---PlaceHolderRowExec
+--PlaceholderRowExec
 
 query I
 SELECT COUNT(*) FROM (SELECT a FROM t1 LIMIT 3 OFFSET 8);

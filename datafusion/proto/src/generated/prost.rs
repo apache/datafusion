@@ -1581,7 +1581,7 @@ pub mod physical_plan_node {
         #[prost(message, tag = "25")]
         SymmetricHashJoin(::prost::alloc::boxed::Box<super::SymmetricHashJoinExecNode>),
         #[prost(message, tag = "26")]
-        PlaceholderRow(super::PlaceHolderRowExecNode),
+        PlaceholderRow(super::PlaceholderRowExecNode),
     }
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
@@ -2098,7 +2098,7 @@ pub struct EmptyExecNode {
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
-pub struct PlaceHolderRowExecNode {
+pub struct PlaceholderRowExecNode {
     #[prost(message, optional, tag = "1")]
     pub schema: ::core::option::Option<Schema>,
 }

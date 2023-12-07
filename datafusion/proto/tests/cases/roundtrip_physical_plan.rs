@@ -49,7 +49,7 @@ use datafusion::physical_plan::joins::{
     HashJoinExec, NestedLoopJoinExec, PartitionMode, StreamJoinPartitionMode,
 };
 use datafusion::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
-use datafusion::physical_plan::placeholder_row::PlaceHolderRowExec;
+use datafusion::physical_plan::placeholder_row::PlaceholderRowExec;
 use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::physical_plan::windows::{
@@ -658,7 +658,7 @@ fn roundtrip_get_indexed_field_list_index() -> Result<()> {
     ];
 
     let schema = Schema::new(fields);
-    let input = Arc::new(PlaceHolderRowExec::new(Arc::new(schema.clone())));
+    let input = Arc::new(PlaceholderRowExec::new(Arc::new(schema.clone())));
 
     let col_arg = col("arg", &schema)?;
     let col_key = col("key", &schema)?;
@@ -711,7 +711,7 @@ fn roundtrip_analyze() -> Result<()> {
     let field_a = Field::new("plan_type", DataType::Utf8, false);
     let field_b = Field::new("plan", DataType::Utf8, false);
     let schema = Schema::new(vec![field_a, field_b]);
-    let input = Arc::new(PlaceHolderRowExec::new(Arc::new(schema.clone())));
+    let input = Arc::new(PlaceholderRowExec::new(Arc::new(schema.clone())));
 
     roundtrip_test(Arc::new(AnalyzeExec::new(
         false,
@@ -726,7 +726,7 @@ fn roundtrip_json_sink() -> Result<()> {
     let field_a = Field::new("plan_type", DataType::Utf8, false);
     let field_b = Field::new("plan", DataType::Utf8, false);
     let schema = Arc::new(Schema::new(vec![field_a, field_b]));
-    let input = Arc::new(PlaceHolderRowExec::new(schema.clone()));
+    let input = Arc::new(PlaceholderRowExec::new(schema.clone()));
 
     let file_sink_config = FileSinkConfig {
         object_store_url: ObjectStoreUrl::local_filesystem(),

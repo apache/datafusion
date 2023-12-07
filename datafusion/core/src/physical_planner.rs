@@ -91,7 +91,7 @@ use datafusion_expr::{
     WindowFrameBound, WriteOp,
 };
 use datafusion_physical_expr::expressions::Literal;
-use datafusion_physical_plan::placeholder_row::PlaceHolderRowExec;
+use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
 use datafusion_sql::utils::window_expr_common_partition_keys;
 
 use async_trait::async_trait;
@@ -1205,7 +1205,7 @@ impl DefaultPhysicalPlanner {
                 LogicalPlan::EmptyRelation(EmptyRelation {
                     produce_one_row: true,
                     schema,
-                }) => Ok(Arc::new(PlaceHolderRowExec::new(
+                }) => Ok(Arc::new(PlaceholderRowExec::new(
                     SchemaRef::new(schema.as_ref().to_owned().into()),
                 ))),
                 LogicalPlan::SubqueryAlias(SubqueryAlias { input, .. }) => {

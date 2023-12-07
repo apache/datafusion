@@ -41,7 +41,7 @@ use datafusion_common::project_schema;
 use datafusion_common::stats::Precision;
 
 use async_trait::async_trait;
-use datafusion_physical_plan::placeholder_row::PlaceHolderRowExec;
+use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
 use futures::stream::Stream;
 
 /// Also run all tests that are found in the `custom_sources_cases` directory
@@ -256,7 +256,7 @@ async fn optimizers_catch_all_statistics() {
 
     let physical_plan = df.create_physical_plan().await.unwrap();
 
-    // when the optimization kicks in, the source is replaced by an PlaceHolderRowExec
+    // when the optimization kicks in, the source is replaced by an PlaceholderRowExec
     assert!(
         contains_place_holder_exec(Arc::clone(&physical_plan)),
         "Expected aggregate_statistics optimizations missing: {physical_plan:?}"
@@ -284,7 +284,7 @@ async fn optimizers_catch_all_statistics() {
 }
 
 fn contains_place_holder_exec(plan: Arc<dyn ExecutionPlan>) -> bool {
-    if plan.as_any().is::<PlaceHolderRowExec>() {
+    if plan.as_any().is::<PlaceholderRowExec>() {
         true
     } else if plan.children().len() != 1 {
         false

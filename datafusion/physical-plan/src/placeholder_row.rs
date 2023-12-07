@@ -34,23 +34,23 @@ use log::trace;
 
 /// Execution plan for empty relation with produce_one_row=true
 #[derive(Debug)]
-pub struct PlaceHolderRowExec {
+pub struct PlaceholderRowExec {
     /// The schema for the produced row
     schema: SchemaRef,
     /// Number of partitions
     partitions: usize,
 }
 
-impl PlaceHolderRowExec {
-    /// Create a new PlaceHolderRowExec
+impl PlaceholderRowExec {
+    /// Create a new PlaceholderRowExec
     pub fn new(schema: SchemaRef) -> Self {
-        PlaceHolderRowExec {
+        PlaceholderRowExec {
             schema,
             partitions: 1,
         }
     }
 
-    /// Create a new PlaceHolderRowExecPlaceHolderRowExec with specified partition number
+    /// Create a new PlaceholderRowExecPlaceholderRowExec with specified partition number
     pub fn with_partitions(mut self, partitions: usize) -> Self {
         self.partitions = partitions;
         self
@@ -80,7 +80,7 @@ impl PlaceHolderRowExec {
     }
 }
 
-impl DisplayAs for PlaceHolderRowExec {
+impl DisplayAs for PlaceholderRowExec {
     fn fmt_as(
         &self,
         t: DisplayFormatType,
@@ -88,13 +88,13 @@ impl DisplayAs for PlaceHolderRowExec {
     ) -> std::fmt::Result {
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
-                write!(f, "PlaceHolderRowExec")
+                write!(f, "PlaceholderRowExec")
             }
         }
     }
 }
 
-impl ExecutionPlan for PlaceHolderRowExec {
+impl ExecutionPlan for PlaceholderRowExec {
     /// Return a reference to Any that can be used for downcasting
     fn as_any(&self) -> &dyn Any {
         self
@@ -121,7 +121,7 @@ impl ExecutionPlan for PlaceHolderRowExec {
         self: Arc<Self>,
         _: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(Arc::new(PlaceHolderRowExec::new(self.schema.clone())))
+        Ok(Arc::new(PlaceholderRowExec::new(self.schema.clone())))
     }
 
     fn execute(
@@ -129,11 +129,11 @@ impl ExecutionPlan for PlaceHolderRowExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        trace!("Start PlaceHolderRowExec::execute for partition {} of context session_id {} and task_id {:?}", partition, context.session_id(), context.task_id());
+        trace!("Start PlaceholderRowExec::execute for partition {} of context session_id {} and task_id {:?}", partition, context.session_id(), context.task_id());
 
         if partition >= self.partitions {
             return internal_err!(
-                "PlaceHolderRowExec invalid partition {} (expected less than {})",
+                "PlaceholderRowExec invalid partition {} (expected less than {})",
                 partition,
                 self.partitions
             );
@@ -168,7 +168,7 @@ mod tests {
     fn with_new_children() -> Result<()> {
         let schema = test::aggr_test_schema();
 
-        let placeholder = Arc::new(PlaceHolderRowExec::new(schema));
+        let placeholder = Arc::new(PlaceholderRowExec::new(schema));
 
         let placeholder_2 =
             with_new_children_if_necessary(placeholder.clone(), vec![])?.into();
@@ -186,7 +186,7 @@ mod tests {
     async fn invalid_execute() -> Result<()> {
         let task_ctx = Arc::new(TaskContext::default());
         let schema = test::aggr_test_schema();
-        let placeholder = PlaceHolderRowExec::new(schema);
+        let placeholder = PlaceholderRowExec::new(schema);
 
         // ask for the wrong partition
         assert!(placeholder.execute(1, task_ctx.clone()).is_err());
@@ -198,7 +198,7 @@ mod tests {
     async fn produce_one_row() -> Result<()> {
         let task_ctx = Arc::new(TaskContext::default());
         let schema = test::aggr_test_schema();
-        let placeholder = PlaceHolderRowExec::new(schema);
+        let placeholder = PlaceholderRowExec::new(schema);
 
         let iter = placeholder.execute(0, task_ctx)?;
         let batches = common::collect(iter).await?;
@@ -214,7 +214,7 @@ mod tests {
         let task_ctx = Arc::new(TaskContext::default());
         let schema = test::aggr_test_schema();
         let partitions = 3;
-        let placeholder = PlaceHolderRowExec::new(schema).with_partitions(partitions);
+        let placeholder = PlaceholderRowExec::new(schema).with_partitions(partitions);
 
         for n in 0..partitions {
             let iter = placeholder.execute(n, task_ctx.clone())?;

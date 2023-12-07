@@ -29,7 +29,7 @@ use crate::scalar::ScalarValue;
 use datafusion_common::stats::Precision;
 use datafusion_common::tree_node::TreeNode;
 use datafusion_expr::utils::COUNT_STAR_EXPANSION;
-use datafusion_physical_plan::placeholder_row::PlaceHolderRowExec;
+use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
 
 /// Optimizer that uses available statistics for aggregate functions
 #[derive(Default)]
@@ -82,7 +82,7 @@ impl PhysicalOptimizerRule for AggregateStatistics {
                 // input can be entirely removed
                 Ok(Arc::new(ProjectionExec::try_new(
                     projections,
-                    Arc::new(PlaceHolderRowExec::new(plan.schema())),
+                    Arc::new(PlaceholderRowExec::new(plan.schema())),
                 )?))
             } else {
                 plan.map_children(|child| self.optimize(child, _config))

@@ -44,7 +44,7 @@ use datafusion::physical_plan::joins::{
 };
 use datafusion::physical_plan::joins::{HashJoinExec, PartitionMode};
 use datafusion::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
-use datafusion::physical_plan::placeholder_row::PlaceHolderRowExec;
+use datafusion::physical_plan::placeholder_row::PlaceholderRowExec;
 use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::repartition::RepartitionExec;
 use datafusion::physical_plan::sorts::sort::SortExec;
@@ -715,7 +715,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
             }
             PhysicalPlanType::PlaceholderRow(placeholder) => {
                 let schema = Arc::new(convert_required!(placeholder.schema)?);
-                Ok(Arc::new(PlaceHolderRowExec::new(schema)))
+                Ok(Arc::new(PlaceholderRowExec::new(schema)))
             }
             PhysicalPlanType::Sort(sort) => {
                 let input: Arc<dyn ExecutionPlan> =
@@ -1307,11 +1307,11 @@ impl AsExecutionPlan for PhysicalPlanNode {
             });
         }
 
-        if let Some(empty) = plan.downcast_ref::<PlaceHolderRowExec>() {
+        if let Some(empty) = plan.downcast_ref::<PlaceholderRowExec>() {
             let schema = empty.schema().as_ref().try_into()?;
             return Ok(protobuf::PhysicalPlanNode {
                 physical_plan_type: Some(PhysicalPlanType::PlaceholderRow(
-                    protobuf::PlaceHolderRowExecNode {
+                    protobuf::PlaceholderRowExecNode {
                         schema: Some(schema),
                     },
                 )),

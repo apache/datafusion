@@ -94,7 +94,7 @@ EXPLAIN select count(*) from (values ('a', 1, 100), ('a', 2, 150)) as t (c1,c2,c
 ----
 physical_plan
 ProjectionExec: expr=[2 as COUNT(*)]
---PlaceHolderRowExec
+--PlaceholderRowExec
 
 statement ok
 set datafusion.explain.physical_plan_only = false
@@ -368,7 +368,7 @@ Projection: List([[1, 2, 3], [4, 5, 6]]) AS make_array(make_array(Int64(1),Int64
 --EmptyRelation
 physical_plan
 ProjectionExec: expr=[[[1, 2, 3], [4, 5, 6]] as make_array(make_array(Int64(1),Int64(2),Int64(3)),make_array(Int64(4),Int64(5),Int64(6)))]
---PlaceHolderRowExec
+--PlaceholderRowExec
 
 query TT
 explain select [[1, 2, 3], [4, 5, 6]];
@@ -378,4 +378,4 @@ Projection: List([[1, 2, 3], [4, 5, 6]]) AS make_array(make_array(Int64(1),Int64
 --EmptyRelation
 physical_plan
 ProjectionExec: expr=[[[1, 2, 3], [4, 5, 6]] as make_array(make_array(Int64(1),Int64(2),Int64(3)),make_array(Int64(4),Int64(5),Int64(6)))]
---PlaceHolderRowExec
+--PlaceholderRowExec
