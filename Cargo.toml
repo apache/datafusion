@@ -90,6 +90,7 @@ tempfile = "3"
 thiserror = "1.0.44"
 chrono = { version = "0.4.31", default-features = false }
 url = "2.2"
+roaring = {version = "0.10"}
 
 [profile.release]
 codegen-units = 1
