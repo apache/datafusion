@@ -106,6 +106,36 @@ FROM
 ----
 [0VVIHzxWtNOFLtnhjHEKjXaJOSLJfm, 0keZ5G8BffGwgF2RwQD59TFzMStxCB, 0og6hSkhbX8AC1ktFS4kounvTzy8Vo, 1aOcrEGd0cOqZe2I5XBOm0nDcwtBZO, 2T3wSlHdEmASmO0xcXHnndkKEt6bz8]
 
+statement ok
+CREATE EXTERNAL TABLE agg_order (
+c1 INT NOT NULL,
+c2 INT NOT NULL,
+c3 INT NOT NULL
+)
+STORED AS CSV
+WITH HEADER ROW
+LOCATION '../core/tests/data/aggregate_agg_multi_order.csv';
+
+# test array_agg with order by multiple columns
+query ?
+select array_agg(c1 order by c2 desc, c3) from agg_order;
+----
+[5, 6, 7, 8, 9, 1, 2, 3, 4, 10]
+
+query TT
+explain select array_agg(c1 order by c2 desc, c3) from agg_order;
+----
+logical_plan
+Aggregate: groupBy=[[]], aggr=[[ARRAY_AGG(agg_order.c1) ORDER BY [agg_order.c2 DESC NULLS FIRST, agg_order.c3 ASC NULLS LAST]]]
+--TableScan: agg_order projection=[c1, c2, c3]
+physical_plan
+AggregateExec: mode=Final, gby=[], aggr=[ARRAY_AGG(agg_order.c1)]
+--CoalescePartitionsExec
+----AggregateExec: mode=Partial, gby=[], aggr=[ARRAY_AGG(agg_order.c1)]
+------SortExec: expr=[c2@1 DESC,c3@2 ASC NULLS LAST]
+--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+----------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/aggregate_agg_multi_order.csv]]}, projection=[c1, c2, c3], has_header=true
+
 statement error This feature is not implemented: LIMIT not supported in ARRAY_AGG: 1
 SELECT array_agg(c13 LIMIT 1) FROM aggregate_test_100
 
