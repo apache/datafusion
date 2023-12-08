@@ -841,6 +841,8 @@ message Field {
   // for complex data types like structs, unions
   repeated Field children = 4;
   map<string, string> metadata = 5;
+  int64 dict_id = 6;
+  bool dict_ordered = 7;
 }
 
 message FixedSizeBinary{
@@ -1162,6 +1164,7 @@ message PhysicalPlanNode {
     AnalyzeExecNode analyze = 23;
     JsonSinkExecNode json_sink = 24;
     SymmetricHashJoinExecNode symmetric_hash_join = 25;
+    InterleaveExecNode  interleave = 26;
   }
 }
 
@@ -1453,6 +1456,10 @@ message SymmetricHashJoinExecNode {
   StreamPartitionMode partition_mode = 6;
   bool null_equals_null = 7;
   JoinFilter filter = 8;
+}
+
+message InterleaveExecNode {
+  repeated PhysicalPlanNode inputs = 1;
 }
 
 message UnionExecNode {

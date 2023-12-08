@@ -3199,3 +3199,16 @@ FROM my_data
 GROUP BY dummy
 ----
 text1, text1, text1
+
+
+# Queries with nested count(*)
+
+query I
+select count(*) from (select count(*) from (select 1));
+----
+1
+
+query I
+select count(*) from (select count(*) a, count(*) b from (select 1));
+----
+1

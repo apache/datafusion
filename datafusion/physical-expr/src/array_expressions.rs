@@ -537,7 +537,7 @@ fn general_except<OffsetSize: OffsetSizeTrait>(
         dedup.clear();
     }
 
-    if let Some(values) = converter.convert_rows(rows)?.get(0) {
+    if let Some(values) = converter.convert_rows(rows)?.first() {
         Ok(GenericListArray::<OffsetSize>::new(
             field.to_owned(),
             OffsetBuffer::new(offsets.into()),
@@ -2088,7 +2088,7 @@ pub fn array_intersect(args: &[ArrayRef]) -> Result<ArrayRef> {
                     };
                     offsets.push(last_offset + rows.len() as i32);
                     let arrays = converter.convert_rows(rows)?;
-                    let array = match arrays.get(0) {
+                    let array = match arrays.first() {
                         Some(array) => array.clone(),
                         None => {
                             return internal_err!(

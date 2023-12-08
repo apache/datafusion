@@ -1161,6 +1161,7 @@ dependencies = [
  "mimalloc",
  "object_store",
  "parking_lot",
+ "parquet",
  "predicates",
  "regex",
  "rstest",
