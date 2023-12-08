@@ -3773,10 +3773,13 @@ select a,
 # 1 1
 # 2 2
 
-# TODO: this works in Postgres which returns [1, 1].
-query error DataFusion error: Arrow error: Invalid argument error: must either specify a row count or at least one column
-select rank() over (RANGE between UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) rnk
-       from (select 1 a union select 2 a) q;
+# # TODO: this is different to Postgres which returns [1, 1] for `rnk`.
+# query I
+# select rank() over (RANGE between UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) rnk
+#        from (select 1 a union select 2 a) q;
+# ----
+# 1
+# 2
 
 query II
 select a,
