@@ -40,7 +40,7 @@ use crate::{
 };
 
 use arrow::{
-    array::{Array, ArrayRef, UInt32Builder},
+    array::{Array, ArrayRef, RecordBatchOptions, UInt32Builder},
     compute::{concat, concat_batches, sort_to_indices},
     datatypes::{Schema, SchemaBuilder, SchemaRef},
     record_batch::RecordBatch,
@@ -1026,8 +1026,11 @@ impl BoundedWindowAggStream {
             .iter()
             .map(|elem| elem.slice(n_out, n_to_keep))
             .collect::<Vec<_>>();
-        self.input_buffer =
-            RecordBatch::try_new(self.input_buffer.schema(), batch_to_keep)?;
+        self.input_buffer = RecordBatch::try_new_with_options(
+            self.input_buffer.schema(),
+            batch_to_keep,
+            &RecordBatchOptions::new().with_row_count(Some(n_to_keep)),
+        )?;
         Ok(())
     }
 
