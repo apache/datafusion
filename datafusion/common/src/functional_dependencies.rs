@@ -24,9 +24,9 @@ use std::ops::Deref;
 use std::vec::IntoIter;
 
 use crate::error::_plan_err;
+use crate::utils::{merge_and_order_indices, set_difference};
 use crate::{DFSchema, DFSchemaRef, DataFusionError, JoinType, Result};
 
-use crate::utils::{merge_and_order_indices, set_difference};
 use sqlparser::ast::TableConstraint;
 
 /// This object defines a constraint on a table.
@@ -272,9 +272,9 @@ impl FunctionalDependencies {
         self.deps.extend(other.deps);
     }
 
-    /// Sanity check whether functional dependencies are valid
-    /// e.g if field size is 10, we cannot receive any index further than 9.
-    pub fn are_dependencies_valid(&self, n_field: usize) -> bool {
+    /// Sanity checks if functional dependencies are valid. For example, if
+    /// there are 10 fields, we cannot receive any index further than 9.
+    pub fn is_valid(&self, n_field: usize) -> bool {
         self.deps.iter().all(
             |FunctionalDependence {
                  source_indices,
@@ -466,7 +466,7 @@ pub fn aggregate_functional_dependencies(
     } in &func_dependencies.deps
     {
         // Keep source indices in a `HashSet` to prevent duplicate entries:
-        let mut new_source_indices = HashSet::new();
+        let mut new_source_indices = vec![];
         let mut new_source_field_names = vec![];
         let source_field_names = source_indices
             .iter()
@@ -478,10 +478,8 @@ pub fn aggregate_functional_dependencies(
             // the GROUP BY expression, add the index of the GROUP BY
             // expression as a new determinant key:
             if source_field_names.contains(group_by_expr_name) {
-                new_source_indices.insert(idx);
-                if !new_source_field_names.contains(group_by_expr_name) {
-                    new_source_field_names.push(group_by_expr_name.clone());
-                }
+                new_source_indices.push(idx);
+                new_source_field_names.push(group_by_expr_name.clone());
             }
         }
         let existing_target_indices =
@@ -493,17 +491,17 @@ pub fn aggregate_functional_dependencies(
         let mode = if existing_target_indices == new_target_indices
             && new_target_indices.is_some()
         {
-            // If dependency covers all of the group by exprs, mode will be single
+            // If dependency covers all GROUP BY expressions, mode will be `Single`:
             Dependency::Single
         } else {
-            // Otherwise existing mode is preserved
+            // Otherwise, existing mode is preserved:
             *mode
         };
         // All of the composite indices occur in the GROUP BY expression:
         if new_source_indices.len() == source_indices.len() {
             aggregate_func_dependencies.push(
                 FunctionalDependence::new(
-                    new_source_indices.into_iter().collect(),
+                    new_source_indices,
                     target_indices.clone(),
                     *nullable,
                 )
@@ -517,7 +515,6 @@ pub fn aggregate_functional_dependencies(
     if group_by_expr_names.len() == 1 {
         // If `source_indices` contain 0, delete this functional dependency
         // as it will be added anyway with mode `Dependency::Single`:
-        // Delete the functional dependency that contains zeroth idx:
         aggregate_func_dependencies.retain(|item| !item.source_indices.contains(&0));
         // Add a new functional dependency associated with the whole table:
         aggregate_func_dependencies.push(
@@ -567,13 +564,14 @@ pub fn get_target_functional_dependencies(
         }
     }
     (!combined_target_indices.is_empty()).then_some({
-        let mut res = combined_target_indices.iter().cloned().collect::<Vec<_>>();
-        res.sort();
-        res
+        let mut result = combined_target_indices.into_iter().collect::<Vec<_>>();
+        result.sort();
+        result
     })
 }
 
-/// Returns indices of group by exprs that is functionally equivalent to the argument but simpler.
+/// Returns indices for the minimal subset of GROUP BY expressions that are
+/// functionally equivalent to the original set of GROUP BY expressions.
 pub fn get_required_group_by_exprs_indices(
     schema: &DFSchema,
     group_by_expr_names: &[String],
@@ -584,45 +582,42 @@ pub fn get_required_group_by_exprs_indices(
         .iter()
         .map(|item| item.qualified_name())
         .collect::<Vec<_>>();
-    let groupby_expr_indices = group_by_expr_names
+    let mut groupby_expr_indices = group_by_expr_names
         .iter()
         .map(|group_by_expr_name| {
             field_names
                 .iter()
                 .position(|field_name| field_name == group_by_expr_name)
         })
-        .collect::<Option<Vec<_>>>();
-    if let Some(mut indices) = groupby_expr_indices {
-        indices.sort();
-        for FunctionalDependence {
-            source_indices,
-            target_indices,
-            ..
-        } in &dependencies.deps
-        {
-            // All of the source indices is among indices.
-            if source_indices
-                .iter()
-                .all(|source_idx| indices.contains(source_idx))
-            {
-                // We can remove target indices from indices, then use source_indices instead.
-                indices = set_difference(&indices, target_indices);
-                indices = merge_and_order_indices(indices, source_indices);
-            }
-        }
-        if let Some(group_by_used_indices) = indices
+        .collect::<Option<Vec<_>>>()?;
+
+    groupby_expr_indices.sort();
+    for FunctionalDependence {
+        source_indices,
+        target_indices,
+        ..
+    } in &dependencies.deps
+    {
+        if source_indices
             .iter()
-            .map(|idx| {
-                group_by_expr_names.iter().position(|group_by_expr_name| {
-                    &field_names[*idx] == group_by_expr_name
-                })
-            })
-            .collect::<Option<Vec<_>>>()
+            .all(|source_idx| groupby_expr_indices.contains(source_idx))
         {
-            return Some(group_by_used_indices);
+            // If all source indices are among GROUP BY expression indices, we
+            // can remove target indices from GROUP BY expression indices and
+            // use source indices instead.
+            groupby_expr_indices = set_difference(&groupby_expr_indices, target_indices);
+            groupby_expr_indices =
+                merge_and_order_indices(groupby_expr_indices, source_indices);
         }
     }
-    None
+    groupby_expr_indices
+        .iter()
+        .map(|idx| {
+            group_by_expr_names
+                .iter()
+                .position(|name| &field_names[*idx] == name)
+        })
+        .collect()
 }
 
 /// Updates entries inside the `entries` vector with their corresponding

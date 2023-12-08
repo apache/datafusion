@@ -17,6 +17,10 @@
 
 //! Expression utilities
 
+use std::cmp::Ordering;
+use std::collections::HashSet;
+use std::sync::Arc;
+
 use crate::expr::{Alias, Sort, WindowFunction};
 use crate::expr_rewriter::strip_outer_reference;
 use crate::logical_plan::Aggregate;
@@ -25,16 +29,15 @@ use crate::{
     and, BinaryExpr, Cast, Expr, ExprSchemable, Filter, GroupingSet, LogicalPlan,
     Operator, TryCast,
 };
+
 use arrow::datatypes::{DataType, TimeUnit};
 use datafusion_common::tree_node::{TreeNode, VisitRecursion};
 use datafusion_common::{
     internal_err, plan_datafusion_err, plan_err, Column, DFField, DFSchema, DFSchemaRef,
     DataFusionError, Result, ScalarValue, TableReference,
 };
+
 use sqlparser::ast::{ExceptSelectItem, ExcludeSelectItem, WildcardAdditionalOptions};
-use std::cmp::Ordering;
-use std::collections::HashSet;
-use std::sync::Arc;
 
 ///  The value to which `COUNT(*)` is expanded to in
 ///  `COUNT(<constant>)` expressions
@@ -1229,10 +1232,9 @@ pub fn merge_schema(inputs: Vec<&LogicalPlan>) -> DFSchema {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::expr_vec_fmt;
     use crate::{
         col, cube, expr, grouping_set, lit, rollup, AggregateFunction, WindowFrame,
-        WindowFunction,
+        WindowFunction, expr_vec_fmt,
     };
 
     #[test]

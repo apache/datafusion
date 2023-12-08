@@ -23,28 +23,7 @@ mod parquet;
 use std::any::Any;
 use std::sync::Arc;
 
-use arrow::array::{Array, ArrayRef, Int64Array, StringArray};
-use arrow::compute::{cast, concat};
-use arrow::csv::WriterBuilder;
-use arrow::datatypes::{DataType, Field};
-use async_trait::async_trait;
-use datafusion_common::file_options::csv_writer::CsvWriterOptions;
-use datafusion_common::file_options::json_writer::JsonWriterOptions;
-use datafusion_common::parsers::CompressionTypeVariant;
-use datafusion_common::{
-    DataFusionError, FileType, FileTypeWriterOptions, ParamValues, SchemaError,
-    UnnestOptions,
-};
-use datafusion_expr::dml::CopyOptions;
-
-use datafusion_common::{Column, DFSchema};
-use datafusion_expr::{
-    avg, count, is_null, max, median, min, stddev, utils::COUNT_STAR_EXPANSION,
-    TableProviderFilterPushDown, UNNAMED_TABLE,
-};
-
-use crate::arrow::datatypes::Schema;
-use crate::arrow::datatypes::SchemaRef;
+use crate::arrow::datatypes::{Schema, SchemaRef};
 use crate::arrow::record_batch::RecordBatch;
 use crate::arrow::util::pretty;
 use crate::datasource::{provider_as_source, MemTable, TableProvider};
@@ -53,14 +32,34 @@ use crate::execution::{
     context::{SessionState, TaskContext},
     FunctionRegistry,
 };
+use crate::logical_expr::utils::find_window_exprs;
 use crate::logical_expr::{
-    col, utils::find_window_exprs, Expr, JoinType, LogicalPlan, LogicalPlanBuilder,
-    Partitioning, TableType,
+    col, Expr, JoinType, LogicalPlan, LogicalPlanBuilder, Partitioning, TableType,
 };
-use crate::physical_plan::SendableRecordBatchStream;
-use crate::physical_plan::{collect, collect_partitioned};
-use crate::physical_plan::{execute_stream, execute_stream_partitioned, ExecutionPlan};
+use crate::physical_plan::{
+    collect, collect_partitioned, execute_stream, execute_stream_partitioned,
+    ExecutionPlan, SendableRecordBatchStream,
+};
 use crate::prelude::SessionContext;
+
+use arrow::array::{Array, ArrayRef, Int64Array, StringArray};
+use arrow::compute::{cast, concat};
+use arrow::csv::WriterBuilder;
+use arrow::datatypes::{DataType, Field};
+use datafusion_common::file_options::csv_writer::CsvWriterOptions;
+use datafusion_common::file_options::json_writer::JsonWriterOptions;
+use datafusion_common::parsers::CompressionTypeVariant;
+use datafusion_common::{
+    Column, DFSchema, DataFusionError, FileType, FileTypeWriterOptions, ParamValues,
+    SchemaError, UnnestOptions,
+};
+use datafusion_expr::dml::CopyOptions;
+use datafusion_expr::{
+    avg, count, is_null, max, median, min, stddev, utils::COUNT_STAR_EXPANSION,
+    TableProviderFilterPushDown, UNNAMED_TABLE,
+};
+
+use async_trait::async_trait;
 
 /// Contains options that control how data is
 /// written out from a DataFrame
@@ -1343,10 +1342,14 @@ impl TableProvider for DataFrameTableProvider {
 mod tests {
     use std::vec;
 
-    use arrow::array::Int32Array;
-    use arrow::datatypes::DataType;
-    use arrow_array::array;
+    use super::*;
+    use crate::execution::context::SessionConfig;
+    use crate::physical_plan::{ColumnarValue, Partitioning, PhysicalExpr};
+    use crate::test_util::{register_aggregate_csv, test_table, test_table_with_name};
+    use crate::{assert_batches_sorted_eq, execution::context::SessionContext};    
 
+    use arrow::array::{self, Int32Array};
+    use arrow::datatypes::DataType;
     use datafusion_common::{Constraint, Constraints, ScalarValue};
     use datafusion_expr::{
         avg, cast, count, count_distinct, create_udf, expr, lit, max, min, sum,
@@ -1354,23 +1357,7 @@ mod tests {
         Volatility, WindowFrame, WindowFunction,
     };
     use datafusion_physical_expr::expressions::Column;
-    use datafusion_physical_plan::displayable;
-
-    use crate::execution::context::SessionConfig;
-    use crate::physical_plan::ColumnarValue;
-    use crate::physical_plan::Partitioning;
-    use crate::physical_plan::PhysicalExpr;
-    use crate::test_util::{register_aggregate_csv, test_table, test_table_with_name};
-    use crate::{assert_batches_sorted_eq, execution::context::SessionContext};
-
-    use super::*;
-
-    /// Utility function yielding a string representation of the given [`ExecutionPlan`].
-    fn get_plan_string(plan: &Arc<dyn ExecutionPlan>) -> Vec<String> {
-        let formatted = displayable(plan.as_ref()).indent(true).to_string();
-        let actual: Vec<&str> = formatted.trim().lines().collect();
-        actual.iter().map(|elem| elem.to_string()).collect()
-    }
+    use datafusion_physical_plan::get_plan_string;
 
     pub fn table_with_constraints() -> Arc<dyn TableProvider> {
         let dual_schema = Arc::new(Schema::new(vec![

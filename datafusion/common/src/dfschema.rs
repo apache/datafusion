@@ -200,15 +200,14 @@ impl DFSchema {
         mut self,
         functional_dependencies: FunctionalDependencies,
     ) -> Result<Self> {
-        let n_field = self.fields.len();
-        if functional_dependencies.are_dependencies_valid(n_field) {
+        if functional_dependencies.is_valid(self.fields.len()) {
             self.functional_dependencies = functional_dependencies;
             Ok(self)
         } else {
-            Err(DataFusionError::Plan(format!(
-                "Invalid functional dependency:{:?}",
+            _plan_err!(
+                "Invalid functional dependency: {:?}",
                 functional_dependencies
-            )))
+            )
         }
     }
 
