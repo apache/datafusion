@@ -116,8 +116,9 @@ impl ExprBoundaries {
         })
     }
 
-    /// Create `ExprBoundaries` that represent no known bounds for all the columns `schema`
-    pub fn try_new_unknown(schema: &Schema) -> Result<Vec<Self>> {
+    /// Create `ExprBoundaries` that represent no known bounds for all the
+    /// columns in `schema`
+    pub fn try_new_unbounded(schema: &Schema) -> Result<Vec<Self>> {
         schema
             .fields()
             .iter()

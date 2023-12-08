@@ -213,7 +213,7 @@ fn range_analysis_demo() -> Result<()> {
     // (for example, maybe you know you only have data up to `2020-09-15`), but
     // in this case, let's say we don't know any boundaries beforehand so we use
     // `try_new_unknown`
-    let boundaries = ExprBoundaries::try_new_unknown(&schema)?;
+    let boundaries = ExprBoundaries::try_new_unbounded(&schema)?;
 
     // Now, we invoke the analysis code to perform the range analysis
     let physical_expr = physical_expr(&schema, expr)?;
