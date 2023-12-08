@@ -201,7 +201,7 @@ fn range_analysis_demo() -> Result<()> {
     // organized in files according to day, this information permits skipping
     // entire files without reading them.
     //
-    // While this simply example could be handled with a special case, the
+    // While this simple example could be handled with a special case, the
     // DataFusion API handles arbitrary expressions (so for example, you don't
     // have to handle the case where the predicate clauses are reversed such as
     // `date < '2020-10-01' AND date > '2020-09-01'`
