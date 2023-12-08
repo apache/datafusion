@@ -419,7 +419,7 @@ pub fn date_trunc(args: &[ColumnarValue]) -> Result<ColumnarValue> {
         Ok(ColumnarValue::Array(Arc::new(array)))
     }
 
-    fn process_scalr<T: ArrowTimestampType>(
+    fn process_scalar<T: ArrowTimestampType>(
         v: &Option<i64>,
         granularity: String,
         tz_opt: &Option<Arc<str>>,
@@ -432,16 +432,16 @@ pub fn date_trunc(args: &[ColumnarValue]) -> Result<ColumnarValue> {
 
     Ok(match array {
         ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(v, tz_opt)) => {
-            process_scalr::<TimestampNanosecondType>(v, granularity, tz_opt)?
+            process_scalar::<TimestampNanosecondType>(v, granularity, tz_opt)?
         }
         ColumnarValue::Scalar(ScalarValue::TimestampMicrosecond(v, tz_opt)) => {
-            process_scalr::<TimestampMicrosecondType>(v, granularity, tz_opt)?
+            process_scalar::<TimestampMicrosecondType>(v, granularity, tz_opt)?
         }
         ColumnarValue::Scalar(ScalarValue::TimestampMillisecond(v, tz_opt)) => {
-            process_scalr::<TimestampMillisecondType>(v, granularity, tz_opt)?
+            process_scalar::<TimestampMillisecondType>(v, granularity, tz_opt)?
         }
         ColumnarValue::Scalar(ScalarValue::TimestampSecond(v, tz_opt)) => {
-            process_scalr::<TimestampSecondType>(v, granularity, tz_opt)?
+            process_scalar::<TimestampSecondType>(v, granularity, tz_opt)?
         }
         ColumnarValue::Array(array) => {
             let array_type = array.data_type();
