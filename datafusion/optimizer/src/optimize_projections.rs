@@ -192,7 +192,7 @@ fn optimize_projections(
             let new_group_bys = aggregate.group_expr.clone();
 
             // Only use absolutely necessary aggregate expressions required by parent.
-            let new_aggr_expr = get_at_indices(&aggregate.aggr_expr, &aggregate_reqs);
+            let mut new_aggr_expr = get_at_indices(&aggregate.aggr_expr, &aggregate_reqs);
             let all_exprs_iter = new_group_bys.iter().chain(new_aggr_expr.iter());
             let necessary_indices =
                 indices_referred_by_exprs(&aggregate.input, all_exprs_iter)?;
@@ -212,6 +212,16 @@ fn optimize_projections(
                 get_required_exprs(aggregate.input.schema(), &necessary_indices);
             let (aggregate_input, _is_added) =
                 add_projection_on_top_if_helpful(aggregate_input, necessary_exprs, true)?;
+
+            // Aggregate always needs at least one aggregate expression.
+            // With a nested count we don't require any column as input, but still need to create a correct aggregate
+            // The aggregate may be optimized out later (select count(*) from (select count(*) from [...]) always returns 1
+            if new_aggr_expr.is_empty()
+                && new_group_bys.is_empty()
+                && !aggregate.aggr_expr.is_empty()
+            {
+                new_aggr_expr = vec![aggregate.aggr_expr[0].clone()];
+            }
 
             // Create new aggregate plan with updated input, and absolutely necessary fields.
             return Aggregate::try_new(
@@ -857,10 +867,11 @@ fn rewrite_projection_given_requirements(
 #[cfg(test)]
 mod tests {
     use crate::optimize_projections::OptimizeProjections;
-    use datafusion_common::Result;
+    use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion_common::{Result, TableReference};
     use datafusion_expr::{
-        binary_expr, col, lit, logical_plan::builder::LogicalPlanBuilder, LogicalPlan,
-        Operator,
+        binary_expr, col, count, lit, logical_plan::builder::LogicalPlanBuilder,
+        table_scan, Expr, LogicalPlan, Operator,
     };
     use std::sync::Arc;
 
@@ -907,6 +918,27 @@ mod tests {
 
         let expected = "Projection: test.a AS alias\
         \n  TableScan: test projection=[a]";
+        assert_optimized_plan_equal(&plan, expected)
+    }
+    #[test]
+    fn test_nested_count() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("foo", DataType::Int32, false)]);
+
+        let groups: Vec<Expr> = vec![];
+
+        let plan = table_scan(TableReference::none(), &schema, None)
+            .unwrap()
+            .aggregate(groups.clone(), vec![count(lit(1))])
+            .unwrap()
+            .aggregate(groups, vec![count(lit(1))])
+            .unwrap()
+            .build()
+            .unwrap();
+
+        let expected = "Aggregate: groupBy=[[]], aggr=[[COUNT(Int32(1))]]\
+        \n  Projection: \
+        \n    Aggregate: groupBy=[[]], aggr=[[COUNT(Int32(1))]]\
+        \n      TableScan: ?table? projection=[]";
         assert_optimized_plan_equal(&plan, expected)
     }
 }
