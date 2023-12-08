@@ -645,6 +645,7 @@ enum ScalarFunction {
   SubstrIndex = 126;
   FindInSet = 127;
   ArraySort = 128;
+  ArrayDistinct = 129;
 }
 
 message ScalarFunctionNode {
