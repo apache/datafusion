@@ -36,7 +36,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 name, alias, args, ..
             } => {
                 if let Some(func_args) = args {
-                    let tbl_func_name = name.0.get(0).unwrap().value.to_string();
+                    let tbl_func_name = name.0.first().unwrap().value.to_string();
                     let args = func_args
                         .into_iter()
                         .flat_map(|arg| {
