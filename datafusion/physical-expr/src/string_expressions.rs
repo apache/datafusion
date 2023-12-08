@@ -373,19 +373,19 @@ fn general_trim<T: OffsetSizeTrait>(
     }
 }
 
-/// Removes the longest string containing only characters in characters (a space by default) from the start and end of string.
+/// Returns the longest string  with leading and trailing characters removed. If the characters are not specified, whitespace is removed.
 /// btrim('xyxtrimyyx', 'xyz') = 'trim'
 pub fn btrim<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
     general_trim::<T>(args, TrimType::Both)
 }
 
-/// Removes the longest string containing only characters in characters (a space by default) from the start of string.
+/// Returns the longest string  with leading characters removed. If the characters are not specified, whitespace is removed.
 /// ltrim('zzzytest', 'xyz') = 'test'
 pub fn ltrim<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
     general_trim::<T>(args, TrimType::Left)
 }
 
-/// Removes the longest string containing only characters in characters (a space by default) from the end of string.
+/// Returns the longest string  with trailing characters removed. If the characters are not specified, whitespace is removed.
 /// rtrim('testxxzx', 'xyz') = 'test'
 pub fn rtrim<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
     general_trim::<T>(args, TrimType::Right)
