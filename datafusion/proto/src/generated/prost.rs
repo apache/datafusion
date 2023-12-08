@@ -1027,6 +1027,10 @@ pub struct Field {
         ::prost::alloc::string::String,
         ::prost::alloc::string::String,
     >,
+    #[prost(int64, tag = "6")]
+    pub dict_id: i64,
+    #[prost(bool, tag = "7")]
+    pub dict_ordered: bool,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
