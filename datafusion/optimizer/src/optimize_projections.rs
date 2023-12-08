@@ -213,7 +213,8 @@ fn optimize_projections(
                 aggregate.group_expr.clone()
             };
 
-            // Only use absolutely necessary aggregate expressions required by parent.
+            // Only use the absolutely necessary aggregate expressions required
+            // by the parent:
             let mut new_aggr_expr = get_at_indices(&aggregate.aggr_expr, &aggregate_reqs);
             let all_exprs_iter = new_group_bys.iter().chain(new_aggr_expr.iter());
             let schema = aggregate.input.schema();
@@ -235,9 +236,14 @@ fn optimize_projections(
             let (aggregate_input, _) =
                 add_projection_on_top_if_helpful(aggregate_input, necessary_exprs)?;
 
-            // Aggregate always needs at least one aggregate expression.
-            // With a nested count we don't require any column as input, but still need to create a correct aggregate
-            // The aggregate may be optimized out later (select count(*) from (select count(*) from [...]) always returns 1
+            // Aggregations always need at least one aggregate expression.
+            // With a nested count, we don't require any column as input, but
+            // still need to create a correct aggregate, which may be optimized
+            // out later. As an example, consider the following query:
+            //
+            // SELECT COUNT(*) FROM (SELECT COUNT(*) FROM [...])
+            //
+            // which always returns 1.
             if new_aggr_expr.is_empty()
                 && new_group_bys.is_empty()
                 && !aggregate.aggr_expr.is_empty()
@@ -245,7 +251,8 @@ fn optimize_projections(
                 new_aggr_expr = vec![aggregate.aggr_expr[0].clone()];
             }
 
-            // Create new aggregate plan with updated input, and absolutely necessary fields.
+            // Create a new aggregate plan with the updated input and only the
+            // absolutely necessary fields:
             return Aggregate::try_new(
                 Arc::new(aggregate_input),
                 new_group_bys,
