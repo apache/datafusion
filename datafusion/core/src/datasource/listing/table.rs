@@ -490,7 +490,7 @@ impl ListingOptions {
 ///
 /// # Features
 ///
-/// 1. Merges schemas if the files have compatible but not indentical schemas
+/// 1. Merges schemas if the files have compatible but not identical schemas
 ///
 /// 2. Hive-style partitioning support, where a path such as
 /// `/files/date=1/1/2022/data.parquet` is injected as a `date` column.
