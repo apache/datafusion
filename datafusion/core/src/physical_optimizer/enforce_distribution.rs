@@ -1763,6 +1763,7 @@ pub(crate) mod tests {
         parquet_exec_with_sort(vec![])
     }
 
+    /// create a single parquet file that is sorted
     pub(crate) fn parquet_exec_with_sort(
         output_ordering: Vec<Vec<PhysicalSortExpr>>,
     ) -> Arc<ParquetExec> {
@@ -1787,7 +1788,7 @@ pub(crate) mod tests {
         parquet_exec_multiple_sorted(vec![])
     }
 
-    // Created a sorted parquet exec with multiple files
+    /// Created a sorted parquet exec with multiple files
     fn parquet_exec_multiple_sorted(
         output_ordering: Vec<Vec<PhysicalSortExpr>>,
     ) -> Arc<ParquetExec> {
@@ -3859,6 +3860,57 @@ pub(crate) mod tests {
 
         assert_optimized!(expected_parquet, plan_parquet, true, false, 2, true, 10);
         assert_optimized!(expected_csv, plan_csv, true, false, 2, true, 10);
+        Ok(())
+    }
+
+    #[test]
+    fn parallelization_multiple_files() -> Result<()> {
+        let schema = schema();
+        let sort_key = vec![PhysicalSortExpr {
+            expr: col("a", &schema).unwrap(),
+            options: SortOptions::default(),
+        }];
+
+        let plan = filter_exec(parquet_exec_multiple_sorted(vec![sort_key]));
+        let plan = sort_required_exec(plan);
+
+        // The groups must have only contiguous ranges of rows from the same file
+        // if any group has rows from multiple files, the data is no longer sorted destroyed
+        // https://github.com/apache/arrow-datafusion/issues/8451
+        let expected = [
+            "SortRequiredExec: [a@0 ASC]",
+            "FilterExec: c@2 = 0",
+            "ParquetExec: file_groups={3 groups: [[x:0..67], [x:67..100, y:0..34], [y:34..100]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC]",
+        ];
+        let target_partitions = 3;
+        let repartition_size = 1;
+        assert_optimized!(
+            expected,
+            plan,
+            true,
+            true,
+            target_partitions,
+            true,
+            repartition_size
+        );
+
+        let expected = [
+            "SortRequiredExec: [a@0 ASC]",
+            "FilterExec: c@2 = 0",
+            "ParquetExec: file_groups={8 groups: [[x:0..25], [x:25..50], [x:50..75], [x:75..100], [y:0..25], [y:25..50], [y:50..75], [y:75..100]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC]",
+        ];
+        let target_partitions = 8;
+        let repartition_size = 1;
+        assert_optimized!(
+            expected,
+            plan,
+            true,
+            true,
+            target_partitions,
+            true,
+            repartition_size
+        );
+
         Ok(())
     }
 
