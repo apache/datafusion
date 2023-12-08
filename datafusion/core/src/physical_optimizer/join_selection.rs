@@ -434,7 +434,7 @@ fn hash_join_convert_symmetric_subrule(
     config_options: &ConfigOptions,
 ) -> Option<Result<PipelineStatePropagator>> {
     if let Some(hash_join) = input.plan.as_any().downcast_ref::<HashJoinExec>() {
-        let ub_flags = &input.children_unbounded;
+        let ub_flags = input.children_unbounded();
         let (left_unbounded, right_unbounded) = (ub_flags[0], ub_flags[1]);
         input.unbounded = left_unbounded || right_unbounded;
         let result = if left_unbounded && right_unbounded {
@@ -511,7 +511,7 @@ fn hash_join_swap_subrule(
     _config_options: &ConfigOptions,
 ) -> Option<Result<PipelineStatePropagator>> {
     if let Some(hash_join) = input.plan.as_any().downcast_ref::<HashJoinExec>() {
-        let ub_flags = &input.children_unbounded;
+        let ub_flags = input.children_unbounded();
         let (left_unbounded, right_unbounded) = (ub_flags[0], ub_flags[1]);
         input.unbounded = left_unbounded || right_unbounded;
         let result = if left_unbounded
@@ -577,7 +577,7 @@ fn apply_subrules(
     }
     let is_unbounded = input
         .plan
-        .unbounded_output(&input.children_unbounded)
+        .unbounded_output(&input.children_unbounded())
         // Treat the case where an operator can not run on unbounded data as
         // if it can and it outputs unbounded data. Do not raise an error yet.
         // Such operators may be fixed, adjusted or replaced later on during
@@ -1253,6 +1253,7 @@ mod hash_join_tests {
     use arrow::record_batch::RecordBatch;
     use datafusion_common::utils::DataPtr;
     use datafusion_common::JoinType;
+    use datafusion_physical_plan::empty::EmptyExec;
     use std::sync::Arc;
 
     struct TestCase {
@@ -1620,10 +1621,22 @@ mod hash_join_tests {
             false,
         )?;
 
+        let children = vec![
+            PipelineStatePropagator {
+                plan: Arc::new(EmptyExec::new(false, Arc::new(Schema::empty()))),
+                unbounded: left_unbounded,
+                children: vec![],
+            },
+            PipelineStatePropagator {
+                plan: Arc::new(EmptyExec::new(false, Arc::new(Schema::empty()))),
+                unbounded: right_unbounded,
+                children: vec![],
+            },
+        ];
         let initial_hash_join_state = PipelineStatePropagator {
             plan: Arc::new(join),
             unbounded: false,
-            children_unbounded: vec![left_unbounded, right_unbounded],
+            children,
         };
 
         let optimized_hash_join =

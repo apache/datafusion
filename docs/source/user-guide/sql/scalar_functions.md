@@ -638,6 +638,7 @@ nullif(expression1, expression2)
 - [overlay](#overlay)
 - [levenshtein](#levenshtein)
 - [substr_index](#substr_index)
+- [find_in_set](#find_in_set)
 
 ### `ascii`
 
@@ -1170,6 +1171,20 @@ substr_index(str, delim, count)
 - **delim**: the string to find in str to split str.
 - **count**: The number of times to search for the delimiter. Can be both a positive or negative number.
 
+### `find_in_set`
+
+Returns a value in the range of 1 to N if the string str is in the string list strlist consisting of N substrings.
+For example, `find_in_set('b', 'a,b,c,d') = 2`
+
+```
+find_in_set(str, strlist)
+```
+
+#### Arguments
+
+- **str**: String expression to find in strlist.
+- **strlist**: A string list is a string composed of substrings separated by , characters.
+
 ## Binary String Functions
 
 - [decode](#decode)
@@ -1442,10 +1457,13 @@ extract(field FROM source)
 ### `to_timestamp`
 
 Converts a value to a timestamp (`YYYY-MM-DDT00:00:00Z`).
-Supports strings, integer, and unsigned integer types as input.
+Supports strings, integer, unsigned integer, and double types as input.
 Strings are parsed as RFC3339 (e.g. '2023-07-20T05:44:00')
-Integers and unsigned integers are interpreted as seconds since the unix epoch (`1970-01-01T00:00:00Z`)
+Integers, unsigned integers, and doubles are interpreted as seconds since the unix epoch (`1970-01-01T00:00:00Z`)
 return the corresponding timestamp.
+
+Note: `to_timestamp` returns `Timestamp(Nanosecond)`. The supported range for integer input is between `-9223372037` and `9223372036`.
+Supported range for string input is between `1677-09-21T00:12:44.0` and `2262-04-11T23:47:16.0`. Please use `to_timestamp_seconds` for the input outside of supported bounds.
 
 ```
 to_timestamp(expression)
@@ -1537,6 +1555,7 @@ from_unixtime(expression)
 ## Array Functions
 
 - [array_append](#array_append)
+- [array_sort](#array_sort)
 - [array_cat](#array_cat)
 - [array_concat](#array_concat)
 - [array_contains](#array_contains)
@@ -1566,6 +1585,7 @@ from_unixtime(expression)
 - [cardinality](#cardinality)
 - [empty](#empty)
 - [list_append](#list_append)
+- [list_sort](#list_sort)
 - [list_cat](#list_cat)
 - [list_concat](#list_concat)
 - [list_dims](#list_dims)
@@ -1626,6 +1646,36 @@ array_append(array, element)
 - array_push_back
 - list_append
 - list_push_back
+
+### `array_sort`
+
+Sort array.
+
+```
+array_sort(array, desc, nulls_first)
+```
+
+#### Arguments
+
+- **array**: Array expression.
+  Can be a constant, column, or function, and any combination of array operators.
+- **desc**: Whether to sort in descending order(`ASC` or `DESC`).
+- **nulls_first**: Whether to sort nulls first(`NULLS FIRST` or `NULLS LAST`).
+
+#### Example
+
+```
+❯ select array_sort([3, 1, 2]);
++-----------------------------+
+| array_sort(List([3,1,2]))   |
++-----------------------------+
+| [1, 2, 3]                   |
++-----------------------------+
+```
+
+#### Aliases
+
+- list_sort
 
 ### `array_cat`
 
@@ -2353,7 +2403,7 @@ array_except(array1, array2)
 +----------------------------------------------------+
 | array_except([1, 2, 3, 4], [3, 4, 5, 6]);           |
 +----------------------------------------------------+
-| [3, 4]                                 |
+| [1, 2]                                 |
 +----------------------------------------------------+
 ```
 
@@ -2414,6 +2464,10 @@ empty(array)
 ### `list_append`
 
 _Alias of [array_append](#array_append)._
+
+### `list_sort`
+
+_Alias of [array_sort](#array_sort)._
 
 ### `list_cat`
 

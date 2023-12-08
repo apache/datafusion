@@ -50,12 +50,14 @@ use datafusion::physical_plan::joins::{
 };
 use datafusion::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion::physical_plan::projection::ProjectionExec;
+use datafusion::physical_plan::repartition::RepartitionExec;
 use datafusion::physical_plan::sorts::sort::SortExec;
+use datafusion::physical_plan::union::{InterleaveExec, UnionExec};
 use datafusion::physical_plan::windows::{
     BuiltInWindowExpr, PlainAggregateWindowExpr, WindowAggExec,
 };
 use datafusion::physical_plan::{
-    functions, udaf, AggregateExpr, ExecutionPlan, PhysicalExpr, Statistics,
+    functions, udaf, AggregateExpr, ExecutionPlan, Partitioning, PhysicalExpr, Statistics,
 };
 use datafusion::prelude::SessionContext;
 use datafusion::scalar::ScalarValue;
@@ -231,21 +233,21 @@ fn roundtrip_window() -> Result<()> {
     };
 
     let builtin_window_expr = Arc::new(BuiltInWindowExpr::new(
-            Arc::new(NthValue::first(
-                "FIRST_VALUE(a) PARTITION BY [b] ORDER BY [a ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW",
-                col("a", &schema)?,
-                DataType::Int64,
-            )),
-            &[col("b", &schema)?],
-            &[PhysicalSortExpr {
-                expr: col("a", &schema)?,
-                options: SortOptions {
-                    descending: false,
-                    nulls_first: false,
-                },
-            }],
-            Arc::new(window_frame),
-        ));
+        Arc::new(NthValue::first(
+            "FIRST_VALUE(a) PARTITION BY [b] ORDER BY [a ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW",
+            col("a", &schema)?,
+            DataType::Int64,
+        )),
+        &[col("b", &schema)?],
+        &[PhysicalSortExpr {
+            expr: col("a", &schema)?,
+            options: SortOptions {
+                descending: false,
+                nulls_first: false,
+            },
+        }],
+        Arc::new(window_frame),
+    ));
 
     let plain_aggr_window_expr = Arc::new(PlainAggregateWindowExpr::new(
         Arc::new(Avg::new(
@@ -636,7 +638,7 @@ fn roundtrip_get_indexed_field_named_struct_field() -> Result<()> {
     let get_indexed_field_expr = Arc::new(GetIndexedFieldExpr::new(
         col_arg,
         GetFieldAccessExpr::NamedStructField {
-            name: ScalarValue::Utf8(Some(String::from("name"))),
+            name: ScalarValue::from("name"),
         },
     ));
 
@@ -797,4 +799,35 @@ fn roundtrip_sym_hash_join() -> Result<()> {
         }
     }
     Ok(())
+}
+
+#[test]
+fn roundtrip_union() -> Result<()> {
+    let field_a = Field::new("col", DataType::Int64, false);
+    let schema_left = Schema::new(vec![field_a.clone()]);
+    let schema_right = Schema::new(vec![field_a]);
+    let left = EmptyExec::new(false, Arc::new(schema_left));
+    let right = EmptyExec::new(false, Arc::new(schema_right));
+    let inputs: Vec<Arc<dyn ExecutionPlan>> = vec![Arc::new(left), Arc::new(right)];
+    let union = UnionExec::new(inputs);
+    roundtrip_test(Arc::new(union))
+}
+
+#[test]
+fn roundtrip_interleave() -> Result<()> {
+    let field_a = Field::new("col", DataType::Int64, false);
+    let schema_left = Schema::new(vec![field_a.clone()]);
+    let schema_right = Schema::new(vec![field_a]);
+    let partition = Partitioning::Hash(vec![], 3);
+    let left = RepartitionExec::try_new(
+        Arc::new(EmptyExec::new(false, Arc::new(schema_left))),
+        partition.clone(),
+    )?;
+    let right = RepartitionExec::try_new(
+        Arc::new(EmptyExec::new(false, Arc::new(schema_right))),
+        partition.clone(),
+    )?;
+    let inputs: Vec<Arc<dyn ExecutionPlan>> = vec![Arc::new(left), Arc::new(right)];
+    let interleave = InterleaveExec::try_new(inputs)?;
+    roundtrip_test(Arc::new(interleave))
 }

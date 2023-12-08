@@ -204,7 +204,7 @@ mod tests {
         )
         .unwrap();
 
-        let delimiter = Arc::new(Literal::new(ScalarValue::Utf8(Some(delimiter))));
+        let delimiter = Arc::new(Literal::new(ScalarValue::from(delimiter)));
         let schema = Schema::new(vec![Field::new("a", coerced[0].clone(), true)]);
         let agg = create_aggregate_expr(
             &function,

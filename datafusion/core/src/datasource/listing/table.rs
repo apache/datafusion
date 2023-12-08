@@ -17,6 +17,7 @@
 
 //! The table implementation.
 
+use std::collections::HashMap;
 use std::str::FromStr;
 use std::{any::Any, sync::Arc};
 
@@ -156,7 +157,7 @@ impl ListingTableConfig {
 
     /// Infer `ListingOptions` based on `table_path` suffix.
     pub async fn infer_options(self, state: &SessionState) -> Result<Self> {
-        let store = if let Some(url) = self.table_paths.get(0) {
+        let store = if let Some(url) = self.table_paths.first() {
             state.runtime_env().object_store(url)?
         } else {
             return Ok(self);
@@ -164,7 +165,7 @@ impl ListingTableConfig {
 
         let file = self
             .table_paths
-            .get(0)
+            .first()
             .unwrap()
             .list_all_files(state, store.as_ref(), "")
             .await?
@@ -190,7 +191,7 @@ impl ListingTableConfig {
     pub async fn infer_schema(self, state: &SessionState) -> Result<Self> {
         match self.options {
             Some(options) => {
-                let schema = if let Some(url) = self.table_paths.get(0) {
+                let schema = if let Some(url) = self.table_paths.first() {
                     options.infer_schema(state, url).await?
                 } else {
                     Arc::new(Schema::empty())
@@ -558,6 +559,7 @@ pub struct ListingTable {
     collected_statistics: FileStatisticsCache,
     infinite_source: bool,
     constraints: Constraints,
+    column_defaults: HashMap<String, Expr>,
 }
 
 impl ListingTable {
@@ -596,6 +598,7 @@ impl ListingTable {
             collected_statistics: Arc::new(DefaultFileStatisticsCache::default()),
             infinite_source,
             constraints: Constraints::empty(),
+            column_defaults: HashMap::new(),
         };
 
         Ok(table)
@@ -604,6 +607,15 @@ impl ListingTable {
     /// Assign constraints
     pub fn with_constraints(mut self, constraints: Constraints) -> Self {
         self.constraints = constraints;
+        self
+    }
+
+    /// Assign column defaults
+    pub fn with_column_defaults(
+        mut self,
+        column_defaults: HashMap<String, Expr>,
+    ) -> Self {
+        self.column_defaults = column_defaults;
         self
     }
 
@@ -698,7 +710,7 @@ impl TableProvider for ListingTable {
             None
         };
 
-        let object_store_url = if let Some(url) = self.table_paths.get(0) {
+        let object_store_url = if let Some(url) = self.table_paths.first() {
             url.object_store()
         } else {
             return Ok(Arc::new(EmptyExec::new(false, Arc::new(Schema::empty()))));
@@ -823,7 +835,7 @@ impl TableProvider for ListingTable {
             // Multiple sort orders in outer vec are equivalent, so we pass only the first one
             let ordering = self
                 .try_create_output_ordering()?
-                .get(0)
+                .first()
                 .ok_or(DataFusionError::Internal(
                     "Expected ListingTable to have a sort order, but none found!".into(),
                 ))?
@@ -844,6 +856,10 @@ impl TableProvider for ListingTable {
             .create_writer_physical_plan(input, state, config, order_requirements)
             .await
     }
+
+    fn get_column_default(&self, column: &str) -> Option<&Expr> {
+        self.column_defaults.get(column)
+    }
 }
 
 impl ListingTable {
@@ -856,7 +872,7 @@ impl ListingTable {
         filters: &'a [Expr],
         limit: Option<usize>,
     ) -> Result<(Vec<Vec<PartitionedFile>>, Statistics)> {
-        let store = if let Some(url) = self.table_paths.get(0) {
+        let store = if let Some(url) = self.table_paths.first() {
             ctx.runtime_env().object_store(url)?
         } else {
             return Ok((vec![], Statistics::new_unknown(&self.file_schema)));

@@ -15,8 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::any::Any;
+use std::collections::HashMap;
+use std::sync::Arc;
+
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef, TimeUnit};
-use chrono::{DateTime, NaiveDateTime, Utc};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{plan_err, DataFusionError, Result};
 use datafusion_expr::{AggregateUDF, LogicalPlan, ScalarUDF, TableSource, WindowUDF};
@@ -28,9 +31,8 @@ use datafusion_sql::sqlparser::ast::Statement;
 use datafusion_sql::sqlparser::dialect::GenericDialect;
 use datafusion_sql::sqlparser::parser::Parser;
 use datafusion_sql::TableReference;
-use std::any::Any;
-use std::collections::HashMap;
-use std::sync::Arc;
+
+use chrono::{DateTime, NaiveDateTime, Utc};
 
 #[cfg(test)]
 #[ctor::ctor]
@@ -324,11 +326,10 @@ fn push_down_filter_groupby_expr_contains_alias() {
 fn test_same_name_but_not_ambiguous() {
     let sql = "SELECT t1.col_int32 AS col_int32 FROM test t1 intersect SELECT col_int32 FROM test t2";
     let plan = test_sql(sql).unwrap();
-    let expected = "LeftSemi Join: col_int32 = t2.col_int32\
-    \n  Aggregate: groupBy=[[col_int32]], aggr=[[]]\
-    \n    Projection: t1.col_int32 AS col_int32\
-    \n      SubqueryAlias: t1\
-    \n        TableScan: test projection=[col_int32]\
+    let expected = "LeftSemi Join: t1.col_int32 = t2.col_int32\
+    \n  Aggregate: groupBy=[[t1.col_int32]], aggr=[[]]\
+    \n    SubqueryAlias: t1\
+    \n      TableScan: test projection=[col_int32]\
     \n  SubqueryAlias: t2\
     \n    TableScan: test projection=[col_int32]";
     assert_eq!(expected, format!("{plan:?}"));

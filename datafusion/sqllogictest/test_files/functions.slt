@@ -952,3 +952,46 @@ query ?
 SELECT substr_index(NULL, NULL, NULL)
 ----
 NULL
+
+query I
+SELECT find_in_set('b', 'a,b,c,d')
+----
+2
+
+
+query I
+SELECT find_in_set('a', 'a,b,c,d,a')
+----
+1
+
+query I
+SELECT find_in_set('', 'a,b,c,d,a')
+----
+0
+
+query I
+SELECT find_in_set('a', '')
+----
+0
+
+
+query I
+SELECT find_in_set('', '')
+----
+1
+
+query ?
+SELECT find_in_set(NULL, 'a,b,c,d')
+----
+NULL
+
+query I
+SELECT find_in_set('a', NULL)
+----
+NULL
+
+
+query ?
+SELECT find_in_set(NULL, NULL)
+----
+NULL

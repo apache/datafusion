@@ -22,7 +22,7 @@ use datafusion_common::tree_node::{
 };
 use datafusion_common::{plan_err, Result};
 use datafusion_common::{Column, DFSchemaRef, DataFusionError, ScalarValue};
-use datafusion_expr::expr::Alias;
+use datafusion_expr::expr::{AggregateFunctionDefinition, Alias};
 use datafusion_expr::utils::{conjunction, find_join_exprs, split_conjunction};
 use datafusion_expr::{expr, EmptyRelation, Expr, LogicalPlan, LogicalPlanBuilder};
 use datafusion_physical_expr::execution_props::ExecutionProps;
@@ -372,15 +372,24 @@ fn agg_exprs_evaluation_result_on_empty_batch(
     for e in agg_expr.iter() {
         let result_expr = e.clone().transform_up(&|expr| {
             let new_expr = match expr {
-                Expr::AggregateFunction(expr::AggregateFunction { fun, .. }) => {
-                    if matches!(fun, datafusion_expr::AggregateFunction::Count) {
-                        Transformed::Yes(Expr::Literal(ScalarValue::Int64(Some(0))))
-                    } else {
-                        Transformed::Yes(Expr::Literal(ScalarValue::Null))
+                Expr::AggregateFunction(expr::AggregateFunction { func_def, .. }) => {
+                    match func_def {
+                        AggregateFunctionDefinition::BuiltIn(fun) => {
+                            if matches!(fun, datafusion_expr::AggregateFunction::Count) {
+                                Transformed::Yes(Expr::Literal(ScalarValue::Int64(Some(
+                                    0,
+                                ))))
+                            } else {
+                                Transformed::Yes(Expr::Literal(ScalarValue::Null))
+                            }
+                        }
+                        AggregateFunctionDefinition::UDF { .. } => {
+                            Transformed::Yes(Expr::Literal(ScalarValue::Null))
+                        }
+                        AggregateFunctionDefinition::Name(_) => {
+                            Transformed::Yes(Expr::Literal(ScalarValue::Null))
+                        }
                     }
-                }
-                Expr::AggregateUDF(_) => {
-                    Transformed::Yes(Expr::Literal(ScalarValue::Null))
                 }
                 _ => Transformed::No(expr),
             };

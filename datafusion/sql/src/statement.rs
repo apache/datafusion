@@ -458,6 +458,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 if ignore {
                     plan_err!("Insert-ignore clause not supported")?;
                 }
+                let Some(source) = source else {
+                    plan_err!("Inserts without a source not supported")?
+                };
                 let _ = into; // optional keyword doesn't change behavior
                 self.insert_to_plan(table_name, columns, source, overwrite)
             }
@@ -566,7 +569,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 });
                 Ok(LogicalPlan::Statement(statement))
             }
-            Statement::Rollback { chain } => {
+            Statement::Rollback { chain, savepoint } => {
+                if savepoint.is_some() {
+                    plan_err!("Savepoints not supported")?;
+                }
                 let statement = PlanStatement::TransactionEnd(TransactionEnd {
                     conclusion: TransactionConclusion::Rollback,
                     chain,
@@ -704,7 +710,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let mut all_results = vec![];
         for expr in order_exprs {
             // Convert each OrderByExpr to a SortExpr:
-            let expr_vec = self.order_by_to_sort_expr(&expr, schema, planner_context)?;
+            let expr_vec =
+                self.order_by_to_sort_expr(&expr, schema, planner_context, true)?;
             // Verify that columns of all SortExprs exist in the schema:
             for expr in expr_vec.iter() {
                 for column in expr.to_columns()?.iter() {
@@ -755,11 +762,18 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             )?;
         }
 
+        let mut planner_context = PlannerContext::new();
+
+        let column_defaults = self
+            .build_column_defaults(&columns, &mut planner_context)?
+            .into_iter()
+            .collect();
+
         let schema = self.build_schema(columns)?;
         let df_schema = schema.to_dfschema_ref()?;
 
         let ordered_exprs =
-            self.build_order_by(order_exprs, &df_schema, &mut PlannerContext::new())?;
+            self.build_order_by(order_exprs, &df_schema, &mut planner_context)?;
 
         // External tables do not support schemas at the moment, so the name is just a table name
         let name = OwnedTableReference::bare(name);
@@ -781,6 +795,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 unbounded,
                 options,
                 constraints,
+                column_defaults,
             },
         )))
     }

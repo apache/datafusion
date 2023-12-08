@@ -17,6 +17,10 @@
 
 //! Expression utilities
 
+use std::cmp::Ordering;
+use std::collections::HashSet;
+use std::sync::Arc;
+
 use crate::expr::{Alias, Sort, WindowFunction};
 use crate::expr_rewriter::strip_outer_reference;
 use crate::logical_plan::Aggregate;
@@ -25,16 +29,15 @@ use crate::{
     and, BinaryExpr, Cast, Expr, ExprSchemable, Filter, GroupingSet, LogicalPlan,
     Operator, TryCast,
 };
+
 use arrow::datatypes::{DataType, TimeUnit};
 use datafusion_common::tree_node::{TreeNode, VisitRecursion};
 use datafusion_common::{
     internal_err, plan_datafusion_err, plan_err, Column, DFField, DFSchema, DFSchemaRef,
     DataFusionError, Result, ScalarValue, TableReference,
 };
+
 use sqlparser::ast::{ExceptSelectItem, ExcludeSelectItem, WildcardAdditionalOptions};
-use std::cmp::Ordering;
-use std::collections::HashSet;
-use std::sync::Arc;
 
 ///  The value to which `COUNT(*)` is expanded to in
 ///  `COUNT(<constant>)` expressions
@@ -291,7 +294,6 @@ pub fn expr_to_columns(expr: &Expr, accum: &mut HashSet<Column>) -> Result<()> {
             | Expr::WindowFunction { .. }
             | Expr::AggregateFunction { .. }
             | Expr::GroupingSet(_)
-            | Expr::AggregateUDF { .. }
             | Expr::InList { .. }
             | Expr::Exists { .. }
             | Expr::InSubquery(_)
@@ -434,7 +436,7 @@ pub fn expand_qualified_wildcard(
     let qualified_schema =
         DFSchema::new_with_metadata(qualified_fields, schema.metadata().clone())?
             // We can use the functional dependencies as is, since it only stores indices:
-            .with_functional_dependencies(schema.functional_dependencies().clone());
+            .with_functional_dependencies(schema.functional_dependencies().clone())?;
     let excluded_columns = if let Some(WildcardAdditionalOptions {
         opt_exclude,
         opt_except,
@@ -502,7 +504,6 @@ pub fn generate_sort_key(
     let res = final_sort_keys
         .into_iter()
         .zip(is_partition_flag)
-        .map(|(lhs, rhs)| (lhs, rhs))
         .collect::<Vec<_>>();
     Ok(res)
 }
@@ -595,15 +596,12 @@ pub fn group_window_expr_by_sort_keys(
     Ok(result)
 }
 
-/// Collect all deeply nested `Expr::AggregateFunction` and
-/// `Expr::AggregateUDF`. They are returned in order of occurrence (depth
+/// Collect all deeply nested `Expr::AggregateFunction`.
+/// They are returned in order of occurrence (depth
 /// first), with duplicates omitted.
 pub fn find_aggregate_exprs(exprs: &[Expr]) -> Vec<Expr> {
     find_exprs_in_exprs(exprs, &|nested_expr| {
-        matches!(
-            nested_expr,
-            Expr::AggregateFunction { .. } | Expr::AggregateUDF { .. }
-        )
+        matches!(nested_expr, Expr::AggregateFunction { .. })
     })
 }
 
@@ -735,11 +733,7 @@ fn agg_cols(agg: &Aggregate) -> Vec<Column> {
         .collect()
 }
 
-fn exprlist_to_fields_aggregate(
-    exprs: &[Expr],
-    plan: &LogicalPlan,
-    agg: &Aggregate,
-) -> Result<Vec<DFField>> {
+fn exprlist_to_fields_aggregate(exprs: &[Expr], agg: &Aggregate) -> Result<Vec<DFField>> {
     let agg_cols = agg_cols(agg);
     let mut fields = vec![];
     for expr in exprs {
@@ -748,7 +742,7 @@ fn exprlist_to_fields_aggregate(
                 // resolve against schema of input to aggregate
                 fields.push(expr.to_field(agg.input.schema())?);
             }
-            _ => fields.push(expr.to_field(plan.schema())?),
+            _ => fields.push(expr.to_field(&agg.schema)?),
         }
     }
     Ok(fields)
@@ -765,15 +759,7 @@ pub fn exprlist_to_fields<'a>(
     // `GROUPING(person.state)` so in order to resolve `person.state` in this case we need to
     // look at the input to the aggregate instead.
     let fields = match plan {
-        LogicalPlan::Aggregate(agg) => {
-            Some(exprlist_to_fields_aggregate(&exprs, plan, agg))
-        }
-        LogicalPlan::Window(window) => match window.input.as_ref() {
-            LogicalPlan::Aggregate(agg) => {
-                Some(exprlist_to_fields_aggregate(&exprs, plan, agg))
-            }
-            _ => None,
-        },
+        LogicalPlan::Aggregate(agg) => Some(exprlist_to_fields_aggregate(&exprs, agg)),
         _ => None,
     };
     if let Some(fields) = fields {
@@ -1245,10 +1231,9 @@ pub fn merge_schema(inputs: Vec<&LogicalPlan>) -> DFSchema {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::expr_vec_fmt;
     use crate::{
-        col, cube, expr, grouping_set, lit, rollup, AggregateFunction, WindowFrame,
-        WindowFunction,
+        col, cube, expr, expr_vec_fmt, grouping_set, lit, rollup, AggregateFunction,
+        WindowFrame, WindowFunction,
     };
 
     #[test]

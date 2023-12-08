@@ -2421,6 +2421,15 @@ select max(x_dict) from value_dict group by x_dict % 2 order by max(x_dict);
 4
 5
 
+query T
+select arrow_typeof(x_dict) from value_dict group by x_dict;
+----
+Int32
+Int32
+Int32
+Int32
+Int32
+
 statement ok
 drop table value
 
@@ -3190,3 +3199,16 @@ FROM my_data
 GROUP BY dummy
 ----
 text1, text1, text1
+
+
+# Queries with nested count(*)
+
+query I
+select count(*) from (select count(*) from (select 1));
+----
+1
+
+query I
+select count(*) from (select count(*) a, count(*) b from (select 1));
+----
+1

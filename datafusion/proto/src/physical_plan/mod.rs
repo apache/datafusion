@@ -48,12 +48,11 @@ use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::repartition::RepartitionExec;
 use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
-use datafusion::physical_plan::union::UnionExec;
-use datafusion::physical_plan::windows::{
-    BoundedWindowAggExec, PartitionSearchMode, WindowAggExec,
-};
+use datafusion::physical_plan::union::{InterleaveExec, UnionExec};
+use datafusion::physical_plan::windows::{BoundedWindowAggExec, WindowAggExec};
 use datafusion::physical_plan::{
-    udaf, AggregateExpr, ExecutionPlan, Partitioning, PhysicalExpr, WindowExpr,
+    udaf, AggregateExpr, ExecutionPlan, InputOrderMode, Partitioning, PhysicalExpr,
+    WindowExpr,
 };
 use datafusion_common::{internal_err, not_impl_err, DataFusionError, Result};
 use prost::bytes::BufMut;
@@ -159,7 +158,16 @@ impl AsExecutionPlan for PhysicalPlanNode {
                                 .to_owned(),
                         )
                     })?;
-                Ok(Arc::new(FilterExec::try_new(predicate, input)?))
+                let filter_selectivity = filter.default_filter_selectivity.try_into();
+                let filter = FilterExec::try_new(predicate, input)?;
+                match filter_selectivity {
+                    Ok(filter_selectivity) => Ok(Arc::new(
+                        filter.with_default_selectivity(filter_selectivity)?,
+                    )),
+                    Err(_) => Err(DataFusionError::Internal(
+                        "filter_selectivity in PhysicalPlanNode is invalid ".to_owned(),
+                    )),
+                }
             }
             PhysicalPlanType::CsvScan(scan) => Ok(Arc::new(CsvExec::new(
                 parse_protobuf_file_scan_config(
@@ -313,20 +321,18 @@ impl AsExecutionPlan for PhysicalPlanNode {
                     })
                     .collect::<Result<Vec<Arc<dyn PhysicalExpr>>>>()?;
 
-                if let Some(partition_search_mode) =
-                    window_agg.partition_search_mode.as_ref()
-                {
-                    let partition_search_mode = match partition_search_mode {
-                        window_agg_exec_node::PartitionSearchMode::Linear(_) => {
-                            PartitionSearchMode::Linear
+                if let Some(input_order_mode) = window_agg.input_order_mode.as_ref() {
+                    let input_order_mode = match input_order_mode {
+                        window_agg_exec_node::InputOrderMode::Linear(_) => {
+                            InputOrderMode::Linear
                         }
-                        window_agg_exec_node::PartitionSearchMode::PartiallySorted(
-                            protobuf::PartiallySortedPartitionSearchMode { columns },
-                        ) => PartitionSearchMode::PartiallySorted(
+                        window_agg_exec_node::InputOrderMode::PartiallySorted(
+                            protobuf::PartiallySortedInputOrderMode { columns },
+                        ) => InputOrderMode::PartiallySorted(
                             columns.iter().map(|c| *c as usize).collect(),
                         ),
-                        window_agg_exec_node::PartitionSearchMode::Sorted(_) => {
-                            PartitionSearchMode::Sorted
+                        window_agg_exec_node::InputOrderMode::Sorted(_) => {
+                            InputOrderMode::Sorted
                         }
                     };
 
@@ -334,7 +340,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
                         physical_window_expr,
                         input,
                         partition_keys,
-                        partition_search_mode,
+                        input_order_mode,
                     )?))
                 } else {
                     Ok(Arc::new(WindowAggExec::try_new(
@@ -539,7 +545,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
                             f.expression.as_ref().ok_or_else(|| {
                                 proto_error("Unexpected empty filter expression")
                             })?,
-                            registry, &schema
+                            registry, &schema,
                         )?;
                         let column_indices = f.column_indices
                             .iter()
@@ -550,7 +556,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
                                         i.side))
                                     )?;
 
-                                Ok(ColumnIndex{
+                                Ok(ColumnIndex {
                                     index: i.index as usize,
                                     side: side.into(),
                                 })
@@ -628,7 +634,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
                             f.expression.as_ref().ok_or_else(|| {
                                 proto_error("Unexpected empty filter expression")
                             })?,
-                            registry, &schema
+                            registry, &schema,
                         )?;
                         let column_indices = f.column_indices
                             .iter()
@@ -639,7 +645,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
                                         i.side))
                                     )?;
 
-                                Ok(ColumnIndex{
+                                Ok(ColumnIndex {
                                     index: i.index as usize,
                                     side: side.into(),
                                 })
@@ -687,6 +693,17 @@ impl AsExecutionPlan for PhysicalPlanNode {
                 }
                 Ok(Arc::new(UnionExec::new(inputs)))
             }
+            PhysicalPlanType::Interleave(interleave) => {
+                let mut inputs: Vec<Arc<dyn ExecutionPlan>> = vec![];
+                for input in &interleave.inputs {
+                    inputs.push(input.try_into_physical_plan(
+                        registry,
+                        runtime,
+                        extension_codec,
+                    )?);
+                }
+                Ok(Arc::new(InterleaveExec::try_new(inputs)?))
+            }
             PhysicalPlanType::CrossJoin(crossjoin) => {
                 let left: Arc<dyn ExecutionPlan> = into_physical_plan(
                     &crossjoin.left,
@@ -729,7 +746,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
                                 })?
                                 .as_ref();
                             Ok(PhysicalSortExpr {
-                                expr: parse_physical_expr(expr,registry, input.schema().as_ref())?,
+                                expr: parse_physical_expr(expr, registry, input.schema().as_ref())?,
                                 options: SortOptions {
                                     descending: !sort_expr.asc,
                                     nulls_first: sort_expr.nulls_first,
@@ -776,7 +793,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
                                 })?
                                 .as_ref();
                             Ok(PhysicalSortExpr {
-                                expr: parse_physical_expr(expr,registry, input.schema().as_ref())?,
+                                expr: parse_physical_expr(expr, registry, input.schema().as_ref())?,
                                 options: SortOptions {
                                     descending: !sort_expr.asc,
                                     nulls_first: sort_expr.nulls_first,
@@ -839,7 +856,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
                             f.expression.as_ref().ok_or_else(|| {
                                 proto_error("Unexpected empty filter expression")
                             })?,
-                            registry, &schema
+                            registry, &schema,
                         )?;
                         let column_indices = f.column_indices
                             .iter()
@@ -850,7 +867,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
                                         i.side))
                                     )?;
 
-                                Ok(ColumnIndex{
+                                Ok(ColumnIndex {
                                     index: i.index as usize,
                                     side: side.into(),
                                 })
@@ -991,6 +1008,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
                     protobuf::FilterExecNode {
                         input: Some(Box::new(input)),
                         expr: Some(exec.predicate().clone().try_into()?),
+                        default_filter_selectivity: exec.default_selectivity() as u32,
                     },
                 ))),
             });
@@ -1456,6 +1474,21 @@ impl AsExecutionPlan for PhysicalPlanNode {
             });
         }
 
+        if let Some(interleave) = plan.downcast_ref::<InterleaveExec>() {
+            let mut inputs: Vec<PhysicalPlanNode> = vec![];
+            for input in interleave.inputs() {
+                inputs.push(protobuf::PhysicalPlanNode::try_from_physical_plan(
+                    input.to_owned(),
+                    extension_codec,
+                )?);
+            }
+            return Ok(protobuf::PhysicalPlanNode {
+                physical_plan_type: Some(PhysicalPlanType::Interleave(
+                    protobuf::InterleaveExecNode { inputs },
+                )),
+            });
+        }
+
         if let Some(exec) = plan.downcast_ref::<SortPreservingMergeExec>() {
             let input = protobuf::PhysicalPlanNode::try_from_physical_plan(
                 exec.input().to_owned(),
@@ -1560,7 +1593,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
                         input: Some(Box::new(input)),
                         window_expr,
                         partition_keys,
-                        partition_search_mode: None,
+                        input_order_mode: None,
                     },
                 ))),
             });
@@ -1584,24 +1617,20 @@ impl AsExecutionPlan for PhysicalPlanNode {
                 .map(|e| e.clone().try_into())
                 .collect::<Result<Vec<protobuf::PhysicalExprNode>>>()?;
 
-            let partition_search_mode = match &exec.partition_search_mode {
-                PartitionSearchMode::Linear => {
-                    window_agg_exec_node::PartitionSearchMode::Linear(
-                        protobuf::EmptyMessage {},
-                    )
-                }
-                PartitionSearchMode::PartiallySorted(columns) => {
-                    window_agg_exec_node::PartitionSearchMode::PartiallySorted(
-                        protobuf::PartiallySortedPartitionSearchMode {
+            let input_order_mode = match &exec.input_order_mode {
+                InputOrderMode::Linear => window_agg_exec_node::InputOrderMode::Linear(
+                    protobuf::EmptyMessage {},
+                ),
+                InputOrderMode::PartiallySorted(columns) => {
+                    window_agg_exec_node::InputOrderMode::PartiallySorted(
+                        protobuf::PartiallySortedInputOrderMode {
                             columns: columns.iter().map(|c| *c as u64).collect(),
                         },
                     )
                 }
-                PartitionSearchMode::Sorted => {
-                    window_agg_exec_node::PartitionSearchMode::Sorted(
-                        protobuf::EmptyMessage {},
-                    )
-                }
+                InputOrderMode::Sorted => window_agg_exec_node::InputOrderMode::Sorted(
+                    protobuf::EmptyMessage {},
+                ),
             };
 
             return Ok(protobuf::PhysicalPlanNode {
@@ -1610,7 +1639,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
                         input: Some(Box::new(input)),
                         window_expr,
                         partition_keys,
-                        partition_search_mode: Some(partition_search_mode),
+                        input_order_mode: Some(input_order_mode),
                     },
                 ))),
             });

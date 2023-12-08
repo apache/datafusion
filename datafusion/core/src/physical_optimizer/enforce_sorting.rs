@@ -53,14 +53,15 @@ use crate::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use crate::physical_plan::windows::{
     get_best_fitting_window, BoundedWindowAggExec, WindowAggExec,
 };
-use crate::physical_plan::{with_new_children_if_necessary, Distribution, ExecutionPlan};
+use crate::physical_plan::{
+    with_new_children_if_necessary, Distribution, ExecutionPlan, InputOrderMode,
+};
 
 use datafusion_common::tree_node::{Transformed, TreeNode, VisitRecursion};
 use datafusion_common::{plan_err, DataFusionError};
 use datafusion_physical_expr::{PhysicalSortExpr, PhysicalSortRequirement};
 
 use datafusion_physical_plan::repartition::RepartitionExec;
-use datafusion_physical_plan::windows::PartitionSearchMode;
 use itertools::izip;
 
 /// This rule inspects [`SortExec`]'s in the given physical plan and removes the
@@ -611,7 +612,7 @@ fn analyze_window_sort_removal(
                 window_expr.to_vec(),
                 window_child,
                 partitionby_exprs.to_vec(),
-                PartitionSearchMode::Sorted,
+                InputOrderMode::Sorted,
             )?) as _
         } else {
             Arc::new(WindowAggExec::try_new(
