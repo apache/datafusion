@@ -27,6 +27,7 @@ use crate::{
     LexRequirement, LexRequirementRef, PhysicalExpr, PhysicalSortExpr,
     PhysicalSortRequirement,
 };
+
 use arrow::datatypes::SchemaRef;
 use arrow_schema::SortOptions;
 use datafusion_common::tree_node::{Transformed, TreeNode};
@@ -1173,32 +1174,36 @@ impl EquivalenceProperties {
         self.eq_group.project_expr(projection_mapping, expr)
     }
 
-    /// Constructs a dependency map based on existing orderings referred to in the projection.
+    /// Constructs a dependency map based on existing orderings referred to in
+    /// the projection.
     ///
-    /// This function analyzes the orderings in the normalized order-equivalence class and
-    /// builds a dependency map. The dependency map captures relationships between expressions
-    /// within the orderings, helping to identify dependencies and construct valid projected
-    /// orderings during projection operations.
+    /// This function analyzes the orderings in the normalized order-equivalence
+    /// class and builds a dependency map. The dependency map captures relationships
+    /// between expressions within the orderings, helping to identify dependencies
+    /// and construct valid projected orderings during projection operations.
     ///
     /// # Parameters
     ///
-    /// - `mapping`: A reference to the `ProjectionMapping` that defines the relationship
-    ///   between source and target expressions.
+    /// - `mapping`: A reference to the `ProjectionMapping` that defines the
+    ///   relationship between source and target expressions.
     ///
     /// # Returns
     ///
     /// A [`DependencyMap`] representing the dependency map, where each
     /// [`DependencyNode`] contains dependencies for the key [`PhysicalSortExpr`].
     ///
-    /// As an example: Assume:
-    /// Orderings are: [a ASC, b ASC], [a ASC, c ASC]
-    /// mapping is [a->a_new, b->b_new, b+c -> b+c],
-    /// Dependency map will be
-    /// a ASC: Node{Some(a_new ASC), HashSet{}}
-    /// b ASC: Node{Some(b_new ASC), HashSet{a ASC}}
-    /// c ASC: Node{None, HashSet{a ASC}}.
+    /// # Example
+    ///
+    /// Assume we have two equivalent orderings: `[a ASC, b ASC]` and `[a ASC, c ASC]`,
+    /// and the projection mapping is `[a -> a_new, b -> b_new, b + c -> b + c]`.
+    /// Then, the dependency map will be:
+    ///
+    /// ```text
+    /// a ASC: Node {Some(a_new ASC), HashSet{}}
+    /// b ASC: Node {Some(b_new ASC), HashSet{a ASC}}
+    /// c ASC: Node {None, HashSet{a ASC}}
+    /// ```
     fn construct_dependency_map(&self, mapping: &ProjectionMapping) -> DependencyMap {
-        // Construct dependency map of the existing orderings that are referred in the projection.
         let mut dependency_map = HashMap::new();
         for ordering in self.normalized_oeq_class().iter() {
             for (idx, sort_expr) in ordering.iter().enumerate() {
@@ -1210,14 +1215,17 @@ impl EquivalenceProperties {
                         }
                     });
                 let is_projected = target_sort_expr.is_some();
-                if is_projected || any_projection_refers(mapping, &sort_expr.expr) {
-                    // Previous ordering is dependency. For leading ordering (e.g first sort_expr inside ordering)
-                    // there is no dependency.
+                if is_projected
+                    || mapping
+                        .iter()
+                        .any(|(source, _)| expr_refers(source, &sort_expr.expr))
+                {
+                    // Previous ordering is a dependency. Note that there is no,
+                    // dependency for a leading ordering (i.e. the first sort
+                    // expression).
                     let dependency = idx.checked_sub(1).map(|a| &ordering[a]);
-                    // Add sort_exprs that
-                    // - can be projected
-                    // - referred by any of the projection expressions
-                    // to the dependency map.
+                    // Add sort expressions that can be projected or referred to
+                    // by any of the projection expressions to the dependency map:
                     dependency_map
                         .entry(sort_expr.clone())
                         .or_insert_with(|| DependencyNode {
@@ -1227,8 +1235,8 @@ impl EquivalenceProperties {
                         .insert_dependency(dependency);
                 }
                 if !is_projected {
-                    // If expression cannot be projected
-                    // Stop constructing dependency. Remaining dependencies will not be valid after projection.
+                    // If we can not project, stop constructing the dependency
+                    // map as remaining dependencies will be invalid after projection.
                     break;
                 }
             }
@@ -1238,9 +1246,9 @@ impl EquivalenceProperties {
 
     /// Returns a new `ProjectionMapping` where source expressions are normalized.
     ///
-    /// The normalization ensures that source expressions are transformed into a consistent
-    /// representation. This is beneficial for algorithms that rely on exact equalities,
-    /// as it allows for more precise and reliable comparisons.
+    /// This normalization ensures that source expressions are transformed into a
+    /// consistent representation. This is beneficial for algorithms that rely on
+    /// exact equalities, as it allows for more precise and reliable comparisons.
     ///
     /// # Parameters
     ///
@@ -1252,99 +1260,93 @@ impl EquivalenceProperties {
     fn normalized_mapping(&self, mapping: &ProjectionMapping) -> ProjectionMapping {
         // Construct the mapping where source expressions are normalized. In this way
         // In the algorithms below we can work on exact equalities
-        let new_inner = mapping
-            .iter()
-            .map(|(source, target)| {
-                let normalized_source = self.eq_group.normalize_expr(source.clone());
-                (normalized_source, target.clone())
-            })
-            .collect::<Vec<_>>();
-        ProjectionMapping { map: new_inner }
+        ProjectionMapping {
+            map: mapping
+                .iter()
+                .map(|(source, target)| {
+                    let normalized_source = self.eq_group.normalize_expr(source.clone());
+                    (normalized_source, target.clone())
+                })
+                .collect(),
+        }
     }
 
     /// Computes projected orderings based on a given projection mapping.
     ///
-    /// This function takes a `ProjectionMapping` and computes the possible orderings
-    /// for the projected expressions. It considers dependencies between expressions
-    /// and generates valid orderings according to the specified sort properties.
+    /// This function takes a `ProjectionMapping` and computes the possible
+    /// orderings for the projected expressions. It considers dependencies
+    /// between expressions and generates valid orderings according to the
+    /// specified sort properties.
     ///
     /// # Parameters
     ///
-    /// - `mapping`: A reference to the `ProjectionMapping` that defines the relationship
-    ///   between source and target expressions.
+    /// - `mapping`: A reference to the `ProjectionMapping` that defines the
+    ///   relationship between source and target expressions.
     ///
     /// # Returns
     ///
-    /// A vector of `LexOrdering` containing all of the valid orderings after projection.
+    /// A vector of `LexOrdering` containing all valid orderings after projection.
     fn projected_orderings(&self, mapping: &ProjectionMapping) -> Vec<LexOrdering> {
         let mapping = self.normalized_mapping(mapping);
 
-        // Get dependency map for existing orderings.
+        // Get dependency map for existing orderings:
         let dependency_map = self.construct_dependency_map(&mapping);
 
-        let mut orderings = mapping
-            .iter()
-            .flat_map(|(source, target)| {
-                referred_dependencies(&dependency_map, source)
-                    .into_iter()
-                    .filter_map(|relevant_deps| {
-                        if let SortProperties::Ordered(options) =
-                            get_expr_ordering(source, &relevant_deps)
-                        {
-                            Some((options, relevant_deps))
-                        } else {
-                            // do not consider unordered cases
-                            None
-                        }
-                    })
-                    .flat_map(|(options, relevant_deps)| {
-                        // Ordered expression, and its dependencies
-                        let sort_expr = PhysicalSortExpr {
-                            expr: target.clone(),
-                            options,
-                        };
-
-                        // Generate dependent orderings (e.g prefixes for the `sort_expr`).
-                        let dependency_orderings = generate_dependency_orderings(
-                            &relevant_deps,
-                            &dependency_map,
-                        );
-                        // Suffix sort_expr to the end of the dependent orderings
-                        dependency_orderings
-                            .into_iter()
-                            .map(|mut ordering| {
-                                ordering.push(sort_expr.clone());
-                                ordering
-                            })
-                            .collect::<Vec<_>>()
-                    })
-            })
-            .collect::<Vec<LexOrdering>>();
-
-        // Add valid projected orderings. Such as if existing ordering is a+b and projection is (a-> a_new, b->b_new)
-        // We need to preserve (a_new+b_new) as ordered. Please note that a_new and b_new themselves are not ordered.
-        // This dependency cannot be understood from the calculations above.
-        let projected_orderings = dependency_map
-            .iter()
-            .flat_map(|(sort_expr, node)| {
-                let mut prefixes = construct_prefix_orderings(sort_expr, &dependency_map);
-                if prefixes.is_empty() {
-                    // If prefix is empty, there is no dependency. Insert empty ordering
-                    prefixes = vec![vec![]];
-                }
-                // Append current ordering on top its dependencies
-                prefixes.iter_mut().for_each(|ordering| {
-                    if let Some(target) = &node.target_sort_expr {
-                        ordering.push(target.clone())
+        let orderings = mapping.iter().flat_map(|(source, target)| {
+            referred_dependencies(&dependency_map, source)
+                .into_iter()
+                .filter_map(|relevant_deps| {
+                    if let SortProperties::Ordered(options) =
+                        get_expr_ordering(source, &relevant_deps)
+                    {
+                        Some((options, relevant_deps))
+                    } else {
+                        // Do not consider unordered cases
+                        None
                     }
-                });
-                prefixes
-            })
-            .collect::<Vec<_>>();
+                })
+                .flat_map(|(options, relevant_deps)| {
+                    let sort_expr = PhysicalSortExpr {
+                        expr: target.clone(),
+                        options,
+                    };
+                    // Generate dependent orderings (i.e. prefixes for `sort_expr`):
+                    let mut dependency_orderings =
+                        generate_dependency_orderings(&relevant_deps, &dependency_map);
+                    // Append `sort_expr` to the dependent orderings:
+                    for ordering in dependency_orderings.iter_mut() {
+                        ordering.push(sort_expr.clone());
+                    }
+                    dependency_orderings
+                })
+        });
 
-        orderings.extend(projected_orderings);
-        // Simplify each ordering by removing redundant sections.
-        orderings.into_iter().map(collapse_lex_ordering).collect()
+        // Add valid projected orderings. For example, if existing ordering is
+        // `a + b` and projection is `[a -> a_new, b -> b_new]`, we need to
+        // preserve `a_new + b_new` as ordered. Please note that `a_new` and
+        // `b_new` themselves need not be ordered. Such dependencies cannot be
+        // deduced via the pass above.
+        let projected_orderings = dependency_map.iter().flat_map(|(sort_expr, node)| {
+            let mut prefixes = construct_prefix_orderings(sort_expr, &dependency_map);
+            if prefixes.is_empty() {
+                // If prefix is empty, there is no dependency. Insert
+                // empty ordering:
+                prefixes = vec![vec![]];
+            }
+            // Append current ordering on top its dependencies:
+            for ordering in prefixes.iter_mut() {
+                if let Some(target) = &node.target_sort_expr {
+                    ordering.push(target.clone())
+                }
+            }
+            prefixes
+        });
+
+        // Simplify each ordering by removing redundant sections:
+        orderings
+            .chain(projected_orderings)
+            .map(collapse_lex_ordering)
+            .collect()
     }
 
     /// Projects constants based on the provided `ProjectionMapping`.
@@ -1533,8 +1535,6 @@ fn is_constant_recurse(
     !children.is_empty() && children.iter().all(|c| is_constant_recurse(constants, c))
 }
 
-/// Checks if a referring expression refers to a given referred expression.
-///
 /// This function examines whether a referring expression directly refers to a
 /// given referred expression or if any of its children in the expression tree
 /// refer to the specified expression.
@@ -1559,9 +1559,7 @@ fn expr_refers(
             .any(|child| expr_refers(child, referred_expr))
 }
 
-/// Wrapper struct for `Arc<dyn PhysicalExpr>`
-/// this struct can be used as key in the hash map
-/// (`Arc<dyn PhysicalExpr>` cannot)
+/// Wrapper struct for `Arc<dyn PhysicalExpr>` to use them as keys in a hash map.
 #[derive(Debug, Clone)]
 struct ExprWrapper(Arc<dyn PhysicalExpr>);
 
@@ -1579,117 +1577,103 @@ impl Hash for ExprWrapper {
     }
 }
 
-/// Collects referred dependencies for a given source expression.
-///
 /// This function analyzes the dependency map to collect referred dependencies for
 /// a given source expression.
 ///
 /// # Parameters
 ///
-/// - `dependency_map`: A reference to the `DependencyMap` representing
-///   the dependency map, where each `PhysicalSortExpr` is associated with a `DependencyMap`.
-/// - `source`: A reference to the source expression (`Arc<dyn PhysicalExpr>`) for which
-///   relevant dependencies need to be identified.
+/// - `dependency_map`: A reference to the `DependencyMap` where each
+///   `PhysicalSortExpr` is associated with a `DependencyNode`.
+/// - `source`: A reference to the source expression (`Arc<dyn PhysicalExpr>`)
+///   for which relevant dependencies need to be identified.
 ///
 /// # Returns
 ///
-/// A `Vec<Dependencies>` containing dependencies for the given source
-/// expression (Each `Dependencies` inside the vector is sufficient (and not redundant) to construct source expression).
-/// These dependencies are expressions that are referred to by the source
-/// expression based on the provided dependency map.
+/// A `Vec<Dependencies>` containing the dependencies for the given source
+/// expression. These dependencies are expressions that are referred to by
+/// the source expression based on the provided dependency map.
 fn referred_dependencies(
     dependency_map: &DependencyMap,
     source: &Arc<dyn PhysicalExpr>,
 ) -> Vec<Dependencies> {
-    // Associate `PhysicalExpr` and `PhysicalSortExpr`s that contain it.
-    // such as a-> (a ASC, a DESC)
-    let mut expr_to_sort_exprs: HashMap<ExprWrapper, Dependencies> = HashMap::new();
-    dependency_map
+    // Associate `PhysicalExpr`s with `PhysicalSortExpr`s that contain them:
+    let mut expr_to_sort_exprs = HashMap::<ExprWrapper, Dependencies>::new();
+    for sort_expr in dependency_map
         .keys()
         .filter(|sort_expr| expr_refers(source, &sort_expr.expr))
-        .for_each(|sort_expr| {
-            let key = ExprWrapper(sort_expr.expr.clone());
-            expr_to_sort_exprs
-                .entry(key)
-                .or_default()
-                .insert(sort_expr.clone());
-        });
+    {
+        let key = ExprWrapper(sort_expr.expr.clone());
+        expr_to_sort_exprs
+            .entry(key)
+            .or_default()
+            .insert(sort_expr.clone());
+    }
 
-    // Generate all valid dependencies for the source
-    // such as for a+b
-    // If map is  a-> (a ASC, a DESC).
-    //            b-> (b ASC)
-    // Generate vec![HashSet(a ASC, b ASC), HashSet(a DESC, b ASC)]
+    // Generate all valid dependencies for the source. For example, if the source
+    // is `a + b` and the map is `[a -> (a ASC, a DESC), b -> (b ASC)]`, we get
+    // `vec![HashSet(a ASC, b ASC), HashSet(a DESC, b ASC)]`.
     expr_to_sort_exprs
         .values()
         .multi_cartesian_product()
-        .map(|referred_deps| {
-            referred_deps
-                .into_iter()
-                .cloned()
-                .collect::<HashSet<PhysicalSortExpr>>()
-        })
+        .map(|referred_deps| referred_deps.into_iter().cloned().collect())
         .collect()
 }
 
-/// Constructs Lexicographical Orderings based on the given relevant sort expression and dependency map.
-///
-/// This function recursively analyzes the dependencies of the provided relevant sort expression
-/// within the given dependency map. It constructs lexicographical orderings that include the
-/// relevant sort expression and its dependencies.
+/// This function recursively analyzes the dependencies of the given sort
+/// expression within the given dependency map to construct lexicographical
+/// orderings that include the sort expression and its dependencies.
 ///
 /// # Parameters
 ///
-/// - `referred_sort_expr`: A reference to the relevant sort expression (`PhysicalSortExpr`)
-///   for which lexicographical orderings need to be constructed, that satisfying its dependencies.
-/// - `dependency_map`: A reference to the `DependencyMap` that contains dependencies
-///    for different `PhysicalSortExpr`s.
+/// - `referred_sort_expr`: A reference to the sort expression (`PhysicalSortExpr`)
+///   for which lexicographical orderings satisfying its dependencies are to be
+///   constructed.
+/// - `dependency_map`: A reference to the `DependencyMap` that contains
+///   dependencies for different `PhysicalSortExpr`s.
 ///
 /// # Returns
 ///
-/// A vector of lexicographical orderings (`Vec<LexOrdering>`) based on the provided relevant
+/// A vector of lexicographical orderings (`Vec<LexOrdering>`) based on the given
 /// sort expression and its dependencies.
 fn construct_orderings(
     referred_sort_expr: &PhysicalSortExpr,
     dependency_map: &DependencyMap,
 ) -> Vec<LexOrdering> {
     // We are sure that `referred_sort_expr` is inside `dependency_map`.
-    let val = &dependency_map[referred_sort_expr];
-    // Since these nodes are intermediate nodes. We are sure `val.target_sort_expr` is `Some(_)`;
-    let target_sort_expr = val.target_sort_expr.clone().unwrap();
-    if val.dependencies.is_empty() {
+    let node = &dependency_map[referred_sort_expr];
+    // Since we work on intermediate nodes, we are sure `val.target_sort_expr`
+    // exists.
+    let target_sort_expr = node.target_sort_expr.clone().unwrap();
+    if node.dependencies.is_empty() {
         vec![vec![target_sort_expr]]
     } else {
-        val.dependencies
+        node.dependencies
             .iter()
             .flat_map(|dep| {
                 let mut orderings = construct_orderings(dep, dependency_map);
-                orderings
-                    .iter_mut()
-                    .for_each(|ordering| ordering.push(target_sort_expr.clone()));
+                for ordering in orderings.iter_mut() {
+                    ordering.push(target_sort_expr.clone())
+                }
                 orderings
             })
-            .collect::<Vec<_>>()
+            .collect()
     }
 }
 
-/// Constructs prefix orderings (dependent orderings) based on the given relevant sort expression and dependency map.
-///
-/// This function retrieves the dependencies of the provided relevant sort expression from the
-/// given dependency map. It then constructs prefix orderings by recursively analyzing the
-/// dependencies and including them in the orderings.
+/// This function retrieves the dependencies of the given relevant sort expression
+/// from the given dependency map. It then constructs prefix orderings by recursively
+/// analyzing the dependencies and include them in the orderings.
 ///
 /// # Parameters
 ///
-/// - `relevant_sort_expr`: A reference to the relevant sort expression (`PhysicalSortExpr`)
-///   for which prefix orderings need to be constructed.
-/// - `dependency_map`: A reference to the `DependencyMap` that contains dependencies
-///    for different `PhysicalSortExpr`s.
+/// - `relevant_sort_expr`: A reference to the relevant sort expression
+///   (`PhysicalSortExpr`) for which prefix orderings are to be constructed.
+/// - `dependency_map`: A reference to the `DependencyMap` containing dependencies.
 ///
 /// # Returns
 ///
-/// A vector of prefix orderings (`Vec<LexOrdering>`) based on the provided relevant sort
-/// expression and its dependencies.
+/// A vector of prefix orderings (`Vec<LexOrdering>`) based on the given relevant
+/// sort expression and its dependencies.
 fn construct_prefix_orderings(
     relevant_sort_expr: &PhysicalSortExpr,
     dependency_map: &DependencyMap,
@@ -1701,13 +1685,11 @@ fn construct_prefix_orderings(
         .collect()
 }
 
-/// Generates Dependency Orderings (orderings that satisfy dependencies)
-///
 /// Given a set of relevant dependencies (`relevant_deps`) and a map of dependencies
-/// (`dependency_map`), this function generates all possible prefix orderings based on
-/// the dependencies.
+/// (`dependency_map`), this function generates all possible prefix orderings
+/// based on the given dependencies.
 ///
-/// # Arguments
+/// # Parameters
 ///
 /// * `dependencies` - A reference to the dependencies.
 /// * `dependency_map` - A reference to the map of dependencies for expressions.
@@ -1720,7 +1702,8 @@ fn generate_dependency_orderings(
     dependencies: &Dependencies,
     dependency_map: &DependencyMap,
 ) -> Vec<LexOrdering> {
-    // Construct all of the valid prefix orderings for each of the expressions, that is referred in the projection expression.
+    // Construct all the valid prefix orderings for each expression appearing
+    // in the projection:
     let relevant_prefixes = dependencies
         .iter()
         .flat_map(|dep| {
@@ -1729,15 +1712,17 @@ fn generate_dependency_orderings(
         })
         .collect::<Vec<_>>();
 
-    // No dependency, dependent is leading ordering.
+    // No dependency, dependent is a leading ordering.
     if relevant_prefixes.is_empty() {
-        // Return an empty ordering.
+        // Return an empty ordering:
         return vec![vec![]];
     }
 
-    // Generate all possible orderings where dependencies are satisfied for the current projection expression.
-    // If expression is a+b ASC, and dependency for a ASC is [c ASC], dependency for b ASC is [d DESC].
-    // Then we generate [c ASC, d DESC, a+b ASC], [d DESC, c ASC, a+b ASC].
+    // Generate all possible orderings where dependencies are satisfied for the
+    // current projection expression. For example, if expression is `a + b ASC`,
+    // and the dependency for `a ASC` is `[c ASC]`, the dependency for `b ASC`
+    // is `[d DESC]`, then we generate `[c ASC, d DESC, a + b ASC]` and
+    // `[d DESC, c ASC, a + b ASC]`.
     relevant_prefixes
         .into_iter()
         .multi_cartesian_product()
@@ -1745,33 +1730,25 @@ fn generate_dependency_orderings(
             prefix_orderings
                 .iter()
                 .permutations(prefix_orderings.len())
-                .map(|prefixes| {
-                    prefixes
-                        .into_iter()
-                        .flatten()
-                        .cloned()
-                        .collect::<LexOrdering>()
-                })
-                .collect::<Vec<LexOrdering>>()
+                .map(|prefixes| prefixes.into_iter().flatten().cloned().collect())
+                .collect::<Vec<_>>()
         })
-        .collect::<Vec<LexOrdering>>()
+        .collect()
 }
 
-/// Retrieves the ordering properties for a given expression based on sort expressions it refers.
-///
-/// This function examines the provided expression and sort expressions it refers to determine
-/// the ordering properties of the expression.
+/// This function examines the given expression and the sort expressions it
+/// refers to determine the ordering properties of the expression.
 ///
 /// # Parameters
 ///
-/// - `expr`: A reference to the source expression (`Arc<dyn PhysicalExpr>`) for which ordering
-///   properties need to be determined.
-/// - `dependencies`: A reference to a `Dependencies` containing sort
-///   expressions referred by the `expr`.
+/// - `expr`: A reference to the source expression (`Arc<dyn PhysicalExpr>`) for
+///   which ordering properties need to be determined.
+/// - `dependencies`: A reference to `Dependencies`, containing sort expressions
+///   referred to by `expr`.
 ///
 /// # Returns
 ///
-/// A `SortProperties` enum indicating the ordering information of the given expression:
+/// A `SortProperties` indicating the ordering information of the given expression.
 fn get_expr_ordering(
     expr: &Arc<dyn PhysicalExpr>,
     dependencies: &Dependencies,
@@ -1791,38 +1768,19 @@ fn get_expr_ordering(
     }
 }
 
-/// Checks if any expression in the projection mapping refers to a given source expression.
+/// Represents a node in the dependency map used to construct projected orderings.
 ///
-/// # Parameters
-///
-/// - `mapping`: A reference to the `ProjectionMapping` that defines the relationship between
-///   source and target expressions.
-/// - `expr`: A reference to the `Arc<dyn PhysicalExpr>` for which we check whether any projection
-///    source expression refers to it..
-///
-/// # Returns
-///
-/// A `bool` flag, that indicates, whether any projection source refers `expr` or not.
-fn any_projection_refers(
-    mapping: &ProjectionMapping,
-    expr: &Arc<dyn PhysicalExpr>,
-) -> bool {
-    mapping
-        .iter()
-        .any(|(source, _target)| expr_refers(source, expr))
-}
-
-/// Represents a node in the dependency map used for constructing projected orderings.
-///
-/// A `DependencyNode` contains information about a particular sort expression, including
-/// its target sort expression and a set of dependencies on other sort expressions.
+/// A `DependencyNode` contains information about a particular sort expression,
+/// including its target sort expression and a set of dependencies on other sort
+/// expressions.
 ///
 /// # Fields
 ///
-/// - `target_sort_expr`: An optional `PhysicalSortExpr` representing the target sort expression
-///   associated with the node. It is `None` if the sort expression cannot be projected.
-/// - `dependencies`: A [`Dependencies`] containing dependencies on other sort expressions
-///   that are referred to by the target sort expression.
+/// - `target_sort_expr`: An optional `PhysicalSortExpr` representing the target
+///   sort expression associated with the node. It is `None` if the sort expression
+///   cannot be projected.
+/// - `dependencies`: A [`Dependencies`] containing dependencies on other sort
+///   expressions that are referred to by the target sort expression.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct DependencyNode {
     target_sort_expr: Option<PhysicalSortExpr>,
@@ -1830,7 +1788,7 @@ struct DependencyNode {
 }
 
 impl DependencyNode {
-    // Insert dependency to the state, (if there is any dependency)
+    // Insert dependency to the state (if exists).
     fn insert_dependency(&mut self, dependency: Option<&PhysicalSortExpr>) {
         if let Some(dep) = dependency {
             self.dependencies.insert(dep.clone());
@@ -2154,7 +2112,7 @@ mod tests {
             .map(|(expr, options)| {
                 PhysicalSortRequirement::new((*expr).clone(), *options)
             })
-            .collect::<Vec<_>>()
+            .collect()
     }
 
     // Convert each tuple to PhysicalSortExpr
@@ -2167,7 +2125,7 @@ mod tests {
                 expr: (*expr).clone(),
                 options: *options,
             })
-            .collect::<Vec<_>>()
+            .collect()
     }
 
     // Convert each inner tuple to PhysicalSortExpr
@@ -2190,7 +2148,7 @@ mod tests {
                 expr: (*expr).clone(),
                 options: *options,
             })
-            .collect::<Vec<_>>()
+            .collect()
     }
 
     // Convert each inner tuple to PhysicalSortExpr
