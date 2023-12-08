@@ -3763,23 +3763,20 @@ select a,
 1 1
 2 2
 
-# TODO: this is different to Postgres which returns [1, 1] for `rnk`.
-# Comment it because it is flaky now as it depends on the order of the `a` column.
-# query II
-# select a,
-#       rank() over (RANGE BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) rnk
-#       from (select 1 a union select 2 a) q ORDER BY rnk
-# ----
-# 1 1
-# 2 2
+query II
+select a,
+      rank() over (RANGE BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) rnk
+      from (select 1 a union select 2 a) q ORDER BY a
+----
+1 1
+2 1
 
-# # TODO: this is different to Postgres which returns [1, 1] for `rnk`.
-# query I
-# select rank() over (RANGE between UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) rnk
-#        from (select 1 a union select 2 a) q;
-# ----
-# 1
-# 2
+query I
+select rank() over (RANGE between UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) rnk
+       from (select 1 a union select 2 a) q;
+----
+1
+1
 
 query II
 select a,

@@ -21,7 +21,7 @@ use datafusion_common::{
 };
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::function::suggest_valid_function;
-use datafusion_expr::window_frame::regularize;
+use datafusion_expr::window_frame::{check_window_frame, regularize_window_order_by};
 use datafusion_expr::{
     expr, window_function, AggregateFunction, BuiltinScalarFunction, Expr, WindowFrame,
     WindowFunction,
@@ -92,7 +92,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 .into_iter()
                 .map(|e| self.sql_expr_to_logical_expr(e, schema, planner_context))
                 .collect::<Result<Vec<_>>>()?;
-            let order_by = self.order_by_to_sort_expr(
+            let mut order_by = self.order_by_to_sort_expr(
                 &window.order_by,
                 schema,
                 planner_context,
@@ -104,14 +104,18 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 .as_ref()
                 .map(|window_frame| {
                     let window_frame = window_frame.clone().try_into()?;
-                    regularize(window_frame, order_by.len())
+                    check_window_frame(&window_frame, order_by.len())
+                        .map(|_| window_frame)
                 })
                 .transpose()?;
+
             let window_frame = if let Some(window_frame) = window_frame {
+                regularize_window_order_by(&window_frame, &mut order_by)?;
                 window_frame
             } else {
                 WindowFrame::new(!order_by.is_empty())
             };
+
             if let Ok(fun) = self.find_window_func(&name) {
                 let expr = match fun {
                     WindowFunction::AggregateFunction(aggregate_fun) => {
