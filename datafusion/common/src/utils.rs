@@ -135,7 +135,7 @@ pub fn bisect<const SIDE: bool>(
 ) -> Result<usize> {
     let low: usize = 0;
     let high: usize = item_columns
-        .get(0)
+        .first()
         .ok_or_else(|| {
             DataFusionError::Internal("Column array shouldn't be empty".to_string())
         })?
@@ -186,7 +186,7 @@ pub fn linear_search<const SIDE: bool>(
 ) -> Result<usize> {
     let low: usize = 0;
     let high: usize = item_columns
-        .get(0)
+        .first()
         .ok_or_else(|| {
             DataFusionError::Internal("Column array shouldn't be empty".to_string())
         })?

@@ -1346,7 +1346,7 @@ mod tests {
     use crate::execution::context::SessionConfig;
     use crate::physical_plan::{ColumnarValue, Partitioning, PhysicalExpr};
     use crate::test_util::{register_aggregate_csv, test_table, test_table_with_name};
-    use crate::{assert_batches_sorted_eq, execution::context::SessionContext};    
+    use crate::{assert_batches_sorted_eq, execution::context::SessionContext};
 
     use arrow::array::{self, Int32Array};
     use arrow::datatypes::DataType;

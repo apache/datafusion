@@ -504,7 +504,6 @@ pub fn generate_sort_key(
     let res = final_sort_keys
         .into_iter()
         .zip(is_partition_flag)
-        .map(|(lhs, rhs)| (lhs, rhs))
         .collect::<Vec<_>>();
     Ok(res)
 }
@@ -1233,8 +1232,8 @@ pub fn merge_schema(inputs: Vec<&LogicalPlan>) -> DFSchema {
 mod tests {
     use super::*;
     use crate::{
-        col, cube, expr, grouping_set, lit, rollup, AggregateFunction, WindowFrame,
-        WindowFunction, expr_vec_fmt,
+        col, cube, expr, expr_vec_fmt, grouping_set, lit, rollup, AggregateFunction,
+        WindowFrame, WindowFunction,
     };
 
     #[test]
