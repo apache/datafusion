@@ -290,7 +290,8 @@ fn try_unifying_projections(
         .map(|e| Some(Arc::new(e) as _))
 }
 
-// check if the expr trival
+/// Checks if the given expression is trivial.
+/// An expression is considered trivial if it is either a `Column` or a `Literal`.
 fn is_expr_trivial(expr: &Arc<dyn PhysicalExpr>) -> bool {
     expr.as_any().downcast_ref::<Column>().is_some()
         || expr.as_any().downcast_ref::<Literal>().is_some()
