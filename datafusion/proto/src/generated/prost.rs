@@ -2614,6 +2614,7 @@ pub enum ScalarFunction {
     SubstrIndex = 126,
     FindInSet = 127,
     ArraySort = 128,
+    ArrayDistinct = 129,
 }
 impl ScalarFunction {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -2751,6 +2752,7 @@ impl ScalarFunction {
             ScalarFunction::SubstrIndex => "SubstrIndex",
             ScalarFunction::FindInSet => "FindInSet",
             ScalarFunction::ArraySort => "ArraySort",
+            ScalarFunction::ArrayDistinct => "ArrayDistinct",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -2885,6 +2887,7 @@ impl ScalarFunction {
             "SubstrIndex" => Some(Self::SubstrIndex),
             "FindInSet" => Some(Self::FindInSet),
             "ArraySort" => Some(Self::ArraySort),
+            "ArrayDistinct" => Some(Self::ArrayDistinct),
             _ => None,
         }
     }
