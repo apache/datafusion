@@ -199,9 +199,16 @@ impl DFSchema {
     pub fn with_functional_dependencies(
         mut self,
         functional_dependencies: FunctionalDependencies,
-    ) -> Self {
-        self.functional_dependencies = functional_dependencies;
-        self
+    ) -> Result<Self> {
+        if functional_dependencies.is_valid(self.fields.len()) {
+            self.functional_dependencies = functional_dependencies;
+            Ok(self)
+        } else {
+            _plan_err!(
+                "Invalid functional dependency: {:?}",
+                functional_dependencies
+            )
+        }
     }
 
     /// Create a new schema that contains the fields from this schema followed by the fields

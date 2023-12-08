@@ -25,10 +25,7 @@ use crate::utils::{
 };
 
 use datafusion_common::Column;
-use datafusion_common::{
-    get_target_functional_dependencies, not_impl_err, plan_err, DFSchemaRef,
-    DataFusionError, Result,
-};
+use datafusion_common::{not_impl_err, plan_err, DataFusionError, Result};
 use datafusion_expr::expr::Alias;
 use datafusion_expr::expr_rewriter::{
     normalize_col, normalize_col_with_schemas_and_ambiguity_check,
@@ -534,13 +531,16 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         group_by_exprs: &[Expr],
         aggr_exprs: &[Expr],
     ) -> Result<(LogicalPlan, Vec<Expr>, Option<Expr>)> {
-        let group_by_exprs =
-            get_updated_group_by_exprs(group_by_exprs, select_exprs, input.schema())?;
-
         // create the aggregate plan
         let plan = LogicalPlanBuilder::from(input.clone())
-            .aggregate(group_by_exprs.clone(), aggr_exprs.to_vec())?
+            .aggregate(group_by_exprs.to_vec(), aggr_exprs.to_vec())?
             .build()?;
+
+        let group_by_exprs = if let LogicalPlan::Aggregate(agg) = &plan {
+            &agg.group_expr
+        } else {
+            unreachable!();
+        };
 
         // in this next section of code we are re-writing the projection to refer to columns
         // output by the aggregate plan. For example, if the projection contains the expression
@@ -550,7 +550,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         // combine the original grouping and aggregate expressions into one list (note that
         // we do not add the "having" expression since that is not part of the projection)
         let mut aggr_projection_exprs = vec![];
-        for expr in &group_by_exprs {
+        for expr in group_by_exprs {
             match expr {
                 Expr::GroupingSet(GroupingSet::Rollup(exprs)) => {
                     aggr_projection_exprs.extend_from_slice(exprs)
@@ -658,62 +658,4 @@ fn match_window_definitions(
         }
     }
     Ok(())
-}
-
-/// Update group by exprs, according to functional dependencies
-/// The query below
-///
-/// SELECT sn, amount
-/// FROM sales_global
-/// GROUP BY sn
-///
-/// cannot be calculated, because it has a column(`amount`) which is not
-/// part of group by expression.
-/// However, if we know that, `sn` is determinant of `amount`. We can
-/// safely, determine value of `amount` for each distinct `sn`. For these cases
-/// we rewrite the query above as
-///
-/// SELECT sn, amount
-/// FROM sales_global
-/// GROUP BY sn, amount
-///
-/// Both queries, are functionally same. \[Because, (`sn`, `amount`) and (`sn`)
-/// defines the identical groups. \]
-/// This function updates group by expressions such that select expressions that are
-/// not in group by expression, are added to the group by expressions if they are dependent
-/// of the sub-set of group by expressions.
-fn get_updated_group_by_exprs(
-    group_by_exprs: &[Expr],
-    select_exprs: &[Expr],
-    schema: &DFSchemaRef,
-) -> Result<Vec<Expr>> {
-    let mut new_group_by_exprs = group_by_exprs.to_vec();
-    let fields = schema.fields();
-    let group_by_expr_names = group_by_exprs
-        .iter()
-        .map(|group_by_expr| group_by_expr.display_name())
-        .collect::<Result<Vec<_>>>()?;
-    // Get targets that can be used in a select, even if they do not occur in aggregation:
-    if let Some(target_indices) =
-        get_target_functional_dependencies(schema, &group_by_expr_names)
-    {
-        // Calculate dependent fields names with determinant GROUP BY expression:
-        let associated_field_names = target_indices
-            .iter()
-            .map(|idx| fields[*idx].qualified_name())
-            .collect::<Vec<_>>();
-        // Expand GROUP BY expressions with select expressions: If a GROUP
-        // BY expression is a determinant key, we can use its dependent
-        // columns in select statements also.
-        for expr in select_exprs {
-            let expr_name = format!("{}", expr);
-            if !new_group_by_exprs.contains(expr)
-                && associated_field_names.contains(&expr_name)
-            {
-                new_group_by_exprs.push(expr.clone());
-            }
-        }
-    }
-
-    Ok(new_group_by_exprs)
 }
