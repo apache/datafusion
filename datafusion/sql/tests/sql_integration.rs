@@ -3546,11 +3546,22 @@ fn test_select_unsupported_syntax_errors(#[case] sql: &str, #[case] error: &str)
 fn select_order_by_with_cast() {
     let sql =
         "SELECT first_name AS first_name FROM (SELECT first_name AS first_name FROM person) ORDER BY CAST(first_name as INT)";
-    let expected = "Sort: CAST(first_name AS first_name AS Int32) ASC NULLS LAST\
-                        \n  Projection: first_name AS first_name\
-                        \n    Projection: person.first_name AS first_name\
+    let expected = "Sort: CAST(person.first_name AS Int32) ASC NULLS LAST\
+                        \n  Projection: person.first_name\
+                        \n    Projection: person.first_name\
                         \n      TableScan: person";
     quick_test(sql, expected);
+}
+
+#[test]
+fn test_avoid_add_alias() {
+    // avoiding adding an alias if the column name is the same.
+    // plan1 = plan2
+    let sql = "select person.id as id from person order by person.id";
+    let plan1 = logical_plan(sql).unwrap();
+    let sql = "select id from person order by id";
+    let plan2 = logical_plan(sql).unwrap();
+    assert_eq!(format!("{plan1:?}"), format!("{plan2:?}"));
 }
 
 #[test]

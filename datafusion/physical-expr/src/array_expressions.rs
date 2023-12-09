@@ -28,10 +28,10 @@ use arrow::datatypes::{DataType, Field, UInt64Type};
 use arrow::row::{RowConverter, SortField};
 use arrow_buffer::NullBuffer;
 
-use arrow_schema::FieldRef;
+use arrow_schema::{FieldRef, SortOptions};
 use datafusion_common::cast::{
-    as_generic_list_array, as_generic_string_array, as_int64_array, as_list_array,
-    as_null_array, as_string_array,
+    as_generic_list_array, as_generic_string_array, as_int64_array, as_large_list_array,
+    as_list_array, as_null_array, as_string_array,
 };
 use datafusion_common::utils::{array_into_list_array, list_ndims};
 use datafusion_common::{
@@ -369,139 +369,64 @@ pub fn make_array(arrays: &[ArrayRef]) -> Result<ArrayRef> {
     }
 }
 
-fn return_empty(return_null: bool, data_type: DataType) -> Arc<dyn Array> {
-    if return_null {
-        new_null_array(&data_type, 1)
-    } else {
-        new_empty_array(&data_type)
-    }
-}
-
-macro_rules! list_slice {
-    ($ARRAY:expr, $I:expr, $J:expr, $RETURN_ELEMENT:expr, $ARRAY_TYPE:ident) => {{
-        let array = $ARRAY.as_any().downcast_ref::<$ARRAY_TYPE>().unwrap();
-        if $I == 0 && $J == 0 || $ARRAY.is_empty() {
-            return return_empty($RETURN_ELEMENT, $ARRAY.data_type().clone());
-        }
-
-        let i = if $I < 0 {
-            if $I.abs() as usize > array.len() {
-                return return_empty(true, $ARRAY.data_type().clone());
-            }
-
-            (array.len() as i64 + $I + 1) as usize
-        } else {
-            if $I == 0 {
-                1
-            } else {
-                $I as usize
-            }
-        };
-        let j = if $J < 0 {
-            if $J.abs() as usize > array.len() {
-                return return_empty(true, $ARRAY.data_type().clone());
-            }
-
-            if $RETURN_ELEMENT {
-                (array.len() as i64 + $J + 1) as usize
-            } else {
-                (array.len() as i64 + $J) as usize
-            }
-        } else {
-            if $J == 0 {
-                1
-            } else {
-                if $J as usize > array.len() {
-                    array.len()
-                } else {
-                    $J as usize
-                }
-            }
-        };
-
-        if i > j || i as usize > $ARRAY.len() {
-            return_empty($RETURN_ELEMENT, $ARRAY.data_type().clone())
-        } else {
-            Arc::new(array.slice((i - 1), (j + 1 - i)))
-        }
-    }};
-}
-
-macro_rules! slice {
-    ($ARRAY:expr, $KEY:expr, $EXTRA_KEY:expr, $RETURN_ELEMENT:expr, $ARRAY_TYPE:ident) => {{
-        let sliced_array: Vec<Arc<dyn Array>> = $ARRAY
-            .iter()
-            .zip($KEY.iter())
-            .zip($EXTRA_KEY.iter())
-            .map(|((arr, i), j)| match (arr, i, j) {
-                (Some(arr), Some(i), Some(j)) => {
-                    list_slice!(arr, i, j, $RETURN_ELEMENT, $ARRAY_TYPE)
-                }
-                (Some(arr), None, Some(j)) => {
-                    list_slice!(arr, 1i64, j, $RETURN_ELEMENT, $ARRAY_TYPE)
-                }
-                (Some(arr), Some(i), None) => {
-                    list_slice!(arr, i, arr.len() as i64, $RETURN_ELEMENT, $ARRAY_TYPE)
-                }
-                (Some(arr), None, None) if !$RETURN_ELEMENT => arr,
-                _ => return_empty($RETURN_ELEMENT, $ARRAY.value_type().clone()),
-            })
-            .collect();
-
-        // concat requires input of at least one array
-        if sliced_array.is_empty() {
-            Ok(return_empty($RETURN_ELEMENT, $ARRAY.value_type()))
-        } else {
-            let vec = sliced_array
-                .iter()
-                .map(|a| a.as_ref())
-                .collect::<Vec<&dyn Array>>();
-            let mut i: i32 = 0;
-            let mut offsets = vec![i];
-            offsets.extend(
-                vec.iter()
-                    .map(|a| {
-                        i += a.len() as i32;
-                        i
-                    })
-                    .collect::<Vec<_>>(),
-            );
-            let values = compute::concat(vec.as_slice()).unwrap();
-
-            if $RETURN_ELEMENT {
-                Ok(values)
-            } else {
-                let field =
-                    Arc::new(Field::new("item", $ARRAY.value_type().clone(), true));
-                Ok(Arc::new(ListArray::try_new(
-                    field,
-                    OffsetBuffer::new(offsets.into()),
-                    values,
-                    None,
-                )?))
-            }
-        }
-    }};
-}
-
-fn define_array_slice(
-    list_array: &ListArray,
-    key: &Int64Array,
-    extra_key: &Int64Array,
-    return_element: bool,
-) -> Result<ArrayRef> {
-    macro_rules! array_function {
-        ($ARRAY_TYPE:ident) => {
-            slice!(list_array, key, extra_key, return_element, $ARRAY_TYPE)
-        };
-    }
-    call_array_function!(list_array.value_type(), true)
-}
-
+/// array_element SQL function
+///
+/// There are two arguments for array_element, the first one is the array, the second one is the 1-indexed index.
+/// `array_element(array, index)`
+///
+/// For example:
+/// > array_element(\[1, 2, 3], 2) -> 2
 pub fn array_element(args: &[ArrayRef]) -> Result<ArrayRef> {
     let list_array = as_list_array(&args[0])?;
-    let key = as_int64_array(&args[1])?;
-    define_array_slice(list_array, key, key, true)
+    let indexes = as_int64_array(&args[1])?;
+
+    let values = list_array.values();
+    let original_data = values.to_data();
+    let capacity = Capacities::Array(original_data.len());
+
+    // use_nulls: true, we don't construct List for array_element, so we need explicit nulls.
+    let mut mutable =
+        MutableArrayData::with_capacities(vec![&original_data], true, capacity);
+
+    fn adjusted_array_index(index: i64, len: usize) -> Option<i64> {
+        // 0 ~ len - 1
+        let adjusted_zero_index = if index < 0 {
+            index + len as i64
+        } else {
+            index - 1
+        };
+
+        if 0 <= adjusted_zero_index && adjusted_zero_index < len as i64 {
+            Some(adjusted_zero_index)
+        } else {
+            // Out of bounds
+            None
+        }
+    }
+
+    for (row_index, offset_window) in list_array.offsets().windows(2).enumerate() {
+        let start = offset_window[0] as usize;
+        let end = offset_window[1] as usize;
+        let len = end - start;
+
+        // array is null
+        if len == 0 {
+            mutable.extend_nulls(1);
+            continue;
+        }
+
+        let index = adjusted_array_index(indexes.value(row_index), len);
+
+        if let Some(index) = index {
+            mutable.extend(0, start + index as usize, start + index as usize + 1);
+        } else {
+            // Index out of bounds
+            mutable.extend_nulls(1);
+        }
+    }
+
+    let data = mutable.freeze();
+    Ok(arrow_array::make_array(data))
 }
 
 fn general_except<OffsetSize: OffsetSizeTrait>(
@@ -540,7 +465,7 @@ fn general_except<OffsetSize: OffsetSizeTrait>(
         dedup.clear();
     }
 
-    if let Some(values) = converter.convert_rows(rows)?.get(0) {
+    if let Some(values) = converter.convert_rows(rows)?.first() {
         Ok(GenericListArray::<OffsetSize>::new(
             field.to_owned(),
             OffsetBuffer::new(offsets.into()),
@@ -582,47 +507,136 @@ pub fn array_except(args: &[ArrayRef]) -> Result<ArrayRef> {
     }
 }
 
+/// array_slice SQL function
+///
+/// We follow the behavior of array_slice in DuckDB
+/// Note that array_slice is 1-indexed. And there are two additional arguments `from` and `to` in array_slice.
+///
+/// > array_slice(array, from, to)
+///
+/// Positive index is treated as the index from the start of the array. If the
+/// `from` index is smaller than 1, it is treated as 1. If the `to` index is larger than the
+/// length of the array, it is treated as the length of the array.
+///
+/// Negative index is treated as the index from the end of the array. If the index
+/// is larger than the length of the array, it is NOT VALID, either in `from` or `to`.
+/// The `to` index is exclusive like python slice syntax.
+///
+/// See test cases in `array.slt` for more details.
 pub fn array_slice(args: &[ArrayRef]) -> Result<ArrayRef> {
     let list_array = as_list_array(&args[0])?;
-    let key = as_int64_array(&args[1])?;
-    let extra_key = as_int64_array(&args[2])?;
-    define_array_slice(list_array, key, extra_key, false)
-}
+    let from_array = as_int64_array(&args[1])?;
+    let to_array = as_int64_array(&args[2])?;
 
-fn general_array_pop(
-    list_array: &GenericListArray<i32>,
-    from_back: bool,
-) -> Result<(Vec<i64>, Vec<i64>)> {
-    if from_back {
-        let key = vec![0; list_array.len()];
-        // Attention: `arr.len() - 1` in extra key defines the last element position (position = index + 1, not inclusive) we want in the new array.
-        let extra_key: Vec<_> = list_array
-            .iter()
-            .map(|x| x.map_or(0, |arr| arr.len() as i64 - 1))
-            .collect();
-        Ok((key, extra_key))
-    } else {
-        // Attention: 2 in the `key`` defines the first element position (position = index + 1) we want in the new array.
-        // We only handle two cases of the first element index: if the old array has any elements, starts from 2 (index + 1), or starts from initial.
-        let key: Vec<_> = list_array.iter().map(|x| x.map_or(0, |_| 2)).collect();
-        let extra_key: Vec<_> = list_array
-            .iter()
-            .map(|x| x.map_or(0, |arr| arr.len() as i64))
-            .collect();
-        Ok((key, extra_key))
+    let values = list_array.values();
+    let original_data = values.to_data();
+    let capacity = Capacities::Array(original_data.len());
+
+    // use_nulls: false, we don't need nulls but empty array for array_slice, so we don't need explicit nulls but adjust offset to indicate nulls.
+    let mut mutable =
+        MutableArrayData::with_capacities(vec![&original_data], false, capacity);
+
+    // We have the slice syntax compatible with DuckDB v0.8.1.
+    // The rule `adjusted_from_index` and `adjusted_to_index` follows the rule of array_slice in duckdb.
+
+    fn adjusted_from_index(index: i64, len: usize) -> Option<i64> {
+        // 0 ~ len - 1
+        let adjusted_zero_index = if index < 0 {
+            index + len as i64
+        } else {
+            // array_slice(arr, 1, to) is the same as array_slice(arr, 0, to)
+            std::cmp::max(index - 1, 0)
+        };
+
+        if 0 <= adjusted_zero_index && adjusted_zero_index < len as i64 {
+            Some(adjusted_zero_index)
+        } else {
+            // Out of bounds
+            None
+        }
     }
+
+    fn adjusted_to_index(index: i64, len: usize) -> Option<i64> {
+        // 0 ~ len - 1
+        let adjusted_zero_index = if index < 0 {
+            // array_slice in duckdb with negative to_index is python-like, so index itself is exclusive
+            index + len as i64 - 1
+        } else {
+            // array_slice(arr, from, len + 1) is the same as array_slice(arr, from, len)
+            std::cmp::min(index - 1, len as i64 - 1)
+        };
+
+        if 0 <= adjusted_zero_index && adjusted_zero_index < len as i64 {
+            Some(adjusted_zero_index)
+        } else {
+            // Out of bounds
+            None
+        }
+    }
+
+    let mut offsets = vec![0];
+
+    for (row_index, offset_window) in list_array.offsets().windows(2).enumerate() {
+        let start = offset_window[0] as usize;
+        let end = offset_window[1] as usize;
+        let len = end - start;
+
+        // len 0 indicate array is null, return empty array in this row.
+        if len == 0 {
+            offsets.push(offsets[row_index]);
+            continue;
+        }
+
+        // If index is null, we consider it as the minimum / maximum index of the array.
+        let from_index = if from_array.is_null(row_index) {
+            Some(0)
+        } else {
+            adjusted_from_index(from_array.value(row_index), len)
+        };
+
+        let to_index = if to_array.is_null(row_index) {
+            Some(len as i64 - 1)
+        } else {
+            adjusted_to_index(to_array.value(row_index), len)
+        };
+
+        if let (Some(from), Some(to)) = (from_index, to_index) {
+            if from <= to {
+                assert!(start + to as usize <= end);
+                mutable.extend(0, start + from as usize, start + to as usize + 1);
+                offsets.push(offsets[row_index] + (to - from + 1) as i32);
+            } else {
+                // invalid range, return empty array
+                offsets.push(offsets[row_index]);
+            }
+        } else {
+            // invalid range, return empty array
+            offsets.push(offsets[row_index]);
+        }
+    }
+
+    let data = mutable.freeze();
+
+    Ok(Arc::new(ListArray::try_new(
+        Arc::new(Field::new("item", list_array.value_type(), true)),
+        OffsetBuffer::new(offsets.into()),
+        arrow_array::make_array(data),
+        None,
+    )?))
 }
 
+/// array_pop_back SQL function
 pub fn array_pop_back(args: &[ArrayRef]) -> Result<ArrayRef> {
     let list_array = as_list_array(&args[0])?;
-    let (key, extra_key) = general_array_pop(list_array, true)?;
-
-    define_array_slice(
-        list_array,
-        &Int64Array::from(key),
-        &Int64Array::from(extra_key),
-        false,
-    )
+    let from_array = Int64Array::from(vec![1; list_array.len()]);
+    let to_array = Int64Array::from(
+        list_array
+            .iter()
+            .map(|arr| arr.map_or(0, |arr| arr.len() as i64 - 1))
+            .collect::<Vec<i64>>(),
+    );
+    let args = vec![args[0].clone(), Arc::new(from_array), Arc::new(to_array)];
+    array_slice(args.as_slice())
 }
 
 /// Appends or prepends elements to a ListArray.
@@ -696,7 +710,7 @@ fn general_append_and_prepend(
 /// # Arguments
 ///
 /// * `args` - An array of 1 to 3 ArrayRefs representing start, stop, and step(step value can not be zero.) values.
-///    
+///
 /// # Examples
 ///
 /// gen_range(3) => [0, 1, 2]
@@ -746,16 +760,18 @@ pub fn gen_range(args: &[ArrayRef]) -> Result<ArrayRef> {
     Ok(arr)
 }
 
+/// array_pop_front SQL function
 pub fn array_pop_front(args: &[ArrayRef]) -> Result<ArrayRef> {
     let list_array = as_list_array(&args[0])?;
-    let (key, extra_key) = general_array_pop(list_array, false)?;
-
-    define_array_slice(
-        list_array,
-        &Int64Array::from(key),
-        &Int64Array::from(extra_key),
-        false,
-    )
+    let from_array = Int64Array::from(vec![2; list_array.len()]);
+    let to_array = Int64Array::from(
+        list_array
+            .iter()
+            .map(|arr| arr.map_or(0, |arr| arr.len() as i64))
+            .collect::<Vec<i64>>(),
+    );
+    let args = vec![args[0].clone(), Arc::new(from_array), Arc::new(to_array)];
+    array_slice(args.as_slice())
 }
 
 /// Array_append SQL function
@@ -778,6 +794,85 @@ pub fn array_append(args: &[ArrayRef]) -> Result<ArrayRef> {
     };
 
     Ok(res)
+}
+
+/// Array_sort SQL function
+pub fn array_sort(args: &[ArrayRef]) -> Result<ArrayRef> {
+    let sort_option = match args.len() {
+        1 => None,
+        2 => {
+            let sort = as_string_array(&args[1])?.value(0);
+            Some(SortOptions {
+                descending: order_desc(sort)?,
+                nulls_first: true,
+            })
+        }
+        3 => {
+            let sort = as_string_array(&args[1])?.value(0);
+            let nulls_first = as_string_array(&args[2])?.value(0);
+            Some(SortOptions {
+                descending: order_desc(sort)?,
+                nulls_first: order_nulls_first(nulls_first)?,
+            })
+        }
+        _ => return internal_err!("array_sort expects 1 to 3 arguments"),
+    };
+
+    let list_array = as_list_array(&args[0])?;
+    let row_count = list_array.len();
+
+    let mut array_lengths = vec![];
+    let mut arrays = vec![];
+    let mut valid = BooleanBufferBuilder::new(row_count);
+    for i in 0..row_count {
+        if list_array.is_null(i) {
+            array_lengths.push(0);
+            valid.append(false);
+        } else {
+            let arr_ref = list_array.value(i);
+            let arr_ref = arr_ref.as_ref();
+
+            let sorted_array = compute::sort(arr_ref, sort_option)?;
+            array_lengths.push(sorted_array.len());
+            arrays.push(sorted_array);
+            valid.append(true);
+        }
+    }
+
+    // Assume all arrays have the same data type
+    let data_type = list_array.value_type();
+    let buffer = valid.finish();
+
+    let elements = arrays
+        .iter()
+        .map(|a| a.as_ref())
+        .collect::<Vec<&dyn Array>>();
+
+    let list_arr = ListArray::new(
+        Arc::new(Field::new("item", data_type, true)),
+        OffsetBuffer::from_lengths(array_lengths),
+        Arc::new(compute::concat(elements.as_slice())?),
+        Some(NullBuffer::new(buffer)),
+    );
+    Ok(Arc::new(list_arr))
+}
+
+fn order_desc(modifier: &str) -> Result<bool> {
+    match modifier.to_uppercase().as_str() {
+        "DESC" => Ok(true),
+        "ASC" => Ok(false),
+        _ => internal_err!("the second parameter of array_sort expects DESC or ASC"),
+    }
+}
+
+fn order_nulls_first(modifier: &str) -> Result<bool> {
+    match modifier.to_uppercase().as_str() {
+        "NULLS FIRST" => Ok(true),
+        "NULLS LAST" => Ok(false),
+        _ => internal_err!(
+            "the third parameter of array_sort expects NULLS FIRST or NULLS LAST"
+        ),
+    }
 }
 
 /// Array_prepend SQL function
@@ -2012,7 +2107,7 @@ pub fn array_intersect(args: &[ArrayRef]) -> Result<ArrayRef> {
                     };
                     offsets.push(last_offset + rows.len() as i32);
                     let arrays = converter.convert_rows(rows)?;
-                    let array = match arrays.get(0) {
+                    let array = match arrays.first() {
                         Some(array) => array.clone(),
                         None => {
                             return internal_err!(
@@ -2032,6 +2127,66 @@ pub fn array_intersect(args: &[ArrayRef]) -> Result<ArrayRef> {
             let arr = Arc::new(ListArray::try_new(field, offsets, values, None)?);
             Ok(arr)
         }
+    }
+}
+
+pub fn general_array_distinct<OffsetSize: OffsetSizeTrait>(
+    array: &GenericListArray<OffsetSize>,
+    field: &FieldRef,
+) -> Result<ArrayRef> {
+    let dt = array.value_type();
+    let mut offsets = Vec::with_capacity(array.len());
+    offsets.push(OffsetSize::usize_as(0));
+    let mut new_arrays = Vec::with_capacity(array.len());
+    let converter = RowConverter::new(vec![SortField::new(dt.clone())])?;
+    // distinct for each list in ListArray
+    for arr in array.iter().flatten() {
+        let values = converter.convert_columns(&[arr])?;
+        // sort elements in list and remove duplicates
+        let rows = values.iter().sorted().dedup().collect::<Vec<_>>();
+        let last_offset: OffsetSize = offsets.last().copied().unwrap();
+        offsets.push(last_offset + OffsetSize::usize_as(rows.len()));
+        let arrays = converter.convert_rows(rows)?;
+        let array = match arrays.get(0) {
+            Some(array) => array.clone(),
+            None => {
+                return internal_err!("array_distinct: failed to get array from rows")
+            }
+        };
+        new_arrays.push(array);
+    }
+    let offsets = OffsetBuffer::new(offsets.into());
+    let new_arrays_ref = new_arrays.iter().map(|v| v.as_ref()).collect::<Vec<_>>();
+    let values = compute::concat(&new_arrays_ref)?;
+    Ok(Arc::new(GenericListArray::<OffsetSize>::try_new(
+        field.clone(),
+        offsets,
+        values,
+        None,
+    )?))
+}
+
+/// array_distinct SQL function
+/// example: from list [1, 3, 2, 3, 1, 2, 4] to [1, 2, 3, 4]
+pub fn array_distinct(args: &[ArrayRef]) -> Result<ArrayRef> {
+    assert_eq!(args.len(), 1);
+
+    // handle null
+    if args[0].data_type() == &DataType::Null {
+        return Ok(args[0].clone());
+    }
+
+    // handle for list & largelist
+    match args[0].data_type() {
+        DataType::List(field) => {
+            let array = as_list_array(&args[0])?;
+            general_array_distinct(array, field)
+        }
+        DataType::LargeList(field) => {
+            let array = as_large_list_array(&args[0])?;
+            general_array_distinct(array, field)
+        }
+        _ => internal_err!("array_distinct only support list array"),
     }
 }
 

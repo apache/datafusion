@@ -203,7 +203,7 @@ pub fn assert_optimized_plan_eq(
     let optimizer = Optimizer::with_rules(vec![rule.clone()]);
     let optimized_plan = optimizer
         .optimize_recursively(
-            optimizer.rules.get(0).unwrap(),
+            optimizer.rules.first().unwrap(),
             plan,
             &OptimizerContext::new(),
         )?
@@ -244,7 +244,7 @@ pub fn assert_optimized_plan_eq_display_indent(
     let optimizer = Optimizer::with_rules(vec![rule]);
     let optimized_plan = optimizer
         .optimize_recursively(
-            optimizer.rules.get(0).unwrap(),
+            optimizer.rules.first().unwrap(),
             plan,
             &OptimizerContext::new(),
         )
@@ -278,7 +278,7 @@ pub fn assert_optimizer_err(
 ) {
     let optimizer = Optimizer::with_rules(vec![rule]);
     let res = optimizer.optimize_recursively(
-        optimizer.rules.get(0).unwrap(),
+        optimizer.rules.first().unwrap(),
         plan,
         &OptimizerContext::new(),
     );
@@ -300,7 +300,7 @@ pub fn assert_optimization_skipped(
     let optimizer = Optimizer::with_rules(vec![rule]);
     let new_plan = optimizer
         .optimize_recursively(
-            optimizer.rules.get(0).unwrap(),
+            optimizer.rules.first().unwrap(),
             plan,
             &OptimizerContext::new(),
         )?

@@ -217,11 +217,10 @@ async fn roundtrip_custom_memory_tables() -> Result<()> {
 async fn roundtrip_custom_listing_tables() -> Result<()> {
     let ctx = SessionContext::new();
 
-    // Make sure during round-trip, constraint information is preserved
     let query = "CREATE EXTERNAL TABLE multiple_ordered_table_with_pk (
               a0 INTEGER,
-              a INTEGER,
-              b INTEGER,
+              a INTEGER DEFAULT 1*2 + 3,
+              b INTEGER DEFAULT NULL,
               c INTEGER,
               d INTEGER,
               primary key(c)
@@ -232,11 +231,13 @@ async fn roundtrip_custom_listing_tables() -> Result<()> {
             WITH ORDER (c ASC)
             LOCATION '../core/tests/data/window_2.csv';";
 
-    let plan = ctx.sql(query).await?.into_optimized_plan()?;
+    let plan = ctx.state().create_logical_plan(query).await?;
 
     let bytes = logical_plan_to_bytes(&plan)?;
     let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx)?;
-    assert_eq!(format!("{plan:?}"), format!("{logical_round_trip:?}"));
+    // Use exact matching to verify everything. Make sure during round-trip,
+    // information like constraints, column defaults, and other aspects of the plan are preserved.
+    assert_eq!(plan, logical_round_trip);
 
     Ok(())
 }
@@ -969,6 +970,45 @@ fn round_trip_datatype() {
         let roundtrip: DataType = (&proto).try_into().unwrap();
         assert_eq!(format!("{test_case:?}"), format!("{roundtrip:?}"));
     }
+}
+
+#[test]
+fn roundtrip_dict_id() -> Result<()> {
+    let dict_id = 42;
+    let field = Field::new(
+        "keys",
+        DataType::List(Arc::new(Field::new_dict(
+            "item",
+            DataType::Dictionary(Box::new(DataType::UInt16), Box::new(DataType::Utf8)),
+            true,
+            dict_id,
+            false,
+        ))),
+        false,
+    );
+    let schema = Arc::new(Schema::new(vec![field]));
+
+    // encode
+    let mut buf: Vec<u8> = vec![];
+    let schema_proto: datafusion_proto::generated::datafusion::Schema =
+        schema.try_into().unwrap();
+    schema_proto.encode(&mut buf).unwrap();
+
+    // decode
+    let schema_proto =
+        datafusion_proto::generated::datafusion::Schema::decode(buf.as_slice()).unwrap();
+    let decoded: Schema = (&schema_proto).try_into()?;
+
+    // assert
+    let keys = decoded.fields().iter().last().unwrap();
+    match keys.data_type() {
+        DataType::List(field) => {
+            assert_eq!(field.dict_id(), Some(dict_id), "dict_id should be retained");
+        }
+        _ => panic!("Invalid type"),
+    }
+
+    Ok(())
 }
 
 #[test]

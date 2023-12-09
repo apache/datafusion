@@ -40,7 +40,7 @@ use crate::{
 };
 
 use arrow::{
-    array::{Array, ArrayRef, UInt32Builder},
+    array::{Array, ArrayRef, RecordBatchOptions, UInt32Builder},
     compute::{concat, concat_batches, sort_to_indices},
     datatypes::{Schema, SchemaBuilder, SchemaRef},
     record_batch::RecordBatch,
@@ -51,7 +51,7 @@ use datafusion_common::utils::{
     evaluate_partition_ranges, get_arrayref_at_indices, get_at_indices,
     get_record_batch_at_indices, get_row_at_idx,
 };
-use datafusion_common::{exec_err, plan_err, DataFusionError, Result};
+use datafusion_common::{exec_err, DataFusionError, Result};
 use datafusion_execution::TaskContext;
 use datafusion_expr::window_state::{PartitionBatchState, WindowAggState};
 use datafusion_expr::ColumnarValue;
@@ -585,7 +585,7 @@ impl LinearSearch {
             .map(|item| match item.evaluate(record_batch)? {
                 ColumnarValue::Array(array) => Ok(array),
                 ColumnarValue::Scalar(scalar) => {
-                    plan_err!("Sort operation is not applicable to scalar value {scalar}")
+                    scalar.to_array_of_size(record_batch.num_rows())
                 }
             })
             .collect()
@@ -1026,8 +1026,11 @@ impl BoundedWindowAggStream {
             .iter()
             .map(|elem| elem.slice(n_out, n_to_keep))
             .collect::<Vec<_>>();
-        self.input_buffer =
-            RecordBatch::try_new(self.input_buffer.schema(), batch_to_keep)?;
+        self.input_buffer = RecordBatch::try_new_with_options(
+            self.input_buffer.schema(),
+            batch_to_keep,
+            &RecordBatchOptions::new().with_row_count(Some(n_to_keep)),
+        )?;
         Ok(())
     }
 

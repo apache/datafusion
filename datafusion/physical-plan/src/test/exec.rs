@@ -790,7 +790,7 @@ impl Stream for PanicStream {
             } else {
                 self.ready = true;
                 // get called again
-                cx.waker().clone().wake();
+                cx.waker().wake_by_ref();
                 return Poll::Pending;
             }
         }

@@ -283,11 +283,19 @@
 //!
 //! ## Plan Representations
 //!
-//! Logical planning yields [`LogicalPlan`]s nodes and [`Expr`]
+//! ### Logical Plans
+//! Logical planning yields [`LogicalPlan`] nodes and [`Expr`]
 //! expressions which are [`Schema`] aware and represent statements
 //! independent of how they are physically executed.
 //! A [`LogicalPlan`] is a Directed Acyclic Graph (DAG) of other
 //! [`LogicalPlan`]s, each potentially containing embedded [`Expr`]s.
+//!
+//! Examples of working with and executing `Expr`s can be found in the
+//! [`expr_api`.rs] example
+//!
+//! [`expr_api`.rs]: https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/expr_api.rs
+//!
+//! ### Physical Plans
 //!
 //! An [`ExecutionPlan`] (sometimes referred to as a "physical plan")
 //! is a plan that can be executed against data. It a DAG of other

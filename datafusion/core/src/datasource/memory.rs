@@ -19,9 +19,9 @@
 
 use datafusion_physical_plan::metrics::MetricsSet;
 use futures::StreamExt;
-use hashbrown::HashMap;
 use log::debug;
 use std::any::Any;
+use std::collections::HashMap;
 use std::fmt::{self, Debug};
 use std::sync::Arc;
 

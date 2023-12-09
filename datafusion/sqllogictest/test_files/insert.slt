@@ -382,6 +382,27 @@ select a,b,c,d from test_column_defaults
 1 10 100 ABC
 NULL 20 500 default_text
 
+# fill the timestamp column with default value `now()` again, it should be different from the previous one
+query IIITP
+insert into test_column_defaults(a, b, c, d) values(2, 20, 200, 'DEF')
+----
+1
+
+# Ensure that the default expression `now()` is evaluated during insertion, not optimized away.
+# Rows are inserted during different time, so their timestamp values should be different.
+query I rowsort
+select count(distinct e) from test_column_defaults
+----
+3
+
+# Expect all rows to be true as now() was inserted into the table
+query B rowsort
+select e < now() from test_column_defaults
+----
+true
+true
+true
+
 statement ok
 drop table test_column_defaults
 
