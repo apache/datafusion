@@ -3272,7 +3272,6 @@ mod tests {
         ];
 
         let array = ScalarValue::new_list(scalars.as_slice(), &DataType::Utf8);
-        let result = as_list_array(&array);
 
         let expected = array_into_list_array(Arc::new(StringArray::from(vec![
             "rust",
@@ -3280,6 +3279,7 @@ mod tests {
             "data-fusion",
         ])));
 
+        let result = as_list_array(&array);
         assert_eq!(result, &expected);
     }
 

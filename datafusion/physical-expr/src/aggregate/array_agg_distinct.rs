@@ -139,7 +139,8 @@ impl Accumulator for DistinctArrayAggAccumulator {
         let array = &values[0];
         match array.data_type() {
             DataType::List(_) => {
-                let scalar_vec = ScalarValue::convert_list_array_to_scalar_vec::<i32>(array)?;
+                let scalar_vec =
+                    ScalarValue::convert_list_array_to_scalar_vec::<i32>(array)?;
                 for scalars in scalar_vec {
                     self.values.extend(scalars);
                 }
