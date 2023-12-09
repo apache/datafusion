@@ -19,11 +19,11 @@ use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::execution::FunctionRegistry;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TreeNode};
-use datafusion_common::{plan_err, DataFusionError, Result, ScalarValue, internal_err};
+use datafusion_common::{internal_err, plan_err, DataFusionError, Result, ScalarValue};
 use datafusion_expr::{
     AggregateUDF, Between, Expr, Filter, LogicalPlan, ScalarUDF, TableSource, WindowUDF,
 };
-use datafusion_optimizer::analyzer::{Analyzer, AnalyzerRule, AnalyzerConfig};
+use datafusion_optimizer::analyzer::{Analyzer, AnalyzerConfig, AnalyzerRule};
 use datafusion_optimizer::optimizer::Optimizer;
 use datafusion_optimizer::{utils, OptimizerConfig, OptimizerContext, OptimizerRule};
 use datafusion_sql::planner::{ContextProvider, SqlToRel};
@@ -33,11 +33,11 @@ use datafusion_sql::TableReference;
 use std::any::Any;
 use std::sync::Arc;
 
-struct ExamplesAnalyzerConfig<'a>{
-    config_options:&'a ConfigOptions
+struct ExamplesAnalyzerConfig<'a> {
+    config_options: &'a ConfigOptions,
 }
 
-impl <'a> FunctionRegistry for ExamplesAnalyzerConfig<'a>{
+impl<'a> FunctionRegistry for ExamplesAnalyzerConfig<'a> {
     fn udfs(&self) -> std::collections::HashSet<String> {
         std::collections::HashSet::new()
     }
@@ -55,7 +55,7 @@ impl <'a> FunctionRegistry for ExamplesAnalyzerConfig<'a>{
     }
 }
 
-impl <'a> AnalyzerConfig for ExamplesAnalyzerConfig<'a>{
+impl<'a> AnalyzerConfig for ExamplesAnalyzerConfig<'a> {
     fn function_registry(&self) -> &dyn FunctionRegistry {
         self
     }
@@ -83,7 +83,9 @@ pub fn main() -> Result<()> {
     // run the analyzer with our custom rule
     let config = OptimizerContext::default().with_skip_failing_rules(false);
     let analyzer = Analyzer::with_rules(vec![Arc::new(MyAnalyzerRule {})]);
-    let analyzer_config = ExamplesAnalyzerConfig{config_options: config.options()};
+    let analyzer_config = ExamplesAnalyzerConfig {
+        config_options: config.options(),
+    };
     let analyzed_plan =
         analyzer.execute_and_check(&logical_plan, &analyzer_config, |_, _| {})?;
     println!(
@@ -114,7 +116,11 @@ fn observe(plan: &LogicalPlan, rule: &dyn OptimizerRule) {
 struct MyAnalyzerRule {}
 
 impl AnalyzerRule for MyAnalyzerRule {
-    fn analyze(&self, plan: LogicalPlan, _config: &dyn AnalyzerConfig) -> Result<LogicalPlan> {
+    fn analyze(
+        &self,
+        plan: LogicalPlan,
+        _config: &dyn AnalyzerConfig,
+    ) -> Result<LogicalPlan> {
         Self::analyze_plan(plan)
     }
 
