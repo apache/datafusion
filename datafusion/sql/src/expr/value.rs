@@ -469,38 +469,4 @@ mod tests {
             assert_eq!(output, expect);
         }
     }
-
-    #[test]
-    fn test_has_units() {
-        let cases = [
-            "1 century",
-            "1 centuries",
-            "1 decade",
-            "1 decades",
-            "1 year",
-            "1 years",
-            "1 month",
-            "1 months",
-            "1 week",
-            "1 weeks",
-            "1 day",
-            "1 days",
-            "1 hour",
-            "1 hours",
-            "1 minute",
-            "1 minutes",
-            "1 second",
-            "1 seconds",
-            "1 millisecond",
-            "1 milliseconds",
-            "1 microsecond",
-            "1 microseconds",
-            "1 nanosecond",
-            "1 nanoseconds",
-        ];
-        for case in cases {
-            assert!(has_units(case));
-            assert!(has_units(case.to_uppercase().as_str()));
-        }
-    }
 }
