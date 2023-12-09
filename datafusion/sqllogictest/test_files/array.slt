@@ -1111,6 +1111,15 @@ select
 ----
 [4] [] [1, , 3, 4] [, , 1]
 
+# test invalid (non-null)
+query error
+select array_append(1, 2);
+
+query error
+select array_append(1, [2]);
+
+query error
+select array_append([1], [2]);
 
 query ??
 select 
