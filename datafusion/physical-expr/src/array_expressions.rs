@@ -369,6 +369,13 @@ pub fn make_array(arrays: &[ArrayRef]) -> Result<ArrayRef> {
     }
 }
 
+/// array_element SQL function
+/// 
+/// There are two arguments for array_element, the first one is the array, the second one is the 1-indexed index.
+/// `array_element(array, index)`
+/// 
+/// For example:
+/// > array_element(\[1, 2, 3], 2) -> 2
 pub fn array_element(args: &[ArrayRef]) -> Result<ArrayRef> {
     let list_array = as_list_array(&args[0])?;
     let indexes = as_int64_array(&args[1])?;
@@ -500,6 +507,22 @@ pub fn array_except(args: &[ArrayRef]) -> Result<ArrayRef> {
     }
 }
 
+/// array_slice SQL function
+/// 
+/// We follow the behavior of array_slice in DuckDB
+/// Note that array_slice is 1-indexed. And there are two additional arguments `from` and `to` in array_slice.
+/// 
+/// > array_slice(array, from, to)
+/// 
+/// Positive index is treated as the index from the start of the array. If the
+/// `from` index is smaller than 1, it is treated as 1. If the `to` index is larger than the
+/// length of the array, it is treated as the length of the array.
+/// 
+/// Negative index is treated as the index from the end of the array. If the index
+/// is larger than the length of the array, it is NOT VALID, either in `from` or `to`.
+/// The `to` index is exclusive like python slice syntax.
+/// 
+/// See test cases in `array.slt` for more details.
 pub fn array_slice(args: &[ArrayRef]) -> Result<ArrayRef> {
     let list_array = as_list_array(&args[0])?;
     let from_array = as_int64_array(&args[1])?;
