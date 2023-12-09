@@ -45,13 +45,17 @@ async fn csv_query_array_agg_distinct() -> Result<()> {
     let column = actual[0].column(0);
     assert_eq!(column.len(), 1);
 
-    let scalar_vec = ScalarValue::convert_list_array_to_scalar_vec(&column)?;
-    let mut scalars = scalar_vec[0].clone();
+    // 1 row
+    let scalar_vec = ScalarValue::convert_list_array_to_scalar_vec::<i32>(&column)?;
+
     // workaround lack of Ord of ScalarValue
     let cmp = |a: &ScalarValue, b: &ScalarValue| {
         a.partial_cmp(b).expect("Can compare ScalarValues")
     };
+
+    let mut scalars = scalar_vec.first().unwrap().to_owned();
     scalars.sort_by(cmp);
+
     assert_eq!(
         scalars,
         vec![

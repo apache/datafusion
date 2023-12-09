@@ -2071,13 +2071,13 @@ impl ScalarValue {
     ///
     /// assert_eq!(scalar_vec, expected);
     /// ```
-    pub fn convert_list_array_to_scalar_vec<O: OffsetSizeTrait>(array: &dyn Array) -> Result<Vec<Vec<Self>>> {
-
-
-        if as_list_array(array).is_ok() {
-            Self::convert_list_array_to_scalar_vec_internal(array)
+    pub fn convert_list_array_to_scalar_vec<O: OffsetSizeTrait>(
+        array: &dyn Array,
+    ) -> Result<Vec<Vec<Self>>> {
+        if array.as_list_opt::<O>().is_some() {
+            Self::convert_list_array_to_scalar_vec_internal::<O>(array)
         } else {
-            _internal_err!("Expected ListArray but found: {array:?}")
+            _internal_err!("Expected GenericListArray but found: {array:?}")
         }
     }
 
@@ -2086,18 +2086,18 @@ impl ScalarValue {
     ) -> Result<Vec<Vec<Self>>> {
         let mut scalars_vec = Vec::with_capacity(array.len());
 
-        let list_arr = as_generic_list_array::<O>(array);
-
-        if let Ok(list_arr) = as_list_array(array) {
+        if let Some(list_arr) = array.as_list_opt::<O>() {
             for index in 0..list_arr.len() {
                 let scalars = match list_arr.is_null(index) {
                     true => Vec::new(),
                     false => {
                         let nested_array = list_arr.value(index);
-                        Self::convert_list_array_to_scalar_vec_internal(&nested_array)?
-                            .into_iter()
-                            .flatten()
-                            .collect()
+                        Self::convert_list_array_to_scalar_vec_internal::<O>(
+                            &nested_array,
+                        )?
+                        .into_iter()
+                        .flatten()
+                        .collect()
                     }
                 };
                 scalars_vec.push(scalars);
@@ -2106,6 +2106,7 @@ impl ScalarValue {
             let scalars = ScalarValue::convert_non_list_array_to_scalars(array)?;
             scalars_vec.push(scalars);
         }
+
         Ok(scalars_vec)
     }
 
@@ -2134,16 +2135,16 @@ impl ScalarValue {
     /// assert_eq!(scalar_vec, expected);
     /// ```
     pub fn convert_non_list_array_to_scalars(array: &dyn Array) -> Result<Vec<Self>> {
-        if as_list_array(array).is_ok() {
-            _internal_err!("Expected non-ListArray but found: {array:?}")
-        } else {
-            let mut scalars = Vec::with_capacity(array.len());
-            for index in 0..array.len() {
-                let scalar = ScalarValue::try_from_array(array, index)?;
-                scalars.push(scalar);
-            }
-            Ok(scalars)
+        if array.as_list_opt::<i32>().is_some() || array.as_list_opt::<i64>().is_some() {
+            return _internal_err!("Expected non ListArray but found: {array:?}");
         }
+
+        let mut scalars = Vec::with_capacity(array.len());
+        for index in 0..array.len() {
+            let scalar = ScalarValue::try_from_array(array, index)?;
+            scalars.push(scalar);
+        }
+        Ok(scalars)
     }
 
     // TODO: Support more types after other ScalarValue is wrapped with ArrayRef
@@ -2194,7 +2195,7 @@ impl ScalarValue {
                 typed_cast!(array, index, LargeStringArray, LargeUtf8)?
             }
             DataType::List(_) => {
-                let list_array = as_list_array(array)?;
+                let list_array = as_list_array(array);
                 let nested_array = list_array.value(index);
                 // Produces a single element `ListArray` with the value at `index`.
                 let arr = Arc::new(array_into_list_array(nested_array));
@@ -3163,7 +3164,6 @@ impl ScalarType<i64> for TimestampNanosecondType {
 }
 
 #[cfg(test)]
-#[cfg(feature = "parquet")]
 mod tests {
     use super::*;
 
@@ -3202,7 +3202,7 @@ mod tests {
         let l12 = arrays_into_list_array([l1, l2]).unwrap();
         let arr = Arc::new(l12) as ArrayRef;
 
-        let actual = ScalarValue::convert_list_array_to_scalar_vec(&arr).unwrap();
+        let actual = ScalarValue::convert_list_array_to_scalar_vec::<i32>(&arr).unwrap();
         let expected = vec![
             vec![
                 ScalarValue::Int32(Some(1)),
@@ -3232,7 +3232,7 @@ mod tests {
         let actual_arr = sv
             .to_array_of_size(2)
             .expect("Failed to convert to array of size");
-        let actual_list_arr = as_list_array(&actual_arr).unwrap();
+        let actual_list_arr = as_list_array(&actual_arr);
 
         let arr = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
             Some(vec![Some(1), None, Some(2)]),
@@ -3272,7 +3272,7 @@ mod tests {
         ];
 
         let array = ScalarValue::new_list(scalars.as_slice(), &DataType::Utf8);
-        let result = as_list_array(&array).unwrap();
+        let result = as_list_array(&array);
 
         let expected = array_into_list_array(Arc::new(StringArray::from(vec![
             "rust",
