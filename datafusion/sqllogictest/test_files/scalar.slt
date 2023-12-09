@@ -1943,3 +1943,8 @@ select
 ;
 ----
 true true true true true true true true true true
+
+query I
+SELECT ALL - CASE WHEN NOT - AVG ( - 41 ) IS NULL THEN 47 WHEN NULL IS NULL THEN COUNT ( * ) END + 93 + - - 44 * 91 + CASE + 44 WHEN - - 21 * 69 - 12 THEN 58 ELSE - 3 END * + + 23 * + 84 * - - 59
+----
+-337914
