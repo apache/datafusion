@@ -114,7 +114,7 @@ fn observe(plan: &LogicalPlan, rule: &dyn OptimizerRule) {
 struct MyAnalyzerRule {}
 
 impl AnalyzerRule for MyAnalyzerRule {
-    fn analyze(&self, plan: LogicalPlan, _config: &ConfigOptions) -> Result<LogicalPlan> {
+    fn analyze(&self, plan: LogicalPlan, _config: &dyn AnalyzerConfig) -> Result<LogicalPlan> {
         Self::analyze_plan(plan)
     }
 
