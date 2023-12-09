@@ -132,7 +132,7 @@ impl<'a> DisplayableExecutionPlan<'a> {
     /// ```dot
     /// strict digraph dot_plan {
     //     0[label="ProjectionExec: expr=[id@0 + 2 as employee.id + Int32(2)]",tooltip=""]
-    //     1[label="EmptyExec: produce_one_row=false",tooltip=""]
+    //     1[label="EmptyExec",tooltip=""]
     //     0 -> 1
     // }
     /// ```

@@ -551,11 +551,11 @@ UnionExec
 ------CoalesceBatchesExec: target_batch_size=2
 --------RepartitionExec: partitioning=Hash([Int64(1)@0], 4), input_partitions=1
 ----------AggregateExec: mode=Partial, gby=[1 as Int64(1)], aggr=[]
-------------EmptyExec: produce_one_row=true
+------------PlaceholderRowExec
 --ProjectionExec: expr=[2 as a]
-----EmptyExec: produce_one_row=true
+----PlaceholderRowExec
 --ProjectionExec: expr=[3 as a]
-----EmptyExec: produce_one_row=true
+----PlaceholderRowExec
 
 # test UNION ALL aliases correctly with aliased subquery
 query TT
@@ -583,7 +583,7 @@ UnionExec
 --------RepartitionExec: partitioning=Hash([n@0], 4), input_partitions=1
 ----------AggregateExec: mode=Partial, gby=[n@0 as n], aggr=[COUNT(*)]
 ------------ProjectionExec: expr=[5 as n]
---------------EmptyExec: produce_one_row=true
+--------------PlaceholderRowExec
 --ProjectionExec: expr=[1 as count, MAX(Int64(10))@0 as n]
 ----AggregateExec: mode=Single, gby=[], aggr=[MAX(Int64(10))]
-------EmptyExec: produce_one_row=true
+------PlaceholderRowExec

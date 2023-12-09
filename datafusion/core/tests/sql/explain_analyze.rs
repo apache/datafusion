@@ -575,7 +575,7 @@ async fn explain_analyze_runs_optimizers() {
 
     // This happens as an optimization pass where count(*) can be
     // answered using statistics only.
-    let expected = "EmptyExec: produce_one_row=true";
+    let expected = "PlaceholderRowExec";
 
     let sql = "EXPLAIN SELECT count(*) from alltypes_plain";
     let actual = execute_to_batches(&ctx, sql).await;
@@ -806,7 +806,7 @@ async fn explain_physical_plan_only() {
     let expected = vec![vec![
         "physical_plan",
         "ProjectionExec: expr=[2 as COUNT(*)]\
-        \n  EmptyExec: produce_one_row=true\
+        \n  PlaceholderRowExec\
         \n",
     ]];
     assert_eq!(expected, actual);
