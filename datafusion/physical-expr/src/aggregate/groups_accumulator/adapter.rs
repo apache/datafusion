@@ -309,7 +309,7 @@ impl GroupsAccumulator for GroupsAccumulatorAdapter {
 
         // double check each array has the same length (aka the
         // accumulator was implemented correctly
-        if let Some(first_col) = arrays.get(0) {
+        if let Some(first_col) = arrays.first() {
             for arr in &arrays {
                 assert_eq!(arr.len(), first_col.len())
             }

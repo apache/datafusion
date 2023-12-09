@@ -157,7 +157,7 @@ impl ListingTableConfig {
 
     /// Infer `ListingOptions` based on `table_path` suffix.
     pub async fn infer_options(self, state: &SessionState) -> Result<Self> {
-        let store = if let Some(url) = self.table_paths.get(0) {
+        let store = if let Some(url) = self.table_paths.first() {
             state.runtime_env().object_store(url)?
         } else {
             return Ok(self);
@@ -165,7 +165,7 @@ impl ListingTableConfig {
 
         let file = self
             .table_paths
-            .get(0)
+            .first()
             .unwrap()
             .list_all_files(state, store.as_ref(), "")
             .await?
@@ -191,7 +191,7 @@ impl ListingTableConfig {
     pub async fn infer_schema(self, state: &SessionState) -> Result<Self> {
         match self.options {
             Some(options) => {
-                let schema = if let Some(url) = self.table_paths.get(0) {
+                let schema = if let Some(url) = self.table_paths.first() {
                     options.infer_schema(state, url).await?
                 } else {
                     Arc::new(Schema::empty())
@@ -490,7 +490,7 @@ impl ListingOptions {
 ///
 /// # Features
 ///
-/// 1. Merges schemas if the files have compatible but not indentical schemas
+/// 1. Merges schemas if the files have compatible but not identical schemas
 ///
 /// 2. Hive-style partitioning support, where a path such as
 /// `/files/date=1/1/2022/data.parquet` is injected as a `date` column.
@@ -710,7 +710,7 @@ impl TableProvider for ListingTable {
             None
         };
 
-        let object_store_url = if let Some(url) = self.table_paths.get(0) {
+        let object_store_url = if let Some(url) = self.table_paths.first() {
             url.object_store()
         } else {
             return Ok(Arc::new(EmptyExec::new(Arc::new(Schema::empty()))));
@@ -835,7 +835,7 @@ impl TableProvider for ListingTable {
             // Multiple sort orders in outer vec are equivalent, so we pass only the first one
             let ordering = self
                 .try_create_output_ordering()?
-                .get(0)
+                .first()
                 .ok_or(DataFusionError::Internal(
                     "Expected ListingTable to have a sort order, but none found!".into(),
                 ))?
@@ -872,7 +872,7 @@ impl ListingTable {
         filters: &'a [Expr],
         limit: Option<usize>,
     ) -> Result<(Vec<Vec<PartitionedFile>>, Statistics)> {
-        let store = if let Some(url) = self.table_paths.get(0) {
+        let store = if let Some(url) = self.table_paths.first() {
             ctx.runtime_env().object_store(url)?
         } else {
             return Ok((vec![], Statistics::new_unknown(&self.file_schema)));

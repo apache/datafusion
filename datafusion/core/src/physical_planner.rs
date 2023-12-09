@@ -2018,7 +2018,7 @@ impl DefaultPhysicalPlanner {
         let mut column_names = StringBuilder::new();
         let mut data_types = StringBuilder::new();
         let mut is_nullables = StringBuilder::new();
-        for (_, field) in table_schema.fields().iter().enumerate() {
+        for field in table_schema.fields() {
             column_names.append_value(field.name());
 
             // "System supplied type" --> Use debug format of the datatype

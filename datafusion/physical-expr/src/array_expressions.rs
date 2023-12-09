@@ -31,8 +31,8 @@ use arrow_buffer::NullBuffer;
 
 use arrow_schema::{FieldRef, SortOptions};
 use datafusion_common::cast::{
-    as_generic_list_array, as_generic_string_array, as_int64_array, as_list_array,
-    as_null_array, as_string_array,
+    as_generic_list_array, as_generic_string_array, as_int64_array, as_large_list_array,
+    as_list_array, as_null_array, as_string_array,
 };
 use datafusion_common::utils::{array_into_list_array, list_ndims};
 use datafusion_common::{
@@ -537,7 +537,7 @@ fn general_except<OffsetSize: OffsetSizeTrait>(
         dedup.clear();
     }
 
-    if let Some(values) = converter.convert_rows(rows)?.get(0) {
+    if let Some(values) = converter.convert_rows(rows)?.first() {
         Ok(GenericListArray::<OffsetSize>::new(
             field.to_owned(),
             OffsetBuffer::new(offsets.into()),
@@ -2088,7 +2088,7 @@ pub fn array_intersect(args: &[ArrayRef]) -> Result<ArrayRef> {
                     };
                     offsets.push(last_offset + rows.len() as i32);
                     let arrays = converter.convert_rows(rows)?;
-                    let array = match arrays.get(0) {
+                    let array = match arrays.first() {
                         Some(array) => array.clone(),
                         None => {
                             return internal_err!(
@@ -2108,6 +2108,66 @@ pub fn array_intersect(args: &[ArrayRef]) -> Result<ArrayRef> {
             let arr = Arc::new(ListArray::try_new(field, offsets, values, None)?);
             Ok(arr)
         }
+    }
+}
+
+pub fn general_array_distinct<OffsetSize: OffsetSizeTrait>(
+    array: &GenericListArray<OffsetSize>,
+    field: &FieldRef,
+) -> Result<ArrayRef> {
+    let dt = array.value_type();
+    let mut offsets = Vec::with_capacity(array.len());
+    offsets.push(OffsetSize::usize_as(0));
+    let mut new_arrays = Vec::with_capacity(array.len());
+    let converter = RowConverter::new(vec![SortField::new(dt.clone())])?;
+    // distinct for each list in ListArray
+    for arr in array.iter().flatten() {
+        let values = converter.convert_columns(&[arr])?;
+        // sort elements in list and remove duplicates
+        let rows = values.iter().sorted().dedup().collect::<Vec<_>>();
+        let last_offset: OffsetSize = offsets.last().copied().unwrap();
+        offsets.push(last_offset + OffsetSize::usize_as(rows.len()));
+        let arrays = converter.convert_rows(rows)?;
+        let array = match arrays.get(0) {
+            Some(array) => array.clone(),
+            None => {
+                return internal_err!("array_distinct: failed to get array from rows")
+            }
+        };
+        new_arrays.push(array);
+    }
+    let offsets = OffsetBuffer::new(offsets.into());
+    let new_arrays_ref = new_arrays.iter().map(|v| v.as_ref()).collect::<Vec<_>>();
+    let values = compute::concat(&new_arrays_ref)?;
+    Ok(Arc::new(GenericListArray::<OffsetSize>::try_new(
+        field.clone(),
+        offsets,
+        values,
+        None,
+    )?))
+}
+
+/// array_distinct SQL function
+/// example: from list [1, 3, 2, 3, 1, 2, 4] to [1, 2, 3, 4]
+pub fn array_distinct(args: &[ArrayRef]) -> Result<ArrayRef> {
+    assert_eq!(args.len(), 1);
+
+    // handle null
+    if args[0].data_type() == &DataType::Null {
+        return Ok(args[0].clone());
+    }
+
+    // handle for list & largelist
+    match args[0].data_type() {
+        DataType::List(field) => {
+            let array = as_list_array(&args[0])?;
+            general_array_distinct(array, field)
+        }
+        DataType::LargeList(field) => {
+            let array = as_large_list_array(&args[0])?;
+            general_array_distinct(array, field)
+        }
+        _ => internal_err!("array_distinct only support list array"),
     }
 }
 
