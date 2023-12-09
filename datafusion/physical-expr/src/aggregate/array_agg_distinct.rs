@@ -137,9 +137,17 @@ impl Accumulator for DistinctArrayAggAccumulator {
         assert_eq!(values.len(), 1, "batch input should only include 1 column!");
 
         let array = &values[0];
-        let scalars = ScalarValue::convert_array_to_scalar_vec(array)?;
-        for scalar in scalars {
-            self.values.extend(scalar)
+        match array.data_type() {
+            DataType::List(_) => {
+                let scalar_vec = ScalarValue::convert_list_array_to_scalar_vec(array)?;
+                for scalars in scalar_vec {
+                    self.values.extend(scalars);
+                }
+            }
+            _ => {
+                let scalars = ScalarValue::convert_non_list_array_to_scalars(array)?;
+                self.values.extend(scalars);
+            }
         }
         Ok(())
     }
@@ -149,18 +157,7 @@ impl Accumulator for DistinctArrayAggAccumulator {
             return Ok(());
         }
 
-        assert_eq!(
-            states.len(),
-            1,
-            "array_agg_distinct states must contain single array"
-        );
-
-        let scalar_vec = ScalarValue::convert_array_to_scalar_vec(&states[0])?;
-        for scalars in scalar_vec {
-            self.values.extend(scalars)
-        }
-
-        Ok(())
+        self.update_batch(states)
     }
 
     fn evaluate(&self) -> Result<ScalarValue> {
