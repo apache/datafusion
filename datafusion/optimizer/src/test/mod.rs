@@ -111,7 +111,18 @@ pub fn get_tpch_table_schema(table: &str) -> Schema {
     }
 }
 
-struct EmptyRegistryAnalyzerConfig { }
+struct EmptyRegistryAnalyzerConfig { 
+    options:ConfigOptions
+}
+
+
+impl EmptyRegistryAnalyzerConfig {
+    fn new() -> Self {
+        let options = ConfigOptions::default();
+        EmptyRegistryAnalyzerConfig{options}
+    }
+}
+
     
 
 impl FunctionRegistry for EmptyRegistryAnalyzerConfig {
@@ -138,8 +149,7 @@ impl AnalyzerConfig for EmptyRegistryAnalyzerConfig {
     }
 
     fn options(&self) -> &ConfigOptions {
-        let options = ConfigOptions::default();
-        &options
+       &self.options   
     }
 }
 
@@ -148,7 +158,7 @@ pub fn assert_analyzed_plan_eq(
     plan: &LogicalPlan,
     expected: &str,
 ) -> Result<()> {
-    let analyzer_config = EmptyRegistryAnalyzerConfig{};
+    let analyzer_config = EmptyRegistryAnalyzerConfig::new();
     let analyzed_plan =
         Analyzer::with_rules(vec![rule]).execute_and_check(plan, &analyzer_config, |_, _| {})?;
     let formatted_plan = format!("{analyzed_plan:?}");
@@ -161,7 +171,7 @@ pub fn assert_analyzed_plan_eq_display_indent(
     plan: &LogicalPlan,
     expected: &str,
 ) -> Result<()> {
-    let analyzer_config = EmptyRegistryAnalyzerConfig{};
+    let analyzer_config = EmptyRegistryAnalyzerConfig::new();
     let analyzed_plan =
         Analyzer::with_rules(vec![rule]).execute_and_check(plan, &analyzer_config, |_, _| {})?;
     let formatted_plan = analyzed_plan.display_indent_schema().to_string();
@@ -175,7 +185,7 @@ pub fn assert_analyzer_check_err(
     plan: &LogicalPlan,
     expected: &str,
 ) {
-    let analyzer_config = EmptyRegistryAnalyzerConfig{};
+    let analyzer_config = EmptyRegistryAnalyzerConfig::new();
     let analyzed_plan =
         Analyzer::with_rules(rules).execute_and_check(plan, &analyzer_config, |_, _| {});
     match analyzed_plan {
