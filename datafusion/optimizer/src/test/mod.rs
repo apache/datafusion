@@ -15,12 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::analyzer::{Analyzer, AnalyzerRule, AnalyzerConfig};
+use crate::analyzer::{Analyzer, AnalyzerConfig, AnalyzerRule};
 use crate::optimizer::{assert_schema_is_the_same, Optimizer};
 use crate::{OptimizerContext, OptimizerRule};
 use arrow::datatypes::{DataType, Field, Schema};
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::{assert_contains, Result, internal_err};
+use datafusion_common::{assert_contains, internal_err, Result};
 use datafusion_execution::FunctionRegistry;
 use datafusion_expr::{col, logical_plan::table_scan, LogicalPlan, LogicalPlanBuilder};
 
@@ -111,19 +111,16 @@ pub fn get_tpch_table_schema(table: &str) -> Schema {
     }
 }
 
-struct EmptyRegistryAnalyzerConfig { 
-    options:ConfigOptions
+struct EmptyRegistryAnalyzerConfig {
+    options: ConfigOptions,
 }
-
 
 impl EmptyRegistryAnalyzerConfig {
     fn new() -> Self {
         let options = ConfigOptions::default();
-        EmptyRegistryAnalyzerConfig{options}
+        EmptyRegistryAnalyzerConfig { options }
     }
 }
-
-    
 
 impl FunctionRegistry for EmptyRegistryAnalyzerConfig {
     fn udfs(&self) -> std::collections::HashSet<String> {
@@ -149,7 +146,7 @@ impl AnalyzerConfig for EmptyRegistryAnalyzerConfig {
     }
 
     fn options(&self) -> &ConfigOptions {
-       &self.options   
+        &self.options
     }
 }
 
@@ -159,8 +156,11 @@ pub fn assert_analyzed_plan_eq(
     expected: &str,
 ) -> Result<()> {
     let analyzer_config = EmptyRegistryAnalyzerConfig::new();
-    let analyzed_plan =
-        Analyzer::with_rules(vec![rule]).execute_and_check(plan, &analyzer_config, |_, _| {})?;
+    let analyzed_plan = Analyzer::with_rules(vec![rule]).execute_and_check(
+        plan,
+        &analyzer_config,
+        |_, _| {},
+    )?;
     let formatted_plan = format!("{analyzed_plan:?}");
     assert_eq!(formatted_plan, expected);
 
@@ -172,8 +172,11 @@ pub fn assert_analyzed_plan_eq_display_indent(
     expected: &str,
 ) -> Result<()> {
     let analyzer_config = EmptyRegistryAnalyzerConfig::new();
-    let analyzed_plan =
-        Analyzer::with_rules(vec![rule]).execute_and_check(plan, &analyzer_config, |_, _| {})?;
+    let analyzed_plan = Analyzer::with_rules(vec![rule]).execute_and_check(
+        plan,
+        &analyzer_config,
+        |_, _| {},
+    )?;
     let formatted_plan = analyzed_plan.display_indent_schema().to_string();
     assert_eq!(formatted_plan, expected);
 

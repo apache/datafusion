@@ -1,8 +1,6 @@
-
-
 use crate::analyzer::AnalyzerRule;
 
-use datafusion_common::tree_node::{TreeNodeRewriter};
+use datafusion_common::tree_node::TreeNodeRewriter;
 use datafusion_common::DataFusionError;
 use datafusion_common::{internal_err, Result};
 use datafusion_expr::expr::ScalarFunction;
@@ -100,11 +98,11 @@ impl<'a> TreeNodeRewriter for FunctionResolverRewriter<'a> {
 mod tests {
     use arrow::datatypes::DataType;
     use datafusion_common::ScalarValue;
-    use std::sync::Arc;
     use datafusion_expr::{
-        ColumnarValue, ReturnTypeFunction, ScalarFunctionImplementation,
-        Signature, Volatility,
+        ColumnarValue, ReturnTypeFunction, ScalarFunctionImplementation, Signature,
+        Volatility,
     };
+    use std::sync::Arc;
 
     use super::*;
 
@@ -144,7 +142,9 @@ mod tests {
 
     fn rewrite(function: ScalarFunction) -> Result<Expr, DataFusionError> {
         let registry = MockRegistry {};
-        let mut rewriter = FunctionResolverRewriter { registry: &registry };
+        let mut rewriter = FunctionResolverRewriter {
+            registry: &registry,
+        };
         rewriter.mutate(Expr::ScalarFunction(function))
     }
 

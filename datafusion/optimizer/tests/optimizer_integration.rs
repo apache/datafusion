@@ -16,12 +16,12 @@
 // under the License.
 
 use std::any::Any;
-use std::collections::{HashMap,HashSet};
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef, TimeUnit};
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::{plan_err, DataFusionError, Result, internal_err};
+use datafusion_common::{internal_err, plan_err, DataFusionError, Result};
 use datafusion_execution::FunctionRegistry;
 use datafusion_expr::{AggregateUDF, LogicalPlan, ScalarUDF, TableSource, WindowUDF};
 use datafusion_optimizer::analyzer::{Analyzer, AnalyzerConfig};
@@ -34,7 +34,6 @@ use datafusion_sql::sqlparser::parser::Parser;
 use datafusion_sql::TableReference;
 
 use chrono::{DateTime, NaiveDateTime, Utc};
-
 
 #[cfg(test)]
 #[ctor::ctor]
@@ -337,13 +336,11 @@ fn test_same_name_but_not_ambiguous() {
     assert_eq!(expected, format!("{plan:?}"));
 }
 
-
-struct EmptyRegistryAnalyzerConfig<'a> { 
-    config_options:& 'a ConfigOptions
+struct EmptyRegistryAnalyzerConfig<'a> {
+    config_options: &'a ConfigOptions,
 }
 
-
-impl <'a> FunctionRegistry for EmptyRegistryAnalyzerConfig<'a>{
+impl<'a> FunctionRegistry for EmptyRegistryAnalyzerConfig<'a> {
     fn udfs(&self) -> std::collections::HashSet<String> {
         HashSet::new()
     }
@@ -361,7 +358,7 @@ impl <'a> FunctionRegistry for EmptyRegistryAnalyzerConfig<'a>{
     }
 }
 
-impl <'a> AnalyzerConfig for EmptyRegistryAnalyzerConfig<'a>{
+impl<'a> AnalyzerConfig for EmptyRegistryAnalyzerConfig<'a> {
     fn function_registry(&self) -> &dyn FunctionRegistry {
         self
     }
@@ -390,7 +387,9 @@ fn test_sql(sql: &str) -> Result<LogicalPlan> {
         .with_query_execution_start_time(now_time);
     let analyzer = Analyzer::new();
     let optimizer = Optimizer::new();
-    let analyzer_config = EmptyRegistryAnalyzerConfig{config_options: config.options()};
+    let analyzer_config = EmptyRegistryAnalyzerConfig {
+        config_options: config.options(),
+    };
     // analyze and optimize the logical plan
     let plan = analyzer.execute_and_check(&plan, &analyzer_config, |_, _| {})?;
     optimizer.optimize(&plan, &config, |_, _| {})

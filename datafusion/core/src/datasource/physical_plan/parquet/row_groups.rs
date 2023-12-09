@@ -351,8 +351,8 @@ mod tests {
     use arrow::datatypes::{DataType, Field};
     use datafusion_common::internal_err;
     use datafusion_common::{config::ConfigOptions, TableReference, ToDFSchema};
-    use datafusion_execution::FunctionRegistry;
     use datafusion_common::{DataFusionError, Result};
+    use datafusion_execution::FunctionRegistry;
     use datafusion_expr::{
         builder::LogicalTableSource, cast, col, lit, AggregateUDF, Expr, ScalarUDF,
         TableSource, WindowUDF,
@@ -374,7 +374,7 @@ mod tests {
     use std::sync::Arc;
 
     struct TestAnalyzerConfig<'a> {
-        config_options: &'a ConfigOptions
+        config_options: &'a ConfigOptions,
     }
 
     impl<'a> FunctionRegistry for TestAnalyzerConfig<'a> {
@@ -397,7 +397,7 @@ mod tests {
 
     impl<'a> AnalyzerConfig for TestAnalyzerConfig<'a> {
         fn function_registry(&self) -> &dyn datafusion_execution::FunctionRegistry {
-            self        
+            self
         }
 
         fn options(&self) -> &ConfigOptions {
@@ -1349,8 +1349,8 @@ mod tests {
         let analyzer = Analyzer::new();
         let optimizer = Optimizer::new();
         // analyze and optimize the logical plan
-        let analyzer_config = TestAnalyzerConfig{
-            config_options:config.options()
+        let analyzer_config = TestAnalyzerConfig {
+            config_options: config.options(),
         };
         let plan = analyzer.execute_and_check(&plan, &analyzer_config, |_, _| {})?;
         let plan = optimizer.optimize(&plan, &config, |_, _| {})?;
