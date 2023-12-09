@@ -1092,18 +1092,25 @@ select list_sort(make_array(1, 3, null, 5, NULL, -5)), list_sort(make_array(1, 3
 
 # array_append with NULLs
 
-query ???????
-select
-  array_append(null, 1),
-  array_append(null, [2, 3]),
-  array_append(null, [[4]]),
+query error
+select array_append(null, 1);
+
+query error
+select array_append(null, [2, 3]);
+
+query error
+select array_append(null, [[4]]);
+
+query ????
+select  
   array_append(make_array(), 4),
   array_append(make_array(), null),
   array_append(make_array(1, null, 3), 4),
   array_append(make_array(null, null), 1)
 ;
 ----
-[1] [[2, 3]] [[[4]]] [4] [] [1, , 3, 4] [, , 1]
+[4] [] [1, , 3, 4] [, , 1]
+
 
 query ??
 select 

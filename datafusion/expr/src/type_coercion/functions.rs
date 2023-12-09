@@ -15,11 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::sync::Arc;
-
 use crate::signature::TIMEZONE_WILDCARD;
 use crate::{Signature, TypeSignature};
-use arrow::datatypes::Field;
 use arrow::{
     compute::can_cast_types,
     datatypes::{DataType, TimeUnit},
@@ -122,11 +119,9 @@ fn get_valid_types(
             let array_type = &current_types[0];
             let elem_type = &current_types[1];
 
-            // Special case for `array_append(Null, T)`, just return and process in physical expression step.
+            // We follow Postgres on `array_append(Null, T)`, which is not valid.
             if array_type.eq(&DataType::Null) {
-                let array_type =
-                    DataType::List(Arc::new(Field::new("item", elem_type.clone(), true)));
-                return Ok(vec![vec![array_type.to_owned(), elem_type.to_owned()]]);
+                return Ok(vec![vec![]]);
             }
 
             // We need to find the coerced base type, mainly for cases like:

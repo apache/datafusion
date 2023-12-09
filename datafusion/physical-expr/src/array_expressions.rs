@@ -761,7 +761,6 @@ pub fn array_append(args: &[ArrayRef]) -> Result<ArrayRef> {
     let list_array = as_list_array(&args[0])?;
     let element_array = &args[1];
 
-    check_datatypes("array_append", &[list_array.values(), element_array])?;
     let res = match list_array.value_type() {
         DataType::List(_) => concat_internal(args)?,
         DataType::Null => {
