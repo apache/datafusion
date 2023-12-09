@@ -916,12 +916,12 @@ impl BuiltinScalarFunction {
                 Signature::variadic_any(self.volatility())
             }
             BuiltinScalarFunction::ArrayAppend => Signature {
-                type_signature: ArrayAppendLikeSignature,
+                type_signature: ArrayAndElement,
                 volatility: self.volatility(),
             },
             BuiltinScalarFunction::MakeArray => {
                 // 0 or more arguments of arbitrary type
-                Signature::one_of(vec![VariadicCoerced, Any(0)], self.volatility())
+                Signature::one_of(vec![VariadicEqual, Any(0)], self.volatility())
             }
             BuiltinScalarFunction::ArrayPopFront => Signature::any(1, self.volatility()),
             BuiltinScalarFunction::ArrayPopBack => Signature::any(1, self.volatility()),

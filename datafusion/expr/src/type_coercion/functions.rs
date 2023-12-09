@@ -91,7 +91,7 @@ fn get_valid_types(
             .iter()
             .map(|valid_type| (0..*number).map(|_| valid_type.clone()).collect())
             .collect(),
-        TypeSignature::VariadicCoerced => {
+        TypeSignature::VariadicEqual => {
             let new_type = current_types.iter().skip(1).try_fold(
                 current_types.first().unwrap().clone(),
                 |acc, x| {
@@ -109,19 +109,12 @@ fn get_valid_types(
                 Err(e) => return Err(e),
             }
         }
-        TypeSignature::VariadicEqual => {
-            // one entry with the same len as current_types, whose type is `current_types[0]`.
-            vec![current_types
-                .iter()
-                .map(|_| current_types[0].clone())
-                .collect()]
-        }
         TypeSignature::VariadicAny => {
             vec![current_types.to_vec()]
         }
 
         TypeSignature::Exact(valid_types) => vec![valid_types.clone()],
-        TypeSignature::ArrayAppendLikeSignature => {
+        TypeSignature::ArrayAndElement => {
             if current_types.len() != 2 {
                 return Ok(vec![vec![]]);
             }

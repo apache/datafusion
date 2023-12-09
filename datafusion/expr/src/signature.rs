@@ -91,13 +91,14 @@ pub enum TypeSignature {
     /// DataFusion attempts to coerce all argument types to match the first argument's type
     ///
     /// # Examples
-    /// A function such as `array` is `VariadicEqual`
+    /// Given types in signature should be coericible to the same final type.
+    /// A function such as `make_array` is `VariadicEqual`.
+    ///
+    /// `make_array(i32, i64) -> make_array(i64, i64)`
     VariadicEqual,
     /// One or more arguments with arbitrary types
     VariadicAny,
-    /// A function such as `make_array` should be coerced to the same type
-    VariadicCoerced,
-    /// fixed number of arguments of an arbitrary but equal type out of a list of valid types.
+    /// Fixed number of arguments of an arbitrary but equal type out of a list of valid types.
     ///
     /// # Examples
     /// 1. A function of one argument of f64 is `Uniform(1, vec![DataType::Float64])`
@@ -116,7 +117,7 @@ pub enum TypeSignature {
     /// is `OneOf(vec![Any(0), VariadicAny])`.
     OneOf(Vec<TypeSignature>),
     /// Specialized Signature for ArrayAppend and similar functions
-    ArrayAppendLikeSignature,
+    ArrayAndElement,
 }
 
 impl TypeSignature {
@@ -140,16 +141,15 @@ impl TypeSignature {
                     .collect::<Vec<&str>>()
                     .join(", ")]
             }
-            TypeSignature::VariadicCoerced => {
+            TypeSignature::VariadicEqual => {
                 vec!["CoercibleT, .., CoercibleT".to_string()]
             }
-            TypeSignature::VariadicEqual => vec!["T, .., T".to_string()],
             TypeSignature::VariadicAny => vec!["Any, .., Any".to_string()],
             TypeSignature::OneOf(sigs) => {
                 sigs.iter().flat_map(|s| s.to_string_repr()).collect()
             }
-            TypeSignature::ArrayAppendLikeSignature => {
-                vec!["ArrayAppendLikeSignature(List<T>, T)".to_string()]
+            TypeSignature::ArrayAndElement => {
+                vec!["ArrayAndElement(List<T>, T)".to_string()]
             }
         }
     }
