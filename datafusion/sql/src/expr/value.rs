@@ -471,7 +471,7 @@ mod tests {
     }
 
     #[test]
-    fn test_has_units(){
+    fn test_has_units() {
         let cases = [
             "1 century",
             "1 centuries",
