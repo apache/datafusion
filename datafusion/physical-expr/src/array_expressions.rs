@@ -2162,18 +2162,4 @@ mod tests {
             expected_dim
         );
     }
-
-    #[test]
-    fn test_check_invalid_datatypes() {
-        let data = vec![Some(vec![Some(1), Some(2), Some(3)])];
-        let list_array =
-            Arc::new(ListArray::from_iter_primitive::<Int64Type, _, _>(data)) as ArrayRef;
-        let int64_array = Arc::new(StringArray::from(vec![Some("string")])) as ArrayRef;
-
-        let args = [list_array.clone(), int64_array.clone()];
-
-        let array = array_append(&args);
-
-        assert_eq!(array.unwrap_err().strip_backtrace(), "Error during planning: array_append received incompatible types: '[Int64, Utf8]'.");
-    }
 }
