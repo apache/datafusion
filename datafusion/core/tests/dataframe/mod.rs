@@ -39,7 +39,7 @@ use datafusion::prelude::JoinType;
 use datafusion::prelude::{CsvReadOptions, ParquetReadOptions};
 use datafusion::test_util::parquet_test_data;
 use datafusion::{assert_batches_eq, assert_batches_sorted_eq};
-use datafusion_common::{DataFusionError, ScalarValue, UnnestOptions};
+use datafusion_common::{assert_contains, DataFusionError, ScalarValue, UnnestOptions};
 use datafusion_execution::config::SessionConfig;
 use datafusion_expr::expr::{GroupingSet, Sort};
 use datafusion_expr::{
@@ -1404,6 +1404,28 @@ async fn unnest_with_redundant_columns() -> Result<()> {
         "+----------+",
     ];
     assert_batches_sorted_eq!(expected, &results);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn unnest_analyze_metrics() -> Result<()> {
+    const NUM_ROWS: usize = 5;
+
+    let df = table_with_nested_types(NUM_ROWS).await?;
+    let results = df
+        .unnest_column("tags")?
+        .explain(false, true)?
+        .collect()
+        .await?;
+    let formatted = arrow::util::pretty::pretty_format_batches(&results)
+        .unwrap()
+        .to_string();
+    assert_contains!(&formatted, "elapsed_compute=");
+    assert_contains!(&formatted, "input_batches=1");
+    assert_contains!(&formatted, "input_rows=5");
+    assert_contains!(&formatted, "output_rows=10");
+    assert_contains!(&formatted, "output_batches=1");
 
     Ok(())
 }
