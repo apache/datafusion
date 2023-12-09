@@ -19,7 +19,7 @@ use std::sync::Arc;
 
 use arrow::{
     array::*,
-    datatypes::{DataType, TimeUnit},
+    datatypes::{DataType, IntervalUnit, TimeUnit},
 };
 use chrono::Timelike;
 use datafusion::error::Result;
@@ -149,7 +149,50 @@ impl ScalarFunctionDef for CurrentTimeFunction {
         Ok(Arc::new(array) as ArrayRef)
     }
 }
+#[derive(Debug)]
+pub struct ToMilliSecondsFunction;
 
+impl ScalarFunctionDef for ToMilliSecondsFunction {
+    fn name(&self) -> &str {
+        "to_milliseconds"
+    }
+
+    fn signature(&self) -> Signature {
+        Signature::exact(
+            vec![DataType::Interval(IntervalUnit::MonthDayNano)],
+            Volatility::Immutable,
+        )
+    }
+
+    fn return_type(&self) -> ReturnTypeFunction {
+        let return_type = Arc::new(DataType::Int64);
+        Arc::new(move |_| Ok(return_type.clone()))
+    }
+
+    fn execute(&self, args: &[ArrayRef]) -> Result<ArrayRef> {
+        let input_array = args[0]
+            .as_any()
+            .downcast_ref::<IntervalMonthDayNanoArray>()
+            .expect("cast to MonthDayNanoArray");
+
+        let array = input_array
+            .iter()
+            .map(|arg| {
+                let value = arg.unwrap() as u128;
+                let months_part: i32 =
+                    ((value & 0xFFFFFFFF000000000000000000000000) >> 96) as i32;
+                    assert!(months_part == 0, "Error: You try to use Trino to_milliseconds(days-seconds). months must be zero");
+                let days_part: i32 = ((value & 0xFFFFFFFF0000000000000000) >> 64) as i32;
+                let nanoseconds_part: i64 = (value & 0xFFFFFFFFFFFFFFFF) as i64;
+                let milliseconds:i64 = (days_part * 24*60*60*1000).into();
+                let milliseconds= milliseconds + nanoseconds_part / 1_000_000;
+                Some(milliseconds)
+            })
+            .collect::<Vec<_>>();
+        let array = Int64Array::from(array);
+        Ok(Arc::new(array) as ArrayRef)
+    }
+}
 // Function package declaration
 pub struct FunctionPackage;
 
@@ -158,6 +201,7 @@ impl ScalarFunctionPackage for FunctionPackage {
         vec![
             Box::new(HumanReadableSecondsFunction),
             Box::new(CurrentTimeFunction),
+            Box::new(ToMilliSecondsFunction),
         ]
     }
 }
@@ -199,6 +243,14 @@ mod test {
         let formatted = current.format("%H:%M:%S").to_string();
         test_expression!("current_time()", formatted);
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_to_milliseconds() -> Result<()> {
+        test_expression!("to_milliseconds(interval '1' day)", "86400000");
+        test_expression!("to_milliseconds(interval '1' hour)", "3600000");
+        test_expression!("to_milliseconds(interval '10' day)", "864000000");
         Ok(())
     }
 }
