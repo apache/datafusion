@@ -1208,7 +1208,7 @@ impl LogicalPlan {
         self.with_new_exprs(new_exprs, &new_inputs_with_values)
     }
 
-    /// Walk the logical plan, find any `PlaceHolder` tokens, and return a map of their IDs and DataTypes
+    /// Walk the logical plan, find any `Placeholder` tokens, and return a map of their IDs and DataTypes
     pub fn get_parameter_types(
         &self,
     ) -> Result<HashMap<String, Option<DataType>>, DataFusionError> {

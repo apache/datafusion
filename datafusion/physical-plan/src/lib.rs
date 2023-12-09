@@ -59,6 +59,7 @@ pub mod limit;
 pub mod memory;
 pub mod metrics;
 mod ordering;
+pub mod placeholder_row;
 pub mod projection;
 pub mod repartition;
 pub mod sorts;
