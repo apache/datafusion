@@ -15,13 +15,16 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::analyzer::{Analyzer, AnalyzerRule};
+use crate::analyzer::{Analyzer, AnalyzerRule, AnalyzerConfig};
 use crate::optimizer::{assert_schema_is_the_same, Optimizer};
 use crate::{OptimizerContext, OptimizerRule};
 use arrow::datatypes::{DataType, Field, Schema};
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::{assert_contains, Result};
+use datafusion_common::{assert_contains, Result, internal_err};
+use datafusion_execution::FunctionRegistry;
 use datafusion_expr::{col, logical_plan::table_scan, LogicalPlan, LogicalPlanBuilder};
+
+use datafusion_common::DataFusionError;
 use std::sync::Arc;
 
 pub mod user_defined;
@@ -108,14 +111,46 @@ pub fn get_tpch_table_schema(table: &str) -> Schema {
     }
 }
 
+struct EmptyRegistryAnalyzerConfig { }
+    
+
+impl FunctionRegistry for EmptyRegistryAnalyzerConfig {
+    fn udfs(&self) -> std::collections::HashSet<String> {
+        std::collections::HashSet::new()
+    }
+
+    fn udf(&self, name: &str) -> Result<Arc<datafusion_expr::ScalarUDF>> {
+        internal_err!("empty registry")
+    }
+
+    fn udaf(&self, _name: &str) -> Result<Arc<datafusion_expr::AggregateUDF>> {
+        internal_err!("empty registry")
+    }
+
+    fn udwf(&self, _name: &str) -> Result<Arc<datafusion_expr::WindowUDF>> {
+        internal_err!("empty registry")
+    }
+}
+
+impl AnalyzerConfig for EmptyRegistryAnalyzerConfig {
+    fn function_registry(&self) -> &dyn FunctionRegistry {
+        self
+    }
+
+    fn options(&self) -> &ConfigOptions {
+        let options = ConfigOptions::default();
+        &options
+    }
+}
+
 pub fn assert_analyzed_plan_eq(
     rule: Arc<dyn AnalyzerRule + Send + Sync>,
     plan: &LogicalPlan,
     expected: &str,
 ) -> Result<()> {
-    let options = ConfigOptions::default();
+    let analyzer_config = EmptyRegistryAnalyzerConfig{};
     let analyzed_plan =
-        Analyzer::with_rules(vec![rule]).execute_and_check(plan, &options, |_, _| {})?;
+        Analyzer::with_rules(vec![rule]).execute_and_check(plan, &analyzer_config, |_, _| {})?;
     let formatted_plan = format!("{analyzed_plan:?}");
     assert_eq!(formatted_plan, expected);
 
@@ -126,9 +161,9 @@ pub fn assert_analyzed_plan_eq_display_indent(
     plan: &LogicalPlan,
     expected: &str,
 ) -> Result<()> {
-    let options = ConfigOptions::default();
+    let analyzer_config = EmptyRegistryAnalyzerConfig{};
     let analyzed_plan =
-        Analyzer::with_rules(vec![rule]).execute_and_check(plan, &options, |_, _| {})?;
+        Analyzer::with_rules(vec![rule]).execute_and_check(plan, &analyzer_config, |_, _| {})?;
     let formatted_plan = analyzed_plan.display_indent_schema().to_string();
     assert_eq!(formatted_plan, expected);
 
@@ -140,9 +175,9 @@ pub fn assert_analyzer_check_err(
     plan: &LogicalPlan,
     expected: &str,
 ) {
-    let options = ConfigOptions::default();
+    let analyzer_config = EmptyRegistryAnalyzerConfig{};
     let analyzed_plan =
-        Analyzer::with_rules(rules).execute_and_check(plan, &options, |_, _| {});
+        Analyzer::with_rules(rules).execute_and_check(plan, &analyzer_config, |_, _| {});
     match analyzed_plan {
         Ok(plan) => assert_eq!(format!("{}", plan.display_indent()), "An error"),
         Err(e) => {

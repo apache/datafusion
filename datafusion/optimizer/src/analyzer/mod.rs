@@ -40,6 +40,14 @@ use log::debug;
 use std::sync::Arc;
 use std::time::Instant;
 
+/// Options to control  DataFusion Analyzer Passes.
+pub trait AnalyzerConfig {
+    /// Return a function registry for resolving names
+    fn function_registry(&self) -> &dyn FunctionRegistry;
+    /// return datafusion configuration options
+    fn options(&self) -> &ConfigOptions;
+}
+
 /// [`AnalyzerRule`]s transform [`LogicalPlan`]s in some way to make
 /// the plan valid prior to the rest of the DataFusion optimization process.
 ///
@@ -52,7 +60,11 @@ use std::time::Instant;
 /// it the same result in some more optimal way.
 pub trait AnalyzerRule {
     /// Rewrite `plan`
-    fn analyze(&self, plan: LogicalPlan, config: &ConfigOptions) -> Result<LogicalPlan>;
+    fn analyze(
+        &self,
+        plan: LogicalPlan,
+        config: &dyn AnalyzerConfig,
+    ) -> Result<LogicalPlan>;
 
     /// A human readable name for this analyzer rule
     fn name(&self) -> &str;
@@ -64,14 +76,20 @@ pub struct Analyzer {
     pub rules: Vec<Arc<dyn AnalyzerRule + Send + Sync>>,
 }
 
+impl Default for Analyzer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Analyzer {
     /// Create a new analyzer using the recommended list of rules
-    pub fn new(registry: impl FunctionRegistry + 'static + Send + Sync) -> Self {
+    pub fn new() -> Self {
         let rules: Vec<Arc<dyn AnalyzerRule + Send + Sync>> = vec![
             Arc::new(InlineTableScan::new()),
             Arc::new(TypeCoercion::new()),
             Arc::new(CountWildcardRule::new()),
-            Arc::new(ResolveFunctionByName::new(registry)),
+            Arc::new(ResolveFunctionByName::new()),
         ];
         Self::with_rules(rules)
     }
@@ -86,7 +104,7 @@ impl Analyzer {
     pub fn execute_and_check<F>(
         &self,
         plan: &LogicalPlan,
-        config: &ConfigOptions,
+        config: &dyn AnalyzerConfig,
         mut observer: F,
     ) -> Result<LogicalPlan>
     where

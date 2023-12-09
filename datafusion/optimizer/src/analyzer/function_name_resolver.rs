@@ -1,8 +1,8 @@
-use std::sync::Arc;
+
 
 use crate::analyzer::AnalyzerRule;
-use datafusion_common::config::ConfigOptions;
-use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRewriter};
+
+use datafusion_common::tree_node::{TreeNodeRewriter};
 use datafusion_common::DataFusionError;
 use datafusion_common::{internal_err, Result};
 use datafusion_expr::expr::ScalarFunction;
@@ -13,22 +13,32 @@ use datafusion_execution::FunctionRegistry;
 use datafusion_expr::{logical_plan::LogicalPlan, Expr};
 use std::str::FromStr;
 
+use crate::analyzer::AnalyzerConfig;
+
 /// Resolves `ScalarFunctionDefinition::Name` at execution time.
 ///
 
-pub struct ResolveFunctionByName<T: FunctionRegistry> {
-    registry: T,
-}
+pub struct ResolveFunctionByName {}
 
-impl<T: FunctionRegistry> ResolveFunctionByName<T> {
-    pub fn new(registry: T) -> Self {
-        ResolveFunctionByName { registry }
+impl ResolveFunctionByName {
+    pub fn new() -> Self {
+        ResolveFunctionByName {}
     }
 }
 
-impl<T: FunctionRegistry> AnalyzerRule for ResolveFunctionByName<T> {
-    fn analyze(&self, plan: LogicalPlan, _: &ConfigOptions) -> Result<LogicalPlan> {
-        analyze_internal(&plan, self.registry)
+impl Default for ResolveFunctionByName {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl AnalyzerRule for ResolveFunctionByName {
+    fn analyze(
+        &self,
+        plan: LogicalPlan,
+        config: &dyn AnalyzerConfig,
+    ) -> Result<LogicalPlan> {
+        analyze_internal(&plan, config.function_registry())
     }
 
     fn name(&self) -> &str {
@@ -38,7 +48,7 @@ impl<T: FunctionRegistry> AnalyzerRule for ResolveFunctionByName<T> {
 
 fn analyze_internal(
     plan: &LogicalPlan,
-    registry: impl FunctionRegistry,
+    registry: &dyn FunctionRegistry,
 ) -> Result<LogicalPlan> {
     // optimize child plans first
     let new_inputs = plan
@@ -57,11 +67,11 @@ fn analyze_internal(
     plan.with_new_exprs(new_expr, &new_inputs)
 }
 
-struct FunctionResolverRewriter<T: FunctionRegistry> {
-    registry: T,
+struct FunctionResolverRewriter<'a> {
+    registry: &'a dyn FunctionRegistry,
 }
 
-impl<T: FunctionRegistry> TreeNodeRewriter for FunctionResolverRewriter<T> {
+impl<'a> TreeNodeRewriter for FunctionResolverRewriter<'a> {
     type N = Expr;
 
     fn mutate(&mut self, old_expr: Expr) -> Result<Expr> {
@@ -90,8 +100,9 @@ impl<T: FunctionRegistry> TreeNodeRewriter for FunctionResolverRewriter<T> {
 mod tests {
     use arrow::datatypes::DataType;
     use datafusion_common::ScalarValue;
+    use std::sync::Arc;
     use datafusion_expr::{
-        ColumnarValue, ReturnTypeFunction, ScalarFunctionImplementation, ScalarUDF,
+        ColumnarValue, ReturnTypeFunction, ScalarFunctionImplementation,
         Signature, Volatility,
     };
 
@@ -133,7 +144,7 @@ mod tests {
 
     fn rewrite(function: ScalarFunction) -> Result<Expr, DataFusionError> {
         let registry = MockRegistry {};
-        let mut rewriter = FunctionResolverRewriter { registry };
+        let mut rewriter = FunctionResolverRewriter { registry: &registry };
         rewriter.mutate(Expr::ScalarFunction(function))
     }
 
