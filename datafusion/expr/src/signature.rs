@@ -117,6 +117,10 @@ pub enum TypeSignature {
     /// is `OneOf(vec![Any(0), VariadicAny])`.
     OneOf(Vec<TypeSignature>),
     /// Specialized Signature for ArrayAppend and similar functions
+    /// The first argument should be List/LargeList, and the second argument should be non-list or list.
+    /// The second argument's list dimension should be one dimension less than the first argument's list dimension.
+    /// List dimension of the List/LargeList is equivalent to the number of List.
+    /// List dimension of the non-list is 0.
     ArrayAndElement,
 }
 
