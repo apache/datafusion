@@ -42,15 +42,15 @@ impl <'a> FunctionRegistry for ExamplesAnalyzerConfig<'a>{
         std::collections::HashSet::new()
     }
 
-    fn udf(&self, name: &str) -> Result<Arc<ScalarUDF>> {
+    fn udf(&self, _name: &str) -> Result<Arc<ScalarUDF>> {
         internal_err!("Mock Function Registry")
     }
 
-    fn udaf(&self, name: &str) -> Result<Arc<AggregateUDF>> {
+    fn udaf(&self, _name: &str) -> Result<Arc<AggregateUDF>> {
         internal_err!("Mock Function Registry")
     }
 
-    fn udwf(&self, name: &str) -> Result<Arc<WindowUDF>> {
+    fn udwf(&self, _name: &str) -> Result<Arc<WindowUDF>> {
         internal_err!("Mock Function Registry")
     }
 }
