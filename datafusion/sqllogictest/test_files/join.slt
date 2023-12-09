@@ -556,7 +556,7 @@ query TT
 explain select * from t1 join t2 on false;
 ----
 logical_plan EmptyRelation
-physical_plan EmptyExec: produce_one_row=false
+physical_plan EmptyExec
 
 # Make batch size smaller than table row number. to introduce parallelism to the plan.
 statement ok
