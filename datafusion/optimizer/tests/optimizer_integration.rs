@@ -364,7 +364,7 @@ impl<'a> AnalyzerConfig for EmptyRegistryAnalyzerConfig<'a> {
     }
 
     fn options(&self) -> &ConfigOptions {
-        &self.config_options
+        self.config_options
     }
 }
 

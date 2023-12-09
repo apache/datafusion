@@ -191,6 +191,6 @@ mod tests {
             args: vec![],
         };
         let result = rewrite(function);
-        assert!(matches!(result, Err(_)));
+        assert!(result.is_err());
     }
 }

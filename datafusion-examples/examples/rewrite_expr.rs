@@ -16,13 +16,14 @@
 // under the License.
 
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use datafusion::execution::FunctionRegistry;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TreeNode};
-use datafusion_common::{plan_err, DataFusionError, Result, ScalarValue};
+use datafusion_common::{plan_err, DataFusionError, Result, ScalarValue, internal_err};
 use datafusion_expr::{
     AggregateUDF, Between, Expr, Filter, LogicalPlan, ScalarUDF, TableSource, WindowUDF,
 };
-use datafusion_optimizer::analyzer::{Analyzer, AnalyzerRule};
+use datafusion_optimizer::analyzer::{Analyzer, AnalyzerRule, AnalyzerConfig};
 use datafusion_optimizer::optimizer::Optimizer;
 use datafusion_optimizer::{utils, OptimizerConfig, OptimizerContext, OptimizerRule};
 use datafusion_sql::planner::{ContextProvider, SqlToRel};
@@ -31,6 +32,38 @@ use datafusion_sql::sqlparser::parser::Parser;
 use datafusion_sql::TableReference;
 use std::any::Any;
 use std::sync::Arc;
+
+struct ExamplesAnalyzerConfig<'a>{
+    config_options:&'a ConfigOptions
+}
+
+impl <'a> FunctionRegistry for ExamplesAnalyzerConfig<'a>{
+    fn udfs(&self) -> std::collections::HashSet<String> {
+        std::collections::HashSet::new()
+    }
+
+    fn udf(&self, name: &str) -> Result<Arc<ScalarUDF>> {
+        internal_err!("Mock Function Registry")
+    }
+
+    fn udaf(&self, name: &str) -> Result<Arc<AggregateUDF>> {
+        internal_err!("Mock Function Registry")
+    }
+
+    fn udwf(&self, name: &str) -> Result<Arc<WindowUDF>> {
+        internal_err!("Mock Function Registry")
+    }
+}
+
+impl <'a> AnalyzerConfig for ExamplesAnalyzerConfig<'a>{
+    fn function_registry(&self) -> &dyn FunctionRegistry {
+        self
+    }
+
+    fn options(&self) -> &ConfigOptions {
+        self.config_options
+    }
+}
 
 pub fn main() -> Result<()> {
     // produce a logical plan using the datafusion-sql crate
@@ -50,8 +83,9 @@ pub fn main() -> Result<()> {
     // run the analyzer with our custom rule
     let config = OptimizerContext::default().with_skip_failing_rules(false);
     let analyzer = Analyzer::with_rules(vec![Arc::new(MyAnalyzerRule {})]);
+    let analyzer_config = ExamplesAnalyzerConfig{config_options: config.options()}
     let analyzed_plan =
-        analyzer.execute_and_check(&logical_plan, config.options(), |_, _| {})?;
+        analyzer.execute_and_check(&logical_plan, &analyzer_config, |_, _| {})?;
     println!(
         "Analyzed Logical Plan:\n\n{}\n",
         analyzed_plan.display_indent()

@@ -127,7 +127,7 @@ impl FunctionRegistry for EmptyRegistryAnalyzerConfig {
         std::collections::HashSet::new()
     }
 
-    fn udf(&self, name: &str) -> Result<Arc<datafusion_expr::ScalarUDF>> {
+    fn udf(&self, _name: &str) -> Result<Arc<datafusion_expr::ScalarUDF>> {
         internal_err!("empty registry")
     }
 
