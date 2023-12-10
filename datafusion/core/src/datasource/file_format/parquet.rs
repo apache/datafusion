@@ -1287,6 +1287,42 @@ mod tests {
         Ok(())
     }
 
+    #[tokio::test]
+    async fn is_schema_stable() -> Result<()> {
+        let c1: ArrayRef =
+            Arc::new(StringArray::from(vec![Some("Foo"), None, Some("bar")]));
+
+        let c2: ArrayRef = Arc::new(Int64Array::from(vec![Some(1), Some(2), None]));
+
+        let batch1 =
+            RecordBatch::try_from_iter(vec![("a", c1.clone()), ("b", c1.clone())])
+                .unwrap();
+        let batch2 =
+            RecordBatch::try_from_iter(vec![("c", c2.clone()), ("d", c2.clone())])
+                .unwrap();
+
+        let store = Arc::new(LocalFileSystem::new()) as _;
+        let (meta, _files) = store_parquet(vec![batch1, batch2], false).await?;
+
+        let session = SessionContext::new();
+        let ctx = session.state();
+        let format = ParquetFormat::default();
+        let schema = format.infer_schema(&ctx, &store, &meta).await.unwrap();
+
+        let order: Vec<_> = ["a", "b", "c", "d"]
+            .into_iter()
+            .map(|i| i.to_string())
+            .collect();
+        let coll: Vec<_> = schema
+            .all_fields()
+            .into_iter()
+            .map(|i| i.name().to_string())
+            .collect();
+        assert_eq!(coll, order);
+
+        Ok(())
+    }
+
     #[derive(Debug)]
     struct RequestCountingObjectStore {
         inner: Arc<dyn ObjectStore>,
