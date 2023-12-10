@@ -18,13 +18,16 @@
 //! Defines physical expression for `ntile` that can evaluated
 //! at runtime during query execution
 
-use crate::window::partition_evaluator::PartitionEvaluator;
+use crate::expressions::Column;
 use crate::window::BuiltInWindowFunctionExpr;
-use crate::PhysicalExpr;
+use crate::{PhysicalExpr, PhysicalSortExpr};
+
 use arrow::array::{ArrayRef, UInt64Array};
 use arrow::datatypes::Field;
-use arrow_schema::DataType;
+use arrow_schema::{DataType, SchemaRef, SortOptions};
 use datafusion_common::Result;
+use datafusion_expr::PartitionEvaluator;
+
 use std::any::Any;
 use std::sync::Arc;
 
@@ -37,6 +40,10 @@ pub struct Ntile {
 impl Ntile {
     pub fn new(name: String, n: u64) -> Self {
         Self { name, n }
+    }
+
+    pub fn get_n(&self) -> u64 {
+        self.n
     }
 }
 
@@ -62,6 +69,18 @@ impl BuiltInWindowFunctionExpr for Ntile {
     fn create_evaluator(&self) -> Result<Box<dyn PartitionEvaluator>> {
         Ok(Box::new(NtileEvaluator { n: self.n }))
     }
+
+    fn get_result_ordering(&self, schema: &SchemaRef) -> Option<PhysicalSortExpr> {
+        // The built-in NTILE window function introduces a new ordering:
+        schema.column_with_name(self.name()).map(|(idx, field)| {
+            let expr = Arc::new(Column::new(field.name(), idx));
+            let options = SortOptions {
+                descending: false,
+                nulls_first: false,
+            }; // ASC, NULLS LAST
+            PhysicalSortExpr { expr, options }
+        })
+    }
 }
 
 #[derive(Debug)]
@@ -70,11 +89,16 @@ pub(crate) struct NtileEvaluator {
 }
 
 impl PartitionEvaluator for NtileEvaluator {
-    fn evaluate(&self, _values: &[ArrayRef], num_rows: usize) -> Result<ArrayRef> {
+    fn evaluate_all(
+        &mut self,
+        _values: &[ArrayRef],
+        num_rows: usize,
+    ) -> Result<ArrayRef> {
         let num_rows = num_rows as u64;
         let mut vec: Vec<u64> = Vec::new();
+        let n = u64::min(self.n, num_rows);
         for i in 0..num_rows {
-            let res = i * self.n / num_rows;
+            let res = i * n / num_rows;
             vec.push(res + 1)
         }
         Ok(Arc::new(UInt64Array::from(vec)))

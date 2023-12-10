@@ -1,0 +1,135 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+##########
+## Join Tests
+##########
+
+# turn off repartition_joins
+statement ok
+set datafusion.optimizer.repartition_joins = false;
+
+include ./join.slt
+
+statement ok
+CREATE EXTERNAL TABLE annotated_data (
+  a0 INTEGER,
+  a INTEGER,
+  b INTEGER,
+  c INTEGER,
+  d INTEGER
+)
+STORED AS CSV
+WITH HEADER ROW
+WITH ORDER (a ASC, b ASC, c ASC)
+LOCATION '../core/tests/data/window_2.csv';
+
+query TT
+EXPLAIN SELECT t2.a
+ FROM annotated_data as t1
+ INNER JOIN annotated_data as t2
+ ON t1.c = t2.c ORDER BY t2.a
+ LIMIT 5
+----
+logical_plan
+Limit: skip=0, fetch=5
+--Sort: t2.a ASC NULLS LAST, fetch=5
+----Projection: t2.a
+------Inner Join: t1.c = t2.c
+--------SubqueryAlias: t1
+----------TableScan: annotated_data projection=[c]
+--------SubqueryAlias: t2
+----------TableScan: annotated_data projection=[a, c]
+physical_plan
+GlobalLimitExec: skip=0, fetch=5
+--SortPreservingMergeExec: [a@0 ASC NULLS LAST], fetch=5
+----ProjectionExec: expr=[a@1 as a]
+------CoalesceBatchesExec: target_batch_size=8192
+--------HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(c@0, c@1)]
+----------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[c], has_header=true
+----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, c], output_ordering=[a@0 ASC NULLS LAST], has_header=true
+
+# preserve_inner_join
+query IIII nosort
+SELECT t1.a, t1.b, t1.c, t2.a as a2
+ FROM annotated_data as t1
+ INNER JOIN annotated_data as t2
+ ON t1.d = t2.d ORDER BY a2, t2.b
+ LIMIT 5
+----
+0 0 0 0
+0 0 2 0
+0 0 3 0
+0 0 6 0
+0 0 20 0
+
+query TT
+EXPLAIN SELECT t2.a as a2, t2.b
+    FROM annotated_data as t1
+    RIGHT SEMI JOIN annotated_data as t2
+    ON t1.d = t2.d AND t1.c = t2.c
+    WHERE t2.d = 3
+    ORDER BY a2, t2.b
+LIMIT 10
+----
+logical_plan
+Limit: skip=0, fetch=10
+--Sort: a2 ASC NULLS LAST, t2.b ASC NULLS LAST, fetch=10
+----Projection: t2.a AS a2, t2.b
+------RightSemi Join: t1.d = t2.d, t1.c = t2.c
+--------SubqueryAlias: t1
+----------TableScan: annotated_data projection=[c, d]
+--------SubqueryAlias: t2
+----------Filter: annotated_data.d = Int32(3)
+------------TableScan: annotated_data projection=[a, b, c, d], partial_filters=[annotated_data.d = Int32(3)]
+physical_plan
+GlobalLimitExec: skip=0, fetch=10
+--SortPreservingMergeExec: [a2@0 ASC NULLS LAST,b@1 ASC NULLS LAST], fetch=10
+----ProjectionExec: expr=[a@0 as a2, b@1 as b]
+------CoalesceBatchesExec: target_batch_size=8192
+--------HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(d@1, d@3), (c@0, c@2)]
+----------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[c, d], has_header=true
+----------CoalesceBatchesExec: target_batch_size=8192
+------------FilterExec: d@3 = 3
+--------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+----------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b, c, d], output_ordering=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST, c@2 ASC NULLS LAST], has_header=true
+
+# preserve_right_semi_join
+query II nosort
+SELECT t2.a as a2, t2.b
+    FROM annotated_data as t1
+    RIGHT SEMI JOIN annotated_data as t2
+    ON t1.d = t2.d AND t1.c = t2.c
+    WHERE t2.d = 3
+    ORDER BY a2, t2.b
+LIMIT 10
+----
+0 0
+0 0
+0 0
+0 1
+0 1
+0 1
+0 1
+0 1
+1 2
+1 2
+
+# turn on repartition_joins
+statement ok
+set datafusion.optimizer.repartition_joins = true;

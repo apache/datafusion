@@ -15,15 +15,16 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::aggregate::row_accumulator::RowAccumulator;
-use crate::expressions::{ArrayAgg, FirstValue, LastValue};
-use crate::PhysicalExpr;
+use crate::expressions::{FirstValue, LastValue, OrderSensitiveArrayAgg};
+use crate::{PhysicalExpr, PhysicalSortExpr};
 use arrow::datatypes::Field;
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::{not_impl_err, DataFusionError, Result};
 use datafusion_expr::Accumulator;
 use std::any::Any;
 use std::fmt::Debug;
 use std::sync::Arc;
+
+use self::groups_accumulator::GroupsAccumulator;
 
 pub(crate) mod approx_distinct;
 pub(crate) mod approx_median;
@@ -31,6 +32,7 @@ pub(crate) mod approx_percentile_cont;
 pub(crate) mod approx_percentile_cont_with_weight;
 pub(crate) mod array_agg;
 pub(crate) mod array_agg_distinct;
+pub(crate) mod array_agg_ordered;
 pub(crate) mod average;
 pub(crate) mod bit_and_or_xor;
 pub(crate) mod bool_and_or;
@@ -41,12 +43,14 @@ pub(crate) mod covariance;
 pub(crate) mod first_last;
 pub(crate) mod grouping;
 pub(crate) mod median;
+pub(crate) mod string_agg;
 #[macro_use]
 pub(crate) mod min_max;
 pub mod build_in;
+pub(crate) mod groups_accumulator;
 mod hyperloglog;
 pub mod moving_min_max;
-pub mod row_accumulator;
+pub(crate) mod regr;
 pub(crate) mod stats;
 pub(crate) mod stddev;
 pub(crate) mod sum;
@@ -65,7 +69,7 @@ pub(crate) mod variance;
 /// `PartialEq<dyn Any>` to allows comparing equality between the
 /// trait objects.
 pub trait AggregateExpr: Send + Sync + Debug + PartialEq<dyn Any> {
-    /// Returns the aggregate expression as [`Any`](std::any::Any) so that it can be
+    /// Returns the aggregate expression as [`Any`] so that it can be
     /// downcast to a specific implementation.
     fn as_any(&self) -> &dyn Any;
 
@@ -85,35 +89,33 @@ pub trait AggregateExpr: Send + Sync + Debug + PartialEq<dyn Any> {
     /// Single-column aggregations such as `sum` return a single value, others (e.g. `cov`) return many.
     fn expressions(&self) -> Vec<Arc<dyn PhysicalExpr>>;
 
+    /// Order by requirements for the aggregate function
+    /// By default it is `None` (there is no requirement)
+    /// Order-sensitive aggregators, such as `FIRST_VALUE(x ORDER BY y)` should implement this
+    fn order_bys(&self) -> Option<&[PhysicalSortExpr]> {
+        None
+    }
+
     /// Human readable name such as `"MIN(c2)"`. The default
     /// implementation returns placeholder text.
     fn name(&self) -> &str {
         "AggregateExpr: default name"
     }
 
-    /// If the aggregate expression is supported by row format
-    fn row_accumulator_supported(&self) -> bool {
+    /// If the aggregate expression has a specialized
+    /// [`GroupsAccumulator`] implementation. If this returns true,
+    /// `[Self::create_groups_accumulator`] will be called.
+    fn groups_accumulator_supported(&self) -> bool {
         false
     }
 
-    /// Specifies whether this aggregate function can run using bounded memory.
-    /// Any accumulator returning "true" needs to implement `retract_batch`.
-    fn supports_bounded_execution(&self) -> bool {
-        false
-    }
-
-    /// RowAccumulator to access/update row-based aggregation state in-place.
-    /// Currently, row accumulator only supports states of fixed-sized type.
+    /// Return a specialized [`GroupsAccumulator`] that manages state
+    /// for all groups.
     ///
-    /// We recommend implementing `RowAccumulator` along with the standard `Accumulator`,
-    /// when its state is of fixed size, as RowAccumulator is more memory efficient and CPU-friendly.
-    fn create_row_accumulator(
-        &self,
-        _start_index: usize,
-    ) -> Result<Box<dyn RowAccumulator>> {
-        Err(DataFusionError::NotImplemented(format!(
-            "RowAccumulator hasn't been implemented for {self:?} yet"
-        )))
+    /// For maximum performance, a [`GroupsAccumulator`] should be
+    /// implemented in addition to [`Accumulator`].
+    fn create_groups_accumulator(&self) -> Result<Box<dyn GroupsAccumulator>> {
+        not_impl_err!("GroupsAccumulator hasn't been implemented for {self:?} yet")
     }
 
     /// Construct an expression that calculates the aggregate in reverse.
@@ -126,9 +128,7 @@ pub trait AggregateExpr: Send + Sync + Debug + PartialEq<dyn Any> {
 
     /// Creates accumulator implementation that supports retract
     fn create_sliding_accumulator(&self) -> Result<Box<dyn Accumulator>> {
-        Err(DataFusionError::NotImplemented(format!(
-            "Retractable Accumulator hasn't been implemented for {self:?} yet"
-        )))
+        not_impl_err!("Retractable Accumulator hasn't been implemented for {self:?} yet")
     }
 }
 
@@ -139,5 +139,5 @@ pub trait AggregateExpr: Send + Sync + Debug + PartialEq<dyn Any> {
 pub fn is_order_sensitive(aggr_expr: &Arc<dyn AggregateExpr>) -> bool {
     aggr_expr.as_any().is::<FirstValue>()
         || aggr_expr.as_any().is::<LastValue>()
-        || aggr_expr.as_any().is::<ArrayAgg>()
+        || aggr_expr.as_any().is::<OrderSensitiveArrayAgg>()
 }

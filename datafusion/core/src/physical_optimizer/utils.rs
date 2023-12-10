@@ -17,11 +17,10 @@
 
 //! Collection of utility functions that are leveraged by the query optimizer rules
 
-use std::borrow::Borrow;
-use std::collections::HashSet;
+use std::fmt;
+use std::fmt::Formatter;
 use std::sync::Arc;
 
-use crate::error::Result;
 use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use crate::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use crate::physical_plan::repartition::RepartitionExec;
@@ -29,25 +28,87 @@ use crate::physical_plan::sorts::sort::SortExec;
 use crate::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use crate::physical_plan::union::UnionExec;
 use crate::physical_plan::windows::{BoundedWindowAggExec, WindowAggExec};
-use crate::physical_plan::ExecutionPlan;
-use datafusion_common::DataFusionError;
-use datafusion_physical_expr::utils::ordering_satisfy;
-use datafusion_physical_expr::PhysicalSortExpr;
+use crate::physical_plan::{get_plan_string, ExecutionPlan};
+
+use datafusion_physical_expr::{LexRequirementRef, PhysicalSortRequirement};
+
+/// This object implements a tree that we use while keeping track of paths
+/// leading to [`SortExec`]s.
+#[derive(Debug, Clone)]
+pub(crate) struct ExecTree {
+    /// The `ExecutionPlan` associated with this node
+    pub plan: Arc<dyn ExecutionPlan>,
+    /// Child index of the plan in its parent
+    pub idx: usize,
+    /// Children of the plan that would need updating if we remove leaf executors
+    pub children: Vec<ExecTree>,
+}
+
+impl fmt::Display for ExecTree {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        let plan_string = get_plan_string(&self.plan);
+        write!(f, "\nidx: {:?}", self.idx)?;
+        write!(f, "\nplan: {:?}", plan_string)?;
+        for child in self.children.iter() {
+            write!(f, "\nexec_tree:{}", child)?;
+        }
+        writeln!(f)
+    }
+}
+
+impl ExecTree {
+    /// Create new Exec tree
+    pub fn new(
+        plan: Arc<dyn ExecutionPlan>,
+        idx: usize,
+        children: Vec<ExecTree>,
+    ) -> Self {
+        ExecTree {
+            plan,
+            idx,
+            children,
+        }
+    }
+}
+
+/// Get `ExecTree` for each child of the plan if they are tracked.
+/// # Arguments
+///
+/// * `n_children` - Children count of the plan of interest
+/// * `onward` - Contains `Some(ExecTree)` of the plan tracked.
+///            - Contains `None` is plan is not tracked.
+///
+/// # Returns
+///
+/// A `Vec<Option<ExecTree>>` that contains tracking information of each child.
+/// If a child is `None`, it is not tracked. If `Some(ExecTree)` child is tracked also.
+pub(crate) fn get_children_exectrees(
+    n_children: usize,
+    onward: &Option<ExecTree>,
+) -> Vec<Option<ExecTree>> {
+    let mut children_onward = vec![None; n_children];
+    if let Some(exec_tree) = &onward {
+        for child in &exec_tree.children {
+            children_onward[child.idx] = Some(child.clone());
+        }
+    }
+    children_onward
+}
 
 /// This utility function adds a `SortExec` above an operator according to the
 /// given ordering requirements while preserving the original partitioning.
 pub fn add_sort_above(
     node: &mut Arc<dyn ExecutionPlan>,
-    sort_expr: Vec<PhysicalSortExpr>,
-) -> Result<()> {
+    sort_requirement: LexRequirementRef,
+    fetch: Option<usize>,
+) {
     // If the ordering requirement is already satisfied, do not add a sort.
-    if !ordering_satisfy(
-        node.output_ordering(),
-        Some(&sort_expr),
-        || node.equivalence_properties(),
-        || node.ordering_equivalence_properties(),
-    ) {
-        let new_sort = SortExec::new(sort_expr, node.clone());
+    if !node
+        .equivalence_properties()
+        .ordering_satisfy_requirement(sort_requirement)
+    {
+        let sort_expr = PhysicalSortRequirement::to_sort_exprs(sort_requirement.to_vec());
+        let new_sort = SortExec::new(sort_expr, node.clone()).with_fetch(fetch);
 
         *node = Arc::new(if node.output_partitioning().partition_count() > 1 {
             new_sort.with_preserve_partitioning(true)
@@ -55,65 +116,6 @@ pub fn add_sort_above(
             new_sort
         }) as _
     }
-    Ok(())
-}
-
-/// Find indices of each element in `targets` inside `items`. If one of the
-/// elements is absent in `items`, returns an error.
-pub fn find_indices<T: PartialEq, S: Borrow<T>>(
-    items: &[T],
-    targets: impl IntoIterator<Item = S>,
-) -> Result<Vec<usize>> {
-    targets
-        .into_iter()
-        .map(|target| items.iter().position(|e| target.borrow().eq(e)))
-        .collect::<Option<_>>()
-        .ok_or_else(|| DataFusionError::Execution("Target not found".to_string()))
-}
-
-/// Merges collections `first` and `second`, removes duplicates and sorts the
-/// result, returning it as a [`Vec`].
-pub fn merge_and_order_indices<T: Borrow<usize>, S: Borrow<usize>>(
-    first: impl IntoIterator<Item = T>,
-    second: impl IntoIterator<Item = S>,
-) -> Vec<usize> {
-    let mut result: Vec<_> = first
-        .into_iter()
-        .map(|e| *e.borrow())
-        .chain(second.into_iter().map(|e| *e.borrow()))
-        .collect::<HashSet<_>>()
-        .into_iter()
-        .collect();
-    result.sort();
-    result
-}
-
-/// Checks whether the given index sequence is monotonically non-decreasing.
-pub fn is_sorted<T: Borrow<usize>>(sequence: impl IntoIterator<Item = T>) -> bool {
-    // TODO: Remove this function when `is_sorted` graduates from Rust nightly.
-    let mut previous = 0;
-    for item in sequence.into_iter() {
-        let current = *item.borrow();
-        if current < previous {
-            return false;
-        }
-        previous = current;
-    }
-    true
-}
-
-/// Calculates the set difference between sequences `first` and `second`,
-/// returning the result as a [`Vec`]. Preserves the ordering of `first`.
-pub fn set_difference<T: Borrow<usize>, S: Borrow<usize>>(
-    first: impl IntoIterator<Item = T>,
-    second: impl IntoIterator<Item = S>,
-) -> Vec<usize> {
-    let set: HashSet<_> = second.into_iter().map(|e| *e.borrow()).collect();
-    first
-        .into_iter()
-        .map(|e| *e.borrow())
-        .filter(|e| !set.contains(e))
-        .collect()
 }
 
 /// Checks whether the given operator is a limit;
@@ -151,54 +153,4 @@ pub fn is_union(plan: &Arc<dyn ExecutionPlan>) -> bool {
 /// Checks whether the given operator is a [`RepartitionExec`].
 pub fn is_repartition(plan: &Arc<dyn ExecutionPlan>) -> bool {
     plan.as_any().is::<RepartitionExec>()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[tokio::test]
-    async fn test_find_indices() -> Result<()> {
-        assert_eq!(find_indices(&[0, 3, 4], [0, 3, 4])?, vec![0, 1, 2]);
-        assert_eq!(find_indices(&[0, 3, 4], [0, 4, 3])?, vec![0, 2, 1]);
-        assert_eq!(find_indices(&[3, 0, 4], [0, 3])?, vec![1, 0]);
-        assert!(find_indices(&[0, 3], [0, 3, 4]).is_err());
-        assert!(find_indices(&[0, 3, 4], [0, 2]).is_err());
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_merge_and_order_indices() {
-        assert_eq!(
-            merge_and_order_indices([0, 3, 4], [1, 3, 5]),
-            vec![0, 1, 3, 4, 5]
-        );
-        // Result should be ordered, even if inputs are not
-        assert_eq!(
-            merge_and_order_indices([3, 0, 4], [5, 1, 3]),
-            vec![0, 1, 3, 4, 5]
-        );
-    }
-
-    #[tokio::test]
-    async fn test_is_sorted() {
-        assert!(is_sorted::<usize>([]));
-        assert!(is_sorted([0]));
-        assert!(is_sorted([0, 3, 4]));
-        assert!(is_sorted([0, 1, 2]));
-        assert!(is_sorted([0, 1, 4]));
-        assert!(is_sorted([0usize; 0]));
-        assert!(is_sorted([1, 2]));
-        assert!(!is_sorted([3, 2]));
-    }
-
-    #[tokio::test]
-    async fn test_set_difference() {
-        assert_eq!(set_difference([0, 3, 4], [1, 2]), vec![0, 3, 4]);
-        assert_eq!(set_difference([0, 3, 4], [1, 2, 4]), vec![0, 3]);
-        // return value should have same ordering with the in1
-        assert_eq!(set_difference([3, 4, 0], [1, 2, 4]), vec![3, 0]);
-        assert_eq!(set_difference([0, 3, 4], [4, 1, 2]), vec![0, 3]);
-        assert_eq!(set_difference([3, 4, 0], [4, 1, 2]), vec![3, 0]);
-    }
 }

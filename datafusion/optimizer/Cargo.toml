@@ -19,9 +19,9 @@
 name = "datafusion-optimizer"
 description = "DataFusion Query Optimizer"
 keywords = [ "datafusion", "query", "optimizer" ]
+readme = "README.md"
 version = { workspace = true }
 edition = { workspace = true }
-readme = { workspace = true }
 homepage = { workspace = true }
 repository = { workspace = true }
 license = { workspace = true }
@@ -35,23 +35,22 @@ path = "src/lib.rs"
 [features]
 crypto_expressions = ["datafusion-physical-expr/crypto_expressions"]
 default = ["unicode_expressions", "crypto_expressions", "regex_expressions"]
-dictionary_expressions = ["datafusion-physical-expr/dictionary_expressions"]
 regex_expressions = ["datafusion-physical-expr/regex_expressions"]
 unicode_expressions = ["datafusion-physical-expr/unicode_expressions"]
 
 [dependencies]
 arrow = { workspace = true }
-async-trait = "0.1.41"
-chrono = { version = "0.4.23", default-features = false }
-datafusion-common = { path = "../common", version = "26.0.0" }
-datafusion-expr = { path = "../expr", version = "26.0.0" }
-datafusion-physical-expr = { path = "../physical-expr", version = "26.0.0", default-features = false }
+async-trait = { workspace = true }
+chrono = { workspace = true }
+datafusion-common = { workspace = true }
+datafusion-expr = { workspace = true }
+datafusion-physical-expr = { path = "../physical-expr", version = "33.0.0", default-features = false }
 hashbrown = { version = "0.14", features = ["raw"] }
-itertools = "0.10"
-log = "^0.4"
-regex-syntax = "0.7.1"
+itertools = { workspace = true }
+log = { workspace = true }
+regex-syntax = "0.8.0"
 
 [dev-dependencies]
-ctor = "0.2.0"
-datafusion-sql = { path = "../sql", version = "26.0.0" }
+ctor = { workspace = true }
+datafusion-sql = { path = "../sql", version = "33.0.0" }
 env_logger = "0.10.0"

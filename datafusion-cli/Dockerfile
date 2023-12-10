@@ -15,13 +15,14 @@
 # specific language governing permissions and limitations
 # under the License.
 
-FROM rust:1.62 as builder
+FROM rust:1.70 as builder
 
-COPY ./datafusion /usr/src/datafusion
+COPY . /usr/src/arrow-datafusion
+COPY ./datafusion /usr/src/arrow-datafusion/datafusion
 
-COPY ./datafusion-cli /usr/src/datafusion-cli
+COPY ./datafusion-cli /usr/src/arrow-datafusion/datafusion-cli
 
-WORKDIR /usr/src/datafusion-cli
+WORKDIR /usr/src/arrow-datafusion/datafusion-cli
 
 RUN rustup component add rustfmt
 
@@ -29,7 +30,7 @@ RUN cargo build --release
 
 FROM debian:bullseye-slim
 
-COPY --from=builder /usr/src/datafusion-cli/target/release/datafusion-cli /usr/local/bin
+COPY --from=builder /usr/src/arrow-datafusion/datafusion-cli/target/release/datafusion-cli /usr/local/bin
 
 ENTRYPOINT ["datafusion-cli"]
 

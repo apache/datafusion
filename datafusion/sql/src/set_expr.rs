@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::{not_impl_err, DataFusionError, Result};
 use datafusion_expr::{LogicalPlan, LogicalPlanBuilder};
 use sqlparser::ast::{SetExpr, SetOperator, SetQuantifier};
 
@@ -38,6 +38,15 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 let all = match set_quantifier {
                     SetQuantifier::All => true,
                     SetQuantifier::Distinct | SetQuantifier::None => false,
+                    SetQuantifier::ByName => {
+                        return not_impl_err!("UNION BY NAME not implemented");
+                    }
+                    SetQuantifier::AllByName => {
+                        return not_impl_err!("UNION ALL BY NAME not implemented")
+                    }
+                    SetQuantifier::DistinctByName => {
+                        return not_impl_err!("UNION DISTINCT BY NAME not implemented")
+                    }
                 };
 
                 let left_plan = self.set_expr_to_plan(*left, planner_context)?;
@@ -64,9 +73,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 }
             }
             SetExpr::Query(q) => self.query_to_plan(*q, planner_context),
-            _ => Err(DataFusionError::NotImplemented(format!(
-                "Query {set_expr} not implemented yet"
-            ))),
+            _ => not_impl_err!("Query {set_expr} not implemented yet"),
         }
     }
 }

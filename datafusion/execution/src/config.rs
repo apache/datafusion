@@ -25,7 +25,7 @@ use std::{
 use datafusion_common::{config::ConfigOptions, Result, ScalarValue};
 
 /// Configuration options for Execution context
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct SessionConfig {
     /// Configuration options
     options: ConfigOptions,
@@ -86,7 +86,7 @@ impl SessionConfig {
 
     /// Set a generic `str` configuration option
     pub fn set_str(self, key: &str, value: &str) -> Self {
-        self.set(key, ScalarValue::Utf8(Some(value.to_string())))
+        self.set(key, ScalarValue::from(value))
     }
 
     /// Customize batch size
@@ -143,6 +143,14 @@ impl SessionConfig {
     /// or do we coalesce partitions first and sort globally?
     pub fn repartition_sorts(&self) -> bool {
         self.options.optimizer.repartition_sorts
+    }
+
+    /// Prefer existing sort (true) or maximize parallelism (false). See
+    /// [prefer_existing_sort] for more details
+    ///
+    /// [prefer_existing_sort]: datafusion_common::config::OptimizerOptions::prefer_existing_sort
+    pub fn prefer_existing_sort(&self) -> bool {
+        self.options.optimizer.prefer_existing_sort
     }
 
     /// Are statistics collected during execution?
@@ -215,6 +223,15 @@ impl SessionConfig {
         self
     }
 
+    /// Prefer existing sort (true) or maximize parallelism (false). See
+    /// [prefer_existing_sort] for more details
+    ///
+    /// [prefer_existing_sort]: datafusion_common::config::OptimizerOptions::prefer_existing_sort
+    pub fn with_prefer_existing_sort(mut self, enabled: bool) -> Self {
+        self.options.optimizer.prefer_existing_sort = enabled;
+        self
+    }
+
     /// Enables or disables the use of pruning predicate for parquet readers to skip row groups
     pub fn with_parquet_pruning(mut self, enabled: bool) -> Self {
         self.options.execution.parquet.pruning = enabled;
@@ -272,6 +289,32 @@ impl SessionConfig {
     /// add round robin repartition to increase parallelism to leverage more CPU cores.
     pub fn round_robin_repartition(&self) -> bool {
         self.options.optimizer.enable_round_robin_repartition
+    }
+
+    /// Set the size of [`sort_spill_reservation_bytes`] to control
+    /// memory pre-reservation
+    ///
+    /// [`sort_spill_reservation_bytes`]: datafusion_common::config::ExecutionOptions::sort_spill_reservation_bytes
+    pub fn with_sort_spill_reservation_bytes(
+        mut self,
+        sort_spill_reservation_bytes: usize,
+    ) -> Self {
+        self.options.execution.sort_spill_reservation_bytes =
+            sort_spill_reservation_bytes;
+        self
+    }
+
+    /// Set the size of [`sort_in_place_threshold_bytes`] to control
+    /// how sort does things.
+    ///
+    /// [`sort_in_place_threshold_bytes`]: datafusion_common::config::ExecutionOptions::sort_in_place_threshold_bytes
+    pub fn with_sort_in_place_threshold_bytes(
+        mut self,
+        sort_in_place_threshold_bytes: usize,
+    ) -> Self {
+        self.options.execution.sort_in_place_threshold_bytes =
+            sort_in_place_threshold_bytes;
+        self
     }
 
     /// Convert configuration options to name-value pairs with values

@@ -23,19 +23,18 @@ use std::sync::Arc;
 use arrow::datatypes::Schema;
 use arrow::{self, datatypes::SchemaRef};
 use async_trait::async_trait;
+use datafusion_common::FileType;
 use datafusion_physical_expr::PhysicalExpr;
-use object_store::{GetResult, ObjectMeta, ObjectStore};
+use object_store::{GetResultPayload, ObjectMeta, ObjectStore};
 
 use super::FileFormat;
-use crate::avro_to_arrow::read_avro_schema_from_reader;
+use crate::datasource::avro_to_arrow::read_avro_schema_from_reader;
 use crate::datasource::physical_plan::{AvroExec, FileScanConfig};
 use crate::error::Result;
 use crate::execution::context::SessionState;
 use crate::physical_plan::ExecutionPlan;
 use crate::physical_plan::Statistics;
 
-/// The default file extension of avro files
-pub const DEFAULT_AVRO_EXTENSION: &str = ".avro";
 /// Avro `FileFormat` implementation.
 #[derive(Default, Debug)]
 pub struct AvroFormat;
@@ -54,9 +53,12 @@ impl FileFormat for AvroFormat {
     ) -> Result<SchemaRef> {
         let mut schemas = vec![];
         for object in objects {
-            let schema = match store.get(&object.location).await? {
-                GetResult::File(mut file, _) => read_avro_schema_from_reader(&mut file)?,
-                r @ GetResult::Stream(_) => {
+            let r = store.as_ref().get(&object.location).await?;
+            let schema = match r.payload {
+                GetResultPayload::File(mut file, _) => {
+                    read_avro_schema_from_reader(&mut file)?
+                }
+                GetResultPayload::Stream(_) => {
                     // TODO: Fetching entire file to get schema is potentially wasteful
                     let data = r.bytes().await?;
                     read_avro_schema_from_reader(&mut data.as_ref())?
@@ -72,10 +74,10 @@ impl FileFormat for AvroFormat {
         &self,
         _state: &SessionState,
         _store: &Arc<dyn ObjectStore>,
-        _table_schema: SchemaRef,
+        table_schema: SchemaRef,
         _object: &ObjectMeta,
     ) -> Result<Statistics> {
-        Ok(Statistics::default())
+        Ok(Statistics::new_unknown(&table_schema))
     }
 
     async fn create_physical_plan(
@@ -86,6 +88,10 @@ impl FileFormat for AvroFormat {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let exec = AvroExec::new(conf);
         Ok(Arc::new(exec))
+    }
+
+    fn file_type(&self) -> FileType {
+        FileType::AVRO
     }
 }
 
@@ -106,7 +112,7 @@ mod tests {
     #[tokio::test]
     async fn read_small_batches() -> Result<()> {
         let config = SessionConfig::new().with_batch_size(2);
-        let session_ctx = SessionContext::with_config(config);
+        let session_ctx = SessionContext::new_with_config(config);
         let state = session_ctx.state();
         let task_ctx = state.task_ctx();
         let projection = None;
@@ -176,8 +182,7 @@ mod tests {
         let batches = collect(exec, task_ctx).await?;
         assert_eq!(batches.len(), 1);
 
-        let expected =  vec![
-            "+----+----------+-------------+--------------+---------+------------+-----------+------------+------------------+------------+---------------------+",
+        let expected =  ["+----+----------+-------------+--------------+---------+------------+-----------+------------+------------------+------------+---------------------+",
             "| id | bool_col | tinyint_col | smallint_col | int_col | bigint_col | float_col | double_col | date_string_col  | string_col | timestamp_col       |",
             "+----+----------+-------------+--------------+---------+------------+-----------+------------+------------------+------------+---------------------+",
             "| 4  | true     | 0           | 0            | 0       | 0          | 0.0       | 0.0        | 30332f30312f3039 | 30         | 2009-03-01T00:00:00 |",
@@ -188,8 +193,7 @@ mod tests {
             "| 3  | false    | 1           | 1            | 1       | 10         | 1.1       | 10.1       | 30322f30312f3039 | 31         | 2009-02-01T00:01:00 |",
             "| 0  | true     | 0           | 0            | 0       | 0          | 0.0       | 0.0        | 30312f30312f3039 | 30         | 2009-01-01T00:00:00 |",
             "| 1  | false    | 1           | 1            | 1       | 10         | 1.1       | 10.1       | 30312f30312f3039 | 31         | 2009-01-01T00:01:00 |",
-            "+----+----------+-------------+--------------+---------+------------+-----------+------------+------------------+------------+---------------------+",
-        ];
+            "+----+----------+-------------+--------------+---------+------------+-----------+------------+------------------+------------+---------------------+"];
 
         crate::assert_batches_eq!(expected, &batches);
         Ok(())

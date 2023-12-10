@@ -19,14 +19,17 @@
 
 # Example Usage
 
-In this example some simple processing is performed on the [`example.csv`](../../../datafusion/core/tests/data/example.csv) file.
+In this example some simple processing is performed on the [`example.csv`](https://github.com/apache/arrow-datafusion/blob/main/datafusion/core/tests/data/example.csv) file.
+
+Even [`more code examples`](https://github.com/apache/arrow-datafusion/tree/main/datafusion-examples) attached to the project.
 
 ## Update `Cargo.toml`
 
-Add the following to your `Cargo.toml` file:
+Find latest available Datafusion version on [DataFusion's
+crates.io] page. Add the dependency to your `Cargo.toml` file:
 
 ```toml
-datafusion = "22"
+datafusion = "31"
 tokio = "1.0"
 ```
 
@@ -110,7 +113,7 @@ unexpectedly.
 [`arrow`]: https://docs.rs/arrow/latest/arrow/
 [`parquet`]: https://docs.rs/parquet/latest/parquet/
 [datafusion's crates.io]: https://crates.io/crates/datafusion
-[datafusion `25.0.0` dependencies]: https://crates.io/crates/datafusion/25.0.0/dependencies
+[datafusion `26.0.0` dependencies]: https://crates.io/crates/datafusion/26.0.0/dependencies
 
 ## Identifiers and Capitalization
 
@@ -184,10 +187,6 @@ DataFusion is designed to be extensible at all points. To that end, you can prov
 - [x] User Defined `LogicalPlan` nodes
 - [x] User Defined `ExecutionPlan` nodes
 
-## Rust Version Compatibility
-
-This crate is tested with the latest stable version of Rust. We do not currently test against other, older versions of the Rust compiler.
-
 ## Optimized Configuration
 
 For an optimized build several steps are required. First, use the below in your `Cargo.toml`. It is
@@ -230,3 +229,37 @@ with `native` or at least `avx2`.
 ```shell
 RUSTFLAGS='-C target-cpu=native' cargo +nightly run --release
 ```
+
+## Enable backtraces
+
+By default Datafusion returns errors as a plain message. There is option to enable more verbose details about the error,
+like error backtrace. To enable a backtrace you need to add Datafusion `backtrace` feature to your `Cargo.toml` file:
+
+```toml
+datafusion = { version = "31.0.0", features = ["backtrace"]}
+```
+
+Set environment [`variables`] https://doc.rust-lang.org/std/backtrace/index.html#environment-variables
+
+```bash
+RUST_BACKTRACE=1 ./target/debug/datafusion-cli
+DataFusion CLI v31.0.0
+❯ select row_numer() over (partition by a order by a) from (select 1 a);
+Error during planning: Invalid function 'row_numer'.
+Did you mean 'ROW_NUMBER'?
+
+backtrace:    0: std::backtrace_rs::backtrace::libunwind::trace
+             at /rustc/5680fa18feaa87f3ff04063800aec256c3d4b4be/library/std/src/../../backtrace/src/backtrace/libunwind.rs:93:5
+   1: std::backtrace_rs::backtrace::trace_unsynchronized
+             at /rustc/5680fa18feaa87f3ff04063800aec256c3d4b4be/library/std/src/../../backtrace/src/backtrace/mod.rs:66:5
+   2: std::backtrace::Backtrace::create
+             at /rustc/5680fa18feaa87f3ff04063800aec256c3d4b4be/library/std/src/backtrace.rs:332:13
+   3: std::backtrace::Backtrace::capture
+             at /rustc/5680fa18feaa87f3ff04063800aec256c3d4b4be/library/std/src/backtrace.rs:298:9
+   4: datafusion_common::error::DataFusionError::get_back_trace
+             at /arrow-datafusion/datafusion/common/src/error.rs:436:30
+   5: datafusion_sql::expr::function::<impl datafusion_sql::planner::SqlToRel<S>>::sql_function_to_expr
+   ............
+```
+
+Note: The backtrace wrapped into systems calls, so some steps on top of the backtrace can be ignored

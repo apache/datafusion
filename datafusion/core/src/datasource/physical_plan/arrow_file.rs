@@ -16,25 +16,26 @@
 // under the License.
 
 //! Execution plan for reading Arrow files
+
+use std::any::Any;
+use std::sync::Arc;
+
 use crate::datasource::physical_plan::{
     FileMeta, FileOpenFuture, FileOpener, FileScanConfig,
 };
 use crate::error::Result;
 use crate::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::physical_plan::{
-    ordering_equivalence_properties_helper, DisplayFormatType, ExecutionPlan,
-    Partitioning, SendableRecordBatchStream,
+    DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream,
 };
+
 use arrow_schema::SchemaRef;
 use datafusion_common::Statistics;
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr::{
-    LexOrdering, OrderingEquivalenceProperties, PhysicalSortExpr,
-};
+use datafusion_physical_expr::{EquivalenceProperties, LexOrdering, PhysicalSortExpr};
+
 use futures::StreamExt;
-use object_store::{GetResult, ObjectStore};
-use std::any::Any;
-use std::sync::Arc;
+use object_store::{GetResultPayload, ObjectStore};
 
 /// Execution plan for scanning Arrow data source
 #[derive(Debug, Clone)]
@@ -68,6 +69,17 @@ impl ArrowExec {
     }
 }
 
+impl DisplayAs for ArrowExec {
+    fn fmt_as(
+        &self,
+        t: DisplayFormatType,
+        f: &mut std::fmt::Formatter,
+    ) -> std::fmt::Result {
+        write!(f, "ArrowExec: ")?;
+        self.base_config.fmt_as(t, f)
+    }
+}
+
 impl ExecutionPlan for ArrowExec {
     fn as_any(&self) -> &dyn Any {
         self
@@ -91,8 +103,8 @@ impl ExecutionPlan for ArrowExec {
             .map(|ordering| ordering.as_slice())
     }
 
-    fn ordering_equivalence_properties(&self) -> OrderingEquivalenceProperties {
-        ordering_equivalence_properties_helper(
+    fn equivalence_properties(&self) -> EquivalenceProperties {
+        EquivalenceProperties::new_with_orderings(
             self.schema(),
             &self.projected_output_ordering,
         )
@@ -132,20 +144,8 @@ impl ExecutionPlan for ArrowExec {
         Some(self.metrics.clone_inner())
     }
 
-    fn fmt_as(
-        &self,
-        t: DisplayFormatType,
-        f: &mut std::fmt::Formatter,
-    ) -> std::fmt::Result {
-        match t {
-            DisplayFormatType::Default => {
-                write!(f, "ArrowExec: {}", self.base_config)
-            }
-        }
-    }
-
-    fn statistics(&self) -> Statistics {
-        self.projected_statistics.clone()
+    fn statistics(&self) -> Result<Statistics> {
+        Ok(self.projected_statistics.clone())
     }
 }
 
@@ -159,13 +159,14 @@ impl FileOpener for ArrowOpener {
         let object_store = self.object_store.clone();
         let projection = self.projection.clone();
         Ok(Box::pin(async move {
-            match object_store.get(file_meta.location()).await? {
-                GetResult::File(file, _) => {
+            let r = object_store.get(file_meta.location()).await?;
+            match r.payload {
+                GetResultPayload::File(file, _) => {
                     let arrow_reader =
                         arrow::ipc::reader::FileReader::try_new(file, projection)?;
                     Ok(futures::stream::iter(arrow_reader).boxed())
                 }
-                r @ GetResult::Stream(_) => {
+                GetResultPayload::Stream(_) => {
                     let bytes = r.bytes().await?;
                     let cursor = std::io::Cursor::new(bytes);
                     let arrow_reader =

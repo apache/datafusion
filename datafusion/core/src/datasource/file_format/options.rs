@@ -21,24 +21,25 @@ use std::sync::Arc;
 
 use arrow::datatypes::{DataType, Schema, SchemaRef};
 use async_trait::async_trait;
-use datafusion_common::DataFusionError;
+use datafusion_common::{plan_err, DataFusionError};
 
-use crate::datasource::file_format::arrow::{ArrowFormat, DEFAULT_ARROW_EXTENSION};
-use crate::datasource::file_format::avro::DEFAULT_AVRO_EXTENSION;
-use crate::datasource::file_format::csv::DEFAULT_CSV_EXTENSION;
-use crate::datasource::file_format::file_type::FileCompressionType;
-use crate::datasource::file_format::json::DEFAULT_JSON_EXTENSION;
-use crate::datasource::file_format::parquet::DEFAULT_PARQUET_EXTENSION;
+use crate::datasource::file_format::arrow::ArrowFormat;
+use crate::datasource::file_format::file_compression_type::FileCompressionType;
+#[cfg(feature = "parquet")]
+use crate::datasource::file_format::parquet::ParquetFormat;
 use crate::datasource::file_format::DEFAULT_SCHEMA_INFER_MAX_RECORD;
 use crate::datasource::listing::ListingTableUrl;
 use crate::datasource::{
-    file_format::{
-        avro::AvroFormat, csv::CsvFormat, json::JsonFormat, parquet::ParquetFormat,
-    },
+    file_format::{avro::AvroFormat, csv::CsvFormat, json::JsonFormat},
     listing::ListingOptions,
 };
 use crate::error::Result;
 use crate::execution::context::{SessionConfig, SessionState};
+use crate::logical_expr::Expr;
+use datafusion_common::{
+    DEFAULT_ARROW_EXTENSION, DEFAULT_AVRO_EXTENSION, DEFAULT_CSV_EXTENSION,
+    DEFAULT_JSON_EXTENSION, DEFAULT_PARQUET_EXTENSION,
+};
 
 /// Options that control the reading of CSV files.
 ///
@@ -55,6 +56,10 @@ pub struct CsvReadOptions<'a> {
     pub has_header: bool,
     /// An optional column delimiter. Defaults to `b','`.
     pub delimiter: u8,
+    /// An optional quote character. Defaults to `b'"'`.
+    pub quote: u8,
+    /// An optional escape character. Defaults to None.
+    pub escape: Option<u8>,
     /// An optional schema representing the CSV files. If None, CSV reader will try to infer it
     /// based on data in file.
     pub schema: Option<&'a Schema>,
@@ -69,6 +74,8 @@ pub struct CsvReadOptions<'a> {
     pub file_compression_type: FileCompressionType,
     /// Flag indicating whether this file may be unbounded (as in a FIFO file).
     pub infinite: bool,
+    /// Indicates how the file is sorted
+    pub file_sort_order: Vec<Vec<Expr>>,
 }
 
 impl<'a> Default for CsvReadOptions<'a> {
@@ -85,10 +92,13 @@ impl<'a> CsvReadOptions<'a> {
             schema: None,
             schema_infer_max_records: DEFAULT_SCHEMA_INFER_MAX_RECORD,
             delimiter: b',',
+            quote: b'"',
+            escape: None,
             file_extension: DEFAULT_CSV_EXTENSION,
             table_partition_cols: vec![],
             file_compression_type: FileCompressionType::UNCOMPRESSED,
             infinite: false,
+            file_sort_order: vec![],
         }
     }
 
@@ -107,6 +117,18 @@ impl<'a> CsvReadOptions<'a> {
     /// Specify delimiter to use for CSV read
     pub fn delimiter(mut self, delimiter: u8) -> Self {
         self.delimiter = delimiter;
+        self
+    }
+
+    /// Specify quote to use for CSV read
+    pub fn quote(mut self, quote: u8) -> Self {
+        self.quote = quote;
+        self
+    }
+
+    /// Specify delimiter to use for CSV read
+    pub fn escape(mut self, escape: u8) -> Self {
+        self.escape = Some(escape);
         self
     }
 
@@ -153,6 +175,12 @@ impl<'a> CsvReadOptions<'a> {
         self.file_compression_type = file_compression_type;
         self
     }
+
+    /// Configure if file has known sort order
+    pub fn file_sort_order(mut self, file_sort_order: Vec<Vec<Expr>>) -> Self {
+        self.file_sort_order = file_sort_order;
+        self
+    }
 }
 
 /// Options that control the reading of Parquet files.
@@ -177,6 +205,11 @@ pub struct ParquetReadOptions<'a> {
     ///
     /// If None specified, uses value in SessionConfig
     pub skip_metadata: Option<bool>,
+    /// An optional schema representing the parquet files. If None, parquet reader will try to infer it
+    /// based on data in file.
+    pub schema: Option<&'a Schema>,
+    /// Indicates how the file is sorted
+    pub file_sort_order: Vec<Vec<Expr>>,
 }
 
 impl<'a> Default for ParquetReadOptions<'a> {
@@ -186,6 +219,8 @@ impl<'a> Default for ParquetReadOptions<'a> {
             table_partition_cols: vec![],
             parquet_pruning: None,
             skip_metadata: None,
+            schema: None,
+            file_sort_order: vec![],
         }
     }
 }
@@ -205,12 +240,24 @@ impl<'a> ParquetReadOptions<'a> {
         self
     }
 
+    /// Specify schema to use for parquet read
+    pub fn schema(mut self, schema: &'a Schema) -> Self {
+        self.schema = Some(schema);
+        self
+    }
+
     /// Specify table_partition_cols for partition pruning
     pub fn table_partition_cols(
         mut self,
         table_partition_cols: Vec<(String, DataType)>,
     ) -> Self {
         self.table_partition_cols = table_partition_cols;
+        self
+    }
+
+    /// Configure if file has known sort order
+    pub fn file_sort_order(mut self, file_sort_order: Vec<Vec<Expr>>) -> Self {
+        self.file_sort_order = file_sort_order;
         self
     }
 }
@@ -336,6 +383,8 @@ pub struct NdJsonReadOptions<'a> {
     pub file_compression_type: FileCompressionType,
     /// Flag indicating whether this file may be unbounded (as in a FIFO file).
     pub infinite: bool,
+    /// Indicates how the file is sorted
+    pub file_sort_order: Vec<Vec<Expr>>,
 }
 
 impl<'a> Default for NdJsonReadOptions<'a> {
@@ -347,6 +396,7 @@ impl<'a> Default for NdJsonReadOptions<'a> {
             table_partition_cols: vec![],
             file_compression_type: FileCompressionType::UNCOMPRESSED,
             infinite: false,
+            file_sort_order: vec![],
         }
     }
 }
@@ -387,6 +437,12 @@ impl<'a> NdJsonReadOptions<'a> {
         self.schema = Some(schema);
         self
     }
+
+    /// Configure if file has known sort order
+    pub fn file_sort_order(mut self, file_sort_order: Vec<Vec<Expr>>) -> Self {
+        self.file_sort_order = file_sort_order;
+        self
+    }
 }
 
 #[async_trait]
@@ -421,10 +477,9 @@ pub trait ReadOptions<'a> {
                 .to_listing_options(config)
                 .infer_schema(&state, &table_path)
                 .await?),
-            (None, true) => Err(DataFusionError::Plan(
-                "Schema inference for infinite data sources is not supported."
-                    .to_string(),
-            )),
+            (None, true) => {
+                plan_err!("Schema inference for infinite data sources is not supported.")
+            }
         }
     }
 }
@@ -435,6 +490,8 @@ impl ReadOptions<'_> for CsvReadOptions<'_> {
         let file_format = CsvFormat::default()
             .with_has_header(self.has_header)
             .with_delimiter(self.delimiter)
+            .with_quote(self.quote)
+            .with_escape(self.escape)
             .with_schema_infer_max_rec(Some(self.schema_infer_max_records))
             .with_file_compression_type(self.file_compression_type.to_owned());
 
@@ -442,8 +499,7 @@ impl ReadOptions<'_> for CsvReadOptions<'_> {
             .with_file_extension(self.file_extension)
             .with_target_partitions(config.target_partitions())
             .with_table_partition_cols(self.table_partition_cols.clone())
-            // TODO: Add file sort order into CsvReadOptions and introduce here.
-            .with_file_sort_order(vec![])
+            .with_file_sort_order(self.file_sort_order.clone())
             .with_infinite_source(self.infinite)
     }
 
@@ -458,6 +514,7 @@ impl ReadOptions<'_> for CsvReadOptions<'_> {
     }
 }
 
+#[cfg(feature = "parquet")]
 #[async_trait]
 impl ReadOptions<'_> for ParquetReadOptions<'_> {
     fn to_listing_options(&self, config: &SessionConfig) -> ListingOptions {
@@ -469,6 +526,7 @@ impl ReadOptions<'_> for ParquetReadOptions<'_> {
             .with_file_extension(self.file_extension)
             .with_target_partitions(config.target_partitions())
             .with_table_partition_cols(self.table_partition_cols.clone())
+            .with_file_sort_order(self.file_sort_order.clone())
     }
 
     async fn get_resolved_schema(
@@ -477,11 +535,8 @@ impl ReadOptions<'_> for ParquetReadOptions<'_> {
         state: SessionState,
         table_path: ListingTableUrl,
     ) -> Result<SchemaRef> {
-        // with parquet we resolve the schema in all cases
-        Ok(self
-            .to_listing_options(config)
-            .infer_schema(&state, &table_path)
-            .await?)
+        self._get_resolved_schema(config, state, table_path, self.schema, false)
+            .await
     }
 }
 
@@ -489,6 +544,7 @@ impl ReadOptions<'_> for ParquetReadOptions<'_> {
 impl ReadOptions<'_> for NdJsonReadOptions<'_> {
     fn to_listing_options(&self, config: &SessionConfig) -> ListingOptions {
         let file_format = JsonFormat::default()
+            .with_schema_infer_max_rec(Some(self.schema_infer_max_records))
             .with_file_compression_type(self.file_compression_type.to_owned());
 
         ListingOptions::new(Arc::new(file_format))
@@ -496,6 +552,7 @@ impl ReadOptions<'_> for NdJsonReadOptions<'_> {
             .with_target_partitions(config.target_partitions())
             .with_table_partition_cols(self.table_partition_cols.clone())
             .with_infinite_source(self.infinite)
+            .with_file_sort_order(self.file_sort_order.clone())
     }
 
     async fn get_resolved_schema(
@@ -512,7 +569,7 @@ impl ReadOptions<'_> for NdJsonReadOptions<'_> {
 #[async_trait]
 impl ReadOptions<'_> for AvroReadOptions<'_> {
     fn to_listing_options(&self, config: &SessionConfig) -> ListingOptions {
-        let file_format = AvroFormat::default();
+        let file_format = AvroFormat;
 
         ListingOptions::new(Arc::new(file_format))
             .with_file_extension(self.file_extension)
@@ -535,7 +592,7 @@ impl ReadOptions<'_> for AvroReadOptions<'_> {
 #[async_trait]
 impl ReadOptions<'_> for ArrowReadOptions<'_> {
     fn to_listing_options(&self, config: &SessionConfig) -> ListingOptions {
-        let file_format = ArrowFormat::default();
+        let file_format = ArrowFormat;
 
         ListingOptions::new(Arc::new(file_format))
             .with_file_extension(self.file_extension)

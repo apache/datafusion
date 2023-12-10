@@ -20,10 +20,10 @@
 use std::sync::Arc;
 
 use super::{ExprSimplifier, SimplifyContext};
-use crate::utils::merge_schema;
 use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_common::{DFSchema, DFSchemaRef, Result};
-use datafusion_expr::{logical_plan::LogicalPlan, utils::from_plan};
+use datafusion_expr::logical_plan::LogicalPlan;
+use datafusion_expr::utils::merge_schema;
 use datafusion_physical_expr::execution_props::ExecutionProps;
 
 /// Optimizer Pass that simplifies [`LogicalPlan`]s by rewriting
@@ -65,10 +65,21 @@ impl SimplifyExpressions {
     ) -> Result<LogicalPlan> {
         let schema = if !plan.inputs().is_empty() {
             DFSchemaRef::new(merge_schema(plan.inputs()))
-        } else if let LogicalPlan::TableScan(_) = plan {
-            // When predicates are pushed into a table scan, there needs to be
-            // a schema to resolve the fields against.
-            Arc::clone(plan.schema())
+        } else if let LogicalPlan::TableScan(scan) = plan {
+            // When predicates are pushed into a table scan, there is no input
+            // schema to resolve predicates against, so it must be handled specially
+            //
+            // Note that this is not `plan.schema()` which is the *output*
+            // schema, and reflects any pushed down projection. The output schema
+            // will not contain columns that *only* appear in pushed down predicates
+            // (and no where else) in the plan.
+            //
+            // Thus, use the full schema of the inner provider without any
+            // projection applied for simplification
+            Arc::new(DFSchema::try_from_qualified_schema(
+                &scan.table_name,
+                &scan.source.schema(),
+            )?)
         } else {
             Arc::new(DFSchema::empty())
         };
@@ -86,28 +97,14 @@ impl SimplifyExpressions {
             .expressions()
             .into_iter()
             .map(|e| {
-                // We need to keep original expression name, if any.
-                // Constant folding should not change expression name.
-                let name = &e.display_name();
-
-                // Apply the actual simplification logic
+                // TODO: unify with `rewrite_preserving_name`
+                let original_name = e.name_for_alias()?;
                 let new_e = simplifier.simplify(e)?;
-
-                let new_name = &new_e.display_name();
-
-                if let (Ok(expr_name), Ok(new_expr_name)) = (name, new_name) {
-                    if expr_name != new_expr_name {
-                        Ok(new_e.alias(expr_name))
-                    } else {
-                        Ok(new_e)
-                    }
-                } else {
-                    Ok(new_e)
-                }
+                new_e.alias_if_changed(original_name)
             })
             .collect::<Result<Vec<_>>>()?;
 
-        from_plan(plan, &expr, &new_inputs)
+        plan.with_new_exprs(expr, &new_inputs)
     }
 }
 
@@ -125,7 +122,7 @@ mod tests {
     use crate::simplify_expressions::utils::for_test::{
         cast_to_int64_expr, now_expr, to_timestamp_expr,
     };
-    use crate::test::test_table_scan_with_name;
+    use crate::test::{assert_fields_eq, test_table_scan_with_name};
 
     use super::*;
     use arrow::datatypes::{DataType, Field, Schema};
@@ -186,6 +183,48 @@ mod tests {
         let formatted_plan = format!("{optimized_plan:?}");
         assert_eq!(formatted_plan, expected);
         Ok(())
+    }
+
+    #[test]
+    fn test_simplify_table_full_filter_in_scan() -> Result<()> {
+        let fields = vec![
+            Field::new("a", DataType::UInt32, false),
+            Field::new("b", DataType::UInt32, false),
+            Field::new("c", DataType::UInt32, false),
+        ];
+
+        let schema = Schema::new(fields);
+
+        let table_scan = table_scan_with_filters(
+            Some("test"),
+            &schema,
+            Some(vec![0]),
+            vec![col("b").is_not_null()],
+        )?
+        .build()?;
+        assert_eq!(1, table_scan.schema().fields().len());
+        assert_fields_eq(&table_scan, vec!["a"]);
+
+        let expected = "TableScan: test projection=[a], full_filters=[Boolean(true) AS b IS NOT NULL]";
+
+        assert_optimized_plan_eq(&table_scan, expected)
+    }
+
+    #[test]
+    fn test_simplify_filter_pushdown() -> Result<()> {
+        let table_scan = test_table_scan();
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .project(vec![col("a")])?
+            .filter(and(col("b").gt(lit(1)), col("b").gt(lit(1))))?
+            .build()?;
+
+        assert_optimized_plan_eq(
+            &plan,
+            "\
+	        Filter: test.b > Int32(1)\
+            \n  Projection: test.a\
+            \n    TableScan: test",
+        )
     }
 
     #[test]
@@ -487,8 +526,8 @@ mod tests {
         let expected = format!(
             "Projection: TimestampNanosecond({}, Some(\"+00:00\")) AS now(), TimestampNanosecond({}, Some(\"+00:00\")) AS t2\
             \n  TableScan: test",
-            time.timestamp_nanos(),
-            time.timestamp_nanos()
+            time.timestamp_nanos_opt().unwrap(),
+            time.timestamp_nanos_opt().unwrap()
         );
 
         assert_eq!(expected, actual);
@@ -847,8 +886,7 @@ mod tests {
 
         // before simplify: t.g = power(t.f, 1.0)
         // after simplify:  (t.g = t.f) as "t.g = power(t.f, 1.0)"
-        let expected =
-            "TableScan: test, unsupported_filters=[g = f AS g = power(f,Float64(1))]";
+        let expected = "TableScan: test, full_filters=[g = f AS g = power(f,Float64(1))]";
         assert_optimized_plan_eq(&plan, expected)
     }
 

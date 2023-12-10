@@ -18,24 +18,24 @@
 [package]
 name = "datafusion-substrait"
 description = "DataFusion Substrait Producer and Consumer"
+readme = "README.md"
 version = { workspace = true }
 edition = { workspace = true }
-readme = { workspace = true }
 homepage = { workspace = true }
 repository = { workspace = true }
 license = { workspace = true }
 authors = { workspace = true }
-rust-version = { workspace = true }
+rust-version = "1.70"
 
 [dependencies]
 async-recursion = "1.0"
-chrono = { version = "0.4.23", default-features = false }
-datafusion = { version = "26.0.0", path = "../core" }
-itertools = "0.10.5"
-object_store = "0.6.1"
-prost = "0.11"
-prost-types = "0.11"
-substrait = "0.11.0"
+chrono = { workspace = true }
+datafusion = { workspace = true }
+itertools = { workspace = true }
+object_store = { workspace = true }
+prost = "0.12"
+prost-types = "0.12"
+substrait = "0.20.0"
 tokio = "1.17"
 
 [features]

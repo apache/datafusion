@@ -1,0 +1,73 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+statement ok
+CREATE TABLE test(
+  num INT,
+  bin_field  BYTEA,
+  base64_field TEXT,
+  hex_field TEXT,
+) as VALUES
+  (0, 'abc',  encode('abc', 'base64'), encode('abc', 'hex')),
+  (1, 'qweqwe',    encode('qweqwe', 'base64'), encode('qweqwe', 'hex')),
+  (2, NULL, NULL, NULL)
+;
+
+# errors
+query error DataFusion error: Error during planning: The encode function can only accept utf8 or binary\.
+select encode(12, 'hex')
+
+query error DataFusion error: Error during planning: There is no built\-in encoding named 'non_encoding', currently supported encodings are: base64, hex
+select encode(bin_field, 'non_encoding') from test;
+
+query error DataFusion error: Error during planning: The decode function can only accept utf8 or binary\.
+select decode(12, 'hex')
+
+query error DataFusion error: Error during planning: There is no built\-in encoding named 'non_encoding', currently supported encodings are: base64, hex
+select decode(hex_field, 'non_encoding') from test;
+
+query error DataFusion error: Error during planning: No function matches the given name and argument types 'to_hex\(Utf8\)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tto_hex\(Int64\)
+select to_hex(hex_field) from test;
+
+# Arrays tests
+query T
+SELECT encode(bin_field, 'hex') FROM test ORDER BY num;
+----
+616263
+717765717765
+NULL
+
+query T
+SELECT arrow_cast(decode(base64_field, 'base64'), 'Utf8') FROM test ORDER BY num;
+----
+abc
+qweqwe
+NULL
+
+query T
+SELECT arrow_cast(decode(hex_field, 'hex'), 'Utf8') FROM test ORDER BY num;
+----
+abc
+qweqwe
+NULL
+
+query T
+select to_hex(num) from test ORDER BY num;
+----
+0
+1
+2

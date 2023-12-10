@@ -17,6 +17,7 @@
 
 use crate::parquet::Unit::Page;
 use crate::parquet::{ContextWithParquet, Scenario};
+
 use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::file_format::FileFormat;
 use datafusion::datasource::listing::PartitionedFile;
@@ -30,6 +31,7 @@ use datafusion_common::{ScalarValue, Statistics, ToDFSchema};
 use datafusion_expr::{col, lit, Expr};
 use datafusion_physical_expr::create_physical_expr;
 use datafusion_physical_expr::execution_props::ExecutionProps;
+
 use futures::StreamExt;
 use object_store::path::Path;
 use object_store::ObjectMeta;
@@ -48,6 +50,7 @@ async fn get_parquet_exec(state: &SessionState, filter: Expr) -> ParquetExec {
         last_modified: metadata.modified().map(chrono::DateTime::from).unwrap(),
         size: metadata.len() as usize,
         e_tag: None,
+        version: None,
     };
 
     let schema = ParquetFormat::default()
@@ -71,8 +74,8 @@ async fn get_parquet_exec(state: &SessionState, filter: Expr) -> ParquetExec {
         FileScanConfig {
             object_store_url,
             file_groups: vec![vec![partitioned_file]],
-            file_schema: schema,
-            statistics: Statistics::default(),
+            file_schema: schema.clone(),
+            statistics: Statistics::new_unknown(&schema),
             // file has 10 cols so index 12 should be month
             projection: None,
             limit: None,
@@ -240,10 +243,11 @@ async fn test_prune(
     expected_row_pages_pruned: Option<usize>,
     expected_results: usize,
 ) {
-    let output = ContextWithParquet::new(case_data_type, Page)
-        .await
-        .query(sql)
-        .await;
+    let output: crate::parquet::TestOutput =
+        ContextWithParquet::new(case_data_type, Page)
+            .await
+            .query(sql)
+            .await;
 
     println!("{}", output.description());
     assert_eq!(output.predicate_evaluation_errors(), expected_errors);

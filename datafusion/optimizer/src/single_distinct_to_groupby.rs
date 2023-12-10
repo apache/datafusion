@@ -17,32 +17,39 @@
 
 //! single distinct to group by optimizer rule
 
+use std::sync::Arc;
+
 use crate::optimizer::ApplyOrder;
 use crate::{OptimizerConfig, OptimizerRule};
+
 use datafusion_common::{DFSchema, Result};
+use datafusion_expr::expr::AggregateFunctionDefinition;
 use datafusion_expr::{
+    aggregate_function::AggregateFunction::{Max, Min, Sum},
     col,
     expr::AggregateFunction,
     logical_plan::{Aggregate, LogicalPlan, Projection},
     utils::columnize_expr,
     Expr, ExprSchemable,
 };
+
 use hashbrown::HashSet;
-use std::sync::Arc;
 
 /// single distinct to group by optimizer rule
 ///  ```text
-///    SELECT F1(DISTINCT s),F2(DISTINCT s)
-///    ...
-///    GROUP BY k
+///    Before:
+///    SELECT a, COUNT(DINSTINCT b), SUM(c)
+///    FROM t
+///    GROUP BY a
 ///
-///    Into
-///
-///    SELECT F1(alias1),F2(alias1)
+///    After:
+///    SELECT a, COUNT(alias1), SUM(alias2)
 ///    FROM (
-///      SELECT s as alias1, k ... GROUP BY s, k
+///      SELECT a, b as alias1, SUM(c) as alias2
+///      FROM t
+///      GROUP BY a, b
 ///    )
-///    GROUP BY k
+///    GROUP BY a
 ///  ```
 #[derive(Default)]
 pub struct SingleDistinctToGroupBy {}
@@ -61,22 +68,30 @@ fn is_single_distinct_agg(plan: &LogicalPlan) -> Result<bool> {
     match plan {
         LogicalPlan::Aggregate(Aggregate { aggr_expr, .. }) => {
             let mut fields_set = HashSet::new();
-            let mut distinct_count = 0;
+            let mut aggregate_count = 0;
             for expr in aggr_expr {
                 if let Expr::AggregateFunction(AggregateFunction {
-                    distinct, args, ..
+                    func_def: AggregateFunctionDefinition::BuiltIn(fun),
+                    distinct,
+                    args,
+                    filter,
+                    order_by,
                 }) = expr
                 {
-                    if *distinct {
-                        distinct_count += 1;
+                    if filter.is_some() || order_by.is_some() {
+                        return Ok(false);
                     }
-                    for e in args {
-                        fields_set.insert(e.display_name()?);
+                    aggregate_count += 1;
+                    if *distinct {
+                        for e in args {
+                            fields_set.insert(e.canonical_name());
+                        }
+                    } else if !matches!(fun, Sum | Min | Max) {
+                        return Ok(false);
                     }
                 }
             }
-            let res = distinct_count == aggr_expr.len() && fields_set.len() == 1;
-            Ok(res)
+            Ok(aggregate_count == aggr_expr.len() && fields_set.len() == 1)
         }
         _ => Ok(false),
     }
@@ -102,51 +117,104 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                 ..
             }) => {
                 if is_single_distinct_agg(plan)? && !contains_grouping_set(group_expr) {
+                    let fields = schema.fields();
                     // alias all original group_by exprs
-                    let mut group_expr_alias = Vec::with_capacity(group_expr.len());
-                    let mut inner_group_exprs = group_expr
+                    let (mut inner_group_exprs, out_group_expr_with_alias): (
+                        Vec<Expr>,
+                        Vec<(Expr, Option<String>)>,
+                    ) = group_expr
                         .iter()
                         .enumerate()
                         .map(|(i, group_expr)| {
-                            let alias_str = format!("group_alias_{i}");
-                            let alias_expr = group_expr.clone().alias(&alias_str);
-                            group_expr_alias
-                                .push((alias_str, schema.fields()[i].clone()));
-                            alias_expr
+                            if let Expr::Column(_) = group_expr {
+                                // For Column expressions we can use existing expression as is.
+                                (group_expr.clone(), (group_expr.clone(), None))
+                            } else {
+                                // For complex expression write is as alias, to be able to refer
+                                // if from parent operators successfully.
+                                // Consider plan below.
+                                //
+                                // Aggregate: groupBy=[[group_alias_0]], aggr=[[COUNT(alias1)]] [group_alias_0:Int32, COUNT(alias1):Int64;N]\
+                                // --Aggregate: groupBy=[[test.a + Int32(1) AS group_alias_0, test.c AS alias1]], aggr=[[]] [group_alias_0:Int32, alias1:UInt32]\
+                                // ----TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+                                //
+                                // First aggregate(from bottom) refers to `test.a` column.
+                                // Second aggregate refers to the `group_alias_0` column, Which is a valid field in the first aggregate.
+                                // If we were to write plan above as below without alias
+                                //
+                                // Aggregate: groupBy=[[test.a + Int32(1)]], aggr=[[COUNT(alias1)]] [group_alias_0:Int32, COUNT(alias1):Int64;N]\
+                                // --Aggregate: groupBy=[[test.a + Int32(1), test.c AS alias1]], aggr=[[]] [group_alias_0:Int32, alias1:UInt32]\
+                                // ----TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+                                //
+                                // Second aggregate refers to the `test.a + Int32(1)` expression However, its input do not have `test.a` expression in it.
+                                let alias_str = format!("group_alias_{i}");
+                                let alias_expr = group_expr.clone().alias(&alias_str);
+                                (
+                                    alias_expr,
+                                    (col(alias_str), Some(fields[i].qualified_name())),
+                                )
+                            }
                         })
-                        .collect::<Vec<_>>();
+                        .unzip();
 
                     // and they can be referenced by the alias in the outer aggr plan
-                    let outer_group_exprs = group_expr_alias
+                    let outer_group_exprs = out_group_expr_with_alias
                         .iter()
-                        .map(|(alias, _)| col(alias))
+                        .map(|(out_group_expr, _)| out_group_expr.clone())
                         .collect::<Vec<_>>();
 
                     // replace the distinct arg with alias
+                    let mut index = 1;
                     let mut group_fields_set = HashSet::new();
-                    let new_aggr_exprs = aggr_expr
+                    let mut inner_aggr_exprs = vec![];
+                    let outer_aggr_exprs = aggr_expr
                         .iter()
                         .map(|aggr_expr| match aggr_expr {
                             Expr::AggregateFunction(AggregateFunction {
-                                fun,
+                                func_def: AggregateFunctionDefinition::BuiltIn(fun),
                                 args,
-                                filter,
-                                order_by,
+                                distinct,
                                 ..
                             }) => {
                                 // is_single_distinct_agg ensure args.len=1
-                                if group_fields_set.insert(args[0].display_name()?) {
+                                if *distinct
+                                    && group_fields_set.insert(args[0].display_name()?)
+                                {
                                     inner_group_exprs.push(
                                         args[0].clone().alias(SINGLE_DISTINCT_ALIAS),
                                     );
                                 }
-                                Ok(Expr::AggregateFunction(AggregateFunction::new(
-                                    fun.clone(),
-                                    vec![col(SINGLE_DISTINCT_ALIAS)],
-                                    false, // intentional to remove distinct here
-                                    filter.clone(),
-                                    order_by.clone(),
-                                )))
+
+                                // if the aggregate function is not distinct, we need to rewrite it like two phase aggregation
+                                if !(*distinct) {
+                                    index += 1;
+                                    let alias_str = format!("alias{}", index);
+                                    inner_aggr_exprs.push(
+                                        Expr::AggregateFunction(AggregateFunction::new(
+                                            fun.clone(),
+                                            args.clone(),
+                                            false,
+                                            None,
+                                            None,
+                                        ))
+                                        .alias(&alias_str),
+                                    );
+                                    Ok(Expr::AggregateFunction(AggregateFunction::new(
+                                        fun.clone(),
+                                        vec![col(&alias_str)],
+                                        false,
+                                        None,
+                                        None,
+                                    )))
+                                } else {
+                                    Ok(Expr::AggregateFunction(AggregateFunction::new(
+                                        fun.clone(),
+                                        vec![col(SINGLE_DISTINCT_ALIAS)],
+                                        false, // intentional to remove distinct here
+                                        None,
+                                        None,
+                                    )))
+                                }
                             }
                             _ => Ok(aggr_expr.clone()),
                         })
@@ -155,6 +223,7 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                     // construct the inner AggrPlan
                     let inner_fields = inner_group_exprs
                         .iter()
+                        .chain(inner_aggr_exprs.iter())
                         .map(|expr| expr.to_field(input.schema()))
                         .collect::<Result<Vec<_>>>()?;
                     let inner_schema = DFSchema::new_with_metadata(
@@ -164,15 +233,16 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                     let inner_agg = LogicalPlan::Aggregate(Aggregate::try_new(
                         input.clone(),
                         inner_group_exprs,
-                        Vec::new(),
+                        inner_aggr_exprs,
                     )?);
 
+                    let outer_fields = outer_group_exprs
+                        .iter()
+                        .chain(outer_aggr_exprs.iter())
+                        .map(|expr| expr.to_field(&inner_schema))
+                        .collect::<Result<Vec<_>>>()?;
                     let outer_aggr_schema = Arc::new(DFSchema::new_with_metadata(
-                        outer_group_exprs
-                            .iter()
-                            .chain(new_aggr_exprs.iter())
-                            .map(|expr| expr.to_field(&inner_schema))
-                            .collect::<Result<Vec<_>>>()?,
+                        outer_fields,
                         input.schema().metadata().clone(),
                     )?);
 
@@ -180,34 +250,33 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                     // this optimizer has two kinds of alias:
                     // - group_by aggr
                     // - aggr expr
-                    let mut alias_expr: Vec<Expr> = Vec::new();
-                    for (alias, original_field) in group_expr_alias {
-                        alias_expr
-                            .push(col(alias).alias(original_field.qualified_name()));
-                    }
-                    for (i, expr) in new_aggr_exprs.iter().enumerate() {
-                        alias_expr.push(columnize_expr(
-                            expr.clone().alias(
-                                schema.clone().fields()[i + group_expr.len()]
-                                    .qualified_name(),
-                            ),
-                            &outer_aggr_schema,
-                        ));
-                    }
+                    let group_size = group_expr.len();
+                    let alias_expr = out_group_expr_with_alias
+                        .into_iter()
+                        .map(|(group_expr, original_field)| {
+                            if let Some(name) = original_field {
+                                group_expr.alias(name)
+                            } else {
+                                group_expr
+                            }
+                        })
+                        .chain(outer_aggr_exprs.iter().enumerate().map(|(idx, expr)| {
+                            let idx = idx + group_size;
+                            let name = fields[idx].qualified_name();
+                            columnize_expr(expr.clone().alias(name), &outer_aggr_schema)
+                        }))
+                        .collect();
 
                     let outer_aggr = LogicalPlan::Aggregate(Aggregate::try_new(
                         Arc::new(inner_agg),
                         outer_group_exprs,
-                        new_aggr_exprs,
+                        outer_aggr_exprs,
                     )?);
 
-                    Ok(Some(LogicalPlan::Projection(
-                        Projection::try_new_with_schema(
-                            alias_expr,
-                            Arc::new(outer_aggr),
-                            schema.clone(),
-                        )?,
-                    )))
+                    Ok(Some(LogicalPlan::Projection(Projection::try_new(
+                        alias_expr,
+                        Arc::new(outer_aggr),
+                    )?)))
                 } else {
                     Ok(None)
                 }
@@ -233,7 +302,7 @@ mod tests {
     use datafusion_expr::expr::GroupingSet;
     use datafusion_expr::{
         col, count, count_distinct, lit, logical_plan::builder::LogicalPlanBuilder, max,
-        AggregateFunction,
+        min, sum, AggregateFunction,
     };
 
     fn assert_optimized_plan_equal(plan: &LogicalPlan, expected: &str) -> Result<()> {
@@ -293,7 +362,7 @@ mod tests {
             .build()?;
 
         // Should not be optimized
-        let expected = "Aggregate: groupBy=[[GROUPING SETS ((test.a), (test.b))]], aggr=[[COUNT(DISTINCT test.c)]] [a:UInt32, b:UInt32, COUNT(DISTINCT test.c):Int64;N]\
+        let expected = "Aggregate: groupBy=[[GROUPING SETS ((test.a), (test.b))]], aggr=[[COUNT(DISTINCT test.c)]] [a:UInt32;N, b:UInt32;N, COUNT(DISTINCT test.c):Int64;N]\
                             \n  TableScan: test [a:UInt32, b:UInt32, c:UInt32]";
 
         assert_optimized_plan_equal(&plan, expected)
@@ -311,7 +380,7 @@ mod tests {
             .build()?;
 
         // Should not be optimized
-        let expected = "Aggregate: groupBy=[[CUBE (test.a, test.b)]], aggr=[[COUNT(DISTINCT test.c)]] [a:UInt32, b:UInt32, COUNT(DISTINCT test.c):Int64;N]\
+        let expected = "Aggregate: groupBy=[[CUBE (test.a, test.b)]], aggr=[[COUNT(DISTINCT test.c)]] [a:UInt32;N, b:UInt32;N, COUNT(DISTINCT test.c):Int64;N]\
                             \n  TableScan: test [a:UInt32, b:UInt32, c:UInt32]";
 
         assert_optimized_plan_equal(&plan, expected)
@@ -330,7 +399,7 @@ mod tests {
             .build()?;
 
         // Should not be optimized
-        let expected = "Aggregate: groupBy=[[ROLLUP (test.a, test.b)]], aggr=[[COUNT(DISTINCT test.c)]] [a:UInt32, b:UInt32, COUNT(DISTINCT test.c):Int64;N]\
+        let expected = "Aggregate: groupBy=[[ROLLUP (test.a, test.b)]], aggr=[[COUNT(DISTINCT test.c)]] [a:UInt32;N, b:UInt32;N, COUNT(DISTINCT test.c):Int64;N]\
                             \n  TableScan: test [a:UInt32, b:UInt32, c:UInt32]";
 
         assert_optimized_plan_equal(&plan, expected)
@@ -361,9 +430,9 @@ mod tests {
             .build()?;
 
         // Should work
-        let expected = "Projection: group_alias_0 AS test.a, COUNT(alias1) AS COUNT(DISTINCT test.b) [a:UInt32, COUNT(DISTINCT test.b):Int64;N]\
-                            \n  Aggregate: groupBy=[[group_alias_0]], aggr=[[COUNT(alias1)]] [group_alias_0:UInt32, COUNT(alias1):Int64;N]\
-                            \n    Aggregate: groupBy=[[test.a AS group_alias_0, test.b AS alias1]], aggr=[[]] [group_alias_0:UInt32, alias1:UInt32]\
+        let expected = "Projection: test.a, COUNT(alias1) AS COUNT(DISTINCT test.b) [a:UInt32, COUNT(DISTINCT test.b):Int64;N]\
+                            \n  Aggregate: groupBy=[[test.a]], aggr=[[COUNT(alias1)]] [a:UInt32, COUNT(alias1):Int64;N]\
+                            \n    Aggregate: groupBy=[[test.a, test.b AS alias1]], aggr=[[]] [a:UInt32, alias1:UInt32]\
                             \n      TableScan: test [a:UInt32, b:UInt32, c:UInt32]";
 
         assert_optimized_plan_equal(&plan, expected)
@@ -407,9 +476,9 @@ mod tests {
             )?
             .build()?;
         // Should work
-        let expected = "Projection: group_alias_0 AS test.a, COUNT(alias1) AS COUNT(DISTINCT test.b), MAX(alias1) AS MAX(DISTINCT test.b) [a:UInt32, COUNT(DISTINCT test.b):Int64;N, MAX(DISTINCT test.b):UInt32;N]\
-                            \n  Aggregate: groupBy=[[group_alias_0]], aggr=[[COUNT(alias1), MAX(alias1)]] [group_alias_0:UInt32, COUNT(alias1):Int64;N, MAX(alias1):UInt32;N]\
-                            \n    Aggregate: groupBy=[[test.a AS group_alias_0, test.b AS alias1]], aggr=[[]] [group_alias_0:UInt32, alias1:UInt32]\
+        let expected = "Projection: test.a, COUNT(alias1) AS COUNT(DISTINCT test.b), MAX(alias1) AS MAX(DISTINCT test.b) [a:UInt32, COUNT(DISTINCT test.b):Int64;N, MAX(DISTINCT test.b):UInt32;N]\
+                            \n  Aggregate: groupBy=[[test.a]], aggr=[[COUNT(alias1), MAX(alias1)]] [a:UInt32, COUNT(alias1):Int64;N, MAX(alias1):UInt32;N]\
+                            \n    Aggregate: groupBy=[[test.a, test.b AS alias1]], aggr=[[]] [a:UInt32, alias1:UInt32]\
                             \n      TableScan: test [a:UInt32, b:UInt32, c:UInt32]";
 
         assert_optimized_plan_equal(&plan, expected)
@@ -446,6 +515,183 @@ mod tests {
                             \n  Aggregate: groupBy=[[group_alias_0]], aggr=[[COUNT(alias1)]] [group_alias_0:Int32, COUNT(alias1):Int64;N]\
                             \n    Aggregate: groupBy=[[test.a + Int32(1) AS group_alias_0, test.c AS alias1]], aggr=[[]] [group_alias_0:Int32, alias1:UInt32]\
                             \n      TableScan: test [a:UInt32, b:UInt32, c:UInt32]";
+
+        assert_optimized_plan_equal(&plan, expected)
+    }
+
+    #[test]
+    fn two_distinct_and_one_common() -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .aggregate(
+                vec![col("a")],
+                vec![
+                    sum(col("c")),
+                    count_distinct(col("b")),
+                    Expr::AggregateFunction(expr::AggregateFunction::new(
+                        AggregateFunction::Max,
+                        vec![col("b")],
+                        true,
+                        None,
+                        None,
+                    )),
+                ],
+            )?
+            .build()?;
+        // Should work
+        let expected = "Projection: test.a, SUM(alias2) AS SUM(test.c), COUNT(alias1) AS COUNT(DISTINCT test.b), MAX(alias1) AS MAX(DISTINCT test.b) [a:UInt32, SUM(test.c):UInt64;N, COUNT(DISTINCT test.b):Int64;N, MAX(DISTINCT test.b):UInt32;N]\
+                            \n  Aggregate: groupBy=[[test.a]], aggr=[[SUM(alias2), COUNT(alias1), MAX(alias1)]] [a:UInt32, SUM(alias2):UInt64;N, COUNT(alias1):Int64;N, MAX(alias1):UInt32;N]\
+                            \n    Aggregate: groupBy=[[test.a, test.b AS alias1]], aggr=[[SUM(test.c) AS alias2]] [a:UInt32, alias1:UInt32, alias2:UInt64;N]\
+                            \n      TableScan: test [a:UInt32, b:UInt32, c:UInt32]";
+
+        assert_optimized_plan_equal(&plan, expected)
+    }
+
+    #[test]
+    fn one_distinctand_and_two_common() -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .aggregate(
+                vec![col("a")],
+                vec![sum(col("c")), max(col("c")), count_distinct(col("b"))],
+            )?
+            .build()?;
+        // Should work
+        let expected = "Projection: test.a, SUM(alias2) AS SUM(test.c), MAX(alias3) AS MAX(test.c), COUNT(alias1) AS COUNT(DISTINCT test.b) [a:UInt32, SUM(test.c):UInt64;N, MAX(test.c):UInt32;N, COUNT(DISTINCT test.b):Int64;N]\
+                            \n  Aggregate: groupBy=[[test.a]], aggr=[[SUM(alias2), MAX(alias3), COUNT(alias1)]] [a:UInt32, SUM(alias2):UInt64;N, MAX(alias3):UInt32;N, COUNT(alias1):Int64;N]\
+                            \n    Aggregate: groupBy=[[test.a, test.b AS alias1]], aggr=[[SUM(test.c) AS alias2, MAX(test.c) AS alias3]] [a:UInt32, alias1:UInt32, alias2:UInt64;N, alias3:UInt32;N]\
+                            \n      TableScan: test [a:UInt32, b:UInt32, c:UInt32]";
+
+        assert_optimized_plan_equal(&plan, expected)
+    }
+
+    #[test]
+    fn one_distinct_and_one_common() -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .aggregate(
+                vec![col("c")],
+                vec![min(col("a")), count_distinct(col("b"))],
+            )?
+            .build()?;
+        // Should work
+        let expected = "Projection: test.c, MIN(alias2) AS MIN(test.a), COUNT(alias1) AS COUNT(DISTINCT test.b) [c:UInt32, MIN(test.a):UInt32;N, COUNT(DISTINCT test.b):Int64;N]\
+                            \n  Aggregate: groupBy=[[test.c]], aggr=[[MIN(alias2), COUNT(alias1)]] [c:UInt32, MIN(alias2):UInt32;N, COUNT(alias1):Int64;N]\
+                            \n    Aggregate: groupBy=[[test.c, test.b AS alias1]], aggr=[[MIN(test.a) AS alias2]] [c:UInt32, alias1:UInt32, alias2:UInt32;N]\
+                            \n      TableScan: test [a:UInt32, b:UInt32, c:UInt32]";
+
+        assert_optimized_plan_equal(&plan, expected)
+    }
+
+    #[test]
+    fn common_with_filter() -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        // SUM(a) FILTER (WHERE a > 5)
+        let expr = Expr::AggregateFunction(expr::AggregateFunction::new(
+            AggregateFunction::Sum,
+            vec![col("a")],
+            false,
+            Some(Box::new(col("a").gt(lit(5)))),
+            None,
+        ));
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .aggregate(vec![col("c")], vec![expr, count_distinct(col("b"))])?
+            .build()?;
+        // Do nothing
+        let expected = "Aggregate: groupBy=[[test.c]], aggr=[[SUM(test.a) FILTER (WHERE test.a > Int32(5)), COUNT(DISTINCT test.b)]] [c:UInt32, SUM(test.a) FILTER (WHERE test.a > Int32(5)):UInt64;N, COUNT(DISTINCT test.b):Int64;N]\
+                            \n  TableScan: test [a:UInt32, b:UInt32, c:UInt32]";
+
+        assert_optimized_plan_equal(&plan, expected)
+    }
+
+    #[test]
+    fn distinct_with_filter() -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        // COUNT(DISTINCT a) FILTER (WHERE a > 5)
+        let expr = Expr::AggregateFunction(expr::AggregateFunction::new(
+            AggregateFunction::Count,
+            vec![col("a")],
+            true,
+            Some(Box::new(col("a").gt(lit(5)))),
+            None,
+        ));
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .aggregate(vec![col("c")], vec![sum(col("a")), expr])?
+            .build()?;
+        // Do nothing
+        let expected = "Aggregate: groupBy=[[test.c]], aggr=[[SUM(test.a), COUNT(DISTINCT test.a) FILTER (WHERE test.a > Int32(5))]] [c:UInt32, SUM(test.a):UInt64;N, COUNT(DISTINCT test.a) FILTER (WHERE test.a > Int32(5)):Int64;N]\
+                            \n  TableScan: test [a:UInt32, b:UInt32, c:UInt32]";
+
+        assert_optimized_plan_equal(&plan, expected)
+    }
+
+    #[test]
+    fn common_with_order_by() -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        // SUM(a ORDER BY a)
+        let expr = Expr::AggregateFunction(expr::AggregateFunction::new(
+            AggregateFunction::Sum,
+            vec![col("a")],
+            false,
+            None,
+            Some(vec![col("a")]),
+        ));
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .aggregate(vec![col("c")], vec![expr, count_distinct(col("b"))])?
+            .build()?;
+        // Do nothing
+        let expected = "Aggregate: groupBy=[[test.c]], aggr=[[SUM(test.a) ORDER BY [test.a], COUNT(DISTINCT test.b)]] [c:UInt32, SUM(test.a) ORDER BY [test.a]:UInt64;N, COUNT(DISTINCT test.b):Int64;N]\
+                            \n  TableScan: test [a:UInt32, b:UInt32, c:UInt32]";
+
+        assert_optimized_plan_equal(&plan, expected)
+    }
+
+    #[test]
+    fn distinct_with_order_by() -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        // COUNT(DISTINCT a ORDER BY a)
+        let expr = Expr::AggregateFunction(expr::AggregateFunction::new(
+            AggregateFunction::Count,
+            vec![col("a")],
+            true,
+            None,
+            Some(vec![col("a")]),
+        ));
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .aggregate(vec![col("c")], vec![sum(col("a")), expr])?
+            .build()?;
+        // Do nothing
+        let expected = "Aggregate: groupBy=[[test.c]], aggr=[[SUM(test.a), COUNT(DISTINCT test.a) ORDER BY [test.a]]] [c:UInt32, SUM(test.a):UInt64;N, COUNT(DISTINCT test.a) ORDER BY [test.a]:Int64;N]\
+                            \n  TableScan: test [a:UInt32, b:UInt32, c:UInt32]";
+
+        assert_optimized_plan_equal(&plan, expected)
+    }
+
+    #[test]
+    fn aggregate_with_filter_and_order_by() -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        // COUNT(DISTINCT a ORDER BY a) FILTER (WHERE a > 5)
+        let expr = Expr::AggregateFunction(expr::AggregateFunction::new(
+            AggregateFunction::Count,
+            vec![col("a")],
+            true,
+            Some(Box::new(col("a").gt(lit(5)))),
+            Some(vec![col("a")]),
+        ));
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .aggregate(vec![col("c")], vec![sum(col("a")), expr])?
+            .build()?;
+        // Do nothing
+        let expected = "Aggregate: groupBy=[[test.c]], aggr=[[SUM(test.a), COUNT(DISTINCT test.a) FILTER (WHERE test.a > Int32(5)) ORDER BY [test.a]]] [c:UInt32, SUM(test.a):UInt64;N, COUNT(DISTINCT test.a) FILTER (WHERE test.a > Int32(5)) ORDER BY [test.a]:Int64;N]\
+                            \n  TableScan: test [a:UInt32, b:UInt32, c:UInt32]";
 
         assert_optimized_plan_equal(&plan, expected)
     }

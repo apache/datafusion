@@ -93,10 +93,9 @@ async fn setup_files(store: Arc<dyn ObjectStore>) {
         for partition in 0..TABLE_PARTITIONS {
             for file in 0..PARTITION_FILES {
                 let data = create_parquet_file(&mut rng, file * FILE_ROWS);
-                let location = Path::try_from(format!(
+                let location = Path::from(format!(
                     "{table_name}/partition={partition}/{file}.parquet"
-                ))
-                .unwrap();
+                ));
                 store.put(&location, data).await.unwrap();
             }
         }
@@ -120,7 +119,7 @@ async fn setup_context(object_store: Arc<dyn ObjectStore>) -> SessionContext {
     let config = SessionConfig::new().with_target_partitions(THREADS);
     let rt = Arc::new(RuntimeEnv::default());
     rt.register_object_store(&Url::parse("data://my_store").unwrap(), object_store);
-    let context = SessionContext::with_config_rt(config, rt);
+    let context = SessionContext::new_with_config_rt(config, rt);
 
     for table_id in 0..TABLES {
         let table_name = table_name(table_id);

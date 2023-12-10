@@ -17,19 +17,64 @@
 
 //! This module provides the bisect function, which implements binary search.
 
+use crate::error::_internal_err;
 use crate::{DataFusionError, Result, ScalarValue};
 use arrow::array::{ArrayRef, PrimitiveArray};
+use arrow::buffer::OffsetBuffer;
 use arrow::compute;
-use arrow::compute::{lexicographical_partition_ranges, SortColumn, SortOptions};
-use arrow::datatypes::UInt32Type;
+use arrow::compute::{partition, SortColumn, SortOptions};
+use arrow::datatypes::{Field, SchemaRef, UInt32Type};
 use arrow::record_batch::RecordBatch;
+use arrow_array::{Array, LargeListArray, ListArray, RecordBatchOptions};
+use arrow_schema::DataType;
 use sqlparser::ast::Ident;
 use sqlparser::dialect::GenericDialect;
 use sqlparser::parser::Parser;
 use std::borrow::{Borrow, Cow};
 use std::cmp::Ordering;
+use std::collections::HashSet;
 use std::ops::Range;
 use std::sync::Arc;
+
+/// Applies an optional projection to a [`SchemaRef`], returning the
+/// projected schema
+///
+/// Example:
+/// ```
+/// use arrow::datatypes::{SchemaRef, Schema, Field, DataType};
+/// use datafusion_common::project_schema;
+///
+/// // Schema with columns 'a', 'b', and 'c'
+/// let schema = SchemaRef::new(Schema::new(vec![
+///   Field::new("a", DataType::Int32, true),
+///   Field::new("b", DataType::Int64, true),
+///   Field::new("c", DataType::Utf8, true),
+/// ]));
+///
+/// // Pick columns 'c' and 'b'
+/// let projection = Some(vec![2,1]);
+/// let projected_schema = project_schema(
+///    &schema,
+///    projection.as_ref()
+///  ).unwrap();
+///
+/// let expected_schema = SchemaRef::new(Schema::new(vec![
+///   Field::new("c", DataType::Utf8, true),
+///   Field::new("b", DataType::Int64, true),
+/// ]));
+///
+/// assert_eq!(projected_schema, expected_schema);
+/// ```
+pub fn project_schema(
+    schema: &SchemaRef,
+    projection: Option<&Vec<usize>>,
+) -> Result<SchemaRef> {
+    let schema = match projection {
+        Some(columns) => Arc::new(schema.project(columns)?),
+        None => Arc::clone(schema),
+    };
+    Ok(schema)
+}
 
 /// Given column vectors, returns row at `idx`.
 pub fn get_row_at_idx(columns: &[ArrayRef], idx: usize) -> Result<Vec<ScalarValue>> {
@@ -45,8 +90,12 @@ pub fn get_record_batch_at_indices(
     indices: &PrimitiveArray<UInt32Type>,
 ) -> Result<RecordBatch> {
     let new_columns = get_arrayref_at_indices(record_batch.columns(), indices)?;
-    RecordBatch::try_new(record_batch.schema(), new_columns)
-        .map_err(DataFusionError::ArrowError)
+    RecordBatch::try_new_with_options(
+        record_batch.schema(),
+        new_columns,
+        &RecordBatchOptions::new().with_row_count(Some(indices.len())),
+    )
+    .map_err(DataFusionError::ArrowError)
 }
 
 /// This function compares two tuples depending on the given sort options.
@@ -90,7 +139,7 @@ pub fn bisect<const SIDE: bool>(
 ) -> Result<usize> {
     let low: usize = 0;
     let high: usize = item_columns
-        .get(0)
+        .first()
         .ok_or_else(|| {
             DataFusionError::Internal("Column array shouldn't be empty".to_string())
         })?
@@ -141,7 +190,7 @@ pub fn linear_search<const SIDE: bool>(
 ) -> Result<usize> {
     let low: usize = 0;
     let high: usize = item_columns
-        .get(0)
+        .first()
         .ok_or_else(|| {
             DataFusionError::Internal("Column array shouldn't be empty".to_string())
         })?
@@ -177,9 +226,10 @@ where
     Ok(low)
 }
 
-/// This function finds the partition points according to `partition_columns`.
-/// If there are no sort columns, then the result will be a single element
-/// vector containing one partition range spanning all data.
+/// Given a list of 0 or more already sorted columns, finds the
+/// partition ranges that would partition equally across columns.
+///
+/// See [`partition`] for more details.
 pub fn evaluate_partition_ranges(
     num_rows: usize,
     partition_columns: &[SortColumn],
@@ -190,7 +240,8 @@ pub fn evaluate_partition_ranges(
             end: num_rows,
         }]
     } else {
-        lexicographical_partition_ranges(partition_columns)?.collect()
+        let cols: Vec<_> = partition_columns.iter().map(|x| x.values.clone()).collect();
+        partition(&cols)?.ranges()
     })
 }
 
@@ -245,13 +296,14 @@ pub fn get_arrayref_at_indices(
         .collect()
 }
 
-pub(crate) fn parse_identifiers_normalized(s: &str) -> Vec<String> {
+pub(crate) fn parse_identifiers_normalized(s: &str, ignore_case: bool) -> Vec<String> {
     parse_identifiers(s)
         .unwrap_or_default()
         .into_iter()
         .map(|id| match id.quote_style {
             Some(_) => id.value,
-            None => id.value.to_ascii_lowercase(),
+            None if ignore_case => id.value,
+            _ => id.value.to_ascii_lowercase(),
         })
         .collect::<Vec<_>>()
 }
@@ -288,6 +340,102 @@ pub fn longest_consecutive_prefix<T: Borrow<usize>>(
         count += 1;
     }
     count
+}
+
+/// Wrap an array into a single element `ListArray`.
+/// For example `[1, 2, 3]` would be converted into `[[1, 2, 3]]`
+pub fn array_into_list_array(arr: ArrayRef) -> ListArray {
+    let offsets = OffsetBuffer::from_lengths([arr.len()]);
+    ListArray::new(
+        Arc::new(Field::new("item", arr.data_type().to_owned(), true)),
+        offsets,
+        arr,
+        None,
+    )
+}
+
+/// Wrap an array into a single element `LargeListArray`.
+/// For example `[1, 2, 3]` would be converted into `[[1, 2, 3]]`
+pub fn array_into_large_list_array(arr: ArrayRef) -> LargeListArray {
+    let offsets = OffsetBuffer::from_lengths([arr.len()]);
+    LargeListArray::new(
+        Arc::new(Field::new("item", arr.data_type().to_owned(), true)),
+        offsets,
+        arr,
+        None,
+    )
+}
+
+/// Wrap arrays into a single element `ListArray`.
+///
+/// Example:
+/// ```
+/// use arrow::array::{Int32Array, ListArray, ArrayRef};
+/// use arrow::datatypes::{Int32Type, Field};
+/// use std::sync::Arc;
+///
+/// let arr1 = Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef;
+/// let arr2 = Arc::new(Int32Array::from(vec![4, 5, 6])) as ArrayRef;
+///
+/// let list_arr = datafusion_common::utils::arrays_into_list_array([arr1, arr2]).unwrap();
+///
+/// let expected = ListArray::from_iter_primitive::<Int32Type, _, _>(
+///    vec![
+///     Some(vec![Some(1), Some(2), Some(3)]),
+///     Some(vec![Some(4), Some(5), Some(6)]),
+///    ]
+/// );
+///
+/// assert_eq!(list_arr, expected);
+pub fn arrays_into_list_array(
+    arr: impl IntoIterator<Item = ArrayRef>,
+) -> Result<ListArray> {
+    let arr = arr.into_iter().collect::<Vec<_>>();
+    if arr.is_empty() {
+        return _internal_err!("Cannot wrap empty array into list array");
+    }
+
+    let lens = arr.iter().map(|x| x.len()).collect::<Vec<_>>();
+    // Assume data type is consistent
+    let data_type = arr[0].data_type().to_owned();
+    let values = arr.iter().map(|x| x.as_ref()).collect::<Vec<_>>();
+    Ok(ListArray::new(
+        Arc::new(Field::new("item", data_type, true)),
+        OffsetBuffer::from_lengths(lens),
+        arrow::compute::concat(values.as_slice())?,
+        None,
+    ))
+}
+
+/// Get the base type of a data type.
+///
+/// Example
+/// ```
+/// use arrow::datatypes::{DataType, Field};
+/// use datafusion_common::utils::base_type;
+/// use std::sync::Arc;
+///
+/// let data_type = DataType::List(Arc::new(Field::new("item", DataType::Int32, true)));
+/// assert_eq!(base_type(&data_type), DataType::Int32);
+///
+/// let data_type = DataType::Int32;
+/// assert_eq!(base_type(&data_type), DataType::Int32);
+/// ```
+pub fn base_type(data_type: &DataType) -> DataType {
+    if let DataType::List(field) = data_type {
+        base_type(field.data_type())
+    } else {
+        data_type.to_owned()
+    }
+}
+
+/// Compute the number of dimensions in a list data type.
+pub fn list_ndims(data_type: &DataType) -> u64 {
+    if let DataType::List(field) = data_type {
+        1 + list_ndims(field.data_type())
+    } else {
+        0
+    }
 }
 
 /// An extension trait for smart pointers. Provides an interface to get a
@@ -384,6 +532,64 @@ pub mod datafusion_strsim {
     pub fn levenshtein(a: &str, b: &str) -> usize {
         generic_levenshtein(&StringWrapper(a), &StringWrapper(b))
     }
+}
+
+/// Merges collections `first` and `second`, removes duplicates and sorts the
+/// result, returning it as a [`Vec`].
+pub fn merge_and_order_indices<T: Borrow<usize>, S: Borrow<usize>>(
+    first: impl IntoIterator<Item = T>,
+    second: impl IntoIterator<Item = S>,
+) -> Vec<usize> {
+    let mut result: Vec<_> = first
+        .into_iter()
+        .map(|e| *e.borrow())
+        .chain(second.into_iter().map(|e| *e.borrow()))
+        .collect::<HashSet<_>>()
+        .into_iter()
+        .collect();
+    result.sort();
+    result
+}
+
+/// Calculates the set difference between sequences `first` and `second`,
+/// returning the result as a [`Vec`]. Preserves the ordering of `first`.
+pub fn set_difference<T: Borrow<usize>, S: Borrow<usize>>(
+    first: impl IntoIterator<Item = T>,
+    second: impl IntoIterator<Item = S>,
+) -> Vec<usize> {
+    let set: HashSet<_> = second.into_iter().map(|e| *e.borrow()).collect();
+    first
+        .into_iter()
+        .map(|e| *e.borrow())
+        .filter(|e| !set.contains(e))
+        .collect()
+}
+
+/// Checks whether the given index sequence is monotonically non-decreasing.
+pub fn is_sorted<T: Borrow<usize>>(sequence: impl IntoIterator<Item = T>) -> bool {
+    // TODO: Remove this function when `is_sorted` graduates from Rust nightly.
+    let mut previous = 0;
+    for item in sequence.into_iter() {
+        let current = *item.borrow();
+        if current < previous {
+            return false;
+        }
+        previous = current;
+    }
+    true
+}
+
+/// Find indices of each element in `targets` inside `items`. If one of the
+/// elements is absent in `items`, returns an error.
+pub fn find_indices<T: PartialEq, S: Borrow<T>>(
+    items: &[T],
+    targets: impl IntoIterator<Item = S>,
+) -> Result<Vec<usize>> {
+    targets
+        .into_iter()
+        .map(|target| items.iter().position(|e| target.borrow().eq(e)))
+        .collect::<Option<_>>()
+        .ok_or_else(|| DataFusionError::Execution("Target not found".to_string()))
 }
 
 #[cfg(test)]
@@ -703,5 +909,50 @@ mod tests {
             Arc::data_ptr_eq(&y, &y_clone),
             "cloned `Arc` should point to same data as the original"
         );
+    }
+
+    #[test]
+    fn test_merge_and_order_indices() {
+        assert_eq!(
+            merge_and_order_indices([0, 3, 4], [1, 3, 5]),
+            vec![0, 1, 3, 4, 5]
+        );
+        // Result should be ordered, even if inputs are not
+        assert_eq!(
+            merge_and_order_indices([3, 0, 4], [5, 1, 3]),
+            vec![0, 1, 3, 4, 5]
+        );
+    }
+
+    #[test]
+    fn test_set_difference() {
+        assert_eq!(set_difference([0, 3, 4], [1, 2]), vec![0, 3, 4]);
+        assert_eq!(set_difference([0, 3, 4], [1, 2, 4]), vec![0, 3]);
+        // return value should have same ordering with the in1
+        assert_eq!(set_difference([3, 4, 0], [1, 2, 4]), vec![3, 0]);
+        assert_eq!(set_difference([0, 3, 4], [4, 1, 2]), vec![0, 3]);
+        assert_eq!(set_difference([3, 4, 0], [4, 1, 2]), vec![3, 0]);
+    }
+
+    #[test]
+    fn test_is_sorted() {
+        assert!(is_sorted::<usize>([]));
+        assert!(is_sorted([0]));
+        assert!(is_sorted([0, 3, 4]));
+        assert!(is_sorted([0, 1, 2]));
+        assert!(is_sorted([0, 1, 4]));
+        assert!(is_sorted([0usize; 0]));
+        assert!(is_sorted([1, 2]));
+        assert!(!is_sorted([3, 2]));
+    }
+
+    #[test]
+    fn test_find_indices() -> Result<()> {
+        assert_eq!(find_indices(&[0, 3, 4], [0, 3, 4])?, vec![0, 1, 2]);
+        assert_eq!(find_indices(&[0, 3, 4], [0, 4, 3])?, vec![0, 2, 1]);
+        assert_eq!(find_indices(&[3, 0, 4], [0, 3])?, vec![1, 0]);
+        assert!(find_indices(&[0, 3], [0, 3, 4]).is_err());
+        assert!(find_indices(&[0, 3, 4], [0, 2]).is_err());
+        Ok(())
     }
 }

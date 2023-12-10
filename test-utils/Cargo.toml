@@ -18,7 +18,7 @@
 [package]
 name = "test-utils"
 version = "0.1.0"
-edition = "2021"
+edition = { workspace = true }
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -26,4 +26,4 @@ edition = "2021"
 arrow = { workspace = true }
 datafusion-common = { path = "../datafusion/common" }
 env_logger = "0.10.0"
-rand = "0.8"
+rand = { workspace = true }

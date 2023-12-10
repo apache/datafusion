@@ -1,0 +1,106 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+statement ok
+CREATE EXTERNAL TABLE case_insensitive_test (
+  a INT,
+  b INT,
+  c INT
+)
+STORED AS CSV
+WITH HEADER ROW
+LOCATION '../core/tests/data/example.csv'
+
+# normalized column identifiers
+query II
+SELECT A, b FROM case_insensitive_test
+----
+1 2
+
+query II
+SELECT t.A, b FROM case_insensitive_test AS t
+----
+1 2
+
+query II
+SELECT t.A as x, b FROM case_insensitive_test AS t
+----
+1 2
+
+query II
+SELECT t.A AS X, b FROM case_insensitive_test AS t
+----
+1 2
+
+
+query II
+SELECT t.A AS "X", b FROM case_insensitive_test AS t
+----
+1 2
+
+query II
+SELECT t.A AS x, b FROM case_insensitive_test AS t ORDER BY x
+----
+1 2
+
+query II
+SELECT t.A AS x, b FROM case_insensitive_test AS t ORDER BY X
+----
+1 2
+
+query II
+SELECT t.A AS "X", b FROM case_insensitive_test AS t ORDER BY "X"
+----
+1 2
+
+query II
+SELECT a, b FROM case_insensitive_test where A IS NOT null
+----
+1 2
+
+query II
+SELECT a as x, count(*) as c FROM case_insensitive_test GROUP BY X
+----
+1 1
+
+query II
+SELECT a as "X", count(*) as c FROM case_insensitive_test GROUP BY "X"
+----
+1 1
+
+statement ok
+drop table  case_insensitive_test
+
+# case insensitive in sql errors
+
+statement ok
+CREATE TABLE test("Column1" string) AS VALUES ('content1');
+
+statement error DataFusion error: Schema error: No field named column1\. Valid fields are test\."Column1"\.
+SELECT COLumn1 from test
+
+statement error DataFusion error: Schema error: No field named column1\. Valid fields are test\."Column1"\.
+SELECT Column1 from test
+
+statement error DataFusion error: Schema error: No field named column1\. Valid fields are test\."Column1"\.
+SELECT column1 from test
+
+statement error DataFusion error: Schema error: No field named column1\. Valid fields are test\."Column1"\.
+SELECT "column1" from test
+
+statement ok
+SELECT "Column1" from test

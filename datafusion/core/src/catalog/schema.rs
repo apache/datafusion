@@ -20,6 +20,7 @@
 
 use async_trait::async_trait;
 use dashmap::DashMap;
+use datafusion_common::exec_err;
 use std::any::Any;
 use std::sync::Arc;
 
@@ -47,18 +48,14 @@ pub trait SchemaProvider: Sync + Send {
         name: String,
         table: Arc<dyn TableProvider>,
     ) -> Result<Option<Arc<dyn TableProvider>>> {
-        Err(DataFusionError::Execution(
-            "schema provider does not support registering tables".to_owned(),
-        ))
+        exec_err!("schema provider does not support registering tables")
     }
 
     /// If supported by the implementation, removes an existing table from this schema and returns it.
     /// If no table of that name exists, returns Ok(None).
     #[allow(unused_variables)]
     fn deregister_table(&self, name: &str) -> Result<Option<Arc<dyn TableProvider>>> {
-        Err(DataFusionError::Execution(
-            "schema provider does not support deregistering tables".to_owned(),
-        ))
+        exec_err!("schema provider does not support deregistering tables")
     }
 
     /// If supported by the implementation, checks the table exist in the schema provider or not.
@@ -110,9 +107,7 @@ impl SchemaProvider for MemorySchemaProvider {
         table: Arc<dyn TableProvider>,
     ) -> Result<Option<Arc<dyn TableProvider>>> {
         if self.table_exist(name.as_str()) {
-            return Err(DataFusionError::Execution(format!(
-                "The table {name} already exists"
-            )));
+            return exec_err!("The table {name} already exists");
         }
         Ok(self.tables.insert(name, table))
     }
@@ -133,8 +128,8 @@ mod tests {
     use arrow::datatypes::Schema;
 
     use crate::assert_batches_eq;
-    use crate::catalog::catalog::{CatalogProvider, MemoryCatalogProvider};
     use crate::catalog::schema::{MemorySchemaProvider, SchemaProvider};
+    use crate::catalog::{CatalogProvider, MemoryCatalogProvider};
     use crate::datasource::empty::EmptyTable;
     use crate::datasource::listing::{ListingTable, ListingTableConfig, ListingTableUrl};
     use crate::prelude::SessionContext;
@@ -199,7 +194,7 @@ mod tests {
 
         let actual = df.collect().await.unwrap();
 
-        let expected = vec![
+        let expected = [
             "+----+----------+",
             "| id | bool_col |",
             "+----+----------+",

@@ -29,7 +29,7 @@ pub enum VarType {
     UserDefined,
 }
 
-/// A var provider for @variable
+/// A var provider for `@variable` and `@@variable` runtime values.
 pub trait VarProvider: std::fmt::Debug {
     /// Get variable value
     fn get_value(&self, var_names: Vec<String>) -> Result<ScalarValue>;

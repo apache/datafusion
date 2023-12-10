@@ -17,21 +17,22 @@
 
 use std::any::Any;
 use std::fmt;
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 use crate::physical_expr::down_cast_any_ref;
 use crate::PhysicalExpr;
 use arrow::compute;
-use arrow::compute::kernels;
+use arrow::compute::{cast_with_options, CastOptions};
 use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
 use compute::can_cast_types;
-use datafusion_common::ScalarValue;
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::format::DEFAULT_FORMAT_OPTIONS;
+use datafusion_common::{not_impl_err, DataFusionError, Result, ScalarValue};
 use datafusion_expr::ColumnarValue;
 
 /// TRY_CAST expression casts an expression to a specific data type and retuns NULL on invalid cast
-#[derive(Debug)]
+#[derive(Debug, Hash)]
 pub struct TryCastExpr {
     /// The expression to cast
     expr: Arc<dyn PhysicalExpr>,
@@ -78,14 +79,18 @@ impl PhysicalExpr for TryCastExpr {
 
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
         let value = self.expr.evaluate(batch)?;
+        let options = CastOptions {
+            safe: true,
+            format_options: DEFAULT_FORMAT_OPTIONS,
+        };
         match value {
-            ColumnarValue::Array(array) => Ok(ColumnarValue::Array(kernels::cast::cast(
-                &array,
-                &self.cast_type,
-            )?)),
+            ColumnarValue::Array(array) => {
+                let cast = cast_with_options(&array, &self.cast_type, &options)?;
+                Ok(ColumnarValue::Array(cast))
+            }
             ColumnarValue::Scalar(scalar) => {
-                let scalar_array = scalar.to_array();
-                let cast_array = kernels::cast::cast(&scalar_array, &self.cast_type)?;
+                let array = scalar.to_array()?;
+                let cast_array = cast_with_options(&array, &self.cast_type, &options)?;
                 let cast_scalar = ScalarValue::try_from_array(&cast_array, 0)?;
                 Ok(ColumnarValue::Scalar(cast_scalar))
             }
@@ -104,6 +109,11 @@ impl PhysicalExpr for TryCastExpr {
             children[0].clone(),
             self.cast_type.clone(),
         )))
+    }
+
+    fn dyn_hash(&self, state: &mut dyn Hasher) {
+        let mut s = state;
+        self.hash(&mut s);
     }
 }
 
@@ -131,9 +141,7 @@ pub fn try_cast(
     } else if can_cast_types(&expr_type, &cast_type) {
         Ok(Arc::new(TryCastExpr::new(expr, cast_type)))
     } else {
-        Err(DataFusionError::NotImplemented(format!(
-            "Unsupported TRY_CAST from {expr_type:?} to {cast_type:?}"
-        )))
+        not_impl_err!("Unsupported TRY_CAST from {expr_type:?} to {cast_type:?}")
     }
 }
 
@@ -179,7 +187,10 @@ mod tests {
             assert_eq!(expression.data_type(&schema)?, $TYPE);
 
             // compute
-            let result = expression.evaluate(&batch)?.into_array(batch.num_rows());
+            let result = expression
+                .evaluate(&batch)?
+                .into_array(batch.num_rows())
+                .expect("Failed to convert to array");
 
             // verify that the array's data_type is correct
             assert_eq!(*result.data_type(), $TYPE);
@@ -227,7 +238,10 @@ mod tests {
             assert_eq!(expression.data_type(&schema)?, $TYPE);
 
             // compute
-            let result = expression.evaluate(&batch)?.into_array(batch.num_rows());
+            let result = expression
+                .evaluate(&batch)?
+                .into_array(batch.num_rows())
+                .expect("Failed to convert to array");
 
             // verify that the array's data_type is correct
             assert_eq!(*result.data_type(), $TYPE);
@@ -261,13 +275,13 @@ mod tests {
             DataType::Decimal128(10, 3),
             Decimal128Array,
             DataType::Decimal128(20, 6),
-            vec![
+            [
                 Some(1_234_000),
                 Some(2_222_000),
                 Some(3_000),
                 Some(4_000_000),
                 Some(5_000_000),
-                None,
+                None
             ]
         );
 
@@ -277,7 +291,7 @@ mod tests {
             DataType::Decimal128(10, 3),
             Decimal128Array,
             DataType::Decimal128(10, 2),
-            vec![Some(123), Some(222), Some(0), Some(400), Some(500), None,]
+            [Some(123), Some(222), Some(0), Some(400), Some(500), None]
         );
 
         Ok(())
@@ -295,13 +309,13 @@ mod tests {
             DataType::Decimal128(10, 0),
             Int8Array,
             DataType::Int8,
-            vec![
+            [
                 Some(1_i8),
                 Some(2_i8),
                 Some(3_i8),
                 Some(4_i8),
                 Some(5_i8),
-                None,
+                None
             ]
         );
 
@@ -312,13 +326,13 @@ mod tests {
             DataType::Decimal128(10, 0),
             Int16Array,
             DataType::Int16,
-            vec![
+            [
                 Some(1_i16),
                 Some(2_i16),
                 Some(3_i16),
                 Some(4_i16),
                 Some(5_i16),
-                None,
+                None
             ]
         );
 
@@ -329,13 +343,13 @@ mod tests {
             DataType::Decimal128(10, 0),
             Int32Array,
             DataType::Int32,
-            vec![
+            [
                 Some(1_i32),
                 Some(2_i32),
                 Some(3_i32),
                 Some(4_i32),
                 Some(5_i32),
-                None,
+                None
             ]
         );
 
@@ -346,13 +360,13 @@ mod tests {
             DataType::Decimal128(10, 0),
             Int64Array,
             DataType::Int64,
-            vec![
+            [
                 Some(1_i64),
                 Some(2_i64),
                 Some(3_i64),
                 Some(4_i64),
                 Some(5_i64),
-                None,
+                None
             ]
         );
 
@@ -364,13 +378,13 @@ mod tests {
             DataType::Decimal128(10, 3),
             Float32Array,
             DataType::Float32,
-            vec![
+            [
                 Some(1.234_f32),
                 Some(2.222_f32),
                 Some(0.003_f32),
                 Some(4.0_f32),
                 Some(5.0_f32),
-                None,
+                None
             ]
         );
         // decimal to float64
@@ -380,13 +394,13 @@ mod tests {
             DataType::Decimal128(20, 6),
             Float64Array,
             DataType::Float64,
-            vec![
+            [
                 Some(0.001234_f64),
                 Some(0.002222_f64),
                 Some(0.000003_f64),
                 Some(0.004_f64),
                 Some(0.005_f64),
-                None,
+                None
             ]
         );
 
@@ -402,7 +416,7 @@ mod tests {
             vec![1, 2, 3, 4, 5],
             Decimal128Array,
             DataType::Decimal128(3, 0),
-            vec![Some(1), Some(2), Some(3), Some(4), Some(5),]
+            [Some(1), Some(2), Some(3), Some(4), Some(5)]
         );
 
         // int16
@@ -412,7 +426,7 @@ mod tests {
             vec![1, 2, 3, 4, 5],
             Decimal128Array,
             DataType::Decimal128(5, 0),
-            vec![Some(1), Some(2), Some(3), Some(4), Some(5),]
+            [Some(1), Some(2), Some(3), Some(4), Some(5)]
         );
 
         // int32
@@ -422,7 +436,7 @@ mod tests {
             vec![1, 2, 3, 4, 5],
             Decimal128Array,
             DataType::Decimal128(10, 0),
-            vec![Some(1), Some(2), Some(3), Some(4), Some(5),]
+            [Some(1), Some(2), Some(3), Some(4), Some(5)]
         );
 
         // int64
@@ -432,7 +446,7 @@ mod tests {
             vec![1, 2, 3, 4, 5],
             Decimal128Array,
             DataType::Decimal128(20, 0),
-            vec![Some(1), Some(2), Some(3), Some(4), Some(5),]
+            [Some(1), Some(2), Some(3), Some(4), Some(5)]
         );
 
         // int64 to different scale
@@ -442,7 +456,7 @@ mod tests {
             vec![1, 2, 3, 4, 5],
             Decimal128Array,
             DataType::Decimal128(20, 2),
-            vec![Some(100), Some(200), Some(300), Some(400), Some(500),]
+            [Some(100), Some(200), Some(300), Some(400), Some(500)]
         );
 
         // float32
@@ -452,7 +466,7 @@ mod tests {
             vec![1.5, 2.5, 3.0, 1.123_456_8, 5.50],
             Decimal128Array,
             DataType::Decimal128(10, 2),
-            vec![Some(150), Some(250), Some(300), Some(112), Some(550),]
+            [Some(150), Some(250), Some(300), Some(112), Some(550)]
         );
 
         // float64
@@ -462,12 +476,12 @@ mod tests {
             vec![1.5, 2.5, 3.0, 1.123_456_8, 5.50],
             Decimal128Array,
             DataType::Decimal128(20, 4),
-            vec![
+            [
                 Some(15000),
                 Some(25000),
                 Some(30000),
                 Some(11235),
-                Some(55000),
+                Some(55000)
             ]
         );
         Ok(())
@@ -481,7 +495,7 @@ mod tests {
             vec![1, 2, 3, 4, 5],
             UInt32Array,
             DataType::UInt32,
-            vec![
+            [
                 Some(1_u32),
                 Some(2_u32),
                 Some(3_u32),
@@ -500,7 +514,7 @@ mod tests {
             vec![1, 2, 3, 4, 5],
             StringArray,
             DataType::Utf8,
-            vec![Some("1"), Some("2"), Some("3"), Some("4"), Some("5")]
+            [Some("1"), Some("2"), Some("3"), Some("4"), Some("5")]
         );
         Ok(())
     }
@@ -513,7 +527,7 @@ mod tests {
             vec!["a", "2", "3", "b", "5"],
             Int32Array,
             DataType::Int32,
-            vec![None, Some(2), Some(3), None, Some(5)]
+            [None, Some(2), Some(3), None, Some(5)]
         );
         Ok(())
     }
@@ -541,7 +555,11 @@ mod tests {
         // Ensure a useful error happens at plan time if invalid casts are used
         let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
 
-        let result = try_cast(col("a", &schema).unwrap(), &schema, DataType::LargeBinary);
+        let result = try_cast(
+            col("a", &schema).unwrap(),
+            &schema,
+            DataType::Interval(IntervalUnit::MonthDayNano),
+        );
         result.expect_err("expected Invalid TRY_CAST");
     }
 

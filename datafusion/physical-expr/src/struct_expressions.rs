@@ -19,16 +19,14 @@
 
 use arrow::array::*;
 use arrow::datatypes::{DataType, Field};
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::{exec_err, not_impl_err, DataFusionError, Result};
 use datafusion_expr::ColumnarValue;
 use std::sync::Arc;
 
 fn array_struct(args: &[ArrayRef]) -> Result<ArrayRef> {
     // do not accept 0 arguments.
     if args.is_empty() {
-        return Err(DataFusionError::Internal(
-            "struct requires at least one argument".to_string(),
-        ));
+        return exec_err!("struct requires at least one argument");
     }
 
     let vec: Vec<_> = args
@@ -57,9 +55,9 @@ fn array_struct(args: &[ArrayRef]) -> Result<ArrayRef> {
                     )),
                     arg.clone(),
                 )),
-                data_type => Err(DataFusionError::NotImplemented(format!(
-                    "Struct is not implemented for type '{data_type:?}'."
-                ))),
+                data_type => {
+                    not_impl_err!("Struct is not implemented for type '{data_type:?}'.")
+                }
             }
         })
         .collect::<Result<Vec<_>>>()?;
@@ -69,12 +67,67 @@ fn array_struct(args: &[ArrayRef]) -> Result<ArrayRef> {
 
 /// put values in a struct array.
 pub fn struct_expr(values: &[ColumnarValue]) -> Result<ColumnarValue> {
-    let arrays: Vec<ArrayRef> = values
+    let arrays = values
         .iter()
-        .map(|x| match x {
-            ColumnarValue::Array(array) => array.clone(),
-            ColumnarValue::Scalar(scalar) => scalar.to_array().clone(),
+        .map(|x| {
+            Ok(match x {
+                ColumnarValue::Array(array) => array.clone(),
+                ColumnarValue::Scalar(scalar) => scalar.to_array()?.clone(),
+            })
         })
-        .collect();
+        .collect::<Result<Vec<ArrayRef>>>()?;
     Ok(ColumnarValue::Array(array_struct(arrays.as_slice())?))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use datafusion_common::cast::as_struct_array;
+    use datafusion_common::ScalarValue;
+
+    #[test]
+    fn test_struct() {
+        // struct(1, 2, 3) = {"c0": 1, "c1": 2, "c2": 3}
+        let args = [
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(1))),
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(2))),
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(3))),
+        ];
+        let struc = struct_expr(&args)
+            .expect("failed to initialize function struct")
+            .into_array(1)
+            .expect("Failed to convert to array");
+        let result =
+            as_struct_array(&struc).expect("failed to initialize function struct");
+        assert_eq!(
+            &Int64Array::from(vec![1]),
+            result
+                .column_by_name("c0")
+                .unwrap()
+                .clone()
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .unwrap()
+        );
+        assert_eq!(
+            &Int64Array::from(vec![2]),
+            result
+                .column_by_name("c1")
+                .unwrap()
+                .clone()
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .unwrap()
+        );
+        assert_eq!(
+            &Int64Array::from(vec![3]),
+            result
+                .column_by_name("c2")
+                .unwrap()
+                .clone()
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .unwrap()
+        );
+    }
 }

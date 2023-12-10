@@ -15,20 +15,24 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::fs;
+
 use crate::datasource::object_store::ObjectStoreUrl;
+use crate::execution::context::SessionState;
 use datafusion_common::{DataFusionError, Result};
 use futures::stream::BoxStream;
 use futures::{StreamExt, TryStreamExt};
 use glob::Pattern;
 use itertools::Itertools;
+use log::debug;
 use object_store::path::Path;
 use object_store::{ObjectMeta, ObjectStore};
-use percent_encoding;
+use std::sync::Arc;
 use url::Url;
 
 /// A parsed URL identifying files for a listing table, see [`ListingTableUrl::parse`]
 /// for more information on the supported expressions
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub struct ListingTableUrl {
     /// A URL that identifies a file or directory to list files from
     url: Url,
@@ -41,22 +45,45 @@ pub struct ListingTableUrl {
 impl ListingTableUrl {
     /// Parse a provided string as a `ListingTableUrl`
     ///
+    /// A URL can either refer to a single object, or a collection of objects with a
+    /// common prefix, with the presence of a trailing `/` indicating a collection.
+    ///
+    /// For example, `file:///foo.txt` refers to the file at `/foo.txt`, whereas
+    /// `file:///foo/` refers to all the files under the directory `/foo` and its
+    /// subdirectories.
+    ///
+    /// Similarly `s3://BUCKET/blob.csv` refers to `blob.csv` in the S3 bucket `BUCKET`,
+    /// wherease `s3://BUCKET/foo/` refers to all objects with the prefix `foo/` in the
+    /// S3 bucket `BUCKET`
+    ///
+    /// # URL Encoding
+    ///
+    /// URL paths are expected to be URL-encoded. That is, the URL for a file named `bar%2Efoo`
+    /// would be `file:///bar%252Efoo`, as per the [URL] specification.
+    ///
+    /// It should be noted that some tools, such as the AWS CLI, take a different approach and
+    /// instead interpret the URL path verbatim. For example the object `bar%2Efoo` would be
+    /// addressed as `s3://BUCKET/bar%252Efoo` using [`ListingTableUrl`] but `s3://BUCKET/bar%2Efoo`
+    /// when using the aws-cli.
+    ///
     /// # Paths without a Scheme
     ///
     /// If no scheme is provided, or the string is an absolute filesystem path
-    /// as determined [`std::path::Path::is_absolute`], the string will be
+    /// as determined by [`std::path::Path::is_absolute`], the string will be
     /// interpreted as a path on the local filesystem using the operating
     /// system's standard path delimiter, i.e. `\` on Windows, `/` on Unix.
     ///
     /// If the path contains any of `'?', '*', '['`, it will be considered
     /// a glob expression and resolved as described in the section below.
     ///
-    /// Otherwise, the path will be resolved to an absolute path, returning
-    /// an error if it does not exist, and converted to a [file URI]
+    /// Otherwise, the path will be resolved to an absolute path based on the current
+    /// working directory, and converted to a [file URI].
     ///
-    /// If you wish to specify a path that does not exist on the local
-    /// machine you must provide it as a fully-qualified [file URI]
-    /// e.g. `file:///myfile.txt`
+    /// If the path already exists in the local filesystem this will be used to determine if this
+    /// [`ListingTableUrl`] refers to a collection or a single object, otherwise the presence
+    /// of a trailing path delimiter will be used to indicate a directory. For the avoidance
+    /// of ambiguity it is recommended users always include trailing `/` when intending to
+    /// refer to a directory.
     ///
     /// ## Glob File Paths
     ///
@@ -64,14 +91,13 @@ impl ListingTableUrl {
     /// be resolved as follows.
     ///
     /// The string up to the first path segment containing a glob expression will be extracted,
-    /// and resolved in the same manner as a normal scheme-less path. That is, resolved to
-    /// an absolute path on the local filesystem, returning an error if it does not exist,
-    /// and converted to a [file URI]
+    /// and resolved in the same manner as a normal scheme-less path above.
     ///
     /// The remaining string will be interpreted as a [`glob::Pattern`] and used as a
     /// filter when listing files from object storage
     ///
     /// [file URI]: https://en.wikipedia.org/wiki/File_URI_scheme
+    /// [URL]: https://url.spec.whatwg.org/
     pub fn parse(s: impl AsRef<str>) -> Result<Self> {
         let s = s.as_ref();
 
@@ -81,15 +107,41 @@ impl ListingTableUrl {
         }
 
         match Url::parse(s) {
-            Ok(url) => Ok(Self::new(url, None)),
+            Ok(url) => Self::try_new(url, None),
             Err(url::ParseError::RelativeUrlWithoutBase) => Self::parse_path(s),
             Err(e) => Err(DataFusionError::External(Box::new(e))),
         }
     }
 
+    /// Get object store for specified input_url
+    /// if input_url is actually not a url, we assume it is a local file path
+    /// if we have a local path, create it if not exists so ListingTableUrl::parse works
+    pub fn parse_create_local_if_not_exists(
+        s: impl AsRef<str>,
+        is_directory: bool,
+    ) -> Result<Self> {
+        let s = s.as_ref();
+        let is_valid_url = Url::parse(s).is_ok();
+
+        match is_valid_url {
+            true => ListingTableUrl::parse(s),
+            false => {
+                let path = std::path::PathBuf::from(s);
+                if !path.exists() {
+                    if is_directory {
+                        fs::create_dir_all(path)?;
+                    } else {
+                        fs::File::create(path)?;
+                    }
+                }
+                ListingTableUrl::parse(s)
+            }
+        }
+    }
+
     /// Creates a new [`ListingTableUrl`] interpreting `s` as a filesystem path
     fn parse_path(s: &str) -> Result<Self> {
-        let (prefix, glob) = match split_glob_expression(s) {
+        let (path, glob) = match split_glob_expression(s) {
             Some((prefix, glob)) => {
                 let glob = Pattern::new(glob)
                     .map_err(|e| DataFusionError::External(Box::new(e)))?;
@@ -98,25 +150,19 @@ impl ListingTableUrl {
             None => (s, None),
         };
 
-        let path = std::path::Path::new(prefix).canonicalize()?;
-        let url = if path.is_dir() {
-            Url::from_directory_path(path)
-        } else {
-            Url::from_file_path(path)
-        }
-        .map_err(|_| DataFusionError::Internal(format!("Can not open path: {s}")))?;
-        // TODO: Currently we do not have an IO-related error variant that accepts ()
-        //       or a string. Once we have such a variant, change the error type above.
+        let url = url_from_filesystem_path(path).ok_or_else(|| {
+            DataFusionError::External(
+                format!("Failed to convert path to URL: {path}").into(),
+            )
+        })?;
 
-        Ok(Self::new(url, glob))
+        Self::try_new(url, glob)
     }
 
     /// Creates a new [`ListingTableUrl`] from a url and optional glob expression
-    fn new(url: Url, glob: Option<Pattern>) -> Self {
-        let decoded_path =
-            percent_encoding::percent_decode_str(url.path()).decode_utf8_lossy();
-        let prefix = Path::from(decoded_path.as_ref());
-        Self { url, prefix, glob }
+    fn try_new(url: Url, glob: Option<Pattern>) -> Result<Self> {
+        let prefix = Path::from_url_path(url.path())?;
+        Ok(Self { url, prefix, glob })
     }
 
     /// Returns the URL scheme
@@ -124,7 +170,10 @@ impl ListingTableUrl {
         self.url.scheme()
     }
 
-    /// Return the prefix from which to list files
+    /// Return the URL path not excluding any glob expression
+    ///
+    /// If [`Self::is_collection`], this is the listing prefix
+    /// Otherwise, this is the path to the object
     pub fn prefix(&self) -> &Path {
         &self.prefix
     }
@@ -143,6 +192,11 @@ impl ListingTableUrl {
         }
     }
 
+    /// Returns `true` if `path` refers to a collection of objects
+    pub fn is_collection(&self) -> bool {
+        self.url.as_str().ends_with('/')
+    }
+
     /// Strips the prefix of this [`ListingTableUrl`] from the provided path, returning
     /// an iterator of the remaining path segments
     pub(crate) fn strip_prefix<'a, 'b: 'a>(
@@ -158,28 +212,40 @@ impl ListingTableUrl {
     }
 
     /// List all files identified by this [`ListingTableUrl`] for the provided `file_extension`
-    pub(crate) fn list_all_files<'a>(
+    pub(crate) async fn list_all_files<'a>(
         &'a self,
+        ctx: &'a SessionState,
         store: &'a dyn ObjectStore,
         file_extension: &'a str,
-    ) -> BoxStream<'a, Result<ObjectMeta>> {
+    ) -> Result<BoxStream<'a, Result<ObjectMeta>>> {
         // If the prefix is a file, use a head request, otherwise list
-        let is_dir = self.url.as_str().ends_with('/');
-        let list = match is_dir {
-            true => futures::stream::once(store.list(Some(&self.prefix)))
-                .try_flatten()
-                .boxed(),
+        let list = match self.is_collection() {
+            true => match ctx.runtime_env().cache_manager.get_list_files_cache() {
+                None => store.list(Some(&self.prefix)),
+                Some(cache) => {
+                    if let Some(res) = cache.get(&self.prefix) {
+                        debug!("Hit list all files cache");
+                        futures::stream::iter(res.as_ref().clone().into_iter().map(Ok))
+                            .boxed()
+                    } else {
+                        let list_res = store.list(Some(&self.prefix));
+                        let vec = list_res.try_collect::<Vec<ObjectMeta>>().await?;
+                        cache.put(&self.prefix, Arc::new(vec.clone()));
+                        futures::stream::iter(vec.into_iter().map(Ok)).boxed()
+                    }
+                }
+            },
             false => futures::stream::once(store.head(&self.prefix)).boxed(),
         };
-
-        list.map_err(Into::into)
+        Ok(list
             .try_filter(move |meta| {
                 let path = &meta.location;
                 let extension_match = path.as_ref().ends_with(file_extension);
                 let glob_match = self.contains(path);
                 futures::future::ready(extension_match && glob_match)
             })
-            .boxed()
+            .map_err(DataFusionError::ObjectStore)
+            .boxed())
     }
 
     /// Returns this [`ListingTableUrl`] as a string
@@ -192,6 +258,34 @@ impl ListingTableUrl {
         let url = &self.url[url::Position::BeforeScheme..url::Position::BeforePath];
         ObjectStoreUrl::parse(url).unwrap()
     }
+}
+
+/// Creates a file URL from a potentially relative filesystem path
+fn url_from_filesystem_path(s: &str) -> Option<Url> {
+    let path = std::path::Path::new(s);
+    let is_dir = match path.exists() {
+        true => path.is_dir(),
+        // Fallback to inferring from trailing separator
+        false => std::path::is_separator(s.chars().last()?),
+    };
+
+    let from_absolute_path = |p| {
+        let first = match is_dir {
+            true => Url::from_directory_path(p).ok(),
+            false => Url::from_file_path(p).ok(),
+        }?;
+
+        // By default from_*_path preserve relative path segments
+        // We therefore parse the URL again to resolve these
+        Url::parse(first.as_str()).ok()
+    };
+
+    if path.is_absolute() {
+        return from_absolute_path(path);
+    }
+
+    let absolute = std::env::current_dir().ok()?.join(path);
+    from_absolute_path(&absolute)
 }
 
 impl AsRef<str> for ListingTableUrl {
@@ -241,6 +335,7 @@ fn split_glob_expression(path: &str) -> Option<(&str, &str)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::tempdir;
 
     #[test]
     fn test_prefix_path() {
@@ -273,7 +368,57 @@ mod tests {
         assert_eq!(url.prefix.as_ref(), "foo/bar");
 
         let url = ListingTableUrl::parse("file:///foo/😺").unwrap();
-        assert_eq!(url.prefix.as_ref(), "foo/%F0%9F%98%BA");
+        assert_eq!(url.prefix.as_ref(), "foo/😺");
+
+        let url = ListingTableUrl::parse("file:///foo/bar%2Efoo").unwrap();
+        assert_eq!(url.prefix.as_ref(), "foo/bar.foo");
+
+        let url = ListingTableUrl::parse("file:///foo/bar%2Efoo").unwrap();
+        assert_eq!(url.prefix.as_ref(), "foo/bar.foo");
+
+        let url = ListingTableUrl::parse("file:///foo/bar%252Ffoo").unwrap();
+        assert_eq!(url.prefix.as_ref(), "foo/bar%2Ffoo");
+
+        let url = ListingTableUrl::parse("file:///foo/a%252Fb.txt").unwrap();
+        assert_eq!(url.prefix.as_ref(), "foo/a%2Fb.txt");
+
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("bar%2Ffoo");
+        std::fs::File::create(&path).unwrap();
+
+        let url = ListingTableUrl::parse(path.to_str().unwrap()).unwrap();
+        assert!(url.prefix.as_ref().ends_with("bar%2Ffoo"), "{}", url.prefix);
+
+        let url = ListingTableUrl::parse("file:///foo/../a%252Fb.txt").unwrap();
+        assert_eq!(url.prefix.as_ref(), "a%2Fb.txt");
+
+        let url =
+            ListingTableUrl::parse("file:///foo/./bar/../../baz/./test.txt").unwrap();
+        assert_eq!(url.prefix.as_ref(), "baz/test.txt");
+
+        let workdir = std::env::current_dir().unwrap();
+        let t = workdir.join("non-existent");
+        let a = ListingTableUrl::parse(t.to_str().unwrap()).unwrap();
+        let b = ListingTableUrl::parse("non-existent").unwrap();
+        assert_eq!(a, b);
+        assert!(a.prefix.as_ref().ends_with("non-existent"));
+
+        let t = workdir.parent().unwrap();
+        let a = ListingTableUrl::parse(t.to_str().unwrap()).unwrap();
+        let b = ListingTableUrl::parse("..").unwrap();
+        assert_eq!(a, b);
+
+        let t = t.join("bar");
+        let a = ListingTableUrl::parse(t.to_str().unwrap()).unwrap();
+        let b = ListingTableUrl::parse("../bar").unwrap();
+        assert_eq!(a, b);
+        assert!(a.prefix.as_ref().ends_with("bar"));
+
+        let t = t.join(".").join("foo").join("..").join("baz");
+        let a = ListingTableUrl::parse(t.to_str().unwrap()).unwrap();
+        let b = ListingTableUrl::parse("../bar/./foo/../baz").unwrap();
+        assert_eq!(a, b);
+        assert!(a.prefix.as_ref().ends_with("bar/baz"));
     }
 
     #[test]

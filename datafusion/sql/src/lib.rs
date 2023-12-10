@@ -15,8 +15,18 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! This module provides a SQL parser that translates SQL queries into an abstract syntax
-//! tree (AST), and a SQL query planner that creates a logical plan from the AST.
+//! This module provides:
+//!
+//! 1. A SQL parser, [`DFParser`], that translates SQL query text into
+//! an abstract syntax tree (AST), [`Statement`].
+//!
+//! 2. A SQL query planner [`SqlToRel`] that creates [`LogicalPlan`]s
+//! from [`Statement`]s.
+//!
+//! [`DFParser`]: parser::DFParser
+//! [`Statement`]: parser::Statement
+//! [`SqlToRel`]: planner::SqlToRel
+//! [`LogicalPlan`]: datafusion_expr::logical_plan::LogicalPlan
 
 mod expr;
 pub mod parser;

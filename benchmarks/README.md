@@ -20,11 +20,14 @@
 # DataFusion Benchmarks
 
 This crate contains benchmarks based on popular public data sets and
-open source benchmark suites, making it easy to run more realistic
-benchmarks to help with performance and scalability testing of DataFusion.
+open source benchmark suites, to help with performance and scalability
+testing of DataFusion.
 
-# Benchmarks Against Other Engines
 
+## Other engines
+
+The benchmarks measure changes to DataFusion itself, rather than
+its performance against other engines. For competitive benchmarking,
 DataFusion is included in the benchmark setups for several popular
 benchmarks that compare performance with other engines. For example:
 
@@ -36,30 +39,35 @@ benchmarks that compare performance with other engines. For example:
 
 # Running the benchmarks
 
-## Running Benchmarks
+## `bench.sh`
 
-The easiest way to run benchmarks from DataFusion source checkouts is
-to use the [bench.sh](bench.sh) script. Usage instructions can be
-found with:
+The easiest way to run benchmarks is the [bench.sh](bench.sh)
+script. Usage instructions can be found with:
 
 ```shell
 # show usage
 ./bench.sh
 ```
 
-## Generating Data
+## Generating data
 
-You can create data for all these benchmarks using the [bench.sh](bench.sh) script:
+You can create / download the data for these benchmarks using the [bench.sh](bench.sh) script:
+
+Create / download all datasets
 
 ```shell
 ./bench.sh data
 ```
 
-Data is generated in the `data` subdirectory and will not be checked
-in because this directory has been added to the `.gitignore` file.
+Create / download a specific dataset (TPCH)
 
+```shell
+./bench.sh data tpch
+```
 
-## Example to compare peformance on main to a branch
+Data is placed in the `data` subdirectory.
+
+## Comparing performance of main and a branch
 
 ```shell
 git checkout main
@@ -143,38 +151,22 @@ Benchmark tpch_mem.json
 ```
 
 
-# Benchmark Descriptions:
+### Running Benchmarks Manually
 
-## `tpch` Benchmark derived from TPC-H
-
-These benchmarks are derived from the [TPC-H][1] benchmark. And we use this repo as the source of tpch-gen and answers:
-https://github.com/databricks/tpch-dbgen.git, based on [2.17.1](https://www.tpc.org/tpc_documents_current_versions/pdf/tpc-h_v2.17.1.pdf) version of TPC-H.
-
-
-### Running the DataFusion Benchmarks Manually
-
-The benchmark can then be run (assuming the data created from `dbgen` is in `./data`) with a command such as:
+Assuming data in the `data` directory, the `tpch` benchmark can be run with a command like this
 
 ```bash
-cargo run --release --bin tpch -- benchmark datafusion --iterations 3 --path ./data --format tbl --query 1 --batch-size 4096
+cargo run --release --bin dfbench -- tpch --iterations 3 --path ./data --format tbl --query 1 --batch-size 4096
 ```
 
-If you omit `--query=<query_id>` argument, then all benchmarks will be run one by one (from query 1 to query 22).
+See the help for more details
 
-```bash
-cargo run --release --bin tpch -- benchmark datafusion --iterations 1 --path ./data --format tbl --batch-size 4096
-```
+### Different features
 
 You can enable the features `simd` (to use SIMD instructions, `cargo nightly` is required.) and/or `mimalloc` or `snmalloc` (to use either the mimalloc or snmalloc allocator) as features by passing them in as `--features`:
 
 ```
 cargo run --release --features "simd mimalloc" --bin tpch -- benchmark datafusion --iterations 3 --path ./data --format tbl --query 1 --batch-size 4096
-```
-
-If you want to disable collection of statistics (and thus cost based optimizers), you can pass `--disable-statistics` flag.
-
-```bash
-cargo run --release --bin tpch -- benchmark datafusion --iterations 3 --path /mnt/tpch-parquet --format parquet --query 17 --disable-statistics
 ```
 
 The benchmark program also supports CSV and Parquet input file formats and a utility is provided to convert from `tbl`
@@ -188,9 +180,10 @@ Or if you want to verify and run all the queries in the benchmark, you can just 
 
 ### Comparing results between runs
 
-Any `tpch` execution with `-o <dir>` argument will produce a summary file right under the `<dir>`
-directory. It is a JSON serialized form of all the runs that happened as well as the runtime metadata
-(number of cores, DataFusion version, etc.).
+Any `dfbench` execution with `-o <dir>` argument will produce a
+summary JSON in the specified directory. This file contains a
+serialized form of all the runs that happened and runtime
+metadata (number of cores, DataFusion version, etc.).
 
 ```shell
 $ git checkout main
@@ -236,40 +229,113 @@ This will produce output like
 └──────────────┴──────────────┴──────────────┴───────────────┘
 ```
 
-### Expected output
+# Benchmark Runner
 
-The result of query 1 should produce the following output when executed against the SF=1 dataset.
+The `dfbench` program contains subcommands to run the various
+benchmarks. When benchmarking, it should always be built in release
+mode using `--release`.
+
+Full help for each benchmark can be found in the relevant sub
+command. For example to get help for tpch, run
+
+```shell
+cargo run --release --bin dfbench  --help
+...
+datafusion-benchmarks 27.0.0
+benchmark command
+
+USAGE:
+    dfbench <SUBCOMMAND>
+
+SUBCOMMANDS:
+    clickbench        Run the clickbench benchmark
+    help              Prints this message or the help of the given subcommand(s)
+    parquet-filter    Test performance of parquet filter pushdown
+    sort              Test performance of parquet filter pushdown
+    tpch              Run the tpch benchmark.
+    tpch-convert      Convert tpch .slt files to .parquet or .csv files
 
 ```
-+--------------+--------------+----------+--------------------+--------------------+--------------------+--------------------+--------------------+----------------------+-------------+
-| l_returnflag | l_linestatus | sum_qty  | sum_base_price     | sum_disc_price     | sum_charge         | avg_qty            | avg_price          | avg_disc             | count_order |
-+--------------+--------------+----------+--------------------+--------------------+--------------------+--------------------+--------------------+----------------------+-------------+
-| A            | F            | 37734107 | 56586554400.73001  | 53758257134.870026 | 55909065222.82768  | 25.522005853257337 | 38273.12973462168  | 0.049985295838396455 | 1478493     |
-| N            | F            | 991417   | 1487504710.3799996 | 1413082168.0541    | 1469649223.1943746 | 25.516471920522985 | 38284.467760848296 | 0.05009342667421622  | 38854       |
-| N            | O            | 74476023 | 111701708529.50996 | 106118209986.10472 | 110367023144.56622 | 25.502229680934594 | 38249.1238377803   | 0.049996589476752576 | 2920373     |
-| R            | F            | 37719753 | 56568041380.90001  | 53741292684.60399  | 55889619119.83194  | 25.50579361269077  | 38250.854626099666 | 0.05000940583012587  | 1478870     |
-+--------------+--------------+----------+--------------------+--------------------+--------------------+--------------------+--------------------+----------------------+-------------+
-Query 1 iteration 0 took 1956.1 ms
-Query 1 avg time: 1956.11 ms
-```
 
-## NYC Taxi Benchmark
+# Benchmarks
 
-These benchmarks are based on the [New York Taxi and Limousine Commission][2] data set.
+The output of `dfbench` help includes a descripion of each benchmark, which is reproducedd here for convenience
 
-```bash
-cargo run --release --bin nyctaxi -- --iterations 3 --path /mnt/nyctaxi/csv --format csv --batch-size 4096
-```
+## ClickBench
+
+The ClickBench[1] benchmarks are widely cited in the industry and
+focus on grouping / aggregation / filtering. This runner uses the
+scripts and queries from [2].
+
+[1]: https://github.com/ClickHouse/ClickBench
+[2]: https://github.com/ClickHouse/ClickBench/tree/main/datafusion
+
+## Parquet Filter
+
+Test performance of parquet filter pushdown
+
+The queries are executed on a synthetic dataset generated during
+the benchmark execution and designed to simulate web server access
+logs.
+
+Example
+
+dfbench parquet-filter  --path ./data --scale-factor 1.0
+
+generates the synthetic dataset at `./data/logs.parquet`. The size
+of the dataset can be controlled through the `size_factor`
+(with the default value of `1.0` generating a ~1GB parquet file).
+
+For each filter we will run the query using different
+`ParquetScanOption` settings.
 
 Example output:
 
-```bash
-Running benchmarks with the following options: Opt { debug: false, iterations: 3, batch_size: 4096, path: "/mnt/nyctaxi/csv", file_format: "csv" }
-Executing 'fare_amt_by_passenger'
-Query 'fare_amt_by_passenger' iteration 0 took 7138 ms
-Query 'fare_amt_by_passenger' iteration 1 took 7599 ms
-Query 'fare_amt_by_passenger' iteration 2 took 7969 ms
 ```
+Running benchmarks with the following options: Opt { debug: false, iterations: 3, partitions: 2, path: "./data",
+batch_size: 8192, scale_factor: 1.0 }
+Generated test dataset with 10699521 rows
+Executing with filter 'request_method = Utf8("GET")'
+Using scan options ParquetScanOptions { pushdown_filters: false, reorder_predicates: false, enable_page_index: false }
+Iteration 0 returned 10699521 rows in 1303 ms
+Iteration 1 returned 10699521 rows in 1288 ms
+Iteration 2 returned 10699521 rows in 1266 ms
+Using scan options ParquetScanOptions { pushdown_filters: true, reorder_predicates: true, enable_page_index: true }
+Iteration 0 returned 1781686 rows in 1970 ms
+Iteration 1 returned 1781686 rows in 2002 ms
+Iteration 2 returned 1781686 rows in 1988 ms
+Using scan options ParquetScanOptions { pushdown_filters: true, reorder_predicates: false, enable_page_index: true }
+Iteration 0 returned 1781686 rows in 1940 ms
+Iteration 1 returned 1781686 rows in 1986 ms
+Iteration 2 returned 1781686 rows in 1947 ms
+...
+```
+
+## Sort
+Test performance of sorting large datasets
+
+This test sorts a a synthetic dataset generated during the
+benchmark execution, designed to simulate sorting web server
+access logs. Such sorting is often done during data transformation
+steps.
+
+The tests sort the entire dataset using several different sort
+orders.
+
+## TPCH
+
+Run the tpch benchmark.
+
+This benchmarks is derived from the [TPC-H][1] version
+[2.17.1]. The data and answers are generated using `tpch-gen` from
+[2].
+
+[1]: http://www.tpc.org/tpch/
+[2]: https://github.com/databricks/tpch-dbgen.git,
+[2.17.1]: https://www.tpc.org/tpc_documents_current_versions/pdf/tpc-h_v2.17.1.pdf
+
+
+# Older Benchmarks
 
 ## h2o benchmarks
 
@@ -298,50 +364,3 @@ h2o groupby query 1 took 1669 ms
 
 [1]: http://www.tpc.org/tpch/
 [2]: https://www1.nyc.gov/site/tlc/about/tlc-trip-record-data.page
-
-## Parquet benchmarks
-
-This is a set of benchmarks for testing and verifying performance of parquet filtering and sorting.
-The queries are executed on a synthetic dataset generated during the benchmark execution and designed to simulate web server access logs.
-
-To run filter benchmarks, run:
-
-```base
-cargo run --release --bin parquet -- filter  --path ./data --scale-factor 1.0
-```
-
-This will generate the synthetic dataset at `./data/logs.parquet`. The size of the dataset can be controlled through the `size_factor`
-(with the default value of `1.0` generating a ~1GB parquet file).
-
-For each filter we will run the query using different `ParquetScanOption` settings.
-
-Example run:
-
-```
-Running benchmarks with the following options: Opt { debug: false, iterations: 3, partitions: 2, path: "./data", batch_size: 8192, scale_factor: 1.0 }
-Generated test dataset with 10699521 rows
-Executing with filter 'request_method = Utf8("GET")'
-Using scan options ParquetScanOptions { pushdown_filters: false, reorder_predicates: false, enable_page_index: false }
-Iteration 0 returned 10699521 rows in 1303 ms
-Iteration 1 returned 10699521 rows in 1288 ms
-Iteration 2 returned 10699521 rows in 1266 ms
-Using scan options ParquetScanOptions { pushdown_filters: true, reorder_predicates: true, enable_page_index: true }
-Iteration 0 returned 1781686 rows in 1970 ms
-Iteration 1 returned 1781686 rows in 2002 ms
-Iteration 2 returned 1781686 rows in 1988 ms
-Using scan options ParquetScanOptions { pushdown_filters: true, reorder_predicates: false, enable_page_index: true }
-Iteration 0 returned 1781686 rows in 1940 ms
-Iteration 1 returned 1781686 rows in 1986 ms
-Iteration 2 returned 1781686 rows in 1947 ms
-...
-```
-
-Similarly, to run sorting benchmarks, run:
-
-```base
-cargo run --release --bin parquet -- sort  --path ./data --scale-factor 1.0
-```
-
-This proceeds in the same way as the filter benchmarks: each sort expression
-combination will be run using the same set of `ParquetScanOption` as the
-filter benchmarks.

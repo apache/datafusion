@@ -60,7 +60,80 @@ async fn test_mathematical_expressions_with_null() -> Result<()> {
     test_expression!("atan2(NULL, NULL)", "NULL");
     test_expression!("atan2(1, NULL)", "NULL");
     test_expression!("atan2(NULL, 1)", "NULL");
+    test_expression!("nanvl(NULL, NULL)", "NULL");
+    test_expression!("nanvl(1, NULL)", "NULL");
+    test_expression!("nanvl(NULL, 1)", "NULL");
+    test_expression!("isnan(NULL)", "NULL");
+    test_expression!("iszero(NULL)", "NULL");
     Ok(())
+}
+
+#[tokio::test]
+#[cfg_attr(not(feature = "crypto_expressions"), ignore)]
+async fn test_encoding_expressions() -> Result<()> {
+    // Input Utf8
+    test_expression!("encode('tom','base64')", "dG9t");
+    test_expression!("arrow_cast(decode('dG9t','base64'), 'Utf8')", "tom");
+    test_expression!("encode('tom','hex')", "746f6d");
+    test_expression!("arrow_cast(decode('746f6d','hex'), 'Utf8')", "tom");
+
+    // Input LargeUtf8
+    test_expression!("encode(arrow_cast('tom', 'LargeUtf8'),'base64')", "dG9t");
+    test_expression!(
+        "arrow_cast(decode(arrow_cast('dG9t', 'LargeUtf8'),'base64'), 'Utf8')",
+        "tom"
+    );
+    test_expression!("encode(arrow_cast('tom', 'LargeUtf8'),'hex')", "746f6d");
+    test_expression!(
+        "arrow_cast(decode(arrow_cast('746f6d', 'LargeUtf8'),'hex'), 'Utf8')",
+        "tom"
+    );
+
+    // Input Binary
+    test_expression!("encode(arrow_cast('tom', 'Binary'),'base64')", "dG9t");
+    test_expression!(
+        "arrow_cast(decode(arrow_cast('dG9t', 'Binary'),'base64'), 'Utf8')",
+        "tom"
+    );
+    test_expression!("encode(arrow_cast('tom', 'Binary'),'hex')", "746f6d");
+    test_expression!(
+        "arrow_cast(decode(arrow_cast('746f6d', 'Binary'),'hex'), 'Utf8')",
+        "tom"
+    );
+
+    // Input LargeBinary
+    test_expression!("encode(arrow_cast('tom', 'LargeBinary'),'base64')", "dG9t");
+    test_expression!(
+        "arrow_cast(decode(arrow_cast('dG9t', 'LargeBinary'),'base64'), 'Utf8')",
+        "tom"
+    );
+    test_expression!("encode(arrow_cast('tom', 'LargeBinary'),'hex')", "746f6d");
+    test_expression!(
+        "arrow_cast(decode(arrow_cast('746f6d', 'LargeBinary'),'hex'), 'Utf8')",
+        "tom"
+    );
+
+    // NULL
+    test_expression!("encode(NULL,'base64')", "NULL");
+    test_expression!("decode(NULL,'base64')", "NULL");
+    test_expression!("encode(NULL,'hex')", "NULL");
+    test_expression!("decode(NULL,'hex')", "NULL");
+
+    // Empty string
+    test_expression!("encode('','base64')", "");
+    test_expression!("decode('','base64')", "");
+    test_expression!("encode('','hex')", "");
+    test_expression!("decode('','hex')", "");
+
+    Ok(())
+}
+
+#[should_panic(expected = "Invalid timezone \\\"Foo\\\": 'Foo' is not a valid timezone")]
+#[tokio::test]
+async fn test_array_cast_invalid_timezone_will_panic() {
+    let ctx = SessionContext::new();
+    let sql = "SELECT arrow_cast('2021-01-02T03:04:00', 'Timestamp(Nanosecond, Some(\"Foo\"))')";
+    execute(&ctx, sql).await;
 }
 
 #[tokio::test]
@@ -223,10 +296,11 @@ async fn test_interval_expressions() -> Result<()> {
         "interval '0.5 minute'",
         "0 years 0 mons 0 days 0 hours 0 mins 30.000000000 secs"
     );
-    test_expression!(
-        "interval '.5 minute'",
-        "0 years 0 mons 0 days 0 hours 0 mins 30.000000000 secs"
-    );
+    // https://github.com/apache/arrow-rs/issues/4424
+    // test_expression!(
+    //     "interval '.5 minute'",
+    //     "0 years 0 mons 0 days 0 hours 0 mins 30.000000000 secs"
+    // );
     test_expression!(
         "interval '5 minute'",
         "0 years 0 mons 0 days 0 hours 5 mins 0.000000000 secs"
@@ -384,8 +458,10 @@ async fn test_substring_expr() -> Result<()> {
     Ok(())
 }
 
+/// Test string expressions test split into two batches
+/// to prevent stack overflow error
 #[tokio::test]
-async fn test_string_expressions() -> Result<()> {
+async fn test_string_expressions_batch1() -> Result<()> {
     test_expression!("ascii('')", "0");
     test_expression!("ascii('x')", "120");
     test_expression!("ascii(NULL)", "NULL");
@@ -437,6 +513,13 @@ async fn test_string_expressions() -> Result<()> {
     test_expression!("rtrim(' zzzytest ', NULL)", "NULL");
     test_expression!("rtrim('testxxzx', 'xyz')", "test");
     test_expression!("rtrim(NULL, 'xyz')", "NULL");
+    Ok(())
+}
+
+/// Test string expressions test split into two batches
+/// to prevent stack overflow error
+#[tokio::test]
+async fn test_string_expressions_batch2() -> Result<()> {
     test_expression!("split_part('abc~@~def~@~ghi', '~@~', 2)", "def");
     test_expression!("split_part('abc~@~def~@~ghi', '~@~', 20)", "");
     test_expression!("split_part(NULL, '~@~', 20)", "NULL");
@@ -512,11 +595,6 @@ async fn test_regex_expressions() -> Result<()> {
 
 #[tokio::test]
 async fn test_cast_expressions() -> Result<()> {
-    test_expression!("CAST([1,2,3,4] AS INT[])", "[1, 2, 3, 4]");
-    test_expression!(
-        "CAST([1,2,3,4] AS NUMERIC(10,4)[])",
-        "[1.0000, 2.0000, 3.0000, 4.0000]"
-    );
     test_expression!("CAST('0' AS INT)", "0");
     test_expression!("CAST(NULL AS INT)", "NULL");
     test_expression!("TRY_CAST('0' AS INT)", "0");
@@ -525,8 +603,20 @@ async fn test_cast_expressions() -> Result<()> {
 }
 
 #[tokio::test]
+#[ignore]
+// issue: https://github.com/apache/arrow-datafusion/issues/6596
+async fn test_array_cast_expressions() -> Result<()> {
+    test_expression!("CAST([1,2,3,4] AS INT[])", "[1, 2, 3, 4]");
+    test_expression!(
+        "CAST([1,2,3,4] AS NUMERIC(10,4)[])",
+        "[1.0000, 2.0000, 3.0000, 4.0000]"
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_random_expression() -> Result<()> {
-    let ctx = create_ctx();
+    let ctx = SessionContext::new();
     let sql = "SELECT random() r1";
     let actual = execute(&ctx, sql).await;
     let r1 = actual[0][0].parse::<f64>().unwrap();
@@ -537,7 +627,7 @@ async fn test_random_expression() -> Result<()> {
 
 #[tokio::test]
 async fn test_uuid_expression() -> Result<()> {
-    let ctx = create_ctx();
+    let ctx = SessionContext::new();
     let sql = "SELECT uuid()";
     let actual = execute(&ctx, sql).await;
     let uuid = actual[0][0].parse::<uuid::Uuid>().unwrap();
@@ -549,7 +639,7 @@ async fn test_uuid_expression() -> Result<()> {
 async fn test_extract_date_part() -> Result<()> {
     test_expression!("date_part('YEAR', CAST('2000-01-01' AS DATE))", "2000.0");
     test_expression!(
-        "EXTRACT(year FROM to_timestamp('2020-09-08T12:00:00+00:00'))",
+        "EXTRACT(year FROM  timestamp '2020-09-08T12:00:00+00:00')",
         "2020.0"
     );
     test_expression!("date_part('QUARTER', CAST('2000-01-01' AS DATE))", "1.0");
@@ -596,37 +686,56 @@ async fn test_extract_date_part() -> Result<()> {
         "12.0"
     );
     test_expression!(
-        "EXTRACT(second FROM to_timestamp('2020-09-08T12:00:12.12345678+00:00'))",
+        "EXTRACT(second FROM timestamp '2020-09-08T12:00:12.12345678+00:00')",
         "12.12345678"
     );
     test_expression!(
-        "EXTRACT(millisecond FROM to_timestamp('2020-09-08T12:00:12.12345678+00:00'))",
+        "EXTRACT(millisecond FROM timestamp '2020-09-08T12:00:12.12345678+00:00')",
         "12123.45678"
     );
     test_expression!(
-        "EXTRACT(microsecond FROM to_timestamp('2020-09-08T12:00:12.12345678+00:00'))",
+        "EXTRACT(microsecond FROM timestamp '2020-09-08T12:00:12.12345678+00:00')",
         "12123456.78"
     );
     test_expression!(
-        "EXTRACT(nanosecond FROM to_timestamp('2020-09-08T12:00:12.12345678+00:00'))",
+        "EXTRACT(nanosecond FROM timestamp '2020-09-08T12:00:12.12345678+00:00')",
         "1.212345678e10"
     );
     test_expression!(
-        "date_part('second', to_timestamp('2020-09-08T12:00:12.12345678+00:00'))",
+        "date_part('second', timestamp '2020-09-08T12:00:12.12345678+00:00')",
         "12.12345678"
     );
     test_expression!(
-        "date_part('millisecond', to_timestamp('2020-09-08T12:00:12.12345678+00:00'))",
+        "date_part('millisecond', timestamp '2020-09-08T12:00:12.12345678+00:00')",
         "12123.45678"
     );
     test_expression!(
-        "date_part('microsecond', to_timestamp('2020-09-08T12:00:12.12345678+00:00'))",
+        "date_part('microsecond', timestamp '2020-09-08T12:00:12.12345678+00:00')",
         "12123456.78"
     );
     test_expression!(
-        "date_part('nanosecond', to_timestamp('2020-09-08T12:00:12.12345678+00:00'))",
+        "date_part('nanosecond', timestamp '2020-09-08T12:00:12.12345678+00:00')",
         "1.212345678e10"
     );
+
+    // Keep precision when coercing Utf8 to Timestamp
+    test_expression!(
+        "date_part('second', '2020-09-08T12:00:12.12345678+00:00')",
+        "12.12345678"
+    );
+    test_expression!(
+        "date_part('millisecond', '2020-09-08T12:00:12.12345678+00:00')",
+        "12123.45678"
+    );
+    test_expression!(
+        "date_part('microsecond', '2020-09-08T12:00:12.12345678+00:00')",
+        "12123456.78"
+    );
+    test_expression!(
+        "date_part('nanosecond', '2020-09-08T12:00:12.12345678+00:00')",
+        "1.212345678e10"
+    );
+
     Ok(())
 }
 
@@ -797,18 +906,6 @@ async fn csv_query_nullif_divide_by_0() -> Result<()> {
 }
 
 #[tokio::test]
-async fn csv_query_avg_sqrt() -> Result<()> {
-    let ctx = create_ctx();
-    register_aggregate_csv(&ctx).await?;
-    let sql = "SELECT avg(custom_sqrt(c12)) FROM aggregate_test_100";
-    let mut actual = execute(&ctx, sql).await;
-    actual.sort();
-    let expected = vec![vec!["0.6706002946036462"]];
-    assert_float_eq(&expected, &actual);
-    Ok(())
-}
-
-#[tokio::test]
 async fn nested_subquery() -> Result<()> {
     let ctx = SessionContext::new();
     let schema = Schema::new(vec![
@@ -826,13 +923,11 @@ async fn nested_subquery() -> Result<()> {
     let actual = execute_to_batches(&ctx, sql).await;
     // the purpose of this test is just to make sure the query produces a valid plan
     #[rustfmt::skip]
-    let expected = vec![
-        "+-----+",
+    let expected = ["+-----+",
         "| cnt |",
         "+-----+",
         "| 0   |",
-        "+-----+"
-    ];
+        "+-----+"];
     assert_batches_eq!(expected, &actual);
     Ok(())
 }

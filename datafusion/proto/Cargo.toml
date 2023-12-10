@@ -19,14 +19,14 @@
 name = "datafusion-proto"
 description = "Protobuf serialization of DataFusion logical plan expressions"
 keywords = ["arrow", "query", "sql"]
+readme = "README.md"
 version = { workspace = true }
 edition = { workspace = true }
-readme = { workspace = true }
 homepage = { workspace = true }
 repository = { workspace = true }
 license = { workspace = true }
 authors = { workspace = true }
-rust-version = { workspace = true }
+rust-version = "1.70"
 
 # Exclude proto files so crates.io consumers don't need protoc
 exclude = ["*.proto"]
@@ -36,21 +36,22 @@ name = "datafusion_proto"
 path = "src/lib.rs"
 
 [features]
-default = []
+default = ["parquet"]
 json = ["pbjson", "serde", "serde_json"]
+parquet = ["datafusion/parquet", "datafusion-common/parquet"]
 
 [dependencies]
 arrow = { workspace = true }
-chrono = { version = "0.4", default-features = false }
-datafusion = { path = "../core", version = "26.0.0" }
-datafusion-common = { path = "../common", version = "26.0.0" }
-datafusion-expr = { path = "../expr", version = "26.0.0" }
-object_store = { version = "0.6.1" }
+chrono = { workspace = true }
+datafusion = { path = "../core", version = "33.0.0" }
+datafusion-common = { workspace = true }
+datafusion-expr = { workspace = true }
+object_store = { workspace = true }
 pbjson = { version = "0.5", optional = true }
-prost = "0.11.0"
+prost = "0.12.0"
 serde = { version = "1.0", optional = true }
-serde_json = { version = "1.0", optional = true }
+serde_json = { workspace = true, optional = true }
 
 [dev-dependencies]
-doc-comment = "0.3"
+doc-comment = { workspace = true }
 tokio = "1.18"

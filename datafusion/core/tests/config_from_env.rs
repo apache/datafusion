@@ -36,7 +36,7 @@ fn from_env() {
 
     // for invalid testing
     env::set_var(env_key, "abc");
-    let err = ConfigOptions::from_env().unwrap_err().to_string();
+    let err = ConfigOptions::from_env().unwrap_err().strip_backtrace();
     assert_eq!(err, "Error parsing abc as usize\ncaused by\nExternal error: invalid digit found in string");
 
     env::remove_var(env_key);

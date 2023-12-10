@@ -17,28 +17,33 @@
 
 //! Implementation of `InList` expressions: [`InListExpr`]
 
-use ahash::RandomState;
 use std::any::Any;
 use std::fmt::Debug;
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
-use crate::hash_utils::HashValue;
-use crate::physical_expr::down_cast_any_ref;
-use crate::utils::expr_list_eq_any_order;
+use crate::physical_expr::{down_cast_any_ref, physical_exprs_bag_equal};
 use crate::PhysicalExpr;
+
 use arrow::array::*;
+use arrow::buffer::BooleanBuffer;
+use arrow::compute::kernels::boolean::{not, or_kleene};
+use arrow::compute::kernels::cmp::eq;
 use arrow::compute::take;
 use arrow::datatypes::*;
 use arrow::record_batch::RecordBatch;
 use arrow::util::bit_iterator::BitIndexIterator;
 use arrow::{downcast_dictionary_array, downcast_primitive_array};
+use datafusion_common::cast::{
+    as_boolean_array, as_generic_binary_array, as_string_array,
+};
+use datafusion_common::hash_utils::HashValue;
 use datafusion_common::{
-    cast::{
-        as_boolean_array, as_generic_binary_array, as_primitive_array, as_string_array,
-    },
-    DataFusionError, Result, ScalarValue,
+    exec_err, internal_err, not_impl_err, DataFusionError, Result, ScalarValue,
 };
 use datafusion_expr::ColumnarValue;
+
+use ahash::RandomState;
 use hashbrown::hash_map::RawEntryMut;
 use hashbrown::HashMap;
 
@@ -63,6 +68,7 @@ impl Debug for InListExpr {
 /// A type-erased container of array elements
 pub trait Set: Send + Sync {
     fn contains(&self, v: &dyn Array, negated: bool) -> Result<BooleanArray>;
+    fn has_nulls(&self) -> bool;
 }
 
 struct ArrayHashSet {
@@ -95,7 +101,7 @@ impl<T> Set for ArraySet<T>
 where
     T: Array + 'static,
     for<'a> &'a T: ArrayAccessor,
-    for<'a> <&'a T as ArrayAccessor>::Item: PartialEq + HashValue,
+    for<'a> <&'a T as ArrayAccessor>::Item: IsEqual,
 {
     fn contains(&self, v: &dyn Array, negated: bool) -> Result<BooleanArray> {
         downcast_dictionary_array! {
@@ -119,7 +125,7 @@ where
                         .hash_set
                         .map
                         .raw_entry()
-                        .from_hash(hash, |idx| in_array.value(*idx) == v)
+                        .from_hash(hash, |idx| in_array.value(*idx).is_equal(&v))
                         .is_some();
 
                     match contains {
@@ -130,6 +136,10 @@ where
                 })
             })
             .collect())
+    }
+
+    fn has_nulls(&self) -> bool {
+        self.array.null_count() != 0
     }
 }
 
@@ -142,7 +152,7 @@ where
 fn make_hash_set<T>(array: T) -> ArrayHashSet
 where
     T: ArrayAccessor,
-    T::Item: PartialEq + HashValue,
+    T::Item: IsEqual,
 {
     let state = RandomState::new();
     let mut map: HashMap<usize, (), ()> =
@@ -153,7 +163,7 @@ where
         let hash = value.hash_one(&state);
         if let RawEntryMut::Vacant(v) = map
             .raw_entry_mut()
-            .from_hash(hash, |x| array.value(*x) == value)
+            .from_hash(hash, |x| array.value(*x).is_equal(&value))
         {
             v.insert_with_hasher(hash, idx, (), |x| array.value(*x).hash_one(&state));
         }
@@ -178,14 +188,6 @@ fn make_set(array: &dyn Array) -> Result<Arc<dyn Set>> {
             let array = as_boolean_array(array)?;
             Arc::new(ArraySet::new(array, make_hash_set(array)))
         },
-        DataType::Decimal128(_, _) => {
-            let array = as_primitive_array::<Decimal128Type>(array)?;
-            Arc::new(ArraySet::new(array, make_hash_set(array)))
-        }
-        DataType::Decimal256(_, _) => {
-            let array = as_primitive_array::<Decimal256Type>(array)?;
-            Arc::new(ArraySet::new(array, make_hash_set(array)))
-        }
         DataType::Utf8 => {
             let array = as_string_array(array)?;
             Arc::new(ArraySet::new(array, make_hash_set(array)))
@@ -203,7 +205,7 @@ fn make_set(array: &dyn Array) -> Result<Arc<dyn Set>> {
             Arc::new(ArraySet::new(array, make_hash_set(array)))
         }
         DataType::Dictionary(_, _) => unreachable!("dictionary should have been flattened"),
-        d => return Err(DataFusionError::NotImplemented(format!("DataType::{d} not supported in InList")))
+        d => return not_impl_err!("DataType::{d} not supported in InList")
     })
 }
 
@@ -216,9 +218,9 @@ fn evaluate_list(
         .iter()
         .map(|expr| {
             expr.evaluate(batch).and_then(|r| match r {
-                ColumnarValue::Array(_) => Err(DataFusionError::Execution(
-                    "InList expression must evaluate to a scalar".to_string(),
-                )),
+                ColumnarValue::Array(_) => {
+                    exec_err!("InList expression must evaluate to a scalar")
+                }
                 // Flatten dictionary values
                 ColumnarValue::Scalar(ScalarValue::Dictionary(_, v)) => Ok(*v),
                 ColumnarValue::Scalar(s) => Ok(s),
@@ -236,6 +238,40 @@ fn try_cast_static_filter_to_set(
     let batch = RecordBatch::new_empty(Arc::new(schema.clone()));
     make_set(evaluate_list(list, &batch)?.as_ref())
 }
+
+/// Custom equality check function which is used with [`ArrayHashSet`] for existence check.
+trait IsEqual: HashValue {
+    fn is_equal(&self, other: &Self) -> bool;
+}
+
+impl<'a, T: IsEqual + ?Sized> IsEqual for &'a T {
+    fn is_equal(&self, other: &Self) -> bool {
+        T::is_equal(self, other)
+    }
+}
+
+macro_rules! is_equal {
+    ($($t:ty),+) => {
+        $(impl IsEqual for $t {
+            fn is_equal(&self, other: &Self) -> bool {
+                self == other
+            }
+        })*
+    };
+}
+is_equal!(i8, i16, i32, i64, i128, i256, u8, u16, u32, u64);
+is_equal!(bool, str, [u8]);
+
+macro_rules! is_equal_float {
+    ($($t:ty),+) => {
+        $(impl IsEqual for $t {
+            fn is_equal(&self, other: &Self) -> bool {
+                self.to_bits() == other.to_bits()
+            }
+        })*
+    };
+}
+is_equal_float!(half::f16, f32, f64);
 
 impl InListExpr {
     /// Create a new InList expression
@@ -296,16 +332,43 @@ impl PhysicalExpr for InListExpr {
     }
 
     fn nullable(&self, input_schema: &Schema) -> Result<bool> {
-        self.expr.nullable(input_schema)
+        if self.expr.nullable(input_schema)? {
+            return Ok(true);
+        }
+
+        if let Some(static_filter) = &self.static_filter {
+            Ok(static_filter.has_nulls())
+        } else {
+            for expr in &self.list {
+                if expr.nullable(input_schema)? {
+                    return Ok(true);
+                }
+            }
+            Ok(false)
+        }
     }
 
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
-        let value = self.expr.evaluate(batch)?.into_array(1);
+        let value = self.expr.evaluate(batch)?;
         let r = match &self.static_filter {
-            Some(f) => f.contains(value.as_ref(), self.negated)?,
+            Some(f) => f.contains(value.into_array(1)?.as_ref(), self.negated)?,
             None => {
-                let list = evaluate_list(&self.list, batch)?;
-                make_set(list.as_ref())?.contains(value.as_ref(), self.negated)?
+                let value = value.into_array(batch.num_rows())?;
+                let found = self.list.iter().map(|expr| expr.evaluate(batch)).try_fold(
+                    BooleanArray::new(BooleanBuffer::new_unset(batch.num_rows()), None),
+                    |result, expr| -> Result<BooleanArray> {
+                        Ok(or_kleene(
+                            &result,
+                            &eq(&value, &expr?.into_array(batch.num_rows())?)?,
+                        )?)
+                    },
+                )?;
+
+                if self.negated {
+                    not(&found)?
+                } else {
+                    found
+                }
             }
         };
         Ok(ColumnarValue::Array(Arc::new(r)))
@@ -330,6 +393,14 @@ impl PhysicalExpr for InListExpr {
             self.static_filter.clone(),
         )))
     }
+
+    fn dyn_hash(&self, state: &mut dyn Hasher) {
+        let mut s = state;
+        self.expr.hash(&mut s);
+        self.negated.hash(&mut s);
+        self.list.hash(&mut s);
+        // Add `self.static_filter` when hash is available
+    }
 }
 
 impl PartialEq<dyn Any> for InListExpr {
@@ -338,7 +409,7 @@ impl PartialEq<dyn Any> for InListExpr {
             .downcast_ref::<Self>()
             .map(|x| {
                 self.expr.eq(&x.expr)
-                    && expr_list_eq_any_order(&self.list, &x.list)
+                    && physical_exprs_bag_equal(&self.list, &x.list)
                     && self.negated == x.negated
             })
             .unwrap_or(false)
@@ -357,9 +428,9 @@ pub fn in_list(
     for list_expr in list.iter() {
         let list_expr_data_type = list_expr.data_type(schema)?;
         if !expr_data_type.eq(&list_expr_data_type) {
-            return Err(DataFusionError::Internal(format!(
+            return internal_err!(
                 "The data type inlist should be same, the value type is {expr_data_type}, one of list expr type is {list_expr_data_type}"
-            )));
+            );
         }
     }
     let static_filter = try_cast_static_filter_to_set(&list, schema).ok();
@@ -378,6 +449,7 @@ mod tests {
     use super::*;
     use crate::expressions;
     use crate::expressions::{col, lit, try_cast};
+    use datafusion_common::plan_err;
     use datafusion_common::Result;
     use datafusion_expr::type_coercion::binary::comparison_coercion;
 
@@ -397,9 +469,9 @@ mod tests {
             .collect();
         let result_type = get_coerce_type(expr_type, &list_types);
         match result_type {
-            None => Err(DataFusionError::Plan(format!(
+            None => plan_err!(
                 "Can not find compatible types to compare {expr_type:?} with {list_types:?}"
-            ))),
+            ),
             Some(data_type) => {
                 // find the coerced type
                 let cast_expr = try_cast(expr, input_schema, data_type.clone())?;
@@ -419,9 +491,8 @@ mod tests {
     fn get_coerce_type(expr_type: &DataType, list_type: &[DataType]) -> Option<DataType> {
         list_type
             .iter()
-            .fold(Some(expr_type.clone()), |left, right_type| match left {
-                None => None,
-                Some(left_type) => comparison_coercion(&left_type, right_type),
+            .try_fold(expr_type.clone(), |left_type, right_type| {
+                comparison_coercion(&left_type, right_type)
             })
     }
 
@@ -430,7 +501,10 @@ mod tests {
         ($BATCH:expr, $LIST:expr, $NEGATED:expr, $EXPECTED:expr, $COL:expr, $SCHEMA:expr) => {{
             let (cast_expr, cast_list_exprs) = in_list_cast($COL, $LIST, $SCHEMA)?;
             let expr = in_list(cast_expr, cast_list_exprs, $NEGATED, $SCHEMA).unwrap();
-            let result = expr.evaluate(&$BATCH)?.into_array($BATCH.num_rows());
+            let result = expr
+                .evaluate(&$BATCH)?
+                .into_array($BATCH.num_rows())
+                .expect("Failed to convert to array");
             let result =
                 as_boolean_array(&result).expect("failed to downcast to BooleanArray");
             let expected = &BooleanArray::from($EXPECTED);
@@ -609,50 +683,100 @@ mod tests {
     #[test]
     fn in_list_float64() -> Result<()> {
         let schema = Schema::new(vec![Field::new("a", DataType::Float64, true)]);
-        let a = Float64Array::from(vec![Some(0.0), Some(0.2), None]);
+        let a = Float64Array::from(vec![
+            Some(0.0),
+            Some(0.2),
+            None,
+            Some(f64::NAN),
+            Some(-f64::NAN),
+        ]);
         let col_a = col("a", &schema)?;
         let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::new(a)])?;
 
-        // expression: "a in (0.0, 0.2)"
+        // expression: "a in (0.0, 0.1)"
         let list = vec![lit(0.0f64), lit(0.1f64)];
         in_list!(
             batch,
             list,
             &false,
-            vec![Some(true), Some(false), None],
+            vec![Some(true), Some(false), None, Some(false), Some(false)],
             col_a.clone(),
             &schema
         );
 
-        // expression: "a not in (0.0, 0.2)"
+        // expression: "a not in (0.0, 0.1)"
         let list = vec![lit(0.0f64), lit(0.1f64)];
         in_list!(
             batch,
             list,
             &true,
-            vec![Some(false), Some(true), None],
+            vec![Some(false), Some(true), None, Some(true), Some(true)],
             col_a.clone(),
             &schema
         );
 
-        // expression: "a in (0.0, 0.2, NULL)"
+        // expression: "a in (0.0, 0.1, NULL)"
         let list = vec![lit(0.0f64), lit(0.1f64), lit(ScalarValue::Null)];
         in_list!(
             batch,
             list,
             &false,
-            vec![Some(true), None, None],
+            vec![Some(true), None, None, None, None],
             col_a.clone(),
             &schema
         );
 
-        // expression: "a not in (0.0, 0.2, NULL)"
+        // expression: "a not in (0.0, 0.1, NULL)"
         let list = vec![lit(0.0f64), lit(0.1f64), lit(ScalarValue::Null)];
         in_list!(
             batch,
             list,
             &true,
-            vec![Some(false), None, None],
+            vec![Some(false), None, None, None, None],
+            col_a.clone(),
+            &schema
+        );
+
+        // expression: "a in (0.0, 0.1, NaN)"
+        let list = vec![lit(0.0f64), lit(0.1f64), lit(f64::NAN)];
+        in_list!(
+            batch,
+            list,
+            &false,
+            vec![Some(true), Some(false), None, Some(true), Some(false)],
+            col_a.clone(),
+            &schema
+        );
+
+        // expression: "a not in (0.0, 0.1, NaN)"
+        let list = vec![lit(0.0f64), lit(0.1f64), lit(f64::NAN)];
+        in_list!(
+            batch,
+            list,
+            &true,
+            vec![Some(false), Some(true), None, Some(false), Some(true)],
+            col_a.clone(),
+            &schema
+        );
+
+        // expression: "a in (0.0, 0.1, -NaN)"
+        let list = vec![lit(0.0f64), lit(0.1f64), lit(-f64::NAN)];
+        in_list!(
+            batch,
+            list,
+            &false,
+            vec![Some(true), Some(false), None, Some(false), Some(true)],
+            col_a.clone(),
+            &schema
+        );
+
+        // expression: "a not in (0.0, 0.1, -NaN)"
+        let list = vec![lit(0.0f64), lit(0.1f64), lit(-f64::NAN)];
+        in_list!(
+            batch,
+            list,
+            &true,
+            vec![Some(false), Some(true), None, Some(true), Some(false)],
             col_a.clone(),
             &schema
         );
@@ -1042,6 +1166,105 @@ mod tests {
             col_a.clone(),
             &schema
         );
+        Ok(())
+    }
+
+    #[test]
+    fn in_expr_with_multiple_element_in_list() -> Result<()> {
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Float64, true),
+            Field::new("b", DataType::Float64, true),
+            Field::new("c", DataType::Float64, true),
+        ]);
+        let a = Float64Array::from(vec![
+            Some(0.0),
+            Some(1.0),
+            Some(2.0),
+            Some(f64::NAN),
+            Some(-f64::NAN),
+        ]);
+        let b = Float64Array::from(vec![
+            Some(8.0),
+            Some(1.0),
+            Some(5.0),
+            Some(f64::NAN),
+            Some(3.0),
+        ]);
+        let c = Float64Array::from(vec![
+            Some(6.0),
+            Some(7.0),
+            None,
+            Some(5.0),
+            Some(-f64::NAN),
+        ]);
+        let col_a = col("a", &schema)?;
+        let col_b = col("b", &schema)?;
+        let col_c = col("c", &schema)?;
+        let batch = RecordBatch::try_new(
+            Arc::new(schema.clone()),
+            vec![Arc::new(a), Arc::new(b), Arc::new(c)],
+        )?;
+
+        let list = vec![col_b.clone(), col_c.clone()];
+        in_list!(
+            batch,
+            list.clone(),
+            &false,
+            vec![Some(false), Some(true), None, Some(true), Some(true)],
+            col_a.clone(),
+            &schema
+        );
+
+        in_list!(
+            batch,
+            list,
+            &true,
+            vec![Some(true), Some(false), None, Some(false), Some(false)],
+            col_a.clone(),
+            &schema
+        );
+
+        Ok(())
+    }
+
+    macro_rules! test_nullable {
+        ($COL:expr, $LIST:expr, $SCHEMA:expr, $EXPECTED:expr) => {{
+            let (cast_expr, cast_list_exprs) = in_list_cast($COL, $LIST, $SCHEMA)?;
+            let expr = in_list(cast_expr, cast_list_exprs, &false, $SCHEMA).unwrap();
+            let result = expr.nullable($SCHEMA)?;
+            assert_eq!($EXPECTED, result);
+        }};
+    }
+
+    #[test]
+    fn in_list_nullable() -> Result<()> {
+        let schema = Schema::new(vec![
+            Field::new("c1_nullable", DataType::Int64, true),
+            Field::new("c2_non_nullable", DataType::Int64, false),
+        ]);
+
+        let c1_nullable = col("c1_nullable", &schema)?;
+        let c2_non_nullable = col("c2_non_nullable", &schema)?;
+
+        // static_filter has no nulls
+        let list = vec![lit(1_i64), lit(2_i64)];
+        test_nullable!(c1_nullable.clone(), list.clone(), &schema, true);
+        test_nullable!(c2_non_nullable.clone(), list.clone(), &schema, false);
+
+        // static_filter has nulls
+        let list = vec![lit(1_i64), lit(2_i64), lit(ScalarValue::Null)];
+        test_nullable!(c1_nullable.clone(), list.clone(), &schema, true);
+        test_nullable!(c2_non_nullable.clone(), list.clone(), &schema, true);
+
+        let list = vec![c1_nullable.clone()];
+        test_nullable!(c2_non_nullable.clone(), list.clone(), &schema, true);
+
+        let list = vec![c2_non_nullable.clone()];
+        test_nullable!(c1_nullable.clone(), list.clone(), &schema, true);
+
+        let list = vec![c2_non_nullable.clone(), c2_non_nullable.clone()];
+        test_nullable!(c2_non_nullable.clone(), list.clone(), &schema, false);
+
         Ok(())
     }
 }

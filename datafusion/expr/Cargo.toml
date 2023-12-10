@@ -19,9 +19,9 @@
 name = "datafusion-expr"
 description = "Logical plan and expression representation for DataFusion query engine"
 keywords = ["datafusion", "logical", "plan", "expressions"]
+readme = "README.md"
 version = { workspace = true }
 edition = { workspace = true }
-readme = { workspace = true }
 homepage = { workspace = true }
 repository = { workspace = true }
 license = { workspace = true }
@@ -35,14 +35,17 @@ path = "src/lib.rs"
 [features]
 
 [dependencies]
-ahash = { version = "0.8", default-features = false, features = ["runtime-rng"] }
+ahash = { version = "0.8", default-features = false, features = [
+    "runtime-rng",
+] }
 arrow = { workspace = true }
-datafusion-common = { path = "../common", version = "26.0.0" }
-lazy_static = { version = "^1.4.0" }
-sqlparser = "0.34"
-strum = { version = "0.24", features = ["derive"] }
-strum_macros = "0.24"
+arrow-array = { workspace = true }
+datafusion-common = { workspace = true }
+paste = "^1.0"
+sqlparser = { workspace = true }
+strum = { version = "0.25.0", features = ["derive"] }
+strum_macros = "0.25.0"
 
 [dev-dependencies]
-ctor = "0.2.0"
-env_logger = "0.10"
+ctor = { workspace = true }
+env_logger = { workspace = true }

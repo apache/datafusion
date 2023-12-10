@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! PyArrow
+//! Conversions between PyArrow and DataFusion types
 
 use arrow::array::ArrayData;
 use arrow::pyarrow::{FromPyArrow, ToPyArrow};
@@ -54,7 +54,7 @@ impl FromPyArrow for ScalarValue {
 
 impl ToPyArrow for ScalarValue {
     fn to_pyarrow(&self, py: Python) -> PyResult<PyObject> {
-        let array = self.to_array();
+        let array = self.to_array()?;
         // convert to pyarrow array using C data interface
         let pyarray = array.to_data().to_pyarrow(py)?;
         let pyscalar = pyarray.call_method1(py, "__getitem__", (0,))?;
@@ -94,10 +94,11 @@ mod tests {
                     Some(locals),
                 )
                 .expect("Couldn't get python info");
-                let executable: String =
-                    locals.get_item("executable").unwrap().extract().unwrap();
-                let python_path: Vec<&str> =
-                    locals.get_item("python_path").unwrap().extract().unwrap();
+                let executable = locals.get_item("executable").unwrap().unwrap();
+                let executable: String = executable.extract().unwrap();
+
+                let python_path = locals.get_item("python_path").unwrap().unwrap();
+                let python_path: Vec<&str> = python_path.extract().unwrap();
 
                 panic!("pyarrow not found\nExecutable: {executable}\nPython path: {python_path:?}\n\
                          HINT: try `pip install pyarrow`\n\
@@ -118,7 +119,7 @@ mod tests {
             ScalarValue::Boolean(Some(true)),
             ScalarValue::Int32(Some(23)),
             ScalarValue::Float64(Some(12.34)),
-            ScalarValue::Utf8(Some("Hello!".to_string())),
+            ScalarValue::from("Hello!"),
             ScalarValue::Date32(Some(1234)),
         ];
 

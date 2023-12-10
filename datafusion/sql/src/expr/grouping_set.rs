@@ -16,6 +16,7 @@
 // under the License.
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
+use datafusion_common::plan_err;
 use datafusion_common::{DFSchema, DataFusionError, Result};
 use datafusion_expr::{Expr, GroupingSet};
 use sqlparser::ast::Expr as SQLExpr;
@@ -48,10 +49,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             .into_iter()
             .map(|v| {
                 if v.len() != 1 {
-                    Err(DataFusionError::Internal(
+                    plan_err!(
                         "Tuple expressions are not supported for Rollup expressions"
-                            .to_string(),
-                    ))
+                    )
                 } else {
                     self.sql_expr_to_logical_expr(v[0].clone(), schema, planner_context)
                 }
@@ -70,10 +70,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             .into_iter()
             .map(|v| {
                 if v.len() != 1 {
-                    Err(DataFusionError::Internal(
-                        "Tuple expressions not are supported for Cube expressions"
-                            .to_string(),
-                    ))
+                    plan_err!("Tuple expressions not are supported for Cube expressions")
                 } else {
                     self.sql_expr_to_logical_expr(v[0].clone(), schema, planner_context)
                 }

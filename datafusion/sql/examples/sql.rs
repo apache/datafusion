@@ -17,7 +17,8 @@
 
 use arrow_schema::{DataType, Field, Schema};
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::{plan_err, DataFusionError, Result};
+use datafusion_expr::WindowUDF;
 use datafusion_expr::{
     logical_plan::builder::LogicalTableSource, AggregateUDF, ScalarUDF, TableSource,
 };
@@ -48,20 +49,20 @@ fn main() {
     let statement = &ast[0];
 
     // create a logical query plan
-    let schema_provider = MySchemaProvider::new();
-    let sql_to_rel = SqlToRel::new(&schema_provider);
+    let context_provider = MyContextProvider::new();
+    let sql_to_rel = SqlToRel::new(&context_provider);
     let plan = sql_to_rel.sql_statement_to_plan(statement.clone()).unwrap();
 
     // show the plan
     println!("{plan:?}");
 }
 
-struct MySchemaProvider {
+struct MyContextProvider {
     options: ConfigOptions,
     tables: HashMap<String, Arc<dyn TableSource>>,
 }
 
-impl MySchemaProvider {
+impl MyContextProvider {
     fn new() -> Self {
         let mut tables = HashMap::new();
         tables.insert(
@@ -103,14 +104,11 @@ fn create_table_source(fields: Vec<Field>) -> Arc<dyn TableSource> {
     )))
 }
 
-impl ContextProvider for MySchemaProvider {
-    fn get_table_provider(&self, name: TableReference) -> Result<Arc<dyn TableSource>> {
+impl ContextProvider for MyContextProvider {
+    fn get_table_source(&self, name: TableReference) -> Result<Arc<dyn TableSource>> {
         match self.tables.get(name.table()) {
             Some(table) => Ok(table.clone()),
-            _ => Err(DataFusionError::Plan(format!(
-                "Table not found: {}",
-                name.table()
-            ))),
+            _ => plan_err!("Table not found: {}", name.table()),
         }
     }
 
@@ -123,6 +121,10 @@ impl ContextProvider for MySchemaProvider {
     }
 
     fn get_variable_type(&self, _variable_names: &[String]) -> Option<DataType> {
+        None
+    }
+
+    fn get_window_meta(&self, _name: &str) -> Option<Arc<WindowUDF>> {
         None
     }
 

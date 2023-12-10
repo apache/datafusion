@@ -21,32 +21,43 @@ use std::ops::Not;
 
 use super::or_in_list_simplifier::OrInListSimplifier;
 use super::utils::*;
-
 use crate::analyzer::type_coercion::TypeCoercionRewriter;
+use crate::simplify_expressions::guarantees::GuaranteeRewriter;
 use crate::simplify_expressions::regex::simplify_regex_expr;
+use crate::simplify_expressions::SimplifyInfo;
+
 use arrow::{
     array::new_null_array,
     datatypes::{DataType, Field, Schema},
     error::ArrowError,
     record_batch::RecordBatch,
 };
-use datafusion_common::tree_node::{RewriteRecursion, TreeNode, TreeNodeRewriter};
-use datafusion_common::{DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue};
-use datafusion_expr::expr::{InList, InSubquery, ScalarFunction};
+use datafusion_common::{
+    cast::{as_large_list_array, as_list_array},
+    tree_node::{RewriteRecursion, TreeNode, TreeNodeRewriter},
+};
+use datafusion_common::{
+    exec_err, internal_err, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue,
+};
 use datafusion_expr::{
-    and, expr, lit, or, BinaryExpr, BuiltinScalarFunction, ColumnarValue, Expr, Like,
-    Volatility,
+    and, lit, or, BinaryExpr, BuiltinScalarFunction, Case, ColumnarValue, Expr, Like,
+    ScalarFunctionDefinition, Volatility,
+};
+use datafusion_expr::{
+    expr::{InList, InSubquery, ScalarFunction},
+    interval_arithmetic::NullableInterval,
 };
 use datafusion_physical_expr::{create_physical_expr, execution_props::ExecutionProps};
-
-use crate::simplify_expressions::SimplifyInfo;
 
 /// This structure handles API for expression simplification
 pub struct ExprSimplifier<S> {
     info: S,
+    /// Guarantees about the values of columns. This is provided by the user
+    /// in [ExprSimplifier::with_guarantees()].
+    guarantees: Vec<(Expr, NullableInterval)>,
 }
 
-const THRESHOLD_INLINE_INLIST: usize = 3;
+pub const THRESHOLD_INLINE_INLIST: usize = 3;
 
 impl<S: SimplifyInfo> ExprSimplifier<S> {
     /// Create a new `ExprSimplifier` with the given `info` such as an
@@ -55,7 +66,10 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
     ///
     /// [`SimplifyContext`]: crate::simplify_expressions::context::SimplifyContext
     pub fn new(info: S) -> Self {
-        Self { info }
+        Self {
+            info,
+            guarantees: vec![],
+        }
     }
 
     /// Simplifies this [`Expr`]`s as much as possible, evaluating
@@ -119,6 +133,7 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
         let mut simplifier = Simplifier::new(&self.info);
         let mut const_evaluator = ConstEvaluator::try_new(self.info.execution_props())?;
         let mut or_in_list_simplifier = OrInListSimplifier::new();
+        let mut guarantee_rewriter = GuaranteeRewriter::new(&self.guarantees);
 
         // TODO iterate until no changes are made during rewrite
         // (evaluating constants can enable new simplifications and
@@ -127,6 +142,7 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
         expr.rewrite(&mut const_evaluator)?
             .rewrite(&mut simplifier)?
             .rewrite(&mut or_in_list_simplifier)?
+            .rewrite(&mut guarantee_rewriter)?
             // run both passes twice to try an minimize simplifications that we missed
             .rewrite(&mut const_evaluator)?
             .rewrite(&mut simplifier)
@@ -146,6 +162,65 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
         let mut expr_rewrite = TypeCoercionRewriter { schema };
 
         expr.rewrite(&mut expr_rewrite)
+    }
+
+    /// Input guarantees about the values of columns.
+    ///
+    /// The guarantees can simplify expressions. For example, if a column `x` is
+    /// guaranteed to be `3`, then the expression `x > 1` can be replaced by the
+    /// literal `true`.
+    ///
+    /// The guarantees are provided as a `Vec<(Expr, NullableInterval)>`,
+    /// where the [Expr] is a column reference and the [NullableInterval]
+    /// is an interval representing the known possible values of that column.
+    ///
+    /// ```rust
+    /// use arrow::datatypes::{DataType, Field, Schema};
+    /// use datafusion_expr::{col, lit, Expr};
+    /// use datafusion_expr::interval_arithmetic::{Interval, NullableInterval};
+    /// use datafusion_common::{Result, ScalarValue, ToDFSchema};
+    /// use datafusion_physical_expr::execution_props::ExecutionProps;
+    /// use datafusion_optimizer::simplify_expressions::{
+    ///     ExprSimplifier, SimplifyContext};
+    ///
+    /// let schema = Schema::new(vec![
+    ///   Field::new("x", DataType::Int64, false),
+    ///   Field::new("y", DataType::UInt32, false),
+    ///   Field::new("z", DataType::Int64, false),
+    ///   ])
+    ///   .to_dfschema_ref().unwrap();
+    ///
+    /// // Create the simplifier
+    /// let props = ExecutionProps::new();
+    /// let context = SimplifyContext::new(&props)
+    ///    .with_schema(schema);
+    ///
+    /// // Expression: (x >= 3) AND (y + 2 < 10) AND (z > 5)
+    /// let expr_x = col("x").gt_eq(lit(3_i64));
+    /// let expr_y = (col("y") + lit(2_u32)).lt(lit(10_u32));
+    /// let expr_z = col("z").gt(lit(5_i64));
+    /// let expr = expr_x.and(expr_y).and(expr_z.clone());
+    ///
+    /// let guarantees = vec![
+    ///    // x ∈ [3, 5]
+    ///    (
+    ///        col("x"),
+    ///        NullableInterval::NotNull {
+    ///            values: Interval::make(Some(3_i64), Some(5_i64)).unwrap()
+    ///        }
+    ///    ),
+    ///    // y = 3
+    ///    (col("y"), NullableInterval::from(ScalarValue::UInt32(Some(3)))),
+    /// ];
+    /// let simplifier = ExprSimplifier::new(context).with_guarantees(guarantees);
+    /// let output = simplifier.simplify(expr).unwrap();
+    /// // Expression becomes: true AND true AND (z > 5), which simplifies to
+    /// // z > 5.
+    /// assert_eq!(output, expr_z);
+    /// ```
+    pub fn with_guarantees(mut self, guarantees: Vec<(Expr, NullableInterval)>) -> Self {
+        self.guarantees = guarantees;
+        self
     }
 }
 
@@ -208,9 +283,7 @@ impl<'a> TreeNodeRewriter for ConstEvaluator<'a> {
         match self.can_evaluate.pop() {
             Some(true) => Ok(Expr::Literal(self.evaluate_to_scalar(expr)?)),
             Some(false) => Ok(expr),
-            _ => Err(DataFusionError::Internal(
-                "Failed to pop can_evaluate".to_string(),
-            )),
+            _ => internal_err!("Failed to pop can_evaluate"),
         }
     }
 }
@@ -259,7 +332,6 @@ impl<'a> ConstEvaluator<'a> {
             // Has no runtime cost, but needed during planning
             Expr::Alias(..)
             | Expr::AggregateFunction { .. }
-            | Expr::AggregateUDF { .. }
             | Expr::ScalarVariable(_, _)
             | Expr::Column(_)
             | Expr::OuterReferenceColumn(_, _)
@@ -269,15 +341,17 @@ impl<'a> ConstEvaluator<'a> {
             | Expr::WindowFunction { .. }
             | Expr::Sort { .. }
             | Expr::GroupingSet(_)
-            | Expr::Wildcard
-            | Expr::QualifiedWildcard { .. }
+            | Expr::Wildcard { .. }
             | Expr::Placeholder(_) => false,
-            Expr::ScalarFunction(ScalarFunction { fun, .. }) => {
-                Self::volatility_ok(fun.volatility())
-            }
-            Expr::ScalarUDF(expr::ScalarUDF { fun, .. }) => {
-                Self::volatility_ok(fun.signature.volatility)
-            }
+            Expr::ScalarFunction(ScalarFunction { func_def, .. }) => match func_def {
+                ScalarFunctionDefinition::BuiltIn(fun) => {
+                    Self::volatility_ok(fun.volatility())
+                }
+                ScalarFunctionDefinition::UDF(fun) => {
+                    Self::volatility_ok(fun.signature().volatility)
+                }
+                ScalarFunctionDefinition::Name(_) => false,
+            },
             Expr::Literal(_)
             | Expr::BinaryExpr { .. }
             | Expr::Not(_)
@@ -292,7 +366,6 @@ impl<'a> ConstEvaluator<'a> {
             | Expr::Negative(_)
             | Expr::Between { .. }
             | Expr::Like { .. }
-            | Expr::ILike { .. }
             | Expr::SimilarTo { .. }
             | Expr::Case(_)
             | Expr::Cast { .. }
@@ -318,12 +391,15 @@ impl<'a> ConstEvaluator<'a> {
         match col_val {
             ColumnarValue::Array(a) => {
                 if a.len() != 1 {
-                    Err(DataFusionError::Execution(format!(
+                    exec_err!(
                         "Could not evaluate the expression, found a result of length {}",
                         a.len()
-                    )))
+                    )
+                } else if as_list_array(&a).is_ok() || as_large_list_array(&a).is_ok() {
+                    Ok(ScalarValue::List(a))
                 } else {
-                    Ok(ScalarValue::try_from_array(&a, 0)?)
+                    // Non-ListArray
+                    ScalarValue::try_from_array(&a, 0)
                 }
             }
             ColumnarValue::Scalar(s) => Ok(s),
@@ -413,7 +489,9 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
             }) if list.len() == 1
                 && matches!(list.first(), Some(Expr::ScalarSubquery { .. })) =>
             {
-                let Expr::ScalarSubquery(subquery) = list.remove(0) else { unreachable!() };
+                let Expr::ScalarSubquery(subquery) = list.remove(0) else {
+                    unreachable!()
+                };
                 Expr::InSubquery(InSubquery::new(expr, subquery, negated))
             }
 
@@ -669,18 +747,28 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 right: _,
             }) if is_null(&left) => *left,
 
-            // A * 0 --> 0 (if A is not null)
+            // A * 0 --> 0 (if A is not null and not floating, since NAN * 0 -> NAN)
             Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: Multiply,
                 right,
-            }) if !info.nullable(&left)? && is_zero(&right) => *right,
-            // 0 * A --> 0 (if A is not null)
+            }) if !info.nullable(&left)?
+                && !info.get_data_type(&left)?.is_floating()
+                && is_zero(&right) =>
+            {
+                *right
+            }
+            // 0 * A --> 0 (if A is not null and not floating, since 0 * NAN -> NAN)
             Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: Multiply,
                 right,
-            }) if !info.nullable(&right)? && is_zero(&left) => *left,
+            }) if !info.nullable(&right)?
+                && !info.get_data_type(&right)?.is_floating()
+                && is_zero(&left) =>
+            {
+                *left
+            }
 
             //
             // Rules for Divide
@@ -704,20 +792,16 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 op: Divide,
                 right,
             }) if is_null(&right) => *right,
-            // 0 / 0 -> null
+            // A / 0 -> DivideByZero Error if A is not null and not floating
+            // (float / 0 -> inf | -inf | NAN)
             Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: Divide,
                 right,
-            }) if is_zero(&left) && is_zero(&right) => {
-                Expr::Literal(ScalarValue::Int32(None))
-            }
-            // A / 0 -> DivideByZero Error
-            Expr::BinaryExpr(BinaryExpr {
-                left,
-                op: Divide,
-                right,
-            }) if !info.nullable(&left)? && is_zero(&right) => {
+            }) if !info.nullable(&left)?
+                && !info.get_data_type(&left)?.is_floating()
+                && is_zero(&right) =>
+            {
                 return Err(DataFusionError::ArrowError(ArrowError::DivideByZero));
             }
 
@@ -737,19 +821,33 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 op: Modulo,
                 right: _,
             }) if is_null(&left) => *left,
-            // A % 1 --> 0
+            // A % 1 --> 0 (if A is not nullable and not floating, since NAN % 1 --> NAN)
             Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: Modulo,
                 right,
-            }) if !info.nullable(&left)? && is_one(&right) => lit(0),
-            // A % 0 --> DivideByZero Error
+            }) if !info.nullable(&left)?
+                && !info.get_data_type(&left)?.is_floating()
+                && is_one(&right) =>
+            {
+                lit(0)
+            }
+            // A % 0 --> DivideByZero Error (if A is not floating and not null)
+            // A % 0 --> NAN (if A is floating and not null)
             Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: Modulo,
                 right,
             }) if !info.nullable(&left)? && is_zero(&right) => {
-                return Err(DataFusionError::ArrowError(ArrowError::DivideByZero));
+                match info.get_data_type(&left)? {
+                    DataType::Float32 => lit(f32::NAN),
+                    DataType::Float64 => lit(f64::NAN),
+                    _ => {
+                        return Err(DataFusionError::ArrowError(
+                            ArrowError::DivideByZero,
+                        ));
+                    }
+                }
             }
 
             //
@@ -1069,17 +1167,20 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
             //
             // Note: the rationale for this rewrite is that the expr can then be further
             // simplified using the existing rules for AND/OR
-            Expr::Case(case)
-                if !case.when_then_expr.is_empty()
-                && case.when_then_expr.len() < 3 // The rewrite is O(n!) so limit to small number
-                && info.is_boolean_type(&case.when_then_expr[0].1)? =>
+            Expr::Case(Case {
+                expr: None,
+                when_then_expr,
+                else_expr,
+            }) if !when_then_expr.is_empty()
+                && when_then_expr.len() < 3 // The rewrite is O(n!) so limit to small number
+                && info.is_boolean_type(&when_then_expr[0].1)? =>
             {
                 // The disjunction of all the when predicates encountered so far
                 let mut filter_expr = lit(false);
                 // The disjunction of all the cases
                 let mut out_expr = lit(false);
 
-                for (when, then) in case.when_then_expr {
+                for (when, then) in when_then_expr {
                     let case_expr = when
                         .as_ref()
                         .clone()
@@ -1090,7 +1191,7 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                     filter_expr = filter_expr.or(*when);
                 }
 
-                if let Some(else_expr) = case.else_expr {
+                if let Some(else_expr) = else_expr {
                     let case_expr = filter_expr.not().and(*else_expr);
                     out_expr = out_expr.or(case_expr);
                 }
@@ -1101,25 +1202,28 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
 
             // log
             Expr::ScalarFunction(ScalarFunction {
-                fun: BuiltinScalarFunction::Log,
+                func_def: ScalarFunctionDefinition::BuiltIn(BuiltinScalarFunction::Log),
                 args,
             }) => simpl_log(args, <&S>::clone(&info))?,
 
             // power
             Expr::ScalarFunction(ScalarFunction {
-                fun: BuiltinScalarFunction::Power,
+                func_def: ScalarFunctionDefinition::BuiltIn(BuiltinScalarFunction::Power),
                 args,
             }) => simpl_power(args, <&S>::clone(&info))?,
 
             // concat
             Expr::ScalarFunction(ScalarFunction {
-                fun: BuiltinScalarFunction::Concat,
+                func_def: ScalarFunctionDefinition::BuiltIn(BuiltinScalarFunction::Concat),
                 args,
             }) => simpl_concat(args)?,
 
             // concat_ws
             Expr::ScalarFunction(ScalarFunction {
-                fun: BuiltinScalarFunction::ConcatWithSeparator,
+                func_def:
+                    ScalarFunctionDefinition::BuiltIn(
+                        BuiltinScalarFunction::ConcatWithSeparator,
+                    ),
                 args,
             }) => match &args[..] {
                 [delimiter, vals @ ..] => simpl_concat_ws(delimiter, vals)?,
@@ -1163,6 +1267,7 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 pattern,
                 negated,
                 escape_char: _,
+                case_insensitive: _,
             }) if !is_null(&expr)
                 && matches!(
                     pattern.as_ref(),
@@ -1172,26 +1277,17 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 lit(!negated)
             }
 
-            // Rules for ILike
-            Expr::ILike(Like {
-                expr,
-                pattern,
-                negated,
-                escape_char: _,
-            }) if !is_null(&expr)
-                && matches!(
-                    pattern.as_ref(),
-                    Expr::Literal(ScalarValue::Utf8(Some(pattern_str))) if pattern_str == "%"
-                ) =>
+            // a is not null/unknown --> true (if a is not nullable)
+            Expr::IsNotNull(expr) | Expr::IsNotUnknown(expr)
+                if !info.nullable(&expr)? =>
             {
-                lit(!negated)
+                lit(true)
             }
 
-            // a IS NOT NULL --> true, if a is not nullable
-            Expr::IsNotNull(expr) if !info.nullable(&expr)? => lit(true),
-
-            // a IS NULL --> false, if a is not nullable
-            Expr::IsNull(expr) if !info.nullable(&expr)? => lit(false),
+            // a is null/unknown --> false (if a is not nullable)
+            Expr::IsNull(expr) | Expr::IsUnknown(expr) if !info.nullable(&expr)? => {
+                lit(false)
+            }
 
             // no additional rewrites possible
             expr => expr,
@@ -1208,23 +1304,24 @@ mod tests {
         sync::Arc,
     };
 
+    use super::*;
     use crate::simplify_expressions::{
         utils::for_test::{cast_to_int64_expr, now_expr, to_timestamp_expr},
         SimplifyContext,
     };
-
-    use super::*;
     use crate::test::test_table_scan_with_name;
+
     use arrow::{
         array::{ArrayRef, Int32Array},
         datatypes::{DataType, Field, Schema},
     };
-    use chrono::{DateTime, TimeZone, Utc};
     use datafusion_common::{assert_contains, cast::as_int32_array, DFField, ToDFSchema};
-    use datafusion_expr::*;
+    use datafusion_expr::{interval_arithmetic::Interval, *};
     use datafusion_physical_expr::{
         execution_props::ExecutionProps, functions::make_scalar_function,
     };
+
+    use chrono::{DateTime, TimeZone, Utc};
 
     // ------------------------------
     // --- ExprSimplifier tests -----
@@ -1313,10 +1410,8 @@ mod tests {
         expected_expr: Expr,
         date_time: &DateTime<Utc>,
     ) {
-        let execution_props = ExecutionProps {
-            query_execution_start_time: *date_time,
-            var_providers: None,
-        };
+        let execution_props =
+            ExecutionProps::new().with_query_execution_start_time(*date_time);
 
         let mut const_evaluator = ConstEvaluator::try_new(&execution_props).unwrap();
         let evaluated_expr = input_expr
@@ -1408,7 +1503,7 @@ mod tests {
         test_evaluate(expr, lit("foobarbaz"));
 
         // Check non string arguments
-        // to_timestamp("2020-09-08T12:00:00+00:00") --> timestamp(1599566400000000000i64)
+        // to_timestamp("2020-09-08T12:00:00+00:00") --> timestamp(1599566400i64)
         let expr =
             call_fn("to_timestamp", vec![lit("2020-09-08T12:00:00+00:00")]).unwrap();
         test_evaluate(expr, lit_timestamp_nano(1599566400000000000i64));
@@ -1460,7 +1555,7 @@ mod tests {
 
         // immutable UDF should get folded
         // udf_add(1+2, 30+40) --> 73
-        let expr = Expr::ScalarUDF(expr::ScalarUDF::new(
+        let expr = Expr::ScalarFunction(expr::ScalarFunction::new_udf(
             make_udf_add(Volatility::Immutable),
             args.clone(),
         ));
@@ -1469,15 +1564,21 @@ mod tests {
         // stable UDF should be entirely folded
         // udf_add(1+2, 30+40) --> 73
         let fun = make_udf_add(Volatility::Stable);
-        let expr = Expr::ScalarUDF(expr::ScalarUDF::new(Arc::clone(&fun), args.clone()));
+        let expr = Expr::ScalarFunction(expr::ScalarFunction::new_udf(
+            Arc::clone(&fun),
+            args.clone(),
+        ));
         test_evaluate(expr, lit(73));
 
         // volatile UDF should have args folded
         // udf_add(1+2, 30+40) --> udf_add(3, 70)
         let fun = make_udf_add(Volatility::Volatile);
-        let expr = Expr::ScalarUDF(expr::ScalarUDF::new(Arc::clone(&fun), args));
-        let expected_expr =
-            Expr::ScalarUDF(expr::ScalarUDF::new(Arc::clone(&fun), folded_args));
+        let expr =
+            Expr::ScalarFunction(expr::ScalarFunction::new_udf(Arc::clone(&fun), args));
+        let expected_expr = Expr::ScalarFunction(expr::ScalarFunction::new_udf(
+            Arc::clone(&fun),
+            folded_args,
+        ));
         test_evaluate(expr, expected_expr);
     }
 
@@ -1670,11 +1771,14 @@ mod tests {
 
     #[test]
     fn test_simplify_divide_zero_by_zero() {
-        // 0 / 0 -> null
+        // 0 / 0 -> DivideByZero
         let expr = lit(0) / lit(0);
-        let expected = lit(ScalarValue::Int32(None));
+        let err = try_simplify(expr).unwrap_err();
 
-        assert_eq!(simplify(expr), expected);
+        assert!(
+            matches!(err, DataFusionError::ArrowError(ArrowError::DivideByZero)),
+            "{err}"
+        );
     }
 
     #[test]
@@ -2504,10 +2608,43 @@ mod tests {
             col("c1")
                 .in_list(vec![lit("foo"), lit("bar"), lit("baz"), lit("qux")], false),
         );
+        assert_change(
+            regex_match(col("c1"), lit("^(fo_o)$")),
+            col("c1").eq(lit("fo_o")),
+        );
+        assert_change(
+            regex_match(col("c1"), lit("^(fo_o)$")),
+            col("c1").eq(lit("fo_o")),
+        );
+        assert_change(
+            regex_match(col("c1"), lit("^(fo_o|ba_r)$")),
+            col("c1").eq(lit("fo_o")).or(col("c1").eq(lit("ba_r"))),
+        );
+        assert_change(
+            regex_not_match(col("c1"), lit("^(fo_o|ba_r)$")),
+            col("c1")
+                .not_eq(lit("fo_o"))
+                .and(col("c1").not_eq(lit("ba_r"))),
+        );
+        assert_change(
+            regex_match(col("c1"), lit("^(fo_o|ba_r|ba_z)$")),
+            ((col("c1").eq(lit("fo_o"))).or(col("c1").eq(lit("ba_r"))))
+                .or(col("c1").eq(lit("ba_z"))),
+        );
+        assert_change(
+            regex_match(col("c1"), lit("^(fo_o|ba_r|baz|qu_x)$")),
+            col("c1").in_list(
+                vec![lit("fo_o"), lit("ba_r"), lit("baz"), lit("qu_x")],
+                false,
+            ),
+        );
 
         // regular expressions that mismatch captured literals
         assert_no_change(regex_match(col("c1"), lit("(foo|bar)")));
         assert_no_change(regex_match(col("c1"), lit("(foo|bar)*")));
+        assert_no_change(regex_match(col("c1"), lit("(fo_o|b_ar)")));
+        assert_no_change(regex_match(col("c1"), lit("(foo|ba_r)*")));
+        assert_no_change(regex_match(col("c1"), lit("(fo_o|ba_r)*")));
         assert_no_change(regex_match(col("c1"), lit("^(foo|bar)*")));
         assert_no_change(regex_match(col("c1"), lit("^foo|bar$")));
         assert_no_change(regex_match(col("c1"), lit("^(foo)(bar)$")));
@@ -2602,6 +2739,7 @@ mod tests {
             expr: Box::new(expr),
             pattern: Box::new(lit(pattern)),
             escape_char: None,
+            case_insensitive: false,
         })
     }
 
@@ -2611,24 +2749,27 @@ mod tests {
             expr: Box::new(expr),
             pattern: Box::new(lit(pattern)),
             escape_char: None,
+            case_insensitive: false,
         })
     }
 
     fn ilike(expr: Expr, pattern: &str) -> Expr {
-        Expr::ILike(Like {
+        Expr::Like(Like {
             negated: false,
             expr: Box::new(expr),
             pattern: Box::new(lit(pattern)),
             escape_char: None,
+            case_insensitive: true,
         })
     }
 
     fn not_ilike(expr: Expr, pattern: &str) -> Expr {
-        Expr::ILike(Like {
+        Expr::Like(Like {
             negated: true,
             expr: Box::new(expr),
             pattern: Box::new(lit(pattern)),
             escape_char: None,
+            case_insensitive: true,
         })
     }
 
@@ -2647,6 +2788,19 @@ mod tests {
 
     fn simplify(expr: Expr) -> Expr {
         try_simplify(expr).unwrap()
+    }
+
+    fn simplify_with_guarantee(
+        expr: Expr,
+        guarantees: Vec<(Expr, NullableInterval)>,
+    ) -> Expr {
+        let schema = expr_test_schema();
+        let execution_props = ExecutionProps::new();
+        let simplifier = ExprSimplifier::new(
+            SimplifyContext::new(&execution_props).with_schema(schema),
+        )
+        .with_guarantees(guarantees);
+        simplifier.simplify(expr).unwrap()
     }
 
     fn expr_test_schema() -> DFSchemaRef {
@@ -2726,6 +2880,25 @@ mod tests {
     }
 
     #[test]
+    fn simplify_expr_is_unknown() {
+        assert_eq!(simplify(col("c2").is_unknown()), col("c2").is_unknown(),);
+
+        // 'c2_non_null is unknown' is always false
+        assert_eq!(simplify(col("c2_non_null").is_unknown()), lit(false));
+    }
+
+    #[test]
+    fn simplify_expr_is_not_known() {
+        assert_eq!(
+            simplify(col("c2").is_not_unknown()),
+            col("c2").is_not_unknown()
+        );
+
+        // 'c2_non_null is not unknown' is always true
+        assert_eq!(simplify(col("c2_non_null").is_not_unknown()), lit(true));
+    }
+
+    #[test]
     fn simplify_expr_eq() {
         let schema = expr_test_schema();
         assert_eq!(col("c2").get_type(&schema).unwrap(), DataType::Boolean);
@@ -2793,9 +2966,9 @@ mod tests {
 
     #[test]
     fn simplify_expr_case_when_then_else() {
-        // CASE WHERE c2 != false THEN "ok" == "not_ok" ELSE c2 == true
+        // CASE WHEN c2 != false THEN "ok" == "not_ok" ELSE c2 == true
         // -->
-        // CASE WHERE c2 THEN false ELSE c2
+        // CASE WHEN c2 THEN false ELSE c2
         // -->
         // false
         assert_eq!(
@@ -2810,9 +2983,9 @@ mod tests {
             col("c2").not().and(col("c2")) // #1716
         );
 
-        // CASE WHERE c2 != false THEN "ok" == "ok" ELSE c2
+        // CASE WHEN c2 != false THEN "ok" == "ok" ELSE c2
         // -->
-        // CASE WHERE c2 THEN true ELSE c2
+        // CASE WHEN c2 THEN true ELSE c2
         // -->
         // c2
         //
@@ -2830,7 +3003,7 @@ mod tests {
             col("c2").or(col("c2").not().and(col("c2"))) // #1716
         );
 
-        // CASE WHERE ISNULL(c2) THEN true ELSE c2
+        // CASE WHEN ISNULL(c2) THEN true ELSE c2
         // -->
         // ISNULL(c2) OR c2
         //
@@ -2847,7 +3020,7 @@ mod tests {
                 .or(col("c2").is_not_null().and(col("c2")))
         );
 
-        // CASE WHERE c1 then true WHERE c2 then false ELSE true
+        // CASE WHEN c1 then true WHEN c2 then false ELSE true
         // --> c1 OR (NOT(c1) AND c2 AND FALSE) OR (NOT(c1 OR c2) AND TRUE)
         // --> c1 OR (NOT(c1) AND NOT(c2))
         // --> c1 OR NOT(c2)
@@ -2866,7 +3039,7 @@ mod tests {
             col("c1").or(col("c1").not().and(col("c2").not()))
         );
 
-        // CASE WHERE c1 then true WHERE c2 then true ELSE false
+        // CASE WHEN c1 then true WHEN c2 then true ELSE false
         // --> c1 OR (NOT(c1) AND c2 AND TRUE) OR (NOT(c1 OR c2) AND FALSE)
         // --> c1 OR (NOT(c1) AND c2)
         // --> c1 OR c2
@@ -3092,5 +3265,91 @@ mod tests {
 
         let expr = not_ilike(null, "%");
         assert_eq!(simplify(expr), lit_bool_null());
+    }
+
+    #[test]
+    fn test_simplify_with_guarantee() {
+        // (c3 >= 3) AND (c4 + 2 < 10 OR (c1 NOT IN ("a", "b")))
+        let expr_x = col("c3").gt(lit(3_i64));
+        let expr_y = (col("c4") + lit(2_u32)).lt(lit(10_u32));
+        let expr_z = col("c1").in_list(vec![lit("a"), lit("b")], true);
+        let expr = expr_x.clone().and(expr_y.clone().or(expr_z));
+
+        // All guaranteed null
+        let guarantees = vec![
+            (col("c3"), NullableInterval::from(ScalarValue::Int64(None))),
+            (col("c4"), NullableInterval::from(ScalarValue::UInt32(None))),
+            (col("c1"), NullableInterval::from(ScalarValue::Utf8(None))),
+        ];
+
+        let output = simplify_with_guarantee(expr.clone(), guarantees);
+        assert_eq!(output, lit_bool_null());
+
+        // All guaranteed false
+        let guarantees = vec![
+            (
+                col("c3"),
+                NullableInterval::NotNull {
+                    values: Interval::make(Some(0_i64), Some(2_i64)).unwrap(),
+                },
+            ),
+            (
+                col("c4"),
+                NullableInterval::from(ScalarValue::UInt32(Some(9))),
+            ),
+            (col("c1"), NullableInterval::from(ScalarValue::from("a"))),
+        ];
+        let output = simplify_with_guarantee(expr.clone(), guarantees);
+        assert_eq!(output, lit(false));
+
+        // Guaranteed false or null -> no change.
+        let guarantees = vec![
+            (
+                col("c3"),
+                NullableInterval::MaybeNull {
+                    values: Interval::make(Some(0_i64), Some(2_i64)).unwrap(),
+                },
+            ),
+            (
+                col("c4"),
+                NullableInterval::MaybeNull {
+                    values: Interval::make(Some(9_u32), Some(9_u32)).unwrap(),
+                },
+            ),
+            (
+                col("c1"),
+                NullableInterval::NotNull {
+                    values: Interval::try_new(
+                        ScalarValue::from("d"),
+                        ScalarValue::from("f"),
+                    )
+                    .unwrap(),
+                },
+            ),
+        ];
+        let output = simplify_with_guarantee(expr.clone(), guarantees);
+        assert_eq!(&output, &expr_x);
+
+        // Sufficient true guarantees
+        let guarantees = vec![
+            (
+                col("c3"),
+                NullableInterval::from(ScalarValue::Int64(Some(9))),
+            ),
+            (
+                col("c4"),
+                NullableInterval::from(ScalarValue::UInt32(Some(3))),
+            ),
+        ];
+        let output = simplify_with_guarantee(expr.clone(), guarantees);
+        assert_eq!(output, lit(true));
+
+        // Only partially simplify
+        let guarantees = vec![(
+            col("c4"),
+            NullableInterval::from(ScalarValue::UInt32(Some(3))),
+        )];
+        let output = simplify_with_guarantee(expr.clone(), guarantees);
+        assert_eq!(&output, &expr_x);
     }
 }

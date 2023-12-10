@@ -34,7 +34,7 @@ use datafusion::physical_plan::collect;
 use datafusion::physical_plan::metrics::MetricsSet;
 use datafusion::prelude::{col, lit, lit_timestamp_nano, Expr, SessionContext};
 use datafusion::test_util::parquet::{ParquetScanOptions, TestParquetFile};
-use datafusion_optimizer::utils::{conjunction, disjunction, split_conjunction};
+use datafusion_expr::utils::{conjunction, disjunction, split_conjunction};
 use itertools::Itertools;
 use parquet::file::properties::WriterProperties;
 use tempfile::TempDir;
@@ -507,7 +507,7 @@ impl<'a> TestCase<'a> {
     ) -> RecordBatch {
         println!("  scan options: {scan_options:?}");
         println!("  reading with filter {filter:?}");
-        let ctx = SessionContext::with_config(scan_options.config());
+        let ctx = SessionContext::new_with_config(scan_options.config());
         let exec = self
             .test_parquet_file
             .create_scan(Some(filter.clone()))

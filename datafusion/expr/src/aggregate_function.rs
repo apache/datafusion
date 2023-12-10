@@ -17,14 +17,17 @@
 
 //! Aggregate function module contains all built-in aggregate functions definitions
 
+use crate::utils;
 use crate::{type_coercion::aggregates::*, Signature, TypeSignature, Volatility};
 use arrow::datatypes::{DataType, Field};
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::{plan_datafusion_err, plan_err, DataFusionError, Result};
 use std::sync::Arc;
 use std::{fmt, str::FromStr};
 use strum_macros::EnumIter;
 
 /// Enum of all built-in aggregate functions
+// Contributor's guide for adding new aggregate functions
+// https://arrow.apache.org/datafusion/contributor-guide/index.html#how-to-add-a-new-aggregate-function
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash, EnumIter)]
 pub enum AggregateFunction {
     /// count
@@ -61,6 +64,24 @@ pub enum AggregateFunction {
     CovariancePop,
     /// Correlation
     Correlation,
+    /// Slope from linear regression
+    RegrSlope,
+    /// Intercept from linear regression
+    RegrIntercept,
+    /// Number of input rows in which both expressions are not null
+    RegrCount,
+    /// R-squared value from linear regression
+    RegrR2,
+    /// Average of the independent variable
+    RegrAvgx,
+    /// Average of the dependent variable
+    RegrAvgy,
+    /// Sum of squares of the independent variable
+    RegrSXX,
+    /// Sum of squares of the dependent variable
+    RegrSYY,
+    /// Sum of products of pairs of numbers
+    RegrSXY,
     /// Approximate continuous percentile function
     ApproxPercentileCont,
     /// Approximate continuous percentile function with weight
@@ -79,10 +100,12 @@ pub enum AggregateFunction {
     BoolAnd,
     /// Bool Or
     BoolOr,
+    /// string_agg
+    StringAgg,
 }
 
 impl AggregateFunction {
-    fn name(&self) -> &str {
+    pub fn name(&self) -> &str {
         use AggregateFunction::*;
         match self {
             Count => "COUNT",
@@ -95,13 +118,22 @@ impl AggregateFunction {
             ArrayAgg => "ARRAY_AGG",
             FirstValue => "FIRST_VALUE",
             LastValue => "LAST_VALUE",
-            Variance => "VARIANCE",
-            VariancePop => "VARIANCE_POP",
+            Variance => "VAR",
+            VariancePop => "VAR_POP",
             Stddev => "STDDEV",
             StddevPop => "STDDEV_POP",
-            Covariance => "COVARIANCE",
-            CovariancePop => "COVARIANCE_POP",
-            Correlation => "CORRELATION",
+            Covariance => "COVAR",
+            CovariancePop => "COVAR_POP",
+            Correlation => "CORR",
+            RegrSlope => "REGR_SLOPE",
+            RegrIntercept => "REGR_INTERCEPT",
+            RegrCount => "REGR_COUNT",
+            RegrR2 => "REGR_R2",
+            RegrAvgx => "REGR_AVGX",
+            RegrAvgy => "REGR_AVGY",
+            RegrSXX => "REGR_SXX",
+            RegrSYY => "REGR_SYY",
+            RegrSXY => "REGR_SXY",
             ApproxPercentileCont => "APPROX_PERCENTILE_CONT",
             ApproxPercentileContWithWeight => "APPROX_PERCENTILE_CONT_WITH_WEIGHT",
             ApproxMedian => "APPROX_MEDIAN",
@@ -111,6 +143,7 @@ impl AggregateFunction {
             BitXor => "BIT_XOR",
             BoolAnd => "BOOL_AND",
             BoolOr => "BOOL_OR",
+            StringAgg => "STRING_AGG",
         }
     }
 }
@@ -141,6 +174,7 @@ impl FromStr for AggregateFunction {
             "array_agg" => AggregateFunction::ArrayAgg,
             "first_value" => AggregateFunction::FirstValue,
             "last_value" => AggregateFunction::LastValue,
+            "string_agg" => AggregateFunction::StringAgg,
             // statistical
             "corr" => AggregateFunction::Correlation,
             "covar" => AggregateFunction::Covariance,
@@ -152,6 +186,15 @@ impl FromStr for AggregateFunction {
             "var" => AggregateFunction::Variance,
             "var_pop" => AggregateFunction::VariancePop,
             "var_samp" => AggregateFunction::Variance,
+            "regr_slope" => AggregateFunction::RegrSlope,
+            "regr_intercept" => AggregateFunction::RegrIntercept,
+            "regr_count" => AggregateFunction::RegrCount,
+            "regr_r2" => AggregateFunction::RegrR2,
+            "regr_avgx" => AggregateFunction::RegrAvgx,
+            "regr_avgy" => AggregateFunction::RegrAvgy,
+            "regr_sxx" => AggregateFunction::RegrSXX,
+            "regr_syy" => AggregateFunction::RegrSYY,
+            "regr_sxy" => AggregateFunction::RegrSXY,
             // approximate
             "approx_distinct" => AggregateFunction::ApproxDistinct,
             "approx_median" => AggregateFunction::ApproxMedian,
@@ -162,9 +205,7 @@ impl FromStr for AggregateFunction {
             // other
             "grouping" => AggregateFunction::Grouping,
             _ => {
-                return Err(DataFusionError::Plan(format!(
-                    "There is no built-in function named {name}"
-                )));
+                return plan_err!("There is no built-in function named {name}");
             }
         })
     }
@@ -172,58 +213,97 @@ impl FromStr for AggregateFunction {
 
 /// Returns the datatype of the aggregate function.
 /// This is used to get the returned data type for aggregate expr.
+#[deprecated(
+    since = "27.0.0",
+    note = "please use `AggregateFunction::return_type` instead"
+)]
 pub fn return_type(
     fun: &AggregateFunction,
     input_expr_types: &[DataType],
 ) -> Result<DataType> {
-    // Note that this function *must* return the same type that the respective physical expression returns
-    // or the execution panics.
+    fun.return_type(input_expr_types)
+}
 
-    let coerced_data_types = crate::type_coercion::aggregates::coerce_types(
-        fun,
-        input_expr_types,
-        &signature(fun),
-    )?;
+impl AggregateFunction {
+    /// Returns the datatype of the aggregate function given its argument types
+    ///
+    /// This is used to get the returned data type for aggregate expr.
+    pub fn return_type(&self, input_expr_types: &[DataType]) -> Result<DataType> {
+        // Note that this function *must* return the same type that the respective physical expression returns
+        // or the execution panics.
 
-    match fun {
-        AggregateFunction::Count | AggregateFunction::ApproxDistinct => {
-            Ok(DataType::Int64)
-        }
-        AggregateFunction::Max | AggregateFunction::Min => {
-            // For min and max agg function, the returned type is same as input type.
-            // The coerced_data_types is same with input_types.
-            Ok(coerced_data_types[0].clone())
-        }
-        AggregateFunction::Sum => sum_return_type(&coerced_data_types[0]),
-        AggregateFunction::BitAnd
-        | AggregateFunction::BitOr
-        | AggregateFunction::BitXor => Ok(coerced_data_types[0].clone()),
-        AggregateFunction::BoolAnd | AggregateFunction::BoolOr => Ok(DataType::Boolean),
-        AggregateFunction::Variance => variance_return_type(&coerced_data_types[0]),
-        AggregateFunction::VariancePop => variance_return_type(&coerced_data_types[0]),
-        AggregateFunction::Covariance => covariance_return_type(&coerced_data_types[0]),
-        AggregateFunction::CovariancePop => {
-            covariance_return_type(&coerced_data_types[0])
-        }
-        AggregateFunction::Correlation => correlation_return_type(&coerced_data_types[0]),
-        AggregateFunction::Stddev => stddev_return_type(&coerced_data_types[0]),
-        AggregateFunction::StddevPop => stddev_return_type(&coerced_data_types[0]),
-        AggregateFunction::Avg => avg_return_type(&coerced_data_types[0]),
-        AggregateFunction::ArrayAgg => Ok(DataType::List(Arc::new(Field::new(
-            "item",
-            coerced_data_types[0].clone(),
-            true,
-        )))),
-        AggregateFunction::ApproxPercentileCont => Ok(coerced_data_types[0].clone()),
-        AggregateFunction::ApproxPercentileContWithWeight => {
-            Ok(coerced_data_types[0].clone())
-        }
-        AggregateFunction::ApproxMedian | AggregateFunction::Median => {
-            Ok(coerced_data_types[0].clone())
-        }
-        AggregateFunction::Grouping => Ok(DataType::Int32),
-        AggregateFunction::FirstValue | AggregateFunction::LastValue => {
-            Ok(coerced_data_types[0].clone())
+        let coerced_data_types = coerce_types(self, input_expr_types, &self.signature())
+            // original errors are all related to wrong function signature
+            // aggregate them for better error message
+            .map_err(|_| {
+                plan_datafusion_err!(
+                    "{}",
+                    utils::generate_signature_error_msg(
+                        &format!("{self}"),
+                        self.signature(),
+                        input_expr_types,
+                    )
+                )
+            })?;
+
+        match self {
+            AggregateFunction::Count | AggregateFunction::ApproxDistinct => {
+                Ok(DataType::Int64)
+            }
+            AggregateFunction::Max | AggregateFunction::Min => {
+                // For min and max agg function, the returned type is same as input type.
+                // The coerced_data_types is same with input_types.
+                Ok(coerced_data_types[0].clone())
+            }
+            AggregateFunction::Sum => sum_return_type(&coerced_data_types[0]),
+            AggregateFunction::BitAnd
+            | AggregateFunction::BitOr
+            | AggregateFunction::BitXor => Ok(coerced_data_types[0].clone()),
+            AggregateFunction::BoolAnd | AggregateFunction::BoolOr => {
+                Ok(DataType::Boolean)
+            }
+            AggregateFunction::Variance => variance_return_type(&coerced_data_types[0]),
+            AggregateFunction::VariancePop => {
+                variance_return_type(&coerced_data_types[0])
+            }
+            AggregateFunction::Covariance => {
+                covariance_return_type(&coerced_data_types[0])
+            }
+            AggregateFunction::CovariancePop => {
+                covariance_return_type(&coerced_data_types[0])
+            }
+            AggregateFunction::Correlation => {
+                correlation_return_type(&coerced_data_types[0])
+            }
+            AggregateFunction::Stddev => stddev_return_type(&coerced_data_types[0]),
+            AggregateFunction::StddevPop => stddev_return_type(&coerced_data_types[0]),
+            AggregateFunction::RegrSlope
+            | AggregateFunction::RegrIntercept
+            | AggregateFunction::RegrCount
+            | AggregateFunction::RegrR2
+            | AggregateFunction::RegrAvgx
+            | AggregateFunction::RegrAvgy
+            | AggregateFunction::RegrSXX
+            | AggregateFunction::RegrSYY
+            | AggregateFunction::RegrSXY => Ok(DataType::Float64),
+            AggregateFunction::Avg => avg_return_type(&coerced_data_types[0]),
+            AggregateFunction::ArrayAgg => Ok(DataType::List(Arc::new(Field::new(
+                "item",
+                coerced_data_types[0].clone(),
+                true,
+            )))),
+            AggregateFunction::ApproxPercentileCont => Ok(coerced_data_types[0].clone()),
+            AggregateFunction::ApproxPercentileContWithWeight => {
+                Ok(coerced_data_types[0].clone())
+            }
+            AggregateFunction::ApproxMedian | AggregateFunction::Median => {
+                Ok(coerced_data_types[0].clone())
+            }
+            AggregateFunction::Grouping => Ok(DataType::Int32),
+            AggregateFunction::FirstValue | AggregateFunction::LastValue => {
+                Ok(coerced_data_types[0].clone())
+            }
+            AggregateFunction::StringAgg => Ok(DataType::LargeUtf8),
         }
     }
 }
@@ -236,79 +316,127 @@ pub fn sum_type_of_avg(input_expr_types: &[DataType]) -> Result<DataType> {
     let coerced_data_types = crate::type_coercion::aggregates::coerce_types(
         &fun,
         input_expr_types,
-        &signature(&fun),
+        &fun.signature(),
     )?;
     avg_sum_type(&coerced_data_types[0])
 }
 
 /// the signatures supported by the function `fun`.
+#[deprecated(
+    since = "27.0.0",
+    note = "please use `AggregateFunction::signature` instead"
+)]
 pub fn signature(fun: &AggregateFunction) -> Signature {
-    // note: the physical expression must accept the type returned by this function or the execution panics.
-    match fun {
-        AggregateFunction::Count => Signature::variadic_any(Volatility::Immutable),
-        AggregateFunction::ApproxDistinct
-        | AggregateFunction::Grouping
-        | AggregateFunction::ArrayAgg => Signature::any(1, Volatility::Immutable),
-        AggregateFunction::Min | AggregateFunction::Max => {
-            let valid = STRINGS
-                .iter()
-                .chain(NUMERICS.iter())
-                .chain(TIMESTAMPS.iter())
-                .chain(DATES.iter())
-                .chain(TIMES.iter())
-                .cloned()
-                .collect::<Vec<_>>();
-            Signature::uniform(1, valid, Volatility::Immutable)
-        }
-        AggregateFunction::BitAnd
-        | AggregateFunction::BitOr
-        | AggregateFunction::BitXor => {
-            Signature::uniform(1, INTEGERS.to_vec(), Volatility::Immutable)
-        }
-        AggregateFunction::BoolAnd | AggregateFunction::BoolOr => {
-            Signature::uniform(1, vec![DataType::Boolean], Volatility::Immutable)
-        }
-        AggregateFunction::Avg
-        | AggregateFunction::Sum
-        | AggregateFunction::Variance
-        | AggregateFunction::VariancePop
-        | AggregateFunction::Stddev
-        | AggregateFunction::StddevPop
-        | AggregateFunction::Median
-        | AggregateFunction::ApproxMedian
-        | AggregateFunction::FirstValue
-        | AggregateFunction::LastValue => {
-            Signature::uniform(1, NUMERICS.to_vec(), Volatility::Immutable)
-        }
-        AggregateFunction::Covariance | AggregateFunction::CovariancePop => {
-            Signature::uniform(2, NUMERICS.to_vec(), Volatility::Immutable)
-        }
-        AggregateFunction::Correlation => {
-            Signature::uniform(2, NUMERICS.to_vec(), Volatility::Immutable)
-        }
-        AggregateFunction::ApproxPercentileCont => {
-            // Accept any numeric value paired with a float64 percentile
-            let with_tdigest_size = NUMERICS.iter().map(|t| {
-                TypeSignature::Exact(vec![t.clone(), DataType::Float64, t.clone()])
-            });
-            Signature::one_of(
+    fun.signature()
+}
+
+impl AggregateFunction {
+    /// the signatures supported by the function `fun`.
+    pub fn signature(&self) -> Signature {
+        // note: the physical expression must accept the type returned by this function or the execution panics.
+        match self {
+            AggregateFunction::Count => Signature::variadic_any(Volatility::Immutable),
+            AggregateFunction::ApproxDistinct
+            | AggregateFunction::Grouping
+            | AggregateFunction::ArrayAgg => Signature::any(1, Volatility::Immutable),
+            AggregateFunction::Min | AggregateFunction::Max => {
+                let valid = STRINGS
+                    .iter()
+                    .chain(NUMERICS.iter())
+                    .chain(TIMESTAMPS.iter())
+                    .chain(DATES.iter())
+                    .chain(TIMES.iter())
+                    .chain(BINARYS.iter())
+                    .cloned()
+                    .collect::<Vec<_>>();
+                Signature::uniform(1, valid, Volatility::Immutable)
+            }
+            AggregateFunction::BitAnd
+            | AggregateFunction::BitOr
+            | AggregateFunction::BitXor => {
+                Signature::uniform(1, INTEGERS.to_vec(), Volatility::Immutable)
+            }
+            AggregateFunction::BoolAnd | AggregateFunction::BoolOr => {
+                Signature::uniform(1, vec![DataType::Boolean], Volatility::Immutable)
+            }
+            AggregateFunction::Avg
+            | AggregateFunction::Sum
+            | AggregateFunction::Variance
+            | AggregateFunction::VariancePop
+            | AggregateFunction::Stddev
+            | AggregateFunction::StddevPop
+            | AggregateFunction::Median
+            | AggregateFunction::ApproxMedian
+            | AggregateFunction::FirstValue
+            | AggregateFunction::LastValue => {
+                Signature::uniform(1, NUMERICS.to_vec(), Volatility::Immutable)
+            }
+            AggregateFunction::Covariance
+            | AggregateFunction::CovariancePop
+            | AggregateFunction::Correlation
+            | AggregateFunction::RegrSlope
+            | AggregateFunction::RegrIntercept
+            | AggregateFunction::RegrCount
+            | AggregateFunction::RegrR2
+            | AggregateFunction::RegrAvgx
+            | AggregateFunction::RegrAvgy
+            | AggregateFunction::RegrSXX
+            | AggregateFunction::RegrSYY
+            | AggregateFunction::RegrSXY => {
+                Signature::uniform(2, NUMERICS.to_vec(), Volatility::Immutable)
+            }
+            AggregateFunction::ApproxPercentileCont => {
+                // Accept any numeric value paired with a float64 percentile
+                let with_tdigest_size = NUMERICS.iter().map(|t| {
+                    TypeSignature::Exact(vec![t.clone(), DataType::Float64, t.clone()])
+                });
+                Signature::one_of(
+                    NUMERICS
+                        .iter()
+                        .map(|t| TypeSignature::Exact(vec![t.clone(), DataType::Float64]))
+                        .chain(with_tdigest_size)
+                        .collect(),
+                    Volatility::Immutable,
+                )
+            }
+            AggregateFunction::ApproxPercentileContWithWeight => Signature::one_of(
+                // Accept any numeric value paired with a float64 percentile
                 NUMERICS
                     .iter()
-                    .map(|t| TypeSignature::Exact(vec![t.clone(), DataType::Float64]))
-                    .chain(with_tdigest_size)
+                    .map(|t| {
+                        TypeSignature::Exact(vec![
+                            t.clone(),
+                            t.clone(),
+                            DataType::Float64,
+                        ])
+                    })
                     .collect(),
                 Volatility::Immutable,
-            )
+            ),
+            AggregateFunction::StringAgg => {
+                Signature::uniform(2, STRINGS.to_vec(), Volatility::Immutable)
+            }
         }
-        AggregateFunction::ApproxPercentileContWithWeight => Signature::one_of(
-            // Accept any numeric value paired with a float64 percentile
-            NUMERICS
-                .iter()
-                .map(|t| {
-                    TypeSignature::Exact(vec![t.clone(), t.clone(), DataType::Float64])
-                })
-                .collect(),
-            Volatility::Immutable,
-        ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use strum::IntoEnumIterator;
+
+    #[test]
+    // Test for AggregateFuncion's Display and from_str() implementations.
+    // For each variant in AggregateFuncion, it converts the variant to a string
+    // and then back to a variant. The test asserts that the original variant and
+    // the reconstructed variant are the same. This assertion is also necessary for
+    // function suggestion. See https://github.com/apache/arrow-datafusion/issues/8082
+    fn test_display_and_from_str() {
+        for func_original in AggregateFunction::iter() {
+            let func_name = func_original.to_string();
+            let func_from_str =
+                AggregateFunction::from_str(func_name.to_lowercase().as_str()).unwrap();
+            assert_eq!(func_from_str, func_original);
+        }
     }
 }

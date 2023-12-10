@@ -16,6 +16,7 @@
 // under the License.
 
 use std::borrow::Cow;
+use std::hash::{Hash, Hasher};
 use std::{any::Any, sync::Arc};
 
 use crate::expressions::try_cast;
@@ -23,11 +24,13 @@ use crate::expressions::NoOp;
 use crate::physical_expr::down_cast_any_ref;
 use crate::PhysicalExpr;
 use arrow::array::*;
+use arrow::compute::kernels::cmp::eq;
 use arrow::compute::kernels::zip::zip;
-use arrow::compute::{and, eq_dyn, is_null, not, or, prep_null_mask_filter};
+use arrow::compute::{and, is_null, not, or, prep_null_mask_filter};
 use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
-use datafusion_common::{cast::as_boolean_array, DataFusionError, Result};
+use datafusion_common::exec_err;
+use datafusion_common::{cast::as_boolean_array, internal_err, DataFusionError, Result};
 use datafusion_expr::ColumnarValue;
 
 use itertools::Itertools;
@@ -51,7 +54,7 @@ type WhenThen = (Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>);
 ///     [WHEN ...]
 ///     [ELSE result]
 /// END
-#[derive(Debug)]
+#[derive(Debug, Hash)]
 pub struct CaseExpr {
     /// Optional base expression that can be compared to literal values in the "when" expressions
     expr: Option<Arc<dyn PhysicalExpr>>,
@@ -85,9 +88,7 @@ impl CaseExpr {
         else_expr: Option<Arc<dyn PhysicalExpr>>,
     ) -> Result<Self> {
         if when_then_expr.is_empty() {
-            Err(DataFusionError::Execution(
-                "There must be at least one WHEN clause".to_string(),
-            ))
+            exec_err!("There must be at least one WHEN clause")
         } else {
             Ok(Self {
                 expr,
@@ -125,7 +126,7 @@ impl CaseExpr {
         let return_type = self.data_type(&batch.schema())?;
         let expr = self.expr.as_ref().unwrap();
         let base_value = expr.evaluate(batch)?;
-        let base_value = base_value.into_array(batch.num_rows());
+        let base_value = base_value.into_array(batch.num_rows())?;
         let base_nulls = is_null(base_value.as_ref())?;
 
         // start with nulls as default output
@@ -136,9 +137,9 @@ impl CaseExpr {
             let when_value = self.when_then_expr[i]
                 .0
                 .evaluate_selection(batch, &remainder)?;
-            let when_value = when_value.into_array(batch.num_rows());
+            let when_value = when_value.into_array(batch.num_rows())?;
             // build boolean array representing which rows match the "when" value
-            let when_match = eq_dyn(&when_value, base_value.as_ref())?;
+            let when_match = eq(&when_value, &base_value)?;
             // Treat nulls as false
             let when_match = match when_match.null_count() {
                 0 => Cow::Borrowed(&when_match),
@@ -152,7 +153,7 @@ impl CaseExpr {
                 ColumnarValue::Scalar(value) if value.is_null() => {
                     new_null_array(&return_type, batch.num_rows())
                 }
-                _ => then_value.into_array(batch.num_rows()),
+                _ => then_value.into_array(batch.num_rows())?,
             };
 
             current_value =
@@ -169,7 +170,7 @@ impl CaseExpr {
             remainder = or(&base_nulls, &remainder)?;
             let else_ = expr
                 .evaluate_selection(batch, &remainder)?
-                .into_array(batch.num_rows());
+                .into_array(batch.num_rows())?;
             current_value = zip(&remainder, else_.as_ref(), current_value.as_ref())?;
         }
 
@@ -193,7 +194,7 @@ impl CaseExpr {
             let when_value = self.when_then_expr[i]
                 .0
                 .evaluate_selection(batch, &remainder)?;
-            let when_value = when_value.into_array(batch.num_rows());
+            let when_value = when_value.into_array(batch.num_rows())?;
             let when_value = as_boolean_array(&when_value).map_err(|e| {
                 DataFusionError::Context(
                     "WHEN expression did not return a BooleanArray".to_string(),
@@ -213,7 +214,7 @@ impl CaseExpr {
                 ColumnarValue::Scalar(value) if value.is_null() => {
                     new_null_array(&return_type, batch.num_rows())
                 }
-                _ => then_value.into_array(batch.num_rows()),
+                _ => then_value.into_array(batch.num_rows())?,
             };
 
             current_value =
@@ -230,7 +231,7 @@ impl CaseExpr {
                 .unwrap_or_else(|_| e.clone());
             let else_ = expr
                 .evaluate_selection(batch, &remainder)?
-                .into_array(batch.num_rows());
+                .into_array(batch.num_rows())?;
             current_value = zip(&remainder, else_.as_ref(), current_value.as_ref())?;
         }
 
@@ -318,9 +319,7 @@ impl PhysicalExpr for CaseExpr {
         children: Vec<Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn PhysicalExpr>> {
         if children.len() != self.children().len() {
-            Err(DataFusionError::Internal(
-                "CaseExpr: Wrong number of children".to_string(),
-            ))
+            internal_err!("CaseExpr: Wrong number of children")
         } else {
             assert_eq!(children.len() % 2, 0);
             let expr = match children[0].clone().as_any().downcast_ref::<NoOp>() {
@@ -347,6 +346,11 @@ impl PhysicalExpr for CaseExpr {
                 else_expr,
             )?))
         }
+    }
+
+    fn dyn_hash(&self, state: &mut dyn Hasher) {
+        let mut s = state;
+        self.hash(&mut s);
     }
 }
 
@@ -398,6 +402,7 @@ mod tests {
     use arrow::datatypes::DataType::Float64;
     use arrow::datatypes::*;
     use datafusion_common::cast::{as_float64_array, as_int32_array};
+    use datafusion_common::plan_err;
     use datafusion_common::tree_node::{Transformed, TreeNode};
     use datafusion_common::ScalarValue;
     use datafusion_expr::type_coercion::binary::comparison_coercion;
@@ -420,7 +425,10 @@ mod tests {
             None,
             schema.as_ref(),
         )?;
-        let result = expr.evaluate(&batch)?.into_array(batch.num_rows());
+        let result = expr
+            .evaluate(&batch)?
+            .into_array(batch.num_rows())
+            .expect("Failed to convert to array");
         let result = as_int32_array(&result)?;
 
         let expected = &Int32Array::from(vec![Some(123), None, None, Some(456)]);
@@ -448,7 +456,10 @@ mod tests {
             Some(else_value),
             schema.as_ref(),
         )?;
-        let result = expr.evaluate(&batch)?.into_array(batch.num_rows());
+        let result = expr
+            .evaluate(&batch)?
+            .into_array(batch.num_rows())
+            .expect("Failed to convert to array");
         let result = as_int32_array(&result)?;
 
         let expected =
@@ -480,7 +491,10 @@ mod tests {
             Some(else_value),
             schema.as_ref(),
         )?;
-        let result = expr.evaluate(&batch)?.into_array(batch.num_rows());
+        let result = expr
+            .evaluate(&batch)?
+            .into_array(batch.num_rows())
+            .expect("Failed to convert to array");
         let result =
             as_float64_array(&result).expect("failed to downcast to Float64Array");
 
@@ -518,7 +532,10 @@ mod tests {
             None,
             schema.as_ref(),
         )?;
-        let result = expr.evaluate(&batch)?.into_array(batch.num_rows());
+        let result = expr
+            .evaluate(&batch)?
+            .into_array(batch.num_rows())
+            .expect("Failed to convert to array");
         let result = as_int32_array(&result)?;
 
         let expected = &Int32Array::from(vec![Some(123), None, None, Some(456)]);
@@ -546,7 +563,10 @@ mod tests {
             Some(else_value),
             schema.as_ref(),
         )?;
-        let result = expr.evaluate(&batch)?.into_array(batch.num_rows());
+        let result = expr
+            .evaluate(&batch)?
+            .into_array(batch.num_rows())
+            .expect("Failed to convert to array");
         let result = as_int32_array(&result)?;
 
         let expected =
@@ -578,7 +598,10 @@ mod tests {
             Some(x),
             schema.as_ref(),
         )?;
-        let result = expr.evaluate(&batch)?.into_array(batch.num_rows());
+        let result = expr
+            .evaluate(&batch)?
+            .into_array(batch.num_rows())
+            .expect("Failed to convert to array");
         let result =
             as_float64_array(&result).expect("failed to downcast to Float64Array");
 
@@ -624,7 +647,10 @@ mod tests {
             Some(else_value),
             schema.as_ref(),
         )?;
-        let result = expr.evaluate(&batch)?.into_array(batch.num_rows());
+        let result = expr
+            .evaluate(&batch)?
+            .into_array(batch.num_rows())
+            .expect("Failed to convert to array");
         let result = as_int32_array(&result)?;
 
         let expected =
@@ -656,7 +682,10 @@ mod tests {
             Some(else_value),
             schema.as_ref(),
         )?;
-        let result = expr.evaluate(&batch)?.into_array(batch.num_rows());
+        let result = expr
+            .evaluate(&batch)?
+            .into_array(batch.num_rows())
+            .expect("Failed to convert to array");
         let result =
             as_float64_array(&result).expect("failed to downcast to Float64Array");
 
@@ -688,7 +717,10 @@ mod tests {
             None,
             schema.as_ref(),
         )?;
-        let result = expr.evaluate(&batch)?.into_array(batch.num_rows());
+        let result = expr
+            .evaluate(&batch)?
+            .into_array(batch.num_rows())
+            .expect("Failed to convert to array");
         let result =
             as_float64_array(&result).expect("failed to downcast to Float64Array");
 
@@ -716,7 +748,10 @@ mod tests {
             None,
             schema.as_ref(),
         )?;
-        let result = expr.evaluate(&batch)?.into_array(batch.num_rows());
+        let result = expr
+            .evaluate(&batch)?
+            .into_array(batch.num_rows())
+            .expect("Failed to convert to array");
         let result =
             as_float64_array(&result).expect("failed to downcast to Float64Array");
 
@@ -960,9 +995,9 @@ mod tests {
         let coerce_type =
             get_case_common_type(&when_thens, else_expr.clone(), input_schema);
         let (when_thens, else_expr) = match coerce_type {
-            None => Err(DataFusionError::Plan(format!(
+            None => plan_err!(
                 "Can't get a common type for then {when_thens:?} and else {else_expr:?} expression"
-            ))),
+            ),
             Some(data_type) => {
                 // cast then expr
                 let left = when_thens
@@ -1004,11 +1039,10 @@ mod tests {
         };
         thens_type
             .iter()
-            .fold(Some(else_type), |left, right_type| match left {
-                None => None,
+            .try_fold(else_type, |left_type, right_type| {
                 // TODO: now just use the `equal` coercion rule for case when. If find the issue, and
                 // refactor again.
-                Some(left_type) => comparison_coercion(&left_type, right_type),
+                comparison_coercion(&left_type, right_type)
             })
     }
 }

@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
-use datafusion_common::{Column, DataFusionError, Result};
+use datafusion_common::{not_impl_err, Column, DataFusionError, Result};
 use datafusion_expr::{JoinType, LogicalPlan, LogicalPlanBuilder};
 use sqlparser::ast::{Join, JoinConstraint, JoinOperator, TableWithJoins};
 use std::collections::HashSet;
@@ -106,9 +106,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 self.parse_join(left, right, constraint, JoinType::Full, planner_context)
             }
             JoinOperator::CrossJoin => self.parse_cross_join(left, right),
-            other => Err(DataFusionError::NotImplemented(format!(
-                "Unsupported JOIN operator {other:?}"
-            ))),
+            other => not_impl_err!("Unsupported JOIN operator {other:?}"),
         }
     }
 
@@ -134,12 +132,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 // parse ON expression
                 let expr = self.sql_to_expr(sql_expr, &join_schema, planner_context)?;
                 LogicalPlanBuilder::from(left)
-                    .join(
-                        right,
-                        join_type,
-                        (Vec::<Column>::new(), Vec::<Column>::new()),
-                        Some(expr),
-                    )?
+                    .join_on(right, join_type, Some(expr))?
                     .build()
             }
             JoinConstraint::Using(idents) => {
@@ -174,9 +167,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         .build()
                 }
             }
-            JoinConstraint::None => Err(DataFusionError::NotImplemented(
-                "NONE constraint is not supported".to_string(),
-            )),
+            JoinConstraint::None => not_impl_err!("NONE constraint is not supported"),
         }
     }
 }

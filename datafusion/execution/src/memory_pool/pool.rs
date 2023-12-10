@@ -49,7 +49,7 @@ impl MemoryPool for UnboundedMemoryPool {
 /// A [`MemoryPool`] that implements a greedy first-come first-serve limit.
 ///
 /// This pool works well for queries that do not need to spill or have
-/// a single spillable operator. See [`GreedyMemoryPool`] if there are
+/// a single spillable operator. See [`FairSpillPool`] if there are
 /// multiple spillable operators that all will spill.
 #[derive(Debug)]
 pub struct GreedyMemoryPool {
@@ -84,7 +84,11 @@ impl MemoryPool for GreedyMemoryPool {
                 (new_used <= self.pool_size).then_some(new_used)
             })
             .map_err(|used| {
-                insufficient_capacity_err(reservation, additional, self.pool_size - used)
+                insufficient_capacity_err(
+                    reservation,
+                    additional,
+                    self.pool_size.saturating_sub(used),
+                )
             })?;
         Ok(())
     }
@@ -139,6 +143,7 @@ struct FairSpillPoolState {
 impl FairSpillPool {
     /// Allocate up to `limit` bytes
     pub fn new(pool_size: usize) -> Self {
+        debug!("Created new FairSpillPool(pool_size={pool_size})");
         Self {
             pool_size,
             state: Mutex::new(FairSpillPoolState {
@@ -159,13 +164,14 @@ impl MemoryPool for FairSpillPool {
 
     fn unregister(&self, consumer: &MemoryConsumer) {
         if consumer.can_spill {
-            self.state.lock().num_spill -= 1;
+            let mut state = self.state.lock();
+            state.num_spill = state.num_spill.checked_sub(1).unwrap();
         }
     }
 
     fn grow(&self, reservation: &MemoryReservation, additional: usize) {
         let mut state = self.state.lock();
-        match reservation.consumer.can_spill {
+        match reservation.registration.consumer.can_spill {
             true => state.spillable += additional,
             false => state.unspillable += additional,
         }
@@ -173,7 +179,7 @@ impl MemoryPool for FairSpillPool {
 
     fn shrink(&self, reservation: &MemoryReservation, shrink: usize) {
         let mut state = self.state.lock();
-        match reservation.consumer.can_spill {
+        match reservation.registration.consumer.can_spill {
             true => state.spillable -= shrink,
             false => state.unspillable -= shrink,
         }
@@ -182,7 +188,7 @@ impl MemoryPool for FairSpillPool {
     fn try_grow(&self, reservation: &MemoryReservation, additional: usize) -> Result<()> {
         let mut state = self.state.lock();
 
-        match reservation.consumer.can_spill {
+        match reservation.registration.consumer.can_spill {
             true => {
                 // The total amount of memory available to spilling consumers
                 let spill_available = self.pool_size.saturating_sub(state.unspillable);
@@ -230,7 +236,7 @@ fn insufficient_capacity_err(
     additional: usize,
     available: usize,
 ) -> DataFusionError {
-    DataFusionError::ResourcesExhausted(format!("Failed to allocate additional {} bytes for {} with {} bytes already allocated - maximum available is {}", additional, reservation.consumer.name, reservation.size, available))
+    DataFusionError::ResourcesExhausted(format!("Failed to allocate additional {} bytes for {} with {} bytes already allocated - maximum available is {}", additional, reservation.registration.consumer.name, reservation.size, available))
 }
 
 #[cfg(test)]
@@ -247,7 +253,7 @@ mod tests {
         r1.grow(2000);
         assert_eq!(pool.reserved(), 2000);
 
-        let mut r2 = MemoryConsumer::new("s1")
+        let mut r2 = MemoryConsumer::new("r2")
             .with_can_spill(true)
             .register(&pool);
         // Can grow beyond capacity of pool
@@ -255,11 +261,11 @@ mod tests {
 
         assert_eq!(pool.reserved(), 4000);
 
-        let err = r2.try_grow(1).unwrap_err().to_string();
-        assert_eq!(err, "Resources exhausted: Failed to allocate additional 1 bytes for s1 with 2000 bytes already allocated - maximum available is 0");
+        let err = r2.try_grow(1).unwrap_err().strip_backtrace();
+        assert_eq!(err, "Resources exhausted: Failed to allocate additional 1 bytes for r2 with 2000 bytes already allocated - maximum available is 0");
 
-        let err = r2.try_grow(1).unwrap_err().to_string();
-        assert_eq!(err, "Resources exhausted: Failed to allocate additional 1 bytes for s1 with 2000 bytes already allocated - maximum available is 0");
+        let err = r2.try_grow(1).unwrap_err().strip_backtrace();
+        assert_eq!(err, "Resources exhausted: Failed to allocate additional 1 bytes for r2 with 2000 bytes already allocated - maximum available is 0");
 
         r1.shrink(1990);
         r2.shrink(2000);
@@ -269,7 +275,7 @@ mod tests {
         r1.try_grow(10).unwrap();
         assert_eq!(pool.reserved(), 20);
 
-        // Can grow a2 to 80 as only spilling consumer
+        // Can grow r2 to 80 as only spilling consumer
         r2.try_grow(80).unwrap();
         assert_eq!(pool.reserved(), 100);
 
@@ -279,19 +285,19 @@ mod tests {
         assert_eq!(r2.size(), 10);
         assert_eq!(pool.reserved(), 30);
 
-        let mut r3 = MemoryConsumer::new("s2")
+        let mut r3 = MemoryConsumer::new("r3")
             .with_can_spill(true)
             .register(&pool);
 
-        let err = r3.try_grow(70).unwrap_err().to_string();
-        assert_eq!(err, "Resources exhausted: Failed to allocate additional 70 bytes for s2 with 0 bytes already allocated - maximum available is 40");
+        let err = r3.try_grow(70).unwrap_err().strip_backtrace();
+        assert_eq!(err, "Resources exhausted: Failed to allocate additional 70 bytes for r3 with 0 bytes already allocated - maximum available is 40");
 
-        //Shrinking a2 to zero doesn't allow a3 to allocate more than 45
+        //Shrinking r2 to zero doesn't allow a3 to allocate more than 45
         r2.free();
-        let err = r3.try_grow(70).unwrap_err().to_string();
-        assert_eq!(err, "Resources exhausted: Failed to allocate additional 70 bytes for s2 with 0 bytes already allocated - maximum available is 40");
+        let err = r3.try_grow(70).unwrap_err().strip_backtrace();
+        assert_eq!(err, "Resources exhausted: Failed to allocate additional 70 bytes for r3 with 0 bytes already allocated - maximum available is 40");
 
-        // But dropping a2 does
+        // But dropping r2 does
         drop(r2);
         assert_eq!(pool.reserved(), 20);
         r3.try_grow(80).unwrap();
@@ -301,7 +307,7 @@ mod tests {
         assert_eq!(pool.reserved(), 80);
 
         let mut r4 = MemoryConsumer::new("s4").register(&pool);
-        let err = r4.try_grow(30).unwrap_err().to_string();
+        let err = r4.try_grow(30).unwrap_err().strip_backtrace();
         assert_eq!(err, "Resources exhausted: Failed to allocate additional 30 bytes for s4 with 0 bytes already allocated - maximum available is 20");
     }
 }

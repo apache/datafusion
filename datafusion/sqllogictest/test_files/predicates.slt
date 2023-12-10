@@ -1,0 +1,523 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+##########
+## Limit Tests
+##########
+
+statement ok
+CREATE EXTERNAL TABLE aggregate_test_100 (
+  c1  VARCHAR NOT NULL,
+  c2  TINYINT NOT NULL,
+  c3  SMALLINT NOT NULL,
+  c4  SMALLINT,
+  c5  INT,
+  c6  BIGINT NOT NULL,
+  c7  SMALLINT NOT NULL,
+  c8  INT NOT NULL,
+  c9  BIGINT UNSIGNED NOT NULL,
+  c10 VARCHAR NOT NULL,
+  c11 FLOAT NOT NULL,
+  c12 DOUBLE NOT NULL,
+  c13 VARCHAR NOT NULL
+)
+STORED AS CSV
+WITH HEADER ROW
+LOCATION '../../testing/data/csv/aggregate_test_100.csv'
+
+statement ok
+CREATE EXTERNAL TABLE alltypes_plain STORED AS PARQUET LOCATION '../../parquet-testing/data/alltypes_plain.parquet';
+
+
+# async fn csv_query_with_predicate()
+query TR
+SELECT c1, c12 FROM aggregate_test_100 WHERE c12 > 0.376 AND c12 < 0.4
+----
+e 0.391444365692
+d 0.38870280984
+
+# async fn csv_query_with_negative_predicate
+query TI
+SELECT c1, c4 FROM aggregate_test_100 WHERE c3 < -55 AND -c4 > 30000
+----
+e -31500
+c -30187
+
+# async fn csv_query_with_negated_predicate()
+query I
+SELECT COUNT(1) FROM aggregate_test_100 WHERE NOT(c1 != 'a')
+----
+21
+
+# async fn csv_query_with_is_not_null_predicate
+query I
+SELECT COUNT(1) FROM aggregate_test_100 WHERE c1 IS NOT NULL
+----
+100
+
+# async fn csv_query_with_is_null_predicate
+query I
+SELECT COUNT(1) FROM aggregate_test_100 WHERE c1 IS NULL
+----
+0
+
+# async fn query_where_neg_num
+query II
+select c7, c8 from aggregate_test_100 where c7 >= -2 and c7 < 10
+----
+7 45465
+5 40622
+0 61069
+2 20120
+4 39363
+
+query II
+select c7, c8 from aggregate_test_100 where c7 >= -2.9 and c7 < 10
+----
+7 45465
+5 40622
+0 61069
+2 20120
+4 39363
+
+# async fn like
+query I
+SELECT COUNT(c1) FROM aggregate_test_100 WHERE c13 LIKE '%FB%'
+----
+1
+
+# async fn csv_between_expr
+query I
+SELECT c4 FROM aggregate_test_100 WHERE c12 BETWEEN 0.995 AND 1.0
+----
+10837
+
+# async fn csv_between_expr_negated
+query I
+SELECT c4 FROM aggregate_test_100 WHERE c12 NOT BETWEEN 0 AND 0.995
+----
+10837
+
+# async fn csv_in_set_test
+query I
+SELECT count(*) FROM aggregate_test_100 WHERE c7 in ('25','155','204','77','208','67','139','191','26','7','202','113','129','197','249','146','129','220','154','163','220','19','71','243','150','231','196','170','99','255')
+----
+36
+
+# async fn except_with_null_not_equal
+query ?I
+SELECT * FROM (SELECT null AS id1, 1 AS id2) t1
+EXCEPT
+SELECT * FROM (SELECT null AS id1, 2 AS id2) t2
+----
+NULL 1
+
+# async fn except_with_null_equal
+query ?I
+SELECT * FROM (SELECT null AS id1, 1 AS id2) t1
+EXCEPT
+SELECT * FROM (SELECT null AS id1, 1 AS id2) t2
+----
+
+statement ok
+CREATE TABLE IF NOT EXISTS test AS VALUES('foo'),('bar'),(NULL),('fazzz');
+
+# async fn like_on_strings
+query T
+SELECT * FROM test WHERE column1 LIKE '%a%'
+----
+bar
+fazzz
+
+# async fn like_on_string_dictionaries
+query T
+SELECT * FROM test WHERE column1 LIKE '%a%'
+----
+bar
+fazzz
+
+# async fn in_list_string_dictionaries_with_null
+query T
+SELECT * FROM test WHERE column1 IN ('Bar')
+----
+
+query T
+SELECT * FROM test WHERE column1 IN ('foo')
+----
+foo
+
+query T
+SELECT * FROM test WHERE column1 IN ('bar', 'foo')
+----
+foo
+bar
+
+query T
+SELECT * FROM test WHERE column1 IN ('Bar', 'foo')
+----
+foo
+
+query T
+SELECT * FROM test WHERE column1 IN ('foo', 'Bar', 'fazzz')
+----
+foo
+fazzz
+
+
+# async fn in_set_string_dictionaries
+query T
+SELECT * FROM test WHERE column1 IN ('foo', 'Bar', 'fazzz')
+----
+foo
+fazzz
+
+statement ok
+DROP TABLE test;
+
+statement ok
+CREATE TABLE IF NOT EXISTS test AS VALUES('foo'),('Barrr'),('Bazzz'),('ZZZZZ');
+
+# async fn test_regexp_is_match
+query error Error during planning: Cannot infer common argument type for regex operation Int64 \~ Utf8
+SELECT * FROM test WHERE 12 ~ 'z'
+
+
+query T
+SELECT * FROM test WHERE column1 ~ 'z'
+----
+Bazzz
+
+query T
+SELECT * FROM test WHERE column1 ~* 'z'
+----
+Bazzz
+ZZZZZ
+
+query T
+SELECT * FROM test WHERE column1 !~ 'z'
+----
+foo
+Barrr
+ZZZZZ
+
+query T
+SELECT * FROM test WHERE column1 !~* 'z'
+----
+foo
+Barrr
+
+statement ok
+DROP TABLE test;
+
+statement ok
+CREATE TABLE IF NOT EXISTS test AS VALUES('foo'),('bar'),('fazzz');
+
+# async fn in_list_string_dictionaries
+query T
+SELECT * FROM test WHERE column1 IN ('Bar')
+----
+
+query T
+SELECT * FROM test WHERE column1 IN ('foo')
+----
+foo
+
+query T
+SELECT * FROM test WHERE column1 IN ('bar', 'foo')
+----
+foo
+bar
+
+query T
+SELECT * FROM test WHERE column1 IN ('Bar', 'foo')
+----
+foo
+
+query T
+SELECT * FROM test WHERE column1 IN ('foo', 'Bar', 'fazzz')
+----
+foo
+fazzz
+
+statement ok
+CREATE TABLE IF NOT EXISTS test_float AS VALUES
+ ('a', 1.2, 2.3, 1.2, -3.5, 1.1),
+ ('b', 2.1, 'NaN'::double, -1.7, -8.2, NULL),
+ ('c', NULL, NULL, '-NaN'::double, -5.4, 1.5),
+ ('d', 'NaN'::double, 'NaN'::double, 1.1, '-NaN'::double, NULL),
+ ('e', '-NaN'::double, 6.2, 'NaN'::double, -3.3, 5.6)
+ ;
+
+# IN expr for float
+query T
+SELECT column1 FROM test_float WHERE column2 IN (0.0, -1.2)
+----
+
+query T
+SELECT column1 FROM test_float WHERE column2 IN (0.0, 1.2)
+----
+a
+
+query T
+SELECT column1 FROM test_float WHERE column2 IN (2.1, 1.2)
+----
+a
+b
+
+query T
+SELECT column1 FROM test_float WHERE column2 IN (0.0, 1.2, NULL)
+----
+a
+
+query T
+SELECT column1 FROM test_float WHERE column2 IN (0.0, -1.2, NULL)
+----
+
+query T
+SELECT column1 FROM test_float WHERE column2 IN (0.0, 1.2, 'NaN'::double, '-NaN'::double)
+----
+a
+d
+e
+
+query T
+SELECT column1 FROM test_float WHERE column2 IN (column3, column4, column5, column6)
+----
+a
+d
+
+query T
+SELECT column1 FROM test_float WHERE column2 IN (column3, column4, column5, column6, 2.1, NULL, '-NaN'::double)
+----
+a
+b
+d
+e
+
+query T
+SELECT column1 FROM test_float WHERE column2 NOT IN (column3, column4, column5, column6)
+----
+e
+
+query T
+SELECT column1 FROM test_float WHERE column2 NOT IN (column3, column4, column5, column6, 2.1, NULL, '-NaN'::double)
+----
+
+
+query T
+SELECT column1 FROM test_float WHERE NULL IN (column2, column2 + 1, column2 + 2, column2 + 3)
+----
+
+query T
+SELECT column1 FROM test_float WHERE 'NaN'::double IN (column2, column2 + 1, column2 + 2, column2 + 3)
+----
+d
+
+query T
+SELECT column1 FROM test_float WHERE '-NaN'::double IN (column2, column2 + 1, column2 + 2, column2 + 3)
+----
+e
+
+query II
+SELECT c3, c7 FROM aggregate_test_100 WHERE c3 IN (c7 / 10, c7 / 20, c7 / 30, c7 / 40, 68, 103)
+----
+1 25
+103 146
+68 224
+68 121
+3 133
+
+###
+# Test logical plan simplifies large OR chains
+###
+
+statement ok
+set datafusion.explain.logical_plan_only = true
+
+# Number of OR statements is less than or equal to threshold
+query TT
+EXPLAIN SELECT * FROM test WHERE column1 = 'foo' OR column1 = 'bar' OR column1 = 'fazzz'
+----
+logical_plan
+Filter: test.column1 = Utf8("foo") OR test.column1 = Utf8("bar") OR test.column1 = Utf8("fazzz")
+--TableScan: test projection=[column1]
+
+# Number of OR statements is greater than threshold
+query TT
+EXPLAIN SELECT * FROM test WHERE column1 = 'foo' OR column1 = 'bar' OR column1 = 'fazzz' OR column1 = 'barfoo'
+----
+logical_plan
+Filter: test.column1 IN ([Utf8("foo"), Utf8("bar"), Utf8("fazzz"), Utf8("barfoo")])
+--TableScan: test projection=[column1]
+
+# Complex OR statements
+query TT
+EXPLAIN SELECT * FROM test WHERE column1 = 'foo' OR column1 = 'bar' OR column1 = 'fazzz' OR column1 = 'barfoo' OR false OR column1 = 'foobar'
+----
+logical_plan
+Filter: test.column1 IN ([Utf8("foo"), Utf8("bar"), Utf8("fazzz"), Utf8("barfoo"), Utf8("foobar")])
+--TableScan: test projection=[column1]
+
+# Balanced OR structures
+query TT
+EXPLAIN SELECT * FROM test WHERE (column1 = 'foo' OR column1 = 'bar') OR (column1 = 'fazzz' OR column1 = 'barfoo')
+----
+logical_plan
+Filter: test.column1 IN ([Utf8("foo"), Utf8("bar"), Utf8("fazzz"), Utf8("barfoo")])
+--TableScan: test projection=[column1]
+
+# Right-deep OR structures
+query TT
+EXPLAIN SELECT * FROM test WHERE column1 = 'foo' OR (column1 = 'bar' OR (column1 = 'fazzz' OR column1 = 'barfoo'))
+----
+logical_plan
+Filter: test.column1 IN ([Utf8("foo"), Utf8("bar"), Utf8("fazzz"), Utf8("barfoo")])
+--TableScan: test projection=[column1]
+
+# Not simplifiable, mixed column
+query TT
+EXPLAIN SELECT * FROM aggregate_test_100
+WHERE (c2 = 1 OR c3 = 100) OR (c2 = 2 OR c2 = 3 OR c2 = 4)
+----
+logical_plan
+Filter: aggregate_test_100.c2 = Int8(1) OR aggregate_test_100.c3 = Int16(100) OR aggregate_test_100.c2 = Int8(2) OR aggregate_test_100.c2 = Int8(3) OR aggregate_test_100.c2 = Int8(4)
+--TableScan: aggregate_test_100 projection=[c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13], partial_filters=[aggregate_test_100.c2 = Int8(1) OR aggregate_test_100.c3 = Int16(100) OR aggregate_test_100.c2 = Int8(2) OR aggregate_test_100.c2 = Int8(3) OR aggregate_test_100.c2 = Int8(4)]
+
+# Partially simplifiable, mixed column
+query TT
+EXPLAIN SELECT * FROM aggregate_test_100
+WHERE (c2 = 1 OR c3 = 100) OR (c2 = 2 OR c2 = 3 OR c2 = 4 OR c2 = 5)
+----
+logical_plan
+Filter: aggregate_test_100.c2 = Int8(1) OR aggregate_test_100.c3 = Int16(100) OR aggregate_test_100.c2 IN ([Int8(2), Int8(3), Int8(4), Int8(5)])
+--TableScan: aggregate_test_100 projection=[c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13], partial_filters=[aggregate_test_100.c2 = Int8(1) OR aggregate_test_100.c3 = Int16(100) OR aggregate_test_100.c2 IN ([Int8(2), Int8(3), Int8(4), Int8(5)])]
+
+statement ok
+set datafusion.explain.logical_plan_only = false
+
+
+# async fn test_expect_all
+query IR
+SELECT int_col, double_col FROM alltypes_plain where int_col > 0 EXCEPT ALL SELECT int_col, double_col FROM alltypes_plain where int_col < 1
+----
+1 10.1
+1 10.1
+1 10.1
+1 10.1
+
+# async fn test_expect_distinct
+query IR
+SELECT int_col, double_col FROM alltypes_plain where int_col > 0 EXCEPT SELECT int_col, double_col FROM alltypes_plain where int_col < 1
+----
+1 10.1
+
+
+########
+# Clean up after the test
+########
+
+statement ok
+drop table aggregate_test_100;
+
+statement ok
+drop table alltypes_plain;
+
+statement ok
+DROP TABLE test;
+
+statement ok
+DROP TABLE test_float;
+
+#########
+# Predicates on memory tables / statistics generation
+# Reproducer for https://github.com/apache/arrow-datafusion/issues/7125
+#########
+
+statement ok
+CREATE TABLE t (i integer, s string, b boolean) AS VALUES
+ (1,    'One', true),
+ (2,    'Two', false),
+ (NULL, NULL,  NULL),
+ (4,    'Four', false)
+ ;
+
+query ITB
+select * from t where (b OR b) = b;
+----
+1 One true
+2 Two false
+4 Four false
+
+query ITB
+select * from t where (s LIKE 'T%') = true;
+----
+2 Two false
+
+query ITB
+select * from t where (i & 3) = 1;
+----
+1 One true
+
+
+
+
+########
+# Clean up after the test
+########
+statement ok
+DROP TABLE t;
+
+
+########
+# Test query with bloom filter
+# Refer to https://github.com/apache/arrow-datafusion/pull/7821#pullrequestreview-1688062599
+########
+
+statement ok
+CREATE EXTERNAL TABLE data_index_bloom_encoding_stats STORED AS PARQUET LOCATION '../../parquet-testing/data/data_index_bloom_encoding_stats.parquet';
+
+statement ok
+set datafusion.execution.parquet.bloom_filter_enabled=true;
+
+query T
+SELECT * FROM data_index_bloom_encoding_stats WHERE "String" = 'foo';
+----
+
+query T
+SELECT * FROM data_index_bloom_encoding_stats WHERE "String" = 'test';
+----
+test
+
+query T
+SELECT * FROM data_index_bloom_encoding_stats WHERE "String" like '%e%';
+----
+Hello
+test
+are you
+the quick
+over
+the lazy
+
+statement ok
+set datafusion.execution.parquet.bloom_filter_enabled=false;
+
+
+########
+# Clean up after the test
+########
+statement ok
+DROP TABLE data_index_bloom_encoding_stats;

@@ -1,0 +1,1106 @@
+
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+statement ok
+CREATE EXTERNAL TABLE aggregate_test_100 (
+  c1  VARCHAR NOT NULL,
+  c2  TINYINT NOT NULL,
+  c3  SMALLINT NOT NULL,
+  c4  SMALLINT,
+  c5  INT,
+  c6  BIGINT NOT NULL,
+  c7  SMALLINT NOT NULL,
+  c8  INT NOT NULL,
+  c9  BIGINT UNSIGNED NOT NULL,
+  c10 VARCHAR NOT NULL,
+  c11 FLOAT NOT NULL,
+  c12 DOUBLE NOT NULL,
+  c13 VARCHAR NOT NULL
+)
+STORED AS CSV
+WITH HEADER ROW
+LOCATION '../../testing/data/csv/aggregate_test_100.csv'
+
+statement ok
+CREATE EXTERNAL TABLE aggregate_simple (
+  c1 FLOAT NOT NULL,
+  c2 DOUBLE NOT NULL,
+  c3 BOOLEAN NOT NULL
+)
+STORED AS CSV
+WITH HEADER ROW
+LOCATION '../core/tests/data/aggregate_simple.csv'
+
+
+##########
+## SELECT Tests
+##########
+
+
+# select_values_list
+statement error DataFusion error: SQL error: ParserError\("Expected \(, found: EOF"\)
+VALUES
+
+statement error DataFusion error: SQL error: ParserError\("Expected an expression:, found: \)"\)
+VALUES ()
+
+statement error DataFusion error: SQL error: ParserError\("Expected an expression:, found: \)"\)
+VALUES (1),()
+
+statement error DataFusion error: Error during planning: Inconsistent data length across values list: got 2 values in row 1 but expected 1
+VALUES (1),(1,2)
+
+statement error DataFusion error: Error during planning: Inconsistent data type across values list at row 1 column 0
+VALUES (1),('2')
+
+statement error DataFusion error: Error during planning: Inconsistent data type across values list at row 1 column 0
+VALUES (1),(2.0)
+
+statement error DataFusion error: Error during planning: Inconsistent data type across values list at row 1 column 1
+VALUES (1,2), (1,'2')
+
+query IT
+VALUES (1,'a'),(NULL,'b'),(3,'c')
+----
+1 a
+NULL b
+3 c
+
+query IT
+VALUES (NULL,'a'),(NULL,'b'),(3,'c')
+----
+NULL a
+NULL b
+3 c
+
+query TT
+VALUES (NULL,'a'),(NULL,'b'),(NULL,'c')
+----
+NULL a
+NULL b
+NULL c
+
+query IT
+VALUES (1,'a'),(2,NULL),(3,'c')
+----
+1 a
+2 NULL
+3 c
+
+query IT
+VALUES (1,NULL),(2,NULL),(3,'c')
+----
+1 NULL
+2 NULL
+3 c
+
+query IIIIIIIIIIIIITTR
+VALUES (1,2,3,4,5,6,7,8,9,10,11,12,13,NULL,'F',3.5)
+----
+1 2 3 4 5 6 7 8 9 10 11 12 13 NULL F 3.5
+
+query IT
+SELECT * FROM (VALUES (1,'a'),(2,NULL)) AS t(c1, c2)
+----
+1 a
+2 NULL
+
+query TT
+EXPLAIN VALUES (1, 'a', -1, 1.1),(NULL, 'b', -3, 0.5)
+----
+logical_plan Values: (Int64(1), Utf8("a"), Int64(-1), Float64(1.1)), (Int64(NULL), Utf8("b"), Int64(-3), Float64(0.5))
+physical_plan ValuesExec
+
+query TT
+EXPLAIN VALUES ('1'::float)
+----
+logical_plan Values: (Float32(1) AS Utf8("1"))
+physical_plan ValuesExec
+
+query TT
+EXPLAIN VALUES (('1'||'2')::int unsigned)
+----
+logical_plan Values: (UInt32(12) AS Utf8("1") || Utf8("2"))
+physical_plan ValuesExec
+
+
+# all where empty
+statement ok
+SELECT * FROM aggregate_test_100 WHERE 1=2
+
+# Simple values function
+query I
+VALUES (1)
+----
+1
+
+# VALUES with a negative values
+query I
+VALUES (-1)
+----
+-1
+
+# foo bar
+query IIB
+VALUES (2+1,2-1,2>1)
+----
+3    1    true
+
+# multiple rows values
+query I rowsort
+VALUES (1),(2)
+----
+1
+2
+
+# multiple rows and columns from VALUES
+query IT rowsort
+VALUES (1,'a'),(2,'b')
+----
+1   a
+2   b
+
+# table foo for distinct order by
+statement ok
+CREATE TABLE foo AS VALUES
+(1, 2),
+(3, 4),
+(5, 6);
+
+# foo distinct
+query T
+select distinct '1' from foo;
+----
+1
+
+# foo order by
+query T
+select '1' from foo order by column1;
+----
+1
+1
+1
+
+# foo distinct order by
+statement error DataFusion error: Error during planning: For SELECT DISTINCT, ORDER BY expressions column1 must appear in select list
+select distinct '1' from foo order by column1;
+
+# distincts for float nan
+query BBBBBBBBBBBBBBBBB
+select
+    'nan'::double is distinct from 'nan'::double v1,
+    'nan'::double is not distinct from 'nan'::double v2,
+    'nan'::double is not distinct from null v3,
+    'nan'::double is distinct from null v4,
+    null is distinct from 'nan'::double v5,
+    null is not distinct from 'nan'::double v6,
+    'nan'::float is distinct from 'nan'::float v7,
+    'nan'::float is not distinct from 'nan'::float v8,
+    'nan'::float is not distinct from null v9,
+    'nan'::float is distinct from null v10,
+    null is distinct from 'nan'::float v11,
+    null is not distinct from 'nan'::float v12,
+    1::float is distinct from 2::float v13,
+    'nan'::float is distinct from 1::float v14,
+    'nan'::float is not distinct from 1::float v15,
+    1::float is not distinct from null v16,
+    1::float is distinct from null v17
+;
+----
+false true false true true false false true false true true false true true false false true
+
+# select NaNs
+query BBBB
+select (isnan('NaN'::double) AND 'NaN'::double > 0) a, (isnan('-NaN'::double) AND '-NaN'::double < 0) b, (isnan('NaN'::float) AND 'NaN'::float > 0) c, (isnan('-NaN'::float) AND '-NaN'::float < 0) d
+----
+true true true true
+
+# select limit clause
+query I
+select * from (select 1 a union all select 2) b order by a limit 1;
+----
+1
+
+# select limit clause invalid
+statement error DataFusion error: Error during planning: LIMIT must not be negative
+select * from (select 1 a union all select 2) b order by a limit -1;
+
+# select limit clause
+query I
+select * from (select 1 a union all select 2) b order by a limit null;
+----
+1
+2
+
+# select limit clause
+query I
+select * from (select 1 a union all select 2) b order by a limit 0;
+----
+
+# select case when type coercion with case expression
+query I
+select CASE 10.5 WHEN 0 THEN 1 ELSE 2 END;
+----
+2
+
+# select case when type coercion without case expression
+query I
+select CASE
+  WHEN 10 = 5 THEN 1
+  WHEN 'true' THEN 2
+  ELSE 3
+END;
+----
+2
+
+# Binary Expression for LargeUtf8
+# issue: https://github.com/apache/arrow-datafusion/issues/5893
+statement ok
+CREATE TABLE t as select arrow_cast('Bar', 'LargeUtf8') as column1, 'B%' as column2;
+
+query B
+select column1 like column2 from t;
+----
+true
+
+query B
+select column1 ilike column2 from t;
+----
+true
+
+query B
+select column1 not like column2 from t;
+----
+false
+
+query B
+select column1 not ilike column2 from t;
+----
+false
+
+query B
+select column1 is distinct from column2 from t;
+----
+true
+
+query B
+select column1 is not distinct from column2 from t;
+----
+false
+
+
+# Binary Expression for Binary
+statement ok
+CREATE TABLE binary_t as select arrow_cast('Bar', 'Binary') as column1, arrow_cast('B%', 'Binary') as column2;
+
+query B
+select column1 is distinct from column2 from binary_t;
+----
+true
+
+query B
+select column1 is not distinct from column2 from binary_t;
+----
+false
+
+# Binary Expression for LargeBinary
+statement ok
+CREATE TABLE large_binary_t as select arrow_cast('Bar', 'LargeBinary') as column1, arrow_cast('B%', 'LargeBinary') as column2;
+
+query B
+select column1 is distinct from column2 from large_binary_t;
+----
+true
+
+query B
+select column1 is not distinct from column2 from large_binary_t;
+----
+false
+
+# select all
+# these two queries should return the same result
+query R
+SELECT c1 FROM aggregate_simple order by c1
+----
+0.00001
+0.00002
+0.00002
+0.00003
+0.00003
+0.00003
+0.00004
+0.00004
+0.00004
+0.00004
+0.00005
+0.00005
+0.00005
+0.00005
+0.00005
+
+query R
+SELECT ALL c1 FROM aggregate_simple order by c1
+----
+0.00001
+0.00002
+0.00002
+0.00003
+0.00003
+0.00003
+0.00004
+0.00004
+0.00004
+0.00004
+0.00005
+0.00005
+0.00005
+0.00005
+0.00005
+
+# select distinct
+query RRB rowsort
+SELECT DISTINCT * FROM aggregate_simple
+----
+0.00001 0.000000000001 true
+0.00002 0.000000000002 false
+0.00003 0.000000000003 true
+0.00004 0.000000000004 false
+0.00005 0.000000000005 true
+
+# select distinct with projection and order by
+query R
+SELECT DISTINCT c1 FROM aggregate_simple order by c1
+----
+0.00001
+0.00002
+0.00003
+0.00004
+0.00005
+
+# select distinct with multi-columns projection and single-column order by
+query RR
+SELECT DISTINCT c1, c2 FROM aggregate_simple order by c1
+----
+0.00001 0.000000000001
+0.00002 0.000000000002
+0.00003 0.000000000003
+0.00004 0.000000000004
+0.00005 0.000000000005
+
+# select distinct boolean column
+query B
+SELECT DISTINCT c3 FROM aggregate_simple order by c3
+----
+false
+true
+
+# select distinct with addition expression
+query R rowsort
+SELECT DISTINCT c1 + c2 AS a FROM aggregate_simple
+----
+0.000010000001
+0.000020000001
+0.000030000002
+0.000040000003
+0.000050000004
+
+# select distinct from
+query BBBBBBBB
+select
+1 IS DISTINCT FROM CAST(NULL as INT) as a,
+1 IS DISTINCT FROM 1 as b,
+1 IS NOT DISTINCT FROM CAST(NULL as INT) as c,
+1 IS NOT DISTINCT FROM 1 as d,
+NULL IS DISTINCT FROM NULL as e,
+NULL IS NOT DISTINCT FROM NULL as f,
+NULL is DISTINCT FROM 1 as g,
+NULL is NOT DISTINCT FROM 1 as h
+----
+true false false true false true true false
+
+query BBBBBBBB
+select
+NULL IS DISTINCT FROM NULL as a,
+NULL IS NOT DISTINCT FROM NULL as b,
+NULL is DISTINCT FROM 1 as c,
+NULL is NOT DISTINCT FROM 1 as d,
+1 IS DISTINCT FROM CAST(NULL as INT) as e,
+1 IS DISTINCT FROM 1 as f,
+1 IS NOT DISTINCT FROM CAST(NULL as INT) as g,
+1 IS NOT DISTINCT FROM 1 as h
+----
+false true true false true false false true
+
+# select distinct from utf8
+query BBBB
+select
+'x' IS DISTINCT FROM NULL as a,
+'x' IS DISTINCT FROM 'x' as b,
+'x' IS NOT DISTINCT FROM NULL as c,
+'x' IS NOT DISTINCT FROM 'x' as d
+----
+true false false true
+
+# select between simple expression
+query B
+SELECT 1 NOT BETWEEN 3 AND 5
+----
+true
+
+
+statement ok
+create table select_between_data(c1 bigint) as values (1), (2), (3), (4);
+
+# select between complex expression
+
+query B
+SELECT abs(c1) BETWEEN 0 AND LoG(c1 * 100 ) FROM select_between_data ORDER BY c1
+----
+true
+true
+false
+false
+
+# explain select between
+query TT
+EXPLAIN SELECT c1 BETWEEN 2 AND 3 FROM select_between_data
+----
+logical_plan
+Projection: select_between_data.c1 >= Int64(2) AND select_between_data.c1 <= Int64(3) AS select_between_data.c1 BETWEEN Int64(2) AND Int64(3)
+--TableScan: select_between_data projection=[c1]
+physical_plan
+ProjectionExec: expr=[c1@0 >= 2 AND c1@0 <= 3 as select_between_data.c1 BETWEEN Int64(2) AND Int64(3)]
+--MemoryExec: partitions=1, partition_sizes=[1]
+
+
+# TODO: query_get_indexed_field
+
+# TODO: query_nested_get_indexed_field
+
+# TODO: query_nested_get_indexed_field_on_struct
+
+# TODO: query_on_string_dictionary
+
+# TODO: sort_on_window_null_string
+
+
+# # Create time tables with different precisions but the same logical values
+
+statement ok
+create table time_data(ts bigint, value bigint) as values
+  (5000000000000, 2505),
+  (5000000000000, 2436),
+  (5500000000000, 2384),
+  (5500000000000, 1815),
+  (5900000000000, 2330),
+  (5900000000000, 2065);
+
+statement ok
+create table time64_nanos as
+select arrow_cast(ts, 'Time64(Nanosecond)') as time, value
+from time_data;
+
+statement ok
+create table time64_micros as
+select arrow_cast(ts / 1000, 'Time64(Microsecond)') as time, value
+from time_data;
+
+statement ok
+create table time32_millis as
+select arrow_cast(arrow_cast(ts / 1000 / 1000, 'Int32'), 'Time32(Millisecond)') as time, value
+from time_data;
+
+statement ok
+create table time32_s as
+select arrow_cast(arrow_cast(ts / 1000 / 1000 / 1000, 'Int32'), 'Time32(Second)') as time, value
+from time_data;
+
+# select with time filter and seconds precision
+query I rowsort
+SELECT value FROM time32_s WHERE time = '01:23:20'
+----
+2436
+2505
+
+# select with time filter and milliseconds precision
+query I rowsort
+SELECT value FROM time32_millis WHERE time = '01:23:20'
+----
+2436
+2505
+
+# select with time filter and microseconds precision
+query I rowsort
+SELECT value FROM time64_micros WHERE time = '01:23:20'
+----
+2436
+2505
+
+# select with time filter and nanoseconds precision
+query I rowsort
+SELECT value FROM time64_nanos WHERE time = '01:23:20'
+----
+2436
+2505
+
+
+# query cte with alias
+# the purpose of this test is just to make sure the query produces a valid plan
+statement ok
+create table t1(id smallint, a smallint);
+
+query III
+WITH
+    v1 AS (SELECT * FROM t1),
+    v2 AS (SELECT v1.id AS id, v1a.id AS id_a, v1b.id AS id_b
+FROM v1, v1 v1a, v1 v1b
+WHERE v1a.id = v1.id - 1
+  AND v1b.id = v1.id + 1)
+SELECT * FROM v2
+----
+
+# query cte
+query I
+WITH t AS (SELECT 1) SELECT * FROM t
+----
+1
+
+# query cte + union
+query I rowsort
+WITH t AS (SELECT 1 AS a), u AS (SELECT 2 AS a)
+SELECT * FROM t
+UNION ALL
+SELECT * FROM u
+----
+1
+2
+
+# query cte + join
+query I
+WITH t AS (SELECT 1 AS id1), u AS (SELECT 1 AS id2, 5 as x)
+SELECT x
+FROM t
+JOIN u ON (id1 = id2)
+----
+5
+
+# query cte with backward reference
+query I
+WITH t AS (SELECT 1 AS id1), u AS (SELECT * FROM t) SELECT * from u
+----
+1
+
+# nested select
+query TII
+SELECT o1, o2, c3
+FROM (
+    SELECT c1 AS o1, c2 + 1 AS o2, c3
+    FROM (
+        SELECT c1, c2, c3, c4
+        FROM aggregate_test_100
+        WHERE c1 = 'a' AND c2 >= 4
+        ORDER BY c2 ASC, c3 ASC
+    ) AS a
+) AS b
+----
+a 5 -101
+a 5 -54
+a 5 -38
+a 5 65
+a 6 -101
+a 6 -31
+a 6 36
+
+# nested select without aliases
+query TII
+SELECT o1, o2, c3
+FROM (
+    SELECT c1 AS o1, c2 + 1 AS o2, c3
+    FROM (
+        SELECT c1, c2, c3, c4
+        FROM aggregate_test_100
+        WHERE c1 = 'a' AND c2 >= 4
+        ORDER BY c2 ASC, c3 ASC
+    )
+)
+----
+a 5 -101
+a 5 -54
+a 5 -38
+a 5 65
+a 6 -101
+a 6 -31
+a 6 36
+
+# select with join unaliased subqueries
+query TIITII
+SELECT o1, o2, c3, p1, p2, p3
+FROM
+    (SELECT c1 AS o1, c2 + 1 AS o2, c3 FROM aggregate_test_100),
+    (SELECT c1 AS p1, c2 - 1 AS p2, c3 AS p3 FROM aggregate_test_100)
+LIMIT 5
+----
+c 3 1 c 1 1
+c 3 1 d 4 -40
+c 3 1 b 0 29
+c 3 1 a 0 -85
+c 3 1 b 4 -82
+
+# TODO: test_prepare_statement
+
+# TODO: parallel_query_with_filter
+
+
+# query with filter string type coercion
+
+statement ok
+create table utf8_data(str string) as values ('1'), ('2'), ('3'), ('4'), ('5');
+
+statement ok
+create table largeutf8_data as
+select arrow_cast(str, 'LargeUtf8') as large_str
+from utf8_data;
+
+query T
+select * from largeutf8_data where large_str = '1'
+----
+1
+
+query T
+select * from largeutf8_data where large_str != '1'
+----
+2
+3
+4
+5
+
+
+# query empty table
+statement ok
+CREATE TABLE empty_table;
+
+statement ok
+SELECT * FROM empty_table
+
+
+# TODO: boolean_literal
+
+# TODO: unprojected_filter
+
+
+# case sensitive in default dialect
+
+statement ok
+CREATE TABLE case_sensitive_table("INT32" int) AS VALUES (1), (2), (3), (4), (5);
+
+statement error DataFusion error: Schema error: No field named int32. Valid fields are case_sensitive_table."INT32".
+select "int32" from case_sensitive_table
+
+query I
+select "INT32" from case_sensitive_table;
+----
+1
+2
+3
+4
+5
+
+# Columns in the table are a,b,c,d. Source is CsvExec which is ordered by
+# a,b,c column. Column a has cardinality 2, column b has cardinality 4.
+# Column c has cardinality 100 (unique entries). Column d has cardinality 5.
+statement ok
+CREATE EXTERNAL TABLE annotated_data_finite2 (
+  a0 INTEGER,
+  a INTEGER,
+  b INTEGER,
+  c INTEGER,
+  d INTEGER
+)
+STORED AS CSV
+WITH HEADER ROW
+WITH ORDER (a ASC, b ASC, c ASC)
+LOCATION '../core/tests/data/window_2.csv';
+
+# test_source_projection
+
+
+#  Final plan shouldn't include SortExec.
+query TT
+EXPLAIN SELECT a FROM annotated_data_finite2
+        ORDER BY a
+        LIMIT 5
+----
+logical_plan
+Limit: skip=0, fetch=5
+--Sort: annotated_data_finite2.a ASC NULLS LAST, fetch=5
+----TableScan: annotated_data_finite2 projection=[a]
+physical_plan
+GlobalLimitExec: skip=0, fetch=5
+--CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a], output_ordering=[a@0 ASC NULLS LAST], has_header=true
+
+query I
+SELECT a FROM annotated_data_finite2
+        ORDER BY a
+        LIMIT 5
+----
+0
+0
+0
+0
+0
+
+# create a table to test SELECT * EXCLUDE, SELECT * EXCEPT syntax
+statement ok
+CREATE TABLE table1 (
+  a int,
+  b int,
+  c int,
+  d int
+) as values
+  (1, 10, 100, 1000),
+  (2, 20, 200, 2000);
+
+# Below query should emit all the columns except a and b
+# The syntax is as follows: `SELECT * EXCLUDE(<col_name>, ...)`
+# when only single column is excluded, we can either use
+# `EXCLUDE <col_name>` or `EXCLUDE(<col_name>)` syntax
+query II
+SELECT * EXCLUDE(b) FROM (
+  SELECT * EXCLUDE a
+    FROM table1
+    ORDER BY c
+    LIMIT 5
+  )
+----
+100 1000
+200 2000
+
+# Below query should emit all the columns except a and b
+# To exclude some columns, we can use except clause also,
+# the behavior is similar to EXCLUDE clause.
+# The syntax is as follows: `SELECT * EXCEPT(<col_name>, ...)`
+query II
+SELECT * EXCEPT(a, b)
+FROM table1
+ORDER BY c
+LIMIT 5
+----
+100 1000
+200 2000
+
+# below query should emit all the columns except a and b
+query II
+SELECT * EXCLUDE(a, b)
+FROM table1
+ORDER BY c
+LIMIT 5
+----
+100 1000
+200 2000
+
+# when wildcard is prepended with table name, exclude should still work
+# below query should emit all the columns except a and b
+query II
+SELECT table1.* EXCLUDE(a, b)
+FROM table1
+ORDER BY c
+LIMIT 5
+----
+100 1000
+200 2000
+
+# Trying to exclude non-existing column should give error
+statement error DataFusion error: Schema error: No field named e. Valid fields are table1.a, table1.b, table1.c, table1.d.
+SELECT * EXCLUDE e
+FROM table1
+
+# similarly, except should raise error if excluded column is not in the table
+statement error DataFusion error: Schema error: No field named e. Valid fields are table1.a, table1.b, table1.c, table1.d.
+SELECT * EXCEPT(e)
+FROM table1
+
+# EXCEPT, or EXCLUDE can only be used after wildcard *
+# below query should give 4 columns, a1, b1, b, c, d
+query IIIII
+SELECT a as a1, b as b1, * EXCEPT(a)
+FROM table1
+----
+1 10 10 100 1000
+2 20 20 200 2000
+
+# EXCEPT, or EXCLUDE shouldn't contain duplicate column names
+statement error DataFusion error: Error during planning: EXCLUDE or EXCEPT contains duplicate column names
+SELECT * EXCLUDE(a, a)
+FROM table1
+
+# if EXCEPT all the columns, query should still succeed but return empty
+statement ok
+SELECT * EXCEPT(a, b, c, d)
+FROM table1
+
+# EXCLUDE order shouldn't matter
+query II
+SELECT * EXCLUDE(b, a)
+FROM table1
+ORDER BY c
+LIMIT 5
+----
+100 1000
+200 2000
+
+# EXCLUDE with out of order but duplicate columns should error
+statement error DataFusion error: Error during planning: EXCLUDE or EXCEPT contains duplicate column names
+SELECT * EXCLUDE(d, b, c, a, a, b, c, d)
+FROM table1
+
+# avoiding adding an alias if the column name is the same
+query TT
+EXPLAIN select a as a FROM table1 order by a
+----
+logical_plan
+Sort: table1.a ASC NULLS LAST
+--TableScan: table1 projection=[a]
+physical_plan
+SortExec: expr=[a@0 ASC NULLS LAST]
+--MemoryExec: partitions=1, partition_sizes=[1]
+
+# ambiguous column references in on join
+query error DataFusion error: Schema error: Ambiguous reference to unqualified field a
+EXPLAIN select a as a FROM table1 t1 CROSS JOIN table1 t2 order by a
+
+# run below query in multi partitions
+statement ok
+set datafusion.execution.target_partitions = 2;
+
+# since query below contains computation
+# inside projection expr, increasing partitions
+# is beneficial
+query TT
+EXPLAIN SELECT a, a+b
+FROM annotated_data_finite2
+ORDER BY a ASC;
+----
+logical_plan
+Sort: annotated_data_finite2.a ASC NULLS LAST
+--Projection: annotated_data_finite2.a, annotated_data_finite2.a + annotated_data_finite2.b
+----TableScan: annotated_data_finite2 projection=[a, b]
+physical_plan
+SortPreservingMergeExec: [a@0 ASC NULLS LAST]
+--ProjectionExec: expr=[a@0 as a, a@0 + b@1 as annotated_data_finite2.a + annotated_data_finite2.b]
+----RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b], output_ordering=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST], has_header=true
+
+# since query below doesn't computation
+# inside projection expr, increasing partitions
+# is not beneficial. Hence plan doesn't contain
+# RepartitionExec
+query TT
+EXPLAIN SELECT a, b, 2
+FROM annotated_data_finite2
+ORDER BY a ASC;
+----
+logical_plan
+Sort: annotated_data_finite2.a ASC NULLS LAST
+--Projection: annotated_data_finite2.a, annotated_data_finite2.b, Int64(2)
+----TableScan: annotated_data_finite2 projection=[a, b]
+physical_plan
+ProjectionExec: expr=[a@0 as a, b@1 as b, 2 as Int64(2)]
+--CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b], output_ordering=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST], has_header=true
+
+# source is ordered by a,b,c
+# when filter result is constant for column a
+# ordering b, c is still satisfied. Final plan shouldn't have
+# SortExec.
+query TT
+EXPLAIN SELECT *
+FROM annotated_data_finite2
+WHERE a=0
+ORDER BY b, c;
+----
+logical_plan
+Sort: annotated_data_finite2.b ASC NULLS LAST, annotated_data_finite2.c ASC NULLS LAST
+--Filter: annotated_data_finite2.a = Int32(0)
+----TableScan: annotated_data_finite2 projection=[a0, a, b, c, d], partial_filters=[annotated_data_finite2.a = Int32(0)]
+physical_plan
+SortPreservingMergeExec: [b@2 ASC NULLS LAST,c@3 ASC NULLS LAST]
+--CoalesceBatchesExec: target_batch_size=8192
+----FilterExec: a@1 = 0
+------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+--------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a0, a, b, c, d], output_ordering=[a@1 ASC NULLS LAST, b@2 ASC NULLS LAST, c@3 ASC NULLS LAST], has_header=true
+
+# source is ordered by a,b,c
+# when filter result is constant for column a and b
+# ordering c is still satisfied. Final plan shouldn't have
+# SortExec.
+query TT
+EXPLAIN SELECT *
+FROM annotated_data_finite2
+WHERE a=0 and b=0
+ORDER BY c;
+----
+logical_plan
+Sort: annotated_data_finite2.c ASC NULLS LAST
+--Filter: annotated_data_finite2.a = Int32(0) AND annotated_data_finite2.b = Int32(0)
+----TableScan: annotated_data_finite2 projection=[a0, a, b, c, d], partial_filters=[annotated_data_finite2.a = Int32(0), annotated_data_finite2.b = Int32(0)]
+physical_plan
+SortPreservingMergeExec: [c@3 ASC NULLS LAST]
+--CoalesceBatchesExec: target_batch_size=8192
+----FilterExec: a@1 = 0 AND b@2 = 0
+------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+--------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a0, a, b, c, d], output_ordering=[a@1 ASC NULLS LAST, b@2 ASC NULLS LAST, c@3 ASC NULLS LAST], has_header=true
+
+# source is ordered by a,b,c
+# when filter result is constant for column a and b
+# ordering b, c is still satisfied. Final plan shouldn't have
+# SortExec.
+query TT
+EXPLAIN SELECT *
+FROM annotated_data_finite2
+WHERE a=0 and b=0
+ORDER BY b, c;
+----
+logical_plan
+Sort: annotated_data_finite2.b ASC NULLS LAST, annotated_data_finite2.c ASC NULLS LAST
+--Filter: annotated_data_finite2.a = Int32(0) AND annotated_data_finite2.b = Int32(0)
+----TableScan: annotated_data_finite2 projection=[a0, a, b, c, d], partial_filters=[annotated_data_finite2.a = Int32(0), annotated_data_finite2.b = Int32(0)]
+physical_plan
+SortPreservingMergeExec: [b@2 ASC NULLS LAST,c@3 ASC NULLS LAST]
+--CoalesceBatchesExec: target_batch_size=8192
+----FilterExec: a@1 = 0 AND b@2 = 0
+------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+--------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a0, a, b, c, d], output_ordering=[a@1 ASC NULLS LAST, b@2 ASC NULLS LAST, c@3 ASC NULLS LAST], has_header=true
+
+# source is ordered by a,b,c
+# when filter result is constant for column a and b
+# ordering a, b, c is still satisfied. Final plan shouldn't have
+# SortExec.
+query TT
+EXPLAIN SELECT *
+FROM annotated_data_finite2
+WHERE a=0 and b=0
+ORDER BY a, b, c;
+----
+logical_plan
+Sort: annotated_data_finite2.a ASC NULLS LAST, annotated_data_finite2.b ASC NULLS LAST, annotated_data_finite2.c ASC NULLS LAST
+--Filter: annotated_data_finite2.a = Int32(0) AND annotated_data_finite2.b = Int32(0)
+----TableScan: annotated_data_finite2 projection=[a0, a, b, c, d], partial_filters=[annotated_data_finite2.a = Int32(0), annotated_data_finite2.b = Int32(0)]
+physical_plan
+SortPreservingMergeExec: [a@1 ASC NULLS LAST,b@2 ASC NULLS LAST,c@3 ASC NULLS LAST]
+--CoalesceBatchesExec: target_batch_size=8192
+----FilterExec: a@1 = 0 AND b@2 = 0
+------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+--------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a0, a, b, c, d], output_ordering=[a@1 ASC NULLS LAST, b@2 ASC NULLS LAST, c@3 ASC NULLS LAST], has_header=true
+
+# source is ordered by a,b,c
+# when filter result is when filter contains or
+# column a, and b may not be constant. Hence final plan
+# should contain SortExec
+query TT
+EXPLAIN SELECT *
+FROM annotated_data_finite2
+WHERE a=0 or b=0
+ORDER BY c;
+----
+logical_plan
+Sort: annotated_data_finite2.c ASC NULLS LAST
+--Filter: annotated_data_finite2.a = Int32(0) OR annotated_data_finite2.b = Int32(0)
+----TableScan: annotated_data_finite2 projection=[a0, a, b, c, d], partial_filters=[annotated_data_finite2.a = Int32(0) OR annotated_data_finite2.b = Int32(0)]
+physical_plan
+SortPreservingMergeExec: [c@3 ASC NULLS LAST]
+--SortExec: expr=[c@3 ASC NULLS LAST]
+----CoalesceBatchesExec: target_batch_size=8192
+------FilterExec: a@1 = 0 OR b@2 = 0
+--------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+----------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a0, a, b, c, d], output_ordering=[a@1 ASC NULLS LAST, b@2 ASC NULLS LAST, c@3 ASC NULLS LAST], has_header=true
+
+# When ordering lost during projection, we shouldn't keep the SortExec.
+# in the final physical plan.
+query TT
+EXPLAIN SELECT c2, COUNT(*)
+FROM (SELECT c2
+FROM aggregate_test_100
+ORDER BY c1, c2)
+GROUP BY c2;
+----
+logical_plan
+Aggregate: groupBy=[[aggregate_test_100.c2]], aggr=[[COUNT(UInt8(1)) AS COUNT(*)]]
+--Projection: aggregate_test_100.c2
+----Sort: aggregate_test_100.c1 ASC NULLS LAST, aggregate_test_100.c2 ASC NULLS LAST
+------Projection: aggregate_test_100.c2, aggregate_test_100.c1
+--------TableScan: aggregate_test_100 projection=[c1, c2]
+physical_plan
+AggregateExec: mode=FinalPartitioned, gby=[c2@0 as c2], aggr=[COUNT(*)]
+--CoalesceBatchesExec: target_batch_size=8192
+----RepartitionExec: partitioning=Hash([c2@0], 2), input_partitions=2
+------AggregateExec: mode=Partial, gby=[c2@0 as c2], aggr=[COUNT(*)]
+--------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+----------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c2], has_header=true
+
+statement ok
+drop table annotated_data_finite2;
+
+statement ok
+drop table t;
+
+statement ok
+create table t(x bigint, y bigint) as values (1,2), (1,3);
+
+query II
+select z+1, y from (select x+1 as z, y from t) where y > 1;
+----
+3 2
+3 3
+
+query TT
+EXPLAIN SELECT x/2, x/2+1 FROM t;
+----
+logical_plan
+Projection: t.x / Int64(2)Int64(2)t.x AS t.x / Int64(2), t.x / Int64(2)Int64(2)t.x AS t.x / Int64(2) + Int64(1)
+--Projection: t.x / Int64(2) AS t.x / Int64(2)Int64(2)t.x
+----TableScan: t projection=[x]
+physical_plan
+ProjectionExec: expr=[t.x / Int64(2)Int64(2)t.x@0 as t.x / Int64(2), t.x / Int64(2)Int64(2)t.x@0 + 1 as t.x / Int64(2) + Int64(1)]
+--ProjectionExec: expr=[x@0 / 2 as t.x / Int64(2)Int64(2)t.x]
+----MemoryExec: partitions=1, partition_sizes=[1]
+
+query II
+SELECT x/2, x/2+1 FROM t;
+----
+0 1
+0 1
+
+query TT
+EXPLAIN SELECT abs(x), abs(x) + abs(y) FROM t;
+----
+logical_plan
+Projection: abs(t.x)t.x AS abs(t.x), abs(t.x)t.x AS abs(t.x) + abs(t.y)
+--Projection: abs(t.x) AS abs(t.x)t.x, t.y
+----TableScan: t projection=[x, y]
+physical_plan
+ProjectionExec: expr=[abs(t.x)t.x@0 as abs(t.x), abs(t.x)t.x@0 + abs(y@1) as abs(t.x) + abs(t.y)]
+--ProjectionExec: expr=[abs(x@0) as abs(t.x)t.x, y@1 as y]
+----MemoryExec: partitions=1, partition_sizes=[1]
+
+query II
+SELECT abs(x), abs(x) + abs(y) FROM t;
+----
+1 3
+1 4
+
+statement ok
+DROP TABLE t;

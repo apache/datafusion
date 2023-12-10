@@ -23,21 +23,25 @@
 
 use arrow::{
     array::{
-        Array, ArrayRef, BooleanArray, GenericStringArray, Int32Array, OffsetSizeTrait,
-        StringArray,
+        Array, ArrayRef, BooleanArray, GenericStringArray, Int32Array, Int64Array,
+        OffsetSizeTrait, StringArray,
     },
     datatypes::{ArrowNativeType, ArrowPrimitiveType, DataType},
 };
+use datafusion_common::utils::datafusion_strsim;
 use datafusion_common::{
     cast::{
         as_generic_string_array, as_int64_array, as_primitive_array, as_string_array,
     },
-    ScalarValue,
+    exec_err, ScalarValue,
 };
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::{internal_err, DataFusionError, Result};
 use datafusion_expr::ColumnarValue;
-use std::iter;
 use std::sync::Arc;
+use std::{
+    fmt::{Display, Formatter},
+    iter,
+};
 use uuid::Uuid;
 
 /// applies a unary expression to `args[0]` that is expected to be downcastable to
@@ -58,11 +62,11 @@ where
     F: Fn(&'a str) -> R,
 {
     if args.len() != 1 {
-        return Err(DataFusionError::Internal(format!(
+        return internal_err!(
             "{:?} args were supplied but {} takes exactly one argument",
             args.len(),
-            name,
-        )));
+            name
+        );
     }
 
     let string_array = as_generic_string_array::<T>(args[0])?;
@@ -98,9 +102,7 @@ where
                     &[a.as_ref()], op, name
                 )?)))
             }
-            other => Err(DataFusionError::Internal(format!(
-                "Unsupported data type {other:?} for function {name}",
-            ))),
+            other => internal_err!("Unsupported data type {other:?} for function {name}"),
         },
         ColumnarValue::Scalar(scalar) => match scalar {
             ScalarValue::Utf8(a) => {
@@ -111,9 +113,7 @@ where
                 let result = a.as_ref().map(|x| (op)(x).as_ref().to_string());
                 Ok(ColumnarValue::Scalar(ScalarValue::LargeUtf8(result)))
             }
-            other => Err(DataFusionError::Internal(format!(
-                "Unsupported data type {other:?} for function {name}",
-            ))),
+            other => internal_err!("Unsupported data type {other:?} for function {name}"),
         },
     }
 }
@@ -136,53 +136,6 @@ pub fn ascii<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
     Ok(Arc::new(result) as ArrayRef)
 }
 
-/// Removes the longest string containing only characters in characters (a space by default) from the start and end of string.
-/// btrim('xyxtrimyyx', 'xyz') = 'trim'
-pub fn btrim<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
-    match args.len() {
-        1 => {
-            let string_array = as_generic_string_array::<T>(&args[0])?;
-
-            let result = string_array
-                .iter()
-                .map(|string| {
-                    string.map(|string: &str| {
-                        string.trim_start_matches(' ').trim_end_matches(' ')
-                    })
-                })
-                .collect::<GenericStringArray<T>>();
-
-            Ok(Arc::new(result) as ArrayRef)
-        }
-        2 => {
-            let string_array = as_generic_string_array::<T>(&args[0])?;
-            let characters_array = as_generic_string_array::<T>(&args[1])?;
-
-            let result = string_array
-                .iter()
-                .zip(characters_array.iter())
-                .map(|(string, characters)| match (string, characters) {
-                    (None, _) => None,
-                    (_, None) => None,
-                    (Some(string), Some(characters)) => {
-                        let chars: Vec<char> = characters.chars().collect();
-                        Some(
-                            string
-                                .trim_start_matches(&chars[..])
-                                .trim_end_matches(&chars[..]),
-                        )
-                    }
-                })
-                .collect::<GenericStringArray<T>>();
-
-            Ok(Arc::new(result) as ArrayRef)
-        }
-        other => Err(DataFusionError::Internal(format!(
-            "btrim was called with {other} arguments. It requires at least 1 and at most 2."
-        ))),
-    }
-}
-
 /// Returns the character with the given code. chr(0) is disallowed because text data types cannot store that character.
 /// chr(65) = 'A'
 pub fn chr(args: &[ArrayRef]) -> Result<ArrayRef> {
@@ -195,15 +148,13 @@ pub fn chr(args: &[ArrayRef]) -> Result<ArrayRef> {
             integer
                 .map(|integer| {
                     if integer == 0 {
-                        Err(DataFusionError::Execution(
-                            "null character not permitted.".to_string(),
-                        ))
+                        exec_err!("null character not permitted.")
                     } else {
                         match core::char::from_u32(integer as u32) {
                             Some(integer) => Ok(integer.to_string()),
-                            None => Err(DataFusionError::Execution(
-                                "requested character too large for encoding.".to_string(),
-                            )),
+                            None => {
+                                exec_err!("requested character too large for encoding.")
+                            }
                         }
                     }
                 })
@@ -219,10 +170,10 @@ pub fn chr(args: &[ArrayRef]) -> Result<ArrayRef> {
 pub fn concat(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     // do not accept 0 arguments.
     if args.is_empty() {
-        return Err(DataFusionError::Internal(format!(
+        return internal_err!(
             "concat was called with {} arguments. It requires at least 1.",
             args.len()
-        )));
+        );
     }
 
     // first, decide whether to return a scalar or a vector.
@@ -285,10 +236,10 @@ pub fn concat_ws(args: &[ArrayRef]) -> Result<ArrayRef> {
 
     // do not accept 0 or 1 arguments.
     if args.len() < 2 {
-        return Err(DataFusionError::Internal(format!(
+        return internal_err!(
             "concat_ws was called with {} arguments. It requires at least 2.",
             args.len()
-        )));
+        );
     }
 
     // first map is the iterator, second is for the `Option<_>`
@@ -351,42 +302,93 @@ pub fn lower(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     handle(args, |string| string.to_ascii_lowercase(), "lower")
 }
 
-/// Removes the longest string containing only characters in characters (a space by default) from the start of string.
-/// ltrim('zzzytest', 'xyz') = 'test'
-pub fn ltrim<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
+enum TrimType {
+    Left,
+    Right,
+    Both,
+}
+
+impl Display for TrimType {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            TrimType::Left => write!(f, "ltrim"),
+            TrimType::Right => write!(f, "rtrim"),
+            TrimType::Both => write!(f, "btrim"),
+        }
+    }
+}
+
+fn general_trim<T: OffsetSizeTrait>(
+    args: &[ArrayRef],
+    trim_type: TrimType,
+) -> Result<ArrayRef> {
+    let func = match trim_type {
+        TrimType::Left => |input, pattern: &str| {
+            let pattern = pattern.chars().collect::<Vec<char>>();
+            str::trim_start_matches::<&[char]>(input, pattern.as_ref())
+        },
+        TrimType::Right => |input, pattern: &str| {
+            let pattern = pattern.chars().collect::<Vec<char>>();
+            str::trim_end_matches::<&[char]>(input, pattern.as_ref())
+        },
+        TrimType::Both => |input, pattern: &str| {
+            let pattern = pattern.chars().collect::<Vec<char>>();
+            str::trim_end_matches::<&[char]>(
+                str::trim_start_matches::<&[char]>(input, pattern.as_ref()),
+                pattern.as_ref(),
+            )
+        },
+    };
+
+    let string_array = as_generic_string_array::<T>(&args[0])?;
+
     match args.len() {
         1 => {
-            let string_array = as_generic_string_array::<T>(&args[0])?;
-
             let result = string_array
                 .iter()
-                .map(|string| string.map(|string: &str| string.trim_start_matches(' ')))
+                .map(|string| string.map(|string: &str| func(string, " ")))
                 .collect::<GenericStringArray<T>>();
 
             Ok(Arc::new(result) as ArrayRef)
         }
         2 => {
-            let string_array = as_generic_string_array::<T>(&args[0])?;
             let characters_array = as_generic_string_array::<T>(&args[1])?;
 
             let result = string_array
                 .iter()
                 .zip(characters_array.iter())
                 .map(|(string, characters)| match (string, characters) {
-                    (Some(string), Some(characters)) => {
-                        let chars: Vec<char> = characters.chars().collect();
-                        Some(string.trim_start_matches(&chars[..]))
-                    }
+                    (Some(string), Some(characters)) => Some(func(string, characters)),
                     _ => None,
                 })
                 .collect::<GenericStringArray<T>>();
 
             Ok(Arc::new(result) as ArrayRef)
         }
-        other => Err(DataFusionError::Internal(format!(
-            "ltrim was called with {other} arguments. It requires at least 1 and at most 2."
-        ))),
+        other => {
+            internal_err!(
+            "{trim_type} was called with {other} arguments. It requires at least 1 and at most 2."
+        )
+        }
     }
+}
+
+/// Returns the longest string  with leading and trailing characters removed. If the characters are not specified, whitespace is removed.
+/// btrim('xyxtrimyyx', 'xyz') = 'trim'
+pub fn btrim<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
+    general_trim::<T>(args, TrimType::Both)
+}
+
+/// Returns the longest string  with leading characters removed. If the characters are not specified, whitespace is removed.
+/// ltrim('zzzytest', 'xyz') = 'test'
+pub fn ltrim<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
+    general_trim::<T>(args, TrimType::Left)
+}
+
+/// Returns the longest string  with trailing characters removed. If the characters are not specified, whitespace is removed.
+/// rtrim('testxxzx', 'xyz') = 'test'
+pub fn rtrim<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
+    general_trim::<T>(args, TrimType::Right)
 }
 
 /// Repeats string the specified number of times.
@@ -427,44 +429,6 @@ pub fn replace<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
     Ok(Arc::new(result) as ArrayRef)
 }
 
-/// Removes the longest string containing only characters in characters (a space by default) from the end of string.
-/// rtrim('testxxzx', 'xyz') = 'test'
-pub fn rtrim<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
-    match args.len() {
-        1 => {
-            let string_array = as_generic_string_array::<T>(&args[0])?;
-
-            let result = string_array
-                .iter()
-                .map(|string| string.map(|string: &str| string.trim_end_matches(' ')))
-                .collect::<GenericStringArray<T>>();
-
-            Ok(Arc::new(result) as ArrayRef)
-        }
-        2 => {
-            let string_array = as_generic_string_array::<T>(&args[0])?;
-            let characters_array = as_generic_string_array::<T>(&args[1])?;
-
-            let result = string_array
-                .iter()
-                .zip(characters_array.iter())
-                .map(|(string, characters)| match (string, characters) {
-                    (Some(string), Some(characters)) => {
-                        let chars: Vec<char> = characters.chars().collect();
-                        Some(string.trim_end_matches(&chars[..]))
-                    }
-                    _ => None,
-                })
-                .collect::<GenericStringArray<T>>();
-
-            Ok(Arc::new(result) as ArrayRef)
-        }
-        other => Err(DataFusionError::Internal(format!(
-            "rtrim was called with {other} arguments. It requires at least 1 and at most 2."
-        ))),
-    }
-}
-
 /// Splits string at occurrences of delimiter and returns the n'th field (counting from one).
 /// split_part('abc~@~def~@~ghi', '~@~', 2) = 'def'
 pub fn split_part<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
@@ -478,9 +442,7 @@ pub fn split_part<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
         .map(|((string, delimiter), n)| match (string, delimiter, n) {
             (Some(string), Some(delimiter), Some(n)) => {
                 if n <= 0 {
-                    Err(DataFusionError::Execution(
-                        "field position must be greater than zero".to_string(),
-                    ))
+                    exec_err!("field position must be greater than zero")
                 } else {
                     let split_string: Vec<&str> = string.split(delimiter).collect();
                     match split_string.get(n as usize - 1) {
@@ -531,9 +493,7 @@ where
                 } else if let Some(value_isize) = value.to_isize() {
                     Ok(Some(format!("{value_isize:x}")))
                 } else {
-                    Err(DataFusionError::Internal(format!(
-                        "Unsupported data type {integer:?} for function to_hex",
-                    )))
+                    internal_err!("Unsupported data type {integer:?} for function to_hex")
                 }
             } else {
                 Ok(None)
@@ -555,11 +515,7 @@ pub fn upper(args: &[ColumnarValue]) -> Result<ColumnarValue> {
 pub fn uuid(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     let len: usize = match &args[0] {
         ColumnarValue::Array(array) => array.len(),
-        _ => {
-            return Err(DataFusionError::Internal(
-                "Expect uuid function to take no param".to_string(),
-            ))
-        }
+        _ => return internal_err!("Expect uuid function to take no param"),
     };
 
     let values = iter::repeat_with(|| Uuid::new_v4().to_string()).take(len);
@@ -567,11 +523,149 @@ pub fn uuid(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     Ok(ColumnarValue::Array(Arc::new(array)))
 }
 
+/// OVERLAY(string1 PLACING string2 FROM integer FOR integer2)
+/// Replaces a substring of string1 with string2 starting at the integer bit
+/// pgsql overlay('Txxxxas' placing 'hom' from 2 for 4) → Thomas
+/// overlay('Txxxxas' placing 'hom' from 2) -> Thomxas, without for option, str2's len is instead
+pub fn overlay<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
+    match args.len() {
+        3 => {
+            let string_array = as_generic_string_array::<T>(&args[0])?;
+            let characters_array = as_generic_string_array::<T>(&args[1])?;
+            let pos_num = as_int64_array(&args[2])?;
+
+            let result = string_array
+                .iter()
+                .zip(characters_array.iter())
+                .zip(pos_num.iter())
+                .map(|((string, characters), start_pos)| {
+                    match (string, characters, start_pos) {
+                        (Some(string), Some(characters), Some(start_pos)) => {
+                            let string_len = string.chars().count();
+                            let characters_len = characters.chars().count();
+                            let replace_len = characters_len as i64;
+                            let mut res =
+                                String::with_capacity(string_len.max(characters_len));
+
+                            //as sql replace index start from 1 while string index start from 0
+                            if start_pos > 1 && start_pos - 1 < string_len as i64 {
+                                let start = (start_pos - 1) as usize;
+                                res.push_str(&string[..start]);
+                            }
+                            res.push_str(characters);
+                            // if start + replace_len - 1 >= string_length, just to string end
+                            if start_pos + replace_len - 1 < string_len as i64 {
+                                let end = (start_pos + replace_len - 1) as usize;
+                                res.push_str(&string[end..]);
+                            }
+                            Ok(Some(res))
+                        }
+                        _ => Ok(None),
+                    }
+                })
+                .collect::<Result<GenericStringArray<T>>>()?;
+            Ok(Arc::new(result) as ArrayRef)
+        }
+        4 => {
+            let string_array = as_generic_string_array::<T>(&args[0])?;
+            let characters_array = as_generic_string_array::<T>(&args[1])?;
+            let pos_num = as_int64_array(&args[2])?;
+            let len_num = as_int64_array(&args[3])?;
+
+            let result = string_array
+                .iter()
+                .zip(characters_array.iter())
+                .zip(pos_num.iter())
+                .zip(len_num.iter())
+                .map(|(((string, characters), start_pos), len)| {
+                    match (string, characters, start_pos, len) {
+                        (Some(string), Some(characters), Some(start_pos), Some(len)) => {
+                            let string_len = string.chars().count();
+                            let characters_len = characters.chars().count();
+                            let replace_len = len.min(string_len as i64);
+                            let mut res =
+                                String::with_capacity(string_len.max(characters_len));
+
+                            //as sql replace index start from 1 while string index start from 0
+                            if start_pos > 1 && start_pos - 1 < string_len as i64 {
+                                let start = (start_pos - 1) as usize;
+                                res.push_str(&string[..start]);
+                            }
+                            res.push_str(characters);
+                            // if start + replace_len - 1 >= string_length, just to string end
+                            if start_pos + replace_len - 1 < string_len as i64 {
+                                let end = (start_pos + replace_len - 1) as usize;
+                                res.push_str(&string[end..]);
+                            }
+                            Ok(Some(res))
+                        }
+                        _ => Ok(None),
+                    }
+                })
+                .collect::<Result<GenericStringArray<T>>>()?;
+            Ok(Arc::new(result) as ArrayRef)
+        }
+        other => {
+            internal_err!(
+                "overlay was called with {other} arguments. It requires 3 or 4."
+            )
+        }
+    }
+}
+
+///Returns the Levenshtein distance between the two given strings.
+/// LEVENSHTEIN('kitten', 'sitting') = 3
+pub fn levenshtein<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
+    if args.len() != 2 {
+        return Err(DataFusionError::Internal(format!(
+            "levenshtein function requires two arguments, got {}",
+            args.len()
+        )));
+    }
+    let str1_array = as_generic_string_array::<T>(&args[0])?;
+    let str2_array = as_generic_string_array::<T>(&args[1])?;
+    match args[0].data_type() {
+        DataType::Utf8 => {
+            let result = str1_array
+                .iter()
+                .zip(str2_array.iter())
+                .map(|(string1, string2)| match (string1, string2) {
+                    (Some(string1), Some(string2)) => {
+                        Some(datafusion_strsim::levenshtein(string1, string2) as i32)
+                    }
+                    _ => None,
+                })
+                .collect::<Int32Array>();
+            Ok(Arc::new(result) as ArrayRef)
+        }
+        DataType::LargeUtf8 => {
+            let result = str1_array
+                .iter()
+                .zip(str2_array.iter())
+                .map(|(string1, string2)| match (string1, string2) {
+                    (Some(string1), Some(string2)) => {
+                        Some(datafusion_strsim::levenshtein(string1, string2) as i64)
+                    }
+                    _ => None,
+                })
+                .collect::<Int64Array>();
+            Ok(Arc::new(result) as ArrayRef)
+        }
+        other => {
+            internal_err!(
+                "levenshtein was called with {other} datatype arguments. It requires Utf8 or LargeUtf8."
+            )
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
 
     use crate::string_expressions;
     use arrow::{array::Int32Array, datatypes::Int32Type};
+    use arrow_array::Int64Array;
+    use datafusion_common::cast::as_int32_array;
 
     use super::*;
 
@@ -610,6 +704,38 @@ mod tests {
         let hex_value = as_string_array(&hex_value_arc)?;
         let expected = StringArray::from(vec![Some("ffffffffffffffff")]);
         assert_eq!(&expected, hex_value);
+
+        Ok(())
+    }
+
+    #[test]
+    fn to_overlay() -> Result<()> {
+        let string =
+            Arc::new(StringArray::from(vec!["123", "abcdefg", "xyz", "Txxxxas"]));
+        let replace_string =
+            Arc::new(StringArray::from(vec!["abc", "qwertyasdfg", "ijk", "hom"]));
+        let start = Arc::new(Int64Array::from(vec![4, 1, 1, 2])); // start
+        let end = Arc::new(Int64Array::from(vec![5, 7, 2, 4])); // replace len
+
+        let res = overlay::<i32>(&[string, replace_string, start, end]).unwrap();
+        let result = as_generic_string_array::<i32>(&res).unwrap();
+        let expected = StringArray::from(vec!["abc", "qwertyasdfg", "ijkz", "Thomas"]);
+        assert_eq!(&expected, result);
+
+        Ok(())
+    }
+
+    #[test]
+    fn to_levenshtein() -> Result<()> {
+        let string1_array =
+            Arc::new(StringArray::from(vec!["123", "abc", "xyz", "kitten"]));
+        let string2_array =
+            Arc::new(StringArray::from(vec!["321", "def", "zyx", "sitting"]));
+        let res = levenshtein::<i32>(&[string1_array, string2_array]).unwrap();
+        let result =
+            as_int32_array(&res).expect("failed to initialized function levenshtein");
+        let expected = Int32Array::from(vec![2, 3, 2, 3]);
+        assert_eq!(&expected, result);
 
         Ok(())
     }

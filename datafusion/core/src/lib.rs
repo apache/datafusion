@@ -17,9 +17,9 @@
 #![warn(missing_docs, clippy::needless_borrow)]
 
 //! [DataFusion] is an extensible query engine written in Rust that
-//! uses [Apache Arrow] as its in-memory format. DataFusion's [use
-//! cases] include building very fast database and analytic systems,
-//! customized to particular workloads.
+//! uses [Apache Arrow] as its in-memory format. DataFusion's many [use
+//! cases] help developers build very fast and feature rich database
+//! and analytic systems, customized to particular workloads.
 //!
 //! "Out of the box," DataFusion quickly runs complex [SQL] and
 //! [`DataFrame`] queries using a sophisticated query planner, a columnar,
@@ -132,23 +132,30 @@
 //!
 //! ## Customization and Extension
 //!
-//! DataFusion supports extension at many points:
+//! DataFusion is a "disaggregated" query engine.  This
+//! means developers can start with a working, full featured engine, and then
+//! extend the parts of DataFusion they need to specialize for their usecase. For example,
+//! some projects may add custom [`ExecutionPlan`] operators, or create their own
+//! query language that directly creates [`LogicalPlan`] rather than using the
+//! built in SQL planner, [`SqlToRel`].
+//!
+//! In order to achieve this, DataFusion supports extension at many points:
 //!
 //! * read from any datasource ([`TableProvider`])
 //! * define your own catalogs, schemas, and table lists ([`CatalogProvider`])
-//! * build your own query langue or plans using the ([`LogicalPlanBuilder`])
-//! * declare and use user-defined scalar functions ([`ScalarUDF`])
-//! * declare and use user-defined aggregate functions ([`AggregateUDF`])
+//! * build your own query language or plans ([`LogicalPlanBuilder`])
+//! * declare and use user-defined functions ([`ScalarUDF`], and [`AggregateUDF`], [`WindowUDF`])
 //! * add custom optimizer rewrite passes ([`OptimizerRule`] and [`PhysicalOptimizerRule`])
 //! * extend the planner to use user-defined logical and physical nodes ([`QueryPlanner`])
 //!
 //! You can find examples of each of them in the [datafusion-examples] directory.
 //!
 //! [`TableProvider`]: crate::datasource::TableProvider
-//! [`CatalogProvider`]: crate::catalog::catalog::CatalogProvider
+//! [`CatalogProvider`]: crate::catalog::CatalogProvider
 //! [`LogicalPlanBuilder`]: datafusion_expr::logical_plan::builder::LogicalPlanBuilder
-//! [`ScalarUDF`]: physical_plan::udf::ScalarUDF
-//! [`AggregateUDF`]: physical_plan::udaf::AggregateUDF
+//! [`ScalarUDF`]: crate::logical_expr::ScalarUDF
+//! [`AggregateUDF`]: crate::logical_expr::AggregateUDF
+//! [`WindowUDF`]: crate::logical_expr::WindowUDF
 //! [`QueryPlanner`]: execution::context::QueryPlanner
 //! [`OptimizerRule`]: datafusion_optimizer::optimizer::OptimizerRule
 //! [`PhysicalOptimizerRule`]: crate::physical_optimizer::optimizer::PhysicalOptimizerRule
@@ -274,13 +281,21 @@
 //! [`MemTable`]: crate::datasource::memory::MemTable
 //! [`StreamingTable`]: crate::datasource::streaming::StreamingTable
 //!
-//! ## Plans
+//! ## Plan Representations
 //!
-//! Logical planning yields [`LogicalPlan`]s nodes and [`Expr`]
+//! ### Logical Plans
+//! Logical planning yields [`LogicalPlan`] nodes and [`Expr`]
 //! expressions which are [`Schema`] aware and represent statements
 //! independent of how they are physically executed.
 //! A [`LogicalPlan`] is a Directed Acyclic Graph (DAG) of other
 //! [`LogicalPlan`]s, each potentially containing embedded [`Expr`]s.
+//!
+//! Examples of working with and executing `Expr`s can be found in the
+//! [`expr_api`.rs] example
+//!
+//! [`expr_api`.rs]: https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/expr_api.rs
+//!
+//! ### Physical Plans
 //!
 //! An [`ExecutionPlan`] (sometimes referred to as a "physical plan")
 //! is a plan that can be executed against data. It a DAG of other
@@ -325,13 +340,17 @@
 //! ```
 //!
 //! [`ExecutionPlan`]s process data using the [Apache Arrow] memory
-//! format, largely with functions from the [arrow] crate. When
-//! [`execute`] is called, a [`SendableRecordBatchStream`] is returned
-//! that produces the desired output as a [`Stream`] of [`RecordBatch`]es.
+//! format, making heavy use of functions from the [arrow]
+//! crate. Calling [`execute`] produces 1 or more partitions of data,
+//! consisting an operator that implements
+//! [`SendableRecordBatchStream`].
 //!
-//! Values are
-//! represented with [`ColumnarValue`], which are either single
-//! constant values ([`ScalarValue`]) or Arrow Arrays ([`ArrayRef`]).
+//! Values are represented with [`ColumnarValue`], which are either
+//! [`ScalarValue`] (single constant values) or [`ArrayRef`] (Arrow
+//! Arrays).
+//!
+//! Balanced parallelism is achieved using [`RepartitionExec`], which
+//! implements a [Volcano style] "Exchange".
 //!
 //! [`execute`]: physical_plan::ExecutionPlan::execute
 //! [`SendableRecordBatchStream`]: crate::physical_plan::SendableRecordBatchStream
@@ -340,9 +359,10 @@
 //! [`ArrayRef`]: arrow::array::ArrayRef
 //! [`Stream`]: futures::stream::Stream
 //!
-//!
 //! See the [implementors of `ExecutionPlan`] for a list of physical operators available.
 //!
+//! [`RepartitionExec`]: https://docs.rs/datafusion/latest/datafusion/physical_plan/repartition/struct.RepartitionExec.html
+//! [Volcano style]: https://w6113.github.io/files/papers/volcanoparallelism-89.pdf
 //! [implementors of `ExecutionPlan`]: https://docs.rs/datafusion/latest/datafusion/physical_plan/trait.ExecutionPlan.html#implementors
 //!
 //! ## State Management and Configuration
@@ -384,11 +404,11 @@
 //! and improve compilation times. The crates are:
 //!
 //! * [datafusion_common]: Common traits and types
-//! * [datafusion_execution]: State needed for execution
 //! * [datafusion_expr]: [`LogicalPlan`],  [`Expr`] and related logical planning structure
+//! * [datafusion_execution]: State and structures needed for execution
 //! * [datafusion_optimizer]: [`OptimizerRule`]s and [`AnalyzerRule`]s
 //! * [datafusion_physical_expr]: [`PhysicalExpr`] and related expressions
-//! * [datafusion_sql]:  [`SqlToRel`] SQL planner
+//! * [datafusion_sql]: SQL planner ([`SqlToRel`])
 //!
 //! [sqlparser]: https://docs.rs/sqlparser/latest/sqlparser
 //! [`SqlToRel`]: sql::planner::SqlToRel
@@ -397,7 +417,7 @@
 //! [`AnalyzerRule`]: datafusion_optimizer::analyzer::AnalyzerRule
 //! [`OptimizerRule`]: optimizer::optimizer::OptimizerRule
 //! [`ExecutionPlan`]: physical_plan::ExecutionPlan
-//! [`PhysicalPlanner`]: physical_plan::PhysicalPlanner
+//! [`PhysicalPlanner`]: physical_planner::PhysicalPlanner
 //! [`PhysicalOptimizerRule`]: datafusion::physical_optimizer::optimizer::PhysicalOptimizerRule
 //! [`Schema`]: arrow::datatypes::Schema
 //! [`PhysicalExpr`]: physical_plan::PhysicalExpr
@@ -412,30 +432,64 @@ pub const DATAFUSION_VERSION: &str = env!("CARGO_PKG_VERSION");
 extern crate core;
 extern crate sqlparser;
 
-pub mod avro_to_arrow;
 pub mod catalog;
 pub mod dataframe;
 pub mod datasource;
 pub mod error;
 pub mod execution;
 pub mod physical_optimizer;
-pub mod physical_plan;
+pub mod physical_planner;
 pub mod prelude;
 pub mod scalar;
 pub mod variable;
 
-// re-export dependencies from arrow-rs to minimise version maintenance for crate users
+// re-export dependencies from arrow-rs to minimize version maintenance for crate users
 pub use arrow;
+#[cfg(feature = "parquet")]
 pub use parquet;
 
-// re-export DataFusion crates
-pub use datafusion_common as common;
-pub use datafusion_common::config;
-pub use datafusion_expr as logical_expr;
-pub use datafusion_optimizer as optimizer;
-pub use datafusion_physical_expr as physical_expr;
-pub use datafusion_row as row;
-pub use datafusion_sql as sql;
+// re-export DataFusion sub-crates at the top level. Use `pub use *`
+// so that the contents of the subcrates appears in rustdocs
+// for details, see https://github.com/apache/arrow-datafusion/issues/6648
+
+/// re-export of [`datafusion_common`] crate
+pub mod common {
+    pub use datafusion_common::*;
+}
+
+// Backwards compatibility
+pub use common::config;
+
+// NB datafusion execution is re-exported in the `execution` module
+
+/// re-export of [`datafusion_expr`] crate
+pub mod logical_expr {
+    pub use datafusion_expr::*;
+}
+
+/// re-export of [`datafusion_optimizer`] crate
+pub mod optimizer {
+    pub use datafusion_optimizer::*;
+}
+
+/// re-export of [`datafusion_physical_expr`] crate
+pub mod physical_expr {
+    pub use datafusion_physical_expr::*;
+}
+
+/// re-export of [`datafusion_physical_plan`] crate
+pub mod physical_plan {
+    pub use datafusion_physical_plan::*;
+}
+
+// Reexport testing macros for compatibility
+pub use datafusion_common::assert_batches_eq;
+pub use datafusion_common::assert_batches_sorted_eq;
+
+/// re-export of [`datafusion_sql`] crate
+pub mod sql {
+    pub use datafusion_sql::*;
+}
 
 #[cfg(test)]
 pub mod test;

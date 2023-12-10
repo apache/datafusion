@@ -17,10 +17,11 @@
 
 use crate::var_provider::{VarProvider, VarType};
 use chrono::{DateTime, TimeZone, Utc};
+use datafusion_common::alias::AliasGenerator;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-/// Holds per-query execution properties and data (such as statment
+/// Holds per-query execution properties and data (such as statement
 /// starting timestamps).
 ///
 /// An [`ExecutionProps`] is created each time a [`LogicalPlan`] is
@@ -34,6 +35,8 @@ use std::sync::Arc;
 #[derive(Clone, Debug)]
 pub struct ExecutionProps {
     pub query_execution_start_time: DateTime<Utc>,
+    /// Alias generator used by subquery optimizer rules
+    pub alias_generator: Arc<AliasGenerator>,
     /// Providers for scalar variables
     pub var_providers: Option<HashMap<VarType, Arc<dyn VarProvider + Send + Sync>>>,
 }
@@ -51,13 +54,25 @@ impl ExecutionProps {
             // Set this to a fixed sentinel to make it obvious if this is
             // not being updated / propagated correctly
             query_execution_start_time: Utc.timestamp_nanos(0),
+            alias_generator: Arc::new(AliasGenerator::new()),
             var_providers: None,
         }
     }
 
-    /// Marks the execution of query started timestamp
+    /// Set the query execution start time to use
+    pub fn with_query_execution_start_time(
+        mut self,
+        query_execution_start_time: DateTime<Utc>,
+    ) -> Self {
+        self.query_execution_start_time = query_execution_start_time;
+        self
+    }
+
+    /// Marks the execution of query started timestamp.
+    /// This also instantiates a new alias generator.
     pub fn start_execution(&mut self) -> &Self {
         self.query_execution_start_time = Utc::now();
+        self.alias_generator = Arc::new(AliasGenerator::new());
         &*self
     }
 
@@ -94,6 +109,6 @@ mod test {
     #[test]
     fn debug() {
         let props = ExecutionProps::new();
-        assert_eq!("ExecutionProps { query_execution_start_time: 1970-01-01T00:00:00Z, var_providers: None }", format!("{props:?}"));
+        assert_eq!("ExecutionProps { query_execution_start_time: 1970-01-01T00:00:00Z, alias_generator: AliasGenerator { next_id: 1 }, var_providers: None }", format!("{props:?}"));
     }
 }

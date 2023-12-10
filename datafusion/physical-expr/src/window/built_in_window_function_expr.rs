@@ -15,12 +15,15 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use super::partition_evaluator::PartitionEvaluator;
-use crate::PhysicalExpr;
+use crate::{PhysicalExpr, PhysicalSortExpr};
+
 use arrow::array::ArrayRef;
 use arrow::datatypes::Field;
 use arrow::record_batch::RecordBatch;
+use arrow_schema::SchemaRef;
 use datafusion_common::Result;
+use datafusion_expr::PartitionEvaluator;
+
 use std::any::Any;
 use std::sync::Arc;
 
@@ -34,7 +37,7 @@ use std::sync::Arc;
 /// `nth_value` need the value.
 #[allow(rustdoc::private_intra_doc_links)]
 pub trait BuiltInWindowFunctionExpr: Send + Sync + std::fmt::Debug {
-    /// Returns the aggregate expression as [`Any`](std::any::Any) so that it can be
+    /// Returns the aggregate expression as [`Any`] so that it can be
     /// downcast to a specific implementation.
     fn as_any(&self) -> &dyn Any;
 
@@ -57,8 +60,10 @@ pub trait BuiltInWindowFunctionExpr: Send + Sync + std::fmt::Debug {
     fn evaluate_args(&self, batch: &RecordBatch) -> Result<Vec<ArrayRef>> {
         self.expressions()
             .iter()
-            .map(|e| e.evaluate(batch))
-            .map(|r| r.map(|v| v.into_array(batch.num_rows())))
+            .map(|e| {
+                e.evaluate(batch)
+                    .and_then(|v| v.into_array(batch.num_rows()))
+            })
             .collect()
     }
 
@@ -79,20 +84,11 @@ pub trait BuiltInWindowFunctionExpr: Send + Sync + std::fmt::Debug {
         None
     }
 
-    /// Can the window function be incrementally computed using
-    /// bounded memory?
-    ///
-    /// If this function returns true, [`Self::create_evaluator`] must
-    /// implement [`PartitionEvaluator::evaluate_stateful`]
-    fn supports_bounded_execution(&self) -> bool {
-        false
-    }
-
-    /// Does the window function use the values from its window frame?
-    ///
-    /// If this function returns true, [`Self::create_evaluator`] must
-    /// implement [`PartitionEvaluator::evaluate_inside_range`]
-    fn uses_window_frame(&self) -> bool {
-        false
+    /// Returns the ordering introduced by the window function, if applicable.
+    /// Most window functions don't introduce an ordering, hence the default
+    /// value is `None`. Note that this information is used to update ordering
+    /// equivalences.
+    fn get_result_ordering(&self, _schema: &SchemaRef) -> Option<PhysicalSortExpr> {
+        None
     }
 }

@@ -39,9 +39,8 @@ use parquet::{
 };
 use std::sync::Arc;
 
-use crate::datasource::physical_plan::parquet::{
-    from_bytes_to_i128, parquet_to_arrow_decimal_type,
-};
+use crate::datasource::physical_plan::parquet::parquet_to_arrow_decimal_type;
+use crate::datasource::physical_plan::parquet::statistics::from_bytes_to_i128;
 use crate::physical_optimizer::pruning::{PruningPredicate, PruningStatistics};
 
 use super::metrics::ParquetFileMetrics;
@@ -147,17 +146,19 @@ impl PagePruningPredicate {
 
         let file_offset_indexes = file_metadata.offset_index();
         let file_page_indexes = file_metadata.column_index();
-        let (file_offset_indexes, file_page_indexes) =
-            match (file_offset_indexes, file_page_indexes) {
-                (Some(o), Some(i)) => (o, i),
-                _ => {
-                    trace!(
-                    "skip page pruning due to lack of indexes. Have offset: {} file: {}",
+        let (file_offset_indexes, file_page_indexes) = match (
+            file_offset_indexes,
+            file_page_indexes,
+        ) {
+            (Some(o), Some(i)) => (o, i),
+            _ => {
+                trace!(
+                    "skip page pruning due to lack of indexes. Have offset: {}, column index: {}",
                     file_offset_indexes.is_some(), file_page_indexes.is_some()
                 );
-                    return Ok(None);
-                }
-            };
+                return Ok(None);
+            }
+        };
 
         let mut row_selections = Vec::with_capacity(page_index_predicates.len());
         for predicate in page_index_predicates {

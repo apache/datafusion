@@ -15,25 +15,25 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::alias::AliasGenerator;
+use crate::decorrelate::{PullUpCorrelatedExpr, UN_MATCHED_ROW_INDICATOR};
 use crate::optimizer::ApplyOrder;
-use crate::utils::{
-    collect_subquery_cols, conjunction, extract_join_filters, only_or_err,
-    replace_qualified_name,
-};
+use crate::utils::replace_qualified_name;
 use crate::{OptimizerConfig, OptimizerRule};
-use datafusion_common::tree_node::{RewriteRecursion, TreeNode, TreeNodeRewriter};
-use datafusion_common::{context, Column, Result};
+use datafusion_common::alias::AliasGenerator;
+use datafusion_common::tree_node::{
+    RewriteRecursion, Transformed, TreeNode, TreeNodeRewriter,
+};
+use datafusion_common::{plan_err, Column, DataFusionError, Result, ScalarValue};
+use datafusion_expr::expr_rewriter::create_col_from_scalar_expr;
 use datafusion_expr::logical_plan::{JoinType, Subquery};
-use datafusion_expr::{EmptyRelation, Expr, LogicalPlan, LogicalPlanBuilder};
-use log::debug;
+use datafusion_expr::utils::conjunction;
+use datafusion_expr::{expr, EmptyRelation, Expr, LogicalPlan, LogicalPlanBuilder};
+use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
 
 /// Optimizer rule for rewriting subquery filters to joins
 #[derive(Default)]
-pub struct ScalarSubqueryToJoin {
-    alias: Arc<AliasGenerator>,
-}
+pub struct ScalarSubqueryToJoin {}
 
 impl ScalarSubqueryToJoin {
     #[allow(missing_docs)]
@@ -65,12 +65,14 @@ impl OptimizerRule for ScalarSubqueryToJoin {
     fn try_optimize(
         &self,
         plan: &LogicalPlan,
-        _config: &dyn OptimizerConfig,
+        config: &dyn OptimizerConfig,
     ) -> Result<Option<LogicalPlan>> {
         match plan {
             LogicalPlan::Filter(filter) => {
-                let (subqueries, expr) =
-                    self.extract_subquery_exprs(&filter.predicate, self.alias.clone())?;
+                let (subqueries, mut rewrite_expr) = self.extract_subquery_exprs(
+                    &filter.predicate,
+                    config.alias_generator(),
+                )?;
 
                 if subqueries.is_empty() {
                     // regular filter, no subquery exists clause here
@@ -80,26 +82,48 @@ impl OptimizerRule for ScalarSubqueryToJoin {
                 // iterate through all subqueries in predicate, turning each into a left join
                 let mut cur_input = filter.input.as_ref().clone();
                 for (subquery, alias) in subqueries {
-                    if let Some(optimized_subquery) =
-                        optimize_scalar(&subquery, &cur_input, &alias)?
+                    if let Some((optimized_subquery, expr_check_map)) =
+                        build_join(&subquery, &cur_input, &alias)?
                     {
+                        if !expr_check_map.is_empty() {
+                            rewrite_expr =
+                                rewrite_expr.clone().transform_up(&|expr| {
+                                    if let Expr::Column(col) = &expr {
+                                        if let Some(map_expr) =
+                                            expr_check_map.get(&col.name)
+                                        {
+                                            Ok(Transformed::Yes(map_expr.clone()))
+                                        } else {
+                                            Ok(Transformed::No(expr))
+                                        }
+                                    } else {
+                                        Ok(Transformed::No(expr))
+                                    }
+                                })?;
+                        }
                         cur_input = optimized_subquery;
                     } else {
                         // if we can't handle all of the subqueries then bail for now
                         return Ok(None);
                     }
                 }
-                let new_plan = LogicalPlanBuilder::from(cur_input);
-                Ok(Some(new_plan.filter(expr)?.build()?))
+                let new_plan = LogicalPlanBuilder::from(cur_input)
+                    .filter(rewrite_expr)?
+                    .build()?;
+                Ok(Some(new_plan))
             }
             LogicalPlan::Projection(projection) => {
                 let mut all_subqueryies = vec![];
-                let mut rewrite_exprs = vec![];
+                let mut expr_to_rewrite_expr_map = HashMap::new();
+                let mut subquery_to_expr_map = HashMap::new();
                 for expr in projection.expr.iter() {
-                    let (subqueries, expr) =
-                        self.extract_subquery_exprs(expr, self.alias.clone())?;
+                    let (subqueries, rewrite_exprs) =
+                        self.extract_subquery_exprs(expr, config.alias_generator())?;
+                    for (subquery, _) in &subqueries {
+                        subquery_to_expr_map.insert(subquery.clone(), expr.clone());
+                    }
                     all_subqueryies.extend(subqueries);
-                    rewrite_exprs.push(expr);
+                    expr_to_rewrite_expr_map.insert(expr, rewrite_exprs);
                 }
                 if all_subqueryies.is_empty() {
                     // regular projection, no subquery exists clause here
@@ -108,17 +132,54 @@ impl OptimizerRule for ScalarSubqueryToJoin {
                 // iterate through all subqueries in predicate, turning each into a left join
                 let mut cur_input = projection.input.as_ref().clone();
                 for (subquery, alias) in all_subqueryies {
-                    if let Some(optimized_subquery) =
-                        optimize_scalar(&subquery, &cur_input, &alias)?
+                    if let Some((optimized_subquery, expr_check_map)) =
+                        build_join(&subquery, &cur_input, &alias)?
                     {
                         cur_input = optimized_subquery;
+                        if !expr_check_map.is_empty() {
+                            if let Some(expr) = subquery_to_expr_map.get(&subquery) {
+                                if let Some(rewrite_expr) =
+                                    expr_to_rewrite_expr_map.get(expr)
+                                {
+                                    let new_expr =
+                                        rewrite_expr.clone().transform_up(&|expr| {
+                                            if let Expr::Column(col) = &expr {
+                                                if let Some(map_expr) =
+                                                    expr_check_map.get(&col.name)
+                                                {
+                                                    Ok(Transformed::Yes(map_expr.clone()))
+                                                } else {
+                                                    Ok(Transformed::No(expr))
+                                                }
+                                            } else {
+                                                Ok(Transformed::No(expr))
+                                            }
+                                        })?;
+                                    expr_to_rewrite_expr_map.insert(expr, new_expr);
+                                }
+                            }
+                        }
                     } else {
                         // if we can't handle all of the subqueries then bail for now
                         return Ok(None);
                     }
                 }
-                let new_plan = LogicalPlanBuilder::from(cur_input);
-                Ok(Some(new_plan.project(rewrite_exprs)?.build()?))
+
+                let mut proj_exprs = vec![];
+                for expr in projection.expr.iter() {
+                    let old_expr_name = expr.display_name()?;
+                    let new_expr = expr_to_rewrite_expr_map.get(expr).unwrap();
+                    let new_expr_name = new_expr.display_name()?;
+                    if new_expr_name != old_expr_name {
+                        proj_exprs.push(new_expr.clone().alias(old_expr_name))
+                    } else {
+                        proj_exprs.push(new_expr.clone());
+                    }
+                }
+                let new_plan = LogicalPlanBuilder::from(cur_input)
+                    .project(proj_exprs)?
+                    .build()?;
+                Ok(Some(new_plan))
             }
 
             _ => Ok(None),
@@ -153,9 +214,16 @@ impl TreeNodeRewriter for ExtractScalarSubQuery {
         match expr {
             Expr::ScalarSubquery(subquery) => {
                 let subqry_alias = self.alias_gen.next("__scalar_sq");
-                self.sub_query_info.push((subquery, subqry_alias.clone()));
-                let scalar_column = "__value";
-                Ok(Expr::Column(Column::new(Some(subqry_alias), scalar_column)))
+                self.sub_query_info
+                    .push((subquery.clone(), subqry_alias.clone()));
+                let scalar_expr = subquery
+                    .subquery
+                    .head_output_expr()?
+                    .map_or(plan_err!("single expression required."), Ok)?;
+                Ok(Expr::Column(create_col_from_scalar_expr(
+                    &scalar_expr,
+                    subqry_alias,
+                )?))
             }
             _ => Ok(expr),
         }
@@ -188,7 +256,7 @@ impl TreeNodeRewriter for ExtractScalarSubQuery {
 ///
 /// ```text
 /// select c.id from customers c
-/// cross join (select avg(total) as val from orders) a
+/// left join (select avg(total) as val from orders) a
 /// where c.balance > a.val
 /// ```
 ///
@@ -198,106 +266,112 @@ impl TreeNodeRewriter for ExtractScalarSubQuery {
 /// * `filter_input` - The non-subquery portion (from customers)
 /// * `outer_others` - Any additional parts to the `where` expression (and c.x = y)
 /// * `subquery_alias` - Subquery aliases
-fn optimize_scalar(
+fn build_join(
     subquery: &Subquery,
     filter_input: &LogicalPlan,
     subquery_alias: &str,
-) -> Result<Option<LogicalPlan>> {
+) -> Result<Option<(LogicalPlan, HashMap<String, Expr>)>> {
     let subquery_plan = subquery.subquery.as_ref();
-    let proj = match &subquery_plan {
-        LogicalPlan::Projection(proj) => proj,
-        _ => {
-            // this rule does not support this type of scalar subquery
-            // TODO support more types
-            debug!(
-                "cannot translate this type of scalar subquery to a join: {}",
-                subquery_plan.display_indent()
-            );
-            return Ok(None);
-        }
+    let mut pull_up = PullUpCorrelatedExpr {
+        join_filters: vec![],
+        correlated_subquery_cols_map: Default::default(),
+        in_predicate_opt: None,
+        exists_sub_query: false,
+        can_pull_up: true,
+        need_handle_count_bug: true,
+        collected_count_expr_map: Default::default(),
+        pull_up_having_expr: None,
     };
-    let proj = only_or_err(proj.expr.as_slice())
-        .map_err(|e| context!("exactly one expression should be projected", e))?;
-    let proj = Expr::Alias(Box::new(proj.clone()), "__value".to_string());
-    let sub_inputs = subquery_plan.inputs();
-    let sub_input = only_or_err(sub_inputs.as_slice())
-        .map_err(|e| context!("Exactly one input is expected. Is this a join?", e))?;
+    let new_plan = subquery_plan.clone().rewrite(&mut pull_up)?;
+    if !pull_up.can_pull_up {
+        return Ok(None);
+    }
 
-    let aggr = match sub_input {
-        LogicalPlan::Aggregate(aggr) => aggr,
-        _ => {
-            // this rule does not support this type of scalar subquery
-            // TODO support more types
-            debug!(
-                "cannot translate this type of scalar subquery to a join: {}",
-                subquery_plan.display_indent()
-            );
-            return Ok(None);
-        }
-    };
-
-    // extract join filters
-    let (join_filters, subquery_input) = extract_join_filters(&aggr.input)?;
-    // Only operate if one column is present and the other closed upon from outside scope
-    let input_schema = subquery_input.schema();
-    let subqry_cols = collect_subquery_cols(&join_filters, input_schema.clone())?;
-    let join_filter = conjunction(join_filters).map_or(Ok(None), |filter| {
-        replace_qualified_name(filter, &subqry_cols, subquery_alias).map(Option::Some)
-    })?;
-
-    let group_by: Vec<_> = subqry_cols
-        .iter()
-        .map(|it| Expr::Column(it.clone()))
-        .collect();
-    let subqry_plan = LogicalPlanBuilder::from(subquery_input);
-
-    // project the prior projection + any correlated (and now grouped) columns
-    let proj: Vec<_> = group_by
-        .iter()
-        .cloned()
-        .chain(vec![proj].iter().cloned())
-        .collect();
-    let subqry_plan = subqry_plan
-        .aggregate(group_by, aggr.aggr_expr.clone())?
-        .project(proj)?
+    let collected_count_expr_map =
+        pull_up.collected_count_expr_map.get(&new_plan).cloned();
+    let sub_query_alias = LogicalPlanBuilder::from(new_plan)
         .alias(subquery_alias.to_string())?
         .build()?;
 
+    let mut all_correlated_cols = BTreeSet::new();
+    pull_up
+        .correlated_subquery_cols_map
+        .values()
+        .for_each(|cols| all_correlated_cols.extend(cols.clone()));
+
+    // alias the join filter
+    let join_filter_opt =
+        conjunction(pull_up.join_filters).map_or(Ok(None), |filter| {
+            replace_qualified_name(filter, &all_correlated_cols, subquery_alias)
+                .map(Option::Some)
+        })?;
+
     // join our sub query into the main plan
-    let new_plan = if join_filter.is_none() {
+    let new_plan = if join_filter_opt.is_none() {
         match filter_input {
             LogicalPlan::EmptyRelation(EmptyRelation {
                 produce_one_row: true,
                 schema: _,
-            }) => subqry_plan,
+            }) => sub_query_alias,
             _ => {
-                // if not correlated, group down to 1 row and cross join on that (preserving row count)
+                // if not correlated, group down to 1 row and left join on that (preserving row count)
                 LogicalPlanBuilder::from(filter_input.clone())
-                    .cross_join(subqry_plan)?
+                    .join_on(sub_query_alias, JoinType::Left, None)?
                     .build()?
             }
         }
     } else {
         // left join if correlated, grouping by the join keys so we don't change row count
         LogicalPlanBuilder::from(filter_input.clone())
-            .join(
-                subqry_plan,
-                JoinType::Left,
-                (Vec::<Column>::new(), Vec::<Column>::new()),
-                join_filter,
-            )?
+            .join_on(sub_query_alias, JoinType::Left, join_filter_opt)?
             .build()?
     };
+    let mut computation_project_expr = HashMap::new();
+    if let Some(expr_map) = collected_count_expr_map {
+        for (name, result) in expr_map {
+            let computer_expr = if let Some(filter) = &pull_up.pull_up_having_expr {
+                Expr::Case(expr::Case {
+                    expr: None,
+                    when_then_expr: vec![
+                        (
+                            Box::new(Expr::IsNull(Box::new(Expr::Column(
+                                Column::new_unqualified(UN_MATCHED_ROW_INDICATOR),
+                            )))),
+                            Box::new(result),
+                        ),
+                        (
+                            Box::new(Expr::Not(Box::new(filter.clone()))),
+                            Box::new(Expr::Literal(ScalarValue::Null)),
+                        ),
+                    ],
+                    else_expr: Some(Box::new(Expr::Column(Column::new_unqualified(
+                        name.clone(),
+                    )))),
+                })
+            } else {
+                Expr::Case(expr::Case {
+                    expr: None,
+                    when_then_expr: vec![(
+                        Box::new(Expr::IsNull(Box::new(Expr::Column(
+                            Column::new_unqualified(UN_MATCHED_ROW_INDICATOR),
+                        )))),
+                        Box::new(result),
+                    )],
+                    else_expr: Some(Box::new(Expr::Column(Column::new_unqualified(
+                        name.clone(),
+                    )))),
+                })
+            };
+            computation_project_expr.insert(name, computer_expr);
+        }
+    }
 
-    Ok(Some(new_plan))
+    Ok(Some((new_plan, computation_project_expr)))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::eliminate_cross_join::EliminateCrossJoin;
-    use crate::eliminate_outer_join::EliminateOuterJoin;
-    use crate::extract_equijoin_predicate::ExtractEquijoinPredicate;
     use crate::test::*;
     use arrow::datatypes::DataType;
     use datafusion_common::Result;
@@ -331,24 +405,20 @@ mod tests {
             .build()?;
 
         let expected = "Projection: customer.c_custkey [c_custkey:Int64]\
-        \n  Filter: Int32(1) < __scalar_sq_1.__value AND Int32(1) < __scalar_sq_2.__value [c_custkey:Int64, c_name:Utf8, o_custkey:Int64;N, __value:Int64;N, o_custkey:Int64, __value:Int64;N]\
-        \n    Inner Join: customer.c_custkey = __scalar_sq_2.o_custkey [c_custkey:Int64, c_name:Utf8, o_custkey:Int64;N, __value:Int64;N, o_custkey:Int64, __value:Int64;N]\
-        \n      Left Join: customer.c_custkey = __scalar_sq_1.o_custkey [c_custkey:Int64, c_name:Utf8, o_custkey:Int64;N, __value:Int64;N]\
+        \n  Filter: Int32(1) < __scalar_sq_1.MAX(orders.o_custkey) AND Int32(1) < __scalar_sq_2.MAX(orders.o_custkey) [c_custkey:Int64, c_name:Utf8, MAX(orders.o_custkey):Int64;N, o_custkey:Int64;N, MAX(orders.o_custkey):Int64;N, o_custkey:Int64;N]\
+        \n    Left Join:  Filter: __scalar_sq_2.o_custkey = customer.c_custkey [c_custkey:Int64, c_name:Utf8, MAX(orders.o_custkey):Int64;N, o_custkey:Int64;N, MAX(orders.o_custkey):Int64;N, o_custkey:Int64;N]\
+        \n      Left Join:  Filter: __scalar_sq_1.o_custkey = customer.c_custkey [c_custkey:Int64, c_name:Utf8, MAX(orders.o_custkey):Int64;N, o_custkey:Int64;N]\
         \n        TableScan: customer [c_custkey:Int64, c_name:Utf8]\
-        \n        SubqueryAlias: __scalar_sq_1 [o_custkey:Int64, __value:Int64;N]\
-        \n          Projection: orders.o_custkey, MAX(orders.o_custkey) AS __value [o_custkey:Int64, __value:Int64;N]\
+        \n        SubqueryAlias: __scalar_sq_1 [MAX(orders.o_custkey):Int64;N, o_custkey:Int64]\
+        \n          Projection: MAX(orders.o_custkey), orders.o_custkey [MAX(orders.o_custkey):Int64;N, o_custkey:Int64]\
         \n            Aggregate: groupBy=[[orders.o_custkey]], aggr=[[MAX(orders.o_custkey)]] [o_custkey:Int64, MAX(orders.o_custkey):Int64;N]\
         \n              TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]\
-        \n      SubqueryAlias: __scalar_sq_2 [o_custkey:Int64, __value:Int64;N]\
-        \n        Projection: orders.o_custkey, MAX(orders.o_custkey) AS __value [o_custkey:Int64, __value:Int64;N]\
+        \n      SubqueryAlias: __scalar_sq_2 [MAX(orders.o_custkey):Int64;N, o_custkey:Int64]\
+        \n        Projection: MAX(orders.o_custkey), orders.o_custkey [MAX(orders.o_custkey):Int64;N, o_custkey:Int64]\
         \n          Aggregate: groupBy=[[orders.o_custkey]], aggr=[[MAX(orders.o_custkey)]] [o_custkey:Int64, MAX(orders.o_custkey):Int64;N]\
         \n            TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]";
         assert_multi_rules_optimized_plan_eq_display_indent(
-            vec![
-                Arc::new(ScalarSubqueryToJoin::new()),
-                Arc::new(EliminateOuterJoin::new()),
-                Arc::new(ExtractEquijoinPredicate::new()),
-            ],
+            vec![Arc::new(ScalarSubqueryToJoin::new())],
             &plan,
             expected,
         );
@@ -390,25 +460,21 @@ mod tests {
             .build()?;
 
         let expected = "Projection: customer.c_custkey [c_custkey:Int64]\
-        \n  Filter: customer.c_acctbal < __scalar_sq_1.__value [c_custkey:Int64, c_name:Utf8, o_custkey:Int64, __value:Float64;N]\
-        \n    Inner Join: customer.c_custkey = __scalar_sq_1.o_custkey [c_custkey:Int64, c_name:Utf8, o_custkey:Int64, __value:Float64;N]\
+        \n  Filter: customer.c_acctbal < __scalar_sq_1.SUM(orders.o_totalprice) [c_custkey:Int64, c_name:Utf8, SUM(orders.o_totalprice):Float64;N, o_custkey:Int64;N]\
+        \n    Left Join:  Filter: __scalar_sq_1.o_custkey = customer.c_custkey [c_custkey:Int64, c_name:Utf8, SUM(orders.o_totalprice):Float64;N, o_custkey:Int64;N]\
         \n      TableScan: customer [c_custkey:Int64, c_name:Utf8]\
-        \n      SubqueryAlias: __scalar_sq_1 [o_custkey:Int64, __value:Float64;N]\
-        \n        Projection: orders.o_custkey, SUM(orders.o_totalprice) AS __value [o_custkey:Int64, __value:Float64;N]\
+        \n      SubqueryAlias: __scalar_sq_1 [SUM(orders.o_totalprice):Float64;N, o_custkey:Int64]\
+        \n        Projection: SUM(orders.o_totalprice), orders.o_custkey [SUM(orders.o_totalprice):Float64;N, o_custkey:Int64]\
         \n          Aggregate: groupBy=[[orders.o_custkey]], aggr=[[SUM(orders.o_totalprice)]] [o_custkey:Int64, SUM(orders.o_totalprice):Float64;N]\
-        \n            Filter: orders.o_totalprice < __scalar_sq_2.__value [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N, l_orderkey:Int64;N, __value:Float64;N]\
-        \n              Inner Join: orders.o_orderkey = __scalar_sq_2.l_orderkey [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N, l_orderkey:Int64;N, __value:Float64;N]\
+        \n            Filter: orders.o_totalprice < __scalar_sq_2.SUM(lineitem.l_extendedprice) [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N, SUM(lineitem.l_extendedprice):Float64;N, l_orderkey:Int64;N]\
+        \n              Left Join:  Filter: __scalar_sq_2.l_orderkey = orders.o_orderkey [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N, SUM(lineitem.l_extendedprice):Float64;N, l_orderkey:Int64;N]\
         \n                TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]\
-        \n                SubqueryAlias: __scalar_sq_2 [l_orderkey:Int64, __value:Float64;N]\
-        \n                  Projection: lineitem.l_orderkey, SUM(lineitem.l_extendedprice) AS __value [l_orderkey:Int64, __value:Float64;N]\
+        \n                SubqueryAlias: __scalar_sq_2 [SUM(lineitem.l_extendedprice):Float64;N, l_orderkey:Int64]\
+        \n                  Projection: SUM(lineitem.l_extendedprice), lineitem.l_orderkey [SUM(lineitem.l_extendedprice):Float64;N, l_orderkey:Int64]\
         \n                    Aggregate: groupBy=[[lineitem.l_orderkey]], aggr=[[SUM(lineitem.l_extendedprice)]] [l_orderkey:Int64, SUM(lineitem.l_extendedprice):Float64;N]\
         \n                      TableScan: lineitem [l_orderkey:Int64, l_partkey:Int64, l_suppkey:Int64, l_linenumber:Int32, l_quantity:Float64, l_extendedprice:Float64]";
         assert_multi_rules_optimized_plan_eq_display_indent(
-            vec![
-                Arc::new(ScalarSubqueryToJoin::new()),
-                Arc::new(ExtractEquijoinPredicate::new()),
-                Arc::new(EliminateOuterJoin::new()),
-            ],
+            vec![Arc::new(ScalarSubqueryToJoin::new())],
             &plan,
             expected,
         );
@@ -436,21 +502,17 @@ mod tests {
             .build()?;
 
         let expected = "Projection: customer.c_custkey [c_custkey:Int64]\
-        \n  Filter: customer.c_custkey = __scalar_sq_1.__value [c_custkey:Int64, c_name:Utf8, o_custkey:Int64;N, __value:Int64;N]\
-        \n    Inner Join: customer.c_custkey = __scalar_sq_1.o_custkey [c_custkey:Int64, c_name:Utf8, o_custkey:Int64;N, __value:Int64;N]\
+        \n  Filter: customer.c_custkey = __scalar_sq_1.MAX(orders.o_custkey) [c_custkey:Int64, c_name:Utf8, MAX(orders.o_custkey):Int64;N, o_custkey:Int64;N]\
+        \n    Left Join:  Filter: customer.c_custkey = __scalar_sq_1.o_custkey [c_custkey:Int64, c_name:Utf8, MAX(orders.o_custkey):Int64;N, o_custkey:Int64;N]\
         \n      TableScan: customer [c_custkey:Int64, c_name:Utf8]\
-        \n      SubqueryAlias: __scalar_sq_1 [o_custkey:Int64, __value:Int64;N]\
-        \n        Projection: orders.o_custkey, MAX(orders.o_custkey) AS __value [o_custkey:Int64, __value:Int64;N]\
+        \n      SubqueryAlias: __scalar_sq_1 [MAX(orders.o_custkey):Int64;N, o_custkey:Int64]\
+        \n        Projection: MAX(orders.o_custkey), orders.o_custkey [MAX(orders.o_custkey):Int64;N, o_custkey:Int64]\
         \n          Aggregate: groupBy=[[orders.o_custkey]], aggr=[[MAX(orders.o_custkey)]] [o_custkey:Int64, MAX(orders.o_custkey):Int64;N]\
         \n            Filter: orders.o_orderkey = Int32(1) [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]\
         \n              TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]";
 
         assert_multi_rules_optimized_plan_eq_display_indent(
-            vec![
-                Arc::new(ScalarSubqueryToJoin::new()),
-                Arc::new(ExtractEquijoinPredicate::new()),
-                Arc::new(EliminateOuterJoin::new()),
-            ],
+            vec![Arc::new(ScalarSubqueryToJoin::new())],
             &plan,
             expected,
         );
@@ -478,18 +540,15 @@ mod tests {
 
         // it will optimize, but fail for the same reason the unoptimized query would
         let expected = "Projection: customer.c_custkey [c_custkey:Int64]\
-        \n  Inner Join: customer.c_custkey = __scalar_sq_1.__value [c_custkey:Int64, c_name:Utf8, __value:Int64;N]\
-        \n    TableScan: customer [c_custkey:Int64, c_name:Utf8]\
-        \n    SubqueryAlias: __scalar_sq_1 [__value:Int64;N]\
-        \n      Projection: MAX(orders.o_custkey) AS __value [__value:Int64;N]\
-        \n        Aggregate: groupBy=[[]], aggr=[[MAX(orders.o_custkey)]] [MAX(orders.o_custkey):Int64;N]\
-        \n          TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]";
+        \n  Filter: customer.c_custkey = __scalar_sq_1.MAX(orders.o_custkey) [c_custkey:Int64, c_name:Utf8, MAX(orders.o_custkey):Int64;N]\
+        \n    Left Join:  [c_custkey:Int64, c_name:Utf8, MAX(orders.o_custkey):Int64;N]\
+        \n      TableScan: customer [c_custkey:Int64, c_name:Utf8]\
+        \n      SubqueryAlias: __scalar_sq_1 [MAX(orders.o_custkey):Int64;N]\
+        \n        Projection: MAX(orders.o_custkey) [MAX(orders.o_custkey):Int64;N]\
+        \n          Aggregate: groupBy=[[]], aggr=[[MAX(orders.o_custkey)]] [MAX(orders.o_custkey):Int64;N]\
+        \n            TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]";
         assert_multi_rules_optimized_plan_eq_display_indent(
-            vec![
-                Arc::new(ScalarSubqueryToJoin::new()),
-                Arc::new(ExtractEquijoinPredicate::new()),
-                Arc::new(EliminateCrossJoin::new()),
-            ],
+            vec![Arc::new(ScalarSubqueryToJoin::new())],
             &plan,
             expected,
         );
@@ -513,20 +572,17 @@ mod tests {
             .build()?;
 
         let expected = "Projection: customer.c_custkey [c_custkey:Int64]\
-        \n  Inner Join: customer.c_custkey = __scalar_sq_1.__value [c_custkey:Int64, c_name:Utf8, __value:Int64;N]\
-        \n    TableScan: customer [c_custkey:Int64, c_name:Utf8]\
-        \n    SubqueryAlias: __scalar_sq_1 [__value:Int64;N]\
-        \n      Projection: MAX(orders.o_custkey) AS __value [__value:Int64;N]\
-        \n        Aggregate: groupBy=[[]], aggr=[[MAX(orders.o_custkey)]] [MAX(orders.o_custkey):Int64;N]\
-        \n          Filter: orders.o_custkey = orders.o_custkey [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]\
-        \n            TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]";
+        \n  Filter: customer.c_custkey = __scalar_sq_1.MAX(orders.o_custkey) [c_custkey:Int64, c_name:Utf8, MAX(orders.o_custkey):Int64;N]\
+        \n    Left Join:  [c_custkey:Int64, c_name:Utf8, MAX(orders.o_custkey):Int64;N]\
+        \n      TableScan: customer [c_custkey:Int64, c_name:Utf8]\
+        \n      SubqueryAlias: __scalar_sq_1 [MAX(orders.o_custkey):Int64;N]\
+        \n        Projection: MAX(orders.o_custkey) [MAX(orders.o_custkey):Int64;N]\
+        \n          Aggregate: groupBy=[[]], aggr=[[MAX(orders.o_custkey)]] [MAX(orders.o_custkey):Int64;N]\
+        \n            Filter: orders.o_custkey = orders.o_custkey [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]\
+        \n              TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]";
 
         assert_multi_rules_optimized_plan_eq_display_indent(
-            vec![
-                Arc::new(ScalarSubqueryToJoin::new()),
-                Arc::new(ExtractEquijoinPredicate::new()),
-                Arc::new(EliminateCrossJoin::new()),
-            ],
+            vec![Arc::new(ScalarSubqueryToJoin::new())],
             &plan,
             expected,
         );
@@ -629,24 +685,6 @@ mod tests {
             .project(vec![col("customer.c_custkey")])?
             .build()?;
 
-        // we expect the plan to be unchanged because this subquery is not supported by this rule
-        let expected = r#"Projection: customer.c_custkey [c_custkey:Int64]
-  Filter: customer.c_custkey = (<subquery>) [c_custkey:Int64, c_name:Utf8]
-    Subquery: [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]
-      Filter: customer.c_custkey = orders.o_custkey [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]
-        TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]
-    TableScan: customer [c_custkey:Int64, c_name:Utf8]"#;
-
-        assert_multi_rules_optimized_plan_eq_display_indent(
-            vec![
-                Arc::new(ScalarSubqueryToJoin::new()),
-                Arc::new(ExtractEquijoinPredicate::new()),
-                Arc::new(EliminateOuterJoin::new()),
-            ],
-            &plan,
-            expected,
-        );
-
         let expected = "check_analyzed_plan\
         \ncaused by\
         \nError during planning: Scalar subquery should only return one column";
@@ -674,20 +712,16 @@ mod tests {
             .build()?;
 
         let expected = "Projection: customer.c_custkey [c_custkey:Int64]\
-        \n  Filter: customer.c_custkey = __scalar_sq_1.__value [c_custkey:Int64, c_name:Utf8, o_custkey:Int64;N, __value:Int64;N]\
-        \n    Inner Join: customer.c_custkey = __scalar_sq_1.o_custkey [c_custkey:Int64, c_name:Utf8, o_custkey:Int64;N, __value:Int64;N]\
+        \n  Filter: customer.c_custkey = __scalar_sq_1.MAX(orders.o_custkey) + Int32(1) [c_custkey:Int64, c_name:Utf8, MAX(orders.o_custkey) + Int32(1):Int64;N, o_custkey:Int64;N]\
+        \n    Left Join:  Filter: customer.c_custkey = __scalar_sq_1.o_custkey [c_custkey:Int64, c_name:Utf8, MAX(orders.o_custkey) + Int32(1):Int64;N, o_custkey:Int64;N]\
         \n      TableScan: customer [c_custkey:Int64, c_name:Utf8]\
-        \n      SubqueryAlias: __scalar_sq_1 [o_custkey:Int64, __value:Int64;N]\
-        \n        Projection: orders.o_custkey, MAX(orders.o_custkey) + Int32(1) AS __value [o_custkey:Int64, __value:Int64;N]\
+        \n      SubqueryAlias: __scalar_sq_1 [MAX(orders.o_custkey) + Int32(1):Int64;N, o_custkey:Int64]\
+        \n        Projection: MAX(orders.o_custkey) + Int32(1), orders.o_custkey [MAX(orders.o_custkey) + Int32(1):Int64;N, o_custkey:Int64]\
         \n          Aggregate: groupBy=[[orders.o_custkey]], aggr=[[MAX(orders.o_custkey)]] [o_custkey:Int64, MAX(orders.o_custkey):Int64;N]\
         \n            TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]";
 
         assert_multi_rules_optimized_plan_eq_display_indent(
-            vec![
-                Arc::new(ScalarSubqueryToJoin::new()),
-                Arc::new(ExtractEquijoinPredicate::new()),
-                Arc::new(EliminateOuterJoin::new()),
-            ],
+            vec![Arc::new(ScalarSubqueryToJoin::new())],
             &plan,
             expected,
         );
@@ -744,20 +778,16 @@ mod tests {
             .build()?;
 
         let expected = "Projection: customer.c_custkey [c_custkey:Int64]\
-        \n  Filter: customer.c_custkey >= __scalar_sq_1.__value AND customer.c_custkey = Int32(1) [c_custkey:Int64, c_name:Utf8, o_custkey:Int64;N, __value:Int64;N]\
-        \n    Inner Join: customer.c_custkey = __scalar_sq_1.o_custkey [c_custkey:Int64, c_name:Utf8, o_custkey:Int64;N, __value:Int64;N]\
+        \n  Filter: customer.c_custkey >= __scalar_sq_1.MAX(orders.o_custkey) AND customer.c_custkey = Int32(1) [c_custkey:Int64, c_name:Utf8, MAX(orders.o_custkey):Int64;N, o_custkey:Int64;N]\
+        \n    Left Join:  Filter: customer.c_custkey = __scalar_sq_1.o_custkey [c_custkey:Int64, c_name:Utf8, MAX(orders.o_custkey):Int64;N, o_custkey:Int64;N]\
         \n      TableScan: customer [c_custkey:Int64, c_name:Utf8]\
-        \n      SubqueryAlias: __scalar_sq_1 [o_custkey:Int64, __value:Int64;N]\
-        \n        Projection: orders.o_custkey, MAX(orders.o_custkey) AS __value [o_custkey:Int64, __value:Int64;N]\
+        \n      SubqueryAlias: __scalar_sq_1 [MAX(orders.o_custkey):Int64;N, o_custkey:Int64]\
+        \n        Projection: MAX(orders.o_custkey), orders.o_custkey [MAX(orders.o_custkey):Int64;N, o_custkey:Int64]\
         \n          Aggregate: groupBy=[[orders.o_custkey]], aggr=[[MAX(orders.o_custkey)]] [o_custkey:Int64, MAX(orders.o_custkey):Int64;N]\
         \n            TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]";
 
         assert_multi_rules_optimized_plan_eq_display_indent(
-            vec![
-                Arc::new(ScalarSubqueryToJoin::new()),
-                Arc::new(ExtractEquijoinPredicate::new()),
-                Arc::new(EliminateOuterJoin::new()),
-            ],
+            vec![Arc::new(ScalarSubqueryToJoin::new())],
             &plan,
             expected,
         );
@@ -787,20 +817,16 @@ mod tests {
             .build()?;
 
         let expected = "Projection: customer.c_custkey [c_custkey:Int64]\
-        \n  Filter: customer.c_custkey = __scalar_sq_1.__value AND customer.c_custkey = Int32(1) [c_custkey:Int64, c_name:Utf8, o_custkey:Int64;N, __value:Int64;N]\
-        \n    Inner Join: customer.c_custkey = __scalar_sq_1.o_custkey [c_custkey:Int64, c_name:Utf8, o_custkey:Int64;N, __value:Int64;N]\
+        \n  Filter: customer.c_custkey = __scalar_sq_1.MAX(orders.o_custkey) AND customer.c_custkey = Int32(1) [c_custkey:Int64, c_name:Utf8, MAX(orders.o_custkey):Int64;N, o_custkey:Int64;N]\
+        \n    Left Join:  Filter: customer.c_custkey = __scalar_sq_1.o_custkey [c_custkey:Int64, c_name:Utf8, MAX(orders.o_custkey):Int64;N, o_custkey:Int64;N]\
         \n      TableScan: customer [c_custkey:Int64, c_name:Utf8]\
-        \n      SubqueryAlias: __scalar_sq_1 [o_custkey:Int64, __value:Int64;N]\
-        \n        Projection: orders.o_custkey, MAX(orders.o_custkey) AS __value [o_custkey:Int64, __value:Int64;N]\
+        \n      SubqueryAlias: __scalar_sq_1 [MAX(orders.o_custkey):Int64;N, o_custkey:Int64]\
+        \n        Projection: MAX(orders.o_custkey), orders.o_custkey [MAX(orders.o_custkey):Int64;N, o_custkey:Int64]\
         \n          Aggregate: groupBy=[[orders.o_custkey]], aggr=[[MAX(orders.o_custkey)]] [o_custkey:Int64, MAX(orders.o_custkey):Int64;N]\
         \n            TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]";
 
         assert_multi_rules_optimized_plan_eq_display_indent(
-            vec![
-                Arc::new(ScalarSubqueryToJoin::new()),
-                Arc::new(EliminateOuterJoin::new()),
-                Arc::new(ExtractEquijoinPredicate::new()),
-            ],
+            vec![Arc::new(ScalarSubqueryToJoin::new())],
             &plan,
             expected,
         );
@@ -831,20 +857,16 @@ mod tests {
             .build()?;
 
         let expected = "Projection: customer.c_custkey [c_custkey:Int64]\
-        \n  Filter: customer.c_custkey = __scalar_sq_1.__value OR customer.c_custkey = Int32(1) [c_custkey:Int64, c_name:Utf8, o_custkey:Int64;N, __value:Int64;N]\
-        \n    Left Join: customer.c_custkey = __scalar_sq_1.o_custkey [c_custkey:Int64, c_name:Utf8, o_custkey:Int64;N, __value:Int64;N]\
+        \n  Filter: customer.c_custkey = __scalar_sq_1.MAX(orders.o_custkey) OR customer.c_custkey = Int32(1) [c_custkey:Int64, c_name:Utf8, MAX(orders.o_custkey):Int64;N, o_custkey:Int64;N]\
+        \n    Left Join:  Filter: customer.c_custkey = __scalar_sq_1.o_custkey [c_custkey:Int64, c_name:Utf8, MAX(orders.o_custkey):Int64;N, o_custkey:Int64;N]\
         \n      TableScan: customer [c_custkey:Int64, c_name:Utf8]\
-        \n      SubqueryAlias: __scalar_sq_1 [o_custkey:Int64, __value:Int64;N]\
-        \n        Projection: orders.o_custkey, MAX(orders.o_custkey) AS __value [o_custkey:Int64, __value:Int64;N]\
+        \n      SubqueryAlias: __scalar_sq_1 [MAX(orders.o_custkey):Int64;N, o_custkey:Int64]\
+        \n        Projection: MAX(orders.o_custkey), orders.o_custkey [MAX(orders.o_custkey):Int64;N, o_custkey:Int64]\
         \n          Aggregate: groupBy=[[orders.o_custkey]], aggr=[[MAX(orders.o_custkey)]] [o_custkey:Int64, MAX(orders.o_custkey):Int64;N]\
         \n            TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]";
 
         assert_multi_rules_optimized_plan_eq_display_indent(
-            vec![
-                Arc::new(ScalarSubqueryToJoin::new()),
-                Arc::new(ExtractEquijoinPredicate::new()),
-                Arc::new(EliminateCrossJoin::new()),
-            ],
+            vec![Arc::new(ScalarSubqueryToJoin::new())],
             &plan,
             expected,
         );
@@ -868,20 +890,16 @@ mod tests {
             .build()?;
 
         let expected = "Projection: test.c [c:UInt32]\
-        \n  Filter: test.c < __scalar_sq_1.__value [a:UInt32, b:UInt32, c:UInt32, a:UInt32;N, __value:UInt32;N]\
-        \n    Inner Join: test.a = __scalar_sq_1.a [a:UInt32, b:UInt32, c:UInt32, a:UInt32;N, __value:UInt32;N]\
+        \n  Filter: test.c < __scalar_sq_1.MIN(sq.c) [a:UInt32, b:UInt32, c:UInt32, MIN(sq.c):UInt32;N, a:UInt32;N]\
+        \n    Left Join:  Filter: test.a = __scalar_sq_1.a [a:UInt32, b:UInt32, c:UInt32, MIN(sq.c):UInt32;N, a:UInt32;N]\
         \n      TableScan: test [a:UInt32, b:UInt32, c:UInt32]\
-        \n      SubqueryAlias: __scalar_sq_1 [a:UInt32, __value:UInt32;N]\
-        \n        Projection: sq.a, MIN(sq.c) AS __value [a:UInt32, __value:UInt32;N]\
+        \n      SubqueryAlias: __scalar_sq_1 [MIN(sq.c):UInt32;N, a:UInt32]\
+        \n        Projection: MIN(sq.c), sq.a [MIN(sq.c):UInt32;N, a:UInt32]\
         \n          Aggregate: groupBy=[[sq.a]], aggr=[[MIN(sq.c)]] [a:UInt32, MIN(sq.c):UInt32;N]\
         \n            TableScan: sq [a:UInt32, b:UInt32, c:UInt32]";
 
         assert_multi_rules_optimized_plan_eq_display_indent(
-            vec![
-                Arc::new(ScalarSubqueryToJoin::new()),
-                Arc::new(ExtractEquijoinPredicate::new()),
-                Arc::new(EliminateOuterJoin::new()),
-            ],
+            vec![Arc::new(ScalarSubqueryToJoin::new())],
             &plan,
             expected,
         );
@@ -904,20 +922,16 @@ mod tests {
             .build()?;
 
         let expected = "Projection: customer.c_custkey [c_custkey:Int64]\
-        \n  Filter: customer.c_custkey < __scalar_sq_1.__value [c_custkey:Int64, c_name:Utf8, __value:Int64;N]\
-        \n    CrossJoin: [c_custkey:Int64, c_name:Utf8, __value:Int64;N]\
+        \n  Filter: customer.c_custkey < __scalar_sq_1.MAX(orders.o_custkey) [c_custkey:Int64, c_name:Utf8, MAX(orders.o_custkey):Int64;N]\
+        \n    Left Join:  [c_custkey:Int64, c_name:Utf8, MAX(orders.o_custkey):Int64;N]\
         \n      TableScan: customer [c_custkey:Int64, c_name:Utf8]\
-        \n      SubqueryAlias: __scalar_sq_1 [__value:Int64;N]\
-        \n        Projection: MAX(orders.o_custkey) AS __value [__value:Int64;N]\
+        \n      SubqueryAlias: __scalar_sq_1 [MAX(orders.o_custkey):Int64;N]\
+        \n        Projection: MAX(orders.o_custkey) [MAX(orders.o_custkey):Int64;N]\
         \n          Aggregate: groupBy=[[]], aggr=[[MAX(orders.o_custkey)]] [MAX(orders.o_custkey):Int64;N]\
         \n            TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]";
 
         assert_multi_rules_optimized_plan_eq_display_indent(
-            vec![
-                Arc::new(ScalarSubqueryToJoin::new()),
-                Arc::new(ExtractEquijoinPredicate::new()),
-                Arc::new(EliminateCrossJoin::new()),
-            ],
+            vec![Arc::new(ScalarSubqueryToJoin::new())],
             &plan,
             expected,
         );
@@ -939,19 +953,16 @@ mod tests {
             .build()?;
 
         let expected = "Projection: customer.c_custkey [c_custkey:Int64]\
-        \n  Inner Join: customer.c_custkey = __scalar_sq_1.__value [c_custkey:Int64, c_name:Utf8, __value:Int64;N]\
-        \n    TableScan: customer [c_custkey:Int64, c_name:Utf8]\
-        \n    SubqueryAlias: __scalar_sq_1 [__value:Int64;N]\
-        \n      Projection: MAX(orders.o_custkey) AS __value [__value:Int64;N]\
-        \n        Aggregate: groupBy=[[]], aggr=[[MAX(orders.o_custkey)]] [MAX(orders.o_custkey):Int64;N]\
-        \n          TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]";
+        \n  Filter: customer.c_custkey = __scalar_sq_1.MAX(orders.o_custkey) [c_custkey:Int64, c_name:Utf8, MAX(orders.o_custkey):Int64;N]\
+        \n    Left Join:  [c_custkey:Int64, c_name:Utf8, MAX(orders.o_custkey):Int64;N]\
+        \n      TableScan: customer [c_custkey:Int64, c_name:Utf8]\
+        \n      SubqueryAlias: __scalar_sq_1 [MAX(orders.o_custkey):Int64;N]\
+        \n        Projection: MAX(orders.o_custkey) [MAX(orders.o_custkey):Int64;N]\
+        \n          Aggregate: groupBy=[[]], aggr=[[MAX(orders.o_custkey)]] [MAX(orders.o_custkey):Int64;N]\
+        \n            TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]";
 
         assert_multi_rules_optimized_plan_eq_display_indent(
-            vec![
-                Arc::new(ScalarSubqueryToJoin::new()),
-                Arc::new(ExtractEquijoinPredicate::new()),
-                Arc::new(EliminateCrossJoin::new()),
-            ],
+            vec![Arc::new(ScalarSubqueryToJoin::new())],
             &plan,
             expected,
         );
@@ -994,25 +1005,21 @@ mod tests {
             .build()?;
 
         let expected = "Projection: customer.c_custkey [c_custkey:Int64]\
-        \n  Filter: customer.c_custkey BETWEEN __scalar_sq_1.__value AND __scalar_sq_2.__value [c_custkey:Int64, c_name:Utf8, o_custkey:Int64;N, __value:Int64;N, o_custkey:Int64;N, __value:Int64;N]\
-        \n    Left Join: customer.c_custkey = __scalar_sq_2.o_custkey [c_custkey:Int64, c_name:Utf8, o_custkey:Int64;N, __value:Int64;N, o_custkey:Int64;N, __value:Int64;N]\
-        \n      Left Join: customer.c_custkey = __scalar_sq_1.o_custkey [c_custkey:Int64, c_name:Utf8, o_custkey:Int64;N, __value:Int64;N]\
+        \n  Filter: customer.c_custkey BETWEEN __scalar_sq_1.MIN(orders.o_custkey) AND __scalar_sq_2.MAX(orders.o_custkey) [c_custkey:Int64, c_name:Utf8, MIN(orders.o_custkey):Int64;N, o_custkey:Int64;N, MAX(orders.o_custkey):Int64;N, o_custkey:Int64;N]\
+        \n    Left Join:  Filter: customer.c_custkey = __scalar_sq_2.o_custkey [c_custkey:Int64, c_name:Utf8, MIN(orders.o_custkey):Int64;N, o_custkey:Int64;N, MAX(orders.o_custkey):Int64;N, o_custkey:Int64;N]\
+        \n      Left Join:  Filter: customer.c_custkey = __scalar_sq_1.o_custkey [c_custkey:Int64, c_name:Utf8, MIN(orders.o_custkey):Int64;N, o_custkey:Int64;N]\
         \n        TableScan: customer [c_custkey:Int64, c_name:Utf8]\
-        \n        SubqueryAlias: __scalar_sq_1 [o_custkey:Int64, __value:Int64;N]\
-        \n          Projection: orders.o_custkey, MIN(orders.o_custkey) AS __value [o_custkey:Int64, __value:Int64;N]\
+        \n        SubqueryAlias: __scalar_sq_1 [MIN(orders.o_custkey):Int64;N, o_custkey:Int64]\
+        \n          Projection: MIN(orders.o_custkey), orders.o_custkey [MIN(orders.o_custkey):Int64;N, o_custkey:Int64]\
         \n            Aggregate: groupBy=[[orders.o_custkey]], aggr=[[MIN(orders.o_custkey)]] [o_custkey:Int64, MIN(orders.o_custkey):Int64;N]\
         \n              TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]\
-        \n      SubqueryAlias: __scalar_sq_2 [o_custkey:Int64, __value:Int64;N]\
-        \n        Projection: orders.o_custkey, MAX(orders.o_custkey) AS __value [o_custkey:Int64, __value:Int64;N]\
+        \n      SubqueryAlias: __scalar_sq_2 [MAX(orders.o_custkey):Int64;N, o_custkey:Int64]\
+        \n        Projection: MAX(orders.o_custkey), orders.o_custkey [MAX(orders.o_custkey):Int64;N, o_custkey:Int64]\
         \n          Aggregate: groupBy=[[orders.o_custkey]], aggr=[[MAX(orders.o_custkey)]] [o_custkey:Int64, MAX(orders.o_custkey):Int64;N]\
         \n            TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]";
 
         assert_multi_rules_optimized_plan_eq_display_indent(
-            vec![
-                Arc::new(ScalarSubqueryToJoin::new()),
-                Arc::new(ExtractEquijoinPredicate::new()),
-                Arc::new(EliminateOuterJoin::new()),
-            ],
+            vec![Arc::new(ScalarSubqueryToJoin::new())],
             &plan,
             expected,
         );
@@ -1047,25 +1054,21 @@ mod tests {
             .build()?;
 
         let expected = "Projection: customer.c_custkey [c_custkey:Int64]\
-        \n  Filter: customer.c_custkey BETWEEN __scalar_sq_1.__value AND __scalar_sq_2.__value [c_custkey:Int64, c_name:Utf8, __value:Int64;N, __value:Int64;N]\
-        \n    CrossJoin: [c_custkey:Int64, c_name:Utf8, __value:Int64;N, __value:Int64;N]\
-        \n      CrossJoin: [c_custkey:Int64, c_name:Utf8, __value:Int64;N]\
+        \n  Filter: customer.c_custkey BETWEEN __scalar_sq_1.MIN(orders.o_custkey) AND __scalar_sq_2.MAX(orders.o_custkey) [c_custkey:Int64, c_name:Utf8, MIN(orders.o_custkey):Int64;N, MAX(orders.o_custkey):Int64;N]\
+        \n    Left Join:  [c_custkey:Int64, c_name:Utf8, MIN(orders.o_custkey):Int64;N, MAX(orders.o_custkey):Int64;N]\
+        \n      Left Join:  [c_custkey:Int64, c_name:Utf8, MIN(orders.o_custkey):Int64;N]\
         \n        TableScan: customer [c_custkey:Int64, c_name:Utf8]\
-        \n        SubqueryAlias: __scalar_sq_1 [__value:Int64;N]\
-        \n          Projection: MIN(orders.o_custkey) AS __value [__value:Int64;N]\
+        \n        SubqueryAlias: __scalar_sq_1 [MIN(orders.o_custkey):Int64;N]\
+        \n          Projection: MIN(orders.o_custkey) [MIN(orders.o_custkey):Int64;N]\
         \n            Aggregate: groupBy=[[]], aggr=[[MIN(orders.o_custkey)]] [MIN(orders.o_custkey):Int64;N]\
         \n              TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]\
-        \n      SubqueryAlias: __scalar_sq_2 [__value:Int64;N]\
-        \n        Projection: MAX(orders.o_custkey) AS __value [__value:Int64;N]\
+        \n      SubqueryAlias: __scalar_sq_2 [MAX(orders.o_custkey):Int64;N]\
+        \n        Projection: MAX(orders.o_custkey) [MAX(orders.o_custkey):Int64;N]\
         \n          Aggregate: groupBy=[[]], aggr=[[MAX(orders.o_custkey)]] [MAX(orders.o_custkey):Int64;N]\
         \n            TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]";
 
         assert_multi_rules_optimized_plan_eq_display_indent(
-            vec![
-                Arc::new(ScalarSubqueryToJoin::new()),
-                Arc::new(ExtractEquijoinPredicate::new()),
-                Arc::new(EliminateOuterJoin::new()),
-            ],
+            vec![Arc::new(ScalarSubqueryToJoin::new())],
             &plan,
             expected,
         );

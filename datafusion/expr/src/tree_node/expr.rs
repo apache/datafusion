@@ -18,13 +18,14 @@
 //! Tree node implementation for logical expr
 
 use crate::expr::{
-    AggregateFunction, AggregateUDF, Between, BinaryExpr, Case, Cast, GetIndexedField,
-    GroupingSet, InList, InSubquery, Like, Placeholder, ScalarFunction, ScalarUDF, Sort,
-    TryCast, WindowFunction,
+    AggregateFunction, AggregateFunctionDefinition, Alias, Between, BinaryExpr, Case,
+    Cast, GetIndexedField, GroupingSet, InList, InSubquery, Like, Placeholder,
+    ScalarFunction, ScalarFunctionDefinition, Sort, TryCast, WindowFunction,
 };
-use crate::Expr;
-use datafusion_common::tree_node::VisitRecursion;
-use datafusion_common::{tree_node::TreeNode, Result};
+use crate::{Expr, GetFieldAccess};
+
+use datafusion_common::tree_node::{TreeNode, VisitRecursion};
+use datafusion_common::{internal_err, DataFusionError, Result};
 
 impl TreeNode for Expr {
     fn apply_children<F>(&self, op: &mut F) -> Result<VisitRecursion>
@@ -32,7 +33,7 @@ impl TreeNode for Expr {
         F: FnMut(&Self) -> Result<VisitRecursion>,
     {
         let children = match self {
-            Expr::Alias(expr, _)
+            Expr::Alias(Alias{expr,..})
             | Expr::Not(expr)
             | Expr::IsNotNull(expr)
             | Expr::IsTrue(expr)
@@ -47,12 +48,23 @@ impl TreeNode for Expr {
             | Expr::TryCast(TryCast { expr, .. })
             | Expr::Sort(Sort { expr, .. })
             | Expr::InSubquery(InSubquery{ expr, .. }) => vec![expr.as_ref().clone()],
-            Expr::GetIndexedField(GetIndexedField { expr, .. }) => {
-                vec![expr.as_ref().clone()]
+            Expr::GetIndexedField(GetIndexedField { expr, field }) => {
+                let expr = expr.as_ref().clone();
+                match field {
+                    GetFieldAccess::ListIndex {key} => {
+                        vec![key.as_ref().clone(), expr]
+                    },
+                    GetFieldAccess::ListRange {start, stop} => {
+                        vec![start.as_ref().clone(), stop.as_ref().clone(), expr]
+                    }
+                    GetFieldAccess::NamedStructField {name: _name} => {
+                        vec![expr]
+                    }
+                }
             }
             Expr::GroupingSet(GroupingSet::Rollup(exprs))
             | Expr::GroupingSet(GroupingSet::Cube(exprs)) => exprs.clone(),
-            Expr::ScalarFunction (ScalarFunction{ args, .. } )| Expr::ScalarUDF(ScalarUDF { args, .. })  => {
+            Expr::ScalarFunction (ScalarFunction{ args, .. } )  => {
                 args.clone()
             }
             Expr::GroupingSet(GroupingSet::GroupingSets(lists_of_exprs)) => {
@@ -65,14 +77,12 @@ impl TreeNode for Expr {
             | Expr::Literal(_)
             | Expr::Exists { .. }
             | Expr::ScalarSubquery(_)
-            | Expr::Wildcard
-            | Expr::QualifiedWildcard { .. }
+            | Expr::Wildcard {..}
             | Expr::Placeholder (_) => vec![],
             Expr::BinaryExpr(BinaryExpr { left, right, .. }) => {
                 vec![left.as_ref().clone(), right.as_ref().clone()]
             }
             Expr::Like(Like { expr, pattern, .. })
-            | Expr::ILike(Like { expr, pattern, .. })
             | Expr::SimilarTo(Like { expr, pattern, .. }) => {
                 vec![expr.as_ref().clone(), pattern.as_ref().clone()]
             }
@@ -98,7 +108,7 @@ impl TreeNode for Expr {
                 expr_vec
             }
             Expr::AggregateFunction(AggregateFunction { args, filter, order_by, .. })
-            | Expr::AggregateUDF(AggregateUDF { args, filter, order_by, .. }) => {
+             => {
                 let mut expr_vec = args.clone();
 
                 if let Some(f) = filter {
@@ -147,9 +157,11 @@ impl TreeNode for Expr {
         let mut transform = transform;
 
         Ok(match self {
-            Expr::Alias(expr, name) => {
-                Expr::Alias(transform_boxed(expr, &mut transform)?, name)
-            }
+            Expr::Alias(Alias {
+                expr,
+                relation,
+                name,
+            }) => Expr::Alias(Alias::new(transform(*expr)?, relation, name)),
             Expr::Column(_) => self,
             Expr::OuterReferenceColumn(_, _) => self,
             Expr::Exists { .. } => self,
@@ -177,33 +189,26 @@ impl TreeNode for Expr {
                 expr,
                 pattern,
                 escape_char,
+                case_insensitive,
             }) => Expr::Like(Like::new(
                 negated,
                 transform_boxed(expr, &mut transform)?,
                 transform_boxed(pattern, &mut transform)?,
                 escape_char,
-            )),
-            Expr::ILike(Like {
-                negated,
-                expr,
-                pattern,
-                escape_char,
-            }) => Expr::ILike(Like::new(
-                negated,
-                transform_boxed(expr, &mut transform)?,
-                transform_boxed(pattern, &mut transform)?,
-                escape_char,
+                case_insensitive,
             )),
             Expr::SimilarTo(Like {
                 negated,
                 expr,
                 pattern,
                 escape_char,
+                case_insensitive,
             }) => Expr::SimilarTo(Like::new(
                 negated,
                 transform_boxed(expr, &mut transform)?,
                 transform_boxed(pattern, &mut transform)?,
                 escape_char,
+                case_insensitive,
             )),
             Expr::Not(expr) => Expr::Not(transform_boxed(expr, &mut transform)?),
             Expr::IsNotNull(expr) => {
@@ -271,12 +276,19 @@ impl TreeNode for Expr {
                 asc,
                 nulls_first,
             )),
-            Expr::ScalarFunction(ScalarFunction { args, fun }) => Expr::ScalarFunction(
-                ScalarFunction::new(fun, transform_vec(args, &mut transform)?),
-            ),
-            Expr::ScalarUDF(ScalarUDF { args, fun }) => {
-                Expr::ScalarUDF(ScalarUDF::new(fun, transform_vec(args, &mut transform)?))
-            }
+            Expr::ScalarFunction(ScalarFunction { func_def, args }) => match func_def {
+                ScalarFunctionDefinition::BuiltIn(fun) => Expr::ScalarFunction(
+                    ScalarFunction::new(fun, transform_vec(args, &mut transform)?),
+                ),
+                ScalarFunctionDefinition::UDF(fun) => Expr::ScalarFunction(
+                    ScalarFunction::new_udf(fun, transform_vec(args, &mut transform)?),
+                ),
+                ScalarFunctionDefinition::Name(_) => {
+                    return internal_err!(
+                        "Function `Expr` with name should be resolved."
+                    );
+                }
+            },
             Expr::WindowFunction(WindowFunction {
                 args,
                 fun,
@@ -292,17 +304,40 @@ impl TreeNode for Expr {
             )),
             Expr::AggregateFunction(AggregateFunction {
                 args,
-                fun,
+                func_def,
                 distinct,
                 filter,
                 order_by,
-            }) => Expr::AggregateFunction(AggregateFunction::new(
-                fun,
-                transform_vec(args, &mut transform)?,
-                distinct,
-                transform_option_box(filter, &mut transform)?,
-                transform_option_vec(order_by, &mut transform)?,
-            )),
+            }) => match func_def {
+                AggregateFunctionDefinition::BuiltIn(fun) => {
+                    Expr::AggregateFunction(AggregateFunction::new(
+                        fun,
+                        transform_vec(args, &mut transform)?,
+                        distinct,
+                        transform_option_box(filter, &mut transform)?,
+                        transform_option_vec(order_by, &mut transform)?,
+                    ))
+                }
+                AggregateFunctionDefinition::UDF(fun) => {
+                    let order_by = if let Some(order_by) = order_by {
+                        Some(transform_vec(order_by, &mut transform)?)
+                    } else {
+                        None
+                    };
+                    Expr::AggregateFunction(AggregateFunction::new_udf(
+                        fun,
+                        transform_vec(args, &mut transform)?,
+                        false,
+                        transform_option_box(filter, &mut transform)?,
+                        transform_option_vec(order_by, &mut transform)?,
+                    ))
+                }
+                AggregateFunctionDefinition::Name(_) => {
+                    return internal_err!(
+                        "Function `Expr` with name should be resolved."
+                    );
+                }
+            },
             Expr::GroupingSet(grouping_set) => match grouping_set {
                 GroupingSet::Rollup(exprs) => Expr::GroupingSet(GroupingSet::Rollup(
                     transform_vec(exprs, &mut transform)?,
@@ -319,24 +354,7 @@ impl TreeNode for Expr {
                     ))
                 }
             },
-            Expr::AggregateUDF(AggregateUDF {
-                args,
-                fun,
-                filter,
-                order_by,
-            }) => {
-                let order_by = if let Some(order_by) = order_by {
-                    Some(transform_vec(order_by, &mut transform)?)
-                } else {
-                    None
-                };
-                Expr::AggregateUDF(AggregateUDF::new(
-                    fun,
-                    transform_vec(args, &mut transform)?,
-                    transform_option_box(filter, &mut transform)?,
-                    transform_option_vec(order_by, &mut transform)?,
-                ))
-            }
+
             Expr::InList(InList {
                 expr,
                 list,
@@ -346,14 +364,11 @@ impl TreeNode for Expr {
                 transform_vec(list, &mut transform)?,
                 negated,
             )),
-            Expr::Wildcard => Expr::Wildcard,
-            Expr::QualifiedWildcard { qualifier } => {
-                Expr::QualifiedWildcard { qualifier }
-            }
-            Expr::GetIndexedField(GetIndexedField { key, expr }) => {
+            Expr::Wildcard { qualifier } => Expr::Wildcard { qualifier },
+            Expr::GetIndexedField(GetIndexedField { expr, field }) => {
                 Expr::GetIndexedField(GetIndexedField::new(
                     transform_boxed(expr, &mut transform)?,
-                    key,
+                    field,
                 ))
             }
             Expr::Placeholder(Placeholder { id, data_type }) => {

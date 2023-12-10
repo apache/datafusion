@@ -16,10 +16,11 @@
 // under the License.
 
 use crate::analyzer::check_plan;
-use crate::utils::{collect_subquery_cols, split_conjunction};
+use crate::utils::collect_subquery_cols;
 use datafusion_common::tree_node::{TreeNode, VisitRecursion};
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::{plan_err, DataFusionError, Result};
 use datafusion_expr::expr_rewriter::strip_outer_reference;
+use datafusion_expr::utils::split_conjunction;
 use datafusion_expr::{
     Aggregate, BinaryExpr, Cast, Expr, Filter, Join, JoinType, LogicalPlan, Operator,
     Window,
@@ -42,11 +43,11 @@ pub fn check_subquery_expr(
     if let Expr::ScalarSubquery(subquery) = expr {
         // Scalar subquery should only return one column
         if subquery.subquery.schema().fields().len() > 1 {
-            return Err(datafusion_common::DataFusionError::Plan(format!(
+            return plan_err!(
                 "Scalar subquery should only return one column, but found {}: {}",
                 subquery.subquery.schema().fields().len(),
-                subquery.subquery.schema().field_names().join(", "),
-            )));
+                subquery.subquery.schema().field_names().join(", ")
+            );
         }
         // Correlated scalar subquery must be aggregated to return at most one row
         if !subquery.outer_ref_columns.is_empty() {
@@ -71,10 +72,9 @@ pub fn check_subquery_expr(
                     {
                         Ok(())
                     } else {
-                        Err(DataFusionError::Plan(
+                        plan_err!(
                             "Correlated scalar subquery must be aggregated to return at most one row"
-                                .to_string(),
-                        ))
+                        )
                     }
                 }
             }?;
@@ -84,33 +84,40 @@ pub fn check_subquery_expr(
                 LogicalPlan::Aggregate(Aggregate {group_expr, aggr_expr,..}) => {
                     if group_expr.contains(expr) && !aggr_expr.contains(expr) {
                         // TODO revisit this validation logic
-                        Err(DataFusionError::Plan(
+                        plan_err!(
                             "Correlated scalar subquery in the GROUP BY clause must also be in the aggregate expressions"
-                                .to_string(),
-                        ))
+                        )
                     } else {
                         Ok(())
                     }
                 },
-                _ => Err(DataFusionError::Plan(
+                _ => plan_err!(
                     "Correlated scalar subquery can only be used in Projection, Filter, Aggregate plan nodes"
-                        .to_string(),
-                ))
+                )
             }?;
         }
         check_correlations_in_subquery(inner_plan, true)
     } else {
+        if let Expr::InSubquery(subquery) = expr {
+            // InSubquery should only return one column
+            if subquery.subquery.subquery.schema().fields().len() > 1 {
+                return plan_err!(
+                    "InSubquery should only return one column, but found {}: {}",
+                    subquery.subquery.subquery.schema().fields().len(),
+                    subquery.subquery.subquery.schema().field_names().join(", ")
+                );
+            }
+        }
         match outer_plan {
             LogicalPlan::Projection(_)
             | LogicalPlan::Filter(_)
             | LogicalPlan::Window(_)
             | LogicalPlan::Aggregate(_)
             | LogicalPlan::Join(_) => Ok(()),
-            _ => Err(DataFusionError::Plan(
+            _ => plan_err!(
                 "In/Exist subquery can only be used in \
             Projection, Filter, Window functions, Aggregate and Join plan nodes"
-                    .to_string(),
-            )),
+            ),
         }?;
         check_correlations_in_subquery(inner_plan, false)
     }
@@ -132,9 +139,7 @@ fn check_inner_plan(
     can_contain_outer_ref: bool,
 ) -> Result<()> {
     if !can_contain_outer_ref && contains_outer_reference(inner_plan) {
-        return Err(DataFusionError::Plan(
-            "Accessing outer reference columns is not allowed in the plan".to_string(),
-        ));
+        return plan_err!("Accessing outer reference columns is not allowed in the plan");
     }
     // We want to support as many operators as possible inside the correlated subquery
     match inner_plan {
@@ -156,9 +161,9 @@ fn check_inner_plan(
                 .filter(|expr| !can_pullup_over_aggregation(expr))
                 .collect::<Vec<_>>();
             if is_aggregate && is_scalar && !maybe_unsupport.is_empty() {
-                return Err(DataFusionError::Plan(format!(
-                    "Correlated column is not allowed in predicate: {predicate:?}"
-                )));
+                return plan_err!(
+                    "Correlated column is not allowed in predicate: {predicate}"
+                );
             }
             check_inner_plan(input, is_scalar, is_aggregate, can_contain_outer_ref)
         }
@@ -221,9 +226,8 @@ fn check_inner_plan(
                 Ok(())
             }
         },
-        _ => Err(DataFusionError::Plan(
-            "Unsupported operator in the subquery plan.".to_string(),
-        )),
+        LogicalPlan::Extension(_) => Ok(()),
+        _ => plan_err!("Unsupported operator in the subquery plan."),
     }
 }
 
@@ -239,10 +243,9 @@ fn check_aggregation_in_scalar_subquery(
     agg: &Aggregate,
 ) -> Result<()> {
     if agg.aggr_expr.is_empty() {
-        return Err(DataFusionError::Plan(
+        return plan_err!(
             "Correlated scalar subquery must be aggregated to return at most one row"
-                .to_string(),
-        ));
+        );
     }
     if !agg.group_expr.is_empty() {
         let correlated_exprs = get_correlated_expressions(inner_plan)?;
@@ -258,10 +261,9 @@ fn check_aggregation_in_scalar_subquery(
 
         if !group_columns.all(|group| inner_subquery_cols.contains(&group)) {
             // Group BY columns must be a subset of columns in the correlated expressions
-            return Err(DataFusionError::Plan(
+            return plan_err!(
                 "A GROUP BY clause in a scalar correlated subquery cannot contain non-correlated columns"
-                    .to_string(),
-            ));
+            );
         }
     }
     Ok(())
@@ -331,11 +333,64 @@ fn check_mixed_out_refer_in_window(window: &Window) -> Result<()> {
         win_expr.contains_outer() && !win_expr.to_columns().unwrap().is_empty()
     });
     if mixed {
-        Err(DataFusionError::Plan(
+        plan_err!(
             "Window expressions should not contain a mixed of outer references and inner columns"
-                .to_string(),
-        ))
+        )
     } else {
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use std::sync::Arc;
+
+    use datafusion_common::{DFSchema, DFSchemaRef};
+    use datafusion_expr::{Extension, UserDefinedLogicalNodeCore};
+
+    use super::*;
+
+    #[derive(Debug, PartialEq, Eq, Hash)]
+    struct MockUserDefinedLogicalPlan {
+        empty_schema: DFSchemaRef,
+    }
+
+    impl UserDefinedLogicalNodeCore for MockUserDefinedLogicalPlan {
+        fn name(&self) -> &str {
+            "MockUserDefinedLogicalPlan"
+        }
+
+        fn inputs(&self) -> Vec<&LogicalPlan> {
+            vec![]
+        }
+
+        fn schema(&self) -> &datafusion_common::DFSchemaRef {
+            &self.empty_schema
+        }
+
+        fn expressions(&self) -> Vec<Expr> {
+            vec![]
+        }
+
+        fn fmt_for_explain(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+            write!(f, "MockUserDefinedLogicalPlan")
+        }
+
+        fn from_template(&self, _exprs: &[Expr], _inputs: &[LogicalPlan]) -> Self {
+            Self {
+                empty_schema: self.empty_schema.clone(),
+            }
+        }
+    }
+
+    #[test]
+    fn wont_fail_extension_plan() {
+        let plan = LogicalPlan::Extension(Extension {
+            node: Arc::new(MockUserDefinedLogicalPlan {
+                empty_schema: DFSchemaRef::new(DFSchema::empty()),
+            }),
+        });
+
+        check_inner_plan(&plan, false, false, true).unwrap();
     }
 }

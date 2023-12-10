@@ -17,16 +17,13 @@
 
 //! Test queries on partitioned datasets
 
-use arrow::datatypes::DataType;
 use std::collections::BTreeSet;
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::ops::Range;
 use std::sync::Arc;
 
-use async_trait::async_trait;
-use bytes::Bytes;
-use chrono::{TimeZone, Utc};
+use arrow::datatypes::DataType;
 use datafusion::datasource::listing::ListingTableUrl;
 use datafusion::{
     assert_batches_sorted_eq,
@@ -39,11 +36,17 @@ use datafusion::{
     prelude::SessionContext,
     test_util::{self, arrow_test_data, parquet_test_data},
 };
+use datafusion_common::stats::Precision;
 use datafusion_common::ScalarValue;
+
+use async_trait::async_trait;
+use bytes::Bytes;
+use chrono::{TimeZone, Utc};
 use futures::stream;
 use futures::stream::BoxStream;
 use object_store::{
-    path::Path, GetOptions, GetResult, ListResult, MultipartId, ObjectMeta, ObjectStore,
+    path::Path, GetOptions, GetResult, GetResultPayload, ListResult, MultipartId,
+    ObjectMeta, ObjectStore, PutOptions, PutResult,
 };
 use tokio::io::AsyncWrite;
 use url::Url;
@@ -81,7 +84,7 @@ async fn parquet_distinct_partition_col() -> Result<()> {
         .collect()
         .await?;
 
-    let expected = vec![
+    let expected = [
         "+------+-------+-----+",
         "| year | month | day |",
         "+------+-------+-----+",
@@ -124,7 +127,7 @@ async fn parquet_distinct_partition_col() -> Result<()> {
 
     let mut max_limit = match ScalarValue::try_from_array(results[0].column(0), 0)? {
         ScalarValue::Int64(Some(count)) => count,
-        s => panic!("Expected count as Int64 found {}", s.get_datatype()),
+        s => panic!("Expected count as Int64 found {}", s.data_type()),
     };
 
     max_limit += 1;
@@ -135,7 +138,7 @@ async fn parquet_distinct_partition_col() -> Result<()> {
     let mut min_limit =
         match ScalarValue::try_from_array(last_batch.column(0), last_row_idx)? {
             ScalarValue::Int64(Some(count)) => count,
-            s => panic!("Expected count as Int64 found {}", s.get_datatype()),
+            s => panic!("Expected count as Int64 found {}", s.data_type()),
         };
 
     min_limit -= 1;
@@ -165,9 +168,9 @@ async fn parquet_distinct_partition_col() -> Result<()> {
     assert_eq!(min_limit, resulting_limit);
 
     let s = ScalarValue::try_from_array(results[0].column(1), 0)?;
-    let month = match extract_as_utf(&s) {
-        Some(month) => month,
-        s => panic!("Expected month as Dict(_, Utf8) found {s:?}"),
+    let month = match s {
+        ScalarValue::Utf8(Some(month)) => month,
+        s => panic!("Expected month as Utf8 found {s:?}"),
     };
 
     let sql_on_partition_boundary = format!(
@@ -186,15 +189,6 @@ async fn parquet_distinct_partition_col() -> Result<()> {
     let partition_row_count = max_limit - 1;
     assert_eq!(partition_row_count, resulting_limit);
     Ok(())
-}
-
-fn extract_as_utf(v: &ScalarValue) -> Option<String> {
-    if let ScalarValue::Dictionary(_, v) = v {
-        if let ScalarValue::Utf8(v) = v.as_ref() {
-            return v.clone();
-        }
-    }
-    None
 }
 
 #[tokio::test]
@@ -217,7 +211,7 @@ async fn csv_filter_with_file_col() -> Result<()> {
         .collect()
         .await?;
 
-    let expected = vec![
+    let expected = [
         "+----+----+",
         "| c1 | c2 |",
         "+----+----+",
@@ -253,7 +247,7 @@ async fn csv_filter_with_file_nonstring_col() -> Result<()> {
         .collect()
         .await?;
 
-    let expected = vec![
+    let expected = [
         "+----+----+------------+",
         "| c1 | c2 | date       |",
         "+----+----+------------+",
@@ -289,7 +283,7 @@ async fn csv_projection_on_partition() -> Result<()> {
         .collect()
         .await?;
 
-    let expected = vec![
+    let expected = [
         "+----+------------+",
         "| c1 | date       |",
         "+----+------------+",
@@ -326,13 +320,13 @@ async fn csv_grouping_by_partition() -> Result<()> {
         .collect()
         .await?;
 
-    let expected = vec![
-        "+------------+-----------------+----------------------+",
-        "| date       | COUNT(UInt8(1)) | COUNT(DISTINCT t.c1) |",
-        "+------------+-----------------+----------------------+",
-        "| 2021-10-26 | 100             | 5                    |",
-        "| 2021-10-27 | 100             | 5                    |",
-        "+------------+-----------------+----------------------+",
+    let expected = [
+        "+------------+----------+----------------------+",
+        "| date       | COUNT(*) | COUNT(DISTINCT t.c1) |",
+        "+------------+----------+----------------------+",
+        "| 2021-10-26 | 100      | 5                    |",
+        "| 2021-10-27 | 100      | 5                    |",
+        "+------------+----------+----------------------+",
     ];
     assert_batches_sorted_eq!(expected, &result);
 
@@ -366,7 +360,7 @@ async fn parquet_multiple_partitions() -> Result<()> {
         .collect()
         .await?;
 
-    let expected = vec![
+    let expected = [
         "+----+-----+",
         "| id | day |",
         "+----+-----+",
@@ -412,7 +406,7 @@ async fn parquet_multiple_nonstring_partitions() -> Result<()> {
         .collect()
         .await?;
 
-    let expected = vec![
+    let expected = [
         "+----+-----+",
         "| id | day |",
         "+----+-----+",
@@ -457,34 +451,30 @@ async fn parquet_statistics() -> Result<()> {
     //// NO PROJECTION ////
     let dataframe = ctx.sql("SELECT * FROM t").await?;
     let physical_plan = dataframe.create_physical_plan().await?;
-    assert_eq!(physical_plan.schema().fields().len(), 4);
+    let schema = physical_plan.schema();
+    assert_eq!(schema.fields().len(), 4);
 
-    let stat_cols = physical_plan
-        .statistics()
-        .column_statistics
-        .expect("col stats should be defined");
+    let stat_cols = physical_plan.statistics()?.column_statistics;
     assert_eq!(stat_cols.len(), 4);
     // stats for the first col are read from the parquet file
-    assert_eq!(stat_cols[0].null_count, Some(3));
+    assert_eq!(stat_cols[0].null_count, Precision::Exact(3));
     // TODO assert partition column (1,2,3) stats once implemented (#1186)
-    assert_eq!(stat_cols[1], ColumnStatistics::default());
-    assert_eq!(stat_cols[2], ColumnStatistics::default());
-    assert_eq!(stat_cols[3], ColumnStatistics::default());
+    assert_eq!(stat_cols[1], ColumnStatistics::new_unknown(),);
+    assert_eq!(stat_cols[2], ColumnStatistics::new_unknown(),);
+    assert_eq!(stat_cols[3], ColumnStatistics::new_unknown(),);
 
     //// WITH PROJECTION ////
     let dataframe = ctx.sql("SELECT mycol, day FROM t WHERE day='28'").await?;
     let physical_plan = dataframe.create_physical_plan().await?;
-    assert_eq!(physical_plan.schema().fields().len(), 2);
+    let schema = physical_plan.schema();
+    assert_eq!(schema.fields().len(), 2);
 
-    let stat_cols = physical_plan
-        .statistics()
-        .column_statistics
-        .expect("col stats should be defined");
+    let stat_cols = physical_plan.statistics()?.column_statistics;
     assert_eq!(stat_cols.len(), 2);
     // stats for the first col are read from the parquet file
-    assert_eq!(stat_cols[0].null_count, Some(1));
+    assert_eq!(stat_cols[0].null_count, Precision::Exact(1));
     // TODO assert partition column stats once implemented (#1186)
-    assert_eq!(stat_cols[1], ColumnStatistics::default());
+    assert_eq!(stat_cols[1], ColumnStatistics::new_unknown(),);
 
     Ok(())
 }
@@ -621,7 +611,12 @@ impl MirroringObjectStore {
 
 #[async_trait]
 impl ObjectStore for MirroringObjectStore {
-    async fn put(&self, _location: &Path, _bytes: Bytes) -> object_store::Result<()> {
+    async fn put_opts(
+        &self,
+        _location: &Path,
+        _bytes: Bytes,
+        _opts: PutOptions,
+    ) -> object_store::Result<PutResult> {
         unimplemented!()
     }
 
@@ -648,7 +643,20 @@ impl ObjectStore for MirroringObjectStore {
         self.files.iter().find(|x| *x == location).unwrap();
         let path = std::path::PathBuf::from(&self.mirrored_file);
         let file = File::open(&path).unwrap();
-        Ok(GetResult::File(file, path))
+        let metadata = file.metadata().unwrap();
+        let meta = ObjectMeta {
+            location: location.clone(),
+            last_modified: metadata.modified().map(chrono::DateTime::from).unwrap(),
+            size: metadata.len() as usize,
+            e_tag: None,
+            version: None,
+        };
+
+        Ok(GetResult {
+            range: 0..meta.size,
+            payload: GetResultPayload::File(file, path),
+            meta,
+        })
     }
 
     async fn get_range(
@@ -669,26 +677,16 @@ impl ObjectStore for MirroringObjectStore {
         Ok(data.into())
     }
 
-    async fn head(&self, location: &Path) -> object_store::Result<ObjectMeta> {
-        self.files.iter().find(|x| *x == location).unwrap();
-        Ok(ObjectMeta {
-            location: location.clone(),
-            last_modified: Utc.timestamp_nanos(0),
-            size: self.file_size as usize,
-            e_tag: None,
-        })
-    }
-
     async fn delete(&self, _location: &Path) -> object_store::Result<()> {
         unimplemented!()
     }
 
-    async fn list(
+    fn list(
         &self,
         prefix: Option<&Path>,
-    ) -> object_store::Result<BoxStream<'_, object_store::Result<ObjectMeta>>> {
+    ) -> BoxStream<'_, object_store::Result<ObjectMeta>> {
         let prefix = prefix.cloned().unwrap_or_default();
-        Ok(Box::pin(stream::iter(self.files.iter().filter_map(
+        Box::pin(stream::iter(self.files.iter().filter_map(
             move |location| {
                 // Don't return for exact prefix match
                 let filter = location
@@ -702,10 +700,11 @@ impl ObjectStore for MirroringObjectStore {
                         last_modified: Utc.timestamp_nanos(0),
                         size: self.file_size as usize,
                         e_tag: None,
+                        version: None,
                     })
                 })
             },
-        ))))
+        )))
     }
 
     async fn list_with_delimiter(
@@ -739,6 +738,7 @@ impl ObjectStore for MirroringObjectStore {
                     last_modified: Utc.timestamp_nanos(0),
                     size: self.file_size as usize,
                     e_tag: None,
+                    version: None,
                 };
                 objects.push(object);
             }

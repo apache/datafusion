@@ -29,7 +29,7 @@ async fn query_get_indexed_field() -> Result<()> {
     )]));
     let builder = PrimitiveBuilder::<Int64Type>::with_capacity(3);
     let mut lb = ListBuilder::new(builder);
-    for int_vec in vec![vec![0, 1, 2], vec![4, 5, 6], vec![7, 8, 9]] {
+    for int_vec in [[0, 1, 2], [4, 5, 6], [7, 8, 9]] {
         let builder = lb.values();
         for int in int_vec {
             builder.append_value(int);
@@ -45,15 +45,13 @@ async fn query_get_indexed_field() -> Result<()> {
     let sql = "SELECT some_list[1] as i0 FROM ints LIMIT 3";
     let actual = execute_to_batches(&ctx, sql).await;
     #[rustfmt::skip]
-    let expected = vec![
-        "+----+",
+    let expected = ["+----+",
         "| i0 |",
         "+----+",
         "| 0  |",
         "| 4  |",
         "| 7  |",
-        "+----+",
-    ];
+        "+----+"];
     assert_batches_eq!(expected, &actual);
     Ok(())
 }
@@ -72,10 +70,10 @@ async fn query_nested_get_indexed_field() -> Result<()> {
     let builder = PrimitiveBuilder::<Int64Type>::with_capacity(3);
     let nested_lb = ListBuilder::new(builder);
     let mut lb = ListBuilder::new(nested_lb);
-    for int_vec_vec in vec![
-        vec![vec![0, 1], vec![2, 3], vec![3, 4]],
-        vec![vec![5, 6], vec![7, 8], vec![9, 10]],
-        vec![vec![11, 12], vec![13, 14], vec![15, 16]],
+    for int_vec_vec in [
+        [[0, 1], [2, 3], [3, 4]],
+        [[5, 6], [7, 8], [9, 10]],
+        [[11, 12], [13, 14], [15, 16]],
     ] {
         let nested_builder = lb.values();
         for int_vec in int_vec_vec {
@@ -95,7 +93,7 @@ async fn query_nested_get_indexed_field() -> Result<()> {
     // Original column is micros, convert to millis and check timestamp
     let sql = "SELECT some_list[1] as i0 FROM ints LIMIT 3";
     let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
+    let expected = [
         "+----------+",
         "| i0       |",
         "+----------+",
@@ -108,15 +106,13 @@ async fn query_nested_get_indexed_field() -> Result<()> {
     let sql = "SELECT some_list[1][1] as i0 FROM ints LIMIT 3";
     let actual = execute_to_batches(&ctx, sql).await;
     #[rustfmt::skip]
-    let expected = vec![
-        "+----+",
+    let expected = ["+----+",
         "| i0 |",
         "+----+",
         "| 0  |",
         "| 5  |",
         "| 11 |",
-        "+----+",
-    ];
+        "+----+"];
     assert_batches_eq!(expected, &actual);
     Ok(())
 }
@@ -136,7 +132,7 @@ async fn query_nested_get_indexed_field_on_struct() -> Result<()> {
     let builder = PrimitiveBuilder::<Int64Type>::with_capacity(3);
     let nested_lb = ListBuilder::new(builder);
     let mut sb = StructBuilder::new(struct_fields, vec![Box::new(nested_lb)]);
-    for int_vec in vec![vec![0, 1, 2, 3], vec![4, 5, 6, 7], vec![8, 9, 10, 11]] {
+    for int_vec in [[0, 1, 2, 3], [4, 5, 6, 7], [8, 9, 10, 11]] {
         let lb = sb.field_builder::<ListBuilder<Int64Builder>>(0).unwrap();
         for int in int_vec {
             lb.values().append_value(int);
@@ -152,7 +148,7 @@ async fn query_nested_get_indexed_field_on_struct() -> Result<()> {
     // Original column is micros, convert to millis and check timestamp
     let sql = "SELECT some_struct['bar'] as l0 FROM structs LIMIT 3";
     let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
+    let expected = [
         "+----------------+",
         "| l0             |",
         "+----------------+",
@@ -166,7 +162,7 @@ async fn query_nested_get_indexed_field_on_struct() -> Result<()> {
     // Access to field of struct by CompoundIdentifier
     let sql = "SELECT some_struct.bar as l0 FROM structs LIMIT 3";
     let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
+    let expected = [
         "+----------------+",
         "| l0             |",
         "+----------------+",
@@ -180,21 +176,18 @@ async fn query_nested_get_indexed_field_on_struct() -> Result<()> {
     let sql = "SELECT some_struct['bar'][1] as i0 FROM structs LIMIT 3";
     let actual = execute_to_batches(&ctx, sql).await;
     #[rustfmt::skip]
-    let expected = vec![
-        "+----+",
+    let expected = ["+----+",
         "| i0 |",
         "+----+",
         "| 0  |",
         "| 4  |",
         "| 8  |",
-        "+----+",
-    ];
+        "+----+"];
     assert_batches_eq!(expected, &actual);
     Ok(())
 }
 
 #[tokio::test]
-#[cfg(feature = "dictionary_expressions")]
 async fn query_on_string_dictionary() -> Result<()> {
     // Test to ensure DataFusion can operate on dictionary types
     // Use StringDictionary (32 bit indexes = keys)
@@ -220,7 +213,7 @@ async fn query_on_string_dictionary() -> Result<()> {
     // Basic SELECT
     let sql = "SELECT d1 FROM test";
     let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
+    let expected = [
         "+-------+",
         "| d1    |",
         "+-------+",
@@ -234,7 +227,7 @@ async fn query_on_string_dictionary() -> Result<()> {
     // basic filtering
     let sql = "SELECT d1 FROM test WHERE d1 IS NOT NULL";
     let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
+    let expected = [
         "+-------+",
         "| d1    |",
         "+-------+",
@@ -247,7 +240,7 @@ async fn query_on_string_dictionary() -> Result<()> {
     // comparison with constant
     let sql = "SELECT d1 FROM test WHERE d1 = 'three'";
     let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
+    let expected = [
         "+-------+",
         "| d1    |",
         "+-------+",
@@ -259,7 +252,7 @@ async fn query_on_string_dictionary() -> Result<()> {
     // comparison with another dictionary column
     let sql = "SELECT d1 FROM test WHERE d1 = d2";
     let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
+    let expected = [
         "+-------+",
         "| d1    |",
         "+-------+",
@@ -271,7 +264,7 @@ async fn query_on_string_dictionary() -> Result<()> {
     // order comparison with another dictionary column
     let sql = "SELECT d1 FROM test WHERE d1 <= d2";
     let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
+    let expected = [
         "+-------+",
         "| d1    |",
         "+-------+",
@@ -283,7 +276,7 @@ async fn query_on_string_dictionary() -> Result<()> {
     // comparison with a non dictionary column
     let sql = "SELECT d1 FROM test WHERE d1 = d3";
     let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
+    let expected = [
         "+-------+",
         "| d1    |",
         "+-------+",
@@ -295,7 +288,7 @@ async fn query_on_string_dictionary() -> Result<()> {
     // filtering with constant
     let sql = "SELECT d1 FROM test WHERE d1 = 'three'";
     let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
+    let expected = [
         "+-------+",
         "| d1    |",
         "+-------+",
@@ -307,7 +300,7 @@ async fn query_on_string_dictionary() -> Result<()> {
     // Expression evaluation
     let sql = "SELECT concat(d1, '-foo') FROM test";
     let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
+    let expected = [
         "+------------------------------+",
         "| concat(test.d1,Utf8(\"-foo\")) |",
         "+------------------------------+",
@@ -321,7 +314,7 @@ async fn query_on_string_dictionary() -> Result<()> {
     // Expression evaluation with two dictionaries
     let sql = "SELECT concat(d1, d2) FROM test";
     let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
+    let expected = [
         "+-------------------------+",
         "| concat(test.d1,test.d2) |",
         "+-------------------------+",
@@ -335,7 +328,7 @@ async fn query_on_string_dictionary() -> Result<()> {
     // aggregation
     let sql = "SELECT COUNT(d1) FROM test";
     let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
+    let expected = [
         "+----------------+",
         "| COUNT(test.d1) |",
         "+----------------+",
@@ -347,7 +340,7 @@ async fn query_on_string_dictionary() -> Result<()> {
     // aggregation min
     let sql = "SELECT MIN(d1) FROM test";
     let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
+    let expected = [
         "+--------------+",
         "| MIN(test.d1) |",
         "+--------------+",
@@ -359,7 +352,7 @@ async fn query_on_string_dictionary() -> Result<()> {
     // aggregation max
     let sql = "SELECT MAX(d1) FROM test";
     let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
+    let expected = [
         "+--------------+",
         "| MAX(test.d1) |",
         "+--------------+",
@@ -371,21 +364,21 @@ async fn query_on_string_dictionary() -> Result<()> {
     // grouping
     let sql = "SELECT d1, COUNT(*) FROM test group by d1";
     let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
-        "+-------+-----------------+",
-        "| d1    | COUNT(UInt8(1)) |",
-        "+-------+-----------------+",
-        "| one   | 1               |",
-        "|       | 1               |",
-        "| three | 1               |",
-        "+-------+-----------------+",
+    let expected = [
+        "+-------+----------+",
+        "| d1    | COUNT(*) |",
+        "+-------+----------+",
+        "|       | 1        |",
+        "| one   | 1        |",
+        "| three | 1        |",
+        "+-------+----------+",
     ];
     assert_batches_sorted_eq!(expected, &actual);
 
     // window functions
     let sql = "SELECT d1, row_number() OVER (partition by d1) as rn1 FROM test";
     let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
+    let expected = [
         "+-------+-----+",
         "| d1    | rn1 |",
         "+-------+-----+",
@@ -414,7 +407,8 @@ async fn sort_on_window_null_string() -> Result<()> {
     ])
     .unwrap();
 
-    let ctx = SessionContext::with_config(SessionConfig::new().with_target_partitions(1));
+    let ctx =
+        SessionContext::new_with_config(SessionConfig::new().with_target_partitions(1));
     ctx.register_batch("test", batch)?;
 
     let sql =
@@ -422,7 +416,7 @@ async fn sort_on_window_null_string() -> Result<()> {
 
     let actual = execute_to_batches(&ctx, sql).await;
     // NULLS LAST
-    let expected = vec![
+    let expected = [
         "+-------+-----+",
         "| d1    | rn1 |",
         "+-------+-----+",
@@ -437,7 +431,7 @@ async fn sort_on_window_null_string() -> Result<()> {
         "SELECT d2, row_number() OVER (partition by d2) as rn1 FROM test ORDER BY d2 asc";
     let actual = execute_to_batches(&ctx, sql).await;
     // NULLS LAST
-    let expected = vec![
+    let expected = [
         "+-------+-----+",
         "| d2    | rn1 |",
         "+-------+-----+",
@@ -453,7 +447,7 @@ async fn sort_on_window_null_string() -> Result<()> {
 
     let actual = execute_to_batches(&ctx, sql).await;
     // NULLS FIRST
-    let expected = vec![
+    let expected = [
         "+-------+-----+",
         "| d2    | rn1 |",
         "+-------+-----+",
@@ -532,6 +526,53 @@ async fn test_prepare_statement() -> Result<()> {
 }
 
 #[tokio::test]
+async fn test_named_query_parameters() -> Result<()> {
+    let tmp_dir = TempDir::new()?;
+    let partition_count = 4;
+    let ctx = partitioned_csv::create_ctx(&tmp_dir, partition_count).await?;
+
+    // sql to statement then to logical plan with parameters
+    // c1 defined as UINT32, c2 defined as UInt64
+    let results = ctx
+        .sql("SELECT c1, c2 FROM test WHERE c1 > $coo AND c1 < $foo")
+        .await?
+        .with_param_values(vec![
+            ("foo", ScalarValue::UInt32(Some(3))),
+            ("coo", ScalarValue::UInt32(Some(0))),
+        ])?
+        .collect()
+        .await?;
+    let expected = vec![
+        "+----+----+",
+        "| c1 | c2 |",
+        "+----+----+",
+        "| 1  | 1  |",
+        "| 1  | 2  |",
+        "| 1  | 3  |",
+        "| 1  | 4  |",
+        "| 1  | 5  |",
+        "| 1  | 6  |",
+        "| 1  | 7  |",
+        "| 1  | 8  |",
+        "| 1  | 9  |",
+        "| 1  | 10 |",
+        "| 2  | 1  |",
+        "| 2  | 2  |",
+        "| 2  | 3  |",
+        "| 2  | 4  |",
+        "| 2  | 5  |",
+        "| 2  | 6  |",
+        "| 2  | 7  |",
+        "| 2  | 8  |",
+        "| 2  | 9  |",
+        "| 2  | 10 |",
+        "+----+----+",
+    ];
+    assert_batches_sorted_eq!(expected, &results);
+    Ok(())
+}
+
+#[tokio::test]
 async fn parallel_query_with_filter() -> Result<()> {
     let tmp_dir = TempDir::new()?;
     let partition_count = 4;
@@ -578,7 +619,7 @@ async fn boolean_literal() -> Result<()> {
         execute_with_partition("SELECT c1, c3 FROM test WHERE c1 > 2 AND c3 = true", 4)
             .await?;
 
-    let expected = vec![
+    let expected = [
         "+----+------+",
         "| c1 | c3   |",
         "+----+------+",
@@ -597,7 +638,7 @@ async fn boolean_literal() -> Result<()> {
 #[tokio::test]
 async fn unprojected_filter() {
     let config = SessionConfig::new();
-    let ctx = SessionContext::with_config(config);
+    let ctx = SessionContext::new_with_config(config);
     let df = ctx.read_table(table_with_sequence(1, 3).unwrap()).unwrap();
 
     let df = df
@@ -611,7 +652,7 @@ async fn unprojected_filter() {
 
     let results = df.collect().await.unwrap();
 
-    let expected = vec![
+    let expected = [
         "+-----------------------+",
         "| ?table?.i + ?table?.i |",
         "+-----------------------+",

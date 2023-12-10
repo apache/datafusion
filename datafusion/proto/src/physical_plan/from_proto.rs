@@ -17,43 +17,44 @@
 
 //! Serde code to convert from protocol buffers to Rust data structures.
 
-use crate::protobuf;
-use arrow::datatypes::DataType;
-use chrono::TimeZone;
-use chrono::Utc;
+use std::convert::{TryFrom, TryInto};
+use std::sync::Arc;
+
+use arrow::compute::SortOptions;
 use datafusion::arrow::datatypes::Schema;
-use datafusion::datasource::listing::{FileRange, PartitionedFile};
+use datafusion::datasource::file_format::json::JsonSink;
+use datafusion::datasource::listing::{FileRange, ListingTableUrl, PartitionedFile};
 use datafusion::datasource::object_store::ObjectStoreUrl;
-use datafusion::datasource::physical_plan::FileScanConfig;
+use datafusion::datasource::physical_plan::{FileScanConfig, FileSinkConfig};
 use datafusion::execution::context::ExecutionProps;
 use datafusion::execution::FunctionRegistry;
 use datafusion::logical_expr::window_function::WindowFunction;
 use datafusion::physical_expr::{PhysicalSortExpr, ScalarFunctionExpr};
 use datafusion::physical_plan::expressions::{
-    date_time_interval_expr, GetIndexedFieldExpr,
+    in_list, BinaryExpr, CaseExpr, CastExpr, Column, IsNotNullExpr, IsNullExpr, LikeExpr,
+    Literal, NegativeExpr, NotExpr, TryCastExpr,
 };
-use datafusion::physical_plan::expressions::{in_list, LikeExpr};
+use datafusion::physical_plan::expressions::{GetFieldAccessExpr, GetIndexedFieldExpr};
+use datafusion::physical_plan::windows::create_window_expr;
 use datafusion::physical_plan::{
-    expressions::{
-        BinaryExpr, CaseExpr, CastExpr, Column, IsNotNullExpr, IsNullExpr, Literal,
-        NegativeExpr, NotExpr, TryCastExpr,
-    },
-    functions, Partitioning,
+    functions, ColumnStatistics, Partitioning, PhysicalExpr, Statistics, WindowExpr,
 };
-use datafusion::physical_plan::{ColumnStatistics, PhysicalExpr, Statistics};
-use datafusion_common::{DataFusionError, Result};
-use object_store::path::Path;
-use object_store::ObjectMeta;
-use std::convert::{TryFrom, TryInto};
-use std::ops::Deref;
-use std::sync::Arc;
+use datafusion_common::file_options::json_writer::JsonWriterOptions;
+use datafusion_common::parsers::CompressionTypeVariant;
+use datafusion_common::stats::Precision;
+use datafusion_common::{
+    not_impl_err, DataFusionError, FileTypeWriterOptions, JoinSide, Result, ScalarValue,
+};
 
 use crate::common::proto_error;
 use crate::convert_required;
 use crate::logical_plan;
+use crate::protobuf;
 use crate::protobuf::physical_expr_node::ExprType;
-use datafusion::physical_plan::joins::utils::JoinSide;
-use datafusion::physical_plan::sorts::sort::SortOptions;
+
+use chrono::{TimeZone, Utc};
+use object_store::path::Path;
+use object_store::ObjectMeta;
 
 impl From<&protobuf::PhysicalColumn> for Column {
     fn from(c: &protobuf::PhysicalColumn) -> Column {
@@ -84,6 +85,61 @@ pub fn parse_physical_sort_expr(
     } else {
         Err(proto_error("Unexpected empty physical expression"))
     }
+}
+
+/// Parses a physical window expr from a protobuf.
+///
+/// # Arguments
+///
+/// * `proto` - Input proto with physical window exprression node.
+/// * `name` - Name of the window expression.
+/// * `registry` - A registry knows how to build logical expressions out of user-defined function' names
+/// * `input_schema` - The Arrow schema for the input, used for determining expression data types
+///                    when performing type coercion.
+pub fn parse_physical_window_expr(
+    proto: &protobuf::PhysicalWindowExprNode,
+    registry: &dyn FunctionRegistry,
+    input_schema: &Schema,
+) -> Result<Arc<dyn WindowExpr>> {
+    let window_node_expr = proto
+        .args
+        .iter()
+        .map(|e| parse_physical_expr(e, registry, input_schema))
+        .collect::<Result<Vec<_>>>()?;
+
+    let partition_by = proto
+        .partition_by
+        .iter()
+        .map(|p| parse_physical_expr(p, registry, input_schema))
+        .collect::<Result<Vec<_>>>()?;
+
+    let order_by = proto
+        .order_by
+        .iter()
+        .map(|o| parse_physical_sort_expr(o, registry, input_schema))
+        .collect::<Result<Vec<_>>>()?;
+
+    let window_frame = proto
+        .window_frame
+        .as_ref()
+        .map(|wf| wf.clone().try_into())
+        .transpose()
+        .map_err(|e| DataFusionError::Internal(format!("{e}")))?
+        .ok_or_else(|| {
+            DataFusionError::Internal(
+                "Missing required field 'window_frame' in protobuf".to_string(),
+            )
+        })?;
+
+    create_window_expr(
+        &convert_required!(proto.window_function)?,
+        proto.name.clone(),
+        &window_node_expr,
+        &partition_by,
+        &order_by,
+        Arc::new(window_frame),
+        input_schema,
+    )
 }
 
 /// Parses a physical expression from a protobuf.
@@ -125,36 +181,18 @@ pub fn parse_physical_expr(
                 input_schema,
             )?,
         )),
-        ExprType::DateTimeIntervalExpr(expr) => date_time_interval_expr(
-            parse_required_physical_expr(
-                expr.l.as_deref(),
-                registry,
-                "left",
-                input_schema,
-            )?,
-            logical_plan::from_proto::from_proto_binary_op(&expr.op)?,
-            parse_required_physical_expr(
-                expr.r.as_deref(),
-                registry,
-                "right",
-                input_schema,
-            )?,
-            input_schema,
-        )?,
         ExprType::AggregateExpr(_) => {
-            return Err(DataFusionError::NotImplemented(
-                "Cannot convert aggregate expr node to physical expression".to_owned(),
-            ));
+            return not_impl_err!(
+                "Cannot convert aggregate expr node to physical expression"
+            );
         }
         ExprType::WindowExpr(_) => {
-            return Err(DataFusionError::NotImplemented(
-                "Cannot convert window expr node to physical expression".to_owned(),
-            ));
+            return not_impl_err!(
+                "Cannot convert window expr node to physical expression"
+            );
         }
         ExprType::Sort(_) => {
-            return Err(DataFusionError::NotImplemented(
-                "Cannot convert sort expr node to physical expression".to_owned(),
-            ));
+            return not_impl_err!("Cannot convert sort expr node to physical expression");
         }
         ExprType::IsNullExpr(e) => {
             Arc::new(IsNullExpr::new(parse_required_physical_expr(
@@ -250,7 +288,7 @@ pub fn parse_physical_expr(
         )),
         ExprType::ScalarFunction(e) => {
             let scalar_function =
-                protobuf::ScalarFunction::from_i32(e.fun).ok_or_else(|| {
+                protobuf::ScalarFunction::try_from(e.fun).map_err(|_| {
                     proto_error(
                         format!("Received an unknown scalar function: {}", e.fun,),
                     )
@@ -274,11 +312,12 @@ pub fn parse_physical_expr(
                 &e.name,
                 fun_expr,
                 args,
-                &convert_required!(e.return_type)?,
+                convert_required!(e.return_type)?,
+                None,
             ))
         }
         ExprType::ScalarUdf(e) => {
-            let scalar_fun = registry.udf(e.name.as_str())?.deref().clone().fun;
+            let scalar_fun = registry.udf(e.name.as_str())?.fun().clone();
 
             let args = e
                 .args
@@ -290,7 +329,8 @@ pub fn parse_physical_expr(
                 e.name.as_str(),
                 scalar_fun,
                 args,
-                &convert_required!(e.return_type)?,
+                convert_required!(e.return_type)?,
+                None,
             ))
         }
         ExprType::LikeExpr(like_expr) => Arc::new(LikeExpr::new(
@@ -310,6 +350,36 @@ pub fn parse_physical_expr(
             )?,
         )),
         ExprType::GetIndexedFieldExpr(get_indexed_field_expr) => {
+            let field = match &get_indexed_field_expr.field {
+                Some(protobuf::physical_get_indexed_field_expr_node::Field::NamedStructFieldExpr(named_struct_field_expr)) => GetFieldAccessExpr::NamedStructField{
+                    name: convert_required!(named_struct_field_expr.name)?,
+                },
+                Some(protobuf::physical_get_indexed_field_expr_node::Field::ListIndexExpr(list_index_expr)) => GetFieldAccessExpr::ListIndex{
+                    key: parse_required_physical_expr(
+                        list_index_expr.key.as_deref(),
+                        registry,
+                        "key",
+                        input_schema,
+                    )?},
+                Some(protobuf::physical_get_indexed_field_expr_node::Field::ListRangeExpr(list_range_expr)) => GetFieldAccessExpr::ListRange{
+                    start: parse_required_physical_expr(
+                        list_range_expr.start.as_deref(),
+                        registry,
+                        "start",
+                        input_schema,
+                    )?,
+                    stop: parse_required_physical_expr(
+                        list_range_expr.stop.as_deref(),
+                        registry,
+                        "stop",
+                        input_schema
+                    )?,
+                },
+                None =>                 return Err(proto_error(
+                    "Field must not be None",
+                )),
+            };
+
             Arc::new(GetIndexedFieldExpr::new(
                 parse_required_physical_expr(
                     get_indexed_field_expr.arg.as_deref(),
@@ -317,7 +387,7 @@ pub fn parse_physical_expr(
                     "arg",
                     input_schema,
                 )?,
-                convert_required!(get_indexed_field_expr.key)?,
+                field,
             ))
         }
     };
@@ -346,7 +416,7 @@ impl TryFrom<&protobuf::physical_window_expr_node::WindowFunction> for WindowFun
     ) -> Result<Self, Self::Error> {
         match expr {
             protobuf::physical_window_expr_node::WindowFunction::AggrFunction(n) => {
-                let f = protobuf::AggregateFunction::from_i32(*n).ok_or_else(|| {
+                let f = protobuf::AggregateFunction::try_from(*n).map_err(|_| {
                     proto_error(format!(
                         "Received an unknown window aggregate function: {n}"
                     ))
@@ -355,12 +425,11 @@ impl TryFrom<&protobuf::physical_window_expr_node::WindowFunction> for WindowFun
                 Ok(WindowFunction::AggregateFunction(f.into()))
             }
             protobuf::physical_window_expr_node::WindowFunction::BuiltInFunction(n) => {
-                let f =
-                    protobuf::BuiltInWindowFunction::from_i32(*n).ok_or_else(|| {
-                        proto_error(format!(
-                            "Received an unknown window builtin function: {n}"
-                        ))
-                    })?;
+                let f = protobuf::BuiltInWindowFunction::try_from(*n).map_err(|_| {
+                    proto_error(format!(
+                        "Received an unknown window builtin function: {n}"
+                    ))
+                })?;
 
                 Ok(WindowFunction::BuiltInWindowFunction(f.into()))
             }
@@ -422,13 +491,8 @@ pub fn parse_protobuf_file_scan_config(
     let table_partition_cols = proto
         .table_partition_cols
         .iter()
-        .map(|col| {
-            Ok((
-                col.to_owned(),
-                schema.field_with_name(col)?.data_type().clone(),
-            ))
-        })
-        .collect::<Result<Vec<(String, DataType)>>>()?;
+        .map(|col| Ok(schema.field_with_name(col)?.clone()))
+        .collect::<Result<Vec<_>>>()?;
 
     let mut output_ordering = vec![];
     for node_collection in &proto.output_ordering {
@@ -476,6 +540,7 @@ impl TryFrom<&protobuf::PartitionedFile> for PartitionedFile {
                 last_modified: Utc.timestamp_nanos(val.last_modified_ns as i64),
                 size: val.size as usize,
                 e_tag: None,
+                version: None,
             },
             partition_values: val
                 .partition_values
@@ -513,10 +578,96 @@ impl TryFrom<&protobuf::FileGroup> for Vec<PartitionedFile> {
 impl From<&protobuf::ColumnStats> for ColumnStatistics {
     fn from(cs: &protobuf::ColumnStats) -> ColumnStatistics {
         ColumnStatistics {
-            null_count: Some(cs.null_count as usize),
-            max_value: cs.max_value.as_ref().map(|m| m.try_into().unwrap()),
-            min_value: cs.min_value.as_ref().map(|m| m.try_into().unwrap()),
-            distinct_count: Some(cs.distinct_count as usize),
+            null_count: if let Some(nc) = &cs.null_count {
+                nc.clone().into()
+            } else {
+                Precision::Absent
+            },
+            max_value: if let Some(max) = &cs.max_value {
+                max.clone().into()
+            } else {
+                Precision::Absent
+            },
+            min_value: if let Some(min) = &cs.min_value {
+                min.clone().into()
+            } else {
+                Precision::Absent
+            },
+            distinct_count: if let Some(dc) = &cs.distinct_count {
+                dc.clone().into()
+            } else {
+                Precision::Absent
+            },
+        }
+    }
+}
+
+impl From<protobuf::Precision> for Precision<usize> {
+    fn from(s: protobuf::Precision) -> Self {
+        let Ok(precision_type) = s.precision_info.try_into() else {
+            return Precision::Absent;
+        };
+        match precision_type {
+            protobuf::PrecisionInfo::Exact => {
+                if let Some(val) = s.val {
+                    if let Ok(ScalarValue::UInt64(Some(val))) =
+                        ScalarValue::try_from(&val)
+                    {
+                        Precision::Exact(val as usize)
+                    } else {
+                        Precision::Absent
+                    }
+                } else {
+                    Precision::Absent
+                }
+            }
+            protobuf::PrecisionInfo::Inexact => {
+                if let Some(val) = s.val {
+                    if let Ok(ScalarValue::UInt64(Some(val))) =
+                        ScalarValue::try_from(&val)
+                    {
+                        Precision::Inexact(val as usize)
+                    } else {
+                        Precision::Absent
+                    }
+                } else {
+                    Precision::Absent
+                }
+            }
+            protobuf::PrecisionInfo::Absent => Precision::Absent,
+        }
+    }
+}
+
+impl From<protobuf::Precision> for Precision<ScalarValue> {
+    fn from(s: protobuf::Precision) -> Self {
+        let Ok(precision_type) = s.precision_info.try_into() else {
+            return Precision::Absent;
+        };
+        match precision_type {
+            protobuf::PrecisionInfo::Exact => {
+                if let Some(val) = s.val {
+                    if let Ok(val) = ScalarValue::try_from(&val) {
+                        Precision::Exact(val)
+                    } else {
+                        Precision::Absent
+                    }
+                } else {
+                    Precision::Absent
+                }
+            }
+            protobuf::PrecisionInfo::Inexact => {
+                if let Some(val) = s.val {
+                    if let Ok(val) = ScalarValue::try_from(&val) {
+                        Precision::Inexact(val)
+                    } else {
+                        Precision::Absent
+                    }
+                } else {
+                    Precision::Absent
+                }
+            }
+            protobuf::PrecisionInfo::Absent => Precision::Absent,
         }
     }
 }
@@ -535,27 +686,91 @@ impl TryFrom<&protobuf::Statistics> for Statistics {
 
     fn try_from(s: &protobuf::Statistics) -> Result<Self, Self::Error> {
         // Keep it sync with Statistics::to_proto
-        let none_value = -1_i64;
-        let column_statistics =
-            s.column_stats.iter().map(|s| s.into()).collect::<Vec<_>>();
         Ok(Statistics {
-            num_rows: if s.num_rows == none_value {
-                None
+            num_rows: if let Some(nr) = &s.num_rows {
+                nr.clone().into()
             } else {
-                Some(s.num_rows as usize)
+                Precision::Absent
             },
-            total_byte_size: if s.total_byte_size == none_value {
-                None
+            total_byte_size: if let Some(tbs) = &s.total_byte_size {
+                tbs.clone().into()
             } else {
-                Some(s.total_byte_size as usize)
+                Precision::Absent
             },
             // No column statistic (None) is encoded with empty array
-            column_statistics: if column_statistics.is_empty() {
-                None
-            } else {
-                Some(column_statistics)
-            },
-            is_exact: s.is_exact,
+            column_statistics: s.column_stats.iter().map(|s| s.into()).collect(),
         })
+    }
+}
+
+impl TryFrom<&protobuf::JsonSink> for JsonSink {
+    type Error = DataFusionError;
+
+    fn try_from(value: &protobuf::JsonSink) -> Result<Self, Self::Error> {
+        Ok(Self::new(convert_required!(value.config)?))
+    }
+}
+
+impl TryFrom<&protobuf::FileSinkConfig> for FileSinkConfig {
+    type Error = DataFusionError;
+
+    fn try_from(conf: &protobuf::FileSinkConfig) -> Result<Self, Self::Error> {
+        let file_groups = conf
+            .file_groups
+            .iter()
+            .map(TryInto::try_into)
+            .collect::<Result<Vec<_>>>()?;
+        let table_paths = conf
+            .table_paths
+            .iter()
+            .map(ListingTableUrl::parse)
+            .collect::<Result<Vec<_>>>()?;
+        let table_partition_cols = conf
+            .table_partition_cols
+            .iter()
+            .map(|protobuf::PartitionColumn { name, arrow_type }| {
+                let data_type = convert_required!(arrow_type)?;
+                Ok((name.clone(), data_type))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Ok(Self {
+            object_store_url: ObjectStoreUrl::parse(&conf.object_store_url)?,
+            file_groups,
+            table_paths,
+            output_schema: Arc::new(convert_required!(conf.output_schema)?),
+            table_partition_cols,
+            single_file_output: conf.single_file_output,
+            unbounded_input: conf.unbounded_input,
+            overwrite: conf.overwrite,
+            file_type_writer_options: convert_required!(conf.file_type_writer_options)?,
+        })
+    }
+}
+
+impl From<protobuf::CompressionTypeVariant> for CompressionTypeVariant {
+    fn from(value: protobuf::CompressionTypeVariant) -> Self {
+        match value {
+            protobuf::CompressionTypeVariant::Gzip => Self::GZIP,
+            protobuf::CompressionTypeVariant::Bzip2 => Self::BZIP2,
+            protobuf::CompressionTypeVariant::Xz => Self::XZ,
+            protobuf::CompressionTypeVariant::Zstd => Self::ZSTD,
+            protobuf::CompressionTypeVariant::Uncompressed => Self::UNCOMPRESSED,
+        }
+    }
+}
+
+impl TryFrom<&protobuf::FileTypeWriterOptions> for FileTypeWriterOptions {
+    type Error = DataFusionError;
+
+    fn try_from(value: &protobuf::FileTypeWriterOptions) -> Result<Self, Self::Error> {
+        let file_type = value
+            .file_type
+            .as_ref()
+            .ok_or_else(|| proto_error("Missing required field in protobuf"))?;
+        match file_type {
+            protobuf::file_type_writer_options::FileType::JsonOptions(opts) => Ok(
+                Self::JSON(JsonWriterOptions::new(opts.compression().into())),
+            ),
+        }
     }
 }

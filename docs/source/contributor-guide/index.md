@@ -151,7 +151,7 @@ Tests for code in an individual module are defined in the same source file with 
 
 ### sqllogictests Tests
 
-DataFusion's SQL implementation is tested using [sqllogictest](https://github.com/apache/arrow-datafusion/tree/main/datafusion/core/tests/sqllogictests) which are run like any other Rust test using `cargo test --test sqllogictests`.
+DataFusion's SQL implementation is tested using [sqllogictest](https://github.com/apache/arrow-datafusion/tree/main/datafusion/sqllogictest) which are run like any other Rust test using `cargo test --test sqllogictests`.
 
 `sqllogictests` tests may be less convenient for new contributors who are familiar with writing `.rs` tests as they require learning another tool. However, `sqllogictest` based tests are much easier to develop and maintain as they 1) do not require a slow recompile/link cycle and 2) can be automatically updated via `cargo test --test sqllogictests -- --complete`.
 
@@ -221,9 +221,11 @@ Below is a checklist of what you need to do to add a new scalar function to Data
   - a new line in `signature` with the signature of the function (number and types of its arguments)
   - a new line in `create_physical_expr`/`create_physical_fun` mapping the built-in to the implementation
   - tests to the function.
-- In [core/tests/sql](../../../datafusion/core/tests/sql), add a new test where the function is called through SQL against well known data and returns the expected result.
+- In [sqllogictest/test_files](../../../datafusion/sqllogictest/test_files), add new `sqllogictest` integration tests where the function is called through SQL against well known data and returns the expected result.
+  - Documentation for `sqllogictest` [here](../../../datafusion/sqllogictest/README.md)
 - In [expr/src/expr_fn.rs](../../../datafusion/expr/src/expr_fn.rs), add:
   - a new entry of the `unary_scalar_expr!` macro for the new function.
+- Add SQL reference documentation [here](../../../docs/source/user-guide/sql/scalar_functions.md)
 
 ### How to add a new aggregate function
 
@@ -241,7 +243,9 @@ Below is a checklist of what you need to do to add a new aggregate function to D
   - a new line in `signature` with the signature of the function (number and types of its arguments)
   - a new line in `create_aggregate_expr` mapping the built-in to the implementation
   - tests to the function.
-- In [tests/sql](../../../datafusion/core/tests/sql), add a new test where the function is called through SQL against well known data and returns the expected result.
+- In [sqllogictest/test_files](../../../datafusion/sqllogictest/test_files), add new `sqllogictest` integration tests where the function is called through SQL against well known data and returns the expected result.
+  - Documentation for `sqllogictest` [here](../../../datafusion/sqllogictest/README.md)
+- Add SQL reference documentation [here](../../../docs/source/user-guide/sql/aggregate_functions.md)
 
 ### How to display plans graphically
 

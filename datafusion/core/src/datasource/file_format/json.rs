@@ -18,32 +18,46 @@
 //! Line delimited JSON format abstractions
 
 use std::any::Any;
-
+use std::fmt;
+use std::fmt::Debug;
 use std::io::BufReader;
 use std::sync::Arc;
 
+use super::{FileFormat, FileScanConfig};
 use arrow::datatypes::Schema;
 use arrow::datatypes::SchemaRef;
+use arrow::json;
 use arrow::json::reader::infer_json_schema_from_iterator;
 use arrow::json::reader::ValueIter;
+use arrow_array::RecordBatch;
 use async_trait::async_trait;
 use bytes::Buf;
 
+use bytes::Bytes;
 use datafusion_physical_expr::PhysicalExpr;
-use object_store::{GetResult, ObjectMeta, ObjectStore};
+use datafusion_physical_expr::PhysicalSortRequirement;
+use datafusion_physical_plan::ExecutionPlan;
+use object_store::{GetResultPayload, ObjectMeta, ObjectStore};
 
-use super::FileFormat;
-use super::FileScanConfig;
-use crate::datasource::file_format::file_type::FileCompressionType;
+use crate::datasource::physical_plan::FileGroupDisplay;
+use crate::physical_plan::insert::DataSink;
+use crate::physical_plan::insert::FileSinkExec;
+use crate::physical_plan::SendableRecordBatchStream;
+use crate::physical_plan::{DisplayAs, DisplayFormatType, Statistics};
+
+use super::write::orchestration::stateless_multipart_put;
+
+use crate::datasource::file_format::file_compression_type::FileCompressionType;
+use crate::datasource::file_format::write::BatchSerializer;
 use crate::datasource::file_format::DEFAULT_SCHEMA_INFER_MAX_RECORD;
-use crate::datasource::physical_plan::NdJsonExec;
+use crate::datasource::physical_plan::{FileSinkConfig, NdJsonExec};
 use crate::error::Result;
 use crate::execution::context::SessionState;
-use crate::physical_plan::ExecutionPlan;
-use crate::physical_plan::Statistics;
 
-/// The default file extension of json files
-pub const DEFAULT_JSON_EXTENSION: &str = ".json";
+use datafusion_common::{not_impl_err, DataFusionError, FileType};
+use datafusion_execution::TaskContext;
+use datafusion_physical_plan::metrics::MetricsSet;
+
 /// New line delimited JSON `FileFormat` implementation.
 #[derive(Debug)]
 pub struct JsonFormat {
@@ -103,14 +117,15 @@ impl FileFormat for JsonFormat {
                 should_take
             };
 
-            let schema = match store.get(&object.location).await? {
-                GetResult::File(file, _) => {
+            let r = store.as_ref().get(&object.location).await?;
+            let schema = match r.payload {
+                GetResultPayload::File(file, _) => {
                     let decoder = file_compression_type.convert_read(file)?;
                     let mut reader = BufReader::new(decoder);
                     let iter = ValueIter::new(&mut reader, None);
                     infer_json_schema_from_iterator(iter.take_while(|_| take_while()))?
                 }
-                r @ GetResult::Stream(_) => {
+                GetResultPayload::Stream(_) => {
                     let data = r.bytes().await?;
                     let decoder = file_compression_type.convert_read(data.reader())?;
                     let mut reader = BufReader::new(decoder);
@@ -133,10 +148,10 @@ impl FileFormat for JsonFormat {
         &self,
         _state: &SessionState,
         _store: &Arc<dyn ObjectStore>,
-        _table_schema: SchemaRef,
+        table_schema: SchemaRef,
         _object: &ObjectMeta,
     ) -> Result<Statistics> {
-        Ok(Statistics::default())
+        Ok(Statistics::new_unknown(&table_schema))
     }
 
     async fn create_physical_plan(
@@ -148,12 +163,157 @@ impl FileFormat for JsonFormat {
         let exec = NdJsonExec::new(conf, self.file_compression_type.to_owned());
         Ok(Arc::new(exec))
     }
+
+    async fn create_writer_physical_plan(
+        &self,
+        input: Arc<dyn ExecutionPlan>,
+        _state: &SessionState,
+        conf: FileSinkConfig,
+        order_requirements: Option<Vec<PhysicalSortRequirement>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        if conf.overwrite {
+            return not_impl_err!("Overwrites are not implemented yet for Json");
+        }
+
+        if self.file_compression_type != FileCompressionType::UNCOMPRESSED {
+            return not_impl_err!("Inserting compressed JSON is not implemented yet.");
+        }
+        let sink_schema = conf.output_schema().clone();
+        let sink = Arc::new(JsonSink::new(conf));
+
+        Ok(Arc::new(FileSinkExec::new(
+            input,
+            sink,
+            sink_schema,
+            order_requirements,
+        )) as _)
+    }
+
+    fn file_type(&self) -> FileType {
+        FileType::JSON
+    }
+}
+
+impl Default for JsonSerializer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Define a struct for serializing Json records to a stream
+pub struct JsonSerializer {
+    // Inner buffer for avoiding reallocation
+    buffer: Vec<u8>,
+}
+
+impl JsonSerializer {
+    /// Constructor for the JsonSerializer object
+    pub fn new() -> Self {
+        Self {
+            buffer: Vec::with_capacity(4096),
+        }
+    }
+}
+
+#[async_trait]
+impl BatchSerializer for JsonSerializer {
+    async fn serialize(&mut self, batch: RecordBatch) -> Result<Bytes> {
+        let mut writer = json::LineDelimitedWriter::new(&mut self.buffer);
+        writer.write(&batch)?;
+        //drop(writer);
+        Ok(Bytes::from(self.buffer.drain(..).collect::<Vec<u8>>()))
+    }
+
+    fn duplicate(&mut self) -> Result<Box<dyn BatchSerializer>> {
+        Ok(Box::new(JsonSerializer::new()))
+    }
+}
+
+/// Implements [`DataSink`] for writing to a Json file.
+pub struct JsonSink {
+    /// Config options for writing data
+    config: FileSinkConfig,
+}
+
+impl Debug for JsonSink {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("JsonSink").finish()
+    }
+}
+
+impl DisplayAs for JsonSink {
+    fn fmt_as(&self, t: DisplayFormatType, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match t {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => {
+                write!(f, "JsonSink(file_groups=",)?;
+                FileGroupDisplay(&self.config.file_groups).fmt_as(t, f)?;
+                write!(f, ")")
+            }
+        }
+    }
+}
+
+impl JsonSink {
+    /// Create from config.
+    pub fn new(config: FileSinkConfig) -> Self {
+        Self { config }
+    }
+
+    /// Retrieve the inner [`FileSinkConfig`].
+    pub fn config(&self) -> &FileSinkConfig {
+        &self.config
+    }
+
+    async fn multipartput_all(
+        &self,
+        data: SendableRecordBatchStream,
+        context: &Arc<TaskContext>,
+    ) -> Result<u64> {
+        let writer_options = self.config.file_type_writer_options.try_into_json()?;
+        let compression = &writer_options.compression;
+
+        let get_serializer = move || {
+            let serializer: Box<dyn BatchSerializer> = Box::new(JsonSerializer::new());
+            serializer
+        };
+
+        stateless_multipart_put(
+            data,
+            context,
+            "json".into(),
+            Box::new(get_serializer),
+            &self.config,
+            (*compression).into(),
+        )
+        .await
+    }
+}
+
+#[async_trait]
+impl DataSink for JsonSink {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn metrics(&self) -> Option<MetricsSet> {
+        None
+    }
+
+    async fn write_all(
+        &self,
+        data: SendableRecordBatchStream,
+        context: &Arc<TaskContext>,
+    ) -> Result<u64> {
+        let total_count = self.multipartput_all(data, context).await?;
+        Ok(total_count)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::super::test_util::scan_format;
     use datafusion_common::cast::as_int64_array;
+    use datafusion_common::stats::Precision;
     use futures::StreamExt;
     use object_store::local::LocalFileSystem;
 
@@ -165,7 +325,7 @@ mod tests {
     #[tokio::test]
     async fn read_small_batches() -> Result<()> {
         let config = SessionConfig::new().with_batch_size(2);
-        let session_ctx = SessionContext::with_config(config);
+        let session_ctx = SessionContext::new_with_config(config);
         let state = session_ctx.state();
         let task_ctx = state.task_ctx();
         let projection = None;
@@ -184,8 +344,8 @@ mod tests {
         assert_eq!(tt_batches, 6 /* 12/2 */);
 
         // test metadata
-        assert_eq!(exec.statistics().num_rows, None);
-        assert_eq!(exec.statistics().total_byte_size, None);
+        assert_eq!(exec.statistics()?.num_rows, Precision::Absent);
+        assert_eq!(exec.statistics()?.total_byte_size, Precision::Absent);
 
         Ok(())
     }

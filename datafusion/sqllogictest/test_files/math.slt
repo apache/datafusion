@@ -1,0 +1,567 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+##########
+## Math expression Tests
+##########
+
+statement ok
+CREATE external table aggregate_simple(c1 real, c2 double, c3 boolean) STORED as CSV WITH HEADER ROW LOCATION '../core/tests/data/aggregate_simple.csv';
+
+# Round
+query R
+SELECT ROUND(c1) FROM aggregate_simple
+----
+0
+0
+0
+0
+0
+0
+0
+0
+0
+0
+0
+0
+0
+0
+0
+
+# Round
+query R
+SELECT round(c1/3, 2) FROM aggregate_simple order by c1
+----
+0
+0
+0
+0
+0
+0
+0
+0
+0
+0
+0
+0
+0
+0
+0
+
+# Round
+query R
+SELECT round(c1, 4) FROM aggregate_simple order by c1
+----
+0
+0
+0
+0
+0
+0
+0
+0
+0
+0
+0.0001
+0.0001
+0.0001
+0.0001
+0.0001
+
+# Round
+query RRRRRRRR
+SELECT round(125.2345, -3), round(125.2345, -2), round(125.2345, -1), round(125.2345), round(125.2345, 0), round(125.2345, 1), round(125.2345, 2), round(125.2345, 3)
+----
+0 100 130 125 125 125.2 125.23 125.235
+
+# atan2
+query RRRRRRR
+SELECT atan2(2.0, 1.0), atan2(-2.0, 1.0), atan2(2.0, -1.0), atan2(-2.0, -1.0), atan2(NULL, 1.0), atan2(2.0, NULL), atan2(NULL, NULL);
+----
+1.107148717794 -1.107148717794 2.034443935796 -2.034443935796 NULL NULL NULL
+
+# nanvl
+query RRR
+SELECT nanvl(asin(10), 1.0), nanvl(1.0, 2.0), nanvl(asin(10), asin(10))
+----
+1 1 NaN
+
+# isnan
+query BBBB
+SELECT isnan(1.0), isnan('NaN'::DOUBLE), isnan(-'NaN'::DOUBLE), isnan(NULL)
+----
+false true true NULL
+
+# iszero
+query BBBB
+SELECT iszero(1.0), iszero(0.0), iszero(-0.0), iszero(NULL)
+----
+false true true NULL
+
+# abs: empty argumnet
+statement error DataFusion error: Error during planning: No function matches the given name and argument types 'abs\(\)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tabs\(Any\)
+SELECT abs();
+
+# abs: wrong number of arguments
+statement error DataFusion error: Error during planning: No function matches the given name and argument types 'abs\(Int64, Int64\)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tabs\(Any\)
+SELECT abs(1, 2);
+
+# abs: unsupported argument type
+statement error DataFusion error: Optimizer rule 'simplify_expressions' failed\ncaused by\nThis feature is not implemented: Unsupported data type Utf8 for function abs
+SELECT abs('foo');
+
+
+statement ok
+CREATE TABLE test_nullable_integer(
+    c1 TINYINT, 
+    c2 SMALLINT, 
+    c3 INT, 
+    c4 BIGINT, 
+    c5 TINYINT UNSIGNED, 
+    c6 SMALLINT UNSIGNED, 
+    c7 INT UNSIGNED, 
+    c8 BIGINT UNSIGNED, 
+    dataset TEXT
+    ) 
+    AS VALUES
+    (NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 'nulls'),
+    (0, 0, 0, 0, 0, 0, 0, 0, 'zeros'),
+    (1, 1, 1, 1, 1, 1, 1, 1, 'ones');
+
+query IIIIIIIIT
+INSERT into test_nullable_integer values(-128, -32768, -2147483648, -9223372036854775808, 0, 0, 0, 0, 'mins');
+----
+1
+
+query IIIIIIIIT
+INSERT into test_nullable_integer values(127, 32767, 2147483647, 9223372036854775807, 255, 65535, 4294967295, 18446744073709551615, 'maxs');
+----
+1
+
+query IIIIIIII
+SELECT c1*0, c2*0, c3*0, c4*0, c5*0, c6*0, c7*0, c8*0 FROM test_nullable_integer where dataset = 'nulls'
+----
+NULL NULL NULL NULL NULL NULL NULL NULL
+
+query IIIIIIII
+SELECT c1/0, c2/0, c3/0, c4/0, c5/0, c6/0, c7/0, c8/0 FROM test_nullable_integer where dataset = 'nulls'
+----
+NULL NULL NULL NULL NULL NULL NULL NULL
+
+query IIIIIIII
+SELECT c1%0, c2%0, c3%0, c4%0, c5%0, c6%0, c7%0, c8%0 FROM test_nullable_integer where dataset = 'nulls'
+----
+NULL NULL NULL NULL NULL NULL NULL NULL
+
+query IIIIIIII rowsort
+select c1*0, c2*0, c3*0, c4*0, c5*0, c6*0, c7*0, c8*0 from test_nullable_integer where dataset != 'maxs'
+----
+0 0 0 0 0 0 0 0
+0 0 0 0 0 0 0 0
+0 0 0 0 0 0 0 0
+NULL NULL NULL NULL NULL NULL NULL NULL
+
+query error DataFusion error: Arrow error: Divide by zero error
+SELECT c1/0 FROM test_nullable_integer
+
+query error DataFusion error: Arrow error: Divide by zero error
+SELECT c2/0 FROM test_nullable_integer
+
+query error DataFusion error: Arrow error: Divide by zero error
+SELECT c3/0 FROM test_nullable_integer
+
+query error DataFusion error: Arrow error: Divide by zero error
+SELECT c4/0 FROM test_nullable_integer
+
+query error DataFusion error: Arrow error: Divide by zero error
+SELECT c5/0 FROM test_nullable_integer
+
+query error DataFusion error: Arrow error: Divide by zero error
+SELECT c6/0 FROM test_nullable_integer
+
+query error DataFusion error: Arrow error: Divide by zero error
+SELECT c7/0 FROM test_nullable_integer
+
+query error DataFusion error: Arrow error: Divide by zero error
+SELECT c8/0 FROM test_nullable_integer
+
+query error DataFusion error: Arrow error: Divide by zero error
+SELECT c1%0 FROM test_nullable_integer
+
+query error DataFusion error: Arrow error: Divide by zero error
+SELECT c2%0 FROM test_nullable_integer
+
+query error DataFusion error: Arrow error: Divide by zero error
+SELECT c3%0 FROM test_nullable_integer
+
+query error DataFusion error: Arrow error: Divide by zero error
+SELECT c4%0 FROM test_nullable_integer
+
+query error DataFusion error: Arrow error: Divide by zero error
+SELECT c5%0 FROM test_nullable_integer
+
+query error DataFusion error: Arrow error: Divide by zero error
+SELECT c6%0 FROM test_nullable_integer
+
+query error DataFusion error: Arrow error: Divide by zero error
+SELECT c7%0 FROM test_nullable_integer
+
+query error DataFusion error: Arrow error: Divide by zero error
+SELECT c8%0 FROM test_nullable_integer
+
+# abs: return type
+query TTTTTTTT rowsort
+select 
+   arrow_typeof(abs(c1)), arrow_typeof(abs(c2)), arrow_typeof(abs(c3)), arrow_typeof(abs(c4)),
+   arrow_typeof(abs(c5)), arrow_typeof(abs(c6)), arrow_typeof(abs(c7)), arrow_typeof(abs(c8))
+from test_nullable_integer limit 1
+----
+Int8 Int16 Int32 Int64 UInt8 UInt16 UInt32 UInt64
+
+# abs: unsigned integers
+query IIII rowsort
+select abs(c5), abs(c6), abs(c7), abs(c8) from test_nullable_integer
+----
+0 0 0 0
+0 0 0 0
+1 1 1 1
+255 65535 4294967295 18446744073709551615
+NULL NULL NULL NULL
+
+# abs: signed integers
+query IIII rowsort
+select abs(c1), abs(c2), abs(c3), abs(c4) from test_nullable_integer where dataset != 'mins'
+----
+0 0 0 0
+1 1 1 1
+127 32767 2147483647 9223372036854775807
+NULL NULL NULL NULL
+
+# abs: Int8 overlow
+statement error DataFusion error: Arrow error: Compute error: Int8Array overflow on abs\(-128\)
+select abs(c1) from test_nullable_integer where dataset = 'mins'
+
+# abs: Int16 overlow
+statement error DataFusion error: Arrow error: Compute error: Int16Array overflow on abs\(-32768\)
+select abs(c2) from test_nullable_integer where dataset = 'mins'
+
+# abs: Int32 overlow
+statement error DataFusion error: Arrow error: Compute error: Int32Array overflow on abs\(-2147483648\)
+select abs(c3) from test_nullable_integer where dataset = 'mins'
+
+# abs: Int64 overlow
+statement error DataFusion error: Arrow error: Compute error: Int64Array overflow on abs\(-9223372036854775808\)
+select abs(c4) from test_nullable_integer where dataset = 'mins'
+
+statement ok
+drop table test_nullable_integer
+
+
+statement ok
+CREATE TABLE test_non_nullable_integer(
+    c1 TINYINT NOT NULL, 
+    c2 SMALLINT NOT NULL, 
+    c3 INT NOT NULL, 
+    c4 BIGINT NOT NULL, 
+    c5 TINYINT UNSIGNED NOT NULL, 
+    c6 SMALLINT UNSIGNED NOT NULL, 
+    c7 INT UNSIGNED NOT NULL, 
+    c8 BIGINT UNSIGNED NOT NULL, 
+    );
+
+query IIIIIIII
+INSERT INTO test_non_nullable_integer VALUES(1, 1, 1, 1, 1, 1, 1, 1)
+----
+1
+
+query IIIIIIII rowsort
+select c1*0, c2*0, c3*0, c4*0, c5*0, c6*0, c7*0, c8*0 from test_non_nullable_integer
+----
+0 0 0 0 0 0 0 0
+
+query error DataFusion error: Optimizer rule 'simplify_expressions' failed\ncaused by\nArrow error: Divide by zero error
+SELECT c1/0 FROM test_non_nullable_integer
+
+query error DataFusion error: Optimizer rule 'simplify_expressions' failed\ncaused by\nArrow error: Divide by zero error
+SELECT c2/0 FROM test_non_nullable_integer
+
+query error DataFusion error: Optimizer rule 'simplify_expressions' failed\ncaused by\nArrow error: Divide by zero error
+SELECT c3/0 FROM test_non_nullable_integer
+
+query error DataFusion error: Optimizer rule 'simplify_expressions' failed\ncaused by\nArrow error: Divide by zero error
+SELECT c4/0 FROM test_non_nullable_integer
+
+query error DataFusion error: Optimizer rule 'simplify_expressions' failed\ncaused by\nArrow error: Divide by zero error
+SELECT c5/0 FROM test_non_nullable_integer
+
+query error DataFusion error: Optimizer rule 'simplify_expressions' failed\ncaused by\nArrow error: Divide by zero error
+SELECT c6/0 FROM test_non_nullable_integer
+
+query error DataFusion error: Optimizer rule 'simplify_expressions' failed\ncaused by\nArrow error: Divide by zero error
+SELECT c7/0 FROM test_non_nullable_integer
+
+query error DataFusion error: Optimizer rule 'simplify_expressions' failed\ncaused by\nArrow error: Divide by zero error
+SELECT c8/0 FROM test_non_nullable_integer
+
+
+query error DataFusion error: Optimizer rule 'simplify_expressions' failed\ncaused by\nArrow error: Divide by zero error
+SELECT c1%0 FROM test_non_nullable_integer
+
+query error DataFusion error: Optimizer rule 'simplify_expressions' failed\ncaused by\nArrow error: Divide by zero error
+SELECT c2%0 FROM test_non_nullable_integer
+
+query error DataFusion error: Optimizer rule 'simplify_expressions' failed\ncaused by\nArrow error: Divide by zero error
+SELECT c3%0 FROM test_non_nullable_integer
+
+query error DataFusion error: Optimizer rule 'simplify_expressions' failed\ncaused by\nArrow error: Divide by zero error
+SELECT c4%0 FROM test_non_nullable_integer
+
+query error DataFusion error: Optimizer rule 'simplify_expressions' failed\ncaused by\nArrow error: Divide by zero error
+SELECT c5%0 FROM test_non_nullable_integer
+
+query error DataFusion error: Optimizer rule 'simplify_expressions' failed\ncaused by\nArrow error: Divide by zero error
+SELECT c6%0 FROM test_non_nullable_integer
+
+query error DataFusion error: Optimizer rule 'simplify_expressions' failed\ncaused by\nArrow error: Divide by zero error
+SELECT c7%0 FROM test_non_nullable_integer
+
+query error DataFusion error: Optimizer rule 'simplify_expressions' failed\ncaused by\nArrow error: Divide by zero error
+SELECT c8%0 FROM test_non_nullable_integer
+
+statement ok
+drop table test_non_nullable_integer
+
+
+statement ok
+CREATE TABLE test_nullable_float(
+    c1 float,
+    c2 double, 
+    ) AS VALUES
+    (-1.0, -1.0),
+    (1.0, 1.0), 
+    (NULL, NULL),
+    (0., 0.),
+    ('NaN'::double, 'NaN'::double);
+
+query RR rowsort
+SELECT c1*0, c2*0 FROM test_nullable_float
+----
+0 0
+0 0
+0 0
+NULL NULL
+NaN NaN
+
+query RR rowsort
+SELECT c1/0, c2/0 FROM test_nullable_float
+----
+-Infinity -Infinity
+Infinity Infinity
+NULL NULL
+NaN NaN
+NaN NaN
+
+query RR rowsort
+SELECT c1%0, c2%0 FROM test_nullable_float
+----
+NULL NULL
+NaN NaN
+NaN NaN
+NaN NaN
+NaN NaN
+
+query RR rowsort
+SELECT c1%1, c2%1 FROM test_nullable_float
+----
+0 0
+0 0
+0 0
+NULL NULL
+NaN NaN
+
+# abs: return type
+query TT rowsort
+SELECT arrow_typeof(abs(c1)), arrow_typeof(abs(c2)) FROM test_nullable_float limit 1
+----
+Float32 Float64
+
+# abs: floats
+query RR rowsort
+SELECT abs(c1), abs(c2) from test_nullable_float 
+----
+0 0
+1 1
+1 1
+NULL NULL
+NaN NaN
+
+statement ok
+drop table test_nullable_float
+
+
+statement ok
+CREATE TABLE test_non_nullable_float(
+    c1 float NOT NULL,
+    c2 double NOT NULL, 
+    ); 
+
+query RR
+INSERT INTO test_non_nullable_float VALUES
+    (-1.0, -1.0),
+    (1.0, 1.0),
+    (0., 0.),
+    ('NaN'::double, 'NaN'::double)
+----
+4
+
+query RR rowsort
+SELECT c1*0, c2*0 FROM test_non_nullable_float
+----
+0 0
+0 0
+0 0
+NaN NaN
+
+query RR rowsort
+SELECT c1/0, c2/0 FROM test_non_nullable_float
+----
+-Infinity -Infinity
+Infinity Infinity
+NaN NaN
+NaN NaN
+
+query RR rowsort
+SELECT c1%0, c2%0 FROM test_non_nullable_float
+----
+NaN NaN
+NaN NaN
+NaN NaN
+NaN NaN
+
+query RR rowsort
+SELECT c1%1, c2%1 FROM test_non_nullable_float
+----
+0 0
+0 0
+0 0
+NaN NaN
+
+statement ok
+drop table test_non_nullable_float
+
+
+statement ok
+CREATE TABLE test_nullable_decimal(
+    c1 DECIMAL(10, 2),    /* Decimal128 */
+    c2 DECIMAL(38, 10),   /* Decimal128 with max precision */ 
+    c3 DECIMAL(40, 2),    /* Decimal256 */
+    c4 DECIMAL(76, 10)    /* Decimal256 with max precision */ 
+ ) AS VALUES 
+    (0, 0, 0, 0), 
+    (NULL, NULL, NULL, NULL);
+
+query RRRR
+INSERT into test_nullable_decimal values
+    (
+        -99999999.99, 
+        '-9999999999999999999999999999.9999999999', 
+        '-99999999999999999999999999999999999999.99', 
+        '-999999999999999999999999999999999999999999999999999999999999999999.9999999999'
+    ), 
+    (
+        99999999.99, 
+        '9999999999999999999999999999.9999999999', 
+        '99999999999999999999999999999999999999.99', 
+        '999999999999999999999999999999999999999999999999999999999999999999.9999999999'
+    ) 
+----
+2
+
+
+query R
+SELECT c1*0 FROM test_nullable_decimal WHERE c1 IS NULL;
+----
+NULL
+
+query R
+SELECT c1/0 FROM test_nullable_decimal WHERE c1 IS NULL;
+----
+NULL
+
+query R
+SELECT c1%0 FROM test_nullable_decimal WHERE c1 IS NULL;
+----
+NULL
+
+query R
+SELECT c1*0 FROM test_nullable_decimal WHERE c1 IS NOT NULL;
+----
+0
+0
+0
+
+query error DataFusion error: Arrow error: Divide by zero error
+SELECT c1/0 FROM test_nullable_decimal WHERE c1 IS NOT NULL;
+
+query error DataFusion error: Arrow error: Divide by zero error
+SELECT c1%0 FROM test_nullable_decimal WHERE c1 IS NOT NULL;
+
+# abs: return type
+query TTTT
+SELECT 
+    arrow_typeof(abs(c1)), 
+    arrow_typeof(abs(c2)), 
+    arrow_typeof(abs(c3)),
+    arrow_typeof(abs(c4))
+FROM test_nullable_decimal limit 1
+----
+Decimal128(10, 2) Decimal128(38, 10) Decimal256(40, 2) Decimal256(76, 10)
+
+# abs: decimals
+query RRRR rowsort
+SELECT abs(c1), abs(c2), abs(c3), abs(c4) FROM test_nullable_decimal
+----
+0 0 0 0
+99999999.99 9999999999999999999999999999.9999999999 99999999999999999999999999999999999999.99 999999999999999999999999999999999999999999999999999999999999999999.9999999999
+99999999.99 9999999999999999999999999999.9999999999 99999999999999999999999999999999999999.99 999999999999999999999999999999999999999999999999999999999999999999.9999999999
+NULL NULL NULL NULL
+
+statement ok
+drop table test_nullable_decimal  
+
+
+statement ok
+CREATE TABLE test_non_nullable_decimal(c1 DECIMAL(9,2) NOT NULL); 
+
+query R
+INSERT INTO test_non_nullable_decimal VALUES(1)
+----
+1
+
+query R rowsort
+SELECT c1*0 FROM test_non_nullable_decimal
+----
+0
+
+query error DataFusion error: Optimizer rule 'simplify_expressions' failed\ncaused by\nArrow error: Divide by zero error
+SELECT c1/0 FROM test_non_nullable_decimal 
+
+query error DataFusion error: Optimizer rule 'simplify_expressions' failed\ncaused by\nArrow error: Divide by zero error
+SELECT c1%0 FROM test_non_nullable_decimal 
+
+statement ok
+drop table test_non_nullable_decimal 

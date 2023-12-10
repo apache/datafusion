@@ -112,7 +112,7 @@ enum FileStreamState {
     /// The idle state, no file is currently being read
     Idle,
     /// Currently performing asynchronous IO to obtain a stream of RecordBatch
-    /// for a given parquet file
+    /// for a given file
     Open {
         /// A [`FileOpenFuture`] returned by [`FileOpener::open`]
         future: FileOpenFuture,
@@ -259,7 +259,7 @@ impl<F: FileOpener> FileStream<F> {
             &config
                 .table_partition_cols
                 .iter()
-                .map(|x| x.0.clone())
+                .map(|x| x.name().clone())
                 .collect::<Vec<_>>(),
         );
 
@@ -519,10 +519,12 @@ impl<F: FileOpener> RecordBatchStream for FileStream<F> {
 #[cfg(test)]
 mod tests {
     use arrow_schema::Schema;
+    use datafusion_common::internal_err;
     use datafusion_common::DataFusionError;
+    use datafusion_common::Statistics;
 
     use super::*;
-    use crate::datasource::file_format::BatchSerializer;
+    use crate::datasource::file_format::write::BatchSerializer;
     use crate::datasource::object_store::ObjectStoreUrl;
     use crate::datasource::physical_plan::FileMeta;
     use crate::physical_plan::metrics::ExecutionPlanMetricsSet;
@@ -557,12 +559,9 @@ mod tests {
             let idx = self.current_idx.fetch_add(1, Ordering::SeqCst);
 
             if self.error_opening_idx.contains(&idx) {
-                Ok(futures::future::ready(Err(DataFusionError::Internal(
-                    "error opening".to_owned(),
-                )))
-                .boxed())
+                Ok(futures::future::ready(internal_err!("error opening")).boxed())
             } else if self.error_scanning_idx.contains(&idx) {
-                let error = futures::future::ready(Err(ArrowError::IoError(
+                let error = futures::future::ready(Err(ArrowError::IpcError(
                     "error scanning".to_owned(),
                 )));
                 let stream = futures::stream::once(error).boxed();
@@ -661,9 +660,9 @@ mod tests {
 
             let config = FileScanConfig {
                 object_store_url: ObjectStoreUrl::parse("test:///").unwrap(),
+                statistics: Statistics::new_unknown(&file_schema),
                 file_schema,
                 file_groups: vec![file_group],
-                statistics: Default::default(),
                 projection: None,
                 limit: self.limit,
                 table_partition_cols: vec![],

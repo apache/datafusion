@@ -1,0 +1,381 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+statement ok
+CREATE EXTERNAL TABLE aggregate_test_100 (
+        c1  VARCHAR NOT NULL,
+        c2  TINYINT NOT NULL,
+        c3  SMALLINT NOT NULL,
+        c4  SMALLINT NOT NULL,
+        c5  INTEGER NOT NULL,
+        c6  BIGINT NOT NULL,
+        c7  SMALLINT NOT NULL,
+        c8  INT NOT NULL,
+        c9  INT UNSIGNED NOT NULL,
+        c10 BIGINT UNSIGNED NOT NULL,
+        c11 FLOAT NOT NULL,
+        c12 DOUBLE NOT NULL,
+        c13 VARCHAR NOT NULL
+    )
+STORED AS CSV
+WITH HEADER ROW
+LOCATION '../../testing/data/csv/aggregate_test_100.csv';
+
+query TT
+explain SELECT c1 FROM aggregate_test_100 where c2 > 10
+----
+logical_plan
+Projection: aggregate_test_100.c1
+--Filter: aggregate_test_100.c2 > Int8(10)
+----TableScan: aggregate_test_100 projection=[c1, c2], partial_filters=[aggregate_test_100.c2 > Int8(10)]
+physical_plan
+ProjectionExec: expr=[c1@0 as c1]
+--CoalesceBatchesExec: target_batch_size=8192
+----FilterExec: c2@1 > 10
+------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+--------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c2], has_header=true
+
+# explain_csv_exec_scan_config
+
+statement ok
+CREATE EXTERNAL TABLE aggregate_test_100_with_order (
+        c1  VARCHAR NOT NULL,
+        c2  TINYINT NOT NULL,
+        c3  SMALLINT NOT NULL,
+        c4  SMALLINT NOT NULL,
+        c5  INTEGER NOT NULL,
+        c6  BIGINT NOT NULL,
+        c7  SMALLINT NOT NULL,
+        c8  INT NOT NULL,
+        c9  INT UNSIGNED NOT NULL,
+        c10 BIGINT UNSIGNED NOT NULL,
+        c11 FLOAT NOT NULL,
+        c12 DOUBLE NOT NULL,
+        c13 VARCHAR NOT NULL
+    )
+STORED AS CSV
+WITH HEADER ROW
+WITH ORDER (c1 ASC)
+LOCATION '../core/tests/data/aggregate_test_100_order_by_c1_asc.csv';
+
+query TT
+explain SELECT c1 FROM aggregate_test_100_with_order order by c1 ASC limit 10
+----
+logical_plan
+Limit: skip=0, fetch=10
+--Sort: aggregate_test_100_with_order.c1 ASC NULLS LAST, fetch=10
+----TableScan: aggregate_test_100_with_order projection=[c1]
+physical_plan
+GlobalLimitExec: skip=0, fetch=10
+--CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/aggregate_test_100_order_by_c1_asc.csv]]}, projection=[c1], output_ordering=[c1@0 ASC NULLS LAST], has_header=true
+
+
+## explain_physical_plan_only
+
+statement ok
+set datafusion.explain.physical_plan_only = true
+
+query TT
+EXPLAIN select count(*) from (values ('a', 1, 100), ('a', 2, 150)) as t (c1,c2,c3)
+----
+physical_plan
+ProjectionExec: expr=[2 as COUNT(*)]
+--PlaceholderRowExec
+
+statement ok
+set datafusion.explain.physical_plan_only = false
+
+
+## explain nested
+query error DataFusion error: Error during planning: Nested EXPLAINs are not supported
+EXPLAIN explain select 1
+
+## explain nested
+statement error DataFusion error: Error during planning: Nested EXPLAINs are not supported
+EXPLAIN EXPLAIN explain select 1
+
+statement ok
+set datafusion.explain.physical_plan_only = true
+
+statement error DataFusion error: Error during planning: Nested EXPLAINs are not supported
+EXPLAIN explain select 1
+
+statement ok
+set datafusion.explain.physical_plan_only = false
+
+##########
+# EXPLAIN VERBOSE will get pass prefixed with "logical_plan after"
+##########
+
+statement ok
+CREATE EXTERNAL TABLE simple_explain_test (
+  a INT,
+  b INT,
+  c INT
+)
+STORED AS CSV
+WITH HEADER ROW
+LOCATION '../core/tests/data/example.csv'
+
+query TT
+EXPLAIN SELECT a, b, c FROM simple_explain_test
+----
+logical_plan TableScan: simple_explain_test projection=[a, b, c]
+physical_plan CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/example.csv]]}, projection=[a, b, c], has_header=true
+
+# create a sink table, path is same with aggregate_test_100 table
+# we do not overwrite this file, we only assert plan.
+statement ok
+CREATE UNBOUNDED EXTERNAL TABLE sink_table (
+        c1  VARCHAR NOT NULL,
+        c2  TINYINT NOT NULL,
+        c3  SMALLINT NOT NULL,
+        c4  SMALLINT NOT NULL,
+        c5  INTEGER NOT NULL,
+        c6  BIGINT NOT NULL,
+        c7  SMALLINT NOT NULL,
+        c8  INT NOT NULL,
+        c9  INT UNSIGNED NOT NULL,
+        c10 BIGINT UNSIGNED NOT NULL,
+        c11 FLOAT NOT NULL,
+        c12 DOUBLE NOT NULL,
+        c13 VARCHAR NOT NULL
+    )
+STORED AS CSV
+WITH HEADER ROW
+LOCATION '../../testing/data/csv/aggregate_test_100.csv';
+
+query TT
+EXPLAIN INSERT INTO sink_table SELECT * FROM aggregate_test_100 ORDER by c1
+----
+logical_plan
+Dml: op=[Insert Into] table=[sink_table]
+--Projection: aggregate_test_100.c1 AS c1, aggregate_test_100.c2 AS c2, aggregate_test_100.c3 AS c3, aggregate_test_100.c4 AS c4, aggregate_test_100.c5 AS c5, aggregate_test_100.c6 AS c6, aggregate_test_100.c7 AS c7, aggregate_test_100.c8 AS c8, aggregate_test_100.c9 AS c9, aggregate_test_100.c10 AS c10, aggregate_test_100.c11 AS c11, aggregate_test_100.c12 AS c12, aggregate_test_100.c13 AS c13
+----Sort: aggregate_test_100.c1 ASC NULLS LAST
+------TableScan: aggregate_test_100 projection=[c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13]
+physical_plan
+FileSinkExec: sink=StreamWrite { location: "../../testing/data/csv/aggregate_test_100.csv", batch_size: 8192, encoding: Csv, header: true, .. }
+--SortExec: expr=[c1@0 ASC NULLS LAST]
+----CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13], has_header=true
+
+# test EXPLAIN VERBOSE
+query TT
+EXPLAIN VERBOSE SELECT a, b, c FROM simple_explain_test
+----
+initial_logical_plan
+Projection: simple_explain_test.a, simple_explain_test.b, simple_explain_test.c
+--TableScan: simple_explain_test
+logical_plan after inline_table_scan SAME TEXT AS ABOVE
+logical_plan after type_coercion SAME TEXT AS ABOVE
+logical_plan after count_wildcard_rule SAME TEXT AS ABOVE
+analyzed_logical_plan SAME TEXT AS ABOVE
+logical_plan after eliminate_nested_union SAME TEXT AS ABOVE
+logical_plan after simplify_expressions SAME TEXT AS ABOVE
+logical_plan after unwrap_cast_in_comparison SAME TEXT AS ABOVE
+logical_plan after replace_distinct_aggregate SAME TEXT AS ABOVE
+logical_plan after eliminate_join SAME TEXT AS ABOVE
+logical_plan after decorrelate_predicate_subquery SAME TEXT AS ABOVE
+logical_plan after scalar_subquery_to_join SAME TEXT AS ABOVE
+logical_plan after extract_equijoin_predicate SAME TEXT AS ABOVE
+logical_plan after simplify_expressions SAME TEXT AS ABOVE
+logical_plan after rewrite_disjunctive_predicate SAME TEXT AS ABOVE
+logical_plan after eliminate_duplicated_expr SAME TEXT AS ABOVE
+logical_plan after eliminate_filter SAME TEXT AS ABOVE
+logical_plan after eliminate_cross_join SAME TEXT AS ABOVE
+logical_plan after common_sub_expression_eliminate SAME TEXT AS ABOVE
+logical_plan after eliminate_limit SAME TEXT AS ABOVE
+logical_plan after propagate_empty_relation SAME TEXT AS ABOVE
+logical_plan after eliminate_one_union SAME TEXT AS ABOVE
+logical_plan after filter_null_join_keys SAME TEXT AS ABOVE
+logical_plan after eliminate_outer_join SAME TEXT AS ABOVE
+logical_plan after push_down_limit SAME TEXT AS ABOVE
+logical_plan after push_down_filter SAME TEXT AS ABOVE
+logical_plan after single_distinct_aggregation_to_group_by SAME TEXT AS ABOVE
+logical_plan after simplify_expressions SAME TEXT AS ABOVE
+logical_plan after unwrap_cast_in_comparison SAME TEXT AS ABOVE
+logical_plan after common_sub_expression_eliminate SAME TEXT AS ABOVE
+logical_plan after optimize_projections TableScan: simple_explain_test projection=[a, b, c]
+logical_plan after eliminate_nested_union SAME TEXT AS ABOVE
+logical_plan after simplify_expressions SAME TEXT AS ABOVE
+logical_plan after unwrap_cast_in_comparison SAME TEXT AS ABOVE
+logical_plan after replace_distinct_aggregate SAME TEXT AS ABOVE
+logical_plan after eliminate_join SAME TEXT AS ABOVE
+logical_plan after decorrelate_predicate_subquery SAME TEXT AS ABOVE
+logical_plan after scalar_subquery_to_join SAME TEXT AS ABOVE
+logical_plan after extract_equijoin_predicate SAME TEXT AS ABOVE
+logical_plan after simplify_expressions SAME TEXT AS ABOVE
+logical_plan after rewrite_disjunctive_predicate SAME TEXT AS ABOVE
+logical_plan after eliminate_duplicated_expr SAME TEXT AS ABOVE
+logical_plan after eliminate_filter SAME TEXT AS ABOVE
+logical_plan after eliminate_cross_join SAME TEXT AS ABOVE
+logical_plan after common_sub_expression_eliminate SAME TEXT AS ABOVE
+logical_plan after eliminate_limit SAME TEXT AS ABOVE
+logical_plan after propagate_empty_relation SAME TEXT AS ABOVE
+logical_plan after eliminate_one_union SAME TEXT AS ABOVE
+logical_plan after filter_null_join_keys SAME TEXT AS ABOVE
+logical_plan after eliminate_outer_join SAME TEXT AS ABOVE
+logical_plan after push_down_limit SAME TEXT AS ABOVE
+logical_plan after push_down_filter SAME TEXT AS ABOVE
+logical_plan after single_distinct_aggregation_to_group_by SAME TEXT AS ABOVE
+logical_plan after simplify_expressions SAME TEXT AS ABOVE
+logical_plan after unwrap_cast_in_comparison SAME TEXT AS ABOVE
+logical_plan after common_sub_expression_eliminate SAME TEXT AS ABOVE
+logical_plan after optimize_projections SAME TEXT AS ABOVE
+logical_plan TableScan: simple_explain_test projection=[a, b, c]
+initial_physical_plan CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/example.csv]]}, projection=[a, b, c], has_header=true
+initial_physical_plan_with_stats CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/example.csv]]}, projection=[a, b, c], has_header=true, statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:),(Col[2]:)]]
+physical_plan after OutputRequirements
+OutputRequirementExec
+--CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/example.csv]]}, projection=[a, b, c], has_header=true
+physical_plan after aggregate_statistics SAME TEXT AS ABOVE
+physical_plan after join_selection SAME TEXT AS ABOVE
+physical_plan after LimitedDistinctAggregation SAME TEXT AS ABOVE
+physical_plan after EnforceDistribution SAME TEXT AS ABOVE
+physical_plan after CombinePartialFinalAggregate SAME TEXT AS ABOVE
+physical_plan after EnforceSorting SAME TEXT AS ABOVE
+physical_plan after coalesce_batches SAME TEXT AS ABOVE
+physical_plan after OutputRequirements CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/example.csv]]}, projection=[a, b, c], has_header=true
+physical_plan after PipelineChecker SAME TEXT AS ABOVE
+physical_plan after LimitAggregation SAME TEXT AS ABOVE
+physical_plan after ProjectionPushdown SAME TEXT AS ABOVE
+physical_plan CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/example.csv]]}, projection=[a, b, c], has_header=true
+physical_plan_with_stats CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/example.csv]]}, projection=[a, b, c], has_header=true, statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:),(Col[2]:)]]
+
+
+### tests for EXPLAIN with display statistics enabled
+statement ok
+set datafusion.explain.show_statistics = true;
+
+statement ok
+set datafusion.explain.physical_plan_only = true;
+
+# CSV scan with empty statistics
+query TT
+EXPLAIN SELECT a, b, c FROM simple_explain_test limit 10;
+----
+physical_plan
+GlobalLimitExec: skip=0, fetch=10, statistics=[Rows=Inexact(10), Bytes=Absent, [(Col[0]:),(Col[1]:),(Col[2]:)]]
+--CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/example.csv]]}, projection=[a, b, c], limit=10, has_header=true, statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:),(Col[2]:)]]
+
+# Parquet scan with statistics collected
+statement ok
+set datafusion.execution.collect_statistics = true;
+
+statement ok
+CREATE EXTERNAL TABLE alltypes_plain STORED AS PARQUET LOCATION '../../parquet-testing/data/alltypes_plain.parquet';
+
+query TT
+EXPLAIN SELECT * FROM alltypes_plain limit 10;
+----
+physical_plan
+GlobalLimitExec: skip=0, fetch=10, statistics=[Rows=Exact(8), Bytes=Absent, [(Col[0]:),(Col[1]:),(Col[2]:),(Col[3]:),(Col[4]:),(Col[5]:),(Col[6]:),(Col[7]:),(Col[8]:),(Col[9]:),(Col[10]:)]]
+--ParquetExec: file_groups={1 group: [[WORKSPACE_ROOT/parquet-testing/data/alltypes_plain.parquet]]}, projection=[id, bool_col, tinyint_col, smallint_col, int_col, bigint_col, float_col, double_col, date_string_col, string_col, timestamp_col], limit=10, statistics=[Rows=Exact(8), Bytes=Absent, [(Col[0]:),(Col[1]:),(Col[2]:),(Col[3]:),(Col[4]:),(Col[5]:),(Col[6]:),(Col[7]:),(Col[8]:),(Col[9]:),(Col[10]:)]]
+
+# explain verbose with both collect & show statistics on
+query TT
+EXPLAIN VERBOSE SELECT * FROM alltypes_plain limit 10;
+----
+initial_physical_plan
+GlobalLimitExec: skip=0, fetch=10, statistics=[Rows=Exact(8), Bytes=Absent, [(Col[0]:),(Col[1]:),(Col[2]:),(Col[3]:),(Col[4]:),(Col[5]:),(Col[6]:),(Col[7]:),(Col[8]:),(Col[9]:),(Col[10]:)]]
+--ParquetExec: file_groups={1 group: [[WORKSPACE_ROOT/parquet-testing/data/alltypes_plain.parquet]]}, projection=[id, bool_col, tinyint_col, smallint_col, int_col, bigint_col, float_col, double_col, date_string_col, string_col, timestamp_col], limit=10, statistics=[Rows=Exact(8), Bytes=Absent, [(Col[0]:),(Col[1]:),(Col[2]:),(Col[3]:),(Col[4]:),(Col[5]:),(Col[6]:),(Col[7]:),(Col[8]:),(Col[9]:),(Col[10]:)]]
+physical_plan after OutputRequirements
+OutputRequirementExec, statistics=[Rows=Exact(8), Bytes=Absent, [(Col[0]:),(Col[1]:),(Col[2]:),(Col[3]:),(Col[4]:),(Col[5]:),(Col[6]:),(Col[7]:),(Col[8]:),(Col[9]:),(Col[10]:)]]
+--GlobalLimitExec: skip=0, fetch=10, statistics=[Rows=Exact(8), Bytes=Absent, [(Col[0]:),(Col[1]:),(Col[2]:),(Col[3]:),(Col[4]:),(Col[5]:),(Col[6]:),(Col[7]:),(Col[8]:),(Col[9]:),(Col[10]:)]]
+----ParquetExec: file_groups={1 group: [[WORKSPACE_ROOT/parquet-testing/data/alltypes_plain.parquet]]}, projection=[id, bool_col, tinyint_col, smallint_col, int_col, bigint_col, float_col, double_col, date_string_col, string_col, timestamp_col], limit=10, statistics=[Rows=Exact(8), Bytes=Absent, [(Col[0]:),(Col[1]:),(Col[2]:),(Col[3]:),(Col[4]:),(Col[5]:),(Col[6]:),(Col[7]:),(Col[8]:),(Col[9]:),(Col[10]:)]]
+physical_plan after aggregate_statistics SAME TEXT AS ABOVE
+physical_plan after join_selection SAME TEXT AS ABOVE
+physical_plan after LimitedDistinctAggregation SAME TEXT AS ABOVE
+physical_plan after EnforceDistribution SAME TEXT AS ABOVE
+physical_plan after CombinePartialFinalAggregate SAME TEXT AS ABOVE
+physical_plan after EnforceSorting SAME TEXT AS ABOVE
+physical_plan after coalesce_batches SAME TEXT AS ABOVE
+physical_plan after OutputRequirements
+GlobalLimitExec: skip=0, fetch=10, statistics=[Rows=Exact(8), Bytes=Absent, [(Col[0]:),(Col[1]:),(Col[2]:),(Col[3]:),(Col[4]:),(Col[5]:),(Col[6]:),(Col[7]:),(Col[8]:),(Col[9]:),(Col[10]:)]]
+--ParquetExec: file_groups={1 group: [[WORKSPACE_ROOT/parquet-testing/data/alltypes_plain.parquet]]}, projection=[id, bool_col, tinyint_col, smallint_col, int_col, bigint_col, float_col, double_col, date_string_col, string_col, timestamp_col], limit=10, statistics=[Rows=Exact(8), Bytes=Absent, [(Col[0]:),(Col[1]:),(Col[2]:),(Col[3]:),(Col[4]:),(Col[5]:),(Col[6]:),(Col[7]:),(Col[8]:),(Col[9]:),(Col[10]:)]]
+physical_plan after PipelineChecker SAME TEXT AS ABOVE
+physical_plan after LimitAggregation SAME TEXT AS ABOVE
+physical_plan after ProjectionPushdown SAME TEXT AS ABOVE
+physical_plan
+GlobalLimitExec: skip=0, fetch=10, statistics=[Rows=Exact(8), Bytes=Absent, [(Col[0]:),(Col[1]:),(Col[2]:),(Col[3]:),(Col[4]:),(Col[5]:),(Col[6]:),(Col[7]:),(Col[8]:),(Col[9]:),(Col[10]:)]]
+--ParquetExec: file_groups={1 group: [[WORKSPACE_ROOT/parquet-testing/data/alltypes_plain.parquet]]}, projection=[id, bool_col, tinyint_col, smallint_col, int_col, bigint_col, float_col, double_col, date_string_col, string_col, timestamp_col], limit=10, statistics=[Rows=Exact(8), Bytes=Absent, [(Col[0]:),(Col[1]:),(Col[2]:),(Col[3]:),(Col[4]:),(Col[5]:),(Col[6]:),(Col[7]:),(Col[8]:),(Col[9]:),(Col[10]:)]]
+
+
+statement ok
+set datafusion.explain.show_statistics = false;
+
+# explain verbose with collect on and & show statistics off: still has stats
+query TT
+EXPLAIN VERBOSE SELECT * FROM alltypes_plain limit 10;
+----
+initial_physical_plan
+GlobalLimitExec: skip=0, fetch=10
+--ParquetExec: file_groups={1 group: [[WORKSPACE_ROOT/parquet-testing/data/alltypes_plain.parquet]]}, projection=[id, bool_col, tinyint_col, smallint_col, int_col, bigint_col, float_col, double_col, date_string_col, string_col, timestamp_col], limit=10
+initial_physical_plan_with_stats
+GlobalLimitExec: skip=0, fetch=10, statistics=[Rows=Exact(8), Bytes=Absent, [(Col[0]:),(Col[1]:),(Col[2]:),(Col[3]:),(Col[4]:),(Col[5]:),(Col[6]:),(Col[7]:),(Col[8]:),(Col[9]:),(Col[10]:)]]
+--ParquetExec: file_groups={1 group: [[WORKSPACE_ROOT/parquet-testing/data/alltypes_plain.parquet]]}, projection=[id, bool_col, tinyint_col, smallint_col, int_col, bigint_col, float_col, double_col, date_string_col, string_col, timestamp_col], limit=10, statistics=[Rows=Exact(8), Bytes=Absent, [(Col[0]:),(Col[1]:),(Col[2]:),(Col[3]:),(Col[4]:),(Col[5]:),(Col[6]:),(Col[7]:),(Col[8]:),(Col[9]:),(Col[10]:)]]
+physical_plan after OutputRequirements
+OutputRequirementExec
+--GlobalLimitExec: skip=0, fetch=10
+----ParquetExec: file_groups={1 group: [[WORKSPACE_ROOT/parquet-testing/data/alltypes_plain.parquet]]}, projection=[id, bool_col, tinyint_col, smallint_col, int_col, bigint_col, float_col, double_col, date_string_col, string_col, timestamp_col], limit=10
+physical_plan after aggregate_statistics SAME TEXT AS ABOVE
+physical_plan after join_selection SAME TEXT AS ABOVE
+physical_plan after LimitedDistinctAggregation SAME TEXT AS ABOVE
+physical_plan after EnforceDistribution SAME TEXT AS ABOVE
+physical_plan after CombinePartialFinalAggregate SAME TEXT AS ABOVE
+physical_plan after EnforceSorting SAME TEXT AS ABOVE
+physical_plan after coalesce_batches SAME TEXT AS ABOVE
+physical_plan after OutputRequirements
+GlobalLimitExec: skip=0, fetch=10
+--ParquetExec: file_groups={1 group: [[WORKSPACE_ROOT/parquet-testing/data/alltypes_plain.parquet]]}, projection=[id, bool_col, tinyint_col, smallint_col, int_col, bigint_col, float_col, double_col, date_string_col, string_col, timestamp_col], limit=10
+physical_plan after PipelineChecker SAME TEXT AS ABOVE
+physical_plan after LimitAggregation SAME TEXT AS ABOVE
+physical_plan after ProjectionPushdown SAME TEXT AS ABOVE
+physical_plan
+GlobalLimitExec: skip=0, fetch=10
+--ParquetExec: file_groups={1 group: [[WORKSPACE_ROOT/parquet-testing/data/alltypes_plain.parquet]]}, projection=[id, bool_col, tinyint_col, smallint_col, int_col, bigint_col, float_col, double_col, date_string_col, string_col, timestamp_col], limit=10
+physical_plan_with_stats
+GlobalLimitExec: skip=0, fetch=10, statistics=[Rows=Exact(8), Bytes=Absent, [(Col[0]:),(Col[1]:),(Col[2]:),(Col[3]:),(Col[4]:),(Col[5]:),(Col[6]:),(Col[7]:),(Col[8]:),(Col[9]:),(Col[10]:)]]
+--ParquetExec: file_groups={1 group: [[WORKSPACE_ROOT/parquet-testing/data/alltypes_plain.parquet]]}, projection=[id, bool_col, tinyint_col, smallint_col, int_col, bigint_col, float_col, double_col, date_string_col, string_col, timestamp_col], limit=10, statistics=[Rows=Exact(8), Bytes=Absent, [(Col[0]:),(Col[1]:),(Col[2]:),(Col[3]:),(Col[4]:),(Col[5]:),(Col[6]:),(Col[7]:),(Col[8]:),(Col[9]:),(Col[10]:)]]
+
+
+statement ok
+set datafusion.execution.collect_statistics = false;
+
+# Explain ArrayFuncions
+
+statement ok
+set datafusion.explain.physical_plan_only = false
+
+query TT
+explain select make_array(make_array(1, 2, 3), make_array(4, 5, 6));
+----
+logical_plan
+Projection: List([[1, 2, 3], [4, 5, 6]]) AS make_array(make_array(Int64(1),Int64(2),Int64(3)),make_array(Int64(4),Int64(5),Int64(6)))
+--EmptyRelation
+physical_plan
+ProjectionExec: expr=[[[1, 2, 3], [4, 5, 6]] as make_array(make_array(Int64(1),Int64(2),Int64(3)),make_array(Int64(4),Int64(5),Int64(6)))]
+--PlaceholderRowExec
+
+query TT
+explain select [[1, 2, 3], [4, 5, 6]];
+----
+logical_plan
+Projection: List([[1, 2, 3], [4, 5, 6]]) AS make_array(make_array(Int64(1),Int64(2),Int64(3)),make_array(Int64(4),Int64(5),Int64(6)))
+--EmptyRelation
+physical_plan
+ProjectionExec: expr=[[[1, 2, 3], [4, 5, 6]] as make_array(make_array(Int64(1),Int64(2),Int64(3)),make_array(Int64(4),Int64(5),Int64(6)))]
+--PlaceholderRowExec

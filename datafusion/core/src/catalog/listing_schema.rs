@@ -16,21 +16,25 @@
 // under the License.
 
 //! listing_schema contains a SchemaProvider that scans ObjectStores for tables automatically
-use crate::catalog::schema::SchemaProvider;
-use crate::datasource::datasource::TableProviderFactory;
-use crate::datasource::TableProvider;
-use crate::execution::context::SessionState;
-use async_trait::async_trait;
-use datafusion_common::parsers::CompressionTypeVariant;
-use datafusion_common::{DFSchema, DataFusionError, OwnedTableReference};
-use datafusion_expr::CreateExternalTable;
-use futures::TryStreamExt;
-use itertools::Itertools;
-use object_store::ObjectStore;
+
 use std::any::Any;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
+
+use crate::catalog::schema::SchemaProvider;
+use crate::datasource::provider::TableProviderFactory;
+use crate::datasource::TableProvider;
+use crate::execution::context::SessionState;
+
+use datafusion_common::parsers::CompressionTypeVariant;
+use datafusion_common::{Constraints, DFSchema, DataFusionError, OwnedTableReference};
+use datafusion_expr::CreateExternalTable;
+
+use async_trait::async_trait;
+use futures::TryStreamExt;
+use itertools::Itertools;
+use object_store::ObjectStore;
 
 /// A [`SchemaProvider`] that scans an [`ObjectStore`] to automatically discover tables
 ///
@@ -88,12 +92,7 @@ impl ListingSchemaProvider {
 
     /// Reload table information from ObjectStore
     pub async fn refresh(&self, state: &SessionState) -> datafusion_common::Result<()> {
-        let entries: Vec<_> = self
-            .store
-            .list(Some(&self.path))
-            .await?
-            .try_collect()
-            .await?;
+        let entries: Vec<_> = self.store.list(Some(&self.path)).try_collect().await?;
         let base = Path::new(self.path.as_ref());
         let mut tables = HashSet::new();
         for file in entries.iter() {
@@ -149,6 +148,8 @@ impl ListingSchemaProvider {
                             order_exprs: vec![],
                             unbounded: false,
                             options: Default::default(),
+                            constraints: Constraints::empty(),
+                            column_defaults: Default::default(),
                         },
                     )
                     .await?;

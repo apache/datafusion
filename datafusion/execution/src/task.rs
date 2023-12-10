@@ -22,21 +22,25 @@ use std::{
 
 use datafusion_common::{
     config::{ConfigOptions, Extensions},
-    DataFusionError, Result,
+    plan_datafusion_err, DataFusionError, Result,
 };
-use datafusion_expr::{AggregateUDF, ScalarUDF};
+use datafusion_expr::{AggregateUDF, ScalarUDF, WindowUDF};
 
 use crate::{
-    config::SessionConfig, memory_pool::MemoryPool, registry::FunctionRegistry,
-    runtime_env::RuntimeEnv,
+    config::SessionConfig,
+    memory_pool::MemoryPool,
+    registry::FunctionRegistry,
+    runtime_env::{RuntimeConfig, RuntimeEnv},
 };
 
 /// Task Execution Context
 ///
-/// A [`TaskContext`] has represents the state available during a single query's
-/// execution.
+/// A [`TaskContext`] contains the state available during a single
+/// query's execution. Please see [`SessionContext`] for a user level
+/// multi-query API.
 ///
-/// # Task Context
+/// [`SessionContext`]: https://docs.rs/datafusion/latest/datafusion/execution/context/struct.SessionContext.html
+#[derive(Debug)]
 pub struct TaskContext {
     /// Session Id
     session_id: String,
@@ -48,18 +52,43 @@ pub struct TaskContext {
     scalar_functions: HashMap<String, Arc<ScalarUDF>>,
     /// Aggregate functions associated with this task context
     aggregate_functions: HashMap<String, Arc<AggregateUDF>>,
+    /// Window functions associated with this task context
+    window_functions: HashMap<String, Arc<WindowUDF>>,
     /// Runtime environment associated with this task context
     runtime: Arc<RuntimeEnv>,
 }
 
+impl Default for TaskContext {
+    fn default() -> Self {
+        let runtime = RuntimeEnv::new(RuntimeConfig::new())
+            .expect("defauly runtime created successfully");
+
+        // Create a default task context, mostly useful for testing
+        Self {
+            session_id: "DEFAULT".to_string(),
+            task_id: None,
+            session_config: SessionConfig::new(),
+            scalar_functions: HashMap::new(),
+            aggregate_functions: HashMap::new(),
+            window_functions: HashMap::new(),
+            runtime: Arc::new(runtime),
+        }
+    }
+}
+
 impl TaskContext {
-    /// Create a new task context instance
+    /// Create a new [`TaskContext`] instance.
+    ///
+    /// Most users will use [`SessionContext::task_ctx`] to create [`TaskContext`]s
+    ///
+    /// [`SessionContext::task_ctx`]: https://docs.rs/datafusion/latest/datafusion/execution/context/struct.SessionContext.html#method.task_ctx
     pub fn new(
         task_id: Option<String>,
         session_id: String,
         session_config: SessionConfig,
         scalar_functions: HashMap<String, Arc<ScalarUDF>>,
         aggregate_functions: HashMap<String, Arc<AggregateUDF>>,
+        window_functions: HashMap<String, Arc<WindowUDF>>,
         runtime: Arc<RuntimeEnv>,
     ) -> Self {
         Self {
@@ -68,6 +97,7 @@ impl TaskContext {
             session_config,
             scalar_functions,
             aggregate_functions,
+            window_functions,
             runtime,
         }
     }
@@ -92,6 +122,7 @@ impl TaskContext {
             config.set(&k, &v)?;
         }
         let session_config = SessionConfig::from(config);
+        let window_functions = HashMap::new();
 
         Ok(Self::new(
             Some(task_id),
@@ -99,6 +130,7 @@ impl TaskContext {
             session_config,
             scalar_functions,
             aggregate_functions,
+            window_functions,
             runtime,
         ))
     }
@@ -127,6 +159,18 @@ impl TaskContext {
     pub fn runtime_env(&self) -> Arc<RuntimeEnv> {
         self.runtime.clone()
     }
+
+    /// Update the [`ConfigOptions`]
+    pub fn with_session_config(mut self, session_config: SessionConfig) -> Self {
+        self.session_config = session_config;
+        self
+    }
+
+    /// Update the [`RuntimeEnv`]
+    pub fn with_runtime(mut self, runtime: Arc<RuntimeEnv>) -> Self {
+        self.runtime = runtime;
+        self
+    }
 }
 
 impl FunctionRegistry for TaskContext {
@@ -138,9 +182,7 @@ impl FunctionRegistry for TaskContext {
         let result = self.scalar_functions.get(name);
 
         result.cloned().ok_or_else(|| {
-            DataFusionError::Internal(format!(
-                "There is no UDF named \"{name}\" in the TaskContext"
-            ))
+            plan_datafusion_err!("There is no UDF named \"{name}\" in the TaskContext")
         })
     }
 
@@ -148,8 +190,16 @@ impl FunctionRegistry for TaskContext {
         let result = self.aggregate_functions.get(name);
 
         result.cloned().ok_or_else(|| {
+            plan_datafusion_err!("There is no UDAF named \"{name}\" in the TaskContext")
+        })
+    }
+
+    fn udwf(&self, name: &str) -> Result<Arc<WindowUDF>> {
+        let result = self.window_functions.get(name);
+
+        result.cloned().ok_or_else(|| {
             DataFusionError::Internal(format!(
-                "There is no UDAF named \"{name}\" in the TaskContext"
+                "There is no UDWF named \"{name}\" in the TaskContext"
             ))
         })
     }
@@ -184,6 +234,7 @@ mod tests {
             Some("task_id".to_string()),
             "session_id".to_string(),
             session_config,
+            HashMap::default(),
             HashMap::default(),
             HashMap::default(),
             runtime,

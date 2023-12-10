@@ -15,7 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! ScalarValue reimported from datafusion-common to easy migration
-//! when datafusion was split into several different crates
-
+//! [`ScalarValue`] single value representation.
+//!
+//! Note this is reimported from the datafusion-common crate for easy
+//! migration when datafusion was split into several different crates
 pub use datafusion_common::{ScalarType, ScalarValue};

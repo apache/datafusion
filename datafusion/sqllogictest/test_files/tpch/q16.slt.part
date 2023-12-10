@@ -1,0 +1,149 @@
+
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+query TT
+explain select
+    p_brand,
+    p_type,
+    p_size,
+    count(distinct ps_suppkey) as supplier_cnt
+from
+    partsupp,
+    part
+where
+        p_partkey = ps_partkey
+  and p_brand <> 'Brand#45'
+  and p_type not like 'MEDIUM POLISHED%'
+  and p_size in (49, 14, 23, 45, 19, 3, 36, 9)
+  and ps_suppkey not in (
+    select
+        s_suppkey
+    from
+        supplier
+    where
+            s_comment like '%Customer%Complaints%'
+)
+group by
+    p_brand,
+    p_type,
+    p_size
+order by
+    supplier_cnt desc,
+    p_brand,
+    p_type,
+    p_size
+limit 10;
+----
+logical_plan
+Limit: skip=0, fetch=10
+--Sort: supplier_cnt DESC NULLS FIRST, part.p_brand ASC NULLS LAST, part.p_type ASC NULLS LAST, part.p_size ASC NULLS LAST, fetch=10
+----Projection: part.p_brand, part.p_type, part.p_size, COUNT(alias1) AS supplier_cnt
+------Aggregate: groupBy=[[part.p_brand, part.p_type, part.p_size]], aggr=[[COUNT(alias1)]]
+--------Aggregate: groupBy=[[part.p_brand, part.p_type, part.p_size, partsupp.ps_suppkey AS alias1]], aggr=[[]]
+----------LeftAnti Join: partsupp.ps_suppkey = __correlated_sq_1.s_suppkey
+------------Projection: partsupp.ps_suppkey, part.p_brand, part.p_type, part.p_size
+--------------Inner Join: partsupp.ps_partkey = part.p_partkey
+----------------TableScan: partsupp projection=[ps_partkey, ps_suppkey]
+----------------Filter: part.p_brand != Utf8("Brand#45") AND part.p_type NOT LIKE Utf8("MEDIUM POLISHED%") AND part.p_size IN ([Int32(49), Int32(14), Int32(23), Int32(45), Int32(19), Int32(3), Int32(36), Int32(9)])
+------------------TableScan: part projection=[p_partkey, p_brand, p_type, p_size], partial_filters=[part.p_brand != Utf8("Brand#45"), part.p_type NOT LIKE Utf8("MEDIUM POLISHED%"), part.p_size IN ([Int32(49), Int32(14), Int32(23), Int32(45), Int32(19), Int32(3), Int32(36), Int32(9)])]
+------------SubqueryAlias: __correlated_sq_1
+--------------Projection: supplier.s_suppkey
+----------------Filter: supplier.s_comment LIKE Utf8("%Customer%Complaints%")
+------------------TableScan: supplier projection=[s_suppkey, s_comment], partial_filters=[supplier.s_comment LIKE Utf8("%Customer%Complaints%")]
+physical_plan
+GlobalLimitExec: skip=0, fetch=10
+--SortPreservingMergeExec: [supplier_cnt@3 DESC,p_brand@0 ASC NULLS LAST,p_type@1 ASC NULLS LAST,p_size@2 ASC NULLS LAST], fetch=10
+----SortExec: TopK(fetch=10), expr=[supplier_cnt@3 DESC,p_brand@0 ASC NULLS LAST,p_type@1 ASC NULLS LAST,p_size@2 ASC NULLS LAST]
+------ProjectionExec: expr=[p_brand@0 as p_brand, p_type@1 as p_type, p_size@2 as p_size, COUNT(alias1)@3 as supplier_cnt]
+--------AggregateExec: mode=FinalPartitioned, gby=[p_brand@0 as p_brand, p_type@1 as p_type, p_size@2 as p_size], aggr=[COUNT(alias1)]
+----------CoalesceBatchesExec: target_batch_size=8192
+------------RepartitionExec: partitioning=Hash([p_brand@0, p_type@1, p_size@2], 4), input_partitions=4
+--------------AggregateExec: mode=Partial, gby=[p_brand@0 as p_brand, p_type@1 as p_type, p_size@2 as p_size], aggr=[COUNT(alias1)]
+----------------AggregateExec: mode=FinalPartitioned, gby=[p_brand@0 as p_brand, p_type@1 as p_type, p_size@2 as p_size, alias1@3 as alias1], aggr=[]
+------------------CoalesceBatchesExec: target_batch_size=8192
+--------------------RepartitionExec: partitioning=Hash([p_brand@0, p_type@1, p_size@2, alias1@3], 4), input_partitions=4
+----------------------AggregateExec: mode=Partial, gby=[p_brand@1 as p_brand, p_type@2 as p_type, p_size@3 as p_size, ps_suppkey@0 as alias1], aggr=[]
+------------------------CoalesceBatchesExec: target_batch_size=8192
+--------------------------HashJoinExec: mode=Partitioned, join_type=LeftAnti, on=[(ps_suppkey@0, s_suppkey@0)]
+----------------------------CoalesceBatchesExec: target_batch_size=8192
+------------------------------RepartitionExec: partitioning=Hash([ps_suppkey@0], 4), input_partitions=4
+--------------------------------ProjectionExec: expr=[ps_suppkey@1 as ps_suppkey, p_brand@3 as p_brand, p_type@4 as p_type, p_size@5 as p_size]
+----------------------------------CoalesceBatchesExec: target_batch_size=8192
+------------------------------------HashJoinExec: mode=Partitioned, join_type=Inner, on=[(ps_partkey@0, p_partkey@0)]
+--------------------------------------CoalesceBatchesExec: target_batch_size=8192
+----------------------------------------RepartitionExec: partitioning=Hash([ps_partkey@0], 4), input_partitions=4
+------------------------------------------CsvExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/partsupp.tbl:0..2932049], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/partsupp.tbl:2932049..5864098], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/partsupp.tbl:5864098..8796147], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/partsupp.tbl:8796147..11728193]]}, projection=[ps_partkey, ps_suppkey], has_header=false
+--------------------------------------CoalesceBatchesExec: target_batch_size=8192
+----------------------------------------RepartitionExec: partitioning=Hash([p_partkey@0], 4), input_partitions=4
+------------------------------------------CoalesceBatchesExec: target_batch_size=8192
+--------------------------------------------FilterExec: p_brand@1 != Brand#45 AND p_type@2 NOT LIKE MEDIUM POLISHED% AND Use p_size@3 IN (SET) ([Literal { value: Int32(49) }, Literal { value: Int32(14) }, Literal { value: Int32(23) }, Literal { value: Int32(45) }, Literal { value: Int32(19) }, Literal { value: Int32(3) }, Literal { value: Int32(36) }, Literal { value: Int32(9) }])
+----------------------------------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+------------------------------------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/part.tbl]]}, projection=[p_partkey, p_brand, p_type, p_size], has_header=false
+----------------------------CoalesceBatchesExec: target_batch_size=8192
+------------------------------RepartitionExec: partitioning=Hash([s_suppkey@0], 4), input_partitions=4
+--------------------------------ProjectionExec: expr=[s_suppkey@0 as s_suppkey]
+----------------------------------CoalesceBatchesExec: target_batch_size=8192
+------------------------------------FilterExec: s_comment@1 LIKE %Customer%Complaints%
+--------------------------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+----------------------------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/supplier.tbl]]}, projection=[s_suppkey, s_comment], has_header=false
+
+
+
+query TTII
+select
+    p_brand,
+    p_type,
+    p_size,
+    count(distinct ps_suppkey) as supplier_cnt
+from
+    partsupp,
+    part
+where
+        p_partkey = ps_partkey
+  and p_brand <> 'Brand#45'
+  and p_type not like 'MEDIUM POLISHED%'
+  and p_size in (49, 14, 23, 45, 19, 3, 36, 9)
+  and ps_suppkey not in (
+    select
+        s_suppkey
+    from
+        supplier
+    where
+            s_comment like '%Customer%Complaints%'
+)
+group by
+    p_brand,
+    p_type,
+    p_size
+order by
+    supplier_cnt desc,
+    p_brand,
+    p_type,
+    p_size
+limit 10;
+----
+Brand#14 SMALL ANODIZED NICKEL 45 12
+Brand#22 SMALL BURNISHED BRASS 19 12
+Brand#25 PROMO POLISHED COPPER 14 12
+Brand#35 LARGE ANODIZED STEEL 45 12
+Brand#35 PROMO BRUSHED COPPER 9 12
+Brand#51 ECONOMY ANODIZED STEEL 9 12
+Brand#53 LARGE BRUSHED NICKEL 45 12
+Brand#11 ECONOMY POLISHED COPPER 14 8
+Brand#11 LARGE PLATED STEEL 23 8
+Brand#11 PROMO POLISHED STEEL 23 8

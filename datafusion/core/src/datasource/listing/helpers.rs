@@ -36,10 +36,10 @@ use crate::{error::Result, scalar::ScalarValue};
 
 use super::PartitionedFile;
 use crate::datasource::listing::ListingTableUrl;
+use crate::execution::context::SessionState;
 use datafusion_common::tree_node::{TreeNode, VisitRecursion};
-use datafusion_common::{Column, DFField, DFSchema, DataFusionError};
-use datafusion_expr::expr::ScalarUDF;
-use datafusion_expr::{Expr, Volatility};
+use datafusion_common::{internal_err, Column, DFField, DFSchema, DataFusionError};
+use datafusion_expr::{Expr, ScalarFunctionDefinition, Volatility};
 use datafusion_physical_expr::create_physical_expr;
 use datafusion_physical_expr::execution_props::ExecutionProps;
 use object_store::path::Path;
@@ -53,17 +53,17 @@ use object_store::{ObjectMeta, ObjectStore};
 pub fn expr_applicable_for_cols(col_names: &[String], expr: &Expr) -> bool {
     let mut is_applicable = true;
     expr.apply(&mut |expr| {
-        Ok(match expr {
+        match expr {
             Expr::Column(Column { ref name, .. }) => {
                 is_applicable &= col_names.contains(name);
                 if is_applicable {
-                    VisitRecursion::Skip
+                    Ok(VisitRecursion::Skip)
                 } else {
-                    VisitRecursion::Stop
+                    Ok(VisitRecursion::Stop)
                 }
             }
             Expr::Literal(_)
-            | Expr::Alias(_, _)
+            | Expr::Alias(_)
             | Expr::OuterReferenceColumn(_, _)
             | Expr::ScalarVariable(_, _)
             | Expr::Not(_)
@@ -81,7 +81,6 @@ pub fn expr_applicable_for_cols(col_names: &[String], expr: &Expr) -> bool {
             | Expr::BinaryExpr { .. }
             | Expr::Between { .. }
             | Expr::Like { .. }
-            | Expr::ILike { .. }
             | Expr::SimilarTo { .. }
             | Expr::InList { .. }
             | Expr::Exists { .. }
@@ -89,25 +88,32 @@ pub fn expr_applicable_for_cols(col_names: &[String], expr: &Expr) -> bool {
             | Expr::ScalarSubquery(_)
             | Expr::GetIndexedField { .. }
             | Expr::GroupingSet(_)
-            | Expr::Case { .. } => VisitRecursion::Continue,
+            | Expr::Case { .. } => Ok(VisitRecursion::Continue),
 
             Expr::ScalarFunction(scalar_function) => {
-                match scalar_function.fun.volatility() {
-                    Volatility::Immutable => VisitRecursion::Continue,
-                    // TODO: Stable functions could be `applicable`, but that would require access to the context
-                    Volatility::Stable | Volatility::Volatile => {
-                        is_applicable = false;
-                        VisitRecursion::Stop
+                match &scalar_function.func_def {
+                    ScalarFunctionDefinition::BuiltIn(fun) => {
+                        match fun.volatility() {
+                            Volatility::Immutable => Ok(VisitRecursion::Continue),
+                            // TODO: Stable functions could be `applicable`, but that would require access to the context
+                            Volatility::Stable | Volatility::Volatile => {
+                                is_applicable = false;
+                                Ok(VisitRecursion::Stop)
+                            }
+                        }
                     }
-                }
-            }
-            Expr::ScalarUDF(ScalarUDF { fun, .. }) => {
-                match fun.signature.volatility {
-                    Volatility::Immutable => VisitRecursion::Continue,
-                    // TODO: Stable functions could be `applicable`, but that would require access to the context
-                    Volatility::Stable | Volatility::Volatile => {
-                        is_applicable = false;
-                        VisitRecursion::Stop
+                    ScalarFunctionDefinition::UDF(fun) => {
+                        match fun.signature().volatility {
+                            Volatility::Immutable => Ok(VisitRecursion::Continue),
+                            // TODO: Stable functions could be `applicable`, but that would require access to the context
+                            Volatility::Stable | Volatility::Volatile => {
+                                is_applicable = false;
+                                Ok(VisitRecursion::Stop)
+                            }
+                        }
+                    }
+                    ScalarFunctionDefinition::Name(_) => {
+                        internal_err!("Function `Expr` with name should be resolved.")
                     }
                 }
             }
@@ -116,17 +122,15 @@ pub fn expr_applicable_for_cols(col_names: &[String], expr: &Expr) -> bool {
             // - AGGREGATE, WINDOW and SORT should not end up in filter conditions, except maybe in some edge cases
             // - Can `Wildcard` be considered as a `Literal`?
             // - ScalarVariable could be `applicable`, but that would require access to the context
-            Expr::AggregateUDF { .. }
-            | Expr::AggregateFunction { .. }
+            Expr::AggregateFunction { .. }
             | Expr::Sort { .. }
             | Expr::WindowFunction { .. }
-            | Expr::Wildcard
-            | Expr::QualifiedWildcard { .. }
+            | Expr::Wildcard { .. }
             | Expr::Placeholder(_) => {
                 is_applicable = false;
-                VisitRecursion::Stop
+                Ok(VisitRecursion::Stop)
             }
-        })
+        }
     })
     .unwrap();
     is_applicable
@@ -276,7 +280,10 @@ async fn prune_partitions(
     // Applies `filter` to `batch` returning `None` on error
     let do_filter = |filter| -> Option<ArrayRef> {
         let expr = create_physical_expr(filter, &df_schema, &schema, &props).ok()?;
-        Some(expr.evaluate(&batch).ok()?.into_array(partitions.len()))
+        expr.evaluate(&batch)
+            .ok()?
+            .into_array(partitions.len())
+            .ok()
     };
 
     //.Compute the conjunction of the filters, ignoring errors
@@ -316,17 +323,21 @@ async fn prune_partitions(
 /// `filters` might contain expressions that can be resolved only at the
 /// file level (e.g. Parquet row group pruning).
 pub async fn pruned_partition_list<'a>(
+    ctx: &'a SessionState,
     store: &'a dyn ObjectStore,
     table_path: &'a ListingTableUrl,
     filters: &'a [Expr],
     file_extension: &'a str,
     partition_cols: &'a [(String, DataType)],
 ) -> Result<BoxStream<'a, Result<PartitionedFile>>> {
-    let list = table_path.list_all_files(store, file_extension);
-
     // if no partition col => simply list all the files
     if partition_cols.is_empty() {
-        return Ok(Box::pin(list.map_ok(|object_meta| object_meta.into())));
+        return Ok(Box::pin(
+            table_path
+                .list_all_files(ctx, store, file_extension)
+                .await?
+                .map_ok(|object_meta| object_meta.into()),
+        ));
     }
 
     let partitions = list_partitions(store, table_path, partition_cols.len()).await?;
@@ -355,8 +366,7 @@ pub async fn pruned_partition_list<'a>(
                 Some(files) => files,
                 None => {
                     trace!("Recursively listing partition {}", partition.path);
-                    let s = store.list(Some(&partition.path)).await?;
-                    s.try_collect().await?
+                    store.list(Some(&partition.path)).try_collect().await?
                 }
             };
 
@@ -421,7 +431,7 @@ mod tests {
     use futures::StreamExt;
 
     use crate::logical_expr::{case, col, lit};
-    use crate::test::object_store::make_test_store;
+    use crate::test::object_store::make_test_store_and_state;
 
     use super::*;
 
@@ -467,12 +477,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_pruned_partition_list_empty() {
-        let store = make_test_store(&[
+        let (store, state) = make_test_store_and_state(&[
             ("tablepath/mypartition=val1/notparquetfile", 100),
             ("tablepath/file.parquet", 100),
         ]);
         let filter = Expr::eq(col("mypartition"), lit("val1"));
         let pruned = pruned_partition_list(
+            &state,
             store.as_ref(),
             &ListingTableUrl::parse("file:///tablepath/").unwrap(),
             &[filter],
@@ -489,13 +500,14 @@ mod tests {
 
     #[tokio::test]
     async fn test_pruned_partition_list() {
-        let store = make_test_store(&[
+        let (store, state) = make_test_store_and_state(&[
             ("tablepath/mypartition=val1/file.parquet", 100),
             ("tablepath/mypartition=val2/file.parquet", 100),
             ("tablepath/mypartition=val1/other=val3/file.parquet", 100),
         ]);
         let filter = Expr::eq(col("mypartition"), lit("val1"));
         let pruned = pruned_partition_list(
+            &state,
             store.as_ref(),
             &ListingTableUrl::parse("file:///tablepath/").unwrap(),
             &[filter],
@@ -514,24 +526,18 @@ mod tests {
             f1.object_meta.location.as_ref(),
             "tablepath/mypartition=val1/file.parquet"
         );
-        assert_eq!(
-            &f1.partition_values,
-            &[ScalarValue::Utf8(Some(String::from("val1"))),]
-        );
+        assert_eq!(&f1.partition_values, &[ScalarValue::from("val1")]);
         let f2 = &pruned[1];
         assert_eq!(
             f2.object_meta.location.as_ref(),
             "tablepath/mypartition=val1/other=val3/file.parquet"
         );
-        assert_eq!(
-            f2.partition_values,
-            &[ScalarValue::Utf8(Some(String::from("val1"))),]
-        );
+        assert_eq!(f2.partition_values, &[ScalarValue::from("val1"),]);
     }
 
     #[tokio::test]
     async fn test_pruned_partition_list_multi() {
-        let store = make_test_store(&[
+        let (store, state) = make_test_store_and_state(&[
             ("tablepath/part1=p1v1/file.parquet", 100),
             ("tablepath/part1=p1v2/part2=p2v1/file1.parquet", 100),
             ("tablepath/part1=p1v2/part2=p2v1/file2.parquet", 100),
@@ -543,6 +549,7 @@ mod tests {
         // filter3 cannot be resolved at partition pruning
         let filter3 = Expr::eq(col("part2"), col("other"));
         let pruned = pruned_partition_list(
+            &state,
             store.as_ref(),
             &ListingTableUrl::parse("file:///tablepath/").unwrap(),
             &[filter1, filter2, filter3],
@@ -566,10 +573,7 @@ mod tests {
         );
         assert_eq!(
             &f1.partition_values,
-            &[
-                ScalarValue::Utf8(Some(String::from("p1v2"))),
-                ScalarValue::Utf8(Some(String::from("p2v1")))
-            ]
+            &[ScalarValue::from("p1v2"), ScalarValue::from("p2v1"),]
         );
         let f2 = &pruned[1];
         assert_eq!(
@@ -578,10 +582,7 @@ mod tests {
         );
         assert_eq!(
             &f2.partition_values,
-            &[
-                ScalarValue::Utf8(Some(String::from("p1v2"))),
-                ScalarValue::Utf8(Some(String::from("p2v1")))
-            ]
+            &[ScalarValue::from("p1v2"), ScalarValue::from("p2v1")]
         );
     }
 

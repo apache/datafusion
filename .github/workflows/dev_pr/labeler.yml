@@ -16,35 +16,37 @@
 # under the License.
 
 development-process:
-  - dev/**.*
-  - .github/**.*
-  - ci/**.*
-  - .asf.yaml
+- changed-files:
+  - any-glob-to-any-file: ['dev/**.*', '.github/**.*', 'ci/**.*', '.asf.yaml']
 
 documentation:
-  - docs/**.*
-  - README.md
-  - ./**/README.md
-  - DEVELOPERS.md
-  - datafusion/docs/**.*
+- changed-files:
+  - any-glob-to-any-file: ['docs/**.*', 'README.md', './**/README.md', 'DEVELOPERS.md', 'datafusion/docs/**.*']
 
 sql:
-  - datafusion/sql/**/*
+- changed-files:
+  - any-glob-to-any-file: ['datafusion/sql/**/*']
 
 logical-expr:
-  - datafusion/expr/**/*
+- changed-files:
+  - any-glob-to-any-file: ['datafusion/expr/**/*']
 
 physical-expr:
-  - datafusion/physical-expr/**/*
+- changed-files:
+  - any-glob-to-any-file: ['datafusion/physical-expr/**/*']
 
 optimizer:
-  - datafusion/optimizer/**/*
+- changed-files:
+  - any-glob-to-any-file: ['datafusion/optimizer/**/*']
 
 core:
-  - datafusion/core/**/*
+- changed-files:
+  - any-glob-to-any-file: ['datafusion/core/**/*']
 
 substrait:
-  - datafusion/substrait/**/*
+- changed-files:
+  - any-glob-to-any-file: ['datafusion/substrait/**/*']
 
 sqllogictest:
-  - datafusion/core/tests/sqllogictests/**/*
+- changed-files:
+  - any-glob-to-any-file: ['datafusion/sqllogictest/**/*']

@@ -18,7 +18,7 @@
 //! Manages all available memory during query execution
 
 use datafusion_common::Result;
-use std::sync::Arc;
+use std::{cmp::Ordering, sync::Arc};
 
 mod pool;
 pub mod proxy;
@@ -46,9 +46,9 @@ pub use pool::*;
 ///
 /// The following memory pool implementations are available:
 ///
-/// * [`UnboundedMemoryPool`](pool::UnboundedMemoryPool)
-/// * [`GreedyMemoryPool`](pool::GreedyMemoryPool)
-/// * [`FairSpillPool`](pool::FairSpillPool)
+/// * [`UnboundedMemoryPool`]
+/// * [`GreedyMemoryPool`]
+/// * [`FairSpillPool`]
 pub trait MemoryPool: Send + Sync + std::fmt::Debug {
     /// Registers a new [`MemoryConsumer`]
     ///
@@ -77,7 +77,9 @@ pub trait MemoryPool: Send + Sync + std::fmt::Debug {
     fn reserved(&self) -> usize;
 }
 
-/// A memory consumer that can be tracked by [`MemoryReservation`] in a [`MemoryPool`]
+/// A memory consumer that can be tracked by [`MemoryReservation`] in
+/// a [`MemoryPool`]. All allocations are registered to a particular
+/// `MemoryConsumer`;
 #[derive(Debug)]
 pub struct MemoryConsumer {
     name: String,
@@ -113,20 +115,40 @@ impl MemoryConsumer {
     pub fn register(self, pool: &Arc<dyn MemoryPool>) -> MemoryReservation {
         pool.register(&self);
         MemoryReservation {
-            consumer: self,
+            registration: Arc::new(SharedRegistration {
+                pool: Arc::clone(pool),
+                consumer: self,
+            }),
             size: 0,
-            policy: Arc::clone(pool),
         }
     }
 }
 
-/// A [`MemoryReservation`] tracks a reservation of memory in a [`MemoryPool`]
-/// that is freed back to the pool on drop
+/// A registration of a [`MemoryConsumer`] with a [`MemoryPool`].
+///
+/// Calls [`MemoryPool::unregister`] on drop to return any memory to
+/// the underlying pool.
+#[derive(Debug)]
+struct SharedRegistration {
+    pool: Arc<dyn MemoryPool>,
+    consumer: MemoryConsumer,
+}
+
+impl Drop for SharedRegistration {
+    fn drop(&mut self) {
+        self.pool.unregister(&self.consumer);
+    }
+}
+
+/// A [`MemoryReservation`] tracks an individual reservation of a
+/// number of bytes of memory in a [`MemoryPool`] that is freed back
+/// to the pool on drop.
+///
+/// The reservation can be grown or shrunk over time.
 #[derive(Debug)]
 pub struct MemoryReservation {
-    consumer: MemoryConsumer,
+    registration: Arc<SharedRegistration>,
     size: usize,
-    policy: Arc<dyn MemoryPool>,
 }
 
 impl MemoryReservation {
@@ -135,7 +157,13 @@ impl MemoryReservation {
         self.size
     }
 
-    /// Frees all bytes from this reservation returning the number of bytes freed
+    /// Returns [MemoryConsumer] for this [MemoryReservation]
+    pub fn consumer(&self) -> &MemoryConsumer {
+        &self.registration.consumer
+    }
+
+    /// Frees all bytes from this reservation back to the underlying
+    /// pool, returning the number of bytes freed.
     pub fn free(&mut self) -> usize {
         let size = self.size;
         if size != 0 {
@@ -151,13 +179,12 @@ impl MemoryReservation {
     /// Panics if `capacity` exceeds [`Self::size`]
     pub fn shrink(&mut self, capacity: usize) {
         let new_size = self.size.checked_sub(capacity).unwrap();
-        self.policy.shrink(self, capacity);
+        self.registration.pool.shrink(self, capacity);
         self.size = new_size
     }
 
     /// Sets the size of this reservation to `capacity`
     pub fn resize(&mut self, capacity: usize) {
-        use std::cmp::Ordering;
         match capacity.cmp(&self.size) {
             Ordering::Greater => self.grow(capacity - self.size),
             Ordering::Less => self.shrink(self.size - capacity),
@@ -167,7 +194,6 @@ impl MemoryReservation {
 
     /// Try to set the size of this reservation to `capacity`
     pub fn try_resize(&mut self, capacity: usize) -> Result<()> {
-        use std::cmp::Ordering;
         match capacity.cmp(&self.size) {
             Ordering::Greater => self.try_grow(capacity - self.size)?,
             Ordering::Less => self.shrink(self.size - capacity),
@@ -178,22 +204,55 @@ impl MemoryReservation {
 
     /// Increase the size of this reservation by `capacity` bytes
     pub fn grow(&mut self, capacity: usize) {
-        self.policy.grow(self, capacity);
+        self.registration.pool.grow(self, capacity);
         self.size += capacity;
     }
 
-    /// Try to increase the size of this reservation by `capacity` bytes
+    /// Try to increase the size of this reservation by `capacity`
+    /// bytes, returning error if there is insufficient capacity left
+    /// in the pool.
     pub fn try_grow(&mut self, capacity: usize) -> Result<()> {
-        self.policy.try_grow(self, capacity)?;
+        self.registration.pool.try_grow(self, capacity)?;
         self.size += capacity;
         Ok(())
+    }
+
+    /// Splits off `capacity` bytes from this [`MemoryReservation`]
+    /// into a new [`MemoryReservation`] with the same
+    /// [`MemoryConsumer`].
+    ///
+    /// This can be useful to free part of this reservation with RAAI
+    /// style dropping
+    ///
+    /// # Panics
+    ///
+    /// Panics if `capacity` exceeds [`Self::size`]
+    pub fn split(&mut self, capacity: usize) -> MemoryReservation {
+        self.size = self.size.checked_sub(capacity).unwrap();
+        Self {
+            size: capacity,
+            registration: self.registration.clone(),
+        }
+    }
+
+    /// Returns a new empty [`MemoryReservation`] with the same [`MemoryConsumer`]
+    pub fn new_empty(&self) -> Self {
+        Self {
+            size: 0,
+            registration: self.registration.clone(),
+        }
+    }
+
+    /// Splits off all the bytes from this [`MemoryReservation`] into
+    /// a new [`MemoryReservation`] with the same [`MemoryConsumer`]
+    pub fn take(&mut self) -> MemoryReservation {
+        self.split(self.size)
     }
 }
 
 impl Drop for MemoryReservation {
     fn drop(&mut self) {
         self.free();
-        self.policy.unregister(&self.consumer);
     }
 }
 
@@ -252,5 +311,60 @@ mod tests {
 
         a2.try_grow(25).unwrap();
         assert_eq!(pool.reserved(), 25);
+    }
+
+    #[test]
+    fn test_split() {
+        let pool = Arc::new(GreedyMemoryPool::new(50)) as _;
+        let mut r1 = MemoryConsumer::new("r1").register(&pool);
+
+        r1.try_grow(20).unwrap();
+        assert_eq!(r1.size(), 20);
+        assert_eq!(pool.reserved(), 20);
+
+        // take 5 from r1, should still have same reservation split
+        let r2 = r1.split(5);
+        assert_eq!(r1.size(), 15);
+        assert_eq!(r2.size(), 5);
+        assert_eq!(pool.reserved(), 20);
+
+        // dropping r1 frees 15 but retains 5 as they have the same consumer
+        drop(r1);
+        assert_eq!(r2.size(), 5);
+        assert_eq!(pool.reserved(), 5);
+    }
+
+    #[test]
+    fn test_new_empty() {
+        let pool = Arc::new(GreedyMemoryPool::new(50)) as _;
+        let mut r1 = MemoryConsumer::new("r1").register(&pool);
+
+        r1.try_grow(20).unwrap();
+        let mut r2 = r1.new_empty();
+        r2.try_grow(5).unwrap();
+
+        assert_eq!(r1.size(), 20);
+        assert_eq!(r2.size(), 5);
+        assert_eq!(pool.reserved(), 25);
+    }
+
+    #[test]
+    fn test_take() {
+        let pool = Arc::new(GreedyMemoryPool::new(50)) as _;
+        let mut r1 = MemoryConsumer::new("r1").register(&pool);
+
+        r1.try_grow(20).unwrap();
+        let mut r2 = r1.take();
+        r2.try_grow(5).unwrap();
+
+        assert_eq!(r1.size(), 0);
+        assert_eq!(r2.size(), 25);
+        assert_eq!(pool.reserved(), 25);
+
+        // r1 can still grow again
+        r1.try_grow(3).unwrap();
+        assert_eq!(r1.size(), 3);
+        assert_eq!(r2.size(), 25);
+        assert_eq!(pool.reserved(), 28);
     }
 }

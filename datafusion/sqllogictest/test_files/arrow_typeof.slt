@@ -1,0 +1,378 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+# http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# arrow_typeof_null
+query T
+SELECT arrow_typeof(null)
+----
+Null
+
+# arrow_typeof_boolean
+query T
+SELECT arrow_typeof(true)
+----
+Boolean
+
+# arrow_typeof_i64
+query T
+SELECT arrow_typeof(1)
+----
+Int64
+
+# arrow_typeof_i32
+query T
+SELECT arrow_typeof(1::int)
+----
+Int32
+
+# arrow_typeof_f64
+query T
+SELECT arrow_typeof(1.0)
+----
+Float64
+
+# arrow_typeof_f32
+query T
+SELECT arrow_typeof(1.0::float)
+----
+Float32
+
+# arrow_typeof_decimal
+query T
+SELECT arrow_typeof(1::Decimal)
+----
+Decimal128(38, 10)
+
+# arrow_typeof_timestamp
+query T
+SELECT arrow_typeof(now()::timestamp)
+----
+Timestamp(Nanosecond, None)
+
+# arrow_typeof_timestamp_utc
+query T
+SELECT arrow_typeof(now())
+----
+Timestamp(Nanosecond, Some("+00:00"))
+
+# arrow_typeof_timestamp_date32(
+query T
+SELECT arrow_typeof(now()::date)
+----
+Date32
+
+# arrow_typeof_utf8
+query T
+SELECT arrow_typeof('1')
+----
+Utf8
+
+
+#### arrow_cast (in some ways opposite of arrow_typeof)
+
+# Basic tests
+
+query I
+SELECT arrow_cast('1', 'Int16')
+----
+1
+
+# Basic error test
+query error Error during planning: arrow_cast needs 2 arguments, 1 provided
+SELECT arrow_cast('1')
+
+query error Error during planning: arrow_cast requires its second argument to be a constant string, got Int64\(43\)
+SELECT arrow_cast('1', 43)
+
+query error Error unrecognized word: unknown
+SELECT arrow_cast('1', 'unknown')
+
+# Round Trip tests:
+query TTTTTTTTTTTTTTTTTTTTTTT
+SELECT
+  arrow_typeof(arrow_cast(1, 'Int8')) as col_i8,
+  arrow_typeof(arrow_cast(1, 'Int16')) as col_i16,
+  arrow_typeof(arrow_cast(1, 'Int32')) as col_i32,
+  arrow_typeof(arrow_cast(1, 'Int64')) as col_i64,
+  arrow_typeof(arrow_cast(1, 'UInt8')) as col_u8,
+  arrow_typeof(arrow_cast(1, 'UInt16')) as col_u16,
+  arrow_typeof(arrow_cast(1, 'UInt32')) as col_u32,
+  arrow_typeof(arrow_cast(1, 'UInt64')) as col_u64,
+  -- can't seem to cast to Float16 for some reason
+  -- arrow_typeof(arrow_cast(1, 'Float16')) as col_f16,
+  arrow_typeof(arrow_cast(1, 'Float32')) as col_f32,
+  arrow_typeof(arrow_cast(1, 'Float64')) as col_f64,
+  arrow_typeof(arrow_cast('foo', 'Utf8')) as col_utf8,
+  arrow_typeof(arrow_cast('foo', 'LargeUtf8')) as col_large_utf8,
+  arrow_typeof(arrow_cast('foo', 'Binary')) as col_binary,
+  arrow_typeof(arrow_cast('foo', 'LargeBinary')) as col_large_binary,
+  arrow_typeof(arrow_cast(to_timestamp('2020-01-02 01:01:11.1234567890Z'), 'Timestamp(Second, None)')) as col_ts_s,
+  arrow_typeof(arrow_cast(to_timestamp('2020-01-02 01:01:11.1234567890Z'), 'Timestamp(Millisecond, None)')) as col_ts_ms,
+  arrow_typeof(arrow_cast(to_timestamp('2020-01-02 01:01:11.1234567890Z'), 'Timestamp(Microsecond, None)')) as col_ts_us,
+  arrow_typeof(arrow_cast(to_timestamp('2020-01-02 01:01:11.1234567890Z'), 'Timestamp(Nanosecond, None)')) as col_ts_ns,
+  arrow_typeof(arrow_cast(to_timestamp('2020-01-02 01:01:11.1234567890Z'), 'Timestamp(Second, Some("+08:00"))')) as col_tstz_s,
+  arrow_typeof(arrow_cast(to_timestamp('2020-01-02 01:01:11.1234567890Z'), 'Timestamp(Millisecond, Some("+08:00"))')) as col_tstz_ms,
+  arrow_typeof(arrow_cast(to_timestamp('2020-01-02 01:01:11.1234567890Z'), 'Timestamp(Microsecond, Some("+08:00"))')) as col_tstz_us,
+  arrow_typeof(arrow_cast(to_timestamp('2020-01-02 01:01:11.1234567890Z'), 'Timestamp(Nanosecond, Some("+08:00"))')) as col_tstz_ns,
+  arrow_typeof(arrow_cast('foo', 'Dictionary(Int32, Utf8)')) as col_dict
+----
+Int8 Int16 Int32 Int64 UInt8 UInt16 UInt32 UInt64 Float32 Float64 Utf8 LargeUtf8 Binary LargeBinary Timestamp(Second, None) Timestamp(Millisecond, None) Timestamp(Microsecond, None) Timestamp(Nanosecond, None) Timestamp(Second, Some("+08:00")) Timestamp(Millisecond, Some("+08:00")) Timestamp(Microsecond, Some("+08:00")) Timestamp(Nanosecond, Some("+08:00")) Dictionary(Int32, Utf8)
+
+
+
+
+## Basic Types: Create a table
+
+statement ok
+create table foo as select
+  arrow_cast(1, 'Int8') as col_i8,
+  arrow_cast(1, 'Int16') as col_i16,
+  arrow_cast(1, 'Int32') as col_i32,
+  arrow_cast(1, 'Int64') as col_i64,
+  arrow_cast(1, 'UInt8') as col_u8,
+  arrow_cast(1, 'UInt16') as col_u16,
+  arrow_cast(1, 'UInt32') as col_u32,
+  arrow_cast(1, 'UInt64') as col_u64,
+  -- can't seem to cast to Float16 for some reason
+  -- arrow_cast(1.0, 'Float16') as col_f16,
+  arrow_cast(1.0, 'Float32') as col_f32,
+  arrow_cast(1.0, 'Float64') as col_f64
+;
+
+## Ensure each column in the table has the expected type
+
+query TTTTTTTTTT
+SELECT
+  arrow_typeof(col_i8),
+  arrow_typeof(col_i16),
+  arrow_typeof(col_i32),
+  arrow_typeof(col_i64),
+  arrow_typeof(col_u8),
+  arrow_typeof(col_u16),
+  arrow_typeof(col_u32),
+  arrow_typeof(col_u64),
+  -- arrow_typeof(col_f16),
+  arrow_typeof(col_f32),
+  arrow_typeof(col_f64)
+  FROM foo;
+----
+Int8 Int16 Int32 Int64 UInt8 UInt16 UInt32 UInt64 Float32 Float64
+
+
+statement ok
+drop table foo
+
+## Decimals: Create a table
+
+statement ok
+create table foo as select
+  arrow_cast(100, 'Decimal128(5,2)') as col_d128,
+  arrow_cast(100, 'Decimal256(5,2)') as col_d256
+;
+
+
+## Ensure each column in the table has the expected type
+
+query TT
+SELECT
+  arrow_typeof(col_d128),
+  arrow_typeof(col_d256)
+  FROM foo;
+----
+Decimal128(5, 2) Decimal256(5, 2)
+
+
+query RR
+SELECT
+  col_d128,
+  col_d256
+  FROM foo;
+----
+100 100
+
+statement ok
+drop table foo
+
+## Strings, Binary: Create a table
+
+statement ok
+create table foo as select
+  arrow_cast('foo', 'Utf8') as col_utf8,
+  arrow_cast('foo', 'LargeUtf8') as col_large_utf8,
+  arrow_cast('foo', 'Binary') as col_binary,
+  arrow_cast('foo', 'LargeBinary') as col_large_binary
+;
+
+## Ensure each column in the table has the expected type
+
+query TTTT
+SELECT
+  arrow_typeof(col_utf8),
+  arrow_typeof(col_large_utf8),
+  arrow_typeof(col_binary),
+  arrow_typeof(col_large_binary)
+  FROM foo;
+----
+Utf8 LargeUtf8 Binary LargeBinary
+
+
+statement ok
+drop table foo
+
+
+## Timestamps: Create a table
+
+statement ok
+create table foo as select
+  arrow_cast(to_timestamp('2020-01-02 01:01:11.1234567890Z'), 'Timestamp(Second, None)') as col_ts_s,
+  arrow_cast(to_timestamp('2020-01-02 01:01:11.1234567890Z'), 'Timestamp(Millisecond, None)') as col_ts_ms,
+  arrow_cast(to_timestamp('2020-01-02 01:01:11.1234567890Z'), 'Timestamp(Microsecond, None)') as col_ts_us,
+  arrow_cast(to_timestamp('2020-01-02 01:01:11.1234567890Z'), 'Timestamp(Nanosecond, None)') as col_ts_ns
+;
+
+## Ensure each column in the table has the expected type
+
+query TTTT
+SELECT
+  arrow_typeof(col_ts_s),
+  arrow_typeof(col_ts_ms),
+  arrow_typeof(col_ts_us),
+  arrow_typeof(col_ts_ns)
+  FROM foo;
+----
+Timestamp(Second, None) Timestamp(Millisecond, None) Timestamp(Microsecond, None) Timestamp(Nanosecond, None)
+
+
+statement ok
+drop table foo
+
+## Dictionaries
+
+statement ok
+create table foo as select
+  arrow_cast('foo', 'Dictionary(Int32, Utf8)') as col_dict_int32_utf8,
+  arrow_cast('foo', 'Dictionary(Int8, LargeUtf8)') as col_dict_int8_largeutf8
+;
+
+## Ensure each column in the table has the expected type
+
+query TT
+SELECT
+  arrow_typeof(col_dict_int32_utf8),
+  arrow_typeof(col_dict_int8_largeutf8)
+  FROM foo;
+----
+Dictionary(Int32, Utf8) Dictionary(Int8, LargeUtf8)
+
+
+statement ok
+drop table foo
+
+
+## Intervals:
+
+query ?
+---
+select arrow_cast(interval '30 minutes', 'Interval(MonthDayNano)');
+----
+0 years 0 mons 0 days 0 hours 30 mins 0.000000000 secs
+
+query ?
+select arrow_cast('30 minutes', 'Interval(DayTime)');
+----
+0 years 0 mons 0 days 0 hours 30 mins 0.000 secs
+
+query ?
+select arrow_cast('1 year 5 months', 'Interval(YearMonth)');
+----
+1 years 5 mons 0 days 0 hours 0 mins 0.00 secs
+
+query ?
+select arrow_cast('30 minutes', 'Interval(MonthDayNano)');
+----
+0 years 0 mons 0 days 0 hours 30 mins 0.000000000 secs
+
+
+## Duration
+
+query ?
+---
+select arrow_cast(interval '30 minutes', 'Duration(Second)');
+----
+0 days 0 hours 30 mins 0 secs
+
+query error DataFusion error: Error during planning: Cannot automatically convert Utf8 to Duration\(Second\)
+select arrow_cast('30 minutes', 'Duration(Second)');
+
+
+## Timestamptz
+
+query P
+select arrow_cast(timestamp '2000-01-01T00:00:00', 'Timestamp(Nanosecond, Some( "+00:00" ))');
+----
+2000-01-01T00:00:00Z
+
+query P
+select arrow_cast(timestamp '2000-01-01T00:00:00', 'Timestamp(Nanosecond, Some( "+08:00" ))');
+----
+2000-01-01T00:00:00+08:00
+
+query P
+select arrow_cast(timestamp '2000-01-01T00:00:00Z', 'Timestamp(Nanosecond, Some( "+08:00" ))');
+----
+2000-01-01T00:00:00+08:00
+
+statement error Arrow error: Parser error: Invalid timezone "\+25:00": '\+25:00' is not a valid timezone
+select arrow_cast(timestamp '2000-01-01T00:00:00', 'Timestamp(Nanosecond, Some( "+25:00" ))');
+
+
+## List
+
+
+query ?
+select arrow_cast('1', 'List(Int64)');
+----
+[1]
+
+query ?
+select arrow_cast(make_array(1, 2, 3), 'List(Int64)');
+----
+[1, 2, 3]
+
+query T
+select arrow_typeof(arrow_cast(make_array(1, 2, 3), 'List(Int64)'));
+----
+List(Field { name: "item", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} })
+
+
+## LargeList
+
+
+query ?
+select arrow_cast('1', 'LargeList(Int64)');
+----
+[1]
+
+query ?
+select arrow_cast(make_array(1, 2, 3), 'LargeList(Int64)');
+----
+[1, 2, 3]
+
+query T
+select arrow_typeof(arrow_cast(make_array(1, 2, 3), 'LargeList(Int64)'));
+----
+LargeList(Field { name: "item", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} })

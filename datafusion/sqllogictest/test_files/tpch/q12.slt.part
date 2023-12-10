@@ -1,0 +1,117 @@
+
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+query TT
+explain select
+    l_shipmode,
+    sum(case
+            when o_orderpriority = '1-URGENT'
+                or o_orderpriority = '2-HIGH'
+                then 1
+            else 0
+        end) as high_line_count,
+    sum(case
+            when o_orderpriority <> '1-URGENT'
+                and o_orderpriority <> '2-HIGH'
+                then 1
+            else 0
+        end) as low_line_count
+from
+    lineitem
+        join
+    orders
+    on
+            l_orderkey = o_orderkey
+where
+        l_shipmode in ('MAIL', 'SHIP')
+  and l_commitdate < l_receiptdate
+  and l_shipdate < l_commitdate
+  and l_receiptdate >= date '1994-01-01'
+  and l_receiptdate < date '1995-01-01'
+group by
+    l_shipmode
+order by
+    l_shipmode;
+----
+logical_plan
+Sort: lineitem.l_shipmode ASC NULLS LAST
+--Projection: lineitem.l_shipmode, SUM(CASE WHEN orders.o_orderpriority = Utf8("1-URGENT") OR orders.o_orderpriority = Utf8("2-HIGH") THEN Int64(1) ELSE Int64(0) END) AS high_line_count, SUM(CASE WHEN orders.o_orderpriority != Utf8("1-URGENT") AND orders.o_orderpriority != Utf8("2-HIGH") THEN Int64(1) ELSE Int64(0) END) AS low_line_count
+----Aggregate: groupBy=[[lineitem.l_shipmode]], aggr=[[SUM(CASE WHEN orders.o_orderpriority = Utf8("1-URGENT") OR orders.o_orderpriority = Utf8("2-HIGH") THEN Int64(1) ELSE Int64(0) END), SUM(CASE WHEN orders.o_orderpriority != Utf8("1-URGENT") AND orders.o_orderpriority != Utf8("2-HIGH") THEN Int64(1) ELSE Int64(0) END)]]
+------Projection: lineitem.l_shipmode, orders.o_orderpriority
+--------Inner Join: lineitem.l_orderkey = orders.o_orderkey
+----------Projection: lineitem.l_orderkey, lineitem.l_shipmode
+------------Filter: (lineitem.l_shipmode = Utf8("MAIL") OR lineitem.l_shipmode = Utf8("SHIP")) AND lineitem.l_commitdate < lineitem.l_receiptdate AND lineitem.l_shipdate < lineitem.l_commitdate AND lineitem.l_receiptdate >= Date32("8766") AND lineitem.l_receiptdate < Date32("9131")
+--------------TableScan: lineitem projection=[l_orderkey, l_shipdate, l_commitdate, l_receiptdate, l_shipmode], partial_filters=[lineitem.l_shipmode = Utf8("MAIL") OR lineitem.l_shipmode = Utf8("SHIP"), lineitem.l_commitdate < lineitem.l_receiptdate, lineitem.l_shipdate < lineitem.l_commitdate, lineitem.l_receiptdate >= Date32("8766"), lineitem.l_receiptdate < Date32("9131")]
+----------TableScan: orders projection=[o_orderkey, o_orderpriority]
+physical_plan
+SortPreservingMergeExec: [l_shipmode@0 ASC NULLS LAST]
+--SortExec: expr=[l_shipmode@0 ASC NULLS LAST]
+----ProjectionExec: expr=[l_shipmode@0 as l_shipmode, SUM(CASE WHEN orders.o_orderpriority = Utf8("1-URGENT") OR orders.o_orderpriority = Utf8("2-HIGH") THEN Int64(1) ELSE Int64(0) END)@1 as high_line_count, SUM(CASE WHEN orders.o_orderpriority != Utf8("1-URGENT") AND orders.o_orderpriority != Utf8("2-HIGH") THEN Int64(1) ELSE Int64(0) END)@2 as low_line_count]
+------AggregateExec: mode=FinalPartitioned, gby=[l_shipmode@0 as l_shipmode], aggr=[SUM(CASE WHEN orders.o_orderpriority = Utf8("1-URGENT") OR orders.o_orderpriority = Utf8("2-HIGH") THEN Int64(1) ELSE Int64(0) END), SUM(CASE WHEN orders.o_orderpriority != Utf8("1-URGENT") AND orders.o_orderpriority != Utf8("2-HIGH") THEN Int64(1) ELSE Int64(0) END)]
+--------CoalesceBatchesExec: target_batch_size=8192
+----------RepartitionExec: partitioning=Hash([l_shipmode@0], 4), input_partitions=4
+------------AggregateExec: mode=Partial, gby=[l_shipmode@0 as l_shipmode], aggr=[SUM(CASE WHEN orders.o_orderpriority = Utf8("1-URGENT") OR orders.o_orderpriority = Utf8("2-HIGH") THEN Int64(1) ELSE Int64(0) END), SUM(CASE WHEN orders.o_orderpriority != Utf8("1-URGENT") AND orders.o_orderpriority != Utf8("2-HIGH") THEN Int64(1) ELSE Int64(0) END)]
+--------------ProjectionExec: expr=[l_shipmode@1 as l_shipmode, o_orderpriority@3 as o_orderpriority]
+----------------CoalesceBatchesExec: target_batch_size=8192
+------------------HashJoinExec: mode=Partitioned, join_type=Inner, on=[(l_orderkey@0, o_orderkey@0)]
+--------------------CoalesceBatchesExec: target_batch_size=8192
+----------------------RepartitionExec: partitioning=Hash([l_orderkey@0], 4), input_partitions=4
+------------------------ProjectionExec: expr=[l_orderkey@0 as l_orderkey, l_shipmode@4 as l_shipmode]
+--------------------------CoalesceBatchesExec: target_batch_size=8192
+----------------------------FilterExec: (l_shipmode@4 = MAIL OR l_shipmode@4 = SHIP) AND l_commitdate@2 < l_receiptdate@3 AND l_shipdate@1 < l_commitdate@2 AND l_receiptdate@3 >= 8766 AND l_receiptdate@3 < 9131
+------------------------------CsvExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:0..18561749], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:18561749..37123498], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:37123498..55685247], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:55685247..74246996]]}, projection=[l_orderkey, l_shipdate, l_commitdate, l_receiptdate, l_shipmode], has_header=false
+--------------------CoalesceBatchesExec: target_batch_size=8192
+----------------------RepartitionExec: partitioning=Hash([o_orderkey@0], 4), input_partitions=4
+------------------------CsvExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/orders.tbl:0..4223281], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/orders.tbl:4223281..8446562], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/orders.tbl:8446562..12669843], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/orders.tbl:12669843..16893122]]}, projection=[o_orderkey, o_orderpriority], has_header=false
+
+
+
+query TII
+select
+    l_shipmode,
+    sum(case
+            when o_orderpriority = '1-URGENT'
+                or o_orderpriority = '2-HIGH'
+                then 1
+            else 0
+        end) as high_line_count,
+    sum(case
+            when o_orderpriority <> '1-URGENT'
+                and o_orderpriority <> '2-HIGH'
+                then 1
+            else 0
+        end) as low_line_count
+from
+    lineitem
+        join
+    orders
+    on
+            l_orderkey = o_orderkey
+where
+        l_shipmode in ('MAIL', 'SHIP')
+  and l_commitdate < l_receiptdate
+  and l_shipdate < l_commitdate
+  and l_receiptdate >= date '1994-01-01'
+  and l_receiptdate < date '1995-01-01'
+group by
+    l_shipmode
+order by
+    l_shipmode;
+----
+MAIL 647 945
+SHIP 620 943

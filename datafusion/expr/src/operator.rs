@@ -53,9 +53,13 @@ pub enum Operator {
     And,
     /// Logical OR, like `||`
     Or,
-    /// IS DISTINCT FROM
+    /// `IS DISTINCT FROM` (see [`distinct`])
+    ///
+    /// [`distinct`]: arrow::compute::kernels::cmp::distinct
     IsDistinctFrom,
-    /// IS NOT DISTINCT FROM
+    /// `IS NOT DISTINCT FROM` (see [`not_distinct`])
+    ///
+    /// [`not_distinct`]: arrow::compute::kernels::cmp::not_distinct
     IsNotDistinctFrom,
     /// Case sensitive regex match
     RegexMatch,
@@ -69,7 +73,7 @@ pub enum Operator {
     BitwiseAnd,
     /// Bitwise or, like `|`
     BitwiseOr,
-    /// Bitwise xor, like `#`
+    /// Bitwise xor, such as `^` in MySQL or `#` in PostgreSQL
     BitwiseXor,
     /// Bitwise right, like `>>`
     BitwiseShiftRight,
@@ -77,6 +81,10 @@ pub enum Operator {
     BitwiseShiftLeft,
     /// String concat
     StringConcat,
+    /// At arrow, like `@>`
+    AtArrow,
+    /// Arrow at, like `<@`
+    ArrowAt,
 }
 
 impl Operator {
@@ -108,7 +116,9 @@ impl Operator {
             | Operator::BitwiseXor
             | Operator::BitwiseShiftRight
             | Operator::BitwiseShiftLeft
-            | Operator::StringConcat => None,
+            | Operator::StringConcat
+            | Operator::AtArrow
+            | Operator::ArrowAt => None,
         }
     }
 
@@ -167,6 +177,8 @@ impl Operator {
             Operator::LtEq => Some(Operator::GtEq),
             Operator::Gt => Some(Operator::Lt),
             Operator::GtEq => Some(Operator::LtEq),
+            Operator::AtArrow => Some(Operator::ArrowAt),
+            Operator::ArrowAt => Some(Operator::AtArrow),
             Operator::IsDistinctFrom
             | Operator::IsNotDistinctFrom
             | Operator::Plus
@@ -214,7 +226,9 @@ impl Operator {
             | Operator::BitwiseShiftLeft
             | Operator::BitwiseShiftRight
             | Operator::BitwiseXor
-            | Operator::StringConcat => 0,
+            | Operator::StringConcat
+            | Operator::AtArrow
+            | Operator::ArrowAt => 0,
         }
     }
 }
@@ -243,10 +257,12 @@ impl fmt::Display for Operator {
             Operator::IsNotDistinctFrom => "IS NOT DISTINCT FROM",
             Operator::BitwiseAnd => "&",
             Operator::BitwiseOr => "|",
-            Operator::BitwiseXor => "#",
+            Operator::BitwiseXor => "BIT_XOR",
             Operator::BitwiseShiftRight => ">>",
             Operator::BitwiseShiftLeft => "<<",
             Operator::StringConcat => "||",
+            Operator::AtArrow => "@>",
+            Operator::ArrowAt => "<@",
         };
         write!(f, "{display}")
     }
@@ -351,6 +367,7 @@ impl ops::Neg for Expr {
     }
 }
 
+/// Support `NOT <expr>` fluent style
 impl Not for Expr {
     type Output = Self;
 
@@ -361,19 +378,27 @@ impl Not for Expr {
                 expr,
                 pattern,
                 escape_char,
-            }) => Expr::Like(Like::new(!negated, expr, pattern, escape_char)),
-            Expr::ILike(Like {
-                negated,
+                case_insensitive,
+            }) => Expr::Like(Like::new(
+                !negated,
                 expr,
                 pattern,
                 escape_char,
-            }) => Expr::ILike(Like::new(!negated, expr, pattern, escape_char)),
+                case_insensitive,
+            )),
             Expr::SimilarTo(Like {
                 negated,
                 expr,
                 pattern,
                 escape_char,
-            }) => Expr::SimilarTo(Like::new(!negated, expr, pattern, escape_char)),
+                case_insensitive,
+            }) => Expr::SimilarTo(Like::new(
+                !negated,
+                expr,
+                pattern,
+                escape_char,
+                case_insensitive,
+            )),
             _ => Expr::Not(Box::new(self)),
         }
     }
@@ -387,57 +412,57 @@ mod tests {
     fn test_operators() {
         // Add
         assert_eq!(
-            format!("{:?}", lit(1u32) + lit(2u32)),
+            format!("{}", lit(1u32) + lit(2u32)),
             "UInt32(1) + UInt32(2)"
         );
         // Sub
         assert_eq!(
-            format!("{:?}", lit(1u32) - lit(2u32)),
+            format!("{}", lit(1u32) - lit(2u32)),
             "UInt32(1) - UInt32(2)"
         );
         // Mul
         assert_eq!(
-            format!("{:?}", lit(1u32) * lit(2u32)),
+            format!("{}", lit(1u32) * lit(2u32)),
             "UInt32(1) * UInt32(2)"
         );
         // Div
         assert_eq!(
-            format!("{:?}", lit(1u32) / lit(2u32)),
+            format!("{}", lit(1u32) / lit(2u32)),
             "UInt32(1) / UInt32(2)"
         );
         // Rem
         assert_eq!(
-            format!("{:?}", lit(1u32) % lit(2u32)),
+            format!("{}", lit(1u32) % lit(2u32)),
             "UInt32(1) % UInt32(2)"
         );
         // BitAnd
         assert_eq!(
-            format!("{:?}", lit(1u32) & lit(2u32)),
+            format!("{}", lit(1u32) & lit(2u32)),
             "UInt32(1) & UInt32(2)"
         );
         // BitOr
         assert_eq!(
-            format!("{:?}", lit(1u32) | lit(2u32)),
+            format!("{}", lit(1u32) | lit(2u32)),
             "UInt32(1) | UInt32(2)"
         );
         // BitXor
         assert_eq!(
-            format!("{:?}", lit(1u32) ^ lit(2u32)),
-            "UInt32(1) # UInt32(2)"
+            format!("{}", lit(1u32) ^ lit(2u32)),
+            "UInt32(1) BIT_XOR UInt32(2)"
         );
         // Shl
         assert_eq!(
-            format!("{:?}", lit(1u32) << lit(2u32)),
+            format!("{}", lit(1u32) << lit(2u32)),
             "UInt32(1) << UInt32(2)"
         );
         // Shr
         assert_eq!(
-            format!("{:?}", lit(1u32) >> lit(2u32)),
+            format!("{}", lit(1u32) >> lit(2u32)),
             "UInt32(1) >> UInt32(2)"
         );
         // Neg
-        assert_eq!(format!("{:?}", -lit(1u32)), "(- UInt32(1))");
+        assert_eq!(format!("{}", -lit(1u32)), "(- UInt32(1))");
         // Not
-        assert_eq!(format!("{:?}", !lit(1u32)), "NOT UInt32(1)");
+        assert_eq!(format!("{}", !lit(1u32)), "NOT UInt32(1)");
     }
 }

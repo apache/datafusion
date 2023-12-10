@@ -19,16 +19,19 @@
 
 use crate::expr::{
     AggregateFunction, BinaryExpr, Cast, Exists, GroupingSet, InList, InSubquery,
-    ScalarFunction, TryCast,
+    Placeholder, ScalarFunction, TryCast,
 };
+use crate::function::PartitionEvaluatorFactory;
+use crate::WindowUDF;
 use crate::{
     aggregate_function, built_in_function, conditional_expressions::CaseBuilder,
-    logical_plan::Subquery, AccumulatorFunctionImplementation, AggregateUDF,
+    logical_plan::Subquery, AccumulatorFactoryFunction, AggregateUDF,
     BuiltinScalarFunction, Expr, LogicalPlan, Operator, ReturnTypeFunction,
     ScalarFunctionImplementation, ScalarUDF, Signature, StateTypeFunction, Volatility,
 };
 use arrow::datatypes::DataType;
 use datafusion_common::{Column, Result};
+use std::ops::Not;
 use std::sync::Arc;
 
 /// Create a column expression based on a qualified or unqualified column name. Will
@@ -78,6 +81,37 @@ pub fn ident(name: impl Into<String>) -> Expr {
     Expr::Column(Column::from_name(name))
 }
 
+/// Create placeholder value that will be filled in (such as `$1`)
+///
+/// Note the parameter type can be inferred using [`Expr::infer_placeholder_types`]
+///
+/// # Example
+///
+/// ```rust
+/// # use datafusion_expr::{placeholder};
+/// let p = placeholder("$0"); // $0, refers to parameter 1
+/// assert_eq!(p.to_string(), "$0")
+/// ```
+pub fn placeholder(id: impl Into<String>) -> Expr {
+    Expr::Placeholder(Placeholder {
+        id: id.into(),
+        data_type: None,
+    })
+}
+
+/// Create an '*' [`Expr::Wildcard`] expression that matches all columns
+///
+/// # Example
+///
+/// ```rust
+/// # use datafusion_expr::{wildcard};
+/// let p = wildcard();
+/// assert_eq!(p.to_string(), "*")
+/// ```
+pub fn wildcard() -> Expr {
+    Expr::Wildcard { qualifier: None }
+}
+
 /// Return a new expression `left <op> right`
 pub fn binary_expr(left: Expr, op: Operator, right: Expr) -> Expr {
     Expr::BinaryExpr(BinaryExpr::new(Box::new(left), op, Box::new(right)))
@@ -99,6 +133,11 @@ pub fn or(left: Expr, right: Expr) -> Expr {
         Operator::Or,
         Box::new(right),
     ))
+}
+
+/// Return a new expression with a logical NOT
+pub fn not(expr: Expr) -> Expr {
+    expr.not()
 }
 
 /// Create an expression to represent the min() aggregate function
@@ -127,6 +166,17 @@ pub fn max(expr: Expr) -> Expr {
 pub fn sum(expr: Expr) -> Expr {
     Expr::AggregateFunction(AggregateFunction::new(
         aggregate_function::AggregateFunction::Sum,
+        vec![expr],
+        false,
+        None,
+        None,
+    ))
+}
+
+/// Create an expression to represent the array_agg() aggregate function
+pub fn array_agg(expr: Expr) -> Expr {
+    Expr::AggregateFunction(AggregateFunction::new(
+        aggregate_function::AggregateFunction::ArrayAgg,
         vec![expr],
         false,
         None,
@@ -474,6 +524,7 @@ scalar_expr!(Cbrt, cbrt, num, "cube root of a number");
 scalar_expr!(Sin, sin, num, "sine");
 scalar_expr!(Cos, cos, num, "cosine");
 scalar_expr!(Tan, tan, num, "tangent");
+scalar_expr!(Cot, cot, num, "cotangent");
 scalar_expr!(Sinh, sinh, num, "hyperbolic sine");
 scalar_expr!(Cosh, cosh, num, "hyperbolic cosine");
 scalar_expr!(Tanh, tanh, num, "hyperbolic tangent");
@@ -499,7 +550,11 @@ scalar_expr!(
 scalar_expr!(Degrees, degrees, num, "converts radians to degrees");
 scalar_expr!(Radians, radians, num, "converts degrees to radians");
 nary_scalar_expr!(Round, round, "round to nearest integer");
-scalar_expr!(Trunc, trunc, num, "truncate toward zero");
+nary_scalar_expr!(
+    Trunc,
+    trunc,
+    "truncate toward zero, with optional precision"
+);
 scalar_expr!(Abs, abs, num, "absolute value");
 scalar_expr!(Signum, signum, num, "sign of the argument (-1, 0, +1) ");
 scalar_expr!(Exp, exp, num, "exponential");
@@ -517,7 +572,7 @@ scalar_expr!(
     num,
     "returns the hexdecimal representation of an integer"
 );
-scalar_expr!(Uuid, uuid, , "Returns uuid v4 as a string value");
+scalar_expr!(Uuid, uuid, , "returns uuid v4 as a string value");
 scalar_expr!(Log, log, base x, "logarithm of a `x` for a particular `base`");
 
 // array functions
@@ -527,7 +582,54 @@ scalar_expr!(
     array element,
     "appends an element to the end of an array."
 );
+
+scalar_expr!(ArraySort, array_sort, array desc null_first, "returns sorted array.");
+
+scalar_expr!(
+    ArrayPopBack,
+    array_pop_back,
+    array,
+    "returns the array without the last element."
+);
+
+scalar_expr!(
+    ArrayPopFront,
+    array_pop_front,
+    array,
+    "returns the array without the first element."
+);
+
 nary_scalar_expr!(ArrayConcat, array_concat, "concatenates arrays.");
+scalar_expr!(
+    ArrayHas,
+    array_has,
+    first_array second_array,
+    "returns true, if the element appears in the first array, otherwise false."
+);
+scalar_expr!(
+    ArrayEmpty,
+    array_empty,
+    array,
+    "returns 1 for an empty array or 0 for a non-empty array."
+);
+scalar_expr!(
+    ArrayHasAll,
+    array_has_all,
+    first_array second_array,
+    "returns true if each element of the second array appears in the first array; otherwise, it returns false."
+);
+scalar_expr!(
+    ArrayHasAny,
+    array_has_any,
+    first_array second_array,
+    "returns true if at least one element of the second array appears in the first array; otherwise, it returns false."
+);
+scalar_expr!(
+    Flatten,
+    flatten,
+    array,
+    "flattens an array of arrays into a single array."
+);
 scalar_expr!(
     ArrayDims,
     array_dims,
@@ -535,10 +637,16 @@ scalar_expr!(
     "returns an array of the array's dimensions."
 );
 scalar_expr!(
-    ArrayFill,
-    array_fill,
-    element array,
-    "returns an array filled with copies of the given value."
+    ArrayElement,
+    array_element,
+    array element,
+    "extracts the element with the index n from the array."
+);
+scalar_expr!(
+    ArrayExcept,
+    array_except,
+    first_array second_array,
+    "Returns an array of the elements that appear in the first array but not in the second."
 );
 scalar_expr!(
     ArrayLength,
@@ -551,6 +659,12 @@ scalar_expr!(
     array_ndims,
     array,
     "returns the number of dimensions of the array."
+);
+scalar_expr!(
+    ArrayDistinct,
+    array_distinct,
+    array,
+    "return distinct values from the array after removing duplicates."
 );
 scalar_expr!(
     ArrayPosition,
@@ -571,23 +685,61 @@ scalar_expr!(
     "prepends an element to the beginning of an array."
 );
 scalar_expr!(
+    ArrayRepeat,
+    array_repeat,
+    element count,
+    "returns an array containing element `count` times."
+);
+scalar_expr!(
     ArrayRemove,
     array_remove,
     array element,
-    "removes all elements equal to the given value from the array."
+    "removes the first element from the array equal to the given value."
+);
+scalar_expr!(
+    ArrayRemoveN,
+    array_remove_n,
+    array element max,
+    "removes the first `max` elements from the array equal to the given value."
+);
+scalar_expr!(
+    ArrayRemoveAll,
+    array_remove_all,
+    array element,
+    "removes all elements from the array equal to the given value."
 );
 scalar_expr!(
     ArrayReplace,
     array_replace,
     array from to,
-    "replaces a specified element with another specified element."
+    "replaces the first occurrence of the specified element with another specified element."
+);
+scalar_expr!(
+    ArrayReplaceN,
+    array_replace_n,
+    array from to max,
+    "replaces the first `max` occurrences of the specified element with another specified element."
+);
+scalar_expr!(
+    ArrayReplaceAll,
+    array_replace_all,
+    array from to,
+    "replaces all occurrences of the specified element with another specified element."
+);
+scalar_expr!(
+    ArraySlice,
+    array_slice,
+    array offset length,
+    "returns a slice of the array."
 );
 scalar_expr!(
     ArrayToString,
     array_to_string,
-    array delimeter,
+    array delimiter,
     "converts each element to its text representation."
 );
+scalar_expr!(ArrayUnion, array_union, array1 array2, "returns an array of the elements in the union of array1 and array2 without duplicates.");
+
 scalar_expr!(
     Cardinality,
     cardinality,
@@ -600,10 +752,16 @@ nary_scalar_expr!(
     "returns an Arrow array using the specified input expressions."
 );
 scalar_expr!(
-    TrimArray,
-    trim_array,
-    array n,
-    "removes the last n elements from the array."
+    ArrayIntersect,
+    array_intersect,
+    first_array second_array,
+    "Returns an array of the elements in the intersection of array1 and array2."
+);
+
+nary_scalar_expr!(
+    Range,
+    gen_range,
+    "Returns a list of values in the range between start and stop with step."
 );
 
 // string functions
@@ -627,6 +785,8 @@ scalar_expr!(
     "converts the Unicode code point to a UTF8 character"
 );
 scalar_expr!(Digest, digest, input algorithm, "compute the binary hash of `input`, using the `algorithm`");
+scalar_expr!(Encode, encode, input encoding, "encode the `input`, using the `encoding`. encoding can be base64 or hex");
+scalar_expr!(Decode, decode, input encoding, "decode the`input`, using the `encoding`. encoding can be base64 or hex");
 scalar_expr!(InitCap, initcap, string, "converts the first letter of each word in `string` in uppercase and the remaining characters in lowercase");
 scalar_expr!(Left, left, string n, "returns the first `n` characters in the `string`");
 scalar_expr!(Lower, lower, string, "convert the string to lower case");
@@ -658,6 +818,7 @@ scalar_expr!(SHA256, sha256, string, "SHA-256 hash");
 scalar_expr!(SHA384, sha384, string, "SHA-384 hash");
 scalar_expr!(SHA512, sha512, string, "SHA-512 hash");
 scalar_expr!(SplitPart, split_part, string delimiter index, "splits a string based on a delimiter and picks out the desired field based on the index.");
+scalar_expr!(StringToArray, string_to_array, string delimiter null_string, "splits a `string` based on a `delimiter` and returns an array of parts. Any parts matching the optional `null_string` will be replaced with `NULL`");
 scalar_expr!(StartsWith, starts_with, string prefix, "whether the `string` starts with the `prefix`");
 scalar_expr!(Strpos, strpos, string substring, "finds the position from where the `substring` matches the `string`");
 scalar_expr!(Substr, substr, string position, "substring from the `position` to the end");
@@ -704,6 +865,11 @@ nary_scalar_expr!(
     "concatenates several strings, placing a seperator between each one"
 );
 nary_scalar_expr!(Concat, concat_expr, "concatenates several strings");
+nary_scalar_expr!(
+    OverLay,
+    overlay,
+    "replace the substring of string that starts at the start'th character and extends for count characters with new substring"
+);
 
 // date functions
 scalar_expr!(DatePart, date_part, part date, "extracts a subfield from the date");
@@ -722,6 +888,12 @@ scalar_expr!(
     "converts a string to a `Timestamp(Microseconds, None)`"
 );
 scalar_expr!(
+    ToTimestampNanos,
+    to_timestamp_nanos,
+    date,
+    "converts a string to a `Timestamp(Nanoseconds, None)`"
+);
+scalar_expr!(
     ToTimestampSeconds,
     to_timestamp_seconds,
     date,
@@ -736,8 +908,31 @@ scalar_expr!(
 scalar_expr!(CurrentDate, current_date, ,"returns current UTC date as a [`DataType::Date32`] value");
 scalar_expr!(Now, now, ,"returns current timestamp in nanoseconds, using the same value for all instances of now() in same statement");
 scalar_expr!(CurrentTime, current_time, , "returns current UTC time as a [`DataType::Time64`] value");
+scalar_expr!(Nanvl, nanvl, x y, "returns x if x is not NaN otherwise returns y");
+scalar_expr!(
+    Isnan,
+    isnan,
+    num,
+    "returns true if a given number is +NaN or -NaN otherwise returns false"
+);
+scalar_expr!(
+    Iszero,
+    iszero,
+    num,
+    "returns true if a given number is +0.0 or -0.0 otherwise returns false"
+);
 
 scalar_expr!(ArrowTypeof, arrow_typeof, val, "data type");
+scalar_expr!(Levenshtein, levenshtein, string1 string2, "Returns the Levenshtein distance between the two given strings");
+scalar_expr!(SubstrIndex, substr_index, string delimiter count, "Returns the substring from str before count occurrences of the delimiter");
+scalar_expr!(FindInSet, find_in_set, str strlist, "Returns a value in the range of 1 to N if the string str is in the string list strlist consisting of N substrings");
+
+scalar_expr!(
+    Struct,
+    struct_fun,
+    val,
+    "returns a vector of fields from the struct"
+);
 
 /// Create a CASE WHEN statement with literal WHEN expressions for comparison to the base expression.
 pub fn case(expr: Expr) -> CaseBuilder {
@@ -774,20 +969,41 @@ pub fn create_udf(
 /// The signature and state type must match the `Accumulator's implementation`.
 pub fn create_udaf(
     name: &str,
-    input_type: DataType,
+    input_type: Vec<DataType>,
     return_type: Arc<DataType>,
     volatility: Volatility,
-    accumulator: AccumulatorFunctionImplementation,
+    accumulator: AccumulatorFactoryFunction,
     state_type: Arc<Vec<DataType>>,
 ) -> AggregateUDF {
     let return_type: ReturnTypeFunction = Arc::new(move |_| Ok(return_type.clone()));
     let state_type: StateTypeFunction = Arc::new(move |_| Ok(state_type.clone()));
     AggregateUDF::new(
         name,
-        &Signature::exact(vec![input_type], volatility),
+        &Signature::exact(input_type, volatility),
         &return_type,
         &accumulator,
         &state_type,
+    )
+}
+
+/// Creates a new UDWF with a specific signature, state type and return type.
+///
+/// The signature and state type must match the [`PartitionEvaluator`]'s implementation`.
+///
+/// [`PartitionEvaluator`]: crate::PartitionEvaluator
+pub fn create_udwf(
+    name: &str,
+    input_type: DataType,
+    return_type: Arc<DataType>,
+    volatility: Volatility,
+    partition_evaluator_factory: PartitionEvaluatorFactory,
+) -> WindowUDF {
+    let return_type: ReturnTypeFunction = Arc::new(move |_| Ok(return_type.clone()));
+    WindowUDF::new(
+        name,
+        &Signature::exact(vec![input_type], volatility),
+        &return_type,
+        &partition_evaluator_factory,
     )
 }
 
@@ -808,23 +1024,25 @@ pub fn call_fn(name: impl AsRef<str>, args: Vec<Expr>) -> Result<Expr> {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::lit;
+    use crate::{lit, ScalarFunctionDefinition};
 
     #[test]
     fn filter_is_null_and_is_not_null() {
         let col_null = col("col1");
         let col_not_null = ident("col2");
-        assert_eq!(format!("{:?}", col_null.is_null()), "col1 IS NULL");
+        assert_eq!(format!("{}", col_null.is_null()), "col1 IS NULL");
         assert_eq!(
-            format!("{:?}", col_not_null.is_not_null()),
+            format!("{}", col_not_null.is_not_null()),
             "col2 IS NOT NULL"
         );
     }
 
     macro_rules! test_unary_scalar_expr {
         ($ENUM:ident, $FUNC:ident) => {{
-            if let Expr::ScalarFunction(ScalarFunction { fun, args }) =
-                $FUNC(col("tableA.a"))
+            if let Expr::ScalarFunction(ScalarFunction {
+                func_def: ScalarFunctionDefinition::BuiltIn(fun),
+                args,
+            }) = $FUNC(col("tableA.a"))
             {
                 let name = built_in_function::BuiltinScalarFunction::$ENUM;
                 assert_eq!(name, fun);
@@ -836,42 +1054,42 @@ mod test {
     }
 
     macro_rules! test_scalar_expr {
-        ($ENUM:ident, $FUNC:ident, $($arg:ident),*) => {
-            let expected = vec![$(stringify!($arg)),*];
-            let result = $FUNC(
+    ($ENUM:ident, $FUNC:ident, $($arg:ident),*) => {
+        let expected = [$(stringify!($arg)),*];
+        let result = $FUNC(
+            $(
+                col(stringify!($arg.to_string()))
+            ),*
+        );
+        if let Expr::ScalarFunction(ScalarFunction { func_def: ScalarFunctionDefinition::BuiltIn(fun), args }) = result {
+            let name = built_in_function::BuiltinScalarFunction::$ENUM;
+            assert_eq!(name, fun);
+            assert_eq!(expected.len(), args.len());
+        } else {
+            assert!(false, "unexpected: {:?}", result);
+        }
+    };
+}
+
+    macro_rules! test_nary_scalar_expr {
+    ($ENUM:ident, $FUNC:ident, $($arg:ident),*) => {
+        let expected = [$(stringify!($arg)),*];
+        let result = $FUNC(
+            vec![
                 $(
                     col(stringify!($arg.to_string()))
                 ),*
-            );
-            if let Expr::ScalarFunction(ScalarFunction { fun, args }) = result {
-                let name = built_in_function::BuiltinScalarFunction::$ENUM;
-                assert_eq!(name, fun);
-                assert_eq!(expected.len(), args.len());
-            } else {
-                assert!(false, "unexpected: {:?}", result);
-            }
-        };
-    }
-
-    macro_rules! test_nary_scalar_expr {
-        ($ENUM:ident, $FUNC:ident, $($arg:ident),*) => {
-            let expected = vec![$(stringify!($arg)),*];
-            let result = $FUNC(
-                vec![
-                    $(
-                        col(stringify!($arg.to_string()))
-                    ),*
-                ]
-            );
-            if let Expr::ScalarFunction(ScalarFunction { fun, args }) = result {
-                let name = built_in_function::BuiltinScalarFunction::$ENUM;
-                assert_eq!(name, fun);
-                assert_eq!(expected.len(), args.len());
-            } else {
-                assert!(false, "unexpected: {:?}", result);
-            }
-        };
-    }
+            ]
+        );
+        if let Expr::ScalarFunction(ScalarFunction { func_def: ScalarFunctionDefinition::BuiltIn(fun), args }) = result {
+            let name = built_in_function::BuiltinScalarFunction::$ENUM;
+            assert_eq!(name, fun);
+            assert_eq!(expected.len(), args.len());
+        } else {
+            assert!(false, "unexpected: {:?}", result);
+        }
+    };
+}
 
     #[test]
     fn scalar_function_definitions() {
@@ -880,6 +1098,7 @@ mod test {
         test_unary_scalar_expr!(Sin, sin);
         test_unary_scalar_expr!(Cos, cos);
         test_unary_scalar_expr!(Tan, tan);
+        test_unary_scalar_expr!(Cot, cot);
         test_unary_scalar_expr!(Sinh, sinh);
         test_unary_scalar_expr!(Cosh, cosh);
         test_unary_scalar_expr!(Tanh, tanh);
@@ -896,7 +1115,8 @@ mod test {
         test_unary_scalar_expr!(Radians, radians);
         test_nary_scalar_expr!(Round, round, input);
         test_nary_scalar_expr!(Round, round, input, decimal_places);
-        test_unary_scalar_expr!(Trunc, trunc);
+        test_nary_scalar_expr!(Trunc, trunc, num);
+        test_nary_scalar_expr!(Trunc, trunc, num, precision);
         test_unary_scalar_expr!(Abs, abs);
         test_unary_scalar_expr!(Signum, signum);
         test_unary_scalar_expr!(Exp, exp);
@@ -904,6 +1124,9 @@ mod test {
         test_unary_scalar_expr!(Log10, log10);
         test_unary_scalar_expr!(Ln, ln);
         test_scalar_expr!(Atan2, atan2, y, x);
+        test_scalar_expr!(Nanvl, nanvl, x, y);
+        test_scalar_expr!(Isnan, isnan, input);
+        test_scalar_expr!(Iszero, iszero, input);
 
         test_scalar_expr!(Ascii, ascii, input);
         test_scalar_expr!(BitLength, bit_length, string);
@@ -912,6 +1135,8 @@ mod test {
         test_scalar_expr!(CharacterLength, character_length, string);
         test_scalar_expr!(Chr, chr, string);
         test_scalar_expr!(Digest, digest, string, algorithm);
+        test_scalar_expr!(Encode, encode, string, encoding);
+        test_scalar_expr!(Decode, decode, string, encoding);
         test_scalar_expr!(Gcd, gcd, arg_1, arg_2);
         test_scalar_expr!(Lcm, lcm, arg_1, arg_2);
         test_scalar_expr!(InitCap, initcap, string);
@@ -951,6 +1176,7 @@ mod test {
         test_scalar_expr!(SHA384, sha384, string);
         test_scalar_expr!(SHA512, sha512, string);
         test_scalar_expr!(SplitPart, split_part, expr, delimiter, index);
+        test_scalar_expr!(StringToArray, string_to_array, expr, delimiter, null_value);
         test_scalar_expr!(StartsWith, starts_with, string, characters);
         test_scalar_expr!(Strpos, strpos, string, substring);
         test_scalar_expr!(Substr, substr, string, position);
@@ -966,26 +1192,41 @@ mod test {
         test_scalar_expr!(FromUnixtime, from_unixtime, unixtime);
 
         test_scalar_expr!(ArrayAppend, array_append, array, element);
+        test_scalar_expr!(ArraySort, array_sort, array, desc, null_first);
+        test_scalar_expr!(ArrayPopFront, array_pop_front, array);
+        test_scalar_expr!(ArrayPopBack, array_pop_back, array);
         test_unary_scalar_expr!(ArrayDims, array_dims);
-        test_scalar_expr!(ArrayFill, array_fill, element, array);
         test_scalar_expr!(ArrayLength, array_length, array, dimension);
         test_unary_scalar_expr!(ArrayNdims, array_ndims);
         test_scalar_expr!(ArrayPosition, array_position, array, element, index);
         test_scalar_expr!(ArrayPositions, array_positions, array, element);
         test_scalar_expr!(ArrayPrepend, array_prepend, array, element);
+        test_scalar_expr!(ArrayRepeat, array_repeat, element, count);
         test_scalar_expr!(ArrayRemove, array_remove, array, element);
+        test_scalar_expr!(ArrayRemoveN, array_remove_n, array, element, max);
+        test_scalar_expr!(ArrayRemoveAll, array_remove_all, array, element);
         test_scalar_expr!(ArrayReplace, array_replace, array, from, to);
+        test_scalar_expr!(ArrayReplaceN, array_replace_n, array, from, to, max);
+        test_scalar_expr!(ArrayReplaceAll, array_replace_all, array, from, to);
         test_scalar_expr!(ArrayToString, array_to_string, array, delimiter);
         test_unary_scalar_expr!(Cardinality, cardinality);
         test_nary_scalar_expr!(MakeArray, array, input);
-        test_scalar_expr!(TrimArray, trim_array, array, n);
 
         test_unary_scalar_expr!(ArrowTypeof, arrow_typeof);
+        test_nary_scalar_expr!(OverLay, overlay, string, characters, position, len);
+        test_nary_scalar_expr!(OverLay, overlay, string, characters, position);
+        test_scalar_expr!(Levenshtein, levenshtein, string1, string2);
+        test_scalar_expr!(SubstrIndex, substr_index, string, delimiter, count);
+        test_scalar_expr!(FindInSet, find_in_set, string, stringlist);
     }
 
     #[test]
     fn uuid_function_definitions() {
-        if let Expr::ScalarFunction(ScalarFunction { fun, args }) = uuid() {
+        if let Expr::ScalarFunction(ScalarFunction {
+            func_def: ScalarFunctionDefinition::BuiltIn(fun),
+            args,
+        }) = uuid()
+        {
             let name = BuiltinScalarFunction::Uuid;
             assert_eq!(name, fun);
             assert_eq!(0, args.len());
@@ -996,10 +1237,42 @@ mod test {
 
     #[test]
     fn digest_function_definitions() {
-        if let Expr::ScalarFunction(ScalarFunction { fun, args }) =
-            digest(col("tableA.a"), lit("md5"))
+        if let Expr::ScalarFunction(ScalarFunction {
+            func_def: ScalarFunctionDefinition::BuiltIn(fun),
+            args,
+        }) = digest(col("tableA.a"), lit("md5"))
         {
             let name = BuiltinScalarFunction::Digest;
+            assert_eq!(name, fun);
+            assert_eq!(2, args.len());
+        } else {
+            unreachable!();
+        }
+    }
+
+    #[test]
+    fn encode_function_definitions() {
+        if let Expr::ScalarFunction(ScalarFunction {
+            func_def: ScalarFunctionDefinition::BuiltIn(fun),
+            args,
+        }) = encode(col("tableA.a"), lit("base64"))
+        {
+            let name = BuiltinScalarFunction::Encode;
+            assert_eq!(name, fun);
+            assert_eq!(2, args.len());
+        } else {
+            unreachable!();
+        }
+    }
+
+    #[test]
+    fn decode_function_definitions() {
+        if let Expr::ScalarFunction(ScalarFunction {
+            func_def: ScalarFunctionDefinition::BuiltIn(fun),
+            args,
+        }) = decode(col("tableA.a"), lit("hex"))
+        {
+            let name = BuiltinScalarFunction::Decode;
             assert_eq!(name, fun);
             assert_eq!(2, args.len());
         } else {

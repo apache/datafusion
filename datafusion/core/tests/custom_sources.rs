@@ -15,37 +15,39 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::{Int32Array, Int64Array};
-use arrow::compute::kernels::aggregate;
-use arrow::datatypes::{DataType, Field, Int32Type, Schema, SchemaRef};
-use arrow::record_batch::RecordBatch;
-use datafusion::execution::context::{SessionContext, SessionState, TaskContext};
-use datafusion::logical_expr::{
-    col, Expr, LogicalPlan, LogicalPlanBuilder, TableScan, UNNAMED_TABLE,
-};
-use datafusion::physical_plan::empty::EmptyExec;
-use datafusion::physical_plan::expressions::PhysicalSortExpr;
-use datafusion::physical_plan::{
-    project_schema, ColumnStatistics, ExecutionPlan, Partitioning, RecordBatchStream,
-    SendableRecordBatchStream, Statistics,
-};
-use datafusion::scalar::ScalarValue;
-use datafusion::{
-    datasource::{TableProvider, TableType},
-    physical_plan::collect,
-};
-use datafusion::{error::Result, physical_plan::DisplayFormatType};
-
-use datafusion_common::cast::as_primitive_array;
-use futures::stream::Stream;
 use std::any::Any;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use async_trait::async_trait;
+use arrow::array::{Int32Array, Int64Array};
+use arrow::compute::kernels::aggregate;
+use arrow::datatypes::{DataType, Field, Int32Type, Schema, SchemaRef};
+use arrow::record_batch::RecordBatch;
+use datafusion::datasource::{TableProvider, TableType};
+use datafusion::error::Result;
+use datafusion::execution::context::{SessionContext, SessionState, TaskContext};
+use datafusion::logical_expr::{
+    col, Expr, LogicalPlan, LogicalPlanBuilder, TableScan, UNNAMED_TABLE,
+};
+use datafusion::physical_plan::expressions::PhysicalSortExpr;
+use datafusion::physical_plan::{
+    collect, ColumnStatistics, DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning,
+    RecordBatchStream, SendableRecordBatchStream, Statistics,
+};
+use datafusion::scalar::ScalarValue;
+use datafusion_common::cast::as_primitive_array;
+use datafusion_common::project_schema;
+use datafusion_common::stats::Precision;
 
-//// Custom source dataframe tests ////
+use async_trait::async_trait;
+use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
+use futures::stream::Stream;
+
+/// Also run all tests that are found in the `custom_sources_cases` directory
+mod custom_sources_cases;
+
+//--- Custom source dataframe tests ---//
 
 struct CustomTableProvider;
 #[derive(Debug, Clone)]
@@ -98,6 +100,20 @@ impl Stream for TestCustomRecordBatchStream {
     }
 }
 
+impl DisplayAs for CustomExecutionPlan {
+    fn fmt_as(
+        &self,
+        t: DisplayFormatType,
+        f: &mut std::fmt::Formatter,
+    ) -> std::fmt::Result {
+        match t {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => {
+                write!(f, "CustomExecutionPlan: projection={:#?}", self.projection)
+            }
+        }
+    }
+}
+
 impl ExecutionPlan for CustomExecutionPlan {
     fn as_any(&self) -> &dyn Any {
         self
@@ -135,42 +151,28 @@ impl ExecutionPlan for CustomExecutionPlan {
         Ok(Box::pin(TestCustomRecordBatchStream { nb_batch: 1 }))
     }
 
-    fn fmt_as(
-        &self,
-        t: DisplayFormatType,
-        f: &mut std::fmt::Formatter,
-    ) -> std::fmt::Result {
-        match t {
-            DisplayFormatType::Default => {
-                write!(f, "CustomExecutionPlan: projection={:#?}", self.projection)
-            }
-        }
-    }
-
-    fn statistics(&self) -> Statistics {
+    fn statistics(&self) -> Result<Statistics> {
         let batch = TEST_CUSTOM_RECORD_BATCH!().unwrap();
-        Statistics {
-            is_exact: true,
-            num_rows: Some(batch.num_rows()),
-            total_byte_size: None,
-            column_statistics: Some(
-                self.projection
-                    .clone()
-                    .unwrap_or_else(|| (0..batch.columns().len()).collect())
-                    .iter()
-                    .map(|i| ColumnStatistics {
-                        null_count: Some(batch.column(*i).null_count()),
-                        min_value: Some(ScalarValue::Int32(aggregate::min(
-                            as_primitive_array::<Int32Type>(batch.column(*i)).unwrap(),
-                        ))),
-                        max_value: Some(ScalarValue::Int32(aggregate::max(
-                            as_primitive_array::<Int32Type>(batch.column(*i)).unwrap(),
-                        ))),
-                        ..Default::default()
-                    })
-                    .collect(),
-            ),
-        }
+        Ok(Statistics {
+            num_rows: Precision::Exact(batch.num_rows()),
+            total_byte_size: Precision::Absent,
+            column_statistics: self
+                .projection
+                .clone()
+                .unwrap_or_else(|| (0..batch.columns().len()).collect())
+                .iter()
+                .map(|i| ColumnStatistics {
+                    null_count: Precision::Exact(batch.column(*i).null_count()),
+                    min_value: Precision::Exact(ScalarValue::Int32(aggregate::min(
+                        as_primitive_array::<Int32Type>(batch.column(*i)).unwrap(),
+                    ))),
+                    max_value: Precision::Exact(ScalarValue::Int32(aggregate::max(
+                        as_primitive_array::<Int32Type>(batch.column(*i)).unwrap(),
+                    ))),
+                    ..Default::default()
+                })
+                .collect(),
+        })
     }
 }
 
@@ -254,15 +256,15 @@ async fn optimizers_catch_all_statistics() {
 
     let physical_plan = df.create_physical_plan().await.unwrap();
 
-    // when the optimization kicks in, the source is replaced by an EmptyExec
+    // when the optimization kicks in, the source is replaced by an PlaceholderRowExec
     assert!(
-        contains_empty_exec(Arc::clone(&physical_plan)),
+        contains_place_holder_exec(Arc::clone(&physical_plan)),
         "Expected aggregate_statistics optimizations missing: {physical_plan:?}"
     );
 
     let expected = RecordBatch::try_new(
         Arc::new(Schema::new(vec![
-            Field::new("COUNT(UInt8(1))", DataType::Int64, false),
+            Field::new("COUNT(*)", DataType::Int64, false),
             Field::new("MIN(test.c1)", DataType::Int32, false),
             Field::new("MAX(test.c1)", DataType::Int32, false),
         ])),
@@ -281,12 +283,12 @@ async fn optimizers_catch_all_statistics() {
     assert_eq!(format!("{:?}", actual[0]), format!("{expected:?}"));
 }
 
-fn contains_empty_exec(plan: Arc<dyn ExecutionPlan>) -> bool {
-    if plan.as_any().is::<EmptyExec>() {
+fn contains_place_holder_exec(plan: Arc<dyn ExecutionPlan>) -> bool {
+    if plan.as_any().is::<PlaceholderRowExec>() {
         true
     } else if plan.children().len() != 1 {
         false
     } else {
-        contains_empty_exec(Arc::clone(&plan.children()[0]))
+        contains_place_holder_exec(Arc::clone(&plan.children()[0]))
     }
 }

@@ -22,14 +22,13 @@ use std::any::Any;
 use std::fmt::Debug;
 use std::sync::Arc;
 
-use arrow::array::{Array, ArrayRef};
+use arrow::array::ArrayRef;
 use std::collections::HashSet;
 
 use crate::aggregate::utils::down_cast_any_ref;
 use crate::expressions::format_state_name;
 use crate::{AggregateExpr, PhysicalExpr};
-use datafusion_common::Result;
-use datafusion_common::ScalarValue;
+use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::Accumulator;
 
 /// Expression for a ARRAY_AGG(DISTINCT) aggregation.
@@ -41,6 +40,8 @@ pub struct DistinctArrayAgg {
     input_data_type: DataType,
     /// The input expression
     expr: Arc<dyn PhysicalExpr>,
+    /// If the input expression can have NULLs
+    nullable: bool,
 }
 
 impl DistinctArrayAgg {
@@ -49,12 +50,14 @@ impl DistinctArrayAgg {
         expr: Arc<dyn PhysicalExpr>,
         name: impl Into<String>,
         input_data_type: DataType,
+        nullable: bool,
     ) -> Self {
         let name = name.into();
         Self {
             name,
-            expr,
             input_data_type,
+            expr,
+            nullable,
         }
     }
 }
@@ -68,8 +71,9 @@ impl AggregateExpr for DistinctArrayAgg {
     fn field(&self) -> Result<Field> {
         Ok(Field::new_list(
             &self.name,
+            // This should be the same as return type of AggregateFunction::ArrayAgg
             Field::new("item", self.input_data_type.clone(), true),
-            false,
+            self.nullable,
         ))
     }
 
@@ -83,7 +87,7 @@ impl AggregateExpr for DistinctArrayAgg {
         Ok(vec![Field::new_list(
             format_state_name(&self.name, "distinct_array_agg"),
             Field::new("item", self.input_data_type.clone(), true),
-            false,
+            self.nullable,
         )])
     }
 
@@ -126,18 +130,16 @@ impl DistinctArrayAggAccumulator {
 
 impl Accumulator for DistinctArrayAggAccumulator {
     fn state(&self) -> Result<Vec<ScalarValue>> {
-        Ok(vec![ScalarValue::new_list(
-            Some(self.values.clone().into_iter().collect()),
-            self.datatype.clone(),
-        )])
+        Ok(vec![self.evaluate()?])
     }
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         assert_eq!(values.len(), 1, "batch input should only include 1 column!");
 
-        let arr = &values[0];
-        for i in 0..arr.len() {
-            self.values.insert(ScalarValue::try_from_array(arr, i)?);
+        let array = &values[0];
+        let scalars = ScalarValue::convert_array_to_scalar_vec(array)?;
+        for scalar in scalars {
+            self.values.extend(scalar)
         }
         Ok(())
     }
@@ -147,20 +149,24 @@ impl Accumulator for DistinctArrayAggAccumulator {
             return Ok(());
         }
 
-        for array in states {
-            for j in 0..array.len() {
-                self.values.insert(ScalarValue::try_from_array(array, j)?);
-            }
+        assert_eq!(
+            states.len(),
+            1,
+            "array_agg_distinct states must contain single array"
+        );
+
+        let scalar_vec = ScalarValue::convert_array_to_scalar_vec(&states[0])?;
+        for scalars in scalar_vec {
+            self.values.extend(scalars)
         }
 
         Ok(())
     }
 
     fn evaluate(&self) -> Result<ScalarValue> {
-        Ok(ScalarValue::new_list(
-            Some(self.values.clone().into_iter().collect()),
-            self.datatype.clone(),
-        ))
+        let values: Vec<ScalarValue> = self.values.iter().cloned().collect();
+        let arr = ScalarValue::new_list(&values, &self.datatype);
+        Ok(ScalarValue::List(arr))
     }
 
     fn size(&self) -> usize {
@@ -173,12 +179,57 @@ impl Accumulator for DistinctArrayAggAccumulator {
 
 #[cfg(test)]
 mod tests {
+
     use super::*;
     use crate::expressions::col;
     use crate::expressions::tests::aggregate;
     use arrow::array::{ArrayRef, Int32Array};
     use arrow::datatypes::{DataType, Schema};
     use arrow::record_batch::RecordBatch;
+    use arrow_array::cast::as_list_array;
+    use arrow_array::types::Int32Type;
+    use arrow_array::{Array, ListArray};
+    use arrow_buffer::OffsetBuffer;
+    use datafusion_common::utils::array_into_list_array;
+    use datafusion_common::{internal_err, DataFusionError};
+
+    // arrow::compute::sort cann't sort ListArray directly, so we need to sort the inner primitive array and wrap it back into ListArray.
+    fn sort_list_inner(arr: ScalarValue) -> ScalarValue {
+        let arr = match arr {
+            ScalarValue::List(arr) => {
+                let list_arr = as_list_array(&arr);
+                list_arr.value(0)
+            }
+            _ => {
+                panic!("Expected ScalarValue::List, got {:?}", arr)
+            }
+        };
+
+        let arr = arrow::compute::sort(&arr, None).unwrap();
+        let list_arr = array_into_list_array(arr);
+        ScalarValue::List(Arc::new(list_arr))
+    }
+
+    fn compare_list_contents(expected: ScalarValue, actual: ScalarValue) -> Result<()> {
+        let actual = sort_list_inner(actual);
+
+        match (&expected, &actual) {
+            (ScalarValue::List(arr1), ScalarValue::List(arr2)) => {
+                if arr1.eq(arr2) {
+                    Ok(())
+                } else {
+                    internal_err!(
+                        "Actual value {:?} not found in expected values {:?}",
+                        actual,
+                        expected
+                    )
+                }
+            }
+            _ => {
+                internal_err!("Expected scalar lists as inputs")
+            }
+        }
+    }
 
     fn check_distinct_array_agg(
         input: ArrayRef,
@@ -192,108 +243,218 @@ mod tests {
             col("a", &schema)?,
             "bla".to_string(),
             datatype,
+            true,
         ));
         let actual = aggregate(&batch, agg)?;
 
-        match (expected, actual) {
-            (ScalarValue::List(Some(mut e), _), ScalarValue::List(Some(mut a), _)) => {
-                // workaround lack of Ord of ScalarValue
-                let cmp = |a: &ScalarValue, b: &ScalarValue| {
-                    a.partial_cmp(b).expect("Can compare ScalarValues")
-                };
+        compare_list_contents(expected, actual)
+    }
 
-                e.sort_by(cmp);
-                a.sort_by(cmp);
-                // Check that the inputs are the same
-                assert_eq!(e, a);
-            }
-            _ => {
-                unreachable!()
-            }
-        }
+    fn check_merge_distinct_array_agg(
+        input1: ArrayRef,
+        input2: ArrayRef,
+        expected: ScalarValue,
+        datatype: DataType,
+    ) -> Result<()> {
+        let schema = Schema::new(vec![Field::new("a", datatype.clone(), false)]);
+        let agg = Arc::new(DistinctArrayAgg::new(
+            col("a", &schema)?,
+            "bla".to_string(),
+            datatype,
+            true,
+        ));
 
-        Ok(())
+        let mut accum1 = agg.create_accumulator()?;
+        let mut accum2 = agg.create_accumulator()?;
+
+        accum1.update_batch(&[input1])?;
+        accum2.update_batch(&[input2])?;
+
+        let array = accum2.state()?[0].raw_data()?;
+        accum1.merge_batch(&[array])?;
+
+        let actual = accum1.evaluate()?;
+
+        compare_list_contents(expected, actual)
     }
 
     #[test]
     fn distinct_array_agg_i32() -> Result<()> {
         let col: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 7, 4, 5, 2]));
+        let expected =
+            ScalarValue::List(Arc::new(
+                ListArray::from_iter_primitive::<Int32Type, _, _>(vec![Some(vec![
+                    Some(1),
+                    Some(2),
+                    Some(4),
+                    Some(5),
+                    Some(7),
+                ])]),
+            ));
 
-        let out = ScalarValue::new_list(
-            Some(vec![
-                ScalarValue::Int32(Some(1)),
-                ScalarValue::Int32(Some(2)),
-                ScalarValue::Int32(Some(7)),
-                ScalarValue::Int32(Some(4)),
-                ScalarValue::Int32(Some(5)),
-            ]),
-            DataType::Int32,
-        );
+        check_distinct_array_agg(col, expected, DataType::Int32)
+    }
 
-        check_distinct_array_agg(col, out, DataType::Int32)
+    #[test]
+    fn merge_distinct_array_agg_i32() -> Result<()> {
+        let col1: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 7, 4, 5, 2]));
+        let col2: ArrayRef = Arc::new(Int32Array::from(vec![1, 3, 7, 8, 4]));
+
+        let expected =
+            ScalarValue::List(Arc::new(
+                ListArray::from_iter_primitive::<Int32Type, _, _>(vec![Some(vec![
+                    Some(1),
+                    Some(2),
+                    Some(3),
+                    Some(4),
+                    Some(5),
+                    Some(7),
+                    Some(8),
+                ])]),
+            ));
+
+        check_merge_distinct_array_agg(col1, col2, expected, DataType::Int32)
     }
 
     #[test]
     fn distinct_array_agg_nested() -> Result<()> {
         // [[1, 2, 3], [4, 5]]
-        let l1 = ScalarValue::new_list(
-            Some(vec![
-                ScalarValue::new_list(
-                    Some(vec![
-                        ScalarValue::from(1i32),
-                        ScalarValue::from(2i32),
-                        ScalarValue::from(3i32),
-                    ]),
-                    DataType::Int32,
-                ),
-                ScalarValue::new_list(
-                    Some(vec![ScalarValue::from(4i32), ScalarValue::from(5i32)]),
-                    DataType::Int32,
-                ),
-            ]),
-            DataType::List(Arc::new(Field::new("item", DataType::Int32, true))),
+        let a1 = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![Some(vec![
+            Some(1),
+            Some(2),
+            Some(3),
+        ])]);
+        let a2 = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![Some(vec![
+            Some(4),
+            Some(5),
+        ])]);
+        let l1 = ListArray::new(
+            Arc::new(Field::new("item", a1.data_type().to_owned(), true)),
+            OffsetBuffer::from_lengths([2]),
+            arrow::compute::concat(&[&a1, &a2]).unwrap(),
+            None,
         );
 
         // [[6], [7, 8]]
-        let l2 = ScalarValue::new_list(
-            Some(vec![
-                ScalarValue::new_list(
-                    Some(vec![ScalarValue::from(6i32)]),
-                    DataType::Int32,
-                ),
-                ScalarValue::new_list(
-                    Some(vec![ScalarValue::from(7i32), ScalarValue::from(8i32)]),
-                    DataType::Int32,
-                ),
-            ]),
-            DataType::List(Arc::new(Field::new("item", DataType::Int32, true))),
+        let a1 =
+            ListArray::from_iter_primitive::<Int32Type, _, _>(vec![Some(vec![Some(6)])]);
+        let a2 = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![Some(vec![
+            Some(7),
+            Some(8),
+        ])]);
+        let l2 = ListArray::new(
+            Arc::new(Field::new("item", a1.data_type().to_owned(), true)),
+            OffsetBuffer::from_lengths([2]),
+            arrow::compute::concat(&[&a1, &a2]).unwrap(),
+            None,
         );
 
         // [[9]]
-        let l3 = ScalarValue::new_list(
-            Some(vec![ScalarValue::new_list(
-                Some(vec![ScalarValue::from(9i32)]),
-                DataType::Int32,
-            )]),
-            DataType::List(Arc::new(Field::new("item", DataType::Int32, true))),
+        let a1 =
+            ListArray::from_iter_primitive::<Int32Type, _, _>(vec![Some(vec![Some(9)])]);
+        let l3 = ListArray::new(
+            Arc::new(Field::new("item", a1.data_type().to_owned(), true)),
+            OffsetBuffer::from_lengths([1]),
+            Arc::new(a1),
+            None,
         );
 
-        let list = ScalarValue::new_list(
-            Some(vec![l1.clone(), l2.clone(), l3.clone()]),
-            DataType::List(Arc::new(Field::new("item", DataType::Int32, true))),
-        );
+        let l1 = ScalarValue::List(Arc::new(l1));
+        let l2 = ScalarValue::List(Arc::new(l2));
+        let l3 = ScalarValue::List(Arc::new(l3));
 
         // Duplicate l1 in the input array and check that it is deduped in the output.
         let array = ScalarValue::iter_to_array(vec![l1.clone(), l2, l3, l1]).unwrap();
 
+        let expected =
+            ScalarValue::List(Arc::new(
+                ListArray::from_iter_primitive::<Int32Type, _, _>(vec![Some(vec![
+                    Some(1),
+                    Some(2),
+                    Some(3),
+                    Some(4),
+                    Some(5),
+                    Some(6),
+                    Some(7),
+                    Some(8),
+                    Some(9),
+                ])]),
+            ));
+
         check_distinct_array_agg(
             array,
-            list,
+            expected,
             DataType::List(Arc::new(Field::new_list(
                 "item",
                 Field::new("item", DataType::Int32, true),
                 true,
             ))),
         )
+    }
+
+    #[test]
+    fn merge_distinct_array_agg_nested() -> Result<()> {
+        // [[1, 2], [3, 4]]
+        let a1 = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![Some(vec![
+            Some(1),
+            Some(2),
+        ])]);
+        let a2 = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![Some(vec![
+            Some(3),
+            Some(4),
+        ])]);
+        let l1 = ListArray::new(
+            Arc::new(Field::new("item", a1.data_type().to_owned(), true)),
+            OffsetBuffer::from_lengths([2]),
+            arrow::compute::concat(&[&a1, &a2]).unwrap(),
+            None,
+        );
+
+        let a1 =
+            ListArray::from_iter_primitive::<Int32Type, _, _>(vec![Some(vec![Some(5)])]);
+        let l2 = ListArray::new(
+            Arc::new(Field::new("item", a1.data_type().to_owned(), true)),
+            OffsetBuffer::from_lengths([1]),
+            Arc::new(a1),
+            None,
+        );
+
+        // [[6, 7], [8]]
+        let a1 = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![Some(vec![
+            Some(6),
+            Some(7),
+        ])]);
+        let a2 =
+            ListArray::from_iter_primitive::<Int32Type, _, _>(vec![Some(vec![Some(8)])]);
+        let l3 = ListArray::new(
+            Arc::new(Field::new("item", a1.data_type().to_owned(), true)),
+            OffsetBuffer::from_lengths([2]),
+            arrow::compute::concat(&[&a1, &a2]).unwrap(),
+            None,
+        );
+
+        let l1 = ScalarValue::List(Arc::new(l1));
+        let l2 = ScalarValue::List(Arc::new(l2));
+        let l3 = ScalarValue::List(Arc::new(l3));
+
+        // Duplicate l1 in the input array and check that it is deduped in the output.
+        let input1 = ScalarValue::iter_to_array(vec![l1.clone(), l2]).unwrap();
+        let input2 = ScalarValue::iter_to_array(vec![l1, l3]).unwrap();
+
+        let expected =
+            ScalarValue::List(Arc::new(
+                ListArray::from_iter_primitive::<Int32Type, _, _>(vec![Some(vec![
+                    Some(1),
+                    Some(2),
+                    Some(3),
+                    Some(4),
+                    Some(5),
+                    Some(6),
+                    Some(7),
+                    Some(8),
+                ])]),
+            ));
+
+        check_merge_distinct_array_agg(input1, input2, expected, DataType::Int32)
     }
 }

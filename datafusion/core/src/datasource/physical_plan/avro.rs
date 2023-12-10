@@ -16,22 +16,22 @@
 // under the License.
 
 //! Execution plan for reading line-delimited Avro files
-use crate::error::Result;
-use crate::physical_plan::expressions::PhysicalSortExpr;
-use crate::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
-use crate::physical_plan::{
-    ordering_equivalence_properties_helper, DisplayFormatType, ExecutionPlan,
-    Partitioning, SendableRecordBatchStream, Statistics,
-};
-use datafusion_execution::TaskContext;
-
-use arrow::datatypes::SchemaRef;
-use datafusion_physical_expr::{LexOrdering, OrderingEquivalenceProperties};
 
 use std::any::Any;
 use std::sync::Arc;
 
 use super::FileScanConfig;
+use crate::error::Result;
+use crate::physical_plan::expressions::PhysicalSortExpr;
+use crate::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
+use crate::physical_plan::{
+    DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream,
+    Statistics,
+};
+
+use arrow::datatypes::SchemaRef;
+use datafusion_execution::TaskContext;
+use datafusion_physical_expr::{EquivalenceProperties, LexOrdering};
 
 /// Execution plan for scanning Avro data source
 #[derive(Debug, Clone)]
@@ -65,6 +65,17 @@ impl AvroExec {
     }
 }
 
+impl DisplayAs for AvroExec {
+    fn fmt_as(
+        &self,
+        t: DisplayFormatType,
+        f: &mut std::fmt::Formatter,
+    ) -> std::fmt::Result {
+        write!(f, "AvroExec: ")?;
+        self.base_config.fmt_as(t, f)
+    }
+}
+
 impl ExecutionPlan for AvroExec {
     fn as_any(&self) -> &dyn Any {
         self
@@ -88,8 +99,8 @@ impl ExecutionPlan for AvroExec {
             .map(|ordering| ordering.as_slice())
     }
 
-    fn ordering_equivalence_properties(&self) -> OrderingEquivalenceProperties {
-        ordering_equivalence_properties_helper(
+    fn equivalence_properties(&self) -> EquivalenceProperties {
+        EquivalenceProperties::new_with_orderings(
             self.schema(),
             &self.projected_output_ordering,
         )
@@ -141,20 +152,8 @@ impl ExecutionPlan for AvroExec {
         Ok(Box::pin(stream))
     }
 
-    fn fmt_as(
-        &self,
-        t: DisplayFormatType,
-        f: &mut std::fmt::Formatter,
-    ) -> std::fmt::Result {
-        match t {
-            DisplayFormatType::Default => {
-                write!(f, "AvroExec: {}", self.base_config)
-            }
-        }
-    }
-
-    fn statistics(&self) -> Statistics {
-        self.projected_statistics.clone()
+    fn statistics(&self) -> Result<Statistics> {
+        Ok(self.projected_statistics.clone())
     }
 
     fn metrics(&self) -> Option<MetricsSet> {
@@ -165,11 +164,12 @@ impl ExecutionPlan for AvroExec {
 #[cfg(feature = "avro")]
 mod private {
     use super::*;
+    use crate::datasource::avro_to_arrow::Reader as AvroReader;
     use crate::datasource::physical_plan::file_stream::{FileOpenFuture, FileOpener};
     use crate::datasource::physical_plan::FileMeta;
     use bytes::Buf;
     use futures::StreamExt;
-    use object_store::{GetResult, ObjectStore};
+    use object_store::{GetResultPayload, ObjectStore};
 
     pub struct AvroConfig {
         pub schema: SchemaRef,
@@ -179,11 +179,8 @@ mod private {
     }
 
     impl AvroConfig {
-        fn open<R: std::io::Read>(
-            &self,
-            reader: R,
-        ) -> Result<crate::avro_to_arrow::Reader<'static, R>> {
-            crate::avro_to_arrow::Reader::try_new(
+        fn open<R: std::io::Read>(&self, reader: R) -> Result<AvroReader<'static, R>> {
+            AvroReader::try_new(
                 reader,
                 self.schema.clone(),
                 self.batch_size,
@@ -200,12 +197,13 @@ mod private {
         fn open(&self, file_meta: FileMeta) -> Result<FileOpenFuture> {
             let config = self.config.clone();
             Ok(Box::pin(async move {
-                match config.object_store.get(file_meta.location()).await? {
-                    GetResult::File(file, _) => {
+                let r = config.object_store.get(file_meta.location()).await?;
+                match r.payload {
+                    GetResultPayload::File(file, _) => {
                         let reader = config.open(file)?;
                         Ok(futures::stream::iter(reader).boxed())
                     }
-                    r @ GetResult::Stream(_) => {
+                    GetResultPayload::Stream(_) => {
                         let bytes = r.bytes().await?;
                         let reader = config.open(bytes.reader())?;
                         Ok(futures::stream::iter(reader).boxed())
@@ -222,12 +220,12 @@ mod tests {
     use crate::datasource::file_format::{avro::AvroFormat, FileFormat};
     use crate::datasource::listing::PartitionedFile;
     use crate::datasource::object_store::ObjectStoreUrl;
-    use crate::datasource::physical_plan::chunked_store::ChunkedStore;
     use crate::prelude::SessionContext;
     use crate::scalar::ScalarValue;
     use crate::test::object_store::local_unpartitioned_file;
     use arrow::datatypes::{DataType, Field, SchemaBuilder};
     use futures::StreamExt;
+    use object_store::chunked::ChunkedStore;
     use object_store::local::LocalFileSystem;
     use object_store::ObjectStore;
     use rstest::*;
@@ -272,8 +270,8 @@ mod tests {
         let avro_exec = AvroExec::new(FileScanConfig {
             object_store_url: ObjectStoreUrl::local_filesystem(),
             file_groups: vec![vec![meta.into()]],
+            statistics: Statistics::new_unknown(&file_schema),
             file_schema,
-            statistics: Statistics::default(),
             projection: Some(vec![0, 1, 2]),
             limit: None,
             table_partition_cols: vec![],
@@ -291,7 +289,7 @@ mod tests {
             .expect("plan iterator empty")
             .expect("plan iterator returned an error");
 
-        let expected = vec![
+        let expected = [
             "+----+----------+-------------+",
             "| id | bool_col | tinyint_col |",
             "+----+----------+-------------+",
@@ -344,8 +342,8 @@ mod tests {
         let avro_exec = AvroExec::new(FileScanConfig {
             object_store_url,
             file_groups: vec![vec![meta.into()]],
+            statistics: Statistics::new_unknown(&file_schema),
             file_schema,
-            statistics: Statistics::default(),
             projection,
             limit: None,
             table_partition_cols: vec![],
@@ -364,7 +362,7 @@ mod tests {
             .expect("plan iterator empty")
             .expect("plan iterator returned an error");
 
-        let expected = vec![
+        let expected = [
             "+----+----------+-------------+-------------+",
             "| id | bool_col | tinyint_col | missing_col |",
             "+----+----------+-------------+-------------+",
@@ -408,8 +406,7 @@ mod tests {
             .await?;
 
         let mut partitioned_file = PartitionedFile::from(meta);
-        partitioned_file.partition_values =
-            vec![ScalarValue::Utf8(Some("2021-10-26".to_owned()))];
+        partitioned_file.partition_values = vec![ScalarValue::from("2021-10-26")];
 
         let avro_exec = AvroExec::new(FileScanConfig {
             // select specific columns of the files as well as the partitioning
@@ -417,10 +414,10 @@ mod tests {
             projection: Some(vec![0, 1, file_schema.fields().len(), 2]),
             object_store_url,
             file_groups: vec![vec![partitioned_file]],
+            statistics: Statistics::new_unknown(&file_schema),
             file_schema,
-            statistics: Statistics::default(),
             limit: None,
-            table_partition_cols: vec![("date".to_owned(), DataType::Utf8)],
+            table_partition_cols: vec![Field::new("date", DataType::Utf8, false)],
             output_ordering: vec![],
             infinite_source: false,
         });
@@ -436,7 +433,7 @@ mod tests {
             .expect("plan iterator empty")
             .expect("plan iterator returned an error");
 
-        let expected = vec![
+        let expected = [
             "+----+----------+------------+-------------+",
             "| id | bool_col | date       | tinyint_col |",
             "+----+----------+------------+-------------+",

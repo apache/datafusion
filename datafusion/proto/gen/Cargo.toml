@@ -19,8 +19,8 @@
 name = "gen"
 description = "Code generation for proto"
 version = "0.1.0"
-edition = "2021"
-rust-version = "1.62"
+edition = { workspace = true }
+rust-version = "1.64"
 authors = ["Apache Arrow <dev@arrow.apache.org>"]
 homepage = "https://github.com/apache/arrow-datafusion"
 repository = "https://github.com/apache/arrow-datafusion"
@@ -31,5 +31,5 @@ publish = false
 
 [dependencies]
 # Pin these dependencies so that the generated output is deterministic
-pbjson-build = { version = "=0.5.1" }
-prost-build = { version = "=0.11.9" }
+pbjson-build = "=0.6.2"
+prost-build = "=0.12.3"

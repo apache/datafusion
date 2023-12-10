@@ -103,4 +103,7 @@ datafusion/CHANGELOG.md.bak
 .githubchangeloggenerator.cache*
 
 # Generated tpch data
-datafusion/core/tests/sqllogictests/test_files/tpch/data/*
+datafusion/sqllogictests/test_files/tpch/data/*
+
+# Scratch temp dir for sqllogictests
+datafusion/sqllogictest/test_files/scratch*

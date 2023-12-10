@@ -19,9 +19,11 @@ use std::sync::Arc;
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 
-use datafusion_common::{DataFusionError, Result, ScalarValue};
+use datafusion_common::{
+    not_impl_err, plan_err, sql_err, Constraints, DataFusionError, Result, ScalarValue,
+};
 use datafusion_expr::{
-    CreateMemoryTable, DdlStatement, Expr, LogicalPlan, LogicalPlanBuilder,
+    CreateMemoryTable, DdlStatement, Distinct, Expr, LogicalPlan, LogicalPlanBuilder,
 };
 use sqlparser::ast::{
     Expr as SQLExpr, Offset as SQLOffset, OrderByExpr, Query, SetExpr, Value,
@@ -52,18 +54,16 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             // Process CTEs from top to bottom
             // do not allow self-references
             if with.recursive {
-                return Err(DataFusionError::NotImplemented(
-                    "Recursive CTEs are not supported".to_string(),
-                ));
+                return not_impl_err!("Recursive CTEs are not supported");
             }
 
             for cte in with.cte_tables {
                 // A `WITH` block can't use the same name more than once
                 let cte_name = self.normalizer.normalize(cte.alias.name.clone());
                 if planner_context.contains_cte(&cte_name) {
-                    return Err(DataFusionError::SQL(ParserError(format!(
+                    return sql_err!(ParserError(format!(
                         "WITH query name {cte_name:?} specified more than once"
-                    ))));
+                    )));
                 }
                 // create logical plan & pass backreferencing CTEs
                 // CTE expr don't need extend outer_query_schema
@@ -86,10 +86,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 let select_into = select.into.unwrap();
                 LogicalPlan::Ddl(DdlStatement::CreateMemoryTable(CreateMemoryTable {
                     name: self.object_name_to_table_reference(select_into.name)?,
-                    primary_key: Vec::new(),
+                    constraints: Constraints::empty(),
                     input: Arc::new(plan),
                     if_not_exists: false,
                     or_replace: false,
+                    column_defaults: vec![],
                 }))
             }
             _ => plan,
@@ -117,15 +118,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             )? {
                 Expr::Literal(ScalarValue::Int64(Some(s))) => {
                     if s < 0 {
-                        return Err(DataFusionError::Plan(format!(
-                            "Offset must be >= 0, '{s}' was provided."
-                        )));
+                        return plan_err!("Offset must be >= 0, '{s}' was provided.");
                     }
                     Ok(s as usize)
                 }
-                _ => Err(DataFusionError::Plan(
-                    "Unexpected expression in OFFSET clause".to_string(),
-                )),
+                _ => plan_err!("Unexpected expression in OFFSET clause"),
             }?,
             _ => 0,
         };
@@ -142,9 +139,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     Expr::Literal(ScalarValue::Int64(Some(n))) if n >= 0 => {
                         Ok(n as usize)
                     }
-                    _ => Err(DataFusionError::Plan(
-                        "LIMIT must not be negative".to_string(),
-                    )),
+                    _ => plan_err!("LIMIT must not be negative"),
                 }?;
                 Some(n)
             }
@@ -166,7 +161,15 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         }
 
         let order_by_rex =
-            self.order_by_to_sort_expr(&order_by, plan.schema(), planner_context)?;
-        LogicalPlanBuilder::from(plan).sort(order_by_rex)?.build()
+            self.order_by_to_sort_expr(&order_by, plan.schema(), planner_context, true)?;
+
+        if let LogicalPlan::Distinct(Distinct::On(ref distinct_on)) = plan {
+            // In case of `DISTINCT ON` we must capture the sort expressions since during the plan
+            // optimization we're effectively doing a `first_value` aggregation according to them.
+            let distinct_on = distinct_on.clone().with_sort_expr(order_by_rex)?;
+            Ok(LogicalPlan::Distinct(Distinct::On(distinct_on)))
+        } else {
+            LogicalPlanBuilder::from(plan).sort(order_by_rex)?.build()
+        }
     }
 }

@@ -15,18 +15,21 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use async_recursion::async_recursion;
-use chrono::DateTime;
+use std::collections::HashMap;
+use std::sync::Arc;
+
 use datafusion::arrow::datatypes::Schema;
+use datafusion::common::not_impl_err;
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::object_store::ObjectStoreUrl;
 use datafusion::datasource::physical_plan::{FileScanConfig, ParquetExec};
 use datafusion::error::{DataFusionError, Result};
-use datafusion::physical_plan::ExecutionPlan;
+use datafusion::physical_plan::{ExecutionPlan, Statistics};
 use datafusion::prelude::SessionContext;
+
+use async_recursion::async_recursion;
+use chrono::DateTime;
 use object_store::ObjectMeta;
-use std::collections::HashMap;
-use std::sync::Arc;
 use substrait::proto::read_rel::local_files::file_or_files::PathType;
 use substrait::proto::{
     expression::MaskExpression, read_rel::ReadType, rel::RelType, Rel,
@@ -35,26 +38,20 @@ use substrait::proto::{
 /// Convert Substrait Rel to DataFusion ExecutionPlan
 #[async_recursion]
 pub async fn from_substrait_rel(
-    _ctx: &mut SessionContext,
+    _ctx: &SessionContext,
     rel: &Rel,
     _extensions: &HashMap<u32, &String>,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     match &rel.rel_type {
         Some(RelType::Read(read)) => {
             if read.filter.is_some() || read.best_effort_filter.is_some() {
-                return Err(DataFusionError::NotImplemented(
-                    "Read with filter is not supported".to_string(),
-                ));
+                return not_impl_err!("Read with filter is not supported");
             }
             if read.base_schema.is_some() {
-                return Err(DataFusionError::NotImplemented(
-                    "Read with schema is not supported".to_string(),
-                ));
+                return not_impl_err!("Read with schema is not supported");
             }
             if read.advanced_extension.is_some() {
-                return Err(DataFusionError::NotImplemented(
-                    "Read with AdvancedExtension is not supported".to_string(),
-                ));
+                return not_impl_err!("Read with AdvancedExtension is not supported");
             }
             match &read.as_ref().read_type {
                 Some(ReadType::LocalFiles(files)) => {
@@ -92,6 +89,7 @@ pub async fn from_substrait_rel(
                                 location: path.into(),
                                 size,
                                 e_tag: None,
+                                version: None,
                             },
                             partition_values: vec![],
                             range: None,
@@ -109,7 +107,7 @@ pub async fn from_substrait_rel(
                         object_store_url: ObjectStoreUrl::local_filesystem(),
                         file_schema: Arc::new(Schema::empty()),
                         file_groups,
-                        statistics: Default::default(),
+                        statistics: Statistics::new_unknown(&Schema::empty()),
                         projection: None,
                         limit: None,
                         table_partition_cols: vec![],
@@ -131,15 +129,11 @@ pub async fn from_substrait_rel(
                     Ok(Arc::new(ParquetExec::new(base_config, None, None))
                         as Arc<dyn ExecutionPlan>)
                 }
-                _ => Err(DataFusionError::NotImplemented(
+                _ => not_impl_err!(
                     "Only LocalFile reads are supported when parsing physical"
-                        .to_string(),
-                )),
+                ),
             }
         }
-        _ => Err(DataFusionError::NotImplemented(format!(
-            "Unsupported RelType: {:?}",
-            rel.rel_type
-        ))),
+        _ => not_impl_err!("Unsupported RelType: {:?}", rel.rel_type),
     }
 }

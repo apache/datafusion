@@ -97,7 +97,7 @@ mod tests {
         let optimizer = Optimizer::with_rules(vec![Arc::new(EliminateLimit::new())]);
         let optimized_plan = optimizer
             .optimize_recursively(
-                optimizer.rules.get(0).unwrap(),
+                optimizer.rules.first().unwrap(),
                 plan,
                 &OptimizerContext::new(),
             )?

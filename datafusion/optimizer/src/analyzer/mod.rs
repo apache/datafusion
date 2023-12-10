@@ -40,7 +40,7 @@ use std::time::Instant;
 /// [`AnalyzerRule`]s transform [`LogicalPlan`]s in some way to make
 /// the plan valid prior to the rest of the DataFusion optimization process.
 ///
-/// For example, it may resolve [`Expr]s into more specific forms such
+/// For example, it may resolve [`Expr`]s into more specific forms such
 /// as a subquery reference, to do type coercion to ensure the types
 /// of operands are correct.
 ///

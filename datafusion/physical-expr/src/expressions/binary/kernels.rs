@@ -24,6 +24,7 @@ use arrow::compute::kernels::bitwise::{
     bitwise_xor, bitwise_xor_scalar,
 };
 use arrow::datatypes::DataType;
+use datafusion_common::internal_err;
 use datafusion_common::{DataFusionError, Result, ScalarValue};
 
 use std::sync::Arc;
@@ -68,11 +69,11 @@ macro_rules! create_dyn_kernel {
                 DataType::UInt64 => {
                     call_bitwise_kernel!(left, right, $KERNEL, UInt64Array)
                 }
-                other => Err(DataFusionError::Internal(format!(
+                other => internal_err!(
                     "Data type {:?} not supported for binary operation '{}' on dyn arrays",
                     other,
-                    stringify!($KERNEL),
-                ))),
+                    stringify!($KERNEL)
+                ),
             }
         }
     };
@@ -114,11 +115,11 @@ macro_rules! create_dyn_scalar_kernel {
                 DataType::UInt16 => call_bitwise_scalar_kernel!(array, scalar, $KERNEL, UInt16Array, u16),
                 DataType::UInt32 => call_bitwise_scalar_kernel!(array, scalar, $KERNEL, UInt32Array, u32),
                 DataType::UInt64 => call_bitwise_scalar_kernel!(array, scalar, $KERNEL, UInt64Array, u64),
-                other => Err(DataFusionError::Internal(format!(
+                other => internal_err!(
                     "Data type {:?} not supported for binary operation '{}' on dyn arrays",
                     other,
-                    stringify!($KERNEL),
-                ))),
+                    stringify!($KERNEL)
+                ),
             };
             Some(result)
         }

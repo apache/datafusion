@@ -18,21 +18,22 @@
 //! Literal expressions for physical operations
 
 use std::any::Any;
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
+
+use crate::physical_expr::down_cast_any_ref;
+use crate::sort_properties::SortProperties;
+use crate::PhysicalExpr;
 
 use arrow::{
     datatypes::{DataType, Schema},
     record_batch::RecordBatch,
 };
-
-use crate::physical_expr::down_cast_any_ref;
-use crate::{AnalysisContext, ExprBoundaries, PhysicalExpr};
-use datafusion_common::Result;
-use datafusion_common::ScalarValue;
+use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::{ColumnarValue, Expr};
 
 /// Represents a literal value
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct Literal {
     value: ScalarValue,
 }
@@ -62,7 +63,7 @@ impl PhysicalExpr for Literal {
     }
 
     fn data_type(&self, _input_schema: &Schema) -> Result<DataType> {
-        Ok(self.value.get_datatype())
+        Ok(self.value.data_type())
     }
 
     fn nullable(&self, _input_schema: &Schema) -> Result<bool> {
@@ -84,14 +85,13 @@ impl PhysicalExpr for Literal {
         Ok(self)
     }
 
-    /// Return the boundaries of this literal expression (which is the same as
-    /// the value it represents).
-    fn analyze(&self, context: AnalysisContext) -> AnalysisContext {
-        context.with_boundaries(Some(ExprBoundaries::new(
-            self.value.clone(),
-            self.value.clone(),
-            Some(1),
-        )))
+    fn dyn_hash(&self, state: &mut dyn Hasher) {
+        let mut s = state;
+        self.hash(&mut s);
+    }
+
+    fn get_ordering(&self, _children: &[SortProperties]) -> SortProperties {
+        SortProperties::Singleton
     }
 }
 
@@ -131,7 +131,10 @@ mod tests {
         let literal_expr = lit(42i32);
         assert_eq!("42", format!("{literal_expr}"));
 
-        let literal_array = literal_expr.evaluate(&batch)?.into_array(batch.num_rows());
+        let literal_array = literal_expr
+            .evaluate(&batch)?
+            .into_array(batch.num_rows())
+            .expect("Failed to convert to array");
         let literal_array = as_int32_array(&literal_array)?;
 
         // note that the contents of the literal array are unrelated to the batch contents except for the length of the array
@@ -139,22 +142,6 @@ mod tests {
         for i in 0..literal_array.len() {
             assert_eq!(literal_array.value(i), 42);
         }
-
-        Ok(())
-    }
-
-    #[test]
-    fn literal_bounds_analysis() -> Result<()> {
-        let schema = Schema::empty();
-        let context = AnalysisContext::new(&schema, vec![]);
-
-        let literal_expr = lit(42i32);
-        let result_ctx = literal_expr.analyze(context);
-        let boundaries = result_ctx.boundaries.unwrap();
-        assert_eq!(boundaries.min_value, ScalarValue::Int32(Some(42)));
-        assert_eq!(boundaries.max_value, ScalarValue::Int32(Some(42)));
-        assert_eq!(boundaries.distinct_count, Some(1));
-        assert_eq!(boundaries.selectivity, None);
 
         Ok(())
     }

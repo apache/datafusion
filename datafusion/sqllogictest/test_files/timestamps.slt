@@ -1,0 +1,1866 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+##########
+## Common timestamp data
+#
+# ts_data:        Int64 nanosecods
+# ts_data_nanos:  Timestamp(Nanosecond, None)
+# ts_data_micros: Timestamp(Microsecond, None)
+# ts_data_millis: Timestamp(Millisecond, None)
+# ts_data_secs:   Timestamp(Second, None)
+##########
+
+# Create timestamp tables with different precisions but the same logical values
+
+statement ok
+create table ts_data(ts bigint, value int) as values
+  (1599572549190855123, 1),
+  (1599568949190855123, 2),
+  (1599565349190855123, 3);
+
+statement ok
+create table ts_data_nanos as select arrow_cast(ts, 'Timestamp(Nanosecond, None)') as ts, value from ts_data;
+
+statement ok
+create table ts_data_micros as select arrow_cast(ts / 1000, 'Timestamp(Microsecond, None)') as ts, value from ts_data;
+
+statement ok
+create table ts_data_millis as select arrow_cast(ts / 1000000, 'Timestamp(Millisecond, None)') as ts, value from ts_data;
+
+statement ok
+create table ts_data_secs as select arrow_cast(ts / 1000000000, 'Timestamp(Second, None)') as ts, value from ts_data;
+
+
+
+##########
+## Timestamp Handling Tests
+##########
+
+statement ok
+create table foo (val int, ts timestamp) as values (1, '2000-01-01T00:00:00'::timestamp), (2, '2000-02-01T00:00:00'::timestamp), (3, '2000-03-01T00:00:00'::timestamp);
+
+query IP rowsort
+select * from foo;
+----
+1 2000-01-01T00:00:00
+2 2000-02-01T00:00:00
+3 2000-03-01T00:00:00
+
+# Test that we can compare a timestamp to a casted string
+query IP rowsort
+select * from foo where ts > '2000-01-01T00:00:00'::timestamp;
+----
+2 2000-02-01T00:00:00
+3 2000-03-01T00:00:00
+
+# Test that we can compare a timestamp to a string and it will be coerced
+query IP rowsort
+select * from foo where ts > '2000-01-01T00:00:00';
+----
+2 2000-02-01T00:00:00
+3 2000-03-01T00:00:00
+
+query IP rowsort
+select * from foo where ts < '2000-02-01T00:00:00';
+----
+1 2000-01-01T00:00:00
+
+query IP rowsort
+select * from foo where ts <= '2000-02-01T00:00:00';
+----
+1 2000-01-01T00:00:00
+2 2000-02-01T00:00:00
+
+query IP rowsort
+select * from foo where ts = '2000-02-01T00:00:00';
+----
+2 2000-02-01T00:00:00
+
+query IP rowsort
+select * from foo where ts != '2000-02-01T00:00:00';
+----
+1 2000-01-01T00:00:00
+3 2000-03-01T00:00:00
+
+statement ok
+drop table foo;
+
+
+##########
+## Timezone Handling Tests
+##########
+
+statement ok
+SET TIME ZONE = '+08'
+
+# should use execution timezone
+query P
+SELECT TIMESTAMPTZ '2000-01-01T01:01:01'
+----
+2000-01-01T01:01:01+08:00
+
+# casts return timezone to use execution timezone (same as postgresql)
+query P
+SELECT TIMESTAMPTZ '2000-01-01T01:01:01+07:00'
+----
+2000-01-01T02:01:01+08:00
+
+query P
+SELECT TIMESTAMPTZ '2000-01-01T01:01:01Z'
+----
+2000-01-01T09:01:01+08:00
+
+statement ok
+SET TIME ZONE = '+00'
+
+query P
+SELECT TIMESTAMPTZ '2000-01-01T01:01:01'
+----
+2000-01-01T01:01:01Z
+
+
+##########
+## to_timestamp tests
+##########
+
+statement ok
+create table t1(ts bigint) as VALUES
+   (1235865600000),
+   (1235865660000),
+   (1238544000000);
+
+
+# query_cast_timestamp_millis
+query P
+SELECT to_timestamp_millis(ts) FROM t1 LIMIT 3
+----
+2009-03-01T00:00:00
+2009-03-01T00:01:00
+2009-04-01T00:00:00
+
+# query_cast_timestamp_micros
+
+query P
+SELECT to_timestamp_micros(ts * 1000) FROM t1 LIMIT 3
+----
+2009-03-01T00:00:00
+2009-03-01T00:01:00
+2009-04-01T00:00:00
+
+# query_cast_timestamp_seconds
+
+query P
+SELECT to_timestamp_seconds(ts / 1000) FROM t1 LIMIT 3
+----
+2009-03-01T00:00:00
+2009-03-01T00:01:00
+2009-04-01T00:00:00
+
+
+
+# query_cast_timestamp_nanos_to_others
+
+query P
+SELECT to_timestamp_micros(ts / 1000) FROM ts_data LIMIT 3
+----
+2020-09-08T13:42:29.190855
+2020-09-08T12:42:29.190855
+2020-09-08T11:42:29.190855
+
+query P
+SELECT to_timestamp_millis(ts / 1000000) FROM ts_data LIMIT 3
+----
+2020-09-08T13:42:29.190
+2020-09-08T12:42:29.190
+2020-09-08T11:42:29.190
+
+
+query P
+SELECT to_timestamp_seconds(ts / 1000000000) FROM ts_data LIMIT 3
+----
+2020-09-08T13:42:29
+2020-09-08T12:42:29
+2020-09-08T11:42:29
+
+# query_cast_timestamp_seconds_to_others
+
+# Original column is seconds, convert to millis and check timestamp
+query P
+SELECT to_timestamp_millis(ts) FROM ts_data_secs LIMIT 3
+----
+2020-09-08T13:42:29
+2020-09-08T12:42:29
+2020-09-08T11:42:29
+
+# Original column is seconds, convert to micros and check timestamp
+query P
+SELECT to_timestamp_micros(ts) FROM ts_data_secs LIMIT 3
+----
+2020-09-08T13:42:29
+2020-09-08T12:42:29
+2020-09-08T11:42:29
+
+# to nanos
+query P
+SELECT to_timestamp_nanos(ts) FROM ts_data_secs LIMIT 3
+----
+2020-09-08T13:42:29
+2020-09-08T12:42:29
+2020-09-08T11:42:29
+
+
+# query_cast_timestamp_micros_to_others
+
+# Original column is micros, convert to millis and check timestamp
+query P
+SELECT to_timestamp_millis(ts) FROM ts_data_micros LIMIT 3
+----
+2020-09-08T13:42:29.190
+2020-09-08T12:42:29.190
+2020-09-08T11:42:29.190
+
+
+# Original column is micros, convert to seconds and check timestamp
+query P
+SELECT to_timestamp_seconds(ts) FROM ts_data_micros LIMIT 3
+----
+2020-09-08T13:42:29
+2020-09-08T12:42:29
+2020-09-08T11:42:29
+
+
+# Original column is micros, convert to seconds and check timestamp
+
+query P
+SELECT to_timestamp(ts) FROM ts_data_micros LIMIT 3
+----
+2020-09-08T13:42:29.190855
+2020-09-08T12:42:29.190855
+2020-09-08T11:42:29.190855
+
+# query_cast_timestamp_from_unixtime
+
+
+query P
+SELECT from_unixtime(ts / 1000000000) FROM ts_data LIMIT 3;
+----
+2020-09-08T13:42:29
+2020-09-08T12:42:29
+2020-09-08T11:42:29
+
+# to_timestamp
+
+query I
+SELECT COUNT(*) FROM ts_data_nanos where ts > timestamp '2020-09-08T12:00:00+00:00'
+----
+2
+
+# to_timestamp_millis
+
+query I
+SELECT COUNT(*) FROM ts_data_millis where ts > to_timestamp_millis('2020-09-08T12:00:00+00:00')
+----
+2
+
+# to_timestamp_micros
+
+query I
+SELECT COUNT(*) FROM ts_data_micros where ts > to_timestamp_micros('2020-09-08T12:00:00+00:00')
+----
+2
+
+# to_timestamp_seconds
+
+query I
+SELECT COUNT(*) FROM ts_data_secs where ts > to_timestamp_seconds('2020-09-08T12:00:00+00:00')
+----
+2
+
+
+# to_timestamp float inputs
+
+query PPP
+SELECT to_timestamp(1.1) as c1, cast(1.1 as timestamp) as c2, 1.1::timestamp as c3;
+----
+1970-01-01T00:00:01.100 1970-01-01T00:00:01.100 1970-01-01T00:00:01.100
+
+query PPP
+SELECT to_timestamp(-1.1) as c1, cast(-1.1 as timestamp) as c2, (-1.1)::timestamp as c3;
+----
+1969-12-31T23:59:58.900 1969-12-31T23:59:58.900 1969-12-31T23:59:58.900
+
+query PPP
+SELECT to_timestamp(0.0) as c1, cast(0.0 as timestamp) as c2, 0.0::timestamp as c3;
+----
+1970-01-01T00:00:00 1970-01-01T00:00:00 1970-01-01T00:00:00
+
+query PPP
+SELECT to_timestamp(1.23456789) as c1, cast(1.23456789 as timestamp) as c2, 1.23456789::timestamp as c3;
+----
+1970-01-01T00:00:01.234567890 1970-01-01T00:00:01.234567890 1970-01-01T00:00:01.234567890
+
+query PPP
+SELECT to_timestamp(123456789.123456789) as c1, cast(123456789.123456789 as timestamp) as c2, 123456789.123456789::timestamp as c3;
+----
+1973-11-29T21:33:09.123456784 1973-11-29T21:33:09.123456784 1973-11-29T21:33:09.123456784
+
+
+# from_unixtime
+
+# 1599566400 is '2020-09-08T12:00:00+00:00'
+query I
+SELECT COUNT(*) FROM ts_data_secs where ts > from_unixtime(1599566400)
+----
+2
+
+
+# count_distinct_timestamps
+query P rowsort
+SELECT DISTINCT ts FROM ts_data_nanos;
+----
+2020-09-08T11:42:29.190855123
+2020-09-08T12:42:29.190855123
+2020-09-08T13:42:29.190855123
+
+
+query I
+SELECT COUNT(DISTINCT(ts)) FROM ts_data_nanos
+----
+3
+
+# add_interval_month
+query D
+select date '1994-01-31' + interval '1' month as date;
+----
+1994-02-28
+
+
+# sub_interval_month
+query D
+select date '1994-03-31' - interval '1' month as date;
+----
+1994-02-28
+
+
+# sub_month_wrap
+query D
+select date '1994-01-15' - interval '1' month as date;
+----
+1993-12-15
+
+# add_interval_day
+query D
+select date '1994-01-15' + interval '1' day as date;
+----
+1994-01-16
+
+# sub_interval_day
+query D
+select date '1994-01-01' - interval '1' day as date;
+----
+1993-12-31
+
+
+# cast_string_to_time()
+statement ok
+set datafusion.optimizer.skip_failed_rules = false
+
+query DDDD
+select
+        time '08:09:10.123456789' as time_nano,
+        time '13:14:15.123456'    as time_micro,
+        time '13:14:15.123'       as time_milli,
+        time '13:14:15'           as time;
+----
+08:09:10.123456789 13:14:15.123456 13:14:15.123 13:14:15
+
+query error Cannot cast string 'not a time' to value of Time64\(Nanosecond\) type
+SELECT TIME 'not a time' as time;
+
+# invalid time
+query error Cannot cast string '24:01:02' to value of Time64\(Nanosecond\) type
+SELECT TIME '24:01:02' as time;
+
+statement ok
+set datafusion.optimizer.skip_failed_rules = true
+
+
+# cast_to_timestamp_twice
+query P
+select to_timestamp(a) from (select to_timestamp(1) as a) A;
+----
+1970-01-01T00:00:01
+
+# cast_to_timestamp_seconds_twice
+query P
+select to_timestamp_seconds(a) from (select to_timestamp_seconds(1) as a)A
+----
+1970-01-01T00:00:01
+
+# cast_to_timestamp_millis_twice
+query P
+select to_timestamp_millis(a) from (select to_timestamp_millis(1) as a)A;
+----
+1970-01-01T00:00:00.001
+
+# cast_to_timestamp_micros_twice
+query P
+select to_timestamp_micros(a) from (select to_timestamp_micros(1) as a)A;
+----
+1970-01-01T00:00:00.000001
+
+# cast_to_timestamp_nanos_twice
+query P
+select to_timestamp_nanos(a) from (select to_timestamp_nanos(1) as a)A;
+----
+1970-01-01T00:00:00.000000001
+
+# to_timestamp_i32
+query P
+select to_timestamp(cast (1 as int));
+----
+1970-01-01T00:00:01
+
+# to_timestamp_micros_i32
+query P
+select to_timestamp_micros(cast (1 as int));
+----
+1970-01-01T00:00:00.000001
+
+# to_timestamp_nanos_i32
+query P
+select to_timestamp_nanos(cast (1 as int));
+----
+1970-01-01T00:00:00.000000001
+
+# to_timestamp_millis_i32
+query P
+select to_timestamp_millis(cast (1 as int));
+----
+1970-01-01T00:00:00.001
+
+# to_timestamp_seconds_i32
+query P
+select to_timestamp_seconds(cast (1 as int));
+----
+1970-01-01T00:00:01
+
+##########
+## test date_bin function
+##########
+
+# invalid second arg type
+query error DataFusion error: Error during planning: No function matches the given name and argument types 'date_bin\(Interval\(MonthDayNano\), Int64, Timestamp\(Nanosecond, None\)\)'\.
+SELECT DATE_BIN(INTERVAL '0 second', 25, TIMESTAMP '1970-01-01T00:00:00Z')
+
+# not support interval 0
+statement error Execution error: DATE_BIN stride must be non-zero
+SELECT DATE_BIN(INTERVAL '0 second', TIMESTAMP '2022-08-03 14:38:50.000000006Z', TIMESTAMP '1970-01-01T00:00:00Z')
+
+statement error Execution error: DATE_BIN stride must be non-zero
+SELECT DATE_BIN(INTERVAL '0 month', TIMESTAMP '2022-08-03 14:38:50.000000006Z')
+
+statement error Execution error: DATE_BIN stride must be non-zero
+SELECT
+  DATE_BIN(INTERVAL '0' minute, time) AS time,
+  count(val)
+FROM (
+  VALUES
+    (TIMESTAMP '2021-06-10 17:05:00Z', 0.5),
+    (TIMESTAMP '2021-06-10 17:19:10Z', 0.3)
+  ) as t (time, val)
+group by time;
+
+query P
+SELECT DATE_BIN(INTERVAL '15 minutes', TIMESTAMP '2022-08-03 14:38:50Z', TIMESTAMP '1970-01-01T00:00:00Z')
+----
+2022-08-03T14:30:00
+
+# Supports Month-Day-Nano nanosecond interval
+query P
+SELECT DATE_BIN(INTERVAL '10 nanoseconds', TIMESTAMP '2022-08-03 14:38:50.000000016Z', TIMESTAMP '1970-01-01T00:00:00Z')
+----
+2022-08-03T14:38:50.000000010
+
+# Supports Month-Day-Nano nanosecond interval via fractions
+query P
+SELECT DATE_BIN(INTERVAL '0.000000010 seconds', TIMESTAMP '2022-08-03 14:38:50.000000016Z', TIMESTAMP '1970-01-01T00:00:00Z')
+----
+2022-08-03T14:38:50.000000010
+
+# Supports Month-Day-Nano microsecond interval
+query P
+SELECT DATE_BIN(INTERVAL '5 microseconds', TIMESTAMP '2022-08-03 14:38:50.000006Z', TIMESTAMP '1970-01-01T00:00:00Z')
+----
+2022-08-03T14:38:50.000005
+
+# Does not support months for Month-Day-Nano interval
+statement error DataFusion error: This feature is not implemented: DATE_BIN stride does not support combination of month, day and nanosecond intervals
+SELECT DATE_BIN(INTERVAL '1 month 5 nanoseconds', TIMESTAMP '2022-08-03 14:38:50.000000006Z', TIMESTAMP '1970-01-01T00:00:00Z')
+
+# Can coerce string interval arguments
+query P
+SELECT DATE_BIN('15 minutes', TIMESTAMP '2022-08-03 14:38:50Z', TIMESTAMP '1970-01-01T00:00:00Z')
+----
+2022-08-03T14:30:00
+
+# Can coerce all string arguments
+query P
+SELECT DATE_BIN('15 minutes', '2022-08-03 14:38:50Z', '1970-01-01T00:00:00Z')
+----
+2022-08-03T14:30:00
+
+# Call in two arguments (should be the same as the above query)
+query B
+SELECT DATE_BIN('15 minutes', '2022-08-03 14:38:50Z') = DATE_BIN('15 minutes', '2022-08-03 14:38:50Z', '1970-01-01T00:00:00Z')
+----
+true
+
+# Shift forward by 5 minutes
+query P
+SELECT DATE_BIN(INTERVAL '15 minutes', TIMESTAMP '2022-08-03 14:38:50Z', TIMESTAMP '1970-01-01T00:05:00Z')
+----
+2022-08-03T14:35:00
+
+
+# Shift backward by 5 minutes
+query P
+SELECT DATE_BIN(INTERVAL '15 minutes', TIMESTAMP '2022-08-03 14:38:50Z', TIMESTAMP '1970-01-01T23:55:00Z')
+----
+2022-08-03T14:25:00
+
+# origin after source, timestamp in previous bucket
+query P
+SELECT DATE_BIN(INTERVAL '15 minutes', TIMESTAMP '2022-08-03 14:38:50Z', TIMESTAMP '2022-08-03 14:40:00Z')
+----
+2022-08-03T14:25:00
+
+# stride by 7 days
+query P
+SELECT DATE_BIN(INTERVAL '7 days', TIMESTAMP '2022-08-03 14:38:50Z', TIMESTAMP '1970-01-01 00:00:00Z')
+----
+2022-07-28T00:00:00
+
+
+# origin shifts bins forward 1 day
+query P
+SELECT DATE_BIN(INTERVAL '7 days', TIMESTAMP '2022-08-03 14:38:50Z', TIMESTAMP '1970-01-02 00:00:00Z')
+----
+2022-07-29T00:00:00
+
+
+# demonstrates array values (rather than scalar) for the source argument
+query PR rowsort
+SELECT
+  DATE_BIN(INTERVAL '15' minute, time, TIMESTAMP '2001-01-01T00:00:00Z') AS time,
+  val
+FROM (
+  VALUES
+    (TIMESTAMP '2021-06-10 17:05:00Z', 0.5),
+    (TIMESTAMP '2021-06-10 17:19:10Z', 0.3)
+  ) as t (time, val)
+----
+2021-06-10T17:00:00 0.5
+2021-06-10T17:15:00 0.3
+
+# demonstrates array values for the origin argument are not currently supported
+statement error This feature is not implemented: DATE_BIN only supports literal values for the origin argument, not arrays
+SELECT
+  DATE_BIN(INTERVAL '15' minute, time, origin) AS time,
+  val
+FROM (
+  VALUES
+    (TIMESTAMP '2021-06-10 17:05:00Z', TIMESTAMP '2001-01-01T00:00:00Z', 0.5),
+    (TIMESTAMP '2021-06-10 17:19:10Z', TIMESTAMP '2001-01-01T00:00:00Z', 0.3)
+  ) as t (time, origin, val)
+
+# different input timestamp type
+query P
+SELECT DATE_BIN(INTERVAL '15 minute', to_timestamp_micros(TIMESTAMP '2022-08-03 14:38:50Z'), TIMESTAMP '1970-01-01 00:00:00Z')
+----
+2022-08-03T14:30:00
+
+query P
+select date_bin(INTERVAL '15 minute', column1)
+from (values
+  (to_timestamp_micros(TIMESTAMP '2022-08-03 14:38:50Z'))
+) as sq
+----
+2022-08-03T14:30:00
+
+query T
+SELECT arrow_typeof(DATE_BIN(INTERVAL '15 minute', to_timestamp_micros(TIMESTAMP '2022-08-03 14:38:50Z'), TIMESTAMP '1970-01-01 00:00:00Z'))
+----
+Timestamp(Microsecond, None)
+
+query P
+SELECT DATE_BIN(INTERVAL '15 minute', to_timestamp_millis(TIMESTAMP '2022-08-03 14:38:50Z'), TIMESTAMP '1970-01-01 00:00:00Z')
+----
+2022-08-03T14:30:00
+
+query P
+select date_bin(INTERVAL '15 minute', column1)
+from (values
+  (to_timestamp_millis(TIMESTAMP '2022-08-03 14:38:50Z'))
+) as sq
+----
+2022-08-03T14:30:00
+
+query T
+SELECT arrow_typeof(DATE_BIN(INTERVAL '15 minute', to_timestamp_millis(TIMESTAMP '2022-08-03 14:38:50Z'), TIMESTAMP '1970-01-01 00:00:00Z'))
+----
+Timestamp(Millisecond, None)
+
+query P
+SELECT DATE_BIN(INTERVAL '15 minute', to_timestamp_seconds(TIMESTAMP '2022-08-03 14:38:50Z'), TIMESTAMP '1970-01-01 00:00:00Z')
+----
+2022-08-03T14:30:00
+
+query P
+select date_bin(INTERVAL '15 minute', column1)
+from (values
+  (to_timestamp_seconds(TIMESTAMP '2022-08-03 14:38:50Z'))
+) as sq
+----
+2022-08-03T14:30:00
+
+query T
+SELECT arrow_typeof(DATE_BIN(INTERVAL '15 minute', to_timestamp_seconds(TIMESTAMP '2022-08-03 14:38:50Z'), TIMESTAMP '1970-01-01 00:00:00Z'))
+----
+Timestamp(Second, None)
+
+# month interval with INTERVAL keyword in date_bin with default start time
+query P
+select date_bin(INTERVAL '1 month', column1)
+from (values
+  (timestamp '2022-01-01 00:00:00'),
+  (timestamp '2022-01-01 01:00:00'),
+  (timestamp '2022-01-02 00:00:00'),
+  (timestamp '2022-02-02 00:00:00'),
+  (timestamp '2022-02-15 00:00:00'),
+  (timestamp '2022-03-31 00:00:00')
+) as sq
+----
+2022-01-01T00:00:00
+2022-01-01T00:00:00
+2022-01-01T00:00:00
+2022-02-01T00:00:00
+2022-02-01T00:00:00
+2022-03-01T00:00:00
+
+
+# year interval in date_bin with default start time
+query P
+select date_bin(INTERVAL '1 year', column1)
+from (values
+  (timestamp '2022-01-01 00:00:00'),
+  (timestamp '2023-01-01 01:00:00'),
+  (timestamp '2022-01-02 00:00:00'),
+  (timestamp '2022-02-02 00:00:00'),
+  (timestamp '2022-02-15 00:00:00'),
+  (timestamp '2022-03-31 00:00:00')
+) as sq
+----
+2022-01-01T00:00:00
+2023-01-01T00:00:00
+2022-01-01T00:00:00
+2022-01-01T00:00:00
+2022-01-01T00:00:00
+2022-01-01T00:00:00
+
+query P
+SELECT DATE_BIN('1 month', '2022-01-01 00:00:00Z', '1970-01-01T00:00:00Z');
+----
+2022-01-01T00:00:00
+
+
+# Tests without INTERVAL keyword
+# 1-month interval in date_bin with default start time
+query P
+select date_bin('1 month', column1)
+from (values
+  (timestamp '2022-01-01 00:00:00'),
+  (timestamp '2022-01-01 01:00:00'),
+  (timestamp '2022-01-02 00:00:00'),
+  (timestamp '2022-02-02 00:00:00'),
+  (timestamp '2022-02-15 00:00:00'),
+  (timestamp '2022-03-31 00:00:00')
+) as sq
+----
+2022-01-01T00:00:00
+2022-01-01T00:00:00
+2022-01-01T00:00:00
+2022-02-01T00:00:00
+2022-02-01T00:00:00
+2022-03-01T00:00:00
+
+# 2-month interval in date_bin with default start time
+query P
+select date_bin('2 month', column1)
+from (values
+  (timestamp '2022-01-01 00:00:00'),
+  (timestamp '2022-01-01 01:00:00'),
+  (timestamp '2022-01-02 00:00:00'),
+  (timestamp '2022-02-02 00:00:00'),
+  (timestamp '2022-02-15 00:00:00'),
+  (timestamp '2022-03-31 00:00:00')
+) as sq
+----
+2022-01-01T00:00:00
+2022-01-01T00:00:00
+2022-01-01T00:00:00
+2022-01-01T00:00:00
+2022-01-01T00:00:00
+2022-03-01T00:00:00
+
+
+# month interval with start date end of the month plus some minutes
+#
+# The the return of `date_bin` is the start of the bin. The bin width is one year.
+# The source data must be inside the bin.
+# Since the origin is '1970-12-31T00:15:00Z', the start of the bins are
+#   '1970-12-31T00:15:00Z',
+#   '1971-12-31T00:15:00Z',
+#   ...,
+#   '2021-12-31T00:15:00Z',
+#   '2022-12-31T00:15:00Z',
+#   ...
+#
+# Note the datetime '2022-03-31 00:00:00'. Its bin is NOT '2022-03-31 00:15:00' which is after its time
+# Its bin is '2022-02-28T00:15:00'
+#
+query P
+select date_bin('1 month', column1, '1970-12-31T00:15:00Z')
+from (values
+  (timestamp '2022-01-01 00:00:00'),
+  (timestamp '2022-01-01 01:00:00'),
+  (timestamp '2022-01-02 00:00:00'),
+  (timestamp '2022-02-02 00:00:00'),
+  (timestamp '2022-02-15 00:00:00'),
+  (timestamp '2022-03-31 00:00:00')
+) as sq
+----
+2021-12-31T00:15:00
+2021-12-31T00:15:00
+2021-12-31T00:15:00
+2022-01-31T00:15:00
+2022-01-31T00:15:00
+2022-02-28T00:15:00
+
+# month interval with start date is end of the month plus some minutes
+query P
+select date_bin('2 months', column1, '1970-12-31T00:15:00Z')
+from (values
+  (timestamp '2022-01-01 00:00:00'),
+  (timestamp '2022-01-01 01:00:00'),
+  (timestamp '2022-01-02 00:00:00'),
+  (timestamp '2022-02-02 00:00:00'),
+  (timestamp '2022-02-15 00:00:00'),
+  (timestamp '2022-03-31 00:00:00')
+) as sq
+----
+2021-12-31T00:15:00
+2021-12-31T00:15:00
+2021-12-31T00:15:00
+2021-12-31T00:15:00
+2021-12-31T00:15:00
+2022-02-28T00:15:00
+
+# year interval in date_bin with default start time
+query P
+select date_bin('1 year', column1)
+from (values
+  (timestamp '2022-01-01 00:00:00'),
+  (timestamp '2022-01-01 01:00:00'),
+  (timestamp '2022-01-02 00:00:00'),
+  (timestamp '2022-02-02 00:00:00'),
+  (timestamp '2022-02-15 00:00:00'),
+  (timestamp '2022-03-31 00:00:00'),
+  (timestamp '2023-10-28 01:33:00')
+) as sq
+----
+2022-01-01T00:00:00
+2022-01-01T00:00:00
+2022-01-01T00:00:00
+2022-01-01T00:00:00
+2022-01-01T00:00:00
+2022-01-01T00:00:00
+2023-01-01T00:00:00
+
+# year interval with start date is end of the month plus some minutes
+query P
+select date_bin('1 year', column1, '1970-12-31T00:15:00Z')
+from (values
+  (timestamp '2022-01-01 00:00:00'),
+  (timestamp '2022-01-01 01:00:00'),
+  (timestamp '2022-01-02 00:00:00'),
+  (timestamp '2022-02-02 00:00:00'),
+  (timestamp '2022-02-15 00:00:00'),
+  (timestamp '2022-03-31 00:00:00'),
+  (timestamp '2023-03-31 00:00:00')
+) as sq
+----
+2021-12-31T00:15:00
+2021-12-31T00:15:00
+2021-12-31T00:15:00
+2021-12-31T00:15:00
+2021-12-31T00:15:00
+2021-12-31T00:15:00
+2022-12-31T00:15:00
+
+# month interval on constant
+query P
+SELECT DATE_BIN('1 month', '2022-01-01 00:00:00Z');
+----
+2022-01-01T00:00:00
+
+# five months interval on constant
+query P
+SELECT DATE_BIN('5 month', '2022-01-01T00:00:00Z');
+----
+2021-09-01T00:00:00
+
+# month interval with default start time
+query P
+SELECT DATE_BIN('1 month', '2022-01-01 00:00:00Z');
+----
+2022-01-01T00:00:00
+
+# origin on the first date but not at midnight
+query P
+SELECT DATE_BIN('1 month', '2022-04-01T00:00:00Z', '2021-05-01T00:04:00Z');
+----
+2022-03-01T00:04:00
+
+# origin is May 31 (last date of the month) to produce bin on Feb 28
+query P
+SELECT DATE_BIN('3 month', '2022-04-01T00:00:00Z', '2021-05-31T00:04:00Z');
+----
+2022-02-28T00:04:00
+
+# origin is on Feb 29 and interval is one month. The bins will be:
+# '2000-02-29T00:00:00'
+# '2000-01-29T00:00:00'
+# '1999-12-29T00:00:00'
+# ....
+# Reason: Even though 29 (or 28 for non-leap year) is the last date of Feb but it
+# is not last date of other month. Months' chrono consider a month before or after that
+# will land on the same 29th date.
+query P
+select date_bin('1 month', timestamp '2000-01-31T00:00:00', timestamp '2000-02-29T00:00:00');
+----
+2000-01-29T00:00:00
+
+# similar for the origin March 29
+query P
+select date_bin('1 month', timestamp '2000-01-31T00:00:00', timestamp '2000-03-29T00:00:00');
+----
+2000-01-29T00:00:00
+
+# any value of origin
+query P
+SELECT DATE_BIN('3 month', '2022-01-01T00:00:00Z', '2021-05-05T17:56:21Z');
+----
+2021-11-05T17:56:21
+
+# origin is later than source
+query P
+SELECT DATE_BIN('3 month', '2022-01-01T00:00:00Z', '2022-05-05T17:56:21Z');
+----
+2021-11-05T17:56:21
+
+# year interval on constant
+query P
+SELECT DATE_BIN('1 year', '2022-01-01 00:00:00Z');
+----
+2022-01-01T00:00:00
+
+# 3-year interval on constant
+query P
+SELECT DATE_BIN('3 year', '2022-01-01 00:00:00Z');
+----
+2021-01-01T00:00:00
+
+# 3 year 1 months = 37 months
+query P
+SELECT DATE_BIN('3 years 1 months', '2022-09-01 00:00:00Z');
+----
+2022-06-01T00:00:00
+
+###
+## test date_trunc function
+###
+query P
+SELECT DATE_TRUNC('year', TIMESTAMP '2022-08-03 14:38:50Z');
+----
+2022-01-01T00:00:00
+
+query P
+SELECT DATE_TRUNC('YEAR', TIMESTAMP '2022-08-03 14:38:50Z');
+----
+2022-01-01T00:00:00
+
+query P
+SELECT DATE_TRUNC('year', NULL);
+----
+NULL
+
+query P
+SELECT DATE_TRUNC('YEAR', NULL);
+----
+NULL
+
+query P
+SELECT DATE_TRUNC('quarter', TIMESTAMP '2022-08-03 14:38:50Z');
+----
+2022-07-01T00:00:00
+
+query P
+SELECT DATE_TRUNC('QUARTER', TIMESTAMP '2022-08-03 14:38:50Z');
+----
+2022-07-01T00:00:00
+
+query P
+SELECT DATE_TRUNC('quarter', NULL);
+----
+NULL
+
+query P
+SELECT DATE_TRUNC('QUARTER', NULL);
+----
+NULL
+
+query P
+SELECT DATE_TRUNC('month', TIMESTAMP '2022-08-03 14:38:50Z');
+----
+2022-08-01T00:00:00
+
+query P
+SELECT DATE_TRUNC('MONTH', TIMESTAMP '2022-08-03 14:38:50Z');
+----
+2022-08-01T00:00:00
+
+query P
+SELECT DATE_TRUNC('month', NULL);
+----
+NULL
+
+query P
+SELECT DATE_TRUNC('MONTH', NULL);
+----
+NULL
+
+query P
+SELECT DATE_TRUNC('week', TIMESTAMP '2022-08-03 14:38:50Z');
+----
+2022-08-01T00:00:00
+
+query P
+SELECT DATE_TRUNC('WEEK', TIMESTAMP '2022-08-03 14:38:50Z');
+----
+2022-08-01T00:00:00
+
+query P
+SELECT DATE_TRUNC('week', NULL);
+----
+NULL
+
+query P
+SELECT DATE_TRUNC('WEEK', NULL);
+----
+NULL
+
+query P
+SELECT DATE_TRUNC('day', TIMESTAMP '2022-08-03 14:38:50Z');
+----
+2022-08-03T00:00:00
+
+query P
+SELECT DATE_TRUNC('DAY', TIMESTAMP '2022-08-03 14:38:50Z');
+----
+2022-08-03T00:00:00
+
+query P
+SELECT DATE_TRUNC('day', NULL);
+----
+NULL
+
+query P
+SELECT DATE_TRUNC('DAY', NULL);
+----
+NULL
+
+query P
+SELECT DATE_TRUNC('hour', TIMESTAMP '2022-08-03 14:38:50Z');
+----
+2022-08-03T14:00:00
+
+query P
+SELECT DATE_TRUNC('HOUR', TIMESTAMP '2022-08-03 14:38:50Z');
+----
+2022-08-03T14:00:00
+
+query P
+SELECT DATE_TRUNC('hour', NULL);
+----
+NULL
+
+query P
+SELECT DATE_TRUNC('HOUR', NULL);
+----
+NULL
+
+query P
+SELECT DATE_TRUNC('minute', TIMESTAMP '2022-08-03 14:38:50Z');
+----
+2022-08-03T14:38:00
+
+query P
+SELECT DATE_TRUNC('MINUTE', TIMESTAMP '2022-08-03 14:38:50Z');
+----
+2022-08-03T14:38:00
+
+query P
+SELECT DATE_TRUNC('minute', NULL);
+----
+NULL
+
+query P
+SELECT DATE_TRUNC('MINUTE', NULL);
+----
+NULL
+
+query P
+SELECT DATE_TRUNC('second', TIMESTAMP '2022-08-03 14:38:50Z');
+----
+2022-08-03T14:38:50
+
+query P
+SELECT DATE_TRUNC('SECOND', TIMESTAMP '2022-08-03 14:38:50Z');
+----
+2022-08-03T14:38:50
+
+query P
+SELECT DATE_TRUNC('second', NULL);
+----
+NULL
+
+query P
+SELECT DATE_TRUNC('SECOND', NULL);
+----
+NULL
+
+# Test date trunc on different timestamp types and ensure types are consistent
+query TP rowsort
+SELECT 'ts_data_nanos', DATE_TRUNC('day', ts) FROM ts_data_nanos
+ UNION ALL
+SELECT 'ts_data_micros', DATE_TRUNC('day', ts) FROM ts_data_micros
+ UNION ALL
+SELECT 'ts_data_millis', DATE_TRUNC('day', ts) FROM ts_data_millis
+ UNION ALL
+SELECT 'ts_data_secs', DATE_TRUNC('day', ts) FROM ts_data_secs
+----
+ts_data_micros 2020-09-08T00:00:00
+ts_data_micros 2020-09-08T00:00:00
+ts_data_micros 2020-09-08T00:00:00
+ts_data_millis 2020-09-08T00:00:00
+ts_data_millis 2020-09-08T00:00:00
+ts_data_millis 2020-09-08T00:00:00
+ts_data_nanos 2020-09-08T00:00:00
+ts_data_nanos 2020-09-08T00:00:00
+ts_data_nanos 2020-09-08T00:00:00
+ts_data_secs 2020-09-08T00:00:00
+ts_data_secs 2020-09-08T00:00:00
+ts_data_secs 2020-09-08T00:00:00
+
+# Test date trun on different granularity
+query TP rowsort
+SELECT 'millisecond', DATE_TRUNC('millisecond', ts) FROM ts_data_nanos
+  UNION ALL
+SELECT 'microsecond', DATE_TRUNC('microsecond', ts) FROM ts_data_nanos
+  UNION ALL
+SELECT 'second', DATE_TRUNC('second', ts) FROM ts_data_nanos
+  UNION ALL
+SELECT 'minute', DATE_TRUNC('minute', ts) FROM ts_data_nanos
+----
+microsecond 2020-09-08T11:42:29.190855
+microsecond 2020-09-08T12:42:29.190855
+microsecond 2020-09-08T13:42:29.190855
+millisecond 2020-09-08T11:42:29.190
+millisecond 2020-09-08T12:42:29.190
+millisecond 2020-09-08T13:42:29.190
+minute 2020-09-08T11:42:00
+minute 2020-09-08T12:42:00
+minute 2020-09-08T13:42:00
+second 2020-09-08T11:42:29
+second 2020-09-08T12:42:29
+second 2020-09-08T13:42:29
+
+query TP rowsort
+SELECT 'millisecond', DATE_TRUNC('millisecond', ts) FROM ts_data_micros
+  UNION ALL
+SELECT 'microsecond', DATE_TRUNC('microsecond', ts) FROM ts_data_micros
+  UNION ALL
+SELECT 'second', DATE_TRUNC('second', ts) FROM ts_data_micros
+  UNION ALL
+SELECT 'minute', DATE_TRUNC('minute', ts) FROM ts_data_micros
+----
+microsecond 2020-09-08T11:42:29.190855
+microsecond 2020-09-08T12:42:29.190855
+microsecond 2020-09-08T13:42:29.190855
+millisecond 2020-09-08T11:42:29.190
+millisecond 2020-09-08T12:42:29.190
+millisecond 2020-09-08T13:42:29.190
+minute 2020-09-08T11:42:00
+minute 2020-09-08T12:42:00
+minute 2020-09-08T13:42:00
+second 2020-09-08T11:42:29
+second 2020-09-08T12:42:29
+second 2020-09-08T13:42:29
+
+query TP rowsort
+SELECT 'millisecond', DATE_TRUNC('millisecond', ts) FROM ts_data_millis
+  UNION ALL
+SELECT 'microsecond', DATE_TRUNC('microsecond', ts) FROM ts_data_millis
+  UNION ALL
+SELECT 'second', DATE_TRUNC('second', ts) FROM ts_data_millis
+  UNION ALL
+SELECT 'minute', DATE_TRUNC('minute', ts) FROM ts_data_millis
+----
+microsecond 2020-09-08T11:42:29.190
+microsecond 2020-09-08T12:42:29.190
+microsecond 2020-09-08T13:42:29.190
+millisecond 2020-09-08T11:42:29.190
+millisecond 2020-09-08T12:42:29.190
+millisecond 2020-09-08T13:42:29.190
+minute 2020-09-08T11:42:00
+minute 2020-09-08T12:42:00
+minute 2020-09-08T13:42:00
+second 2020-09-08T11:42:29
+second 2020-09-08T12:42:29
+second 2020-09-08T13:42:29
+
+query TP rowsort
+SELECT 'millisecond', DATE_TRUNC('millisecond', ts) FROM ts_data_secs
+  UNION ALL
+SELECT 'microsecond', DATE_TRUNC('microsecond', ts) FROM ts_data_secs
+  UNION ALL
+SELECT 'second', DATE_TRUNC('second', ts) FROM ts_data_secs
+  UNION ALL
+SELECT 'minute', DATE_TRUNC('minute', ts) FROM ts_data_secs
+----
+microsecond 2020-09-08T11:42:29
+microsecond 2020-09-08T12:42:29
+microsecond 2020-09-08T13:42:29
+millisecond 2020-09-08T11:42:29
+millisecond 2020-09-08T12:42:29
+millisecond 2020-09-08T13:42:29
+minute 2020-09-08T11:42:00
+minute 2020-09-08T12:42:00
+minute 2020-09-08T13:42:00
+second 2020-09-08T11:42:29
+second 2020-09-08T12:42:29
+second 2020-09-08T13:42:29
+
+
+# test date trunc on different timestamp scalar types and ensure they are consistent
+query P rowsort
+SELECT DATE_TRUNC('second', arrow_cast(TIMESTAMP '2023-08-03 14:38:50Z', 'Timestamp(Second, None)')) as ts
+  UNION ALL
+SELECT DATE_TRUNC('second', arrow_cast(TIMESTAMP '2023-08-03 14:38:50Z', 'Timestamp(Nanosecond, None)')) as ts
+  UNION ALL
+SELECT DATE_TRUNC('day', arrow_cast(TIMESTAMP '2023-08-03 14:38:50Z', 'Timestamp(Microsecond, None)')) as ts
+  UNION ALL
+SELECT DATE_TRUNC('day', arrow_cast(TIMESTAMP '2023-08-03 14:38:50Z', 'Timestamp(Millisecond, None)')) as ts
+----
+2023-08-03T00:00:00
+2023-08-03T00:00:00
+2023-08-03T14:38:50
+2023-08-03T14:38:50
+
+
+# Demonstrate that strings are automatically coerced to timestamps (don't use TIMESTAMP)
+
+query P
+SELECT DATE_TRUNC('second', '2022-08-03 14:38:50Z');
+----
+2022-08-03T14:38:50
+
+# Test that interval can add a timestamp
+query P
+SELECT timestamp '2013-07-01 12:00:00' + INTERVAL '8' DAY;
+----
+2013-07-09T12:00:00
+
+query P
+SELECT '2000-01-01T00:00:00'::timestamp + INTERVAL '8' DAY;
+----
+2000-01-09T00:00:00
+
+query P
+SELECT '2000-01-01T00:00:00'::timestamp + INTERVAL '8' YEAR;
+----
+2008-01-01T00:00:00
+
+query P
+SELECT '2000-01-01T00:00:00'::timestamp + INTERVAL '8' MONTH;
+----
+2000-09-01T00:00:00
+
+query P
+SELECT INTERVAL '8' DAY + timestamp '2013-07-01 12:00:00';
+----
+2013-07-09T12:00:00
+
+query P
+SELECT INTERVAL '8' DAY + '2000-01-01T00:00:00'::timestamp;
+----
+2000-01-09T00:00:00
+
+query P
+SELECT INTERVAL '8' YEAR + '2000-01-01T00:00:00'::timestamp;
+----
+2008-01-01T00:00:00
+
+query P
+SELECT INTERVAL '8' MONTH + '2000-01-01T00:00:00'::timestamp;
+----
+2000-09-01T00:00:00
+
+statement ok
+create table foo (val int, ts1 timestamp, ts2 timestamp, i interval) as values
+(1, '2023-03-15T15:00:20.000000123'::timestamp, '2023-01-20T23:00:00.000000099'::timestamp, '1 day'::interval),
+(2, '2023-02-28T12:01:55.000123456'::timestamp, '2000-02-23T11:00:00.123000001'::timestamp, '2 months'::interval),
+(3, '2033-11-02T23:22:13.000123456'::timestamp, '1990-03-01T00:00:00.333000001'::timestamp, '1 day 3 hours'::interval),
+(4, '2003-07-11T01:31:15.000123456'::timestamp, '2045-04-11T15:00:00.000000001'::timestamp, '1 day 7 nanoseconds'::interval);
+
+statement ok
+create table bar (val int, i1 interval, i2 interval) as values
+(1, '1 day'::interval,               '2 days'::interval),
+(2, '2 months'::interval,            '13 days'::interval),
+(3, '1 day 3 hours'::interval,       '4 minutes'::interval),
+(4, '1 day 7 nanoseconds'::interval, '4 seconds'::interval);
+
+# Timestamp - Timestamp
+query I?
+SELECT val, ts1 - ts2 FROM foo ORDER BY ts2 - ts1;
+----
+3 15952 days 23 hours 22 mins 12.667123455 secs
+2 8406 days 1 hours 1 mins 54.877123455 secs
+1 53 days 16 hours 0 mins 20.000000024 secs
+4 -15250 days -13 hours -28 mins -44.999876545 secs
+
+# Interval - Interval
+query ?
+SELECT i1 - i2 FROM bar;
+----
+0 years 0 mons -1 days 0 hours 0 mins 0.000000000 secs
+0 years 2 mons -13 days 0 hours 0 mins 0.000000000 secs
+0 years 0 mons 1 days 2 hours 56 mins 0.000000000 secs
+0 years 0 mons 1 days 0 hours 0 mins -3.999999993 secs
+
+# Interval + Interval
+query ?
+SELECT i1 + i2 FROM bar;
+----
+0 years 0 mons 3 days 0 hours 0 mins 0.000000000 secs
+0 years 2 mons 13 days 0 hours 0 mins 0.000000000 secs
+0 years 0 mons 1 days 3 hours 4 mins 0.000000000 secs
+0 years 0 mons 1 days 0 hours 0 mins 4.000000007 secs
+
+# Timestamp - Interval
+query P
+SELECT ts1 - i FROM foo;
+----
+2023-03-14T15:00:20.000000123
+2022-12-28T12:01:55.000123456
+2033-11-01T20:22:13.000123456
+2003-07-10T01:31:15.000123449
+
+# Interval + Timestamp
+query P
+SELECT i + ts1 FROM foo;
+----
+2023-03-16T15:00:20.000000123
+2023-04-28T12:01:55.000123456
+2033-11-04T02:22:13.000123456
+2003-07-12T01:31:15.000123463
+
+# Timestamp + Interval
+query P
+SELECT ts1 + i FROM foo;
+----
+2023-03-16T15:00:20.000000123
+2023-04-28T12:01:55.000123456
+2033-11-04T02:22:13.000123456
+2003-07-12T01:31:15.000123463
+
+# Timestamp + Timestamp => error
+query error DataFusion error: Error during planning: Cannot get result type for temporal operation Timestamp\(Nanosecond, None\) \+ Timestamp\(Nanosecond, None\): Invalid argument error: Invalid timestamp arithmetic operation: Timestamp\(Nanosecond, None\) \+ Timestamp\(Nanosecond, None\)
+SELECT ts1 + ts2
+FROM foo;
+
+# Timestamp - Timestamp
+query ?
+SELECT '2000-01-01T00:00:00'::timestamp - '2000-01-01T00:00:00'::timestamp;
+----
+0 days 0 hours 0 mins 0.000000000 secs
+
+# large timestamp - small timestamp
+query ?
+SELECT '2000-01-01T00:00:00'::timestamp - '2010-01-01T00:00:00'::timestamp;
+----
+-3653 days 0 hours 0 mins 0.000000000 secs
+
+# Interval - Timestamp => error
+# statement error DataFusion error: Error during planning: Cannot coerce arithmetic expression Interval\(MonthDayNano\) \- Timestamp\(Nanosecond, None\) to valid types
+# TODO: This query should raise error
+# query P
+# SELECT i - ts1 from FOO;
+
+statement ok
+drop table foo;
+
+statement ok
+drop table bar;
+
+# timestamptz <=> utf8 conversion
+query BBBB
+SELECT
+  '2000-01-01T00:00:00'::timestamp::timestamptz = '2000-01-01T00:00:00',
+  '2000-01-01T00:00:00'::timestamp::timestamptz != '2000-01-01T00:00:00',
+  '2000-01-01T00:00:00'::timestamp::timestamptz >= '2000-01-01T00:00:00',
+  '2000-01-01T00:00:00'::timestamp::timestamptz <= '2000-01-01T00:00:00'
+;
+----
+true false true true
+
+# timestamptz <=> timestamp conversion
+query BBBB
+SELECT
+  '2000-01-01T00:00:00'::timestamp::timestamptz = '2000-01-01T00:00:00'::timestamp,
+  '2000-01-01T00:00:00'::timestamp::timestamptz != '2000-01-01T00:00:00'::timestamp,
+  '2000-01-01T00:00:00'::timestamp::timestamptz >= '2000-01-01T00:00:00'::timestamp,
+  '2000-01-01T00:00:00'::timestamp::timestamptz <= '2000-01-01T00:00:00'::timestamp
+;
+----
+true false true true
+
+
+
+##########
+## Common timestamp data
+##########
+
+statement ok
+drop table ts_data
+
+statement ok
+drop table ts_data_nanos
+
+statement ok
+drop table ts_data_micros
+
+statement ok
+drop table ts_data_millis
+
+statement ok
+drop table ts_data_secs
+
+
+
+##########
+## Timezone impact on builtin scalar functions
+#
+# server time = +07
+##########
+
+statement ok
+set timezone to '+07';
+
+# postgresql: 2000-01-01 01:00:00+07
+query P
+SELECT date_trunc('hour', TIMESTAMPTZ '2000-01-01T01:01:01') as ts
+----
+2000-01-01T01:00:00+07:00
+
+# postgresql: 2000-01-01 00:00:00+07
+query P
+SELECT date_trunc('day', TIMESTAMPTZ '2000-01-01T01:01:01') as ts
+----
+2000-01-01T00:00:00+07:00
+
+# postgresql: 2000-01-01 08:00:00+07
+query P
+SELECT date_trunc('hour', TIMESTAMPTZ '2000-01-01T01:01:01Z') as ts
+----
+2000-01-01T08:00:00+07:00
+
+# postgresql: 2000-01-01 00:00:00+07
+query P
+SELECT date_trunc('day', TIMESTAMPTZ '2000-01-01T01:01:01Z') as ts
+----
+2000-01-01T00:00:00+07:00
+
+# postgresql:  2022-01-01 00:00:00+07
+query P
+SELECT date_bin('1 day', TIMESTAMPTZ '2022-01-01 20:10:00', TIMESTAMPTZ '2020-01-01')
+----
+2022-01-01T00:00:00+07:00
+
+# postgresql: 2022-01-02 00:00:00+07
+query P
+SELECT date_bin('1 day', TIMESTAMPTZ '2022-01-01 20:10:00Z', TIMESTAMPTZ '2020-01-01')
+----
+2022-01-02T00:00:00+07:00
+
+# coerce TIMESTAMP to TIMESTAMPTZ
+query P
+SELECT date_bin('1 day', TIMESTAMPTZ '2022-01-01 20:10:00Z', TIMESTAMP '2020-01-01')
+----
+2022-01-01T07:00:00+07:00
+
+# postgresql: 1
+query R
+SELECT date_part('hour', TIMESTAMPTZ '2000-01-01T01:01:01') as part
+----
+1
+
+# postgresql: 8
+query R
+SELECT date_part('hour', TIMESTAMPTZ '2000-01-01T01:01:01Z') as part
+----
+8
+
+
+
+##########
+## Timezone impact on builtin scalar functions
+#
+# server time = UTC
+##########
+
+statement ok
+set timezone to '+00';
+
+# postgresql: 2000-01-01T01:00:00+00
+query P
+SELECT date_trunc('hour', TIMESTAMPTZ '2000-01-01T01:01:01') as ts
+----
+2000-01-01T01:00:00Z
+
+# postgresql: 2000-01-01T00:00:00+00
+query P
+SELECT date_trunc('day', TIMESTAMPTZ '2000-01-01T01:01:01') as ts
+----
+2000-01-01T00:00:00Z
+
+# postgresql: 1999-12-31T18:00:00+00
+query P
+SELECT date_trunc('hour', TIMESTAMPTZ '2000-01-01T01:01:01+07') as ts
+----
+1999-12-31T18:00:00Z
+
+# postgresql: 1999-12-31T00:00:00+00
+query P
+SELECT date_trunc('day', TIMESTAMPTZ '2000-01-01T01:01:01+07') as ts
+----
+1999-12-31T00:00:00Z
+
+# postgresql: 2022-01-01 00:00:00+00
+query P
+SELECT date_bin('1 day', TIMESTAMPTZ '2022-01-01 20:10:00', TIMESTAMPTZ '2020-01-01')
+----
+2022-01-01T00:00:00Z
+
+# postgresql: 2021-12-31 00:00:00+00
+query P
+SELECT date_bin('1 day', TIMESTAMPTZ '2022-01-01 01:10:00+07', TIMESTAMPTZ '2020-01-01')
+----
+2021-12-31T00:00:00Z
+
+# postgresql: 2021-12-31 00:00:00+00
+query P
+SELECT date_bin('1 day', TIMESTAMPTZ '2022-01-01 01:10:00+07', '2020-01-01')
+----
+2021-12-31T00:00:00Z
+
+# postgresql: 2021-12-31 00:00:00+00
+query P
+SELECT date_bin('1 day', TIMESTAMPTZ '2022-01-01 01:10:00+07', '2020-01-01T00:00:00Z')
+----
+2021-12-31T00:00:00Z
+
+# postgresql: 2021-12-31 18:00:00+00
+query P
+SELECT date_bin('2 hour', TIMESTAMPTZ '2022-01-01 01:10:00+07', '2020-01-01')
+----
+2021-12-31T18:00:00Z
+
+# postgresql: 2021-12-31 18:00:00+00
+query P
+SELECT date_bin('2 hour', TIMESTAMPTZ '2022-01-01 01:10:00+07', '2020-01-01T00:00:00Z')
+----
+2021-12-31T18:00:00Z
+
+# postgresql: 1
+query R
+SELECT date_part('hour', TIMESTAMPTZ '2000-01-01T01:01:01') as part
+----
+1
+
+# postgresql: 18
+query R
+SELECT date_part('hour', TIMESTAMPTZ '2000-01-01T01:01:01+07') as part
+----
+18
+
+
+
+##########
+## Timezone impact on builtin scalar functions
+#
+# irregular offsets
+##########
+
+query P rowsort
+SELECT date_trunc('hour', TIMESTAMPTZ '2000-01-01T00:00:00+00:45') as ts_irregular_offset
+ UNION ALL
+SELECT date_trunc('hour', TIMESTAMPTZ '2000-01-01T00:00:00+00:30') as ts_irregular_offset
+ UNION ALL
+SELECT date_trunc('hour', TIMESTAMPTZ '2000-01-01T00:00:00+00:15') as ts_irregular_offset
+ UNION ALL
+SELECT date_trunc('hour', TIMESTAMPTZ '2000-01-01T00:00:00-00:15') as ts_irregular_offset
+ UNION ALL
+SELECT date_trunc('hour', TIMESTAMPTZ '2000-01-01T00:00:00-00:30') as ts_irregular_offset
+ UNION ALL
+SELECT date_trunc('hour', TIMESTAMPTZ '2000-01-01T00:00:00-00:45') as ts_irregular_offset
+----
+1999-12-31T23:00:00Z
+1999-12-31T23:00:00Z
+1999-12-31T23:00:00Z
+2000-01-01T00:00:00Z
+2000-01-01T00:00:00Z
+2000-01-01T00:00:00Z
+
+query P rowsort
+SELECT date_bin('1 day', TIMESTAMPTZ '2022-01-01 00:00:00+00:30', TIMESTAMPTZ '2020-01-01') as ts_irregular_offset
+ UNION ALL
+SELECT date_bin('1 day', TIMESTAMPTZ '2022-01-01 00:00:00+00:15', TIMESTAMPTZ '2020-01-01') as ts_irregular_offset
+ UNION ALL
+SELECT date_bin('1 day', TIMESTAMPTZ '2022-01-01 00:00:00-00:15', TIMESTAMPTZ '2020-01-01') as ts_irregular_offset
+ UNION ALL
+SELECT date_bin('1 day', TIMESTAMPTZ '2022-01-01 00:00:00-00:30', TIMESTAMPTZ '2020-01-01') as ts_irregular_offset
+----
+2021-12-31T00:00:00Z
+2021-12-31T00:00:00Z
+2022-01-01T00:00:00Z
+2022-01-01T00:00:00Z
+
+query P rowsort
+SELECT date_bin('1 hour', TIMESTAMPTZ '2022-01-01 00:00:00+01:15', TIMESTAMPTZ '2020-01-01') as ts_irregular_offset
+ UNION ALL
+SELECT date_bin('1 hour', TIMESTAMPTZ '2022-01-01 00:00:00+00:45', TIMESTAMPTZ '2020-01-01') as ts_irregular_offset
+ UNION ALL
+SELECT date_bin('1 hour', TIMESTAMPTZ '2022-01-01 00:00:00+00:30', TIMESTAMPTZ '2020-01-01') as ts_irregular_offset
+ UNION ALL
+SELECT date_bin('1 hour', TIMESTAMPTZ '2022-01-01 00:00:00+00:15', TIMESTAMPTZ '2020-01-01') as ts_irregular_offset
+ UNION ALL
+SELECT date_bin('1 hour', TIMESTAMPTZ '2022-01-01 00:00:00-00:15', TIMESTAMPTZ '2020-01-01') as ts_irregular_offset
+ UNION ALL
+SELECT date_bin('1 hour', TIMESTAMPTZ '2022-01-01 00:00:00-00:30', TIMESTAMPTZ '2020-01-01') as ts_irregular_offset
+ UNION ALL
+SELECT date_bin('1 hour', TIMESTAMPTZ '2022-01-01 00:00:00-00:45', TIMESTAMPTZ '2020-01-01') as ts_irregular_offset
+ UNION ALL
+SELECT date_bin('1 hour', TIMESTAMPTZ '2022-01-01 00:00:00-01:15', TIMESTAMPTZ '2020-01-01') as ts_irregular_offset
+----
+2021-12-31T22:00:00Z
+2021-12-31T23:00:00Z
+2021-12-31T23:00:00Z
+2021-12-31T23:00:00Z
+2022-01-01T00:00:00Z
+2022-01-01T00:00:00Z
+2022-01-01T00:00:00Z
+2022-01-01T01:00:00Z
+
+
+
+##########
+## Timezone acceptance bounds
+#
+# standard formats
+##########
+
+query P
+SELECT TIMESTAMPTZ '2022-01-01 01:10:00' as rfc3339_no_tz
+----
+2022-01-01T01:10:00Z
+
+# +00, +00:00, +0000
+# +01, +01:00, +0100
+# -01, -01:00, -0100
+query P rowsort
+SELECT TIMESTAMPTZ '2022-01-01 01:10:00+00' as rfc3339_offset_tz
+ UNION ALL
+SELECT TIMESTAMPTZ '2022-01-01 01:10:00+00:00' as rfc3339_offset_tz
+ UNION ALL
+SELECT TIMESTAMPTZ '2022-01-01 01:10:00+0000' as rfc3339_offset_tz
+ UNION ALL
+ SELECT TIMESTAMPTZ '2022-01-01 01:10:00+01' as rfc3339_offset_tz
+ UNION ALL
+SELECT TIMESTAMPTZ '2022-01-01 01:10:00+01:00' as rfc3339_offset_tz
+ UNION ALL
+SELECT TIMESTAMPTZ '2022-01-01 01:10:00+0100' as rfc3339_offset_tz
+ UNION ALL
+SELECT TIMESTAMPTZ '2022-01-01 01:10:00-01' as rfc3339_offset_tz
+ UNION ALL
+SELECT TIMESTAMPTZ '2022-01-01 01:10:00-01:00' as rfc3339_offset_tz
+ UNION ALL
+SELECT TIMESTAMPTZ '2022-01-01 01:10:00-0100' as rfc3339_offset_tz
+----
+2022-01-01T00:10:00Z
+2022-01-01T00:10:00Z
+2022-01-01T00:10:00Z
+2022-01-01T01:10:00Z
+2022-01-01T01:10:00Z
+2022-01-01T01:10:00Z
+2022-01-01T02:10:00Z
+2022-01-01T02:10:00Z
+2022-01-01T02:10:00Z
+
+query P
+SELECT TIMESTAMPTZ '2022-01-01T01:10:00' as iso8601_no_tz
+----
+2022-01-01T01:10:00Z
+
+# +00, +00:00, +0000
+# +01, +01:00, +0100
+# -01, -01:00, -0100
+query P rowsort
+SELECT TIMESTAMPTZ '2022-01-01T01:10:00+00' as iso8601_offset_tz
+ UNION ALL
+SELECT TIMESTAMPTZ '2022-01-01T01:10:00+00:00' as iso8601_offset_tz
+ UNION ALL
+SELECT TIMESTAMPTZ '2022-01-01T01:10:00+0000' as iso8601_offset_tz
+ UNION ALL
+ SELECT TIMESTAMPTZ '2022-01-01T01:10:00+01' as iso8601_offset_tz
+ UNION ALL
+SELECT TIMESTAMPTZ '2022-01-01T01:10:00+01:00' as iso8601_offset_tz
+ UNION ALL
+SELECT TIMESTAMPTZ '2022-01-01T01:10:00+0100' as iso8601_offset_tz
+ UNION ALL
+SELECT TIMESTAMPTZ '2022-01-01T01:10:00-01' as iso8601_offset_tz
+ UNION ALL
+SELECT TIMESTAMPTZ '2022-01-01T01:10:00-01:00' as iso8601_offset_tz
+ UNION ALL
+SELECT TIMESTAMPTZ '2022-01-01T01:10:00-0100' as iso8601_offset_tz
+----
+2022-01-01T00:10:00Z
+2022-01-01T00:10:00Z
+2022-01-01T00:10:00Z
+2022-01-01T01:10:00Z
+2022-01-01T01:10:00Z
+2022-01-01T01:10:00Z
+2022-01-01T02:10:00Z
+2022-01-01T02:10:00Z
+2022-01-01T02:10:00Z
+
+statement error
+SELECT TIMESTAMPTZ '2023‐W38‐5' as iso8601_week_designation
+
+statement error
+SELECT TIMESTAMPTZ '2022-01-01T01:10:00+Foo' as bad_tz
+
+statement error
+SELECT TIMESTAMPTZ '2022-01-01T01:10:00+42:00' as bad_tz
+
+query P rowsort
+SELECT TIMESTAMPTZ '2022-01-01 01:10:00 GMT' as ts_gmt
+----
+2022-01-01T01:10:00Z
+
+statement error
+SELECT TIMESTAMPTZ '2022-01-01 01:10:00 GMT-1' as ts_gmt_offset
+
+# will not accept non-GMT geo abbr
+# postgresql: accepts
+statement error
+SELECT TIMESTAMPTZ '2022-01-01 01:10:00 AEST'
+
+# ok to use geo longform
+query P rowsort
+SELECT TIMESTAMPTZ '2022-01-01 01:10:00 Australia/Sydney' as ts_geo
+ UNION ALL
+SELECT TIMESTAMPTZ '2022-01-01 01:10:00 Antarctica/Vostok' as ts_geo
+ UNION ALL
+SELECT TIMESTAMPTZ '2022-01-01 01:10:00 Africa/Johannesburg' as ts_geo
+ UNION ALL
+SELECT TIMESTAMPTZ '2022-01-01 01:10:00 America/Los_Angeles' as ts_geo
+----
+2021-12-31T14:10:00Z
+2021-12-31T19:10:00Z
+2021-12-31T23:10:00Z
+2022-01-01T09:10:00Z
+
+# geo longform timezones need whitespace converted to underscore
+statement error
+SELECT TIMESTAMPTZ '2022-01-01 01:10:00 America/Los Angeles' as ts_geo
+
+statement error
+SELECT TIMESTAMPTZ 'Sat, 1 Jan 2022 01:10:00 GMT' as rfc1123
+
+
+
+##########
+## Timezone acceptance bounds
+#
+# daylight savings
+##########
+
+# will not accept daylight savings designations as geo abbr (because not accepting geo abbr)
+# postgresql: accepts
+statement error
+SELECT TIMESTAMPTZ '2023-03-12 02:00:00 EDT'
+
+# ok to use geo longform
+query P
+SELECT TIMESTAMPTZ '2023-03-11 02:00:00 America/Los_Angeles' as ts_geo
+----
+2023-03-11T10:00:00Z
+
+# will error if provide geo longform with time not possible due to daylight savings
+# Arrow error: Parser error: Error parsing timestamp from '2023-03-12 02:00:00 America/Los_Angeles': error computing timezone offset
+# postgresql: accepts
+statement error
+SELECT TIMESTAMPTZ '2023-03-12 02:00:00 America/Los_Angeles' as ts_geo
+
+
+
+##########
+## Timezone column tests
+##########
+
+# create a table with a non-UTC time zone.
+statement ok
+SET TIME ZONE = '+05:00'
+
+statement ok
+CREATE TABLE foo (time TIMESTAMPTZ) AS VALUES
+    ('2020-01-01T00:00:00+05:00'), 
+    ('2020-01-01T01:00:00+05:00'),
+    ('2020-01-01T02:00:00+05:00'),
+    ('2020-01-01T03:00:00+05:00')
+
+statement ok
+SET TIME ZONE = '+00'
+
+# verify column type
+query T
+SELECT arrow_typeof(time) FROM foo LIMIT 1
+----
+Timestamp(Nanosecond, Some("+05:00"))
+
+# check date_trunc
+query P
+SELECT date_trunc('day', time) FROM foo
+----
+2020-01-01T00:00:00+05:00
+2020-01-01T00:00:00+05:00
+2020-01-01T00:00:00+05:00
+2020-01-01T00:00:00+05:00
+
+# verify date_trunc column type
+query T
+SELECT arrow_typeof(date_trunc('day', time)) FROM foo LIMIT 1
+----
+Timestamp(Nanosecond, Some("+05:00"))
+
+# check date_bin
+query P
+SELECT date_bin(INTERVAL '1 day', time, '1970-01-01T00:00:00+05:00') FROM foo
+----
+2020-01-01T00:00:00+05:00
+2020-01-01T00:00:00+05:00
+2020-01-01T00:00:00+05:00
+2020-01-01T00:00:00+05:00
+
+# verify date_trunc column type
+query T
+SELECT arrow_typeof(date_bin(INTERVAL '1 day', time, '1970-01-01T00:00:00+05:00')) FROM foo LIMIT 1
+----
+Timestamp(Nanosecond, Some("+05:00"))
+
+
+# timestamp comparison with and without timezone
+query B
+SELECT TIMESTAMPTZ '2022-01-01 20:10:00Z' = TIMESTAMP '2020-01-01'
+----
+false
+
+query B
+SELECT TIMESTAMPTZ '2020-01-01 00:00:00Z' = TIMESTAMP '2020-01-01'
+----
+true
+
+# verify timestamp cast with integer input
+query PPPPPP
+SELECT to_timestamp(null), to_timestamp(0), to_timestamp(1926632005), to_timestamp(1), to_timestamp(-1), to_timestamp(0-1)
+----
+NULL 1970-01-01T00:00:00 2031-01-19T23:33:25 1970-01-01T00:00:01 1969-12-31T23:59:59 1969-12-31T23:59:59
+
+# verify timestamp syntax stlyes are consistent
+query BBBBBBBBBBBBB
+SELECT to_timestamp(null) is null as c1,
+       null::timestamp is null as c2, 
+       cast(null as timestamp) is null as c3, 
+       to_timestamp(0) = 0::timestamp as c4, 
+       to_timestamp(1926632005) = 1926632005::timestamp as c5, 
+       to_timestamp(1) = 1::timestamp as c6, 
+       to_timestamp(-1) = -1::timestamp as c7, 
+       to_timestamp(0-1) = (0-1)::timestamp as c8,
+       to_timestamp(0) = cast(0 as timestamp) as c9, 
+       to_timestamp(1926632005) = cast(1926632005 as timestamp) as c10, 
+       to_timestamp(1) = cast(1 as timestamp) as c11, 
+       to_timestamp(-1) = cast(-1 as timestamp) as c12, 
+       to_timestamp(0-1) = cast(0-1 as timestamp) as c13
+----
+true true true true true true true true true true true true true
+
+# verify timestamp output types 
+query TTT
+SELECT arrow_typeof(to_timestamp(1)), arrow_typeof(to_timestamp(null)), arrow_typeof(to_timestamp('2023-01-10 12:34:56.000'))
+----
+Timestamp(Nanosecond, None) Timestamp(Nanosecond, None) Timestamp(Nanosecond, None)
+
+# verify timestamp output types using timestamp literal syntax
+query BBBBBB
+SELECT arrow_typeof(to_timestamp(1)) = arrow_typeof(1::timestamp) as c1, 
+       arrow_typeof(to_timestamp(null)) = arrow_typeof(null::timestamp) as c2,
+       arrow_typeof(to_timestamp('2023-01-10 12:34:56.000')) = arrow_typeof('2023-01-10 12:34:56.000'::timestamp) as c3,
+       arrow_typeof(to_timestamp(1)) = arrow_typeof(cast(1 as timestamp)) as c4, 
+       arrow_typeof(to_timestamp(null)) = arrow_typeof(cast(null as timestamp)) as c5,
+       arrow_typeof(to_timestamp('2023-01-10 12:34:56.000')) = arrow_typeof(cast('2023-01-10 12:34:56.000' as timestamp)) as c6
+----
+true true true true true true
+
+# known issues. currently overflows (expects default precision to be microsecond instead of nanoseconds. Work pending)
+#verify extreme values 
+#query PPPPPPPP
+#SELECT to_timestamp(-62125747200), to_timestamp(1926632005177), -62125747200::timestamp, 1926632005177::timestamp, cast(-62125747200 as timestamp), cast(1926632005177 as timestamp)
+#----
+#0001-04-25T00:00:00 +63022-07-16T12:59:37 0001-04-25T00:00:00 +63022-07-16T12:59:37 0001-04-25T00:00:00 +63022-07-16T12:59:37

@@ -17,9 +17,10 @@
 
 //! Expression rewriter
 
+use crate::expr::Alias;
 use crate::logical_plan::Projection;
 use crate::{Expr, ExprSchemable, LogicalPlan, LogicalPlanBuilder};
-use datafusion_common::tree_node::{Transformed, TreeNode};
+use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRewriter};
 use datafusion_common::Result;
 use datafusion_common::{Column, DFSchema};
 use std::collections::HashMap;
@@ -137,6 +138,23 @@ pub fn unnormalize_col(expr: Expr) -> Expr {
     .expect("Unnormalize is infallable")
 }
 
+/// Create a Column from the Scalar Expr
+pub fn create_col_from_scalar_expr(
+    scalar_expr: &Expr,
+    subqry_alias: String,
+) -> Result<Column> {
+    match scalar_expr {
+        Expr::Alias(Alias { name, .. }) => Ok(Column::new(Some(subqry_alias), name)),
+        Expr::Column(Column { relation: _, name }) => {
+            Ok(Column::new(Some(subqry_alias), name))
+        }
+        _ => {
+            let scalar_column = scalar_expr.display_name()?;
+            Ok(Column::new(Some(subqry_alias), scalar_column))
+        }
+    }
+}
+
 /// Recursively un-normalize all [`Column`] expressions in a list of expression trees
 #[inline]
 pub fn unnormalize_cols(exprs: impl IntoIterator<Item = Expr>) -> Vec<Expr> {
@@ -204,8 +222,8 @@ fn coerce_exprs_for_schema(
             let new_type = dst_schema.field(idx).data_type();
             if new_type != &expr.get_type(src_schema)? {
                 match expr {
-                    Expr::Alias(e, alias) => {
-                        Ok(e.cast_to(new_type, src_schema)?.alias(alias))
+                    Expr::Alias(Alias { expr, name, .. }) => {
+                        Ok(expr.cast_to(new_type, src_schema)?.alias(name))
                     }
                     _ => expr.cast_to(new_type, src_schema),
                 }
@@ -216,13 +234,38 @@ fn coerce_exprs_for_schema(
         .collect::<Result<_>>()
 }
 
+/// Recursively un-alias an expressions
+#[inline]
+pub fn unalias(expr: Expr) -> Expr {
+    match expr {
+        Expr::Alias(Alias { expr, .. }) => unalias(*expr),
+        _ => expr,
+    }
+}
+
+/// Rewrites `expr` using `rewriter`, ensuring that the output has the
+/// same name as `expr` prior to rewrite, adding an alias if necessary.
+///
+/// This is important when optimizing plans to ensure the output
+/// schema of plan nodes don't change after optimization
+pub fn rewrite_preserving_name<R>(expr: Expr, rewriter: &mut R) -> Result<Expr>
+where
+    R: TreeNodeRewriter<N = Expr>,
+{
+    let original_name = expr.name_for_alias()?;
+    let expr = expr.rewrite(rewriter)?;
+    expr.alias_if_changed(original_name)
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::{col, lit};
+    use crate::expr::Sort;
+    use crate::{col, lit, Cast};
     use arrow::datatypes::DataType;
     use datafusion_common::tree_node::{RewriteRecursion, TreeNode, TreeNodeRewriter};
     use datafusion_common::{DFField, DFSchema, ScalarValue};
+    use std::ops::Add;
 
     #[derive(Default)]
     struct RecordingRewriter {
@@ -233,12 +276,12 @@ mod test {
         type N = Expr;
 
         fn pre_visit(&mut self, expr: &Expr) -> Result<RewriteRecursion> {
-            self.v.push(format!("Previsited {expr:?}"));
+            self.v.push(format!("Previsited {expr}"));
             Ok(RewriteRecursion::Continue)
         }
 
         fn mutate(&mut self, expr: Expr) -> Result<Expr> {
-            self.v.push(format!("Mutated {expr:?}"));
+            self.v.push(format!("Mutated {expr}"));
             Ok(expr)
         }
     }
@@ -331,7 +374,7 @@ mod test {
         let error =
             normalize_col_with_schemas_and_ambiguity_check(expr, &[&schemas], &[])
                 .unwrap_err()
-                .to_string();
+                .strip_backtrace();
         assert_eq!(
             error,
             r#"Schema error: No field named b. Valid fields are "tableA".a."#
@@ -368,6 +411,66 @@ mod test {
                 "Mutated Utf8(\"CO\")",
                 "Mutated state = Utf8(\"CO\")"
             ]
+        )
+    }
+
+    #[test]
+    fn test_rewrite_preserving_name() {
+        test_rewrite(col("a"), col("a"));
+
+        test_rewrite(col("a"), col("b"));
+
+        // cast data types
+        test_rewrite(
+            col("a"),
+            Expr::Cast(Cast::new(Box::new(col("a")), DataType::Int32)),
+        );
+
+        // change literal type from i32 to i64
+        test_rewrite(col("a").add(lit(1i32)), col("a").add(lit(1i64)));
+
+        // SortExpr a+1 ==> b + 2
+        test_rewrite(
+            Expr::Sort(Sort::new(Box::new(col("a").add(lit(1i32))), true, false)),
+            Expr::Sort(Sort::new(Box::new(col("b").add(lit(2i64))), true, false)),
+        );
+    }
+
+    /// rewrites `expr_from` to `rewrite_to` using
+    /// `rewrite_preserving_name` verifying the result is `expected_expr`
+    fn test_rewrite(expr_from: Expr, rewrite_to: Expr) {
+        struct TestRewriter {
+            rewrite_to: Expr,
+        }
+
+        impl TreeNodeRewriter for TestRewriter {
+            type N = Expr;
+
+            fn mutate(&mut self, _: Expr) -> Result<Expr> {
+                Ok(self.rewrite_to.clone())
+            }
+        }
+
+        let mut rewriter = TestRewriter {
+            rewrite_to: rewrite_to.clone(),
+        };
+        let expr = rewrite_preserving_name(expr_from.clone(), &mut rewriter).unwrap();
+
+        let original_name = match &expr_from {
+            Expr::Sort(Sort { expr, .. }) => expr.display_name(),
+            expr => expr.display_name(),
+        }
+        .unwrap();
+
+        let new_name = match &expr {
+            Expr::Sort(Sort { expr, .. }) => expr.display_name(),
+            expr => expr.display_name(),
+        }
+        .unwrap();
+
+        assert_eq!(
+            original_name, new_name,
+            "mismatch rewriting expr_from: {expr_from} to {rewrite_to}"
         )
     }
 }

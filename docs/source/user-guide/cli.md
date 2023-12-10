@@ -17,11 +17,136 @@
   under the License.
 -->
 
-# `datafusion-cli`
+# Command line SQL console
 
 The DataFusion CLI is a command-line interactive SQL utility for executing
 queries against any supported data files. It is a convenient way to
 try DataFusion's SQL support with your own data.
+
+## Installation
+
+### Install and run using Cargo
+
+The easiest way to install DataFusion CLI a spin is via `cargo install datafusion-cli`.
+
+### Install and run using Homebrew (on MacOS)
+
+DataFusion CLI can also be installed via Homebrew (on MacOS). If you don't have Homebrew installed, you can check how to install it [here](https://docs.brew.sh/Installation).
+
+Install it as any other pre-built software like this:
+
+```bash
+brew install datafusion
+# ==> Downloading https://ghcr.io/v2/homebrew/core/datafusion/manifests/12.0.0
+# ######################################################################## 100.0%
+# ==> Downloading https://ghcr.io/v2/homebrew/core/datafusion/blobs/sha256:9ecc8a01be47ceb9a53b39976696afa87c0a8
+# ==> Downloading from https://pkg-containers.githubusercontent.com/ghcr1/blobs/sha256:9ecc8a01be47ceb9a53b39976
+# ######################################################################## 100.0%
+# ==> Pouring datafusion--12.0.0.big_sur.bottle.tar.gz
+# 🍺  /usr/local/Cellar/datafusion/12.0.0: 9 files, 17.4MB
+
+datafusion-cli
+```
+
+### Install and run using PyPI
+
+DataFusion CLI can also be installed via PyPI. You can check how to install PyPI [here](https://pip.pypa.io/en/latest/installation/).
+
+Install it as any other pre-built software like this:
+
+```bash
+pip3 install datafusion
+# Defaulting to user installation because normal site-packages is not writeable
+# Collecting datafusion
+#   Downloading datafusion-33.0.0-cp38-abi3-macosx_11_0_arm64.whl.metadata (9.6 kB)
+# Collecting pyarrow>=11.0.0 (from datafusion)
+#   Downloading pyarrow-14.0.1-cp39-cp39-macosx_11_0_arm64.whl.metadata (3.0 kB)
+# Requirement already satisfied: numpy>=1.16.6 in /Users/Library/Python/3.9/lib/python/site-packages (from pyarrow>=11.0.0->datafusion) (1.23.4)
+# Downloading datafusion-33.0.0-cp38-abi3-macosx_11_0_arm64.whl (13.5 MB)
+#    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 13.5/13.5 MB 3.6 MB/s eta 0:00:00
+# Downloading pyarrow-14.0.1-cp39-cp39-macosx_11_0_arm64.whl (24.0 MB)
+#    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 24.0/24.0 MB 36.4 MB/s eta 0:00:00
+# Installing collected packages: pyarrow, datafusion
+#   Attempting uninstall: pyarrow
+#     Found existing installation: pyarrow 10.0.1
+#     Uninstalling pyarrow-10.0.1:
+#       Successfully uninstalled pyarrow-10.0.1
+# Successfully installed datafusion-33.0.0 pyarrow-14.0.1
+
+datafusion-cli
+```
+
+### Run using Docker
+
+There is no officially published Docker image for the DataFusion CLI, so it is necessary to build from source
+instead.
+
+Use the following commands to clone this repository and build a Docker image containing the CLI tool. Note
+that there is `.dockerignore` file in the root of the repository that may need to be deleted in order for
+this to work.
+
+```bash
+git clone https://github.com/apache/arrow-datafusion
+cd arrow-datafusion
+git checkout 12.0.0
+docker build -f datafusion-cli/Dockerfile . --tag datafusion-cli
+docker run -it -v $(your_data_location):/data datafusion-cli
+```
+
+## Usage
+
+See the current usage using `datafusion-cli --help`:
+
+```bash
+Apache Arrow <dev@arrow.apache.org>
+Command Line Client for DataFusion query engine.
+
+USAGE:
+    datafusion-cli [OPTIONS]
+
+OPTIONS:
+    -b, --batch-size <BATCH_SIZE>
+            The batch size of each query, or use DataFusion default
+
+    -c, --command <COMMAND>...
+            Execute the given command string(s), then exit
+
+    -f, --file <FILE>...
+            Execute commands from file(s), then exit
+
+        --format <FORMAT>
+            [default: table] [possible values: csv, tsv, table, json, nd-json]
+
+    -h, --help
+            Print help information
+
+    -m, --memory-limit <MEMORY_LIMIT>
+            The memory pool limitation (e.g. '10g'), default to None (no limit)
+
+        --maxrows <MAXROWS>
+            The max number of rows to display for 'Table' format
+            [default: 40] [possible values: numbers(0/10/...), inf(no limit)]
+
+        --mem-pool-type <MEM_POOL_TYPE>
+            Specify the memory pool type 'greedy' or 'fair', default to 'greedy'
+
+    -p, --data-path <DATA_PATH>
+            Path to your data, default to current directory
+
+    -q, --quiet
+            Reduce printing other than the results and work quietly
+
+    -r, --rc <RC>...
+            Run the provided files on startup instead of ~/.datafusionrc
+
+    -V, --version
+            Print version information
+```
+
+## Querying data from the files directly
+
+Files can be queried directly by enclosing the file or
+directory name in single `'` quotes as shown in the example.
 
 ## Example
 
@@ -66,85 +191,37 @@ DataFusion CLI v16.0.0
 2 rows in set. Query took 0.007 seconds.
 ```
 
-## Installation
-
-### Install and run using Cargo
-
-The easiest way to install DataFusion CLI a spin is via `cargo install datafusion-cli`.
-
-### Install and run using Homebrew (on MacOS)
-
-DataFusion CLI can also be installed via Homebrew (on MacOS). Install it as any other pre-built software like this:
-
-```bash
-brew install datafusion
-# ==> Downloading https://ghcr.io/v2/homebrew/core/datafusion/manifests/12.0.0
-# ######################################################################## 100.0%
-# ==> Downloading https://ghcr.io/v2/homebrew/core/datafusion/blobs/sha256:9ecc8a01be47ceb9a53b39976696afa87c0a8
-# ==> Downloading from https://pkg-containers.githubusercontent.com/ghcr1/blobs/sha256:9ecc8a01be47ceb9a53b39976
-# ######################################################################## 100.0%
-# ==> Pouring datafusion--12.0.0.big_sur.bottle.tar.gz
-# 🍺  /usr/local/Cellar/datafusion/12.0.0: 9 files, 17.4MB
-
-datafusion-cli
-```
-
-### Run using Docker
-
-There is no officially published Docker image for the DataFusion CLI, so it is necessary to build from source
-instead.
-
-Use the following commands to clone this repository and build a Docker image containing the CLI tool. Note
-that there is `.dockerignore` file in the root of the repository that may need to be deleted in order for
-this to work.
-
-```bash
-git clone https://github.com/apache/arrow-datafusion
-cd arrow-datafusion
-git checkout 12.0.0
-docker build -f datafusion-cli/Dockerfile . --tag datafusion-cli
-docker run -it -v $(your_data_location):/data datafusion-cli
-```
-
-## Usage
-
-See the current usage using `datafusion-cli --help`:
-
-```bash
-Apache Arrow <dev@arrow.apache.org>
-Command Line Client for DataFusion query engine.
-
-USAGE:
-    datafusion-cli [OPTIONS]
-
-OPTIONS:
-    -c, --batch-size <BATCH_SIZE>    The batch size of each query, or use DataFusion default
-    -f, --file <FILE>...             Execute commands from file(s), then exit
-        --format <FORMAT>            [default: table] [possible values: csv, tsv, table, json,
-                                     nd-json]
-    -h, --help                       Print help information
-    -p, --data-path <DATA_PATH>      Path to your data, default to current directory
-    -q, --quiet                      Reduce printing other than the results and work quietly
-    -r, --rc <RC>...                 Run the provided files on startup instead of ~/.datafusionrc
-    -V, --version                    Print version information
-```
-
-## Selecting files directly
-
-Files can be queried directly by enclosing the file or
-directory name in single `'` quotes as shown in the example.
+## Creating external tables
 
 It is also possible to create a table backed by files by explicitly
-via `CREATE EXTERNAL TABLE` as shown below.
+via `CREATE EXTERNAL TABLE` as shown below. Filemask wildcards supported
 
 ## Registering Parquet Data Sources
 
-Parquet data sources can be registered by executing a `CREATE EXTERNAL TABLE` SQL statement. It is not necessary to provide schema information for Parquet files.
+Parquet data sources can be registered by executing a `CREATE EXTERNAL TABLE` SQL statement. The schema information will be derived automatically.
+
+Register a single file parquet datasource
 
 ```sql
 CREATE EXTERNAL TABLE taxi
 STORED AS PARQUET
 LOCATION '/mnt/nyctaxi/tripdata.parquet';
+```
+
+Register a single folder parquet datasource. All files inside must be valid parquet files!
+
+```sql
+CREATE EXTERNAL TABLE taxi
+STORED AS PARQUET
+LOCATION '/mnt/nyctaxi/';
+```
+
+Register a single folder parquet datasource by specifying a wildcard for files to read
+
+```sql
+CREATE EXTERNAL TABLE taxi
+STORED AS PARQUET
+LOCATION '/mnt/nyctaxi/*.parquet';
 ```
 
 ## Registering CSV Data Sources
@@ -350,11 +427,13 @@ Available commands inside DataFusion CLI are:
 
 - Show configuration options
 
+`SHOW ALL [VERBOSE]`
+
 ```SQL
 > show all;
 
 +-------------------------------------------------+---------+
-| name                                            | setting |
+| name                                            | value   |
 +-------------------------------------------------+---------+
 | datafusion.execution.batch_size                 | 8192    |
 | datafusion.execution.coalesce_batches           | true    |
@@ -363,6 +442,21 @@ Available commands inside DataFusion CLI are:
 | datafusion.explain.physical_plan_only           | false   |
 | datafusion.optimizer.filter_null_join_keys      | false   |
 | datafusion.optimizer.skip_failed_rules          | true    |
++-------------------------------------------------+---------+
+
+```
+
+- Show specific configuration option
+
+`SHOW xyz.abc.qwe [VERBOSE]`
+
+```SQL
+> show datafusion.execution.batch_size;
+
++-------------------------------------------------+---------+
+| name                                            | value   |
++-------------------------------------------------+---------+
+| datafusion.execution.batch_size                 | 8192    |
 +-------------------------------------------------+---------+
 
 ```
@@ -385,12 +479,12 @@ For example, to set `datafusion.execution.batch_size` to `1024` you
 would set the `DATAFUSION_EXECUTION_BATCH_SIZE` environment variable
 appropriately:
 
-```shell
+```SQL
 $ DATAFUSION_EXECUTION_BATCH_SIZE=1024 datafusion-cli
 DataFusion CLI v12.0.0
 ❯ show all;
 +-------------------------------------------------+---------+
-| name                                            | setting |
+| name                                            | value   |
 +-------------------------------------------------+---------+
 | datafusion.execution.batch_size                 | 1024    |
 | datafusion.execution.coalesce_batches           | true    |
@@ -405,13 +499,13 @@ DataFusion CLI v12.0.0
 
 You can change the configuration options using `SET` statement as well
 
-```shell
+```SQL
 $ datafusion-cli
 DataFusion CLI v13.0.0
 
 ❯ show datafusion.execution.batch_size;
 +---------------------------------+---------+
-| name                            | setting |
+| name                            | value   |
 +---------------------------------+---------+
 | datafusion.execution.batch_size | 8192    |
 +---------------------------------+---------+
@@ -422,7 +516,7 @@ DataFusion CLI v13.0.0
 
 ❯ show datafusion.execution.batch_size;
 +---------------------------------+---------+
-| name                            | setting |
+| name                            | value   |
 +---------------------------------+---------+
 | datafusion.execution.batch_size | 1024    |
 +---------------------------------+---------+

@@ -1,0 +1,136 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+
+# create aggregate_test_100 table
+statement ok
+CREATE EXTERNAL TABLE aggregate_test_100 (
+  c1  VARCHAR NOT NULL,
+  c2  TINYINT NOT NULL,
+  c3  SMALLINT NOT NULL,
+  c4  SMALLINT,
+  c5  INT,
+  c6  BIGINT NOT NULL,
+  c7  SMALLINT NOT NULL,
+  c8  INT NOT NULL,
+  c9  BIGINT UNSIGNED NOT NULL,
+  c10 VARCHAR NOT NULL,
+  c11 FLOAT NOT NULL,
+  c12 DOUBLE NOT NULL,
+  c13 VARCHAR NOT NULL
+)
+STORED AS CSV
+WITH HEADER ROW
+LOCATION '../../testing/data/csv/aggregate_test_100.csv'
+
+# csv_query_error
+statement error DataFusion error: Error during planning: No function matches the given name and argument types 'sin\(Utf8\)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tsin\(Float64/Float32\)
+SELECT sin(c1) FROM aggregate_test_100
+
+# cast_expressions_error
+statement error DataFusion error: Arrow error: Cast error: Cannot cast string 'c' to value of Int32 type
+SELECT CAST(c1 AS INT) FROM aggregate_test_100
+
+# aggregation_with_bad_arguments
+statement error DataFusion error: Error during planning: No function matches the given name and argument types 'COUNT\(\)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tCOUNT\(Any, .., Any\)
+SELECT COUNT(DISTINCT) FROM aggregate_test_100
+
+# query_cte_incorrect
+statement error Error during planning: table 'datafusion\.public\.t' not found
+WITH t AS (SELECT * FROM t) SELECT * from u
+
+statement error Error during planning: table 'datafusion\.public\.u' not found
+WITH t AS (SELECT * FROM u), u AS (SELECT 1) SELECT * from u
+
+statement error Error during planning: table 'datafusion\.public\.u' not found
+WITH t AS (WITH u as (SELECT 1) SELECT 1) SELECT * from u
+
+# select_wildcard_without_table
+statement error Error during planning: SELECT \* with no tables specified is not valid
+SELECT * 
+
+# invalid_qualified_table_references
+statement error Error during planning: table 'datafusion\.nonexistentschema\.aggregate_test_100' not found
+SELECT COUNT(*) FROM nonexistentschema.aggregate_test_100
+
+statement error Error during planning: table 'nonexistentcatalog\.public\.aggregate_test_100' not found
+SELECT COUNT(*) FROM nonexistentcatalog.public.aggregate_test_100
+
+statement error Error during planning: Unsupported compound identifier '\[Ident \{ value: "way", quote_style: None \}, Ident \{ value: "too", quote_style: None \}, Ident \{ value: "many", quote_style: None \}, Ident \{ value: "namespaces", quote_style: None \}, Ident \{ value: "as", quote_style: None \}, Ident \{ value: "ident", quote_style: None \}, Ident \{ value: "prefixes", quote_style: None \}, Ident \{ value: "aggregate_test_100", quote_style: None \}\]'
+SELECT COUNT(*) FROM way.too.many.namespaces.as.ident.prefixes.aggregate_test_100
+
+
+
+#
+# Wrong scalar function signature
+#
+
+# error message for wrong function signature (Variadic: arbitrary number of args all from some common types)
+statement error Error during planning: No function matches the given name and argument types 'concat\(\)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tconcat\(Utf8, ..\)
+SELECT concat();
+
+# error message for wrong function signature (Uniform: t args all from some common types)
+statement error Error during planning: No function matches the given name and argument types 'nullif\(Int64\)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tnullif\(Boolean/UInt8/UInt16/UInt32/UInt64/Int8/Int16/Int32/Int64/Float32/Float64/Utf8/LargeUtf8, Boolean/UInt8/UInt16/UInt32/UInt64/Int8/Int16/Int32/Int64/Float32/Float64/Utf8/LargeUtf8\)
+SELECT nullif(1);
+
+# error message for wrong function signature (Exact: exact number of args of an exact type)
+statement error Error during planning: No function matches the given name and argument types 'pi\(Float64\)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tpi\(\)
+SELECT pi(3.14);
+
+# error message for wrong function signature (Any: fixed number of args of arbitrary types)
+statement error Error during planning: No function matches the given name and argument types 'arrow_typeof\(Int64, Int64\)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tarrow_typeof\(Any\)
+SELECT arrow_typeof(1, 1);
+
+# error message for wrong function signature (OneOf: fixed number of args of arbitrary types)
+statement error Error during planning: No function matches the given name and argument types 'power\(Int64, Int64, Int64\)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tpower\(Int64, Int64\)\n\tpower\(Float64, Float64\)
+SELECT power(1, 2, 3);
+
+#
+# Wrong window/aggregate function signature
+#
+
+# AggregateFunction with wrong number of arguments
+statement error DataFusion error: Error during planning: No function matches the given name and argument types 'COUNT\(\)'\. You might need to add explicit type casts\.\n\tCandidate functions:\n\tCOUNT\(Any, \.\., Any\)
+select count();
+
+# AggregateFunction with wrong number of arguments
+statement error DataFusion error: Error during planning: No function matches the given name and argument types 'AVG\(Utf8, Float64\)'\. You might need to add explicit type casts\.\n\tCandidate functions:\n\tAVG\(Int8/Int16/Int32/Int64/UInt8/UInt16/UInt32/UInt64/Float32/Float64\)
+select avg(c1, c12) from aggregate_test_100;
+
+# AggregateFunction with wrong argument type
+statement error DataFusion error: Error during planning: No function matches the given name and argument types 'REGR_SLOPE\(Int64, Utf8\)'\. You might need to add explicit type casts\.\n\tCandidate functions:\n\tREGR_SLOPE\(Int8/Int16/Int32/Int64/UInt8/UInt16/UInt32/UInt64/Float32/Float64, Int8/Int16/Int32/Int64/UInt8/UInt16/UInt32/UInt64/Float32/Float64\)
+select regr_slope(1, '2');
+
+# WindowFunction using AggregateFunction wrong signature
+statement error DataFusion error: Error during planning: No function matches the given name and argument types 'REGR_SLOPE\(Float32, Utf8\)'\. You might need to add explicit type casts\.\n\tCandidate functions:\n\tREGR_SLOPE\(Int8/Int16/Int32/Int64/UInt8/UInt16/UInt32/UInt64/Float32/Float64, Int8/Int16/Int32/Int64/UInt8/UInt16/UInt32/UInt64/Float32/Float64\)
+select
+c9,
+regr_slope(c11, '2') over () as min1
+from aggregate_test_100
+order by c9
+
+# WindowFunction with BuiltInWindowFunction wrong signature
+statement error DataFusion error: Error during planning: No function matches the given name and argument types 'NTH_VALUE\(Int32, Int64, Int64\)'\. You might need to add explicit type casts\.\n\tCandidate functions:\n\tNTH_VALUE\(Any, Any\)
+select
+c9,
+nth_value(c5, 2, 3) over (order by c9) as nv1
+from aggregate_test_100
+order by c9
+
+
+statement error Inconsistent data type across values list at row 1 column 0. Was Int64 but found Utf8
+create table foo as values (1), ('foo');

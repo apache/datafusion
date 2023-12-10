@@ -329,8 +329,8 @@ fn utf8_tuple_streams(sorted: bool) -> PartitionedBatches {
     let mut tuples: Vec<_> = gen
         .utf8_low_cardinality_values()
         .into_iter()
-        .zip(gen.utf8_low_cardinality_values().into_iter())
-        .zip(gen.utf8_high_cardinality_values().into_iter())
+        .zip(gen.utf8_low_cardinality_values())
+        .zip(gen.utf8_high_cardinality_values())
         .collect();
 
     if sorted {
@@ -362,9 +362,9 @@ fn mixed_tuple_streams(sorted: bool) -> PartitionedBatches {
     let mut tuples: Vec<_> = gen
         .i64_values()
         .into_iter()
-        .zip(gen.utf8_low_cardinality_values().into_iter())
-        .zip(gen.utf8_low_cardinality_values().into_iter())
-        .zip(gen.i64_values().into_iter())
+        .zip(gen.utf8_low_cardinality_values())
+        .zip(gen.utf8_low_cardinality_values())
+        .zip(gen.i64_values())
         .collect();
 
     if sorted {

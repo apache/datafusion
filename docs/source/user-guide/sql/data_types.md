@@ -96,6 +96,9 @@ For example, to cast the output of `now()` to a `Timestamp` with second precisio
 | ------------ | :------------- |
 | `BYTEA`      | `Binary`       |
 
+You can create binary literals using a hex string literal such as
+`X'1234` to create a `Binary` value of two bytes, `0x12` and `0x34`.
+
 ## Unsupported SQL Types
 
 | SQL Data Type | Arrow DataType      |
@@ -147,7 +150,6 @@ The following types are supported by the `arrow_typeof` function:
 | `Duration(Nanosecond)`                                      |
 | `Interval(YearMonth)`                                       |
 | `Interval(DayTime)`                                         |
-| `Interval(MonthDayNano)`                                    |
 | `Interval(MonthDayNano)`                                    |
 | `FixedSizeBinary(<len>)` (e.g. `FixedSizeBinary(16)`)       |
 | `Decimal128(<precision>, <scale>)` e.g. `Decimal128(3, 10)` |

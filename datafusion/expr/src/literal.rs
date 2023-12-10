@@ -43,19 +43,19 @@ pub trait TimestampLiteral {
 
 impl Literal for &str {
     fn lit(&self) -> Expr {
-        Expr::Literal(ScalarValue::Utf8(Some((*self).to_owned())))
+        Expr::Literal(ScalarValue::from(*self))
     }
 }
 
 impl Literal for String {
     fn lit(&self) -> Expr {
-        Expr::Literal(ScalarValue::Utf8(Some((*self).to_owned())))
+        Expr::Literal(ScalarValue::from(self.as_ref()))
     }
 }
 
 impl Literal for &String {
     fn lit(&self) -> Expr {
-        Expr::Literal(ScalarValue::Utf8(Some((*self).to_owned())))
+        Expr::Literal(ScalarValue::from(self.as_ref()))
     }
 }
 
@@ -88,6 +88,17 @@ macro_rules! make_literal {
     };
 }
 
+macro_rules! make_nonzero_literal {
+    ($TYPE:ty, $SCALAR:ident, $DOC: expr) => {
+        #[doc = $DOC]
+        impl Literal for $TYPE {
+            fn lit(&self) -> Expr {
+                Expr::Literal(ScalarValue::$SCALAR(Some(self.get())))
+            }
+        }
+    };
+}
+
 macro_rules! make_timestamp_literal {
     ($TYPE:ty, $SCALAR:ident, $DOC: expr) => {
         #[doc = $DOC]
@@ -114,6 +125,47 @@ make_literal!(u16, UInt16, "literal expression containing a u16");
 make_literal!(u32, UInt32, "literal expression containing a u32");
 make_literal!(u64, UInt64, "literal expression containing a u64");
 
+make_nonzero_literal!(
+    std::num::NonZeroI8,
+    Int8,
+    "literal expression containing an i8"
+);
+make_nonzero_literal!(
+    std::num::NonZeroI16,
+    Int16,
+    "literal expression containing an i16"
+);
+make_nonzero_literal!(
+    std::num::NonZeroI32,
+    Int32,
+    "literal expression containing an i32"
+);
+make_nonzero_literal!(
+    std::num::NonZeroI64,
+    Int64,
+    "literal expression containing an i64"
+);
+make_nonzero_literal!(
+    std::num::NonZeroU8,
+    UInt8,
+    "literal expression containing a u8"
+);
+make_nonzero_literal!(
+    std::num::NonZeroU16,
+    UInt16,
+    "literal expression containing a u16"
+);
+make_nonzero_literal!(
+    std::num::NonZeroU32,
+    UInt32,
+    "literal expression containing a u32"
+);
+make_nonzero_literal!(
+    std::num::NonZeroU64,
+    UInt64,
+    "literal expression containing a u64"
+);
+
 make_timestamp_literal!(i8, Int8, "literal expression containing an i8");
 make_timestamp_literal!(i16, Int16, "literal expression containing an i16");
 make_timestamp_literal!(i32, Int32, "literal expression containing an i32");
@@ -124,9 +176,18 @@ make_timestamp_literal!(u32, UInt32, "literal expression containing a u32");
 
 #[cfg(test)]
 mod test {
+    use std::num::NonZeroU32;
+
     use super::*;
     use crate::expr_fn::col;
     use datafusion_common::ScalarValue;
+
+    #[test]
+    fn test_lit_nonzero() {
+        let expr = col("id").eq(lit(NonZeroU32::new(1).unwrap()));
+        let expected = col("id").eq(lit(ScalarValue::UInt32(Some(1))));
+        assert_eq!(expr, expected);
+    }
 
     #[test]
     fn test_lit_timestamp_nano() {

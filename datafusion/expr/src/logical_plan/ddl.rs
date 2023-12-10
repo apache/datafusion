@@ -15,10 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use datafusion_common::{
-    parsers::CompressionTypeVariant, DFSchemaRef, OwnedTableReference,
-};
-use datafusion_common::{Column, OwnedSchemaReference};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::{
@@ -27,6 +23,11 @@ use std::{
 };
 
 use crate::{Expr, LogicalPlan};
+
+use datafusion_common::parsers::CompressionTypeVariant;
+use datafusion_common::{
+    Constraints, DFSchemaRef, OwnedSchemaReference, OwnedTableReference,
+};
 
 /// Various types of DDL  (CREATE / DROP) catalog manipulation
 #[derive(Clone, PartialEq, Eq, Hash)]
@@ -111,22 +112,17 @@ impl DdlStatement {
                 match self.0 {
                     DdlStatement::CreateExternalTable(CreateExternalTable {
                         ref name,
+                        constraints,
                         ..
                     }) => {
-                        write!(f, "CreateExternalTable: {name:?}")
+                        write!(f, "CreateExternalTable: {name:?}{constraints}")
                     }
                     DdlStatement::CreateMemoryTable(CreateMemoryTable {
                         name,
-                        primary_key,
+                        constraints,
                         ..
                     }) => {
-                        let pk: Vec<String> =
-                            primary_key.iter().map(|c| c.name.to_string()).collect();
-                        let mut pk = pk.join(", ");
-                        if !pk.is_empty() {
-                            pk = format!(" primary_key=[{pk}]");
-                        }
-                        write!(f, "CreateMemoryTable: {name:?}{pk}")
+                        write!(f, "CreateMemoryTable: {name:?}{constraints}")
                     }
                     DdlStatement::CreateView(CreateView { name, .. }) => {
                         write!(f, "CreateView: {name:?}")
@@ -196,6 +192,10 @@ pub struct CreateExternalTable {
     pub unbounded: bool,
     /// Table(provider) specific options
     pub options: HashMap<String, String>,
+    /// The list of constraints in the schema, such as primary key, unique, etc.
+    pub constraints: Constraints,
+    /// Default values for columns
+    pub column_defaults: HashMap<String, Expr>,
 }
 
 // Hashing refers to a subset of fields considered in PartialEq.
@@ -222,14 +222,16 @@ impl Hash for CreateExternalTable {
 pub struct CreateMemoryTable {
     /// The table name
     pub name: OwnedTableReference,
-    /// The ordered list of columns in the primary key, or an empty vector if none
-    pub primary_key: Vec<Column>,
+    /// The list of constraints in the schema, such as primary key, unique, etc.
+    pub constraints: Constraints,
     /// The logical plan
     pub input: Arc<LogicalPlan>,
     /// Option to not error if table already exists
     pub if_not_exists: bool,
     /// Option to replace table content if table already exists
     pub or_replace: bool,
+    /// Default values for columns
+    pub column_defaults: Vec<(String, Expr)>,
 }
 
 /// Creates a view.

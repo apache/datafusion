@@ -18,17 +18,19 @@
 //! The [PipelineChecker] rule ensures that a given plan can accommodate its
 //! infinite sources, if there are any. It will reject non-runnable query plans
 //! that use pipeline-breaking operators on infinite input(s).
-//!
+
+use std::sync::Arc;
+
 use crate::config::ConfigOptions;
 use crate::error::Result;
 use crate::physical_optimizer::PhysicalOptimizerRule;
 use crate::physical_plan::joins::SymmetricHashJoinExec;
 use crate::physical_plan::{with_new_children_if_necessary, ExecutionPlan};
+
 use datafusion_common::config::OptimizerOptions;
 use datafusion_common::tree_node::{Transformed, TreeNode, VisitRecursion};
-use datafusion_common::DataFusionError;
-use datafusion_physical_expr::intervals::{check_support, is_datatype_supported};
-use std::sync::Arc;
+use datafusion_common::{plan_err, DataFusionError};
+use datafusion_physical_expr::intervals::utils::{check_support, is_datatype_supported};
 
 /// The PipelineChecker rule rejects non-runnable query plans that use
 /// pipeline-breaking operators on infinite input(s).
@@ -68,18 +70,26 @@ impl PhysicalOptimizerRule for PipelineChecker {
 pub struct PipelineStatePropagator {
     pub(crate) plan: Arc<dyn ExecutionPlan>,
     pub(crate) unbounded: bool,
-    pub(crate) children_unbounded: Vec<bool>,
+    pub(crate) children: Vec<PipelineStatePropagator>,
 }
 
 impl PipelineStatePropagator {
     /// Constructs a new, default pipelining state.
     pub fn new(plan: Arc<dyn ExecutionPlan>) -> Self {
-        let length = plan.children().len();
+        let children = plan.children();
         PipelineStatePropagator {
             plan,
             unbounded: false,
-            children_unbounded: vec![false; length],
+            children: children.into_iter().map(Self::new).collect(),
         }
+    }
+
+    /// Returns the children unboundedness information.
+    pub fn children_unbounded(&self) -> Vec<bool> {
+        self.children
+            .iter()
+            .map(|c| c.unbounded)
+            .collect::<Vec<_>>()
     }
 }
 
@@ -88,9 +98,8 @@ impl TreeNode for PipelineStatePropagator {
     where
         F: FnMut(&Self) -> Result<VisitRecursion>,
     {
-        let children = self.plan.children();
-        for child in children {
-            match op(&PipelineStatePropagator::new(child))? {
+        for child in &self.children {
+            match op(child)? {
                 VisitRecursion::Continue => {}
                 VisitRecursion::Skip => return Ok(VisitRecursion::Continue),
                 VisitRecursion::Stop => return Ok(VisitRecursion::Stop),
@@ -104,25 +113,18 @@ impl TreeNode for PipelineStatePropagator {
     where
         F: FnMut(Self) -> Result<Self>,
     {
-        let children = self.plan.children();
-        if !children.is_empty() {
-            let new_children = children
+        if !self.children.is_empty() {
+            let new_children = self
+                .children
                 .into_iter()
-                .map(|child| PipelineStatePropagator::new(child))
                 .map(transform)
                 .collect::<Result<Vec<_>>>()?;
-            let children_unbounded = new_children
-                .iter()
-                .map(|c| c.unbounded)
-                .collect::<Vec<bool>>();
-            let children_plans = new_children
-                .into_iter()
-                .map(|child| child.plan)
-                .collect::<Vec<_>>();
+            let children_plans = new_children.iter().map(|c| c.plan.clone()).collect();
+
             Ok(PipelineStatePropagator {
                 plan: with_new_children_if_necessary(self.plan, children_plans)?.into(),
                 unbounded: self.unbounded,
-                children_unbounded,
+                children: new_children,
             })
         } else {
             Ok(self)
@@ -142,12 +144,12 @@ pub fn check_finiteness_requirements(
         {
             const MSG: &str = "Join operation cannot operate on a non-prunable stream without enabling \
                                the 'allow_symmetric_joins_without_pruning' configuration flag";
-            return Err(DataFusionError::Plan(MSG.to_owned()));
+            return plan_err!("{}", MSG);
         }
     }
     input
         .plan
-        .unbounded_output(&input.children_unbounded)
+        .unbounded_output(&input.children_unbounded())
         .map(|value| {
             input.unbounded = value;
             Transformed::Yes(input)
@@ -163,7 +165,7 @@ pub fn check_finiteness_requirements(
 /// [`Operator`]: datafusion_expr::Operator
 fn is_prunable(join: &SymmetricHashJoinExec) -> bool {
     join.filter().map_or(false, |filter| {
-        check_support(filter.expression())
+        check_support(filter.expression(), &join.schema())
             && filter
                 .schema()
                 .fields()

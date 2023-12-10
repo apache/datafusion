@@ -1,0 +1,51 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# Turn it on
+statement ok
+set datafusion.catalog.information_schema = true;
+
+############
+# Table with many types
+############
+
+statement ok
+create table physical as values(1);
+
+statement ok
+create view query as values(1);
+
+# Temporary tables cannot be created using SQL syntax so it is done using Rust code.
+
+query TTTT rowsort
+SELECT * from information_schema.tables;
+----
+datafusion information_schema columns VIEW
+datafusion information_schema df_settings VIEW
+datafusion information_schema tables VIEW
+datafusion information_schema views VIEW
+datafusion public physical BASE TABLE
+datafusion public query VIEW
+datafusion public temp LOCAL TEMPORARY
+
+# Cleanup
+
+statement ok
+drop table physical
+
+statement ok
+drop view query

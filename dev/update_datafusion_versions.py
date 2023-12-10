@@ -35,12 +35,15 @@ crates = {
     'datafusion-execution': 'datafusion/execution/Cargo.toml',
     'datafusion-optimizer': 'datafusion/optimizer/Cargo.toml',
     'datafusion-physical-expr': 'datafusion/physical-expr/Cargo.toml',
+    'datafusion-physical-plan': 'datafusion/physical-plan/Cargo.toml',
     'datafusion-proto': 'datafusion/proto/Cargo.toml',
-    'datafusion-row': 'datafusion/row/Cargo.toml',
     'datafusion-substrait': 'datafusion/substrait/Cargo.toml',
     'datafusion-sql': 'datafusion/sql/Cargo.toml',
+    'datafusion-sqllogictest': 'datafusion/sqllogictest/Cargo.toml',
+    'datafusion-wasmtest': 'datafusion/wasmtest/Cargo.toml',
     'datafusion-benchmarks': 'benchmarks/Cargo.toml',
     'datafusion-examples': 'datafusion-examples/Cargo.toml',
+    'datafusion-docs': 'docs/Cargo.toml',
 }
 
 def update_workspace_version(new_version: str):

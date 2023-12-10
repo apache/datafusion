@@ -15,8 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::{collections::HashMap, sync::Arc};
+use std::collections::HashMap;
+use std::ops::Deref;
+use std::sync::Arc;
 
+use datafusion::logical_expr::{CrossJoin, Distinct, Like, WindowFrameUnits};
 use datafusion::{
     arrow::datatypes::{DataType, TimeUnit},
     error::{DataFusionError, Result},
@@ -26,14 +29,18 @@ use datafusion::{
 };
 
 use datafusion::common::DFSchemaRef;
+use datafusion::common::{exec_err, internal_err, not_impl_err};
 #[allow(unused_imports)]
 use datafusion::logical_expr::aggregate_function;
 use datafusion::logical_expr::expr::{
-    BinaryExpr, Case, Cast, ScalarFunction as DFScalarFunction, Sort, WindowFunction,
+    AggregateFunctionDefinition, Alias, BinaryExpr, Case, Cast, GroupingSet, InList,
+    ScalarFunctionDefinition, Sort, WindowFunction,
 };
 use datafusion::logical_expr::{expr, Between, JoinConstraint, LogicalPlan, Operator};
-use datafusion::prelude::{binary_expr, Expr};
+use datafusion::prelude::Expr;
 use prost_types::Any as ProtoAny;
+use substrait::proto::expression::window_function::BoundsType;
+use substrait::proto::CrossRel;
 use substrait::{
     proto::{
         aggregate_function::AggregationInvocation,
@@ -48,7 +55,7 @@ use substrait::{
             window_function::bound::Kind as BoundKind,
             window_function::Bound,
             FieldReference, IfThen, Literal, MaskExpression, ReferenceSegment, RexType,
-            ScalarFunction, WindowFunction as SubstraitWindowFunction,
+            ScalarFunction, SingularOrList, WindowFunction as SubstraitWindowFunction,
         },
         extensions::{
             self,
@@ -58,10 +65,11 @@ use substrait::{
         join_rel, plan_rel, r#type,
         read_rel::{NamedTable, ReadType},
         rel::RelType,
+        set_rel,
         sort_field::{SortDirection, SortKind},
         AggregateFunction, AggregateRel, AggregationPhase, Expression, ExtensionLeafRel,
         ExtensionMultiRel, ExtensionSingleRel, FetchRel, FilterRel, FunctionArgument,
-        JoinRel, NamedStruct, Plan, PlanRel, ProjectRel, ReadRel, Rel, RelRoot,
+        JoinRel, NamedStruct, Plan, PlanRel, ProjectRel, ReadRel, Rel, RelRoot, SetRel,
         SortField, SortRel,
     },
     version,
@@ -156,7 +164,7 @@ pub fn to_substrait_rel(
             let expressions = p
                 .expr
                 .iter()
-                .map(|e| to_substrait_rex(e, p.input.schema(), extension_info))
+                .map(|e| to_substrait_rex(e, p.input.schema(), 0, extension_info))
                 .collect::<Result<Vec<_>>>()?;
             Ok(Box::new(Rel {
                 rel_type: Some(RelType::Project(Box::new(ProjectRel {
@@ -172,6 +180,7 @@ pub fn to_substrait_rel(
             let filter_expr = to_substrait_rex(
                 &filter.predicate,
                 filter.input.schema(),
+                0,
                 extension_info,
             )?;
             Ok(Box::new(Rel {
@@ -185,7 +194,8 @@ pub fn to_substrait_rel(
         }
         LogicalPlan::Limit(limit) => {
             let input = to_substrait_rel(limit.input.as_ref(), ctx, extension_info)?;
-            let limit_fetch = limit.fetch.unwrap_or(0);
+            // Since protobuf can't directly distinguish `None` vs `0` encode `None` as `MAX`
+            let limit_fetch = limit.fetch.unwrap_or(usize::MAX);
             Ok(Box::new(Rel {
                 rel_type: Some(RelType::Fetch(Box::new(FetchRel {
                     common: None,
@@ -214,12 +224,11 @@ pub fn to_substrait_rel(
         }
         LogicalPlan::Aggregate(agg) => {
             let input = to_substrait_rel(agg.input.as_ref(), ctx, extension_info)?;
-            // Translate aggregate expression to Substrait's groupings (repeated repeated Expression)
-            let grouping = agg
-                .group_expr
-                .iter()
-                .map(|e| to_substrait_rex(e, agg.input.schema(), extension_info))
-                .collect::<Result<Vec<_>>>()?;
+            let groupings = to_substrait_groupings(
+                &agg.group_expr,
+                agg.input.schema(),
+                extension_info,
+            )?;
             let measures = agg
                 .aggr_expr
                 .iter()
@@ -230,19 +239,17 @@ pub fn to_substrait_rel(
                 rel_type: Some(RelType::Aggregate(Box::new(AggregateRel {
                     common: None,
                     input: Some(input),
-                    groupings: vec![Grouping {
-                        grouping_expressions: grouping,
-                    }], //groupings,
+                    groupings,
                     measures,
                     advanced_extension: None,
                 }))),
             }))
         }
-        LogicalPlan::Distinct(distinct) => {
+        LogicalPlan::Distinct(Distinct::All(plan)) => {
             // Use Substrait's AggregateRel with empty measures to represent `select distinct`
-            let input = to_substrait_rel(distinct.input.as_ref(), ctx, extension_info)?;
+            let input = to_substrait_rel(plan.as_ref(), ctx, extension_info)?;
             // Get grouping keys from the input relation's number of output fields
-            let grouping = (0..distinct.input.schema().fields().len())
+            let grouping = (0..plan.schema().fields().len())
                 .map(substrait_field_ref)
                 .collect::<Result<Vec<_>>>()?;
 
@@ -263,17 +270,24 @@ pub fn to_substrait_rel(
             let right = to_substrait_rel(join.right.as_ref(), ctx, extension_info)?;
             let join_type = to_substrait_jointype(join.join_type);
             // we only support basic joins so return an error for anything not yet supported
-            if join.filter.is_some() {
-                return Err(DataFusionError::NotImplemented("join filter".to_string()));
-            }
             match join.join_constraint {
                 JoinConstraint::On => {}
-                _ => {
-                    return Err(DataFusionError::NotImplemented(
-                        "join constraint".to_string(),
-                    ))
+                JoinConstraint::Using => {
+                    return not_impl_err!("join constraint: `using`")
                 }
             }
+            // parse filter if exists
+            let in_join_schema = join.left.schema().join(join.right.schema())?;
+            let join_filter = match &join.filter {
+                Some(filter) => Some(to_substrait_rex(
+                    filter,
+                    &Arc::new(in_join_schema),
+                    0,
+                    extension_info,
+                )?),
+                None => None,
+            };
+
             // map the left and right columns to binary expressions in the form `l = r`
             // build a single expression for the ON condition, such as `l.a = r.a AND l.b = r.b`
             let eq_op = if join.null_equals_null {
@@ -281,50 +295,83 @@ pub fn to_substrait_rel(
             } else {
                 Operator::Eq
             };
-            let join_expression = join
-                .on
-                .iter()
-                .map(|(l, r)| binary_expr(l.clone(), eq_op, r.clone()))
-                .reduce(|acc: Expr, expr: Expr| acc.and(expr));
-            // join schema from left and right to maintain all nececesary columns from inputs
-            // note that we cannot simple use join.schema here since we discard some input columns
-            // when performing semi and anti joins
-            let join_schema = match join.left.schema().join(join.right.schema()) {
-                Ok(schema) => Ok(schema),
-                Err(DataFusionError::SchemaError(
-                    datafusion::common::SchemaError::DuplicateQualifiedField {
-                        qualifier: _,
-                        name: _,
-                    },
-                )) => Ok(join.schema.as_ref().clone()),
-                Err(e) => Err(e),
+            let join_on = to_substrait_join_expr(
+                &join.on,
+                eq_op,
+                join.left.schema(),
+                join.right.schema(),
+                extension_info,
+            )?;
+
+            // create conjunction between `join_on` and `join_filter` to embed all join conditions,
+            // whether equal or non-equal in a single expression
+            let join_expr = match &join_on {
+                Some(on_expr) => match &join_filter {
+                    Some(filter) => Some(Box::new(make_binary_op_scalar_func(
+                        on_expr,
+                        filter,
+                        Operator::And,
+                        extension_info,
+                    ))),
+                    None => join_on.map(Box::new), // the join expression will only contain `join_on` if filter doesn't exist
+                },
+                None => match &join_filter {
+                    Some(_) => join_filter.map(Box::new), // the join expression will only contain `join_filter` if the `on` condition doesn't exist
+                    None => None,
+                },
             };
-            if let Some(e) = join_expression {
-                Ok(Box::new(Rel {
-                    rel_type: Some(RelType::Join(Box::new(JoinRel {
-                        common: None,
-                        left: Some(left),
-                        right: Some(right),
-                        r#type: join_type as i32,
-                        expression: Some(Box::new(to_substrait_rex(
-                            &e,
-                            &Arc::new(join_schema?),
-                            extension_info,
-                        )?)),
-                        post_join_filter: None,
-                        advanced_extension: None,
-                    }))),
-                }))
-            } else {
-                Err(DataFusionError::NotImplemented(
-                    "Empty join condition".to_string(),
-                ))
-            }
+
+            Ok(Box::new(Rel {
+                rel_type: Some(RelType::Join(Box::new(JoinRel {
+                    common: None,
+                    left: Some(left),
+                    right: Some(right),
+                    r#type: join_type as i32,
+                    expression: join_expr,
+                    post_join_filter: None,
+                    advanced_extension: None,
+                }))),
+            }))
+        }
+        LogicalPlan::CrossJoin(cross_join) => {
+            let CrossJoin {
+                left,
+                right,
+                schema: _,
+            } = cross_join;
+            let left = to_substrait_rel(left.as_ref(), ctx, extension_info)?;
+            let right = to_substrait_rel(right.as_ref(), ctx, extension_info)?;
+            Ok(Box::new(Rel {
+                rel_type: Some(RelType::Cross(Box::new(CrossRel {
+                    common: None,
+                    left: Some(left),
+                    right: Some(right),
+                    advanced_extension: None,
+                }))),
+            }))
         }
         LogicalPlan::SubqueryAlias(alias) => {
             // Do nothing if encounters SubqueryAlias
             // since there is no corresponding relation type in Substrait
             to_substrait_rel(alias.input.as_ref(), ctx, extension_info)
+        }
+        LogicalPlan::Union(union) => {
+            let input_rels = union
+                .inputs
+                .iter()
+                .map(|input| to_substrait_rel(input.as_ref(), ctx, extension_info))
+                .collect::<Result<Vec<_>>>()?
+                .into_iter()
+                .map(|ptr| *ptr)
+                .collect();
+            Ok(Box::new(Rel {
+                rel_type: Some(substrait::proto::rel::RelType::Set(SetRel {
+                    common: None,
+                    inputs: input_rels,
+                    op: set_rel::SetOp::UnionAll as i32, // UNION DISTINCT gets translated to AGGREGATION + UNION ALL
+                    advanced_extension: None,
+                })),
+            }))
         }
         LogicalPlan::Window(window) => {
             let input = to_substrait_rel(window.input.as_ref(), ctx, extension_info)?;
@@ -353,6 +400,7 @@ pub fn to_substrait_rel(
                 window_exprs.push(to_substrait_rex(
                     expr,
                     window.input.schema(),
+                    0,
                     extension_info,
                 )?);
             }
@@ -397,10 +445,40 @@ pub fn to_substrait_rel(
                 rel_type: Some(rel_type),
             }))
         }
-        _ => Err(DataFusionError::NotImplemented(format!(
-            "Unsupported operator: {plan:?}"
-        ))),
+        _ => not_impl_err!("Unsupported operator: {plan:?}"),
     }
+}
+
+fn to_substrait_join_expr(
+    join_conditions: &Vec<(Expr, Expr)>,
+    eq_op: Operator,
+    left_schema: &DFSchemaRef,
+    right_schema: &DFSchemaRef,
+    extension_info: &mut (
+        Vec<extensions::SimpleExtensionDeclaration>,
+        HashMap<String, u32>,
+    ),
+) -> Result<Option<Expression>> {
+    // Only support AND conjunction for each binary expression in join conditions
+    let mut exprs: Vec<Expression> = vec![];
+    for (left, right) in join_conditions {
+        // Parse left
+        let l = to_substrait_rex(left, left_schema, 0, extension_info)?;
+        // Parse right
+        let r = to_substrait_rex(
+            right,
+            right_schema,
+            left_schema.fields().len(), // offset to return the correct index
+            extension_info,
+        )?;
+        // AND with existing expression
+        exprs.push(make_binary_op_scalar_func(&l, &r, eq_op, extension_info));
+    }
+    let join_expr: Option<Expression> =
+        exprs.into_iter().reduce(|acc: Expression, e: Expression| {
+            make_binary_op_scalar_func(&acc, &e, Operator::And, extension_info)
+        });
+    Ok(join_expr)
 }
 
 fn to_substrait_jointype(join_type: JoinType) -> join_rel::JoinType {
@@ -424,7 +502,7 @@ pub fn operator_to_name(op: Operator) -> &'static str {
         Operator::Gt => "gt",
         Operator::GtEq => "gte",
         Operator::Plus => "add",
-        Operator::Minus => "substract",
+        Operator::Minus => "subtract",
         Operator::Multiply => "multiply",
         Operator::Divide => "divide",
         Operator::Modulo => "mod",
@@ -439,9 +517,72 @@ pub fn operator_to_name(op: Operator) -> &'static str {
         Operator::BitwiseAnd => "bitwise_and",
         Operator::BitwiseOr => "bitwise_or",
         Operator::StringConcat => "str_concat",
+        Operator::AtArrow => "at_arrow",
+        Operator::ArrowAt => "arrow_at",
         Operator::BitwiseXor => "bitwise_xor",
         Operator::BitwiseShiftRight => "bitwise_shift_right",
         Operator::BitwiseShiftLeft => "bitwise_shift_left",
+    }
+}
+
+pub fn parse_flat_grouping_exprs(
+    exprs: &[Expr],
+    schema: &DFSchemaRef,
+    extension_info: &mut (
+        Vec<extensions::SimpleExtensionDeclaration>,
+        HashMap<String, u32>,
+    ),
+) -> Result<Grouping> {
+    let grouping_expressions = exprs
+        .iter()
+        .map(|e| to_substrait_rex(e, schema, 0, extension_info))
+        .collect::<Result<Vec<_>>>()?;
+    Ok(Grouping {
+        grouping_expressions,
+    })
+}
+
+pub fn to_substrait_groupings(
+    exprs: &Vec<Expr>,
+    schema: &DFSchemaRef,
+    extension_info: &mut (
+        Vec<extensions::SimpleExtensionDeclaration>,
+        HashMap<String, u32>,
+    ),
+) -> Result<Vec<Grouping>> {
+    match exprs.len() {
+        1 => match &exprs[0] {
+            Expr::GroupingSet(gs) => match gs {
+                GroupingSet::Cube(_) => Err(DataFusionError::NotImplemented(
+                    "GroupingSet CUBE is not yet supported".to_string(),
+                )),
+                GroupingSet::GroupingSets(sets) => Ok(sets
+                    .iter()
+                    .map(|set| parse_flat_grouping_exprs(set, schema, extension_info))
+                    .collect::<Result<Vec<_>>>()?),
+                GroupingSet::Rollup(set) => {
+                    let mut sets: Vec<Vec<Expr>> = vec![vec![]];
+                    for i in 0..set.len() {
+                        sets.push(set[..=i].to_vec());
+                    }
+                    Ok(sets
+                        .iter()
+                        .rev()
+                        .map(|set| parse_flat_grouping_exprs(set, schema, extension_info))
+                        .collect::<Result<Vec<_>>>()?)
+                }
+            },
+            _ => Ok(vec![parse_flat_grouping_exprs(
+                exprs,
+                schema,
+                extension_info,
+            )?]),
+        },
+        _ => Ok(vec![parse_flat_grouping_exprs(
+            exprs,
+            schema,
+            extension_info,
+        )?]),
     }
 }
 
@@ -455,42 +596,112 @@ pub fn to_substrait_agg_measure(
     ),
 ) -> Result<Measure> {
     match expr {
-        // TODO: Once substrait supports order by, add handling for it.
-        Expr::AggregateFunction(expr::AggregateFunction { fun, args, distinct, filter, order_by: _order_by }) => {
-            let mut arguments: Vec<FunctionArgument> = vec![];
-            for arg in args {
-                arguments.push(FunctionArgument { arg_type: Some(ArgType::Value(to_substrait_rex(arg, schema, extension_info)?)) });
-            }
-            let function_name = fun.to_string().to_lowercase();
-            let function_anchor = _register_function(function_name, extension_info);
-            Ok(Measure {
-                measure: Some(AggregateFunction {
-                    function_reference: function_anchor,
-                    arguments,
-                    sorts: vec![],
-                    output_type: None,
-                    invocation: match distinct {
-                        true => AggregationInvocation::Distinct as i32,
-                        false => AggregationInvocation::All as i32,
-                    },
-                    phase: AggregationPhase::Unspecified as i32,
-                    args: vec![],
-                    options: vec![],
-                }),
-                filter: match filter {
-                    Some(f) => Some(to_substrait_rex(f, schema, extension_info)?),
-                    None => None
+        Expr::AggregateFunction(expr::AggregateFunction { func_def, args, distinct, filter, order_by }) => {
+            match func_def {
+                AggregateFunctionDefinition::BuiltIn (fun) => {
+                    let sorts = if let Some(order_by) = order_by {
+                        order_by.iter().map(|expr| to_substrait_sort_field(expr, schema, extension_info)).collect::<Result<Vec<_>>>()?
+                    } else {
+                        vec![]
+                    };
+                    let mut arguments: Vec<FunctionArgument> = vec![];
+                    for arg in args {
+                        arguments.push(FunctionArgument { arg_type: Some(ArgType::Value(to_substrait_rex(arg, schema, 0, extension_info)?)) });
+                    }
+                    let function_anchor = _register_function(fun.to_string(), extension_info);
+                    Ok(Measure {
+                        measure: Some(AggregateFunction {
+                            function_reference: function_anchor,
+                            arguments,
+                            sorts,
+                            output_type: None,
+                            invocation: match distinct {
+                                true => AggregationInvocation::Distinct as i32,
+                                false => AggregationInvocation::All as i32,
+                            },
+                            phase: AggregationPhase::Unspecified as i32,
+                            args: vec![],
+                            options: vec![],
+                        }),
+                        filter: match filter {
+                            Some(f) => Some(to_substrait_rex(f, schema, 0, extension_info)?),
+                            None => None
+                        }
+                    })
                 }
-            })
+                AggregateFunctionDefinition::UDF(fun) => {
+                    let sorts = if let Some(order_by) = order_by {
+                        order_by.iter().map(|expr| to_substrait_sort_field(expr, schema, extension_info)).collect::<Result<Vec<_>>>()?
+                    } else {
+                        vec![]
+                    };
+                    let mut arguments: Vec<FunctionArgument> = vec![];
+                    for arg in args {
+                        arguments.push(FunctionArgument { arg_type: Some(ArgType::Value(to_substrait_rex(arg, schema, 0, extension_info)?)) });
+                    }
+                    let function_anchor = _register_function(fun.name().to_string(), extension_info);
+                    Ok(Measure {
+                        measure: Some(AggregateFunction {
+                            function_reference: function_anchor,
+                            arguments,
+                            sorts,
+                            output_type: None,
+                            invocation: AggregationInvocation::All as i32,
+                            phase: AggregationPhase::Unspecified as i32,
+                            args: vec![],
+                            options: vec![],
+                        }),
+                        filter: match filter {
+                            Some(f) => Some(to_substrait_rex(f, schema, 0, extension_info)?),
+                            None => None
+                        }
+                    })
+                }
+                AggregateFunctionDefinition::Name(name) => {
+                    internal_err!("AggregateFunctionDefinition::Name({:?}) should be resolved during `AnalyzerRule`", name)
+                }
+            }
+
         }
-        Expr::Alias(expr, _name) => {
+        Expr::Alias(Alias{expr,..})=> {
             to_substrait_agg_measure(expr, schema, extension_info)
         }
-        _ => Err(DataFusionError::Internal(format!(
+        _ => internal_err!(
             "Expression must be compatible with aggregation. Unsupported expression: {:?}. ExpressionType: {:?}",
             expr,
             expr.variant_name()
-        ))),
+        ),
+    }
+}
+
+/// Converts sort expression to corresponding substrait `SortField`
+fn to_substrait_sort_field(
+    expr: &Expr,
+    schema: &DFSchemaRef,
+    extension_info: &mut (
+        Vec<extensions::SimpleExtensionDeclaration>,
+        HashMap<String, u32>,
+    ),
+) -> Result<SortField> {
+    match expr {
+        Expr::Sort(sort) => {
+            let sort_kind = match (sort.asc, sort.nulls_first) {
+                (true, true) => SortDirection::AscNullsFirst,
+                (true, false) => SortDirection::AscNullsLast,
+                (false, true) => SortDirection::DescNullsFirst,
+                (false, false) => SortDirection::DescNullsLast,
+            };
+            Ok(SortField {
+                expr: Some(to_substrait_rex(
+                    sort.expr.deref(),
+                    schema,
+                    0,
+                    extension_info,
+                )?),
+                sort_kind: Some(SortKind::Direction(sort_kind.into())),
+            })
+        }
+        _ => exec_err!("expects to receive sort expression"),
     }
 }
 
@@ -545,8 +756,8 @@ pub fn make_binary_op_scalar_func(
         HashMap<String, u32>,
     ),
 ) -> Expression {
-    let function_name = operator_to_name(op).to_string().to_lowercase();
-    let function_anchor = _register_function(function_name, extension_info);
+    let function_anchor =
+        _register_function(operator_to_name(op).to_string(), extension_info);
     Expression {
         rex_type: Some(RexType::ScalarFunction(ScalarFunction {
             function_reference: function_anchor,
@@ -566,29 +777,97 @@ pub fn make_binary_op_scalar_func(
 }
 
 /// Convert DataFusion Expr to Substrait Rex
+///
+/// # Arguments
+///
+/// * `expr` - DataFusion expression to be parse into a Substrait expression
+/// * `schema` - DataFusion input schema for looking up field qualifiers
+/// * `col_ref_offset` - Offset for caculating Substrait field reference indices.
+///                     This should only be set by caller with more than one input relations i.e. Join.
+///                     Substrait expects one set of indices when joining two relations.
+///                     Let's say `left` and `right` have `m` and `n` columns, respectively. The `right`
+///                     relation will have column indices from `0` to `n-1`, however, Substrait will expect
+///                     the `right` indices to be offset by the `left`. This means Substrait will expect to
+///                     evaluate the join condition expression on indices [0 .. n-1, n .. n+m-1]. For example:
+///                     ```SELECT *
+///                        FROM t1
+///                        JOIN t2
+///                        ON t1.c1 = t2.c0;```
+///                     where t1 consists of columns [c0, c1, c2], and t2 = columns [c0, c1]
+///                     the join condition should become
+///                     `col_ref(1) = col_ref(3 + 0)`
+///                     , where `3` is the number of `left` columns (`col_ref_offset`) and `0` is the index
+///                     of the join key column from `right`
+/// * `extension_info` - Substrait extension info. Contains registered function information
 #[allow(deprecated)]
 pub fn to_substrait_rex(
     expr: &Expr,
     schema: &DFSchemaRef,
+    col_ref_offset: usize,
     extension_info: &mut (
         Vec<extensions::SimpleExtensionDeclaration>,
         HashMap<String, u32>,
     ),
 ) -> Result<Expression> {
     match expr {
-        Expr::ScalarFunction(DFScalarFunction { fun, args }) => {
+        Expr::InList(InList {
+            expr,
+            list,
+            negated,
+        }) => {
+            let substrait_list = list
+                .iter()
+                .map(|x| to_substrait_rex(x, schema, col_ref_offset, extension_info))
+                .collect::<Result<Vec<Expression>>>()?;
+            let substrait_expr =
+                to_substrait_rex(expr, schema, col_ref_offset, extension_info)?;
+
+            let substrait_or_list = Expression {
+                rex_type: Some(RexType::SingularOrList(Box::new(SingularOrList {
+                    value: Some(Box::new(substrait_expr)),
+                    options: substrait_list,
+                }))),
+            };
+
+            if *negated {
+                let function_anchor =
+                    _register_function("not".to_string(), extension_info);
+
+                Ok(Expression {
+                    rex_type: Some(RexType::ScalarFunction(ScalarFunction {
+                        function_reference: function_anchor,
+                        arguments: vec![FunctionArgument {
+                            arg_type: Some(ArgType::Value(substrait_or_list)),
+                        }],
+                        output_type: None,
+                        args: vec![],
+                        options: vec![],
+                    })),
+                })
+            } else {
+                Ok(substrait_or_list)
+            }
+        }
+        Expr::ScalarFunction(fun) => {
             let mut arguments: Vec<FunctionArgument> = vec![];
-            for arg in args {
+            for arg in &fun.args {
                 arguments.push(FunctionArgument {
                     arg_type: Some(ArgType::Value(to_substrait_rex(
                         arg,
                         schema,
+                        col_ref_offset,
                         extension_info,
                     )?)),
                 });
             }
-            let function_name = fun.to_string().to_lowercase();
-            let function_anchor = _register_function(function_name, extension_info);
+
+            // function should be resolved during `AnalyzerRule`
+            if let ScalarFunctionDefinition::Name(_) = fun.func_def {
+                return internal_err!("Function `Expr` with name should be resolved.");
+            }
+
+            let function_anchor =
+                _register_function(fun.name().to_string(), extension_info);
             Ok(Expression {
                 rex_type: Some(RexType::ScalarFunction(ScalarFunction {
                     function_reference: function_anchor,
@@ -607,9 +886,12 @@ pub fn to_substrait_rex(
         }) => {
             if *negated {
                 // `expr NOT BETWEEN low AND high` can be translated into (expr < low OR high < expr)
-                let substrait_expr = to_substrait_rex(expr, schema, extension_info)?;
-                let substrait_low = to_substrait_rex(low, schema, extension_info)?;
-                let substrait_high = to_substrait_rex(high, schema, extension_info)?;
+                let substrait_expr =
+                    to_substrait_rex(expr, schema, col_ref_offset, extension_info)?;
+                let substrait_low =
+                    to_substrait_rex(low, schema, col_ref_offset, extension_info)?;
+                let substrait_high =
+                    to_substrait_rex(high, schema, col_ref_offset, extension_info)?;
 
                 let l_expr = make_binary_op_scalar_func(
                     &substrait_expr,
@@ -632,9 +914,12 @@ pub fn to_substrait_rex(
                 ))
             } else {
                 // `expr BETWEEN low AND high` can be translated into (low <= expr AND expr <= high)
-                let substrait_expr = to_substrait_rex(expr, schema, extension_info)?;
-                let substrait_low = to_substrait_rex(low, schema, extension_info)?;
-                let substrait_high = to_substrait_rex(high, schema, extension_info)?;
+                let substrait_expr =
+                    to_substrait_rex(expr, schema, col_ref_offset, extension_info)?;
+                let substrait_low =
+                    to_substrait_rex(low, schema, col_ref_offset, extension_info)?;
+                let substrait_high =
+                    to_substrait_rex(high, schema, col_ref_offset, extension_info)?;
 
                 let l_expr = make_binary_op_scalar_func(
                     &substrait_low,
@@ -659,11 +944,11 @@ pub fn to_substrait_rex(
         }
         Expr::Column(col) => {
             let index = schema.index_of_column(col)?;
-            substrait_field_ref(index)
+            substrait_field_ref(index + col_ref_offset)
         }
         Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
-            let l = to_substrait_rex(left, schema, extension_info)?;
-            let r = to_substrait_rex(right, schema, extension_info)?;
+            let l = to_substrait_rex(left, schema, col_ref_offset, extension_info)?;
+            let r = to_substrait_rex(right, schema, col_ref_offset, extension_info)?;
 
             Ok(make_binary_op_scalar_func(&l, &r, *op, extension_info))
         }
@@ -677,21 +962,41 @@ pub fn to_substrait_rex(
             if let Some(e) = expr {
                 // Base expression exists
                 ifs.push(IfClause {
-                    r#if: Some(to_substrait_rex(e, schema, extension_info)?),
+                    r#if: Some(to_substrait_rex(
+                        e,
+                        schema,
+                        col_ref_offset,
+                        extension_info,
+                    )?),
                     then: None,
                 });
             }
             // Parse `when`s
             for (r#if, then) in when_then_expr {
                 ifs.push(IfClause {
-                    r#if: Some(to_substrait_rex(r#if, schema, extension_info)?),
-                    then: Some(to_substrait_rex(then, schema, extension_info)?),
+                    r#if: Some(to_substrait_rex(
+                        r#if,
+                        schema,
+                        col_ref_offset,
+                        extension_info,
+                    )?),
+                    then: Some(to_substrait_rex(
+                        then,
+                        schema,
+                        col_ref_offset,
+                        extension_info,
+                    )?),
                 });
             }
 
             // Parse outer `else`
             let r#else: Option<Box<Expression>> = match else_expr {
-                Some(e) => Some(Box::new(to_substrait_rex(e, schema, extension_info)?)),
+                Some(e) => Some(Box::new(to_substrait_rex(
+                    e,
+                    schema,
+                    col_ref_offset,
+                    extension_info,
+                )?)),
                 None => None,
             };
 
@@ -707,6 +1012,7 @@ pub fn to_substrait_rex(
                         input: Some(Box::new(to_substrait_rex(
                             expr,
                             schema,
+                            col_ref_offset,
                             extension_info,
                         )?)),
                         failure_behavior: 0, // FAILURE_BEHAVIOR_UNSPECIFIED
@@ -715,7 +1021,9 @@ pub fn to_substrait_rex(
             })
         }
         Expr::Literal(value) => to_substrait_literal(value),
-        Expr::Alias(expr, _alias) => to_substrait_rex(expr, schema, extension_info),
+        Expr::Alias(Alias { expr, .. }) => {
+            to_substrait_rex(expr, schema, col_ref_offset, extension_info)
+        }
         Expr::WindowFunction(WindowFunction {
             fun,
             args,
@@ -724,8 +1032,7 @@ pub fn to_substrait_rex(
             window_frame,
         }) => {
             // function reference
-            let function_name = fun.to_string().to_lowercase();
-            let function_anchor = _register_function(function_name, extension_info);
+            let function_anchor = _register_function(fun.to_string(), extension_info);
             // arguments
             let mut arguments: Vec<FunctionArgument> = vec![];
             for arg in args {
@@ -733,6 +1040,7 @@ pub fn to_substrait_rex(
                     arg_type: Some(ArgType::Value(to_substrait_rex(
                         arg,
                         schema,
+                        col_ref_offset,
                         extension_info,
                     )?)),
                 });
@@ -740,7 +1048,7 @@ pub fn to_substrait_rex(
             // partition by expressions
             let partition_by = partition_by
                 .iter()
-                .map(|e| to_substrait_rex(e, schema, extension_info))
+                .map(|e| to_substrait_rex(e, schema, col_ref_offset, extension_info))
                 .collect::<Result<Vec<_>>>()?;
             // order by expressions
             let order_by = order_by
@@ -749,26 +1057,86 @@ pub fn to_substrait_rex(
                 .collect::<Result<Vec<_>>>()?;
             // window frame
             let bounds = to_substrait_bounds(window_frame)?;
+            let bound_type = to_substrait_bound_type(window_frame)?;
             Ok(make_substrait_window_function(
                 function_anchor,
                 arguments,
                 partition_by,
                 order_by,
                 bounds,
+                bound_type,
             ))
         }
-        _ => Err(DataFusionError::NotImplemented(format!(
-            "Unsupported expression: {expr:?}"
-        ))),
+        Expr::Like(Like {
+            negated,
+            expr,
+            pattern,
+            escape_char,
+            case_insensitive,
+        }) => make_substrait_like_expr(
+            *case_insensitive,
+            *negated,
+            expr,
+            pattern,
+            *escape_char,
+            schema,
+            col_ref_offset,
+            extension_info,
+        ),
+        Expr::IsNull(arg) => {
+            let arguments: Vec<FunctionArgument> = vec![FunctionArgument {
+                arg_type: Some(ArgType::Value(to_substrait_rex(
+                    arg,
+                    schema,
+                    col_ref_offset,
+                    extension_info,
+                )?)),
+            }];
+
+            let function_name = "is_null".to_string();
+            let function_anchor = _register_function(function_name, extension_info);
+            Ok(Expression {
+                rex_type: Some(RexType::ScalarFunction(ScalarFunction {
+                    function_reference: function_anchor,
+                    arguments,
+                    output_type: None,
+                    args: vec![],
+                    options: vec![],
+                })),
+            })
+        }
+        Expr::IsNotNull(arg) => {
+            let arguments: Vec<FunctionArgument> = vec![FunctionArgument {
+                arg_type: Some(ArgType::Value(to_substrait_rex(
+                    arg,
+                    schema,
+                    col_ref_offset,
+                    extension_info,
+                )?)),
+            }];
+
+            let function_name = "is_not_null".to_string();
+            let function_anchor = _register_function(function_name, extension_info);
+            Ok(Expression {
+                rex_type: Some(RexType::ScalarFunction(ScalarFunction {
+                    function_reference: function_anchor,
+                    arguments,
+                    output_type: None,
+                    args: vec![],
+                    options: vec![],
+                })),
+            })
+        }
+        _ => {
+            not_impl_err!("Unsupported expression: {expr:?}")
+        }
     }
 }
 
 fn to_substrait_type(dt: &DataType) -> Result<substrait::proto::Type> {
     let default_nullability = r#type::Nullability::Required as i32;
     match dt {
-        DataType::Null => Err(DataFusionError::Internal(
-            "Null cast is not valid".to_string(),
-        )),
+        DataType::Null => internal_err!("Null cast is not valid"),
         DataType::Boolean => Ok(substrait::proto::Type {
             kind: Some(r#type::Kind::Bool(r#type::Boolean {
                 type_variation_reference: DEFAULT_TYPE_REF,
@@ -943,9 +1311,7 @@ fn to_substrait_type(dt: &DataType) -> Result<substrait::proto::Type> {
                 precision: *p as i32,
             })),
         }),
-        _ => Err(DataFusionError::NotImplemented(format!(
-            "Unsupported cast type: {dt:?}"
-        ))),
+        _ => not_impl_err!("Unsupported cast type: {dt:?}"),
     }
 }
 
@@ -956,6 +1322,7 @@ fn make_substrait_window_function(
     partitions: Vec<Expression>,
     sorts: Vec<SortField>,
     bounds: (Bound, Bound),
+    bounds_type: BoundsType,
 ) -> Expression {
     Expression {
         rex_type: Some(RexType::WindowFunction(SubstraitWindowFunction {
@@ -970,7 +1337,73 @@ fn make_substrait_window_function(
             lower_bound: Some(bounds.0),
             upper_bound: Some(bounds.1),
             args: vec![],
+            bounds_type: bounds_type as i32,
         })),
+    }
+}
+
+#[allow(deprecated)]
+#[allow(clippy::too_many_arguments)]
+fn make_substrait_like_expr(
+    ignore_case: bool,
+    negated: bool,
+    expr: &Expr,
+    pattern: &Expr,
+    escape_char: Option<char>,
+    schema: &DFSchemaRef,
+    col_ref_offset: usize,
+    extension_info: &mut (
+        Vec<extensions::SimpleExtensionDeclaration>,
+        HashMap<String, u32>,
+    ),
+) -> Result<Expression> {
+    let function_anchor = if ignore_case {
+        _register_function("ilike".to_string(), extension_info)
+    } else {
+        _register_function("like".to_string(), extension_info)
+    };
+    let expr = to_substrait_rex(expr, schema, col_ref_offset, extension_info)?;
+    let pattern = to_substrait_rex(pattern, schema, col_ref_offset, extension_info)?;
+    let escape_char =
+        to_substrait_literal(&ScalarValue::Utf8(escape_char.map(|c| c.to_string())))?;
+    let arguments = vec![
+        FunctionArgument {
+            arg_type: Some(ArgType::Value(expr)),
+        },
+        FunctionArgument {
+            arg_type: Some(ArgType::Value(pattern)),
+        },
+        FunctionArgument {
+            arg_type: Some(ArgType::Value(escape_char)),
+        },
+    ];
+
+    let substrait_like = Expression {
+        rex_type: Some(RexType::ScalarFunction(ScalarFunction {
+            function_reference: function_anchor,
+            arguments,
+            output_type: None,
+            args: vec![],
+            options: vec![],
+        })),
+    };
+
+    if negated {
+        let function_anchor = _register_function("not".to_string(), extension_info);
+
+        Ok(Expression {
+            rex_type: Some(RexType::ScalarFunction(ScalarFunction {
+                function_reference: function_anchor,
+                arguments: vec![FunctionArgument {
+                    arg_type: Some(ArgType::Value(substrait_like)),
+                }],
+                output_type: None,
+                args: vec![],
+                options: vec![],
+            })),
+        })
+    } else {
+        Ok(substrait_like)
     }
 }
 
@@ -1069,6 +1502,15 @@ fn to_substrait_bound(bound: &WindowFrameBound) -> Bound {
                 kind: Some(BoundKind::Unbounded(SubstraitBound::Unbounded {})),
             },
         },
+    }
+}
+
+fn to_substrait_bound_type(window_frame: &WindowFrame) -> Result<BoundsType> {
+    match window_frame.units {
+        WindowFrameUnits::Rows => Ok(BoundsType::Rows), // ROWS
+        WindowFrameUnits::Range => Ok(BoundsType::Range), // RANGE
+        // TODO: Support GROUPS
+        unit => not_impl_err!("Unsupported window frame unit: {unit:?}"),
     }
 }
 
@@ -1305,9 +1747,7 @@ fn try_to_substrait_null(v: &ScalarValue) -> Result<LiteralType> {
             }))
         }
         // TODO: Extend support for remaining data types
-        _ => Err(DataFusionError::NotImplemented(format!(
-            "Unsupported literal: {v:?}"
-        ))),
+        _ => not_impl_err!("Unsupported literal: {v:?}"),
     }
 }
 
@@ -1325,7 +1765,7 @@ fn substrait_sort_field(
             asc,
             nulls_first,
         }) => {
-            let e = to_substrait_rex(expr, schema, extension_info)?;
+            let e = to_substrait_rex(expr, schema, 0, extension_info)?;
             let d = match (asc, nulls_first) {
                 (true, true) => SortDirection::AscNullsFirst,
                 (true, false) => SortDirection::AscNullsLast,
@@ -1337,9 +1777,7 @@ fn substrait_sort_field(
                 sort_kind: Some(SortKind::Direction(d as i32)),
             })
         }
-        _ => Err(DataFusionError::NotImplemented(format!(
-            "Expecting sort expression but got {expr:?}"
-        ))),
+        _ => not_impl_err!("Expecting sort expression but got {expr:?}"),
     }
 }
 
@@ -1406,7 +1844,10 @@ mod test {
         println!("Checking round trip of {scalar:?}");
 
         let substrait = to_substrait_literal(&scalar)?;
-        let Expression { rex_type: Some(RexType::Literal(substrait_literal)) } = substrait else {
+        let Expression {
+            rex_type: Some(RexType::Literal(substrait_literal)),
+        } = substrait
+        else {
             panic!("Expected Literal expression, got {substrait:?}");
         };
 

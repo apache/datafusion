@@ -15,20 +15,21 @@
 // specific language governing permissions and limitations
 // under the License.
 
-pub mod alias;
 pub mod analyzer;
 pub mod common_subexpr_eliminate;
+pub mod decorrelate;
 pub mod decorrelate_predicate_subquery;
 pub mod eliminate_cross_join;
 pub mod eliminate_duplicated_expr;
 pub mod eliminate_filter;
 pub mod eliminate_join;
 pub mod eliminate_limit;
+pub mod eliminate_nested_union;
+pub mod eliminate_one_union;
 pub mod eliminate_outer_join;
-pub mod eliminate_project;
 pub mod extract_equijoin_predicate;
 pub mod filter_null_join_keys;
-pub mod merge_projection;
+pub mod optimize_projections;
 pub mod optimizer;
 pub mod propagate_empty_relation;
 pub mod push_down_filter;

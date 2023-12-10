@@ -17,37 +17,43 @@
 
 //! This module provides a builder for creating LogicalPlans
 
+use std::any::Any;
+use std::cmp::Ordering;
+use std::collections::{HashMap, HashSet};
+use std::convert::TryFrom;
+use std::iter::zip;
+use std::sync::Arc;
+
+use crate::dml::{CopyOptions, CopyTo};
+use crate::expr::Alias;
 use crate::expr_rewriter::{
     coerce_plan_expr_for_schema, normalize_col,
     normalize_col_with_schemas_and_ambiguity_check, normalize_cols,
     rewrite_sort_cols_by_aggs,
 };
+use crate::logical_plan::{
+    Aggregate, Analyze, CrossJoin, Distinct, DistinctOn, EmptyRelation, Explain, Filter,
+    Join, JoinConstraint, JoinType, Limit, LogicalPlan, Partitioning, PlanType, Prepare,
+    Projection, Repartition, Sort, SubqueryAlias, TableScan, Union, Unnest, Values,
+    Window,
+};
 use crate::type_coercion::binary::comparison_coercion;
-use crate::utils::{columnize_expr, compare_sort_expr, exprlist_to_fields, from_plan};
-use crate::{and, binary_expr, DmlStatement, Operator, WriteOp};
+use crate::utils::{
+    can_hash, columnize_expr, compare_sort_expr, expand_qualified_wildcard,
+    expand_wildcard, find_valid_equijoin_key_pair, group_window_expr_by_sort_keys,
+};
 use crate::{
-    logical_plan::{
-        Aggregate, Analyze, CrossJoin, Distinct, EmptyRelation, Explain, Filter, Join,
-        JoinConstraint, JoinType, Limit, LogicalPlan, Partitioning, PlanType, Prepare,
-        Projection, Repartition, Sort, SubqueryAlias, TableScan, ToStringifiedPlan,
-        Union, Unnest, Values, Window,
-    },
-    utils::{
-        can_hash, expand_qualified_wildcard, expand_wildcard,
-        find_valid_equijoin_key_pair, group_window_expr_by_sort_keys,
-    },
-    Expr, ExprSchemable, TableSource,
+    and, binary_expr, DmlStatement, Expr, ExprSchemable, Operator,
+    TableProviderFilterPushDown, TableSource, WriteOp,
 };
+
 use arrow::datatypes::{DataType, Schema, SchemaRef};
+use datafusion_common::display::ToStringifiedPlan;
 use datafusion_common::{
-    Column, DFField, DFSchema, DFSchemaRef, DataFusionError, OwnedTableReference, Result,
-    ScalarValue, TableReference, ToDFSchema,
+    get_target_functional_dependencies, plan_datafusion_err, plan_err, Column, DFField,
+    DFSchema, DFSchemaRef, DataFusionError, FileType, OwnedTableReference, Result,
+    ScalarValue, TableReference, ToDFSchema, UnnestOptions,
 };
-use std::any::Any;
-use std::cmp::Ordering;
-use std::collections::{HashMap, HashSet};
-use std::convert::TryFrom;
-use std::sync::Arc;
 
 /// Default table name for unnamed table
 pub const UNNAMED_TABLE: &str = "?table?";
@@ -126,13 +132,11 @@ impl LogicalPlanBuilder {
     /// If the values include params/binders such as $1, $2, $3, etc, then the `param_data_types` should be provided.
     pub fn values(mut values: Vec<Vec<Expr>>) -> Result<Self> {
         if values.is_empty() {
-            return Err(DataFusionError::Plan("Values list cannot be empty".into()));
+            return plan_err!("Values list cannot be empty");
         }
         let n_cols = values[0].len();
         if n_cols == 0 {
-            return Err(DataFusionError::Plan(
-                "Values list cannot be zero length".into(),
-            ));
+            return plan_err!("Values list cannot be zero length");
         }
         let empty_schema = DFSchema::empty();
         let mut field_types: Vec<Option<DataType>> = Vec::with_capacity(n_cols);
@@ -143,12 +147,12 @@ impl LogicalPlanBuilder {
         let mut nulls: Vec<(usize, usize)> = Vec::new();
         for (i, row) in values.iter().enumerate() {
             if row.len() != n_cols {
-                return Err(DataFusionError::Plan(format!(
+                return plan_err!(
                     "Inconsistent data length across values list: got {} values in row {} but expected {}",
                     row.len(),
                     i,
                     n_cols
-                )));
+                );
             }
             field_types = row
                 .iter()
@@ -161,8 +165,7 @@ impl LogicalPlanBuilder {
                         let data_type = expr.get_type(&empty_schema)?;
                         if let Some(prev_data_type) = &field_types[j] {
                             if prev_data_type != &data_type {
-                                let err = format!("Inconsistent data type across values list at row {i} column {j}");
-                                return Err(DataFusionError::Plan(err));
+                                return plan_err!("Inconsistent data type across values list at row {i} column {j}. Was {prev_data_type} but found {data_type}")
                             }
                         }
                         Ok(Some(data_type))
@@ -231,17 +234,42 @@ impl LogicalPlanBuilder {
         Self::scan_with_filters(table_name, table_source, projection, vec![])
     }
 
+    /// Create a [CopyTo] for copying the contents of this builder to the specified file(s)
+    pub fn copy_to(
+        input: LogicalPlan,
+        output_url: String,
+        file_format: FileType,
+        single_file_output: bool,
+        copy_options: CopyOptions,
+    ) -> Result<Self> {
+        Ok(Self::from(LogicalPlan::Copy(CopyTo {
+            input: Arc::new(input),
+            output_url,
+            file_format,
+            single_file_output,
+            copy_options,
+        })))
+    }
+
     /// Create a [DmlStatement] for inserting the contents of this builder into the named table
     pub fn insert_into(
         input: LogicalPlan,
         table_name: impl Into<OwnedTableReference>,
         table_schema: &Schema,
+        overwrite: bool,
     ) -> Result<Self> {
         let table_schema = table_schema.clone().to_dfschema_ref()?;
+
+        let op = if overwrite {
+            WriteOp::InsertOverwrite
+        } else {
+            WriteOp::InsertInto
+        };
+
         Ok(Self::from(LogicalPlan::Dml(DmlStatement {
             table_name: table_name.into(),
             table_schema,
-            op: WriteOp::Insert,
+            op,
             input: Arc::new(input),
         })))
     }
@@ -253,44 +281,9 @@ impl LogicalPlanBuilder {
         projection: Option<Vec<usize>>,
         filters: Vec<Expr>,
     ) -> Result<Self> {
-        let table_name = table_name.into();
-
-        if table_name.table().is_empty() {
-            return Err(DataFusionError::Plan(
-                "table_name cannot be empty".to_string(),
-            ));
-        }
-
-        let schema = table_source.schema();
-
-        let projected_schema = projection
-            .as_ref()
-            .map(|p| {
-                DFSchema::new_with_metadata(
-                    p.iter()
-                        .map(|i| {
-                            DFField::from_qualified(
-                                table_name.clone(),
-                                schema.field(*i).clone(),
-                            )
-                        })
-                        .collect(),
-                    schema.metadata().clone(),
-                )
-            })
-            .unwrap_or_else(|| {
-                DFSchema::try_from_qualified_schema(table_name.clone(), &schema)
-            })?;
-
-        let table_scan = LogicalPlan::TableScan(TableScan {
-            table_name,
-            source: table_source,
-            projected_schema: Arc::new(projected_schema),
-            projection,
-            filters,
-            fetch: None,
-        });
-        Ok(Self::from(table_scan))
+        TableScan::try_new(table_name, table_source, projection, filters, None)
+            .map(LogicalPlan::TableScan)
+            .map(Self::from)
     }
 
     /// Wrap a plan in a window
@@ -335,7 +328,7 @@ impl LogicalPlanBuilder {
         self,
         expr: impl IntoIterator<Item = impl Into<Expr>>,
     ) -> Result<Self> {
-        Ok(Self::from(project(self.plan, expr)?))
+        project(self.plan, expr).map(Self::from)
     }
 
     /// Select the given column indices
@@ -351,10 +344,9 @@ impl LogicalPlanBuilder {
     /// Apply a filter
     pub fn filter(self, expr: impl Into<Expr>) -> Result<Self> {
         let expr = normalize_col(expr.into(), &self.plan)?;
-        Ok(Self::from(LogicalPlan::Filter(Filter::try_new(
-            expr,
-            Arc::new(self.plan),
-        )?)))
+        Filter::try_new(expr, Arc::new(self.plan))
+            .map(LogicalPlan::Filter)
+            .map(Self::from)
     }
 
     /// Make a builder for a prepare logical plan from the builder's plan
@@ -382,7 +374,7 @@ impl LogicalPlanBuilder {
 
     /// Apply an alias
     pub fn alias(self, alias: impl Into<OwnedTableReference>) -> Result<Self> {
-        Ok(Self::from(subquery_alias(self.plan, alias)?))
+        subquery_alias(self.plan, alias).map(Self::from)
     }
 
     /// Add missing sort columns to all downstream projection
@@ -437,7 +429,7 @@ impl LogicalPlanBuilder {
                     Self::ambiguous_distinct_check(&missing_exprs, missing_cols, &expr)?;
                 }
                 expr.extend(missing_exprs);
-                Ok(project((*input).clone(), expr)?)
+                project((*input).clone(), expr)
             }
             _ => {
                 let is_distinct =
@@ -453,9 +445,7 @@ impl LogicalPlanBuilder {
                         )
                     })
                     .collect::<Result<Vec<_>>>()?;
-
-                let expr = curr_plan.expressions();
-                from_plan(&curr_plan, &expr, &new_inputs)
+                curr_plan.with_new_inputs(&new_inputs)
             }
         }
     }
@@ -478,7 +468,7 @@ impl LogicalPlanBuilder {
         // As described in https://github.com/apache/arrow-datafusion/issues/5293
         let all_aliases = missing_exprs.iter().all(|e| {
             projection_exprs.iter().any(|proj_expr| {
-                if let Expr::Alias(expr, _) = proj_expr {
+                if let Expr::Alias(Alias { expr, .. }) = proj_expr {
                     e == expr.as_ref()
                 } else {
                     false
@@ -494,9 +484,7 @@ impl LogicalPlanBuilder {
             .map(|col| col.flat_name())
             .collect::<String>();
 
-        Err(DataFusionError::Plan(format!(
-            "For SELECT DISTINCT, ORDER BY expressions {missing_col_names} must appear in select list",
-        )))
+        plan_err!("For SELECT DISTINCT, ORDER BY expressions {missing_col_names} must appear in select list")
     }
 
     /// Apply a sort
@@ -548,46 +536,59 @@ impl LogicalPlanBuilder {
             fetch: None,
         });
 
-        Ok(Self::from(LogicalPlan::Projection(Projection::try_new(
-            new_expr,
-            Arc::new(sort_plan),
-        )?)))
+        Projection::try_new(new_expr, Arc::new(sort_plan))
+            .map(LogicalPlan::Projection)
+            .map(Self::from)
     }
 
     /// Apply a union, preserving duplicate rows
     pub fn union(self, plan: LogicalPlan) -> Result<Self> {
-        Ok(Self::from(union(self.plan, plan)?))
+        union(self.plan, plan).map(Self::from)
     }
 
     /// Apply a union, removing duplicate rows
     pub fn union_distinct(self, plan: LogicalPlan) -> Result<Self> {
-        // unwrap top-level Distincts, to avoid duplication
-        let left_plan: LogicalPlan = match self.plan {
-            LogicalPlan::Distinct(Distinct { input }) => (*input).clone(),
-            _ => self.plan,
-        };
-        let right_plan: LogicalPlan = match plan {
-            LogicalPlan::Distinct(Distinct { input }) => (*input).clone(),
-            _ => plan,
-        };
+        let left_plan: LogicalPlan = self.plan;
+        let right_plan: LogicalPlan = plan;
 
-        Ok(Self::from(LogicalPlan::Distinct(Distinct {
-            input: Arc::new(union(left_plan, right_plan)?),
-        })))
+        Ok(Self::from(LogicalPlan::Distinct(Distinct::All(Arc::new(
+            union(left_plan, right_plan)?,
+        )))))
     }
 
     /// Apply deduplication: Only distinct (different) values are returned)
     pub fn distinct(self) -> Result<Self> {
-        Ok(Self::from(LogicalPlan::Distinct(Distinct {
-            input: Arc::new(self.plan),
-        })))
+        Ok(Self::from(LogicalPlan::Distinct(Distinct::All(Arc::new(
+            self.plan,
+        )))))
     }
 
-    /// Apply a join with on constraint.
+    /// Project first values of the specified expression list according to the provided
+    /// sorting expressions grouped by the `DISTINCT ON` clause expressions.
+    pub fn distinct_on(
+        self,
+        on_expr: Vec<Expr>,
+        select_expr: Vec<Expr>,
+        sort_expr: Option<Vec<Expr>>,
+    ) -> Result<Self> {
+        Ok(Self::from(LogicalPlan::Distinct(Distinct::On(
+            DistinctOn::try_new(on_expr, select_expr, sort_expr, Arc::new(self.plan))?,
+        ))))
+    }
+
+    /// Apply a join to `right` using explicitly specified columns and an
+    /// optional filter expression.
     ///
-    /// Filter expression expected to contain non-equality predicates that can not be pushed
-    /// down to any of join inputs.
-    /// In case of outer join, filter applied to only matched rows.
+    /// See [`join_on`](Self::join_on) for a more concise way to specify the
+    /// join condition. Since DataFusion will automatically identify and
+    /// optimize equality predicates there is no performance difference between
+    /// this function and `join_on`
+    ///
+    /// `left_cols` and `right_cols` are used to form "equijoin" predicates (see
+    /// example below), which are then combined with the optional `filter`
+    /// expression.
+    ///
+    /// Note that in case of outer join, the `filter` is applied to only matched rows.
     pub fn join(
         self,
         right: LogicalPlan,
@@ -596,6 +597,63 @@ impl LogicalPlanBuilder {
         filter: Option<Expr>,
     ) -> Result<Self> {
         self.join_detailed(right, join_type, join_keys, filter, false)
+    }
+
+    /// Apply a join with using the specified expressions.
+    ///
+    /// Note that DataFusion automatically optimizes joins, including
+    /// identifying and optimizing equality predicates.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use datafusion_expr::{Expr, col, LogicalPlanBuilder,
+    /// #  logical_plan::builder::LogicalTableSource, logical_plan::JoinType,};
+    /// # use std::sync::Arc;
+    /// # use arrow::datatypes::{Schema, DataType, Field};
+    /// # use datafusion_common::Result;
+    /// # fn main() -> Result<()> {
+    /// let example_schema = Arc::new(Schema::new(vec![
+    ///     Field::new("a", DataType::Int32, false),
+    ///     Field::new("b", DataType::Int32, false),
+    ///     Field::new("c", DataType::Int32, false),
+    /// ]));
+    /// let table_source = Arc::new(LogicalTableSource::new(example_schema));
+    /// let left_table = table_source.clone();
+    /// let right_table = table_source.clone();
+    ///
+    /// let right_plan = LogicalPlanBuilder::scan("right", right_table, None)?.build()?;
+    ///
+    /// // Form the expression `(left.a != right.a)` AND `(left.b != right.b)`
+    /// let exprs = vec![
+    ///     col("left.a").eq(col("right.a")),
+    ///     col("left.b").not_eq(col("right.b"))
+    ///  ];
+    ///
+    /// // Perform the equivalent of `left INNER JOIN right ON (a != a2 AND b != b2)`
+    /// // finding all pairs of rows from `left` and `right` where
+    /// // where `a = a2` and `b != b2`.
+    /// let plan = LogicalPlanBuilder::scan("left", left_table, None)?
+    ///     .join_on(right_plan, JoinType::Inner, exprs)?
+    ///     .build()?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn join_on(
+        self,
+        right: LogicalPlan,
+        join_type: JoinType,
+        on_exprs: impl IntoIterator<Item = Expr>,
+    ) -> Result<Self> {
+        let filter = on_exprs.into_iter().reduce(Expr::and);
+
+        self.join_detailed(
+            right,
+            join_type,
+            (Vec::<Column>::new(), Vec::<Column>::new()),
+            filter,
+            false,
+        )
     }
 
     pub(crate) fn normalize(
@@ -611,8 +669,14 @@ impl LogicalPlanBuilder {
         )
     }
 
-    /// Apply a join with on constraint and specified null equality
-    /// If null_equals_null is true then null == null, else null != null
+    /// Apply a join with on constraint and specified null equality.
+    ///
+    /// The behavior is the same as [`join`](Self::join) except that it allows
+    /// specifying the null equality behavior.
+    ///
+    /// If `null_equals_null=true`, rows where both join keys are `null` will be
+    /// emitted. Otherwise rows where either or both join keys are `null` will be
+    /// omitted.
     pub fn join_detailed(
         self,
         right: LogicalPlan,
@@ -622,9 +686,7 @@ impl LogicalPlanBuilder {
         null_equals_null: bool,
     ) -> Result<Self> {
         if join_keys.0.len() != join_keys.1.len() {
-            return Err(DataFusionError::Plan(
-                "left_keys and right_keys were not the same length".to_string(),
-            ));
+            return plan_err!("left_keys and right_keys were not the same length");
         }
 
         let filter = if let Some(expr) = filter {
@@ -642,7 +704,7 @@ impl LogicalPlanBuilder {
             join_keys
                 .0
                 .into_iter()
-                .zip(join_keys.1.into_iter())
+                .zip(join_keys.1)
                 .map(|(l, r)| {
                     let l = l.into();
                     let r = r.into();
@@ -719,7 +781,7 @@ impl LogicalPlanBuilder {
 
         let on = left_keys
             .into_iter()
-            .zip(right_keys.into_iter())
+            .zip(right_keys)
             .map(|(l, r)| (Expr::Column(l), Expr::Column(r)))
             .collect();
         let join_schema =
@@ -754,7 +816,7 @@ impl LogicalPlanBuilder {
             .map(|c| Self::normalize(&right, c))
             .collect::<Result<_>>()?;
 
-        let on: Vec<(_, _)> = left_keys.into_iter().zip(right_keys.into_iter()).collect();
+        let on: Vec<(_, _)> = left_keys.into_iter().zip(right_keys).collect();
         let join_schema =
             build_join_schema(self.plan.schema(), right.schema(), &join_type)?;
         let mut join_on: Vec<(Expr, Expr)> = vec![];
@@ -804,11 +866,12 @@ impl LogicalPlanBuilder {
 
     /// Apply a cross join
     pub fn cross_join(self, right: LogicalPlan) -> Result<Self> {
-        let schema = self.plan.schema().join(right.schema())?;
+        let join_schema =
+            build_join_schema(self.plan.schema(), right.schema(), &JoinType::Inner)?;
         Ok(Self::from(LogicalPlan::CrossJoin(CrossJoin {
             left: Arc::new(self.plan),
             right: Arc::new(right),
-            schema: DFSchemaRef::new(schema),
+            schema: DFSchemaRef::new(join_schema),
         })))
     }
 
@@ -826,17 +889,11 @@ impl LogicalPlanBuilder {
         window_expr: impl IntoIterator<Item = impl Into<Expr>>,
     ) -> Result<Self> {
         let window_expr = normalize_cols(window_expr, &self.plan)?;
-        let all_expr = window_expr.iter();
-        validate_unique_names("Windows", all_expr.clone())?;
-        let mut window_fields: Vec<DFField> = self.plan.schema().fields().clone();
-        window_fields.extend_from_slice(&exprlist_to_fields(all_expr, &self.plan)?);
-        let metadata = self.plan.schema().metadata().clone();
-
-        Ok(Self::from(LogicalPlan::Window(Window {
-            input: Arc::new(self.plan),
+        validate_unique_names("Windows", &window_expr)?;
+        Ok(Self::from(LogicalPlan::Window(Window::try_new(
             window_expr,
-            schema: Arc::new(DFSchema::new_with_metadata(window_fields, metadata)?),
-        })))
+            Arc::new(self.plan),
+        )?)))
     }
 
     /// Apply an aggregate: grouping on the `group_expr` expressions
@@ -847,13 +904,30 @@ impl LogicalPlanBuilder {
         group_expr: impl IntoIterator<Item = impl Into<Expr>>,
         aggr_expr: impl IntoIterator<Item = impl Into<Expr>>,
     ) -> Result<Self> {
-        let group_expr = normalize_cols(group_expr, &self.plan)?;
+        let mut group_expr = normalize_cols(group_expr, &self.plan)?;
         let aggr_expr = normalize_cols(aggr_expr, &self.plan)?;
-        Ok(Self::from(LogicalPlan::Aggregate(Aggregate::try_new(
-            Arc::new(self.plan),
-            group_expr,
-            aggr_expr,
-        )?)))
+
+        // Rewrite groupby exprs according to functional dependencies
+        let group_by_expr_names = group_expr
+            .iter()
+            .map(|group_by_expr| group_by_expr.display_name())
+            .collect::<Result<Vec<_>>>()?;
+        let schema = self.plan.schema();
+        if let Some(target_indices) =
+            get_target_functional_dependencies(schema, &group_by_expr_names)
+        {
+            for idx in target_indices {
+                let field = schema.field(idx);
+                let expr =
+                    Expr::Column(Column::new(field.qualifier().cloned(), field.name()));
+                if !group_expr.contains(&expr) {
+                    group_expr.push(expr);
+                }
+            }
+        }
+        Aggregate::try_new(Arc::new(self.plan), group_expr, aggr_expr)
+            .map(LogicalPlan::Aggregate)
+            .map(Self::from)
     }
 
     /// Create an expression to represent the explanation of the plan
@@ -925,9 +999,9 @@ impl LogicalPlanBuilder {
         let right_len = right_plan.schema().fields().len();
 
         if left_len != right_len {
-            return Err(DataFusionError::Plan(format!(
+            return plan_err!(
                 "INTERSECT/EXCEPT query must have the same number of columns. Left is {left_len} and right is {right_len}."
-            )));
+            );
         }
 
         let join_keys = left_plan
@@ -973,9 +1047,7 @@ impl LogicalPlanBuilder {
         filter: Option<Expr>,
     ) -> Result<Self> {
         if equi_exprs.0.len() != equi_exprs.1.len() {
-            return Err(DataFusionError::Plan(
-                "left_keys and right_keys were not the same length".to_string(),
-            ));
+            return plan_err!("left_keys and right_keys were not the same length");
         }
 
         let join_key_pairs = equi_exprs
@@ -1007,9 +1079,9 @@ impl LogicalPlanBuilder {
                         self.plan.schema().clone(),
                         right.schema().clone(),
                     )?.ok_or_else(||
-                        DataFusionError::Plan(format!(
+                        plan_datafusion_err!(
                             "can't create join plan, join key should belong to one input, error key: ({normalized_left_key},{normalized_right_key})"
-                        )))
+                        ))
             })
             .collect::<Result<Vec<_>>>()?;
 
@@ -1031,6 +1103,19 @@ impl LogicalPlanBuilder {
     /// Unnest the given column.
     pub fn unnest_column(self, column: impl Into<Column>) -> Result<Self> {
         Ok(Self::from(unnest(self.plan, column.into())?))
+    }
+
+    /// Unnest the given column given [`UnnestOptions`]
+    pub fn unnest_column_with_options(
+        self,
+        column: impl Into<Column>,
+        options: UnnestOptions,
+    ) -> Result<Self> {
+        Ok(Self::from(unnest_with_options(
+            self.plan,
+            column.into(),
+            options,
+        )?))
     }
 }
 
@@ -1093,10 +1178,15 @@ pub fn build_join_schema(
             right_fields.clone()
         }
     };
-
+    let func_dependencies = left.functional_dependencies().join(
+        right.functional_dependencies(),
+        join_type,
+        left_fields.len(),
+    );
     let mut metadata = left.metadata().clone();
     metadata.extend(right.metadata().clone());
-    DFSchema::new_with_metadata(fields, metadata)
+    let schema = DFSchema::new_with_metadata(fields, metadata)?;
+    schema.with_functional_dependencies(func_dependencies)
 }
 
 /// Errors if one or more expressions have equal names.
@@ -1113,12 +1203,10 @@ pub(crate) fn validate_unique_names<'a>(
                 Ok(())
             },
             Some((existing_position, existing_expr)) => {
-                Err(DataFusionError::Plan(
-                    format!("{node_name} require unique expression names \
-                             but the expression \"{existing_expr:?}\" at position {existing_position} and \"{expr:?}\" \
-                             at position {position} have the same name. Consider aliasing (\"AS\") one of them.",
+                plan_err!("{node_name} require unique expression names \
+                             but the expression \"{existing_expr}\" at position {existing_position} and \"{expr}\" \
+                             at position {position} have the same name. Consider aliasing (\"AS\") one of them."
                             )
-                ))
             }
         }
     })
@@ -1133,7 +1221,7 @@ pub fn project_with_column_index(
         .into_iter()
         .enumerate()
         .map(|(i, e)| match e {
-            Expr::Alias(_, ref name) if name != schema.field(i).name() => {
+            Expr::Alias(Alias { ref name, .. }) if name != schema.field(i).name() => {
                 e.unalias().alias(schema.field(i).name())
             }
             Expr::Column(Column {
@@ -1145,9 +1233,8 @@ pub fn project_with_column_index(
         })
         .collect::<Vec<_>>();
 
-    Ok(LogicalPlan::Projection(Projection::try_new_with_schema(
-        alias_expr, input, schema,
-    )?))
+    Projection::try_new_with_schema(alias_expr, input, schema)
+        .map(LogicalPlan::Projection)
 }
 
 /// Union two logical plans.
@@ -1157,45 +1244,41 @@ pub fn union(left_plan: LogicalPlan, right_plan: LogicalPlan) -> Result<LogicalP
     // check union plan length same.
     let right_col_num = right_plan.schema().fields().len();
     if right_col_num != left_col_num {
-        return Err(DataFusionError::Plan(format!(
-            "Union queries must have the same number of columns, (left is {left_col_num}, right is {right_col_num})")
-        ));
+        return plan_err!(
+            "Union queries must have the same number of columns, (left is {left_col_num}, right is {right_col_num})");
     }
 
     // create union schema
-    let union_schema = (0..left_col_num)
-        .map(|i| {
-            let left_field = left_plan.schema().field(i);
-            let right_field = right_plan.schema().field(i);
-            let nullable = left_field.is_nullable() || right_field.is_nullable();
-            let data_type =
-                comparison_coercion(left_field.data_type(), right_field.data_type())
-                    .ok_or_else(|| {
-                        DataFusionError::Plan(format!(
-                    "UNION Column {} (type: {}) is not compatible with column {} (type: {})",
-                    right_field.name(),
-                    right_field.data_type(),
-                    left_field.name(),
-                    left_field.data_type()
-                ))
-                    })?;
-
-            Ok(DFField::new(
-                left_field.qualifier().cloned(),
+    let union_schema = zip(
+        left_plan.schema().fields().iter(),
+        right_plan.schema().fields().iter(),
+    )
+    .map(|(left_field, right_field)| {
+        let nullable = left_field.is_nullable() || right_field.is_nullable();
+        let data_type =
+            comparison_coercion(left_field.data_type(), right_field.data_type())
+                .ok_or_else(|| {
+                    plan_datafusion_err!(
+                "UNION Column {} (type: {}) is not compatible with column {} (type: {})",
+                right_field.name(),
+                right_field.data_type(),
                 left_field.name(),
-                data_type,
-                nullable,
-            ))
-        })
-        .collect::<Result<Vec<_>>>()?
-        .to_dfschema()?;
+                left_field.data_type()
+            )
+                })?;
+
+        Ok(DFField::new(
+            left_field.qualifier().cloned(),
+            left_field.name(),
+            data_type,
+            nullable,
+        ))
+    })
+    .collect::<Result<Vec<_>>>()?
+    .to_dfschema()?;
 
     let inputs = vec![left_plan, right_plan]
         .into_iter()
-        .flat_map(|p| match p {
-            LogicalPlan::Union(Union { inputs, .. }) => inputs,
-            other_plan => vec![Arc::new(other_plan)],
-        })
         .map(|p| {
             let plan = coerce_plan_expr_for_schema(&p, &union_schema)?;
             match plan {
@@ -1212,7 +1295,7 @@ pub fn union(left_plan: LogicalPlan, right_plan: LogicalPlan) -> Result<LogicalP
         .collect::<Result<Vec<_>>>()?;
 
     if inputs.is_empty() {
-        return Err(DataFusionError::Plan("Empty UNION".to_string()));
+        return plan_err!("Empty UNION");
     }
 
     Ok(LogicalPlan::Union(Union {
@@ -1230,31 +1313,29 @@ pub fn project(
     plan: LogicalPlan,
     expr: impl IntoIterator<Item = impl Into<Expr>>,
 ) -> Result<LogicalPlan> {
+    // TODO: move it into analyzer
     let input_schema = plan.schema();
     let mut projected_expr = vec![];
     for e in expr {
         let e = e.into();
         match e {
-            Expr::Wildcard => {
+            Expr::Wildcard { qualifier: None } => {
                 projected_expr.extend(expand_wildcard(input_schema, &plan, None)?)
             }
-            Expr::QualifiedWildcard { ref qualifier } => projected_expr
-                .extend(expand_qualified_wildcard(qualifier, input_schema, None)?),
+            Expr::Wildcard {
+                qualifier: Some(qualifier),
+            } => projected_expr.extend(expand_qualified_wildcard(
+                &qualifier,
+                input_schema,
+                None,
+            )?),
             _ => projected_expr
                 .push(columnize_expr(normalize_col(e, &plan)?, input_schema)),
         }
     }
     validate_unique_names("Projections", projected_expr.iter())?;
-    let input_schema = DFSchema::new_with_metadata(
-        exprlist_to_fields(&projected_expr, &plan)?,
-        plan.schema().metadata().clone(),
-    )?;
 
-    Ok(LogicalPlan::Projection(Projection::try_new_with_schema(
-        projected_expr,
-        Arc::new(plan.clone()),
-        DFSchemaRef::new(input_schema),
-    )?))
+    Projection::try_new(projected_expr, Arc::new(plan)).map(LogicalPlan::Projection)
 }
 
 /// Create a SubqueryAlias to wrap a LogicalPlan.
@@ -1262,9 +1343,7 @@ pub fn subquery_alias(
     plan: LogicalPlan,
     alias: impl Into<OwnedTableReference>,
 ) -> Result<LogicalPlan> {
-    Ok(LogicalPlan::SubqueryAlias(SubqueryAlias::try_new(
-        plan, alias,
-    )?))
+    SubqueryAlias::try_new(plan, alias).map(LogicalPlan::SubqueryAlias)
 }
 
 /// Create a LogicalPlanBuilder representing a scan of a table with the provided name and schema.
@@ -1317,7 +1396,7 @@ pub fn wrap_projection_for_join_if_necessary(
             //  then a and cast(a as int) will use the same field name - `a` in projection schema.
             //  https://github.com/apache/arrow-datafusion/issues/4478
             if matches!(key, Expr::Cast(_)) || matches!(key, Expr::TryCast(_)) {
-                let alias = format!("{key:?}");
+                let alias = format!("{key}");
                 key.clone().alias(alias)
             } else {
                 key.clone()
@@ -1375,10 +1454,26 @@ impl TableSource for LogicalTableSource {
     fn schema(&self) -> SchemaRef {
         self.table_schema.clone()
     }
+
+    fn supports_filters_pushdown(
+        &self,
+        filters: &[&Expr],
+    ) -> Result<Vec<crate::TableProviderFilterPushDown>> {
+        Ok(vec![TableProviderFilterPushDown::Exact; filters.len()])
+    }
 }
 
-/// Create an unnest plan.
+/// Create a [`LogicalPlan::Unnest`] plan
 pub fn unnest(input: LogicalPlan, column: Column) -> Result<LogicalPlan> {
+    unnest_with_options(input, column, UnnestOptions::new())
+}
+
+/// Create a [`LogicalPlan::Unnest`] plan with options
+pub fn unnest_with_options(
+    input: LogicalPlan,
+    column: Column,
+    options: UnnestOptions,
+) -> Result<LogicalPlan> {
     let unnest_field = input.schema().field_from_column(&column)?;
 
     // Extract the type of the nested field in the list.
@@ -1411,28 +1506,28 @@ pub fn unnest(input: LogicalPlan, column: Column) -> Result<LogicalPlan> {
         })
         .collect::<Vec<_>>();
 
-    let schema = Arc::new(DFSchema::new_with_metadata(
-        fields,
-        input_schema.metadata().clone(),
-    )?);
+    let metadata = input_schema.metadata().clone();
+    let df_schema = DFSchema::new_with_metadata(fields, metadata)?;
+    // We can use the existing functional dependencies:
+    let deps = input_schema.functional_dependencies().clone();
+    let schema = Arc::new(df_schema.with_functional_dependencies(deps)?);
 
     Ok(LogicalPlan::Unnest(Unnest {
         input: Arc::new(input),
         column: unnested_field.qualified_column(),
         schema,
+        options,
     }))
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::{expr, expr_fn::exists};
+    use super::*;
+    use crate::logical_plan::StringifiedPlan;
+    use crate::{col, expr, expr_fn::exists, in_subquery, lit, scalar_subquery, sum};
+
     use arrow::datatypes::{DataType, Field};
     use datafusion_common::{OwnedTableReference, SchemaError, TableReference};
-
-    use crate::logical_plan::StringifiedPlan;
-
-    use super::*;
-    use crate::{col, in_subquery, lit, scalar_subquery, sum};
 
     #[test]
     fn plan_builder_simple() -> Result<()> {
@@ -1481,7 +1576,7 @@ mod tests {
         let err =
             LogicalPlanBuilder::scan("", table_source(&schema), projection).unwrap_err();
         assert_eq!(
-            err.to_string(),
+            err.strip_backtrace(),
             "Error during planning: table_name cannot be empty"
         );
     }
@@ -1532,7 +1627,7 @@ mod tests {
 
         let plan = table_scan(Some("t1"), &employee_schema(), None)?
             .join_using(t2, JoinType::Inner, vec!["id"])?
-            .project(vec![Expr::Wildcard])?
+            .project(vec![Expr::Wildcard { qualifier: None }])?
             .build()?;
 
         // id column should only show up once in projection
@@ -1547,7 +1642,7 @@ mod tests {
     }
 
     #[test]
-    fn plan_builder_union_combined_single_union() -> Result<()> {
+    fn plan_builder_union() -> Result<()> {
         let plan =
             table_scan(Some("employee_csv"), &employee_schema(), Some(vec![3, 4]))?;
 
@@ -1558,11 +1653,12 @@ mod tests {
             .union(plan.build()?)?
             .build()?;
 
-        // output has only one union
         let expected = "Union\
-        \n  TableScan: employee_csv projection=[state, salary]\
-        \n  TableScan: employee_csv projection=[state, salary]\
-        \n  TableScan: employee_csv projection=[state, salary]\
+        \n  Union\
+        \n    Union\
+        \n      TableScan: employee_csv projection=[state, salary]\
+        \n      TableScan: employee_csv projection=[state, salary]\
+        \n    TableScan: employee_csv projection=[state, salary]\
         \n  TableScan: employee_csv projection=[state, salary]";
 
         assert_eq!(expected, format!("{plan:?}"));
@@ -1571,7 +1667,7 @@ mod tests {
     }
 
     #[test]
-    fn plan_builder_union_distinct_combined_single_union() -> Result<()> {
+    fn plan_builder_union_distinct() -> Result<()> {
         let plan =
             table_scan(Some("employee_csv"), &employee_schema(), Some(vec![3, 4]))?;
 
@@ -1582,13 +1678,16 @@ mod tests {
             .union_distinct(plan.build()?)?
             .build()?;
 
-        // output has only one union
         let expected = "\
         Distinct:\
         \n  Union\
-        \n    TableScan: employee_csv projection=[state, salary]\
-        \n    TableScan: employee_csv projection=[state, salary]\
-        \n    TableScan: employee_csv projection=[state, salary]\
+        \n    Distinct:\
+        \n      Union\
+        \n        Distinct:\
+        \n          Union\
+        \n            TableScan: employee_csv projection=[state, salary]\
+        \n            TableScan: employee_csv projection=[state, salary]\
+        \n        TableScan: employee_csv projection=[state, salary]\
         \n    TableScan: employee_csv projection=[state, salary]";
 
         assert_eq!(expected, format!("{plan:?}"));
@@ -1607,8 +1706,8 @@ mod tests {
         let err_msg1 = plan1.clone().union(plan2.clone().build()?).unwrap_err();
         let err_msg2 = plan1.union_distinct(plan2.build()?).unwrap_err();
 
-        assert_eq!(err_msg1.to_string(), expected);
-        assert_eq!(err_msg2.to_string(), expected);
+        assert_eq!(err_msg1.strip_backtrace(), expected);
+        assert_eq!(err_msg2.strip_backtrace(), expected);
 
         Ok(())
     }
@@ -1737,9 +1836,7 @@ mod tests {
                 assert_eq!("id", &name);
                 Ok(())
             }
-            _ => Err(DataFusionError::Plan(
-                "Plan should have returned an DataFusionError::SchemaError".to_string(),
-            )),
+            _ => plan_err!("Plan should have returned an DataFusionError::SchemaError"),
         }
     }
 
@@ -1766,9 +1863,7 @@ mod tests {
                 assert_eq!("state", &name);
                 Ok(())
             }
-            _ => Err(DataFusionError::Plan(
-                "Plan should have returned an DataFusionError::SchemaError".to_string(),
-            )),
+            _ => plan_err!("Plan should have returned an DataFusionError::SchemaError"),
         }
     }
 
@@ -1836,7 +1931,7 @@ mod tests {
             LogicalPlanBuilder::intersect(plan1.build()?, plan2.build()?, true)
                 .unwrap_err();
 
-        assert_eq!(err_msg1.to_string(), expected);
+        assert_eq!(err_msg1.strip_backtrace(), expected);
 
         Ok(())
     }

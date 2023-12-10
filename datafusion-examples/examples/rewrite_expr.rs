@@ -18,9 +18,9 @@
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TreeNode};
-use datafusion_common::{DataFusionError, Result, ScalarValue};
+use datafusion_common::{plan_err, DataFusionError, Result, ScalarValue};
 use datafusion_expr::{
-    AggregateUDF, Between, Expr, Filter, LogicalPlan, ScalarUDF, TableSource,
+    AggregateUDF, Between, Expr, Filter, LogicalPlan, ScalarUDF, TableSource, WindowUDF,
 };
 use datafusion_optimizer::analyzer::{Analyzer, AnalyzerRule};
 use datafusion_optimizer::optimizer::Optimizer;
@@ -191,7 +191,7 @@ struct MyContextProvider {
 }
 
 impl ContextProvider for MyContextProvider {
-    fn get_table_provider(&self, name: TableReference) -> Result<Arc<dyn TableSource>> {
+    fn get_table_source(&self, name: TableReference) -> Result<Arc<dyn TableSource>> {
         if name.table() == "person" {
             Ok(Arc::new(MyTableSource {
                 schema: Arc::new(Schema::new(vec![
@@ -200,7 +200,7 @@ impl ContextProvider for MyContextProvider {
                 ])),
             }))
         } else {
-            Err(DataFusionError::Plan("table not found".to_string()))
+            plan_err!("table not found")
         }
     }
 
@@ -213,6 +213,10 @@ impl ContextProvider for MyContextProvider {
     }
 
     fn get_variable_type(&self, _variable_names: &[String]) -> Option<DataType> {
+        None
+    }
+
+    fn get_window_meta(&self, _name: &str) -> Option<Arc<WindowUDF>> {
         None
     }
 

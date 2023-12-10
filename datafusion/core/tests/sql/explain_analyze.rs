@@ -16,8 +16,10 @@
 // under the License.
 
 use super::*;
+
 use datafusion::config::ConfigOptions;
 use datafusion::physical_plan::display::DisplayableExecutionPlan;
+use datafusion::physical_plan::metrics::Timestamp;
 
 #[tokio::test]
 async fn explain_analyze_baseline_metrics() {
@@ -26,7 +28,7 @@ async fn explain_analyze_baseline_metrics() {
     let config = SessionConfig::new()
         .with_target_partitions(3)
         .with_batch_size(4096);
-    let ctx = SessionContext::with_config(config);
+    let ctx = SessionContext::new_with_config(config);
     register_aggregate_csv_by_sql(&ctx).await;
     // a query with as many operators as we have metrics for
     let sql = "EXPLAIN ANALYZE \
@@ -78,7 +80,7 @@ async fn explain_analyze_baseline_metrics() {
     );
     assert_metrics!(
         &formatted,
-        "ProjectionExec: expr=[COUNT(UInt8(1))",
+        "ProjectionExec: expr=[COUNT(*)",
         "metrics=[output_rows=1, elapsed_compute="
     );
     assert_metrics!(
@@ -142,11 +144,11 @@ async fn explain_analyze_baseline_metrics() {
             metrics.iter().for_each(|m| match m.value() {
                 MetricValue::StartTimestamp(ts) => {
                     saw_start = true;
-                    assert!(ts.value().unwrap().timestamp_nanos() > 0);
+                    assert!(nanos_from_timestamp(ts) > 0);
                 }
                 MetricValue::EndTimestamp(ts) => {
                     saw_end = true;
-                    assert!(ts.value().unwrap().timestamp_nanos() > 0);
+                    assert!(nanos_from_timestamp(ts) > 0);
                 }
                 _ => {}
             });
@@ -161,7 +163,9 @@ async fn explain_analyze_baseline_metrics() {
     datafusion::physical_plan::accept(physical_plan.as_ref(), &mut TimeValidator {})
         .unwrap();
 }
-
+fn nanos_from_timestamp(ts: &Timestamp) -> i64 {
+    ts.value().unwrap().timestamp_nanos_opt().unwrap()
+}
 #[tokio::test]
 async fn csv_explain_plans() {
     // This test verify the look of each plan in its full cycle plan creation
@@ -210,7 +214,9 @@ async fn csv_explain_plans() {
     //
     // verify the grahviz format of the plan
     let expected = vec![
-        "// Begin DataFusion GraphViz Plan (see https://graphviz.org)",
+        "// Begin DataFusion GraphViz Plan,",
+        "// display it online here: https://dreampuf.github.io/GraphvizOnline",
+        "",
         "digraph {",
         "  subgraph cluster_1",
         "  {",
@@ -282,7 +288,9 @@ async fn csv_explain_plans() {
     //
     // verify the grahviz format of the plan
     let expected = vec![
-        "// Begin DataFusion GraphViz Plan (see https://graphviz.org)",
+        "// Begin DataFusion GraphViz Plan,",
+        "// display it online here: https://dreampuf.github.io/GraphvizOnline",
+        "",
         "digraph {",
         "  subgraph cluster_1",
         "  {",
@@ -427,7 +435,9 @@ async fn csv_explain_verbose_plans() {
     //
     // verify the grahviz format of the plan
     let expected = vec![
-        "// Begin DataFusion GraphViz Plan (see https://graphviz.org)",
+        "// Begin DataFusion GraphViz Plan,",
+        "// display it online here: https://dreampuf.github.io/GraphvizOnline",
+        "",
         "digraph {",
         "  subgraph cluster_1",
         "  {",
@@ -499,7 +509,9 @@ async fn csv_explain_verbose_plans() {
     //
     // verify the grahviz format of the plan
     let expected = vec![
-        "// Begin DataFusion GraphViz Plan (see https://graphviz.org)",
+        "// Begin DataFusion GraphViz Plan,",
+        "// display it online here: https://dreampuf.github.io/GraphvizOnline",
+        "",
         "digraph {",
         "  subgraph cluster_1",
         "  {",
@@ -548,7 +560,7 @@ async fn csv_explain_verbose_plans() {
     // Since the plan contains path that are environmentally
     // dependant(e.g. full path of the test file), only verify
     // important content
-    assert_contains!(&actual, "logical_plan after push_down_projection");
+    assert_contains!(&actual, "logical_plan after optimize_projections");
     assert_contains!(&actual, "physical_plan");
     assert_contains!(&actual, "FilterExec: c2@1 > 10");
     assert_contains!(actual, "ProjectionExec: expr=[c1@0 as c1]");
@@ -563,7 +575,7 @@ async fn explain_analyze_runs_optimizers() {
 
     // This happens as an optimization pass where count(*) can be
     // answered using statistics only.
-    let expected = "EmptyExec: produce_one_row=true";
+    let expected = "PlaceholderRowExec";
 
     let sql = "EXPLAIN SELECT count(*) from alltypes_plain";
     let actual = execute_to_batches(&ctx, sql).await;
@@ -587,7 +599,7 @@ async fn test_physical_plan_display_indent() {
     let config = SessionConfig::new()
         .with_target_partitions(9000)
         .with_batch_size(4096);
-    let ctx = SessionContext::with_config(config);
+    let ctx = SessionContext::new_with_config(config);
     register_aggregate_csv(&ctx).await.unwrap();
     let sql = "SELECT c1, MAX(c12), MIN(c12) as the_min \
                FROM aggregate_test_100 \
@@ -599,12 +611,12 @@ async fn test_physical_plan_display_indent() {
     let physical_plan = dataframe.create_physical_plan().await.unwrap();
     let expected = vec![
         "GlobalLimitExec: skip=0, fetch=10",
-        "  SortPreservingMergeExec: [the_min@2 DESC]",
-        "    SortExec: fetch=10, expr=[the_min@2 DESC]",
+        "  SortPreservingMergeExec: [the_min@2 DESC], fetch=10",
+        "    SortExec: TopK(fetch=10), expr=[the_min@2 DESC]",
         "      ProjectionExec: expr=[c1@0 as c1, MAX(aggregate_test_100.c12)@1 as MAX(aggregate_test_100.c12), MIN(aggregate_test_100.c12)@2 as the_min]",
         "        AggregateExec: mode=FinalPartitioned, gby=[c1@0 as c1], aggr=[MAX(aggregate_test_100.c12), MIN(aggregate_test_100.c12)]",
         "          CoalesceBatchesExec: target_batch_size=4096",
-        "            RepartitionExec: partitioning=Hash([Column { name: \"c1\", index: 0 }], 9000), input_partitions=9000",
+        "            RepartitionExec: partitioning=Hash([c1@0], 9000), input_partitions=9000",
         "              AggregateExec: mode=Partial, gby=[c1@0 as c1], aggr=[MAX(aggregate_test_100.c12), MIN(aggregate_test_100.c12)]",
         "                CoalesceBatchesExec: target_batch_size=4096",
         "                  FilterExec: c12@1 < 10",
@@ -613,7 +625,7 @@ async fn test_physical_plan_display_indent() {
     ];
 
     let normalizer = ExplainNormalizer::new();
-    let actual = format!("{}", displayable(physical_plan.as_ref()).indent())
+    let actual = format!("{}", displayable(physical_plan.as_ref()).indent(true))
         .trim()
         .lines()
         // normalize paths
@@ -631,7 +643,7 @@ async fn test_physical_plan_display_indent_multi_children() {
     let config = SessionConfig::new()
         .with_target_partitions(9000)
         .with_batch_size(4096);
-    let ctx = SessionContext::with_config(config);
+    let ctx = SessionContext::new_with_config(config);
     // ensure indenting works for nodes with multiple children
     register_aggregate_csv(&ctx).await.unwrap();
     let sql = "SELECT c1 \
@@ -646,20 +658,20 @@ async fn test_physical_plan_display_indent_multi_children() {
     let expected = vec![
         "ProjectionExec: expr=[c1@0 as c1]",
         "  CoalesceBatchesExec: target_batch_size=4096",
-        "    HashJoinExec: mode=Partitioned, join_type=Inner, on=[(Column { name: \"c1\", index: 0 }, Column { name: \"c2\", index: 0 })]",
+        "    HashJoinExec: mode=Partitioned, join_type=Inner, on=[(c1@0, c2@0)]",
         "      CoalesceBatchesExec: target_batch_size=4096",
-        "        RepartitionExec: partitioning=Hash([Column { name: \"c1\", index: 0 }], 9000), input_partitions=9000",
+        "        RepartitionExec: partitioning=Hash([c1@0], 9000), input_partitions=9000",
         "          RepartitionExec: partitioning=RoundRobinBatch(9000), input_partitions=1",
         "            CsvExec: file_groups={1 group: [[ARROW_TEST_DATA/csv/aggregate_test_100.csv]]}, projection=[c1], has_header=true",
         "      CoalesceBatchesExec: target_batch_size=4096",
-        "        RepartitionExec: partitioning=Hash([Column { name: \"c2\", index: 0 }], 9000), input_partitions=9000",
+        "        RepartitionExec: partitioning=Hash([c2@0], 9000), input_partitions=9000",
         "          RepartitionExec: partitioning=RoundRobinBatch(9000), input_partitions=1",
         "            ProjectionExec: expr=[c1@0 as c2]",
         "              CsvExec: file_groups={1 group: [[ARROW_TEST_DATA/csv/aggregate_test_100.csv]]}, projection=[c1], has_header=true",
     ];
 
     let normalizer = ExplainNormalizer::new();
-    let actual = format!("{}", displayable(physical_plan.as_ref()).indent())
+    let actual = format!("{}", displayable(physical_plan.as_ref()).indent(true))
         .trim()
         .lines()
         // normalize paths
@@ -687,7 +699,7 @@ async fn csv_explain_analyze() {
     // Only test basic plumbing and try to avoid having to change too
     // many things. explain_analyze_baseline_metrics covers the values
     // in greater depth
-    let needle = "AggregateExec: mode=FinalPartitioned, gby=[c1@0 as c1], aggr=[COUNT(UInt8(1))], metrics=[output_rows=5";
+    let needle = "AggregateExec: mode=FinalPartitioned, gby=[c1@0 as c1], aggr=[COUNT(*)], metrics=[output_rows=5";
     assert_contains!(&formatted, needle);
 
     let verbose_needle = "Output Rows";
@@ -766,7 +778,7 @@ async fn csv_explain_analyze_verbose() {
 async fn explain_logical_plan_only() {
     let mut config = ConfigOptions::new();
     config.explain.logical_plan_only = true;
-    let ctx = SessionContext::with_config(config.into());
+    let ctx = SessionContext::new_with_config(config.into());
     let sql = "EXPLAIN select count(*) from (values ('a', 1, 100), ('a', 2, 150)) as t (c1,c2,c3)";
     let actual = execute(&ctx, sql).await;
     let actual = normalize_vec_for_explain(actual);
@@ -774,9 +786,9 @@ async fn explain_logical_plan_only() {
     let expected = vec![
         vec![
             "logical_plan",
-            "Aggregate: groupBy=[[]], aggr=[[COUNT(UInt8(1))]]\
+            "Aggregate: groupBy=[[]], aggr=[[COUNT(UInt8(1)) AS COUNT(*)]]\
             \n  SubqueryAlias: t\
-            \n    Projection: column1\
+            \n    Projection: \
             \n      Values: (Utf8(\"a\"), Int64(1), Int64(100)), (Utf8(\"a\"), Int64(2), Int64(150))"
         ]];
     assert_eq!(expected, actual);
@@ -786,16 +798,37 @@ async fn explain_logical_plan_only() {
 async fn explain_physical_plan_only() {
     let mut config = ConfigOptions::new();
     config.explain.physical_plan_only = true;
-    let ctx = SessionContext::with_config(config.into());
+    let ctx = SessionContext::new_with_config(config.into());
     let sql = "EXPLAIN select count(*) from (values ('a', 1, 100), ('a', 2, 150)) as t (c1,c2,c3)";
     let actual = execute(&ctx, sql).await;
     let actual = normalize_vec_for_explain(actual);
 
     let expected = vec![vec![
         "physical_plan",
-        "ProjectionExec: expr=[2 as COUNT(UInt8(1))]\
-        \n  EmptyExec: produce_one_row=true\
+        "ProjectionExec: expr=[2 as COUNT(*)]\
+        \n  PlaceholderRowExec\
         \n",
     ]];
     assert_eq!(expected, actual);
+}
+
+#[tokio::test]
+async fn csv_explain_analyze_with_statistics() {
+    let mut config = ConfigOptions::new();
+    config.explain.physical_plan_only = true;
+    config.explain.show_statistics = true;
+    let ctx = SessionContext::new_with_config(config.into());
+    register_aggregate_csv_by_sql(&ctx).await;
+
+    let sql = "EXPLAIN ANALYZE SELECT c1 FROM aggregate_test_100";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let formatted = arrow::util::pretty::pretty_format_batches(&actual)
+        .unwrap()
+        .to_string();
+
+    // should contain scan statistics
+    assert_contains!(
+        &formatted,
+        ", statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:)]]"
+    );
 }

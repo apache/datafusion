@@ -18,6 +18,7 @@
 //! NoOp placeholder for physical operations
 
 use std::any::Any;
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 use arrow::{
@@ -27,13 +28,13 @@ use arrow::{
 
 use crate::physical_expr::down_cast_any_ref;
 use crate::PhysicalExpr;
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::{internal_err, DataFusionError, Result};
 use datafusion_expr::ColumnarValue;
 
 /// A place holder expression, can not be evaluated.
 ///
 /// Used in some cases where an `Arc<dyn PhysicalExpr>` is needed, such as `children()`
-#[derive(Debug, PartialEq, Eq, Default)]
+#[derive(Debug, PartialEq, Eq, Default, Hash)]
 pub struct NoOp {}
 
 impl NoOp {
@@ -64,9 +65,7 @@ impl PhysicalExpr for NoOp {
     }
 
     fn evaluate(&self, _batch: &RecordBatch) -> Result<ColumnarValue> {
-        Err(DataFusionError::Plan(
-            "NoOp::evaluate() should not be called".to_owned(),
-        ))
+        internal_err!("NoOp::evaluate() should not be called")
     }
 
     fn children(&self) -> Vec<Arc<dyn PhysicalExpr>> {
@@ -78,6 +77,11 @@ impl PhysicalExpr for NoOp {
         _children: Vec<Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn PhysicalExpr>> {
         Ok(self)
+    }
+
+    fn dyn_hash(&self, state: &mut dyn Hasher) {
+        let mut s = state;
+        self.hash(&mut s);
     }
 }
 

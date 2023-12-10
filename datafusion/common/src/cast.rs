@@ -34,6 +34,7 @@ use arrow::{
     },
     datatypes::{ArrowDictionaryKeyType, ArrowPrimitiveType},
 };
+use arrow_array::Decimal256Array;
 
 // Downcast ArrayRef to Date32Array
 pub fn as_date32_array(array: &dyn Array) -> Result<&Date32Array> {
@@ -63,6 +64,11 @@ pub fn as_int64_array(array: &dyn Array) -> Result<&Int64Array> {
 // Downcast ArrayRef to Decimal128Array
 pub fn as_decimal128_array(array: &dyn Array) -> Result<&Decimal128Array> {
     Ok(downcast_value!(array, Decimal128Array))
+}
+
+// Downcast ArrayRef to Decimal256Array
+pub fn as_decimal256_array(array: &dyn Array) -> Result<&Decimal256Array> {
+    Ok(downcast_value!(array, Decimal256Array))
 }
 
 // Downcast ArrayRef to Float32Array
@@ -175,23 +181,17 @@ pub fn as_timestamp_second_array(array: &dyn Array) -> Result<&TimestampSecondAr
 }
 
 // Downcast ArrayRef to IntervalYearMonthArray
-pub fn as_interval_ym_array(
-    array: &dyn Array,
-) -> Result<&IntervalYearMonthArray, DataFusionError> {
+pub fn as_interval_ym_array(array: &dyn Array) -> Result<&IntervalYearMonthArray> {
     Ok(downcast_value!(array, IntervalYearMonthArray))
 }
 
 // Downcast ArrayRef to IntervalDayTimeArray
-pub fn as_interval_dt_array(
-    array: &dyn Array,
-) -> Result<&IntervalDayTimeArray, DataFusionError> {
+pub fn as_interval_dt_array(array: &dyn Array) -> Result<&IntervalDayTimeArray> {
     Ok(downcast_value!(array, IntervalDayTimeArray))
 }
 
 // Downcast ArrayRef to IntervalMonthDayNanoArray
-pub fn as_interval_mdn_array(
-    array: &dyn Array,
-) -> Result<&IntervalMonthDayNanoArray, DataFusionError> {
+pub fn as_interval_mdn_array(array: &dyn Array) -> Result<&IntervalMonthDayNanoArray> {
     Ok(downcast_value!(array, IntervalMonthDayNanoArray))
 }
 

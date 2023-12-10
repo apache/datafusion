@@ -15,12 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::signature::TIMEZONE_WILDCARD;
 use crate::{Signature, TypeSignature};
 use arrow::{
     compute::can_cast_types,
     datatypes::{DataType, TimeUnit},
 };
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::{plan_err, DataFusionError, Result};
 
 /// Performs type coercion for function arguments.
 ///
@@ -34,8 +35,17 @@ pub fn data_types(
     signature: &Signature,
 ) -> Result<Vec<DataType>> {
     if current_types.is_empty() {
-        return Ok(vec![]);
+        if signature.type_signature.supports_zero_argument() {
+            return Ok(vec![]);
+        } else {
+            return plan_err!(
+                "Coercion from {:?} to the signature {:?} failed.",
+                current_types,
+                &signature.type_signature
+            );
+        }
     }
+
     let valid_types = get_valid_types(&signature.type_signature, current_types)?;
 
     if valid_types
@@ -45,6 +55,8 @@ pub fn data_types(
         return Ok(current_types.to_vec());
     }
 
+    // Try and coerce the argument types to match the signature, returning the
+    // coerced types from the first matching signature.
     for valid_types in valid_types {
         if let Some(types) = maybe_data_types(&valid_types, current_types) {
             return Ok(types);
@@ -52,12 +64,14 @@ pub fn data_types(
     }
 
     // none possible -> Error
-    Err(DataFusionError::Plan(format!(
+    plan_err!(
         "Coercion from {:?} to the signature {:?} failed.",
-        current_types, &signature.type_signature
-    )))
+        current_types,
+        &signature.type_signature
+    )
 }
 
+/// Returns a Vec of all possible valid argument types for the given signature.
 fn get_valid_types(
     signature: &TypeSignature,
     current_types: &[DataType],
@@ -84,11 +98,11 @@ fn get_valid_types(
         TypeSignature::Exact(valid_types) => vec![valid_types.clone()],
         TypeSignature::Any(number) => {
             if current_types.len() != *number {
-                return Err(DataFusionError::Plan(format!(
+                return plan_err!(
                     "The function expected {} arguments but received {}",
                     number,
                     current_types.len()
-                )));
+                );
             }
             vec![(0..*number).map(|i| current_types[i].clone()).collect()]
         }
@@ -102,7 +116,12 @@ fn get_valid_types(
     Ok(valid_types)
 }
 
-/// Try to coerce current_types into valid_types.
+/// Try to coerce the current argument types to match the given `valid_types`.
+///
+/// For example, if a function `func` accepts arguments of  `(int64, int64)`,
+/// but was called with `(int32, int64)`, this function could match the
+/// valid_types by coercing the first argument to `int64`, and would return
+/// `Some([int64, int64])`.
 fn maybe_data_types(
     valid_types: &[DataType],
     current_types: &[DataType],
@@ -119,8 +138,8 @@ fn maybe_data_types(
             new_type.push(current_type.clone())
         } else {
             // attempt to coerce
-            if can_coerce_from(valid_type, current_type) {
-                new_type.push(valid_type.clone())
+            if let Some(valid_type) = coerced_from(valid_type, current_type) {
+                new_type.push(valid_type)
             } else {
                 // not possible
                 return None;
@@ -135,69 +154,123 @@ fn maybe_data_types(
 ///
 /// See the module level documentation for more detail on coercion.
 pub fn can_coerce_from(type_into: &DataType, type_from: &DataType) -> bool {
-    use self::DataType::*;
-
     if type_into == type_from {
         return true;
     }
-    // Null can convert to most of types
+    if let Some(coerced) = coerced_from(type_into, type_from) {
+        return coerced == *type_into;
+    }
+    false
+}
+
+fn coerced_from<'a>(
+    type_into: &'a DataType,
+    type_from: &'a DataType,
+) -> Option<DataType> {
+    use self::DataType::*;
+
     match type_into {
-        Int8 => matches!(type_from, Null | Int8),
-        Int16 => matches!(type_from, Null | Int8 | Int16 | UInt8),
-        Int32 => matches!(type_from, Null | Int8 | Int16 | Int32 | UInt8 | UInt16),
-        Int64 => matches!(
-            type_from,
-            Null | Int8 | Int16 | Int32 | Int64 | UInt8 | UInt16 | UInt32
-        ),
-        UInt8 => matches!(type_from, Null | UInt8),
-        UInt16 => matches!(type_from, Null | UInt8 | UInt16),
-        UInt32 => matches!(type_from, Null | UInt8 | UInt16 | UInt32),
-        UInt64 => matches!(type_from, Null | UInt8 | UInt16 | UInt32 | UInt64),
-        Float32 => matches!(
-            type_from,
-            Null | Int8
-                | Int16
-                | Int32
-                | Int64
-                | UInt8
-                | UInt16
-                | UInt32
-                | UInt64
-                | Float32
-        ),
-        Float64 => matches!(
-            type_from,
-            Null | Int8
-                | Int16
-                | Int32
-                | Int64
-                | UInt8
-                | UInt16
-                | UInt32
-                | UInt64
-                | Float32
-                | Float64
-                | Decimal128(_, _)
-        ),
-        Timestamp(TimeUnit::Nanosecond, _) => {
-            matches!(
+        // coerced into type_into
+        Int8 if matches!(type_from, Null | Int8) => Some(type_into.clone()),
+        Int16 if matches!(type_from, Null | Int8 | Int16 | UInt8) => {
+            Some(type_into.clone())
+        }
+        Int32 if matches!(type_from, Null | Int8 | Int16 | Int32 | UInt8 | UInt16) => {
+            Some(type_into.clone())
+        }
+        Int64
+            if matches!(
+                type_from,
+                Null | Int8 | Int16 | Int32 | Int64 | UInt8 | UInt16 | UInt32
+            ) =>
+        {
+            Some(type_into.clone())
+        }
+        UInt8 if matches!(type_from, Null | UInt8) => Some(type_into.clone()),
+        UInt16 if matches!(type_from, Null | UInt8 | UInt16) => Some(type_into.clone()),
+        UInt32 if matches!(type_from, Null | UInt8 | UInt16 | UInt32) => {
+            Some(type_into.clone())
+        }
+        UInt64 if matches!(type_from, Null | UInt8 | UInt16 | UInt32 | UInt64) => {
+            Some(type_into.clone())
+        }
+        Float32
+            if matches!(
+                type_from,
+                Null | Int8
+                    | Int16
+                    | Int32
+                    | Int64
+                    | UInt8
+                    | UInt16
+                    | UInt32
+                    | UInt64
+                    | Float32
+            ) =>
+        {
+            Some(type_into.clone())
+        }
+        Float64
+            if matches!(
+                type_from,
+                Null | Int8
+                    | Int16
+                    | Int32
+                    | Int64
+                    | UInt8
+                    | UInt16
+                    | UInt32
+                    | UInt64
+                    | Float32
+                    | Float64
+                    | Decimal128(_, _)
+            ) =>
+        {
+            Some(type_into.clone())
+        }
+        Timestamp(TimeUnit::Nanosecond, None)
+            if matches!(
+                type_from,
+                Null | Timestamp(_, None) | Date32 | Utf8 | LargeUtf8
+            ) =>
+        {
+            Some(type_into.clone())
+        }
+        Interval(_) if matches!(type_from, Utf8 | LargeUtf8) => Some(type_into.clone()),
+        // Any type can be coerced into strings
+        Utf8 | LargeUtf8 => Some(type_into.clone()),
+        Null if can_cast_types(type_from, type_into) => Some(type_into.clone()),
+
+        Timestamp(unit, Some(tz)) if tz.as_ref() == TIMEZONE_WILDCARD => {
+            match type_from {
+                Timestamp(_, Some(from_tz)) => {
+                    Some(Timestamp(unit.clone(), Some(from_tz.clone())))
+                }
+                Null | Date32 | Utf8 | LargeUtf8 | Timestamp(_, None) => {
+                    // In the absence of any other information assume the time zone is "+00" (UTC).
+                    Some(Timestamp(unit.clone(), Some("+00".into())))
+                }
+                _ => None,
+            }
+        }
+        Timestamp(_, Some(_))
+            if matches!(
                 type_from,
                 Null | Timestamp(_, _) | Date32 | Utf8 | LargeUtf8
-            )
+            ) =>
+        {
+            Some(type_into.clone())
         }
-        Interval(_) => {
-            matches!(type_from, Utf8 | LargeUtf8)
-        }
-        Utf8 | LargeUtf8 => true,
-        Null => can_cast_types(type_from, type_into),
-        _ => false,
+
+        // cannot coerce
+        _ => None,
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::datatypes::DataType;
+    use arrow::datatypes::{DataType, TimeUnit};
 
     #[test]
     fn test_maybe_data_types() {
@@ -228,6 +301,20 @@ mod tests {
                 vec![DataType::Boolean, DataType::UInt32],
                 vec![DataType::Boolean, DataType::UInt16],
                 Some(vec![DataType::Boolean, DataType::UInt32]),
+            ),
+            // UTF8 -> Timestamp
+            (
+                vec![
+                    DataType::Timestamp(TimeUnit::Nanosecond, None),
+                    DataType::Timestamp(TimeUnit::Nanosecond, Some("+TZ".into())),
+                    DataType::Timestamp(TimeUnit::Nanosecond, Some("+01".into())),
+                ],
+                vec![DataType::Utf8, DataType::Utf8, DataType::Utf8],
+                Some(vec![
+                    DataType::Timestamp(TimeUnit::Nanosecond, None),
+                    DataType::Timestamp(TimeUnit::Nanosecond, Some("+00".into())),
+                    DataType::Timestamp(TimeUnit::Nanosecond, Some("+01".into())),
+                ]),
             ),
         ];
 

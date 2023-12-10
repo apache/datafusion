@@ -22,7 +22,7 @@ use datafusion_common::{DataFusionError, Result};
 use log::debug;
 use parking_lot::Mutex;
 use rand::{thread_rng, Rng};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tempfile::{Builder, NamedTempFile, TempDir};
 
@@ -75,7 +75,7 @@ pub struct DiskManager {
     ///
     /// If `Some(vec![])` a new OS specified temporary directory will be created
     /// If `None` an error will be returned (configured not to spill)
-    local_dirs: Mutex<Option<Vec<TempDir>>>,
+    local_dirs: Mutex<Option<Vec<Arc<TempDir>>>>,
 }
 
 impl DiskManager {
@@ -102,11 +102,21 @@ impl DiskManager {
         }
     }
 
+    /// Return true if this disk manager supports creating temporary
+    /// files. If this returns false, any call to `create_tmp_file`
+    /// will error.
+    pub fn tmp_files_enabled(&self) -> bool {
+        self.local_dirs.lock().is_some()
+    }
+
     /// Return a temporary file from a randomized choice in the configured locations
     ///
     /// If the file can not be created for some reason, returns an
     /// error message referencing the request description
-    pub fn create_tmp_file(&self, request_description: &str) -> Result<NamedTempFile> {
+    pub fn create_tmp_file(
+        &self,
+        request_description: &str,
+    ) -> Result<RefCountedTempFile> {
         let mut guard = self.local_dirs.lock();
         let local_dirs = guard.as_mut().ok_or_else(|| {
             DataFusionError::ResourcesExhausted(format!(
@@ -124,18 +134,42 @@ impl DiskManager {
                 request_description,
             );
 
-            local_dirs.push(tempdir);
+            local_dirs.push(Arc::new(tempdir));
         }
 
         let dir_index = thread_rng().gen_range(0..local_dirs.len());
-        Builder::new()
-            .tempfile_in(&local_dirs[dir_index])
-            .map_err(DataFusionError::IoError)
+        Ok(RefCountedTempFile {
+            parent_temp_dir: local_dirs[dir_index].clone(),
+            tempfile: Builder::new()
+                .tempfile_in(local_dirs[dir_index].as_ref())
+                .map_err(DataFusionError::IoError)?,
+        })
+    }
+}
+
+/// A wrapper around a [`NamedTempFile`] that also contains
+/// a reference to its parent temporary directory
+#[derive(Debug)]
+pub struct RefCountedTempFile {
+    /// The reference to the directory in which temporary files are created to ensure
+    /// it is not cleaned up prior to the NamedTempFile
+    #[allow(dead_code)]
+    parent_temp_dir: Arc<TempDir>,
+    tempfile: NamedTempFile,
+}
+
+impl RefCountedTempFile {
+    pub fn path(&self) -> &Path {
+        self.tempfile.path()
+    }
+
+    pub fn inner(&self) -> &NamedTempFile {
+        &self.tempfile
     }
 }
 
 /// Setup local dirs by creating one new dir in each of the given dirs
-fn create_local_dirs(local_dirs: Vec<PathBuf>) -> Result<Vec<TempDir>> {
+fn create_local_dirs(local_dirs: Vec<PathBuf>) -> Result<Vec<Arc<TempDir>>> {
     local_dirs
         .iter()
         .map(|root| {
@@ -147,6 +181,7 @@ fn create_local_dirs(local_dirs: Vec<PathBuf>) -> Result<Vec<TempDir>> {
                 .tempdir_in(root)
                 .map_err(DataFusionError::IoError)
         })
+        .map(|result| result.map(Arc::new))
         .collect()
 }
 
@@ -198,6 +233,7 @@ mod tests {
         );
 
         let dm = DiskManager::try_new(config)?;
+        assert!(dm.tmp_files_enabled());
         let actual = dm.create_tmp_file("Testing")?;
 
         // the file should be in one of the specified local directories
@@ -210,8 +246,9 @@ mod tests {
     fn test_disabled_disk_manager() {
         let config = DiskManagerConfig::Disabled;
         let manager = DiskManager::try_new(config).unwrap();
+        assert!(!manager.tmp_files_enabled());
         assert_eq!(
-            manager.create_tmp_file("Testing").unwrap_err().to_string(),
+            manager.create_tmp_file("Testing").unwrap_err().strip_backtrace(),
             "Resources exhausted: Memory Exhausted while Testing (DiskManager is disabled)",
         )
     }
@@ -240,5 +277,42 @@ mod tests {
         });
 
         assert!(found, "Can't find {file_path:?} in dirs: {dirs:?}");
+    }
+
+    #[test]
+    fn test_temp_file_still_alive_after_disk_manager_dropped() -> Result<()> {
+        // Test for the case using OS arranged temporary directory
+        let config = DiskManagerConfig::new();
+        let dm = DiskManager::try_new(config)?;
+        let temp_file = dm.create_tmp_file("Testing")?;
+        let temp_file_path = temp_file.path().to_owned();
+        assert!(temp_file_path.exists());
+
+        drop(dm);
+        assert!(temp_file_path.exists());
+
+        drop(temp_file);
+        assert!(!temp_file_path.exists());
+
+        // Test for the case using specified directories
+        let local_dir1 = TempDir::new()?;
+        let local_dir2 = TempDir::new()?;
+        let local_dir3 = TempDir::new()?;
+        let local_dirs = [local_dir1.path(), local_dir2.path(), local_dir3.path()];
+        let config = DiskManagerConfig::new_specified(
+            local_dirs.iter().map(|p| p.into()).collect(),
+        );
+        let dm = DiskManager::try_new(config)?;
+        let temp_file = dm.create_tmp_file("Testing")?;
+        let temp_file_path = temp_file.path().to_owned();
+        assert!(temp_file_path.exists());
+
+        drop(dm);
+        assert!(temp_file_path.exists());
+
+        drop(temp_file);
+        assert!(!temp_file_path.exists());
+
+        Ok(())
     }
 }

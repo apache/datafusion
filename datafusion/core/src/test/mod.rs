@@ -17,39 +17,42 @@
 
 //! Common unit test utility methods
 
-use crate::arrow::array::UInt32Array;
-use crate::datasource::file_format::file_type::{FileCompressionType, FileType};
+use std::any::Any;
+use std::fs::File;
+use std::io::prelude::*;
+use std::io::{BufReader, BufWriter};
+use std::path::Path;
+use std::sync::Arc;
+
+use crate::datasource::file_format::file_compression_type::{
+    FileCompressionType, FileTypeExt,
+};
 use crate::datasource::listing::PartitionedFile;
 use crate::datasource::object_store::ObjectStoreUrl;
 use crate::datasource::physical_plan::{CsvExec, FileScanConfig};
 use crate::datasource::{MemTable, TableProvider};
 use crate::error::Result;
 use crate::logical_expr::LogicalPlan;
-use crate::physical_plan::memory::MemoryExec;
 use crate::physical_plan::ExecutionPlan;
 use crate::test::object_store::local_unpartitioned_file;
 use crate::test_util::{aggr_test_schema, arrow_test_data};
-use array::ArrayRef;
-use arrow::array::{self, Array, Decimal128Builder, Int32Array};
+
+use arrow::array::{self, Array, ArrayRef, Decimal128Builder, Int32Array};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-use arrow::record_batch::{RecordBatch, RecordBatchOptions};
+use arrow::record_batch::RecordBatch;
+use datafusion_common::{DataFusionError, FileType, Statistics};
+use datafusion_execution::{SendableRecordBatchStream, TaskContext};
+use datafusion_physical_expr::{Partitioning, PhysicalSortExpr};
+use datafusion_physical_plan::{DisplayAs, DisplayFormatType};
+
 #[cfg(feature = "compression")]
 use bzip2::write::BzEncoder;
 #[cfg(feature = "compression")]
 use bzip2::Compression as BzCompression;
-use datafusion_common::{DataFusionError, Statistics};
-use datafusion_physical_expr::PhysicalSortExpr;
 #[cfg(feature = "compression")]
 use flate2::write::GzEncoder;
 #[cfg(feature = "compression")]
 use flate2::Compression as GzCompression;
-use futures::{Future, FutureExt};
-use std::fs::File;
-use std::io::prelude::*;
-use std::io::{BufReader, BufWriter};
-use std::pin::Pin;
-use std::sync::Arc;
-use tempfile::TempDir;
 #[cfg(feature = "compression")]
 use xz2::write::XzEncoder;
 #[cfg(feature = "compression")]
@@ -73,7 +76,7 @@ pub fn create_table_dual() -> Arc<dyn TableProvider> {
 }
 
 /// Returns a [`CsvExec`] that scans "aggregate_test_100.csv" with `partitions` partitions
-pub fn scan_partitioned_csv(partitions: usize) -> Result<Arc<CsvExec>> {
+pub fn scan_partitioned_csv(partitions: usize, work_dir: &Path) -> Result<Arc<CsvExec>> {
     let schema = aggr_test_schema();
     let filename = "aggregate_test_100.csv";
     let path = format!("{}/csv", arrow_test_data());
@@ -83,12 +86,15 @@ pub fn scan_partitioned_csv(partitions: usize) -> Result<Arc<CsvExec>> {
         partitions,
         FileType::CSV,
         FileCompressionType::UNCOMPRESSED,
+        work_dir,
     )?;
     let config = partitioned_csv_config(schema, file_groups)?;
     Ok(Arc::new(CsvExec::new(
         config,
         true,
         b',',
+        b'"',
+        None,
         FileCompressionType::UNCOMPRESSED,
     )))
 }
@@ -100,10 +106,9 @@ pub fn partitioned_file_groups(
     partitions: usize,
     file_type: FileType,
     file_compression_type: FileCompressionType,
+    work_dir: &Path,
 ) -> Result<Vec<Vec<PartitionedFile>>> {
     let path = format!("{path}/{filename}");
-
-    let tmp_dir = TempDir::new()?.into_path();
 
     let mut writers = vec![];
     let mut files = vec![];
@@ -116,7 +121,7 @@ pub fn partitioned_file_groups(
                 .get_ext_with_compression(file_compression_type.to_owned())
                 .unwrap()
         );
-        let filename = tmp_dir.join(filename);
+        let filename = work_dir.join(filename);
 
         let file = File::create(&filename).unwrap();
 
@@ -171,7 +176,10 @@ pub fn partitioned_file_groups(
             writers[partition].write_all(b"\n").unwrap();
         }
     }
-    for w in writers.iter_mut() {
+
+    // Must drop the stream before creating ObjectMeta below as drop
+    // triggers finish for ZstdEncoder which writes additional data
+    for mut w in writers.into_iter() {
         w.flush().unwrap();
     }
 
@@ -188,9 +196,9 @@ pub fn partitioned_csv_config(
 ) -> Result<FileScanConfig> {
     Ok(FileScanConfig {
         object_store_url: ObjectStoreUrl::local_filesystem(),
-        file_schema: schema,
+        file_schema: schema.clone(),
         file_groups,
-        statistics: Default::default(),
+        statistics: Statistics::new_unknown(&schema),
         projection: None,
         limit: None,
         table_partition_cols: vec![],
@@ -207,40 +215,6 @@ pub fn assert_fields_eq(plan: &LogicalPlan, expected: Vec<&str>) {
         .map(|f| f.name().clone())
         .collect();
     assert_eq!(actual, expected);
-}
-
-/// returns record batch with 3 columns of i32 in memory
-pub fn build_table_i32(
-    a: (&str, &Vec<i32>),
-    b: (&str, &Vec<i32>),
-    c: (&str, &Vec<i32>),
-) -> RecordBatch {
-    let schema = Schema::new(vec![
-        Field::new(a.0, DataType::Int32, false),
-        Field::new(b.0, DataType::Int32, false),
-        Field::new(c.0, DataType::Int32, false),
-    ]);
-
-    RecordBatch::try_new(
-        Arc::new(schema),
-        vec![
-            Arc::new(Int32Array::from(a.1.clone())),
-            Arc::new(Int32Array::from(b.1.clone())),
-            Arc::new(Int32Array::from(c.1.clone())),
-        ],
-    )
-    .unwrap()
-}
-
-/// returns memory table scan wrapped around record batch with 3 columns of i32
-pub fn build_table_scan_i32(
-    a: (&str, &Vec<i32>),
-    b: (&str, &Vec<i32>),
-    c: (&str, &Vec<i32>),
-) -> Arc<dyn ExecutionPlan> {
-    let batch = build_table_i32(a, b, c);
-    let schema = batch.schema();
-    Arc::new(MemoryExec::try_new(&[vec![batch]], schema, None).unwrap())
 }
 
 /// Returns the column names on the schema
@@ -275,14 +249,6 @@ pub fn make_partition(sz: i32) -> RecordBatch {
     RecordBatch::try_new(schema, vec![arr]).unwrap()
 }
 
-/// Return a RecordBatch with a single array with row_count sz
-pub fn make_batch_no_column(sz: usize) -> RecordBatch {
-    let schema = Arc::new(Schema::empty());
-
-    let options = RecordBatchOptions::new().with_row_count(Option::from(sz));
-    RecordBatch::try_new_with_options(schema, vec![], &options).unwrap()
-}
-
 /// Return a new table which provide this decimal column
 pub fn table_with_decimal() -> Arc<dyn TableProvider> {
     let batch_decimal = make_decimal();
@@ -307,25 +273,6 @@ fn make_decimal() -> RecordBatch {
     RecordBatch::try_new(Arc::new(schema), vec![Arc::new(array)]).unwrap()
 }
 
-/// Asserts that given future is pending.
-pub fn assert_is_pending<'a, T>(fut: &mut Pin<Box<dyn Future<Output = T> + Send + 'a>>) {
-    let waker = futures::task::noop_waker();
-    let mut cx = futures::task::Context::from_waker(&waker);
-    let poll = fut.poll_unpin(&mut cx);
-
-    assert!(poll.is_pending());
-}
-
-/// Create vector batches
-pub fn create_vec_batches(schema: &Schema, n: usize) -> Vec<RecordBatch> {
-    let batch = create_batch(schema);
-    let mut vec = Vec::with_capacity(n);
-    for _ in 0..n {
-        vec.push(batch.clone());
-    }
-    vec
-}
-
 /// Created a sorted Csv exec
 pub fn csv_exec_sorted(
     schema: &SchemaRef,
@@ -339,7 +286,7 @@ pub fn csv_exec_sorted(
             object_store_url: ObjectStoreUrl::parse("test:///").unwrap(),
             file_schema: schema.clone(),
             file_groups: vec![vec![PartitionedFile::new("x".to_string(), 100)]],
-            statistics: Statistics::default(),
+            statistics: Statistics::new_unknown(schema),
             projection: None,
             limit: None,
             table_partition_cols: vec![],
@@ -348,19 +295,90 @@ pub fn csv_exec_sorted(
         },
         false,
         0,
+        0,
+        None,
         FileCompressionType::UNCOMPRESSED,
     ))
 }
 
-/// Create batch
-fn create_batch(schema: &Schema) -> RecordBatch {
-    RecordBatch::try_new(
-        Arc::new(schema.clone()),
-        vec![Arc::new(UInt32Array::from(vec![1, 2, 3, 4, 5, 6, 7, 8]))],
-    )
-    .unwrap()
+/// A mock execution plan that simply returns the provided statistics
+#[derive(Debug, Clone)]
+pub struct StatisticsExec {
+    stats: Statistics,
+    schema: Arc<Schema>,
+}
+impl StatisticsExec {
+    pub fn new(stats: Statistics, schema: Schema) -> Self {
+        assert_eq!(
+            stats.column_statistics.len(), schema.fields().len(),
+            "if defined, the column statistics vector length should be the number of fields"
+        );
+        Self {
+            stats,
+            schema: Arc::new(schema),
+        }
+    }
 }
 
-pub mod exec;
+impl DisplayAs for StatisticsExec {
+    fn fmt_as(
+        &self,
+        t: DisplayFormatType,
+        f: &mut std::fmt::Formatter,
+    ) -> std::fmt::Result {
+        match t {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => {
+                write!(
+                    f,
+                    "StatisticsExec: col_count={}, row_count={:?}",
+                    self.schema.fields().len(),
+                    self.stats.num_rows,
+                )
+            }
+        }
+    }
+}
+
+impl ExecutionPlan for StatisticsExec {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn schema(&self) -> SchemaRef {
+        Arc::clone(&self.schema)
+    }
+
+    fn output_partitioning(&self) -> Partitioning {
+        Partitioning::UnknownPartitioning(2)
+    }
+
+    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+        None
+    }
+
+    fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
+        vec![]
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        _: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        Ok(self)
+    }
+
+    fn execute(
+        &self,
+        _partition: usize,
+        _context: Arc<TaskContext>,
+    ) -> Result<SendableRecordBatchStream> {
+        unimplemented!("This plan only serves for testing statistics")
+    }
+
+    fn statistics(&self) -> Result<Statistics> {
+        Ok(self.stats.clone())
+    }
+}
+
 pub mod object_store;
 pub mod variable;

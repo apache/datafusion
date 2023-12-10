@@ -16,11 +16,12 @@
 // under the License.
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
-use datafusion_common::{DFSchema, DataFusionError, Result};
-use datafusion_expr::expr::{ScalarFunction, ScalarUDF};
-use datafusion_expr::function_err::suggest_valid_function;
-use datafusion_expr::utils::COUNT_STAR_EXPANSION;
-use datafusion_expr::window_frame::regularize;
+use datafusion_common::{
+    not_impl_err, plan_datafusion_err, plan_err, DFSchema, DataFusionError, Result,
+};
+use datafusion_expr::expr::ScalarFunction;
+use datafusion_expr::function::suggest_valid_function;
+use datafusion_expr::window_frame::{check_window_frame, regularize_window_order_by};
 use datafusion_expr::{
     expr, window_function, AggregateFunction, BuiltinScalarFunction, Expr, WindowFrame,
     WindowFunction,
@@ -35,66 +36,91 @@ use super::arrow_cast::ARROW_CAST_NAME;
 impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     pub(super) fn sql_function_to_expr(
         &self,
-        mut function: SQLFunction,
+        function: SQLFunction,
         schema: &DFSchema,
         planner_context: &mut PlannerContext,
     ) -> Result<Expr> {
-        let name = if function.name.0.len() > 1 {
+        let SQLFunction {
+            name,
+            args,
+            over,
+            distinct,
+            filter,
+            null_treatment,
+            special: _, // true if not called with trailing parens
+            order_by,
+        } = function;
+
+        if let Some(null_treatment) = null_treatment {
+            return not_impl_err!("Null treatment in aggregate functions is not supported: {null_treatment}");
+        }
+
+        let name = if name.0.len() > 1 {
             // DF doesn't handle compound identifiers
             // (e.g. "foo.bar") for function names yet
-            function.name.to_string()
+            name.to_string()
         } else {
-            crate::utils::normalize_ident(function.name.0[0].clone())
+            crate::utils::normalize_ident(name.0[0].clone())
         };
+
+        // user-defined function (UDF) should have precedence in case it has the same name as a scalar built-in function
+        if let Some(fm) = self.context_provider.get_function_meta(&name) {
+            let args = self.function_args_to_expr(args, schema, planner_context)?;
+            return Ok(Expr::ScalarFunction(ScalarFunction::new_udf(fm, args)));
+        }
 
         // next, scalar built-in
         if let Ok(fun) = BuiltinScalarFunction::from_str(&name) {
-            let args =
-                self.function_args_to_expr(function.args, schema, planner_context)?;
+            let args = self.function_args_to_expr(args, schema, planner_context)?;
             return Ok(Expr::ScalarFunction(ScalarFunction::new(fun, args)));
         };
 
         // If function is a window function (it has an OVER clause),
         // it shouldn't have ordering requirement as function argument
         // required ordering should be defined in OVER clause.
-        let is_function_window = function.over.is_some();
-        if !function.order_by.is_empty() && is_function_window {
-            return Err(DataFusionError::Plan(
-                "Aggregate ORDER BY is not implemented for window functions".to_string(),
-            ));
+        let is_function_window = over.is_some();
+        if !order_by.is_empty() && is_function_window {
+            return plan_err!(
+                "Aggregate ORDER BY is not implemented for window functions"
+            );
         }
 
         // then, window function
-        if let Some(WindowType::WindowSpec(window)) = function.over.take() {
+        if let Some(WindowType::WindowSpec(window)) = over {
             let partition_by = window
                 .partition_by
                 .into_iter()
                 .map(|e| self.sql_expr_to_logical_expr(e, schema, planner_context))
                 .collect::<Result<Vec<_>>>()?;
-            let order_by =
-                self.order_by_to_sort_expr(&window.order_by, schema, planner_context)?;
+            let mut order_by = self.order_by_to_sort_expr(
+                &window.order_by,
+                schema,
+                planner_context,
+                // Numeric literals in window function ORDER BY are treated as constants
+                false,
+            )?;
             let window_frame = window
                 .window_frame
                 .as_ref()
                 .map(|window_frame| {
                     let window_frame = window_frame.clone().try_into()?;
-                    regularize(window_frame, order_by.len())
+                    check_window_frame(&window_frame, order_by.len())
+                        .map(|_| window_frame)
                 })
                 .transpose()?;
+
             let window_frame = if let Some(window_frame) = window_frame {
+                regularize_window_order_by(&window_frame, &mut order_by)?;
                 window_frame
             } else {
                 WindowFrame::new(!order_by.is_empty())
             };
+
             if let Ok(fun) = self.find_window_func(&name) {
                 let expr = match fun {
                     WindowFunction::AggregateFunction(aggregate_fun) => {
-                        let (aggregate_fun, args) = self.aggregate_fn_to_expr(
-                            aggregate_fun,
-                            function.args,
-                            schema,
-                            planner_context,
-                        )?;
+                        let args =
+                            self.function_args_to_expr(args, schema, planner_context)?;
 
                         Expr::WindowFunction(expr::WindowFunction::new(
                             WindowFunction::AggregateFunction(aggregate_fun),
@@ -106,11 +132,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     }
                     _ => Expr::WindowFunction(expr::WindowFunction::new(
                         fun,
-                        self.function_args_to_expr(
-                            function.args,
-                            schema,
-                            planner_context,
-                        )?,
+                        self.function_args_to_expr(args, schema, planner_context)?,
                         partition_by,
                         order_by,
                         window_frame,
@@ -119,55 +141,40 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 return Ok(expr);
             }
         } else {
+            // User defined aggregate functions (UDAF) have precedence in case it has the same name as a scalar built-in function
+            if let Some(fm) = self.context_provider.get_aggregate_meta(&name) {
+                let args = self.function_args_to_expr(args, schema, planner_context)?;
+                return Ok(Expr::AggregateFunction(expr::AggregateFunction::new_udf(
+                    fm, args, false, None, None,
+                )));
+            }
+
             // next, aggregate built-ins
             if let Ok(fun) = AggregateFunction::from_str(&name) {
-                let distinct = function.distinct;
-                let order_by = self.order_by_to_sort_expr(
-                    &function.order_by,
-                    schema,
-                    planner_context,
-                )?;
+                let order_by =
+                    self.order_by_to_sort_expr(&order_by, schema, planner_context, true)?;
                 let order_by = (!order_by.is_empty()).then_some(order_by);
-                let (fun, args) = self.aggregate_fn_to_expr(
-                    fun,
-                    function.args,
-                    schema,
-                    planner_context,
-                )?;
+                let args = self.function_args_to_expr(args, schema, planner_context)?;
+                let filter: Option<Box<Expr>> = filter
+                    .map(|e| self.sql_expr_to_logical_expr(*e, schema, planner_context))
+                    .transpose()?
+                    .map(Box::new);
+
                 return Ok(Expr::AggregateFunction(expr::AggregateFunction::new(
-                    fun, args, distinct, None, order_by,
+                    fun, args, distinct, filter, order_by,
                 )));
             };
 
-            // finally, user-defined functions (UDF) and UDAF
-            if let Some(fm) = self.schema_provider.get_function_meta(&name) {
-                let args =
-                    self.function_args_to_expr(function.args, schema, planner_context)?;
-                return Ok(Expr::ScalarUDF(ScalarUDF::new(fm, args)));
-            }
-
-            // User defined aggregate functions
-            if let Some(fm) = self.schema_provider.get_aggregate_meta(&name) {
-                let args =
-                    self.function_args_to_expr(function.args, schema, planner_context)?;
-                return Ok(Expr::AggregateUDF(expr::AggregateUDF::new(
-                    fm, args, None, None,
-                )));
-            }
-
             // Special case arrow_cast (as its type is dependent on its argument value)
             if name == ARROW_CAST_NAME {
-                let args =
-                    self.function_args_to_expr(function.args, schema, planner_context)?;
+                let args = self.function_args_to_expr(args, schema, planner_context)?;
                 return super::arrow_cast::create_arrow_cast(args, schema);
             }
         }
 
         // Could not find the relevant function, so return an error
         let suggested_func_name = suggest_valid_function(&name, is_function_window);
-        Err(DataFusionError::Plan(format!(
-            "Invalid function '{name}'.\nDid you mean '{suggested_func_name}'?"
-        )))
+        plan_err!("Invalid function '{name}'.\nDid you mean '{suggested_func_name}'?")
     }
 
     pub(super) fn sql_named_function_to_expr(
@@ -183,13 +190,20 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
     pub(super) fn find_window_func(&self, name: &str) -> Result<WindowFunction> {
         window_function::find_df_window_func(name)
+            // next check user defined aggregates
             .or_else(|| {
-                self.schema_provider
+                self.context_provider
                     .get_aggregate_meta(name)
                     .map(WindowFunction::AggregateUDF)
             })
+            // next check user defined window functions
+            .or_else(|| {
+                self.context_provider
+                    .get_window_meta(name)
+                    .map(WindowFunction::WindowUDF)
+            })
             .ok_or_else(|| {
-                DataFusionError::Plan(format!("There is no window function named {name}"))
+                plan_datafusion_err!("There is no window function named {name}")
             })
     }
 
@@ -207,14 +221,14 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             FunctionArg::Named {
                 name: _,
                 arg: FunctionArgExpr::Wildcard,
-            } => Ok(Expr::Wildcard),
+            } => Ok(Expr::Wildcard { qualifier: None }),
             FunctionArg::Unnamed(FunctionArgExpr::Expr(arg)) => {
                 self.sql_expr_to_logical_expr(arg, schema, planner_context)
             }
-            FunctionArg::Unnamed(FunctionArgExpr::Wildcard) => Ok(Expr::Wildcard),
-            _ => Err(DataFusionError::NotImplemented(format!(
-                "Unsupported qualified wildcard argument: {sql:?}"
-            ))),
+            FunctionArg::Unnamed(FunctionArgExpr::Wildcard) => {
+                Ok(Expr::Wildcard { qualifier: None })
+            }
+            _ => not_impl_err!("Unsupported qualified wildcard argument: {sql:?}"),
         }
     }
 
@@ -227,29 +241,5 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         args.into_iter()
             .map(|a| self.sql_fn_arg_to_logical_expr(a, schema, planner_context))
             .collect::<Result<Vec<Expr>>>()
-    }
-
-    pub(super) fn aggregate_fn_to_expr(
-        &self,
-        fun: AggregateFunction,
-        args: Vec<FunctionArg>,
-        schema: &DFSchema,
-        planner_context: &mut PlannerContext,
-    ) -> Result<(AggregateFunction, Vec<Expr>)> {
-        let args = match fun {
-            // Special case rewrite COUNT(*) to COUNT(constant)
-            AggregateFunction::Count => args
-                .into_iter()
-                .map(|a| match a {
-                    FunctionArg::Unnamed(FunctionArgExpr::Wildcard) => {
-                        Ok(Expr::Literal(COUNT_STAR_EXPANSION.clone()))
-                    }
-                    _ => self.sql_fn_arg_to_logical_expr(a, schema, planner_context),
-                })
-                .collect::<Result<Vec<Expr>>>()?,
-            _ => self.function_args_to_expr(args, schema, planner_context)?,
-        };
-
-        Ok((fun, args))
     }
 }

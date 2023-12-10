@@ -17,17 +17,21 @@
 
 //! Default TableSource implementation used in DataFusion physical plans
 
-use crate::datasource::TableProvider;
-use arrow::datatypes::SchemaRef;
-use datafusion_common::DataFusionError;
-use datafusion_expr::{Expr, TableProviderFilterPushDown, TableSource};
 use std::any::Any;
 use std::sync::Arc;
 
-/// DataFusion default table source, wrapping TableProvider
+use crate::datasource::TableProvider;
+
+use arrow::datatypes::SchemaRef;
+use datafusion_common::{internal_err, Constraints, DataFusionError};
+use datafusion_expr::{Expr, TableProviderFilterPushDown, TableSource};
+
+/// DataFusion default table source, wrapping TableProvider.
 ///
 /// This structure adapts a `TableProvider` (physical plan trait) to the `TableSource`
-/// (logical plan trait)
+/// (logical plan trait) and is necessary because the logical plan is contained in
+/// the `datafusion_expr` crate, and is not aware of table providers, which exist in
+/// the core `datafusion` crate.
 pub struct DefaultTableSource {
     /// table provider
     pub table_provider: Arc<dyn TableProvider>,
@@ -41,7 +45,7 @@ impl DefaultTableSource {
 }
 
 impl TableSource for DefaultTableSource {
-    /// Returns the table source as [`Any`](std::any::Any) so that it can be
+    /// Returns the table source as [`Any`] so that it can be
     /// downcast to a specific implementation.
     fn as_any(&self) -> &dyn Any {
         self
@@ -50,6 +54,11 @@ impl TableSource for DefaultTableSource {
     /// Get a reference to the schema for this table
     fn schema(&self) -> SchemaRef {
         self.table_provider.schema()
+    }
+
+    /// Get a reference to applicable constraints, if any exists.
+    fn constraints(&self) -> Option<&Constraints> {
+        self.table_provider.constraints()
     }
 
     /// Tests whether the table provider can make use of any or all filter expressions
@@ -63,6 +72,10 @@ impl TableSource for DefaultTableSource {
 
     fn get_logical_plan(&self) -> Option<&datafusion_expr::LogicalPlan> {
         self.table_provider.get_logical_plan()
+    }
+
+    fn get_column_default(&self, column: &str) -> Option<&Expr> {
+        self.table_provider.get_column_default(column)
     }
 }
 
@@ -84,8 +97,6 @@ pub fn source_as_provider(
         .downcast_ref::<DefaultTableSource>()
     {
         Some(source) => Ok(source.table_provider.clone()),
-        _ => Err(DataFusionError::Internal(
-            "TableSource was not DefaultTableSource".to_string(),
-        )),
+        _ => internal_err!("TableSource was not DefaultTableSource"),
     }
 }

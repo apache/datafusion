@@ -15,8 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! DataFusion Configuration Options
-
+//! Runtime configuration, via [`ConfigOptions`]
+use crate::error::_internal_err;
 use crate::{DataFusionError, Result};
 use std::any::Any;
 use std::collections::{BTreeMap, HashMap};
@@ -65,10 +65,10 @@ use std::fmt::Display;
 ///             "field1" => self.field1.set(rem, value),
 ///             "field2" => self.field2.set(rem, value),
 ///             "field3" => self.field3.set(rem, value),
-///             _ => Err(DataFusionError::Internal(format!(
+///             _ => _internal_err!(
 ///                 "Config value \"{}\" not found on MyConfig",
 ///                 key
-///             ))),
+///             ),
 ///         }
 ///     }
 ///
@@ -126,9 +126,9 @@ macro_rules! config_namespace {
                     $(
                        stringify!($field_name) => self.$field_name.set(rem, value),
                     )*
-                    _ => Err(DataFusionError::Internal(
-                        format!(concat!("Config value \"{}\" not found on ", stringify!($struct_name)), key)
-                    ))
+                    _ => _internal_err!(
+                        "Config value \"{}\" not found on {}", key, stringify!($struct_name)
+                    )
                 }
             }
 
@@ -235,11 +235,49 @@ config_namespace! {
         ///
         /// Defaults to the number of CPU cores on the system
         pub planning_concurrency: usize, default = num_cpus::get()
+
+        /// Specifies the reserved memory for each spillable sort operation to
+        /// facilitate an in-memory merge.
+        ///
+        /// When a sort operation spills to disk, the in-memory data must be
+        /// sorted and merged before being written to a file. This setting reserves
+        /// a specific amount of memory for that in-memory sort/merge process.
+        ///
+        /// Note: This setting is irrelevant if the sort operation cannot spill
+        /// (i.e., if there's no `DiskManager` configured).
+        pub sort_spill_reservation_bytes: usize, default = 10 * 1024 * 1024
+
+        /// When sorting, below what size should data be concatenated
+        /// and sorted in a single RecordBatch rather than sorted in
+        /// batches and merged.
+        pub sort_in_place_threshold_bytes: usize, default = 1024 * 1024
+
+        /// Number of files to read in parallel when inferring schema and statistics
+        pub meta_fetch_concurrency: usize, default = 32
+
+        /// Guarantees a minimum level of output files running in parallel.
+        /// RecordBatches will be distributed in round robin fashion to each
+        /// parallel writer. Each writer is closed and a new file opened once
+        /// soft_max_rows_per_output_file is reached.
+        pub minimum_parallel_output_files: usize, default = 4
+
+        /// Target number of rows in output files when writing multiple.
+        /// This is a soft max, so it can be exceeded slightly. There also
+        /// will be one file smaller than the limit if the total
+        /// number of rows written is not roughly divisible by the soft max
+        pub soft_max_rows_per_output_file: usize, default = 50000000
+
+        /// This is the maximum number of RecordBatches buffered
+        /// for each output file being worked. Higher values can potentially
+        /// give faster write performance at the cost of higher peak
+        /// memory consumption
+        pub max_buffered_batches_per_output_file: usize, default = 2
+
     }
 }
 
 config_namespace! {
-    /// Options related to reading of parquet files
+    /// Options related to parquet files
     pub struct ParquetOptions {
         /// If true, reads the Parquet data page level metadata (the
         /// Page Index), if present, to reduce the I/O and number of
@@ -270,6 +308,102 @@ config_namespace! {
         /// will be reordered heuristically to minimize the cost of evaluation. If false,
         /// the filters are applied in the same order as written in the query
         pub reorder_filters: bool, default = false
+
+        // The following map to parquet::file::properties::WriterProperties
+
+        /// Sets best effort maximum size of data page in bytes
+        pub data_pagesize_limit: usize, default = 1024 * 1024
+
+        /// Sets write_batch_size in bytes
+        pub write_batch_size: usize, default = 1024
+
+        /// Sets parquet writer version
+        /// valid values are "1.0" and "2.0"
+        pub writer_version: String, default = "1.0".into()
+
+        /// Sets default parquet compression codec
+        /// Valid values are: uncompressed, snappy, gzip(level),
+        /// lzo, brotli(level), lz4, zstd(level), and lz4_raw.
+        /// These values are not case sensitive. If NULL, uses
+        /// default parquet writer setting
+        pub compression: Option<String>, default = Some("zstd(3)".into())
+
+        /// Sets if dictionary encoding is enabled. If NULL, uses
+        /// default parquet writer setting
+        pub dictionary_enabled: Option<bool>, default = None
+
+        /// Sets best effort maximum dictionary page size, in bytes
+        pub dictionary_page_size_limit: usize, default = 1024 * 1024
+
+        /// Sets if statistics are enabled for any column
+        /// Valid values are: "none", "chunk", and "page"
+        /// These values are not case sensitive. If NULL, uses
+        /// default parquet writer setting
+        pub statistics_enabled: Option<String>, default = None
+
+        /// Sets max statistics size for any column. If NULL, uses
+        /// default parquet writer setting
+        pub max_statistics_size: Option<usize>, default = None
+
+        /// Sets maximum number of rows in a row group
+        pub max_row_group_size: usize, default = 1024 * 1024
+
+        /// Sets "created by" property
+        pub created_by: String, default = concat!("datafusion version ", env!("CARGO_PKG_VERSION")).into()
+
+        /// Sets column index truncate length
+        pub column_index_truncate_length: Option<usize>, default = None
+
+        /// Sets best effort maximum number of rows in data page
+        pub data_page_row_count_limit: usize, default = usize::MAX
+
+        /// Sets default encoding for any column
+        /// Valid values are: plain, plain_dictionary, rle,
+        /// bit_packed, delta_binary_packed, delta_length_byte_array,
+        /// delta_byte_array, rle_dictionary, and byte_stream_split.
+        /// These values are not case sensitive. If NULL, uses
+        /// default parquet writer setting
+        pub encoding: Option<String>, default = None
+
+        /// Sets if bloom filter is enabled for any column
+        pub bloom_filter_enabled: bool, default = false
+
+        /// Sets bloom filter false positive probability. If NULL, uses
+        /// default parquet writer setting
+        pub bloom_filter_fpp: Option<f64>, default = None
+
+        /// Sets bloom filter number of distinct values. If NULL, uses
+        /// default parquet writer setting
+        pub bloom_filter_ndv: Option<u64>, default = None
+
+        /// Controls whether DataFusion will attempt to speed up writing
+        /// parquet files by serializing them in parallel. Each column
+        /// in each row group in each output file are serialized in parallel
+        /// leveraging a maximum possible core count of n_files*n_row_groups*n_columns.
+        pub allow_single_file_parallelism: bool, default = true
+
+        /// By default parallel parquet writer is tuned for minimum
+        /// memory usage in a streaming execution plan. You may see
+        /// a performance benefit when writing large parquet files
+        /// by increasing maximum_parallel_row_group_writers and
+        /// maximum_buffered_record_batches_per_stream if your system
+        /// has idle cores and can tolerate additional memory usage.
+        /// Boosting these values is likely worthwhile when
+        /// writing out already in-memory data, such as from a cached
+        /// data frame.
+        pub maximum_parallel_row_group_writers: usize, default = 1
+
+        /// By default parallel parquet writer is tuned for minimum
+        /// memory usage in a streaming execution plan. You may see
+        /// a performance benefit when writing large parquet files
+        /// by increasing maximum_parallel_row_group_writers and
+        /// maximum_buffered_record_batches_per_stream if your system
+        /// has idle cores and can tolerate additional memory usage.
+        /// Boosting these values is likely worthwhile when
+        /// writing out already in-memory data, such as from a cached
+        /// data frame.
+        pub maximum_buffered_record_batches_per_stream: usize, default = 2
+
     }
 }
 
@@ -293,9 +427,18 @@ config_namespace! {
 config_namespace! {
     /// Options related to query optimization
     pub struct OptimizerOptions {
+        /// When set to true, the optimizer will push a limit operation into
+        /// grouped aggregations which have no aggregate expressions, as a soft limit,
+        /// emitting groups once the limit is reached, before all rows in the group are read.
+        pub enable_distinct_aggregation_soft_limit: bool, default = true
+
         /// When set to true, the physical plan optimizer will try to add round robin
         /// repartitioning to increase parallelism to leverage more CPU cores
         pub enable_round_robin_repartition: bool, default = true
+
+        /// When set to true, the optimizer will attempt to perform limit operations
+        /// during aggregations, if possible
+        pub enable_topk_aggregation: bool, default = true
 
         /// When set to true, the optimizer will insert filters before a join between
         /// a nullable and non-nullable column to filter out nulls on the nullable side. This
@@ -323,10 +466,13 @@ config_namespace! {
         /// long runner execution, all types of joins may encounter out-of-memory errors.
         pub allow_symmetric_joins_without_pruning: bool, default = true
 
-        /// When set to true, file groups will be repartitioned to achieve maximum parallelism.
-        /// Currently supported only for Parquet format in which case
-        /// multiple row groups from the same file may be read concurrently. If false then each
-        /// row group is read serially, though different files may be read in parallel.
+        /// When set to `true`, file groups will be repartitioned to achieve maximum parallelism.
+        /// Currently Parquet and CSV formats are supported.
+        ///
+        /// If set to `true`, all files will be repartitioned evenly (i.e., a single large file
+        /// might be partitioned into smaller chunks) for parallel scanning.
+        /// If set to `false`, different files will be read in parallel, but repartitioning won't
+        /// happen within a single file.
         pub repartition_file_scans: bool, default = true
 
         /// Should DataFusion repartition data using the partitions keys to execute window
@@ -351,6 +497,14 @@ config_namespace! {
         /// ```
         pub repartition_sorts: bool, default = true
 
+        /// When true, DataFusion will opportunistically remove sorts when the data is already sorted,
+        /// (i.e. setting `preserve_order` to true on `RepartitionExec`  and
+        /// using `SortPreservingMergeExec`)
+        ///
+        /// When false, DataFusion will maximize plan parallelism using
+        /// `RepartitionExec` even if this requires subsequently resorting data using a `SortExec`.
+        pub prefer_existing_sort: bool, default = false
+
         /// When set to true, the logical plan optimizer will produce warning
         /// messages if any optimization rules produce errors and then proceed to the next
         /// rule. When set to false, any rules that produce errors will cause the query to fail
@@ -370,6 +524,11 @@ config_namespace! {
         /// The maximum estimated size in bytes for one input side of a HashJoin
         /// will be collected into a single partition
         pub hash_join_single_partition_threshold: usize, default = 1024 * 1024
+
+        /// The default filter selectivity used by Filter Statistics
+        /// when an exact selectivity cannot be determined. Valid values are
+        /// between 0 (no selectivity) and 100 (all rows are selected).
+        pub default_filter_selectivity: u8, default = 20
     }
 }
 
@@ -381,6 +540,10 @@ config_namespace! {
 
         /// When set to true, the explain statement will only print physical plans
         pub physical_plan_only: bool, default = false
+
+        /// When set to true, the explain statement will print operator statistics
+        /// for physical plans
+        pub show_statistics: bool, default = false
     }
 }
 
@@ -425,9 +588,7 @@ impl ConfigField for ConfigOptions {
             "optimizer" => self.optimizer.set(rem, value),
             "explain" => self.explain.set(rem, value),
             "sql_parser" => self.sql_parser.set(rem, value),
-            _ => Err(DataFusionError::Internal(format!(
-                "Config value \"{key}\" not found on ConfigOptions"
-            ))),
+            _ => _internal_err!("Config value \"{key}\" not found on ConfigOptions"),
         }
     }
 
@@ -720,6 +881,9 @@ macro_rules! config_field {
 config_field!(String);
 config_field!(bool);
 config_field!(usize);
+config_field!(f64);
+config_field!(u8);
+config_field!(u64);
 
 /// An implementation trait used to recursively walk configuration
 trait Visit {

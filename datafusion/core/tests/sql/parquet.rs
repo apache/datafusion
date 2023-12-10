@@ -32,7 +32,7 @@ async fn parquet_query() {
     // so we need an explicit cast
     let sql = "SELECT id, CAST(string_col AS varchar) FROM alltypes_plain";
     let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
+    let expected = [
         "+----+---------------------------+",
         "| id | alltypes_plain.string_col |",
         "+----+---------------------------+",
@@ -263,7 +263,7 @@ async fn parquet_list_columns() {
 
     assert_eq!(
         as_string_array(&utf8_list_array.value(0)).unwrap(),
-        &StringArray::try_from(vec![Some("abc"), Some("efg"), Some("hij"),]).unwrap()
+        &StringArray::from(vec![Some("abc"), Some("efg"), Some("hij"),])
     );
 
     assert_eq!(
@@ -335,7 +335,7 @@ async fn parquet_query_with_max_min() {
 
     let sql = "SELECT max(c1) FROM foo";
     let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
+    let expected = [
         "+-------------+",
         "| MAX(foo.c1) |",
         "+-------------+",
@@ -347,7 +347,7 @@ async fn parquet_query_with_max_min() {
 
     let sql = "SELECT min(c2) FROM foo";
     let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
+    let expected = [
         "+-------------+",
         "| MIN(foo.c2) |",
         "+-------------+",
@@ -359,7 +359,7 @@ async fn parquet_query_with_max_min() {
 
     let sql = "SELECT max(c3) FROM foo";
     let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
+    let expected = [
         "+-------------+",
         "| MAX(foo.c3) |",
         "+-------------+",
@@ -371,7 +371,7 @@ async fn parquet_query_with_max_min() {
 
     let sql = "SELECT min(c4) FROM foo";
     let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
+    let expected = [
         "+-------------+",
         "| MIN(foo.c4) |",
         "+-------------+",

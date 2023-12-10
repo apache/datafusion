@@ -27,7 +27,7 @@ use crate::expressions::format_state_name;
 use crate::{AggregateExpr, PhysicalExpr};
 use arrow::{array::ArrayRef, datatypes::DataType, datatypes::Field};
 use datafusion_common::ScalarValue;
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::{internal_err, DataFusionError, Result};
 use datafusion_expr::Accumulator;
 
 /// STDDEV and STDDEV_SAMP (standard deviation) aggregate expression
@@ -230,9 +230,7 @@ impl Accumulator for StddevAccumulator {
                     Ok(ScalarValue::Float64(e.map(|f| f.sqrt())))
                 }
             }
-            _ => Err(DataFusionError::Internal(
-                "Variance should be f64".to_string(),
-            )),
+            _ => internal_err!("Variance should be f64"),
         }
     }
 
@@ -447,13 +445,17 @@ mod tests {
 
         let values1 = expr1
             .iter()
-            .map(|e| e.evaluate(batch1))
-            .map(|r| r.map(|v| v.into_array(batch1.num_rows())))
+            .map(|e| {
+                e.evaluate(batch1)
+                    .and_then(|v| v.into_array(batch1.num_rows()))
+            })
             .collect::<Result<Vec<_>>>()?;
         let values2 = expr2
             .iter()
-            .map(|e| e.evaluate(batch2))
-            .map(|r| r.map(|v| v.into_array(batch2.num_rows())))
+            .map(|e| {
+                e.evaluate(batch2)
+                    .and_then(|v| v.into_array(batch2.num_rows()))
+            })
             .collect::<Result<Vec<_>>>()?;
         accum1.update_batch(&values1)?;
         accum2.update_batch(&values2)?;

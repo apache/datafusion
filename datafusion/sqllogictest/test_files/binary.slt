@@ -1,0 +1,267 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+#############
+## Tests for Binary
+#############
+
+# Basic literals encoded as hex
+query ?T
+SELECT X'FF01', arrow_typeof(X'FF01');
+----
+ff01 Binary
+
+# Invaid hex values
+query error DataFusion error: Error during planning: Invalid HexStringLiteral 'Z'
+SELECT X'Z'
+
+# Insert binary data into tables
+statement ok
+CREATE TABLE t
+AS VALUES
+  ('FF01', X'FF01'),
+  ('ABC', X'ABC'),
+  ('000', X'000');
+
+query T?TT
+SELECT column1, column2, arrow_typeof(column1), arrow_typeof(column2)
+FROM t;
+----
+FF01 ff01 Utf8 Binary
+ABC 0abc Utf8 Binary
+000 0000 Utf8 Binary
+
+# comparisons
+query ?BBBB
+SELECT
+  column2,
+  -- binary compare with string
+  column2 = 'ABC',
+  column2 <> 'ABC',
+  -- binary compared with binary
+  column2 = X'ABC',
+  column2 <> X'ABC'
+FROM t;
+----
+ff01 false true false true
+0abc false true true false
+0000 false true false true
+
+
+# predicates
+query T?
+SELECT column1, column2
+FROM t
+WHERE column2 > X'123';
+----
+FF01 ff01
+ABC 0abc
+
+# order by
+query T?
+SELECT *
+FROM t
+ORDER BY column2;
+----
+000 0000
+ABC 0abc
+FF01 ff01
+
+# group by
+query I
+SELECT count(*)
+FROM t
+GROUP BY column1;
+----
+1
+1
+1
+
+statement ok
+drop table t;
+
+#############
+## Tests for FixedSizeBinary
+#############
+
+# fixed_size_binary
+statement ok
+CREATE TABLE t_source
+AS VALUES
+  (X'000102', X'000102'),
+  (X'003102', X'000102'),
+  (NULL,      X'000102'),
+  (X'FF0102', X'000102'),
+  (X'000102', X'000102')
+;
+
+# Create a table with FixedSizeBinary
+statement ok
+CREATE TABLE t
+AS SELECT
+  arrow_cast(column1, 'FixedSizeBinary(3)') as "column1",
+  arrow_cast(column2, 'FixedSizeBinary(3)') as "column2"
+FROM t_source;
+
+query ?T
+SELECT column1, arrow_typeof(column1) FROM t;
+----
+000102 FixedSizeBinary(3)
+003102 FixedSizeBinary(3)
+NULL FixedSizeBinary(3)
+ff0102 FixedSizeBinary(3)
+000102 FixedSizeBinary(3)
+
+# Comparison
+query ??BB
+SELECT
+  column1,
+  column2,
+  column1 = arrow_cast(X'000102', 'FixedSizeBinary(3)'),
+  column1 = column2
+FROM t
+----
+000102 000102 true true
+003102 000102 false false
+NULL 000102 NULL NULL
+ff0102 000102 false false
+000102 000102 true true
+
+
+# Comparison to different sized field
+query error DataFusion error: Error during planning: Cannot infer common argument type for comparison operation FixedSizeBinary\(3\) = FixedSizeBinary\(2\)
+SELECT column1, column1 = arrow_cast(X'0102', 'FixedSizeBinary(2)') FROM t
+
+# Comparison to different sized Binary
+query error DataFusion error: Error during planning: Cannot infer common argument type for comparison operation FixedSizeBinary\(3\) = Binary
+SELECT column1, column1 = X'0102' FROM t
+
+statement ok
+drop table t_source
+
+statement ok
+drop table t
+
+
+#############
+## Tests for binary that contains strings
+#############
+
+statement ok
+CREATE TABLE t_source
+AS VALUES
+  ('Foo'),
+  (NULL),
+  ('Bar'),
+  ('FooBar')
+;
+
+# Create a table with Binary, LargeBinary but really has strings
+statement ok
+CREATE TABLE t
+AS SELECT
+  arrow_cast(column1, 'Binary') as "binary",
+  arrow_cast(column1, 'LargeBinary') as "largebinary"
+FROM t_source;
+
+query ??TT
+SELECT binary, largebinary, cast(binary as varchar) as binary_str, cast(largebinary as varchar) as binary_largestr from t;
+----
+466f6f 466f6f Foo Foo
+NULL NULL NULL NULL
+426172 426172 Bar Bar
+466f6f426172 466f6f426172 FooBar FooBar
+
+# ensure coercion works for = and <>
+query ?T
+SELECT binary, cast(binary as varchar) as str FROM t WHERE binary = 'Foo';
+----
+466f6f Foo
+
+query ?T
+SELECT binary, cast(binary as varchar) as str FROM t WHERE binary <> 'Foo';
+----
+426172 Bar
+466f6f426172 FooBar
+
+# order by
+query ?
+SELECT binary FROM t ORDER BY binary;
+----
+426172
+466f6f
+466f6f426172
+NULL
+
+# order by
+query ?
+SELECT largebinary FROM t ORDER BY largebinary;
+----
+426172
+466f6f
+466f6f426172
+NULL
+
+# LIKE
+query ?
+SELECT binary FROM t where binary LIKE '%F%';
+----
+466f6f
+466f6f426172
+
+query ?
+SELECT largebinary FROM t where largebinary LIKE '%F%';
+----
+466f6f
+466f6f426172
+
+# character_length function
+query TITI
+SELECT
+  cast(binary as varchar) as str,
+  character_length(binary) as binary_len,
+  cast(largebinary as varchar) as large_str,
+  character_length(binary) as largebinary_len
+from t;
+----
+Foo 3 Foo 3
+NULL NULL NULL NULL
+Bar 3 Bar 3
+FooBar 6 FooBar 6
+
+query I
+SELECT character_length(X'20');
+----
+1
+
+# still errors on values that can not be coerced to utf8
+query error Encountered non UTF\-8 data: invalid utf\-8 sequence of 1 bytes from index 0
+SELECT character_length(X'c328');
+
+# regexp_replace
+query TTTT
+SELECT
+  cast(binary as varchar) as str,
+  regexp_replace(binary, 'F', 'f') as binary_replaced,
+  cast(largebinary as varchar) as large_str,
+  regexp_replace(largebinary, 'F', 'f') as large_binary_replaced
+from t;
+----
+Foo foo Foo foo
+NULL NULL NULL NULL
+Bar Bar Bar Bar
+FooBar fooBar FooBar fooBar

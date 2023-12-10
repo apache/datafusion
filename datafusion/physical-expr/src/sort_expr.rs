@@ -17,12 +17,17 @@
 
 //! Sort expressions
 
+use std::fmt::Display;
+use std::hash::{Hash, Hasher};
+use std::sync::Arc;
+
 use crate::PhysicalExpr;
+
 use arrow::compute::kernels::sort::{SortColumn, SortOptions};
 use arrow::record_batch::RecordBatch;
-use datafusion_common::{DataFusionError, Result};
+use arrow_schema::Schema;
+use datafusion_common::Result;
 use datafusion_expr::ColumnarValue;
-use std::sync::Arc;
 
 /// Represents Sort operation for a column in a RecordBatch
 #[derive(Clone, Debug)]
@@ -39,6 +44,15 @@ impl PartialEq for PhysicalSortExpr {
     }
 }
 
+impl Eq for PhysicalSortExpr {}
+
+impl Hash for PhysicalSortExpr {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.expr.hash(state);
+        self.options.hash(state);
+    }
+}
+
 impl std::fmt::Display for PhysicalSortExpr {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         write!(f, "{} {}", self.expr, to_str(&self.options))
@@ -51,11 +65,7 @@ impl PhysicalSortExpr {
         let value_to_sort = self.expr.evaluate(batch)?;
         let array_to_sort = match value_to_sort {
             ColumnarValue::Array(array) => array,
-            ColumnarValue::Scalar(scalar) => {
-                return Err(DataFusionError::Plan(format!(
-                    "Sort operation is not applicable to scalar value {scalar}"
-                )));
-            }
+            ColumnarValue::Scalar(scalar) => scalar.to_array_of_size(batch.num_rows())?,
         };
         Ok(SortColumn {
             values: array_to_sort,
@@ -63,18 +73,46 @@ impl PhysicalSortExpr {
         })
     }
 
-    /// Check whether sort expression satisfies [`PhysicalSortRequirement`].
-    ///
-    /// If sort options is Some in `PhysicalSortRequirement`, `expr`
-    /// and `options` field are compared for equality.
-    ///
-    /// If sort options is None in `PhysicalSortRequirement`, only
-    /// `expr` is compared for equality.
-    pub fn satisfy(&self, requirement: &PhysicalSortRequirement) -> bool {
+    /// Checks whether this sort expression satisfies the given `requirement`.
+    /// If sort options are unspecified in `requirement`, only expressions are
+    /// compared for inequality.
+    pub fn satisfy(
+        &self,
+        requirement: &PhysicalSortRequirement,
+        schema: &Schema,
+    ) -> bool {
+        // If the column is not nullable, NULLS FIRST/LAST is not important.
+        let nullable = self.expr.nullable(schema).unwrap_or(true);
         self.expr.eq(&requirement.expr)
-            && requirement
-                .options
-                .map_or(true, |opts| self.options == opts)
+            && if nullable {
+                requirement
+                    .options
+                    .map_or(true, |opts| self.options == opts)
+            } else {
+                requirement
+                    .options
+                    .map_or(true, |opts| self.options.descending == opts.descending)
+            }
+    }
+
+    /// Returns a [`Display`]able list of `PhysicalSortExpr`.
+    pub fn format_list(input: &[PhysicalSortExpr]) -> impl Display + '_ {
+        struct DisplayableList<'a>(&'a [PhysicalSortExpr]);
+        impl<'a> Display for DisplayableList<'a> {
+            fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                let mut first = true;
+                for sort_expr in self.0 {
+                    if first {
+                        first = false;
+                    } else {
+                        write!(f, ",")?;
+                    }
+                    write!(f, "{}", sort_expr)?;
+                }
+                Ok(())
+            }
+        }
+        DisplayableList(input)
     }
 }
 
@@ -214,8 +252,18 @@ fn to_str(options: &SortOptions) -> &str {
     }
 }
 
-///`LexOrdering` is a type alias for lexicographical ordering definition`Vec<PhysicalSortExpr>`
+///`LexOrdering` is an alias for the type `Vec<PhysicalSortExpr>`, which represents
+/// a lexicographical ordering.
 pub type LexOrdering = Vec<PhysicalSortExpr>;
 
-///`LexOrderingReq` is a type alias for lexicographical ordering requirement definition`Vec<PhysicalSortRequirement>`
-pub type LexOrderingReq = Vec<PhysicalSortRequirement>;
+///`LexOrderingRef` is an alias for the type &`[PhysicalSortExpr]`, which represents
+/// a reference to a lexicographical ordering.
+pub type LexOrderingRef<'a> = &'a [PhysicalSortExpr];
+
+///`LexRequirement` is an alias for the type `Vec<PhysicalSortRequirement>`, which
+/// represents a lexicographical ordering requirement.
+pub type LexRequirement = Vec<PhysicalSortRequirement>;
+
+///`LexRequirementRef` is an alias for the type &`[PhysicalSortRequirement]`, which
+/// represents a reference to a lexicographical ordering requirement.
+pub type LexRequirementRef<'a> = &'a [PhysicalSortRequirement];

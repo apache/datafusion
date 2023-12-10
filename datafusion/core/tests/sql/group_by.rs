@@ -16,6 +16,8 @@
 // under the License.
 
 use super::*;
+use arrow::util::pretty::pretty_format_batches;
+use arrow_schema::{DataType, TimeUnit};
 
 #[tokio::test]
 async fn group_by_date_trunc() -> Result<()> {
@@ -55,7 +57,7 @@ async fn group_by_date_trunc() -> Result<()> {
         "SELECT date_trunc('week', t1) as week, SUM(c2) FROM test GROUP BY date_trunc('week', t1)",
     ).await?;
 
-    let expected = vec![
+    let expected = [
         "+---------------------+--------------+",
         "| week                | SUM(test.c2) |",
         "+---------------------+--------------+",
@@ -66,6 +68,95 @@ async fn group_by_date_trunc() -> Result<()> {
     assert_batches_sorted_eq!(expected, &results);
 
     Ok(())
+}
+
+#[tokio::test]
+async fn group_by_limit() -> Result<()> {
+    let tmp_dir = TempDir::new()?;
+    let ctx = create_groupby_context(&tmp_dir).await?;
+
+    let sql = "SELECT trace_id, MAX(ts) from traces group by trace_id order by MAX(ts) desc limit 4";
+    let dataframe = ctx.sql(sql).await?;
+
+    // ensure we see `lim=[4]`
+    let physical_plan = dataframe.create_physical_plan().await?;
+    let mut expected_physical_plan = r#"
+GlobalLimitExec: skip=0, fetch=4
+  SortExec: TopK(fetch=4), expr=[MAX(traces.ts)@1 DESC]
+    AggregateExec: mode=Single, gby=[trace_id@0 as trace_id], aggr=[MAX(traces.ts)], lim=[4]
+    "#.trim().to_string();
+    let actual_phys_plan =
+        format_plan(physical_plan.clone(), &mut expected_physical_plan);
+    assert_eq!(actual_phys_plan, expected_physical_plan);
+
+    let batches = collect(physical_plan, ctx.task_ctx()).await?;
+    let expected = r#"
++----------+----------------------+
+| trace_id | MAX(traces.ts)       |
++----------+----------------------+
+| 9        | 2020-12-01T00:00:18Z |
+| 8        | 2020-12-01T00:00:17Z |
+| 7        | 2020-12-01T00:00:16Z |
+| 6        | 2020-12-01T00:00:15Z |
++----------+----------------------+
+"#
+    .trim();
+    let actual = format!("{}", pretty_format_batches(&batches)?);
+    assert_eq!(actual, expected);
+
+    Ok(())
+}
+
+fn format_plan(
+    physical_plan: Arc<dyn ExecutionPlan>,
+    expected_phys_plan: &mut String,
+) -> String {
+    let actual_phys_plan = displayable(physical_plan.as_ref()).indent(true).to_string();
+    let last_line = actual_phys_plan
+        .as_str()
+        .lines()
+        .last()
+        .expect("Plan should not be empty");
+
+    expected_phys_plan.push('\n');
+    expected_phys_plan.push_str(last_line);
+    expected_phys_plan.push('\n');
+    actual_phys_plan
+}
+
+async fn create_groupby_context(tmp_dir: &TempDir) -> Result<SessionContext> {
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("trace_id", DataType::Utf8, false),
+        Field::new(
+            "ts",
+            DataType::Timestamp(TimeUnit::Nanosecond, Some("UTC".into())),
+            false,
+        ),
+    ]));
+
+    // generate a file
+    let filename = "traces.csv";
+    let file_path = tmp_dir.path().join(filename);
+    let mut file = File::create(file_path)?;
+
+    // generate some data
+    for trace_id in 0..10 {
+        for ts in 0..10 {
+            let ts = trace_id + ts;
+            let data = format!("\"{trace_id}\",2020-12-01T00:00:{ts:02}.000Z\n");
+            file.write_all(data.as_bytes())?;
+        }
+    }
+
+    let cfg = SessionConfig::new().with_target_partitions(1);
+    let ctx = SessionContext::new_with_config(cfg);
+    ctx.register_csv(
+        "traces",
+        tmp_dir.path().to_str().unwrap(),
+        CsvReadOptions::new().schema(&schema).has_header(false),
+    )
+    .await?;
+    Ok(ctx)
 }
 
 #[tokio::test]
@@ -103,7 +194,7 @@ async fn group_by_dictionary() {
                 .await
                 .expect("ran plan correctly");
 
-        let expected = vec![
+        let expected = [
             "+------+--------------+",
             "| dict | COUNT(t.val) |",
             "+------+--------------+",
@@ -120,7 +211,7 @@ async fn group_by_dictionary() {
                 .await
                 .expect("ran plan correctly");
 
-        let expected = vec![
+        let expected = [
             "+-----+---------------+",
             "| val | COUNT(t.dict) |",
             "+-----+---------------+",
@@ -139,14 +230,14 @@ async fn group_by_dictionary() {
         .await
         .expect("ran plan correctly");
 
-        let expected = vec![
-            "+-------+------------------------+",
-            "| t.val | COUNT(DISTINCT t.dict) |",
-            "+-------+------------------------+",
-            "| 1     | 2                      |",
-            "| 2     | 2                      |",
-            "| 4     | 1                      |",
-            "+-------+------------------------+",
+        let expected = [
+            "+-----+------------------------+",
+            "| val | COUNT(DISTINCT t.dict) |",
+            "+-----+------------------------+",
+            "| 1   | 2                      |",
+            "| 2   | 2                      |",
+            "| 4   | 1                      |",
+            "+-----+------------------------+",
         ];
         assert_batches_sorted_eq!(expected, &results);
     }

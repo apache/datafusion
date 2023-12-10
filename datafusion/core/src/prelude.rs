@@ -13,9 +13,9 @@
 // "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
-// under the License.pub},
+// under the License.
 
-//! A "prelude" for users of the datafusion crate.
+//! DataFusion "prelude" to simplify importing common types.
 //!
 //! Like the standard library's prelude, this module simplifies importing of
 //! common items. Unlike the standard prelude, the contents of this module must
@@ -26,7 +26,7 @@
 //! ```
 
 pub use crate::dataframe::DataFrame;
-pub use crate::execution::context::{SessionConfig, SessionContext};
+pub use crate::execution::context::{SQLOptions, SessionConfig, SessionContext};
 pub use crate::execution::options::{
     AvroReadOptions, CsvReadOptions, NdJsonReadOptions, ParquetReadOptions,
 };
@@ -38,3 +38,8 @@ pub use datafusion_expr::{
     logical_plan::{JoinType, Partitioning},
     Expr,
 };
+
+pub use std::ops::Not;
+pub use std::ops::{Add, Div, Mul, Neg, Rem, Sub};
+pub use std::ops::{BitAnd, BitOr, BitXor};
+pub use std::ops::{Shl, Shr};

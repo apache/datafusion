@@ -15,19 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! This module contains code to prune "containers" of row groups
-//! based on statistics prior to execution. This can lead to
-//! significant performance improvements by avoiding the need
-//! to evaluate a plan on entire containers (e.g. an entire file)
+//! [`PruningPredicate`] to apply filter [`Expr`] to prune "containers"
+//! based on statistics (e.g. Parquet Row Groups)
 //!
-//! For example, DataFusion uses this code to prune (skip) row groups
-//! while reading parquet files if it can be determined from the
-//! predicate that nothing in the row group can match.
-//!
-//! This code can also be used by other systems to prune other
-//! entities (e.g. entire files) if the statistics are known via some
-//! other source (e.g. a catalog)
-
+//! [`Expr`]: crate::prelude::Expr
 use std::collections::HashSet;
 use std::convert::TryFrom;
 use std::sync::Arc;
@@ -44,24 +35,30 @@ use arrow::{
     datatypes::{DataType, Field, Schema, SchemaRef},
     record_batch::RecordBatch,
 };
-use datafusion_common::tree_node::{Transformed, TreeNode};
-use datafusion_common::{downcast_value, ScalarValue};
+use datafusion_common::{downcast_value, plan_datafusion_err, ScalarValue};
+use datafusion_common::{
+    internal_err, plan_err,
+    tree_node::{Transformed, TreeNode},
+};
 use datafusion_physical_expr::utils::collect_columns;
 use datafusion_physical_expr::{expressions as phys_expr, PhysicalExprRef};
 use log::trace;
 
-/// Interface to pass statistics information to [`PruningPredicate`]
+/// Interface to pass statistics (min/max/nulls) information to [`PruningPredicate`].
 ///
-/// Returns statistics for containers / files of data in Arrays.
+/// Returns statistics for containers / files as Arrow [`ArrayRef`], so the
+/// evaluation happens once on a single `RecordBatch`, amortizing the overhead
+/// of evaluating of the predicate. This is important when pruning 1000s of
+/// containers which often happens in analytic systems.
 ///
-/// For example, for the following three files with a single column
+/// For example, for the following three files with a single column `a`:
 /// ```text
 /// file1: column a: min=5, max=10
 /// file2: column a: No stats
 /// file2: column a: min=20, max=30
 /// ```
 ///
-/// PruningStatistics should return:
+/// PruningStatistics would return:
 ///
 /// ```text
 /// min_values("a") -> Some([5, Null, 20])
@@ -69,29 +66,78 @@ use log::trace;
 /// min_values("X") -> None
 /// ```
 pub trait PruningStatistics {
-    /// return the minimum values for the named column, if known.
-    /// Note: the returned array must contain `num_containers()` rows
+    /// Return the minimum values for the named column, if known.
+    ///
+    /// If the minimum value for a particular container is not known, the
+    /// returned array should have `null` in that row. If the minimum value is
+    /// not known for any row, return `None`.
+    ///
+    /// Note: the returned array must contain [`Self::num_containers`] rows
     fn min_values(&self, column: &Column) -> Option<ArrayRef>;
 
-    /// return the maximum values for the named column, if known.
-    /// Note: the returned array must contain `num_containers()` rows.
+    /// Return the maximum values for the named column, if known.
+    ///
+    /// See [`Self::min_values`] for when to return `None` and null values.
+    ///
+    /// Note: the returned array must contain [`Self::num_containers`] rows
     fn max_values(&self, column: &Column) -> Option<ArrayRef>;
 
-    /// return the number of containers (e.g. row groups) being
-    /// pruned with these statistics
+    /// Return the number of containers (e.g. row groups) being
+    /// pruned with these statistics (the number of rows in each returned array)
     fn num_containers(&self) -> usize;
 
-    /// return the number of null values for the named column as an
+    /// Return the number of null values for the named column as an
     /// `Option<UInt64Array>`.
     ///
-    /// Note: the returned array must contain `num_containers()` rows.
+    /// See [`Self::min_values`] for when to return `None` and null values.
+    ///
+    /// Note: the returned array must contain [`Self::num_containers`] rows
     fn null_counts(&self, column: &Column) -> Option<ArrayRef>;
 }
 
-/// Evaluates filter expressions on statistics in order to
-/// prune data containers (e.g. parquet row group)
+/// Evaluates filter expressions on statistics such as min/max values and null
+/// counts, attempting to prove a "container" (e.g. Parquet Row Group) can be
+/// skipped without reading the actual data, potentially leading to significant
+/// performance improvements.
 ///
-/// See [`PruningPredicate::try_new`] for more information.
+/// For example, [`PruningPredicate`]s are used to prune Parquet Row Groups
+/// based on the min/max values found in the Parquet metadata. If the
+/// `PruningPredicate` can guarantee that no rows in the Row Group match the
+/// filter, the entire Row Group is skipped during query execution.
+///
+/// The `PruningPredicate` API is general, allowing it to be used for pruning
+/// other types of containers (e.g. files) based on statistics that may be
+/// known from external catalogs (e.g. Delta Lake) or other sources. Thus it
+/// supports:
+///
+/// 1. Arbitrary expressions expressions (including user defined functions)
+///
+/// 2. Vectorized evaluation (provide more than one set of statistics at a time)
+/// so it is suitable for pruning 1000s of containers.
+///
+/// 3. Anything that implements the [`PruningStatistics`] trait, not just
+/// Parquet metadata.
+///
+/// # Example
+///
+/// Given an expression like `x = 5` and statistics for 3 containers (Row
+/// Groups, files, etc) `A`, `B`, and `C`:
+///
+/// ```text
+///   A: {x_min = 0, x_max = 4}
+///   B: {x_min = 2, x_max = 10}
+///   C: {x_min = 5, x_max = 8}
+/// ```
+///
+/// Applying the `PruningPredicate` will concludes that `A` can be pruned:
+///
+/// ```text
+/// A: false (no rows could possibly match x = 5)
+/// B: true  (rows might match x = 5)
+/// C: true  (rows might match x = 5)
+/// ```
+///
+/// See [`PruningPredicate::try_new`] and [`PruningPredicate::prune`] for more information.
 #[derive(Debug, Clone)]
 pub struct PruningPredicate {
     /// The input schema against which the predicate will be evaluated
@@ -143,17 +189,14 @@ impl PruningPredicate {
     ///
     /// `true`: There MAY be rows that match the predicate
     ///
-    /// `false`: There are no rows that could match the predicate
+    /// `false`: There are no rows that could possibly match the predicate
     ///
-    /// Note this function takes a slice of statistics as a parameter
-    /// to amortize the cost of the evaluation of the predicate
-    /// against a single record batch.
-    ///
-    /// Note: the predicate passed to `prune` should be simplified as
+    /// Note: the predicate passed to `prune` should already be simplified as
     /// much as possible (e.g. this pass doesn't handle some
     /// expressions like `b = false`, but it does handle the
-    /// simplified version `b`. The predicates are simplified via the
-    /// ConstantFolding optimizer pass
+    /// simplified version `b`. See [`ExprSimplifier`] to simplify expressions.
+    ///
+    /// [`ExprSimplifier`]: crate::optimizer::simplify_expressions::ExprSimplifier
     pub fn prune<S: PruningStatistics>(&self, statistics: &S) -> Result<Vec<bool>> {
         // build a RecordBatch that contains the min/max values in the
         // appropriate statistics columns
@@ -183,10 +226,10 @@ impl PruningPredicate {
                 Ok(vec![v; statistics.num_containers()])
             }
             other => {
-                Err(DataFusionError::Internal(format!(
+                internal_err!(
                     "Unexpected result of pruning predicate evaluation. Expected Boolean array \
                      or scalar but got {other:?}"
-                )))
+                )
             }
         }
     }
@@ -223,8 +266,12 @@ fn is_always_true(expr: &Arc<dyn PhysicalExpr>) -> bool {
         .unwrap_or_default()
 }
 
-/// Records for which columns statistics are necessary to evaluate a
-/// pruning predicate.
+/// Describes which columns statistics are necessary to evaluate a
+/// [`PruningPredicate`].
+///
+/// This structure permits reading and creating the minimum number statistics,
+/// which is important since statistics may be non trivial to read (e.g. large
+/// strings or when there are 1000s of columns).
 ///
 /// Handles creating references to the min/max statistics
 /// for columns as well as recording which statistics are needed
@@ -396,11 +443,11 @@ fn build_statistics_record_batch<S: PruningStatistics>(
         let array = array.unwrap_or_else(|| new_null_array(data_type, num_containers));
 
         if num_containers != array.len() {
-            return Err(DataFusionError::Internal(format!(
+            return internal_err!(
                 "mismatched statistics length. Expected {}, got {}",
                 num_containers,
                 array.len()
-            )));
+            );
         }
 
         // cast statistics array to required data type (e.g. parquet
@@ -423,7 +470,7 @@ fn build_statistics_record_batch<S: PruningStatistics>(
     );
 
     RecordBatch::try_new_with_options(schema, arrays, &options).map_err(|err| {
-        DataFusionError::Plan(format!("Can not create statistics record batch: {err}"))
+        plan_datafusion_err!("Can not create statistics record batch: {err}")
     })
 }
 
@@ -453,10 +500,9 @@ impl<'a> PruningExpressionBuilder<'a> {
                 (0, 1) => (right, left, right_columns, reverse_operator(op)?),
                 _ => {
                     // if more than one column used in expression - not supported
-                    return Err(DataFusionError::Plan(
+                    return plan_err!(
                         "Multi-column expressions are not currently supported"
-                            .to_string(),
-                    ));
+                    );
                 }
             };
 
@@ -471,9 +517,7 @@ impl<'a> PruningExpressionBuilder<'a> {
         let field = match schema.column_with_name(column.name()) {
             Some((_, f)) => f,
             _ => {
-                return Err(DataFusionError::Plan(
-                    "Field not found in schema".to_string(),
-                ));
+                return plan_err!("Field not found in schema");
             }
         };
 
@@ -525,9 +569,7 @@ fn rewrite_expr_to_prunable(
     schema: DFSchema,
 ) -> Result<(PhysicalExprRef, Operator, PhysicalExprRef)> {
     if !is_compare_op(op) {
-        return Err(DataFusionError::Plan(
-            "rewrite_expr_to_prunable only support compare expression".to_string(),
-        ));
+        return plan_err!("rewrite_expr_to_prunable only support compare expression");
     }
 
     let column_expr_any = column_expr.as_any();
@@ -574,9 +616,7 @@ fn rewrite_expr_to_prunable(
     } else if let Some(not) = column_expr_any.downcast_ref::<phys_expr::NotExpr>() {
         // `!col = true` --> `col = !true`
         if op != Operator::Eq && op != Operator::NotEq {
-            return Err(DataFusionError::Plan(
-                "Not with operator other than Eq / NotEq is not supported".to_string(),
-            ));
+            return plan_err!("Not with operator other than Eq / NotEq is not supported");
         }
         if not
             .arg()
@@ -588,14 +628,10 @@ fn rewrite_expr_to_prunable(
             let right = Arc::new(phys_expr::NotExpr::new(scalar_expr.clone()));
             Ok((left, reverse_operator(op)?, right))
         } else {
-            Err(DataFusionError::Plan(format!(
-                "Not with complex expression {column_expr:?} is not supported"
-            )))
+            plan_err!("Not with complex expression {column_expr:?} is not supported")
         }
     } else {
-        Err(DataFusionError::Plan(format!(
-            "column expression {column_expr:?} is not supported"
-        )))
+        plan_err!("column expression {column_expr:?} is not supported")
     }
 }
 
@@ -630,9 +666,9 @@ fn verify_support_type_for_prune(from_type: &DataType, to_type: &DataType) -> Re
     ) {
         Ok(())
     } else {
-        Err(DataFusionError::Plan(format!(
+        plan_err!(
             "Try Cast/Cast with from type {from_type} to type {to_type} is not supported"
-        )))
+        )
     }
 }
 
@@ -841,85 +877,85 @@ fn build_predicate_expression(
 fn build_statistics_expr(
     expr_builder: &mut PruningExpressionBuilder,
 ) -> Result<Arc<dyn PhysicalExpr>> {
-    let statistics_expr: Arc<dyn PhysicalExpr> =
-        match expr_builder.op() {
-            Operator::NotEq => {
-                // column != literal => (min, max) = literal =>
-                // !(min != literal && max != literal) ==>
-                // min != literal || literal != max
-                let min_column_expr = expr_builder.min_column_expr()?;
-                let max_column_expr = expr_builder.max_column_expr()?;
+    let statistics_expr: Arc<dyn PhysicalExpr> = match expr_builder.op() {
+        Operator::NotEq => {
+            // column != literal => (min, max) = literal =>
+            // !(min != literal && max != literal) ==>
+            // min != literal || literal != max
+            let min_column_expr = expr_builder.min_column_expr()?;
+            let max_column_expr = expr_builder.max_column_expr()?;
+            Arc::new(phys_expr::BinaryExpr::new(
                 Arc::new(phys_expr::BinaryExpr::new(
-                    Arc::new(phys_expr::BinaryExpr::new(
-                        min_column_expr,
-                        Operator::NotEq,
-                        expr_builder.scalar_expr().clone(),
-                    )),
-                    Operator::Or,
-                    Arc::new(phys_expr::BinaryExpr::new(
-                        expr_builder.scalar_expr().clone(),
-                        Operator::NotEq,
-                        max_column_expr,
-                    )),
-                ))
-            }
-            Operator::Eq => {
-                // column = literal => (min, max) = literal => min <= literal && literal <= max
-                // (column / 2) = 4 => (column_min / 2) <= 4 && 4 <= (column_max / 2)
-                let min_column_expr = expr_builder.min_column_expr()?;
-                let max_column_expr = expr_builder.max_column_expr()?;
-                Arc::new(phys_expr::BinaryExpr::new(
-                    Arc::new(phys_expr::BinaryExpr::new(
-                        min_column_expr,
-                        Operator::LtEq,
-                        expr_builder.scalar_expr().clone(),
-                    )),
-                    Operator::And,
-                    Arc::new(phys_expr::BinaryExpr::new(
-                        expr_builder.scalar_expr().clone(),
-                        Operator::LtEq,
-                        max_column_expr,
-                    )),
-                ))
-            }
-            Operator::Gt => {
-                // column > literal => (min, max) > literal => max > literal
-                Arc::new(phys_expr::BinaryExpr::new(
-                    expr_builder.max_column_expr()?,
-                    Operator::Gt,
+                    min_column_expr,
+                    Operator::NotEq,
                     expr_builder.scalar_expr().clone(),
-                ))
-            }
-            Operator::GtEq => {
-                // column >= literal => (min, max) >= literal => max >= literal
+                )),
+                Operator::Or,
                 Arc::new(phys_expr::BinaryExpr::new(
-                    expr_builder.max_column_expr()?,
-                    Operator::GtEq,
                     expr_builder.scalar_expr().clone(),
-                ))
-            }
-            Operator::Lt => {
-                // column < literal => (min, max) < literal => min < literal
+                    Operator::NotEq,
+                    max_column_expr,
+                )),
+            ))
+        }
+        Operator::Eq => {
+            // column = literal => (min, max) = literal => min <= literal && literal <= max
+            // (column / 2) = 4 => (column_min / 2) <= 4 && 4 <= (column_max / 2)
+            let min_column_expr = expr_builder.min_column_expr()?;
+            let max_column_expr = expr_builder.max_column_expr()?;
+            Arc::new(phys_expr::BinaryExpr::new(
                 Arc::new(phys_expr::BinaryExpr::new(
-                    expr_builder.min_column_expr()?,
-                    Operator::Lt,
-                    expr_builder.scalar_expr().clone(),
-                ))
-            }
-            Operator::LtEq => {
-                // column <= literal => (min, max) <= literal => min <= literal
-                Arc::new(phys_expr::BinaryExpr::new(
-                    expr_builder.min_column_expr()?,
+                    min_column_expr,
                     Operator::LtEq,
                     expr_builder.scalar_expr().clone(),
-                ))
-            }
-            // other expressions are not supported
-            _ => return Err(DataFusionError::Plan(
+                )),
+                Operator::And,
+                Arc::new(phys_expr::BinaryExpr::new(
+                    expr_builder.scalar_expr().clone(),
+                    Operator::LtEq,
+                    max_column_expr,
+                )),
+            ))
+        }
+        Operator::Gt => {
+            // column > literal => (min, max) > literal => max > literal
+            Arc::new(phys_expr::BinaryExpr::new(
+                expr_builder.max_column_expr()?,
+                Operator::Gt,
+                expr_builder.scalar_expr().clone(),
+            ))
+        }
+        Operator::GtEq => {
+            // column >= literal => (min, max) >= literal => max >= literal
+            Arc::new(phys_expr::BinaryExpr::new(
+                expr_builder.max_column_expr()?,
+                Operator::GtEq,
+                expr_builder.scalar_expr().clone(),
+            ))
+        }
+        Operator::Lt => {
+            // column < literal => (min, max) < literal => min < literal
+            Arc::new(phys_expr::BinaryExpr::new(
+                expr_builder.min_column_expr()?,
+                Operator::Lt,
+                expr_builder.scalar_expr().clone(),
+            ))
+        }
+        Operator::LtEq => {
+            // column <= literal => (min, max) <= literal => min <= literal
+            Arc::new(phys_expr::BinaryExpr::new(
+                expr_builder.min_column_expr()?,
+                Operator::LtEq,
+                expr_builder.scalar_expr().clone(),
+            ))
+        }
+        // other expressions are not supported
+        _ => {
+            return plan_err!(
                 "expressions other than (neq, eq, gt, gteq, lt, lteq) are not supported"
-                    .to_string(),
-            )),
-        };
+            );
+        }
+    };
     Ok(statistics_expr)
 }
 
@@ -1219,7 +1255,7 @@ mod tests {
 
         let batch =
             build_statistics_record_batch(&statistics, &required_columns).unwrap();
-        let expected = vec![
+        let expected = [
             "+--------+--------+--------+--------+",
             "| s1_min | s2_max | s3_max | s3_min |",
             "+--------+--------+--------+--------+",
@@ -1258,7 +1294,7 @@ mod tests {
 
         let batch =
             build_statistics_record_batch(&statistics, &required_columns).unwrap();
-        let expected = vec![
+        let expected = [
             "+-------------------------------+",
             "| s1_min                        |",
             "+-------------------------------+",
@@ -1304,7 +1340,7 @@ mod tests {
 
         let batch =
             build_statistics_record_batch(&statistics, &required_columns).unwrap();
-        let expected = vec![
+        let expected = [
             "+--------+",
             "| s1_min |",
             "+--------+",

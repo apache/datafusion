@@ -84,15 +84,12 @@ impl OperatorMode {
         let like = Like {
             negated: self.not,
             expr,
-            pattern: Box::new(Expr::Literal(ScalarValue::Utf8(Some(pattern)))),
+            pattern: Box::new(Expr::Literal(ScalarValue::from(pattern))),
             escape_char: None,
+            case_insensitive: self.i,
         };
 
-        if self.i {
-            Expr::ILike(like)
-        } else {
-            Expr::Like(like)
-        }
+        Expr::Like(like)
     }
 
     fn expr_matches_literal(&self, left: Box<Expr>, right: Box<Expr>) -> Expr {
@@ -111,7 +108,7 @@ fn collect_concat_to_like_string(parts: &[Hir]) -> Option<String> {
 
     for sub in parts {
         if let HirKind::Literal(l) = sub.kind() {
-            s.push_str(str_from_literal(l)?);
+            s.push_str(like_str_from_literal(l)?);
         } else {
             return None;
         }
@@ -123,7 +120,7 @@ fn collect_concat_to_like_string(parts: &[Hir]) -> Option<String> {
 
 /// returns a str represented by `Literal` if it contains a valid utf8
 /// sequence and is safe for like (has no '%' and '_')
-fn str_from_literal(l: &Literal) -> Option<&str> {
+fn like_str_from_literal(l: &Literal) -> Option<&str> {
     // if not utf8, no good
     let s = std::str::from_utf8(&l.0).ok()?;
 
@@ -132,6 +129,14 @@ fn str_from_literal(l: &Literal) -> Option<&str> {
     } else {
         None
     }
+}
+
+/// returns a str represented by `Literal` if it contains a valid utf8
+fn str_from_literal(l: &Literal) -> Option<&str> {
+    // if not utf8, no good
+    let s = std::str::from_utf8(&l.0).ok()?;
+
+    Some(s)
 }
 
 fn is_safe_for_like(c: char) -> bool {
@@ -198,8 +203,10 @@ fn anchored_literal_to_expr(v: &[Hir]) -> Option<Expr> {
     match v.len() {
         2 => Some(lit("")),
         3 => {
-            let HirKind::Literal(l) = v[1].kind() else { return None };
-            str_from_literal(l).map(lit)
+            let HirKind::Literal(l) = v[1].kind() else {
+                return None;
+            };
+            like_str_from_literal(l).map(lit)
         }
         _ => None,
     }
@@ -245,7 +252,7 @@ fn lower_simple(mode: &OperatorMode, left: &Expr, hir: &Hir) -> Option<Expr> {
             return Some(mode.expr(Box::new(left.clone()), "%".to_owned()));
         }
         HirKind::Literal(l) => {
-            let s = str_from_literal(l)?;
+            let s = like_str_from_literal(l)?;
             return Some(mode.expr(Box::new(left.clone()), format!("%{s}%")));
         }
         HirKind::Concat(inner) if is_anchored_literal(inner) => {

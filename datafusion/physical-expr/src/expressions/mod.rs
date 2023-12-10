@@ -22,7 +22,7 @@ mod binary;
 mod case;
 mod cast;
 mod column;
-mod datetime;
+mod datum;
 mod get_indexed_field;
 mod in_list;
 mod is_not_null;
@@ -46,6 +46,7 @@ pub use crate::aggregate::approx_percentile_cont::ApproxPercentileCont;
 pub use crate::aggregate::approx_percentile_cont_with_weight::ApproxPercentileContWithWeight;
 pub use crate::aggregate::array_agg::ArrayAgg;
 pub use crate::aggregate::array_agg_distinct::DistinctArrayAgg;
+pub use crate::aggregate::array_agg_ordered::OrderSensitiveArrayAgg;
 pub use crate::aggregate::average::{Avg, AvgAccumulator};
 pub use crate::aggregate::bit_and_or_xor::{BitAnd, BitOr, BitXor, DistinctBitXor};
 pub use crate::aggregate::bool_and_or::{BoolAnd, BoolOr};
@@ -59,8 +60,10 @@ pub use crate::aggregate::grouping::Grouping;
 pub use crate::aggregate::median::Median;
 pub use crate::aggregate::min_max::{Max, Min};
 pub use crate::aggregate::min_max::{MaxAccumulator, MinAccumulator};
+pub use crate::aggregate::regr::{Regr, RegrType};
 pub use crate::aggregate::stats::StatsType;
 pub use crate::aggregate::stddev::{Stddev, StddevPop};
+pub use crate::aggregate::string_agg::StringAgg;
 pub use crate::aggregate::sum::Sum;
 pub use crate::aggregate::sum_distinct::DistinctSum;
 pub use crate::aggregate::variance::{Variance, VariancePop};
@@ -79,8 +82,7 @@ pub use binary::{binary, BinaryExpr};
 pub use case::{case, CaseExpr};
 pub use cast::{cast, cast_column, cast_with_options, CastExpr};
 pub use column::{col, Column, UnKnownColumn};
-pub use datetime::{date_time_interval_expr, DateTimeIntervalExpr};
-pub use get_indexed_field::GetIndexedFieldExpr;
+pub use get_indexed_field::{GetFieldAccessExpr, GetIndexedFieldExpr};
 pub use in_list::{in_list, InListExpr};
 pub use is_not_null::{is_not_null, IsNotNullExpr};
 pub use is_null::{is_null, IsNullExpr};
@@ -100,17 +102,23 @@ pub use crate::PhysicalSortExpr;
 
 #[cfg(test)]
 pub(crate) mod tests {
-    use crate::AggregateExpr;
+    use crate::expressions::{col, create_aggregate_expr, try_cast};
+    use crate::{AggregateExpr, EmitTo};
     use arrow::record_batch::RecordBatch;
+    use arrow_array::ArrayRef;
+    use arrow_schema::{Field, Schema};
     use datafusion_common::Result;
     use datafusion_common::ScalarValue;
+    use datafusion_expr::type_coercion::aggregates::coerce_types;
+    use datafusion_expr::AggregateFunction;
     use std::sync::Arc;
 
-    /// macro to perform an aggregation and verify the result.
+    /// macro to perform an aggregation using [`datafusion_expr::Accumulator`] and verify the
+    /// result.
     #[macro_export]
     macro_rules! generic_test_op {
         ($ARRAY:expr, $DATATYPE:expr, $OP:ident, $EXPECTED:expr) => {
-            generic_test_op!($ARRAY, $DATATYPE, $OP, $EXPECTED, $EXPECTED.get_datatype())
+            generic_test_op!($ARRAY, $DATATYPE, $OP, $EXPECTED, $EXPECTED.data_type())
         };
         ($ARRAY:expr, $DATATYPE:expr, $OP:ident, $EXPECTED:expr, $EXPECTED_DATATYPE:expr) => {{
             let schema = Schema::new(vec![Field::new("a", $DATATYPE, true)]);
@@ -131,6 +139,70 @@ pub(crate) mod tests {
         }};
     }
 
+    /// macro to perform an aggregation using [`crate::GroupsAccumulator`] and verify the result.
+    ///
+    /// The difference between this and the above `generic_test_op` is that the former checks
+    /// the old slow-path [`datafusion_expr::Accumulator`] implementation, while this checks
+    /// the new [`crate::GroupsAccumulator`] implementation.
+    #[macro_export]
+    macro_rules! generic_test_op_new {
+        ($ARRAY:expr, $DATATYPE:expr, $OP:ident, $EXPECTED:expr) => {
+            generic_test_op_new!(
+                $ARRAY,
+                $DATATYPE,
+                $OP,
+                $EXPECTED,
+                $EXPECTED.data_type().clone()
+            )
+        };
+        ($ARRAY:expr, $DATATYPE:expr, $OP:ident, $EXPECTED:expr, $EXPECTED_DATATYPE:expr) => {{
+            let schema = Schema::new(vec![Field::new("a", $DATATYPE, true)]);
+
+            let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![$ARRAY])?;
+
+            let agg = Arc::new(<$OP>::new(
+                col("a", &schema)?,
+                "bla".to_string(),
+                $EXPECTED_DATATYPE,
+            ));
+            let actual = aggregate_new(&batch, agg)?;
+            assert_eq!($EXPECTED, &actual);
+
+            Ok(()) as Result<(), DataFusionError>
+        }};
+    }
+
+    /// Assert `function(array) == expected` performing any necessary type coercion
+    pub fn assert_aggregate(
+        array: ArrayRef,
+        function: AggregateFunction,
+        distinct: bool,
+        expected: ScalarValue,
+    ) {
+        let data_type = array.data_type();
+        let sig = function.signature();
+        let coerced = coerce_types(&function, &[data_type.clone()], &sig).unwrap();
+
+        let input_schema = Schema::new(vec![Field::new("a", data_type.clone(), true)]);
+        let batch =
+            RecordBatch::try_new(Arc::new(input_schema.clone()), vec![array]).unwrap();
+
+        let input = try_cast(
+            col("a", &input_schema).unwrap(),
+            &input_schema,
+            coerced[0].clone(),
+        )
+        .unwrap();
+
+        let schema = Schema::new(vec![Field::new("a", coerced[0].clone(), true)]);
+        let agg =
+            create_aggregate_expr(&function, distinct, &[input], &[], &schema, "agg")
+                .unwrap();
+
+        let result = aggregate(&batch, agg).unwrap();
+        assert_eq!(expected, result);
+    }
+
     /// macro to perform an aggregation with two inputs and verify the result.
     #[macro_export]
     macro_rules! generic_test_op2 {
@@ -142,7 +214,7 @@ pub(crate) mod tests {
                 $DATATYPE2,
                 $OP,
                 $EXPECTED,
-                $EXPECTED.get_datatype()
+                $EXPECTED.data_type()
             )
         };
         ($ARRAY1:expr, $ARRAY2:expr, $DATATYPE1:expr, $DATATYPE2:expr, $OP:ident, $EXPECTED:expr, $EXPECTED_DATATYPE:expr) => {{
@@ -176,10 +248,30 @@ pub(crate) mod tests {
         let expr = agg.expressions();
         let values = expr
             .iter()
-            .map(|e| e.evaluate(batch))
-            .map(|r| r.map(|v| v.into_array(batch.num_rows())))
+            .map(|e| {
+                e.evaluate(batch)
+                    .and_then(|v| v.into_array(batch.num_rows()))
+            })
             .collect::<Result<Vec<_>>>()?;
         accum.update_batch(&values)?;
         accum.evaluate()
+    }
+
+    pub fn aggregate_new(
+        batch: &RecordBatch,
+        agg: Arc<dyn AggregateExpr>,
+    ) -> Result<ArrayRef> {
+        let mut accum = agg.create_groups_accumulator()?;
+        let expr = agg.expressions();
+        let values = expr
+            .iter()
+            .map(|e| {
+                e.evaluate(batch)
+                    .and_then(|v| v.into_array(batch.num_rows()))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let indices = vec![0; batch.num_rows()];
+        accum.update_batch(&values, &indices, None, 1)?;
+        accum.evaluate(EmitTo::All)
     }
 }

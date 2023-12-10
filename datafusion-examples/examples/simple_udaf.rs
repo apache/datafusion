@@ -145,7 +145,7 @@ async fn main() -> Result<()> {
         // the name; used to represent it in plan descriptions and in the registry, to use in SQL.
         "geo_mean",
         // the input type; DataFusion guarantees that the first entry of `values` in `update` has this type.
-        DataType::Float64,
+        vec![DataType::Float64],
         // the return type; DataFusion expects this to match the type returned by `evaluate`.
         Arc::new(DataType::Float64),
         Volatility::Immutable,
@@ -154,6 +154,10 @@ async fn main() -> Result<()> {
         // This is the description of the state. `state()` must match the types here.
         Arc::new(vec![DataType::Float64, DataType::UInt32]),
     );
+    ctx.register_udaf(geometric_mean.clone());
+
+    let sql_df = ctx.sql("SELECT geo_mean(a) FROM t").await?;
+    sql_df.show().await?;
 
     // get a DataFrame from the context
     // this table has 1 column `a` f32 with values {2,4,8,64}, whose geometric mean is 8.0.

@@ -46,7 +46,7 @@ impl FromStr for CompressionTypeVariant {
             "BZIP2" | "BZ2" => Ok(Self::BZIP2),
             "XZ" => Ok(Self::XZ),
             "ZST" | "ZSTD" => Ok(Self::ZSTD),
-            "" => Ok(Self::UNCOMPRESSED),
+            "" | "UNCOMPRESSED" => Ok(Self::UNCOMPRESSED),
             _ => Err(ParserError::ParserError(format!(
                 "Unsupported file compression type {s}"
             ))),

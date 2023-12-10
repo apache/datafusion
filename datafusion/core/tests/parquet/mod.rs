@@ -40,6 +40,7 @@ use std::sync::Arc;
 use tempfile::NamedTempFile;
 
 mod custom_reader;
+mod file_statistics;
 mod filter_pushdown;
 mod page_pruning;
 mod row_group_pruning;
@@ -153,7 +154,7 @@ impl ContextWithParquet {
         let parquet_path = file.path().to_string_lossy();
 
         // now, setup a the file as a data source and run a query against it
-        let ctx = SessionContext::with_config(config);
+        let ctx = SessionContext::new_with_config(config);
 
         ctx.register_parquet("t", &parquet_path, ParquetReadOptions::default())
             .await
@@ -290,7 +291,8 @@ fn make_timestamp_batch(offset: Duration) -> RecordBatch {
                 offset_nanos
                     + t.parse::<chrono::NaiveDateTime>()
                         .unwrap()
-                        .timestamp_nanos()
+                        .timestamp_nanos_opt()
+                        .unwrap()
             })
         })
         .collect::<Vec<_>>();

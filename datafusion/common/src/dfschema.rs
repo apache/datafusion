@@ -20,26 +20,97 @@
 
 use std::collections::{HashMap, HashSet};
 use std::convert::TryFrom;
+use std::fmt::{Display, Formatter};
 use std::hash::Hash;
 use std::sync::Arc;
 
-use crate::error::{unqualified_field_not_found, DataFusionError, Result, SchemaError};
-use crate::{field_not_found, Column, OwnedTableReference, TableReference};
+use crate::error::{
+    unqualified_field_not_found, DataFusionError, Result, SchemaError, _plan_err,
+};
+use crate::{
+    field_not_found, Column, FunctionalDependencies, OwnedTableReference, TableReference,
+};
 
 use arrow::compute::can_cast_types;
 use arrow::datatypes::{DataType, Field, FieldRef, Fields, Schema, SchemaRef};
-use std::fmt::{Display, Formatter};
 
-/// A reference-counted reference to a `DFSchema`.
+/// A reference-counted reference to a [DFSchema].
 pub type DFSchemaRef = Arc<DFSchema>;
 
-/// DFSchema wraps an Arrow schema and adds relation names
+/// DFSchema wraps an Arrow schema and adds relation names.
+///
+/// The schema may hold the fields across multiple tables. Some fields may be
+/// qualified and some unqualified. A qualified field is a field that has a
+/// relation name associated with it.
+///
+/// Unqualified fields must be unique not only amongst themselves, but also must
+/// have a distinct name from any qualified field names. This allows finding a
+/// qualified field by name to be possible, so long as there aren't multiple
+/// qualified fields with the same name.
+///
+/// There is an alias to `Arc<DFSchema>` named [DFSchemaRef].
+///
+/// # Creating qualified schemas
+///
+/// Use [DFSchema::try_from_qualified_schema] to create a qualified schema from
+/// an Arrow schema.
+///
+/// ```rust
+/// use datafusion_common::{DFSchema, Column};
+/// use arrow_schema::{DataType, Field, Schema};
+///
+/// let arrow_schema = Schema::new(vec![
+///    Field::new("c1", DataType::Int32, false),
+/// ]);
+///
+/// let df_schema = DFSchema::try_from_qualified_schema("t1", &arrow_schema).unwrap();
+/// let column = Column::from_qualified_name("t1.c1");
+/// assert!(df_schema.has_column(&column));
+///
+/// // Can also access qualified fields with unqualified name, if it's unambiguous
+/// let column = Column::from_qualified_name("c1");
+/// assert!(df_schema.has_column(&column));
+/// ```
+///
+/// # Creating unqualified schemas
+///
+/// Create an unqualified schema using TryFrom:
+///
+/// ```rust
+/// use datafusion_common::{DFSchema, Column};
+/// use arrow_schema::{DataType, Field, Schema};
+///
+/// let arrow_schema = Schema::new(vec![
+///    Field::new("c1", DataType::Int32, false),
+/// ]);
+///
+/// let df_schema = DFSchema::try_from(arrow_schema).unwrap();
+/// let column = Column::new_unqualified("c1");
+/// assert!(df_schema.has_column(&column));
+/// ```
+///
+/// # Converting back to Arrow schema
+///
+/// Use the `Into` trait to convert `DFSchema` into an Arrow schema:
+///
+/// ```rust
+/// use datafusion_common::{DFSchema, DFField};
+/// use arrow_schema::Schema;
+///
+/// let df_schema = DFSchema::new(vec![
+///    DFField::new_unqualified("c1", arrow::datatypes::DataType::Int32, false),
+/// ]).unwrap();
+/// let schema = Schema::from(df_schema);
+/// assert_eq!(schema.fields().len(), 1);
+/// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DFSchema {
     /// Fields
     fields: Vec<DFField>,
     /// Additional metadata in form of key value pairs
     metadata: HashMap<String, String>,
+    /// Stores functional dependencies in the schema.
+    functional_dependencies: FunctionalDependencies,
 }
 
 impl DFSchema {
@@ -48,6 +119,7 @@ impl DFSchema {
         Self {
             fields: vec![],
             metadata: HashMap::new(),
+            functional_dependencies: FunctionalDependencies::empty(),
         }
     }
 
@@ -97,10 +169,17 @@ impl DFSchema {
                 ));
             }
         }
-        Ok(Self { fields, metadata })
+        Ok(Self {
+            fields,
+            metadata,
+            functional_dependencies: FunctionalDependencies::empty(),
+        })
     }
 
     /// Create a `DFSchema` from an Arrow schema and a given qualifier
+    ///
+    /// To create a schema from an Arrow schema without a qualifier, use
+    /// `DFSchema::try_from`.
     pub fn try_from_qualified_schema<'a>(
         qualifier: impl Into<TableReference<'a>>,
         schema: &Schema,
@@ -114,6 +193,22 @@ impl DFSchema {
                 .collect(),
             schema.metadata().clone(),
         )
+    }
+
+    /// Assigns functional dependencies.
+    pub fn with_functional_dependencies(
+        mut self,
+        functional_dependencies: FunctionalDependencies,
+    ) -> Result<Self> {
+        if functional_dependencies.is_valid(self.fields.len()) {
+            self.functional_dependencies = functional_dependencies;
+            Ok(self)
+        } else {
+            _plan_err!(
+                "Invalid functional dependency: {:?}",
+                functional_dependencies
+            )
+        }
     }
 
     /// Create a new schema that contains the fields from this schema followed by the fields
@@ -169,10 +264,10 @@ impl DFSchema {
                 match &self.fields[i].qualifier {
                     Some(qualifier) => {
                         if (qualifier.to_string() + "." + self.fields[i].name()) == name {
-                            return Err(DataFusionError::Plan(format!(
+                            return _plan_err!(
                                 "Fully qualified field name '{name}' was supplied to `index_of` \
                                 which is deprecated. Please use `index_of_column_by_name` instead"
-                            )));
+                            );
                         }
                     }
                     None => (),
@@ -360,12 +455,11 @@ impl DFSchema {
             .zip(arrow_schema.fields().iter())
             .try_for_each(|(l_field, r_field)| {
                 if !can_cast_types(r_field.data_type(), l_field.data_type()) {
-                    Err(DataFusionError::Plan(
-                        format!("Column {} (type: {}) is not compatible with column {} (type: {})",
+                    _plan_err!("Column {} (type: {}) is not compatible with column {} (type: {})",
                                 r_field.name(),
                                 r_field.data_type(),
                                 l_field.name(),
-                                l_field.data_type())))
+                                l_field.data_type())
                 } else {
                     Ok(())
                 }
@@ -373,10 +467,32 @@ impl DFSchema {
     }
 
     /// Returns true if the two schemas have the same qualified named
+    /// fields with logically equivalent data types. Returns false otherwise.
+    ///
+    /// Use [DFSchema]::equivalent_names_and_types for stricter semantic type
+    /// equivalence checking.
+    pub fn logically_equivalent_names_and_types(&self, other: &Self) -> bool {
+        if self.fields().len() != other.fields().len() {
+            return false;
+        }
+        let self_fields = self.fields().iter();
+        let other_fields = other.fields().iter();
+        self_fields.zip(other_fields).all(|(f1, f2)| {
+            f1.qualifier() == f2.qualifier()
+                && f1.name() == f2.name()
+                && Self::datatype_is_logically_equal(f1.data_type(), f2.data_type())
+        })
+    }
+
+    /// Returns true if the two schemas have the same qualified named
     /// fields with the same data types. Returns false otherwise.
     ///
     /// This is a specialized version of Eq that ignores differences
     /// in nullability and metadata.
+    ///
+    /// Use [DFSchema]::logically_equivalent_names_and_types for a weaker
+    /// logical type checking, which for example would consider a dictionary
+    /// encoded UTF8 array to be equivalent to a plain UTF8 array.
     pub fn equivalent_names_and_types(&self, other: &Self) -> bool {
         if self.fields().len() != other.fields().len() {
             return false;
@@ -388,6 +504,46 @@ impl DFSchema {
                 && f1.name() == f2.name()
                 && Self::datatype_is_semantically_equal(f1.data_type(), f2.data_type())
         })
+    }
+
+    /// Checks if two [`DataType`]s are logically equal. This is a notably weaker constraint
+    /// than datatype_is_semantically_equal in that a Dictionary<K,V> type is logically
+    /// equal to a plain V type, but not semantically equal. Dictionary<K1, V1> is also
+    /// logically equal to Dictionary<K2, V1>.
+    fn datatype_is_logically_equal(dt1: &DataType, dt2: &DataType) -> bool {
+        // check nested fields
+        match (dt1, dt2) {
+            (DataType::Dictionary(_, v1), DataType::Dictionary(_, v2)) => {
+                v1.as_ref() == v2.as_ref()
+            }
+            (DataType::Dictionary(_, v1), othertype) => v1.as_ref() == othertype,
+            (othertype, DataType::Dictionary(_, v1)) => v1.as_ref() == othertype,
+            (DataType::List(f1), DataType::List(f2))
+            | (DataType::LargeList(f1), DataType::LargeList(f2))
+            | (DataType::FixedSizeList(f1, _), DataType::FixedSizeList(f2, _))
+            | (DataType::Map(f1, _), DataType::Map(f2, _)) => {
+                Self::field_is_logically_equal(f1, f2)
+            }
+            (DataType::Struct(fields1), DataType::Struct(fields2)) => {
+                let iter1 = fields1.iter();
+                let iter2 = fields2.iter();
+                fields1.len() == fields2.len() &&
+                        // all fields have to be the same
+                    iter1
+                    .zip(iter2)
+                        .all(|(f1, f2)| Self::field_is_logically_equal(f1, f2))
+            }
+            (DataType::Union(fields1, _), DataType::Union(fields2, _)) => {
+                let iter1 = fields1.iter();
+                let iter2 = fields2.iter();
+                fields1.len() == fields2.len() &&
+                    // all fields have to be the same
+                    iter1
+                        .zip(iter2)
+                        .all(|((t1, f1), (t2, f2))| t1 == t2 && Self::field_is_logically_equal(f1, f2))
+            }
+            _ => dt1 == dt2,
+        }
     }
 
     /// Returns true of two [`DataType`]s are semantically equal (same
@@ -425,8 +581,21 @@ impl DFSchema {
                         .zip(iter2)
                         .all(|((t1, f1), (t2, f2))| t1 == t2 && Self::field_is_semantically_equal(f1, f2))
             }
+            (
+                DataType::Decimal128(_l_precision, _l_scale),
+                DataType::Decimal128(_r_precision, _r_scale),
+            ) => true,
+            (
+                DataType::Decimal256(_l_precision, _l_scale),
+                DataType::Decimal256(_r_precision, _r_scale),
+            ) => true,
             _ => dt1 == dt2,
         }
+    }
+
+    fn field_is_logically_equal(f1: &Field, f2: &Field) -> bool {
+        f1.name() == f2.name()
+            && Self::datatype_is_logically_equal(f1.data_type(), f2.data_type())
     }
 
     fn field_is_semantically_equal(f1: &Field, f2: &Field) -> bool {
@@ -470,6 +639,11 @@ impl DFSchema {
     /// Get metadata of this schema
     pub fn metadata(&self) -> &HashMap<String, String> {
         &self.metadata
+    }
+
+    /// Get functional dependencies
+    pub fn functional_dependencies(&self) -> &FunctionalDependencies {
+        &self.functional_dependencies
     }
 }
 
@@ -581,6 +755,9 @@ pub trait ExprSchema: std::fmt::Debug {
 
     /// What is the datatype of this column?
     fn data_type(&self, col: &Column) -> Result<&DataType>;
+
+    /// Returns the column's optional metadata.
+    fn metadata(&self, col: &Column) -> Result<&HashMap<String, String>>;
 }
 
 // Implement `ExprSchema` for `Arc<DFSchema>`
@@ -592,6 +769,10 @@ impl<P: AsRef<DFSchema> + std::fmt::Debug> ExprSchema for P {
     fn data_type(&self, col: &Column) -> Result<&DataType> {
         self.as_ref().data_type(col)
     }
+
+    fn metadata(&self, col: &Column) -> Result<&HashMap<String, String>> {
+        ExprSchema::metadata(self.as_ref(), col)
+    }
 }
 
 impl ExprSchema for DFSchema {
@@ -601,6 +782,10 @@ impl ExprSchema for DFSchema {
 
     fn data_type(&self, col: &Column) -> Result<&DataType> {
         Ok(self.field_from_column(col)?.data_type())
+    }
+
+    fn metadata(&self, col: &Column) -> Result<&HashMap<String, String>> {
+        Ok(self.field_from_column(col)?.metadata())
     }
 }
 
@@ -661,6 +846,10 @@ impl DFField {
         self.field.is_nullable()
     }
 
+    pub fn metadata(&self) -> &HashMap<String, String> {
+        self.field.metadata()
+    }
+
     /// Returns a string to the `DFField`'s qualified name
     pub fn qualified_name(&self) -> String {
         if let Some(qualifier) = &self.qualifier {
@@ -708,6 +897,13 @@ impl DFField {
         self.field = f.into();
         self
     }
+
+    /// Return field with new metadata
+    pub fn with_metadata(mut self, metadata: HashMap<String, String>) -> Self {
+        let f = self.field().as_ref().clone().with_metadata(metadata);
+        self.field = f.into();
+        self
+    }
 }
 
 impl From<FieldRef> for DFField {
@@ -725,6 +921,58 @@ impl From<Field> for DFField {
     }
 }
 
+/// DataFusion-specific extensions to [`Schema`].
+pub trait SchemaExt {
+    /// This is a specialized version of Eq that ignores differences
+    /// in nullability and metadata.
+    ///
+    /// It works the same as [`DFSchema::equivalent_names_and_types`].
+    fn equivalent_names_and_types(&self, other: &Self) -> bool;
+
+    /// Returns true if the two schemas have the same qualified named
+    /// fields with logically equivalent data types. Returns false otherwise.
+    ///
+    /// Use [DFSchema]::equivalent_names_and_types for stricter semantic type
+    /// equivalence checking.
+    fn logically_equivalent_names_and_types(&self, other: &Self) -> bool;
+}
+
+impl SchemaExt for Schema {
+    fn equivalent_names_and_types(&self, other: &Self) -> bool {
+        if self.fields().len() != other.fields().len() {
+            return false;
+        }
+
+        self.fields()
+            .iter()
+            .zip(other.fields().iter())
+            .all(|(f1, f2)| {
+                f1.name() == f2.name()
+                    && DFSchema::datatype_is_semantically_equal(
+                        f1.data_type(),
+                        f2.data_type(),
+                    )
+            })
+    }
+
+    fn logically_equivalent_names_and_types(&self, other: &Self) -> bool {
+        if self.fields().len() != other.fields().len() {
+            return false;
+        }
+
+        self.fields()
+            .iter()
+            .zip(other.fields().iter())
+            .all(|(f1, f2)| {
+                f1.name() == f2.name()
+                    && DFSchema::datatype_is_logically_equal(
+                        f1.data_type(),
+                        f2.data_type(),
+                    )
+            })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::assert_contains;
@@ -739,8 +987,8 @@ mod tests {
         // lookup with unqualified name "t1.c0"
         let err = schema.index_of_column(&col).unwrap_err();
         assert_eq!(
-            err.to_string(),
-            "Schema error: No field named \"t1.c0\". Valid fields are t1.c0, t1.c1.",
+            err.strip_backtrace(),
+            "Schema error: No field named \"t1.c0\". Valid fields are t1.c0, t1.c1."
         );
         Ok(())
     }
@@ -759,8 +1007,8 @@ mod tests {
         // lookup with unqualified name "t1.c0"
         let err = schema.index_of_column(&col).unwrap_err();
         assert_eq!(
-            err.to_string(),
-            "Schema error: No field named \"t1.c0\". Valid fields are t1.\"CapitalColumn\", t1.\"field.with.period\".",
+            err.strip_backtrace(),
+            "Schema error: No field named \"t1.c0\". Valid fields are t1.\"CapitalColumn\", t1.\"field.with.period\"."
         );
         Ok(())
     }
@@ -843,8 +1091,8 @@ mod tests {
         let right = DFSchema::try_from(test_schema_1())?;
         let join = left.join(&right);
         assert_eq!(
-            join.unwrap_err().to_string(),
-            "Schema error: Schema contains duplicate unqualified field name c0",
+            join.unwrap_err().strip_backtrace(),
+            "Schema error: Schema contains duplicate unqualified field name c0"
         );
         Ok(())
     }
@@ -920,12 +1168,12 @@ mod tests {
 
         let col = Column::from_qualified_name("t1.c0");
         let err = schema.index_of_column(&col).unwrap_err();
-        assert_eq!(err.to_string(), "Schema error: No field named t1.c0.");
+        assert_eq!(err.strip_backtrace(), "Schema error: No field named t1.c0.");
 
         // the same check without qualifier
         let col = Column::from_name("c0");
         let err = schema.index_of_column(&col).err().unwrap();
-        assert_eq!("Schema error: No field named c0.", err.to_string());
+        assert_eq!(err.strip_backtrace(), "Schema error: No field named c0.");
     }
 
     #[test]
@@ -991,7 +1239,8 @@ mod tests {
         TestCase {
             fields1: vec![&field1_i16_t],
             fields2: vec![&field1_i16_t],
-            expected: true,
+            expected_dfschema: true,
+            expected_arrow: true,
         }
         .run();
 
@@ -999,7 +1248,8 @@ mod tests {
         TestCase {
             fields1: vec![&field1_i16_t_meta],
             fields2: vec![&field1_i16_t],
-            expected: true,
+            expected_dfschema: true,
+            expected_arrow: true,
         }
         .run();
 
@@ -1007,7 +1257,8 @@ mod tests {
         TestCase {
             fields1: vec![&field1_i16_t],
             fields2: vec![&field2_i16_t],
-            expected: false,
+            expected_dfschema: false,
+            expected_arrow: false,
         }
         .run();
 
@@ -1015,7 +1266,8 @@ mod tests {
         TestCase {
             fields1: vec![&field1_i16_t],
             fields2: vec![&field1_i32_t],
-            expected: false,
+            expected_dfschema: false,
+            expected_arrow: false,
         }
         .run();
 
@@ -1023,7 +1275,8 @@ mod tests {
         TestCase {
             fields1: vec![&field1_i16_t],
             fields2: vec![&field1_i16_f],
-            expected: true,
+            expected_dfschema: true,
+            expected_arrow: true,
         }
         .run();
 
@@ -1031,7 +1284,8 @@ mod tests {
         TestCase {
             fields1: vec![&field1_i16_t],
             fields2: vec![&field1_i16_t_qualified],
-            expected: false,
+            expected_dfschema: false,
+            expected_arrow: true,
         }
         .run();
 
@@ -1039,7 +1293,8 @@ mod tests {
         TestCase {
             fields1: vec![&field2_i16_t, &field1_i16_t],
             fields2: vec![&field2_i16_t, &field3_i16_t],
-            expected: false,
+            expected_dfschema: false,
+            expected_arrow: false,
         }
         .run();
 
@@ -1047,7 +1302,8 @@ mod tests {
         TestCase {
             fields1: vec![&field1_i16_t, &field2_i16_t],
             fields2: vec![&field1_i16_t],
-            expected: false,
+            expected_dfschema: false,
+            expected_arrow: false,
         }
         .run();
 
@@ -1055,7 +1311,8 @@ mod tests {
         TestCase {
             fields1: vec![&field_dict_t],
             fields2: vec![&field_dict_t],
-            expected: true,
+            expected_dfschema: true,
+            expected_arrow: true,
         }
         .run();
 
@@ -1063,7 +1320,8 @@ mod tests {
         TestCase {
             fields1: vec![&field_dict_t],
             fields2: vec![&field_dict_f],
-            expected: true,
+            expected_dfschema: true,
+            expected_arrow: true,
         }
         .run();
 
@@ -1071,7 +1329,8 @@ mod tests {
         TestCase {
             fields1: vec![&field_dict_t],
             fields2: vec![&field1_i16_t],
-            expected: false,
+            expected_dfschema: false,
+            expected_arrow: false,
         }
         .run();
 
@@ -1079,7 +1338,8 @@ mod tests {
         TestCase {
             fields1: vec![&list_t],
             fields2: vec![&list_f],
-            expected: true,
+            expected_dfschema: true,
+            expected_arrow: true,
         }
         .run();
 
@@ -1087,7 +1347,8 @@ mod tests {
         TestCase {
             fields1: vec![&list_t],
             fields2: vec![&list_f_name],
-            expected: false,
+            expected_dfschema: false,
+            expected_arrow: false,
         }
         .run();
 
@@ -1095,7 +1356,8 @@ mod tests {
         TestCase {
             fields1: vec![&struct_t],
             fields2: vec![&struct_f],
-            expected: true,
+            expected_dfschema: true,
+            expected_arrow: true,
         }
         .run();
 
@@ -1103,7 +1365,8 @@ mod tests {
         TestCase {
             fields1: vec![&struct_t],
             fields2: vec![&struct_f_meta],
-            expected: true,
+            expected_dfschema: true,
+            expected_arrow: true,
         }
         .run();
 
@@ -1111,7 +1374,8 @@ mod tests {
         TestCase {
             fields1: vec![&struct_t],
             fields2: vec![&struct_f_type],
-            expected: false,
+            expected_dfschema: false,
+            expected_arrow: false,
         }
         .run();
 
@@ -1119,7 +1383,8 @@ mod tests {
         struct TestCase<'a> {
             fields1: Vec<&'a DFField>,
             fields2: Vec<&'a DFField>,
-            expected: bool,
+            expected_dfschema: bool,
+            expected_arrow: bool,
         }
 
         impl<'a> TestCase<'a> {
@@ -1129,12 +1394,24 @@ mod tests {
                 let schema2 = to_df_schema(self.fields2);
                 assert_eq!(
                     schema1.equivalent_names_and_types(&schema2),
-                    self.expected,
+                    self.expected_dfschema,
                     "Comparison did not match expected: {}\n\n\
                      schema1:\n\n{:#?}\n\nschema2:\n\n{:#?}",
-                    self.expected,
+                    self.expected_dfschema,
                     schema1,
                     schema2
+                );
+
+                let arrow_schema1 = Schema::from(schema1);
+                let arrow_schema2 = Schema::from(schema2);
+                assert_eq!(
+                    arrow_schema1.equivalent_names_and_types(&arrow_schema2),
+                    self.expected_arrow,
+                    "Comparison did not match expected: {}\n\n\
+                     arrow schema1:\n\n{:#?}\n\n arrow schema2:\n\n{:#?}",
+                    self.expected_arrow,
+                    arrow_schema1,
+                    arrow_schema2
                 );
             }
         }
@@ -1206,8 +1483,8 @@ mod tests {
             DFSchema::new_with_metadata([a, b].to_vec(), HashMap::new()).unwrap(),
         );
         let schema: Schema = df_schema.as_ref().clone().into();
-        let a_df = df_schema.fields.get(0).unwrap().field();
-        let a_arrow = schema.fields.get(0).unwrap();
+        let a_df = df_schema.fields.first().unwrap().field();
+        let a_arrow = schema.fields.first().unwrap();
         assert_eq!(a_df.metadata(), a_arrow.metadata())
     }
 

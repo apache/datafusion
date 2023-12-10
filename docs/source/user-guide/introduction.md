@@ -22,8 +22,20 @@
 DataFusion is a very fast, extensible query engine for building
 high-quality data-centric systems in [Rust](http://rustlang.org),
 using the [Apache Arrow](https://arrow.apache.org) in-memory format.
+DataFusion is part of the [Apache Arrow](https://arrow.apache.org/)
+project.
 
-DataFusion offers SQL and Dataframe APIs, excellent [performance](https://benchmark.clickhouse.com/), built-in support for CSV, Parquet, JSON, and Avro, extensive customization, and a great community.
+DataFusion offers SQL and Dataframe APIs, excellent [performance](https://benchmark.clickhouse.com/), built-in support for CSV, Parquet, JSON, and Avro, [python bindings], extensive customization, a great community, and more.
+
+[python bindings]: https://github.com/apache/arrow-datafusion-python
+
+## Project Goals
+
+DataFusion aims to be the query engine of choice for new, fast
+data centric systems such as databases, dataframe libraries, machine
+learning and streaming applications by leveraging the unique features
+of [Rust](https://www.rust-lang.org/) and [Apache
+Arrow](https://arrow.apache.org/).
 
 ## Features
 
@@ -34,24 +46,34 @@ DataFusion offers SQL and Dataframe APIs, excellent [performance](https://benchm
 - Many extension points: user defined scalar/aggregate/window functions, DataSources, SQL,
   other query languages, custom plan and execution nodes, optimizer passes, and more.
 - Streaming, asynchronous IO directly from popular object stores, including AWS S3,
-  Azure Blob Storage, and Google Cloud Storage. Other storage systems are supported via the
-  `ObjectStore` trait.
+  Azure Blob Storage, and Google Cloud Storage (Other storage systems are supported via the
+  `ObjectStore` trait).
 - [Excellent Documentation](https://docs.rs/datafusion/latest) and a
   [welcoming community](https://arrow.apache.org/datafusion/contributor-guide/communication.html).
-- A state of the art query optimizer with projection and filter pushdown, sort aware optimizations,
-  automatic join reordering, expression coercion, and more.
-- Permissive Apache 2.0 License, Apache Software Foundation governance
-- Written in [Rust](https://www.rust-lang.org/), a modern system language with development
-  productivity similar to Java or Golang, the performance of C++, and
-  [loved by programmers everywhere](https://insights.stackoverflow.com/survey/2021#technology-most-loved-dreaded-and-wanted).
-- Support for [Substrait](https://substrait.io/) for query plan serialization, making it easier to integrate DataFusion
-  with other projects, and to pass plans across language boundaries.
+- A state of the art query optimizer with expression coercion and
+  simplification, projection and filter pushdown, sort and distribution
+  aware optimizations, automatic join reordering, and more.
+- Permissive Apache 2.0 License, predictable and well understood
+  [Apache Software Foundation](https://www.apache.org/) governance.
+- Implementation in [Rust](https://www.rust-lang.org/), a modern
+  system language with development productivity similar to Java or
+  Golang, the performance of C++, and [loved by programmers
+  everywhere](https://insights.stackoverflow.com/survey/2021#technology-most-loved-dreaded-and-wanted).
+- Support for [Substrait](https://substrait.io/) query plans, to
+  easily pass plans across language and system boundaries.
 
 ## Use Cases
 
 DataFusion can be used without modification as an embedded SQL
 engine or can be customized and used as a foundation for
-building new systems. Here are some examples of systems built using DataFusion:
+building new systems.
+
+While most current usecases are "analytic" or (throughput) some
+components of DataFusion such as the plan representations, are
+suitable for "streaming" and "transaction" style systems (low
+latency).
+
+Here are some example systems built using DataFusion:
 
 - Specialized Analytical Database systems such as [CeresDB] and more general Apache Spark like system such a [Ballista].
 - New query language engines such as [prql-query] and accelerators such as [VegaFusion]
@@ -59,39 +81,49 @@ building new systems. Here are some examples of systems built using DataFusion:
 - SQL support to another library, such as [dask sql]
 - Streaming data platforms such as [Synnada]
 - Tools for reading / sorting / transcoding Parquet, CSV, AVRO, and JSON files such as [qv]
-- A faster Spark runtime replacement [Blaze]
+- Native Spark runtime replacement such as [Blaze]
 
-By using DataFusion, the projects are freed to focus on their specific
+By using DataFusion, projects are freed to focus on their specific
 features, and avoid reimplementing general (but still necessary)
 features such as an expression representation, standard optimizations,
-execution plans, file format support, etc.
+parellelized streaming execution plans, file format support, etc.
 
 ## Known Users
 
-Here are some of the projects known to use DataFusion:
+Here are some active projects using DataFusion:
 
+ <!-- "Active" means github repositories that had at least one commit in the last 6 months -->
+
+- [Arroyo](https://github.com/ArroyoSystems/arroyo) Distributed stream processing engine in Rust
 - [Ballista](https://github.com/apache/arrow-ballista) Distributed SQL Query Engine
-- [Blaze](https://github.com/blaze-init/blaze) Spark accelerator with DataFusion at its core
 - [CeresDB](https://github.com/CeresDB/ceresdb) Distributed Time-Series Database
-- [Cloudfuse Buzz](https://github.com/cloudfuse-io/buzz-rust)
 - [CnosDB](https://github.com/cnosdb/cnosdb) Open Source Distributed Time Series Database
 - [Cube Store](https://github.com/cube-js/cube.js/tree/master/rust)
 - [Dask SQL](https://github.com/dask-contrib/dask-sql) Distributed SQL query engine in Python
-- [datafusion-tui](https://github.com/datafusion-contrib/datafusion-tui) Text UI for DataFusion
+- [Exon](https://github.com/wheretrue/exon) Analysis toolkit for life-science applications
 - [delta-rs](https://github.com/delta-io/delta-rs) Native Rust implementation of Delta Lake
-- [Flock](https://github.com/flock-lab/flock)
 - [GreptimeDB](https://github.com/GreptimeTeam/greptimedb) Open Source & Cloud Native Distributed Time Series Database
+- [GlareDB](https://github.com/GlareDB/glaredb) Fast SQL database for querying and analyzing distributed data.
 - [InfluxDB IOx](https://github.com/influxdata/influxdb_iox) Time Series Database
 - [Kamu](https://github.com/kamu-data/kamu-cli/) Planet-scale streaming data pipeline
+- [Lance](https://github.com/lancedb/lance) Modern columnar data format for ML
 - [Parseable](https://github.com/parseablehq/parseable) Log storage and observability platform
 - [qv](https://github.com/timvw/qv) Quickly view your data
 - [bdt](https://github.com/andygrove/bdt) Boring Data Tool
+- [Restate](https://github.com/restatedev) Easily build resilient applications using distributed durable async/await
 - [ROAPI](https://github.com/roapi/roapi)
 - [Seafowl](https://github.com/splitgraph/seafowl) CDN-friendly analytical database
 - [Synnada](https://synnada.ai/) Streaming-first framework for data products
-- [Tensorbase](https://github.com/tensorbase/tensorbase)
 - [VegaFusion](https://vegafusion.io/) Server-side acceleration for the [Vega](https://vega.github.io/) visualization grammar
 - [ZincObserve](https://github.com/zinclabs/zincobserve) Distributed cloud native observability platform
+
+Here are some less active projects that used DataFusion:
+
+- [Blaze](https://github.com/blaze-init/blaze) Spark accelerator with DataFusion at its core
+- [Cloudfuse Buzz](https://github.com/cloudfuse-io/buzz-rust)
+- [datafusion-tui](https://github.com/datafusion-contrib/datafusion-tui) Text UI for DataFusion
+- [Flock](https://github.com/flock-lab/flock)
+- [Tensorbase](https://github.com/tensorbase/tensorbase)
 
 [ballista]: https://github.com/apache/arrow-ballista
 [blaze]: https://github.com/blaze-init/blaze
@@ -119,7 +151,7 @@ Here are some of the projects known to use DataFusion:
 ## Integrations and Extensions
 
 There are a number of community projects that extend DataFusion or
-provide integrations with other systems.
+provide integrations with other systems, some of which are described below:
 
 ### Language Bindings
 
@@ -137,5 +169,5 @@ provide integrations with other systems.
 
 - _High Performance_: Leveraging Rust and Arrow's memory model, DataFusion is very fast.
 - _Easy to Connect_: Being part of the Apache Arrow ecosystem (Arrow, Parquet and Flight), DataFusion works well with the rest of the big data ecosystem
-- _Easy to Embed_: Allowing extension at almost any point in its design, DataFusion can be tailored for your specific usecase
-- _High Quality_: Extensively tested, both by itself and with the rest of the Arrow ecosystem, DataFusion can be used as the foundation for production systems.
+- _Easy to Embed_: Allowing extension at almost any point in its design, and published regularly as a crate on [crates.io](http://crates.io), DataFusion can be integrated and tailored for your specific usecase.
+- _High Quality_: Extensively tested, both by itself and with the rest of the Arrow ecosystem, DataFusion can and is used as the foundation for production systems.

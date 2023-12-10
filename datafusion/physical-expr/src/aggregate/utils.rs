@@ -17,11 +17,17 @@
 
 //! Utilities used in aggregates
 
-use crate::AggregateExpr;
+use crate::{AggregateExpr, PhysicalSortExpr};
 use arrow::array::ArrayRef;
-use arrow::datatypes::{MAX_DECIMAL_FOR_EACH_PRECISION, MIN_DECIMAL_FOR_EACH_PRECISION};
-use arrow_schema::DataType;
-use datafusion_common::{DataFusionError, Result, ScalarValue};
+use arrow_array::cast::AsArray;
+use arrow_array::types::{
+    Decimal128Type, DecimalType, TimestampMicrosecondType, TimestampMillisecondType,
+    TimestampNanosecondType, TimestampSecondType,
+};
+use arrow_array::ArrowNativeTypeOp;
+use arrow_buffer::ArrowNativeType;
+use arrow_schema::{DataType, Field};
+use datafusion_common::{exec_err, DataFusionError, Result};
 use datafusion_expr::Accumulator;
 use std::any::Any;
 use std::sync::Arc;
@@ -30,76 +36,172 @@ use std::sync::Arc;
 pub fn get_accum_scalar_values_as_arrays(
     accum: &dyn Accumulator,
 ) -> Result<Vec<ArrayRef>> {
-    Ok(accum
+    accum
         .state()?
         .iter()
         .map(|s| s.to_array_of_size(1))
-        .collect::<Vec<_>>())
+        .collect::<Result<Vec<_>>>()
 }
 
-pub fn calculate_result_decimal_for_avg(
-    lit_value: i128,
-    count: i128,
-    scale: i8,
-    target_type: &DataType,
-) -> Result<ScalarValue> {
-    match target_type {
-        DataType::Decimal128(p, s) => {
-            // Different precision for decimal128 can store different range of value.
-            // For example, the precision is 3, the max of value is `999` and the min
-            // value is `-999`
-            let (target_mul, target_min, target_max) = (
-                10_i128.pow(*s as u32),
-                MIN_DECIMAL_FOR_EACH_PRECISION[*p as usize - 1],
-                MAX_DECIMAL_FOR_EACH_PRECISION[*p as usize - 1],
-            );
-            let lit_scale_mul = 10_i128.pow(scale as u32);
-            if target_mul >= lit_scale_mul {
-                if let Some(value) = lit_value.checked_mul(target_mul / lit_scale_mul) {
-                    let new_value = value / count;
-                    if new_value >= target_min && new_value <= target_max {
-                        Ok(ScalarValue::Decimal128(Some(new_value), *p, *s))
-                    } else {
-                        Err(DataFusionError::Internal(
-                            "Arithmetic Overflow in AvgAccumulator".to_string(),
-                        ))
-                    }
-                } else {
-                    // can't convert the lit decimal to the returned data type
-                    Err(DataFusionError::Internal(
-                        "Arithmetic Overflow in AvgAccumulator".to_string(),
-                    ))
-                }
-            } else {
-                // can't convert the lit decimal to the returned data type
-                Err(DataFusionError::Internal(
-                    "Arithmetic Overflow in AvgAccumulator".to_string(),
-                ))
-            }
+/// Computes averages for `Decimal128`/`Decimal256` values, checking for overflow
+///
+/// This is needed because different precisions for Decimal128/Decimal256 can
+/// store different ranges of values and thus sum/count may not fit in
+/// the target type.
+///
+/// For example, the precision is 3, the max of value is `999` and the min
+/// value is `-999`
+pub(crate) struct DecimalAverager<T: DecimalType> {
+    /// scale factor for sum values (10^sum_scale)
+    sum_mul: T::Native,
+    /// scale factor for target (10^target_scale)
+    target_mul: T::Native,
+    /// the output precision
+    target_precision: u8,
+}
+
+impl<T: DecimalType> DecimalAverager<T> {
+    /// Create a new `DecimalAverager`:
+    ///
+    /// * sum_scale: the scale of `sum` values passed to [`Self::avg`]
+    /// * target_precision: the output precision
+    /// * target_scale: the output scale
+    ///
+    /// Errors if the resulting data can not be stored
+    pub fn try_new(
+        sum_scale: i8,
+        target_precision: u8,
+        target_scale: i8,
+    ) -> Result<Self> {
+        let sum_mul = T::Native::from_usize(10_usize)
+            .map(|b| b.pow_wrapping(sum_scale as u32))
+            .ok_or(DataFusionError::Internal(
+                "Failed to compute sum_mul in DecimalAverager".to_string(),
+            ))?;
+
+        let target_mul = T::Native::from_usize(10_usize)
+            .map(|b| b.pow_wrapping(target_scale as u32))
+            .ok_or(DataFusionError::Internal(
+                "Failed to compute target_mul in DecimalAverager".to_string(),
+            ))?;
+
+        if target_mul >= sum_mul {
+            Ok(Self {
+                sum_mul,
+                target_mul,
+                target_precision,
+            })
+        } else {
+            // can't convert the lit decimal to the returned data type
+            exec_err!("Arithmetic Overflow in AvgAccumulator")
         }
-        other => Err(DataFusionError::Internal(format!(
-            "Error returned data type in AvgAccumulator {other:?}"
-        ))),
+    }
+
+    /// Returns the `sum`/`count` as a i128/i256 Decimal128/Decimal256 with
+    /// target_scale and target_precision and reporting overflow.
+    ///
+    /// * sum: The total sum value stored as Decimal128 with sum_scale
+    /// (passed to `Self::try_new`)
+    /// * count: total count, stored as a i128/i256 (*NOT* a Decimal128/Decimal256 value)
+    #[inline(always)]
+    pub fn avg(&self, sum: T::Native, count: T::Native) -> Result<T::Native> {
+        if let Ok(value) = sum.mul_checked(self.target_mul.div_wrapping(self.sum_mul)) {
+            let new_value = value.div_wrapping(count);
+
+            let validate =
+                T::validate_decimal_precision(new_value, self.target_precision);
+
+            if validate.is_ok() {
+                Ok(new_value)
+            } else {
+                exec_err!("Arithmetic Overflow in AvgAccumulator")
+            }
+        } else {
+            // can't convert the lit decimal to the returned data type
+            exec_err!("Arithmetic Overflow in AvgAccumulator")
+        }
     }
 }
 
+/// Adjust array type metadata if needed
+///
+/// Since `Decimal128Arrays` created from `Vec<NativeType>` have
+/// default precision and scale, this function adjusts the output to
+/// match `data_type`, if necessary
+pub fn adjust_output_array(
+    data_type: &DataType,
+    array: ArrayRef,
+) -> Result<ArrayRef, DataFusionError> {
+    let array = match data_type {
+        DataType::Decimal128(p, s) => Arc::new(
+            array
+                .as_primitive::<Decimal128Type>()
+                .clone()
+                .with_precision_and_scale(*p, *s)?,
+        ) as ArrayRef,
+        DataType::Timestamp(arrow_schema::TimeUnit::Nanosecond, tz) => Arc::new(
+            array
+                .as_primitive::<TimestampNanosecondType>()
+                .clone()
+                .with_timezone_opt(tz.clone()),
+        ),
+        DataType::Timestamp(arrow_schema::TimeUnit::Microsecond, tz) => Arc::new(
+            array
+                .as_primitive::<TimestampMicrosecondType>()
+                .clone()
+                .with_timezone_opt(tz.clone()),
+        ),
+        DataType::Timestamp(arrow_schema::TimeUnit::Millisecond, tz) => Arc::new(
+            array
+                .as_primitive::<TimestampMillisecondType>()
+                .clone()
+                .with_timezone_opt(tz.clone()),
+        ),
+        DataType::Timestamp(arrow_schema::TimeUnit::Second, tz) => Arc::new(
+            array
+                .as_primitive::<TimestampSecondType>()
+                .clone()
+                .with_timezone_opt(tz.clone()),
+        ),
+        // no adjustment needed for other arrays
+        _ => array,
+    };
+    Ok(array)
+}
+
 /// Downcast a `Box<dyn AggregateExpr>` or `Arc<dyn AggregateExpr>`
-/// and return the inner trait object as [`Any`](std::any::Any) so
+/// and return the inner trait object as [`Any`] so
 /// that it can be downcast to a specific implementation.
 ///
 /// This method is used when implementing the `PartialEq<dyn Any>`
 /// for [`AggregateExpr`] aggregation expressions and allows comparing the equality
 /// between the trait objects.
 pub fn down_cast_any_ref(any: &dyn Any) -> &dyn Any {
-    if any.is::<Arc<dyn AggregateExpr>>() {
-        any.downcast_ref::<Arc<dyn AggregateExpr>>()
-            .unwrap()
-            .as_any()
-    } else if any.is::<Box<dyn AggregateExpr>>() {
-        any.downcast_ref::<Box<dyn AggregateExpr>>()
-            .unwrap()
-            .as_any()
+    if let Some(obj) = any.downcast_ref::<Arc<dyn AggregateExpr>>() {
+        obj.as_any()
+    } else if let Some(obj) = any.downcast_ref::<Box<dyn AggregateExpr>>() {
+        obj.as_any()
     } else {
         any
     }
+}
+
+/// Construct corresponding fields for lexicographical ordering requirement expression
+pub(crate) fn ordering_fields(
+    ordering_req: &[PhysicalSortExpr],
+    // Data type of each expression in the ordering requirement
+    data_types: &[DataType],
+) -> Vec<Field> {
+    ordering_req
+        .iter()
+        .zip(data_types.iter())
+        .map(|(expr, dtype)| {
+            Field::new(
+                expr.to_string().as_str(),
+                dtype.clone(),
+                // Multi partitions may be empty hence field should be nullable.
+                true,
+            )
+        })
+        .collect()
 }

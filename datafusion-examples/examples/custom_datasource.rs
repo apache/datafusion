@@ -15,27 +15,29 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use async_trait::async_trait;
+use std::any::Any;
+use std::collections::{BTreeMap, HashMap};
+use std::fmt::{self, Debug, Formatter};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
 use datafusion::arrow::array::{UInt64Builder, UInt8Builder};
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::dataframe::DataFrame;
-use datafusion::datasource::provider_as_source;
-use datafusion::datasource::{TableProvider, TableType};
+use datafusion::datasource::{provider_as_source, TableProvider, TableType};
 use datafusion::error::Result;
 use datafusion::execution::context::{SessionState, TaskContext};
 use datafusion::physical_plan::expressions::PhysicalSortExpr;
 use datafusion::physical_plan::memory::MemoryStream;
 use datafusion::physical_plan::{
-    project_schema, ExecutionPlan, SendableRecordBatchStream, Statistics,
+    project_schema, DisplayAs, DisplayFormatType, ExecutionPlan,
+    SendableRecordBatchStream,
 };
 use datafusion::prelude::*;
 use datafusion_expr::{Expr, LogicalPlanBuilder};
-use std::any::Any;
-use std::collections::{BTreeMap, HashMap};
-use std::fmt::{Debug, Formatter};
-use std::sync::{Arc, Mutex};
-use std::time::Duration;
+
+use async_trait::async_trait;
 use tokio::time::timeout;
 
 /// This example demonstrates executing a simple query against a custom datasource
@@ -78,7 +80,7 @@ async fn search_accounts(
 
     timeout(Duration::from_secs(10), async move {
         let result = dataframe.collect().await.unwrap();
-        let record_batch = result.get(0).unwrap();
+        let record_batch = result.first().unwrap();
 
         assert_eq!(expected_result_length, record_batch.column(1).len());
         dbg!(record_batch.columns());
@@ -204,6 +206,12 @@ impl CustomExec {
     }
 }
 
+impl DisplayAs for CustomExec {
+    fn fmt_as(&self, _t: DisplayFormatType, f: &mut fmt::Formatter) -> std::fmt::Result {
+        write!(f, "CustomExec")
+    }
+}
+
 impl ExecutionPlan for CustomExec {
     fn as_any(&self) -> &dyn Any {
         self
@@ -261,9 +269,5 @@ impl ExecutionPlan for CustomExec {
             self.schema(),
             None,
         )?))
-    }
-
-    fn statistics(&self) -> Statistics {
-        Statistics::default()
     }
 }

@@ -16,9 +16,9 @@
 // under the License.
 
 use super::*;
-use datafusion::datasource::datasource::TableProviderFactory;
 use datafusion::datasource::listing::ListingTable;
 use datafusion::datasource::listing_table_factory::ListingTableFactory;
+use datafusion::datasource::provider::TableProviderFactory;
 use datafusion_expr::logical_plan::DdlStatement;
 use test_utils::{batches_to_vec, partitions_to_sorted_vec};
 
@@ -48,7 +48,9 @@ async fn sort_with_lots_of_repetition_values() -> Result<()> {
 async fn create_external_table_with_order() -> Result<()> {
     let ctx = SessionContext::new();
     let sql = "CREATE EXTERNAL TABLE dt (a_id integer, a_str string, a_bool boolean) STORED AS CSV WITH ORDER (a_id ASC) LOCATION 'file://path/to/table';";
-    let LogicalPlan::Ddl(DdlStatement::CreateExternalTable(cmd)) = ctx.state().create_logical_plan(sql).await? else {
+    let LogicalPlan::Ddl(DdlStatement::CreateExternalTable(cmd)) =
+        ctx.state().create_logical_plan(sql).await?
+    else {
         panic!("Wrong command")
     };
 
@@ -68,7 +70,7 @@ async fn create_external_table_with_ddl_ordered_non_cols() -> Result<()> {
         Ok(_) => panic!("Expecting error."),
         Err(e) => {
             assert_eq!(
-                e.to_string(),
+                e.strip_backtrace(),
                 "Error during planning: Column a is not in schema"
             )
         }
@@ -83,7 +85,7 @@ async fn create_external_table_with_ddl_ordered_without_schema() -> Result<()> {
     match ctx.state().create_logical_plan(sql).await {
         Ok(_) => panic!("Expecting error."),
         Err(e) => {
-            assert_eq!(e.to_string(), "Error during planning: Provide a schema before specifying the order while creating a table.")
+            assert_eq!(e.strip_backtrace(), "Error during planning: Provide a schema before specifying the order while creating a table.")
         }
     }
     Ok(())
@@ -123,7 +125,7 @@ async fn sort_with_duplicate_sort_exprs() -> Result<()> {
         "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
     );
 
-    let expected = vec![
+    let expected = [
         "+----+------+",
         "| id | name |",
         "+----+------+",
@@ -154,7 +156,7 @@ async fn sort_with_duplicate_sort_exprs() -> Result<()> {
         "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
     );
 
-    let expected = vec![
+    let expected = [
         "+----+------+",
         "| id | name |",
         "+----+------+",
@@ -178,7 +180,7 @@ async fn test_issue5970_mini() -> Result<()> {
     let config = SessionConfig::new()
         .with_target_partitions(2)
         .with_repartition_sorts(true);
-    let ctx = SessionContext::with_config(config);
+    let ctx = SessionContext::new_with_config(config);
     let sql = "
 WITH
     m0(t) AS (
@@ -206,21 +208,21 @@ ORDER BY 1, 2;
         "      ProjectionExec: expr=[Int64(0)@0 as m, t@1 as t]",
         "        AggregateExec: mode=FinalPartitioned, gby=[Int64(0)@0 as Int64(0), t@1 as t], aggr=[]",
         "          CoalesceBatchesExec: target_batch_size=8192",
-        "            RepartitionExec: partitioning=Hash([Column { name: \"Int64(0)\", index: 0 }, Column { name: \"t\", index: 1 }], 2), input_partitions=2",
-        "              AggregateExec: mode=Partial, gby=[0 as Int64(0), t@0 as t], aggr=[]",
-        "                RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
+        "            RepartitionExec: partitioning=Hash([Int64(0)@0, t@1], 2), input_partitions=2",
+        "              RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
+        "                AggregateExec: mode=Partial, gby=[0 as Int64(0), t@0 as t], aggr=[]",
         "                  ProjectionExec: expr=[column1@0 as t]",
         "                    ValuesExec",
         "      ProjectionExec: expr=[Int64(1)@0 as m, t@1 as t]",
         "        AggregateExec: mode=FinalPartitioned, gby=[Int64(1)@0 as Int64(1), t@1 as t], aggr=[]",
         "          CoalesceBatchesExec: target_batch_size=8192",
-        "            RepartitionExec: partitioning=Hash([Column { name: \"Int64(1)\", index: 0 }, Column { name: \"t\", index: 1 }], 2), input_partitions=2",
-        "              AggregateExec: mode=Partial, gby=[1 as Int64(1), t@0 as t], aggr=[]",
-        "                RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
+        "            RepartitionExec: partitioning=Hash([Int64(1)@0, t@1], 2), input_partitions=2",
+        "              RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
+        "                AggregateExec: mode=Partial, gby=[1 as Int64(1), t@0 as t], aggr=[]",
         "                  ProjectionExec: expr=[column1@0 as t]",
         "                    ValuesExec",
     ];
-    let formatted = displayable(plan.as_ref()).indent().to_string();
+    let formatted = displayable(plan.as_ref()).indent(true).to_string();
     let actual: Vec<&str> = formatted.trim().lines().collect();
     assert_eq!(
         expected, actual,
@@ -233,7 +235,7 @@ ORDER BY 1, 2;
         let actual = execute_to_batches(&ctx, sql).await;
 
         // in https://github.com/apache/arrow-datafusion/issues/5970 the order of the output was sometimes not right
-        let expected = vec![
+        let expected = [
             "+---+---+",
             "| m | t |",
             "+---+---+",

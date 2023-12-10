@@ -19,17 +19,17 @@ use arrow::array::{new_null_array, Array, BooleanArray};
 use arrow::compute::kernels::zip::zip;
 use arrow::compute::{and, is_not_null, is_null};
 
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::{internal_err, DataFusionError, Result};
 use datafusion_expr::ColumnarValue;
 
 /// coalesce evaluates to the first value which is not NULL
 pub fn coalesce(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     // do not accept 0 arguments.
     if args.is_empty() {
-        return Err(DataFusionError::Internal(format!(
+        return internal_err!(
             "coalesce was called with {} arguments. It requires at least 1.",
             args.len()
-        )));
+        );
     }
 
     let return_type = args[0].data_type();
@@ -54,7 +54,7 @@ pub fn coalesce(args: &[ColumnarValue]) -> Result<ColumnarValue> {
                     if value.is_null() {
                         continue;
                     } else {
-                        let last_value = value.to_array_of_size(size);
+                        let last_value = value.to_array_of_size(size)?;
                         current_value =
                             zip(&remainder, &last_value, current_value.as_ref())?;
                         break;

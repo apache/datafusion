@@ -18,8 +18,10 @@
 //! Table source
 
 use crate::{Expr, LogicalPlan};
+
 use arrow::datatypes::SchemaRef;
-use datafusion_common::Result;
+use datafusion_common::{Constraints, Result};
+
 use std::any::Any;
 
 /// Indicates whether and how a filter expression can be handled by a
@@ -28,14 +30,14 @@ use std::any::Any;
 pub enum TableProviderFilterPushDown {
     /// The expression cannot be used by the provider.
     Unsupported,
-    /// The expression can be used to help minimise the data retrieved,
-    /// but the provider cannot guarantee that all returned tuples
-    /// satisfy the filter. The Filter plan node containing this expression
-    /// will be preserved.
+    /// The expression can be used to reduce the data retrieved,
+    /// but the provider cannot guarantee it will omit all tuples that
+    /// may be filtered. In this case, DataFusion will apply an additional
+    /// `Filter` operation after the scan to ensure all rows are filtered correctly.
     Inexact,
-    /// The provider guarantees that all returned data satisfies this
-    /// filter expression. The Filter plan node containing this expression
-    /// will be removed.
+    /// The provider **guarantees** that it will omit **all** tuples that are
+    /// filtered by the filter expression. This is the fastest option, if available
+    /// as DataFusion will not apply additional filtering.
     Exact,
 }
 
@@ -63,6 +65,11 @@ pub trait TableSource: Sync + Send {
 
     /// Get a reference to the schema for this table
     fn schema(&self) -> SchemaRef;
+
+    /// Get primary key indices, if one exists.
+    fn constraints(&self) -> Option<&Constraints> {
+        None
+    }
 
     /// Get the type of this table for metadata/catalog purposes.
     fn table_type(&self) -> TableType {
@@ -94,6 +101,11 @@ pub trait TableSource: Sync + Send {
 
     /// Get the Logical plan of this table provider, if available.
     fn get_logical_plan(&self) -> Option<&LogicalPlan> {
+        None
+    }
+
+    /// Get the default value for a column, if available.
+    fn get_column_default(&self, _column: &str) -> Option<&Expr> {
         None
     }
 }

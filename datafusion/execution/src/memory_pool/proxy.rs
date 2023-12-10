@@ -26,6 +26,11 @@ pub trait VecAllocExt {
 
     /// [Push](Vec::push) new element to vector and store additional allocated bytes in `accounting` (additive).
     fn push_accounted(&mut self, x: Self::T, accounting: &mut usize);
+
+    /// Return the amount of memory allocated by this Vec (not
+    /// recursively counting any heap allocations contained within the
+    /// structure). Does not include the size of `self`
+    fn allocated_size(&self) -> usize;
 }
 
 impl<T> VecAllocExt for Vec<T> {
@@ -43,6 +48,9 @@ impl<T> VecAllocExt for Vec<T> {
         }
 
         self.push(x);
+    }
+    fn allocated_size(&self) -> usize {
+        std::mem::size_of::<T>() * self.capacity()
     }
 }
 
@@ -76,7 +84,7 @@ impl<T> RawTableAllocExt for RawTable<T> {
             Err(x) => {
                 // need to request more memory
 
-                let bump_elements = (self.capacity() * 2).max(16);
+                let bump_elements = self.capacity().max(16);
                 let bump_size = bump_elements * std::mem::size_of::<T>();
                 *accounting = (*accounting).checked_add(bump_size).expect("overflow");
 

@@ -1,0 +1,580 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+
+statement ok
+CREATE EXTERNAL TABLE alltypes_plain STORED AS PARQUET LOCATION '../../parquet-testing/data/alltypes_plain.parquet';
+
+statement ok
+CREATE EXTERNAL TABLE aggregate_test_100 (
+  c1  VARCHAR NOT NULL,
+  c2  TINYINT NOT NULL,
+  c3  SMALLINT NOT NULL,
+  c4  SMALLINT,
+  c5  INT,
+  c6  BIGINT NOT NULL,
+  c7  SMALLINT NOT NULL,
+  c8  INT NOT NULL,
+  c9  BIGINT UNSIGNED NOT NULL,
+  c10 VARCHAR NOT NULL,
+  c11 FLOAT NOT NULL,
+  c12 DOUBLE NOT NULL,
+  c13 VARCHAR NOT NULL
+)
+STORED AS CSV
+WITH HEADER ROW
+LOCATION '../../testing/data/csv/aggregate_test_100.csv'
+
+# test_sort_unprojected_col
+query I
+SELECT id FROM alltypes_plain ORDER BY int_col, double_col
+----
+4
+6
+2
+0
+5
+7
+3
+1
+
+
+# test_order_by_agg_expr
+query R
+SELECT MIN(c12) FROM aggregate_test_100 ORDER BY MIN(c12)
+----
+0.014793053078
+
+# test_nulls_first_asc
+
+query IT
+SELECT * FROM (VALUES (1, 'one'), (2, 'two'), (null, 'three')) AS t (num,letter) ORDER BY num
+----
+1 one
+2 two
+NULL three
+
+# test_nulls_first_desc()
+
+query IT
+SELECT * FROM (VALUES (1, 'one'), (2, 'two'), (null, 'three')) AS t (num,letter) ORDER BY num DESC
+----
+NULL three
+2 two
+1 one
+
+# test_specific_nulls_last_desc
+
+query IT
+SELECT * FROM (VALUES (1, 'one'), (2, 'two'), (null, 'three')) AS t (num,letter) ORDER BY num DESC NULLS LAST
+----
+2 two
+1 one
+NULL three
+
+# test_specific_nulls_first_asc
+query IT
+SELECT * FROM (VALUES (1, 'one'), (2, 'two'), (null, 'three')) AS t (num,letter) ORDER BY num ASC NULLS FIRST
+----
+NULL three
+1 one
+2 two
+
+# sort
+
+statement ok
+CREATE EXTERNAL TABLE test (c1 int, c2 bigint, c3 boolean)
+STORED AS CSV LOCATION '../core/tests/data/partitioned_csv';
+
+# Demonstrate types
+query TTT
+SELECT arrow_typeof(c1), arrow_typeof(c2), arrow_typeof(c3) FROM test LIMIT 1;
+----
+Int32 Int64 Boolean
+
+query II
+SELECT c1, c2 FROM test ORDER BY c1 DESC, c2 ASC
+----
+3 0
+3 1
+3 2
+3 3
+3 4
+3 5
+3 6
+3 7
+3 8
+3 9
+3 10
+2 0
+2 1
+2 2
+2 3
+2 4
+2 5
+2 6
+2 7
+2 8
+2 9
+2 10
+1 0
+1 1
+1 2
+1 3
+1 4
+1 5
+1 6
+1 7
+1 8
+1 9
+1 10
+0 0
+0 1
+0 2
+0 3
+0 4
+0 5
+0 6
+0 7
+0 8
+0 9
+0 10
+
+# eliminate duplicated sorted expr
+query TT
+explain SELECT c1, c2 FROM aggregate_test_100 ORDER BY c2, c3, c2
+----
+logical_plan
+Projection: aggregate_test_100.c1, aggregate_test_100.c2
+--Sort: aggregate_test_100.c2 ASC NULLS LAST, aggregate_test_100.c3 ASC NULLS LAST
+----TableScan: aggregate_test_100 projection=[c1, c2, c3]
+physical_plan
+ProjectionExec: expr=[c1@0 as c1, c2@1 as c2]
+--SortExec: expr=[c2@1 ASC NULLS LAST,c3@2 ASC NULLS LAST]
+----CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c2, c3], has_header=true
+
+query II
+SELECT c2, c3 FROM aggregate_test_100 ORDER BY c2, c3, c2
+----
+1 -99
+1 -98
+1 -85
+1 -72
+1 -56
+1 -25
+1 -24
+1 -8
+1 -5
+1 12
+1 29
+1 36
+1 38
+1 41
+1 54
+1 57
+1 70
+1 71
+1 83
+1 103
+1 120
+1 125
+2 -117
+2 -107
+2 -106
+2 -61
+2 -60
+2 -60
+2 -48
+2 -43
+2 -29
+2 1
+2 29
+2 31
+2 45
+2 49
+2 52
+2 52
+2 63
+2 68
+2 93
+2 97
+2 113
+2 122
+3 -101
+3 -95
+3 -76
+3 -72
+3 -12
+3 -2
+3 13
+3 13
+3 14
+3 17
+3 17
+3 22
+3 71
+3 73
+3 77
+3 97
+3 104
+3 112
+3 123
+4 -117
+4 -111
+4 -101
+4 -90
+4 -79
+4 -59
+4 -56
+4 -54
+4 -53
+4 -38
+4 3
+4 5
+4 17
+4 30
+4 47
+4 55
+4 65
+4 73
+4 74
+4 96
+4 97
+4 102
+4 123
+5 -101
+5 -94
+5 -86
+5 -82
+5 -59
+5 -44
+5 -40
+5 -31
+5 -5
+5 36
+5 62
+5 64
+5 68
+5 118
+
+
+# sort_empty
+# The predicate on this query purposely generates no results
+
+statement ok
+SELECT c1, c2 FROM test WHERE c1 > 100000 ORDER BY c1 DESC, c2 ASC
+
+#####
+# Sorting and Grouping
+#####
+statement ok
+create table foo as values (1, 2), (3, 4), (5, 6);
+
+query II rowsort
+select * from foo
+----
+1 2
+3 4
+5 6
+
+query I
+select column1 from foo order by column2;
+----
+1
+3
+5
+
+query I
+select column1 from foo order by column1 + column2;
+----
+1
+3
+5
+
+query I
+select column1 from foo order by column1 + column2;
+----
+1
+3
+5
+
+query I rowsort
+select column1 + column2 from foo group by column1, column2;
+----
+11
+3
+7
+
+query I
+select column1 + column2 from foo group by column1, column2 ORDER BY column2 desc;
+----
+11
+7
+3
+
+
+# Cleanup
+statement ok
+drop table foo;
+
+
+#####
+# Tests for https://github.com/apache/arrow-datafusion/issues/4854
+# Ordering / grouping by the same column
+#####
+statement ok
+create or replace table t as select column1 as value, column2 as time from (select * from (values
+  (1, timestamp '2022-01-01 00:00:30'),
+  (2, timestamp '2022-01-01 01:00:10'),
+  (3, timestamp '2022-01-02 00:00:20')
+) as sq) as sq
+
+
+query IP rowsort
+select
+  sum(value) AS "value",
+  date_trunc('hour',time) AS "time"
+FROM t
+GROUP BY time;
+----
+1 2022-01-01T00:00:00
+2 2022-01-01T01:00:00
+3 2022-01-02T00:00:00
+
+# should work fine
+query IP
+select
+  sum(value) AS "value",
+  date_trunc('minute',time) AS "time"
+FROM t
+GROUP BY time
+ORDER BY time;
+----
+1 2022-01-01T00:00:00
+2 2022-01-01T01:00:00
+3 2022-01-02T00:00:00
+
+## SORT BY  is not supported
+statement error DataFusion error: This feature is not implemented: SORT BY
+select * from t SORT BY time;
+
+
+# distinct on a column not in the select list should not work
+statement error For SELECT DISTINCT, ORDER BY expressions time must appear in select list
+SELECT DISTINCT value FROM t ORDER BY time;
+
+# distinct on an expression of a column not in the select list should not work
+statement error For SELECT DISTINCT, ORDER BY expressions time must appear in select list
+SELECT DISTINCT date_trunc('hour', time)  FROM t ORDER BY time;
+
+# distinct on a column that is in the select list but aliasted should work
+query P
+SELECT DISTINCT time as "first_seen" FROM t ORDER BY "first_seen";
+----
+2022-01-01T00:00:30
+2022-01-01T01:00:10
+2022-01-02T00:00:20
+
+# distinct on a column that is in the select list, but aliased (though
+# the reference is to original expr) should work
+query P
+SELECT DISTINCT time as "first_seen" FROM t ORDER BY time;
+----
+2022-01-01T00:00:30
+2022-01-01T01:00:10
+2022-01-02T00:00:20
+
+# distinct on a column that is in the select list, but aliased (though
+# the reference is its ordinal position) should work
+query P
+SELECT DISTINCT time as "first_seen" FROM t ORDER BY 1;
+----
+2022-01-01T00:00:30
+2022-01-01T01:00:10
+2022-01-02T00:00:20
+
+## Cleanup
+statement ok
+drop table t;
+
+# Create a table having 3 columns which are ordering equivalent by the source. In the next step,
+# we will expect to observe the removed SortExec by propagating the orders across projection.
+statement ok
+CREATE EXTERNAL TABLE multiple_ordered_table (
+  a0 INTEGER,
+  a INTEGER,
+  b INTEGER,
+  c INTEGER,
+  d INTEGER
+)
+STORED AS CSV
+WITH HEADER ROW
+WITH ORDER (a ASC)
+WITH ORDER (b ASC)
+WITH ORDER (c ASC)
+LOCATION '../core/tests/data/window_2.csv';
+
+query TT
+EXPLAIN SELECT (b+a+c) AS result 
+FROM multiple_ordered_table
+ORDER BY result;
+----
+logical_plan
+Sort: result ASC NULLS LAST
+--Projection: multiple_ordered_table.b + multiple_ordered_table.a + multiple_ordered_table.c AS result
+----TableScan: multiple_ordered_table projection=[a, b, c]
+physical_plan
+SortPreservingMergeExec: [result@0 ASC NULLS LAST]
+--ProjectionExec: expr=[b@1 + a@0 + c@2 as result]
+----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b, c], output_orderings=[[a@0 ASC NULLS LAST], [b@1 ASC NULLS LAST], [c@2 ASC NULLS LAST]], has_header=true
+
+statement ok
+drop table multiple_ordered_table;
+
+# Create tables having some ordered columns. In the next step, we will expect to observe that scalar
+# functions, such as mathematical functions like atan(), ceil(), sqrt(), or date_time functions
+# like date_bin() and date_trunc(), will maintain the order of its argument columns.
+statement ok
+CREATE EXTERNAL TABLE csv_with_timestamps (
+  name VARCHAR,
+  ts TIMESTAMP
+)
+STORED AS CSV
+WITH ORDER (ts ASC NULLS LAST)
+LOCATION '../core/tests/data/timestamps.csv';
+
+query TT
+EXPLAIN SELECT DATE_BIN(INTERVAL '15 minutes', ts, TIMESTAMP '2022-08-03 14:40:00Z') as db15
+FROM csv_with_timestamps
+ORDER BY db15;
+----
+logical_plan
+Sort: db15 ASC NULLS LAST
+--Projection: date_bin(IntervalMonthDayNano("900000000000"), csv_with_timestamps.ts, TimestampNanosecond(1659537600000000000, None)) AS db15
+----TableScan: csv_with_timestamps projection=[ts]
+physical_plan
+SortPreservingMergeExec: [db15@0 ASC NULLS LAST]
+--ProjectionExec: expr=[date_bin(900000000000, ts@0, 1659537600000000000) as db15]
+----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/timestamps.csv]]}, projection=[ts], output_ordering=[ts@0 ASC NULLS LAST], has_header=false
+
+query TT
+EXPLAIN SELECT DATE_TRUNC('DAY', ts) as dt_day
+FROM csv_with_timestamps
+ORDER BY dt_day;
+----
+logical_plan
+Sort: dt_day ASC NULLS LAST
+--Projection: date_trunc(Utf8("DAY"), csv_with_timestamps.ts) AS dt_day
+----TableScan: csv_with_timestamps projection=[ts]
+physical_plan
+SortPreservingMergeExec: [dt_day@0 ASC NULLS LAST]
+--ProjectionExec: expr=[date_trunc(DAY, ts@0) as dt_day]
+----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/timestamps.csv]]}, projection=[ts], output_ordering=[ts@0 ASC NULLS LAST], has_header=false
+
+statement ok
+drop table csv_with_timestamps;
+
+statement ok
+drop table aggregate_test_100;
+
+statement ok
+CREATE EXTERNAL TABLE aggregate_test_100 (
+  c1  VARCHAR NOT NULL,
+  c2  TINYINT NOT NULL,
+  c3  SMALLINT NOT NULL,
+  c4  SMALLINT,
+  c5  INT,
+  c6  BIGINT NOT NULL,
+  c7  SMALLINT NOT NULL,
+  c8  INT NOT NULL,
+  c9  BIGINT UNSIGNED NOT NULL,
+  c10 VARCHAR NOT NULL,
+  c11 FLOAT NOT NULL,
+  c12 DOUBLE NOT NULL,
+  c13 VARCHAR NOT NULL
+)
+STORED AS CSV
+WITH HEADER ROW
+WITH ORDER(c11)
+WITH ORDER(c12 DESC)
+LOCATION '../../testing/data/csv/aggregate_test_100.csv'
+
+query TT
+EXPLAIN SELECT ATAN(c11) as atan_c11
+FROM aggregate_test_100
+ORDER BY atan_c11;
+----
+logical_plan
+Sort: atan_c11 ASC NULLS LAST
+--Projection: atan(aggregate_test_100.c11) AS atan_c11
+----TableScan: aggregate_test_100 projection=[c11]
+physical_plan
+SortPreservingMergeExec: [atan_c11@0 ASC NULLS LAST]
+--ProjectionExec: expr=[atan(c11@0) as atan_c11]
+----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c11], output_ordering=[c11@0 ASC NULLS LAST], has_header=true
+
+query TT
+EXPLAIN SELECT CEIL(c11) as ceil_c11
+FROM aggregate_test_100
+ORDER BY ceil_c11;
+----
+logical_plan
+Sort: ceil_c11 ASC NULLS LAST
+--Projection: ceil(aggregate_test_100.c11) AS ceil_c11
+----TableScan: aggregate_test_100 projection=[c11]
+physical_plan
+SortPreservingMergeExec: [ceil_c11@0 ASC NULLS LAST]
+--ProjectionExec: expr=[ceil(c11@0) as ceil_c11]
+----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c11], output_ordering=[c11@0 ASC NULLS LAST], has_header=true
+
+query TT
+  EXPLAIN SELECT LOG(c11, c12) as log_c11_base_c12
+  FROM aggregate_test_100
+  ORDER BY log_c11_base_c12;
+----
+logical_plan
+Sort: log_c11_base_c12 ASC NULLS LAST
+--Projection: log(CAST(aggregate_test_100.c11 AS Float64), aggregate_test_100.c12) AS log_c11_base_c12
+----TableScan: aggregate_test_100 projection=[c11, c12]
+physical_plan
+SortPreservingMergeExec: [log_c11_base_c12@0 ASC NULLS LAST]
+--ProjectionExec: expr=[log(CAST(c11@0 AS Float64), c12@1) as log_c11_base_c12]
+----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c11, c12], output_orderings=[[c11@0 ASC NULLS LAST], [c12@1 DESC]], has_header=true
+
+query TT
+EXPLAIN SELECT LOG(c12, c11) as log_c12_base_c11
+FROM aggregate_test_100
+ORDER BY log_c12_base_c11 DESC;
+----
+logical_plan
+Sort: log_c12_base_c11 DESC NULLS FIRST
+--Projection: log(aggregate_test_100.c12, CAST(aggregate_test_100.c11 AS Float64)) AS log_c12_base_c11
+----TableScan: aggregate_test_100 projection=[c11, c12]
+physical_plan
+SortPreservingMergeExec: [log_c12_base_c11@0 DESC]
+--ProjectionExec: expr=[log(c12@1, CAST(c11@0 AS Float64)) as log_c12_base_c11]
+----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c11, c12], output_orderings=[[c11@0 ASC NULLS LAST], [c12@1 DESC]], has_header=true
+
+statement ok
+drop table aggregate_test_100;

@@ -15,21 +15,24 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::expressions::GetFieldAccessExpr;
 use crate::var_provider::is_system_variables;
 use crate::{
     execution_props::ExecutionProps,
-    expressions::{
-        self, binary, date_time_interval_expr, like, Column, GetIndexedFieldExpr, Literal,
-    },
+    expressions::{self, binary, like, Column, GetIndexedFieldExpr, Literal},
     functions, udf,
     var_provider::VarType,
     PhysicalExpr,
 };
-use arrow::datatypes::{DataType, Schema};
-use datafusion_common::{DFSchema, DataFusionError, Result, ScalarValue};
-use datafusion_expr::expr::{Cast, InList, ScalarFunction, ScalarUDF};
+use arrow::datatypes::Schema;
+use datafusion_common::{
+    exec_err, internal_err, not_impl_err, plan_err, DFSchema, DataFusionError, Result,
+    ScalarValue,
+};
+use datafusion_expr::expr::{Alias, Cast, InList, ScalarFunction};
 use datafusion_expr::{
-    binary_expr, Between, BinaryExpr, Expr, GetIndexedField, Like, Operator, TryCast,
+    binary_expr, Between, BinaryExpr, Expr, GetFieldAccess, GetIndexedField, Like,
+    Operator, ScalarFunctionDefinition, TryCast,
 };
 use std::sync::Arc;
 
@@ -49,15 +52,15 @@ pub fn create_physical_expr(
     execution_props: &ExecutionProps,
 ) -> Result<Arc<dyn PhysicalExpr>> {
     if input_schema.fields.len() != input_dfschema.fields().len() {
-        return Err(DataFusionError::Internal(format!(
+        return internal_err!(
             "create_physical_expr expected same number of fields, got \
                      Arrow schema with {}  and DataFusion schema with {}",
             input_schema.fields.len(),
             input_dfschema.fields().len()
-        )));
+        );
     }
     match e {
-        Expr::Alias(expr, ..) => Ok(create_physical_expr(
+        Expr::Alias(Alias { expr, .. }) => Ok(create_physical_expr(
             expr,
             input_dfschema,
             input_schema,
@@ -75,9 +78,7 @@ pub fn create_physical_expr(
                         let scalar_value = provider.get_value(variable_names.clone())?;
                         Ok(Arc::new(Literal::new(scalar_value)))
                     }
-                    _ => Err(DataFusionError::Plan(
-                        "No system variable provider found".to_string(),
-                    )),
+                    _ => plan_err!("No system variable provider found"),
                 }
             } else {
                 match execution_props.get_var_provider(VarType::UserDefined) {
@@ -85,9 +86,7 @@ pub fn create_physical_expr(
                         let scalar_value = provider.get_value(variable_names.clone())?;
                         Ok(Arc::new(Literal::new(scalar_value)))
                     }
-                    _ => Err(DataFusionError::Plan(
-                        "No user defined variable provider found".to_string(),
-                    )),
+                    _ => plan_err!("No user defined variable provider found"),
                 }
             }
         }
@@ -183,56 +182,24 @@ pub fn create_physical_expr(
                 input_schema,
                 execution_props,
             )?;
-            // Match the data types and operator to determine the appropriate expression, if
-            // they are supported temporal types and operations, create DateTimeIntervalExpr,
-            // else create BinaryExpr.
-            match (
-                lhs.data_type(input_schema)?,
-                op,
-                rhs.data_type(input_schema)?,
-            ) {
-                (
-                    DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, _),
-                    Operator::Plus | Operator::Minus,
-                    DataType::Interval(_),
-                ) => Ok(date_time_interval_expr(lhs, *op, rhs, input_schema)?),
-                (
-                    DataType::Interval(_),
-                    Operator::Plus | Operator::Minus,
-                    DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, _),
-                ) => Ok(date_time_interval_expr(rhs, *op, lhs, input_schema)?),
-                (
-                    DataType::Timestamp(_, _),
-                    Operator::Minus,
-                    DataType::Timestamp(_, _),
-                ) => Ok(date_time_interval_expr(lhs, *op, rhs, input_schema)?),
-                (
-                    DataType::Interval(_),
-                    Operator::Plus | Operator::Minus,
-                    DataType::Interval(_),
-                ) => Ok(date_time_interval_expr(lhs, *op, rhs, input_schema)?),
-                _ => {
-                    // Note that the logical planner is responsible
-                    // for type coercion on the arguments (e.g. if one
-                    // argument was originally Int32 and one was
-                    // Int64 they will both be coerced to Int64).
-                    //
-                    // There should be no coercion during physical
-                    // planning.
-                    binary(lhs, *op, rhs, input_schema)
-                }
-            }
+            // Note that the logical planner is responsible
+            // for type coercion on the arguments (e.g. if one
+            // argument was originally Int32 and one was
+            // Int64 they will both be coerced to Int64).
+            //
+            // There should be no coercion during physical
+            // planning.
+            binary(lhs, *op, rhs, input_schema)
         }
         Expr::Like(Like {
             negated,
             expr,
             pattern,
             escape_char,
+            case_insensitive,
         }) => {
             if escape_char.is_some() {
-                return Err(DataFusionError::Execution(
-                    "LIKE does not support escape_char".to_string(),
-                ));
+                return exec_err!("LIKE does not support escape_char");
             }
             let physical_expr = create_physical_expr(
                 expr,
@@ -248,38 +215,7 @@ pub fn create_physical_expr(
             )?;
             like(
                 *negated,
-                false,
-                physical_expr,
-                physical_pattern,
-                input_schema,
-            )
-        }
-        Expr::ILike(Like {
-            negated,
-            expr,
-            pattern,
-            escape_char,
-        }) => {
-            if escape_char.is_some() {
-                return Err(DataFusionError::Execution(
-                    "ILIKE does not support escape_char".to_string(),
-                ));
-            }
-            let physical_expr = create_physical_expr(
-                expr,
-                input_dfschema,
-                input_schema,
-                execution_props,
-            )?;
-            let physical_pattern = create_physical_expr(
-                pattern,
-                input_dfschema,
-                input_schema,
-                execution_props,
-            )?;
-            like(
-                *negated,
-                true,
+                *case_insensitive,
                 physical_expr,
                 physical_pattern,
                 input_schema,
@@ -371,7 +307,36 @@ pub fn create_physical_expr(
             input_schema,
             execution_props,
         )?),
-        Expr::GetIndexedField(GetIndexedField { key, expr }) => {
+        Expr::GetIndexedField(GetIndexedField { expr, field }) => {
+            let field = match field {
+                GetFieldAccess::NamedStructField { name } => {
+                    GetFieldAccessExpr::NamedStructField { name: name.clone() }
+                }
+                GetFieldAccess::ListIndex { key } => GetFieldAccessExpr::ListIndex {
+                    key: create_physical_expr(
+                        key,
+                        input_dfschema,
+                        input_schema,
+                        execution_props,
+                    )?,
+                },
+                GetFieldAccess::ListRange { start, stop } => {
+                    GetFieldAccessExpr::ListRange {
+                        start: create_physical_expr(
+                            start,
+                            input_dfschema,
+                            input_schema,
+                            execution_props,
+                        )?,
+                        stop: create_physical_expr(
+                            stop,
+                            input_dfschema,
+                            input_schema,
+                            execution_props,
+                        )?,
+                    }
+                }
+            };
             Ok(Arc::new(GetIndexedFieldExpr::new(
                 create_physical_expr(
                     expr,
@@ -379,39 +344,41 @@ pub fn create_physical_expr(
                     input_schema,
                     execution_props,
                 )?,
-                key.clone(),
+                field,
             )))
         }
 
-        Expr::ScalarFunction(ScalarFunction { fun, args }) => {
-            let physical_args = args
+        Expr::ScalarFunction(ScalarFunction { func_def, args }) => {
+            let mut physical_args = args
                 .iter()
                 .map(|e| {
                     create_physical_expr(e, input_dfschema, input_schema, execution_props)
                 })
                 .collect::<Result<Vec<_>>>()?;
-            functions::create_physical_expr(
-                fun,
-                &physical_args,
-                input_schema,
-                execution_props,
-            )
-        }
-        Expr::ScalarUDF(ScalarUDF { fun, args }) => {
-            let mut physical_args = vec![];
-            for e in args {
-                physical_args.push(create_physical_expr(
-                    e,
-                    input_dfschema,
-                    input_schema,
-                    execution_props,
-                )?);
+            match func_def {
+                ScalarFunctionDefinition::BuiltIn(fun) => {
+                    functions::create_physical_expr(
+                        fun,
+                        &physical_args,
+                        input_schema,
+                        execution_props,
+                    )
+                }
+                ScalarFunctionDefinition::UDF(fun) => {
+                    // udfs with zero params expect null array as input
+                    if args.is_empty() {
+                        physical_args.push(Arc::new(Literal::new(ScalarValue::Null)));
+                    }
+                    udf::create_physical_expr(
+                        fun.clone().as_ref(),
+                        &physical_args,
+                        input_schema,
+                    )
+                }
+                ScalarFunctionDefinition::Name(_) => {
+                    internal_err!("Function `Expr` with name should be resolved.")
+                }
             }
-            // udfs with zero params expect null array as input
-            if args.is_empty() {
-                physical_args.push(Arc::new(Literal::new(ScalarValue::Null)));
-            }
-            udf::create_physical_expr(fun.clone().as_ref(), &physical_args, input_schema)
         }
         Expr::Between(Between {
             expr,
@@ -478,8 +445,42 @@ pub fn create_physical_expr(
                 expressions::in_list(value_expr, list_exprs, negated, input_schema)
             }
         },
-        other => Err(DataFusionError::NotImplemented(format!(
-            "Physical plan does not support logical expression {other:?}"
-        ))),
+        other => {
+            not_impl_err!("Physical plan does not support logical expression {other:?}")
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow_array::{ArrayRef, BooleanArray, RecordBatch, StringArray};
+    use arrow_schema::{DataType, Field, Schema};
+    use datafusion_common::{DFSchema, Result};
+    use datafusion_expr::{col, left, Literal};
+
+    #[test]
+    fn test_create_physical_expr_scalar_input_output() -> Result<()> {
+        let expr = col("letter").eq(left("APACHE".lit(), 1i64.lit()));
+
+        let schema = Schema::new(vec![Field::new("letter", DataType::Utf8, false)]);
+        let df_schema = DFSchema::try_from_qualified_schema("data", &schema)?;
+        let p = create_physical_expr(&expr, &df_schema, &schema, &ExecutionProps::new())?;
+
+        let batch = RecordBatch::try_new(
+            Arc::new(schema),
+            vec![Arc::new(StringArray::from_iter_values(vec![
+                "A", "B", "C", "D",
+            ]))],
+        )?;
+        let result = p.evaluate(&batch)?;
+        let result = result.into_array(4).expect("Failed to convert to array");
+
+        assert_eq!(
+            &result,
+            &(Arc::new(BooleanArray::from(vec![true, false, false, false,])) as ArrayRef)
+        );
+
+        Ok(())
     }
 }

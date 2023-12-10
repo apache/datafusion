@@ -18,10 +18,7 @@
 //! Optimizer rule to eliminate left/right/full join to inner join if possible.
 use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_common::{Column, DFSchema, Result};
-use datafusion_expr::{
-    logical_plan::{Join, JoinType, LogicalPlan},
-    utils::from_plan,
-};
+use datafusion_expr::logical_plan::{Join, JoinType, LogicalPlan};
 use datafusion_expr::{Expr, Operator};
 
 use crate::optimizer::ApplyOrder;
@@ -109,7 +106,7 @@ impl OptimizerRule for EliminateOuterJoin {
                         schema: join.schema.clone(),
                         null_equals_null: join.null_equals_null,
                     });
-                    let new_plan = from_plan(plan, &plan.expressions(), &[new_join])?;
+                    let new_plan = plan.with_new_inputs(&[new_join])?;
                     Ok(Some(new_plan))
                 }
                 _ => Ok(None),

@@ -34,7 +34,7 @@
 # -- Project information -----------------------------------------------------
 
 project = 'Arrow DataFusion'
-copyright = '2022, Apache Software Foundation'
+copyright = '2023, Apache Software Foundation'
 author = 'Arrow DataFusion Authors'
 
 
@@ -102,7 +102,13 @@ html_static_path = ['_static']
 
 html_logo = "_static/images/DataFusion-Logo-Background-White.png"
 
-html_css_files = ["theme_overrides.css"]
+html_css_files = [
+    "theme_overrides.css"
+]
+
+html_js_files = [
+    ("https://buttons.github.io/buttons.js", {'async': 'true', 'defer': 'true'}),
+]
 
 html_sidebars = {
     "**": ["docs-sidebar.html"],
@@ -112,4 +118,4 @@ html_sidebars = {
 myst_heading_anchors = 3
 
 # enable nice rendering of checkboxes for the task lists
-myst_enable_extensions = [ "tasklist"]
+myst_enable_extensions = ["colon_fence", "deflist", "tasklist"]

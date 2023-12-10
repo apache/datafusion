@@ -17,6 +17,7 @@
 
 //! IS NULL expression
 
+use std::hash::{Hash, Hasher};
 use std::{any::Any, sync::Arc};
 
 use arrow::compute;
@@ -32,7 +33,7 @@ use datafusion_common::ScalarValue;
 use datafusion_expr::ColumnarValue;
 
 /// IS NULL expression
-#[derive(Debug)]
+#[derive(Debug, Hash)]
 pub struct IsNullExpr {
     /// Input expression
     arg: Arc<dyn PhysicalExpr>,
@@ -92,6 +93,11 @@ impl PhysicalExpr for IsNullExpr {
     ) -> Result<Arc<dyn PhysicalExpr>> {
         Ok(Arc::new(IsNullExpr::new(children[0].clone())))
     }
+
+    fn dyn_hash(&self, state: &mut dyn Hasher) {
+        let mut s = state;
+        self.hash(&mut s);
+    }
 }
 
 impl PartialEq<dyn Any> for IsNullExpr {
@@ -128,7 +134,10 @@ mod tests {
         let expr = is_null(col("a", &schema)?).unwrap();
         let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a)])?;
 
-        let result = expr.evaluate(&batch)?.into_array(batch.num_rows());
+        let result = expr
+            .evaluate(&batch)?
+            .into_array(batch.num_rows())
+            .expect("Failed to convert to array");
         let result =
             as_boolean_array(&result).expect("failed to downcast to BooleanArray");
 

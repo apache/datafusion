@@ -86,8 +86,9 @@ fn create_context() -> Arc<Mutex<SessionContext>> {
 
     rt.block_on(async {
         // create local session context
-        let ctx =
-            SessionContext::with_config(SessionConfig::new().with_target_partitions(1));
+        let ctx = SessionContext::new_with_config(
+            SessionConfig::new().with_target_partitions(1),
+        );
 
         let table_provider = Arc::new(csv.await);
         let mem_table = MemTable::load(table_provider, Some(partitions), &ctx.state())
@@ -98,7 +99,7 @@ fn create_context() -> Arc<Mutex<SessionContext>> {
         ctx_holder.lock().push(Arc::new(Mutex::new(ctx)))
     });
 
-    let ctx = ctx_holder.lock().get(0).unwrap().clone();
+    let ctx = ctx_holder.lock().first().unwrap().clone();
     ctx
 }
 

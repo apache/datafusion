@@ -16,8 +16,8 @@
 // under the License.
 
 use async_trait::async_trait;
-use datafusion::catalog::catalog::{CatalogList, CatalogProvider};
 use datafusion::catalog::schema::SchemaProvider;
+use datafusion::catalog::{CatalogList, CatalogProvider};
 use datafusion::datasource::listing::{
     ListingTable, ListingTableConfig, ListingTableUrl,
 };

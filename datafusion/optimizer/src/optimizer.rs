@@ -17,6 +17,10 @@
 
 //! Query optimizer traits
 
+use std::collections::HashSet;
+use std::sync::Arc;
+use std::time::Instant;
+
 use crate::common_subexpr_eliminate::CommonSubexprEliminate;
 use crate::decorrelate_predicate_subquery::DecorrelatePredicateSubquery;
 use crate::eliminate_cross_join::EliminateCrossJoin;
@@ -24,16 +28,16 @@ use crate::eliminate_duplicated_expr::EliminateDuplicatedExpr;
 use crate::eliminate_filter::EliminateFilter;
 use crate::eliminate_join::EliminateJoin;
 use crate::eliminate_limit::EliminateLimit;
+use crate::eliminate_nested_union::EliminateNestedUnion;
+use crate::eliminate_one_union::EliminateOneUnion;
 use crate::eliminate_outer_join::EliminateOuterJoin;
-use crate::eliminate_project::EliminateProjection;
 use crate::extract_equijoin_predicate::ExtractEquijoinPredicate;
 use crate::filter_null_join_keys::FilterNullJoinKeys;
-use crate::merge_projection::MergeProjection;
+use crate::optimize_projections::OptimizeProjections;
 use crate::plan_signature::LogicalPlanSignature;
 use crate::propagate_empty_relation::PropagateEmptyRelation;
 use crate::push_down_filter::PushDownFilter;
 use crate::push_down_limit::PushDownLimit;
-use crate::push_down_projection::PushDownProjection;
 use crate::replace_distinct_aggregate::ReplaceDistinctWithAggregate;
 use crate::rewrite_disjunctive_predicate::RewriteDisjunctivePredicate;
 use crate::scalar_subquery_to_join::ScalarSubqueryToJoin;
@@ -41,14 +45,14 @@ use crate::simplify_expressions::SimplifyExpressions;
 use crate::single_distinct_to_groupby::SingleDistinctToGroupBy;
 use crate::unwrap_cast_in_comparison::UnwrapCastInComparison;
 use crate::utils::log_plan;
-use chrono::{DateTime, Utc};
+
+use datafusion_common::alias::AliasGenerator;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::logical_plan::LogicalPlan;
+
+use chrono::{DateTime, Utc};
 use log::{debug, warn};
-use std::collections::HashSet;
-use std::sync::Arc;
-use std::time::Instant;
 
 /// `OptimizerRule` transforms one [`LogicalPlan`] into another which
 /// computes the same results, but in a potentially more efficient
@@ -80,6 +84,9 @@ pub trait OptimizerConfig {
     /// time is used as the value for now()
     fn query_execution_start_time(&self) -> DateTime<Utc>;
 
+    /// Return alias generator used to generate unique aliases for subqueries
+    fn alias_generator(&self) -> Arc<AliasGenerator>;
+
     fn options(&self) -> &ConfigOptions;
 }
 
@@ -90,6 +97,9 @@ pub struct OptimizerContext {
     /// Query execution start time that can be used to rewrite
     /// expressions such as `now()` to use a literal value instead
     query_execution_start_time: DateTime<Utc>,
+
+    /// Alias generator used to generate unique aliases for subqueries
+    alias_generator: Arc<AliasGenerator>,
 
     options: ConfigOptions,
 }
@@ -102,6 +112,7 @@ impl OptimizerContext {
 
         Self {
             query_execution_start_time: Utc::now(),
+            alias_generator: Arc::new(AliasGenerator::new()),
             options,
         }
     }
@@ -146,6 +157,10 @@ impl Default for OptimizerContext {
 impl OptimizerConfig for OptimizerContext {
     fn query_execution_start_time(&self) -> DateTime<Utc> {
         self.query_execution_start_time
+    }
+
+    fn alias_generator(&self) -> Arc<AliasGenerator> {
+        self.alias_generator.clone()
     }
 
     fn options(&self) -> &ConfigOptions {
@@ -208,6 +223,7 @@ impl Optimizer {
     /// Create a new optimizer using the recommended list of rules
     pub fn new() -> Self {
         let rules: Vec<Arc<dyn OptimizerRule + Sync + Send>> = vec![
+            Arc::new(EliminateNestedUnion::new()),
             Arc::new(SimplifyExpressions::new()),
             Arc::new(UnwrapCastInComparison::new()),
             Arc::new(ReplaceDistinctWithAggregate::new()),
@@ -219,7 +235,6 @@ impl Optimizer {
             // run it again after running the optimizations that potentially converted
             // subqueries to joins
             Arc::new(SimplifyExpressions::new()),
-            Arc::new(MergeProjection::new()),
             Arc::new(RewriteDisjunctivePredicate::new()),
             Arc::new(EliminateDuplicatedExpr::new()),
             Arc::new(EliminateFilter::new()),
@@ -227,6 +242,8 @@ impl Optimizer {
             Arc::new(CommonSubexprEliminate::new()),
             Arc::new(EliminateLimit::new()),
             Arc::new(PropagateEmptyRelation::new()),
+            // Must be after PropagateEmptyRelation
+            Arc::new(EliminateOneUnion::new()),
             Arc::new(FilterNullJoinKeys::default()),
             Arc::new(EliminateOuterJoin::new()),
             // Filters can't be pushed down past Limits, we should do PushDownFilter after PushDownLimit
@@ -238,10 +255,7 @@ impl Optimizer {
             Arc::new(SimplifyExpressions::new()),
             Arc::new(UnwrapCastInComparison::new()),
             Arc::new(CommonSubexprEliminate::new()),
-            Arc::new(PushDownProjection::new()),
-            Arc::new(EliminateProjection::new()),
-            // PushDownProjection can pushdown Projections through Limits, do PushDownLimit again.
-            Arc::new(PushDownLimit::new()),
+            Arc::new(OptimizeProjections::new()),
         ];
 
         Self::with_rules(rules)
@@ -276,11 +290,16 @@ impl Optimizer {
             log_plan(&format!("Optimizer input (pass {i})"), &new_plan);
 
             for rule in &self.rules {
-                let result = self.optimize_recursively(rule, &new_plan, config);
-
+                let result =
+                    self.optimize_recursively(rule, &new_plan, config)
+                        .and_then(|plan| {
+                            if let Some(plan) = &plan {
+                                assert_schema_is_the_same(rule.name(), &new_plan, plan)?;
+                            }
+                            Ok(plan)
+                        });
                 match result {
                     Ok(Some(plan)) => {
-                        assert_schema_is_the_same(rule.name(), &new_plan, &plan)?;
                         new_plan = plan;
                         observer(&new_plan, rule.as_ref());
                         log_plan(rule.name(), &new_plan);
@@ -363,7 +382,7 @@ impl Optimizer {
             })
             .collect::<Vec<_>>();
 
-        Ok(Some(plan.with_new_inputs(new_inputs.as_slice())?))
+        Ok(Some(plan.with_new_inputs(&new_inputs)?))
     }
 
     /// Use a rule to optimize the whole plan.
@@ -405,7 +424,7 @@ impl Optimizer {
 /// Returns an error if plans have different schemas.
 ///
 /// It ignores metadata and nullability.
-fn assert_schema_is_the_same(
+pub(crate) fn assert_schema_is_the_same(
     rule_name: &str,
     prev_plan: &LogicalPlan,
     new_plan: &LogicalPlan,
@@ -416,8 +435,7 @@ fn assert_schema_is_the_same(
 
     if !equivalent {
         let e = DataFusionError::Internal(format!(
-            "Optimizer rule '{}' failed, due to generate a different schema, original schema: {:?}, new schema: {:?}",
-            rule_name,
+            "Failed due to a difference in schemas, original schema: {:?}, new schema: {:?}",
             prev_plan.schema(),
             new_plan.schema()
         ));
@@ -432,15 +450,18 @@ fn assert_schema_is_the_same(
 
 #[cfg(test)]
 mod tests {
-    use crate::optimizer::Optimizer;
-    use crate::test::test_table_scan;
-    use crate::{OptimizerConfig, OptimizerContext, OptimizerRule};
-    use datafusion_common::{DFField, DFSchema, DFSchemaRef, DataFusionError, Result};
-    use datafusion_expr::logical_plan::EmptyRelation;
-    use datafusion_expr::{col, lit, LogicalPlan, LogicalPlanBuilder, Projection};
     use std::sync::{Arc, Mutex};
 
     use super::ApplyOrder;
+    use crate::optimizer::Optimizer;
+    use crate::test::test_table_scan;
+    use crate::{OptimizerConfig, OptimizerContext, OptimizerRule};
+
+    use datafusion_common::{
+        plan_err, DFField, DFSchema, DFSchemaRef, DataFusionError, Result,
+    };
+    use datafusion_expr::logical_plan::EmptyRelation;
+    use datafusion_expr::{col, lit, LogicalPlan, LogicalPlanBuilder, Projection};
 
     #[test]
     fn skip_failing_rule() {
@@ -465,7 +486,7 @@ mod tests {
         assert_eq!(
             "Optimizer rule 'bad rule' failed\ncaused by\n\
             Error during planning: rule failed",
-            err.to_string()
+            err.strip_backtrace()
         );
     }
 
@@ -479,18 +500,29 @@ mod tests {
         });
         let err = opt.optimize(&plan, &config, &observe).unwrap_err();
         assert_eq!(
-            "get table_scan rule\ncaused by\n\
-             Internal error: Optimizer rule 'get table_scan rule' failed, due to generate a different schema, \
-             original schema: DFSchema { fields: [], metadata: {} }, \
+            "Optimizer rule 'get table_scan rule' failed\ncaused by\nget table_scan rule\ncaused by\n\
+             Internal error: Failed due to a difference in schemas, \
+             original schema: DFSchema { fields: [], metadata: {}, functional_dependencies: FunctionalDependencies { deps: [] } }, \
              new schema: DFSchema { fields: [\
              DFField { qualifier: Some(Bare { table: \"test\" }), field: Field { name: \"a\", data_type: UInt32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} } }, \
              DFField { qualifier: Some(Bare { table: \"test\" }), field: Field { name: \"b\", data_type: UInt32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} } }, \
              DFField { qualifier: Some(Bare { table: \"test\" }), field: Field { name: \"c\", data_type: UInt32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} } }], \
-             metadata: {} }. \
-             This was likely caused by a bug in DataFusion's code \
+             metadata: {}, functional_dependencies: FunctionalDependencies { deps: [] } }.\
+             \nThis was likely caused by a bug in DataFusion's code \
              and we would welcome that you file an bug report in our issue tracker",
-            err.to_string()
+            err.strip_backtrace()
         );
+    }
+
+    #[test]
+    fn skip_generate_different_schema() {
+        let opt = Optimizer::with_rules(vec![Arc::new(GetTableScanRule {})]);
+        let config = OptimizerContext::new().with_skip_failing_rules(true);
+        let plan = LogicalPlan::EmptyRelation(EmptyRelation {
+            produce_one_row: false,
+            schema: Arc::new(DFSchema::empty()),
+        });
+        opt.optimize(&plan, &config, &observe).unwrap();
     }
 
     #[test]
@@ -601,7 +633,7 @@ mod tests {
             _: &LogicalPlan,
             _: &dyn OptimizerConfig,
         ) -> Result<Option<LogicalPlan>> {
-            Err(DataFusionError::Plan("rule failed".to_string()))
+            plan_err!("rule failed")
         }
 
         fn name(&self) -> &str {

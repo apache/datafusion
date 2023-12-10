@@ -19,6 +19,9 @@
 
 # DDL
 
+DDL stands for "Data Definition Language" and relates to creating and
+modifying catalog objects such as Tables.
+
 ## CREATE DATABASE
 
 Create catalog with specified name.
@@ -61,7 +64,7 @@ STORED AS <file_type>
 [ DELIMITER <char> ]
 [ COMPRESSION TYPE <GZIP | BZIP2 | XZ | ZSTD> ]
 [ PARTITIONED BY (<column list>) ]
-[ WITH ORDER (<ordered column list>)
+[ WITH ORDER (<ordered column list>) ]
 [ OPTIONS (<key_value_list>) ]
 LOCATION <literal>
 
@@ -74,9 +77,11 @@ LOCATION <literal>
 <key_value_list> := (<literal> <literal, <literal> <literal>, ...)
 ```
 
-`file_type` is one of `CSV`, `PARQUET`, `AVRO` or `JSON`
+For a detailed list of write related options which can be passed in the OPTIONS key_value_list, see [Write Options](write_options).
 
-`LOCATION <literal>` specfies the location to find the data. It can be
+`file_type` is one of `CSV`, `ARROW`, `PARQUET`, `AVRO` or `JSON`
+
+`LOCATION <literal>` specifies the location to find the data. It can be
 a path to a file or directory of partitioned files locally or on an
 object store.
 
@@ -97,6 +102,16 @@ CREATE EXTERNAL TABLE test
 STORED AS CSV
 WITH HEADER ROW
 LOCATION '/path/to/aggregate_simple.csv';
+```
+
+It is also possible to use compressed files, such as `.csv.gz`:
+
+```sql
+CREATE EXTERNAL TABLE test
+STORED AS CSV
+COMPRESSION TYPE GZIP
+WITH HEADER ROW
+LOCATION '/path/to/aggregate_simple.csv.gz';
 ```
 
 It is also possible to specify the schema manually.

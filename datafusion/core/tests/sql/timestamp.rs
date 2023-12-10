@@ -138,7 +138,7 @@ async fn timestamp_minmax() -> Result<()> {
 
     let sql = "SELECT MIN(table_a.ts), MAX(table_b.ts) FROM table_a, table_b";
     let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
+    let expected = [
         "+-------------------------+-----------------------------+",
         "| MIN(table_a.ts)         | MAX(table_b.ts)             |",
         "+-------------------------+-----------------------------+",
@@ -516,7 +516,7 @@ async fn group_by_timestamp_millis() -> Result<()> {
     let sql =
         "SELECT timestamp, SUM(count) FROM t1 GROUP BY timestamp ORDER BY timestamp ASC";
     let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
+    let expected = [
         "+---------------------+---------------+",
         "| timestamp           | SUM(t1.count) |",
         "+---------------------+---------------+",
@@ -565,28 +565,32 @@ async fn timestamp_sub_interval_days() -> Result<()> {
 }
 
 #[tokio::test]
-#[ignore] // https://github.com/apache/arrow-datafusion/issues/3327
 async fn timestamp_add_interval_months() -> Result<()> {
     let ctx = SessionContext::new();
+    let table_a =
+        make_timestamp_tz_table::<TimestampNanosecondType>(Some("+00:00".into()))?;
+    ctx.register_table("table_a", table_a)?;
 
-    let sql = "SELECT NOW(), NOW() + INTERVAL '17' MONTH;";
+    let sql = "SELECT ts, ts + INTERVAL '17' MONTH FROM table_a;";
     let results = execute_to_batches(&ctx, sql).await;
-    let actual = result_vec(&results);
+    let actual_vec = result_vec(&results);
 
-    let res1 = actual[0][0].as_str();
-    let res2 = actual[0][1].as_str();
+    for actual in actual_vec {
+        let res1 = actual[0].as_str();
+        let res2 = actual[1].as_str();
 
-    let format = "%Y-%m-%d %H:%M:%S%.6f";
-    let t1_naive = chrono::NaiveDateTime::parse_from_str(res1, format).unwrap();
-    let t2_naive = chrono::NaiveDateTime::parse_from_str(res2, format).unwrap();
+        let format = "%Y-%m-%dT%H:%M:%S%.6fZ";
+        let t1_naive = NaiveDateTime::parse_from_str(res1, format).unwrap();
+        let t2_naive = NaiveDateTime::parse_from_str(res2, format).unwrap();
 
-    let year = t1_naive.year() + (t1_naive.month() as i32 + 17) / 12;
-    let month = (t1_naive.month() + 17) % 12;
+        let year = t1_naive.year() + (t1_naive.month0() as i32 + 17) / 12;
+        let month = (t1_naive.month0() + 17) % 12 + 1;
 
-    assert_eq!(
-        t1_naive.with_year(year).unwrap().with_month(month).unwrap(),
-        t2_naive
-    );
+        assert_eq!(
+            t1_naive.with_year(year).unwrap().with_month(month).unwrap(),
+            t2_naive
+        );
+    }
     Ok(())
 }
 
@@ -618,7 +622,7 @@ async fn timestamp_array_add_interval() -> Result<()> {
 
     let sql = "SELECT ts, ts - INTERVAL '8' MILLISECONDS FROM table_a";
     let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
+    let expected = [
         "+----------------------------+----------------------------------------------+",
         "| ts                         | table_a.ts - IntervalMonthDayNano(\"8000000\") |",
         "+----------------------------+----------------------------------------------+",
@@ -631,41 +635,35 @@ async fn timestamp_array_add_interval() -> Result<()> {
 
     let sql = "SELECT ts, ts + INTERVAL '1' SECOND FROM table_b";
     let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
-        "+----------------------------+-------------------------------------------------+",
+    let expected = ["+----------------------------+-------------------------------------------------+",
         "| ts                         | table_b.ts + IntervalMonthDayNano(\"1000000000\") |",
         "+----------------------------+-------------------------------------------------+",
         "| 2020-09-08T13:42:29.190855 | 2020-09-08T13:42:30.190855                      |",
         "| 2020-09-08T12:42:29.190855 | 2020-09-08T12:42:30.190855                      |",
         "| 2020-09-08T11:42:29.190855 | 2020-09-08T11:42:30.190855                      |",
-        "+----------------------------+-------------------------------------------------+",
-    ];
+        "+----------------------------+-------------------------------------------------+"];
     assert_batches_eq!(expected, &actual);
 
     let sql = "SELECT ts, ts + INTERVAL '2' MONTH FROM table_b";
     let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
-        "+----------------------------+---------------------------------------------------------------------+",
+    let expected = ["+----------------------------+---------------------------------------------------------------------+",
         "| ts                         | table_b.ts + IntervalMonthDayNano(\"158456325028528675187087900672\") |",
         "+----------------------------+---------------------------------------------------------------------+",
         "| 2020-09-08T13:42:29.190855 | 2020-11-08T13:42:29.190855                                          |",
         "| 2020-09-08T12:42:29.190855 | 2020-11-08T12:42:29.190855                                          |",
         "| 2020-09-08T11:42:29.190855 | 2020-11-08T11:42:29.190855                                          |",
-        "+----------------------------+---------------------------------------------------------------------+",
-    ];
+        "+----------------------------+---------------------------------------------------------------------+"];
     assert_batches_eq!(expected, &actual);
 
     let sql = "SELECT ts, ts - INTERVAL '16' YEAR FROM table_b";
     let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
-        "+----------------------------+-----------------------------------------------------------------------+",
+    let expected = ["+----------------------------+-----------------------------------------------------------------------+",
         "| ts                         | table_b.ts - IntervalMonthDayNano(\"15211807202738752817960438464512\") |",
         "+----------------------------+-----------------------------------------------------------------------+",
         "| 2020-09-08T13:42:29.190855 | 2004-09-08T13:42:29.190855                                            |",
         "| 2020-09-08T12:42:29.190855 | 2004-09-08T12:42:29.190855                                            |",
         "| 2020-09-08T11:42:29.190855 | 2004-09-08T11:42:29.190855                                            |",
-        "+----------------------------+-----------------------------------------------------------------------+",
-    ];
+        "+----------------------------+-----------------------------------------------------------------------+"];
     assert_batches_eq!(expected, &actual);
     Ok(())
 }
@@ -677,7 +675,7 @@ async fn cast_timestamp_before_1970() -> Result<()> {
 
     let sql = "select cast('1969-01-01T00:00:00Z' as timestamp);";
     let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
+    let expected = [
         "+------------------------------+",
         "| Utf8(\"1969-01-01T00:00:00Z\") |",
         "+------------------------------+",
@@ -689,7 +687,7 @@ async fn cast_timestamp_before_1970() -> Result<()> {
 
     let sql = "select cast('1969-01-01T00:00:00.1Z' as timestamp);";
     let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
+    let expected = [
         "+--------------------------------+",
         "| Utf8(\"1969-01-01T00:00:00.1Z\") |",
         "+--------------------------------+",
@@ -709,7 +707,7 @@ async fn test_arrow_typeof() -> Result<()> {
     let sql = "select arrow_typeof(date_trunc('minute', to_timestamp_seconds(61)));";
     let actual = execute_to_batches(&ctx, sql).await;
 
-    let expected = vec![
+    let expected = [
         "+--------------------------------------------------------------------------+",
         "| arrow_typeof(date_trunc(Utf8(\"minute\"),to_timestamp_seconds(Int64(61)))) |",
         "+--------------------------------------------------------------------------+",
@@ -720,7 +718,7 @@ async fn test_arrow_typeof() -> Result<()> {
 
     let sql = "select arrow_typeof(date_trunc('second', to_timestamp_millis(61)));";
     let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
+    let expected = [
         "+-------------------------------------------------------------------------+",
         "| arrow_typeof(date_trunc(Utf8(\"second\"),to_timestamp_millis(Int64(61)))) |",
         "+-------------------------------------------------------------------------+",
@@ -731,18 +729,16 @@ async fn test_arrow_typeof() -> Result<()> {
 
     let sql = "select arrow_typeof(date_trunc('millisecond', to_timestamp_micros(61)));";
     let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
-        "+------------------------------------------------------------------------------+",
+    let expected = ["+------------------------------------------------------------------------------+",
         "| arrow_typeof(date_trunc(Utf8(\"millisecond\"),to_timestamp_micros(Int64(61)))) |",
         "+------------------------------------------------------------------------------+",
         "| Timestamp(Microsecond, None)                                                 |",
-        "+------------------------------------------------------------------------------+",
-    ];
+        "+------------------------------------------------------------------------------+"];
     assert_batches_eq!(expected, &actual);
 
     let sql = "select arrow_typeof(date_trunc('microsecond', to_timestamp(61)));";
     let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
+    let expected = [
         "+-----------------------------------------------------------------------+",
         "| arrow_typeof(date_trunc(Utf8(\"microsecond\"),to_timestamp(Int64(61)))) |",
         "+-----------------------------------------------------------------------+",
@@ -764,7 +760,7 @@ async fn cast_timestamp_to_timestamptz() -> Result<()> {
     let sql = "SELECT ts::timestamptz, arrow_typeof(ts::timestamptz) FROM table_a;";
     let actual = execute_to_batches(&ctx, sql).await;
 
-    let expected = vec![
+    let expected = [
         "+-----------------------------+---------------------------------------+",
         "| table_a.ts                  | arrow_typeof(table_a.ts)              |",
         "+-----------------------------+---------------------------------------+",
@@ -784,7 +780,7 @@ async fn test_cast_to_time() -> Result<()> {
     let sql = "SELECT 0::TIME";
     let actual = execute_to_batches(&ctx, sql).await;
 
-    let expected = vec![
+    let expected = [
         "+----------+",
         "| Int64(0) |",
         "+----------+",
@@ -804,7 +800,7 @@ async fn test_cast_to_time_with_time_zone_should_not_work() -> Result<()> {
     let results = plan_and_collect(&ctx, sql).await.unwrap_err();
 
     assert_eq!(
-        results.to_string(),
+        results.strip_backtrace(),
         "This feature is not implemented: Unsupported SQL type Time(None, WithTimeZone)"
     );
 
@@ -817,7 +813,7 @@ async fn test_cast_to_time_without_time_zone() -> Result<()> {
     let sql = "SELECT 0::TIME WITHOUT TIME ZONE";
     let actual = execute_to_batches(&ctx, sql).await;
 
-    let expected = vec![
+    let expected = [
         "+----------+",
         "| Int64(0) |",
         "+----------+",
@@ -837,7 +833,7 @@ async fn test_cast_to_timetz_should_not_work() -> Result<()> {
     let results = plan_and_collect(&ctx, sql).await.unwrap_err();
 
     assert_eq!(
-        results.to_string(),
+        results.strip_backtrace(),
         "This feature is not implemented: Unsupported SQL type Time(None, Tz)"
     );
     Ok(())
@@ -862,7 +858,7 @@ async fn test_current_date() -> Result<()> {
     let sql = "select case when current_date() = cast(now() as date) then 'OK' else 'FAIL' end result";
     let results = execute_to_batches(&ctx, sql).await;
 
-    let expected = vec![
+    let expected = [
         "+--------+",
         "| result |",
         "+--------+",
@@ -894,7 +890,7 @@ async fn test_current_time() -> Result<()> {
     let sql = "select case when current_time() = (now()::bigint % 86400000000000)::time then 'OK' else 'FAIL' end result";
     let results = execute_to_batches(&ctx, sql).await;
 
-    let expected = vec![
+    let expected = [
         "+--------+",
         "| result |",
         "+--------+",
@@ -914,7 +910,7 @@ async fn test_ts_dt_binary_ops() -> Result<()> {
         "select count(1) result from (select now() as n) a where n = '2000-01-01'::date";
     let results = execute_to_batches(&ctx, sql).await;
 
-    let expected = vec![
+    let expected = [
         "+--------+",
         "| result |",
         "+--------+",
@@ -929,7 +925,7 @@ async fn test_ts_dt_binary_ops() -> Result<()> {
         "select count(1) result from (select now() as n) a where n >= '2000-01-01'::date";
     let results = execute_to_batches(&ctx, sql).await;
 
-    let expected = vec![
+    let expected = [
         "+--------+",
         "| result |",
         "+--------+",
@@ -943,7 +939,7 @@ async fn test_ts_dt_binary_ops() -> Result<()> {
     let sql = "select now() = '2000-01-01'::date as result";
     let results = execute_to_batches(&ctx, sql).await;
 
-    let expected = vec![
+    let expected = [
         "+--------+",
         "| result |",
         "+--------+",
@@ -957,7 +953,7 @@ async fn test_ts_dt_binary_ops() -> Result<()> {
     let sql = "select now() >= '2000-01-01'::date as result";
     let results = execute_to_batches(&ctx, sql).await;
 
-    let expected = vec![
+    let expected = [
         "+--------+",
         "| result |",
         "+--------+",
@@ -1035,14 +1031,14 @@ async fn timestamp_sub_with_tz() -> Result<()> {
 
     let sql = "SELECT val, ts1 - ts2 AS ts_diff FROM table_a ORDER BY ts2 - ts1";
     let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
-        "+-----+---------------------------------------------------+",
-        "| val | ts_diff                                           |",
-        "+-----+---------------------------------------------------+",
-        "| 3   | 0 years 0 mons 0 days 10 hours 0 mins 30.000 secs |",
-        "| 1   | 0 years 0 mons 0 days 10 hours 0 mins 20.000 secs |",
-        "| 2   | 0 years 0 mons 0 days 10 hours 0 mins 10.000 secs |",
-        "+-----+---------------------------------------------------+",
+    let expected = [
+        "+-----+-----------------------------------+",
+        "| val | ts_diff                           |",
+        "+-----+-----------------------------------+",
+        "| 3   | 0 days 0 hours 0 mins 30.000 secs |",
+        "| 1   | 0 days 0 hours 0 mins 20.000 secs |",
+        "| 2   | 0 days 0 hours 0 mins 10.000 secs |",
+        "+-----+-----------------------------------+",
     ];
     assert_batches_eq!(expected, &actual);
 

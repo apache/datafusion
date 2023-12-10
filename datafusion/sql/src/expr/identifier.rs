@@ -17,9 +17,10 @@
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use datafusion_common::{
-    Column, DFField, DFSchema, DataFusionError, Result, ScalarValue, TableReference,
+    internal_err, plan_datafusion_err, Column, DFField, DFSchema, DataFusionError,
+    Result, TableReference,
 };
-use datafusion_expr::{Case, Expr, GetIndexedField};
+use datafusion_expr::{Case, Expr};
 use sqlparser::ast::{Expr as SQLExpr, Ident};
 
 impl<'a, S: ContextProvider> SqlToRel<'a, S> {
@@ -33,12 +34,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             // TODO: figure out if ScalarVariables should be insensitive.
             let var_names = vec![id.value];
             let ty = self
-                .schema_provider
+                .context_provider
                 .get_variable_type(&var_names)
                 .ok_or_else(|| {
-                    DataFusionError::Execution(format!(
-                        "variable {var_names:?} has no type information"
-                    ))
+                    plan_datafusion_err!("variable {var_names:?} has no type information")
                 })?;
             Ok(Expr::ScalarVariable(ty, var_names))
         } else {
@@ -90,9 +89,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         planner_context: &mut PlannerContext,
     ) -> Result<Expr> {
         if ids.len() < 2 {
-            return Err(DataFusionError::Internal(format!(
-                "Not a compound identifier: {ids:?}"
-            )));
+            return internal_err!("Not a compound identifier: {ids:?}");
         }
 
         if ids[0].value.starts_with('@') {
@@ -101,7 +98,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 .map(|id| self.normalizer.normalize(id))
                 .collect();
             let ty = self
-                .schema_provider
+                .context_provider
                 .get_variable_type(&var_names)
                 .ok_or_else(|| {
                     DataFusionError::Execution(format!(
@@ -119,9 +116,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             // Though ideally once that support is in place, this code should work with it
             // TODO: remove when can support multiple nested identifiers
             if ids.len() > 5 {
-                return Err(DataFusionError::Internal(format!(
-                    "Unsupported compound identifier: {ids:?}"
-                )));
+                return internal_err!("Unsupported compound identifier: {ids:?}");
             }
 
             let search_result = search_dfschema(&ids, schema);
@@ -130,16 +125,13 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 Some((field, nested_names)) if !nested_names.is_empty() => {
                     // TODO: remove when can support multiple nested identifiers
                     if nested_names.len() > 1 {
-                        return Err(DataFusionError::Internal(format!(
+                        return internal_err!(
                             "Nested identifiers not yet supported for column {}",
                             field.qualified_column().quoted_flat_name()
-                        )));
+                        );
                     }
                     let nested_name = nested_names[0].to_string();
-                    Ok(Expr::GetIndexedField(GetIndexedField::new(
-                        Box::new(Expr::Column(field.qualified_column())),
-                        ScalarValue::Utf8(Some(nested_name)),
-                    )))
+                    Ok(Expr::Column(field.qualified_column()).field(nested_name))
                 }
                 // found matching field with no spare identifier(s)
                 Some((field, _nested_names)) => {
@@ -149,9 +141,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     // return default where use all identifiers to not have a nested field
                     // this len check is because at 5 identifiers will have to have a nested field
                     if ids.len() == 5 {
-                        Err(DataFusionError::Internal(format!(
-                            "Unsupported compound identifier: {ids:?}"
-                        )))
+                        internal_err!("Unsupported compound identifier: {ids:?}")
                     } else {
                         // check the outer_query_schema and try to find a match
                         if let Some(outer) = planner_context.outer_query_schema() {
@@ -162,10 +152,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                                     if !nested_names.is_empty() =>
                                 {
                                     // TODO: remove when can support nested identifiers for OuterReferenceColumn
-                                    Err(DataFusionError::Internal(format!(
+                                    internal_err!(
                                         "Nested identifiers are not yet supported for OuterReferenceColumn {}",
                                         field.qualified_column().quoted_flat_name()
-                                    )))
+                                    )
                                 }
                                 // found matching field with no spare identifier(s)
                                 Some((field, _nested_names)) => {
@@ -272,10 +262,7 @@ fn form_identifier(idents: &[String]) -> Result<(Option<TableReference>, &String
             }),
             &idents[3],
         )),
-        _ => Err(DataFusionError::Internal(format!(
-            "Incorrect number of identifiers: {}",
-            idents.len()
-        ))),
+        _ => internal_err!("Incorrect number of identifiers: {}", idents.len()),
     }
 }
 
@@ -441,10 +428,10 @@ mod test {
     #[test]
     fn test_form_identifier() -> Result<()> {
         let err = form_identifier(&[]).expect_err("empty identifiers didn't fail");
-        let expected = "Internal error: Incorrect number of identifiers: 0. \
+        let expected = "Internal error: Incorrect number of identifiers: 0.\n\
         This was likely caused by a bug in DataFusion's code and we would \
         welcome that you file an bug report in our issue tracker";
-        assert_eq!(err.to_string(), expected);
+        assert!(expected.starts_with(&err.strip_backtrace()));
 
         let ids = vec!["a".to_string()];
         let (qualifier, column) = form_identifier(&ids)?;
@@ -479,10 +466,10 @@ mod test {
             "e".to_string(),
         ])
         .expect_err("too many identifiers didn't fail");
-        let expected = "Internal error: Incorrect number of identifiers: 5. \
+        let expected = "Internal error: Incorrect number of identifiers: 5.\n\
         This was likely caused by a bug in DataFusion's code and we would \
         welcome that you file an bug report in our issue tracker";
-        assert_eq!(err.to_string(), expected);
+        assert!(expected.starts_with(&err.strip_backtrace()));
 
         Ok(())
     }

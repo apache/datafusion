@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use datafusion::datasource::file_format::file_type::FileCompressionType;
+use datafusion::datasource::file_format::file_compression_type::FileCompressionType;
 use datafusion::error::Result;
 use datafusion::prelude::*;
 

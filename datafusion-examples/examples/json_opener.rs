@@ -21,7 +21,7 @@ use arrow_schema::{DataType, Field, Schema};
 use datafusion::{
     assert_batches_eq,
     datasource::{
-        file_format::file_type::FileCompressionType,
+        file_format::file_compression_type::FileCompressionType,
         listing::PartitionedFile,
         object_store::ObjectStoreUrl,
         physical_plan::{FileScanConfig, FileStream, JsonOpener},
@@ -29,6 +29,8 @@ use datafusion::{
     error::Result,
     physical_plan::metrics::ExecutionPlanMetricsSet,
 };
+use datafusion_common::Statistics;
+
 use futures::StreamExt;
 use object_store::ObjectStore;
 
@@ -63,7 +65,7 @@ async fn main() -> Result<()> {
         object_store_url: ObjectStoreUrl::local_filesystem(),
         file_schema: schema.clone(),
         file_groups: vec![vec![PartitionedFile::new(path.to_string(), 10)]],
-        statistics: Default::default(),
+        statistics: Statistics::new_unknown(&schema),
         projection: Some(vec![1, 0]),
         limit: Some(5),
         table_partition_cols: vec![],

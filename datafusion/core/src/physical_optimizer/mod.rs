@@ -15,24 +15,29 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! This module contains a query optimizer that operates against a physical plan and applies
-//! rules to a physical plan, such as "Repartition".
-
+//! Optimizer that rewrites [`ExecutionPlan`]s.
+//!
+//! These rules take advantage of physical plan properties , such as
+//! "Repartition" or "Sortedness"
+//!
+//! [`ExecutionPlan`]: crate::physical_plan::ExecutionPlan
 pub mod aggregate_statistics;
 pub mod coalesce_batches;
 pub mod combine_partial_final_agg;
-pub mod dist_enforcement;
-pub mod global_sort_selection;
+pub mod enforce_distribution;
+pub mod enforce_sorting;
 pub mod join_selection;
+pub mod limited_distinct_aggregation;
 pub mod optimizer;
+pub mod output_requirements;
 pub mod pipeline_checker;
+mod projection_pushdown;
 pub mod pruning;
-pub mod repartition;
-pub mod sort_enforcement;
+pub mod replace_with_order_preserving_variants;
 mod sort_pushdown;
+pub mod topk_aggregation;
 mod utils;
 
-pub mod pipeline_fixer;
 #[cfg(test)]
 pub mod test_utils;
 
