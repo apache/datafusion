@@ -26,8 +26,9 @@ use async_trait::async_trait;
 use bytes::{BufMut, BytesMut};
 use datafusion_common::DataFusionError;
 use datafusion_physical_expr::PhysicalExpr;
-use futures::{StreamExt, TryStreamExt};
+use futures::{StreamExt, TryFutureExt, TryStreamExt};
 use hashbrown::HashMap;
+use object_store::path::Path;
 use object_store::{ObjectMeta, ObjectStore};
 use parquet::arrow::parquet_to_arrow_schema;
 use parquet::file::footer::{decode_footer, decode_metadata};
@@ -143,6 +144,16 @@ fn clear_metadata(
     })
 }
 
+async fn fetch_schema_with_location(
+    store: &dyn ObjectStore,
+    file: &ObjectMeta,
+    metadata_size_hint: Option<usize>,
+) -> Result<(Path, Schema)> {
+    let loc_path = file.location.clone();
+    let schema = fetch_schema(store, file, metadata_size_hint).await?;
+    Ok((loc_path, schema))
+}
+
 #[async_trait]
 impl FileFormat for ParquetFormat {
     fn as_any(&self) -> &dyn Any {
@@ -155,19 +166,22 @@ impl FileFormat for ParquetFormat {
         store: &Arc<dyn ObjectStore>,
         objects: &[ObjectMeta],
     ) -> Result<SchemaRef> {
-        let schemas: Vec<_> = futures::stream::iter(objects)
-            .map(|object| fetch_schema(store.as_ref(), object, self.metadata_size_hint))
+        let mut schemas: Vec<_> = futures::stream::iter(objects)
+            .map(|object| {
+                fetch_schema_with_location(
+                    store.as_ref(),
+                    object,
+                    self.metadata_size_hint,
+                )
+            })
             .boxed() // Workaround https://github.com/rust-lang/rust/issues/64552
             .buffered(SCHEMA_INFERENCE_CONCURRENCY)
             .try_collect()
             .await?;
 
-        // sorted
-        let schemas: Vec<_> = {
-            let mut stack: Vec<_> = schemas.into_iter().zip(objects).collect();
-            stack.sort_by(|(_, a), (_, b)| a.location.cmp(&b.location));
-            stack.into_iter().map(|(a, _)| a).collect()
-        };
+        schemas.sort_by(|(location1, _), (location2, _)| location1.cmp(location2));
+        
+        let schemas = schemas.into_iter().map(|(_, schema)| schema).collect::<Vec<_>>();
 
         let schema = if self.skip_metadata(state.config_options()) {
             Schema::try_merge(clear_metadata(schemas))
