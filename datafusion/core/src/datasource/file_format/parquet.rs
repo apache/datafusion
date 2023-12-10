@@ -180,8 +180,11 @@ impl FileFormat for ParquetFormat {
             .await?;
 
         schemas.sort_by(|(location1, _), (location2, _)| location1.cmp(location2));
-        
-        let schemas = schemas.into_iter().map(|(_, schema)| schema).collect::<Vec<_>>();
+
+        let schemas = schemas
+            .into_iter()
+            .map(|(_, schema)| schema)
+            .collect::<Vec<_>>();
 
         let schema = if self.skip_metadata(state.config_options()) {
             Schema::try_merge(clear_metadata(schemas))
