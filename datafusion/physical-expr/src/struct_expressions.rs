@@ -18,8 +18,8 @@
 //! Struct expressions
 
 use arrow::array::*;
-use arrow::datatypes::{DataType, Field};
-use datafusion_common::{exec_err, not_impl_err, DataFusionError, Result};
+use arrow::datatypes::Field;
+use datafusion_common::{exec_err, DataFusionError, Result};
 use datafusion_expr::ColumnarValue;
 use std::sync::Arc;
 
