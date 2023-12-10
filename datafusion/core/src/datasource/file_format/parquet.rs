@@ -1148,7 +1148,7 @@ pub(crate) mod test_util {
         multi_page: bool,
     ) -> Result<(Vec<ObjectMeta>, Vec<NamedTempFile>)> {
         // Each batch writes to their own file
-        let files: Vec<_> = batches
+        let mut files: Vec<_> = batches
             .into_iter()
             .map(|batch| {
                 let mut output = NamedTempFile::new().expect("creating temp file");
@@ -1177,7 +1177,9 @@ pub(crate) mod test_util {
             })
             .collect();
 
+        files.sort_by(|a, b| a.path().cmp(b.path()));
         let meta: Vec<_> = files.iter().map(local_unpartitioned_file).collect();
+
         Ok((meta, files))
     }
 
