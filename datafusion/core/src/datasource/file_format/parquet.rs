@@ -1133,7 +1133,7 @@ pub(crate) mod test_util {
     use arrow::record_batch::RecordBatch;
     use parquet::arrow::ArrowWriter;
     use parquet::file::properties::WriterProperties;
-    use tempfile::NamedTempFile;
+    use tempfile::{NamedTempFile, TempDir};
 
     /// How many rows per page should be written
     const ROWS_PER_PAGE: usize = 2;
@@ -1147,11 +1147,19 @@ pub(crate) mod test_util {
         batches: Vec<RecordBatch>,
         multi_page: bool,
     ) -> Result<(Vec<ObjectMeta>, Vec<NamedTempFile>)> {
+        let tmp_files = {
+            let mut tmp_files: Vec<_> = (0..batches.len())
+                .map(|_| NamedTempFile::new().expect("creating temp file"))
+                .collect();
+            tmp_files.sort_by(|a, b| a.path().cmp(b.path()));
+            tmp_files
+        };
+        
         // Each batch writes to their own file
-        let mut files: Vec<_> = batches
+        let files: Vec<_> = batches
             .into_iter()
-            .map(|batch| {
-                let mut output = NamedTempFile::new().expect("creating temp file");
+            .zip(tmp_files.into_iter())
+            .map(|(batch, mut output)| {
 
                 let builder = WriterProperties::builder();
                 let props = if multi_page {
@@ -1177,7 +1185,6 @@ pub(crate) mod test_util {
             })
             .collect();
 
-        files.sort_by(|a, b| a.path().cmp(b.path()));
         let meta: Vec<_> = files.iter().map(local_unpartitioned_file).collect();
 
         Ok((meta, files))
