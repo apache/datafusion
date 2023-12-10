@@ -696,15 +696,15 @@ mod tests {
         assert_eq!(stats.num_rows, Some(3));
         let c1_stats = &stats.column_statistics.as_ref().expect("missing c1 stats")[0];
         let c2_stats = &stats.column_statistics.as_ref().expect("missing c2 stats")[1];
-        assert_eq!(c1_stats.null_count, Some(1));
-        assert_eq!(c2_stats.null_count, Some(3));
+        assert_eq!(c1_stats.null_count, Some(3));
+        assert_eq!(c2_stats.null_count, Some(1));
 
         let stats = fetch_statistics(store.as_ref(), schema, &meta[1], None).await?;
         assert_eq!(stats.num_rows, Some(3));
         let c1_stats = &stats.column_statistics.as_ref().expect("missing c1 stats")[0];
         let c2_stats = &stats.column_statistics.as_ref().expect("missing c2 stats")[1];
-        assert_eq!(c1_stats.null_count, Some(3));
-        assert_eq!(c2_stats.null_count, Some(1));
+        assert_eq!(c1_stats.null_count, Some(1));
+        assert_eq!(c2_stats.null_count, Some(3));
         assert_eq!(c2_stats.max_value, Some(ScalarValue::Int64(Some(2))));
         assert_eq!(c2_stats.min_value, Some(ScalarValue::Int64(Some(1))));
 
