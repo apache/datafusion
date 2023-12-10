@@ -162,6 +162,13 @@ impl FileFormat for ParquetFormat {
             .try_collect()
             .await?;
 
+        // sorted
+        let schemas: Vec<_> = {
+            let mut stack: Vec<_> = schemas.into_iter().zip(objects).collect();
+            stack.sort_by(|(_, a), (_, b)| a.location.cmp(&b.location));
+            stack.into_iter().map(|(a, _)| a).collect()
+        };
+
         let schema = if self.skip_metadata(state.config_options()) {
             Schema::try_merge(clear_metadata(schemas))
         } else {
