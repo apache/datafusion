@@ -232,6 +232,12 @@ impl SessionConfig {
         self
     }
 
+    /// Enables or disables the use of repartition round robin to improve parallelism
+    pub fn with_repartition_round_robin(mut self, enabled: bool) -> Self {
+        self.options.optimizer.enable_round_robin_repartition = enabled;
+        self
+    }
+
     /// Enables or disables the use of pruning predicate for parquet readers to skip row groups
     pub fn with_parquet_pruning(mut self, enabled: bool) -> Self {
         self.options.execution.parquet.pruning = enabled;

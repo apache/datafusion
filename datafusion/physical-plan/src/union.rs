@@ -44,7 +44,7 @@ use datafusion_physical_expr::EquivalenceProperties;
 
 use futures::Stream;
 use itertools::Itertools;
-use log::{debug, trace, warn};
+use log::{debug, info, trace, warn};
 use tokio::macros::support::thread_rng_n;
 
 /// `UnionExec`: `UNION ALL` execution plan.
@@ -275,19 +275,41 @@ impl ExecutionPlan for UnionExec {
         mut partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        trace!("Start UnionExec::execute for partition {} of context session_id {} and task_id {:?}", partition, context.session_id(), context.task_id());
+        info!("======= Start UnionExec::execute for partition {} of context session_id {} and task_id {:?}", partition, context.session_id(), context.task_id());
         let baseline_metrics = BaselineMetrics::new(&self.metrics, partition);
         // record the tiny amount of work done in this function so
         // elapsed_compute is reported as non zero
         let elapsed_compute = baseline_metrics.elapsed_compute().clone();
         let _timer = elapsed_compute.timer(); // record on drop
 
+        // print number of output partitions
+        if partition == 0 {
+            info!(
+                "======= UnionExec::execute: number of output partitions: {}",
+                self.output_partitioning().partition_count()
+            );
+
+            // print number of input partitions
+            let mut num_input_partitions = 0;
+            for input in self.inputs.iter() {
+                info!(
+                    "========= UnionExec::execute: number of input partitions: {}",
+                    input.output_partitioning().partition_count()
+                );
+                num_input_partitions += input.output_partitioning().partition_count();
+            }
+            info!(
+                "====== UnionExec::execute: number of total input partitions: {}",
+                num_input_partitions
+            );
+        }
+
         // find partition to execute
         for input in self.inputs.iter() {
             // Calculate whether partition belongs to the current partition
             if partition < input.output_partitioning().partition_count() {
                 let stream = input.execute(partition, context)?;
-                debug!("Found a Union partition to execute");
+                info!("========= Found a Union partition to execute");
                 return Ok(Box::pin(ObservedStream::new(stream, baseline_metrics)));
             } else {
                 partition -= input.output_partitioning().partition_count();

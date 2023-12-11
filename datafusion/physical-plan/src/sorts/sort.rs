@@ -54,7 +54,7 @@ use datafusion_execution::TaskContext;
 use datafusion_physical_expr::EquivalenceProperties;
 
 use futures::{StreamExt, TryStreamExt};
-use log::{debug, error, trace};
+use log::{debug, error, info, trace};
 use tokio::sync::mpsc::Sender;
 use tokio::task;
 
@@ -857,13 +857,16 @@ impl ExecutionPlan for SortExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        trace!("Start SortExec::execute for partition {} of context session_id {} and task_id {:?}", partition, context.session_id(), context.task_id());
+        // info!("========= Start SortExec::execute for partition {} of context session_id {} and task_id {:?}", partition, context.session_id(), context.task_id());
 
         let mut input = self.input.execute(partition, context.clone())?;
 
         let execution_options = &context.session_config().options().execution;
 
-        trace!("End SortExec's input.execute for partition: {}", partition);
+        // info!(
+        //     "========= End SortExec's input.execute for partition: {}",
+        //     partition
+        // );
 
         if let Some(fetch) = self.fetch.as_ref() {
             let mut topk = TopK::try_new(

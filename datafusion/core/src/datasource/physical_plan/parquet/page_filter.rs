@@ -26,7 +26,7 @@ use arrow::{array::ArrayRef, datatypes::SchemaRef, error::ArrowError};
 use datafusion_common::{DataFusionError, Result};
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::{split_conjunction, PhysicalExpr};
-use log::{debug, trace, info};
+use log::{debug, info, trace};
 use parquet::schema::types::ColumnDescriptor;
 use parquet::{
     arrow::arrow_reader::{RowSelection, RowSelector},

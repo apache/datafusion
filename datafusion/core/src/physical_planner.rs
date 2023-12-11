@@ -972,6 +972,7 @@ impl DefaultPhysicalPlanner {
                         ))
                         .collect::<Result<Vec<_>>>()?;
                     let new_sort = SortExec::new(sort_expr, physical_input)
+                        // .with_preserve_partitioning(true)  // prototype for https://github.com/influxdata/idpe/issues/18388
                         .with_fetch(*fetch);
                     Ok(Arc::new(new_sort))
                 }
