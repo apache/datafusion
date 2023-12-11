@@ -200,10 +200,10 @@ impl FileFormat for ParquetFormat {
             .await?;
 
         // Schema inference adds fields based the order they are seen
-        // which depends on the order the files are processed. For some 
+        // which depends on the order the files are processed. For some
         // object stores (like local file systems) the order returned from list
-        // is not deterministic. Thus, to ensure deterministic schema inference 
-        // sort the files first. 
+        // is not deterministic. Thus, to ensure deterministic schema inference
+        // sort the files first.
         // https://github.com/apache/arrow-datafusion/pull/6629
         schemas.sort_by(|(location1, _), (location2, _)| location1.cmp(location2));
 
