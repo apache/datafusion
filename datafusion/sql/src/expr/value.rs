@@ -415,7 +415,7 @@ fn parse_decimal_128(unsigned_number: &str, negative: bool) -> Result<Expr> {
     let (trimmed, e_scale) = if parts.len() == 1 {
         (trimmed, 0)
     } else if parts.len() == 2 {
-        let e_scale = parts[1].parse::<i32>().map_err(|e| {
+        let e_scale = parts[1].parse::<i16>().map_err(|e| {
             DataFusionError::from(ParserError(format!(
                 "Cannot parse {} as i32 when building decimal: {e}",
                 parts[1]
@@ -444,9 +444,9 @@ fn parse_decimal_128(unsigned_number: &str, negative: bool) -> Result<Expr> {
     };
 
     let (precision, scale) = if e_scale > 0 {
-        (precision as i32 + e_scale, scale as i32 - e_scale)
+        (precision as i16 + e_scale, scale as i16 - e_scale)
     } else {
-        (precision as i32 - e_scale, scale as i32 - e_scale)
+        (precision as i16 - e_scale, scale as i16 - e_scale)
     };
 
     let number = replaced_str.parse::<i128>().map_err(|e| {
@@ -456,7 +456,7 @@ fn parse_decimal_128(unsigned_number: &str, negative: bool) -> Result<Expr> {
     })?;
 
     // check precision overflow
-    if precision > DECIMAL128_MAX_PRECISION as i32 || scale > DECIMAL128_MAX_SCALE as i32
+    if precision > DECIMAL128_MAX_PRECISION as i16 || scale > DECIMAL128_MAX_SCALE as i16
     {
         return Err(DataFusionError::from(ParserError(format!(
                 "Cannot parse {replaced_str} as i128 when building decimal: precision overflow"
@@ -492,5 +492,11 @@ mod tests {
             let output = try_decode_hex_literal(input);
             assert_eq!(output, expect);
         }
+    }
+
+    #[test]
+    fn test_parse_128_decimal_number() {
+        let number = "1.23456e10";
+        parse_decimal_128(number, false).unwrap();
     }
 }
