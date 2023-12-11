@@ -215,6 +215,7 @@ Unlike to some databases the math functions in Datafusion works the same way as 
 | array_has_all(array, sub-array)       | Returns true if all elements of sub-array exist in array `array_has_all([1,2,3], [1,3]) -> true`                                                                         |
 | array_has_any(array, sub-array)       | Returns true if any elements exist in both arrays `array_has_any([1,2,3], [1,4]) -> true`                                                                                |
 | array_dims(array)                     | Returns an array of the array's dimensions. `array_dims([[1, 2, 3], [4, 5, 6]]) -> [2, 3]`                                                                               |
+| array_distinct(array)                 | Returns distinct values from the array after removing duplicates. `array_distinct([1, 3, 2, 3, 1, 2, 4]) -> [1, 2, 3, 4]`                                                |
 | array_element(array, index)           | Extracts the element with the index n from the array `array_element([1, 2, 3, 4], 3) -> 3`                                                                               |
 | flatten(array)                        | Converts an array of arrays to a flat array `flatten([[1], [2, 3], [4, 5, 6]]) -> [1, 2, 3, 4, 5, 6]`                                                                    |
 | array_length(array, dimension)        | Returns the length of the array dimension. `array_length([1, 2, 3, 4, 5]) -> 5`                                                                                          |

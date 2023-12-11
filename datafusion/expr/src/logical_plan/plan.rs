@@ -946,7 +946,7 @@ impl LogicalPlan {
                     // We can use the existing functional dependencies as is:
                     .with_functional_dependencies(
                         input.schema().functional_dependencies().clone(),
-                    ),
+                    )?,
                 );
 
                 Ok(LogicalPlan::Unnest(Unnest {
@@ -1208,7 +1208,7 @@ impl LogicalPlan {
         self.with_new_exprs(new_exprs, &new_inputs_with_values)
     }
 
-    /// Walk the logical plan, find any `PlaceHolder` tokens, and return a map of their IDs and DataTypes
+    /// Walk the logical plan, find any `Placeholder` tokens, and return a map of their IDs and DataTypes
     pub fn get_parameter_types(
         &self,
     ) -> Result<HashMap<String, Option<DataType>>, DataFusionError> {
@@ -1834,8 +1834,9 @@ pub fn projection_schema(input: &LogicalPlan, exprs: &[Expr]) -> Result<Arc<DFSc
         exprlist_to_fields(exprs, input)?,
         input.schema().metadata().clone(),
     )?;
-    schema = schema
-        .with_functional_dependencies(calc_func_dependencies_for_project(exprs, input)?);
+    schema = schema.with_functional_dependencies(calc_func_dependencies_for_project(
+        exprs, input,
+    )?)?;
     Ok(Arc::new(schema))
 }
 
@@ -1864,7 +1865,7 @@ impl SubqueryAlias {
         let func_dependencies = plan.schema().functional_dependencies().clone();
         let schema = DFSchemaRef::new(
             DFSchema::try_from_qualified_schema(&alias, &schema)?
-                .with_functional_dependencies(func_dependencies),
+                .with_functional_dependencies(func_dependencies)?,
         );
         Ok(SubqueryAlias {
             input: Arc::new(plan),
@@ -2017,7 +2018,7 @@ impl Window {
             window_expr,
             schema: Arc::new(
                 DFSchema::new_with_metadata(window_fields, metadata)?
-                    .with_functional_dependencies(window_func_dependencies),
+                    .with_functional_dependencies(window_func_dependencies)?,
             ),
         })
     }
@@ -2087,7 +2088,7 @@ impl TableScan {
             .map(|p| {
                 let projected_func_dependencies =
                     func_dependencies.project_functional_dependencies(p, p.len());
-                DFSchema::new_with_metadata(
+                let df_schema = DFSchema::new_with_metadata(
                     p.iter()
                         .map(|i| {
                             DFField::from_qualified(
@@ -2097,15 +2098,13 @@ impl TableScan {
                         })
                         .collect(),
                     schema.metadata().clone(),
-                )
-                .map(|df_schema| {
-                    df_schema.with_functional_dependencies(projected_func_dependencies)
-                })
+                )?;
+                df_schema.with_functional_dependencies(projected_func_dependencies)
             })
             .unwrap_or_else(|| {
-                DFSchema::try_from_qualified_schema(table_name.clone(), &schema).map(
-                    |df_schema| df_schema.with_functional_dependencies(func_dependencies),
-                )
+                let df_schema =
+                    DFSchema::try_from_qualified_schema(table_name.clone(), &schema)?;
+                df_schema.with_functional_dependencies(func_dependencies)
             })?;
         let projected_schema = Arc::new(projected_schema);
         Ok(Self {
@@ -2417,7 +2416,7 @@ impl Aggregate {
             calc_func_dependencies_for_aggregate(&group_expr, &input, &schema)?;
         let new_schema = schema.as_ref().clone();
         let schema = Arc::new(
-            new_schema.with_functional_dependencies(aggregate_func_dependencies),
+            new_schema.with_functional_dependencies(aggregate_func_dependencies)?,
         );
         Ok(Self {
             input,
@@ -2627,17 +2626,19 @@ pub struct Unnest {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
     use super::*;
     use crate::builder::LogicalTableSource;
     use crate::logical_plan::table_scan;
     use crate::{col, count, exists, in_subquery, lit, placeholder, GroupingSet};
+
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::tree_node::TreeNodeVisitor;
     use datafusion_common::{
         not_impl_err, Constraint, DFSchema, ScalarValue, TableReference,
     };
-    use std::collections::HashMap;
-    use std::sync::Arc;
 
     fn employee_schema() -> Schema {
         Schema::new(vec![
@@ -3164,15 +3165,20 @@ digraph {
         )
         .unwrap();
         assert!(!filter.is_scalar());
-        let unique_schema =
-            Arc::new(schema.as_ref().clone().with_functional_dependencies(
-                FunctionalDependencies::new_from_constraints(
-                    Some(&Constraints::new_unverified(vec![Constraint::Unique(
-                        vec![0],
-                    )])),
-                    1,
-                ),
-            ));
+        let unique_schema = Arc::new(
+            schema
+                .as_ref()
+                .clone()
+                .with_functional_dependencies(
+                    FunctionalDependencies::new_from_constraints(
+                        Some(&Constraints::new_unverified(vec![Constraint::Unique(
+                            vec![0],
+                        )])),
+                        1,
+                    ),
+                )
+                .unwrap(),
+        );
         let scan = Arc::new(LogicalPlan::TableScan(TableScan {
             table_name: TableReference::bare("tab"),
             source,

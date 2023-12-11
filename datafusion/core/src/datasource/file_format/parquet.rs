@@ -1803,8 +1803,8 @@ mod tests {
         // there is only one row group in one file.
         assert_eq!(page_index.len(), 1);
         assert_eq!(offset_index.len(), 1);
-        let page_index = page_index.get(0).unwrap();
-        let offset_index = offset_index.get(0).unwrap();
+        let page_index = page_index.first().unwrap();
+        let offset_index = offset_index.first().unwrap();
 
         // 13 col in one row group
         assert_eq!(page_index.len(), 13);

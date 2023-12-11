@@ -146,6 +146,8 @@ pub enum BuiltinScalarFunction {
     ArrayPopBack,
     /// array_dims
     ArrayDims,
+    /// array_distinct
+    ArrayDistinct,
     /// array_element
     ArrayElement,
     /// array_empty
@@ -407,6 +409,7 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::ArrayHasAny => Volatility::Immutable,
             BuiltinScalarFunction::ArrayHas => Volatility::Immutable,
             BuiltinScalarFunction::ArrayDims => Volatility::Immutable,
+            BuiltinScalarFunction::ArrayDistinct => Volatility::Immutable,
             BuiltinScalarFunction::ArrayElement => Volatility::Immutable,
             BuiltinScalarFunction::ArrayExcept => Volatility::Immutable,
             BuiltinScalarFunction::ArrayLength => Volatility::Immutable,
@@ -586,6 +589,7 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::ArrayDims => {
                 Ok(List(Arc::new(Field::new("item", UInt64, true))))
             }
+            BuiltinScalarFunction::ArrayDistinct => Ok(input_expr_types[0].clone()),
             BuiltinScalarFunction::ArrayElement => match &input_expr_types[0] {
                 List(field) => Ok(field.data_type().clone()),
                 _ => plan_err!(
@@ -933,6 +937,7 @@ impl BuiltinScalarFunction {
                 Signature::variadic_any(self.volatility())
             }
             BuiltinScalarFunction::ArrayNdims => Signature::any(1, self.volatility()),
+            BuiltinScalarFunction::ArrayDistinct => Signature::any(1, self.volatility()),
             BuiltinScalarFunction::ArrayPosition => {
                 Signature::variadic_any(self.volatility())
             }
@@ -1570,6 +1575,7 @@ impl BuiltinScalarFunction {
                 &["array_concat", "array_cat", "list_concat", "list_cat"]
             }
             BuiltinScalarFunction::ArrayDims => &["array_dims", "list_dims"],
+            BuiltinScalarFunction::ArrayDistinct => &["array_distinct", "list_distinct"],
             BuiltinScalarFunction::ArrayEmpty => &["empty"],
             BuiltinScalarFunction::ArrayElement => &[
                 "array_element",

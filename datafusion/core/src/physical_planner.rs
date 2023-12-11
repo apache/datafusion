@@ -91,6 +91,7 @@ use datafusion_expr::{
     WindowFrameBound, WriteOp,
 };
 use datafusion_physical_expr::expressions::Literal;
+use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
 use datafusion_sql::utils::window_expr_common_partition_keys;
 
 use async_trait::async_trait;
@@ -1196,10 +1197,15 @@ impl DefaultPhysicalPlanner {
                 }
                 LogicalPlan::Subquery(_) => todo!(),
                 LogicalPlan::EmptyRelation(EmptyRelation {
-                    produce_one_row,
+                    produce_one_row: false,
                     schema,
                 }) => Ok(Arc::new(EmptyExec::new(
-                    *produce_one_row,
+                    SchemaRef::new(schema.as_ref().to_owned().into()),
+                ))),
+                LogicalPlan::EmptyRelation(EmptyRelation {
+                    produce_one_row: true,
+                    schema,
+                }) => Ok(Arc::new(PlaceholderRowExec::new(
                     SchemaRef::new(schema.as_ref().to_owned().into()),
                 ))),
                 LogicalPlan::SubqueryAlias(SubqueryAlias { input, .. }) => {
@@ -2012,7 +2018,7 @@ impl DefaultPhysicalPlanner {
         let mut column_names = StringBuilder::new();
         let mut data_types = StringBuilder::new();
         let mut is_nullables = StringBuilder::new();
-        for (_, field) in table_schema.fields().iter().enumerate() {
+        for field in table_schema.fields() {
             column_names.append_value(field.name());
 
             // "System supplied type" --> Use debug format of the datatype
@@ -2767,7 +2773,7 @@ mod tests {
 
 digraph {
     1[shape=box label="ProjectionExec: expr=[id@0 + 2 as employee.id + Int32(2)]", tooltip=""]
-    2[shape=box label="EmptyExec: produce_one_row=false", tooltip=""]
+    2[shape=box label="EmptyExec", tooltip=""]
     1 -> 2 [arrowhead=none, arrowtail=normal, dir=back]
 }
 // End DataFusion GraphViz Plan

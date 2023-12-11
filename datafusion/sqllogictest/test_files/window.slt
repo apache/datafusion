@@ -279,13 +279,13 @@ SortPreservingMergeExec: [b@0 ASC NULLS LAST]
 ------------AggregateExec: mode=Partial, gby=[b@1 as b], aggr=[MAX(d.a)]
 --------------UnionExec
 ----------------ProjectionExec: expr=[1 as a, aa as b]
-------------------EmptyExec: produce_one_row=true
+------------------PlaceholderRowExec
 ----------------ProjectionExec: expr=[3 as a, aa as b]
-------------------EmptyExec: produce_one_row=true
+------------------PlaceholderRowExec
 ----------------ProjectionExec: expr=[5 as a, bb as b]
-------------------EmptyExec: produce_one_row=true
+------------------PlaceholderRowExec
 ----------------ProjectionExec: expr=[7 as a, bb as b]
-------------------EmptyExec: produce_one_row=true
+------------------PlaceholderRowExec
 
 # Check actual result:
 query TI
@@ -365,13 +365,13 @@ SortPreservingMergeExec: [b@0 ASC NULLS LAST]
 --------------RepartitionExec: partitioning=Hash([b@1], 4), input_partitions=4
 ----------------UnionExec
 ------------------ProjectionExec: expr=[1 as a, aa as b]
---------------------EmptyExec: produce_one_row=true
+--------------------PlaceholderRowExec
 ------------------ProjectionExec: expr=[3 as a, aa as b]
---------------------EmptyExec: produce_one_row=true
+--------------------PlaceholderRowExec
 ------------------ProjectionExec: expr=[5 as a, bb as b]
---------------------EmptyExec: produce_one_row=true
+--------------------PlaceholderRowExec
 ------------------ProjectionExec: expr=[7 as a, bb as b]
---------------------EmptyExec: produce_one_row=true
+--------------------PlaceholderRowExec
 
 
 # check actual result
@@ -3763,20 +3763,20 @@ select a,
 1 1
 2 2
 
-# TODO: this is different to Postgres which returns [1, 1] for `rnk`.
-# Comment it because it is flaky now as it depends on the order of the `a` column.
-# query II
-# select a,
-#       rank() over (RANGE BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) rnk
-#       from (select 1 a union select 2 a) q ORDER BY rnk
-# ----
-# 1 1
-# 2 2
+query II
+select a,
+      rank() over (RANGE BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) rnk
+      from (select 1 a union select 2 a) q ORDER BY a
+----
+1 1
+2 1
 
-# TODO: this works in Postgres which returns [1, 1].
-query error DataFusion error: Arrow error: Invalid argument error: must either specify a row count or at least one column
+query I
 select rank() over (RANGE between UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) rnk
        from (select 1 a union select 2 a) q;
+----
+1
+1
 
 query II
 select a,
