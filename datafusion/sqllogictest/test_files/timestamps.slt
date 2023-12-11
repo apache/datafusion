@@ -61,6 +61,11 @@ select now() = current_date();
 false
 
 query B
+select current_date() = today();
+----
+false
+
+query B
 select cast(now() as date) = today();
 ----
 true
