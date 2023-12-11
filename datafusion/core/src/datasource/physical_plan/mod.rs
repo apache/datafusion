@@ -135,7 +135,7 @@ impl DisplayAs for FileScanConfig {
             write!(f, ", infinite_source=true")?;
         }
 
-        if let Some(ordering) = orderings.get(0) {
+        if let Some(ordering) = orderings.first() {
             if !ordering.is_empty() {
                 let start = if orderings.len() == 1 {
                     ", output_ordering="

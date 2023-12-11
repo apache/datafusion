@@ -116,7 +116,7 @@ fn signature(lhs: &DataType, op: &Operator, rhs: &DataType) -> Result<Signature>
             })
         }
         AtArrow | ArrowAt => {
-            // ArrowAt and AtArrow check for whether one array ic contained in another.
+            // ArrowAt and AtArrow check for whether one array is contained in another.
             // The result type is boolean. Signature::comparison defines this signature.
             // Operation has nothing to do with comparison
             array_coercion(lhs, rhs).map(Signature::comparison).ok_or_else(|| {

@@ -453,7 +453,7 @@ mod tests {
             .evaluate(&batch)?
             .into_array(batch.num_rows())
             .expect("Failed to convert to array");
-        assert!(result.is_null(0));
+        assert!(result.is_empty());
         Ok(())
     }
 

@@ -661,6 +661,12 @@ scalar_expr!(
     "returns the number of dimensions of the array."
 );
 scalar_expr!(
+    ArrayDistinct,
+    array_distinct,
+    array,
+    "return distinct values from the array after removing duplicates."
+);
+scalar_expr!(
     ArrayPosition,
     array_position,
     array element index,

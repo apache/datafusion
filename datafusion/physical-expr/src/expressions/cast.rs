@@ -140,8 +140,7 @@ impl PhysicalExpr for CastExpr {
         let mut s = state;
         self.expr.hash(&mut s);
         self.cast_type.hash(&mut s);
-        // Add `self.cast_options` when hash is available
-        // https://github.com/apache/arrow-rs/pull/4395
+        self.cast_options.hash(&mut s);
     }
 
     /// A [`CastExpr`] preserves the ordering of its child.
@@ -157,8 +156,7 @@ impl PartialEq<dyn Any> for CastExpr {
             .map(|x| {
                 self.expr.eq(&x.expr)
                     && self.cast_type == x.cast_type
-                    // TODO: Use https://github.com/apache/arrow-rs/issues/2966 when available
-                    && self.cast_options.safe == x.cast_options.safe
+                    && self.cast_options == x.cast_options
             })
             .unwrap_or(false)
     }
