@@ -159,6 +159,7 @@ async fn run_test_file_with_postgres(test_file: TestFile) -> Result<()> {
         relative_path,
     } = test_file;
     info!("Running with Postgres runner: {}", path.display());
+    setup_scratch_dir(&relative_path)?;
     let mut runner =
         sqllogictest::Runner::new(|| Postgres::connect(relative_path.clone()));
     runner.with_column_validator(strict_column_validator);
@@ -188,6 +189,7 @@ async fn run_complete_file(test_file: TestFile) -> Result<()> {
         info!("Skipping: {}", path.display());
         return Ok(());
     };
+    setup_scratch_dir(&relative_path)?;
     let mut runner = sqllogictest::Runner::new(|| async {
         Ok(DataFusion::new(
             test_ctx.session_ctx().clone(),
