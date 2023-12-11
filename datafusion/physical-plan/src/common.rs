@@ -149,11 +149,9 @@ pub fn compute_record_batch_statistics(
         .iter()
         .flatten()
         .map(|b| {
-            b.columns()
+            projection
                 .iter()
-                .enumerate()
-                .filter(|(index, _)| projection.contains(index))
-                .map(|(_, col)| col.get_array_memory_size())
+                .map(|index| b.column(*index).get_array_memory_size())
                 .sum::<usize>()
         })
         .sum();
