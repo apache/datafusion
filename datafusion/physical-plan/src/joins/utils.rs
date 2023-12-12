@@ -1296,15 +1296,15 @@ pub fn prepare_sorted_exprs(
 
 /// The `handle_state` macro is designed to process the result of a state-changing
 /// operation, encountered e.g. in implementations of `EagerJoinStream`. It
-/// operates on a `StreamJoinStateResult` by matching its variants and executing
+/// operates on a `StatefulStreamResult` by matching its variants and executing
 /// corresponding actions. This macro is used to streamline code that deals with
 /// state transitions, reducing boilerplate and improving readability.
 ///
 /// # Cases
 ///
-/// - `Ok(StreamJoinStateResult::Continue)`: Continues the loop, indicating the
+/// - `Ok(StatefulStreamResult::Continue)`: Continues the loop, indicating the
 ///   stream join operation should proceed to the next step.
-/// - `Ok(StreamJoinStateResult::Ready(result))`: Returns a `Poll::Ready` with the
+/// - `Ok(StatefulStreamResult::Ready(result))`: Returns a `Poll::Ready` with the
 ///   result, either yielding a value or indicating the stream is awaiting more
 ///   data.
 /// - `Err(e)`: Returns a `Poll::Ready` containing an error, signaling an issue
@@ -1312,13 +1312,13 @@ pub fn prepare_sorted_exprs(
 ///
 /// # Arguments
 ///
-/// * `$match_case`: An expression that evaluates to a `Result<StreamJoinStateResult<_>>`.
+/// * `$match_case`: An expression that evaluates to a `Result<StatefulStreamResult<_>>`.
 #[macro_export]
 macro_rules! handle_state {
     ($match_case:expr) => {
         match $match_case {
-            Ok(StreamJoinStateResult::Continue) => continue,
-            Ok(StreamJoinStateResult::Ready(result)) => {
+            Ok(StatefulStreamResult::Continue) => continue,
+            Ok(StatefulStreamResult::Ready(result)) => {
                 Poll::Ready(Ok(result).transpose())
             }
             Err(e) => Poll::Ready(Some(Err(e))),
@@ -1335,7 +1335,7 @@ macro_rules! handle_state {
 /// # Arguments
 ///
 /// * `$state_func`: An async function or future that returns a
-///   `Result<StreamJoinStateResult<_>>`.
+///   `Result<StatefulStreamResult<_>>`.
 /// * `$cx`: The context to be passed for polling, usually of type `&mut Context`.
 ///
 #[macro_export]
@@ -1356,7 +1356,7 @@ macro_rules! handle_async_state {
 ///   processing or more data. When this variant is returned, it typically means that the
 ///   current invocation of the state did not produce a final result, and the operation
 ///   should be invoked again later with more data and possibly with a different state.
-pub enum StreamJoinStateResult<T> {
+pub enum StatefulStreamResult<T> {
     Ready(T),
     Continue,
 }
