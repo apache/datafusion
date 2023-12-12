@@ -1692,6 +1692,23 @@ fn create_names(exprs: &[Expr]) -> Result<String> {
         .join(", "))
 }
 
+/// Whether the given expression is volatile, i.e. whether it can return different results
+/// when evaluated multiple times with the same input.
+pub fn is_volatile(expr: &Expr) -> bool {
+    match expr {
+        Expr::ScalarFunction(func) => match func.func_def {
+            ScalarFunctionDefinition::BuiltIn(func) => match func {
+                BuiltinScalarFunction::Random => true,
+                _ => false,
+            },
+            // TODO: Add volatile flag to UDFs
+            ScalarFunctionDefinition::UDF(_) => false,
+            ScalarFunctionDefinition::Name(_) => false,
+        },
+        _ => false,
+    }
+}
+
 #[cfg(test)]
 mod test {
     use crate::expr::Cast;
