@@ -25,24 +25,29 @@ use datafusion_expr::Operator;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-/// Represents a known guarantee that a column is either one of a set of values
-/// or not one of a set of values.
+/// Represents a known guarantee that for a particular filter expression to
+/// evaluate to `true`, a column must be one of a set of values or not one of
+/// a set of values.
 ///
 /// `LiteralGuarantee`s can be used to simplify expressions and skip data files
-/// (or row groups in parquet files). For example, if we know that `a = 1` then
-/// we can skip any partition that does not contain `a = 1`.
+/// (or row groups in parquet files) by proving that an expression can not
+/// evaluate to true. For example, if we know that `a = 1` must be true for the
+/// filter to evaluate to `true`, then we can skip any partition where we know
+/// that `a` never has the value of `1`.
 ///
 /// See [`LiteralGuarantee::analyze`] to extract literal guarantees from a
-/// predicate.
+/// filter predicate.
 ///
 /// # Details
 /// A guarantee can be one of two forms:
 ///
-/// 1. One of particular set of values. For example, `(a = 1)`, `(a = 1 OR a =
-/// 2) or `a IN (1, 2, 3)`
+/// 1. The column  must be one of a particular set of values for the predicate
+/// to be `true`. For example,
+/// `(a = 1)`, `(a = 1 OR a =2) or `a IN (1, 2, 3)`
 ///
-/// 2. NOT one of a particular set of values. For example, `(a != 1)`, `(a != 1
-/// AND a != 2)` or `a NOT IN (1, 2, 3)`
+/// The column must NOT one of a particular set of values for the predicate to
+/// be `true`. For example,
+/// `(a != 1)`, `(a != 1 AND a != 2)` or `a NOT IN (1, 2, 3)`
 ///
 #[derive(Debug, Clone, PartialEq)]
 pub struct LiteralGuarantee {
@@ -51,12 +56,12 @@ pub struct LiteralGuarantee {
     pub literals: HashSet<ScalarValue>,
 }
 
-/// What is be guaranteed about the values?
+/// What guaranteed about the values if the predicate evaluates to `true`?
 #[derive(Debug, Clone, PartialEq)]
 pub enum Guarantee {
-    /// `column` is one of a set of constant values
+    /// `column` must be one of a set of constant values
     In,
-    /// `column` is NOT one of a set of constant values
+    /// `column` must NOT be one of a set of constant values
     NotIn,
 }
 
