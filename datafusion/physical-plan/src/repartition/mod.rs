@@ -391,10 +391,7 @@ impl DisplayAs for RepartitionExec {
                 )?;
 
                 if self.preserve_order {
-                    write!(
-                        f,
-                        ", preserve_order=true"
-                    )?;
+                    write!(f, ", preserve_order=true")?;
                 }
 
                 if let Some(sort_exprs) = self.sort_exprs() {
