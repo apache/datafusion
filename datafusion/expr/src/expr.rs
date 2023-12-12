@@ -1694,6 +1694,7 @@ fn create_names(exprs: &[Expr]) -> Result<String> {
 
 /// Whether the given expression is volatile, i.e. whether it can return different results
 /// when evaluated multiple times with the same input.
+#[allow(clippy::match_like_matches_macro)]
 pub fn is_volatile(expr: &Expr) -> bool {
     match expr {
         Expr::ScalarFunction(func) => match func.func_def {
