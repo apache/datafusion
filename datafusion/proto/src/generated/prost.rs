@@ -360,6 +360,11 @@ pub struct CreateExternalTableNode {
     >,
     #[prost(message, optional, tag = "15")]
     pub constraints: ::core::option::Option<Constraints>,
+    #[prost(map = "string, message", tag = "16")]
+    pub column_defaults: ::std::collections::HashMap<
+        ::prost::alloc::string::String,
+        LogicalExprNode,
+    >,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -1022,6 +1027,10 @@ pub struct Field {
         ::prost::alloc::string::String,
         ::prost::alloc::string::String,
     >,
+    #[prost(int64, tag = "6")]
+    pub dict_id: i64,
+    #[prost(bool, tag = "7")]
+    pub dict_ordered: bool,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -1516,7 +1525,7 @@ pub mod owned_table_reference {
 pub struct PhysicalPlanNode {
     #[prost(
         oneof = "physical_plan_node::PhysicalPlanType",
-        tags = "1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25"
+        tags = "1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27"
     )]
     pub physical_plan_type: ::core::option::Option<physical_plan_node::PhysicalPlanType>,
 }
@@ -1575,6 +1584,10 @@ pub mod physical_plan_node {
         JsonSink(::prost::alloc::boxed::Box<super::JsonSinkExecNode>),
         #[prost(message, tag = "25")]
         SymmetricHashJoin(::prost::alloc::boxed::Box<super::SymmetricHashJoinExecNode>),
+        #[prost(message, tag = "26")]
+        Interleave(super::InterleaveExecNode),
+        #[prost(message, tag = "27")]
+        PlaceholderRow(super::PlaceholderRowExecNode),
     }
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
@@ -2033,6 +2046,12 @@ pub struct SymmetricHashJoinExecNode {
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
+pub struct InterleaveExecNode {
+    #[prost(message, repeated, tag = "1")]
+    pub inputs: ::prost::alloc::vec::Vec<PhysicalPlanNode>,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct UnionExecNode {
     #[prost(message, repeated, tag = "1")]
     pub inputs: ::prost::alloc::vec::Vec<PhysicalPlanNode>,
@@ -2086,9 +2105,13 @@ pub struct JoinOn {
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct EmptyExecNode {
-    #[prost(bool, tag = "1")]
-    pub produce_one_row: bool,
-    #[prost(message, optional, tag = "2")]
+    #[prost(message, optional, tag = "1")]
+    pub schema: ::core::option::Option<Schema>,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PlaceholderRowExecNode {
+    #[prost(message, optional, tag = "1")]
     pub schema: ::core::option::Option<Schema>,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
@@ -2596,6 +2619,8 @@ pub enum ScalarFunction {
     Levenshtein = 125,
     SubstrIndex = 126,
     FindInSet = 127,
+    ArraySort = 128,
+    ArrayDistinct = 129,
 }
 impl ScalarFunction {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -2732,6 +2757,8 @@ impl ScalarFunction {
             ScalarFunction::Levenshtein => "Levenshtein",
             ScalarFunction::SubstrIndex => "SubstrIndex",
             ScalarFunction::FindInSet => "FindInSet",
+            ScalarFunction::ArraySort => "ArraySort",
+            ScalarFunction::ArrayDistinct => "ArrayDistinct",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -2865,6 +2892,8 @@ impl ScalarFunction {
             "Levenshtein" => Some(Self::Levenshtein),
             "SubstrIndex" => Some(Self::SubstrIndex),
             "FindInSet" => Some(Self::FindInSet),
+            "ArraySort" => Some(Self::ArraySort),
+            "ArrayDistinct" => Some(Self::ArrayDistinct),
             _ => None,
         }
     }

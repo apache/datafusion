@@ -555,7 +555,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         } = array_agg;
 
         let order_by = if let Some(order_by) = order_by {
-            Some(self.order_by_to_sort_expr(&order_by, input_schema, planner_context)?)
+            Some(self.order_by_to_sort_expr(
+                &order_by,
+                input_schema,
+                planner_context,
+                true,
+            )?)
         } else {
             None
         };

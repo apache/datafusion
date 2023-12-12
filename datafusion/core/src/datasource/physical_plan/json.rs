@@ -357,9 +357,9 @@ mod tests {
         )
         .unwrap();
         let meta = file_groups
-            .get(0)
+            .first()
             .unwrap()
-            .get(0)
+            .first()
             .unwrap()
             .clone()
             .object_meta;
@@ -391,9 +391,9 @@ mod tests {
         )
         .unwrap();
         let path = file_groups
-            .get(0)
+            .first()
             .unwrap()
-            .get(0)
+            .first()
             .unwrap()
             .object_meta
             .location

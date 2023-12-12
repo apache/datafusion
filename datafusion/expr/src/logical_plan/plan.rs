@@ -33,6 +33,7 @@ use crate::logical_plan::{DmlStatement, Statement};
 use crate::utils::{
     enumerate_grouping_sets, exprlist_to_fields, find_out_reference_exprs,
     grouping_set_expr_count, grouping_set_to_exprlist, inspect_expr_pre,
+    split_conjunction,
 };
 use crate::{
     build_join_schema, expr_vec_fmt, BinaryExpr, CreateMemoryTable, CreateView, Expr,
@@ -47,7 +48,7 @@ use datafusion_common::tree_node::{
 };
 use datafusion_common::{
     aggregate_functional_dependencies, internal_err, plan_err, Column, Constraints,
-    DFField, DFSchema, DFSchemaRef, DataFusionError, FunctionalDependencies,
+    DFField, DFSchema, DFSchemaRef, DataFusionError, Dependency, FunctionalDependencies,
     OwnedTableReference, ParamValues, Result, UnnestOptions,
 };
 // backwards compatibility
@@ -945,7 +946,7 @@ impl LogicalPlan {
                     // We can use the existing functional dependencies as is:
                     .with_functional_dependencies(
                         input.schema().functional_dependencies().clone(),
-                    ),
+                    )?,
                 );
 
                 Ok(LogicalPlan::Unnest(Unnest {
@@ -1032,7 +1033,13 @@ impl LogicalPlan {
     pub fn max_rows(self: &LogicalPlan) -> Option<usize> {
         match self {
             LogicalPlan::Projection(Projection { input, .. }) => input.max_rows(),
-            LogicalPlan::Filter(Filter { input, .. }) => input.max_rows(),
+            LogicalPlan::Filter(filter) => {
+                if filter.is_scalar() {
+                    Some(1)
+                } else {
+                    filter.input.max_rows()
+                }
+            }
             LogicalPlan::Window(Window { input, .. }) => input.max_rows(),
             LogicalPlan::Aggregate(Aggregate {
                 input, group_expr, ..
@@ -1201,7 +1208,7 @@ impl LogicalPlan {
         self.with_new_exprs(new_exprs, &new_inputs_with_values)
     }
 
-    /// Walk the logical plan, find any `PlaceHolder` tokens, and return a map of their IDs and DataTypes
+    /// Walk the logical plan, find any `Placeholder` tokens, and return a map of their IDs and DataTypes
     pub fn get_parameter_types(
         &self,
     ) -> Result<HashMap<String, Option<DataType>>, DataFusionError> {
@@ -1827,8 +1834,9 @@ pub fn projection_schema(input: &LogicalPlan, exprs: &[Expr]) -> Result<Arc<DFSc
         exprlist_to_fields(exprs, input)?,
         input.schema().metadata().clone(),
     )?;
-    schema = schema
-        .with_functional_dependencies(calc_func_dependencies_for_project(exprs, input)?);
+    schema = schema.with_functional_dependencies(calc_func_dependencies_for_project(
+        exprs, input,
+    )?)?;
     Ok(Arc::new(schema))
 }
 
@@ -1857,7 +1865,7 @@ impl SubqueryAlias {
         let func_dependencies = plan.schema().functional_dependencies().clone();
         let schema = DFSchemaRef::new(
             DFSchema::try_from_qualified_schema(&alias, &schema)?
-                .with_functional_dependencies(func_dependencies),
+                .with_functional_dependencies(func_dependencies)?,
         );
         Ok(SubqueryAlias {
             input: Arc::new(plan),
@@ -1913,6 +1921,73 @@ impl Filter {
 
         Ok(Self { predicate, input })
     }
+
+    /// Is this filter guaranteed to return 0 or 1 row in a given instantiation?
+    ///
+    /// This function will return `true` if its predicate contains a conjunction of
+    /// `col(a) = <expr>`, where its schema has a unique filter that is covered
+    /// by this conjunction.
+    ///
+    /// For example, for the table:
+    /// ```sql
+    /// CREATE TABLE t (a INTEGER PRIMARY KEY, b INTEGER);
+    /// ```
+    /// `Filter(a = 2).is_scalar() == true`
+    /// , whereas
+    /// `Filter(b = 2).is_scalar() == false`
+    /// and
+    /// `Filter(a = 2 OR b = 2).is_scalar() == false`
+    fn is_scalar(&self) -> bool {
+        let schema = self.input.schema();
+
+        let functional_dependencies = self.input.schema().functional_dependencies();
+        let unique_keys = functional_dependencies.iter().filter(|dep| {
+            let nullable = dep.nullable
+                && dep
+                    .source_indices
+                    .iter()
+                    .any(|&source| schema.field(source).is_nullable());
+            !nullable
+                && dep.mode == Dependency::Single
+                && dep.target_indices.len() == schema.fields().len()
+        });
+
+        let exprs = split_conjunction(&self.predicate);
+        let eq_pred_cols: HashSet<_> = exprs
+            .iter()
+            .filter_map(|expr| {
+                let Expr::BinaryExpr(BinaryExpr {
+                    left,
+                    op: Operator::Eq,
+                    right,
+                }) = expr
+                else {
+                    return None;
+                };
+                // This is a no-op filter expression
+                if left == right {
+                    return None;
+                }
+
+                match (left.as_ref(), right.as_ref()) {
+                    (Expr::Column(_), Expr::Column(_)) => None,
+                    (Expr::Column(c), _) | (_, Expr::Column(c)) => {
+                        Some(schema.index_of_column(c).unwrap())
+                    }
+                    _ => None,
+                }
+            })
+            .collect();
+
+        // If we have a functional dependence that is a subset of our predicate,
+        // this filter is scalar
+        for key in unique_keys {
+            if key.source_indices.iter().all(|c| eq_pred_cols.contains(c)) {
+                return true;
+            }
+        }
+        false
+    }
 }
 
 /// Window its input based on a set of window spec and window function (e.g. SUM or RANK)
@@ -1943,7 +2018,7 @@ impl Window {
             window_expr,
             schema: Arc::new(
                 DFSchema::new_with_metadata(window_fields, metadata)?
-                    .with_functional_dependencies(window_func_dependencies),
+                    .with_functional_dependencies(window_func_dependencies)?,
             ),
         })
     }
@@ -2013,7 +2088,7 @@ impl TableScan {
             .map(|p| {
                 let projected_func_dependencies =
                     func_dependencies.project_functional_dependencies(p, p.len());
-                DFSchema::new_with_metadata(
+                let df_schema = DFSchema::new_with_metadata(
                     p.iter()
                         .map(|i| {
                             DFField::from_qualified(
@@ -2023,15 +2098,13 @@ impl TableScan {
                         })
                         .collect(),
                     schema.metadata().clone(),
-                )
-                .map(|df_schema| {
-                    df_schema.with_functional_dependencies(projected_func_dependencies)
-                })
+                )?;
+                df_schema.with_functional_dependencies(projected_func_dependencies)
             })
             .unwrap_or_else(|| {
-                DFSchema::try_from_qualified_schema(table_name.clone(), &schema).map(
-                    |df_schema| df_schema.with_functional_dependencies(func_dependencies),
-                )
+                let df_schema =
+                    DFSchema::try_from_qualified_schema(table_name.clone(), &schema)?;
+                df_schema.with_functional_dependencies(func_dependencies)
             })?;
         let projected_schema = Arc::new(projected_schema);
         Ok(Self {
@@ -2343,7 +2416,7 @@ impl Aggregate {
             calc_func_dependencies_for_aggregate(&group_expr, &input, &schema)?;
         let new_schema = schema.as_ref().clone();
         let schema = Arc::new(
-            new_schema.with_functional_dependencies(aggregate_func_dependencies),
+            new_schema.with_functional_dependencies(aggregate_func_dependencies)?,
         );
         Ok(Self {
             input,
@@ -2553,13 +2626,19 @@ pub struct Unnest {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
     use super::*;
+    use crate::builder::LogicalTableSource;
     use crate::logical_plan::table_scan;
     use crate::{col, count, exists, in_subquery, lit, placeholder, GroupingSet};
+
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::tree_node::TreeNodeVisitor;
-    use datafusion_common::{not_impl_err, DFSchema, ScalarValue, TableReference};
-    use std::collections::HashMap;
+    use datafusion_common::{
+        not_impl_err, Constraint, DFSchema, ScalarValue, TableReference,
+    };
 
     fn employee_schema() -> Schema {
         Schema::new(vec![
@@ -3054,6 +3133,68 @@ digraph {
             .field_with_name(None, "bar")
             .unwrap()
             .is_nullable());
+    }
+
+    #[test]
+    fn test_filter_is_scalar() {
+        // test empty placeholder
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]));
+
+        let source = Arc::new(LogicalTableSource::new(schema));
+        let schema = Arc::new(
+            DFSchema::try_from_qualified_schema(
+                TableReference::bare("tab"),
+                &source.schema(),
+            )
+            .unwrap(),
+        );
+        let scan = Arc::new(LogicalPlan::TableScan(TableScan {
+            table_name: TableReference::bare("tab"),
+            source: source.clone(),
+            projection: None,
+            projected_schema: schema.clone(),
+            filters: vec![],
+            fetch: None,
+        }));
+        let col = schema.field(0).qualified_column();
+
+        let filter = Filter::try_new(
+            Expr::Column(col).eq(Expr::Literal(ScalarValue::Int32(Some(1)))),
+            scan,
+        )
+        .unwrap();
+        assert!(!filter.is_scalar());
+        let unique_schema = Arc::new(
+            schema
+                .as_ref()
+                .clone()
+                .with_functional_dependencies(
+                    FunctionalDependencies::new_from_constraints(
+                        Some(&Constraints::new_unverified(vec![Constraint::Unique(
+                            vec![0],
+                        )])),
+                        1,
+                    ),
+                )
+                .unwrap(),
+        );
+        let scan = Arc::new(LogicalPlan::TableScan(TableScan {
+            table_name: TableReference::bare("tab"),
+            source,
+            projection: None,
+            projected_schema: unique_schema.clone(),
+            filters: vec![],
+            fetch: None,
+        }));
+        let col = schema.field(0).qualified_column();
+
+        let filter = Filter::try_new(
+            Expr::Column(col).eq(Expr::Literal(ScalarValue::Int32(Some(1)))),
+            scan,
+        )
+        .unwrap();
+        assert!(filter.is_scalar());
     }
 
     #[test]
