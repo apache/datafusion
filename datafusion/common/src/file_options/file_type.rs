@@ -109,6 +109,7 @@ mod tests {
     use std::str::FromStr;
 
     #[test]
+    #[cfg(feature = "parquet")]
     fn from_str() {
         for (ext, file_type) in [
             ("csv", FileType::CSV),
