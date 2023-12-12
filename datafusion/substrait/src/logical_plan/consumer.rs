@@ -25,8 +25,8 @@ use datafusion::logical_expr::{
     BuiltinScalarFunction, Case, Expr, LogicalPlan, Operator,
 };
 use datafusion::logical_expr::{
-    expr, Cast, Extension, GroupingSet, Like, LogicalPlanBuilder, WindowFrameBound,
-    WindowFrameUnits, Subquery,
+    expr, Cast, Extension, GroupingSet, Like, LogicalPlanBuilder, Subquery,
+    WindowFrameBound, WindowFrameUnits,
 };
 use datafusion::prelude::JoinType;
 use datafusion::sql::TableReference;
@@ -59,7 +59,7 @@ use substrait::proto::{
 use substrait::proto::{FunctionArgument, SortField};
 
 use datafusion::common::plan_err;
-use datafusion::logical_expr::expr::{InList, Sort, InSubquery};
+use datafusion::logical_expr::expr::{InList, InSubquery, Sort};
 use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -240,7 +240,8 @@ pub async fn from_substrait_rel(
                 let mut exprs: Vec<Expr> = vec![];
                 for e in &p.expressions {
                     let x =
-                        from_substrait_rex(ctx, e, input.clone().schema(), extensions).await?;
+                        from_substrait_rex(ctx, e, input.clone().schema(), extensions)
+                            .await?;
                     // if the expression is WindowFunction, wrap in a Window relation
                     //   before returning and do not add to list of this Projection's expression list
                     // otherwise, add expression to the Projection's expression list
@@ -266,7 +267,8 @@ pub async fn from_substrait_rel(
                 );
                 if let Some(condition) = filter.condition.as_ref() {
                     let expr =
-                        from_substrait_rex(ctx, condition, input.schema(), extensions).await?;
+                        from_substrait_rex(ctx, condition, input.schema(), extensions)
+                            .await?;
                     input.filter(expr.as_ref().clone())?.build()
                 } else {
                     not_impl_err!("Filter without an condition is not valid")
@@ -298,7 +300,8 @@ pub async fn from_substrait_rel(
                     from_substrait_rel(ctx, input, extensions).await?,
                 );
                 let sorts =
-                    from_substrait_sorts(ctx, &sort.sorts, input.schema(), extensions).await?;
+                    from_substrait_sorts(ctx, &sort.sorts, input.schema(), extensions)
+                        .await?;
                 input.sort(sorts)?.build()
             } else {
                 not_impl_err!("Sort without an input is not valid")
@@ -316,7 +319,8 @@ pub async fn from_substrait_rel(
                     1 => {
                         for e in &agg.groupings[0].grouping_expressions {
                             let x =
-                                from_substrait_rex(ctx, e, input.schema(), extensions).await?;
+                                from_substrait_rex(ctx, e, input.schema(), extensions)
+                                    .await?;
                             group_expr.push(x.as_ref().clone());
                         }
                     }
@@ -325,8 +329,13 @@ pub async fn from_substrait_rel(
                         for grouping in &agg.groupings {
                             let mut grouping_set = vec![];
                             for e in &grouping.grouping_expressions {
-                                let x = from_substrait_rex(ctx, e, input.schema(), extensions)
-                                    .await?;
+                                let x = from_substrait_rex(
+                                    ctx,
+                                    e,
+                                    input.schema(),
+                                    extensions,
+                                )
+                                .await?;
                                 grouping_set.push(x.as_ref().clone());
                             }
                             grouping_sets.push(grouping_set);
@@ -412,8 +421,8 @@ pub async fn from_substrait_rel(
             // Otherwise, build join with only the filter, without join keys
             match &join.expression.as_ref() {
                 Some(expr) => {
-                    let on =
-                        from_substrait_rex(ctx, expr, &in_join_schema, extensions).await?;
+                    let on = from_substrait_rex(ctx, expr, &in_join_schema, extensions)
+                        .await?;
                     // The join expression can contain both equal and non-equal ops.
                     // As of datafusion 31.0.0, the equal and non equal join conditions are in separate fields.
                     // So we extract each part as follows:
@@ -596,8 +605,9 @@ pub async fn from_substrait_sorts(
 ) -> Result<Vec<Expr>> {
     let mut sorts: Vec<Expr> = vec![];
     for s in substrait_sorts {
-        let expr = from_substrait_rex(ctx, s.expr.as_ref().unwrap(), input_schema, extensions)
-            .await?;
+        let expr =
+            from_substrait_rex(ctx, s.expr.as_ref().unwrap(), input_schema, extensions)
+                .await?;
         let asc_nullfirst = match &s.sort_kind {
             Some(k) => match k {
                 Direction(d) => {
@@ -741,8 +751,13 @@ pub async fn from_substrait_rex(
                         .as_ref()
                         .clone(),
                 ),
-                list: from_substrait_rex_vec(ctx, substrait_list, input_schema, extensions)
-                    .await?,
+                list: from_substrait_rex_vec(
+                    ctx,
+                    substrait_list,
+                    input_schema,
+                    extensions,
+                )
+                .await?,
                 negated: false,
             })))
         }
@@ -793,7 +808,7 @@ pub async fn from_substrait_rex(
                 when_then_expr.push((
                     Box::new(
                         from_substrait_rex(
-                            ctx, 
+                            ctx,
                             if_expr.r#if.as_ref().unwrap(),
                             input_schema,
                             extensions,
@@ -804,7 +819,7 @@ pub async fn from_substrait_rex(
                     ),
                     Box::new(
                         from_substrait_rex(
-                            ctx, 
+                            ctx,
                             if_expr.then.as_ref().unwrap(),
                             input_schema,
                             extensions,
@@ -897,10 +912,11 @@ pub async fn from_substrait_rex(
                     })?;
                     match &arg.arg_type {
                         Some(ArgType::Value(e)) => {
-                            let expr = from_substrait_rex(ctx, e, input_schema, extensions)
-                                .await?
-                                .as_ref()
-                                .clone();
+                            let expr =
+                                from_substrait_rex(ctx, e, input_schema, extensions)
+                                    .await?
+                                    .as_ref()
+                                    .clone();
                             Ok(Arc::new(Expr::Not(Box::new(expr))))
                         }
                         _ => not_impl_err!("Invalid arguments for Not expression"),
@@ -920,10 +936,11 @@ pub async fn from_substrait_rex(
                     })?;
                     match &arg.arg_type {
                         Some(ArgType::Value(e)) => {
-                            let expr = from_substrait_rex(ctx, e, input_schema, extensions)
-                                .await?
-                                .as_ref()
-                                .clone();
+                            let expr =
+                                from_substrait_rex(ctx, e, input_schema, extensions)
+                                    .await?
+                                    .as_ref()
+                                    .clone();
                             Ok(Arc::new(Expr::IsNull(Box::new(expr))))
                         }
                         _ => not_impl_err!("Invalid arguments for IS NULL expression"),
@@ -937,10 +954,11 @@ pub async fn from_substrait_rex(
                     })?;
                     match &arg.arg_type {
                         Some(ArgType::Value(e)) => {
-                            let expr = from_substrait_rex(ctx, e, input_schema, extensions)
-                                .await?
-                                .as_ref()
-                                .clone();
+                            let expr =
+                                from_substrait_rex(ctx, e, input_schema, extensions)
+                                    .await?
+                                    .as_ref()
+                                    .clone();
                             Ok(Arc::new(Expr::IsNotNull(Box::new(expr))))
                         }
                         _ => {
@@ -982,7 +1000,8 @@ pub async fn from_substrait_rex(
                 ),
             };
             let order_by =
-                from_substrait_sorts(ctx, &window.sorts, input_schema, extensions).await?;
+                from_substrait_sorts(ctx, &window.sorts, input_schema, extensions)
+                    .await?;
             // Substrait does not encode WindowFrameUnits so we're using a simple logic to determine the units
             // If there is no `ORDER BY`, then by default, the frame counts each row from the lower up to upper boundary
             // If there is `ORDER BY`, then by default, each frame is a range starting from unbounded preceding to current row
@@ -995,7 +1014,7 @@ pub async fn from_substrait_rex(
             Ok(Arc::new(Expr::WindowFunction(expr::WindowFunction {
                 fun: fun?.unwrap(),
                 args: from_substriat_func_args(
-                    ctx, 
+                    ctx,
                     &window.arguments,
                     input_schema,
                     extensions,
@@ -1016,35 +1035,54 @@ pub async fn from_substrait_rex(
                 },
             })))
         }
-        Some(RexType::Subquery(subquery)) => {
-            match &subquery.as_ref().subquery_type {
-                Some(subquery_type) => match subquery_type {
-                    SubqueryType::InPredicate(in_predicate) => {
+        Some(RexType::Subquery(subquery)) => match &subquery.as_ref().subquery_type {
+            Some(subquery_type) => match subquery_type {
+                SubqueryType::InPredicate(in_predicate) => {
                     if in_predicate.needles.len() != 1 {
-                        Err(DataFusionError::Substrait("InSubquery must have exactly one expression on LHS".to_string()))
+                        Err(DataFusionError::Substrait(
+                            "InSubquery must have exactly one expression on LHS"
+                                .to_string(),
+                        ))
                     } else {
                         let lhs_expr = &in_predicate.needles[0];
                         let rhs_expr = &in_predicate.haystack;
                         if let Some(rhs_expr) = rhs_expr {
-                            let rhs_expr = from_substrait_rel(&ctx, rhs_expr, extensions).await?;
-                            let outer_refs= rhs_expr.all_out_ref_exprs();
-                             Ok(Arc::new(Expr::InSubquery(InSubquery {
-                                expr: Box::new(from_substrait_rex(&ctx, lhs_expr, input_schema, extensions).await?.as_ref().clone()),
-                                subquery: Subquery {subquery: Arc::new(rhs_expr), outer_ref_columns: outer_refs},
-                                negated: false
+                            let rhs_expr =
+                                from_substrait_rel(ctx, rhs_expr, extensions).await?;
+                            let outer_refs = rhs_expr.all_out_ref_exprs();
+                            Ok(Arc::new(Expr::InSubquery(InSubquery {
+                                expr: Box::new(
+                                    from_substrait_rex(
+                                        ctx,
+                                        lhs_expr,
+                                        input_schema,
+                                        extensions,
+                                    )
+                                    .await?
+                                    .as_ref()
+                                    .clone(),
+                                ),
+                                subquery: Subquery {
+                                    subquery: Arc::new(rhs_expr),
+                                    outer_ref_columns: outer_refs,
+                                },
+                                negated: false,
                             })))
                         } else {
-                            Err(DataFusionError::Substrait("Haystack expression cannot be empty".to_string()))
-                        }                     
+                            Err(DataFusionError::Substrait(
+                                "Haystack expression cannot be empty".to_string(),
+                            ))
+                        }
                     }
-                    }, 
-                    _ => Err(DataFusionError::Substrait("InSubquery expression type not implemented".to_string()))
-                },
-                None => Err(DataFusionError::Substrait(
-                    "Subquery experssion without SubqueryType is not allowed".to_string(),
+                }
+                _ => Err(DataFusionError::Substrait(
+                    "InSubquery expression type not implemented".to_string(),
                 )),
-            }
-        }
+            },
+            None => Err(DataFusionError::Substrait(
+                "Subquery experssion without SubqueryType is not allowed".to_string(),
+            )),
+        },
         _ => not_impl_err!("unsupported rex_type"),
     }
 }

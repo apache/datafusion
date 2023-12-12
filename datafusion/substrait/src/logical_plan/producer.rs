@@ -33,8 +33,8 @@ use datafusion::common::{exec_err, internal_err, not_impl_err};
 #[allow(unused_imports)]
 use datafusion::logical_expr::aggregate_function;
 use datafusion::logical_expr::expr::{
-    AggregateFunctionDefinition, Alias, BinaryExpr, Case, Cast, GroupingSet, InList, InSubquery,
-    ScalarFunctionDefinition, Sort, WindowFunction,
+    AggregateFunctionDefinition, Alias, BinaryExpr, Case, Cast, GroupingSet, InList,
+    InSubquery, ScalarFunctionDefinition, Sort, WindowFunction,
 };
 use datafusion::logical_expr::{expr, Between, JoinConstraint, LogicalPlan, Operator};
 use datafusion::prelude::Expr;
@@ -214,7 +214,9 @@ pub fn to_substrait_rel(
             let sort_fields = sort
                 .expr
                 .iter()
-                .map(|e| substrait_sort_field(ctx, e, sort.input.schema(), extension_info))
+                .map(|e| {
+                    substrait_sort_field(ctx, e, sort.input.schema(), extension_info)
+                })
                 .collect::<Result<Vec<_>>>()?;
             Ok(Box::new(Rel {
                 rel_type: Some(RelType::Sort(Box::new(SortRel {
@@ -228,7 +230,7 @@ pub fn to_substrait_rel(
         LogicalPlan::Aggregate(agg) => {
             let input = to_substrait_rel(agg.input.as_ref(), ctx, extension_info)?;
             let groupings = to_substrait_groupings(
-                ctx, 
+                ctx,
                 &agg.group_expr,
                 agg.input.schema(),
                 extension_info,
@@ -236,7 +238,9 @@ pub fn to_substrait_rel(
             let measures = agg
                 .aggr_expr
                 .iter()
-                .map(|e| to_substrait_agg_measure(ctx, e, agg.input.schema(), extension_info))
+                .map(|e| {
+                    to_substrait_agg_measure(ctx, e, agg.input.schema(), extension_info)
+                })
                 .collect::<Result<Vec<_>>>()?;
 
             Ok(Box::new(Rel {
@@ -569,7 +573,9 @@ pub fn to_substrait_groupings(
                 )),
                 GroupingSet::GroupingSets(sets) => Ok(sets
                     .iter()
-                    .map(|set| parse_flat_grouping_exprs(ctx, set, schema, extension_info))
+                    .map(|set| {
+                        parse_flat_grouping_exprs(ctx, set, schema, extension_info)
+                    })
                     .collect::<Result<Vec<_>>>()?),
                 GroupingSet::Rollup(set) => {
                     let mut sets: Vec<Vec<Expr>> = vec![vec![]];
@@ -579,7 +585,9 @@ pub fn to_substrait_groupings(
                     Ok(sets
                         .iter()
                         .rev()
-                        .map(|set| parse_flat_grouping_exprs(ctx, set, schema, extension_info))
+                        .map(|set| {
+                            parse_flat_grouping_exprs(ctx, set, schema, extension_info)
+                        })
                         .collect::<Result<Vec<_>>>()?)
                 }
             },
@@ -708,7 +716,7 @@ fn to_substrait_sort_field(
             };
             Ok(SortField {
                 expr: Some(to_substrait_rex(
-                    ctx, 
+                    ctx,
                     sort.expr.deref(),
                     schema,
                     0,
@@ -870,7 +878,7 @@ pub fn to_substrait_rex(
             for arg in &fun.args {
                 arguments.push(FunctionArgument {
                     arg_type: Some(ArgType::Value(to_substrait_rex(
-                        ctx, 
+                        ctx,
                         arg,
                         schema,
                         col_ref_offset,
@@ -1160,10 +1168,10 @@ pub fn to_substrait_rex(
             negated,
         }) => {
             let substrait_expr =
-                to_substrait_rex(&ctx, expr, schema, col_ref_offset, extension_info)?;
+                to_substrait_rex(ctx, expr, schema, col_ref_offset, extension_info)?;
 
             let subquery_plan =
-                to_substrait_rel(subquery.subquery.as_ref(), &ctx, extension_info)?;
+                to_substrait_rel(subquery.subquery.as_ref(), ctx, extension_info)?;
 
             let substrait_subquery = Expression {
                 rex_type: Some(RexType::Subquery(Box::new(Subquery {
