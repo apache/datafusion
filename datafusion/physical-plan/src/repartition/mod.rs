@@ -370,11 +370,7 @@ impl RepartitionExec {
 
     /// Get name used to display this Exec
     pub fn name(&self) -> &str {
-        if self.preserve_order {
-            "SortPreservingRepartitionExec"
-        } else {
-            "RepartitionExec"
-        }
+        "RepartitionExec"
     }
 }
 
@@ -393,6 +389,13 @@ impl DisplayAs for RepartitionExec {
                     self.partitioning,
                     self.input.output_partitioning().partition_count()
                 )?;
+
+                if self.preserve_order {
+                    write!(
+                        f,
+                        ", preserve_order=true"
+                    )?;
+                }
 
                 if let Some(sort_exprs) = self.sort_exprs() {
                     write!(
