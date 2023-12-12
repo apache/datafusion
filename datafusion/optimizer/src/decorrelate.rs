@@ -370,7 +370,7 @@ fn agg_exprs_evaluation_result_on_empty_batch(
     expr_result_map_for_count_bug: &mut ExprResultMap,
 ) -> Result<()> {
     for e in agg_expr.iter() {
-        let result_expr = e.clone().transform_up(&|expr| {
+        let mut result_expr = e.clone().transform_up(&|expr| {
             let new_expr = match expr {
                 Expr::AggregateFunction(expr::AggregateFunction { func_def, .. }) => {
                     match func_def {
@@ -396,7 +396,7 @@ fn agg_exprs_evaluation_result_on_empty_batch(
             Ok(new_expr)
         })?;
 
-        let result_expr = result_expr.unalias();
+        result_expr.unalias();
         let props = ExecutionProps::new();
         let info = SimplifyContext::new(&props).with_schema(schema.clone());
         let simplifier = ExprSimplifier::new(info);

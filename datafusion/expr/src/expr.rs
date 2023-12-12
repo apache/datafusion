@@ -31,10 +31,10 @@ use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{internal_err, DFSchema, OwnedTableReference};
 use datafusion_common::{plan_err, Column, DataFusionError, Result, ScalarValue};
 use std::collections::HashSet;
-use std::fmt;
 use std::fmt::{Display, Formatter, Write};
 use std::hash::{BuildHasher, Hash, Hasher};
 use std::sync::Arc;
+use std::{fmt, mem};
 
 /// `Expr` is a central struct of DataFusion's query API, and
 /// represent logical expressions such as `A + 1`, or `CAST(c1 AS
@@ -81,8 +81,10 @@ use std::sync::Arc;
 ///   assert_eq!(binary_expr.op, Operator::Eq);
 /// }
 /// ```
-#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, PartialEq, Eq, Hash, Debug, Default)]
 pub enum Expr {
+    #[default]
+    Nop,
     /// An expression with a specific name.
     Alias(Alias),
     /// A named reference to a qualified filed in a schema.
@@ -784,6 +786,7 @@ impl Expr {
     /// Useful for non-rust based bindings
     pub fn variant_name(&self) -> &str {
         match self {
+            Expr::Nop { .. } => "Nop",
             Expr::AggregateFunction { .. } => "AggregateFunction",
             Expr::Alias(..) => "Alias",
             Expr::Between { .. } => "Between",
@@ -954,11 +957,11 @@ impl Expr {
     }
 
     /// Remove an alias from an expression if one exists.
-    pub fn unalias(self) -> Expr {
-        match self {
-            Expr::Alias(alias) => alias.expr.as_ref().clone(),
-            _ => self,
+    pub fn unalias(&mut self) -> &mut Self {
+        if let Expr::Alias(alias) = self {
+            *self = mem::take(alias.expr.as_mut());
         }
+        self
     }
 
     /// Return `self IN <list>` if `negated` is false, otherwise
@@ -1147,7 +1150,7 @@ impl Expr {
     /// For example, gicen an expression like `<int32> = $0` will infer `$0` to
     /// have type `int32`.
     pub fn infer_placeholder_types(self, schema: &DFSchema) -> Result<Expr> {
-        self.transform(&|mut expr| {
+        self.transform_up(&|mut expr| {
             // Default to assuming the arguments are the same type
             if let Expr::BinaryExpr(BinaryExpr { left, op: _, right }) = &mut expr {
                 rewrite_placeholder(left.as_mut(), right.as_ref(), schema)?;
@@ -1204,6 +1207,7 @@ macro_rules! expr_vec_fmt {
 impl fmt::Display for Expr {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
+            Expr::Nop => write!(f, "NOP"),
             Expr::Alias(Alias { expr, name, .. }) => write!(f, "{expr} AS {name}"),
             Expr::Column(c) => write!(f, "{c}"),
             Expr::OuterReferenceColumn(_, c) => write!(f, "outer_ref({c})"),
@@ -1446,6 +1450,7 @@ fn create_function_name(fun: &str, distinct: bool, args: &[Expr]) -> Result<Stri
 /// This function recursively transverses the expression for names such as "CAST(a > 2)".
 fn create_name(e: &Expr) -> Result<String> {
     match e {
+        Expr::Nop => Ok("NOP".to_string()),
         Expr::Alias(Alias { name, .. }) => Ok(name.clone()),
         Expr::Column(c) => Ok(c.flat_name()),
         Expr::OuterReferenceColumn(_, c) => Ok(format!("outer_ref({})", c.flat_name())),

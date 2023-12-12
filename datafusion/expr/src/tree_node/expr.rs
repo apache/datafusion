@@ -24,15 +24,17 @@ use crate::expr::{
 };
 use crate::{Expr, GetFieldAccess};
 
-use datafusion_common::tree_node::{TreeNode, VisitRecursion};
+use datafusion_common::tree_node::{
+    TreeNode, TreeNodeRecursion, TreeNodeRecursionResult, VisitRecursionIterator,
+};
 use datafusion_common::{internal_err, DataFusionError, Result};
 
 impl TreeNode for Expr {
-    fn apply_children<F>(&self, op: &mut F) -> Result<VisitRecursion>
+    fn apply_children<F>(&self, f: &mut F) -> Result<TreeNodeRecursion>
     where
-        F: FnMut(&Self) -> Result<VisitRecursion>,
+        F: FnMut(&Self) -> Result<TreeNodeRecursion>,
     {
-        let children = match self {
+        match self {
             Expr::Alias(Alias{expr,..})
             | Expr::Not(expr)
             | Expr::IsNotNull(expr)
@@ -47,30 +49,26 @@ impl TreeNode for Expr {
             | Expr::Cast(Cast { expr, .. })
             | Expr::TryCast(TryCast { expr, .. })
             | Expr::Sort(Sort { expr, .. })
-            | Expr::InSubquery(InSubquery{ expr, .. }) => vec![expr.as_ref().clone()],
+            | Expr::InSubquery(InSubquery{ expr, .. }) => f(expr),
             Expr::GetIndexedField(GetIndexedField { expr, field }) => {
-                let expr = expr.as_ref().clone();
-                match field {
+                f(expr).and_then_on_continue(|| match field {
                     GetFieldAccess::ListIndex {key} => {
-                        vec![key.as_ref().clone(), expr]
+                        f(key)
                     },
-                    GetFieldAccess::ListRange {start, stop} => {
-                        vec![start.as_ref().clone(), stop.as_ref().clone(), expr]
+                    GetFieldAccess::ListRange { start, stop} => {
+                        f(start).and_then_on_continue(|| f(stop))
                     }
-                    GetFieldAccess::NamedStructField {name: _name} => {
-                        vec![expr]
-                    }
-                }
+                    GetFieldAccess::NamedStructField { name: _name } => Ok(TreeNodeRecursion::Continue)
+                })
             }
             Expr::GroupingSet(GroupingSet::Rollup(exprs))
-            | Expr::GroupingSet(GroupingSet::Cube(exprs)) => exprs.clone(),
-            Expr::ScalarFunction (ScalarFunction{ args, .. } )  => {
-                args.clone()
-            }
+            | Expr::GroupingSet(GroupingSet::Cube(exprs)) => exprs.iter().for_each_till_continue(f),
+            Expr::ScalarFunction (ScalarFunction{ args, .. } )  => args.iter().for_each_till_continue(f),
             Expr::GroupingSet(GroupingSet::GroupingSets(lists_of_exprs)) => {
-                lists_of_exprs.clone().into_iter().flatten().collect()
+                lists_of_exprs.iter().flatten().for_each_till_continue(f)
             }
-            Expr::Column(_)
+            Expr::Nop
+            | Expr::Column(_)
             // Treat OuterReferenceColumn as a leaf expression
             | Expr::OuterReferenceColumn(_, _)
             | Expr::ScalarVariable(_, _)
@@ -78,76 +76,43 @@ impl TreeNode for Expr {
             | Expr::Exists { .. }
             | Expr::ScalarSubquery(_)
             | Expr::Wildcard {..}
-            | Expr::Placeholder (_) => vec![],
+            | Expr::Placeholder (_) => Ok(TreeNodeRecursion::Continue),
             Expr::BinaryExpr(BinaryExpr { left, right, .. }) => {
-                vec![left.as_ref().clone(), right.as_ref().clone()]
+                f(left)
+                    .and_then_on_continue(|| f(right))
             }
             Expr::Like(Like { expr, pattern, .. })
             | Expr::SimilarTo(Like { expr, pattern, .. }) => {
-                vec![expr.as_ref().clone(), pattern.as_ref().clone()]
+                f(expr)
+                    .and_then_on_continue(|| f(pattern))
             }
-            Expr::Between(Between {
-                expr, low, high, ..
-            }) => vec![
-                expr.as_ref().clone(),
-                low.as_ref().clone(),
-                high.as_ref().clone(),
-            ],
-            Expr::Case(case) => {
-                let mut expr_vec = vec![];
-                if let Some(expr) = case.expr.as_ref() {
-                    expr_vec.push(expr.as_ref().clone());
-                };
-                for (when, then) in case.when_then_expr.iter() {
-                    expr_vec.push(when.as_ref().clone());
-                    expr_vec.push(then.as_ref().clone());
-                }
-                if let Some(else_expr) = case.else_expr.as_ref() {
-                    expr_vec.push(else_expr.as_ref().clone());
-                }
-                expr_vec
+            Expr::Between(Between { expr, low, high, .. }) => {
+                f(expr)
+                    .and_then_on_continue(|| f(low))
+                    .and_then_on_continue(|| f(high))
+            },
+            Expr::Case( Case { expr, when_then_expr, else_expr }) => {
+                expr.as_deref().into_iter().for_each_till_continue(f)
+                    .and_then_on_continue(||
+                        when_then_expr.iter().for_each_till_continue(&mut |(w, t)| f(w).and_then_on_continue(|| f(t))))
+                    .and_then_on_continue(|| else_expr.as_deref().into_iter().for_each_till_continue(f))
             }
             Expr::AggregateFunction(AggregateFunction { args, filter, order_by, .. })
              => {
-                let mut expr_vec = args.clone();
-
-                if let Some(f) = filter {
-                    expr_vec.push(f.as_ref().clone());
-                }
-                if let Some(o) = order_by {
-                    expr_vec.extend(o.clone());
-                }
-
-                expr_vec
+                args.iter().for_each_till_continue(f)
+                    .and_then_on_continue(|| filter.as_deref().into_iter().for_each_till_continue(f))
+                    .and_then_on_continue(|| order_by.iter().flatten().for_each_till_continue(f))
             }
-            Expr::WindowFunction(WindowFunction {
-                args,
-                partition_by,
-                order_by,
-                ..
-            }) => {
-                let mut expr_vec = args.clone();
-                expr_vec.extend(partition_by.clone());
-                expr_vec.extend(order_by.clone());
-                expr_vec
+            Expr::WindowFunction(WindowFunction { args, partition_by, order_by, .. }) => {
+                args.iter().for_each_till_continue(f)
+                    .and_then_on_continue(|| partition_by.iter().for_each_till_continue(f))
+                    .and_then_on_continue(|| order_by.iter().for_each_till_continue(f))
             }
             Expr::InList(InList { expr, list, .. }) => {
-                let mut expr_vec = vec![];
-                expr_vec.push(expr.as_ref().clone());
-                expr_vec.extend(list.clone());
-                expr_vec
-            }
-        };
-
-        for child in children.iter() {
-            match op(child)? {
-                VisitRecursion::Continue => {}
-                VisitRecursion::Skip => return Ok(VisitRecursion::Continue),
-                VisitRecursion::Stop => return Ok(VisitRecursion::Stop),
+                f(expr)
+                    .and_then_on_continue(|| list.iter().for_each_till_continue(f))
             }
         }
-
-        Ok(VisitRecursion::Continue)
     }
 
     fn map_children<F>(self, transform: F) -> Result<Self>
@@ -157,6 +122,7 @@ impl TreeNode for Expr {
         let mut transform = transform;
 
         Ok(match self {
+            Expr::Nop => self,
             Expr::Alias(Alias {
                 expr,
                 relation,
@@ -375,6 +341,90 @@ impl TreeNode for Expr {
                 Expr::Placeholder(Placeholder { id, data_type })
             }
         })
+    }
+
+    fn transform_children<F>(&mut self, f: &mut F) -> Result<TreeNodeRecursion>
+    where
+        F: FnMut(&mut Self) -> Result<TreeNodeRecursion>,
+    {
+        match self {
+            Expr::Alias(Alias { expr,.. })
+            | Expr::Not(expr)
+            | Expr::IsNotNull(expr)
+            | Expr::IsTrue(expr)
+            | Expr::IsFalse(expr)
+            | Expr::IsUnknown(expr)
+            | Expr::IsNotTrue(expr)
+            | Expr::IsNotFalse(expr)
+            | Expr::IsNotUnknown(expr)
+            | Expr::IsNull(expr)
+            | Expr::Negative(expr)
+            | Expr::Cast(Cast { expr, .. })
+            | Expr::TryCast(TryCast { expr, .. })
+            | Expr::Sort(Sort { expr, .. })
+            | Expr::InSubquery(InSubquery{ expr, .. }) => f(expr),
+            Expr::GetIndexedField(GetIndexedField { expr, field }) => {
+                f(expr).and_then_on_continue(|| match field {
+                    GetFieldAccess::ListIndex {key} => {
+                        f(key)
+                    },
+                    GetFieldAccess::ListRange { start, stop} => {
+                        f(start).and_then_on_continue(|| f(stop))
+                    }
+                    GetFieldAccess::NamedStructField { name: _name } => Ok(TreeNodeRecursion::Continue)
+                })
+            }
+            Expr::GroupingSet(GroupingSet::Rollup(exprs))
+            | Expr::GroupingSet(GroupingSet::Cube(exprs)) => exprs.iter_mut().for_each_till_continue(f),
+            | Expr::ScalarFunction(ScalarFunction{ args, .. }) => args.iter_mut().for_each_till_continue(f),
+            Expr::GroupingSet(GroupingSet::GroupingSets(lists_of_exprs)) => {
+                lists_of_exprs.iter_mut().flatten().for_each_till_continue(f)
+            }
+            Expr::Nop
+            | Expr::Column(_)
+            // Treat OuterReferenceColumn as a leaf expression
+            | Expr::OuterReferenceColumn(_, _)
+            | Expr::ScalarVariable(_, _)
+            | Expr::Literal(_)
+            | Expr::Exists { .. }
+            | Expr::ScalarSubquery(_)
+            | Expr::Wildcard {..}
+            | Expr::Placeholder (_) => Ok(TreeNodeRecursion::Continue),
+            Expr::BinaryExpr(BinaryExpr { left, right, .. }) => {
+                f(left)
+                    .and_then_on_continue(|| f(right))
+            }
+            Expr::Like(Like { expr, pattern, .. })
+            | Expr::SimilarTo(Like { expr, pattern, .. }) => {
+                f(expr)
+                    .and_then_on_continue(|| f(pattern))
+            }
+            Expr::Between(Between { expr, low, high, .. }) => {
+                f(expr)
+                    .and_then_on_continue(|| f(low))
+                    .and_then_on_continue(|| f(high))
+            },
+            Expr::Case( Case { expr, when_then_expr, else_expr }) => {
+                expr.as_deref_mut().into_iter().for_each_till_continue(f)
+                    .and_then_on_continue(||
+                        when_then_expr.iter_mut().for_each_till_continue(&mut |(w, t)| f(w).and_then_on_continue(|| f(t))))
+                    .and_then_on_continue(|| else_expr.as_deref_mut().into_iter().for_each_till_continue(f))
+            }
+            Expr::AggregateFunction(AggregateFunction { args, filter, order_by, .. }) => {
+                args.iter_mut().for_each_till_continue(f)
+                    .and_then_on_continue(|| filter.as_deref_mut().into_iter().for_each_till_continue(f))
+                    .and_then_on_continue(|| order_by.iter_mut().flatten().for_each_till_continue(f))
+            }
+            Expr::WindowFunction(WindowFunction { args, partition_by, order_by, .. }) => {
+                args.iter_mut().for_each_till_continue(f)
+                    .and_then_on_continue(|| partition_by.iter_mut().for_each_till_continue(f))
+                    .and_then_on_continue(|| order_by.iter_mut().for_each_till_continue(f))
+            }
+            Expr::InList(InList { expr, list, .. }) => {
+                f(expr)
+                    .and_then_on_continue(|| list.iter_mut().for_each_till_continue(f))
+            }
+        }
     }
 }
 

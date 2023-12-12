@@ -18,92 +18,22 @@
 //! Tree node implementation for logical plan
 
 use crate::LogicalPlan;
-use datafusion_common::tree_node::{TreeNodeVisitor, VisitRecursion};
-use datafusion_common::{tree_node::TreeNode, Result};
+use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion, VisitRecursionIterator};
+use datafusion_common::Result;
 
 impl TreeNode for LogicalPlan {
-    fn apply<F>(&self, op: &mut F) -> Result<VisitRecursion>
+    fn apply_children<F>(&self, f: &mut F) -> Result<TreeNodeRecursion>
     where
-        F: FnMut(&Self) -> Result<VisitRecursion>,
+        F: FnMut(&Self) -> Result<TreeNodeRecursion>,
     {
-        // Note,
-        //
-        // Compared to the default implementation, we need to invoke
-        // [`Self::apply_subqueries`] before visiting its children
-        match op(self)? {
-            VisitRecursion::Continue => {}
-            // If the recursion should skip, do not apply to its children. And let the recursion continue
-            VisitRecursion::Skip => return Ok(VisitRecursion::Continue),
-            // If the recursion should stop, do not apply to its children
-            VisitRecursion::Stop => return Ok(VisitRecursion::Stop),
-        };
-
-        self.apply_subqueries(op)?;
-
-        self.apply_children(&mut |node| node.apply(op))
+        self.inputs().into_iter().for_each_till_continue(f)
     }
 
-    /// To use, define a struct that implements the trait [`TreeNodeVisitor`] and then invoke
-    /// [`LogicalPlan::visit`].
-    ///
-    /// For example, for a logical plan like:
-    ///
-    /// ```text
-    /// Projection: id
-    ///    Filter: state Eq Utf8(\"CO\")\
-    ///       CsvScan: employee.csv projection=Some([0, 3])";
-    /// ```
-    ///
-    /// The sequence of visit operations would be:
-    /// ```text
-    /// visitor.pre_visit(Projection)
-    /// visitor.pre_visit(Filter)
-    /// visitor.pre_visit(CsvScan)
-    /// visitor.post_visit(CsvScan)
-    /// visitor.post_visit(Filter)
-    /// visitor.post_visit(Projection)
-    /// ```
-    fn visit<V: TreeNodeVisitor<N = Self>>(
-        &self,
-        visitor: &mut V,
-    ) -> Result<VisitRecursion> {
-        // Compared to the default implementation, we need to invoke
-        // [`Self::visit_subqueries`] before visiting its children
-
-        match visitor.pre_visit(self)? {
-            VisitRecursion::Continue => {}
-            // If the recursion should skip, do not apply to its children. And let the recursion continue
-            VisitRecursion::Skip => return Ok(VisitRecursion::Continue),
-            // If the recursion should stop, do not apply to its children
-            VisitRecursion::Stop => return Ok(VisitRecursion::Stop),
-        };
-
-        self.visit_subqueries(visitor)?;
-
-        match self.apply_children(&mut |node| node.visit(visitor))? {
-            VisitRecursion::Continue => {}
-            // If the recursion should skip, do not apply to its children. And let the recursion continue
-            VisitRecursion::Skip => return Ok(VisitRecursion::Continue),
-            // If the recursion should stop, do not apply to its children
-            VisitRecursion::Stop => return Ok(VisitRecursion::Stop),
-        }
-
-        visitor.post_visit(self)
-    }
-
-    fn apply_children<F>(&self, op: &mut F) -> Result<VisitRecursion>
+    fn apply_inner_children<F>(&self, f: &mut F) -> Result<TreeNodeRecursion>
     where
-        F: FnMut(&Self) -> Result<VisitRecursion>,
+        F: FnMut(&Self) -> Result<TreeNodeRecursion>,
     {
-        for child in self.inputs() {
-            match op(child)? {
-                VisitRecursion::Continue => {}
-                VisitRecursion::Skip => return Ok(VisitRecursion::Continue),
-                VisitRecursion::Stop => return Ok(VisitRecursion::Stop),
-            }
-        }
-
-        Ok(VisitRecursion::Continue)
+        self.apply_subqueries(f)
     }
 
     fn map_children<F>(self, transform: F) -> Result<Self>
@@ -127,5 +57,25 @@ impl TreeNode for LogicalPlan {
         } else {
             Ok(self)
         }
+    }
+
+    fn transform_children<F>(&mut self, f: &mut F) -> Result<TreeNodeRecursion>
+    where
+        F: FnMut(&mut Self) -> Result<TreeNodeRecursion>,
+    {
+        let old_children = self.inputs();
+        let mut new_children =
+            old_children.iter().map(|&c| c.clone()).collect::<Vec<_>>();
+        let tnr = new_children.iter_mut().for_each_till_continue(f)?;
+
+        // if any changes made, make a new child
+        if old_children
+            .iter()
+            .zip(new_children.iter())
+            .any(|(c1, c2)| c1 != &c2)
+        {
+            *self = self.with_new_inputs(new_children.as_slice())?;
+        }
+        Ok(tnr)
     }
 }

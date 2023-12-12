@@ -17,14 +17,18 @@
 
 use crate::analyzer::AnalyzerRule;
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRewriter};
+use datafusion_common::tree_node::{
+    Transformed, TreeNode, TreeNodeRecursion, TreeNodeTransformer,
+};
 use datafusion_common::Result;
-use datafusion_expr::expr::{AggregateFunction, AggregateFunctionDefinition, InSubquery};
+use datafusion_expr::expr::{
+    AggregateFunction, AggregateFunctionDefinition, Exists, InSubquery, WindowFunction,
+};
 use datafusion_expr::expr_rewriter::rewrite_preserving_name;
 use datafusion_expr::utils::COUNT_STAR_EXPANSION;
 use datafusion_expr::Expr::ScalarSubquery;
 use datafusion_expr::{
-    aggregate_function, expr, lit, window_function, Aggregate, Expr, Filter, LogicalPlan,
+    aggregate_function, lit, window_function, Aggregate, Expr, Filter, LogicalPlan,
     LogicalPlanBuilder, Projection, Sort, Subquery,
 };
 use std::sync::Arc;
@@ -114,108 +118,69 @@ fn analyze_internal(plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
 
 struct CountWildcardRewriter {}
 
-impl TreeNodeRewriter for CountWildcardRewriter {
-    type N = Expr;
+impl TreeNodeTransformer for CountWildcardRewriter {
+    type Node = Expr;
 
-    fn mutate(&mut self, old_expr: Expr) -> Result<Expr> {
-        let new_expr = match old_expr.clone() {
-            Expr::WindowFunction(expr::WindowFunction {
+    fn pre_transform(&mut self, _node: &mut Self::Node) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
+    }
+
+    fn post_transform(&mut self, expr: &mut Expr) -> Result<TreeNodeRecursion> {
+        match expr {
+            Expr::WindowFunction(WindowFunction {
                 fun:
                     window_function::WindowFunction::AggregateFunction(
                         aggregate_function::AggregateFunction::Count,
                     ),
                 args,
-                partition_by,
-                order_by,
-                window_frame,
-            }) if args.len() == 1 => match args[0] {
-                Expr::Wildcard { qualifier: None } => {
-                    Expr::WindowFunction(expr::WindowFunction {
-                        fun: window_function::WindowFunction::AggregateFunction(
-                            aggregate_function::AggregateFunction::Count,
-                        ),
-                        args: vec![lit(COUNT_STAR_EXPANSION)],
-                        partition_by,
-                        order_by,
-                        window_frame,
-                    })
+                ..
+            }) if args.len() == 1 => {
+                if let Expr::Wildcard { qualifier: None } = args[0] {
+                    args[0] = lit(COUNT_STAR_EXPANSION)
                 }
-
-                _ => old_expr,
-            },
+            }
             Expr::AggregateFunction(AggregateFunction {
                 func_def:
                     AggregateFunctionDefinition::BuiltIn(
                         aggregate_function::AggregateFunction::Count,
                     ),
                 args,
-                distinct,
-                filter,
-                order_by,
-            }) if args.len() == 1 => match args[0] {
-                Expr::Wildcard { qualifier: None } => {
-                    Expr::AggregateFunction(AggregateFunction::new(
-                        aggregate_function::AggregateFunction::Count,
-                        vec![lit(COUNT_STAR_EXPANSION)],
-                        distinct,
-                        filter,
-                        order_by,
-                    ))
+                ..
+            }) if args.len() == 1 => {
+                if let Expr::Wildcard { qualifier: None } = args[0] {
+                    args[0] = lit(COUNT_STAR_EXPANSION)
                 }
-                _ => old_expr,
-            },
-
-            ScalarSubquery(Subquery {
-                subquery,
-                outer_ref_columns,
-            }) => {
+            }
+            ScalarSubquery(Subquery { subquery, .. }) => {
                 let new_plan = subquery
                     .as_ref()
                     .clone()
                     .transform_down(&analyze_internal)?;
-                ScalarSubquery(Subquery {
-                    subquery: Arc::new(new_plan),
-                    outer_ref_columns,
-                })
+                *subquery = Arc::new(new_plan);
             }
             Expr::InSubquery(InSubquery {
-                expr,
-                subquery,
-                negated,
+                subquery: Subquery { subquery, .. },
+                ..
             }) => {
                 let new_plan = subquery
-                    .subquery
                     .as_ref()
                     .clone()
                     .transform_down(&analyze_internal)?;
-
-                Expr::InSubquery(InSubquery::new(
-                    expr,
-                    Subquery {
-                        subquery: Arc::new(new_plan),
-                        outer_ref_columns: subquery.outer_ref_columns,
-                    },
-                    negated,
-                ))
+                *subquery = Arc::new(new_plan);
             }
-            Expr::Exists(expr::Exists { subquery, negated }) => {
+            Expr::Exists(Exists {
+                subquery: Subquery { subquery, .. },
+                ..
+            }) => {
                 let new_plan = subquery
-                    .subquery
                     .as_ref()
                     .clone()
                     .transform_down(&analyze_internal)?;
-
-                Expr::Exists(expr::Exists {
-                    subquery: Subquery {
-                        subquery: Arc::new(new_plan),
-                        outer_ref_columns: subquery.outer_ref_columns,
-                    },
-                    negated,
-                })
+                *subquery = Arc::new(new_plan);
             }
-            _ => old_expr,
+            _ => {}
         };
-        Ok(new_expr)
+        Ok(TreeNodeRecursion::Continue)
     }
 }
 

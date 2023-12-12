@@ -17,7 +17,7 @@
 
 use arrow::{array::ArrayRef, datatypes::Schema};
 use arrow_schema::FieldRef;
-use datafusion_common::tree_node::{TreeNode, VisitRecursion};
+use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion_common::{Column, DataFusionError, Result, ScalarValue};
 use parquet::file::metadata::ColumnChunkMetaData;
 use parquet::schema::types::SchemaDescriptor;
@@ -259,7 +259,7 @@ impl BloomFilterPruningPredicate {
 
     fn get_predicate_columns(expr: &Arc<dyn PhysicalExpr>) -> HashSet<String> {
         let mut columns = HashSet::new();
-        expr.apply(&mut |expr| {
+        expr.visit_down(&mut |expr| {
             if let Some(binary_expr) =
                 expr.as_any().downcast_ref::<phys_expr::BinaryExpr>()
             {
@@ -269,7 +269,7 @@ impl BloomFilterPruningPredicate {
                     columns.insert(column.name().to_string());
                 }
             }
-            Ok(VisitRecursion::Continue)
+            Ok(TreeNodeRecursion::Continue)
         })
         // no way to fail as only Ok(VisitRecursion::Continue) is returned
         .unwrap();

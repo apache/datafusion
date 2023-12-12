@@ -30,7 +30,9 @@ use crate::physical_plan::{with_new_children_if_necessary, ExecutionPlan};
 use super::utils::is_repartition;
 
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::tree_node::{Transformed, TreeNode, VisitRecursion};
+use datafusion_common::tree_node::{
+    Transformed, TreeNode, TreeNodeRecursion, VisitRecursionIterator,
+};
 use datafusion_physical_plan::unbounded_output;
 
 /// For a given `plan`, this object carries the information one needs from its
@@ -118,18 +120,11 @@ impl OrderPreservationContext {
 }
 
 impl TreeNode for OrderPreservationContext {
-    fn apply_children<F>(&self, op: &mut F) -> Result<VisitRecursion>
+    fn apply_children<F>(&self, f: &mut F) -> Result<TreeNodeRecursion>
     where
-        F: FnMut(&Self) -> Result<VisitRecursion>,
+        F: FnMut(&Self) -> Result<TreeNodeRecursion>,
     {
-        for child in self.children() {
-            match op(&child)? {
-                VisitRecursion::Continue => {}
-                VisitRecursion::Skip => return Ok(VisitRecursion::Continue),
-                VisitRecursion::Stop => return Ok(VisitRecursion::Stop),
-            }
-        }
-        Ok(VisitRecursion::Continue)
+        self.children().iter().for_each_till_continue(f)
     }
 
     fn map_children<F>(self, transform: F) -> Result<Self>
@@ -145,6 +140,23 @@ impl TreeNode for OrderPreservationContext {
                 .map(transform)
                 .collect::<Result<Vec<_>>>()?;
             OrderPreservationContext::new_from_children_nodes(children_nodes, self.plan)
+        }
+    }
+
+    fn transform_children<F>(&mut self, f: &mut F) -> Result<TreeNodeRecursion>
+    where
+        F: FnMut(&mut Self) -> Result<TreeNodeRecursion>,
+    {
+        let mut children = self.children();
+        if children.is_empty() {
+            Ok(TreeNodeRecursion::Continue)
+        } else {
+            let tnr = children.iter_mut().for_each_till_continue(f)?;
+            *self = OrderPreservationContext::new_from_children_nodes(
+                children,
+                self.plan.clone(),
+            )?;
+            Ok(tnr)
         }
     }
 }

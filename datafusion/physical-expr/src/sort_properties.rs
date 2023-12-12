@@ -20,7 +20,8 @@ use std::{ops::Neg, sync::Arc};
 use arrow_schema::SortOptions;
 
 use crate::PhysicalExpr;
-use datafusion_common::tree_node::{TreeNode, VisitRecursion};
+
+use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion, VisitRecursionIterator};
 use datafusion_common::Result;
 
 /// To propagate [`SortOptions`] across the [`PhysicalExpr`], it is insufficient
@@ -173,18 +174,11 @@ impl ExprOrdering {
 }
 
 impl TreeNode for ExprOrdering {
-    fn apply_children<F>(&self, op: &mut F) -> Result<VisitRecursion>
+    fn apply_children<F>(&self, f: &mut F) -> Result<TreeNodeRecursion>
     where
-        F: FnMut(&Self) -> Result<VisitRecursion>,
+        F: FnMut(&Self) -> Result<TreeNodeRecursion>,
     {
-        for child in &self.children {
-            match op(child)? {
-                VisitRecursion::Continue => {}
-                VisitRecursion::Skip => return Ok(VisitRecursion::Continue),
-                VisitRecursion::Stop => return Ok(VisitRecursion::Stop),
-            }
-        }
-        Ok(VisitRecursion::Continue)
+        self.children.iter().for_each_till_continue(f)
     }
 
     fn map_children<F>(mut self, transform: F) -> Result<Self>
@@ -201,5 +195,12 @@ impl TreeNode for ExprOrdering {
                 .collect::<Result<Vec<_>>>()?;
             Ok(self)
         }
+    }
+
+    fn transform_children<F>(&mut self, f: &mut F) -> Result<TreeNodeRecursion>
+    where
+        F: FnMut(&mut Self) -> Result<TreeNodeRecursion>,
+    {
+        self.children.iter_mut().for_each_till_continue(f)
     }
 }

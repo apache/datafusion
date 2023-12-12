@@ -28,7 +28,9 @@ use crate::physical_plan::repartition::RepartitionExec;
 use crate::physical_plan::sorts::sort::SortExec;
 use crate::physical_plan::{with_new_children_if_necessary, ExecutionPlan};
 
-use datafusion_common::tree_node::{Transformed, TreeNode, VisitRecursion};
+use datafusion_common::tree_node::{
+    Transformed, TreeNode, TreeNodeRecursion, VisitRecursionIterator,
+};
 use datafusion_common::{plan_err, DataFusionError, JoinSide, Result};
 use datafusion_expr::JoinType;
 use datafusion_physical_expr::expressions::Column;
@@ -82,20 +84,11 @@ impl SortPushDown {
 }
 
 impl TreeNode for SortPushDown {
-    fn apply_children<F>(&self, op: &mut F) -> Result<VisitRecursion>
+    fn apply_children<F>(&self, f: &mut F) -> Result<TreeNodeRecursion>
     where
-        F: FnMut(&Self) -> Result<VisitRecursion>,
+        F: FnMut(&Self) -> Result<TreeNodeRecursion>,
     {
-        let children = self.children();
-        for child in children {
-            match op(&child)? {
-                VisitRecursion::Continue => {}
-                VisitRecursion::Skip => return Ok(VisitRecursion::Continue),
-                VisitRecursion::Stop => return Ok(VisitRecursion::Stop),
-            }
-        }
-
-        Ok(VisitRecursion::Continue)
+        self.children().iter().for_each_till_continue(f)
     }
 
     fn map_children<F>(mut self, transform: F) -> Result<Self>
@@ -117,6 +110,22 @@ impl TreeNode for SortPushDown {
             }
         };
         Ok(self)
+    }
+
+    fn transform_children<F>(&mut self, f: &mut F) -> Result<TreeNodeRecursion>
+    where
+        F: FnMut(&mut Self) -> Result<TreeNodeRecursion>,
+    {
+        let mut children = self.children();
+        if !children.is_empty() {
+            let tnr = children.iter_mut().for_each_till_continue(f)?;
+            let children_plans = children.into_iter().map(|c| c.plan).collect();
+            self.plan =
+                with_new_children_if_necessary(self.plan.clone(), children_plans)?.into();
+            Ok(tnr)
+        } else {
+            Ok(TreeNodeRecursion::Continue)
+        }
     }
 }
 

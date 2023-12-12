@@ -352,7 +352,7 @@ impl EquivalenceGroup {
     /// class it matches with (if any).
     pub fn normalize_expr(&self, expr: Arc<dyn PhysicalExpr>) -> Arc<dyn PhysicalExpr> {
         expr.clone()
-            .transform(&|expr| {
+            .transform_up(&|expr| {
                 for cls in self.iter() {
                     if cls.contains(&expr) {
                         return Ok(Transformed::Yes(cls.canonical_expr().unwrap()));

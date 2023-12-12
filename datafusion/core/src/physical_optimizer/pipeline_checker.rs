@@ -28,7 +28,9 @@ use crate::physical_plan::joins::SymmetricHashJoinExec;
 use crate::physical_plan::{with_new_children_if_necessary, ExecutionPlan};
 
 use datafusion_common::config::OptimizerOptions;
-use datafusion_common::tree_node::{Transformed, TreeNode, VisitRecursion};
+use datafusion_common::tree_node::{
+    Transformed, TreeNode, TreeNodeRecursion, VisitRecursionIterator,
+};
 use datafusion_common::{plan_err, DataFusionError};
 use datafusion_physical_expr::intervals::utils::{check_support, is_datatype_supported};
 
@@ -94,19 +96,11 @@ impl PipelineStatePropagator {
 }
 
 impl TreeNode for PipelineStatePropagator {
-    fn apply_children<F>(&self, op: &mut F) -> Result<VisitRecursion>
+    fn apply_children<F>(&self, f: &mut F) -> Result<TreeNodeRecursion>
     where
-        F: FnMut(&Self) -> Result<VisitRecursion>,
+        F: FnMut(&Self) -> Result<TreeNodeRecursion>,
     {
-        for child in &self.children {
-            match op(child)? {
-                VisitRecursion::Continue => {}
-                VisitRecursion::Skip => return Ok(VisitRecursion::Continue),
-                VisitRecursion::Stop => return Ok(VisitRecursion::Stop),
-            }
-        }
-
-        Ok(VisitRecursion::Continue)
+        self.children.iter().for_each_till_continue(f)
     }
 
     fn map_children<F>(self, transform: F) -> Result<Self>
@@ -128,6 +122,21 @@ impl TreeNode for PipelineStatePropagator {
             })
         } else {
             Ok(self)
+        }
+    }
+
+    fn transform_children<F>(&mut self, f: &mut F) -> Result<TreeNodeRecursion>
+    where
+        F: FnMut(&mut Self) -> Result<TreeNodeRecursion>,
+    {
+        if !self.children.is_empty() {
+            let tnr = self.children.iter_mut().for_each_till_continue(f)?;
+            let children_plans = self.children.iter().map(|c| c.plan.clone()).collect();
+            self.plan =
+                with_new_children_if_necessary(self.plan.clone(), children_plans)?.into();
+            Ok(tnr)
+        } else {
+            Ok(TreeNodeRecursion::Continue)
         }
     }
 }

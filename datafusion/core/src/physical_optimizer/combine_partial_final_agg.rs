@@ -178,7 +178,7 @@ fn normalize_group_exprs(group_exprs: GroupExprsRef) -> GroupExprs {
 fn discard_column_index(group_expr: Arc<dyn PhysicalExpr>) -> Arc<dyn PhysicalExpr> {
     group_expr
         .clone()
-        .transform(&|expr| {
+        .transform_up(&|expr| {
             let normalized_form: Option<Arc<dyn PhysicalExpr>> =
                 match expr.as_any().downcast_ref::<Column>() {
                     Some(column) => Some(Arc::new(Column::new(column.name(), 0))),

@@ -47,7 +47,9 @@ use crate::physical_plan::{
 };
 
 use arrow::compute::SortOptions;
-use datafusion_common::tree_node::{Transformed, TreeNode, VisitRecursion};
+use datafusion_common::tree_node::{
+    Transformed, TreeNode, TreeNodeRecursion, VisitRecursionIterator,
+};
 use datafusion_expr::logical_plan::JoinType;
 use datafusion_physical_expr::expressions::{Column, NoOp};
 use datafusion_physical_expr::utils::map_columns_before_projection;
@@ -1476,18 +1478,11 @@ impl DistributionContext {
 }
 
 impl TreeNode for DistributionContext {
-    fn apply_children<F>(&self, op: &mut F) -> Result<VisitRecursion>
+    fn apply_children<F>(&self, f: &mut F) -> Result<TreeNodeRecursion>
     where
-        F: FnMut(&Self) -> Result<VisitRecursion>,
+        F: FnMut(&Self) -> Result<TreeNodeRecursion>,
     {
-        for child in self.children() {
-            match op(&child)? {
-                VisitRecursion::Continue => {}
-                VisitRecursion::Skip => return Ok(VisitRecursion::Continue),
-                VisitRecursion::Stop => return Ok(VisitRecursion::Stop),
-            }
-        }
-        Ok(VisitRecursion::Continue)
+        self.children().iter().for_each_till_continue(f)
     }
 
     fn map_children<F>(self, transform: F) -> Result<Self>
@@ -1503,6 +1498,23 @@ impl TreeNode for DistributionContext {
                 .map(transform)
                 .collect::<Result<Vec<_>>>()?;
             DistributionContext::new_from_children_nodes(children_nodes, self.plan)
+        }
+    }
+
+    fn transform_children<F>(&mut self, f: &mut F) -> Result<TreeNodeRecursion>
+    where
+        F: FnMut(&mut Self) -> Result<TreeNodeRecursion>,
+    {
+        let mut children = self.children();
+        if children.is_empty() {
+            Ok(TreeNodeRecursion::Continue)
+        } else {
+            let tnr = children.iter_mut().for_each_till_continue(f)?;
+            *self = DistributionContext::new_from_children_nodes(
+                children,
+                self.plan.clone(),
+            )?;
+            Ok(tnr)
         }
     }
 }
@@ -1566,20 +1578,11 @@ impl PlanWithKeyRequirements {
 }
 
 impl TreeNode for PlanWithKeyRequirements {
-    fn apply_children<F>(&self, op: &mut F) -> Result<VisitRecursion>
+    fn apply_children<F>(&self, f: &mut F) -> Result<TreeNodeRecursion>
     where
-        F: FnMut(&Self) -> Result<VisitRecursion>,
+        F: FnMut(&Self) -> Result<TreeNodeRecursion>,
     {
-        let children = self.children();
-        for child in children {
-            match op(&child)? {
-                VisitRecursion::Continue => {}
-                VisitRecursion::Skip => return Ok(VisitRecursion::Continue),
-                VisitRecursion::Stop => return Ok(VisitRecursion::Stop),
-            }
-        }
-
-        Ok(VisitRecursion::Continue)
+        self.children().iter().for_each_till_continue(f)
     }
 
     fn map_children<F>(self, transform: F) -> Result<Self>
@@ -1603,6 +1606,22 @@ impl TreeNode for PlanWithKeyRequirements {
             })
         } else {
             Ok(self)
+        }
+    }
+
+    fn transform_children<F>(&mut self, f: &mut F) -> Result<TreeNodeRecursion>
+    where
+        F: FnMut(&mut Self) -> Result<TreeNodeRecursion>,
+    {
+        let mut children = self.children();
+        if !children.is_empty() {
+            let tnr = children.iter_mut().for_each_till_continue(f)?;
+            let children_plans = children.into_iter().map(|c| c.plan).collect();
+            self.plan =
+                with_new_children_if_necessary(self.plan.clone(), children_plans)?.into();
+            Ok(tnr)
+        } else {
+            Ok(TreeNodeRecursion::Continue)
         }
     }
 }

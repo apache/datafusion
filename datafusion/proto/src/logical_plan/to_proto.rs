@@ -484,6 +484,10 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
         use protobuf::logical_expr_node::ExprType;
 
         let expr_node = match expr {
+            Expr::Nop => Err(Error::NotImplemented(
+                "Proto serialization error: Trying to serialize a Nop expression"
+                    .to_string(),
+            ))?,
             Expr::Column(c) => Self {
                 expr_type: Some(ExprType::Column(c.into())),
             },

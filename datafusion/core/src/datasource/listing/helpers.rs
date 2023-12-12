@@ -37,7 +37,7 @@ use crate::{error::Result, scalar::ScalarValue};
 use super::PartitionedFile;
 use crate::datasource::listing::ListingTableUrl;
 use crate::execution::context::SessionState;
-use datafusion_common::tree_node::{TreeNode, VisitRecursion};
+use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion_common::{internal_err, Column, DFField, DFSchema, DataFusionError};
 use datafusion_expr::{Expr, ScalarFunctionDefinition, Volatility};
 use datafusion_physical_expr::create_physical_expr;
@@ -52,17 +52,18 @@ use object_store::{ObjectMeta, ObjectStore};
 /// was performed
 pub fn expr_applicable_for_cols(col_names: &[String], expr: &Expr) -> bool {
     let mut is_applicable = true;
-    expr.apply(&mut |expr| {
+    expr.visit_down(&mut |expr| {
         match expr {
             Expr::Column(Column { ref name, .. }) => {
                 is_applicable &= col_names.contains(name);
                 if is_applicable {
-                    Ok(VisitRecursion::Skip)
+                    Ok(TreeNodeRecursion::Prune)
                 } else {
-                    Ok(VisitRecursion::Stop)
+                    Ok(TreeNodeRecursion::Stop)
                 }
             }
-            Expr::Literal(_)
+            Expr::Nop
+            | Expr::Literal(_)
             | Expr::Alias(_)
             | Expr::OuterReferenceColumn(_, _)
             | Expr::ScalarVariable(_, _)
@@ -88,27 +89,27 @@ pub fn expr_applicable_for_cols(col_names: &[String], expr: &Expr) -> bool {
             | Expr::ScalarSubquery(_)
             | Expr::GetIndexedField { .. }
             | Expr::GroupingSet(_)
-            | Expr::Case { .. } => Ok(VisitRecursion::Continue),
+            | Expr::Case { .. } => Ok(TreeNodeRecursion::Continue),
 
             Expr::ScalarFunction(scalar_function) => {
                 match &scalar_function.func_def {
                     ScalarFunctionDefinition::BuiltIn(fun) => {
                         match fun.volatility() {
-                            Volatility::Immutable => Ok(VisitRecursion::Continue),
+                            Volatility::Immutable => Ok(TreeNodeRecursion::Continue),
                             // TODO: Stable functions could be `applicable`, but that would require access to the context
                             Volatility::Stable | Volatility::Volatile => {
                                 is_applicable = false;
-                                Ok(VisitRecursion::Stop)
+                                Ok(TreeNodeRecursion::Stop)
                             }
                         }
                     }
                     ScalarFunctionDefinition::UDF(fun) => {
                         match fun.signature().volatility {
-                            Volatility::Immutable => Ok(VisitRecursion::Continue),
+                            Volatility::Immutable => Ok(TreeNodeRecursion::Continue),
                             // TODO: Stable functions could be `applicable`, but that would require access to the context
                             Volatility::Stable | Volatility::Volatile => {
                                 is_applicable = false;
-                                Ok(VisitRecursion::Stop)
+                                Ok(TreeNodeRecursion::Stop)
                             }
                         }
                     }
@@ -128,7 +129,7 @@ pub fn expr_applicable_for_cols(col_names: &[String], expr: &Expr) -> bool {
             | Expr::Wildcard { .. }
             | Expr::Placeholder(_) => {
                 is_applicable = false;
-                Ok(VisitRecursion::Stop)
+                Ok(TreeNodeRecursion::Stop)
             }
         }
     })
