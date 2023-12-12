@@ -292,6 +292,7 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                     .map(|list_expr| list_expr.get_type(&self.schema))
                     .collect::<Result<Vec<_>>>()?;
                 let result_type =
+					//Todo@wy to coerce
                     get_coerce_type_for_list(&expr_data_type, &list_data_types);
                 match result_type {
                     None => plan_err!(

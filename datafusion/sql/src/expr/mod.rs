@@ -27,7 +27,10 @@ mod substring;
 mod unary_op;
 mod value;
 
+use std::vec;
+
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
+
 use arrow_schema::DataType;
 use arrow_schema::TimeUnit;
 use datafusion_common::{
@@ -514,8 +517,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             }
 
             SQLExpr::Tuple(values) => {
-                // self.
-                todo!()
+				self.parse_tuple(values, schema, planner_context)
             }
 
             _ => not_impl_err!("Unsupported ast node in sqltorel: {sql:?}"),
@@ -594,7 +596,17 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         input_schema: &DFSchema,
         planner_context: &mut PlannerContext,
     ) -> Result<Expr> {
-		todo!()
+        if values.is_empty() {
+            return not_impl_err!("Empty tuple not supported yet");
+        }
+		match values.get(0).unwrap() {
+			SQLExpr::Identifier(_) | SQLExpr::Value(_)=> {
+				self.parse_struct(values, vec![], input_schema, planner_context)
+			}
+			_ => {
+				not_impl_err!("Tuple not supported yet")
+			}
+		}
     }
 
     fn sql_in_list_to_expr(
