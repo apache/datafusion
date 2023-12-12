@@ -37,10 +37,11 @@ use std::sync::Arc;
 use arrow::array::*;
 use arrow::error::ArrowError;
 use arrow::{
-    array::{ArrayRef, Time32MillisecondArray},
+    array::ArrayRef,
     datatypes::{DataType, TimeUnit},
 };
-use chrono::{NaiveDate, TimeZone, Timelike, Utc};
+
+use chrono::{Duration, NaiveDate, TimeZone, Utc};
 use datafusion::error::Result;
 use datafusion_common::DataFusionError;
 use datafusion_expr::{
@@ -48,31 +49,6 @@ use datafusion_expr::{
     TypeSignature, Volatility,
 };
 
-#[derive(Debug)]
-pub struct CurrentTimeFunction;
-
-impl ScalarFunctionDef for CurrentTimeFunction {
-    fn name(&self) -> &str {
-        "current_time"
-    }
-
-    fn signature(&self) -> Signature {
-        Signature::exact(vec![], Volatility::Immutable)
-    }
-
-    fn return_type(&self) -> ReturnTypeFunction {
-        let return_type = Arc::new(DataType::Time32(TimeUnit::Millisecond));
-        Arc::new(move |_| Ok(return_type.clone()))
-    }
-
-    fn execute(&self, _args: &[ArrayRef]) -> Result<ArrayRef> {
-        let current_time = chrono::Local::now().time();
-        let milliseconds_since_midnight = current_time.num_seconds_from_midnight() * 1000;
-        let array =
-            Time32MillisecondArray::from(vec![Some(milliseconds_since_midnight as i32)]);
-        Ok(Arc::new(array) as ArrayRef)
-    }
-}
 #[derive(Debug)]
 pub struct ToIso8601Function;
 
@@ -87,13 +63,10 @@ impl ScalarFunctionDef for ToIso8601Function {
             vec![
                 TypeSignature::Exact(vec![DataType::Date32]),
                 TypeSignature::Exact(vec![DataType::Timestamp(
-                    TimeUnit::Millisecond,
+                    TimeUnit::Nanosecond,
                     None,
                 )]),
-                TypeSignature::Exact(vec![DataType::Timestamp(
-                    TimeUnit::Millisecond,
-                    Some(String::new().into()),
-                )]),
+                TypeSignature::Exact(vec![DataType::Utf8]),
             ],
             Volatility::Immutable,
         )
@@ -107,7 +80,7 @@ impl ScalarFunctionDef for ToIso8601Function {
     fn execute(&self, args: &[ArrayRef]) -> Result<ArrayRef> {
         if args.is_empty() {
             return Err(ArrowError::InvalidArgumentError(
-                "Invalid input type".to_string(),
+                "args is empty".to_string(),
             ))
             .map_err(|err| DataFusionError::Execution(format!("Cast error: {}", err)));
         }
@@ -115,86 +88,60 @@ impl ScalarFunctionDef for ToIso8601Function {
         let input = &args[0];
         let result = match input.data_type() {
             DataType::Date32 => {
-                // Convert Date to ISO 8601 String
-                // Implementation details depend on how Date is represented
-                let date_array = input.as_any().downcast_ref::<Date32Array>().unwrap();
-                let mut builder =
-                    StringBuilder::with_capacity(date_array.len(), date_array.len());
+                // Assuming the first array in args is a DateArray
+                let date_array = args[0]
+                    .as_any()
+                    .downcast_ref::<Date32Array>()
+                    .expect("Expected a date array");
 
-                for i in 0..date_array.len() {
-                    let date_option = date_array.value(i);
-                    let date_string = NaiveDate::from_ymd_opt(1970, 1, 1)
-                        .unwrap()
-                        .checked_add_signed(chrono::Duration::days(date_option as i64))
-                        .unwrap()
-                        .format("%Y-%m-%d")
-                        .to_string();
-                    builder.append_value(date_string);
-                }
+                // Map each date32 to an ISO 8601 string
+                let iso_strings: Vec<String> = date_array
+                    .iter()
+                    .map(|date| {
+                        date.map(|date| {
+                            let naive_date = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap()
+                                + Duration::days(date as i64);
+                            naive_date.format("%Y-%m-%d").to_string()
+                        })
+                        .unwrap_or_else(|| String::from("null")) // Handle null values
+                    })
+                    .collect();
 
-                Ok::<ArrayRef, ArrowError>(Arc::new(builder.finish()))
-                // Ok(Arc::new(builder.finish()) as ArrayRef)
+                // Create a new StringArray from the ISO 8601 strings
+                Ok(Arc::new(StringArray::from(iso_strings)) as Arc<dyn Array>)
             }
-            DataType::Timestamp(TimeUnit::Millisecond, None) => {
-                // Convert Timestamp to ISO 8601 String
-                // Implementation details depend on how Timestamp is represented
+            DataType::Timestamp(TimeUnit::Nanosecond, None) => {
                 let timestamp_array = input
                     .as_any()
-                    .downcast_ref::<TimestampMillisecondArray>()
-                    .unwrap();
-                let mut builder = StringBuilder::with_capacity(
-                    timestamp_array.len(),
-                    timestamp_array.len() * 24,
-                );
+                    .downcast_ref::<TimestampNanosecondArray>()
+                    .expect("Expected a NanosecondTimeStamp array");
+                let milliseconds_array = timestamp_array
+                    .iter()
+                    .map(|timestamp| timestamp.map(|timestamp| timestamp / 1_000_000))
+                    .collect::<TimestampMillisecondArray>();
 
-                for i in 0..timestamp_array.len() {
-                    let timestamp_option = timestamp_array.value(i);
-                    let timestamp_string = Utc
-                        .timestamp_millis_opt(timestamp_option)
-                        .unwrap()
-                        .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-                    builder.append_value(&timestamp_string);
-                }
+                let iso_strings: Vec<String> = milliseconds_array
+                    .iter()
+                    .map(|timestamp| {
+                        timestamp
+                            .map(|timestamp| {
+                                let datetime =
+                                    Utc.timestamp_millis_opt(timestamp).unwrap();
+                                format!("{}", datetime.format("%Y-%m-%dT%H:%M:%S%.3f"))
+                            })
+                            .unwrap_or_else(|| String::from("null")) // Handle null values
+                    })
+                    .collect();
 
-                Ok(Arc::new(builder.finish()) as ArrayRef)
+                Ok(Arc::new(StringArray::from(iso_strings)) as Arc<dyn Array>)
             }
-            DataType::Timestamp(TimeUnit::Millisecond, Some(timezone)) => {
-                // Convert Timestamp with TimeZone to ISO 8601 String
-                // Implementation details depend on how TimestampTZ is represented
-
-                let timestamp_array = input
-                    .as_any()
-                    .downcast_ref::<TimestampMillisecondArray>()
-                    .unwrap();
-                let mut builder = StringBuilder::with_capacity(
-                    timestamp_array.len(),
-                    timestamp_array.len() * 24,
-                );
-                let tz: chrono_tz::Tz = timezone.parse().unwrap();
-
-                for i in 0..timestamp_array.len() {
-                    let timestamp_option = timestamp_array.value(i);
-                    let timestamp_string = tz
-                        .timestamp_millis_opt(timestamp_option)
-                        .unwrap()
-                        .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-                    builder.append_value(&timestamp_string);
-                }
-
-                Ok(Arc::new(builder.finish()) as ArrayRef)
-            }
-            _ => {
-                return Err(ArrowError::InvalidArgumentError(
-                    "Invalid input type".to_string(),
-                ))
-                .map_err(|err| {
-                    DataFusionError::Execution(format!("Cast error: {}", err))
-                })
-            }
-        }
-        .unwrap();
-
-        Ok(result)
+            // timestamp with timezone todo
+            _ => Err(ArrowError::InvalidArgumentError(
+                "Invalid input type".to_string(),
+            ))
+            .map_err(|err| DataFusionError::Execution(format!("Cast error: {}", err))),
+        };
+        result
     }
 }
 
@@ -220,18 +167,19 @@ mod test {
 
     #[tokio::test]
     async fn test_to_iso8601() -> Result<()> {
-        // test_expression!(
-        //     "age(timestamp '2001-04-10', timestamp '2001-04-11')",
-        //     "0 years 0 mons -1 days 0 hours 0 mins 0.000 secs"
-        // );
-        // Test cases for different input types
-        test_expression!("to_iso8601(Date '2023-03-15')", "2023-03-15"); // Date
-        test_expression!("to_iso8601(timestamp '2023-03-15T12:45:30')", "'2023-03-15T12:45:30'"); // Timestamp
+        //Test cases for different input types
+        // Date
+        test_expression!("to_iso8601(Date '2023-03-15')", "2023-03-15");
+        // Timestamp
         test_expression!(
-            "to_iso8601(timestamp '2023-03-15T12:45:30+02:00')",
-            "'2023-03-15T12:45:30+02:00'"
-        ); // Timestamp with TimeZone
-
+            "to_iso8601( timestamp '2001-04-13T02:00:00')",
+            "2001-04-13T02:00:00.000"
+        );
+        //TIMESTAMP '2020-06-10 15:55:23.383345'
+        test_expression!(
+            "to_iso8601( timestamp '2020-06-10 15:55:23.383345')",
+            "2020-06-10T15:55:23.383"
+        );
         Ok(())
     }
 }
