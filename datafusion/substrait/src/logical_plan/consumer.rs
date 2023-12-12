@@ -1040,21 +1040,22 @@ pub async fn from_substrait_rex(
                 SubqueryType::InPredicate(in_predicate) => {
                     if in_predicate.needles.len() != 1 {
                         Err(DataFusionError::Substrait(
-                            "InSubquery must have exactly one expression on LHS"
+                            "InPredicate Subquery type must have exactly one Needle expression"
                                 .to_string(),
                         ))
                     } else {
-                        let lhs_expr = &in_predicate.needles[0];
-                        let rhs_expr = &in_predicate.haystack;
-                        if let Some(rhs_expr) = rhs_expr {
-                            let rhs_expr =
-                                from_substrait_rel(ctx, rhs_expr, extensions).await?;
-                            let outer_refs = rhs_expr.all_out_ref_exprs();
+                        let needle_expr = &in_predicate.needles[0];
+                        let haystack_expr = &in_predicate.haystack;
+                        if let Some(haystack_expr) = haystack_expr {
+                            let haystack_expr =
+                                from_substrait_rel(ctx, haystack_expr, extensions)
+                                    .await?;
+                            let outer_refs = haystack_expr.all_out_ref_exprs();
                             Ok(Arc::new(Expr::InSubquery(InSubquery {
                                 expr: Box::new(
                                     from_substrait_rex(
                                         ctx,
-                                        lhs_expr,
+                                        needle_expr,
                                         input_schema,
                                         extensions,
                                     )
@@ -1063,20 +1064,20 @@ pub async fn from_substrait_rex(
                                     .clone(),
                                 ),
                                 subquery: Subquery {
-                                    subquery: Arc::new(rhs_expr),
+                                    subquery: Arc::new(haystack_expr),
                                     outer_ref_columns: outer_refs,
                                 },
                                 negated: false,
                             })))
                         } else {
                             Err(DataFusionError::Substrait(
-                                "Haystack expression cannot be empty".to_string(),
+                                "InPredicate Subquery type must have a Haystack expression".to_string(),
                             ))
                         }
                     }
                 }
                 _ => Err(DataFusionError::Substrait(
-                    "InSubquery expression type not implemented".to_string(),
+                    "Subquery type not implemented".to_string(),
                 )),
             },
             None => Err(DataFusionError::Substrait(
