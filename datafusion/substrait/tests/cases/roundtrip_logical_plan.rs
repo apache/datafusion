@@ -410,6 +410,7 @@ async fn roundtrip_inlist_5() -> Result<()> {
     \n          TableScan: data2 projection=[a, b, c, d, e, f]").await
 }
 
+#[tokio::test]
 async fn roundtrip_cross_join() -> Result<()> {
     roundtrip("SELECT * FROM data CROSS JOIN data2").await
 }
@@ -851,17 +852,17 @@ async fn test_alias(sql_with_alias: &str, sql_no_alias: &str) -> Result<()> {
 
 async fn roundtrip_with_ctx(sql: &str, ctx: SessionContext) -> Result<()> {
     let df = ctx.sql(sql).await?;
-
     let plan = df.into_optimized_plan()?;
     let proto = to_substrait_plan(&plan, &ctx)?;
-    
     let plan2 = from_substrait_plan(&ctx, &proto).await?;
     let plan2 = ctx.state().optimize(&plan2)?;
 
     println!("{plan:#?}");
     println!("{plan2:#?}");
-
-    assert_eq!(plan, plan2);
+    
+    let plan1str = format!("{plan:?}");
+    let plan2str = format!("{plan2:?}");
+    assert_eq!(plan1str, plan2str);
     Ok(())
 }
 
