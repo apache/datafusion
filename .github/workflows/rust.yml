@@ -68,6 +68,9 @@ jobs:
       - name: Check workspace without default features
         run: cargo check --no-default-features -p datafusion
 
+      - name: Check datafusion-common without default features
+        run: cargo check --tests --no-default-features -p datafusion-common
+
       - name: Check workspace in debug mode
         run: cargo check
 
