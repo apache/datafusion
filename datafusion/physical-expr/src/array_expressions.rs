@@ -2138,7 +2138,7 @@ pub fn general_array_distinct<OffsetSize: OffsetSizeTrait>(
     let mut offsets = Vec::with_capacity(array.len());
     offsets.push(OffsetSize::usize_as(0));
     let mut new_arrays = Vec::with_capacity(array.len());
-    let converter = RowConverter::new(vec![SortField::new(dt.clone())])?;
+    let converter = RowConverter::new(vec![SortField::new(dt)])?;
     // distinct for each list in ListArray
     for arr in array.iter().flatten() {
         let values = converter.convert_columns(&[arr])?;
