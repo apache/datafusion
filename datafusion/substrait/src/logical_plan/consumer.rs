@@ -1023,17 +1023,16 @@ pub async fn from_substrait_rex(
                     } else {
                         let lhs_expr = &in_predicate.needles[0];
                         let rhs_expr = &in_predicate.haystack;
-
                         if let Some(rhs_expr) = rhs_expr {
                             let rhs_expr = from_substrait_rel(&ctx, rhs_expr, extensions).await?;
-
-                            Ok(Arc::new(Expr::InSubquery(InSubquery {
-                                expr: Box::new(from_substrait_rex(ctx, lhs_expr, input_schema, extensions).await?.as_ref().clone()),
-                                subquery: Subquery {subquery: Arc::new(rhs_expr), outer_ref_columns: vec![]},
+                            let outer_refs= rhs_expr.all_out_ref_exprs();
+                             Ok(Arc::new(Expr::InSubquery(InSubquery {
+                                expr: Box::new(from_substrait_rex(&ctx, lhs_expr, input_schema, extensions).await?.as_ref().clone()),
+                                subquery: Subquery {subquery: Arc::new(rhs_expr), outer_ref_columns: outer_refs},
                                 negated: false
                             })))
                         } else {
-                            Err(DataFusionError::Substrait("InSubquery expression rhs must not be empty".to_string()))
+                            Err(DataFusionError::Substrait("Haystack expression cannot be empty".to_string()))
                         }                     
                     }
                     }, 

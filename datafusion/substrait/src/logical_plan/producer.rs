@@ -1134,9 +1134,11 @@ pub fn to_substrait_rex(
             negated,
         }) => {
             let substrait_expr =
-                to_substrait_rex(ctx, expr, schema, col_ref_offset, extension_info)?;
+                to_substrait_rex(&ctx, expr, schema, col_ref_offset, extension_info)?;
+
             let subquery_plan =
                 to_substrait_rel(subquery.subquery.as_ref(), &ctx, extension_info)?;
+
             let substrait_subquery = Expression {
                 rex_type: Some(RexType::Subquery(Box::new(Subquery {
                     subquery_type: Some(
