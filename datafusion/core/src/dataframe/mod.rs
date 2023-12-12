@@ -2641,6 +2641,17 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_cache_mismatch() -> Result<()> {
+        let ctx = SessionContext::new();
+        let df = ctx
+            .sql("SELECT CASE WHEN true THEN NULL ELSE 1 END")
+            .await?;
+        let cache_df = df.cache().await;
+        assert!(cache_df.is_ok());
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn cache_test() -> Result<()> {
         let df = test_table()
             .await?
