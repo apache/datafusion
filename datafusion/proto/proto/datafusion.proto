@@ -216,6 +216,7 @@ message CreateExternalTableNode {
   bool unbounded = 14;
   map<string, string> options = 11;
   Constraints constraints = 15;
+  map<string, LogicalExprNode> column_defaults = 16;
 }
 
 message PrepareNode {
@@ -642,6 +643,9 @@ enum ScalarFunction {
   ArrayPopFront = 124;
   Levenshtein = 125;
   SubstrIndex = 126;
+  FindInSet = 127;
+  ArraySort = 128;
+  ArrayDistinct = 129;
 }
 
 message ScalarFunctionNode {
@@ -837,6 +841,8 @@ message Field {
   // for complex data types like structs, unions
   repeated Field children = 4;
   map<string, string> metadata = 5;
+  int64 dict_id = 6;
+  bool dict_ordered = 7;
 }
 
 message FixedSizeBinary{
@@ -1158,6 +1164,8 @@ message PhysicalPlanNode {
     AnalyzeExecNode analyze = 23;
     JsonSinkExecNode json_sink = 24;
     SymmetricHashJoinExecNode symmetric_hash_join = 25;
+    InterleaveExecNode  interleave = 26;
+    PlaceholderRowExecNode placeholder_row = 27;
   }
 }
 
@@ -1367,6 +1375,7 @@ message PhysicalNegativeNode {
 message FilterExecNode {
   PhysicalPlanNode input = 1;
   PhysicalExprNode expr = 2;
+  uint32 default_filter_selectivity = 3;
 }
 
 message FileGroup {
@@ -1450,6 +1459,10 @@ message SymmetricHashJoinExecNode {
   JoinFilter filter = 8;
 }
 
+message InterleaveExecNode {
+  repeated PhysicalPlanNode inputs = 1;
+}
+
 message UnionExecNode {
   repeated PhysicalPlanNode inputs = 1;
 }
@@ -1483,8 +1496,11 @@ message JoinOn {
 }
 
 message EmptyExecNode {
-  bool produce_one_row = 1;
-  Schema schema = 2;
+  Schema schema = 1;
+}
+
+message PlaceholderRowExecNode {
+  Schema schema = 1;
 }
 
 message ProjectionExecNode {
@@ -1501,7 +1517,7 @@ enum AggregateMode {
   SINGLE_PARTITIONED = 4;
 }
 
-message PartiallySortedPartitionSearchMode {
+message PartiallySortedInputOrderMode {
   repeated uint64 columns = 6;
 }
 
@@ -1510,9 +1526,9 @@ message WindowAggExecNode {
   repeated PhysicalWindowExprNode window_expr = 2;
   repeated PhysicalExprNode partition_keys = 5;
   // Set optional to `None` for `BoundedWindowAggExec`.
-  oneof partition_search_mode {
+  oneof input_order_mode {
     EmptyMessage linear = 7;
-    PartiallySortedPartitionSearchMode partially_sorted = 8;
+    PartiallySortedInputOrderMode partially_sorted = 8;
     EmptyMessage sorted = 9;
   }
 }

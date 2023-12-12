@@ -15,25 +15,25 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::{
-    array::ArrayRef,
-    datatypes::{DataType, Schema},
-};
+use arrow::{array::ArrayRef, datatypes::Schema};
+use arrow_schema::FieldRef;
 use datafusion_common::tree_node::{TreeNode, VisitRecursion};
 use datafusion_common::{Column, DataFusionError, Result, ScalarValue};
+use parquet::file::metadata::ColumnChunkMetaData;
+use parquet::schema::types::SchemaDescriptor;
 use parquet::{
     arrow::{async_reader::AsyncFileReader, ParquetRecordBatchStreamBuilder},
     bloom_filter::Sbbf,
-    file::{metadata::RowGroupMetaData, statistics::Statistics as ParquetStatistics},
+    file::metadata::RowGroupMetaData,
 };
 use std::{
     collections::{HashMap, HashSet},
     sync::Arc,
 };
 
-use crate::datasource::{
-    listing::FileRange,
-    physical_plan::parquet::{from_bytes_to_i128, parquet_to_arrow_decimal_type},
+use crate::datasource::listing::FileRange;
+use crate::datasource::physical_plan::parquet::statistics::{
+    max_statistics, min_statistics, parquet_column,
 };
 use crate::logical_expr::Operator;
 use crate::physical_expr::expressions as phys_expr;
@@ -51,7 +51,11 @@ use super::ParquetFileMetrics;
 ///
 /// If an index IS present in the returned Vec it means the predicate
 /// did not filter out that row group.
+///
+/// Note: This method currently ignores ColumnOrder
+/// <https://github.com/apache/arrow-datafusion/issues/8335>
 pub(crate) fn prune_row_groups_by_statistics(
+    parquet_schema: &SchemaDescriptor,
     groups: &[RowGroupMetaData],
     range: Option<FileRange>,
     predicate: Option<&PruningPredicate>,
@@ -74,8 +78,9 @@ pub(crate) fn prune_row_groups_by_statistics(
 
         if let Some(predicate) = predicate {
             let pruning_stats = RowGroupPruningStatistics {
+                parquet_schema,
                 row_group_metadata: metadata,
-                parquet_schema: predicate.schema().as_ref(),
+                arrow_schema: predicate.schema().as_ref(),
             };
             match predicate.prune(&pruning_stats) {
                 Ok(values) => {
@@ -296,146 +301,33 @@ impl BloomFilterPruningPredicate {
     }
 }
 
-/// Wraps parquet statistics in a way
-/// that implements [`PruningStatistics`]
+/// Wraps [`RowGroupMetaData`] in a way that implements [`PruningStatistics`]
+///
+/// Note: This should be implemented for an array of [`RowGroupMetaData`] instead
+/// of per row-group
 struct RowGroupPruningStatistics<'a> {
+    parquet_schema: &'a SchemaDescriptor,
     row_group_metadata: &'a RowGroupMetaData,
-    parquet_schema: &'a Schema,
+    arrow_schema: &'a Schema,
 }
 
-/// Extract the min/max statistics from a `ParquetStatistics` object
-macro_rules! get_statistic {
-    ($column_statistics:expr, $func:ident, $bytes_func:ident, $target_arrow_type:expr) => {{
-        if !$column_statistics.has_min_max_set() {
-            return None;
-        }
-        match $column_statistics {
-            ParquetStatistics::Boolean(s) => Some(ScalarValue::Boolean(Some(*s.$func()))),
-            ParquetStatistics::Int32(s) => {
-                match $target_arrow_type {
-                    // int32 to decimal with the precision and scale
-                    Some(DataType::Decimal128(precision, scale)) => {
-                        Some(ScalarValue::Decimal128(
-                            Some(*s.$func() as i128),
-                            precision,
-                            scale,
-                        ))
-                    }
-                    _ => Some(ScalarValue::Int32(Some(*s.$func()))),
-                }
-            }
-            ParquetStatistics::Int64(s) => {
-                match $target_arrow_type {
-                    // int64 to decimal with the precision and scale
-                    Some(DataType::Decimal128(precision, scale)) => {
-                        Some(ScalarValue::Decimal128(
-                            Some(*s.$func() as i128),
-                            precision,
-                            scale,
-                        ))
-                    }
-                    _ => Some(ScalarValue::Int64(Some(*s.$func()))),
-                }
-            }
-            // 96 bit ints not supported
-            ParquetStatistics::Int96(_) => None,
-            ParquetStatistics::Float(s) => Some(ScalarValue::Float32(Some(*s.$func()))),
-            ParquetStatistics::Double(s) => Some(ScalarValue::Float64(Some(*s.$func()))),
-            ParquetStatistics::ByteArray(s) => {
-                match $target_arrow_type {
-                    // decimal data type
-                    Some(DataType::Decimal128(precision, scale)) => {
-                        Some(ScalarValue::Decimal128(
-                            Some(from_bytes_to_i128(s.$bytes_func())),
-                            precision,
-                            scale,
-                        ))
-                    }
-                    _ => {
-                        let s = std::str::from_utf8(s.$bytes_func())
-                            .map(|s| s.to_string())
-                            .ok();
-                        Some(ScalarValue::Utf8(s))
-                    }
-                }
-            }
-            // type not supported yet
-            ParquetStatistics::FixedLenByteArray(s) => {
-                match $target_arrow_type {
-                    // just support the decimal data type
-                    Some(DataType::Decimal128(precision, scale)) => {
-                        Some(ScalarValue::Decimal128(
-                            Some(from_bytes_to_i128(s.$bytes_func())),
-                            precision,
-                            scale,
-                        ))
-                    }
-                    _ => None,
-                }
-            }
-        }
-    }};
-}
-
-// Extract the min or max value calling `func` or `bytes_func` on the ParquetStatistics as appropriate
-macro_rules! get_min_max_values {
-    ($self:expr, $column:expr, $func:ident, $bytes_func:ident) => {{
-        let (_column_index, field) =
-            if let Some((v, f)) = $self.parquet_schema.column_with_name(&$column.name) {
-                (v, f)
-            } else {
-                // Named column was not present
-                return None;
-            };
-
-        let data_type = field.data_type();
-        // The result may be None, because DataFusion doesn't have support for ScalarValues of the column type
-        let null_scalar: ScalarValue = data_type.try_into().ok()?;
-
-        $self.row_group_metadata
-            .columns()
-            .iter()
-            .find(|c| c.column_descr().name() == &$column.name)
-            .and_then(|c| if c.statistics().is_some() {Some((c.statistics().unwrap(), c.column_descr()))} else {None})
-            .map(|(stats, column_descr)|
-                {
-                    let target_data_type = parquet_to_arrow_decimal_type(column_descr);
-                    get_statistic!(stats, $func, $bytes_func, target_data_type)
-                })
-            .flatten()
-            // column either didn't have statistics at all or didn't have min/max values
-            .or_else(|| Some(null_scalar.clone()))
-            .and_then(|s| s.to_array().ok())
-    }}
-}
-
-// Extract the null count value on the ParquetStatistics
-macro_rules! get_null_count_values {
-    ($self:expr, $column:expr) => {{
-        let value = ScalarValue::UInt64(
-            if let Some(col) = $self
-                .row_group_metadata
-                .columns()
-                .iter()
-                .find(|c| c.column_descr().name() == &$column.name)
-            {
-                col.statistics().map(|s| s.null_count())
-            } else {
-                Some($self.row_group_metadata.num_rows() as u64)
-            },
-        );
-
-        value.to_array().ok()
-    }};
+impl<'a> RowGroupPruningStatistics<'a> {
+    /// Lookups up the parquet column by name
+    fn column(&self, name: &str) -> Option<(&ColumnChunkMetaData, &FieldRef)> {
+        let (idx, field) = parquet_column(self.parquet_schema, self.arrow_schema, name)?;
+        Some((self.row_group_metadata.column(idx), field))
+    }
 }
 
 impl<'a> PruningStatistics for RowGroupPruningStatistics<'a> {
     fn min_values(&self, column: &Column) -> Option<ArrayRef> {
-        get_min_max_values!(self, column, min, min_bytes)
+        let (column, field) = self.column(&column.name)?;
+        min_statistics(field.data_type(), std::iter::once(column.statistics())).ok()
     }
 
     fn max_values(&self, column: &Column) -> Option<ArrayRef> {
-        get_min_max_values!(self, column, max, max_bytes)
+        let (column, field) = self.column(&column.name)?;
+        max_statistics(field.data_type(), std::iter::once(column.statistics())).ok()
     }
 
     fn num_containers(&self) -> usize {
@@ -443,7 +335,9 @@ impl<'a> PruningStatistics for RowGroupPruningStatistics<'a> {
     }
 
     fn null_counts(&self, column: &Column) -> Option<ArrayRef> {
-        get_null_count_values!(self, column)
+        let (c, _) = self.column(&column.name)?;
+        let scalar = ScalarValue::UInt64(Some(c.statistics()?.null_count()));
+        scalar.to_array().ok()
     }
 }
 
@@ -456,6 +350,7 @@ mod tests {
     use arrow::datatypes::Schema;
     use arrow::datatypes::{DataType, Field};
     use datafusion_common::{config::ConfigOptions, TableReference, ToDFSchema};
+    use datafusion_common::{DataFusionError, Result};
     use datafusion_expr::{
         builder::LogicalTableSource, cast, col, lit, AggregateUDF, Expr, ScalarUDF,
         TableSource, WindowUDF,
@@ -463,6 +358,7 @@ mod tests {
     use datafusion_physical_expr::execution_props::ExecutionProps;
     use datafusion_physical_expr::{create_physical_expr, PhysicalExpr};
     use datafusion_sql::planner::ContextProvider;
+    use parquet::arrow::arrow_to_parquet_schema;
     use parquet::arrow::async_reader::ParquetObjectReader;
     use parquet::basic::LogicalType;
     use parquet::data_type::{ByteArray, FixedLenByteArray};
@@ -540,6 +436,7 @@ mod tests {
         let metrics = parquet_file_metrics();
         assert_eq!(
             prune_row_groups_by_statistics(
+                &schema_descr,
                 &[rgm1, rgm2],
                 None,
                 Some(&pruning_predicate),
@@ -574,6 +471,7 @@ mod tests {
         // is null / undefined so the first row group can't be filtered out
         assert_eq!(
             prune_row_groups_by_statistics(
+                &schema_descr,
                 &[rgm1, rgm2],
                 None,
                 Some(&pruning_predicate),
@@ -621,6 +519,7 @@ mod tests {
         // when conditions are joined using AND
         assert_eq!(
             prune_row_groups_by_statistics(
+                &schema_descr,
                 groups,
                 None,
                 Some(&pruning_predicate),
@@ -639,6 +538,7 @@ mod tests {
         // this bypasses the entire predicate expression and no row groups are filtered out
         assert_eq!(
             prune_row_groups_by_statistics(
+                &schema_descr,
                 groups,
                 None,
                 Some(&pruning_predicate),
@@ -678,6 +578,7 @@ mod tests {
             Field::new("c1", DataType::Int32, false),
             Field::new("c2", DataType::Boolean, false),
         ]));
+        let schema_descr = arrow_to_parquet_schema(&schema).unwrap();
         let expr = col("c1").gt(lit(15)).and(col("c2").is_null());
         let expr = logical2physical(&expr, &schema);
         let pruning_predicate = PruningPredicate::try_new(expr, schema).unwrap();
@@ -687,6 +588,7 @@ mod tests {
         // First row group was filtered out because it contains no null value on "c2".
         assert_eq!(
             prune_row_groups_by_statistics(
+                &schema_descr,
                 &groups,
                 None,
                 Some(&pruning_predicate),
@@ -706,6 +608,7 @@ mod tests {
             Field::new("c1", DataType::Int32, false),
             Field::new("c2", DataType::Boolean, false),
         ]));
+        let schema_descr = arrow_to_parquet_schema(&schema).unwrap();
         let expr = col("c1")
             .gt(lit(15))
             .and(col("c2").eq(lit(ScalarValue::Boolean(None))));
@@ -718,6 +621,7 @@ mod tests {
         // pass predicates. Ideally these should both be false
         assert_eq!(
             prune_row_groups_by_statistics(
+                &schema_descr,
                 &groups,
                 None,
                 Some(&pruning_predicate),
@@ -776,6 +680,7 @@ mod tests {
         let metrics = parquet_file_metrics();
         assert_eq!(
             prune_row_groups_by_statistics(
+                &schema_descr,
                 &[rgm1, rgm2, rgm3],
                 None,
                 Some(&pruning_predicate),
@@ -839,6 +744,7 @@ mod tests {
         let metrics = parquet_file_metrics();
         assert_eq!(
             prune_row_groups_by_statistics(
+                &schema_descr,
                 &[rgm1, rgm2, rgm3, rgm4],
                 None,
                 Some(&pruning_predicate),
@@ -886,6 +792,7 @@ mod tests {
         let metrics = parquet_file_metrics();
         assert_eq!(
             prune_row_groups_by_statistics(
+                &schema_descr,
                 &[rgm1, rgm2, rgm3],
                 None,
                 Some(&pruning_predicate),
@@ -956,6 +863,7 @@ mod tests {
         let metrics = parquet_file_metrics();
         assert_eq!(
             prune_row_groups_by_statistics(
+                &schema_descr,
                 &[rgm1, rgm2, rgm3],
                 None,
                 Some(&pruning_predicate),
@@ -1015,6 +923,7 @@ mod tests {
         let metrics = parquet_file_metrics();
         assert_eq!(
             prune_row_groups_by_statistics(
+                &schema_descr,
                 &[rgm1, rgm2, rgm3],
                 None,
                 Some(&pruning_predicate),
@@ -1028,7 +937,6 @@ mod tests {
         schema_descr: &SchemaDescPtr,
         column_statistics: Vec<ParquetStatistics>,
     ) -> RowGroupMetaData {
-        use parquet::file::metadata::ColumnChunkMetaData;
         let mut columns = vec![];
         for (i, s) in column_statistics.iter().enumerate() {
             let column = ColumnChunkMetaData::builder(schema_descr.column(i))
@@ -1046,7 +954,7 @@ mod tests {
     }
 
     fn get_test_schema_descr(fields: Vec<PrimitiveTypeField>) -> SchemaDescPtr {
-        use parquet::schema::types::{SchemaDescriptor, Type as SchemaType};
+        use parquet::schema::types::Type as SchemaType;
         let schema_fields = fields
             .iter()
             .map(|field| {
@@ -1087,6 +995,26 @@ mod tests {
         create_physical_expr(expr, &df_schema, schema, &execution_props).unwrap()
     }
 
+    // Note the values in the `String` column are:
+    // ❯ select * from './parquet-testing/data/data_index_bloom_encoding_stats.parquet';
+    // +-----------+
+    // | String    |
+    // +-----------+
+    // | Hello     |
+    // | This is   |
+    // | a         |
+    // | test      |
+    // | How       |
+    // | are you   |
+    // | doing     |
+    // | today     |
+    // | the quick |
+    // | brown fox |
+    // | jumps     |
+    // | over      |
+    // | the lazy  |
+    // | dog       |
+    // +-----------+
     #[tokio::test]
     async fn test_row_group_bloom_filter_pruning_predicate_simple_expr() {
         // load parquet file
@@ -1095,7 +1023,7 @@ mod tests {
         let path = format!("{testdata}/{file_name}");
         let data = bytes::Bytes::from(std::fs::read(path).unwrap());
 
-        // generate pruning predicate
+        // generate pruning predicate `(String = "Hello_Not_exists")`
         let schema = Schema::new(vec![Field::new("String", DataType::Utf8, false)]);
         let expr = col(r#""String""#).eq(lit("Hello_Not_Exists"));
         let expr = logical2physical(&expr, &schema);
@@ -1122,7 +1050,7 @@ mod tests {
         let path = format!("{testdata}/{file_name}");
         let data = bytes::Bytes::from(std::fs::read(path).unwrap());
 
-        // generate pruning predicate
+        // generate pruning predicate `(String = "Hello_Not_exists" OR String = "Hello_Not_exists2")`
         let schema = Schema::new(vec![Field::new("String", DataType::Utf8, false)]);
         let expr = lit("1").eq(lit("1")).and(
             col(r#""String""#)
@@ -1184,9 +1112,97 @@ mod tests {
         let path = format!("{testdata}/{file_name}");
         let data = bytes::Bytes::from(std::fs::read(path).unwrap());
 
-        // generate pruning predicate
+        // generate pruning predicate `(String = "Hello")`
         let schema = Schema::new(vec![Field::new("String", DataType::Utf8, false)]);
         let expr = col(r#""String""#).eq(lit("Hello"));
+        let expr = logical2physical(&expr, &schema);
+        let pruning_predicate =
+            PruningPredicate::try_new(expr, Arc::new(schema)).unwrap();
+
+        let row_groups = vec![0];
+        let pruned_row_groups = test_row_group_bloom_filter_pruning_predicate(
+            file_name,
+            data,
+            &pruning_predicate,
+            &row_groups,
+        )
+        .await
+        .unwrap();
+        assert_eq!(pruned_row_groups, row_groups);
+    }
+
+    #[tokio::test]
+    async fn test_row_group_bloom_filter_pruning_predicate_with_exists_2_values() {
+        // load parquet file
+        let testdata = datafusion_common::test_util::parquet_test_data();
+        let file_name = "data_index_bloom_encoding_stats.parquet";
+        let path = format!("{testdata}/{file_name}");
+        let data = bytes::Bytes::from(std::fs::read(path).unwrap());
+
+        // generate pruning predicate `(String = "Hello") OR (String = "the quick")`
+        let schema = Schema::new(vec![Field::new("String", DataType::Utf8, false)]);
+        let expr = col(r#""String""#)
+            .eq(lit("Hello"))
+            .or(col(r#""String""#).eq(lit("the quick")));
+        let expr = logical2physical(&expr, &schema);
+        let pruning_predicate =
+            PruningPredicate::try_new(expr, Arc::new(schema)).unwrap();
+
+        let row_groups = vec![0];
+        let pruned_row_groups = test_row_group_bloom_filter_pruning_predicate(
+            file_name,
+            data,
+            &pruning_predicate,
+            &row_groups,
+        )
+        .await
+        .unwrap();
+        assert_eq!(pruned_row_groups, row_groups);
+    }
+
+    #[tokio::test]
+    async fn test_row_group_bloom_filter_pruning_predicate_with_exists_3_values() {
+        // load parquet file
+        let testdata = datafusion_common::test_util::parquet_test_data();
+        let file_name = "data_index_bloom_encoding_stats.parquet";
+        let path = format!("{testdata}/{file_name}");
+        let data = bytes::Bytes::from(std::fs::read(path).unwrap());
+
+        // generate pruning predicate `(String = "Hello") OR (String = "the quick") OR (String = "are you")`
+        let schema = Schema::new(vec![Field::new("String", DataType::Utf8, false)]);
+        let expr = col(r#""String""#)
+            .eq(lit("Hello"))
+            .or(col(r#""String""#).eq(lit("the quick")))
+            .or(col(r#""String""#).eq(lit("are you")));
+        let expr = logical2physical(&expr, &schema);
+        let pruning_predicate =
+            PruningPredicate::try_new(expr, Arc::new(schema)).unwrap();
+
+        let row_groups = vec![0];
+        let pruned_row_groups = test_row_group_bloom_filter_pruning_predicate(
+            file_name,
+            data,
+            &pruning_predicate,
+            &row_groups,
+        )
+        .await
+        .unwrap();
+        assert_eq!(pruned_row_groups, row_groups);
+    }
+
+    #[tokio::test]
+    async fn test_row_group_bloom_filter_pruning_predicate_with_or_not_eq() {
+        // load parquet file
+        let testdata = datafusion_common::test_util::parquet_test_data();
+        let file_name = "data_index_bloom_encoding_stats.parquet";
+        let path = format!("{testdata}/{file_name}");
+        let data = bytes::Bytes::from(std::fs::read(path).unwrap());
+
+        // generate pruning predicate `(String = "foo") OR (String != "bar")`
+        let schema = Schema::new(vec![Field::new("String", DataType::Utf8, false)]);
+        let expr = col(r#""String""#)
+            .not_eq(lit("foo"))
+            .or(col(r#""String""#).not_eq(lit("bar")));
         let expr = logical2physical(&expr, &schema);
         let pruning_predicate =
             PruningPredicate::try_new(expr, Arc::new(schema)).unwrap();
@@ -1211,7 +1227,7 @@ mod tests {
         let path = format!("{testdata}/{file_name}");
         let data = bytes::Bytes::from(std::fs::read(path).unwrap());
 
-        // generate pruning predicate
+        // generate pruning predicate on a column without a bloom filter
         let schema = Schema::new(vec![Field::new("string_col", DataType::Utf8, false)]);
         let expr = col(r#""string_col""#).eq(lit("0"));
         let expr = logical2physical(&expr, &schema);

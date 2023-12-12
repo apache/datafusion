@@ -140,8 +140,7 @@ impl PhysicalExpr for CastExpr {
         let mut s = state;
         self.expr.hash(&mut s);
         self.cast_type.hash(&mut s);
-        // Add `self.cast_options` when hash is available
-        // https://github.com/apache/arrow-rs/pull/4395
+        self.cast_options.hash(&mut s);
     }
 
     /// A [`CastExpr`] preserves the ordering of its child.
@@ -157,8 +156,7 @@ impl PartialEq<dyn Any> for CastExpr {
             .map(|x| {
                 self.expr.eq(&x.expr)
                     && self.cast_type == x.cast_type
-                    // TODO: Use https://github.com/apache/arrow-rs/issues/2966 when available
-                    && self.cast_options.safe == x.cast_options.safe
+                    && self.cast_options == x.cast_options
             })
             .unwrap_or(false)
     }
@@ -176,7 +174,20 @@ pub fn cast_column(
             kernels::cast::cast_with_options(array, cast_type, &cast_options)?,
         )),
         ColumnarValue::Scalar(scalar) => {
-            let scalar_array = scalar.to_array()?;
+            let scalar_array = if cast_type
+                == &DataType::Timestamp(arrow_schema::TimeUnit::Nanosecond, None)
+            {
+                if let ScalarValue::Float64(Some(float_ts)) = scalar {
+                    ScalarValue::Int64(
+                        Some((float_ts * 1_000_000_000_f64).trunc() as i64),
+                    )
+                    .to_array()?
+                } else {
+                    scalar.to_array()?
+                }
+            } else {
+                scalar.to_array()?
+            };
             let cast_array = kernels::cast::cast_with_options(
                 &scalar_array,
                 cast_type,
@@ -201,7 +212,10 @@ pub fn cast_with_options(
     let expr_type = expr.data_type(input_schema)?;
     if expr_type == cast_type {
         Ok(expr.clone())
-    } else if can_cast_types(&expr_type, &cast_type) {
+    } else if can_cast_types(&expr_type, &cast_type)
+        || (expr_type == DataType::Float64
+            && cast_type == DataType::Timestamp(arrow_schema::TimeUnit::Nanosecond, None))
+    {
         Ok(Arc::new(CastExpr::new(expr, cast_type, cast_options)))
     } else {
         not_impl_err!("Unsupported CAST from {expr_type:?} to {cast_type:?}")

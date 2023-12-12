@@ -17,6 +17,10 @@
 
 //! Query optimizer traits
 
+use std::collections::HashSet;
+use std::sync::Arc;
+use std::time::Instant;
+
 use crate::common_subexpr_eliminate::CommonSubexprEliminate;
 use crate::decorrelate_predicate_subquery::DecorrelatePredicateSubquery;
 use crate::eliminate_cross_join::EliminateCrossJoin;
@@ -27,15 +31,13 @@ use crate::eliminate_limit::EliminateLimit;
 use crate::eliminate_nested_union::EliminateNestedUnion;
 use crate::eliminate_one_union::EliminateOneUnion;
 use crate::eliminate_outer_join::EliminateOuterJoin;
-use crate::eliminate_project::EliminateProjection;
 use crate::extract_equijoin_predicate::ExtractEquijoinPredicate;
 use crate::filter_null_join_keys::FilterNullJoinKeys;
-use crate::merge_projection::MergeProjection;
+use crate::optimize_projections::OptimizeProjections;
 use crate::plan_signature::LogicalPlanSignature;
 use crate::propagate_empty_relation::PropagateEmptyRelation;
 use crate::push_down_filter::PushDownFilter;
 use crate::push_down_limit::PushDownLimit;
-use crate::push_down_projection::PushDownProjection;
 use crate::replace_distinct_aggregate::ReplaceDistinctWithAggregate;
 use crate::rewrite_disjunctive_predicate::RewriteDisjunctivePredicate;
 use crate::scalar_subquery_to_join::ScalarSubqueryToJoin;
@@ -43,15 +45,14 @@ use crate::simplify_expressions::SimplifyExpressions;
 use crate::single_distinct_to_groupby::SingleDistinctToGroupBy;
 use crate::unwrap_cast_in_comparison::UnwrapCastInComparison;
 use crate::utils::log_plan;
-use chrono::{DateTime, Utc};
+
 use datafusion_common::alias::AliasGenerator;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::logical_plan::LogicalPlan;
+
+use chrono::{DateTime, Utc};
 use log::{debug, warn};
-use std::collections::HashSet;
-use std::sync::Arc;
-use std::time::Instant;
 
 /// `OptimizerRule` transforms one [`LogicalPlan`] into another which
 /// computes the same results, but in a potentially more efficient
@@ -234,7 +235,6 @@ impl Optimizer {
             // run it again after running the optimizations that potentially converted
             // subqueries to joins
             Arc::new(SimplifyExpressions::new()),
-            Arc::new(MergeProjection::new()),
             Arc::new(RewriteDisjunctivePredicate::new()),
             Arc::new(EliminateDuplicatedExpr::new()),
             Arc::new(EliminateFilter::new()),
@@ -255,10 +255,7 @@ impl Optimizer {
             Arc::new(SimplifyExpressions::new()),
             Arc::new(UnwrapCastInComparison::new()),
             Arc::new(CommonSubexprEliminate::new()),
-            Arc::new(PushDownProjection::new()),
-            Arc::new(EliminateProjection::new()),
-            // PushDownProjection can pushdown Projections through Limits, do PushDownLimit again.
-            Arc::new(PushDownLimit::new()),
+            Arc::new(OptimizeProjections::new()),
         ];
 
         Self::with_rules(rules)
@@ -453,17 +450,18 @@ pub(crate) fn assert_schema_is_the_same(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{Arc, Mutex};
+
+    use super::ApplyOrder;
     use crate::optimizer::Optimizer;
     use crate::test::test_table_scan;
     use crate::{OptimizerConfig, OptimizerContext, OptimizerRule};
+
     use datafusion_common::{
         plan_err, DFField, DFSchema, DFSchemaRef, DataFusionError, Result,
     };
     use datafusion_expr::logical_plan::EmptyRelation;
     use datafusion_expr::{col, lit, LogicalPlan, LogicalPlanBuilder, Projection};
-    use std::sync::{Arc, Mutex};
-
-    use super::ApplyOrder;
 
     #[test]
     fn skip_failing_rule() {

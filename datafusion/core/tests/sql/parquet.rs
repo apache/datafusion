@@ -263,7 +263,7 @@ async fn parquet_list_columns() {
 
     assert_eq!(
         as_string_array(&utf8_list_array.value(0)).unwrap(),
-        &StringArray::try_from(vec![Some("abc"), Some("efg"), Some("hij"),]).unwrap()
+        &StringArray::from(vec![Some("abc"), Some("efg"), Some("hij"),])
     );
 
     assert_eq!(

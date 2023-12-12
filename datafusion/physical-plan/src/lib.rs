@@ -58,6 +58,8 @@ pub mod joins;
 pub mod limit;
 pub mod memory;
 pub mod metrics;
+mod ordering;
+pub mod placeholder_row;
 pub mod projection;
 pub mod repartition;
 pub mod sorts;
@@ -72,6 +74,7 @@ pub mod windows;
 
 pub use crate::display::{DefaultDisplay, DisplayAs, DisplayFormatType, VerboseDisplay};
 pub use crate::metrics::Metric;
+pub use crate::ordering::InputOrderMode;
 pub use crate::topk::TopK;
 pub use crate::visitor::{accept, visit_execution_plan, ExecutionPlanVisitor};
 
@@ -568,6 +571,13 @@ pub fn unbounded_output(plan: &Arc<dyn ExecutionPlan>) -> bool {
         .collect::<Vec<_>>();
     plan.unbounded_output(&children_unbounded_output)
         .unwrap_or(true)
+}
+
+/// Utility function yielding a string representation of the given [`ExecutionPlan`].
+pub fn get_plan_string(plan: &Arc<dyn ExecutionPlan>) -> Vec<String> {
+    let formatted = displayable(plan.as_ref()).indent(true).to_string();
+    let actual: Vec<&str> = formatted.trim().lines().collect();
+    actual.iter().map(|elem| elem.to_string()).collect()
 }
 
 #[cfg(test)]

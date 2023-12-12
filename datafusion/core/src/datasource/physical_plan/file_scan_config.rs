@@ -654,15 +654,9 @@ mod tests {
                 // file_batch is ok here because we kept all the file cols in the projection
                 file_batch,
                 &[
-                    wrap_partition_value_in_dict(ScalarValue::Utf8(Some(
-                        "2021".to_owned(),
-                    ))),
-                    wrap_partition_value_in_dict(ScalarValue::Utf8(Some(
-                        "10".to_owned(),
-                    ))),
-                    wrap_partition_value_in_dict(ScalarValue::Utf8(Some(
-                        "26".to_owned(),
-                    ))),
+                    wrap_partition_value_in_dict(ScalarValue::from("2021")),
+                    wrap_partition_value_in_dict(ScalarValue::from("10")),
+                    wrap_partition_value_in_dict(ScalarValue::from("26")),
                 ],
             )
             .expect("Projection of partition columns into record batch failed");
@@ -688,15 +682,9 @@ mod tests {
                 // file_batch is ok here because we kept all the file cols in the projection
                 file_batch,
                 &[
-                    wrap_partition_value_in_dict(ScalarValue::Utf8(Some(
-                        "2021".to_owned(),
-                    ))),
-                    wrap_partition_value_in_dict(ScalarValue::Utf8(Some(
-                        "10".to_owned(),
-                    ))),
-                    wrap_partition_value_in_dict(ScalarValue::Utf8(Some(
-                        "27".to_owned(),
-                    ))),
+                    wrap_partition_value_in_dict(ScalarValue::from("2021")),
+                    wrap_partition_value_in_dict(ScalarValue::from("10")),
+                    wrap_partition_value_in_dict(ScalarValue::from("27")),
                 ],
             )
             .expect("Projection of partition columns into record batch failed");
@@ -724,15 +712,9 @@ mod tests {
                 // file_batch is ok here because we kept all the file cols in the projection
                 file_batch,
                 &[
-                    wrap_partition_value_in_dict(ScalarValue::Utf8(Some(
-                        "2021".to_owned(),
-                    ))),
-                    wrap_partition_value_in_dict(ScalarValue::Utf8(Some(
-                        "10".to_owned(),
-                    ))),
-                    wrap_partition_value_in_dict(ScalarValue::Utf8(Some(
-                        "28".to_owned(),
-                    ))),
+                    wrap_partition_value_in_dict(ScalarValue::from("2021")),
+                    wrap_partition_value_in_dict(ScalarValue::from("10")),
+                    wrap_partition_value_in_dict(ScalarValue::from("28")),
                 ],
             )
             .expect("Projection of partition columns into record batch failed");
@@ -758,9 +740,9 @@ mod tests {
                 // file_batch is ok here because we kept all the file cols in the projection
                 file_batch,
                 &[
-                    ScalarValue::Utf8(Some("2021".to_owned())),
-                    ScalarValue::Utf8(Some("10".to_owned())),
-                    ScalarValue::Utf8(Some("26".to_owned())),
+                    ScalarValue::from("2021"),
+                    ScalarValue::from("10"),
+                    ScalarValue::from("26"),
                 ],
             )
             .expect("Projection of partition columns into record batch failed");

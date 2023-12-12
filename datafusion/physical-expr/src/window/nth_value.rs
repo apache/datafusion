@@ -15,21 +15,24 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Defines physical expressions for `first_value`, `last_value`, and `nth_value`
-//! that can evaluated at runtime during query execution
+//! Defines physical expressions for `FIRST_VALUE`, `LAST_VALUE`, and `NTH_VALUE`
+//! functions that can be evaluated at run time during query execution.
+
+use std::any::Any;
+use std::cmp::Ordering;
+use std::ops::Range;
+use std::sync::Arc;
 
 use crate::window::window_expr::{NthValueKind, NthValueState};
 use crate::window::BuiltInWindowFunctionExpr;
 use crate::PhysicalExpr;
+
 use arrow::array::{Array, ArrayRef};
 use arrow::datatypes::{DataType, Field};
 use datafusion_common::{exec_err, ScalarValue};
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::window_state::WindowAggState;
 use datafusion_expr::PartitionEvaluator;
-use std::any::Any;
-use std::ops::Range;
-use std::sync::Arc;
 
 /// nth_value expression
 #[derive(Debug)]
@@ -77,17 +80,17 @@ impl NthValue {
         n: u32,
     ) -> Result<Self> {
         match n {
-            0 => exec_err!("nth_value expect n to be > 0"),
+            0 => exec_err!("NTH_VALUE expects n to be non-zero"),
             _ => Ok(Self {
                 name: name.into(),
                 expr,
                 data_type,
-                kind: NthValueKind::Nth(n),
+                kind: NthValueKind::Nth(n as i64),
             }),
         }
     }
 
-    /// Get nth_value kind
+    /// Get the NTH_VALUE kind
     pub fn get_kind(&self) -> NthValueKind {
         self.kind
     }
@@ -125,7 +128,7 @@ impl BuiltInWindowFunctionExpr for NthValue {
         let reversed_kind = match self.kind {
             NthValueKind::First => NthValueKind::Last,
             NthValueKind::Last => NthValueKind::First,
-            NthValueKind::Nth(_) => return None,
+            NthValueKind::Nth(idx) => NthValueKind::Nth(-idx),
         };
         Some(Arc::new(Self {
             name: self.name.clone(),
@@ -143,16 +146,17 @@ pub(crate) struct NthValueEvaluator {
 }
 
 impl PartitionEvaluator for NthValueEvaluator {
-    /// When the window frame has a fixed beginning (e.g UNBOUNDED
-    /// PRECEDING), for some functions such as FIRST_VALUE, LAST_VALUE and
-    /// NTH_VALUE we can memoize result.  Once result is calculated it
-    /// will always stay same. Hence, we do not need to keep past data
-    /// as we process the entire dataset. This feature enables us to
-    /// prune rows from table. The default implementation does nothing
+    /// When the window frame has a fixed beginning (e.g UNBOUNDED PRECEDING),
+    /// for some functions such as FIRST_VALUE, LAST_VALUE and NTH_VALUE, we
+    /// can memoize the result.  Once result is calculated, it will always stay
+    /// same. Hence, we do not need to keep past data as we process the entire
+    /// dataset.
     fn memoize(&mut self, state: &mut WindowAggState) -> Result<()> {
         let out = &state.out_col;
         let size = out.len();
-        let (is_prunable, is_last) = match self.state.kind {
+        let mut buffer_size = 1;
+        // Decide if we arrived at a final result yet:
+        let (is_prunable, is_reverse_direction) = match self.state.kind {
             NthValueKind::First => {
                 let n_range =
                     state.window_frame_range.end - state.window_frame_range.start;
@@ -162,16 +166,30 @@ impl PartitionEvaluator for NthValueEvaluator {
             NthValueKind::Nth(n) => {
                 let n_range =
                     state.window_frame_range.end - state.window_frame_range.start;
-                (n_range >= (n as usize) && size >= (n as usize), false)
+                match n.cmp(&0) {
+                    Ordering::Greater => {
+                        (n_range >= (n as usize) && size > (n as usize), false)
+                    }
+                    Ordering::Less => {
+                        let reverse_index = (-n) as usize;
+                        buffer_size = reverse_index;
+                        // Negative index represents reverse direction.
+                        (n_range >= reverse_index, true)
+                    }
+                    Ordering::Equal => {
+                        // The case n = 0 is not valid for the NTH_VALUE function.
+                        unreachable!();
+                    }
+                }
             }
         };
         if is_prunable {
-            if self.state.finalized_result.is_none() && !is_last {
+            if self.state.finalized_result.is_none() && !is_reverse_direction {
                 let result = ScalarValue::try_from_array(out, size - 1)?;
                 self.state.finalized_result = Some(result);
             }
             state.window_frame_range.start =
-                state.window_frame_range.end.saturating_sub(1);
+                state.window_frame_range.end.saturating_sub(buffer_size);
         }
         Ok(())
     }
@@ -195,12 +213,33 @@ impl PartitionEvaluator for NthValueEvaluator {
                 NthValueKind::First => ScalarValue::try_from_array(arr, range.start),
                 NthValueKind::Last => ScalarValue::try_from_array(arr, range.end - 1),
                 NthValueKind::Nth(n) => {
-                    // We are certain that n > 0.
-                    let index = (n as usize) - 1;
-                    if index >= n_range {
-                        ScalarValue::try_from(arr.data_type())
-                    } else {
-                        ScalarValue::try_from_array(arr, range.start + index)
+                    match n.cmp(&0) {
+                        Ordering::Greater => {
+                            // SQL indices are not 0-based.
+                            let index = (n as usize) - 1;
+                            if index >= n_range {
+                                // Outside the range, return NULL:
+                                ScalarValue::try_from(arr.data_type())
+                            } else {
+                                ScalarValue::try_from_array(arr, range.start + index)
+                            }
+                        }
+                        Ordering::Less => {
+                            let reverse_index = (-n) as usize;
+                            if n_range >= reverse_index {
+                                ScalarValue::try_from_array(
+                                    arr,
+                                    range.start + n_range - reverse_index,
+                                )
+                            } else {
+                                // Outside the range, return NULL:
+                                ScalarValue::try_from(arr.data_type())
+                            }
+                        }
+                        Ordering::Equal => {
+                            // The case n = 0 is not valid for the NTH_VALUE function.
+                            unreachable!();
+                        }
                     }
                 }
             }

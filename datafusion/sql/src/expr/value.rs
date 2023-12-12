@@ -108,7 +108,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             }
             Ok(index) => index - 1,
             Err(_) => {
-                return plan_err!("Invalid placeholder, not a number: {param}");
+                return if param_data_types.is_empty() {
+                    Ok(Expr::Placeholder(Placeholder::new(param, None)))
+                } else {
+                    // when PREPARE Statement, param_data_types length is always 0
+                    plan_err!("Invalid placeholder, not a number: {param}")
+                };
             }
         };
         // Check if the placeholder is in the parameter list
@@ -144,7 +149,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     values.push(value);
                 }
                 Expr::ScalarFunction(ScalarFunction {
-                    func_def: ScalarFunctionDefinition::BuiltIn { fun, .. },
+                    func_def: ScalarFunctionDefinition::BuiltIn(fun),
                     ..
                 }) => {
                     if fun == BuiltinScalarFunction::MakeArray {
@@ -338,6 +343,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
 // TODO make interval parsing better in arrow-rs / expose `IntervalType`
 fn has_units(val: &str) -> bool {
+    let val = val.to_lowercase();
     val.ends_with("century")
         || val.ends_with("centuries")
         || val.ends_with("decade")

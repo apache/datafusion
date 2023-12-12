@@ -32,7 +32,7 @@ use datafusion::prelude::JoinType;
 use datafusion::sql::TableReference;
 use datafusion::{
     error::{DataFusionError, Result},
-    optimizer::utils::split_conjunction,
+    logical_expr::utils::split_conjunction,
     prelude::{Column, SessionContext},
     scalar::ScalarValue,
 };
@@ -435,6 +435,15 @@ pub async fn from_substrait_rel(
                 None => plan_err!("JoinRel without join condition is not allowed"),
             }
         }
+        Some(RelType::Cross(cross)) => {
+            let left: LogicalPlanBuilder = LogicalPlanBuilder::from(
+                from_substrait_rel(ctx, cross.left.as_ref().unwrap(), extensions).await?,
+            );
+            let right =
+                from_substrait_rel(ctx, cross.right.as_ref().unwrap(), extensions)
+                    .await?;
+            left.cross_join(right)?.build()
+        }
         Some(RelType::Read(read)) => match &read.as_ref().read_type {
             Some(ReadType::NamedTable(nt)) => {
                 let table_reference = match nt.names.len() {
@@ -696,21 +705,14 @@ pub async fn from_substrait_agg_func(
 
     // try udaf first, then built-in aggr fn.
     if let Ok(fun) = ctx.udaf(function_name) {
-        Ok(Arc::new(Expr::AggregateUDF(expr::AggregateUDF {
-            fun,
-            args,
-            filter,
-            order_by,
-        })))
+        Ok(Arc::new(Expr::AggregateFunction(
+            expr::AggregateFunction::new_udf(fun, args, distinct, filter, order_by),
+        )))
     } else if let Ok(fun) = aggregate_function::AggregateFunction::from_str(function_name)
     {
-        Ok(Arc::new(Expr::AggregateFunction(expr::AggregateFunction {
-            fun,
-            args,
-            distinct,
-            filter,
-            order_by,
-        })))
+        Ok(Arc::new(Expr::AggregateFunction(
+            expr::AggregateFunction::new(fun, args, distinct, filter, order_by),
+        )))
     } else {
         not_impl_err!(
             "Aggregated function {} is not supported: function anchor = {:?}",

@@ -107,12 +107,13 @@ impl AggregateUDF {
     /// This utility allows using the UDAF without requiring access to
     /// the registry, such as with the DataFrame API.
     pub fn call(&self, args: Vec<Expr>) -> Expr {
-        Expr::AggregateUDF(crate::expr::AggregateUDF {
-            fun: Arc::new(self.clone()),
+        Expr::AggregateFunction(crate::expr::AggregateFunction::new_udf(
+            Arc::new(self.clone()),
             args,
-            filter: None,
-            order_by: None,
-        })
+            false,
+            None,
+            None,
+        ))
     }
 
     /// Returns this function's name

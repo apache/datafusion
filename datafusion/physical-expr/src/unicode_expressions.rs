@@ -520,3 +520,42 @@ pub fn substr_index<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
 
     Ok(Arc::new(result) as ArrayRef)
 }
+
+///Returns a value in the range of 1 to N if the string str is in the string list strlist consisting of N substrings
+///A string list is a string composed of substrings separated by , characters.
+pub fn find_in_set<T: ArrowPrimitiveType>(args: &[ArrayRef]) -> Result<ArrayRef>
+where
+    T::Native: OffsetSizeTrait,
+{
+    if args.len() != 2 {
+        return internal_err!(
+            "find_in_set was called with {} arguments. It requires 2.",
+            args.len()
+        );
+    }
+
+    let str_array: &GenericStringArray<T::Native> =
+        as_generic_string_array::<T::Native>(&args[0])?;
+    let str_list_array: &GenericStringArray<T::Native> =
+        as_generic_string_array::<T::Native>(&args[1])?;
+
+    let result = str_array
+        .iter()
+        .zip(str_list_array.iter())
+        .map(|(string, str_list)| match (string, str_list) {
+            (Some(string), Some(str_list)) => {
+                let mut res = 0;
+                let str_set: Vec<&str> = str_list.split(',').collect();
+                for (idx, str) in str_set.iter().enumerate() {
+                    if str == &string {
+                        res = idx + 1;
+                        break;
+                    }
+                }
+                T::Native::from_usize(res)
+            }
+            _ => None,
+        })
+        .collect::<PrimitiveArray<T>>();
+    Ok(Arc::new(result) as ArrayRef)
+}

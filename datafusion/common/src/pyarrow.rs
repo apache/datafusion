@@ -119,7 +119,7 @@ mod tests {
             ScalarValue::Boolean(Some(true)),
             ScalarValue::Int32(Some(23)),
             ScalarValue::Float64(Some(12.34)),
-            ScalarValue::Utf8(Some("Hello!".to_string())),
+            ScalarValue::from("Hello!"),
             ScalarValue::Date32(Some(1234)),
         ];
 
