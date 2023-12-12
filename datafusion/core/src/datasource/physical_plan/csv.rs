@@ -193,6 +193,7 @@ impl ExecutionPlan for CsvExec {
 
         let repartitioned_file_groups_option = FileGroupPartitioner::new()
             .with_target_partitions(target_partitions)
+            .with_preserve_order_within_groups(self.output_ordering().is_some())
             .with_repartition_file_min_size(repartition_file_min_size)
             .repartition_file_groups(&self.base_config.file_groups);
 
