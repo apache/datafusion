@@ -509,9 +509,7 @@ pub async fn from_substrait_rel(
         },
         Some(RelType::ExtensionLeaf(extension)) => {
             let Some(ext_detail) = &extension.detail else {
-                return Err(DataFusionError::Substrait(
-                    "Unexpected empty detail in ExtensionLeafRel".to_string(),
-                ));
+                return substrait_err!("Unexpected empty detail in ExtensionLeafRel");
             };
             let plan = ctx
                 .state()
@@ -521,18 +519,16 @@ pub async fn from_substrait_rel(
         }
         Some(RelType::ExtensionSingle(extension)) => {
             let Some(ext_detail) = &extension.detail else {
-                return Err(DataFusionError::Substrait(
-                    "Unexpected empty detail in ExtensionSingleRel".to_string(),
-                ));
+                return substrait_err!("Unexpected empty detail in ExtensionSingleRel");
             };
             let plan = ctx
                 .state()
                 .serializer_registry()
                 .deserialize_logical_plan(&ext_detail.type_url, &ext_detail.value)?;
             let Some(input_rel) = &extension.input else {
-                return Err(DataFusionError::Substrait(
-                    "ExtensionSingleRel doesn't contains input rel. Try use ExtensionLeafRel instead".to_string()
-                ));
+                return substrait_err!(
+                    "ExtensionSingleRel doesn't contains input rel. Try use ExtensionLeafRel instead"
+                );
             };
             let input_plan = from_substrait_rel(ctx, input_rel, extensions).await?;
             let plan = plan.from_template(&plan.expressions(), &[input_plan]);
@@ -540,9 +536,7 @@ pub async fn from_substrait_rel(
         }
         Some(RelType::ExtensionMulti(extension)) => {
             let Some(ext_detail) = &extension.detail else {
-                return Err(DataFusionError::Substrait(
-                    "Unexpected empty detail in ExtensionSingleRel".to_string(),
-                ));
+                return substrait_err!("Unexpected empty detail in ExtensionSingleRel");
             };
             let plan = ctx
                 .state()
@@ -894,9 +888,7 @@ pub async fn from_substrait_rex(
                 ),
                 from_substrait_type(output_type)?,
             )))),
-            None => Err(DataFusionError::Substrait(
-                "Cast experssion without output type is not allowed".to_string(),
-            )),
+            None => substrait_err!("Cast experssion without output type is not allowed"),
         },
         Some(RexType::WindowFunction(window)) => {
             let fun = match extensions.get(&window.function_reference) {
@@ -1021,9 +1013,7 @@ fn from_substrait_type(dt: &substrait::proto::Type) -> Result<DataType> {
             r#type::Kind::List(list) => {
                 let inner_type =
                     from_substrait_type(list.r#type.as_ref().ok_or_else(|| {
-                        DataFusionError::Substrait(
-                            "List type must have inner type".to_string(),
-                        )
+                        substrait_datafusion_err!("List type must have inner type")
                     })?)?;
                 let field = Arc::new(Field::new("list_item", inner_type, true));
                 match list.type_variation_reference {
@@ -1075,9 +1065,7 @@ fn from_substrait_bound(
                     }
                 }
             },
-            None => Err(DataFusionError::Substrait(
-                "WindowFunction missing Substrait Bound kind".to_string(),
-            )),
+            None => substrait_err!("WindowFunction missing Substrait Bound kind"),
         },
         None => {
             if is_lower {
@@ -1096,36 +1084,28 @@ pub(crate) fn from_substrait_literal(lit: &Literal) -> Result<ScalarValue> {
             DEFAULT_TYPE_REF => ScalarValue::Int8(Some(*n as i8)),
             UNSIGNED_INTEGER_TYPE_REF => ScalarValue::UInt8(Some(*n as u8)),
             others => {
-                return Err(DataFusionError::Substrait(format!(
-                    "Unknown type variation reference {others}",
-                )));
+                return substrait_err!("Unknown type variation reference {others}");
             }
         },
         Some(LiteralType::I16(n)) => match lit.type_variation_reference {
             DEFAULT_TYPE_REF => ScalarValue::Int16(Some(*n as i16)),
             UNSIGNED_INTEGER_TYPE_REF => ScalarValue::UInt16(Some(*n as u16)),
             others => {
-                return Err(DataFusionError::Substrait(format!(
-                    "Unknown type variation reference {others}",
-                )));
+                return substrait_err!("Unknown type variation reference {others}");
             }
         },
         Some(LiteralType::I32(n)) => match lit.type_variation_reference {
             DEFAULT_TYPE_REF => ScalarValue::Int32(Some(*n)),
             UNSIGNED_INTEGER_TYPE_REF => ScalarValue::UInt32(Some(*n as u32)),
             others => {
-                return Err(DataFusionError::Substrait(format!(
-                    "Unknown type variation reference {others}",
-                )));
+                return substrait_err!("Unknown type variation reference {others}");
             }
         },
         Some(LiteralType::I64(n)) => match lit.type_variation_reference {
             DEFAULT_TYPE_REF => ScalarValue::Int64(Some(*n)),
             UNSIGNED_INTEGER_TYPE_REF => ScalarValue::UInt64(Some(*n as u64)),
             others => {
-                return Err(DataFusionError::Substrait(format!(
-                    "Unknown type variation reference {others}",
-                )));
+                return substrait_err!("Unknown type variation reference {others}");
             }
         },
         Some(LiteralType::Fp32(f)) => ScalarValue::Float32(Some(*f)),
@@ -1136,9 +1116,7 @@ pub(crate) fn from_substrait_literal(lit: &Literal) -> Result<ScalarValue> {
             TIMESTAMP_MICRO_TYPE_REF => ScalarValue::TimestampMicrosecond(Some(*t), None),
             TIMESTAMP_NANO_TYPE_REF => ScalarValue::TimestampNanosecond(Some(*t), None),
             others => {
-                return Err(DataFusionError::Substrait(format!(
-                    "Unknown type variation reference {others}",
-                )));
+                return substrait_err!("Unknown type variation reference {others}");
             }
         },
         Some(LiteralType::Date(d)) => ScalarValue::Date32(Some(*d)),
@@ -1146,38 +1124,30 @@ pub(crate) fn from_substrait_literal(lit: &Literal) -> Result<ScalarValue> {
             DEFAULT_CONTAINER_TYPE_REF => ScalarValue::Utf8(Some(s.clone())),
             LARGE_CONTAINER_TYPE_REF => ScalarValue::LargeUtf8(Some(s.clone())),
             others => {
-                return Err(DataFusionError::Substrait(format!(
-                    "Unknown type variation reference {others}",
-                )));
+                return substrait_err!("Unknown type variation reference {others}");
             }
         },
         Some(LiteralType::Binary(b)) => match lit.type_variation_reference {
             DEFAULT_CONTAINER_TYPE_REF => ScalarValue::Binary(Some(b.clone())),
             LARGE_CONTAINER_TYPE_REF => ScalarValue::LargeBinary(Some(b.clone())),
             others => {
-                return Err(DataFusionError::Substrait(format!(
-                    "Unknown type variation reference {others}",
-                )));
+                return substrait_err!("Unknown type variation reference {others}");
             }
         },
         Some(LiteralType::FixedBinary(b)) => {
             ScalarValue::FixedSizeBinary(b.len() as _, Some(b.clone()))
         }
         Some(LiteralType::Decimal(d)) => {
-            let value: [u8; 16] =
-                d.value
-                    .clone()
-                    .try_into()
-                    .or(Err(DataFusionError::Substrait(
-                        "Failed to parse decimal value".to_string(),
-                    )))?;
+            let value: [u8; 16] = d
+                .value
+                .clone()
+                .try_into()
+                .or(substrait_err!("Failed to parse decimal value"))?;
             let p = d.precision.try_into().map_err(|e| {
-                DataFusionError::Substrait(format!(
-                    "Failed to parse decimal precision: {e}"
-                ))
+                substrait_datafusion_err!("Failed to parse decimal precision: {e}")
             })?;
             let s = d.scale.try_into().map_err(|e| {
-                DataFusionError::Substrait(format!("Failed to parse decimal scale: {e}"))
+                substrait_datafusion_err!("Failed to parse decimal scale: {e}")
             })?;
             ScalarValue::Decimal128(
                 Some(std::primitive::i128::from_le_bytes(value)),
