@@ -996,7 +996,8 @@ SELECT find_in_set(NULL, NULL)
 ----
 NULL
 
+# Verify that multiple calls to volatile functions like `random()` are not combined / optimized away
 query B
-SELECT r1 == r2 FROM (SELECT random() r1, random() r2)
+SELECT r FROM (SELECT r1 == r2 r, r1, r2 FROM (SELECT random() r1, random() r2) WHERE r1 > 0 AND r2 > 0)
 ----
 false

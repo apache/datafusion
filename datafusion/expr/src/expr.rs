@@ -373,6 +373,20 @@ impl ScalarFunctionDefinition {
             ScalarFunctionDefinition::Name(func_name) => func_name.as_ref(),
         }
     }
+
+    /// Whether this function is volatile, i.e. whether it can return different results
+    /// when evaluated multiple times with the same input.
+    pub fn is_volatile(&self) -> bool {
+        match self {
+            ScalarFunctionDefinition::BuiltIn(fun) => {
+                fun.volatility() == crate::Volatility::Volatile
+            }
+            ScalarFunctionDefinition::UDF(udf) => {
+                udf.signature().volatility == crate::Volatility::Volatile
+            }
+            ScalarFunctionDefinition::Name(_) => false,
+        }
+    }
 }
 
 impl ScalarFunction {
@@ -1694,18 +1708,9 @@ fn create_names(exprs: &[Expr]) -> Result<String> {
 
 /// Whether the given expression is volatile, i.e. whether it can return different results
 /// when evaluated multiple times with the same input.
-#[allow(clippy::match_like_matches_macro)]
 pub fn is_volatile(expr: &Expr) -> bool {
     match expr {
-        Expr::ScalarFunction(func) => match func.func_def {
-            ScalarFunctionDefinition::BuiltIn(func) => match func {
-                BuiltinScalarFunction::Random => true,
-                _ => false,
-            },
-            // TODO: Add volatile flag to UDFs
-            ScalarFunctionDefinition::UDF(_) => false,
-            ScalarFunctionDefinition::Name(_) => false,
-        },
+        Expr::ScalarFunction(func) => func.func_def.is_volatile(),
         _ => false,
     }
 }
