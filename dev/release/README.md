@@ -137,7 +137,7 @@ git checkout apache/main
 Update datafusion version in `datafusion/Cargo.toml` to `5.1.0`:
 
 ```
-./dev/update_datafusion_versions.py 5.1.0
+`./dev/update_datafusion_versions.py 5.1.0`
 ```
 
 Lastly commit the version change:

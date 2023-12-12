@@ -43,7 +43,7 @@ parquet = ["datafusion/parquet", "datafusion-common/parquet"]
 [dependencies]
 arrow = { workspace = true }
 chrono = { workspace = true }
-datafusion = { path = "../core", version = "33.0.0" }
+datafusion = { path = "../core", version = "34.0.0" }
 datafusion-common = { workspace = true }
 datafusion-expr = { workspace = true }
 object_store = { workspace = true }
