@@ -396,7 +396,18 @@ async fn roundtrip_inlist_4() -> Result<()> {
 
 #[tokio::test]
 async fn roundtrip_inlist_5() -> Result<()> {
-    roundtrip("SELECT * FROM data WHERE data.a IN (SELECT data2.a FROM data2 WHERE f IN ('a', 'b', 'c', 'd'))").await
+    assert_expected_plan(
+    "SELECT a, f FROM data WHERE (f IN ('a', 'b', 'c') OR a in (SELECT data2.a FROM data2 WHERE f IN ('b', 'c', 'd')))",
+    "Filter: data.f = Utf8(\"a\") OR data.f = Utf8(\"b\") OR data.f = Utf8(\"c\") OR data.a IN (<subquery>)\
+    \n  Subquery:\
+    \n    Projection: data2.a\
+    \n      Filter: data2.f IN ([Utf8(\"b\"), Utf8(\"c\"), Utf8(\"d\")])\
+    \n        TableScan: data2 projection=[a, b, c, d, e, f]\
+    \n  TableScan: data projection=[a, f], partial_filters=[data.f = Utf8(\"a\") OR data.f = Utf8(\"b\") OR data.f = Utf8(\"c\") OR data.a IN (<subquery>)]\
+    \n    Subquery:\
+    \n      Projection: data2.a\
+    \n        Filter: data2.f IN ([Utf8(\"b\"), Utf8(\"c\"), Utf8(\"d\")])\
+    \n          TableScan: data2 projection=[a, b, c, d, e, f]").await
 }
 
 #[tokio::test]
@@ -835,18 +846,16 @@ async fn test_alias(sql_with_alias: &str, sql_no_alias: &str) -> Result<()> {
 async fn roundtrip_with_ctx(sql: &str, ctx: SessionContext) -> Result<()> {
     let df = ctx.sql(sql).await?;
 
-    // let plan = df.into_optimized_plan()?;
-    let plan = df.into_unoptimized_plan();
+    let plan = df.into_optimized_plan()?;
     let proto = to_substrait_plan(&plan, &ctx)?;
     
     let plan2 = from_substrait_plan(&ctx, &proto).await?;
-    // let plan2 = ctx.state().optimize(&plan2)?;
-    let proto2 = to_substrait_plan(&plan2, &ctx)?;
+    let plan2 = ctx.state().optimize(&plan2)?;
 
     println!("{plan:#?}");
     println!("{plan2:#?}");
 
-    assert_eq!(proto, proto2);
+    assert_eq!(plan, plan2);
     Ok(())
 }
 
