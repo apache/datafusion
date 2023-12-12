@@ -1015,7 +1015,7 @@ impl DataFrame {
 
     /// Write this DataFrame to the referenced table by name.
     /// This method uses on the same underlying implementation
-    /// as the SQL Insert Into statement. Unlike most other DataFrame methods, 
+    /// as the SQL Insert Into statement. Unlike most other DataFrame methods,
     /// this method executes eagerly. Data is written to the table using an
     /// execution plan returned by the [TableProvider]'s insert_into method.
     /// Refer to the documentation of the specific [TableProvider] to determine
