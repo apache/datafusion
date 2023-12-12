@@ -60,6 +60,8 @@ use datafusion_expr::{
 };
 
 use async_trait::async_trait;
+use datafusion_optimizer::analyzer::type_coercion::TypeCoercion;
+use datafusion_optimizer::analyzer::AnalyzerRule;
 
 /// Contains options that control how data is
 /// written out from a DataFrame
@@ -1271,8 +1273,13 @@ impl DataFrame {
     /// ```
     pub async fn cache(self) -> Result<DataFrame> {
         let context = SessionContext::new_with_state(self.session_state.clone());
+        // type cast
+        // such as, DataType::Null is normally resolved (via Coercion) to an actual type of the target schema
+        let analyzed_plan = TypeCoercion::new()
+            .analyze(self.plan.clone(), self.session_state.config_options())?;
+        let transform = analyzed_plan.schema().clone();
         let mem_table = MemTable::try_new(
-            SchemaRef::from(self.schema().clone()),
+            SchemaRef::from(transform.as_ref().clone()),
             self.collect_partitioned().await?,
         )?;
 
