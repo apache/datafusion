@@ -184,69 +184,40 @@ mod test {
         Ok(())
     }
 
-    async fn test_timestamp_function<F, A>(
-        function: F,
-        args: &[A],
-        time_unit: TimeUnit,
-    ) -> Result<()>
-    where
-        F: Fn(&[A]) -> Result<ArrayRef>,
-        A: Array,
-    {
-        let result = function(args).unwrap();
-        let result_value = match time_unit {
-            TimeUnit::Millisecond => result
-                .as_any()
-                .downcast_ref::<TimestampMillisecondArray>()
-                .unwrap()
-                .value(0) as i64,
-            TimeUnit::Nanosecond => result
-                .as_any()
-                .downcast_ref::<TimestampNanosecondArray>()
-                .unwrap()
-                .value(0) as i64,
-        };
-
-        let now = match time_unit {
-            TimeUnit::Millisecond => SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_millis() as i64,
-            TimeUnit::Nanosecond => SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_nanos() as i64,
-        };
-
-        assert!((result_value - now).abs() <= 1_000_000_000);
-
-        Ok(())
+    fn roughly_equal_to_now(millisecond: i64) -> bool {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as i64;
+        (millisecond - now).abs() <= 1
     }
 
-    enum TimeUnit {
-        Millisecond,
-        Nanosecond,
-    }
 
     #[tokio::test]
     async fn test_current_timestamp() -> Result<()> {
-        test_timestamp_function(
-            |args| CurrentTimestampFunction {}.execute(args),
-            &[],
-            TimeUnit::Millisecond,
-        )
-        .await
+        let current_timestamp_function = CurrentTimestampFunction {};
+        let result = current_timestamp_function.execute(&[]).unwrap();
+        let result_array = result
+            .as_any()
+            .downcast_ref::<TimestampMillisecondArray>()
+            .unwrap()
+            .value(0);
+        assert!(roughly_equal_to_now(result_array));
+        Ok(())
     }
 
     #[tokio::test]
     async fn test_current_timestamp_p() -> Result<()> {
+        let function = CurrentTimestampPFunction {};
         let precision_array = Int64Array::from(vec![9]);
         let args = vec![Arc::new(precision_array) as ArrayRef];
-        test_timestamp_function(
-            |args| CurrentTimestampPFunction {}.execute(args),
-            &args,
-            TimeUnit::Nanosecond,
-        )
-        .await
+        let result = function.execute(&args).unwrap();
+        let result_array = result
+            .as_any()
+            .downcast_ref::<TimestampNanosecondArray>()
+            .unwrap()
+            .value(0);
+        assert!(roughly_equal_to_now(result_array / 1_000_000));
+        Ok(())
     }
 }
