@@ -1777,14 +1777,24 @@ macro_rules! to_string {
     }};
 }
 
-fn union_generic_lists<OffsetSize: OffsetSizeTrait>(
+/// general function for array_union and array_intersect
+fn general_set_lists<OffsetSize: OffsetSizeTrait>(
     l: &GenericListArray<OffsetSize>,
     r: &GenericListArray<OffsetSize>,
-    field: &FieldRef,
+    is_union: bool,
 ) -> Result<GenericListArray<OffsetSize>> {
+    let set_op = if is_union {
+        "array_union"
+    } else {
+        "array_intersect"
+    };
+    if l.value_type() != r.value_type() {
+        return internal_err!("{set_op} is not implemented for '{l:?}' and '{r:?}'");
+    }
+
+    let dt = l.value_type();
     let converter = RowConverter::new(vec![SortField::new(l.value_type())])?;
 
-    let nulls = NullBuffer::union(l.nulls(), r.nulls());
     let l_values = l.values().clone();
     let r_values = r.values().clone();
     let l_values = converter.convert_columns(&[l_values])?;
@@ -1806,7 +1816,7 @@ fn union_generic_lists<OffsetSize: OffsetSizeTrait>(
         }
         for i in r_slice {
             let right_row = r_values.row(i);
-            if dedup.insert(right_row) {
+            if dedup.insert(right_row) == is_union {
                 rows.push(right_row);
             }
         }
@@ -1814,6 +1824,7 @@ fn union_generic_lists<OffsetSize: OffsetSizeTrait>(
         dedup.clear();
     }
 
+    let field = Arc::new(Field::new("item", dt, true));
     let values = converter.convert_rows(rows)?;
     let offsets = OffsetBuffer::new(offsets.into());
     let result = values[0].clone();
@@ -1821,7 +1832,7 @@ fn union_generic_lists<OffsetSize: OffsetSizeTrait>(
         field.clone(),
         offsets,
         result,
-        nulls,
+        None,
     ))
 }
 
@@ -1833,36 +1844,56 @@ pub fn array_union(args: &[ArrayRef]) -> Result<ArrayRef> {
     let array1 = &args[0];
     let array2 = &args[1];
 
-    fn union_arrays<O: OffsetSizeTrait>(
-        array1: &ArrayRef,
-        array2: &ArrayRef,
-        l_field_ref: &Arc<Field>,
-        r_field_ref: &Arc<Field>,
-    ) -> Result<ArrayRef> {
-        match (l_field_ref.data_type(), r_field_ref.data_type()) {
-            (DataType::Null, _) => Ok(array2.clone()),
-            (_, DataType::Null) => Ok(array1.clone()),
-            (_, _) => {
-                let list1 = array1.as_list::<O>();
-                let list2 = array2.as_list::<O>();
-                let result = union_generic_lists::<O>(list1, list2, l_field_ref)?;
-                Ok(Arc::new(result))
-            }
+    match (array1.data_type(), array2.data_type()) {
+        (DataType::Null, _) => Ok(array2.clone()),
+        (_, DataType::Null) => Ok(array1.clone()),
+        (DataType::List(_), DataType::List(_)) => {
+            let first_array = as_list_array(&array1)?;
+            let second_array = as_list_array(&array2)?;
+            let arr = general_set_lists::<i32>(first_array, second_array, true)?;
+            Ok(Arc::new(arr))
+        }
+        (DataType::LargeList(_), DataType::LargeList(_)) => {
+            let first_array = as_large_list_array(&array1)?;
+            let second_array = as_large_list_array(&array2)?;
+            let arr = general_set_lists::<i64>(first_array, second_array, true)?;
+            Ok(Arc::new(arr))
+        }
+        (data_type1, data_type2) => {
+            internal_err!(
+                "array_union does not support types '{data_type1:?}' and '{data_type2:?}'"
+            )
         }
     }
+}
+
+/// array_intersect SQL function
+pub fn array_intersect(args: &[ArrayRef]) -> Result<ArrayRef> {
+    if args.len() != 2 {
+        return exec_err!("array_intersect needs two arguments");
+    }
+
+    let array1 = &args[0];
+    let array2 = &args[1];
 
     match (array1.data_type(), array2.data_type()) {
         (DataType::Null, _) => Ok(array2.clone()),
         (_, DataType::Null) => Ok(array1.clone()),
-        (DataType::List(l_field_ref), DataType::List(r_field_ref)) => {
-            union_arrays::<i32>(array1, array2, l_field_ref, r_field_ref)
+        (DataType::List(_), DataType::List(_)) => {
+            let array1 = as_list_array(&array1)?;
+            let array2 = as_list_array(&array2)?;
+            let result = general_set_lists::<i32>(array1, array2, false)?;
+            Ok(Arc::new(result))
         }
-        (DataType::LargeList(l_field_ref), DataType::LargeList(r_field_ref)) => {
-            union_arrays::<i64>(array1, array2, l_field_ref, r_field_ref)
+        (DataType::LargeList(_), DataType::LargeList(_)) => {
+            let array1 = as_large_list_array(&array1)?;
+            let array2 = as_large_list_array(&array2)?;
+            let result = general_set_lists::<i64>(array1, array2, false)?;
+            Ok(Arc::new(result))
         }
-        _ => {
+        (data_type1, data_type2) => {
             internal_err!(
-                "array_union only support list with offsets of type int32 and int64"
+                "array_intersect does not support types '{data_type1:?}' and '{data_type2:?}'"
             )
         }
     }
@@ -2357,74 +2388,6 @@ pub fn string_to_array<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef
 
     let list_array = list_builder.finish();
     Ok(Arc::new(list_array) as ArrayRef)
-}
-
-/// array_intersect SQL function
-pub fn array_intersect(args: &[ArrayRef]) -> Result<ArrayRef> {
-    if args.len() != 2 {
-        return exec_err!("array_intersect needs two arguments");
-    }
-
-    let first_array = &args[0];
-    let second_array = &args[1];
-
-    match (first_array.data_type(), second_array.data_type()) {
-        (DataType::Null, _) => Ok(second_array.clone()),
-        (_, DataType::Null) => Ok(first_array.clone()),
-        _ => {
-            let first_array = as_list_array(&first_array)?;
-            let second_array = as_list_array(&second_array)?;
-
-            if first_array.value_type() != second_array.value_type() {
-                return internal_err!("array_intersect is not implemented for '{first_array:?}' and '{second_array:?}'");
-            }
-
-            let dt = first_array.value_type();
-
-            let mut offsets = vec![0];
-            let mut new_arrays = vec![];
-
-            let converter = RowConverter::new(vec![SortField::new(dt.clone())])?;
-            for (first_arr, second_arr) in first_array.iter().zip(second_array.iter()) {
-                if let (Some(first_arr), Some(second_arr)) = (first_arr, second_arr) {
-                    let l_values = converter.convert_columns(&[first_arr])?;
-                    let r_values = converter.convert_columns(&[second_arr])?;
-
-                    let values_set: HashSet<_> = l_values.iter().collect();
-                    let mut rows = Vec::with_capacity(r_values.num_rows());
-                    for r_val in r_values.iter().sorted().dedup() {
-                        if values_set.contains(&r_val) {
-                            rows.push(r_val);
-                        }
-                    }
-
-                    let last_offset: i32 = match offsets.last().copied() {
-                        Some(offset) => offset,
-                        None => return internal_err!("offsets should not be empty"),
-                    };
-                    offsets.push(last_offset + rows.len() as i32);
-                    let arrays = converter.convert_rows(rows)?;
-                    let array = match arrays.first() {
-                        Some(array) => array.clone(),
-                        None => {
-                            return internal_err!(
-                                "array_intersect: failed to get array from rows"
-                            )
-                        }
-                    };
-                    new_arrays.push(array);
-                }
-            }
-
-            let field = Arc::new(Field::new("item", dt, true));
-            let offsets = OffsetBuffer::new(offsets.into());
-            let new_arrays_ref =
-                new_arrays.iter().map(|v| v.as_ref()).collect::<Vec<_>>();
-            let values = compute::concat(&new_arrays_ref)?;
-            let arr = Arc::new(ListArray::try_new(field, offsets, values, None)?);
-            Ok(arr)
-        }
-    }
 }
 
 pub fn general_array_distinct<OffsetSize: OffsetSizeTrait>(
