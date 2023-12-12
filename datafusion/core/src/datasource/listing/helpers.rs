@@ -141,12 +141,18 @@ const CONCURRENCY_LIMIT: usize = 100;
 
 /// Partition the list of files into `n` groups
 pub fn split_files(
-    partitioned_files: Vec<PartitionedFile>,
+    mut partitioned_files: Vec<PartitionedFile>,
     n: usize,
 ) -> Vec<Vec<PartitionedFile>> {
     if partitioned_files.is_empty() {
         return vec![];
     }
+
+    // ObjectStore::list does not guarantee any consistent order and for some
+    // implementations such as LocalFileSystem, it may be inconsistent. Thus
+    // Sort files by path to ensure consistent plans when run more than once.
+    partitioned_files.sort_by(|a, b| a.path().cmp(b.path()));
+
     // effectively this is div with rounding up instead of truncating
     let chunk_size = (partitioned_files.len() + n - 1) / n;
     partitioned_files
