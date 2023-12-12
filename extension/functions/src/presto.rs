@@ -192,7 +192,6 @@ mod test {
         (millisecond - now).abs() <= 1
     }
 
-
     #[tokio::test]
     async fn test_current_timestamp() -> Result<()> {
         let current_timestamp_function = CurrentTimestampFunction {};
