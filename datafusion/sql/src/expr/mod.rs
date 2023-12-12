@@ -513,6 +513,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 self.parse_struct(values, fields, schema, planner_context)
             }
 
+            SQLExpr::Tuple(values) => {
+                // self.
+                todo!()
+            }
+
             _ => not_impl_err!("Unsupported ast node in sqltorel: {sql:?}"),
         }
     }
@@ -581,6 +586,15 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         Ok(Expr::AggregateFunction(expr::AggregateFunction::new(
             fun, args, distinct, None, order_by,
         )))
+    }
+
+    fn parse_tuple(
+        &self,
+        values: Vec<SQLExpr>,
+        input_schema: &DFSchema,
+        planner_context: &mut PlannerContext,
+    ) -> Result<Expr> {
+		todo!()
     }
 
     fn sql_in_list_to_expr(
