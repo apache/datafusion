@@ -34,7 +34,7 @@ use datafusion::common::{exec_err, internal_err, not_impl_err};
 use datafusion::logical_expr::aggregate_function;
 use datafusion::logical_expr::expr::{
     AggregateFunctionDefinition, Alias, BinaryExpr, Case, Cast, GroupingSet, InList, InSubquery,
-    ScalarFunction as DFScalarFunction, ScalarFunctionDefinition, Sort, WindowFunction,
+    ScalarFunctionDefinition, Sort, WindowFunction,
 };
 use datafusion::logical_expr::{expr, Between, JoinConstraint, LogicalPlan, Operator};
 use datafusion::prelude::Expr;

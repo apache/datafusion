@@ -859,7 +859,7 @@ async fn roundtrip_with_ctx(sql: &str, ctx: SessionContext) -> Result<()> {
 
     println!("{plan:#?}");
     println!("{plan2:#?}");
-    
+
     let plan1str = format!("{plan:?}");
     let plan2str = format!("{plan2:?}");
     assert_eq!(plan1str, plan2str);

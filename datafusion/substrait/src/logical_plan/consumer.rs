@@ -36,7 +36,7 @@ use datafusion::{
     prelude::{Column, SessionContext},
     scalar::ScalarValue,
 };
-use substrait::proto::expression::subquery::{InPredicate, SubqueryType};
+use substrait::proto::expression::subquery::SubqueryType;
 use substrait::proto::expression::{Literal, ScalarFunction};
 use substrait::proto::{
     aggregate_function::AggregationInvocation,
