@@ -42,20 +42,20 @@ use arrow::{
         ArrayRef, Int64Array, Time32MillisecondArray, TimestampMillisecondArray,
         TimestampNanosecondArray,
     },
-    datatypes::{DataType, TimeUnit, IntervalUnit},
+    datatypes::{DataType, IntervalUnit, TimeUnit},
 };
 use chrono::Timelike;
 use datafusion::error::Result;
 use datafusion_common::DataFusionError;
 use datafusion_expr::{
-    ReturnTypeFunction, ScalarFunctionDef, ScalarFunctionPackage, Signature, Volatility,TypeSignature,
+    ReturnTypeFunction, ScalarFunctionDef, ScalarFunctionPackage, Signature,
+    TypeSignature, Volatility,
 };
 
 use arrow::array::*;
 use arrow::error::ArrowError;
 
 use chrono::{Duration, NaiveDate, TimeZone, Utc};
-
 
 #[derive(Debug)]
 pub struct HumanReadableSecondsFunction;
@@ -388,7 +388,6 @@ pub struct FunctionPackage;
 impl ScalarFunctionPackage for FunctionPackage {
     fn functions(&self) -> Vec<Box<dyn ScalarFunctionDef>> {
         vec![
-
             Box::new(HumanReadableSecondsFunction),
             Box::new(CurrentTimeFunction),
             Box::new(ToMilliSecondsFunction),
