@@ -2057,7 +2057,7 @@ impl ScalarValue {
     ///    Some(vec![Some(4), Some(5)])
     /// ]);
     ///
-    /// let scalar_vec = ScalarValue::convert_list_array_to_scalar_vec(&list_arr).unwrap();
+    /// let scalar_vec = ScalarValue::convert_list_array_to_scalar_vec::<i32>(&list_arr).unwrap();
     ///
     /// let expected = vec![
     ///   vec![
