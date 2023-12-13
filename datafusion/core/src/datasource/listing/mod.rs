@@ -109,6 +109,11 @@ impl PartitionedFile {
         let size = std::fs::metadata(path.clone())?.len();
         Ok(Self::new(path, size))
     }
+
+    /// Return the path of this partitioned file
+    pub fn path(&self) -> &Path {
+        &self.object_meta.location
+    }
 }
 
 impl From<ObjectMeta> for PartitionedFile {
