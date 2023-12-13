@@ -231,7 +231,8 @@ impl Accumulator for OrderSensitiveArrayAggAccumulator {
                 partition_values.push(v);
             }
 
-            let orderings = ScalarValue::convert_list_array_to_scalar_vec::<i32>(agg_orderings)?;
+            let orderings =
+                ScalarValue::convert_list_array_to_scalar_vec::<i32>(agg_orderings)?;
 
             for partition_ordering_rows in orderings.into_iter() {
                 // Extract value from struct to ordering_rows for each group/partition
