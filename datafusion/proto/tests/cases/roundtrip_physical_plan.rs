@@ -311,7 +311,6 @@ fn rountrip_aggregate() -> Result<()> {
         PhysicalGroupBy::new_single(groups.clone()),
         aggregates.clone(),
         vec![None],
-        vec![None],
         Arc::new(EmptyExec::new(schema.clone())),
         schema,
     )?))
@@ -378,7 +377,6 @@ fn roundtrip_aggregate_udaf() -> Result<()> {
             AggregateMode::Final,
             PhysicalGroupBy::new_single(groups.clone()),
             aggregates.clone(),
-            vec![None],
             vec![None],
             Arc::new(EmptyExec::new(schema.clone())),
             schema,

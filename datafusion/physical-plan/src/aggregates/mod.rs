@@ -290,8 +290,6 @@ pub struct AggregateExec {
     aggr_expr: Vec<Arc<dyn AggregateExpr>>,
     /// FILTER (WHERE clause) expression for each aggregate expression
     filter_expr: Vec<Option<Arc<dyn PhysicalExpr>>>,
-    /// (ORDER BY clause) expression for each aggregate expression
-    order_by_expr: Vec<Option<LexOrdering>>,
     /// Stores aggregate groups where each group has different ordering requirement.
     aggregate_groups: Vec<AggregateExprGroup>,
     /// Set if the output of this aggregation is truncated by a upstream sort/limit clause
@@ -328,8 +326,6 @@ impl AggregateExec {
         group_by: PhysicalGroupBy,
         mut aggr_expr: Vec<Arc<dyn AggregateExpr>>,
         filter_expr: Vec<Option<Arc<dyn PhysicalExpr>>>,
-        // Ordering requirement of each aggregate expression
-        order_by_expr: Vec<Option<LexOrdering>>,
         input: Arc<dyn ExecutionPlan>,
         input_schema: SchemaRef,
     ) -> Result<Self> {
@@ -394,7 +390,6 @@ impl AggregateExec {
             group_by,
             aggr_expr,
             filter_expr,
-            order_by_expr,
             aggregate_groups,
             input,
             original_schema,
@@ -441,7 +436,8 @@ impl AggregateExec {
 
     /// ORDER BY clause expression for each aggregate expression
     pub fn order_by_expr(&self) -> &[Option<LexOrdering>] {
-        &self.order_by_expr
+        // &self.order_by_expr
+        &[]
     }
 
     /// Input plan
@@ -710,7 +706,6 @@ impl ExecutionPlan for AggregateExec {
             self.group_by.clone(),
             self.aggr_expr.clone(),
             self.filter_expr.clone(),
-            self.order_by_expr.clone(),
             children[0].clone(),
             self.input_schema.clone(),
         )?;
@@ -1397,7 +1392,6 @@ mod tests {
             grouping_set.clone(),
             aggregates.clone(),
             vec![None],
-            vec![None],
             input,
             input_schema.clone(),
         )?);
@@ -1476,7 +1470,6 @@ mod tests {
             final_grouping_set,
             aggregates,
             vec![None],
-            vec![None],
             merge,
             input_schema,
         )?);
@@ -1542,7 +1535,6 @@ mod tests {
             grouping_set.clone(),
             aggregates.clone(),
             vec![None],
-            vec![None],
             input,
             input_schema.clone(),
         )?);
@@ -1589,7 +1581,6 @@ mod tests {
             AggregateMode::Final,
             final_grouping_set,
             aggregates,
-            vec![None],
             vec![None],
             merge,
             input_schema,
@@ -1857,7 +1848,6 @@ mod tests {
                 groups,
                 aggregates,
                 vec![None; 3],
-                vec![None; 3],
                 input.clone(),
                 input_schema.clone(),
             )?);
@@ -1913,7 +1903,6 @@ mod tests {
             groups.clone(),
             aggregates.clone(),
             vec![None],
-            vec![None],
             blocking_exec,
             schema,
         )?);
@@ -1951,7 +1940,6 @@ mod tests {
             AggregateMode::Partial,
             groups,
             aggregates.clone(),
-            vec![None],
             vec![None],
             blocking_exec,
             schema,
@@ -2054,7 +2042,6 @@ mod tests {
             groups.clone(),
             aggregates.clone(),
             vec![None],
-            vec![Some(ordering_req.clone())],
             memory_exec,
             schema.clone(),
         )?);
@@ -2070,7 +2057,6 @@ mod tests {
             groups,
             aggregates.clone(),
             vec![None],
-            vec![Some(ordering_req)],
             coalesce,
             schema,
         )?) as Arc<dyn ExecutionPlan>;
