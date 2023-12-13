@@ -18,6 +18,7 @@
 //! Aggregates functionalities
 
 use std::any::Any;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use super::DisplayAs;
@@ -927,50 +928,89 @@ fn get_aggregate_expr_groups(
     eq_properties: &EquivalenceProperties,
     agg_mode: &AggregateMode,
 ) -> Result<Vec<AggregateExprGroup>> {
-    let mut used_indices: HashSet<usize> = HashSet::new();
-    let mut groups = vec![];
-    while used_indices.len() != aggr_exprs.len() {
-        let mut group: Option<(Vec<usize>, LexOrdering)> = None;
-        for (idx, aggr_expr) in aggr_exprs.iter_mut().enumerate() {
-            // Group is empty and index is not already in another group.
-            if used_indices.contains(&idx) {
-                // Skip this group, it is already inserted.
-                continue;
+    // let mut used_indices: HashSet<usize> = HashSet::new();
+    // let mut groups = vec![];
+    let mut groups_v2 : HashMap<LexOrdering, Vec<usize>> = HashMap::new();
+    for (idx, aggr_expr) in aggr_exprs.iter_mut().enumerate() {
+        let req = aggr_expr.order_bys().unwrap_or(&[]).to_vec();
+        let mut sa = groups_v2.remove(&req).unwrap_or(vec![]);
+        if let Some(finer_ordering) = finer_ordering(
+            &req,
+            aggr_expr,
+            group_by,
+            eq_properties,
+            agg_mode,
+        ) {
+            sa.push(idx);
+            groups_v2.insert(finer_ordering, sa);
+        } else if let Some(reversed_expr) = aggr_expr.reverse_expr() {
+            if let Some(finer_ordering) = finer_ordering(
+                &req,
+                &reversed_expr,
+                group_by,
+                eq_properties,
+                agg_mode,
+            ) {
+                *aggr_expr = reversed_expr;
+                sa.push(idx);
+                groups_v2.insert(finer_ordering, sa);
             }
-            let (mut group_indices, mut req) = if let Some((group_indices, req)) = group {
-                (group_indices, req)
-            } else {
-                // Initialize an empty group with empty requirement
-                (vec![], vec![])
-            };
-            if let Some(finer) =
-                finer_ordering(&req, aggr_expr, group_by, eq_properties, agg_mode)
-            {
-                req = finer;
-                group_indices.push(idx);
-            } else if let Some(reverse) = aggr_expr.reverse_expr() {
-                if let Some(finer) =
-                    finer_ordering(&req, &reverse, group_by, eq_properties, agg_mode)
-                {
-                    *aggr_expr = reverse;
-                    req = finer;
-                    group_indices.push(idx);
-                }
-            }
-            // Update group with new entries
-            group = Some((group_indices, req));
-        }
-        // We cannot received None here.
-        let (indices, requirement) =
-            group.ok_or_else(|| exec_datafusion_err!("Cannot Receive empty group"))?;
-        used_indices.extend(indices.iter());
-        groups.push(AggregateExprGroup {
-            indices,
-            requirement,
-        });
+        };
     }
 
-    Ok(groups)
+
+
+    // while used_indices.len() != aggr_exprs.len() {
+    //     let mut current_group: Option<(Vec<usize>, LexOrdering)> = None;
+    //     for (idx, aggr_expr) in aggr_exprs.iter_mut().enumerate() {
+    //         // Group is empty and index is not already in another group.
+    //         if used_indices.contains(&idx) {
+    //             // Skip this group, it is already inserted.
+    //             continue;
+    //         }
+    //         // Initialize an empty group with empty requirement
+    //         let (mut group_indices, mut ordering_req) =
+    //             current_group.unwrap_or((vec![], vec![]));
+    //
+    //         if let Some(finer_ordering) = finer_ordering(
+    //             &ordering_req,
+    //             aggr_expr,
+    //             group_by,
+    //             eq_properties,
+    //             agg_mode,
+    //         ) {
+    //             ordering_req = finer_ordering;
+    //             group_indices.push(idx);
+    //         } else if let Some(reversed_expr) = aggr_expr.reverse_expr() {
+    //             if let Some(finer_ordering) = finer_ordering(
+    //                 &ordering_req,
+    //                 &reversed_expr,
+    //                 group_by,
+    //                 eq_properties,
+    //                 agg_mode,
+    //             ) {
+    //                 *aggr_expr = reversed_expr;
+    //                 ordering_req = finer_ordering;
+    //                 group_indices.push(idx);
+    //             }
+    //         }
+    //         // Update group with new entries
+    //         current_group = Some((group_indices, ordering_req));
+    //     }
+    //     // We cannot received None here.
+    //     let (indices, requirement) = current_group
+    //         .ok_or_else(|| exec_datafusion_err!("Cannot Receive empty group"))?;
+    //     used_indices.extend(indices.iter());
+    //     groups.push(AggregateExprGroup {
+    //         indices,
+    //         requirement,
+    //     });
+    // }
+
+    Ok(groups_v2.into_iter().map(|(requirement, indices)| AggregateExprGroup {
+        indices,
+        requirement,
+    }).collect())
 }
 
 /// returns physical expressions for arguments to evaluate against a batch
