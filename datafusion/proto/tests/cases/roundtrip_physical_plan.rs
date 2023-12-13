@@ -592,7 +592,6 @@ fn roundtrip_distinct_count() -> Result<()> {
         PhysicalGroupBy::new_single(groups),
         aggregates.clone(),
         vec![None],
-        vec![None],
         Arc::new(EmptyExec::new(schema.clone())),
         schema,
     )?))
