@@ -928,7 +928,7 @@ fn get_aggregate_expr_groups(
 ) -> Result<Vec<AggregateExprGroup>> {
     let mut groups: Vec<(LexOrdering, Vec<usize>)> = vec![];
     for (idx, aggr_expr) in aggr_exprs.iter_mut().enumerate() {
-        let req = aggr_expr.order_bys().unwrap_or(&[]).to_vec();
+        let req = get_aggregate_expr_req(aggr_expr, group_by, agg_mode);
         let mut group_match = false;
         for (key, value) in groups.iter_mut() {
             if let Some(finer_ordering) =
