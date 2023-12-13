@@ -850,19 +850,18 @@ impl<T: 'static> OnceFut<T> {
         }
     }
 
-    /// Get the result of the computation as a shared reference if it is ready, without consuming it
+    /// Get shared reference to the result of the computation if it is ready, without consuming it
     pub(crate) fn get_shared(&mut self, cx: &mut Context<'_>) -> Poll<Result<Arc<T>>> {
         if let OnceFutState::Pending(fut) = &mut self.state {
             let r = ready!(fut.poll_unpin(cx));
             self.state = OnceFutState::Ready(r);
         }
 
-        // Cannot use loop as this would trip up the borrow checker
         match &self.state {
             OnceFutState::Pending(_) => unreachable!(),
             OnceFutState::Ready(r) => Poll::Ready(
                 r.clone()
-                    .map_err(|e| DataFusionError::External(Box::new(e.clone()))),
+                    .map_err(|e| DataFusionError::External(Box::new(e))),
             ),
         }
     }
