@@ -145,6 +145,13 @@ impl Accumulator for DistinctArrayAggAccumulator {
                     self.values.extend(scalars);
                 }
             }
+            DataType::LargeList(_) => {
+                let scalar_vec =
+                    ScalarValue::convert_list_array_to_scalar_vec::<i64>(array)?;
+                for scalars in scalar_vec {
+                    self.values.extend(scalars);
+                }
+            }
             _ => {
                 let scalars = ScalarValue::convert_non_list_array_to_scalars(array)?;
                 self.values.extend(scalars);
