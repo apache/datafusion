@@ -38,9 +38,9 @@ LOCATION '../../testing/data/csv/aggregate_test_100.csv'
 # Basic example: distinct on the first column project the second one, and
 # order by the third
 query TI
-SELECT DISTINCT ON (c1) c1, c2 FROM aggregate_test_100 ORDER BY c1, c3;
+SELECT DISTINCT ON (c1) c1, c2 FROM aggregate_test_100 ORDER BY c1, c3, c9;
 ----
-a 5
+a 4
 b 4
 c 2
 d 1
@@ -48,7 +48,7 @@ e 3
 
 # Basic example + reverse order of the selected column
 query TI
-SELECT DISTINCT ON (c1) c1, c2 FROM aggregate_test_100 ORDER BY c1, c3 DESC;
+SELECT DISTINCT ON (c1) c1, c2 FROM aggregate_test_100 ORDER BY c1, c3 DESC, c9;
 ----
 a 1
 b 5
@@ -58,7 +58,7 @@ e 1
 
 # Basic example + reverse order of the ON column
 query TI
-SELECT DISTINCT ON (c1) c1, c2 FROM aggregate_test_100 ORDER BY c1 DESC, c3;
+SELECT DISTINCT ON (c1) c1, c2 FROM aggregate_test_100 ORDER BY c1 DESC, c3, c9;
 ----
 e 3
 d 1
