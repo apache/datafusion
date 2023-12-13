@@ -340,9 +340,13 @@ impl AggregateExec {
             group_by.contains_null(),
             mode,
         )?;
-        let eq_properties = input.equivalence_properties();
-        let aggregate_groups =
-            get_aggregate_expr_groups(&mut aggr_expr, &group_by, &eq_properties, &mode)?;
+        let input_eq_properties = input.equivalence_properties();
+        let aggregate_groups = get_aggregate_expr_groups(
+            &mut aggr_expr,
+            &group_by,
+            &input_eq_properties,
+            &mode,
+        )?;
 
         let schema = Arc::new(materialize_dict_group_keys(
             &original_schema,
@@ -381,9 +385,8 @@ impl AggregateExec {
         let required_input_ordering =
             (!new_requirement.is_empty()).then_some(new_requirement);
 
-        let aggregate_eqs = input
-            .equivalence_properties()
-            .project(&projection_mapping, schema.clone());
+        let aggregate_eqs =
+            input_eq_properties.project(&projection_mapping, schema.clone());
         let output_ordering = aggregate_eqs.oeq_class().output_ordering();
 
         Ok(AggregateExec {
@@ -2180,8 +2183,6 @@ mod tests {
                 )) as _
             })
             .collect::<Vec<_>>();
-        // let res =
-        //     get_finest_requirement(&mut aggr_exprs, &mut order_by_exprs, &eq_properties)?;
         let group_by = PhysicalGroupBy::new_single(vec![]);
         let res = get_aggregate_expr_groups(
             &mut aggr_exprs,
