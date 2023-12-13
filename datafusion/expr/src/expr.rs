@@ -384,8 +384,10 @@ impl ScalarFunctionDefinition {
             ScalarFunctionDefinition::UDF(udf) => {
                 Ok(udf.signature().volatility == crate::Volatility::Volatile)
             }
-            ScalarFunctionDefinition::Name(_) => {
-                internal_err!("Cannot determine volatility of unresolved function")
+            ScalarFunctionDefinition::Name(func) => {
+                internal_err!(
+                    "Cannot determine volatility of unresolved function: {func}"
+                )
             }
         }
     }
@@ -1869,6 +1871,6 @@ mod test {
         // Unresolved function
         ScalarFunctionDefinition::Name(Arc::from("UnresolvedFunc"))
             .is_volatile()
-            .expect_err("Unresolved function should not be resolved");
+            .expect_err("Shouldn't determine volatility of unresolved function");
     }
 }
