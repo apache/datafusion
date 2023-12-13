@@ -44,7 +44,7 @@ use arrow::{
     },
     datatypes::{DataType, IntervalUnit, TimeUnit},
 };
-use chrono::Timelike;
+use chrono::{Datelike, Timelike};
 use datafusion::error::Result;
 use datafusion_common::DataFusionError;
 use datafusion_expr::{
@@ -381,6 +381,52 @@ impl ScalarFunctionDef for ToIso8601Function {
         result
     }
 }
+#[derive(Debug)]
+pub struct FromIso8601DateFunction;
+///presto `from_iso8601_date` function ([https://trino.io/docs/current/functions/datetime.html])
+impl ScalarFunctionDef for FromIso8601DateFunction {
+    fn name(&self) -> &str {
+        "from_iso8601_date"
+    }
+
+    fn signature(&self) -> Signature {
+        Signature::exact(vec![DataType::Utf8], Volatility::Immutable)
+    }
+
+    fn return_type(&self) -> ReturnTypeFunction {
+        let return_type = Arc::new(DataType::Date32);
+        Arc::new(move |_| Ok(return_type.clone()))
+    }
+
+    fn execute(&self, args: &[ArrayRef]) -> Result<ArrayRef> {
+        let input = &args[0]
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .expect("Failed to downcast StringArray");
+        let mut result = Vec::new();
+
+        for i in 0..input.len() {
+            if input.is_null(i) {
+                result.push(None);
+            } else {
+                let value = input.value(i);
+                let parsed_date = NaiveDate::parse_from_str(value, "%Y-%m-%d")
+                    .or_else(|_| NaiveDate::parse_from_str(value, "%G-W%V-%u"))
+                    .or_else(|_| {
+                        NaiveDate::parse_from_str(&format!("{}-1", value), "%G-W%V-%u")
+                    })
+                    .or_else(|_| NaiveDate::parse_from_str(value, "%Y-%j"));
+
+                match parsed_date {
+                    Ok(date) => result.push(Some(date.num_days_from_ce() - 719163)), // Adjust for Unix time
+                    Err(_) => result.push(None),
+                }
+            }
+        }
+
+        Ok(Arc::new(Date32Array::from(result)) as ArrayRef)
+    }
+}
 
 // Function package declaration
 pub struct FunctionPackage;
@@ -394,6 +440,7 @@ impl ScalarFunctionPackage for FunctionPackage {
             Box::new(CurrentTimestampFunction),
             Box::new(CurrentTimestampPFunction),
             Box::new(ToIso8601Function),
+            Box::new(FromIso8601DateFunction),
         ]
     }
 }
@@ -509,6 +556,15 @@ mod test {
             "to_iso8601( timestamp '2020-06-10 15:55:23.383345')",
             "2020-06-10T15:55:23.383"
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_from_iso8601_date() -> Result<()> {
+        test_expression!("from_iso8601_date('2020-05-11')", "2020-05-11");
+        test_expression!("from_iso8601_date('2020-W10')", "2020-03-02");
+        test_expression!("from_iso8601_date('2020-W10-1')", "2020-03-02");
+        test_expression!("from_iso8601_date('2020-123')", "2020-05-02");
         Ok(())
     }
 }
