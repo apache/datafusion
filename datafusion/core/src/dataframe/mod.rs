@@ -1272,10 +1272,11 @@ impl DataFrame {
     pub async fn cache(self) -> Result<DataFrame> {
         let context = SessionContext::new_with_state(self.session_state.clone());
         // The schema is consistent with the output
-        let physical_plan = self.clone().create_physical_plan().await?;
-        let mem_table =
-            MemTable::try_new(physical_plan.schema(), self.collect_partitioned().await?)?;
-
+        let plan = self.clone().create_physical_plan().await?;
+        let schema = plan.schema();
+        let task_ctx = Arc::new(self.task_ctx());
+        let partitions = collect_partitioned(plan, task_ctx).await?;
+        let mem_table = MemTable::try_new(schema, partitions)?;
         context.read_table(Arc::new(mem_table))
     }
 }
