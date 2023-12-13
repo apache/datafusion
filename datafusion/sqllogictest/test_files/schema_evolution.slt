@@ -1,0 +1,117 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+##########
+# Tests for schema evolution -- reading
+# data from different files with different schemas
+##########
+
+
+statement ok
+CREATE EXTERNAL TABLE parquet_table(a varchar, b int, c float) STORED AS PARQUET
+LOCATION 'test_files/scratch/schema_evolution/parquet_table/';
+
+# File1 has only columns a and b
+statement ok
+COPY  (
+  SELECT column1 as a, column2 as b
+  FROM ( VALUES ('foo', 1), ('foo', 2), ('foo', 3) )
+ )  TO 'test_files/scratch/schema_evolution/parquet_table/1.parquet'
+(FORMAT PARQUET, SINGLE_FILE_OUTPUT true);
+
+
+# File2 has only b
+statement ok
+COPY  (
+  SELECT column1 as b
+  FROM ( VALUES (10) )
+ )  TO 'test_files/scratch/schema_evolution/parquet_table/2.parquet'
+(FORMAT PARQUET, SINGLE_FILE_OUTPUT true);
+
+# File3 has a column from 'z' which does not appear in the table
+# but also values from a which do appear in the table
+statement ok
+COPY  (
+  SELECT column1 as z, column2 as a
+    FROM ( VALUES ('bar', 'foo'), ('blarg', 'foo') )
+ )  TO 'test_files/scratch/schema_evolution/parquet_table/3.parquet'
+(FORMAT PARQUET, SINGLE_FILE_OUTPUT true);
+
+# File4 has data for b and a (reversed) and d
+statement ok
+COPY  (
+  SELECT column1 as b, column2 as a, column3 as c
+    FROM ( VALUES (100, 'foo', 10.5), (200, 'foo', 12.6), (300, 'bzz', 13.7) )
+ )  TO 'test_files/scratch/schema_evolution/parquet_table/4.parquet'
+(FORMAT PARQUET, SINGLE_FILE_OUTPUT true);
+
+
+# Show all the data
+query TIR rowsort
+select * from parquet_table;
+----
+NULL 10 NULL
+bzz 300 13.7
+foo 1 NULL
+foo 100 10.5
+foo 2 NULL
+foo 200 12.6
+foo 3 NULL
+foo NULL NULL
+foo NULL NULL
+
+# Should see all 7 rows that have 'a=foo'
+query TIR rowsort
+select * from parquet_table where a = 'foo';
+----
+foo 1 NULL
+foo 2 NULL
+foo 3 NULL
+
+query TIR rowsort
+select * from parquet_table where a != 'foo';
+----
+bzz 300 13.7
+
+# this should produce at least one row
+query TIR rowsort
+select * from parquet_table where a is NULL;
+----
+
+query TIR rowsort
+select * from parquet_table where b > 5;
+----
+NULL 10 NULL
+bzz 300 13.7
+foo 100 10.5
+foo 200 12.6
+
+
+query TIR rowsort
+select * from parquet_table where b < 150;
+----
+NULL 10 NULL
+foo 1 NULL
+foo 100 10.5
+foo 2 NULL
+foo 3 NULL
+
+query TIR rowsort
+select * from parquet_table where c > 11.0;
+----
+bzz 300 13.7
+foo 200 12.6
