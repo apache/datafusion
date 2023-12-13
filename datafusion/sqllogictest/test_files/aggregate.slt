@@ -132,9 +132,8 @@ physical_plan
 AggregateExec: mode=Final, gby=[], aggr=[ARRAY_AGG(agg_order.c1)]
 --CoalescePartitionsExec
 ----AggregateExec: mode=Partial, gby=[], aggr=[ARRAY_AGG(agg_order.c1)]
-------SortExec: expr=[c2@1 DESC,c3@2 ASC NULLS LAST]
---------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-----------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/aggregate_agg_multi_order.csv]]}, projection=[c1, c2, c3], has_header=true
+------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+--------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/aggregate_agg_multi_order.csv]]}, projection=[c1, c2, c3], has_header=true
 
 statement error This feature is not implemented: LIMIT not supported in ARRAY_AGG: 1
 SELECT array_agg(c13 LIMIT 1) FROM aggregate_test_100
