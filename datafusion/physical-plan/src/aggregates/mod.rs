@@ -18,7 +18,6 @@
 //! Aggregates functionalities
 
 use std::any::Any;
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use super::DisplayAs;
@@ -857,12 +856,17 @@ fn get_aggregate_expr_req(
     group_by: &PhysicalGroupBy,
     agg_mode: &AggregateMode,
 ) -> LexOrdering {
-    let mut req = aggr_expr.order_bys().unwrap_or_default().to_vec();
     // If
     // - aggregation function is not order-sensitive and
     // - aggregation is performing a "second stage" calculation, and
     // - all aggregate function requirement is inside group by expression
     // ignore the ordering requirement.
+    if !is_order_sensitive(aggr_expr) || !agg_mode.is_first_stage() {
+        return vec![];
+    }
+
+    let mut req = aggr_expr.order_bys().unwrap_or_default().to_vec();
+
     // In non-first stage modes, we accumulate data (using `merge_batch`)
     // from different partitions (i.e. merge partial results). During
     // this merge, we consider the ordering of each partial result.
@@ -876,9 +880,6 @@ fn get_aggregate_expr_req(
         req.retain(|sort_expr| {
             !physical_exprs_contains(&physical_exprs, &sort_expr.expr)
         });
-    }
-    if !is_order_sensitive(aggr_expr) || !agg_mode.is_first_stage() {
-        req.clear();
     }
     req
 }
@@ -928,89 +929,55 @@ fn get_aggregate_expr_groups(
     eq_properties: &EquivalenceProperties,
     agg_mode: &AggregateMode,
 ) -> Result<Vec<AggregateExprGroup>> {
-    // let mut used_indices: HashSet<usize> = HashSet::new();
-    // let mut groups = vec![];
-    let mut groups_v2 : HashMap<LexOrdering, Vec<usize>> = HashMap::new();
-    for (idx, aggr_expr) in aggr_exprs.iter_mut().enumerate() {
-        let req = aggr_expr.order_bys().unwrap_or(&[]).to_vec();
-        let mut sa = groups_v2.remove(&req).unwrap_or(vec![]);
-        if let Some(finer_ordering) = finer_ordering(
-            &req,
-            aggr_expr,
-            group_by,
-            eq_properties,
-            agg_mode,
-        ) {
-            sa.push(idx);
-            groups_v2.insert(finer_ordering, sa);
-        } else if let Some(reversed_expr) = aggr_expr.reverse_expr() {
+    let mut used_indices: HashSet<usize> = HashSet::new();
+    let mut groups = vec![];
+    while used_indices.len() != aggr_exprs.len() {
+        let mut current_group: Option<(Vec<usize>, LexOrdering)> = None;
+        for (idx, aggr_expr) in aggr_exprs.iter_mut().enumerate() {
+            // Group is empty and index is not already in another group.
+            if used_indices.contains(&idx) {
+                // Skip this group, it is already inserted.
+                continue;
+            }
+            // Initialize an empty group with empty requirement
+            let (mut group_indices, mut ordering_req) =
+                current_group.unwrap_or((vec![], vec![]));
+
             if let Some(finer_ordering) = finer_ordering(
-                &req,
-                &reversed_expr,
+                &ordering_req,
+                aggr_expr,
                 group_by,
                 eq_properties,
                 agg_mode,
             ) {
-                *aggr_expr = reversed_expr;
-                sa.push(idx);
-                groups_v2.insert(finer_ordering, sa);
+                ordering_req = finer_ordering;
+                group_indices.push(idx);
+            } else if let Some(reversed_expr) = aggr_expr.reverse_expr() {
+                if let Some(finer_ordering) = finer_ordering(
+                    &ordering_req,
+                    &reversed_expr,
+                    group_by,
+                    eq_properties,
+                    agg_mode,
+                ) {
+                    *aggr_expr = reversed_expr;
+                    ordering_req = finer_ordering;
+                    group_indices.push(idx);
+                }
             }
-        };
+            // Update group with new entries
+            current_group = Some((group_indices, ordering_req));
+        }
+        // We cannot received None here.
+        let (indices, requirement) = current_group
+            .ok_or_else(|| exec_datafusion_err!("Cannot Receive empty group"))?;
+        used_indices.extend(indices.iter());
+        groups.push(AggregateExprGroup {
+            indices,
+            requirement,
+        });
     }
-
-
-
-    // while used_indices.len() != aggr_exprs.len() {
-    //     let mut current_group: Option<(Vec<usize>, LexOrdering)> = None;
-    //     for (idx, aggr_expr) in aggr_exprs.iter_mut().enumerate() {
-    //         // Group is empty and index is not already in another group.
-    //         if used_indices.contains(&idx) {
-    //             // Skip this group, it is already inserted.
-    //             continue;
-    //         }
-    //         // Initialize an empty group with empty requirement
-    //         let (mut group_indices, mut ordering_req) =
-    //             current_group.unwrap_or((vec![], vec![]));
-    //
-    //         if let Some(finer_ordering) = finer_ordering(
-    //             &ordering_req,
-    //             aggr_expr,
-    //             group_by,
-    //             eq_properties,
-    //             agg_mode,
-    //         ) {
-    //             ordering_req = finer_ordering;
-    //             group_indices.push(idx);
-    //         } else if let Some(reversed_expr) = aggr_expr.reverse_expr() {
-    //             if let Some(finer_ordering) = finer_ordering(
-    //                 &ordering_req,
-    //                 &reversed_expr,
-    //                 group_by,
-    //                 eq_properties,
-    //                 agg_mode,
-    //             ) {
-    //                 *aggr_expr = reversed_expr;
-    //                 ordering_req = finer_ordering;
-    //                 group_indices.push(idx);
-    //             }
-    //         }
-    //         // Update group with new entries
-    //         current_group = Some((group_indices, ordering_req));
-    //     }
-    //     // We cannot received None here.
-    //     let (indices, requirement) = current_group
-    //         .ok_or_else(|| exec_datafusion_err!("Cannot Receive empty group"))?;
-    //     used_indices.extend(indices.iter());
-    //     groups.push(AggregateExprGroup {
-    //         indices,
-    //         requirement,
-    //     });
-    // }
-
-    Ok(groups_v2.into_iter().map(|(requirement, indices)| AggregateExprGroup {
-        indices,
-        requirement,
-    }).collect())
+    Ok(groups)
 }
 
 /// returns physical expressions for arguments to evaluate against a batch
@@ -1217,24 +1184,26 @@ fn reorder_aggregate_expr_results(
     aggregate_group_results: Vec<Vec<Vec<ArrayRef>>>,
     aggregate_group_indices: Vec<Vec<usize>>,
 ) -> Vec<ArrayRef> {
-    let n_aggregate = aggregate_group_indices
-        .iter()
-        .map(|group_indices| group_indices.len())
-        .sum();
+    // Calculate the total number of aggregate results.
+    let n_aggregate = aggregate_group_indices.iter().flatten().count();
 
+    // Initialize a result vector with empty vectors, one for each aggregate result.
     let mut result = vec![vec![]; n_aggregate];
-    // Insert each aggregation result inside an aggregation group, to the proper places in the result
-    for (aggregate_group_result, group_indices) in aggregate_group_results
+    // Process each aggregate group result and its corresponding indices.
+    // We combine the results and indices, flattening them for processing.
+    aggregate_group_results
         .into_iter()
         .zip(aggregate_group_indices.iter())
-    {
-        group_indices
-            .iter()
-            .zip(aggregate_group_result.into_iter())
-            .for_each(|(&idx, aggr_state)| {
-                result[idx] = aggr_state;
-            })
-    }
+        .flat_map(|(group_result, group_indices)| {
+            // Pair each group's result with its target index.
+            group_indices.iter().zip(group_result)
+        })
+        .for_each(|(&idx, aggr_state)| {
+            // Place each aggregate state in its correct position in the result vector.
+            result[idx] = aggr_state;
+        });
+
+    // Flatten the result vectors into a single vector and return.
     result.into_iter().flatten().collect()
 }
 
