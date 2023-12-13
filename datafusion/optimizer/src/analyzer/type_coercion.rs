@@ -503,7 +503,10 @@ fn coerce_window_frame(
     let target_type = match window_frame.units {
         WindowFrameUnits::Range => {
             if let Some(col_type) = current_types.first() {
-                if col_type.is_numeric() || is_utf8_or_large_utf8(col_type) {
+                if col_type.is_numeric()
+                    || is_utf8_or_large_utf8(col_type)
+                    || matches!(col_type, DataType::Null)
+                {
                     col_type
                 } else if is_datetime(col_type) {
                     &DataType::Interval(IntervalUnit::MonthDayNano)

@@ -72,8 +72,12 @@ impl AnalysisContext {
     }
 }
 
-/// Represents the boundaries of the resulting value from a physical expression,
-/// if it were to be an expression, if it were to be evaluated.
+/// Represents the boundaries (e.g. min and max values) of a particular column
+///
+/// This is used range analysis of expressions, to determine if the expression
+/// limits the value of particular columns (e.g. analyzing an expression such as
+/// `time < 50` would result in a boundary interval for `time` having a max
+/// value of `50`).
 #[derive(Clone, Debug, PartialEq)]
 pub struct ExprBoundaries {
     pub column: Column,
@@ -110,6 +114,23 @@ impl ExprBoundaries {
             interval,
             distinct_count: col_stats.distinct_count.clone(),
         })
+    }
+
+    /// Create `ExprBoundaries` that represent no known bounds for all the
+    /// columns in `schema`
+    pub fn try_new_unbounded(schema: &Schema) -> Result<Vec<Self>> {
+        schema
+            .fields()
+            .iter()
+            .enumerate()
+            .map(|(i, field)| {
+                Ok(Self {
+                    column: Column::new(field.name(), i),
+                    interval: Interval::make_unbounded(field.data_type())?,
+                    distinct_count: Precision::Absent,
+                })
+            })
+            .collect()
     }
 }
 
