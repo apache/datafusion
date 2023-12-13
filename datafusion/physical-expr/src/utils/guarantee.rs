@@ -25,30 +25,50 @@ use datafusion_expr::Operator;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-/// Represents a known guarantee that for a particular filter expression to
-/// evaluate to `true`, a column must be one of a set of values or not one of
-/// a set of values.
+/// Represents a guarantee required for a boolean expression to evaluate to
+/// `true`.
+///
+/// The guarantee takes the form of a column and a set of literal (constant)
+/// [`ScalarValue`]s. For the expression to evaluate to `true`, the column must
+/// *satisfy* the guarantee
+///
+/// To satisfy the guarantee, depending on [`Guarantee`],  the values in the
+/// column must either:
+///
+/// 1. be ONLY one of that set
+/// 2. NOT be ANY of that set
+///
+/// # Uses `LiteralGuarantee`s
 ///
 /// `LiteralGuarantee`s can be used to simplify expressions and skip data files
-/// (or row groups in parquet files) by proving that an expression can not
-/// evaluate to true. For example, if we know that `a = 1` must be true for the
-/// filter to evaluate to `true`, then we can skip any partition where we know
+/// (e.g. row groups in parquet files) by proving expressions can not evaluate
+/// to `true`. For example, if we have a guarantee that `a` must be in (`1`) for
+/// a filter to evaluate to `true`, then we can skip any partition where we know
 /// that `a` never has the value of `1`.
 ///
-/// See [`LiteralGuarantee::analyze`] to extract literal guarantees from a
+/// **Important**: If a `LiteralGuarantee` is not satisfied the relevant
+/// expression is *guaranteed* to evaluate to `false` or `null`. **However**,
+/// the opposite does not hold. Even if all `LiteralGurantee`s are satisfied,
+/// that does does not guarantee that the predicate will evaluate to `true`: it
+/// may still evaluate to `true`, `false` or `null`.
+///
+/// # Creating `LiteralGuarantee`s
+///
+/// Use [`LiteralGuarantee::analyze`] to extract literal guarantees from a
 /// filter predicate.
 ///
 /// # Details
 /// A guarantee can be one of two forms:
 ///
-/// 1. The column  must be one of a particular set of values for the predicate
-/// to be `true`. For example,
-/// `(a = 1)`, `(a = 1 OR a =2) or `a IN (1, 2, 3)`
+/// 1. The column must be one a particular set of values for the predicate
+/// to be `true`. If the column takes on any other value, the predicate can not
+/// evaluate to `true`. For example,
+/// `(a = 1)`, `(a = 1 OR a = 2) or `a IN (1, 2, 3)`
 ///
-/// The column must NOT one of a particular set of values for the predicate to
-/// be `true`. For example,
+/// 2. The column must NOT be one of a particular set of values for the predicate to
+/// be `true`. If the column takes on any of the values, the predicate can not
+/// evaluate to `true`. For example,
 /// `(a != 1)`, `(a != 1 AND a != 2)` or `a NOT IN (1, 2, 3)`
-///
 #[derive(Debug, Clone, PartialEq)]
 pub struct LiteralGuarantee {
     pub column: Column,
@@ -56,19 +76,22 @@ pub struct LiteralGuarantee {
     pub literals: HashSet<ScalarValue>,
 }
 
-/// What guaranteed about the values if the predicate evaluates to `true`?
+/// What is guaranteed about the values for a [`LiteralGuarantee`]?
 #[derive(Debug, Clone, PartialEq)]
 pub enum Guarantee {
-    /// `column` must be one of a set of constant values
+    /// Guarantee that the expression is `true` if `column` is one the values. If
+    /// `column` is not one of the values, the expression can not be `true`.
     In,
-    /// `column` must NOT be one of a set of constant values
+    /// Guarantee that the expression is `true` if `column` is not ANY of the
+    /// values. If `column` is one of the values, the expression can not be
+    /// `true`.
     NotIn,
 }
 
 impl LiteralGuarantee {
     /// Create a new instance of the guarantee if the provided operator is
     /// supported. Returns None otherwise. See [`LiteralGuarantee::analyze`] to
-    /// create these structures from an expression.
+    /// create these structures from an predicate (boolean expression).
     fn try_new<'a>(
         column_name: impl Into<String>,
         op: &Operator,
@@ -89,22 +112,45 @@ impl LiteralGuarantee {
         })
     }
 
-    /// Return a list of `LiteralGuarantees` for the specified predicate that
-    /// hold if the predicate (filter) expression evaluates to `true`.
+    /// Return a list of [`LiteralGuarantee`]s that must be satisfied for `expr`
+    /// to evaluate to `true`.
     ///
-    /// `expr` should be a boolean expression
+    /// If more than one `LiteralGuarantee` is returned, they must **all** hold
+    /// for the expression to possibly be `true`. If any is not satisfied, the
+    /// expression is guaranteed to be `null` or `false`.
     ///
-    /// Note: this function does not simplify the expression prior to analysis.
+    /// # Notes:
+    /// 1. `expr` must be a boolean expression.
+    /// 2. `expr` is not simplified prior to analysis.
     pub fn analyze(expr: &Arc<dyn PhysicalExpr>) -> Vec<LiteralGuarantee> {
+        // split conjunction: <expr> AND <expr> AND ...
         split_conjunction(expr)
             .into_iter()
+            // for an `AND` conjunction to be true, all terms individually must be true
             .fold(GuaranteeBuilder::new(), |builder, expr| {
                 if let Some(cel) = ColOpLit::try_new(expr) {
                     return builder.aggregate_conjunct(cel);
                 } else {
-                    // look for (col <op> literal) OR (col <op> literal) ...
+                    // split disjunction: <expr> OR <expr> OR ...
                     let disjunctions = split_disjunction(expr);
 
+                    // We are trying to add a guarantee that a column must be
+                    // in/not in a particular set of values for the expression
+                    // to evaluate to true.
+                    //
+                    // A disjunction is true, if at least one the terms is be
+                    // true.
+                    //
+                    // Thus, we can infer a guarantee if all terms are of the
+                    // form `(col <op> literal) OR (col <op> literal) OR ...`.
+                    //
+                    // For example, we can infer that `a = 1 OR a = 2 OR a = 3`
+                    // is guaranteed to be true ONLY if a is in (`1`, `2` or `3`).
+                    //
+                    // However, for something like  `a = 1 OR a = 2 OR a < 0` we
+                    // **can't** guarantee that the predicate is only true if a
+                    // is in (`1`, `2`), as it could also be true if `a` were less
+                    // than zero.
                     let terms = disjunctions
                         .iter()
                         .filter_map(|expr| ColOpLit::try_new(expr))
@@ -115,13 +161,13 @@ impl LiteralGuarantee {
                     }
 
                     // if not all terms are of the form (col <op> literal),
-                    // can't infer anything
+                    // can't infer any guarantees
                     if terms.len() != disjunctions.len() {
                         return builder;
                     }
 
                     // if all terms are 'col <op> literal' with the same column
-                    // and operation we can add a guarantee
+                    // and operation we can infer any guarantees
                     let first_term = &terms[0];
                     if terms.iter().all(|term| {
                         term.col.name() == first_term.col.name()
@@ -175,14 +221,15 @@ impl<'a> GuaranteeBuilder<'a> {
         )
     }
 
-    /// Aggregates a new single multi column term to ths builder
-    /// combining with existing guarantees if possible.
+    /// Aggregates a new single column, multi literal term to ths builder
+    /// combining with previously known guarantees if possible.
     ///
     /// # Examples
-    /// * (`AND (a = 1 OR a = 2 OR a = 3)`): a is guaranteed to be 1, 2, or 3
-    /// * `AND (a IN (1,2,3))`: a is guaranteed to be 1, 2, or 3
-    /// * `AND (a != 1 OR a != 2 OR a != 3)`: a is guaranteed to not be 1, 2, or 3
-    /// * `AND (a NOT IN (1,2,3))`: a is guaranteed to not be 1, 2, or 3
+    /// For the following examples, we can guarantee the expression is `true` if:
+    /// * `AND (a = 1 OR a = 2 OR a = 3)`: a is in (1, 2, or 3)
+    /// * `AND (a IN (1,2,3))`: a is in (1, 2, or 3)
+    /// * `AND (a != 1 OR a != 2 OR a != 3)`: a is not in (1, 2, or 3)
+    /// * `AND (a NOT IN (1,2,3))`: a is not in (1, 2, or 3)
     fn aggregate_multi_conjunct(
         mut self,
         col: &'a crate::expressions::Column,
@@ -195,13 +242,17 @@ impl<'a> GuaranteeBuilder<'a> {
             let entry = &mut self.guarantees[*index];
 
             let Some(existing) = entry else {
-                // guarantee has been previously invalidated, nothing to do
+                // determined the previous guarantee for this column has been
+                // invalidated, nothing to do
                 return self;
             };
 
-            // can only combine conjuncts if we have `a != foo AND a != bar`.
-            // `a = foo AND a = bar` is not correct. Also, can't extend with more than one value.
+            // Combine conjuncts if we have `a != foo AND a != bar`.
+            // `a = foo AND a = bar` doesn't make logical sense, s
             match existing.guarantee {
+                // knew that the column could not be a set of values
+                // For example, if we previously had `a != 5` and now we see another `a != 6` we know
+                // if
                 Guarantee::NotIn => {
                     // can extend if only single literal, otherwise invalidate
                     let new_values: HashSet<_> = new_values.into_iter().collect();
@@ -335,7 +386,46 @@ mod test {
     }
 
     #[test]
-    fn test_conjunction() {
+    fn test_conjunction_single_column() {
+        // b = 1 AND b = 2 // impossible. Ideally it should be simplifed
+        test_analyze(col("b").eq(lit(1)).and(col("b").eq(lit(2))), vec![]);
+        // b = 1 AND b != 2
+        test_analyze(col("b").eq(lit(1)).and(col("b").not_eq(lit(2))), vec![]);
+        // b != 1 AND b == 2
+        test_analyze(col("b").not_eq(lit(1)).and(col("b").eq(lit(2))), vec![]);
+        // b != 1 AND b != 2
+        test_analyze(
+            col("b").not_eq(lit(1)).and(col("b").not_eq(lit(2))),
+            vec![not_in_guarantee("b", [1, 2])],
+        );
+        // b != 1 AND b != 2 and b != 3
+        test_analyze(
+            col("b")
+                .not_eq(lit(1))
+                .and(col("b").eq(lit(2)))
+                .and(col("b").not_eq(lit(3))),
+            vec![not_in_guarantee("b", [1, 2, 3])],
+        );
+        // b != 1 AND b != 2 and b = 3 (in theory could determine b = 3)
+        test_analyze(
+            col("b")
+                .not_eq(lit(1))
+                .and(col("b").eq(lit(2)))
+                .and(col("b").not_eq(lit(3))),
+            vec![],
+        );
+        // b != 1 AND b != 2 and b > 3 (can't guarantee true if b was neither 1 nor 2
+        test_analyze(
+            col("b")
+                .not_eq(lit(1))
+                .and(col("b").eq(lit(2)))
+                .and(col("b").lt(lit(3))),
+            vec![],
+        );
+    }
+
+    #[test]
+    fn test_conjunction_multi_column() {
         // a = "foo" AND b = 1
         test_analyze(
             col("a").eq(lit("foo")).and(col("b").eq(lit(1))),
@@ -397,7 +487,46 @@ mod test {
     }
 
     #[test]
-    fn test_disjunction() {
+    fn test_disjunction_single_column() {
+        // b = 1 OR b = 2
+        test_analyze(
+            col("b").eq(lit(1)).or(col("b").eq(lit(2))),
+            vec![in_guarantee("b", [1, 2])],
+        );
+        // b != 1 OR b = 2
+        test_analyze(col("b").not_eq(lit(1)).or(col("b").eq(lit(2))), vec![]);
+        // b = 1 OR b != 2
+        test_analyze(col("b").eq(lit(1)).or(col("b").not_eq(lit(2))), vec![]);
+        // b != 1 OR b != 2
+        test_analyze(col("b").not_eq(lit(1)).or(col("b").not_eq(lit(2))), vec![]);
+        // b != 1 OR b != 2 OR b = 3 -- in theory could guarantee that b = 3
+        test_analyze(
+            col("b")
+                .not_eq(lit(1))
+                .or(col("b").not_eq(lit(2)))
+                .or(lit("b").eq(lit(3))),
+            vec![],
+        );
+        // b = 1 OR b = 2 OR b = 3
+        test_analyze(
+            col("b")
+                .eq(lit(1))
+                .or(col("b").eq(lit(2)))
+                .or(lit("b").eq(lit(3))),
+            vec![in_guarantee("b", [1, 2, 3])],
+        );
+        // b = 1 OR b = 2 OR b > 3 -- can't guarantee that the expression is only true if a is in (1, 2)
+        test_analyze(
+            col("b")
+                .eq(lit(1))
+                .or(col("b").eq(lit(2)))
+                .or(lit("b").eq(lit(3))),
+            vec![],
+        );
+    }
+
+    #[test]
+    fn test_disjunction_multi_column() {
         // a = "foo" OR b = 1
         test_analyze(
             col("a").eq(lit("foo")).or(col("b").eq(lit(1))),
@@ -480,7 +609,7 @@ mod test {
         );
     }
 
-    /// Guarantee that column is a specified value
+    /// Guarantee that the expression is true if the column is one of the specified values
     fn in_guarantee<'a, I, S>(column: &str, literals: I) -> LiteralGuarantee
     where
         I: IntoIterator<Item = S>,
@@ -490,7 +619,7 @@ mod test {
         LiteralGuarantee::try_new(column, &Operator::Eq, literals.iter()).unwrap()
     }
 
-    /// Guarantee that column is NOT a specified value
+    /// Guarantee that the expression is true if the column is NOT any of the specified values
     fn not_in_guarantee<'a, I, S>(column: &str, literals: I) -> LiteralGuarantee
     where
         I: IntoIterator<Item = S>,
