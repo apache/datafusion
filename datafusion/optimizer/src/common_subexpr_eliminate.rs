@@ -518,7 +518,7 @@ enum ExprMask {
 }
 
 impl ExprMask {
-    fn ignores(&self, expr: &Expr) -> bool {
+    fn ignores(&self, expr: &Expr) -> Result<bool> {
         let is_normal_minus_aggregates = matches!(
             expr,
             Expr::Literal(..)
@@ -529,14 +529,14 @@ impl ExprMask {
                 | Expr::Wildcard { .. }
         );
 
-        let is_volatile = is_volatile(expr);
+        let is_volatile = is_volatile(expr)?;
 
         let is_aggr = matches!(expr, Expr::AggregateFunction(..));
 
-        match self {
+        Ok(match self {
             Self::Normal => is_volatile || is_normal_minus_aggregates || is_aggr,
             Self::NormalAndAggregates => is_volatile || is_normal_minus_aggregates,
-        }
+        })
     }
 }
 
@@ -628,7 +628,7 @@ impl TreeNodeVisitor for ExprIdentifierVisitor<'_> {
 
         let (idx, sub_expr_desc) = self.pop_enter_mark();
         // skip exprs should not be recognize.
-        if self.expr_mask.ignores(expr) {
+        if self.expr_mask.ignores(expr)? {
             self.id_array[idx].0 = self.series_number;
             let desc = Self::desc_expr(expr);
             self.visit_stack.push(VisitRecord::ExprItem(desc));
