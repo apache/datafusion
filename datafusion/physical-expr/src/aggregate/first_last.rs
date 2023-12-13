@@ -569,23 +569,16 @@ fn get_value_idx<const FIRST: bool>(
     ordering_req: LexOrderingRef,
     is_set: bool,
 ) -> Result<Option<usize>> {
-    let value = &values[0];
-    let _ordering_values = &values[1..];
-    if value.is_empty() {
-        // For empty batches there is nothing to update
+    let value_array_ref = &values[0];
+    // Return None for empty batches or when no ordering is specified and is_set is true.
+    if value_array_ref.is_empty() || (is_set && FIRST && ordering_req.is_empty()) {
         return Ok(None);
     }
-    if is_set && FIRST && ordering_req.is_empty() {
-        // No need to overwrite existing value, when no ordering is specified
-        // Just use first value encountered
-        return Ok(None);
-    }
-
     Ok(Some(if FIRST {
         0
     } else {
         // LAST
-        value.len() - 1
+        value_array_ref.len() - 1
     }))
 }
 
