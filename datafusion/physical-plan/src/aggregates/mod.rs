@@ -343,7 +343,6 @@ impl AggregateExec {
             &input_eq_properties,
             &mode,
         )?;
-
         let schema = Arc::new(materialize_dict_group_keys(
             &original_schema,
             group_by.expr.len(),
@@ -355,7 +354,8 @@ impl AggregateExec {
         // If existing ordering satisfies a prefix of the GROUP BY expressions,
         // prefix requirements with this section. In this case, aggregation will
         // work more efficiently.
-        let indices = get_ordered_partition_by_indices(&groupby_exprs, &input);
+        let indices =
+            get_ordered_partition_by_indices(&groupby_exprs, &input_eq_properties);
         let mut new_requirement = indices
             .iter()
             .map(|&idx| PhysicalSortRequirement {
