@@ -434,12 +434,6 @@ impl AggregateExec {
         &self.filter_expr
     }
 
-    /// ORDER BY clause expression for each aggregate expression
-    pub fn order_by_expr(&self) -> &[Option<LexOrdering>] {
-        // &self.order_by_expr
-        &[]
-    }
-
     /// Input plan
     pub fn input(&self) -> &Arc<dyn ExecutionPlan> {
         &self.input
@@ -517,7 +511,7 @@ impl AggregateExec {
             return false;
         }
         // ensure there are no order by expressions
-        if self.order_by_expr().iter().any(|e| e.is_some()) {
+        if self.aggr_expr().iter().any(|e| e.order_bys().is_some()) {
             return false;
         }
         // ensure there is no output ordering; can this rule be relaxed?
