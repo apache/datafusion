@@ -1981,7 +1981,6 @@ mod tests {
         )
         .await
         .unwrap();
-        let df = ctx.sql("SELECT c1, c2 FROM test").await?;
         df.write_table("my_table", DataFrameWriteOptions::new())
             .await?;
 
