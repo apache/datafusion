@@ -660,30 +660,40 @@ fn date_bin_impl(
 
     Ok(match array {
         ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(v, tz_opt)) => {
-            let f = stride_map_fn::<TimestampNanosecondType>(origin, stride, stride_fn);
-            ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(f(*v), tz_opt.clone()))
+            let apply_stride_fn =
+                stride_map_fn::<TimestampNanosecondType>(origin, stride, stride_fn);
+            ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(
+                apply_stride_fn(*v),
+                tz_opt.clone(),
+            ))
         }
         ColumnarValue::Scalar(ScalarValue::TimestampMicrosecond(v, tz_opt)) => {
-            let f = stride_map_fn::<TimestampMicrosecondType>(origin, stride, stride_fn);
+            let apply_stride_fn =
+                stride_map_fn::<TimestampMicrosecondType>(origin, stride, stride_fn);
             ColumnarValue::Scalar(ScalarValue::TimestampMicrosecond(
-                f(*v),
+                apply_stride_fn(*v),
                 tz_opt.clone(),
             ))
         }
         ColumnarValue::Scalar(ScalarValue::TimestampMillisecond(v, tz_opt)) => {
-            let f = stride_map_fn::<TimestampMillisecondType>(origin, stride, stride_fn);
+            let apply_stride_fn =
+                stride_map_fn::<TimestampMillisecondType>(origin, stride, stride_fn);
             ColumnarValue::Scalar(ScalarValue::TimestampMillisecond(
-                f(*v),
+                apply_stride_fn(*v),
                 tz_opt.clone(),
             ))
         }
         ColumnarValue::Scalar(ScalarValue::TimestampSecond(v, tz_opt)) => {
-            let f = stride_map_fn::<TimestampSecondType>(origin, stride, stride_fn);
-            ColumnarValue::Scalar(ScalarValue::TimestampSecond(f(*v), tz_opt.clone()))
+            let apply_stride_fn =
+                stride_map_fn::<TimestampSecondType>(origin, stride, stride_fn);
+            ColumnarValue::Scalar(ScalarValue::TimestampSecond(
+                apply_stride_fn(*v),
+                tz_opt.clone(),
+            ))
         }
 
         ColumnarValue::Array(array) => {
-            fn process_array<T>(
+            fn transform_array_with_stride<T>(
                 origin: i64,
                 stride: i64,
                 stride_fn: fn(i64, i64, i64) -> i64,
@@ -694,10 +704,10 @@ fn date_bin_impl(
                 T: ArrowTimestampType,
             {
                 let array = as_primitive_array::<T>(array)?;
-                let f = stride_map_fn::<T>(origin, stride, stride_fn);
+                let apply_stride_fn = stride_map_fn::<T>(origin, stride, stride_fn);
                 let array = array
                     .iter()
-                    .map(f)
+                    .map(apply_stride_fn)
                     .collect::<PrimitiveArray<T>>()
                     .with_timezone_opt(tz_opt.clone());
 
@@ -705,22 +715,22 @@ fn date_bin_impl(
             }
             match array.data_type() {
                 DataType::Timestamp(TimeUnit::Nanosecond, tz_opt) => {
-                    process_array::<TimestampNanosecondType>(
+                    transform_array_with_stride::<TimestampNanosecondType>(
                         origin, stride, stride_fn, array, tz_opt,
                     )?
                 }
                 DataType::Timestamp(TimeUnit::Microsecond, tz_opt) => {
-                    process_array::<TimestampMicrosecondType>(
+                    transform_array_with_stride::<TimestampMicrosecondType>(
                         origin, stride, stride_fn, array, tz_opt,
                     )?
                 }
                 DataType::Timestamp(TimeUnit::Millisecond, tz_opt) => {
-                    process_array::<TimestampMillisecondType>(
+                    transform_array_with_stride::<TimestampMillisecondType>(
                         origin, stride, stride_fn, array, tz_opt,
                     )?
                 }
                 DataType::Timestamp(TimeUnit::Second, tz_opt) => {
-                    process_array::<TimestampSecondType>(
+                    transform_array_with_stride::<TimestampSecondType>(
                         origin, stride, stride_fn, array, tz_opt,
                     )?
                 }
