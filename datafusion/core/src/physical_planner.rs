@@ -795,14 +795,13 @@ impl DefaultPhysicalPlanner {
                         })
                         .collect::<Result<Vec<_>>>()?;
 
-                    let (aggregates, filters, order_bys) : (Vec<_>, Vec<_>, Vec<_>) = multiunzip(agg_filter);
+                    let (aggregates, filters, _order_bys) : (Vec<_>, Vec<_>, Vec<_>) = multiunzip(agg_filter);
 
                     let initial_aggr = Arc::new(AggregateExec::try_new(
                         AggregateMode::Partial,
                         groups.clone(),
                         aggregates.clone(),
                         filters.clone(),
-                        order_bys,
                         input_exec,
                         physical_input_schema.clone(),
                     )?);
@@ -820,7 +819,6 @@ impl DefaultPhysicalPlanner {
                     // To reflect such changes to subsequent stages, use the updated
                     // `AggregateExpr`/`PhysicalSortExpr` objects.
                     let updated_aggregates = initial_aggr.aggr_expr().to_vec();
-                    let updated_order_bys = initial_aggr.order_by_expr().to_vec();
 
                     let next_partition_mode = if can_repartition {
                         // construct a second aggregation with 'AggregateMode::FinalPartitioned'
@@ -844,7 +842,6 @@ impl DefaultPhysicalPlanner {
                         final_grouping_set,
                         updated_aggregates,
                         filters,
-                        updated_order_bys,
                         initial_aggr,
                         physical_input_schema.clone(),
                     )?))

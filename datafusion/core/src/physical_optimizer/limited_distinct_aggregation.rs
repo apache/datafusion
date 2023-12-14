@@ -55,7 +55,6 @@ impl LimitedDistinctAggregation {
             aggr.group_by().clone(),
             aggr.aggr_expr().to_vec(),
             aggr.filter_expr().to_vec(),
-            aggr.order_by_expr().to_vec(),
             aggr.input().clone(),
             aggr.input_schema(),
         )
@@ -307,7 +306,6 @@ mod tests {
             build_group_by(&schema.clone(), vec!["a".to_string()]),
             vec![],         /* aggr_expr */
             vec![None],     /* filter_expr */
-            vec![None],     /* order_by_expr */
             source,         /* input */
             schema.clone(), /* input_schema */
         )?;
@@ -316,7 +314,6 @@ mod tests {
             build_group_by(&schema.clone(), vec!["a".to_string()]),
             vec![],                /* aggr_expr */
             vec![None],            /* filter_expr */
-            vec![None],            /* order_by_expr */
             Arc::new(partial_agg), /* input */
             schema.clone(),        /* input_schema */
         )?;
@@ -359,7 +356,6 @@ mod tests {
             build_group_by(&schema.clone(), vec!["a".to_string()]),
             vec![],         /* aggr_expr */
             vec![None],     /* filter_expr */
-            vec![None],     /* order_by_expr */
             source,         /* input */
             schema.clone(), /* input_schema */
         )?;
@@ -401,7 +397,6 @@ mod tests {
             build_group_by(&schema.clone(), vec!["a".to_string()]),
             vec![],         /* aggr_expr */
             vec![None],     /* filter_expr */
-            vec![None],     /* order_by_expr */
             source,         /* input */
             schema.clone(), /* input_schema */
         )?;
@@ -443,7 +438,6 @@ mod tests {
             build_group_by(&schema.clone(), vec!["a".to_string(), "b".to_string()]),
             vec![],         /* aggr_expr */
             vec![None],     /* filter_expr */
-            vec![None],     /* order_by_expr */
             source,         /* input */
             schema.clone(), /* input_schema */
         )?;
@@ -452,7 +446,6 @@ mod tests {
             build_group_by(&schema.clone(), vec!["a".to_string()]),
             vec![],                 /* aggr_expr */
             vec![None],             /* filter_expr */
-            vec![None],             /* order_by_expr */
             Arc::new(group_by_agg), /* input */
             schema.clone(),         /* input_schema */
         )?;
@@ -495,7 +488,6 @@ mod tests {
             build_group_by(&schema.clone(), vec![]),
             vec![],         /* aggr_expr */
             vec![None],     /* filter_expr */
-            vec![None],     /* order_by_expr */
             source,         /* input */
             schema.clone(), /* input_schema */
         )?;
@@ -526,7 +518,6 @@ mod tests {
             build_group_by(&schema.clone(), vec!["a".to_string()]),
             vec![agg.count_expr()], /* aggr_expr */
             vec![None],             /* filter_expr */
-            vec![None],             /* order_by_expr */
             source,                 /* input */
             schema.clone(),         /* input_schema */
         )?;
@@ -563,7 +554,6 @@ mod tests {
             build_group_by(&schema.clone(), vec!["a".to_string()]),
             vec![],            /* aggr_expr */
             vec![filter_expr], /* filter_expr */
-            vec![None],        /* order_by_expr */
             source,            /* input */
             schema.clone(),    /* input_schema */
         )?;
@@ -592,22 +582,15 @@ mod tests {
         let source = parquet_exec_with_sort(vec![sort_key]);
         let schema = source.schema();
 
-        // `SELECT a FROM MemoryExec GROUP BY a ORDER BY a LIMIT 10;`, Single AggregateExec
-        let order_by_expr = Some(vec![PhysicalSortExpr {
-            expr: expressions::col("a", &schema.clone()).unwrap(),
-            options: SortOptions::default(),
-        }]);
-
         // `SELECT a FROM MemoryExec WHERE a > 1 GROUP BY a LIMIT 10;`, Single AggregateExec
         // the `a > 1` filter is applied in the AggregateExec
         let single_agg = AggregateExec::try_new(
             AggregateMode::Single,
             build_group_by(&schema.clone(), vec!["a".to_string()]),
-            vec![],              /* aggr_expr */
-            vec![None],          /* filter_expr */
-            vec![order_by_expr], /* order_by_expr */
-            source,              /* input */
-            schema.clone(),      /* input_schema */
+            vec![],         /* aggr_expr */
+            vec![None],     /* filter_expr */
+            source,         /* input */
+            schema.clone(), /* input_schema */
         )?;
         let limit_exec = LocalLimitExec::new(
             Arc::new(single_agg),
