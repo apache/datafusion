@@ -1998,7 +1998,6 @@ mod tests {
             .to_str()
             .expect("Should be a str")
             .to_owned();
-        println!("{name}");
         let (parsed_id, _) = name.split_once('_').expect("File should contain _ !");
         let write_id = parsed_id.to_owned();
 
@@ -2073,7 +2072,6 @@ mod tests {
             .to_str()
             .expect("Should be a str")
             .to_owned();
-        println!("{name}");
         let (parsed_id, _) = name.split_once('_').expect("File should contain _ !");
         let write_id = parsed_id.to_owned();
 
