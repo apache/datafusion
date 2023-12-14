@@ -521,7 +521,6 @@ fn reorder_aggregate_keys(
                             new_partial_group_by,
                             agg_exec.aggr_expr().to_vec(),
                             agg_exec.filter_expr().to_vec(),
-                            agg_exec.order_by_expr().to_vec(),
                             agg_exec.input().clone(),
                             agg_exec.input_schema.clone(),
                         )?))
@@ -548,7 +547,6 @@ fn reorder_aggregate_keys(
                         new_group_by,
                         agg_exec.aggr_expr().to_vec(),
                         agg_exec.filter_expr().to_vec(),
-                        agg_exec.order_by_expr().to_vec(),
                         partial_agg,
                         agg_exec.input_schema(),
                     )?);

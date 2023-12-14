@@ -427,19 +427,6 @@ impl AsExecutionPlan for PhysicalPlanNode {
                             .transpose()
                     })
                     .collect::<Result<Vec<_>, _>>()?;
-                let physical_order_by_expr = hash_agg
-                    .order_by_expr
-                    .iter()
-                    .map(|expr| {
-                        expr.sort_expr
-                            .iter()
-                            .map(|e| {
-                                parse_physical_sort_expr(e, registry, &physical_schema)
-                            })
-                            .collect::<Result<Vec<_>>>()
-                            .map(|exprs| (!exprs.is_empty()).then_some(exprs))
-                    })
-                    .collect::<Result<Vec<_>>>()?;
 
                 let physical_aggr_expr: Vec<Arc<dyn AggregateExpr>> = hash_agg
                     .aggr_expr
@@ -498,7 +485,6 @@ impl AsExecutionPlan for PhysicalPlanNode {
                     PhysicalGroupBy::new(group_expr, null_expr, groups),
                     physical_aggr_expr,
                     physical_filter_expr,
-                    physical_order_by_expr,
                     input,
                     Arc::new(input_schema.try_into()?),
                 )?))
@@ -1233,12 +1219,6 @@ impl AsExecutionPlan for PhysicalPlanNode {
 
             let filter = exec
                 .filter_expr()
-                .iter()
-                .map(|expr| expr.to_owned().try_into())
-                .collect::<Result<Vec<_>>>()?;
-
-            let order_by = exec
-                .order_by_expr()
                 .iter()
                 .map(|expr| expr.to_owned().try_into())
                 .collect::<Result<Vec<_>>>()?;

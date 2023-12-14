@@ -41,13 +41,7 @@ use datafusion_common::stats::Precision;
 use datafusion_common::{not_impl_err, plan_err, DataFusionError, Result};
 use datafusion_execution::TaskContext;
 use datafusion_expr::Accumulator;
-use datafusion_physical_expr::{
-    aggregate::is_order_sensitive,
-    equivalence::collapse_lex_req,
-    expressions::{Column, Max, Min, UnKnownColumn},
-    physical_exprs_contains, reverse_order_bys, AggregateExpr, EquivalenceProperties,
-    LexOrdering, LexRequirement, PhysicalExpr, PhysicalSortExpr, PhysicalSortRequirement,
-};
+use datafusion_physical_expr::{aggregate::is_order_sensitive, equivalence::collapse_lex_req, expressions::{Column, Max, Min, UnKnownColumn}, physical_exprs_contains, reverse_order_bys, AggregateExpr, EquivalenceProperties, LexOrdering, LexRequirement, PhysicalExpr, PhysicalSortExpr, PhysicalSortRequirement, LexOrderingRef};
 
 use itertools::{izip, Itertools};
 
@@ -279,8 +273,6 @@ pub struct AggregateExec {
     aggr_expr: Vec<Arc<dyn AggregateExpr>>,
     /// FILTER (WHERE clause) expression for each aggregate expression
     filter_expr: Vec<Option<Arc<dyn PhysicalExpr>>>,
-    /// (ORDER BY clause) expression for each aggregate expression
-    order_by_expr: Vec<Option<LexOrdering>>,
     /// Set if the output of this aggregation is truncated by a upstream sort/limit clause
     limit: Option<usize>,
     /// Input plan, could be a partial aggregate or the input to the aggregate
@@ -468,8 +460,6 @@ impl AggregateExec {
         group_by: PhysicalGroupBy,
         mut aggr_expr: Vec<Arc<dyn AggregateExpr>>,
         filter_expr: Vec<Option<Arc<dyn PhysicalExpr>>>,
-        // Ordering requirement of each aggregate expression
-        mut order_by_expr: Vec<Option<LexOrdering>>,
         input: Arc<dyn ExecutionPlan>,
         input_schema: SchemaRef,
     ) -> Result<Self> {
@@ -487,10 +477,10 @@ impl AggregateExec {
         ));
         let original_schema = Arc::new(original_schema);
         // Reset ordering requirement to `None` if aggregator is not order-sensitive
-        order_by_expr = aggr_expr
+        let mut order_by_expr = aggr_expr
             .iter()
-            .zip(order_by_expr)
-            .map(|(aggr_expr, fn_reqs)| {
+            .map(|aggr_expr| {
+                let fn_reqs = aggr_expr.order_bys().map(|ordering| ordering.to_vec());
                 // If
                 // - aggregation function is order-sensitive and
                 // - aggregation is performing a "first stage" calculation, and
@@ -558,7 +548,6 @@ impl AggregateExec {
             group_by,
             aggr_expr,
             filter_expr,
-            order_by_expr,
             input,
             original_schema,
             schema,
@@ -600,11 +589,6 @@ impl AggregateExec {
     /// FILTER (WHERE clause) expression for each aggregate expression
     pub fn filter_expr(&self) -> &[Option<Arc<dyn PhysicalExpr>>] {
         &self.filter_expr
-    }
-
-    /// ORDER BY clause expression for each aggregate expression
-    pub fn order_by_expr(&self) -> &[Option<LexOrdering>] {
-        &self.order_by_expr
     }
 
     /// Input plan
@@ -684,7 +668,7 @@ impl AggregateExec {
             return false;
         }
         // ensure there are no order by expressions
-        if self.order_by_expr().iter().any(|e| e.is_some()) {
+        if self.aggr_expr().iter().any(|e| e.order_bys().is_some()) {
             return false;
         }
         // ensure there is no output ordering; can this rule be relaxed?
@@ -873,7 +857,6 @@ impl ExecutionPlan for AggregateExec {
             self.group_by.clone(),
             self.aggr_expr.clone(),
             self.filter_expr.clone(),
-            self.order_by_expr.clone(),
             children[0].clone(),
             self.input_schema.clone(),
         )?;

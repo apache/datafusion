@@ -55,7 +55,6 @@ impl LimitedDistinctAggregation {
             aggr.group_by().clone(),
             aggr.aggr_expr().to_vec(),
             aggr.filter_expr().to_vec(),
-            aggr.order_by_expr().to_vec(),
             aggr.input().clone(),
             aggr.input_schema(),
         )
