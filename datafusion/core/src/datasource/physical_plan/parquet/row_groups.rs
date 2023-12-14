@@ -553,6 +553,64 @@ mod tests {
         );
     }
 
+    #[test]
+    fn row_group_pruning_predicate_file_schema() {
+        use datafusion_expr::{col, lit};
+        // test row group predicate when file schema is different than table schema
+        // c1 > 0
+        let table_schema = Arc::new(Schema::new(vec![
+            Field::new("c1", DataType::Int32, false),
+            Field::new("c2", DataType::Int32, false),
+        ]));
+        let expr = col("c1").gt(lit(0));
+        let expr = logical2physical(&expr, &table_schema);
+        let pruning_predicate =
+            PruningPredicate::try_new(expr, table_schema.clone()).unwrap();
+
+        // Model a file schema's column order c2 then c1, which is the opposite
+        // of the table schema
+        let file_schema = Arc::new(Schema::new(vec![
+            Field::new("c2", DataType::Int32, false),
+            Field::new("c1", DataType::Int32, false),
+        ]));
+        let schema_descr = get_test_schema_descr(vec![
+            PrimitiveTypeField::new("c2", PhysicalType::INT32),
+            PrimitiveTypeField::new("c1", PhysicalType::INT32),
+        ]);
+        // rg1 has c2 less than zero, c1 greater than zero
+        let rgm1 = get_row_group_meta_data(
+            &schema_descr,
+            vec![
+                ParquetStatistics::int32(Some(-10), Some(-1), None, 0, false), // c2
+                ParquetStatistics::int32(Some(1), Some(10), None, 0, false),
+            ],
+        );
+        // rg1 has c2 greater than zero, c1 less than zero
+        let rgm2 = get_row_group_meta_data(
+            &schema_descr,
+            vec![
+                ParquetStatistics::int32(Some(1), Some(10), None, 0, false),
+                ParquetStatistics::int32(Some(-10), Some(-1), None, 0, false),
+            ],
+        );
+
+        let metrics = parquet_file_metrics();
+        let groups = &[rgm1, rgm2];
+        // the first row group should be left because c1 is greater than zero
+        // the second should be filtered out because c1 is less than zero
+        assert_eq!(
+            prune_row_groups_by_statistics(
+                &file_schema, // NB must be file schema, not table_schema
+                &schema_descr,
+                groups,
+                None,
+                Some(&pruning_predicate),
+                &metrics
+            ),
+            vec![0]
+        );
+    }
+
     fn gen_row_group_meta_data_for_pruning_predicate() -> Vec<RowGroupMetaData> {
         let schema_descr = get_test_schema_descr(vec![
             PrimitiveTypeField::new("c1", PhysicalType::INT32),
