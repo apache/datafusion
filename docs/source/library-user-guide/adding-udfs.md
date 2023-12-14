@@ -478,7 +478,7 @@ impl TableFunctionImpl for EchoFunction {
 }
 ```
 
-## Registering and Using the UDTF
+### Registering and Using the UDTF
 
 With the UDTF implemented, you can register it with the `SessionContext`:
 
