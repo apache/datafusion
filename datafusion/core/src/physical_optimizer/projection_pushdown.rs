@@ -454,7 +454,8 @@ fn try_swapping_with_sort(
 
     Ok(Some(Arc::new(
         SortExec::new(updated_exprs, make_with_child(projection, sort.input())?)
-            .with_fetch(sort.fetch()),
+            .with_fetch(sort.fetch())
+            .with_preserve_partitioning(sort.preserve_partitioning()),
     )))
 }
 

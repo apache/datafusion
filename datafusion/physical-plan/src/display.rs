@@ -260,8 +260,8 @@ impl<'a, 'b> ExecutionPlanVisitor for IndentVisitor<'a, 'b> {
                 }
             }
         }
-        let stats = plan.statistics().map_err(|_e| fmt::Error)?;
         if self.show_statistics {
+            let stats = plan.statistics().map_err(|_e| fmt::Error)?;
             write!(self.f, ", statistics=[{}]", stats)?;
         }
         writeln!(self.f)?;
@@ -341,8 +341,8 @@ impl ExecutionPlanVisitor for GraphvizVisitor<'_, '_> {
             }
         };
 
-        let stats = plan.statistics().map_err(|_e| fmt::Error)?;
         let statistics = if self.show_statistics {
+            let stats = plan.statistics().map_err(|_e| fmt::Error)?;
             format!("statistics=[{}]", stats)
         } else {
             "".to_string()
@@ -434,5 +434,128 @@ impl<'a> fmt::Display for OutputOrderingDisplay<'a> {
             write!(f, "{e}")?;
         }
         write!(f, "]")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fmt::Write;
+    use std::sync::Arc;
+
+    use datafusion_common::DataFusionError;
+
+    use crate::{DisplayAs, ExecutionPlan};
+
+    use super::DisplayableExecutionPlan;
+
+    #[derive(Debug, Clone, Copy)]
+    enum TestStatsExecPlan {
+        Panic,
+        Error,
+        Ok,
+    }
+
+    impl DisplayAs for TestStatsExecPlan {
+        fn fmt_as(
+            &self,
+            _t: crate::DisplayFormatType,
+            f: &mut std::fmt::Formatter,
+        ) -> std::fmt::Result {
+            write!(f, "TestStatsExecPlan")
+        }
+    }
+
+    impl ExecutionPlan for TestStatsExecPlan {
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+
+        fn schema(&self) -> arrow_schema::SchemaRef {
+            Arc::new(arrow_schema::Schema::empty())
+        }
+
+        fn output_partitioning(&self) -> datafusion_physical_expr::Partitioning {
+            datafusion_physical_expr::Partitioning::UnknownPartitioning(1)
+        }
+
+        fn output_ordering(
+            &self,
+        ) -> Option<&[datafusion_physical_expr::PhysicalSortExpr]> {
+            None
+        }
+
+        fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
+            vec![]
+        }
+
+        fn with_new_children(
+            self: Arc<Self>,
+            _: Vec<Arc<dyn ExecutionPlan>>,
+        ) -> datafusion_common::Result<Arc<dyn ExecutionPlan>> {
+            unimplemented!()
+        }
+
+        fn execute(
+            &self,
+            _: usize,
+            _: Arc<datafusion_execution::TaskContext>,
+        ) -> datafusion_common::Result<datafusion_execution::SendableRecordBatchStream>
+        {
+            todo!()
+        }
+
+        fn statistics(&self) -> datafusion_common::Result<datafusion_common::Statistics> {
+            match self {
+                Self::Panic => panic!("expected panic"),
+                Self::Error => {
+                    Err(DataFusionError::Internal("expected error".to_string()))
+                }
+                Self::Ok => Ok(datafusion_common::Statistics::new_unknown(
+                    self.schema().as_ref(),
+                )),
+            }
+        }
+    }
+
+    fn test_stats_display(exec: TestStatsExecPlan, show_stats: bool) {
+        let display =
+            DisplayableExecutionPlan::new(&exec).set_show_statistics(show_stats);
+
+        let mut buf = String::new();
+        write!(&mut buf, "{}", display.one_line()).unwrap();
+        let buf = buf.trim();
+        assert_eq!(buf, "TestStatsExecPlan");
+    }
+
+    #[test]
+    fn test_display_when_stats_panic_with_no_show_stats() {
+        test_stats_display(TestStatsExecPlan::Panic, false);
+    }
+
+    #[test]
+    fn test_display_when_stats_error_with_no_show_stats() {
+        test_stats_display(TestStatsExecPlan::Error, false);
+    }
+
+    #[test]
+    fn test_display_when_stats_ok_with_no_show_stats() {
+        test_stats_display(TestStatsExecPlan::Ok, false);
+    }
+
+    #[test]
+    #[should_panic(expected = "expected panic")]
+    fn test_display_when_stats_panic_with_show_stats() {
+        test_stats_display(TestStatsExecPlan::Panic, true);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error")] // fmt::Error
+    fn test_display_when_stats_error_with_show_stats() {
+        test_stats_display(TestStatsExecPlan::Error, true);
+    }
+
+    #[test]
+    fn test_display_when_stats_ok_with_show_stats() {
+        test_stats_display(TestStatsExecPlan::Ok, false);
     }
 }

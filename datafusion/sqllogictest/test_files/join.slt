@@ -594,3 +594,40 @@ drop table IF EXISTS full_join_test;
 # batch size
 statement ok
 set datafusion.execution.batch_size = 8192;
+
+# related to: https://github.com/apache/arrow-datafusion/issues/8374
+statement ok
+CREATE TABLE t1(a text, b int) AS VALUES ('Alice', 50), ('Alice', 100);
+
+statement ok
+CREATE TABLE t2(a text, b int) AS VALUES ('Alice', 2), ('Alice', 1);
+
+# the current query results are incorrect, becuase the query was incorrectly rewritten as:
+# SELECT t1.a, t1.b FROM t1 JOIN t2 ON t1.a = t2.a ORDER BY t1.a, t1.b;
+# the difference is ORDER BY clause rewrite from t2.b to t1.b, it is incorrect.
+# after https://github.com/apache/arrow-datafusion/issues/8374 fixed, the correct result should be:
+# Alice 50
+# Alice 100
+# Alice 50
+# Alice 100
+query TI
+SELECT t1.a, t1.b FROM t1 JOIN t2 ON t1.a = t2.a ORDER BY t1.a, t2.b;
+----
+Alice 50
+Alice 50
+Alice 100
+Alice 100
+
+query TITI
+SELECT t1.a, t1.b, t2.a, t2.b FROM t1 JOIN t2 ON t1.a = t2.a ORDER BY t1.a, t2.b;
+----
+Alice 50 Alice 1
+Alice 100 Alice 1
+Alice 50 Alice 2
+Alice 100 Alice 2
+
+statement ok
+DROP TABLE t1;
+
+statement ok
+DROP TABLE t2;
