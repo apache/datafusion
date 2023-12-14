@@ -2329,15 +2329,15 @@ ProjectionExec: expr=[country@0 as country, ARRAY_AGG(s.amount) ORDER BY [s.amou
 ----SortExec: expr=[amount@1 DESC]
 ------MemoryExec: partitions=1, partition_sizes=[1]
 
-query T?R
+query T?R rowsort
 SELECT s.country, ARRAY_AGG(s.amount ORDER BY s.amount DESC) AS amounts,
     SUM(s.amount) AS sum1
   FROM sales_global AS s
   GROUP BY s.country
 ----
 FRA [200.0, 50.0] 250
-TUR [100.0, 75.0] 175
 GRC [80.0, 30.0] 110
+TUR [100.0, 75.0] 175
 
 # test_ordering_sensitive_aggregation3
 # When different aggregators have conflicting requirements, we cannot satisfy all of them in current implementation.
@@ -2373,7 +2373,7 @@ ProjectionExec: expr=[country@0 as country, ARRAY_AGG(s.amount) ORDER BY [s.amou
 ----SortExec: expr=[country@0 ASC NULLS LAST,amount@1 DESC]
 ------MemoryExec: partitions=1, partition_sizes=[1]
 
-query T?R
+query T?R rowsort
 SELECT s.country, ARRAY_AGG(s.amount ORDER BY s.amount DESC) AS amounts,
   SUM(s.amount) AS sum1
     FROM (SELECT *
@@ -2409,7 +2409,7 @@ ProjectionExec: expr=[country@0 as country, zip_code@1 as zip_code, ARRAY_AGG(s.
 ----SortExec: expr=[country@1 ASC NULLS LAST,amount@2 DESC]
 ------MemoryExec: partitions=1, partition_sizes=[1]
 
-query TI?R
+query TI?R rowsort
 SELECT s.country, s.zip_code, ARRAY_AGG(s.amount ORDER BY s.amount DESC) AS amounts,
     SUM(s.amount) AS sum1
       FROM (SELECT *
@@ -2445,7 +2445,7 @@ ProjectionExec: expr=[country@0 as country, ARRAY_AGG(s.amount) ORDER BY [s.coun
 ----SortExec: expr=[country@0 ASC NULLS LAST]
 ------MemoryExec: partitions=1, partition_sizes=[1]
 
-query T?R
+query T?R rowsort
 SELECT s.country, ARRAY_AGG(s.amount ORDER BY s.amount DESC) AS amounts,
   SUM(s.amount) AS sum1
     FROM (SELECT *
@@ -2480,7 +2480,7 @@ ProjectionExec: expr=[country@0 as country, ARRAY_AGG(s.amount) ORDER BY [s.coun
 ----SortExec: expr=[country@0 ASC NULLS LAST,amount@1 DESC]
 ------MemoryExec: partitions=1, partition_sizes=[1]
 
-query T?R
+query T?R rowsort
 SELECT s.country, ARRAY_AGG(s.amount ORDER BY s.country DESC, s.amount DESC) AS amounts,
   SUM(s.amount) AS sum1
     FROM (SELECT *
@@ -2512,7 +2512,7 @@ ProjectionExec: expr=[country@0 as country, ARRAY_AGG(sales_global.amount) ORDER
 ----SortExec: expr=[amount@1 DESC]
 ------MemoryExec: partitions=1, partition_sizes=[1]
 
-query T?RR
+query T?RR rowsort
 SELECT country, ARRAY_AGG(amount ORDER BY amount DESC) AS amounts,
   FIRST_VALUE(amount ORDER BY amount ASC) AS fv1,
   LAST_VALUE(amount ORDER BY amount DESC) AS fv2
@@ -2520,8 +2520,8 @@ SELECT country, ARRAY_AGG(amount ORDER BY amount DESC) AS amounts,
   GROUP BY country
 ----
 FRA [200.0, 50.0] 50 50
-TUR [100.0, 75.0] 75 75
 GRC [80.0, 30.0] 30 30
+TUR [100.0, 75.0] 75 75
 
 # test_reverse_aggregate_expr2
 # Some of the Aggregators can be reversed, by this way we can still run aggregators without re-ordering
@@ -2640,7 +2640,7 @@ ProjectionExec: expr=[country@0 as country, FIRST_VALUE(sales_global.amount) ORD
 ----SortExec: expr=[ts@1 ASC NULLS LAST]
 ------MemoryExec: partitions=1, partition_sizes=[1]
 
-query TRRR
+query TRRR rowsort
 SELECT country, FIRST_VALUE(amount ORDER BY ts DESC) as fv1,
   LAST_VALUE(amount ORDER BY ts DESC) as lv1,
   SUM(amount ORDER BY ts DESC) as sum1
@@ -2649,8 +2649,8 @@ SELECT country, FIRST_VALUE(amount ORDER BY ts DESC) as fv1,
     ORDER BY ts ASC)
   GROUP BY country
 ----
-GRC 80 30 110
 FRA 200 50 250
+GRC 80 30 110
 TUR 100 75 175
 
 # If existing ordering doesn't satisfy requirement, we should do calculations
@@ -2674,16 +2674,16 @@ ProjectionExec: expr=[country@0 as country, FIRST_VALUE(sales_global.amount) ORD
 ----SortExec: expr=[ts@1 DESC]
 ------MemoryExec: partitions=1, partition_sizes=[1]
 
-query TRRR
+query TRRR rowsort
 SELECT country, FIRST_VALUE(amount ORDER BY ts DESC) as fv1,
     LAST_VALUE(amount ORDER BY ts DESC) as lv1,
     SUM(amount ORDER BY ts DESC) as sum1
   FROM sales_global
   GROUP BY country
 ----
-TUR 100 75 175
-GRC 80 30 110
 FRA 200 50 250
+GRC 80 30 110
+TUR 100 75 175
 
 query TT
 EXPLAIN SELECT s.zip_code, s.country, s.sn, s.ts, s.currency, LAST_VALUE(e.amount ORDER BY e.sn) AS last_rate
@@ -2715,7 +2715,7 @@ SortExec: expr=[sn@2 ASC NULLS LAST]
 --------------MemoryExec: partitions=1, partition_sizes=[1]
 --------------MemoryExec: partitions=1, partition_sizes=[1]
 
-query ITIPTR
+query ITIPTR rowsort
 SELECT s.zip_code, s.country, s.sn, s.ts, s.currency, LAST_VALUE(e.amount ORDER BY e.sn) AS last_rate
 FROM sales_global AS s
 JOIN sales_global AS e
@@ -2725,10 +2725,10 @@ GROUP BY s.sn, s.zip_code, s.country, s.ts, s.currency
 ORDER BY s.sn
 ----
 0 GRC 0 2022-01-01T06:00:00 EUR 30
-1 FRA 1 2022-01-01T08:00:00 EUR 50
-1 TUR 2 2022-01-01T11:30:00 TRY 75
-1 FRA 3 2022-01-02T12:00:00 EUR 200
 0 GRC 4 2022-01-03T10:00:00 EUR 80
+1 FRA 1 2022-01-01T08:00:00 EUR 50
+1 FRA 3 2022-01-02T12:00:00 EUR 200
+1 TUR 2 2022-01-01T11:30:00 TRY 75
 1 TUR 4 2022-01-03T10:00:00 TRY 100
 
 # Run order-sensitive aggregators in multiple partitions
