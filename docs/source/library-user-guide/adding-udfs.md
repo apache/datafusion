@@ -470,7 +470,7 @@ impl TableFunctionImpl for EchoFunction {
             vec![Arc::new(Int64Array::from(vec![*value]))],
         )?;
 
-        // Create a MemoryExec plan that returns the RecordBatch
+        // Create a MemTable plan that returns the RecordBatch
         let provider = MemTable::try_new(schema, vec![vec![batch]])?;
 
         Ok(Arc::new(provider))
