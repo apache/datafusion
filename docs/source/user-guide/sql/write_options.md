@@ -78,9 +78,9 @@ The following special options are specific to the `COPY` command.
 
 The following special options are specific to creating an external table.
 
-| Option      | Description                                                                                                                                                                                                                                | Default Value                                                                |
-| ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------- |
-| SINGLE_FILE | If true, indicates that this external table is backed by a single file. INSERT INTO queries will append to this file.                                                                                                                      | false                                                                        |
+| Option      | Description                                                                                                           | Default Value |
+| ----------- | --------------------------------------------------------------------------------------------------------------------- | ------------- |
+| SINGLE_FILE | If true, indicates that this external table is backed by a single file. INSERT INTO queries will append to this file. | false         |
 
 ### JSON Format Specific Options
 
