@@ -468,8 +468,10 @@ impl FileOpener for ParquetOpener {
                 ParquetRecordBatchStreamBuilder::new_with_options(reader, options)
                     .await?;
 
+            let file_schema = builder.schema().clone();
+
             let (schema_mapping, adapted_projections) =
-                schema_adapter.map_schema(builder.schema())?;
+                schema_adapter.map_schema(&file_schema)?;
             // let predicate = predicate.map(|p| reassign_predicate_columns(p, builder.schema(), true)).transpose()?;
 
             let mask = ProjectionMask::roots(
@@ -481,8 +483,8 @@ impl FileOpener for ParquetOpener {
             if let Some(predicate) = pushdown_filters.then_some(predicate).flatten() {
                 let row_filter = row_filter::build_row_filter(
                     &predicate,
-                    builder.schema().as_ref(),
-                    table_schema.as_ref(),
+                    &file_schema,
+                    &table_schema,
                     builder.metadata(),
                     reorder_predicates,
                     &file_metrics,
@@ -507,6 +509,7 @@ impl FileOpener for ParquetOpener {
             let file_metadata = builder.metadata().clone();
             let predicate = pruning_predicate.as_ref().map(|p| p.as_ref());
             let mut row_groups = row_groups::prune_row_groups_by_statistics(
+                &file_schema,
                 builder.parquet_schema(),
                 file_metadata.row_groups(),
                 file_range,
