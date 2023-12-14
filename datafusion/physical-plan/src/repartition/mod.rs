@@ -370,11 +370,7 @@ impl RepartitionExec {
 
     /// Get name used to display this Exec
     pub fn name(&self) -> &str {
-        if self.preserve_order {
-            "SortPreservingRepartitionExec"
-        } else {
-            "RepartitionExec"
-        }
+        "RepartitionExec"
     }
 }
 
@@ -393,6 +389,10 @@ impl DisplayAs for RepartitionExec {
                     self.partitioning,
                     self.input.output_partitioning().partition_count()
                 )?;
+
+                if self.preserve_order {
+                    write!(f, ", preserve_order=true")?;
+                }
 
                 if let Some(sort_exprs) = self.sort_exprs() {
                     write!(
@@ -1491,7 +1491,7 @@ mod test {
 
         // Repartition should preserve order
         let expected_plan = [
-            "SortPreservingRepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=2, sort_exprs=c0@0 ASC",
+            "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=2, preserve_order=true, sort_exprs=c0@0 ASC",
             "  UnionExec",
             "    MemoryExec: partitions=1, partition_sizes=[0], output_ordering=c0@0 ASC",
             "    MemoryExec: partitions=1, partition_sizes=[0], output_ordering=c0@0 ASC",
