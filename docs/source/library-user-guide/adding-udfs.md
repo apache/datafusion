@@ -24,7 +24,7 @@ User Defined Functions (UDFs) are functions that can be used in the context of D
 This page covers how to add UDFs to DataFusion. In particular, it covers how to add Scalar, Window, and Aggregate UDFs.
 
 | UDF Type  | Description                                                                                                | Example             |
-| --------- | ---------------------------------------------------------------------------------------------------------- | --------------------|
+| --------- | ---------------------------------------------------------------------------------------------------------- | ------------------- |
 | Scalar    | A function that takes a row of data and returns a single value.                                            | [simple_udf.rs][1]  |
 | Window    | A function that takes a row of data and returns a single value, but also has access to the rows around it. | [simple_udwf.rs][2] |
 | Aggregate | A function that takes a group of rows and returns a single value.                                          | [simple_udaf.rs][3] |
