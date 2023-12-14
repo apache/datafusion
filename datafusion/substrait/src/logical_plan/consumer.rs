@@ -553,16 +553,12 @@ pub async fn from_substrait_rel(
         }
         Some(RelType::Exchange(exchange)) => {
             let Some(input) = exchange.input.as_ref() else {
-                return Err(DataFusionError::Substrait(
-                    "Unexpected empty input in ExchangeRel".to_string(),
-                ));
+                return substrait_err!("Unexpected empty input in ExchangeRel");
             };
             let input = Arc::new(from_substrait_rel(ctx, input, extensions).await?);
 
             let Some(exchange_kind) = &exchange.exchange_kind else {
-                return Err(DataFusionError::Substrait(
-                    "Unexpected empty input in ExchangeRel".to_string(),
-                ));
+                return substrait_err!("Unexpected empty input in ExchangeRel");
             };
 
             // ref: https://substrait.io/relations/physical_relations/#exchange-types

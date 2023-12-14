@@ -30,8 +30,8 @@ use datafusion::{
     scalar::ScalarValue,
 };
 
-use datafusion::common::DFSchemaRef;
 use datafusion::common::{exec_err, internal_err, not_impl_err};
+use datafusion::common::{substrait_err, DFSchemaRef};
 #[allow(unused_imports)]
 use datafusion::logical_expr::aggregate_function;
 use datafusion::logical_expr::expr::{
@@ -1822,9 +1822,7 @@ fn try_to_substrait_field_reference(
                 root_type: None,
             })
         }
-        _ => Err(DataFusionError::Substrait(format!(
-            "Expect a `Column` expr, but found {expr:?}"
-        ))),
+        _ => substrait_err!("Expect a `Column` expr, but found {expr:?}"),
     }
 }
 
