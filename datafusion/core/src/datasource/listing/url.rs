@@ -187,8 +187,7 @@ impl ListingTableUrl {
         match self.strip_prefix(path) {
             Some(mut segments) => match &self.glob {
                 Some(glob) => {
-                    let stripped = segments.join("/");
-                    glob.matches(&stripped)
+                    glob.matches(&segments.next().unwrap())
                 }
                 None => true,
             },
