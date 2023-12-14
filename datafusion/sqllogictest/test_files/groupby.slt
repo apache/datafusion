@@ -4299,7 +4299,7 @@ physical_plan
 SortPreservingMergeExec: [a@0 ASC NULLS LAST,b@1 ASC NULLS LAST]
 --AggregateExec: mode=FinalPartitioned, gby=[a@0 as a, b@1 as b], aggr=[ARRAY_AGG(multiple_ordered_table.d), ARRAY_AGG(multiple_ordered_table.d)], ordering_mode=Sorted
 ----CoalesceBatchesExec: target_batch_size=2
-------SortPreservingRepartitionExec: partitioning=Hash([a@0, b@1], 8), input_partitions=8, sort_exprs=a@0 ASC NULLS LAST,b@1 ASC NULLS LAST
+------RepartitionExec: partitioning=Hash([a@0, b@1], 8), input_partitions=8, preserve_order=true, sort_exprs=a@0 ASC NULLS LAST,b@1 ASC NULLS LAST
 --------AggregateExec: mode=Partial, gby=[a@0 as a, b@1 as b], aggr=[ARRAY_AGG(multiple_ordered_table.d), ARRAY_AGG(multiple_ordered_table.d)], ordering_mode=Sorted
 ----------RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
 ------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b, c, d], output_orderings=[[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST], [c@2 ASC NULLS LAST]], has_header=true
@@ -4346,7 +4346,7 @@ physical_plan
 SortPreservingMergeExec: [a@0 ASC NULLS LAST,b@1 ASC NULLS LAST]
 --AggregateExec: mode=FinalPartitioned, gby=[a@0 as a, b@1 as b], aggr=[FIRST_VALUE(multiple_ordered_table.d), LAST_VALUE(multiple_ordered_table.d), ARRAY_AGG(multiple_ordered_table.d)], ordering_mode=Sorted
 ----CoalesceBatchesExec: target_batch_size=2
-------SortPreservingRepartitionExec: partitioning=Hash([a@0, b@1], 8), input_partitions=8, sort_exprs=a@0 ASC NULLS LAST,b@1 ASC NULLS LAST
+------RepartitionExec: partitioning=Hash([a@0, b@1], 8), input_partitions=8, preserve_order=true, sort_exprs=a@0 ASC NULLS LAST,b@1 ASC NULLS LAST
 --------AggregateExec: mode=Partial, gby=[a@0 as a, b@1 as b], aggr=[FIRST_VALUE(multiple_ordered_table.d), LAST_VALUE(multiple_ordered_table.d), ARRAY_AGG(multiple_ordered_table.d)], ordering_mode=Sorted
 ----------RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
 ------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b, c, d], output_orderings=[[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST], [c@2 ASC NULLS LAST]], has_header=true
