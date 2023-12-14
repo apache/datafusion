@@ -1275,7 +1275,6 @@ impl AsExecutionPlan for PhysicalPlanNode {
                         group_expr_name: group_names,
                         aggr_expr: agg,
                         filter_expr: filter,
-                        order_by_expr: order_by,
                         aggr_expr_name: agg_names,
                         mode: agg_mode as i32,
                         input: Some(Box::new(input)),

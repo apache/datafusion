@@ -276,7 +276,6 @@ mod tests {
                 group_by,
                 aggr_expr,
                 vec![],
-                vec![],
                 input,
                 schema,
             )
@@ -295,7 +294,6 @@ mod tests {
                 AggregateMode::Final,
                 group_by,
                 aggr_expr,
-                vec![],
                 vec![],
                 input,
                 schema,
@@ -456,7 +454,6 @@ mod tests {
                 AggregateMode::Final,
                 final_group_by,
                 aggr_expr,
-                vec![],
                 vec![],
                 partial_agg,
                 schema,

@@ -1907,12 +1907,10 @@ pub(crate) mod tests {
                 final_grouping,
                 vec![],
                 vec![],
-                vec![],
                 Arc::new(
                     AggregateExec::try_new(
                         AggregateMode::Partial,
                         group_by,
-                        vec![],
                         vec![],
                         vec![],
                         input,

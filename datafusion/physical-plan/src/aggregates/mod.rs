@@ -41,7 +41,13 @@ use datafusion_common::stats::Precision;
 use datafusion_common::{not_impl_err, plan_err, DataFusionError, Result};
 use datafusion_execution::TaskContext;
 use datafusion_expr::Accumulator;
-use datafusion_physical_expr::{aggregate::is_order_sensitive, equivalence::collapse_lex_req, expressions::{Column, Max, Min, UnKnownColumn}, physical_exprs_contains, reverse_order_bys, AggregateExpr, EquivalenceProperties, LexOrdering, LexRequirement, PhysicalExpr, PhysicalSortExpr, PhysicalSortRequirement, LexOrderingRef};
+use datafusion_physical_expr::{
+    aggregate::is_order_sensitive,
+    equivalence::collapse_lex_req,
+    expressions::{Column, Max, Min, UnKnownColumn},
+    physical_exprs_contains, reverse_order_bys, AggregateExpr, EquivalenceProperties,
+    LexOrdering, LexRequirement, PhysicalExpr, PhysicalSortExpr, PhysicalSortRequirement,
+};
 
 use itertools::{izip, Itertools};
 
@@ -1378,7 +1384,6 @@ mod tests {
             grouping_set.clone(),
             aggregates.clone(),
             vec![None],
-            vec![None],
             input,
             input_schema.clone(),
         )?);
@@ -1457,7 +1462,6 @@ mod tests {
             final_grouping_set,
             aggregates,
             vec![None],
-            vec![None],
             merge,
             input_schema,
         )?);
@@ -1523,7 +1527,6 @@ mod tests {
             grouping_set.clone(),
             aggregates.clone(),
             vec![None],
-            vec![None],
             input,
             input_schema.clone(),
         )?);
@@ -1570,7 +1573,6 @@ mod tests {
             AggregateMode::Final,
             final_grouping_set,
             aggregates,
-            vec![None],
             vec![None],
             merge,
             input_schema,
@@ -1838,7 +1840,6 @@ mod tests {
                 groups,
                 aggregates,
                 vec![None; 3],
-                vec![None; 3],
                 input.clone(),
                 input_schema.clone(),
             )?);
@@ -1894,7 +1895,6 @@ mod tests {
             groups.clone(),
             aggregates.clone(),
             vec![None],
-            vec![None],
             blocking_exec,
             schema,
         )?);
@@ -1932,7 +1932,6 @@ mod tests {
             AggregateMode::Partial,
             groups,
             aggregates.clone(),
-            vec![None],
             vec![None],
             blocking_exec,
             schema,
@@ -2035,7 +2034,6 @@ mod tests {
             groups.clone(),
             aggregates.clone(),
             vec![None],
-            vec![Some(ordering_req.clone())],
             memory_exec,
             schema.clone(),
         )?);
@@ -2051,7 +2049,6 @@ mod tests {
             groups,
             aggregates.clone(),
             vec![None],
-            vec![Some(ordering_req)],
             coalesce,
             schema,
         )?) as Arc<dyn ExecutionPlan>;
