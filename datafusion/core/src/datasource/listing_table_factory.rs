@@ -152,7 +152,7 @@ impl TableProviderFactory for ListingTableFactory {
             .take_bool_option("single_file")?
             .unwrap_or(false);
 
-        // Backwards compatibility
+        // Backwards compatibility (#8547)
         if let Some(s) = statement_options.take_str_option("insert_mode") {
             if !s.eq_ignore_ascii_case("append_new_files") {
                 return plan_err!("Unknown or unsupported insert mode {s}. Only append_new_files supported");
