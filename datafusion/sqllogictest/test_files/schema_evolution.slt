@@ -59,6 +59,24 @@ COPY  (
  )  TO 'test_files/scratch/schema_evolution/parquet_table/4.parquet'
 (FORMAT PARQUET, SINGLE_FILE_OUTPUT true);
 
+# The logical distribution of `a`, `b` and `c` in the files is like this:
+#
+## File1:
+# foo 1 NULL
+# foo 2 NULL
+# foo 3 NULL
+#
+## File2:
+# NULL 10 NULL
+#
+## File3:
+# foo NULL NULL
+# foo NULL NULL
+#
+## File4:
+# foo 100 10.5
+# foo 200 12.6
+# bzz 300 13.7
 
 # Show all the data
 query TIR rowsort
