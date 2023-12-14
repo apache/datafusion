@@ -186,9 +186,9 @@ impl ListingTableUrl {
     pub fn contains(&self, path: &Path) -> bool {
         match self.strip_prefix(path) {
             Some(mut segments) => match &self.glob {
-                Some(glob) => {
-                    glob.matches(&segments.next().unwrap())
-                }
+                Some(glob) => segments
+                    .next()
+                    .map_or(false, |file_name| glob.matches(file_name)),
                 None => true,
             },
             None => false,
@@ -422,6 +422,12 @@ mod tests {
         let b = ListingTableUrl::parse("../bar/./foo/../baz").unwrap();
         assert_eq!(a, b);
         assert!(a.prefix.as_ref().ends_with("bar/baz"));
+
+        let url = ListingTableUrl::parse("../foo/*.parquet").unwrap();
+        let child = url.prefix.child("aa.parquet");
+        assert!(url.contains(&child));
+        let child = url.prefix.child("dir").child("aa.parquet");
+        assert!(!url.contains(&child));
     }
 
     #[test]
