@@ -99,8 +99,6 @@ pub struct FileScanConfig {
     pub table_partition_cols: Vec<Field>,
     /// All equivalent lexicographical orderings that describe the schema.
     pub output_ordering: Vec<LexOrdering>,
-    /// Indicates whether this plan may produce an infinite stream of records.
-    pub infinite_source: bool,
 }
 
 impl FileScanConfig {
@@ -707,7 +705,6 @@ mod tests {
             statistics,
             table_partition_cols,
             output_ordering: vec![],
-            infinite_source: false,
         }
     }
 

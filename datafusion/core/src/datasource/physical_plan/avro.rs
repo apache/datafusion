@@ -89,10 +89,6 @@ impl ExecutionPlan for AvroExec {
         Partitioning::UnknownPartitioning(self.base_config.file_groups.len())
     }
 
-    fn unbounded_output(&self, _: &[bool]) -> Result<bool> {
-        Ok(self.base_config().infinite_source)
-    }
-
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
         self.projected_output_ordering
             .first()

@@ -110,10 +110,6 @@ impl ExecutionPlan for NdJsonExec {
         Partitioning::UnknownPartitioning(self.base_config.file_groups.len())
     }
 
-    fn unbounded_output(&self, _: &[bool]) -> Result<bool> {
-        Ok(self.base_config.infinite_source)
-    }
-
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
         self.projected_output_ordering
             .first()
@@ -462,7 +458,6 @@ mod tests {
                 limit: Some(3),
                 table_partition_cols: vec![],
                 output_ordering: vec![],
-                infinite_source: false,
             },
             file_compression_type.to_owned(),
         );
@@ -541,7 +536,6 @@ mod tests {
                 limit: Some(3),
                 table_partition_cols: vec![],
                 output_ordering: vec![],
-                infinite_source: false,
             },
             file_compression_type.to_owned(),
         );
@@ -589,7 +583,6 @@ mod tests {
                 limit: None,
                 table_partition_cols: vec![],
                 output_ordering: vec![],
-                infinite_source: false,
             },
             file_compression_type.to_owned(),
         );
@@ -642,7 +635,6 @@ mod tests {
                 limit: None,
                 table_partition_cols: vec![],
                 output_ordering: vec![],
-                infinite_source: false,
             },
             file_compression_type.to_owned(),
         );

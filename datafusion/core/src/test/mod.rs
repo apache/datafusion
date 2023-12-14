@@ -203,7 +203,6 @@ pub fn partitioned_csv_config(
         limit: None,
         table_partition_cols: vec![],
         output_ordering: vec![],
-        infinite_source: false,
     })
 }
 
@@ -277,7 +276,6 @@ fn make_decimal() -> RecordBatch {
 pub fn csv_exec_sorted(
     schema: &SchemaRef,
     sort_exprs: impl IntoIterator<Item = PhysicalSortExpr>,
-    infinite_source: bool,
 ) -> Arc<dyn ExecutionPlan> {
     let sort_exprs = sort_exprs.into_iter().collect();
 
@@ -291,7 +289,6 @@ pub fn csv_exec_sorted(
             limit: None,
             table_partition_cols: vec![],
             output_ordering: vec![sort_exprs],
-            infinite_source,
         },
         false,
         0,
