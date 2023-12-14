@@ -84,6 +84,10 @@ impl TestContext {
                 info!("Registering table with many types");
                 register_table_with_many_types(test_ctx.session_ctx()).await;
             }
+            "explain.slt" => {
+                info!("Registering table with map");
+                register_table_with_map(test_ctx.session_ctx()).await;
+            }
             "avro.slt" => {
                 #[cfg(feature = "avro")]
                 {
@@ -265,6 +269,23 @@ pub async fn register_table_with_many_types(ctx: &SessionContext) {
     ctx.register_catalog("my_catalog", Arc::new(catalog));
 
     ctx.register_table("my_catalog.my_schema.t2", table_with_many_types())
+        .unwrap();
+}
+
+pub async fn register_table_with_map(ctx: &SessionContext) {
+    let key = Field::new("key", DataType::Int64, false);
+    let value = Field::new("value", DataType::Int64, true);
+    let map_field =
+        Field::new("entries", DataType::Struct(vec![key, value].into()), false);
+    let fields = vec![
+        Field::new("int_field", DataType::Int64, true),
+        Field::new("map_field", DataType::Map(map_field.into(), false), true),
+    ];
+    let schema = Schema::new(fields);
+
+    let memory_table = MemTable::try_new(schema.into(), vec![vec![]]).unwrap();
+
+    ctx.register_table("table_with_map", Arc::new(memory_table))
         .unwrap();
 }
 
