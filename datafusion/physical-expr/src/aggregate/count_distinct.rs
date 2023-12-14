@@ -152,7 +152,12 @@ impl Accumulator for DistinctCountAccumulator {
         if values.is_empty() {
             return Ok(());
         }
+
         let arr = &values[0];
+        if arr.data_type() == &DataType::Null {
+            return Ok(());
+        }
+
         (0..arr.len()).try_for_each(|index| {
             if !arr.is_null(index) {
                 let scalar = ScalarValue::try_from_array(arr, index)?;
