@@ -507,7 +507,7 @@ mod test {
             col("b").gt(lit(10)).and(col("b").eq(lit(10))),
             vec![
                 //  if b isn't 10, it can not be true (though the expression actually can never be true)
-                in_guarantee("b", [10])
+                in_guarantee("b", [10]),
             ],
         );
         // a != "foo" and (a != "bar" OR a != "baz")
@@ -524,9 +524,7 @@ mod test {
     fn test_conjunction_and_disjunction_single_column() {
         // b != 1 AND (b > 2)
         test_analyze(
-            col("b")
-                .not_eq(lit(1))
-                .and(col("b").gt(lit(2))),
+            col("b").not_eq(lit(1)).and(col("b").gt(lit(2))),
             vec![
                 // for the expression to be true, b can not be one
                 not_in_guarantee("b", [1]),
