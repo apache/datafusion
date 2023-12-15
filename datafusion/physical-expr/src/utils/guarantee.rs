@@ -247,12 +247,15 @@ impl<'a> GuaranteeBuilder<'a> {
                 return self;
             };
 
-            // Combine conjuncts if we have `a != foo AND a != bar`.
-            // `a = foo AND a = bar` doesn't make logical sense, s
+            // Combine conjuncts if we have `a != foo AND a != bar`. `a = foo
+            // AND a = bar` doesn't make logical sense so we don't optimize this
+            // case
             match existing.guarantee {
                 // knew that the column could not be a set of values
-                // For example, if we previously had `a != 5` and now we see another `a != 6` we know
-                // if
+                //
+                // For example, if we previously had `a != 5` and now we see
+                // another `AND a != 6` we know that a must not be either 5 or 6
+                // for the expression to be true
                 Guarantee::NotIn => {
                     // can extend if only single literal, otherwise invalidate
                     let new_values: HashSet<_> = new_values.into_iter().collect();
@@ -260,8 +263,9 @@ impl<'a> GuaranteeBuilder<'a> {
                         existing.literals.extend(new_values.into_iter().cloned())
                     } else {
                         // this is like (a != foo AND (a != bar OR a != baz)).
-                        // We can't combine the (a!=bar OR a!=baz) part, but it
-                        // also doesn't invalidate a != foo guarantee.
+                        // We can't combine the (a != bar OR a != baz) part, but
+                        // it also doesn't invalidate our knowledge that a !=
+                        // foo is required for the expression to be true
                     }
                 }
                 Guarantee::In => {
