@@ -606,11 +606,10 @@ impl TDigest {
 
         let centroids: Vec<_> = match &state[5] {
             ScalarValue::List(arr) => {
-                let list_array = as_list_array(arr);
-                let arr = list_array.values();
+                let array = arr.values();
 
                 let f64arr =
-                    as_primitive_array::<Float64Type>(arr).expect("expected f64 array");
+                    as_primitive_array::<Float64Type>(array).expect("expected f64 array");
                 f64arr
                     .values()
                     .chunks(2)

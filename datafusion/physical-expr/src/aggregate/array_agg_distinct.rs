@@ -186,7 +186,6 @@ mod tests {
     use arrow::array::{ArrayRef, Int32Array};
     use arrow::datatypes::{DataType, Schema};
     use arrow::record_batch::RecordBatch;
-    use arrow_array::cast::as_list_array;
     use arrow_array::types::Int32Type;
     use arrow_array::{Array, ListArray};
     use arrow_buffer::OffsetBuffer;
@@ -197,8 +196,7 @@ mod tests {
     fn sort_list_inner(arr: ScalarValue) -> ScalarValue {
         let arr = match arr {
             ScalarValue::List(arr) => {
-                let list_arr = as_list_array(&arr);
-                list_arr.value(0)
+                arr.value(0)
             }
             _ => {
                 panic!("Expected ScalarValue::List, got {:?}", arr)

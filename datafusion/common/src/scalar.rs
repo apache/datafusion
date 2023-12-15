@@ -141,13 +141,13 @@ pub enum ScalarValue {
     /// Fixed size list scalar.
     ///
     /// The array must be a FixedSizeListArray with length 1.
-    FixedSizeList(ArrayRef),
+    FixedSizeList(Arc<FixedSizeListArray>),
     /// Represents a single element of a [`ListArray`] as an [`ArrayRef`]
     ///
     /// The array must be a ListArray with length 1.
-    List(ArrayRef),
+    List(Arc<ListArray>),
     /// The array must be a LargeListArray with length 1.
-    LargeList(ArrayRef),
+    LargeList(Arc<LargeListArray>),
     /// Date stored as a signed 32bit int days since UNIX epoch 1970-01-01
     Date32(Option<i32>),
     /// Date stored as a signed 64bit int milliseconds since UNIX epoch 1970-01-01
@@ -359,10 +359,8 @@ impl PartialOrd for ScalarValue {
             (FixedSizeBinary(_, _), _) => None,
             (LargeBinary(v1), LargeBinary(v2)) => v1.partial_cmp(v2),
             (LargeBinary(_), _) => None,
-            (List(arr1), List(arr2))
-            | (FixedSizeList(arr1), FixedSizeList(arr2))
-            | (LargeList(arr1), LargeList(arr2)) => {
-                // ScalarValue::List / ScalarValue::FixedSizeList / ScalarValue::LargeList are ensure to have length 1
+            // ScalarValue::List / ScalarValue::FixedSizeList / ScalarValue::LargeList are ensure to have length 1
+            (List(arr1), List(arr2)) => {
                 assert_eq!(arr1.len(), 1);
                 assert_eq!(arr2.len(), 1);
 
@@ -370,16 +368,8 @@ impl PartialOrd for ScalarValue {
                     return None;
                 }
 
-                fn first_array_for_list(arr: &ArrayRef) -> ArrayRef {
-                    if let Some(arr) = arr.as_list_opt::<i32>() {
-                        arr.value(0)
-                    } else if let Some(arr) = arr.as_list_opt::<i64>() {
-                        arr.value(0)
-                    } else if let Some(arr) = arr.as_fixed_size_list_opt() {
-                        arr.value(0)
-                    } else {
-                        unreachable!("Since only List / LargeList / FixedSizeList are supported, this should never happen")
-                    }
+                fn first_array_for_list(arr: &Arc<ListArray>) -> ArrayRef {
+                    arr.value(0)
                 }
 
                 let arr1 = first_array_for_list(arr1);
@@ -398,6 +388,65 @@ impl PartialOrd for ScalarValue {
                 }
 
                 Some(Ordering::Equal)
+            }
+            (FixedSizeList(arr1), FixedSizeList(arr2)) => {
+                assert_eq!(arr1.len(), 1);
+                assert_eq!(arr2.len(), 1);
+
+                if arr1.data_type() != arr2.data_type() {
+                    return None;
+                }
+
+                fn first_array_for_list(arr: &Arc<FixedSizeListArray>) -> ArrayRef {
+                    arr.value(0)
+                }
+
+                let arr1 = first_array_for_list(arr1);
+                let arr2 = first_array_for_list(arr2);
+
+                let lt_res = arrow::compute::kernels::cmp::lt(&arr1, &arr2).ok()?;
+                let eq_res = arrow::compute::kernels::cmp::eq(&arr1, &arr2).ok()?;
+
+                for j in 0..lt_res.len() {
+                    if lt_res.is_valid(j) && lt_res.value(j) {
+                        return Some(Ordering::Less);
+                    }
+                    if eq_res.is_valid(j) && !eq_res.value(j) {
+                        return Some(Ordering::Greater);
+                    }
+                }
+
+                Some(Ordering::Equal)
+            }
+            (LargeList(arr1), LargeList(arr2)) => {
+                assert_eq!(arr1.len(), 1);
+                assert_eq!(arr2.len(), 1);
+
+                if arr1.data_type() != arr2.data_type() {
+                    return None;
+                }
+
+                fn first_array_for_list(arr: &Arc<LargeListArray>) -> ArrayRef {
+                    arr.value(0)
+                }
+
+                let arr1 = first_array_for_list(arr1);
+                let arr2 = first_array_for_list(arr2);
+
+                let lt_res = arrow::compute::kernels::cmp::lt(&arr1, &arr2).ok()?;
+                let eq_res = arrow::compute::kernels::cmp::eq(&arr1, &arr2).ok()?;
+
+                for j in 0..lt_res.len() {
+                    if lt_res.is_valid(j) && lt_res.value(j) {
+                        return Some(Ordering::Less);
+                    }
+                    if eq_res.is_valid(j) && !eq_res.value(j) {
+                        return Some(Ordering::Greater);
+                    }
+                }
+
+                Some(Ordering::Equal) 
+                
             }
             (List(_), _) | (LargeList(_), _) | (FixedSizeList(_), _) => None,
             (Date32(v1), Date32(v2)) => v1.partial_cmp(v2),
@@ -516,8 +565,26 @@ impl std::hash::Hash for ScalarValue {
             Binary(v) => v.hash(state),
             FixedSizeBinary(_, v) => v.hash(state),
             LargeBinary(v) => v.hash(state),
-            List(arr) | LargeList(arr) | FixedSizeList(arr) => {
-                let arrays = vec![arr.to_owned()];
+            List(arr) => {
+                let arrays = vec![arr.to_owned() as ArrayRef];
+                let hashes_buffer = &mut vec![0; arr.len()];
+                let random_state = ahash::RandomState::with_seeds(0, 0, 0, 0);
+                let hashes =
+                    create_hashes(&arrays, &random_state, hashes_buffer).unwrap();
+                // Hash back to std::hash::Hasher
+                hashes.hash(state);
+            }
+            LargeList(arr) => {
+                let arrays = vec![arr.to_owned() as ArrayRef];
+                let hashes_buffer = &mut vec![0; arr.len()];
+                let random_state = ahash::RandomState::with_seeds(0, 0, 0, 0);
+                let hashes =
+                    create_hashes(&arrays, &random_state, hashes_buffer).unwrap();
+                // Hash back to std::hash::Hasher
+                hashes.hash(state);
+            }
+            FixedSizeList(arr) => {
+                let arrays = vec![arr.to_owned() as ArrayRef];
                 let hashes_buffer = &mut vec![0; arr.len()];
                 let random_state = ahash::RandomState::with_seeds(0, 0, 0, 0);
                 let hashes =
@@ -941,9 +1008,9 @@ impl ScalarValue {
             ScalarValue::Binary(_) => DataType::Binary,
             ScalarValue::FixedSizeBinary(sz, _) => DataType::FixedSizeBinary(*sz),
             ScalarValue::LargeBinary(_) => DataType::LargeBinary,
-            ScalarValue::List(arr)
-            | ScalarValue::LargeList(arr)
-            | ScalarValue::FixedSizeList(arr) => arr.data_type().to_owned(),
+            ScalarValue::List(arr) => arr.data_type().to_owned(),
+            ScalarValue::LargeList(arr) => arr.data_type().to_owned(),
+            ScalarValue::FixedSizeList(arr) => arr.data_type().to_owned(),
             ScalarValue::Date32(_) => DataType::Date32,
             ScalarValue::Date64(_) => DataType::Date64,
             ScalarValue::Time32Second(_) => DataType::Time32(TimeUnit::Second),
@@ -1146,9 +1213,9 @@ impl ScalarValue {
             ScalarValue::LargeBinary(v) => v.is_none(),
             // arr.len() should be 1 for a list scalar, but we don't seem to
             // enforce that anywhere, so we still check against array length.
-            ScalarValue::List(arr)
-            | ScalarValue::LargeList(arr)
-            | ScalarValue::FixedSizeList(arr) => arr.len() == arr.null_count(),
+            ScalarValue::List(arr) => arr.len() == arr.null_count(),
+            ScalarValue::LargeList(arr) => arr.len() == arr.null_count(),
+            ScalarValue::FixedSizeList(arr) => arr.len() == arr.null_count(),
             ScalarValue::Date32(v) => v.is_none(),
             ScalarValue::Date64(v) => v.is_none(),
             ScalarValue::Time32Second(v) => v.is_none(),
@@ -1694,17 +1761,16 @@ impl ScalarValue {
     ///    ScalarValue::Int32(Some(2))
     /// ];
     ///
-    /// let array = ScalarValue::new_list(&scalars, &DataType::Int32);
-    /// let result = as_list_array(&array).unwrap();
+    /// let result = ScalarValue::new_list(&scalars, &DataType::Int32);
     ///
     /// let expected = ListArray::from_iter_primitive::<Int32Type, _, _>(
     ///     vec![
     ///        Some(vec![Some(1), None, Some(2)])
     ///     ]);
     ///
-    /// assert_eq!(result, &expected);
+    /// assert_eq!(*result, expected);
     /// ```
-    pub fn new_list(values: &[ScalarValue], data_type: &DataType) -> ArrayRef {
+    pub fn new_list(values: &[ScalarValue], data_type: &DataType) -> Arc<ListArray> {
         let values = if values.is_empty() {
             new_empty_array(data_type)
         } else {
@@ -1729,17 +1795,16 @@ impl ScalarValue {
     ///    ScalarValue::Int32(Some(2))
     /// ];
     ///
-    /// let array = ScalarValue::new_large_list(&scalars, &DataType::Int32);
-    /// let result = as_large_list_array(&array).unwrap();
+    /// let result = ScalarValue::new_large_list(&scalars, &DataType::Int32);
     ///
     /// let expected = LargeListArray::from_iter_primitive::<Int32Type, _, _>(
     ///     vec![
     ///        Some(vec![Some(1), None, Some(2)])
     ///     ]);
     ///
-    /// assert_eq!(result, &expected);
+    /// assert_eq!(*result, expected);
     /// ```
-    pub fn new_large_list(values: &[ScalarValue], data_type: &DataType) -> ArrayRef {
+    pub fn new_large_list(values: &[ScalarValue], data_type: &DataType) -> Arc<LargeListArray> {
         let values = if values.is_empty() {
             new_empty_array(data_type)
         } else {
@@ -1875,10 +1940,22 @@ impl ScalarValue {
                         .collect::<LargeBinaryArray>(),
                 ),
             },
-            ScalarValue::List(arr)
-            | ScalarValue::LargeList(arr)
-            | ScalarValue::FixedSizeList(arr) => {
-                let arrays = std::iter::repeat(arr.as_ref())
+            ScalarValue::List(arr) => {
+                let arrays = std::iter::repeat(arr.as_ref() as &dyn Array)
+                    .take(size)
+                    .collect::<Vec<_>>();
+                arrow::compute::concat(arrays.as_slice())
+                    .map_err(DataFusionError::ArrowError)?
+            }
+            ScalarValue::LargeList(arr) => {
+                let arrays = std::iter::repeat(arr.as_ref() as &dyn Array)
+                    .take(size)
+                    .collect::<Vec<_>>();
+                arrow::compute::concat(arrays.as_slice())
+                    .map_err(DataFusionError::ArrowError)?
+            }
+            ScalarValue::FixedSizeList(arr) => {
+                let arrays = std::iter::repeat(arr.as_ref() as &dyn Array)
                     .take(size)
                     .collect::<Vec<_>>();
                 arrow::compute::concat(arrays.as_slice())
@@ -2432,11 +2509,17 @@ impl ScalarValue {
             ScalarValue::LargeBinary(val) => {
                 eq_array_primitive!(array, index, LargeBinaryArray, val)?
             }
-            ScalarValue::List(arr)
-            | ScalarValue::LargeList(arr)
-            | ScalarValue::FixedSizeList(arr) => {
+            ScalarValue::List(arr) => {
                 let right = array.slice(index, 1);
-                arr == &right
+                arr.as_ref() as &dyn Array == &right
+            }
+            ScalarValue::LargeList(arr) => {
+                let right = array.slice(index, 1);
+                arr.as_ref() as &dyn Array == &right
+            }
+            ScalarValue::FixedSizeList(arr) => {
+                let right = array.slice(index, 1);
+                arr.as_ref() as &dyn Array == &right
             }
             ScalarValue::Date32(val) => {
                 eq_array_primitive!(array, index, Date32Array, val)?
@@ -2560,9 +2643,9 @@ impl ScalarValue {
                 | ScalarValue::LargeBinary(b) => {
                     b.as_ref().map(|b| b.capacity()).unwrap_or_default()
                 }
-                ScalarValue::List(arr)
-                | ScalarValue::LargeList(arr)
-                | ScalarValue::FixedSizeList(arr) => arr.get_array_memory_size(),
+                ScalarValue::List(arr) => arr.get_array_memory_size(),
+                ScalarValue::LargeList(arr) => arr.get_array_memory_size(),
+                ScalarValue::FixedSizeList(arr) => arr.get_array_memory_size(),
                 ScalarValue::Struct(vals, fields) => {
                     vals.as_ref()
                         .map(|vals| {
@@ -2864,14 +2947,22 @@ impl TryFrom<&DataType> for ScalarValue {
                 Box::new(value_type.as_ref().try_into()?),
             ),
             // `ScalaValue::List` contains single element `ListArray`.
-            DataType::List(field) => ScalarValue::List(new_null_array(
-                &DataType::List(Arc::new(Field::new(
-                    "item",
-                    field.data_type().clone(),
-                    true,
-                ))),
-                1,
-            )),
+            DataType::List(field) => {
+                ScalarValue::List(
+                    new_null_array(
+                        &DataType::List(
+                            Arc::new(
+                                Field::new(
+                                    "item",
+                                    field.data_type().clone(),
+                                    true,
+                                )
+                            )
+                        ),
+                        1,
+                    ).as_list::<i32>().to_owned().into()
+                )
+            },
             DataType::Struct(fields) => ScalarValue::Struct(None, fields.clone()),
             DataType::Null => ScalarValue::Null,
             _ => {
@@ -2936,13 +3027,27 @@ impl fmt::Display for ScalarValue {
                 )?,
                 None => write!(f, "NULL")?,
             },
-            ScalarValue::List(arr)
-            | ScalarValue::LargeList(arr)
-            | ScalarValue::FixedSizeList(arr) => {
+            ScalarValue::List(arr) => {
                 // ScalarValue List should always have a single element
                 assert_eq!(arr.len(), 1);
                 let options = FormatOptions::default().with_display_error(true);
-                let formatter = ArrayFormatter::try_new(arr, &options).unwrap();
+                let formatter = ArrayFormatter::try_new(arr.as_ref() as &dyn Array, &options).unwrap();
+                let value_formatter = formatter.value(0);
+                write!(f, "{value_formatter}")?
+            }
+            ScalarValue::LargeList(arr) => {
+                // ScalarValue List should always have a single element
+                assert_eq!(arr.len(), 1);
+                let options = FormatOptions::default().with_display_error(true);
+                let formatter = ArrayFormatter::try_new(arr.as_ref() as &dyn Array, &options).unwrap();
+                let value_formatter = formatter.value(0);
+                write!(f, "{value_formatter}")?
+            }
+            ScalarValue::FixedSizeList(arr) => {
+                // ScalarValue List should always have a single element
+                assert_eq!(arr.len(), 1);
+                let options = FormatOptions::default().with_display_error(true);
+                let formatter = ArrayFormatter::try_new(arr.as_ref() as &dyn Array, &options).unwrap();
                 let value_formatter = formatter.value(0);
                 write!(f, "{value_formatter}")?
             }
@@ -3181,15 +3286,14 @@ mod tests {
             ScalarValue::from("data-fusion"),
         ];
 
-        let array = ScalarValue::new_list(scalars.as_slice(), &DataType::Utf8);
+        let result = ScalarValue::new_list(scalars.as_slice(), &DataType::Utf8);
 
         let expected = array_into_list_array(Arc::new(StringArray::from(vec![
             "rust",
             "arrow",
             "data-fusion",
         ])));
-        let result = as_list_array(&array);
-        assert_eq!(result, &expected);
+        assert_eq!(*result, expected);
     }
 
     fn build_list<O: OffsetSizeTrait>(
@@ -3225,9 +3329,9 @@ mod tests {
                 };
 
                 if O::IS_LARGE {
-                    ScalarValue::LargeList(arr)
+                    ScalarValue::LargeList(arr.as_list::<i64>().to_owned().into())
                 } else {
-                    ScalarValue::List(arr)
+                    ScalarValue::List(arr.as_list::<i32>().to_owned().into())
                 }
             })
             .collect()
@@ -3298,33 +3402,6 @@ mod tests {
         let expected = list_of_string_builder.finish();
 
         assert_eq!(result, &expected);
-    }
-
-    #[test]
-    fn test_list_scalar_eq_to_array() {
-        let list_array: ArrayRef =
-            Arc::new(ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
-                Some(vec![Some(0), Some(1), Some(2)]),
-                None,
-                Some(vec![None, Some(5)]),
-            ]));
-
-        let fsl_array: ArrayRef =
-            Arc::new(FixedSizeListArray::from_iter_primitive::<Int32Type, _, _>(
-                vec![
-                    Some(vec![Some(0), Some(1), Some(2)]),
-                    None,
-                    Some(vec![Some(3), None, Some(5)]),
-                ],
-                3,
-            ));
-
-        for arr in [list_array, fsl_array] {
-            for i in 0..arr.len() {
-                let scalar = ScalarValue::List(arr.slice(i, 1));
-                assert!(scalar.eq_array(&arr, i).unwrap());
-            }
-        }
     }
 
     #[test]
@@ -3675,8 +3752,7 @@ mod tests {
 
     #[test]
     fn scalar_list_null_to_array() {
-        let list_array_ref = ScalarValue::new_list(&[], &DataType::UInt64);
-        let list_array = as_list_array(&list_array_ref);
+        let list_array = ScalarValue::new_list(&[], &DataType::UInt64);
 
         assert_eq!(list_array.len(), 1);
         assert_eq!(list_array.values().len(), 0);
@@ -3684,8 +3760,7 @@ mod tests {
 
     #[test]
     fn scalar_large_list_null_to_array() {
-        let list_array_ref = ScalarValue::new_large_list(&[], &DataType::UInt64);
-        let list_array = as_large_list_array(&list_array_ref);
+        let list_array = ScalarValue::new_large_list(&[], &DataType::UInt64);
 
         assert_eq!(list_array.len(), 1);
         assert_eq!(list_array.values().len(), 0);
@@ -3698,8 +3773,7 @@ mod tests {
             ScalarValue::UInt64(None),
             ScalarValue::UInt64(Some(101)),
         ];
-        let list_array_ref = ScalarValue::new_list(&values, &DataType::UInt64);
-        let list_array = as_list_array(&list_array_ref);
+        let list_array = ScalarValue::new_list(&values, &DataType::UInt64);
         assert_eq!(list_array.len(), 1);
         assert_eq!(list_array.values().len(), 3);
 
@@ -3719,8 +3793,7 @@ mod tests {
             ScalarValue::UInt64(None),
             ScalarValue::UInt64(Some(101)),
         ];
-        let list_array_ref = ScalarValue::new_large_list(&values, &DataType::UInt64);
-        let list_array = as_large_list_array(&list_array_ref);
+        let list_array = ScalarValue::new_large_list(&values, &DataType::UInt64);
         assert_eq!(list_array.len(), 1);
         assert_eq!(list_array.values().len(), 3);
 
@@ -3958,10 +4031,11 @@ mod tests {
         let data_type = &data_type;
         let scalar: ScalarValue = data_type.try_into().unwrap();
 
-        let expected = ScalarValue::List(new_null_array(
+        let expected = ScalarValue::List(
+            new_null_array(
             &DataType::List(Arc::new(Field::new("item", DataType::Int32, true))),
             1,
-        ));
+        ).as_list::<i32>().to_owned().into());
 
         assert_eq!(expected, scalar)
     }
@@ -3983,7 +4057,7 @@ mod tests {
                 true,
             ))),
             1,
-        ));
+        ).as_list::<i32>().to_owned().into());
 
         assert_eq!(expected, scalar)
     }

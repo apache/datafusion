@@ -30,6 +30,7 @@ use crate::{
 use arrow::array::new_null_array;
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
+use arrow_array::cast::AsArray;
 use datafusion_common::{internal_err, plan_err, DataFusionError, Result, ScalarValue};
 use datafusion_execution::TaskContext;
 
@@ -71,7 +72,7 @@ impl ValuesExec {
                         match r {
                             Ok(ColumnarValue::Scalar(scalar)) => Ok(scalar),
                             Ok(ColumnarValue::Array(a)) if a.len() == 1 => {
-                                Ok(ScalarValue::List(a))
+                                Ok(ScalarValue::List(a.as_list().to_owned().into()))
                             }
                             Ok(ColumnarValue::Array(a)) => {
                                 plan_err!(

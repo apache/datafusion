@@ -37,7 +37,7 @@ use arrow::{
         TimeUnit, UnionMode,
     },
     ipc::writer::{DictionaryTracker, IpcDataGenerator},
-    record_batch::RecordBatch,
+    record_batch::RecordBatch, array::ArrayRef,
 };
 use datafusion_common::{
     Column, Constraint, Constraints, DFField, DFSchema, DFSchemaRef, OwnedTableReference,
@@ -1159,13 +1159,105 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
             }
             // ScalarValue::List and ScalarValue::FixedSizeList are serialized using
             // Arrow IPC messages as a single column RecordBatch
-            ScalarValue::List(arr)
-            | ScalarValue::LargeList(arr)
-            | ScalarValue::FixedSizeList(arr) => {
+            ScalarValue::List(arr) => {
                 // Wrap in a "field_name" column
                 let batch = RecordBatch::try_from_iter(vec![(
                     "field_name",
-                    arr.to_owned(),
+                    arr.to_owned() as ArrayRef,
+                )])
+                .map_err(|e| {
+                   Error::General( format!("Error creating temporary batch while encoding ScalarValue::List: {e}"))
+                })?;
+
+                let gen = IpcDataGenerator {};
+                let mut dict_tracker = DictionaryTracker::new(false);
+                let (_, encoded_message) = gen
+                    .encoded_batch(&batch, &mut dict_tracker, &Default::default())
+                    .map_err(|e| {
+                        Error::General(format!(
+                            "Error encoding ScalarValue::List as IPC: {e}"
+                        ))
+                    })?;
+
+                let schema: protobuf::Schema = batch.schema().try_into()?;
+
+                let scalar_list_value = protobuf::ScalarListValue {
+                    ipc_message: encoded_message.ipc_message,
+                    arrow_data: encoded_message.arrow_data,
+                    schema: Some(schema),
+                };
+
+                match val {
+                    ScalarValue::List(_) => Ok(protobuf::ScalarValue {
+                        value: Some(protobuf::scalar_value::Value::ListValue(
+                            scalar_list_value,
+                        )),
+                    }),
+                    ScalarValue::LargeList(_) => Ok(protobuf::ScalarValue {
+                        value: Some(protobuf::scalar_value::Value::LargeListValue(
+                            scalar_list_value,
+                        )),
+                    }),
+                    ScalarValue::FixedSizeList(_) => Ok(protobuf::ScalarValue {
+                        value: Some(protobuf::scalar_value::Value::FixedSizeListValue(
+                            scalar_list_value,
+                        )),
+                    }),
+                    _ => unreachable!(),
+                }
+            }
+            ScalarValue::LargeList(arr) => {
+                // Wrap in a "field_name" column
+                let batch = RecordBatch::try_from_iter(vec![(
+                    "field_name",
+                    arr.to_owned() as ArrayRef,
+                )])
+                .map_err(|e| {
+                   Error::General( format!("Error creating temporary batch while encoding ScalarValue::List: {e}"))
+                })?;
+
+                let gen = IpcDataGenerator {};
+                let mut dict_tracker = DictionaryTracker::new(false);
+                let (_, encoded_message) = gen
+                    .encoded_batch(&batch, &mut dict_tracker, &Default::default())
+                    .map_err(|e| {
+                        Error::General(format!(
+                            "Error encoding ScalarValue::List as IPC: {e}"
+                        ))
+                    })?;
+
+                let schema: protobuf::Schema = batch.schema().try_into()?;
+
+                let scalar_list_value = protobuf::ScalarListValue {
+                    ipc_message: encoded_message.ipc_message,
+                    arrow_data: encoded_message.arrow_data,
+                    schema: Some(schema),
+                };
+
+                match val {
+                    ScalarValue::List(_) => Ok(protobuf::ScalarValue {
+                        value: Some(protobuf::scalar_value::Value::ListValue(
+                            scalar_list_value,
+                        )),
+                    }),
+                    ScalarValue::LargeList(_) => Ok(protobuf::ScalarValue {
+                        value: Some(protobuf::scalar_value::Value::LargeListValue(
+                            scalar_list_value,
+                        )),
+                    }),
+                    ScalarValue::FixedSizeList(_) => Ok(protobuf::ScalarValue {
+                        value: Some(protobuf::scalar_value::Value::FixedSizeListValue(
+                            scalar_list_value,
+                        )),
+                    }),
+                    _ => unreachable!(),
+                }
+            }
+            ScalarValue::FixedSizeList(arr) => {
+                // Wrap in a "field_name" column
+                let batch = RecordBatch::try_from_iter(vec![(
+                    "field_name",
+                    arr.to_owned() as ArrayRef,
                 )])
                 .map_err(|e| {
                    Error::General( format!("Error creating temporary batch while encoding ScalarValue::List: {e}"))

@@ -32,7 +32,7 @@ use arrow::{
         i256, DataType, Field, IntervalMonthDayNanoType, IntervalUnit, Schema, TimeUnit,
         UnionFields, UnionMode,
     },
-    ipc::{reader::read_record_batch, root_as_message},
+    ipc::{reader::read_record_batch, root_as_message}, array::AsArray,
 };
 use datafusion::execution::registry::FunctionRegistry;
 use datafusion_common::{
@@ -721,9 +721,9 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
                 .map_err(|e| e.context("Decoding ScalarValue::List Value"))?;
                 let arr = record_batch.column(0);
                 match value {
-                    Value::ListValue(_) => Self::List(arr.to_owned()),
-                    Value::LargeListValue(_) => Self::LargeList(arr.to_owned()),
-                    Value::FixedSizeListValue(_) => Self::FixedSizeList(arr.to_owned()),
+                    Value::ListValue(_) => Self::List(arr.as_list::<i32>().to_owned().into()),
+                    Value::LargeListValue(_) => Self::LargeList(arr.as_list::<i64>().to_owned().into()),
+                    Value::FixedSizeListValue(_) => Self::FixedSizeList(arr.as_fixed_size_list().to_owned().into()),
                     _ => unreachable!(),
                 }
             }

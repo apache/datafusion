@@ -27,7 +27,7 @@ use crate::simplify_expressions::regex::simplify_regex_expr;
 use crate::simplify_expressions::SimplifyInfo;
 
 use arrow::{
-    array::new_null_array,
+    array::{new_null_array, AsArray},
     datatypes::{DataType, Field, Schema},
     error::ArrowError,
     record_batch::RecordBatch,
@@ -396,7 +396,7 @@ impl<'a> ConstEvaluator<'a> {
                         a.len()
                     )
                 } else if as_list_array(&a).is_ok() || as_large_list_array(&a).is_ok() {
-                    Ok(ScalarValue::List(a))
+                    Ok(ScalarValue::List(a.as_list().to_owned().into()))
                 } else {
                     // Non-ListArray
                     ScalarValue::try_from_array(&a, 0)
