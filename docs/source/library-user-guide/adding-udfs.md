@@ -438,7 +438,27 @@ let df = ctx.sql("SELECT geo_mean(a) FROM t").await?;
 
 A User-Defined Table Function (UDTF) is a function that takes parameters and returns a `TableProvider`.
 
-Because we're returning a `TableProvider`, in this example we'll use the `MemTable` data source to represent a table. This is a simple struct that holds a set of RecordBatches in memory and treats them as a table. In your case, this would be replaced with your own struct that implements `TableProvider`. See the [example][4] for a working example that reads from a CSV file.
+Because we're returning a `TableProvider`, in this example we'll use the `MemTable` data source to represent a table. This is a simple struct that holds a set of RecordBatches in memory and treats them as a table. In your case, this would be replaced with your own struct that implements `TableProvider`.
+
+While this is a simple example for illustrative purposes, UDTFs have a lot of potential use cases. And can be particularly useful for reading data from external sources and interactive analysis. For example, see the [example][4] for a working example that reads from a CSV file. As another example, you could use the built-in UDTF `parquet_metadata` in the CLI to read the metadata from a Parquet file.
+
+```console
+❯ select filename, row_group_id, row_group_num_rows, row_group_bytes, stats_min, stats_max from parquet_metadata('./benchmarks/data/hits.parquet') where  column_id = 17 limit 10;
++--------------------------------+--------------+--------------------+-----------------+-----------+-----------+
+| filename                       | row_group_id | row_group_num_rows | row_group_bytes | stats_min | stats_max |
++--------------------------------+--------------+--------------------+-----------------+-----------+-----------+
+| ./benchmarks/data/hits.parquet | 0            | 450560             | 188921521       | 0         | 73256     |
+| ./benchmarks/data/hits.parquet | 1            | 612174             | 210338885       | 0         | 109827    |
+| ./benchmarks/data/hits.parquet | 2            | 344064             | 161242466       | 0         | 122484    |
+| ./benchmarks/data/hits.parquet | 3            | 606208             | 235549898       | 0         | 121073    |
+| ./benchmarks/data/hits.parquet | 4            | 335872             | 137103898       | 0         | 108996    |
+| ./benchmarks/data/hits.parquet | 5            | 311296             | 145453612       | 0         | 108996    |
+| ./benchmarks/data/hits.parquet | 6            | 303104             | 138833963       | 0         | 108996    |
+| ./benchmarks/data/hits.parquet | 7            | 303104             | 191140113       | 0         | 73256     |
+| ./benchmarks/data/hits.parquet | 8            | 573440             | 208038598       | 0         | 95823     |
+| ./benchmarks/data/hits.parquet | 9            | 344064             | 147838157       | 0         | 73256     |
++--------------------------------+--------------+--------------------+-----------------+-----------+-----------+
+```
 
 ### Writing the UDTF
 
