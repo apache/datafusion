@@ -79,7 +79,7 @@ pub struct LiteralGuarantee {
 /// What is guaranteed about the values for a [`LiteralGuarantee`]?
 #[derive(Debug, Clone, PartialEq)]
 pub enum Guarantee {
-    /// Guarantee that the expression is `true` if `column` is one the values. If
+    /// Guarantee that the expression is `true` if `column` is one of the values. If
     /// `column` is not one of the values, the expression can not be `true`.
     In,
     /// Guarantee that the expression is `true` if `column` is not ANY of the
@@ -138,7 +138,7 @@ impl LiteralGuarantee {
                     // in/not in a particular set of values for the expression
                     // to evaluate to true.
                     //
-                    // A disjunction is true, if at least one the terms is be
+                    // A disjunction is true, if at least one of the terms is be
                     // true.
                     //
                     // Thus, we can infer a guarantee if all terms are of the
@@ -378,7 +378,7 @@ mod test {
             col("a").not_eq(lit("foo")),
             vec![not_in_guarantee("a", ["foo"])],
         );
-        // a != "foo"
+        // "foo" != a
         test_analyze(
             lit("foo").not_eq(col("a")),
             vec![not_in_guarantee("a", ["foo"])],
@@ -441,7 +441,7 @@ mod test {
             col("b")
                 .not_eq(lit(1))
                 .and(col("b").not_eq(lit(2)))
-                .and(col("b").lt(lit(3))),
+                .and(col("b").gt(lit(3))),
             vec![not_in_guarantee("b", [1, 2])],
         );
     }
