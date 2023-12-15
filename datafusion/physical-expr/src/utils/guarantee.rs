@@ -94,7 +94,7 @@ impl LiteralGuarantee {
     /// create these structures from an predicate (boolean expression).
     fn try_new<'a>(
         column_name: impl Into<String>,
-        op: &Operator,
+        op: Operator,
         literals: impl IntoIterator<Item = &'a ScalarValue>,
     ) -> Option<Self> {
         let guarantee = match op {
@@ -199,7 +199,7 @@ struct GuaranteeBuilder<'a> {
 
     /// Key is the (column name, operator type)
     /// Value is the index into `guarantees`
-    map: HashMap<(&'a crate::expressions::Column, &'a Operator), usize>,
+    map: HashMap<(&'a crate::expressions::Column, Operator), usize>,
 }
 
 impl<'a> GuaranteeBuilder<'a> {
@@ -233,7 +233,7 @@ impl<'a> GuaranteeBuilder<'a> {
     fn aggregate_multi_conjunct(
         mut self,
         col: &'a crate::expressions::Column,
-        op: &'a Operator,
+        op: Operator,
         new_values: impl IntoIterator<Item = &'a ScalarValue>,
     ) -> Self {
         let key = (col, op);
@@ -290,7 +290,7 @@ impl<'a> GuaranteeBuilder<'a> {
             // new_values are combined with OR, so we can only create a
             // multi-column guarantee for `=` (or a single value).
             // (e.g. ignore `a != foo OR a != bar`)
-            if op == &Operator::Eq || new_values.len() == 1 {
+            if op == Operator::Eq || new_values.len() == 1 {
                 if let Some(guarantee) =
                     LiteralGuarantee::try_new(col.name(), op, new_values)
                 {
@@ -314,7 +314,7 @@ impl<'a> GuaranteeBuilder<'a> {
 /// Represents a single `col <op> literal` expression
 struct ColOpLit<'a> {
     col: &'a crate::expressions::Column,
-    op: &'a Operator,
+    op: Operator,
     lit: &'a crate::expressions::Literal,
 }
 
@@ -340,14 +340,15 @@ impl<'a> ColOpLit<'a> {
             left.downcast_ref::<crate::expressions::Column>(),
             right.downcast_ref::<crate::expressions::Literal>(),
         ) {
-            Some(Self { col, op, lit })
+            Some(Self { col, op: *op, lit })
         }
         // literal <op> col
         else if let (Some(lit), Some(col)) = (
             left.downcast_ref::<crate::expressions::Literal>(),
             right.downcast_ref::<crate::expressions::Column>(),
         ) {
-            Some(Self { col, op, lit })
+            // Used swapped operator operator, if possible
+            op.swap().map(|op| Self { col, op, lit })
         } else {
             None
         }
@@ -667,7 +668,7 @@ mod test {
         S: Into<ScalarValue> + 'a,
     {
         let literals: Vec<_> = literals.into_iter().map(|s| s.into()).collect();
-        LiteralGuarantee::try_new(column, &Operator::Eq, literals.iter()).unwrap()
+        LiteralGuarantee::try_new(column, Operator::Eq, literals.iter()).unwrap()
     }
 
     /// Guarantee that the expression is true if the column is NOT any of the specified values
@@ -677,7 +678,7 @@ mod test {
         S: Into<ScalarValue> + 'a,
     {
         let literals: Vec<_> = literals.into_iter().map(|s| s.into()).collect();
-        LiteralGuarantee::try_new(column, &Operator::NotEq, literals.iter()).unwrap()
+        LiteralGuarantee::try_new(column, Operator::NotEq, literals.iter()).unwrap()
     }
 
     /// Convert a logical expression to a physical expression (without any simplification, etc)
