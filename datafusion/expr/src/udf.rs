@@ -161,6 +161,12 @@ impl ScalarUDF {
     }
 }
 
+impl From<Arc<dyn FunctionImplementation + Send + Sync>> for ScalarUDF {
+    fn from(value: Arc<dyn FunctionImplementation + Send + Sync>) -> Self {
+        Self::new_from_impl(value)
+    }
+}
+
 /// Convenience trait for implementing ScalarUDF. See [`ScalarUDF::new_from_impl()`]
 pub trait FunctionImplementation {
     /// Returns this function's name

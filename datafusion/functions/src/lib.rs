@@ -48,6 +48,11 @@ use std::sync::Arc;
 pub mod encoding;
 pub mod stub;
 
+/// reexports of all expr_fn APIs
+pub mod expr_fn {
+    pub use super::encoding::expr_fn::*;
+}
+
 pub fn register_all(registry: &mut dyn FunctionRegistry) -> Result<()> {
     encoding::functions()
         .into_iter()

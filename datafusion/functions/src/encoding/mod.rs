@@ -18,8 +18,33 @@
 #[cfg(feature = "encoding_expressions")]
 mod inner;
 
-use datafusion_expr::FunctionImplementation;
+use datafusion_expr::{Expr, FunctionImplementation, ScalarUDF};
 use std::sync::Arc;
+
+#[cfg(not(feature = "encoding_expressions"))]
+pub mod expr_fn {}
+
+#[cfg(feature = "encoding_expressions")]
+pub mod expr_fn {
+    use super::*;
+    /// Return encode(arg)
+    pub fn encode(args: Vec<Expr>) -> Expr {
+        let udf = ScalarUDF::new_from_impl(Arc::new(inner::EncodeFunc::default()));
+        Expr::ScalarFunction(datafusion_expr::expr::ScalarFunction::new_udf(
+            Arc::new(udf),
+            args,
+        ))
+    }
+
+    /// Return decode(arg)
+    pub fn decode(args: Vec<Expr>) -> Expr {
+        let udf = ScalarUDF::new_from_impl(Arc::new(inner::DecodeFunc::default()));
+        Expr::ScalarFunction(datafusion_expr::expr::ScalarFunction::new_udf(
+            Arc::new(udf),
+            args,
+        ))
+    }
+}
 
 /// If feature flag is enabled, ues actual implementation
 #[cfg(feature = "encoding_expressions")]
