@@ -43,17 +43,29 @@ use datafusion_common::Result;
 use datafusion_execution::FunctionRegistry;
 use log::debug;
 
-#[cfg(feature = "encoding_expressions")]
-pub mod encoding;
-#[cfg(not(feature = "encoding_expressions"))]
-mod encoding {
-    use datafusion_expr::ScalarUDF;
-    use std::sync::Arc;
+// Macro creates the named module if the feature is enabled
+// otherwise creates a stub
+macro_rules! make_package {
+    ($name:ident, $feature:literal) => {
+        #[cfg(feature = $feature)]
+        pub mod $name;
 
-    pub(crate) fn functions() -> Vec<Arc<ScalarUDF>> {
-        vec![]
-    }
+        #[cfg(not(feature = $feature))]
+        /// Stub module when feature is not enabled
+        mod $name {
+            use datafusion_expr::ScalarUDF;
+            use log::debug;
+            use std::sync::Arc;
+
+            pub(crate) fn functions() -> Vec<Arc<ScalarUDF>> {
+                debug!("{} functions disabled", stringify!($name));
+                vec![]
+            }
+        }
+    };
 }
+
+make_package!(encoding, "encoding_expressions");
 
 pub mod stub;
 

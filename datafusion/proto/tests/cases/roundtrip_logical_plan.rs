@@ -379,7 +379,10 @@ async fn roundtrip_expr_api() -> Result<()> {
     // ensure expressions created with the expr api can be round tripped
     let plan = table
         .select(vec![
-            encode(vec![col("a").cast_to(&DataType::Utf8, &schema)?]),
+            encode(vec![
+                col("a").cast_to(&DataType::Utf8, &schema)?,
+                lit("hex"),
+            ]),
             decode(vec![lit("1234"), lit("hex")]),
         ])?
         .into_optimized_plan()?;
