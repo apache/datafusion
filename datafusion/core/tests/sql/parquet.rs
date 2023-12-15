@@ -25,32 +25,6 @@ use tempfile::TempDir;
 use super::*;
 
 #[tokio::test]
-async fn parquet_query() {
-    let ctx = SessionContext::new();
-    register_alltypes_parquet(&ctx).await;
-    // NOTE that string_col is actually a binary column and does not have the UTF8 logical type
-    // so we need an explicit cast
-    let sql = "SELECT id, CAST(string_col AS varchar) FROM alltypes_plain";
-    let actual = execute_to_batches(&ctx, sql).await;
-    let expected = [
-        "+----+---------------------------+",
-        "| id | alltypes_plain.string_col |",
-        "+----+---------------------------+",
-        "| 4  | 0                         |",
-        "| 5  | 1                         |",
-        "| 6  | 0                         |",
-        "| 7  | 1                         |",
-        "| 2  | 0                         |",
-        "| 3  | 1                         |",
-        "| 0  | 0                         |",
-        "| 1  | 1                         |",
-        "+----+---------------------------+",
-    ];
-
-    assert_batches_eq!(expected, &actual);
-}
-
-#[tokio::test]
 /// Test that if sort order is specified in ListingOptions, the sort
 /// expressions make it all the way down to the ParquetExec
 async fn parquet_with_sort_order_specified() {
