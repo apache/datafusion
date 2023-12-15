@@ -375,13 +375,11 @@ async fn roundtrip_expr_api() -> Result<()> {
         .await?;
     let table = ctx.table("t1").await?;
     let schema = table.schema().clone();
-    // encode(a::varchar, 'hex'), decode('1234', 'hex'),
+
+    // ensure expressions created with the expr api can be round tripped
     let plan = table
         .select(vec![
-            encode(vec![
-                col("a").cast_to(&DataType::Utf8, &schema)?,
-                lit("hex"),
-            ]),
+            encode(vec![col("a").cast_to(&DataType::Utf8, &schema)?]),
             decode(vec![lit("1234"), lit("hex")]),
         ])?
         .into_optimized_plan()?;

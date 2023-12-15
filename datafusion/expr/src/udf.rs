@@ -99,8 +99,9 @@ impl ScalarUDF {
 
     /// Create a new `ScalarUDF` from a `FuncImpl`
     pub fn new_from_impl(
-        arc_fun: Arc<dyn FunctionImplementation + Send + Sync>,
+        fun: impl FunctionImplementation + Send + Sync + 'static,
     ) -> ScalarUDF {
+        let arc_fun = Arc::new(fun);
         let captured_self = arc_fun.clone();
         let return_type: ReturnTypeFunction = Arc::new(move |arg_types| {
             let return_type = captured_self.return_type(arg_types)?;
@@ -158,12 +159,6 @@ impl ScalarUDF {
     /// Return the actual implementation
     pub fn fun(&self) -> ScalarFunctionImplementation {
         self.fun.clone()
-    }
-}
-
-impl From<Arc<dyn FunctionImplementation + Send + Sync>> for ScalarUDF {
-    fn from(value: Arc<dyn FunctionImplementation + Send + Sync>) -> Self {
-        Self::new_from_impl(value)
     }
 }
 

@@ -41,29 +41,26 @@
 //! instead of getting a cryptic "no function found" message at runtime.
 use datafusion_common::Result;
 use datafusion_execution::FunctionRegistry;
-use datafusion_expr::ScalarUDF;
 use log::debug;
-use std::sync::Arc;
 
+#[cfg(feature = "encoding_expressions")]
 pub mod encoding;
+
 pub mod stub;
 
 /// reexports of all expr_fn APIs
 pub mod expr_fn {
+    #[cfg(feature = "encoding_expressions")]
     pub use super::encoding::expr_fn::*;
 }
 
 pub fn register_all(registry: &mut dyn FunctionRegistry) -> Result<()> {
-    encoding::functions()
-        .into_iter()
-        .map(ScalarUDF::new_from_impl)
-        .map(Arc::new)
-        .try_for_each(|udf| {
-            let existing_udf = registry.register_udf(udf)?;
-            if let Some(existing_udf) = existing_udf {
-                debug!("Overwrite existing UDF: {}", existing_udf.name());
-            }
-            Ok(()) as Result<()>
-        })?;
+    encoding::functions().into_iter().try_for_each(|udf| {
+        let existing_udf = registry.register_udf(udf)?;
+        if let Some(existing_udf) = existing_udf {
+            debug!("Overwrite existing UDF: {}", existing_udf.name());
+        }
+        Ok(()) as Result<()>
+    })?;
     Ok(())
 }

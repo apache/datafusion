@@ -15,60 +15,43 @@
 // specific language governing permissions and limitations
 // under the License.
 
-#[cfg(feature = "encoding_expressions")]
 mod inner;
 
-use datafusion_expr::{Expr, FunctionImplementation, ScalarUDF};
-use std::sync::Arc;
+use datafusion_expr::{Expr, ScalarUDF};
+use std::sync::{Arc, OnceLock};
 
-#[cfg(not(feature = "encoding_expressions"))]
-pub mod expr_fn {}
-
-#[cfg(feature = "encoding_expressions")]
 pub mod expr_fn {
     use super::*;
     /// Return encode(arg)
     pub fn encode(args: Vec<Expr>) -> Expr {
-        let udf = ScalarUDF::new_from_impl(Arc::new(inner::EncodeFunc::default()));
-        Expr::ScalarFunction(datafusion_expr::expr::ScalarFunction::new_udf(
-            Arc::new(udf),
-            args,
-        ))
+        super::encode().call(args)
     }
 
     /// Return decode(arg)
     pub fn decode(args: Vec<Expr>) -> Expr {
-        let udf = ScalarUDF::new_from_impl(Arc::new(inner::DecodeFunc::default()));
-        Expr::ScalarFunction(datafusion_expr::expr::ScalarFunction::new_udf(
-            Arc::new(udf),
-            args,
-        ))
+        super::decode().call(args)
     }
 }
 
-/// If feature flag is enabled, ues actual implementation
-#[cfg(feature = "encoding_expressions")]
-macro_rules! use_function {
-    ($UDF:ty, $NAME:expr) => {{
-        Arc::new(<$UDF>::default()) as _
-    }};
+/// If feature flag make a single global UDF instance and a function to return it
+macro_rules! make_function {
+    ($UDF:ty, $GNAME:ident, $NAME:ident) => {
+        /// Singleton instance of the function
+        static $GNAME: OnceLock<Arc<ScalarUDF>> = OnceLock::new();
+
+        /// Return the function implementation
+        fn $NAME() -> Arc<ScalarUDF> {
+            $GNAME
+                .get_or_init(|| Arc::new(ScalarUDF::new_from_impl(<$UDF>::default())))
+                .clone()
+        }
+    };
 }
 
-/// If feature flag is not enabled, registers a stub that will error with a nice message
-#[cfg(not(feature = "encoding_expressions"))]
-macro_rules! use_function {
-    ($IGNORE:tt :: $IGNORE2:tt, $NAME:expr) => {{
-        Arc::new(crate::stub::StubFunc::new(
-            $NAME,
-            "feature 'encoding_expressions' not enabled",
-        ))
-    }};
-}
+make_function!(inner::EncodeFunc, ENCODE, encode);
+make_function!(inner::DecodeFunc, DECODE, decode);
 
 /// Return a list of all functions in this package
-pub(crate) fn functions() -> Vec<Arc<dyn FunctionImplementation + Send + Sync>> {
-    vec![
-        use_function!(inner::EncodeFunc, "encode"),
-        use_function!(inner::DecodeFunc, "decode"),
-    ]
+pub(crate) fn functions() -> Vec<Arc<ScalarUDF>> {
+    vec![encode(), decode()]
 }
