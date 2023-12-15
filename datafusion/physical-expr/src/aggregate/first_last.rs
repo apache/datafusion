@@ -20,7 +20,7 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use crate::aggregate::utils::{down_cast_any_ref, ordering_fields};
+use crate::aggregate::utils::{down_cast_any_ref, get_sort_options, ordering_fields};
 use crate::expressions::format_state_name;
 use crate::{
     reverse_order_bys, AggregateExpr, LexOrdering, LexOrderingRef, PhysicalExpr,
@@ -30,7 +30,6 @@ use crate::{
 use arrow::array::{Array, ArrayRef, AsArray, BooleanArray};
 use arrow::compute::{self, lexsort_to_indices, SortColumn};
 use arrow::datatypes::{DataType, Field};
-use arrow_schema::SortOptions;
 use datafusion_common::utils::{compare_rows, get_arrayref_at_indices, get_row_at_idx};
 use datafusion_common::{DataFusionError, Result, ScalarValue};
 use datafusion_expr::Accumulator;
@@ -540,14 +539,6 @@ fn convert_to_sort_cols(
             values: item.clone(),
             options: Some(sort_expr.options),
         })
-        .collect::<Vec<_>>()
-}
-
-/// Selects the sort option attribute from all the given `PhysicalSortExpr`s.
-fn get_sort_options(ordering_req: &[PhysicalSortExpr]) -> Vec<SortOptions> {
-    ordering_req
-        .iter()
-        .map(|item| item.options)
         .collect::<Vec<_>>()
 }
 

@@ -24,7 +24,7 @@ use std::collections::BinaryHeap;
 use std::fmt::Debug;
 use std::sync::Arc;
 
-use crate::aggregate::utils::{down_cast_any_ref, ordering_fields};
+use crate::aggregate::utils::{down_cast_any_ref, get_sort_options, ordering_fields};
 use crate::expressions::format_state_name;
 use crate::{AggregateExpr, LexOrdering, PhysicalExpr, PhysicalSortExpr};
 
@@ -504,14 +504,6 @@ fn merge_ordered_arrays(
     }
 
     Ok((merged_values, merged_orderings))
-}
-
-/// Selects the sort option attribute from all the given `PhysicalSortExpr`s.
-fn get_sort_options(ordering_req: &[PhysicalSortExpr]) -> Vec<SortOptions> {
-    ordering_req
-        .iter()
-        .map(|item| item.options)
-        .collect::<Vec<_>>()
 }
 
 #[cfg(test)]
