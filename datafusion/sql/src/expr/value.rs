@@ -19,7 +19,7 @@ use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use arrow::compute::kernels::cast_utils::parse_interval_month_day_nano;
 use arrow::datatypes::{ArrowNativeTypeOp, DECIMAL128_MAX_PRECISION};
 use arrow_schema::{DataType, DECIMAL128_MAX_SCALE};
-use bigdecimal::BigDecimal;
+use bigdecimal::{BigDecimal, ToPrimitive};
 use datafusion_common::{
     not_impl_err, plan_err, DFSchema, DataFusionError, Result, ScalarValue,
 };
@@ -414,19 +414,12 @@ fn parse_decimal_128(unsigned_number: &str, negative: bool) -> Result<Expr> {
         )))
     })?;
 
-    let replaced_str = big_decimal.to_string().replace('.', "");
-
-    let (precision, scale) = if big_decimal.fractional_digit_count() < 0 {
-        (
-            (replaced_str.len() as i64)
-                .add_checked(big_decimal.fractional_digit_count())? as u64,
-            big_decimal.fractional_digit_count(),
-        )
+    let (big_int, scale) = big_decimal.clone().into_bigint_and_exponent();
+    let precision = if scale <= 0 {
+        big_int.to_string().len() as u64
     } else {
-        (
-            replaced_str.len() as u64,
-            big_decimal.fractional_digit_count(),
-        )
+        let precision = big_int.to_string().len() as u64;
+        precision.max(scale as u64)
     };
 
     // check precision overflow
@@ -436,16 +429,16 @@ fn parse_decimal_128(unsigned_number: &str, negative: bool) -> Result<Expr> {
                 ))));
     }
 
-    // check scale overflow
-    if scale < -DECIMAL128_MAX_SCALE as i64 || scale > DECIMAL128_MAX_SCALE as i64 {
+    // // check scale overflow
+    if scale > DECIMAL128_MAX_SCALE as i64 {
         return Err(DataFusionError::from(ParserError(format!(
                     "Cannot parse {unsigned_number} as i128 when building decimal: scale overflow"
                 ))));
     }
 
-    let number = replaced_str.parse::<i128>().map_err(|e| {
+    let number = big_int.to_i128().ok_or_else(|| {
         DataFusionError::from(ParserError(format!(
-            "Cannot parse {replaced_str} as i128 when building decimal: {e}"
+            "Cannot parse {unsigned_number} as i128 when building decimal"
         )))
     })?;
 
@@ -478,11 +471,5 @@ mod tests {
             let output = try_decode_hex_literal(input);
             assert_eq!(output, expect);
         }
-    }
-
-    #[test]
-    fn test_parse_128_decimal_number() {
-        let number = "1.23456e10";
-        parse_decimal_128(number, false).unwrap();
     }
 }

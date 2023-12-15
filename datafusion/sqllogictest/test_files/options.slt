@@ -147,7 +147,7 @@ select .0 as c1, 0. as c2, 0000. as c3, 00000.00 as c4
 query TTTT
 select arrow_typeof(.0) as c1, arrow_typeof(0.) as c2, arrow_typeof(0000.) as c3, arrow_typeof(00000.00) as c4
 ----
-Decimal128(2, 1) Decimal128(1, 0) Decimal128(1, 0) Decimal128(3, 2)
+Decimal128(1, 1) Decimal128(1, 0) Decimal128(1, 0) Decimal128(2, 2)
 
 query RR
 select 999999999999999999999999999999999999, -999999999999999999999999999999999999
