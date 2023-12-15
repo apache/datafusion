@@ -27,6 +27,7 @@ use crate::{memory::MemoryStream, DisplayFormatType, ExecutionPlan, Partitioning
 use arrow::array::{ArrayRef, NullArray};
 use arrow::datatypes::{DataType, Field, Fields, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
+use arrow_array::RecordBatchOptions;
 use datafusion_common::{internal_err, DataFusionError, Result};
 use datafusion_execution::TaskContext;
 
@@ -59,9 +60,7 @@ impl PlaceholderRowExec {
     fn data(&self) -> Result<Vec<RecordBatch>> {
         Ok({
             let n_field = self.schema.fields.len();
-            // hack for https://github.com/apache/arrow-datafusion/pull/3242
-            let n_field = if n_field == 0 { 1 } else { n_field };
-            vec![RecordBatch::try_new(
+            vec![RecordBatch::try_new_with_options(
                 Arc::new(Schema::new(
                     (0..n_field)
                         .map(|i| {
@@ -75,6 +74,8 @@ impl PlaceholderRowExec {
                         ret
                     })
                     .collect(),
+                // Even if column number is empty we can generate single row.
+                &RecordBatchOptions::new().with_row_count(Some(1)),
             )?]
         })
     }
