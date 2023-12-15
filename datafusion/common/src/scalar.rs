@@ -445,8 +445,7 @@ impl PartialOrd for ScalarValue {
                     }
                 }
 
-                Some(Ordering::Equal) 
-                
+                Some(Ordering::Equal)
             }
             (List(_), _) | (LargeList(_), _) | (FixedSizeList(_), _) => None,
             (Date32(v1), Date32(v2)) => v1.partial_cmp(v2),
@@ -1804,7 +1803,10 @@ impl ScalarValue {
     ///
     /// assert_eq!(*result, expected);
     /// ```
-    pub fn new_large_list(values: &[ScalarValue], data_type: &DataType) -> Arc<LargeListArray> {
+    pub fn new_large_list(
+        values: &[ScalarValue],
+        data_type: &DataType,
+    ) -> Arc<LargeListArray> {
         let values = if values.is_empty() {
             new_empty_array(data_type)
         } else {
@@ -2947,22 +2949,19 @@ impl TryFrom<&DataType> for ScalarValue {
                 Box::new(value_type.as_ref().try_into()?),
             ),
             // `ScalaValue::List` contains single element `ListArray`.
-            DataType::List(field) => {
-                ScalarValue::List(
-                    new_null_array(
-                        &DataType::List(
-                            Arc::new(
-                                Field::new(
-                                    "item",
-                                    field.data_type().clone(),
-                                    true,
-                                )
-                            )
-                        ),
-                        1,
-                    ).as_list::<i32>().to_owned().into()
+            DataType::List(field) => ScalarValue::List(
+                new_null_array(
+                    &DataType::List(Arc::new(Field::new(
+                        "item",
+                        field.data_type().clone(),
+                        true,
+                    ))),
+                    1,
                 )
-            },
+                .as_list::<i32>()
+                .to_owned()
+                .into(),
+            ),
             DataType::Struct(fields) => ScalarValue::Struct(None, fields.clone()),
             DataType::Null => ScalarValue::Null,
             _ => {
@@ -3031,7 +3030,9 @@ impl fmt::Display for ScalarValue {
                 // ScalarValue List should always have a single element
                 assert_eq!(arr.len(), 1);
                 let options = FormatOptions::default().with_display_error(true);
-                let formatter = ArrayFormatter::try_new(arr.as_ref() as &dyn Array, &options).unwrap();
+                let formatter =
+                    ArrayFormatter::try_new(arr.as_ref() as &dyn Array, &options)
+                        .unwrap();
                 let value_formatter = formatter.value(0);
                 write!(f, "{value_formatter}")?
             }
@@ -3039,7 +3040,9 @@ impl fmt::Display for ScalarValue {
                 // ScalarValue List should always have a single element
                 assert_eq!(arr.len(), 1);
                 let options = FormatOptions::default().with_display_error(true);
-                let formatter = ArrayFormatter::try_new(arr.as_ref() as &dyn Array, &options).unwrap();
+                let formatter =
+                    ArrayFormatter::try_new(arr.as_ref() as &dyn Array, &options)
+                        .unwrap();
                 let value_formatter = formatter.value(0);
                 write!(f, "{value_formatter}")?
             }
@@ -3047,7 +3050,9 @@ impl fmt::Display for ScalarValue {
                 // ScalarValue List should always have a single element
                 assert_eq!(arr.len(), 1);
                 let options = FormatOptions::default().with_display_error(true);
-                let formatter = ArrayFormatter::try_new(arr.as_ref() as &dyn Array, &options).unwrap();
+                let formatter =
+                    ArrayFormatter::try_new(arr.as_ref() as &dyn Array, &options)
+                        .unwrap();
                 let value_formatter = formatter.value(0);
                 write!(f, "{value_formatter}")?
             }
@@ -4033,9 +4038,13 @@ mod tests {
 
         let expected = ScalarValue::List(
             new_null_array(
-            &DataType::List(Arc::new(Field::new("item", DataType::Int32, true))),
-            1,
-        ).as_list::<i32>().to_owned().into());
+                &DataType::List(Arc::new(Field::new("item", DataType::Int32, true))),
+                1,
+            )
+            .as_list::<i32>()
+            .to_owned()
+            .into(),
+        );
 
         assert_eq!(expected, scalar)
     }
@@ -4050,14 +4059,19 @@ mod tests {
         let data_type = &data_type;
         let scalar: ScalarValue = data_type.try_into().unwrap();
 
-        let expected = ScalarValue::List(new_null_array(
-            &DataType::List(Arc::new(Field::new(
-                "item",
-                DataType::List(Arc::new(Field::new("item", DataType::Int32, true))),
-                true,
-            ))),
-            1,
-        ).as_list::<i32>().to_owned().into());
+        let expected = ScalarValue::List(
+            new_null_array(
+                &DataType::List(Arc::new(Field::new(
+                    "item",
+                    DataType::List(Arc::new(Field::new("item", DataType::Int32, true))),
+                    true,
+                ))),
+                1,
+            )
+            .as_list::<i32>()
+            .to_owned()
+            .into(),
+        );
 
         assert_eq!(expected, scalar)
     }

@@ -195,9 +195,7 @@ mod tests {
     // arrow::compute::sort cann't sort ListArray directly, so we need to sort the inner primitive array and wrap it back into ListArray.
     fn sort_list_inner(arr: ScalarValue) -> ScalarValue {
         let arr = match arr {
-            ScalarValue::List(arr) => {
-                arr.value(0)
-            }
+            ScalarValue::List(arr) => arr.value(0),
             _ => {
                 panic!("Expected ScalarValue::List, got {:?}", arr)
             }

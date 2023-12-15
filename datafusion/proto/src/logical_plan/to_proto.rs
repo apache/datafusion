@@ -32,12 +32,13 @@ use crate::protobuf::{
     OptimizedLogicalPlanType, OptimizedPhysicalPlanType, PlaceholderNode, RollupNode,
 };
 use arrow::{
+    array::ArrayRef,
     datatypes::{
         DataType, Field, IntervalMonthDayNanoType, IntervalUnit, Schema, SchemaRef,
         TimeUnit, UnionMode,
     },
     ipc::writer::{DictionaryTracker, IpcDataGenerator},
-    record_batch::RecordBatch, array::ArrayRef,
+    record_batch::RecordBatch,
 };
 use datafusion_common::{
     Column, Constraint, Constraints, DFField, DFSchema, DFSchemaRef, OwnedTableReference,
