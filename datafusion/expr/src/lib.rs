@@ -49,7 +49,6 @@ pub mod field_util;
 pub mod function;
 pub mod interval_arithmetic;
 pub mod logical_plan;
-pub mod struct_expressions;
 pub mod tree_node;
 pub mod type_coercion;
 pub mod utils;

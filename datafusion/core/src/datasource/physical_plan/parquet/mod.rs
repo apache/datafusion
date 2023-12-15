@@ -66,6 +66,7 @@ mod metrics;
 pub mod page_filter;
 mod row_filter;
 mod row_groups;
+mod statistics;
 
 pub use metrics::ParquetFileMetrics;
 
@@ -467,8 +468,10 @@ impl FileOpener for ParquetOpener {
                 ParquetRecordBatchStreamBuilder::new_with_options(reader, options)
                     .await?;
 
+            let file_schema = builder.schema().clone();
+
             let (schema_mapping, adapted_projections) =
-                schema_adapter.map_schema(builder.schema())?;
+                schema_adapter.map_schema(&file_schema)?;
             // let predicate = predicate.map(|p| reassign_predicate_columns(p, builder.schema(), true)).transpose()?;
 
             let mask = ProjectionMask::roots(
@@ -480,8 +483,8 @@ impl FileOpener for ParquetOpener {
             if let Some(predicate) = pushdown_filters.then_some(predicate).flatten() {
                 let row_filter = row_filter::build_row_filter(
                     &predicate,
-                    builder.schema().as_ref(),
-                    table_schema.as_ref(),
+                    &file_schema,
+                    &table_schema,
                     builder.metadata(),
                     reorder_predicates,
                     &file_metrics,
@@ -506,6 +509,8 @@ impl FileOpener for ParquetOpener {
             let file_metadata = builder.metadata().clone();
             let predicate = pruning_predicate.as_ref().map(|p| p.as_ref());
             let mut row_groups = row_groups::prune_row_groups_by_statistics(
+                &file_schema,
+                builder.parquet_schema(),
                 file_metadata.row_groups(),
                 file_range,
                 predicate,
@@ -718,28 +723,6 @@ pub async fn plan_to_parquet(
     Ok(())
 }
 
-// Copy from the arrow-rs
-// https://github.com/apache/arrow-rs/blob/733b7e7fd1e8c43a404c3ce40ecf741d493c21b4/parquet/src/arrow/buffer/bit_util.rs#L55
-// Convert the byte slice to fixed length byte array with the length of 16
-fn sign_extend_be(b: &[u8]) -> [u8; 16] {
-    assert!(b.len() <= 16, "Array too large, expected less than 16");
-    let is_negative = (b[0] & 128u8) == 128u8;
-    let mut result = if is_negative { [255u8; 16] } else { [0u8; 16] };
-    for (d, s) in result.iter_mut().skip(16 - b.len()).zip(b) {
-        *d = *s;
-    }
-    result
-}
-
-// Convert the bytes array to i128.
-// The endian of the input bytes array must be big-endian.
-pub(crate) fn from_bytes_to_i128(b: &[u8]) -> i128 {
-    // The bytes array are from parquet file and must be the big-endian.
-    // The endian is defined by parquet format, and the reference document
-    // https://github.com/apache/parquet-format/blob/54e53e5d7794d383529dd30746378f19a12afd58/src/main/thrift/parquet.thrift#L66
-    i128::from_be_bytes(sign_extend_be(b))
-}
-
 // Convert parquet column schema to arrow data type, and just consider the
 // decimal data type.
 pub(crate) fn parquet_to_arrow_decimal_type(
@@ -769,7 +752,7 @@ mod tests {
     use crate::datasource::file_format::options::CsvReadOptions;
     use crate::datasource::file_format::parquet::test_util::store_parquet;
     use crate::datasource::file_format::test_util::scan_format;
-    use crate::datasource::listing::{FileRange, PartitionedFile};
+    use crate::datasource::listing::{FileRange, ListingOptions, PartitionedFile};
     use crate::datasource::object_store::ObjectStoreUrl;
     use crate::execution::context::SessionState;
     use crate::physical_plan::displayable;
@@ -789,8 +772,8 @@ mod tests {
     };
     use arrow_array::Date64Array;
     use chrono::{TimeZone, Utc};
-    use datafusion_common::ScalarValue;
     use datafusion_common::{assert_contains, ToDFSchema};
+    use datafusion_common::{FileType, GetExt, ScalarValue};
     use datafusion_expr::{col, lit, when, Expr};
     use datafusion_physical_expr::create_physical_expr;
     use datafusion_physical_expr::execution_props::ExecutionProps;
@@ -1623,11 +1606,11 @@ mod tests {
         let partitioned_file = PartitionedFile {
             object_meta: meta,
             partition_values: vec![
-                ScalarValue::Utf8(Some("2021".to_owned())),
+                ScalarValue::from("2021"),
                 ScalarValue::UInt8(Some(10)),
                 ScalarValue::Dictionary(
                     Box::new(DataType::UInt16),
-                    Box::new(ScalarValue::Utf8(Some("26".to_owned()))),
+                    Box::new(ScalarValue::from("26")),
                 ),
             ],
             range: None,
@@ -1959,6 +1942,96 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn write_table_results() -> Result<()> {
+        // create partitioned input file and context
+        let tmp_dir = TempDir::new()?;
+        // let mut ctx = create_ctx(&tmp_dir, 4).await?;
+        let ctx = SessionContext::new_with_config(
+            SessionConfig::new().with_target_partitions(8),
+        );
+        let schema = populate_csv_partitions(&tmp_dir, 4, ".csv")?;
+        // register csv file with the execution context
+        ctx.register_csv(
+            "test",
+            tmp_dir.path().to_str().unwrap(),
+            CsvReadOptions::new().schema(&schema),
+        )
+        .await?;
+
+        // register a local file system object store for /tmp directory
+        let local = Arc::new(LocalFileSystem::new_with_prefix(&tmp_dir)?);
+        let local_url = Url::parse("file://local").unwrap();
+        ctx.runtime_env().register_object_store(&local_url, local);
+
+        // Configure listing options
+        let file_format = ParquetFormat::default().with_enable_pruning(Some(true));
+        let listing_options = ListingOptions::new(Arc::new(file_format))
+            .with_file_extension(FileType::PARQUET.get_ext());
+
+        // execute a simple query and write the results to parquet
+        let out_dir = tmp_dir.as_ref().to_str().unwrap().to_string() + "/out";
+        std::fs::create_dir(&out_dir).unwrap();
+        let df = ctx.sql("SELECT c1, c2 FROM test").await?;
+        let schema: Schema = df.schema().into();
+        // Register a listing table - this will use all files in the directory as data sources
+        // for the query
+        ctx.register_listing_table(
+            "my_table",
+            &out_dir,
+            listing_options,
+            Some(Arc::new(schema)),
+            None,
+        )
+        .await
+        .unwrap();
+        df.write_table("my_table", DataFrameWriteOptions::new())
+            .await?;
+
+        // create a new context and verify that the results were saved to a partitioned parquet file
+        let ctx = SessionContext::new();
+
+        // get write_id
+        let mut paths = fs::read_dir(&out_dir).unwrap();
+        let path = paths.next();
+        let name = path
+            .unwrap()?
+            .path()
+            .file_name()
+            .expect("Should be a file name")
+            .to_str()
+            .expect("Should be a str")
+            .to_owned();
+        let (parsed_id, _) = name.split_once('_').expect("File should contain _ !");
+        let write_id = parsed_id.to_owned();
+
+        // register each partition as well as the top level dir
+        ctx.register_parquet(
+            "part0",
+            &format!("{out_dir}/{write_id}_0.parquet"),
+            ParquetReadOptions::default(),
+        )
+        .await?;
+
+        ctx.register_parquet("allparts", &out_dir, ParquetReadOptions::default())
+            .await?;
+
+        let part0 = ctx.sql("SELECT c1, c2 FROM part0").await?.collect().await?;
+        let allparts = ctx
+            .sql("SELECT c1, c2 FROM allparts")
+            .await?
+            .collect()
+            .await?;
+
+        let allparts_count: usize = allparts.iter().map(|batch| batch.num_rows()).sum();
+
+        assert_eq!(part0[0].schema(), allparts[0].schema());
+
+        assert_eq!(allparts_count, 40);
+
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn write_parquet_results() -> Result<()> {
         // create partitioned input file and context
         let tmp_dir = TempDir::new()?;
@@ -2002,7 +2075,6 @@ mod tests {
             .to_str()
             .expect("Should be a str")
             .to_owned();
-        println!("{name}");
         let (parsed_id, _) = name.split_once('_').expect("File should contain _ !");
         let write_id = parsed_id.to_owned();
 

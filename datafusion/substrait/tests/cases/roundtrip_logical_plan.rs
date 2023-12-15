@@ -395,6 +395,11 @@ async fn roundtrip_inlist_4() -> Result<()> {
 }
 
 #[tokio::test]
+async fn roundtrip_cross_join() -> Result<()> {
+    roundtrip("SELECT * FROM data CROSS JOIN data2").await
+}
+
+#[tokio::test]
 async fn roundtrip_inner_join() -> Result<()> {
     roundtrip("SELECT data.a FROM data JOIN data2 ON data.a = data2.a").await
 }
@@ -479,6 +484,46 @@ async fn roundtrip_ilike() -> Result<()> {
 }
 
 #[tokio::test]
+async fn roundtrip_not() -> Result<()> {
+    roundtrip("SELECT * FROM data WHERE NOT d").await
+}
+
+#[tokio::test]
+async fn roundtrip_negative() -> Result<()> {
+    roundtrip("SELECT * FROM data WHERE -a = 1").await
+}
+
+#[tokio::test]
+async fn roundtrip_is_true() -> Result<()> {
+    roundtrip("SELECT * FROM data WHERE d IS TRUE").await
+}
+
+#[tokio::test]
+async fn roundtrip_is_false() -> Result<()> {
+    roundtrip("SELECT * FROM data WHERE d IS FALSE").await
+}
+
+#[tokio::test]
+async fn roundtrip_is_not_true() -> Result<()> {
+    roundtrip("SELECT * FROM data WHERE d IS NOT TRUE").await
+}
+
+#[tokio::test]
+async fn roundtrip_is_not_false() -> Result<()> {
+    roundtrip("SELECT * FROM data WHERE d IS NOT FALSE").await
+}
+
+#[tokio::test]
+async fn roundtrip_is_unknown() -> Result<()> {
+    roundtrip("SELECT * FROM data WHERE d IS UNKNOWN").await
+}
+
+#[tokio::test]
+async fn roundtrip_is_not_unknown() -> Result<()> {
+    roundtrip("SELECT * FROM data WHERE d IS NOT UNKNOWN").await
+}
+
+#[tokio::test]
 async fn roundtrip_union() -> Result<()> {
     roundtrip("SELECT a, e FROM data UNION SELECT a, e FROM data").await
 }
@@ -501,10 +546,11 @@ async fn simple_intersect() -> Result<()> {
     assert_expected_plan(
         "SELECT COUNT(*) FROM (SELECT data.a FROM data INTERSECT SELECT data2.a FROM data2);",
         "Aggregate: groupBy=[[]], aggr=[[COUNT(UInt8(1))]]\
-         \n  LeftSemi Join: data.a = data2.a\
-         \n    Aggregate: groupBy=[[data.a]], aggr=[[]]\
-         \n      TableScan: data projection=[a]\
-         \n    TableScan: data2 projection=[a]",
+         \n  Projection: \
+         \n    LeftSemi Join: data.a = data2.a\
+         \n      Aggregate: groupBy=[[data.a]], aggr=[[]]\
+         \n        TableScan: data projection=[a]\
+         \n      TableScan: data2 projection=[a]",
     )
         .await
 }
@@ -514,10 +560,11 @@ async fn simple_intersect_table_reuse() -> Result<()> {
     assert_expected_plan(
         "SELECT COUNT(*) FROM (SELECT data.a FROM data INTERSECT SELECT data.a FROM data);",
         "Aggregate: groupBy=[[]], aggr=[[COUNT(UInt8(1))]]\
-         \n  LeftSemi Join: data.a = data.a\
-         \n    Aggregate: groupBy=[[data.a]], aggr=[[]]\
-         \n      TableScan: data projection=[a]\
-         \n    TableScan: data projection=[a]",
+         \n  Projection: \
+         \n    LeftSemi Join: data.a = data.a\
+         \n      Aggregate: groupBy=[[data.a]], aggr=[[]]\
+         \n        TableScan: data projection=[a]\
+         \n      TableScan: data projection=[a]",
     )
         .await
 }

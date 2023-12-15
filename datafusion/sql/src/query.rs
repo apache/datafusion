@@ -161,7 +161,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         }
 
         let order_by_rex =
-            self.order_by_to_sort_expr(&order_by, plan.schema(), planner_context)?;
+            self.order_by_to_sort_expr(&order_by, plan.schema(), planner_context, true)?;
 
         if let LogicalPlan::Distinct(Distinct::On(ref distinct_on)) = plan {
             // In case of `DISTINCT ON` we must capture the sort expressions since during the plan

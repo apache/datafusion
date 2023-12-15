@@ -406,8 +406,7 @@ mod tests {
             .await?;
 
         let mut partitioned_file = PartitionedFile::from(meta);
-        partitioned_file.partition_values =
-            vec![ScalarValue::Utf8(Some("2021-10-26".to_owned()))];
+        partitioned_file.partition_values = vec![ScalarValue::from("2021-10-26")];
 
         let avro_exec = AvroExec::new(FileScanConfig {
             // select specific columns of the files as well as the partitioning

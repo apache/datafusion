@@ -47,7 +47,7 @@ license = "Apache-2.0"
 readme = "README.md"
 repository = "https://github.com/apache/arrow-datafusion"
 rust-version = "1.70"
-version = "33.0.0"
+version = "34.0.0"
 
 [workspace.dependencies]
 arrow = { version = "49.0.0", features = ["prettyprint"] }
@@ -60,18 +60,18 @@ async-trait = "0.1.73"
 bigdecimal = "0.4.1"
 bytes = "1.4"
 ctor = "0.2.0"
-datafusion = { path = "datafusion/core", version = "33.0.0" }
-datafusion-common = { path = "datafusion/common", version = "33.0.0" }
-datafusion-expr = { path = "datafusion/expr", version = "33.0.0" }
-datafusion-functions = { path = "datafusion/functions", version = "33.0.0" }
-datafusion-sql = { path = "datafusion/sql", version = "33.0.0" }
-datafusion-optimizer = { path = "datafusion/optimizer", version = "33.0.0" }
-datafusion-physical-expr = { path = "datafusion/physical-expr", version = "33.0.0" }
-datafusion-physical-plan = { path = "datafusion/physical-plan", version = "33.0.0" }
-datafusion-execution = { path = "datafusion/execution", version = "33.0.0" }
-datafusion-proto = { path = "datafusion/proto", version = "33.0.0" }
-datafusion-sqllogictest = { path = "datafusion/sqllogictest", version = "33.0.0" }
-datafusion-substrait = { path = "datafusion/substrait", version = "33.0.0" }
+datafusion = { path = "datafusion/core", version = "34.0.0" }
+datafusion-common = { path = "datafusion/common", version = "34.0.0" }
+datafusion-expr = { path = "datafusion/expr", version = "34.0.0" }
+datafusion-functions = { path = "datafusion/functions", version = "34.0.0" }
+datafusion-sql = { path = "datafusion/sql", version = "34.0.0" }
+datafusion-optimizer = { path = "datafusion/optimizer", version = "34.0.0" }
+datafusion-physical-expr = { path = "datafusion/physical-expr", version = "34.0.0" }
+datafusion-physical-plan = { path = "datafusion/physical-plan", version = "34.0.0" }
+datafusion-execution = { path = "datafusion/execution", version = "34.0.0" }
+datafusion-proto = { path = "datafusion/proto", version = "34.0.0" }
+datafusion-sqllogictest = { path = "datafusion/sqllogictest", version = "34.0.0" }
+datafusion-substrait = { path = "datafusion/substrait", version = "34.0.0" }
 dashmap = "5.4.0"
 doc-comment = "0.3"
 env_logger = "0.10"
@@ -87,7 +87,7 @@ parquet = { version = "49.0.0", default-features = false, features = ["arrow", "
 rand = "0.8"
 rstest = "0.18.0"
 serde_json = "1"
-sqlparser = { version = "0.39.0", features = ["visitor"] }
+sqlparser = { version = "0.40.0", features = ["visitor"] }
 tempfile = "3"
 thiserror = "1.0.44"
 chrono = { version = "0.4.31", default-features = false }

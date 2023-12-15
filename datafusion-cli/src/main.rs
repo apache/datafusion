@@ -22,6 +22,7 @@ use datafusion::execution::memory_pool::{FairSpillPool, GreedyMemoryPool};
 use datafusion::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
 use datafusion::prelude::SessionContext;
 use datafusion_cli::catalog::DynamicFileCatalog;
+use datafusion_cli::functions::ParquetMetadataFunc;
 use datafusion_cli::{
     exec,
     print_format::PrintFormat,
@@ -185,6 +186,8 @@ pub async fn main() -> Result<()> {
         ctx.state().catalog_list(),
         ctx.state_weak_ref(),
     )));
+    // register `parquet_metadata` table function to get metadata from parquet files
+    ctx.register_udtf("parquet_metadata", Arc::new(ParquetMetadataFunc {}));
 
     let mut print_options = PrintOptions {
         format: args.format,
@@ -328,6 +331,8 @@ fn extract_memory_pool_size(size: &str) -> Result<usize, String> {
 
 #[cfg(test)]
 mod tests {
+    use datafusion::assert_batches_eq;
+
     use super::*;
 
     fn assert_conversion(input: &str, expected: Result<usize, String>) {
@@ -382,6 +387,60 @@ mod tests {
             "12k12k",
             Err("Invalid memory pool size '12k12k'".to_string()),
         );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_parquet_metadata_works() -> Result<(), DataFusionError> {
+        let ctx = SessionContext::new();
+        ctx.register_udtf("parquet_metadata", Arc::new(ParquetMetadataFunc {}));
+
+        // input with single quote
+        let sql =
+            "SELECT * FROM parquet_metadata('../datafusion/core/tests/data/fixed_size_list_array.parquet')";
+        let df = ctx.sql(sql).await?;
+        let rbs = df.collect().await?;
+
+        let excepted = [
+            "+-------------------------------------------------------------+--------------+--------------------+-----------------------+-----------------+-----------+-------------+------------+----------------+-------+-----------+-----------+------------------+----------------------+-----------------+-----------------+-------------+------------------------------+-------------------+------------------------+------------------+-----------------------+-------------------------+",
+            "| filename                                                    | row_group_id | row_group_num_rows | row_group_num_columns | row_group_bytes | column_id | file_offset | num_values | path_in_schema | type  | stats_min | stats_max | stats_null_count | stats_distinct_count | stats_min_value | stats_max_value | compression | encodings                    | index_page_offset | dictionary_page_offset | data_page_offset | total_compressed_size | total_uncompressed_size |",
+            "+-------------------------------------------------------------+--------------+--------------------+-----------------------+-----------------+-----------+-------------+------------+----------------+-------+-----------+-----------+------------------+----------------------+-----------------+-----------------+-------------+------------------------------+-------------------+------------------------+------------------+-----------------------+-------------------------+",
+            "| ../datafusion/core/tests/data/fixed_size_list_array.parquet | 0            | 2                  | 1                     | 123             | 0         | 125         | 4          | \"f0.list.item\" | INT64 | 1         | 4         | 0                |                      | 1               | 4               | SNAPPY      | [RLE_DICTIONARY, PLAIN, RLE] |                   | 4                      | 46               | 121                   | 123                     |",
+            "+-------------------------------------------------------------+--------------+--------------------+-----------------------+-----------------+-----------+-------------+------------+----------------+-------+-----------+-----------+------------------+----------------------+-----------------+-----------------+-------------+------------------------------+-------------------+------------------------+------------------+-----------------------+-------------------------+",
+        ];
+        assert_batches_eq!(excepted, &rbs);
+
+        // input with double quote
+        let sql =
+            "SELECT * FROM parquet_metadata(\"../datafusion/core/tests/data/fixed_size_list_array.parquet\")";
+        let df = ctx.sql(sql).await?;
+        let rbs = df.collect().await?;
+        assert_batches_eq!(excepted, &rbs);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_parquet_metadata_works_with_strings() -> Result<(), DataFusionError> {
+        let ctx = SessionContext::new();
+        ctx.register_udtf("parquet_metadata", Arc::new(ParquetMetadataFunc {}));
+
+        // input with string columns
+        let sql =
+            "SELECT * FROM parquet_metadata('../parquet-testing/data/data_index_bloom_encoding_stats.parquet')";
+        let df = ctx.sql(sql).await?;
+        let rbs = df.collect().await?;
+
+        let excepted = [
+
+"+-----------------------------------------------------------------+--------------+--------------------+-----------------------+-----------------+-----------+-------------+------------+----------------+------------+-----------+-----------+------------------+----------------------+-----------------+-----------------+--------------------+--------------------------+-------------------+------------------------+------------------+-----------------------+-------------------------+",
+"| filename                                                        | row_group_id | row_group_num_rows | row_group_num_columns | row_group_bytes | column_id | file_offset | num_values | path_in_schema | type       | stats_min | stats_max | stats_null_count | stats_distinct_count | stats_min_value | stats_max_value | compression        | encodings                | index_page_offset | dictionary_page_offset | data_page_offset | total_compressed_size | total_uncompressed_size |",
+"+-----------------------------------------------------------------+--------------+--------------------+-----------------------+-----------------+-----------+-------------+------------+----------------+------------+-----------+-----------+------------------+----------------------+-----------------+-----------------+--------------------+--------------------------+-------------------+------------------------+------------------+-----------------------+-------------------------+",
+"| ../parquet-testing/data/data_index_bloom_encoding_stats.parquet | 0            | 14                 | 1                     | 163             | 0         | 4           | 14         | \"String\"       | BYTE_ARRAY | Hello     | today     | 0                |                      | Hello           | today           | GZIP(GzipLevel(6)) | [BIT_PACKED, RLE, PLAIN] |                   |                        | 4                | 152                   | 163                     |",
+"+-----------------------------------------------------------------+--------------+--------------------+-----------------------+-----------------+-----------+-------------+------------+----------------+------------+-----------+-----------+------------------+----------------------+-----------------+-----------------+--------------------+--------------------------+-------------------+------------------------+------------------+-----------------------+-------------------------+"
+        ];
+        assert_batches_eq!(excepted, &rbs);
 
         Ok(())
     }

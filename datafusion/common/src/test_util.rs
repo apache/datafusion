@@ -285,6 +285,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "parquet")]
     fn test_happy() {
         let res = arrow_test_data();
         assert!(PathBuf::from(res).is_dir());

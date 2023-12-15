@@ -62,12 +62,12 @@ bytes = { workspace = true }
 bzip2 = { version = "0.4.3", optional = true }
 chrono = { workspace = true }
 dashmap = { workspace = true }
-datafusion-common = { path = "../common", version = "33.0.0", features = ["object_store"], default-features = false }
+datafusion-common = { path = "../common", version = "34.0.0", features = ["object_store"], default-features = false }
 datafusion-execution = { workspace = true }
 datafusion-expr = { workspace = true }
-datafusion-functions = { path = "../functions", version = "33.0.0"}
-datafusion-optimizer = { path = "../optimizer", version = "33.0.0", default-features = false }
-datafusion-physical-expr = { path = "../physical-expr", version = "33.0.0", default-features = false }
+datafusion-functions = { path = "../functions", version = "34.0.0"}
+datafusion-optimizer = { path = "../optimizer", version = "34.0.0", default-features = false }
+datafusion-physical-expr = { path = "../physical-expr", version = "34.0.0", default-features = false }
 datafusion-physical-plan = { workspace = true }
 datafusion-sql = { workspace = true }
 flate2 = { version = "1.0.24", optional = true }
@@ -168,3 +168,7 @@ name = "sort"
 [[bench]]
 harness = false
 name = "topk_aggregate"
+
+[[bench]]
+harness = false
+name = "array_expression"

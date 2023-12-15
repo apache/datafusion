@@ -67,12 +67,20 @@ impl TableProviderFactory for ListingTableFactory {
         let file_extension = get_extension(cmd.location.as_str());
 
         let file_format: Arc<dyn FileFormat> = match file_type {
-            FileType::CSV => Arc::new(
-                CsvFormat::default()
+            FileType::CSV => {
+                let mut statement_options = StatementOptions::from(&cmd.options);
+                let mut csv_format = CsvFormat::default()
                     .with_has_header(cmd.has_header)
                     .with_delimiter(cmd.delimiter as u8)
-                    .with_file_compression_type(file_compression_type),
-            ),
+                    .with_file_compression_type(file_compression_type);
+                if let Some(quote) = statement_options.take_str_option("quote") {
+                    csv_format = csv_format.with_quote(quote.as_bytes()[0])
+                }
+                if let Some(escape) = statement_options.take_str_option("escape") {
+                    csv_format = csv_format.with_escape(Some(escape.as_bytes()[0]))
+                }
+                Arc::new(csv_format)
+            }
             #[cfg(feature = "parquet")]
             FileType::PARQUET => Arc::new(ParquetFormat::default()),
             FileType::AVRO => Arc::new(AvroFormat),
@@ -140,19 +148,18 @@ impl TableProviderFactory for ListingTableFactory {
                 .unwrap_or(false)
         };
 
-        let create_local_path = statement_options
-            .take_bool_option("create_local_path")?
-            .unwrap_or(false);
         let single_file = statement_options
             .take_bool_option("single_file")?
             .unwrap_or(false);
 
-        // Backwards compatibility
+        // Backwards compatibility (#8547)
         if let Some(s) = statement_options.take_str_option("insert_mode") {
             if !s.eq_ignore_ascii_case("append_new_files") {
-                return plan_err!("Unknown or unsupported insert mode {s}. Only append_to_file supported");
+                return plan_err!("Unknown or unsupported insert mode {s}. Only append_new_files supported");
             }
         }
+        statement_options.take_bool_option("create_local_path")?;
+
         let file_type = file_format.file_type();
 
         // Use remaining options and session state to build FileTypeWriterOptions
@@ -191,13 +198,7 @@ impl TableProviderFactory for ListingTableFactory {
             FileType::AVRO => file_type_writer_options,
         };
 
-        let table_path = match create_local_path {
-            true => ListingTableUrl::parse_create_local_if_not_exists(
-                &cmd.location,
-                !single_file,
-            ),
-            false => ListingTableUrl::parse(&cmd.location),
-        }?;
+        let table_path = ListingTableUrl::parse(&cmd.location)?;
 
         let options = ListingOptions::new(file_format)
             .with_collect_stat(state.config().collect_statistics())
@@ -220,7 +221,8 @@ impl TableProviderFactory for ListingTableFactory {
             .with_cache(state.runtime_env().cache_manager.get_file_statistic_cache());
         let table = provider
             .with_definition(cmd.definition.clone())
-            .with_constraints(cmd.constraints.clone());
+            .with_constraints(cmd.constraints.clone())
+            .with_column_defaults(cmd.column_defaults.clone());
         Ok(Arc::new(table))
     }
 }
@@ -271,6 +273,7 @@ mod tests {
             unbounded: false,
             options: HashMap::new(),
             constraints: Constraints::empty(),
+            column_defaults: HashMap::new(),
         };
         let table_provider = factory.create(&state, &cmd).await.unwrap();
         let listing_table = table_provider

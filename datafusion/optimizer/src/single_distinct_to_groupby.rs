@@ -23,6 +23,7 @@ use crate::optimizer::ApplyOrder;
 use crate::{OptimizerConfig, OptimizerRule};
 
 use datafusion_common::{DFSchema, Result};
+use datafusion_expr::expr::AggregateFunctionDefinition;
 use datafusion_expr::{
     aggregate_function::AggregateFunction::{Max, Min, Sum},
     col,
@@ -70,7 +71,7 @@ fn is_single_distinct_agg(plan: &LogicalPlan) -> Result<bool> {
             let mut aggregate_count = 0;
             for expr in aggr_expr {
                 if let Expr::AggregateFunction(AggregateFunction {
-                    fun,
+                    func_def: AggregateFunctionDefinition::BuiltIn(fun),
                     distinct,
                     args,
                     filter,
@@ -170,7 +171,7 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                         .iter()
                         .map(|aggr_expr| match aggr_expr {
                             Expr::AggregateFunction(AggregateFunction {
-                                fun,
+                                func_def: AggregateFunctionDefinition::BuiltIn(fun),
                                 args,
                                 distinct,
                                 ..

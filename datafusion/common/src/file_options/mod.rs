@@ -299,6 +299,7 @@ impl Display for FileTypeWriterOptions {
 mod tests {
     use std::collections::HashMap;
 
+    #[cfg(feature = "parquet")]
     use parquet::{
         basic::{Compression, Encoding, ZstdLevel},
         file::properties::{EnabledStatistics, WriterVersion},
@@ -313,9 +314,11 @@ mod tests {
 
     use crate::Result;
 
+    #[cfg(feature = "parquet")]
     use super::{parquet_writer::ParquetWriterOptions, StatementOptions};
 
     #[test]
+    #[cfg(feature = "parquet")]
     fn test_writeroptions_parquet_from_statement_options() -> Result<()> {
         let mut option_map: HashMap<String, String> = HashMap::new();
         option_map.insert("max_row_group_size".to_owned(), "123".to_owned());
@@ -386,6 +389,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "parquet")]
     fn test_writeroptions_parquet_column_specific() -> Result<()> {
         let mut option_map: HashMap<String, String> = HashMap::new();
 
@@ -506,6 +510,8 @@ mod tests {
     }
 
     #[test]
+    // for StatementOptions
+    #[cfg(feature = "parquet")]
     fn test_writeroptions_csv_from_statement_options() -> Result<()> {
         let mut option_map: HashMap<String, String> = HashMap::new();
         option_map.insert("header".to_owned(), "true".to_owned());
@@ -533,6 +539,8 @@ mod tests {
     }
 
     #[test]
+    // for StatementOptions
+    #[cfg(feature = "parquet")]
     fn test_writeroptions_json_from_statement_options() -> Result<()> {
         let mut option_map: HashMap<String, String> = HashMap::new();
         option_map.insert("compression".to_owned(), "gzip".to_owned());

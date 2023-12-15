@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::collections::HashMap;
 use std::fmt::Debug;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -252,7 +253,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                     Some(a) => match a {
                         protobuf::projection_node::OptionalAlias::Alias(alias) => {
                             Ok(LogicalPlan::SubqueryAlias(SubqueryAlias::try_new(
-                                new_proj,
+                                Arc::new(new_proj),
                                 alias.clone(),
                             )?))
                         }
@@ -521,6 +522,13 @@ impl AsLogicalPlan for LogicalPlanNode {
                     order_exprs.push(order_expr)
                 }
 
+                let mut column_defaults =
+                    HashMap::with_capacity(create_extern_table.column_defaults.len());
+                for (col_name, expr) in &create_extern_table.column_defaults {
+                    let expr = from_proto::parse_expr(expr, ctx)?;
+                    column_defaults.insert(col_name.clone(), expr);
+                }
+
                 Ok(LogicalPlan::Ddl(DdlStatement::CreateExternalTable(CreateExternalTable {
                     schema: pb_schema.try_into()?,
                     name: from_owned_table_reference(create_extern_table.name.as_ref(), "CreateExternalTable")?,
@@ -540,6 +548,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                     unbounded: create_extern_table.unbounded,
                     options: create_extern_table.options.clone(),
                     constraints: constraints.into(),
+                    column_defaults,
                 })))
             }
             LogicalPlanType::CreateView(create_view) => {
@@ -1298,6 +1307,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                     unbounded,
                     options,
                     constraints,
+                    column_defaults,
                 },
             )) => {
                 let mut converted_order_exprs: Vec<LogicalExprNodeCollection> = vec![];
@@ -1310,6 +1320,12 @@ impl AsLogicalPlan for LogicalPlanNode {
                         )?,
                     };
                     converted_order_exprs.push(temp);
+                }
+
+                let mut converted_column_defaults =
+                    HashMap::with_capacity(column_defaults.len());
+                for (col_name, expr) in column_defaults {
+                    converted_column_defaults.insert(col_name.clone(), expr.try_into()?);
                 }
 
                 Ok(protobuf::LogicalPlanNode {
@@ -1329,6 +1345,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                             unbounded: *unbounded,
                             options: options.clone(),
                             constraints: Some(constraints.clone().into()),
+                            column_defaults: converted_column_defaults,
                         },
                     )),
                 })
