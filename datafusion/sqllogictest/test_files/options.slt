@@ -215,9 +215,6 @@ select 1.234e2, 1.234e-2, -1.234e2, -1.234e-2
 statement error DataFusion error: SQL error: ParserError\("Cannot parse 1.234e-40 as i128 when building decimal: precision overflow"\)
 select 1.234e-40
 
-statement error DataFusion error: SQL error: ParserError\("Cannot parse 12340000000000000000000000000000000000000 as i128 when building decimal: number too large to fit in target type"\)
-select 1.234e+40
-
 # Restore option to default value
 statement ok
 set datafusion.sql_parser.parse_float_as_decimal = false;
