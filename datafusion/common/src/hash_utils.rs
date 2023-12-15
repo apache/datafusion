@@ -220,7 +220,7 @@ fn hash_struct_array(
 
     // Skip null columns
     let valid_indices: Vec<usize> = if let Some(nulls) = nulls {
-        nulls.valid_indices().into_iter().collect()
+        nulls.valid_indices().collect()
     } else {
         (0..num_columns).collect()
     };
