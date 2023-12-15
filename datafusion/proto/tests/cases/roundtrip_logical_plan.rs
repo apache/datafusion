@@ -42,12 +42,7 @@ use datafusion_expr::expr::{
     Sort,
 };
 use datafusion_expr::logical_plan::{Extension, UserDefinedLogicalNodeCore};
-use datafusion_expr::{
-    col, create_udaf, lit, Accumulator, AggregateFunction,
-    BuiltinScalarFunction::{Sqrt, Substr},
-    Expr, LogicalPlan, Operator, PartitionEvaluator, Signature, TryCast, Volatility,
-    WindowFrame, WindowFrameBound, WindowFrameUnits, WindowFunction, WindowUDF,
-};
+use datafusion_expr::{col, create_udaf, lit, Accumulator, AggregateFunction, BuiltinScalarFunction::{Sqrt, Substr}, Expr, LogicalPlan, Operator, PartitionEvaluator, Signature, TryCast, Volatility, WindowFrame, WindowFrameBound, WindowFrameUnits, WindowFunction, WindowUDF, ExprSchemable};
 use datafusion_proto::bytes::{
     logical_plan_from_bytes, logical_plan_from_bytes_with_extension_codec,
     logical_plan_to_bytes, logical_plan_to_bytes_with_extension_codec,
@@ -364,6 +359,23 @@ async fn roundtrip_logical_plan_with_extension() -> Result<()> {
     assert_eq!(format!("{plan:?}"), format!("{logical_round_trip:?}"));
     Ok(())
 }
+
+#[tokio::test]
+async fn roundtrip_expr_api() -> Result<()> {
+    let ctx = SessionContext::new();
+    ctx.register_csv("t1", "tests/testdata/test.csv", CsvReadOptions::default())
+        .await?;
+    let table = ctx.table("t1").await?;
+    // encode(a::varchar, 'hex')
+    let plan = table
+        .select(vec![encode(col("a").cast_to(&DataType::Utf8, table.schema()), lit("hex"))])?
+        .into_optimized_plan()?;
+    let bytes = logical_plan_to_bytes(&plan)?;
+    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx)?;
+    assert_eq!(format!("{plan:?}"), format!("{logical_round_trip:?}"));
+    Ok(())
+}
+
 
 #[tokio::test]
 async fn roundtrip_logical_plan_with_view_scan() -> Result<()> {
