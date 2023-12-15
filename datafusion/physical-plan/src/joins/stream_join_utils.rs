@@ -23,8 +23,9 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::usize;
 
-use crate::handle_async_state;
 use crate::joins::utils::{JoinFilter, JoinHashMapType};
+use crate::metrics::{ExecutionPlanMetricsSet, MetricBuilder};
+use crate::{handle_async_state, metrics};
 
 use arrow::compute::concat_batches;
 use arrow_array::{ArrowPrimitiveType, NativeAdapter, PrimitiveArray, RecordBatch};
@@ -824,6 +825,10 @@ pub trait EagerJoinStream {
     ) -> Result<StreamJoinStateResult<Option<RecordBatch>>> {
         match self.right_stream().next().await {
             Some(Ok(batch)) => {
+                if batch.num_rows() == 0 {
+                    return Ok(StreamJoinStateResult::Continue);
+                }
+
                 self.set_state(EagerJoinStreamState::PullLeft);
                 self.process_batch_from_right(batch)
             }
@@ -849,6 +854,9 @@ pub trait EagerJoinStream {
     ) -> Result<StreamJoinStateResult<Option<RecordBatch>>> {
         match self.left_stream().next().await {
             Some(Ok(batch)) => {
+                if batch.num_rows() == 0 {
+                    return Ok(StreamJoinStateResult::Continue);
+                }
                 self.set_state(EagerJoinStreamState::PullRight);
                 self.process_batch_from_left(batch)
             }
@@ -874,7 +882,12 @@ pub trait EagerJoinStream {
         &mut self,
     ) -> Result<StreamJoinStateResult<Option<RecordBatch>>> {
         match self.left_stream().next().await {
-            Some(Ok(batch)) => self.process_batch_after_right_end(batch),
+            Some(Ok(batch)) => {
+                if batch.num_rows() == 0 {
+                    return Ok(StreamJoinStateResult::Continue);
+                }
+                self.process_batch_after_right_end(batch)
+            }
             Some(Err(e)) => Err(e),
             None => {
                 self.set_state(EagerJoinStreamState::BothExhausted {
@@ -899,7 +912,12 @@ pub trait EagerJoinStream {
         &mut self,
     ) -> Result<StreamJoinStateResult<Option<RecordBatch>>> {
         match self.right_stream().next().await {
-            Some(Ok(batch)) => self.process_batch_after_left_end(batch),
+            Some(Ok(batch)) => {
+                if batch.num_rows() == 0 {
+                    return Ok(StreamJoinStateResult::Continue);
+                }
+                self.process_batch_after_left_end(batch)
+            }
             Some(Err(e)) => Err(e),
             None => {
                 self.set_state(EagerJoinStreamState::BothExhausted {
@@ -1018,6 +1036,65 @@ pub trait EagerJoinStream {
     ///
     /// * `EagerJoinStreamState` - The current state of the join stream.
     fn state(&mut self) -> EagerJoinStreamState;
+}
+
+#[derive(Debug)]
+pub struct StreamJoinSideMetrics {
+    /// Number of batches consumed by this operator
+    pub(crate) input_batches: metrics::Count,
+    /// Number of rows consumed by this operator
+    pub(crate) input_rows: metrics::Count,
+}
+
+/// Metrics for HashJoinExec
+#[derive(Debug)]
+pub struct StreamJoinMetrics {
+    /// Number of left batches/rows consumed by this operator
+    pub(crate) left: StreamJoinSideMetrics,
+    /// Number of right batches/rows consumed by this operator
+    pub(crate) right: StreamJoinSideMetrics,
+    /// Memory used by sides in bytes
+    pub(crate) stream_memory_usage: metrics::Gauge,
+    /// Number of batches produced by this operator
+    pub(crate) output_batches: metrics::Count,
+    /// Number of rows produced by this operator
+    pub(crate) output_rows: metrics::Count,
+}
+
+impl StreamJoinMetrics {
+    pub fn new(partition: usize, metrics: &ExecutionPlanMetricsSet) -> Self {
+        let input_batches =
+            MetricBuilder::new(metrics).counter("input_batches", partition);
+        let input_rows = MetricBuilder::new(metrics).counter("input_rows", partition);
+        let left = StreamJoinSideMetrics {
+            input_batches,
+            input_rows,
+        };
+
+        let input_batches =
+            MetricBuilder::new(metrics).counter("input_batches", partition);
+        let input_rows = MetricBuilder::new(metrics).counter("input_rows", partition);
+        let right = StreamJoinSideMetrics {
+            input_batches,
+            input_rows,
+        };
+
+        let stream_memory_usage =
+            MetricBuilder::new(metrics).gauge("stream_memory_usage", partition);
+
+        let output_batches =
+            MetricBuilder::new(metrics).counter("output_batches", partition);
+
+        let output_rows = MetricBuilder::new(metrics).output_rows(partition);
+
+        Self {
+            left,
+            right,
+            output_batches,
+            stream_memory_usage,
+            output_rows,
+        }
+    }
 }
 
 #[cfg(test)]
