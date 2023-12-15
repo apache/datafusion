@@ -25,12 +25,12 @@ use datafusion_expr::Operator;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-/// Represents a guarantee required for a boolean expression to evaluate to
-/// `true`.
+/// Represents a guarantee that must be true for a boolean expression to
+/// evaluate to `true`.
 ///
 /// The guarantee takes the form of a column and a set of literal (constant)
-/// [`ScalarValue`]s. For the expression to evaluate to `true`, the column must
-/// *satisfy* the guarantee
+/// [`ScalarValue`]s. For the expression to evaluate to `true`, the column *must
+/// satisfy* the guarantee(s).
 ///
 /// To satisfy the guarantee, depending on [`Guarantee`],  the values in the
 /// column must either:
@@ -40,17 +40,17 @@ use std::sync::Arc;
 ///
 /// # Uses `LiteralGuarantee`s
 ///
-/// `LiteralGuarantee`s can be used to simplify expressions and skip data files
-/// (e.g. row groups in parquet files) by proving expressions can not evaluate
-/// to `true`. For example, if we have a guarantee that `a` must be in (`1`) for
-/// a filter to evaluate to `true`, then we can skip any partition where we know
-/// that `a` never has the value of `1`.
+/// `LiteralGuarantee`s can be used to simplify filter expressions and skip data
+/// files (e.g. row groups in parquet files) by proving expressions can not
+/// possibly evaluate to `true`. For example, if we have a guarantee that `a`
+/// must be in (`1`) for a filter to evaluate to `true`, then we can skip any
+/// partition where we know that `a` never has the value of `1`.
 ///
-/// **Important**: If a `LiteralGuarantee` is not satisfied the relevant
+/// **Important**: If a `LiteralGuarantee` is not satisfied, the relevant
 /// expression is *guaranteed* to evaluate to `false` or `null`. **However**,
 /// the opposite does not hold. Even if all `LiteralGurantee`s are satisfied,
-/// that does does not guarantee that the predicate will evaluate to `true`: it
-/// may still evaluate to `true`, `false` or `null`.
+/// that does does not guarantee that the predicate will actually evaluate to
+/// `true`: it may still evaluate to `true`, `false` or `null`.
 ///
 /// # Creating `LiteralGuarantee`s
 ///
@@ -387,12 +387,26 @@ mod test {
 
     #[test]
     fn test_conjunction_single_column() {
-        // b = 1 AND b = 2 // impossible. Ideally it should be simplifed
+        // b = 1 AND b = 2. This is impossible. Ideally this expression could be simplified to false
         test_analyze(col("b").eq(lit(1)).and(col("b").eq(lit(2))), vec![]);
-        // b = 1 AND b != 2
-        test_analyze(col("b").eq(lit(1)).and(col("b").not_eq(lit(2))), vec![]);
-        // b != 1 AND b == 2
-        test_analyze(col("b").not_eq(lit(1)).and(col("b").eq(lit(2))), vec![]);
+        // b = 1 AND b != 2 . In theory, this could be simplified to `b = 1`.
+        test_analyze(
+            col("b").eq(lit(1)).and(col("b").not_eq(lit(2))),
+            vec![
+                // can only be true of b is 1 and b is not 2 (even though it is redundant)
+                in_guarantee("b", [1]),
+                not_in_guarantee("b", [2]),
+            ],
+        );
+        // b != 1 AND b = 2. In theory, this could be simplified to `b = 2`.
+        test_analyze(
+            col("b").not_eq(lit(1)).and(col("b").eq(lit(2))),
+            vec![
+                // can only be true of b is not 1 and b is is 2 (even though it is redundant)
+                not_in_guarantee("b", [1]),
+                in_guarantee("b", [2]),
+            ],
+        );
         // b != 1 AND b != 2
         test_analyze(
             col("b").not_eq(lit(1)).and(col("b").not_eq(lit(2))),
@@ -402,25 +416,33 @@ mod test {
         test_analyze(
             col("b")
                 .not_eq(lit(1))
-                .and(col("b").eq(lit(2)))
+                .and(col("b").not_eq(lit(2)))
                 .and(col("b").not_eq(lit(3))),
             vec![not_in_guarantee("b", [1, 2, 3])],
+        );
+        // b != 1 AND b = 2 and b != 3. Can only be true if b is 2 and b is not in (1, 3)
+        test_analyze(
+            col("b")
+                .not_eq(lit(1))
+                .and(col("b").eq(lit(2)))
+                .and(col("b").not_eq(lit(3))),
+            vec![not_in_guarantee("b", [1, 3]), in_guarantee("b", [2])],
         );
         // b != 1 AND b != 2 and b = 3 (in theory could determine b = 3)
         test_analyze(
             col("b")
                 .not_eq(lit(1))
-                .and(col("b").eq(lit(2)))
-                .and(col("b").not_eq(lit(3))),
-            vec![],
+                .and(col("b").not_eq(lit(2)))
+                .and(col("b").eq(lit(3))),
+            vec![not_in_guarantee("b", [1, 2]), in_guarantee("b", [3])],
         );
-        // b != 1 AND b != 2 and b > 3 (can't guarantee true if b was neither 1 nor 2
+        // b != 1 AND b != 2 and b > 3 (to be true, b can't be either 1 or 2
         test_analyze(
             col("b")
                 .not_eq(lit(1))
-                .and(col("b").eq(lit(2)))
+                .and(col("b").not_eq(lit(2)))
                 .and(col("b").lt(lit(3))),
-            vec![],
+            vec![not_in_guarantee("b", [1, 2])],
         );
     }
 
@@ -487,6 +509,31 @@ mod test {
     }
 
     #[test]
+    fn test_conjunction_and_disjunction_single_column() {
+        // b != 1 AND (b > 2)
+        test_analyze(
+            col("b")
+                .not_eq(lit(1))
+                .and(col("b").gt(lit(2)).or(col("b").eq(lit(3)))),
+            vec![
+                // for the expression to be true, b can not be one
+                not_in_guarantee("b", [1]),
+            ],
+        );
+
+        // b = 1 AND (b = 2 OR b = 3). Could be simplified to false.
+        test_analyze(
+            col("b")
+                .eq(lit(1))
+                .and(col("b").eq(lit(2)).or(col("b").eq(lit(3)))),
+            vec![
+                // in theory, b must be 1 and one of 2,3 for this expression to be true
+                // which is a logical contradiction
+            ],
+        );
+    }
+
+    #[test]
     fn test_disjunction_single_column() {
         // b = 1 OR b = 2
         test_analyze(
@@ -512,7 +559,7 @@ mod test {
             col("b")
                 .eq(lit(1))
                 .or(col("b").eq(lit(2)))
-                .or(lit("b").eq(lit(3))),
+                .or(col("b").eq(lit(3))),
             vec![in_guarantee("b", [1, 2, 3])],
         );
         // b = 1 OR b = 2 OR b > 3 -- can't guarantee that the expression is only true if a is in (1, 2)
