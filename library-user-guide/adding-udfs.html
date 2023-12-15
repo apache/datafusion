@@ -5,7 +5,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
-    <title>Adding User Defined Functions: Scalar/Window/Aggregate &#8212; Arrow DataFusion  documentation</title>
+    <title>Adding User Defined Functions: Scalar/Window/Aggregate/Table Functions &#8212; Arrow DataFusion  documentation</title>
     
     <link href="../_static/styles/theme.css?digest=1999514e3f237ded88cf" rel="stylesheet">
 <link href="../_static/styles/pydata-sphinx-theme.css?digest=1999514e3f237ded88cf" rel="stylesheet">
@@ -256,7 +256,7 @@
  </li>
  <li class="toctree-l1 current active">
   <a class="current reference internal" href="#">
-   Adding User Defined Functions: Scalar/Window/Aggregate
+   Adding User Defined Functions: Scalar/Window/Aggregate/Table Functions
   </a>
  </li>
  <li class="toctree-l1">
@@ -388,6 +388,23 @@
    </li>
   </ul>
  </li>
+ <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#adding-a-user-defined-table-function">
+   Adding a User-Defined Table Function
+  </a>
+  <ul class="nav section-nav flex-column">
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#writing-the-udtf">
+     Writing the UDTF
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#registering-and-using-the-udtf">
+     Registering and Using the UDTF
+    </a>
+   </li>
+  </ul>
+ </li>
 </ul>
 
 </nav>
@@ -434,8 +451,8 @@
   specific language governing permissions and limitations
   under the License.
 -->
-<section id="adding-user-defined-functions-scalar-window-aggregate">
-<h1>Adding User Defined Functions: Scalar/Window/Aggregate<a class="headerlink" href="#adding-user-defined-functions-scalar-window-aggregate" title="Link to this heading">¶</a></h1>
+<section id="adding-user-defined-functions-scalar-window-aggregate-table-functions">
+<h1>Adding User Defined Functions: Scalar/Window/Aggregate/Table Functions<a class="headerlink" href="#adding-user-defined-functions-scalar-window-aggregate-table-functions" title="Link to this heading">¶</a></h1>
 <p>User Defined Functions (UDFs) are functions that can be used in the context of DataFusion execution.</p>
 <p>This page covers how to add UDFs to DataFusion. In particular, it covers how to add Scalar, Window, and Aggregate UDFs.</p>
 <table class="table">
@@ -457,6 +474,10 @@
 <tr class="row-even"><td><p>Aggregate</p></td>
 <td><p>A function that takes a group of rows and returns a single value.</p></td>
 <td><p><a class="reference external" href="https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/simple_udaf.rs">simple_udaf.rs</a></p></td>
+</tr>
+<tr class="row-odd"><td><p>Table</p></td>
+<td><p>A function that takes parameters and returns a <code class="docutils literal notranslate"><span class="pre">TableProvider</span></code> to be used in an query plan.</p></td>
+<td><p><a class="reference external" href="https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/simple_udtf.rs">simple_udtf.rs</a></p></td>
 </tr>
 </tbody>
 </table>
@@ -830,6 +851,90 @@ green,10.3,1996-04-12T12:05:04.000000000
 </div>
 <p>Then, we can query like below:</p>
 <div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="kd">let</span><span class="w"> </span><span class="n">df</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ctx</span><span class="p">.</span><span class="n">sql</span><span class="p">(</span><span class="s">&quot;SELECT geo_mean(a) FROM t&quot;</span><span class="p">).</span><span class="k">await</span><span class="o">?</span><span class="p">;</span>
+</pre></div>
+</div>
+</section>
+</section>
+<section id="adding-a-user-defined-table-function">
+<h2>Adding a User-Defined Table Function<a class="headerlink" href="#adding-a-user-defined-table-function" title="Link to this heading">¶</a></h2>
+<p>A User-Defined Table Function (UDTF) is a function that takes parameters and returns a <code class="docutils literal notranslate"><span class="pre">TableProvider</span></code>.</p>
+<p>Because we’re returning a <code class="docutils literal notranslate"><span class="pre">TableProvider</span></code>, in this example we’ll use the <code class="docutils literal notranslate"><span class="pre">MemTable</span></code> data source to represent a table. This is a simple struct that holds a set of RecordBatches in memory and treats them as a table. In your case, this would be replaced with your own struct that implements <code class="docutils literal notranslate"><span class="pre">TableProvider</span></code>.</p>
+<p>While this is a simple example for illustrative purposes, UDTFs have a lot of potential use cases. And can be particularly useful for reading data from external sources and interactive analysis. For example, see the <a class="reference external" href="https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/simple_udtf.rs">example</a> for a working example that reads from a CSV file. As another example, you could use the built-in UDTF <code class="docutils literal notranslate"><span class="pre">parquet_metadata</span></code> in the CLI to read the metadata from a Parquet file.</p>
+<div class="highlight-console notranslate"><div class="highlight"><pre><span></span><span class="go">❯ select filename, row_group_id, row_group_num_rows, row_group_bytes, stats_min, stats_max from parquet_metadata(&#39;./benchmarks/data/hits.parquet&#39;) where  column_id = 17 limit 10;</span>
+<span class="go">+--------------------------------+--------------+--------------------+-----------------+-----------+-----------+</span>
+<span class="go">| filename                       | row_group_id | row_group_num_rows | row_group_bytes | stats_min | stats_max |</span>
+<span class="go">+--------------------------------+--------------+--------------------+-----------------+-----------+-----------+</span>
+<span class="go">| ./benchmarks/data/hits.parquet | 0            | 450560             | 188921521       | 0         | 73256     |</span>
+<span class="go">| ./benchmarks/data/hits.parquet | 1            | 612174             | 210338885       | 0         | 109827    |</span>
+<span class="go">| ./benchmarks/data/hits.parquet | 2            | 344064             | 161242466       | 0         | 122484    |</span>
+<span class="go">| ./benchmarks/data/hits.parquet | 3            | 606208             | 235549898       | 0         | 121073    |</span>
+<span class="go">| ./benchmarks/data/hits.parquet | 4            | 335872             | 137103898       | 0         | 108996    |</span>
+<span class="go">| ./benchmarks/data/hits.parquet | 5            | 311296             | 145453612       | 0         | 108996    |</span>
+<span class="go">| ./benchmarks/data/hits.parquet | 6            | 303104             | 138833963       | 0         | 108996    |</span>
+<span class="go">| ./benchmarks/data/hits.parquet | 7            | 303104             | 191140113       | 0         | 73256     |</span>
+<span class="go">| ./benchmarks/data/hits.parquet | 8            | 573440             | 208038598       | 0         | 95823     |</span>
+<span class="go">| ./benchmarks/data/hits.parquet | 9            | 344064             | 147838157       | 0         | 73256     |</span>
+<span class="go">+--------------------------------+--------------+--------------------+-----------------+-----------+-----------+</span>
+</pre></div>
+</div>
+<section id="writing-the-udtf">
+<h3>Writing the UDTF<a class="headerlink" href="#writing-the-udtf" title="Link to this heading">¶</a></h3>
+<p>The simple UDTF used here takes a single <code class="docutils literal notranslate"><span class="pre">Int64</span></code> argument and returns a table with a single column with the value of the argument. To create a function in DataFusion, you need to implement the <code class="docutils literal notranslate"><span class="pre">TableFunctionImpl</span></code> trait. This trait has a single method, <code class="docutils literal notranslate"><span class="pre">call</span></code>, that takes a slice of <code class="docutils literal notranslate"><span class="pre">Expr</span></code>s and returns a <code class="docutils literal notranslate"><span class="pre">Result&lt;Arc&lt;dyn</span> <span class="pre">TableProvider&gt;&gt;</span></code>.</p>
+<p>In the <code class="docutils literal notranslate"><span class="pre">call</span></code> method, you parse the input <code class="docutils literal notranslate"><span class="pre">Expr</span></code>s and return a <code class="docutils literal notranslate"><span class="pre">TableProvider</span></code>. You might also want to do some validation of the input <code class="docutils literal notranslate"><span class="pre">Expr</span></code>s, e.g. checking that the number of arguments is correct.</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">use</span><span class="w"> </span><span class="n">datafusion</span>::<span class="n">common</span>::<span class="n">plan_err</span><span class="p">;</span>
+<span class="k">use</span><span class="w"> </span><span class="n">datafusion</span>::<span class="n">datasource</span>::<span class="n">function</span>::<span class="n">TableFunctionImpl</span><span class="p">;</span>
+<span class="c1">// Other imports here</span>
+
+<span class="sd">/// A table function that returns a table provider with the value as a single column</span>
+<span class="cp">#[derive(Default)]</span>
+<span class="k">pub</span><span class="w"> </span><span class="k">struct</span> <span class="nc">EchoFunction</span><span class="w"> </span><span class="p">{}</span>
+
+<span class="k">impl</span><span class="w"> </span><span class="n">TableFunctionImpl</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="n">EchoFunction</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">fn</span> <span class="nf">call</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">,</span><span class="w"> </span><span class="n">exprs</span>: <span class="kp">&amp;</span><span class="p">[</span><span class="n">Expr</span><span class="p">])</span><span class="w"> </span>-&gt; <span class="nb">Result</span><span class="o">&lt;</span><span class="n">Arc</span><span class="o">&lt;</span><span class="k">dyn</span><span class="w"> </span><span class="n">TableProvider</span><span class="o">&gt;&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="nb">Some</span><span class="p">(</span><span class="n">Expr</span>::<span class="n">Literal</span><span class="p">(</span><span class="n">ScalarValue</span>::<span class="n">Int64</span><span class="p">(</span><span class="nb">Some</span><span class="p">(</span><span class="n">value</span><span class="p">))))</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">exprs</span><span class="p">.</span><span class="n">get</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span><span class="w"> </span><span class="k">else</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="k">return</span><span class="w"> </span><span class="n">plan_err</span><span class="o">!</span><span class="p">(</span><span class="s">&quot;First argument must be an integer&quot;</span><span class="p">);</span>
+<span class="w">        </span><span class="p">};</span>
+
+<span class="w">        </span><span class="c1">// Create the schema for the table</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">schema</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Arc</span>::<span class="n">new</span><span class="p">(</span><span class="n">Schema</span>::<span class="n">new</span><span class="p">(</span><span class="fm">vec!</span><span class="p">[</span><span class="n">Field</span>::<span class="n">new</span><span class="p">(</span><span class="s">&quot;a&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">DataType</span>::<span class="n">Int64</span><span class="p">,</span><span class="w"> </span><span class="kc">false</span><span class="p">)]));</span>
+
+<span class="w">        </span><span class="c1">// Create a single RecordBatch with the value as a single column</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">batch</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">RecordBatch</span>::<span class="n">try_new</span><span class="p">(</span>
+<span class="w">            </span><span class="n">schema</span><span class="p">.</span><span class="n">clone</span><span class="p">(),</span>
+<span class="w">            </span><span class="fm">vec!</span><span class="p">[</span><span class="n">Arc</span>::<span class="n">new</span><span class="p">(</span><span class="n">Int64Array</span>::<span class="n">from</span><span class="p">(</span><span class="fm">vec!</span><span class="p">[</span><span class="o">*</span><span class="n">value</span><span class="p">]))],</span>
+<span class="w">        </span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
+
+<span class="w">        </span><span class="c1">// Create a MemTable plan that returns the RecordBatch</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">provider</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">MemTable</span>::<span class="n">try_new</span><span class="p">(</span><span class="n">schema</span><span class="p">,</span><span class="w"> </span><span class="fm">vec!</span><span class="p">[</span><span class="fm">vec!</span><span class="p">[</span><span class="n">batch</span><span class="p">]])</span><span class="o">?</span><span class="p">;</span>
+
+<span class="w">        </span><span class="nb">Ok</span><span class="p">(</span><span class="n">Arc</span>::<span class="n">new</span><span class="p">(</span><span class="n">provider</span><span class="p">))</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+</section>
+<section id="registering-and-using-the-udtf">
+<h3>Registering and Using the UDTF<a class="headerlink" href="#registering-and-using-the-udtf" title="Link to this heading">¶</a></h3>
+<p>With the UDTF implemented, you can register it with the <code class="docutils literal notranslate"><span class="pre">SessionContext</span></code>:</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">use</span><span class="w"> </span><span class="n">datafusion</span>::<span class="n">execution</span>::<span class="n">context</span>::<span class="n">SessionContext</span><span class="p">;</span>
+
+<span class="kd">let</span><span class="w"> </span><span class="n">ctx</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">SessionContext</span>::<span class="n">new</span><span class="p">();</span>
+
+<span class="n">ctx</span><span class="p">.</span><span class="n">register_udtf</span><span class="p">(</span><span class="s">&quot;echo&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">Arc</span>::<span class="n">new</span><span class="p">(</span><span class="n">EchoFunction</span>::<span class="n">default</span><span class="p">()));</span>
+</pre></div>
+</div>
+<p>And if all goes well, you can use it in your query:</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">use</span><span class="w"> </span><span class="n">datafusion</span>::<span class="n">arrow</span>::<span class="n">util</span>::<span class="n">pretty</span><span class="p">;</span>
+
+<span class="kd">let</span><span class="w"> </span><span class="n">df</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ctx</span><span class="p">.</span><span class="n">sql</span><span class="p">(</span><span class="s">&quot;SELECT * FROM echo(1)&quot;</span><span class="p">).</span><span class="k">await</span><span class="o">?</span><span class="p">;</span>
+
+<span class="kd">let</span><span class="w"> </span><span class="n">results</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">df</span><span class="p">.</span><span class="n">collect</span><span class="p">().</span><span class="k">await</span><span class="o">?</span><span class="p">;</span>
+<span class="n">pretty</span>::<span class="n">print_batches</span><span class="p">(</span><span class="o">&amp;</span><span class="n">results</span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
+<span class="c1">// +---+</span>
+<span class="c1">// | a |</span>
+<span class="c1">// +---+</span>
+<span class="c1">// | 1 |</span>
+<span class="c1">// +---+</span>
 </pre></div>
 </div>
 </section>
