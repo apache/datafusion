@@ -20,62 +20,6 @@ mod inner;
 use datafusion_expr::{Expr, ScalarUDF};
 use std::sync::{Arc, OnceLock};
 
-/// macro that exports listed names as individual functions in an `expr_fn` module
-///
-/// Equivalent to
-/// ```text
-/// pub mod expr_fn {
-///     use super::*;
-///     /// Return encode(arg)
-///     pub fn encode(args: Vec<Expr>) -> Expr {
-///         super::encode().call(args)
-///     }
-///  ...
-/// /// Return a list of all functions in this package
-/// pub(crate) fn functions() -> Vec<Arc<ScalarUDF>> {
-///     vec![
-///       encode(),
-///       decode()
-///    ]
-/// }
-/// ```
-macro_rules! export_functions {
-    ($($name:ident),*) => {
-        pub mod expr_fn {
-            use super::*;
-            $(
-                /// Return $name(arg)
-                pub fn $name(args: Vec<Expr>) -> Expr {
-                    super::$name().call(args)
-                }
-            )*
-        }
-
-        /// Return a list of all functions in this package
-        pub(crate) fn functions() -> Vec<Arc<ScalarUDF>> {
-            vec![
-                $(
-                    $name(),
-                )*
-            ]
-        }
-    };
-}
-/// If feature flag make a single global UDF instance and a function to return it
-macro_rules! make_function {
-    ($UDF:ty, $GNAME:ident, $NAME:ident) => {
-        /// Singleton instance of the function
-        static $GNAME: OnceLock<Arc<ScalarUDF>> = OnceLock::new();
-
-        /// Return the function implementation
-        fn $NAME() -> Arc<ScalarUDF> {
-            $GNAME
-                .get_or_init(|| Arc::new(ScalarUDF::new_from_impl(<$UDF>::default())))
-                .clone()
-        }
-    };
-}
-
 make_function!(inner::EncodeFunc, ENCODE, encode);
 make_function!(inner::DecodeFunc, DECODE, decode);
 
