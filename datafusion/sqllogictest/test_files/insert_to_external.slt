@@ -57,7 +57,7 @@ CREATE EXTERNAL TABLE dictionary_encoded_parquet_partitioned(
   b varchar,
 ) 
 STORED AS parquet
-LOCATION 'test_files/scratch/insert_to_external/parquet_types_partitioned'
+LOCATION 'test_files/scratch/insert_to_external/parquet_types_partitioned/'
 PARTITIONED BY (b)
 OPTIONS(
 create_local_path 'true',
@@ -292,7 +292,7 @@ statement ok
 CREATE EXTERNAL TABLE
 directory_test(a bigint, b bigint)
 STORED AS parquet
-LOCATION 'test_files/scratch/insert_to_external/external_parquet_table_q0'
+LOCATION 'test_files/scratch/insert_to_external/external_parquet_table_q0/'
 OPTIONS(
 create_local_path 'true',
 );
@@ -312,7 +312,7 @@ statement ok
 CREATE EXTERNAL TABLE
 table_without_values(field1 BIGINT NULL, field2 BIGINT NULL)
 STORED AS parquet
-LOCATION 'test_files/scratch/insert_to_external/external_parquet_table_q1'
+LOCATION 'test_files/scratch/insert_to_external/external_parquet_table_q1/'
 OPTIONS (create_local_path 'true');
 
 query TT
@@ -378,7 +378,7 @@ statement ok
 CREATE EXTERNAL TABLE
 table_without_values(field1 BIGINT NULL, field2 BIGINT NULL)
 STORED AS parquet
-LOCATION 'test_files/scratch/insert_to_external/external_parquet_table_q2'
+LOCATION 'test_files/scratch/insert_to_external/external_parquet_table_q2/'
 OPTIONS (create_local_path 'true');
 
 query TT
@@ -423,7 +423,7 @@ statement ok
 CREATE EXTERNAL TABLE
 table_without_values(c1 varchar NULL)
 STORED AS parquet
-LOCATION 'test_files/scratch/insert_to_external/external_parquet_table_q3'
+LOCATION 'test_files/scratch/insert_to_external/external_parquet_table_q3/'
 OPTIONS (create_local_path 'true');
 
 # verify that the sort order of the insert query is maintained into the
@@ -462,7 +462,7 @@ statement ok
 CREATE EXTERNAL TABLE
 table_without_values(id BIGINT, name varchar)
 STORED AS parquet
-LOCATION 'test_files/scratch/insert_to_external/external_parquet_table_q4'
+LOCATION 'test_files/scratch/insert_to_external/external_parquet_table_q4/'
 OPTIONS (create_local_path 'true');
 
 query IT
@@ -505,7 +505,7 @@ statement ok
 CREATE EXTERNAL TABLE
 table_without_values(field1 BIGINT NOT NULL, field2 BIGINT NULL)
 STORED AS parquet
-LOCATION 'test_files/scratch/insert_to_external/external_parquet_table_q5'
+LOCATION 'test_files/scratch/insert_to_external/external_parquet_table_q5/'
 OPTIONS (create_local_path 'true');
 
 query II
@@ -555,7 +555,7 @@ CREATE EXTERNAL TABLE test_column_defaults(
   d text default lower('DEFAULT_TEXT'),
   e timestamp default now()
 ) STORED AS parquet
-LOCATION 'test_files/scratch/insert_to_external/external_parquet_table_q6'
+LOCATION 'test_files/scratch/insert_to_external/external_parquet_table_q6/'
 OPTIONS (create_local_path 'true');
 
 # fill in all column values
@@ -608,5 +608,5 @@ CREATE EXTERNAL TABLE test_column_defaults(
   a int,
   b int default a+1
 ) STORED AS parquet
-LOCATION 'test_files/scratch/insert_to_external/external_parquet_table_q7'
+LOCATION 'test_files/scratch/insert_to_external/external_parquet_table_q7/'
 OPTIONS (create_local_path 'true');
