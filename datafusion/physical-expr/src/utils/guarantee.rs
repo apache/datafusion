@@ -502,7 +502,14 @@ mod test {
             col("b").gt(lit(5)).and(col("b").eq(lit(10))),
             vec![in_guarantee("b", [10])],
         );
-
+        // b > 10 AND b = 10 (this is impossible)
+        test_analyze(
+            col("b").gt(lit(10)).and(col("b").eq(lit(10))),
+            vec![
+                //  if b isn't 10, it can not be true (though the expression actually can never be true)
+                in_guarantee("b", [10])
+            ],
+        );
         // a != "foo" and (a != "bar" OR a != "baz")
         test_analyze(
             col("a")
@@ -519,7 +526,7 @@ mod test {
         test_analyze(
             col("b")
                 .not_eq(lit(1))
-                .and(col("b").gt(lit(2)).or(col("b").eq(lit(3)))),
+                .and(col("b").gt(lit(2))),
             vec![
                 // for the expression to be true, b can not be one
                 not_in_guarantee("b", [1]),
