@@ -24,6 +24,7 @@ use std::task::{Context, Poll};
 use std::usize;
 
 use crate::joins::utils::{JoinFilter, JoinHashMapType};
+use crate::metrics::{ExecutionPlanMetricsSet, MetricBuilder};
 use crate::{handle_async_state, metrics};
 
 use arrow::compute::concat_batches;
@@ -39,7 +40,6 @@ use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::utils::collect_columns;
 use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
 
-use crate::metrics::{ExecutionPlanMetricsSet, MetricBuilder};
 use futures::{ready, FutureExt, StreamExt};
 use hashbrown::raw::RawTable;
 use hashbrown::HashSet;
