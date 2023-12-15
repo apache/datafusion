@@ -44,3 +44,11 @@ DELETE 24
 query T
 SELECT strings['not_found'] FROM data LIMIT 1;
 ----
+
+statement ok
+drop table data;
+
+
+# Testing explain on a table with a map filter, registered in test_context.rs.
+statement ok
+explain select * from table_with_map where int_field > 0
