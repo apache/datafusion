@@ -43,8 +43,8 @@ fn parse_decimals() {
     let test_data = [
         ("1", "Int64(1)"),
         ("001", "Int64(1)"),
-        ("0.1", "Decimal128(Some(1),1,1)"),
-        ("0.01", "Decimal128(Some(1),2,2)"),
+        ("0.1", "Decimal128(Some(1),2,1)"),
+        ("0.01", "Decimal128(Some(1),3,2)"),
         ("1.0", "Decimal128(Some(10),2,1)"),
         ("10.01", "Decimal128(Some(1001),4,2)"),
         (
