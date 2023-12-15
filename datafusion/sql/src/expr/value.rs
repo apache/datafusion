@@ -414,7 +414,7 @@ fn parse_decimal_128(unsigned_number: &str, negative: bool) -> Result<Expr> {
         )))
     })?;
 
-    let replaced_str = big_decimal.to_string().replace(".", "");
+    let replaced_str = big_decimal.to_string().replace('.', "");
 
     let (precision, scale) = if big_decimal.fractional_digit_count() < 0 {
         (
@@ -484,14 +484,5 @@ mod tests {
     fn test_parse_128_decimal_number() {
         let number = "1.23456e10";
         parse_decimal_128(number, false).unwrap();
-    }
-
-    #[test]
-    fn demo() {
-        let b = BigDecimal::from_str("00000.00").unwrap(); // Fractional part
-        println!("b: {:?}", b.to_string());
-        println!("digits: {:?}", b.digits());
-        println!("fractional_digit_count: {:?}", b.fractional_digit_count());
-        let string = "0.0".parse::<i128>().unwrap();
     }
 }
