@@ -45,6 +45,15 @@ use log::debug;
 
 #[cfg(feature = "encoding_expressions")]
 pub mod encoding;
+#[cfg(not(feature = "encoding_expressions"))]
+mod encoding {
+    use datafusion_expr::ScalarUDF;
+    use std::sync::Arc;
+
+    pub(crate) fn functions() -> Vec<Arc<ScalarUDF>> {
+        vec![]
+    }
+}
 
 pub mod stub;
 
