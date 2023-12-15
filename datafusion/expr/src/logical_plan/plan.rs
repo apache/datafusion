@@ -792,7 +792,7 @@ impl LogicalPlan {
                 }))
             }
             LogicalPlan::SubqueryAlias(SubqueryAlias { alias, .. }) => {
-                SubqueryAlias::try_new(inputs[0].clone(), alias.clone())
+                SubqueryAlias::try_new(Arc::new(inputs[0].clone()), alias.clone())
                     .map(LogicalPlan::SubqueryAlias)
             }
             LogicalPlan::Limit(Limit { skip, fetch, .. }) => {
@@ -1855,7 +1855,7 @@ pub struct SubqueryAlias {
 
 impl SubqueryAlias {
     pub fn try_new(
-        plan: LogicalPlan,
+        plan: Arc<LogicalPlan>,
         alias: impl Into<OwnedTableReference>,
     ) -> Result<Self> {
         let alias = alias.into();
@@ -1868,7 +1868,7 @@ impl SubqueryAlias {
                 .with_functional_dependencies(func_dependencies)?,
         );
         Ok(SubqueryAlias {
-            input: Arc::new(plan),
+            input: plan,
             alias,
             schema,
         })
