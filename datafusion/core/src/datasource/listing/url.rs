@@ -185,11 +185,11 @@ impl ListingTableUrl {
     }
 
     /// Returns `true` if `path` matches this [`ListingTableUrl`]
-    pub fn contains(&self, path: &Path, ignore_child_dir: bool) -> bool {
+    pub fn contains(&self, path: &Path, ignore_subdirectory: bool) -> bool {
         match self.strip_prefix(path) {
             Some(mut segments) => match &self.glob {
                 Some(glob) => {
-                    if ignore_child_dir {
+                    if ignore_subdirectory {
                         segments
                             .next()
                             .map_or(false, |file_name| glob.matches(file_name))
@@ -231,7 +231,7 @@ impl ListingTableUrl {
         file_extension: &'a str,
     ) -> Result<BoxStream<'a, Result<ObjectMeta>>> {
         let exec_options = &ctx.options().execution;
-        let ignore_child_dir = exec_options.ignore_child_dir;
+        let ignore_subdirectory = exec_options.ignore_subdirectory;
         // If the prefix is a file, use a head request, otherwise list
         let list = match self.is_collection() {
             true => match ctx.runtime_env().cache_manager.get_list_files_cache() {
@@ -255,7 +255,7 @@ impl ListingTableUrl {
             .try_filter(move |meta| {
                 let path = &meta.location;
                 let extension_match = path.as_ref().ends_with(file_extension);
-                let glob_match = self.contains(path, ignore_child_dir);
+                let glob_match = self.contains(path, ignore_subdirectory);
                 futures::future::ready(extension_match && glob_match)
             })
             .map_err(DataFusionError::ObjectStore)

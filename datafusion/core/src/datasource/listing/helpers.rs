@@ -378,11 +378,11 @@ pub async fn pruned_partition_list<'a>(
             };
 
             let exec_options = &ctx.options().execution;
-            let ignore_child_dir = exec_options.ignore_child_dir;
+            let ignore_subdirectory = exec_options.ignore_subdirectory;
 
             let files = files.into_iter().filter(move |o| {
                 let extension_match = o.location.as_ref().ends_with(file_extension);
-                let glob_match = table_path.contains(&o.location, ignore_child_dir);
+                let glob_match = table_path.contains(&o.location, ignore_subdirectory);
                 extension_match && glob_match
             });
 
