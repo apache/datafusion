@@ -818,9 +818,7 @@ impl BuildSide {
     fn try_as_initial_mut(&mut self) -> Result<&mut BuildSideInitialState> {
         match self {
             BuildSide::Initial(state) => Ok(state),
-            _ => Err(DataFusionError::Internal(
-                "Expected build side in initial state".to_string(),
-            )),
+            _ => internal_err!("Expected build side in initial state"),
         }
     }
 
@@ -829,9 +827,7 @@ impl BuildSide {
     fn try_as_ready(&self) -> Result<&BuildSideReadyState> {
         match self {
             BuildSide::Ready(state) => Ok(state),
-            _ => Err(DataFusionError::Internal(
-                "Expected build side in ready state".to_string(),
-            )),
+            _ => internal_err!("Expected build side in ready state"),
         }
     }
 
@@ -840,14 +836,26 @@ impl BuildSide {
     fn try_as_ready_mut(&mut self) -> Result<&mut BuildSideReadyState> {
         match self {
             BuildSide::Ready(state) => Ok(state),
-            _ => Err(DataFusionError::Internal(
-                "Expected build side in ready state".to_string(),
-            )),
+            _ => internal_err!("Expected build side in ready state"),
         }
     }
 }
 
 /// Represents state of HashJoinStream
+///
+/// Expected state transitions performed by HashJoinStream are:
+///
+/// ```text
+///
+///       WaitBuildSide
+///             │
+///             ▼
+///  ┌─► FetchProbeBatch ───► ExhaustedProbeSide ───► Completed
+///  │          │
+///  │          ▼
+///  └─ ProcessProbeBatch
+///
+/// ```
 enum HashJoinStreamState {
     /// Initial state for HashJoinStream indicating that build-side data not collected yet
     WaitBuildSide,
@@ -873,9 +881,7 @@ impl HashJoinStreamState {
     fn try_as_process_probe_batch(&self) -> Result<&ProcessProbeBatchState> {
         match self {
             HashJoinStreamState::ProcessProbeBatch(state) => Ok(state),
-            _ => Err(DataFusionError::Internal(
-                "Expected hash join stream in ProcessProbeBatch state".to_string(),
-            )),
+            _ => internal_err!("Expected hash join stream in ProcessProbeBatch state"),
         }
     }
 }
@@ -1149,21 +1155,7 @@ pub fn equal_rows_arr(
 
 impl HashJoinStream {
     /// Separate implementation function that unpins the [`HashJoinStream`] so
-    /// that partial borrows work correctly.
-    ///
-    /// Performs state transitions for HashJoinStream according to following diagram:
-    ///
-    /// ```text
-    ///
-    ///       WaitBuildSide
-    ///             │
-    ///             ▼
-    ///  ┌─► FetchProbeBatch ───► ExhaustedProbeSide ───► Completed
-    ///  │          │
-    ///  │          ▼
-    ///  └─ ProcessProbeBatch
-    ///
-    /// ```
+    /// that partial borrows work correctly
     fn poll_next_impl(
         &mut self,
         cx: &mut std::task::Context<'_>,
@@ -1201,7 +1193,7 @@ impl HashJoinStream {
         // build hash table from left (build) side, if not yet done
         let left_data = ready!(self
             .build_side
-            .try_into_initial_mut()?
+            .try_as_initial_mut()?
             .left_fut
             .get_shared(cx))?;
         build_timer.done();
@@ -1270,7 +1262,7 @@ impl HashJoinStream {
         &mut self,
     ) -> Result<StatefulStreamResult<Option<RecordBatch>>> {
         let state = self.state.try_as_process_probe_batch()?;
-        let build_side = self.build_side.try_into_ready_mut()?;
+        let build_side = self.build_side.try_as_ready_mut()?;
 
         self.join_metrics.input_batches.add(1);
         self.join_metrics.input_rows.add(state.batch.num_rows());
@@ -1348,7 +1340,7 @@ impl HashJoinStream {
             return Ok(StatefulStreamResult::Continue);
         }
 
-        let build_side = self.build_side.try_into_ready()?;
+        let build_side = self.build_side.try_as_ready()?;
 
         // use the global left bitmap to produce the left indices and right indices
         let (left_side, right_side) =
