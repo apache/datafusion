@@ -49,7 +49,7 @@ use std::sync::Arc;
 /// **Important**: If a `LiteralGuarantee` is not satisfied, the relevant
 /// expression is *guaranteed* to evaluate to `false` or `null`. **However**,
 /// the opposite does not hold. Even if all `LiteralGurantee`s are satisfied,
-/// that does does not guarantee that the predicate will actually evaluate to
+/// that does not guarantee that the predicate will actually evaluate to
 /// `true`: it may still evaluate to `true`, `false` or `null`.
 ///
 /// # Creating `LiteralGuarantee`s
@@ -60,7 +60,7 @@ use std::sync::Arc;
 /// # Details
 /// A guarantee can be one of two forms:
 ///
-/// 1. The column must be one a particular set of values for the predicate
+/// 1. The column must be one of a particular set of values for the predicate
 /// to be `true`. If the column takes on any other value, the predicate can not
 /// evaluate to `true`. For example,
 /// `(a = 1)`, `(a = 1 OR a = 2) or `a IN (1, 2, 3)`
