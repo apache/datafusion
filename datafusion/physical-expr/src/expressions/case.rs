@@ -145,6 +145,8 @@ impl CaseExpr {
                 0 => Cow::Borrowed(&when_match),
                 _ => Cow::Owned(prep_null_mask_filter(&when_match)),
             };
+            // Make sure we only consider rows that have not been matched yet
+            let when_match = and(&when_match, &remainder)?;
 
             let then_value = self.when_then_expr[i]
                 .1
@@ -206,6 +208,8 @@ impl CaseExpr {
                 0 => Cow::Borrowed(when_value),
                 _ => Cow::Owned(prep_null_mask_filter(when_value)),
             };
+            // Make sure we only consider rows that have not been matched yet
+            let when_value = and(&when_value, &remainder)?;
 
             let then_value = self.when_then_expr[i]
                 .1

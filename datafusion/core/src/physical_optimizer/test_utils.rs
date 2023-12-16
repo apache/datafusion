@@ -339,7 +339,6 @@ pub fn aggregate_exec(input: Arc<dyn ExecutionPlan>) -> Arc<dyn ExecutionPlan> {
             PhysicalGroupBy::default(),
             vec![],
             vec![],
-            vec![],
             input,
             schema,
         )

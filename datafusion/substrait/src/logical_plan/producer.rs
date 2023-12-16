@@ -1083,50 +1083,76 @@ pub fn to_substrait_rex(
             col_ref_offset,
             extension_info,
         ),
-        Expr::IsNull(arg) => {
-            let arguments: Vec<FunctionArgument> = vec![FunctionArgument {
-                arg_type: Some(ArgType::Value(to_substrait_rex(
-                    arg,
-                    schema,
-                    col_ref_offset,
-                    extension_info,
-                )?)),
-            }];
-
-            let function_name = "is_null".to_string();
-            let function_anchor = _register_function(function_name, extension_info);
-            Ok(Expression {
-                rex_type: Some(RexType::ScalarFunction(ScalarFunction {
-                    function_reference: function_anchor,
-                    arguments,
-                    output_type: None,
-                    args: vec![],
-                    options: vec![],
-                })),
-            })
-        }
-        Expr::IsNotNull(arg) => {
-            let arguments: Vec<FunctionArgument> = vec![FunctionArgument {
-                arg_type: Some(ArgType::Value(to_substrait_rex(
-                    arg,
-                    schema,
-                    col_ref_offset,
-                    extension_info,
-                )?)),
-            }];
-
-            let function_name = "is_not_null".to_string();
-            let function_anchor = _register_function(function_name, extension_info);
-            Ok(Expression {
-                rex_type: Some(RexType::ScalarFunction(ScalarFunction {
-                    function_reference: function_anchor,
-                    arguments,
-                    output_type: None,
-                    args: vec![],
-                    options: vec![],
-                })),
-            })
-        }
+        Expr::Not(arg) => to_substrait_unary_scalar_fn(
+            "not",
+            arg,
+            schema,
+            col_ref_offset,
+            extension_info,
+        ),
+        Expr::IsNull(arg) => to_substrait_unary_scalar_fn(
+            "is_null",
+            arg,
+            schema,
+            col_ref_offset,
+            extension_info,
+        ),
+        Expr::IsNotNull(arg) => to_substrait_unary_scalar_fn(
+            "is_not_null",
+            arg,
+            schema,
+            col_ref_offset,
+            extension_info,
+        ),
+        Expr::IsTrue(arg) => to_substrait_unary_scalar_fn(
+            "is_true",
+            arg,
+            schema,
+            col_ref_offset,
+            extension_info,
+        ),
+        Expr::IsFalse(arg) => to_substrait_unary_scalar_fn(
+            "is_false",
+            arg,
+            schema,
+            col_ref_offset,
+            extension_info,
+        ),
+        Expr::IsUnknown(arg) => to_substrait_unary_scalar_fn(
+            "is_unknown",
+            arg,
+            schema,
+            col_ref_offset,
+            extension_info,
+        ),
+        Expr::IsNotTrue(arg) => to_substrait_unary_scalar_fn(
+            "is_not_true",
+            arg,
+            schema,
+            col_ref_offset,
+            extension_info,
+        ),
+        Expr::IsNotFalse(arg) => to_substrait_unary_scalar_fn(
+            "is_not_false",
+            arg,
+            schema,
+            col_ref_offset,
+            extension_info,
+        ),
+        Expr::IsNotUnknown(arg) => to_substrait_unary_scalar_fn(
+            "is_not_unknown",
+            arg,
+            schema,
+            col_ref_offset,
+            extension_info,
+        ),
+        Expr::Negative(arg) => to_substrait_unary_scalar_fn(
+            "negative",
+            arg,
+            schema,
+            col_ref_offset,
+            extension_info,
+        ),
         _ => {
             not_impl_err!("Unsupported expression: {expr:?}")
         }
@@ -1587,6 +1613,33 @@ fn to_substrait_literal(value: &ScalarValue) -> Result<Expression> {
             nullable: true,
             type_variation_reference,
             literal_type: Some(literal_type),
+        })),
+    })
+}
+
+/// Util to generate substrait [RexType::ScalarFunction] with one argument
+fn to_substrait_unary_scalar_fn(
+    fn_name: &str,
+    arg: &Expr,
+    schema: &DFSchemaRef,
+    col_ref_offset: usize,
+    extension_info: &mut (
+        Vec<extensions::SimpleExtensionDeclaration>,
+        HashMap<String, u32>,
+    ),
+) -> Result<Expression> {
+    let function_anchor = _register_function(fn_name.to_string(), extension_info);
+    let substrait_expr = to_substrait_rex(arg, schema, col_ref_offset, extension_info)?;
+
+    Ok(Expression {
+        rex_type: Some(RexType::ScalarFunction(ScalarFunction {
+            function_reference: function_anchor,
+            arguments: vec![FunctionArgument {
+                arg_type: Some(ArgType::Value(substrait_expr)),
+            }],
+            output_type: None,
+            options: vec![],
+            ..Default::default()
         })),
     })
 }

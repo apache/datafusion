@@ -29,7 +29,7 @@ use datafusion_common::tree_node::{
 use datafusion_common::{
     internal_err, Column, DFField, DFSchema, DFSchemaRef, DataFusionError, Result,
 };
-use datafusion_expr::expr::Alias;
+use datafusion_expr::expr::{is_volatile, Alias};
 use datafusion_expr::logical_plan::{
     Aggregate, Filter, LogicalPlan, Projection, Sort, Window,
 };
@@ -113,6 +113,8 @@ impl CommonSubexprEliminate {
         let Projection { expr, input, .. } = projection;
         let input_schema = Arc::clone(input.schema());
         let mut expr_set = ExprSet::new();
+
+        // Visit expr list and build expr identifier to occuring count map (`expr_set`).
         let arrays = to_arrays(expr, input_schema, &mut expr_set, ExprMask::Normal)?;
 
         let (mut new_expr, new_input) =
@@ -516,7 +518,7 @@ enum ExprMask {
 }
 
 impl ExprMask {
-    fn ignores(&self, expr: &Expr) -> bool {
+    fn ignores(&self, expr: &Expr) -> Result<bool> {
         let is_normal_minus_aggregates = matches!(
             expr,
             Expr::Literal(..)
@@ -527,12 +529,14 @@ impl ExprMask {
                 | Expr::Wildcard { .. }
         );
 
+        let is_volatile = is_volatile(expr)?;
+
         let is_aggr = matches!(expr, Expr::AggregateFunction(..));
 
-        match self {
-            Self::Normal => is_normal_minus_aggregates || is_aggr,
-            Self::NormalAndAggregates => is_normal_minus_aggregates,
-        }
+        Ok(match self {
+            Self::Normal => is_volatile || is_normal_minus_aggregates || is_aggr,
+            Self::NormalAndAggregates => is_volatile || is_normal_minus_aggregates,
+        })
     }
 }
 
@@ -624,7 +628,7 @@ impl TreeNodeVisitor for ExprIdentifierVisitor<'_> {
 
         let (idx, sub_expr_desc) = self.pop_enter_mark();
         // skip exprs should not be recognize.
-        if self.expr_mask.ignores(expr) {
+        if self.expr_mask.ignores(expr)? {
             self.id_array[idx].0 = self.series_number;
             let desc = Self::desc_expr(expr);
             self.visit_stack.push(VisitRecord::ExprItem(desc));

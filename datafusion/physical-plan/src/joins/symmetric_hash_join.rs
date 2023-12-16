@@ -37,7 +37,7 @@ use crate::joins::stream_join_utils::{
     calculate_filter_expr_intervals, combine_two_batches,
     convert_sort_expr_with_filter_schema, get_pruning_anti_indices,
     get_pruning_semi_indices, record_visited_indices, EagerJoinStream,
-    EagerJoinStreamState, PruningJoinHashMap, SortedFilterExpr,
+    EagerJoinStreamState, PruningJoinHashMap, SortedFilterExpr, StreamJoinMetrics,
 };
 use crate::joins::utils::{
     build_batch_from_indices, build_join_schema, check_join_is_valid,
@@ -47,7 +47,7 @@ use crate::joins::utils::{
 use crate::{
     expressions::{Column, PhysicalSortExpr},
     joins::StreamJoinPartitionMode,
-    metrics::{self, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet},
+    metrics::{ExecutionPlanMetricsSet, MetricsSet},
     DisplayAs, DisplayFormatType, Distribution, EquivalenceProperties, ExecutionPlan,
     Partitioning, RecordBatchStream, SendableRecordBatchStream, Statistics,
 };
@@ -182,65 +182,6 @@ pub struct SymmetricHashJoinExec {
     pub(crate) null_equals_null: bool,
     /// Partition Mode
     mode: StreamJoinPartitionMode,
-}
-
-#[derive(Debug)]
-pub struct StreamJoinSideMetrics {
-    /// Number of batches consumed by this operator
-    pub(crate) input_batches: metrics::Count,
-    /// Number of rows consumed by this operator
-    pub(crate) input_rows: metrics::Count,
-}
-
-/// Metrics for HashJoinExec
-#[derive(Debug)]
-pub struct StreamJoinMetrics {
-    /// Number of left batches/rows consumed by this operator
-    pub(crate) left: StreamJoinSideMetrics,
-    /// Number of right batches/rows consumed by this operator
-    pub(crate) right: StreamJoinSideMetrics,
-    /// Memory used by sides in bytes
-    pub(crate) stream_memory_usage: metrics::Gauge,
-    /// Number of batches produced by this operator
-    pub(crate) output_batches: metrics::Count,
-    /// Number of rows produced by this operator
-    pub(crate) output_rows: metrics::Count,
-}
-
-impl StreamJoinMetrics {
-    pub fn new(partition: usize, metrics: &ExecutionPlanMetricsSet) -> Self {
-        let input_batches =
-            MetricBuilder::new(metrics).counter("input_batches", partition);
-        let input_rows = MetricBuilder::new(metrics).counter("input_rows", partition);
-        let left = StreamJoinSideMetrics {
-            input_batches,
-            input_rows,
-        };
-
-        let input_batches =
-            MetricBuilder::new(metrics).counter("input_batches", partition);
-        let input_rows = MetricBuilder::new(metrics).counter("input_rows", partition);
-        let right = StreamJoinSideMetrics {
-            input_batches,
-            input_rows,
-        };
-
-        let stream_memory_usage =
-            MetricBuilder::new(metrics).gauge("stream_memory_usage", partition);
-
-        let output_batches =
-            MetricBuilder::new(metrics).counter("output_batches", partition);
-
-        let output_rows = MetricBuilder::new(metrics).output_rows(partition);
-
-        Self {
-            left,
-            right,
-            output_batches,
-            stream_memory_usage,
-            output_rows,
-        }
-    }
 }
 
 impl SymmetricHashJoinExec {
