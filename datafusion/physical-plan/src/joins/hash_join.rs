@@ -1159,10 +1159,7 @@ impl HashJoinStream {
     fn poll_next_impl(
         &mut self,
         cx: &mut std::task::Context<'_>,
-    ) -> Poll<Option<Result<RecordBatch>>>
-    where
-        Self: Send,
-    {
+    ) -> Poll<Option<Result<RecordBatch>>> {
         loop {
             return match self.state {
                 HashJoinStreamState::WaitBuildSide => {

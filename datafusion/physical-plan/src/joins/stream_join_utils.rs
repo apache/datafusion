@@ -759,7 +759,7 @@ pub trait EagerJoinStream {
         match self.right_stream().next().await {
             Some(Ok(batch)) => {
                 if batch.num_rows() == 0 {
-                    return Ok(StreamJoinStateResult::Continue);
+                    return Ok(StatefulStreamResult::Continue);
                 }
 
                 self.set_state(EagerJoinStreamState::PullLeft);
@@ -788,7 +788,7 @@ pub trait EagerJoinStream {
         match self.left_stream().next().await {
             Some(Ok(batch)) => {
                 if batch.num_rows() == 0 {
-                    return Ok(StreamJoinStateResult::Continue);
+                    return Ok(StatefulStreamResult::Continue);
                 }
                 self.set_state(EagerJoinStreamState::PullRight);
                 self.process_batch_from_left(batch)
@@ -817,7 +817,7 @@ pub trait EagerJoinStream {
         match self.left_stream().next().await {
             Some(Ok(batch)) => {
                 if batch.num_rows() == 0 {
-                    return Ok(StreamJoinStateResult::Continue);
+                    return Ok(StatefulStreamResult::Continue);
                 }
                 self.process_batch_after_right_end(batch)
             }
@@ -847,7 +847,7 @@ pub trait EagerJoinStream {
         match self.right_stream().next().await {
             Some(Ok(batch)) => {
                 if batch.num_rows() == 0 {
-                    return Ok(StreamJoinStateResult::Continue);
+                    return Ok(StatefulStreamResult::Continue);
                 }
                 self.process_batch_after_left_end(batch)
             }
