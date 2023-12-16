@@ -815,7 +815,7 @@ struct BuildSideReadyState {
 impl BuildSide {
     /// Tries to extract BuildSideInitialState from BuildSide enum.
     /// Returns an error if state is not Initial.
-    fn try_into_initial_mut(&mut self) -> Result<&mut BuildSideInitialState> {
+    fn try_as_initial_mut(&mut self) -> Result<&mut BuildSideInitialState> {
         match self {
             BuildSide::Initial(state) => Ok(state),
             _ => Err(DataFusionError::Internal(
@@ -826,7 +826,7 @@ impl BuildSide {
 
     /// Tries to extract BuildSideReadyState from BuildSide enum.
     /// Returns an error if state is not Ready.
-    fn try_into_ready(&self) -> Result<&BuildSideReadyState> {
+    fn try_as_ready(&self) -> Result<&BuildSideReadyState> {
         match self {
             BuildSide::Ready(state) => Ok(state),
             _ => Err(DataFusionError::Internal(
@@ -837,7 +837,7 @@ impl BuildSide {
 
     /// Tries to extract BuildSideReadyState from BuildSide enum.
     /// Returns an error if state is not Ready.
-    fn try_into_ready_mut(&mut self) -> Result<&mut BuildSideReadyState> {
+    fn try_as_ready_mut(&mut self) -> Result<&mut BuildSideReadyState> {
         match self {
             BuildSide::Ready(state) => Ok(state),
             _ => Err(DataFusionError::Internal(
