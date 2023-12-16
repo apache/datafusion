@@ -26,7 +26,6 @@ use arrow::buffer::OffsetBuffer;
 use arrow::compute;
 use arrow::datatypes::{DataType, Field, UInt64Type};
 use arrow::row::{RowConverter, SortField};
-use arrow_array::types::Int64Type;
 use arrow_buffer::NullBuffer;
 
 use arrow_schema::{FieldRef, SortOptions};
