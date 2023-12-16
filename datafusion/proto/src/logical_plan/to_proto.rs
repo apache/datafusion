@@ -1701,6 +1701,20 @@ impl From<Constraint> for protobuf::Constraint {
                     protobuf::PrimaryKeyConstraint { indices },
                 )
             }
+            Constraint::ForeignKey {
+                indices,
+                referenced_indices,
+                referenced_table,
+            } => protobuf::constraint::ConstraintMode::ForeignKey(
+                protobuf::ForeignKeyConstraint {
+                    indices: indices.into_iter().map(|item| item as u64).collect(),
+                    referenced_indices: referenced_indices
+                        .into_iter()
+                        .map(|item| item as u64)
+                        .collect(),
+                    referenced_table: referenced_table.to_string(),
+                },
+            ),
         };
         protobuf::Constraint {
             constraint_mode: Some(res),

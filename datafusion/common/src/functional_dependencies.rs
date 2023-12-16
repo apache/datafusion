@@ -25,9 +25,12 @@ use std::vec::IntoIter;
 
 use crate::error::_plan_err;
 use crate::utils::{merge_and_order_indices, set_difference};
-use crate::{DFSchema, DFSchemaRef, DataFusionError, JoinType, Result};
+use crate::{
+    DFSchema, DFSchemaRef, DataFusionError, JoinType, OwnedTableReference, Result,
+    TableReference,
+};
 
-use sqlparser::ast::TableConstraint;
+use sqlparser::ast::{Ident, TableConstraint};
 
 /// This object defines a constraint on a table.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -37,6 +40,14 @@ pub enum Constraint {
     PrimaryKey(Vec<usize>),
     /// Columns with the given indices form a composite unique key:
     Unique(Vec<usize>),
+    ForeignKey {
+        /// Colummn indices of the referencing table (the table containing the foreign key)
+        indices: Vec<usize>,
+        /// Colummn indices of the referenced table (the table referenced by the foreign key)
+        referenced_indices: Vec<usize>,
+        /// The table that the foreign key points to
+        referenced_table: OwnedTableReference,
+    },
 }
 
 /// This object encapsulates a list of functional constraints:
@@ -97,8 +108,39 @@ impl Constraints {
                         Constraint::Unique(indices)
                     })
                 }
-                TableConstraint::ForeignKey { .. } => {
-                    _plan_err!("Foreign key constraints are not currently supported")
+                TableConstraint::ForeignKey {
+                    foreign_table,
+                    columns,
+                    name: _,
+                    on_delete: _,
+                    on_update: _,
+                    referred_columns,
+                } => {
+                    let get_indices = |c: &[Ident]| {
+                        Result::<_>::Ok(
+                            c.iter()
+                                .map(|pk| {
+                                    let idx = df_schema
+                                        .fields()
+                                        .iter()
+                                        .position(|item| {
+                                            item.qualified_name() == pk.value.clone()
+                                        })
+                                        .ok_or_else(|| {
+                                            DataFusionError::Execution(
+                                                "Column doesn't exist".to_string(),
+                                            )
+                                        })?;
+                                    Ok(idx)
+                                })
+                                .collect::<Result<Vec<_>>>()?,
+                        )
+                    };
+                    Ok(Constraint::ForeignKey {
+                        indices: get_indices(columns)?,
+                        referenced_indices: get_indices(&referred_columns)?,
+                        referenced_table: TableReference::from(foreign_table.to_string()),
+                    })
                 }
                 TableConstraint::Check { .. } => {
                     _plan_err!("Check constraints are not currently supported")
@@ -235,24 +277,27 @@ impl FunctionalDependencies {
             // Construct dependency objects based on each individual constraint:
             let dependencies = constraints
                 .iter()
-                .map(|constraint| {
+                .flat_map(|constraint| {
                     // All the field indices are associated with the whole table
                     // since we are dealing with table level constraints:
                     let dependency = match constraint {
-                        Constraint::PrimaryKey(indices) => FunctionalDependence::new(
-                            indices.to_vec(),
-                            (0..n_field).collect::<Vec<_>>(),
-                            false,
-                        ),
-                        Constraint::Unique(indices) => FunctionalDependence::new(
+                        Constraint::PrimaryKey(indices) => {
+                            Some(FunctionalDependence::new(
+                                indices.to_vec(),
+                                (0..n_field).collect::<Vec<_>>(),
+                                false,
+                            ))
+                        }
+                        Constraint::Unique(indices) => Some(FunctionalDependence::new(
                             indices.to_vec(),
                             (0..n_field).collect::<Vec<_>>(),
                             true,
-                        ),
-                    };
+                        )),
+                        Constraint::ForeignKey { .. } => None,
+                    }?;
                     // As primary keys are guaranteed to be unique, set the
                     // functional dependency mode to `Dependency::Single`:
-                    dependency.with_mode(Dependency::Single)
+                    Some(dependency.with_mode(Dependency::Single))
                 })
                 .collect::<Vec<_>>();
             Self::new(dependencies)

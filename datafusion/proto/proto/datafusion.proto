@@ -189,10 +189,17 @@ message UniqueConstraint{
   repeated uint64 indices = 1;
 }
 
+message ForeignKeyConstraint{
+  repeated uint64 indices = 1;
+  repeated uint64 referenced_indices = 2;
+  string referenced_table = 3;
+}
+
 message Constraint{
   oneof constraint_mode{
     PrimaryKeyConstraint primary_key = 1;
     UniqueConstraint unique = 2;
+    ForeignKeyConstraint foreign_key = 3;
   }
 }
 
