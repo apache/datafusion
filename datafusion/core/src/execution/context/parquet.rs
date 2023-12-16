@@ -109,7 +109,7 @@ mod tests {
             .read_parquet(
                 // it was reported that when a path contains // (two consecutive separator) no files were found
                 // in this test, regardless of parquet_test_data() value, our path now contains a //
-                format!("{}/..//*/alltypes_plain*.parquet", parquet_test_data()),
+                format!("{}//alltypes_plain*.parquet", parquet_test_data()),
                 ParquetReadOptions::default(),
             )
             .await?;
