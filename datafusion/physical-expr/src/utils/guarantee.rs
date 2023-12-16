@@ -32,7 +32,7 @@ use std::sync::Arc;
 /// [`ScalarValue`]s. For the expression to evaluate to `true`, the column *must
 /// satisfy* the guarantee(s).
 ///
-/// To satisfy the guarantee, depending on [`Guarantee`],  the values in the
+/// To satisfy the guarantee, depending on [`Guarantee`], the values in the
 /// column must either:
 ///
 /// 1. be ONLY one of that set
@@ -49,7 +49,7 @@ use std::sync::Arc;
 /// **Important**: If a `LiteralGuarantee` is not satisfied, the relevant
 /// expression is *guaranteed* to evaluate to `false` or `null`. **However**,
 /// the opposite does not hold. Even if all `LiteralGurantee`s are satisfied,
-/// that does does not guarantee that the predicate will actually evaluate to
+/// that does does **not** guarantee that the predicate will actually evaluate to
 /// `true`: it may still evaluate to `true`, `false` or `null`.
 ///
 /// # Creating `LiteralGuarantee`s
@@ -60,13 +60,13 @@ use std::sync::Arc;
 /// # Details
 /// A guarantee can be one of two forms:
 ///
-/// 1. The column must be one a particular set of values for the predicate
-/// to be `true`. If the column takes on any other value, the predicate can not
-/// evaluate to `true`. For example,
+/// 1. The column must be one the values for the predicate to be `true`. If the
+/// column takes on any other value, the predicate can not evaluate to `true`.
+/// For example,
 /// `(a = 1)`, `(a = 1 OR a = 2) or `a IN (1, 2, 3)`
 ///
-/// 2. The column must NOT be one of a particular set of values for the predicate to
-/// be `true`. If the column takes on any of the values, the predicate can not
+/// 2. The column must NOT be one of the values for the predicate to be `true`.
+/// If the column can ONLY take one of these values, the predicate can not
 /// evaluate to `true`. For example,
 /// `(a != 1)`, `(a != 1 AND a != 2)` or `a NOT IN (1, 2, 3)`
 #[derive(Debug, Clone, PartialEq)]
@@ -83,8 +83,8 @@ pub enum Guarantee {
     /// `column` is not one of the values, the expression can not be `true`.
     In,
     /// Guarantee that the expression is `true` if `column` is not ANY of the
-    /// values. If `column` is one of the values, the expression can not be
-    /// `true`.
+    /// values. If `column` only takes one of these values, the expression can
+    /// not be `true`.
     NotIn,
 }
 
