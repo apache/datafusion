@@ -48,8 +48,8 @@ use std::sync::Arc;
 ///
 /// **Important**: If a `LiteralGuarantee` is not satisfied, the relevant
 /// expression is *guaranteed* to evaluate to `false` or `null`. **However**,
-/// the opposite does not hold. Even if all `LiteralGurantee`s are satisfied,
-/// that does does **not** guarantee that the predicate will actually evaluate to
+/// the opposite does not hold. Even if all `LiteralGuarantee`s are satisfied,
+/// that does **not** guarantee that the predicate will actually evaluate to
 /// `true`: it may still evaluate to `true`, `false` or `null`.
 ///
 /// # Creating `LiteralGuarantee`s
