@@ -531,22 +531,22 @@ pub fn array_slice(args: &[ArrayRef]) -> Result<ArrayRef> {
             let array = as_list_array(&args[0])?;
             let from_array = as_int64_array(&args[1])?;
             let to_array = as_int64_array(&args[2])?;
-            general_array_slice::<i32, Int64Type>(array, from_array, to_array)
+            general_array_slice::<i32>(array, from_array, to_array)
         }
         DataType::LargeList(_) => {
             let array = as_large_list_array(&args[0])?;
             let from_array = as_int64_array(&args[1])?;
             let to_array = as_int64_array(&args[2])?;
-            general_array_slice::<i64, Int64Type>(array, from_array, to_array)
+            general_array_slice::<i64>(array, from_array, to_array)
         }
         _ => not_impl_err!("array_slice does not support type: {:?}", array_data_type),
     }
 }
 
-fn general_array_slice<O: OffsetSizeTrait, T: ArrowNumericType<Native = i64>>(
+fn general_array_slice<O: OffsetSizeTrait>(
     array: &GenericListArray<O>,
-    from_array: &PrimitiveArray<T>,
-    to_array: &PrimitiveArray<T>,
+    from_array: &Int64Array,
+    to_array: &Int64Array,
 ) -> Result<ArrayRef>
 where
     i64: TryInto<O>,
