@@ -484,6 +484,46 @@ async fn roundtrip_ilike() -> Result<()> {
 }
 
 #[tokio::test]
+async fn roundtrip_not() -> Result<()> {
+    roundtrip("SELECT * FROM data WHERE NOT d").await
+}
+
+#[tokio::test]
+async fn roundtrip_negative() -> Result<()> {
+    roundtrip("SELECT * FROM data WHERE -a = 1").await
+}
+
+#[tokio::test]
+async fn roundtrip_is_true() -> Result<()> {
+    roundtrip("SELECT * FROM data WHERE d IS TRUE").await
+}
+
+#[tokio::test]
+async fn roundtrip_is_false() -> Result<()> {
+    roundtrip("SELECT * FROM data WHERE d IS FALSE").await
+}
+
+#[tokio::test]
+async fn roundtrip_is_not_true() -> Result<()> {
+    roundtrip("SELECT * FROM data WHERE d IS NOT TRUE").await
+}
+
+#[tokio::test]
+async fn roundtrip_is_not_false() -> Result<()> {
+    roundtrip("SELECT * FROM data WHERE d IS NOT FALSE").await
+}
+
+#[tokio::test]
+async fn roundtrip_is_unknown() -> Result<()> {
+    roundtrip("SELECT * FROM data WHERE d IS UNKNOWN").await
+}
+
+#[tokio::test]
+async fn roundtrip_is_not_unknown() -> Result<()> {
+    roundtrip("SELECT * FROM data WHERE d IS NOT UNKNOWN").await
+}
+
+#[tokio::test]
 async fn roundtrip_union() -> Result<()> {
     roundtrip("SELECT a, e FROM data UNION SELECT a, e FROM data").await
 }
