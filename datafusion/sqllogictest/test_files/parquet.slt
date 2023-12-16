@@ -15,6 +15,10 @@
 # specific language governing permissions and limitations
 # under the License.
 
+# TESTS FOR PARQUET FILES
+
+# Setup basic alltypes_plain table:
+
 statement ok
 CREATE EXTERNAL TABLE alltypes_plain (
   id  INT NOT NULL,
@@ -33,6 +37,8 @@ STORED AS PARQUET
 WITH HEADER ROW
 LOCATION '../../parquet-testing/data/alltypes_plain.parquet'
 
+# Test a basic query:
+
 query IT
 SELECT id, CAST(string_col AS varchar) FROM alltypes_plain
 ----
@@ -44,3 +50,102 @@ SELECT id, CAST(string_col AS varchar) FROM alltypes_plain
 3 1
 0 0
 1 1
+
+# Explain query on the un-ordered table, expect no "output_ordering" clause in physical_plan -> ParquetExec:
+
+query TT
+EXPLAIN SELECT int_col, string_col
+FROM alltypes_plain
+ORDER BY string_col, int_col
+LIMIT 10
+----
+logical_plan
+Limit: skip=0, fetch=10
+--Sort: alltypes_plain.string_col ASC NULLS LAST, alltypes_plain.int_col ASC NULLS LAST, fetch=10
+----TableScan: alltypes_plain projection=[int_col, string_col]
+physical_plan
+GlobalLimitExec: skip=0, fetch=10
+--SortExec: TopK(fetch=10), expr=[string_col@1 ASC NULLS LAST,int_col@0 ASC NULLS LAST]
+----ParquetExec: file_groups={1 group: [[WORKSPACE_ROOT/parquet-testing/data/alltypes_plain.parquet]]}, projection=[int_col, string_col]
+
+# Setup alltypes_plain, with an order clause:
+
+statement ok
+CREATE EXTERNAL TABLE alltypes_plain_with_order (
+  id  INT NOT NULL,
+  bool_col BOOLEAN NOT NULL,
+  tinyint_col TINYINT NOT NULL,
+  smallint_col SMALLINT NOT NULL,
+  int_col INT NOT NULL,
+  bigint_col BIGINT NOT NULL,
+  float_col FLOAT NOT NULL,
+  double_col DOUBLE NOT NULL,
+  date_string_col BYTEA NOT NULL,
+  string_col VARCHAR NOT NULL,
+  timestamp_col TIMESTAMP NOT NULL,
+)
+STORED AS PARQUET
+WITH HEADER ROW
+WITH ORDER (string_col ASC NULLS LAST, int_col NULLS LAST)
+LOCATION '../../parquet-testing/data/alltypes_plain.parquet'
+
+# Explain query on the ordered table, expect to see the "output_ordering" clause in physical_plan -> ParquetExec:
+
+query TT
+EXPLAIN SELECT int_col, string_col
+FROM alltypes_plain_with_order
+ORDER BY string_col, int_col
+LIMIT 10
+----
+logical_plan
+Limit: skip=0, fetch=10
+--Sort: alltypes_plain_with_order.string_col ASC NULLS LAST, alltypes_plain_with_order.int_col ASC NULLS LAST, fetch=10
+----TableScan: alltypes_plain_with_order projection=[int_col, string_col]
+physical_plan
+GlobalLimitExec: skip=0, fetch=10
+--ParquetExec: file_groups={1 group: [[WORKSPACE_ROOT/parquet-testing/data/alltypes_plain.parquet]]}, projection=[int_col, string_col], output_ordering=[string_col@1 ASC NULLS LAST, int_col@0 ASC NULLS LAST]
+
+# Setup alltypes_plain, from the directory, with ordering clause:
+
+statement ok
+CREATE EXTERNAL TABLE alltypes_plain_from_dir (
+  id  INT NOT NULL,
+  bool_col BOOLEAN NOT NULL,
+  tinyint_col TINYINT NOT NULL,
+  smallint_col SMALLINT NOT NULL,
+  int_col INT NOT NULL,
+  bigint_col BIGINT NOT NULL,
+  float_col FLOAT NOT NULL,
+  double_col DOUBLE NOT NULL,
+  date_string_col BYTEA NOT NULL,
+  string_col VARCHAR NOT NULL,
+  timestamp_col TIMESTAMP NOT NULL,
+)
+STORED AS PARQUET
+WITH HEADER ROW
+WITH ORDER (string_col ASC NULLS LAST, int_col NULLS LAST)
+PARTITIONED BY (string_col, int_col)
+LOCATION '../../parquet-testing/data/alltypes_dir'
+
+
+# Explain query on ordered table from directory source; the directory contains 5 files, which is one more than
+# the hard-coded number of target partitions (4) used by the sqllogictest runner. In this case, we expect the "output_ordering"
+# clause to _not_ be present in physical_plan -> ParquetExec, due to there being more files than partitions
+
+query TT
+EXPLAIN SELECT int_col, string_col
+FROM alltypes_plain_from_dir
+ORDER BY string_col, int_col
+LIMIT 10
+----
+logical_plan
+Limit: skip=0, fetch=10
+--Sort: alltypes_plain_from_dir.string_col ASC NULLS LAST, alltypes_plain_from_dir.int_col ASC NULLS LAST, fetch=10
+----Projection: alltypes_plain_from_dir.int_col, alltypes_plain_from_dir.string_col
+------TableScan: alltypes_plain_from_dir projection=[string_col, int_col]
+physical_plan
+GlobalLimitExec: skip=0, fetch=10
+--SortPreservingMergeExec: [string_col@1 ASC NULLS LAST,int_col@0 ASC NULLS LAST], fetch=10
+----SortExec: TopK(fetch=10), expr=[string_col@1 ASC NULLS LAST,int_col@0 ASC NULLS LAST]
+------ProjectionExec: expr=[int_col@1 as int_col, string_col@0 as string_col]
+--------ParquetExec: file_groups={3 groups: [[WORKSPACE_ROOT/parquet-testing/data/alltypes_dir/0.parquet, WORKSPACE_ROOT/parquet-testing/data/alltypes_dir/1.parquet], [WORKSPACE_ROOT/parquet-testing/data/alltypes_dir/2.parquet, WORKSPACE_ROOT/parquet-testing/data/alltypes_dir/3.parquet], [WORKSPACE_ROOT/parquet-testing/data/alltypes_dir/4.parquet]]}, projection=[string_col, int_col]
