@@ -40,6 +40,7 @@ use crate::execution::context::SessionState;
 use datafusion_common::tree_node::{TreeNode, VisitRecursion};
 use datafusion_common::{internal_err, Column, DFField, DFSchema, DataFusionError};
 use datafusion_expr::{Expr, ScalarFunctionDefinition, Volatility};
+use datafusion_optimizer::OptimizerConfig;
 use datafusion_physical_expr::create_physical_expr;
 use datafusion_physical_expr::execution_props::ExecutionProps;
 use object_store::path::Path;
@@ -376,9 +377,12 @@ pub async fn pruned_partition_list<'a>(
                 }
             };
 
+            let exec_options = &ctx.options().execution;
+            let ignore_child_dir = exec_options.ignore_child_dir;
+
             let files = files.into_iter().filter(move |o| {
                 let extension_match = o.location.as_ref().ends_with(file_extension);
-                let glob_match = table_path.contains(&o.location);
+                let glob_match = table_path.contains(&o.location, ignore_child_dir);
                 extension_match && glob_match
             });
 

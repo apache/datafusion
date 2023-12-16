@@ -273,6 +273,10 @@ config_namespace! {
         /// memory consumption
         pub max_buffered_batches_per_output_file: usize, default = 2
 
+        /// When scanning file paths, whether to ignore subdirectory files,
+        /// ignored by default (true)
+        pub ignore_child_dir: bool, default = true
+
     }
 }
 
