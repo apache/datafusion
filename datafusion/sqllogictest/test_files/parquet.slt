@@ -149,3 +149,30 @@ GlobalLimitExec: skip=0, fetch=10
 ----SortExec: TopK(fetch=10), expr=[string_col@1 ASC NULLS LAST,int_col@0 ASC NULLS LAST]
 ------ProjectionExec: expr=[int_col@1 as int_col, string_col@0 as string_col]
 --------ParquetExec: file_groups={3 groups: [[WORKSPACE_ROOT/parquet-testing/data/alltypes_dir/0.parquet, WORKSPACE_ROOT/parquet-testing/data/alltypes_dir/1.parquet], [WORKSPACE_ROOT/parquet-testing/data/alltypes_dir/2.parquet, WORKSPACE_ROOT/parquet-testing/data/alltypes_dir/3.parquet], [WORKSPACE_ROOT/parquet-testing/data/alltypes_dir/4.parquet]]}, projection=[string_col, int_col]
+
+# Perform SELECT on table with fixed sized binary columns
+
+statement ok
+CREATE EXTERNAL TABLE test_binary
+STORED AS PARQUET
+WITH HEADER ROW
+LOCATION '../core/tests/data/test_binary.parquet'
+
+query ?
+SELECT ids FROM test_binary ORDER BY ids LIMIT 10
+----
+008c7196f68089ab692e4739c5fd16b5
+00a51a7bc5ff8eb1627f8f3dc959dce8
+0166ce1d46129ad104fa4990c6057c91
+03a4893f3285b422820b4cd74c9b9786
+04999ac861e14682cd339eae2cc74359
+04b86bf8f228739fde391f850636a77d
+050fb9cf722a709eb94b70b3ee7dc342
+052578a65e8e91b8526b182d40e846e8
+05408e6a403e4296526006e20cc4a45a
+0592e6fb7d7169b888a4029b53abb701
+
+query I
+SELECT count(ids) FROM test_binary
+----
+466

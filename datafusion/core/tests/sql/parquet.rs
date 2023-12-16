@@ -18,30 +18,10 @@
 use std::{fs, path::Path};
 
 use ::parquet::arrow::ArrowWriter;
-use datafusion::{datasource::listing::ListingOptions, execution::options::ReadOptions};
 use datafusion_common::cast::{as_list_array, as_primitive_array, as_string_array};
 use tempfile::TempDir;
 
 use super::*;
-
-#[tokio::test]
-async fn fixed_size_binary_columns() {
-    let ctx = SessionContext::new();
-    ctx.register_parquet(
-        "t0",
-        "tests/data/test_binary.parquet",
-        ParquetReadOptions::default(),
-    )
-    .await
-    .unwrap();
-    let sql = "SELECT ids FROM t0 ORDER BY ids";
-    let dataframe = ctx.sql(sql).await.unwrap();
-    let results = dataframe.collect().await.unwrap();
-    for batch in results {
-        assert_eq!(466, batch.num_rows());
-        assert_eq!(1, batch.num_columns());
-    }
-}
 
 #[tokio::test]
 async fn window_fn_timestamp_tz() {
