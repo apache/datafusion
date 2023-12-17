@@ -27,8 +27,8 @@ use datafusion::logical_expr::{
     BuiltinScalarFunction, Case, Expr, LogicalPlan, Operator,
 };
 use datafusion::logical_expr::{
-    expr, Cast, Extension, GroupingSet, Like, LogicalPlanBuilder, WindowFrameBound,
-    WindowFrameUnits,
+    expr, Cast, Extension, GroupingSet, Like, LogicalPlanBuilder, Partitioning,
+    Repartition, WindowFrameBound, WindowFrameUnits,
 };
 use datafusion::prelude::JoinType;
 use datafusion::sql::TableReference;
@@ -38,7 +38,8 @@ use datafusion::{
     prelude::{Column, SessionContext},
     scalar::ScalarValue,
 };
-use substrait::proto::expression::{Literal, ScalarFunction};
+use substrait::proto::exchange_rel::ExchangeKind;
+use substrait::proto::expression::{FieldReference, Literal, ScalarFunction};
 use substrait::proto::{
     aggregate_function::AggregationInvocation,
     expression::{
@@ -550,6 +551,45 @@ pub async fn from_substrait_rel(
             let plan = plan.from_template(&plan.expressions(), &inputs);
             Ok(LogicalPlan::Extension(Extension { node: plan }))
         }
+        Some(RelType::Exchange(exchange)) => {
+            let Some(input) = exchange.input.as_ref() else {
+                return substrait_err!("Unexpected empty input in ExchangeRel");
+            };
+            let input = Arc::new(from_substrait_rel(ctx, input, extensions).await?);
+
+            let Some(exchange_kind) = &exchange.exchange_kind else {
+                return substrait_err!("Unexpected empty input in ExchangeRel");
+            };
+
+            // ref: https://substrait.io/relations/physical_relations/#exchange-types
+            let partitioning_scheme = match exchange_kind {
+                ExchangeKind::ScatterByFields(scatter_fields) => {
+                    let mut partition_columns = vec![];
+                    let input_schema = input.schema();
+                    for field_ref in &scatter_fields.fields {
+                        let column =
+                            from_substrait_field_reference(field_ref, input_schema)?;
+                        partition_columns.push(column);
+                    }
+                    Partitioning::Hash(
+                        partition_columns,
+                        exchange.partition_count as usize,
+                    )
+                }
+                ExchangeKind::RoundRobin(_) => {
+                    Partitioning::RoundRobinBatch(exchange.partition_count as usize)
+                }
+                ExchangeKind::SingleTarget(_)
+                | ExchangeKind::MultiTarget(_)
+                | ExchangeKind::Broadcast(_) => {
+                    return not_impl_err!("Unsupported exchange kind: {exchange_kind:?}");
+                }
+            };
+            Ok(LogicalPlan::Repartition(Repartition {
+                input,
+                partitioning_scheme,
+            }))
+        }
         _ => not_impl_err!("Unsupported RelType: {:?}", rel.rel_type),
     }
 }
@@ -725,27 +765,9 @@ pub async fn from_substrait_rex(
                 negated: false,
             })))
         }
-        Some(RexType::Selection(field_ref)) => match &field_ref.reference_type {
-            Some(DirectReference(direct)) => match &direct.reference_type.as_ref() {
-                Some(StructField(x)) => match &x.child.as_ref() {
-                    Some(_) => not_impl_err!(
-                        "Direct reference StructField with child is not supported"
-                    ),
-                    None => {
-                        let column =
-                            input_schema.field(x.field as usize).qualified_column();
-                        Ok(Arc::new(Expr::Column(Column {
-                            relation: column.relation,
-                            name: column.name,
-                        })))
-                    }
-                },
-                _ => not_impl_err!(
-                    "Direct reference with types other than StructField is not supported"
-                ),
-            },
-            _ => not_impl_err!("unsupported field ref type"),
-        },
+        Some(RexType::Selection(field_ref)) => Ok(Arc::new(
+            from_substrait_field_reference(field_ref, input_schema)?,
+        )),
         Some(RexType::IfThen(if_then)) => {
             // Parse `ifs`
             // If the first element does not have a `then` part, then we can assume it's a base expression
@@ -1242,6 +1264,32 @@ fn from_substrait_null(null_type: &Type) -> Result<ScalarValue> {
         }
     } else {
         not_impl_err!("Null type without kind is not supported")
+    }
+}
+
+fn from_substrait_field_reference(
+    field_ref: &FieldReference,
+    input_schema: &DFSchema,
+) -> Result<Expr> {
+    match &field_ref.reference_type {
+        Some(DirectReference(direct)) => match &direct.reference_type.as_ref() {
+            Some(StructField(x)) => match &x.child.as_ref() {
+                Some(_) => not_impl_err!(
+                    "Direct reference StructField with child is not supported"
+                ),
+                None => {
+                    let column = input_schema.field(x.field as usize).qualified_column();
+                    Ok(Expr::Column(Column {
+                        relation: column.relation,
+                        name: column.name,
+                    }))
+                }
+            },
+            _ => not_impl_err!(
+                "Direct reference with types other than StructField is not supported"
+            ),
+        },
+        _ => not_impl_err!("unsupported field ref type"),
     }
 }
 
