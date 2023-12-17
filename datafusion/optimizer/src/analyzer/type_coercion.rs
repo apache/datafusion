@@ -772,7 +772,8 @@ fn coerce_case_expression(case: Case, schema: &DFSchemaRef) -> Result<Case> {
 
 #[cfg(test)]
 mod test {
-    use std::sync::Arc;
+    use std::any::Any;
+    use std::sync::{Arc, OnceLock};
 
     use arrow::array::{FixedSizeListArray, Int32Array};
     use arrow::datatypes::{DataType, TimeUnit};
@@ -784,13 +785,13 @@ mod test {
     use datafusion_expr::{
         cast, col, concat, concat_ws, create_udaf, is_true, AccumulatorFactoryFunction,
         AggregateFunction, AggregateUDF, BinaryExpr, BuiltinScalarFunction, Case,
-        ColumnarValue, ExprSchemable, Filter, Operator, StateTypeFunction, Subquery,
+        ColumnarValue, ExprSchemable, Filter, Operator, ScalarUDFImpl, StateTypeFunction,
+        Subquery,
     };
     use datafusion_expr::{
         lit,
         logical_plan::{EmptyRelation, Projection},
-        Expr, LogicalPlan, ReturnTypeFunction, ScalarFunctionImplementation, ScalarUDF,
-        Signature, Volatility,
+        Expr, LogicalPlan, ReturnTypeFunction, ScalarUDF, Signature, Volatility,
     };
     use datafusion_physical_expr::expressions::AvgAccumulator;
 
@@ -842,22 +843,36 @@ mod test {
         assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), &plan, expected)
     }
 
+    static TEST_SIGNATURE: OnceLock<Signature> = OnceLock::new();
+
+    struct TestScalarUDF {}
+    impl ScalarUDFImpl for TestScalarUDF {
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+
+        fn name(&self) -> &str {
+            "TestScalarUDF"
+        }
+        fn signature(&self) -> &Signature {
+            TEST_SIGNATURE.get_or_init(|| {
+                Signature::uniform(1, vec![DataType::Float32], Volatility::Stable)
+            })
+        }
+        fn return_type(&self, _args: &[DataType]) -> Result<DataType> {
+            Ok(DataType::Utf8)
+        }
+
+        fn invoke(&self, _args: &[ColumnarValue]) -> Result<ColumnarValue> {
+            Ok(ColumnarValue::Scalar(ScalarValue::from("a")))
+        }
+    }
+
     #[test]
     fn scalar_udf() -> Result<()> {
         let empty = empty();
-        let return_type: ReturnTypeFunction =
-            Arc::new(move |_| Ok(Arc::new(DataType::Utf8)));
-        let fun: ScalarFunctionImplementation =
-            Arc::new(move |_| Ok(ColumnarValue::Scalar(ScalarValue::new_utf8("a"))));
-        let udf = Expr::ScalarFunction(expr::ScalarFunction::new_udf(
-            Arc::new(ScalarUDF::new(
-                "TestScalarUDF",
-                &Signature::uniform(1, vec![DataType::Float32], Volatility::Stable),
-                &return_type,
-                &fun,
-            )),
-            vec![lit(123_i32)],
-        ));
+
+        let udf = ScalarUDF::from(TestScalarUDF {}).call(vec![lit(123_i32)]);
         let plan = LogicalPlan::Projection(Projection::try_new(vec![udf], empty)?);
         let expected =
             "Projection: TestScalarUDF(CAST(Int32(123) AS Float32))\n  EmptyRelation";
@@ -867,24 +882,13 @@ mod test {
     #[test]
     fn scalar_udf_invalid_input() -> Result<()> {
         let empty = empty();
-        let return_type: ReturnTypeFunction =
-            Arc::new(move |_| Ok(Arc::new(DataType::Utf8)));
-        let fun: ScalarFunctionImplementation = Arc::new(move |_| unimplemented!());
-        let udf = Expr::ScalarFunction(expr::ScalarFunction::new_udf(
-            Arc::new(ScalarUDF::new(
-                "TestScalarUDF",
-                &Signature::uniform(1, vec![DataType::Int32], Volatility::Stable),
-                &return_type,
-                &fun,
-            )),
-            vec![lit("Apple")],
-        ));
+        let udf = ScalarUDF::from(TestScalarUDF {}).call(vec![lit("Apple")]);
         let plan = LogicalPlan::Projection(Projection::try_new(vec![udf], empty)?);
         let err = assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), &plan, "")
             .err()
             .unwrap();
         assert_eq!(
-    "type_coercion\ncaused by\nError during planning: Coercion from [Utf8] to the signature Uniform(1, [Int32]) failed.",
+    "type_coercion\ncaused by\nError during planning: Coercion from [Utf8] to the signature Uniform(1, [Float32]) failed.",
     err.strip_backtrace()
     );
         Ok(())
