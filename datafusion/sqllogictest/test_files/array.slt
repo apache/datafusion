@@ -1809,9 +1809,19 @@ select array_positions(['h', 'e', 'l', 'l', 'o'], 'l'), array_positions([1, 2, 3
 ----
 [3, 4] [5] [1, 2, 3]
 
+query ???
+select array_positions(arrow_cast(['h', 'e', 'l', 'l', 'o'], 'LargeList(Utf8)'), 'l'), array_positions(arrow_cast([1, 2, 3, 4, 5], 'LargeList(Int64)'), 5), array_positions(arrow_cast([1, 1, 1], 'LargeList(Int64)'), 1);
+----
+[3, 4] [5] [1, 2, 3]
+
 # array_positions scalar function #2 (element is list)
 query ?
 select array_positions(make_array([1, 2, 3], [2, 1, 3], [1, 5, 6], [2, 1, 3], [4, 5, 6]), [2, 1, 3]);
+----
+[2, 4]
+
+query ?
+select array_positions(arrow_cast(make_array([1, 2, 3], [2, 1, 3], [1, 5, 6], [2, 1, 3], [4, 5, 6]), 'LargeList(List(Int64))'), [2, 1, 3]);
 ----
 [2, 4]
 
@@ -1821,9 +1831,22 @@ select list_positions(['h', 'e', 'l', 'l', 'o'], 'l'), list_positions([1, 2, 3, 
 ----
 [3, 4] [5] [1, 2, 3]
 
+query ???
+select list_positions(arrow_cast(['h', 'e', 'l', 'l', 'o'], 'LargeList(Utf8)'), 'l'), list_positions(arrow_cast([1, 2, 3, 4, 5], 'LargeList(Int64)'), 5), list_positions(arrow_cast([1, 1, 1], 'LargeList(Int64)'), 1);
+----
+[3, 4] [5] [1, 2, 3]
+
 # array_positions with columns #1
 query ?
 select array_positions(column1, column2) from arrays_values_without_nulls;
+----
+[1]
+[2]
+[3]
+[4]
+
+query ?
+select array_positions(arrow_cast(column1, 'LargeList(Int64)'), column2) from arrays_values_without_nulls;
 ----
 [1]
 [2]
@@ -1837,6 +1860,12 @@ select array_positions(column1, column2) from nested_arrays;
 [3]
 [2, 5]
 
+query ?
+select array_positions(arrow_cast(column1, 'LargeList(List(Int64))'), column2) from nested_arrays;
+----
+[3]
+[2, 5]
+
 # array_positions with columns and scalars #1
 query ??
 select array_positions(column1, 4), array_positions(array[1, 2, 23, 13, 33, 45], column2) from arrays_values_without_nulls;
@@ -1846,9 +1875,23 @@ select array_positions(column1, 4), array_positions(array[1, 2, 23, 13, 33, 45],
 [] [3]
 [] []
 
+query ??
+select array_positions(arrow_cast(column1, 'LargeList(Int64)'), 4), array_positions(array[1, 2, 23, 13, 33, 45], column2) from arrays_values_without_nulls;
+----
+[4] [1]
+[] []
+[] [3]
+[] []
+
 # array_positions with columns and scalars #2 (element is list)
 query ??
 select array_positions(column1, make_array(4, 5, 6)), array_positions(make_array([1, 2, 3], [11, 12, 13], [4, 5, 6]), column2) from nested_arrays;
+----
+[6] []
+[1] []
+
+query ??
+select array_positions(arrow_cast(column1, 'LargeList(List(Int64))'), make_array(4, 5, 6)), array_positions(arrow_cast(make_array([1, 2, 3], [11, 12, 13], [4, 5, 6]), 'LargeList(List(Int64))'), column2) from nested_arrays;
 ----
 [6] []
 [1] []
