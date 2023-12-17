@@ -2041,7 +2041,13 @@ impl ScalarValue {
 
     /// Retrieve `ScalarValue` for each row in `array`
     ///
-    /// Convert `ListArray` to `Vec<Vec<ScalarValue>>`, first `Vec` is for rows, second `Vec` is for elements in the list
+    /// Convert `ListArray` into a 2 dimensional to `Vec<Vec<ScalarValue>>`, first `Vec` is for rows,
+    /// second `Vec` is for elements in the list.
+    ///
+    /// See [`Self::convert_non_list_array_to_scalars`] for converting non Lists
+    ///
+    /// This method is an optimization to unwrap nested ListArrays to nested Rust structures without
+    /// converting them twice
     ///
     /// Return `Err` if `array` is not `ListArray`
     ///
