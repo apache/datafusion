@@ -229,3 +229,25 @@ query R
 SELECT mycol FROM single_nan
 ----
 NULL
+
+# Perform queries using MIN and MAX
+
+query I
+SELECT max(int_col) FROM alltypes_plain
+----
+1
+
+query T
+SELECT min(string_col) FROM alltypes_plain
+----
+0
+
+query I
+SELECT max(bigint_col) FROM alltypes_plain
+----
+10
+
+query P
+SELECT min(timestamp_col) FROM alltypes_plain
+----
+2009-01-01T00:00:00
