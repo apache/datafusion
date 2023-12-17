@@ -929,7 +929,6 @@ select array_pop_back(arrow_cast(make_array(1), 'LargeList(Int64)'));
 ----
 []
 
-
 # array_pop_back scalar function #3 (array_pop_back the empty array)
 query ?
 select array_pop_back(array_pop_back(make_array(1)));
@@ -1020,9 +1019,19 @@ select array_pop_front(make_array(1, 2, 3, 4, 5)), array_pop_front(make_array('h
 ----
 [2, 3, 4, 5] [e, l, l, o]
 
+query ??
+select array_pop_front(arrow_cast(make_array(1, 2, 3, 4, 5), 'LargeList(Int64)')), array_pop_front(arrow_cast(make_array('h', 'e', 'l', 'l', 'o'), 'LargeList(Utf8)'));
+----
+[2, 3, 4, 5] [e, l, l, o]
+
 # array_pop_front scalar function #2 (after array_pop_front, array is empty)
 query ?
 select array_pop_front(make_array(1));
+----
+[]
+
+query ?
+select array_pop_front(arrow_cast(make_array(1), 'LargeList(Int64)'));
 ----
 []
 
@@ -1032,9 +1041,19 @@ select array_pop_front(array_pop_front(make_array(1)));
 ----
 []
 
+query ?
+select array_pop_front(array_pop_front(arrow_cast(make_array(1), 'LargeList(Int64)')));
+----
+[]
+
 # array_pop_front scalar function #5 (array_pop_front the nested arrays)
 query ?
 select array_pop_front(make_array(make_array(1, 2, 3), make_array(2, 9, 1), make_array(7, 8, 9), make_array(1, 2, 3), make_array(1, 7, 4), make_array(4, 5, 6)));
+----
+[[2, 9, 1], [7, 8, 9], [1, 2, 3], [1, 7, 4], [4, 5, 6]]
+
+query ?
+select array_pop_front(arrow_cast(make_array(make_array(1, 2, 3), make_array(2, 9, 1), make_array(7, 8, 9), make_array(1, 2, 3), make_array(1, 7, 4), make_array(4, 5, 6)), 'LargeList(List(Int64))'));
 ----
 [[2, 9, 1], [7, 8, 9], [1, 2, 3], [1, 7, 4], [4, 5, 6]]
 
@@ -1044,9 +1063,19 @@ select array_pop_front(make_array(NULL, make_array(1, 2, 3), make_array(2, 9, 1)
 ----
 [[1, 2, 3], [2, 9, 1], [7, 8, 9], [1, 2, 3], [1, 7, 4]]
 
+query ?
+select array_pop_front(arrow_cast(make_array(NULL, make_array(1, 2, 3), make_array(2, 9, 1), make_array(7, 8, 9), make_array(1, 2, 3), make_array(1, 7, 4)), 'LargeList(List(Int64))'));
+----
+[[1, 2, 3], [2, 9, 1], [7, 8, 9], [1, 2, 3], [1, 7, 4]]
+
 # array_pop_front scalar function #8 (after array_pop_front, nested array is empty)
 query ?
 select array_pop_front(make_array(make_array(1, 2, 3)));
+----
+[]
+
+query ?
+select array_pop_front(arrow_cast(make_array(make_array(1, 2, 3)), 'LargeList(List(Int64))'));
 ----
 []
 

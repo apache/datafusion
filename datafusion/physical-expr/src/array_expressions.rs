@@ -742,6 +742,54 @@ where
     )?))
 }
 
+fn general_pop_list<O: OffsetSizeTrait>(
+    array: &GenericListArray<O>,
+    from_front: bool,
+) -> Result<ArrayRef>
+where
+    i64: TryInto<O>,
+{
+    let (from_array, to_array) = if from_front {
+        let from_array = Int64Array::from(vec![2; array.len()]);
+        let to_array = Int64Array::from(
+            array
+                .iter()
+                .map(|arr| arr.map_or(0, |arr| arr.len() as i64))
+                .collect::<Vec<i64>>(),
+        );
+        (from_array, to_array)
+    } else {
+        let from_array = Int64Array::from(vec![1; array.len()]);
+        let to_array = Int64Array::from(
+            array
+                .iter()
+                .map(|arr| arr.map_or(0, |arr| arr.len() as i64 - 1))
+                .collect::<Vec<i64>>(),
+        );
+        (from_array, to_array)
+    };
+    general_array_slice::<O>(array, &from_array, &to_array)
+}
+
+/// array_pop_front SQL function
+pub fn array_pop_front(args: &[ArrayRef]) -> Result<ArrayRef> {
+    let array_data_type = args[0].data_type();
+    match array_data_type {
+        DataType::List(_) => {
+            let array = as_list_array(&args[0])?;
+            general_pop_list::<i32>(array, true)
+        }
+        DataType::LargeList(_) => {
+            let array = as_large_list_array(&args[0])?;
+            general_pop_list::<i64>(array, true)
+        }
+        _ => not_impl_err!(
+            "array_pop_front does not support type: {:?}",
+            array_data_type
+        ),
+    }
+}
+
 /// array_pop_back SQL function
 pub fn array_pop_back(args: &[ArrayRef]) -> Result<ArrayRef> {
     if args.len() != 1 {
@@ -751,26 +799,12 @@ pub fn array_pop_back(args: &[ArrayRef]) -> Result<ArrayRef> {
     let array_data_type = args[0].data_type();
     match array_data_type {
         DataType::List(_) => {
-            let list_array = as_list_array(&args[0])?;
-            let from_array = Int64Array::from(vec![1; list_array.len()]);
-            let to_array = Int64Array::from(
-                list_array
-                    .iter()
-                    .map(|arr| arr.map_or(0, |arr| arr.len() as i64 - 1))
-                    .collect::<Vec<i64>>(),
-            );
-            general_array_slice::<i32>(list_array, &from_array, &to_array)
+            let array = as_list_array(&args[0])?;
+            general_pop_list::<i32>(array, false)
         }
         DataType::LargeList(_) => {
-            let list_array = as_large_list_array(&args[0])?;
-            let from_array = Int64Array::from(vec![1; list_array.len()]);
-            let to_array = Int64Array::from(
-                list_array
-                    .iter()
-                    .map(|arr| arr.map_or(0, |arr| arr.len() as i64 - 1))
-                    .collect::<Vec<i64>>(),
-            );
-            general_array_slice::<i64>(list_array, &from_array, &to_array)
+            let array = as_large_list_array(&args[0])?;
+            general_pop_list::<i64>(array, false)
         }
         _ => not_impl_err!(
             "array_pop_back does not support type: {:?}",
@@ -898,20 +932,6 @@ pub fn gen_range(args: &[ArrayRef]) -> Result<ArrayRef> {
         None,
     )?);
     Ok(arr)
-}
-
-/// array_pop_front SQL function
-pub fn array_pop_front(args: &[ArrayRef]) -> Result<ArrayRef> {
-    let list_array = as_list_array(&args[0])?;
-    let from_array = Int64Array::from(vec![2; list_array.len()]);
-    let to_array = Int64Array::from(
-        list_array
-            .iter()
-            .map(|arr| arr.map_or(0, |arr| arr.len() as i64))
-            .collect::<Vec<i64>>(),
-    );
-    let args = vec![args[0].clone(), Arc::new(from_array), Arc::new(to_array)];
-    array_slice(args.as_slice())
 }
 
 /// Array_append SQL function
