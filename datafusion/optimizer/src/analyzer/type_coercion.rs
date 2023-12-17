@@ -300,6 +300,7 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                     ),
                     Some(coerced_type) => {
                         // find the coerced type
+						// Todo@wy try to cast the expr to the coerced type for struct
                         let cast_expr = expr.cast_to(&coerced_type, &self.schema)?;
                         let cast_list_expr = list
                             .into_iter()
