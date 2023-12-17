@@ -748,16 +748,35 @@ pub fn array_pop_back(args: &[ArrayRef]) -> Result<ArrayRef> {
         return exec_err!("array_pop_back needs one argument");
     }
 
-    let list_array = as_list_array(&args[0])?;
-    let from_array = Int64Array::from(vec![1; list_array.len()]);
-    let to_array = Int64Array::from(
-        list_array
-            .iter()
-            .map(|arr| arr.map_or(0, |arr| arr.len() as i64 - 1))
-            .collect::<Vec<i64>>(),
-    );
-    let args = vec![args[0].clone(), Arc::new(from_array), Arc::new(to_array)];
-    array_slice(args.as_slice())
+    let array_data_type = args[0].data_type();
+    match array_data_type {
+        DataType::List(_) => {
+            let list_array = as_list_array(&args[0])?;
+            let from_array = Int64Array::from(vec![1; list_array.len()]);
+            let to_array = Int64Array::from(
+                list_array
+                    .iter()
+                    .map(|arr| arr.map_or(0, |arr| arr.len() as i64 - 1))
+                    .collect::<Vec<i64>>(),
+            );
+            general_array_slice::<i32>(list_array, &from_array, &to_array)
+        }
+        DataType::LargeList(_) => {
+            let list_array = as_large_list_array(&args[0])?;
+            let from_array = Int64Array::from(vec![1; list_array.len()]);
+            let to_array = Int64Array::from(
+                list_array
+                    .iter()
+                    .map(|arr| arr.map_or(0, |arr| arr.len() as i64 - 1))
+                    .collect::<Vec<i64>>(),
+            );
+            general_array_slice::<i64>(list_array, &from_array, &to_array)
+        }
+        _ => not_impl_err!(
+            "array_pop_back does not support type: {:?}",
+            array_data_type
+        ),
+    }
 }
 
 /// Appends or prepends elements to a ListArray.

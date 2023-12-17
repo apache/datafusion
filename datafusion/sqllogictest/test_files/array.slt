@@ -913,15 +913,31 @@ select array_pop_back(make_array(1, 2, 3, 4, 5)), array_pop_back(make_array('h',
 ----
 [1, 2, 3, 4] [h, e, l, l]
 
+query ??
+select array_pop_back(arrow_cast(make_array(1, 2, 3, 4, 5), 'LargeList(Int64)')), array_pop_back(arrow_cast(make_array('h', 'e', 'l', 'l', 'o'), 'LargeList(Utf8)'));
+----
+[1, 2, 3, 4] [h, e, l, l]
+
 # array_pop_back scalar function #2 (after array_pop_back, array is empty)
 query ?
 select array_pop_back(make_array(1));
 ----
 []
 
+query ?
+select array_pop_back(arrow_cast(make_array(1), 'LargeList(Int64)'));
+----
+[]
+
+
 # array_pop_back scalar function #3 (array_pop_back the empty array)
 query ?
 select array_pop_back(array_pop_back(make_array(1)));
+----
+[]
+
+query ?
+select array_pop_back(array_pop_back(arrow_cast(make_array(1), 'LargeList(Int64)')));
 ----
 []
 
@@ -937,9 +953,19 @@ select array_pop_back(make_array(make_array(1, 2, 3), make_array(2, 9, 1), make_
 ----
 [[1, 2, 3], [2, 9, 1], [7, 8, 9], [1, 2, 3], [1, 7, 4]]
 
+query ?
+select array_pop_back(arrow_cast(make_array(make_array(1, 2, 3), make_array(2, 9, 1), make_array(7, 8, 9), make_array(1, 2, 3), make_array(1, 7, 4), make_array(4, 5, 6)), 'LargeList(List(Int64))'));
+----
+[[1, 2, 3], [2, 9, 1], [7, 8, 9], [1, 2, 3], [1, 7, 4]]
+
 # array_pop_back scalar function #6 (array_pop_back the nested arrays with NULL)
 query ?
 select array_pop_back(make_array(make_array(1, 2, 3), make_array(2, 9, 1), make_array(7, 8, 9), make_array(1, 2, 3), make_array(1, 7, 4), NULL));
+----
+[[1, 2, 3], [2, 9, 1], [7, 8, 9], [1, 2, 3], [1, 7, 4]]
+
+query ?
+select array_pop_back(arrow_cast(make_array(make_array(1, 2, 3), make_array(2, 9, 1), make_array(7, 8, 9), make_array(1, 2, 3), make_array(1, 7, 4), NULL), 'LargeList(List(Int64))'));
 ----
 [[1, 2, 3], [2, 9, 1], [7, 8, 9], [1, 2, 3], [1, 7, 4]]
 
@@ -949,15 +975,35 @@ select array_pop_back(make_array(make_array(1, 2, 3), make_array(2, 9, 1), make_
 ----
 [[1, 2, 3], [2, 9, 1], [7, 8, 9], ]
 
+query ?
+select array_pop_back(arrow_cast(make_array(make_array(1, 2, 3), make_array(2, 9, 1), make_array(7, 8, 9), NULL, make_array(1, 7, 4)), 'LargeList(List(Int64))'));
+----
+[[1, 2, 3], [2, 9, 1], [7, 8, 9], ]
+
 # array_pop_back scalar function #8 (after array_pop_back, nested array is empty)
 query ?
 select array_pop_back(make_array(make_array(1, 2, 3)));
 ----
 []
 
+query ?
+select array_pop_back(arrow_cast(make_array(make_array(1, 2, 3)), 'LargeList(List(Int64))'));
+----
+[]
+
 # array_pop_back with columns
 query ?
 select array_pop_back(column1) from arrayspop;
+----
+[1, 2]
+[3, 4, 5]
+[6, 7, 8, ]
+[, ]
+[]
+[, 10, 11]
+
+query ?
+select array_pop_back(arrow_cast(column1, 'LargeList(Int64)')) from arrayspop;
 ----
 [1, 2]
 [3, 4, 5]
