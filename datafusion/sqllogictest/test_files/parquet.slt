@@ -17,11 +17,170 @@
 
 # TESTS FOR PARQUET FILES
 
-# Setup basic alltypes_plain table:
+# Set 2 partitions for deterministic output plans
+statement ok
+set datafusion.execution.target_partitions = 2;
 
+# Automatically partition files over 1 byte
+statement ok
+set datafusion.optimizer.repartition_file_min_size = 1
+
+# Create a table as a data source
+statement ok
+CREATE TABLE src_table (
+  int_col INT,
+  string_col TEXT,
+  bigint_col BIGINT,
+  date_col DATE
+) AS VALUES
+(1, 'aaa', 100, 1),
+(2, 'bbb', 200, 2),
+(3, 'ccc', 300, 3),
+(4, 'ddd', 400, 4),
+(5, 'eee', 500, 5),
+(6, 'fff', 600, 6),
+(7, 'ggg', 700, 7),
+(8, 'hhh', 800, 8),
+(9, 'iii', 900, 9);
+
+# Setup 2 files, i.e., as many as there are partitions:
+
+# File 1:
+query ITID
+COPY (SELECT * FROM src_table LIMIT 3)
+TO 'test_files/scratch/parquet/test_table/0.parquet'
+(FORMAT PARQUET, SINGLE_FILE_OUTPUT true);
+----
+3
+
+# File 2:
+query ITID
+COPY (SELECT * FROM src_table WHERE int_col > 3 LIMIT 3)
+TO 'test_files/scratch/parquet/test_table/1.parquet'
+(FORMAT PARQUET, SINGLE_FILE_OUTPUT true);
+----
+3
+
+# Create a table from generated parquet files, without ordering:
+statement ok
+CREATE EXTERNAL TABLE test_table (
+  int_col INT,
+  string_col TEXT,
+  bigint_col BIGINT,
+  date_col DATE
+)
+STORED AS PARQUET
+WITH HEADER ROW
+LOCATION 'test_files/scratch/parquet/test_table';
+
+# Basic query:
+query ITID
+SELECT * FROM test_table ORDER BY int_col;
+----
+1 aaa 100 1970-01-02
+2 bbb 200 1970-01-03
+3 ccc 300 1970-01-04
+4 ddd 400 1970-01-05
+5 eee 500 1970-01-06
+6 fff 600 1970-01-07
+
+# Check output plan, expect no "output_ordering" clause in the physical_plan -> ParquetExec:
+query TT
+EXPLAIN SELECT int_col, string_col
+FROM test_table
+ORDER BY string_col, int_col;
+----
+logical_plan
+Sort: test_table.string_col ASC NULLS LAST, test_table.int_col ASC NULLS LAST
+--TableScan: test_table projection=[int_col, string_col]
+physical_plan
+SortPreservingMergeExec: [string_col@1 ASC NULLS LAST,int_col@0 ASC NULLS LAST]
+--SortExec: expr=[string_col@1 ASC NULLS LAST,int_col@0 ASC NULLS LAST]
+----ParquetExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet/test_table/0.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet/test_table/1.parquet]]}, projection=[int_col, string_col]
+
+# Tear down test_table:
+statement ok
+DROP TABLE test_table;
+
+# Create test_table again, but with ordering:
+statement ok
+CREATE EXTERNAL TABLE test_table (
+  int_col INT,
+  string_col TEXT,
+  bigint_col BIGINT,
+  date_col DATE
+)
+STORED AS PARQUET
+WITH HEADER ROW
+WITH ORDER (string_col ASC NULLS LAST, int_col ASC NULLS LAST)
+LOCATION 'test_files/scratch/parquet/test_table';
+
+# Check output plan, expect an "output_ordering" clause in the physical_plan -> ParquetExec:
+query TT
+EXPLAIN SELECT int_col, string_col
+FROM test_table
+ORDER BY string_col, int_col;
+----
+logical_plan
+Sort: test_table.string_col ASC NULLS LAST, test_table.int_col ASC NULLS LAST
+--TableScan: test_table projection=[int_col, string_col]
+physical_plan
+SortPreservingMergeExec: [string_col@1 ASC NULLS LAST,int_col@0 ASC NULLS LAST]
+--ParquetExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet/test_table/0.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet/test_table/1.parquet]]}, projection=[int_col, string_col], output_ordering=[string_col@1 ASC NULLS LAST, int_col@0 ASC NULLS LAST]
+
+# Add another file to the directory underlying test_table
+query ITID
+COPY (SELECT * FROM src_table WHERE int_col > 6 LIMIT 3)
+TO 'test_files/scratch/parquet/test_table/2.parquet'
+(FORMAT PARQUET, SINGLE_FILE_OUTPUT true);
+----
+3
+
+# Check output plan again, expect no "output_ordering" clause in the physical_plan -> ParquetExec,
+# due to there being more files than partitions:
+query TT
+EXPLAIN SELECT int_col, string_col
+FROM test_table
+ORDER BY string_col, int_col;
+----
+logical_plan
+Sort: test_table.string_col ASC NULLS LAST, test_table.int_col ASC NULLS LAST
+--TableScan: test_table projection=[int_col, string_col]
+physical_plan
+SortPreservingMergeExec: [string_col@1 ASC NULLS LAST,int_col@0 ASC NULLS LAST]
+--SortExec: expr=[string_col@1 ASC NULLS LAST,int_col@0 ASC NULLS LAST]
+----ParquetExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet/test_table/0.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet/test_table/1.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet/test_table/2.parquet]]}, projection=[int_col, string_col]
+
+
+# Perform queries using MIN and MAX
+query I
+SELECT max(int_col) FROM test_table;
+----
+9
+
+query T
+SELECT min(string_col) FROM test_table;
+----
+aaa
+
+query I
+SELECT max(bigint_col) FROM test_table;
+----
+900
+
+query D
+SELECT min(date_col) FROM test_table;
+----
+1970-01-02
+
+# Clean up
+statement ok
+DROP TABLE test_table;
+
+# Setup alltypes_plain table:
 statement ok
 CREATE EXTERNAL TABLE alltypes_plain (
-  id  INT NOT NULL,
+  id INT NOT NULL,
   bool_col BOOLEAN NOT NULL,
   tinyint_col TINYINT NOT NULL,
   smallint_col SMALLINT NOT NULL,
@@ -37,8 +196,7 @@ STORED AS PARQUET
 WITH HEADER ROW
 LOCATION '../../parquet-testing/data/alltypes_plain.parquet'
 
-# Test a basic query:
-
+# Test a basic query with a CAST:
 query IT
 SELECT id, CAST(string_col AS varchar) FROM alltypes_plain
 ----
@@ -51,104 +209,9 @@ SELECT id, CAST(string_col AS varchar) FROM alltypes_plain
 0 0
 1 1
 
-# Explain query on the un-ordered table, expect no "output_ordering" clause in physical_plan -> ParquetExec:
-
-query TT
-EXPLAIN SELECT int_col, string_col
-FROM alltypes_plain
-ORDER BY string_col, int_col
-LIMIT 10
-----
-logical_plan
-Limit: skip=0, fetch=10
---Sort: alltypes_plain.string_col ASC NULLS LAST, alltypes_plain.int_col ASC NULLS LAST, fetch=10
-----TableScan: alltypes_plain projection=[int_col, string_col]
-physical_plan
-GlobalLimitExec: skip=0, fetch=10
---SortExec: TopK(fetch=10), expr=[string_col@1 ASC NULLS LAST,int_col@0 ASC NULLS LAST]
-----ParquetExec: file_groups={1 group: [[WORKSPACE_ROOT/parquet-testing/data/alltypes_plain.parquet]]}, projection=[int_col, string_col]
-
-# Setup alltypes_plain, with an order clause:
-
+# Clean up
 statement ok
-CREATE EXTERNAL TABLE alltypes_plain_with_order (
-  id  INT NOT NULL,
-  bool_col BOOLEAN NOT NULL,
-  tinyint_col TINYINT NOT NULL,
-  smallint_col SMALLINT NOT NULL,
-  int_col INT NOT NULL,
-  bigint_col BIGINT NOT NULL,
-  float_col FLOAT NOT NULL,
-  double_col DOUBLE NOT NULL,
-  date_string_col BYTEA NOT NULL,
-  string_col VARCHAR NOT NULL,
-  timestamp_col TIMESTAMP NOT NULL,
-)
-STORED AS PARQUET
-WITH HEADER ROW
-WITH ORDER (string_col ASC NULLS LAST, int_col NULLS LAST)
-LOCATION '../../parquet-testing/data/alltypes_plain.parquet'
-
-# Explain query on the ordered table, expect to see the "output_ordering" clause in physical_plan -> ParquetExec:
-
-query TT
-EXPLAIN SELECT int_col, string_col
-FROM alltypes_plain_with_order
-ORDER BY string_col, int_col
-LIMIT 10
-----
-logical_plan
-Limit: skip=0, fetch=10
---Sort: alltypes_plain_with_order.string_col ASC NULLS LAST, alltypes_plain_with_order.int_col ASC NULLS LAST, fetch=10
-----TableScan: alltypes_plain_with_order projection=[int_col, string_col]
-physical_plan
-GlobalLimitExec: skip=0, fetch=10
---ParquetExec: file_groups={1 group: [[WORKSPACE_ROOT/parquet-testing/data/alltypes_plain.parquet]]}, projection=[int_col, string_col], output_ordering=[string_col@1 ASC NULLS LAST, int_col@0 ASC NULLS LAST]
-
-# Setup alltypes_plain, from the directory, with ordering clause:
-
-statement ok
-CREATE EXTERNAL TABLE alltypes_plain_from_dir (
-  id  INT NOT NULL,
-  bool_col BOOLEAN NOT NULL,
-  tinyint_col TINYINT NOT NULL,
-  smallint_col SMALLINT NOT NULL,
-  int_col INT NOT NULL,
-  bigint_col BIGINT NOT NULL,
-  float_col FLOAT NOT NULL,
-  double_col DOUBLE NOT NULL,
-  date_string_col BYTEA NOT NULL,
-  string_col VARCHAR NOT NULL,
-  timestamp_col TIMESTAMP NOT NULL,
-)
-STORED AS PARQUET
-WITH HEADER ROW
-WITH ORDER (string_col ASC NULLS LAST, int_col NULLS LAST)
-PARTITIONED BY (string_col, int_col)
-LOCATION '../../parquet-testing/data/alltypes_dir'
-
-
-# Explain query on ordered table from directory source; the directory contains 5 files, which is one more than
-# the hard-coded number of target partitions (4) used by the sqllogictest runner. In this case, we expect the "output_ordering"
-# clause to _not_ be present in physical_plan -> ParquetExec, due to there being more files than partitions
-
-query TT
-EXPLAIN SELECT int_col, string_col
-FROM alltypes_plain_from_dir
-ORDER BY string_col, int_col
-LIMIT 10
-----
-logical_plan
-Limit: skip=0, fetch=10
---Sort: alltypes_plain_from_dir.string_col ASC NULLS LAST, alltypes_plain_from_dir.int_col ASC NULLS LAST, fetch=10
-----Projection: alltypes_plain_from_dir.int_col, alltypes_plain_from_dir.string_col
-------TableScan: alltypes_plain_from_dir projection=[string_col, int_col]
-physical_plan
-GlobalLimitExec: skip=0, fetch=10
---SortPreservingMergeExec: [string_col@1 ASC NULLS LAST,int_col@0 ASC NULLS LAST], fetch=10
-----SortExec: TopK(fetch=10), expr=[string_col@1 ASC NULLS LAST,int_col@0 ASC NULLS LAST]
-------ProjectionExec: expr=[int_col@1 as int_col, string_col@0 as string_col]
---------ParquetExec: file_groups={3 groups: [[WORKSPACE_ROOT/parquet-testing/data/alltypes_dir/0.parquet, WORKSPACE_ROOT/parquet-testing/data/alltypes_dir/1.parquet], [WORKSPACE_ROOT/parquet-testing/data/alltypes_dir/2.parquet, WORKSPACE_ROOT/parquet-testing/data/alltypes_dir/3.parquet], [WORKSPACE_ROOT/parquet-testing/data/alltypes_dir/4.parquet]]}, projection=[string_col, int_col]
+DROP TABLE alltypes_plain;
 
 # Perform SELECT on table with fixed sized binary columns
 
@@ -156,17 +219,17 @@ statement ok
 CREATE EXTERNAL TABLE test_binary
 STORED AS PARQUET
 WITH HEADER ROW
-LOCATION '../core/tests/data/test_binary.parquet'
+LOCATION '../core/tests/data/test_binary.parquet';
 
 # Check size of table:
-
 query I
-SELECT count(ids) FROM test_binary
+SELECT count(ids) FROM test_binary;
 ----
 466
 
+# Do the SELECT query:
 query ?
-SELECT ids FROM test_binary ORDER BY ids LIMIT 10
+SELECT ids FROM test_binary ORDER BY ids LIMIT 10;
 ----
 008c7196f68089ab692e4739c5fd16b5
 00a51a7bc5ff8eb1627f8f3dc959dce8
@@ -179,25 +242,29 @@ SELECT ids FROM test_binary ORDER BY ids LIMIT 10
 05408e6a403e4296526006e20cc4a45a
 0592e6fb7d7169b888a4029b53abb701
 
+# Clean up
+statement ok
+DROP TABLE test_binary;
+
 # Perform a query with a window function and timestamp data:
 
 statement ok
 CREATE EXTERNAL TABLE timestamp_with_tz
 STORED AS PARQUET
 WITH HEADER ROW
-LOCATION '../core/tests/data/timestamp_with_tz.parquet'
+LOCATION '../core/tests/data/timestamp_with_tz.parquet';
 
 # Check size of table:
-
 query I
-SELECT COUNT(*) FROM timestamp_with_tz
+SELECT COUNT(*) FROM timestamp_with_tz;
 ----
 131072
 
+# Perform the query:
 query IP
 SELECT count, LAG(timestamp, 1) OVER (ORDER BY timestamp)
 FROM timestamp_with_tz
-LIMIT 10
+LIMIT 10;
 ----
 0 NULL
 0 2014-08-27T14:00:00Z
@@ -210,44 +277,29 @@ LIMIT 10
 0 2014-08-27T14:00:00Z
 0 2014-08-27T14:00:00Z
 
-# Test a query from the single_nan data set:
+# Clean up
+statement ok
+DROP TABLE timestamp_with_tz;
 
+# Test a query from the single_nan data set:
 statement ok
 CREATE EXTERNAL TABLE single_nan
 STORED AS PARQUET
 WITH HEADER ROW
-LOCATION '../../parquet-testing/data/single_nan.parquet'
+LOCATION '../../parquet-testing/data/single_nan.parquet';
 
 # Check table size:
-
 query I
-SELECT COUNT(*) FROM single_nan
+SELECT COUNT(*) FROM single_nan;
 ----
 1
 
+# Query for the single NULL:
 query R
-SELECT mycol FROM single_nan
+SELECT mycol FROM single_nan;
 ----
 NULL
 
-# Perform queries using MIN and MAX
-
-query I
-SELECT max(int_col) FROM alltypes_plain
-----
-1
-
-query T
-SELECT min(string_col) FROM alltypes_plain
-----
-0
-
-query I
-SELECT max(bigint_col) FROM alltypes_plain
-----
-10
-
-query P
-SELECT min(timestamp_col) FROM alltypes_plain
-----
-2009-01-01T00:00:00
+# Clean up
+statement ok
+DROP TABLE single_nan;

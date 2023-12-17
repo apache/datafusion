@@ -15,11 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::{fs, path::Path};
-
-use ::parquet::arrow::ArrowWriter;
 use datafusion_common::cast::{as_list_array, as_primitive_array, as_string_array};
-use tempfile::TempDir;
 
 use super::*;
 
