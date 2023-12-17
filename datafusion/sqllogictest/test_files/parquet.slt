@@ -158,6 +158,13 @@ STORED AS PARQUET
 WITH HEADER ROW
 LOCATION '../core/tests/data/test_binary.parquet'
 
+# Check size of table:
+
+query I
+SELECT count(ids) FROM test_binary
+----
+466
+
 query ?
 SELECT ids FROM test_binary ORDER BY ids LIMIT 10
 ----
@@ -172,7 +179,33 @@ SELECT ids FROM test_binary ORDER BY ids LIMIT 10
 05408e6a403e4296526006e20cc4a45a
 0592e6fb7d7169b888a4029b53abb701
 
+# Perform a query with a window function and timestamp data:
+
+statement ok
+CREATE EXTERNAL TABLE timestamp_with_tz
+STORED AS PARQUET
+WITH HEADER ROW
+LOCATION '../core/tests/data/timestamp_with_tz.parquet'
+
+# Check size of table:
+
 query I
-SELECT count(ids) FROM test_binary
+SELECT COUNT(*) FROM timestamp_with_tz
 ----
-466
+131072
+
+query IP
+SELECT count, LAG(timestamp, 1) OVER (ORDER BY timestamp)
+FROM timestamp_with_tz
+LIMIT 10
+----
+0 NULL
+0 2014-08-27T14:00:00Z
+0 2014-08-27T14:00:00Z
+4 2014-08-27T14:00:00Z
+0 2014-08-27T14:00:00Z
+0 2014-08-27T14:00:00Z
+0 2014-08-27T14:00:00Z
+14 2014-08-27T14:00:00Z
+0 2014-08-27T14:00:00Z
+0 2014-08-27T14:00:00Z
