@@ -148,19 +148,18 @@ impl TableProviderFactory for ListingTableFactory {
                 .unwrap_or(false)
         };
 
-        let create_local_path = statement_options
-            .take_bool_option("create_local_path")?
-            .unwrap_or(false);
         let single_file = statement_options
             .take_bool_option("single_file")?
             .unwrap_or(false);
 
-        // Backwards compatibility
+        // Backwards compatibility (#8547)
         if let Some(s) = statement_options.take_str_option("insert_mode") {
             if !s.eq_ignore_ascii_case("append_new_files") {
-                return plan_err!("Unknown or unsupported insert mode {s}. Only append_to_file supported");
+                return plan_err!("Unknown or unsupported insert mode {s}. Only append_new_files supported");
             }
         }
+        statement_options.take_bool_option("create_local_path")?;
+
         let file_type = file_format.file_type();
 
         // Use remaining options and session state to build FileTypeWriterOptions
@@ -199,13 +198,7 @@ impl TableProviderFactory for ListingTableFactory {
             FileType::AVRO => file_type_writer_options,
         };
 
-        let table_path = match create_local_path {
-            true => ListingTableUrl::parse_create_local_if_not_exists(
-                &cmd.location,
-                !single_file,
-            ),
-            false => ListingTableUrl::parse(&cmd.location),
-        }?;
+        let table_path = ListingTableUrl::parse(&cmd.location)?;
 
         let options = ListingOptions::new(file_format)
             .with_collect_stat(state.config().collect_statistics())

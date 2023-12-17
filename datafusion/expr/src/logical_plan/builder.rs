@@ -1343,7 +1343,7 @@ pub fn subquery_alias(
     plan: LogicalPlan,
     alias: impl Into<OwnedTableReference>,
 ) -> Result<LogicalPlan> {
-    SubqueryAlias::try_new(plan, alias).map(LogicalPlan::SubqueryAlias)
+    SubqueryAlias::try_new(Arc::new(plan), alias).map(LogicalPlan::SubqueryAlias)
 }
 
 /// Create a LogicalPlanBuilder representing a scan of a table with the provided name and schema.
