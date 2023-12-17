@@ -742,6 +742,7 @@ where
     )?))
 }
 
+/// If from_front is true, it is array_pop_front, otherwise array_pop_back
 fn general_pop_list<O: OffsetSizeTrait>(
     array: &GenericListArray<O>,
     from_front: bool,
