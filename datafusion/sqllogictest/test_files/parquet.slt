@@ -209,3 +209,23 @@ LIMIT 10
 14 2014-08-27T14:00:00Z
 0 2014-08-27T14:00:00Z
 0 2014-08-27T14:00:00Z
+
+# Test a query from the single_nan data set:
+
+statement ok
+CREATE EXTERNAL TABLE single_nan
+STORED AS PARQUET
+WITH HEADER ROW
+LOCATION '../../parquet-testing/data/single_nan.parquet'
+
+# Check table size:
+
+query I
+SELECT COUNT(*) FROM single_nan
+----
+1
+
+query R
+SELECT mycol FROM single_nan
+----
+NULL

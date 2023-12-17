@@ -24,26 +24,6 @@ use tempfile::TempDir;
 use super::*;
 
 #[tokio::test]
-async fn parquet_single_nan_schema() {
-    let ctx = SessionContext::new();
-    let testdata = datafusion::test_util::parquet_test_data();
-    ctx.register_parquet(
-        "single_nan",
-        &format!("{testdata}/single_nan.parquet"),
-        ParquetReadOptions::default(),
-    )
-    .await
-    .unwrap();
-    let sql = "SELECT mycol FROM single_nan";
-    let dataframe = ctx.sql(sql).await.unwrap();
-    let results = dataframe.collect().await.unwrap();
-    for batch in results {
-        assert_eq!(1, batch.num_rows());
-        assert_eq!(1, batch.num_columns());
-    }
-}
-
-#[tokio::test]
 #[ignore = "Test ignored, will be enabled as part of the nested Parquet reader"]
 async fn parquet_list_columns() {
     let ctx = SessionContext::new();
