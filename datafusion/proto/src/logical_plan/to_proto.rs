@@ -1256,7 +1256,6 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
                     schema: Some(schema),
                 };
 
-                
                 Ok(protobuf::ScalarValue {
                     value: Some(protobuf::scalar_value::Value::FixedSizeListValue(
                         scalar_list_value,

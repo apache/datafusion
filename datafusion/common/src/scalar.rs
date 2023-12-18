@@ -3419,17 +3419,16 @@ mod tests {
             ]));
 
         let fsl_array: ArrayRef =
-            Arc::new(ListArray::from_iter_primitive::<Int32Type, _, _>(
-                vec![
-                    Some(vec![Some(0), Some(1), Some(2)]),
-                    None,
-                    Some(vec![Some(3), None, Some(5)]),
-                ]
-            ));
+            Arc::new(ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+                Some(vec![Some(0), Some(1), Some(2)]),
+                None,
+                Some(vec![Some(3), None, Some(5)]),
+            ]));
 
         for arr in [list_array, fsl_array] {
             for i in 0..arr.len() {
-                let scalar = ScalarValue::List(arr.slice(i, 1).as_list::<i32>().to_owned().into());
+                let scalar =
+                    ScalarValue::List(arr.slice(i, 1).as_list::<i32>().to_owned().into());
                 assert!(scalar.eq_array(&arr, i).unwrap());
             }
         }
