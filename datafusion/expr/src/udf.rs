@@ -113,7 +113,7 @@ impl ScalarUDF {
     /// Create a new `ScalarUDF` from a `[ScalarUDFImpl]` trait object
     ///
     /// Note this is the same as using the `From` impl (`ScalarUDF::from`)
-    pub fn new_from_trait<F>(fun: F) -> ScalarUDF
+    pub fn new_from_impl<F>(fun: F) -> ScalarUDF
     where
         F: ScalarUDFImpl + Send + Sync + 'static,
     {
@@ -192,7 +192,7 @@ where
     F: ScalarUDFImpl + Send + Sync + 'static,
 {
     fn from(fun: F) -> Self {
-        Self::new_from_trait(fun)
+        Self::new_from_impl(fun)
     }
 }
 
