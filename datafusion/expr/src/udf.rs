@@ -201,8 +201,8 @@ where
 /// This trait exposes the full API for implementing user defined functions and
 /// can be used to implement any function.
 ///
-/// See [`advanced_udf.rs`] for a full example with implementation. See
-/// [`ScalarUDF`] for details on a simpler API.
+/// See [`advanced_udf.rs`] for a full example with complete implementation and
+/// [`ScalarUDF`] for other available options.
 ///
 ///
 /// [`advanced_udf.rs`]: https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/advanced_udf.rs
@@ -272,8 +272,11 @@ pub trait ScalarUDFImpl {
     /// count (so the function can know the resulting array size).
     ///
     /// # Performance
-    /// Many functions can be optimized for the case when one or more of their
-    /// arguments are constant values [`ColumnarValue::Scalar`].
+    ///
+    /// For the best performance, the implementations of `invoke` should handle
+    /// the common case when one or more of their arguments are constant values
+    /// (aka  [`ColumnarValue::Scalar`]). Calling [`ColumnarValue::into_array`]
+    /// and treating all arguments as arrays will work, but will be slower.
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue>;
 
     /// Returns any aliases (alternate names) for this function. This should not

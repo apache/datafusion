@@ -78,6 +78,7 @@ The challenge however is that DataFusion doesn't know about this function. We ne
 
 To register a Scalar UDF, you need to wrap the function implementation in a [`ScalarUDF`] struct and then register it with the `SessionContext`.
 DataFusion provides the [`create_udf`] and helper functions to make this easier.
+There is a lower level API with more functionality but is more complex, that is documented in [`advanced_udf.rs`].
 
 ```rust
 use datafusion::logical_expr::{Volatility, create_udf};
@@ -97,6 +98,7 @@ let udf = create_udf(
 [`scalarudf`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/struct.ScalarUDF.html
 [`create_udf`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/fn.create_udf.html
 [`make_scalar_function`]: https://docs.rs/datafusion/latest/datafusion/physical_expr/functions/fn.make_scalar_function.html
+[`advanced_udf.rs`]: https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/advanced_udf.rs
 
 A few things to note:
 
