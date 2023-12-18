@@ -1800,14 +1800,14 @@ fn generic_set_lists<OffsetSize: OffsetSizeTrait>(
 ) -> Result<ArrayRef> {
     if matches!(l.value_type(), DataType::Null) {
         let field = Arc::new(Field::new("item", r.value_type(), true));
-        return general_array_distinct::<OffsetSize>(r, &field);
+        general_array_distinct::<OffsetSize>(r, &field);
     } else if matches!(r.value_type(), DataType::Null) {
         let field = Arc::new(Field::new("item", l.value_type(), true));
-        return general_array_distinct::<OffsetSize>(l, &field);
+        general_array_distinct::<OffsetSize>(l, &field);
     }
 
     if l.value_type() != r.value_type() {
-        return internal_err!("{set_op} is not implemented for '{l:?}' and '{r:?}'");
+        internal_err!("{set_op} is not implemented for '{l:?}' and '{r:?}'");
     }
 
     let dt = l.value_type();
@@ -1883,7 +1883,7 @@ fn general_set_op(
 
         (DataType::List(field), DataType::Null) => {
             if set_op == SetOp::Intersect {
-                return make_array(&[]);
+                make_array(&[]);
             }
             let array = as_list_array(&array1)?;
             general_array_distinct::<i32>(array, field)
@@ -1897,7 +1897,7 @@ fn general_set_op(
         }
         (DataType::LargeList(field), DataType::Null) => {
             if set_op == SetOp::Intersect {
-                return make_array(&[]);
+                make_array(&[]);
             }
             let array = as_large_list_array(&array1)?;
             general_array_distinct::<i64>(array, field)
