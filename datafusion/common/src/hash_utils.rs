@@ -556,7 +556,7 @@ mod tests {
         use arrow_buffer::Buffer;
 
         let boolarr = Arc::new(BooleanArray::from(vec![
-            false, false, true, true, true, true
+            false, false, true, true, true, true,
         ]));
         let i32arr = Arc::new(Int32Array::from(vec![10, 10, 20, 20, 30, 31]));
 
