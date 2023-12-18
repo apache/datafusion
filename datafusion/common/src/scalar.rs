@@ -3410,6 +3410,32 @@ mod tests {
     }
 
     #[test]
+    fn test_list_scalar_eq_to_array() {
+        let list_array: ArrayRef =
+            Arc::new(ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+                Some(vec![Some(0), Some(1), Some(2)]),
+                None,
+                Some(vec![None, Some(5)]),
+            ]));
+
+        let fsl_array: ArrayRef =
+            Arc::new(ListArray::from_iter_primitive::<Int32Type, _, _>(
+                vec![
+                    Some(vec![Some(0), Some(1), Some(2)]),
+                    None,
+                    Some(vec![Some(3), None, Some(5)]),
+                ]
+            ));
+
+        for arr in [list_array, fsl_array] {
+            for i in 0..arr.len() {
+                let scalar = ScalarValue::List(arr.slice(i, 1).as_list::<i32>().to_owned().into());
+                assert!(scalar.eq_array(&arr, i).unwrap());
+            }
+        }
+    }
+
+    #[test]
     fn scalar_add_trait_test() -> Result<()> {
         let float_value = ScalarValue::Float64(Some(123.));
         let float_value_2 = ScalarValue::Float64(Some(123.));
