@@ -807,7 +807,7 @@ pub fn array_pop_back(args: &[ArrayRef]) -> Result<ArrayRef> {
             let array = as_large_list_array(&args[0])?;
             general_pop_list::<i64>(array, false)
         }
-        _ => not_impl_err!(
+        _ => exec_err!(
             "array_pop_back does not support type: {:?}",
             array_data_type
         ),
