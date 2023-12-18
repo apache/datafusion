@@ -361,7 +361,8 @@ pub fn make_array(arrays: &[ArrayRef]) -> Result<ArrayRef> {
     match data_type {
         // Either an empty array or all nulls:
         DataType::Null => {
-            let array = new_null_array(&DataType::Null, arrays.len());
+            let array =
+                new_null_array(&DataType::Null, arrays.iter().map(|a| a.len()).sum());
             Ok(Arc::new(array_into_list_array(array)))
         }
         DataType::LargeList(..) => array_array::<i64>(arrays, data_type),
@@ -827,10 +828,14 @@ pub fn array_append(args: &[ArrayRef]) -> Result<ArrayRef> {
     let list_array = as_list_array(&args[0])?;
     let element_array = &args[1];
 
-    check_datatypes("array_append", &[list_array.values(), element_array])?;
     let res = match list_array.value_type() {
         DataType::List(_) => concat_internal(args)?,
-        DataType::Null => return make_array(&[element_array.to_owned()]),
+        DataType::Null => {
+            return make_array(&[
+                list_array.values().to_owned(),
+                element_array.to_owned(),
+            ]);
+        }
         data_type => {
             return general_append_and_prepend(
                 list_array,
@@ -2283,19 +2288,5 @@ mod tests {
             datafusion_common::utils::list_ndims(res[0].data_type()),
             expected_dim
         );
-    }
-
-    #[test]
-    fn test_check_invalid_datatypes() {
-        let data = vec![Some(vec![Some(1), Some(2), Some(3)])];
-        let list_array =
-            Arc::new(ListArray::from_iter_primitive::<Int64Type, _, _>(data)) as ArrayRef;
-        let int64_array = Arc::new(StringArray::from(vec![Some("string")])) as ArrayRef;
-
-        let args = [list_array.clone(), int64_array.clone()];
-
-        let array = array_append(&args);
-
-        assert_eq!(array.unwrap_err().strip_backtrace(), "Error during planning: array_append received incompatible types: '[Int64, Utf8]'.");
     }
 }
