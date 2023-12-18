@@ -1873,24 +1873,36 @@ fn general_set_op(
     set_op: SetOp,
 ) -> Result<ArrayRef> {
     match (array1.data_type(), array2.data_type()) {
-        // Null type
-        (DataType::Null, DataType::List(field))
-        | (DataType::List(field), DataType::Null) => {
-            let array = match array1.data_type() {
-                DataType::Null => as_list_array(&array2)?,
-                _ => as_list_array(&array1)?,
-            };
+        (DataType::Null, DataType::List(field)) => {
+            if set_op == SetOp::Intersect {
+                return make_array(dbg!(&[]));
+            }
+            let array = as_list_array(&array2)?;
             general_array_distinct::<i32>(array, field)
         }
-        (DataType::Null, DataType::LargeList(field))
-        | (DataType::LargeList(field), DataType::Null) => {
-            let array = match array1.data_type() {
-                DataType::Null => as_large_list_array(&array2)?,
-                _ => as_large_list_array(&array1)?,
-            };
+
+        (DataType::List(field), DataType::Null) => {
+            if set_op == SetOp::Intersect {
+                return make_array(dbg!(&[]));
+            }
+            let array = as_list_array(&array1)?;
+            general_array_distinct::<i32>(array, field)
+        }
+        (DataType::Null, DataType::LargeList(field)) => {
+            if set_op == SetOp::Intersect {
+                return make_array(&[]);
+            }
+            let array = as_large_list_array(&array2)?;
             general_array_distinct::<i64>(array, field)
         }
-        (DataType::Null, DataType::Null) => Ok(array1.clone()),
+        (DataType::LargeList(field), DataType::Null) => {
+            if set_op == SetOp::Intersect {
+                return make_array(&[]);
+            }
+            let array = as_large_list_array(&array1)?;
+            general_array_distinct::<i64>(array, field)
+        }
+        (DataType::Null, DataType::Null) => make_array(&[]),
 
         (DataType::List(_), DataType::List(_)) => {
             let array1 = as_list_array(&array1)?;
