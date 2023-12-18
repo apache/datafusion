@@ -210,7 +210,6 @@ fn hash_dictionary<K: ArrowDictionaryKeyType>(
 
 fn hash_struct_array(
     array: &StructArray,
-
     random_state: &RandomState,
     hashes_buffer: &mut [u64],
 ) -> Result<()> {
@@ -225,14 +224,13 @@ fn hash_struct_array(
         (0..num_columns).collect()
     };
 
-    for i in valid_indices {
+    for column in array.columns() {
         let mut values_hashes = vec![0u64; array.len()];
-        let column_values = values[i].clone();
-        // create hashes for each column
-        create_hashes(&[column_values], random_state, &mut values_hashes)?;
-        let hash = &mut hashes_buffer[i];
-        for value_hash in &values_hashes {
-            *hash = combine_hashes(*hash, *value_hash);
+        create_hashes(&[column.to_owned()], random_state, &mut values_hashes)?;
+        // iterate valid rows and combine hash with the same row from previous column
+        for row in valid_indices.iter().cloned() {
+            let hash = &mut hashes_buffer[row];
+            *hash = combine_hashes(*hash, values_hashes[row]);
         }
     }
 
@@ -558,9 +556,9 @@ mod tests {
         use arrow_buffer::Buffer;
 
         let boolarr = Arc::new(BooleanArray::from(vec![
-            false, true, true, true, false, true,
+            false, false, true, true, true, true
         ]));
-        let i32arr = Arc::new(Int32Array::from(vec![42, 28, 89, 31, 59, 32]));
+        let i32arr = Arc::new(Int32Array::from(vec![10, 10, 20, 20, 30, 31]));
 
         let struct_array = StructArray::from((
             vec![
@@ -581,24 +579,26 @@ mod tests {
                     boolarr.clone() as ArrayRef,
                 ),
             ],
-            // 0b1011(=11), the third column is null
-            Buffer::from(&[11]),
+            Buffer::from(&[0b001011]),
         ));
 
         assert!(struct_array.is_valid(0));
         assert!(struct_array.is_valid(1));
         assert!(struct_array.is_null(2));
         assert!(struct_array.is_valid(3));
+        assert!(struct_array.is_null(4));
+        assert!(struct_array.is_null(5));
 
-        let col = struct_array.num_columns();
         let array = Arc::new(struct_array) as ArrayRef;
 
         let random_state = RandomState::with_seeds(0, 0, 0, 0);
-        let mut hashes = vec![0; col];
+        let mut hashes = vec![0; array.len()];
         create_hashes(&[array], &random_state, &mut hashes).unwrap();
-        assert_eq!(hashes[0], hashes[3]);
-        // Same value but one is null.
-        assert_ne!(hashes[1], hashes[2]);
+        assert_eq!(hashes[0], hashes[1]);
+        // same value but the third row ( hashes[2] ) is null
+        assert_ne!(hashes[2], hashes[3]);
+        // different values but both are null
+        assert_eq!(hashes[4], hashes[5]);
     }
 
     #[test]
