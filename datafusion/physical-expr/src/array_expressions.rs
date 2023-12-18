@@ -1289,12 +1289,23 @@ fn general_position<OffsetSize: OffsetSizeTrait>(
 
 /// Array_positions SQL function
 pub fn array_positions(args: &[ArrayRef]) -> Result<ArrayRef> {
-    let arr = as_list_array(&args[0])?;
     let element = &args[1];
 
-    check_datatypes("array_positions", &[arr.values(), element])?;
-
-    general_positions::<i32>(arr, element)
+    match &args[0].data_type() {
+        DataType::List(_) => {
+            let arr = as_list_array(&args[0])?;
+            check_datatypes("array_positions", &[arr.values(), element])?;
+            general_positions::<i32>(arr, element)
+        }
+        DataType::LargeList(_) => {
+            let arr = as_large_list_array(&args[0])?;
+            check_datatypes("array_positions", &[arr.values(), element])?;
+            general_positions::<i64>(arr, element)
+        }
+        array_type => {
+            not_impl_err!("array_positions does not support type '{array_type:?}'.")
+        }
+    }
 }
 
 fn general_positions<OffsetSize: OffsetSizeTrait>(
