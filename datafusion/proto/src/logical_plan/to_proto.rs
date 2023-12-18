@@ -1188,24 +1188,11 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
                     schema: Some(schema),
                 };
 
-                match val {
-                    ScalarValue::List(_) => Ok(protobuf::ScalarValue {
-                        value: Some(protobuf::scalar_value::Value::ListValue(
-                            scalar_list_value,
-                        )),
-                    }),
-                    ScalarValue::LargeList(_) => Ok(protobuf::ScalarValue {
-                        value: Some(protobuf::scalar_value::Value::LargeListValue(
-                            scalar_list_value,
-                        )),
-                    }),
-                    ScalarValue::FixedSizeList(_) => Ok(protobuf::ScalarValue {
-                        value: Some(protobuf::scalar_value::Value::FixedSizeListValue(
-                            scalar_list_value,
-                        )),
-                    }),
-                    _ => unreachable!(),
-                }
+                Ok(protobuf::ScalarValue {
+                    value: Some(protobuf::scalar_value::Value::ListValue(
+                        scalar_list_value,
+                    )),
+                })
             }
             ScalarValue::LargeList(arr) => {
                 // Wrap in a "field_name" column
@@ -1235,24 +1222,11 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
                     schema: Some(schema),
                 };
 
-                match val {
-                    ScalarValue::List(_) => Ok(protobuf::ScalarValue {
-                        value: Some(protobuf::scalar_value::Value::ListValue(
-                            scalar_list_value,
-                        )),
-                    }),
-                    ScalarValue::LargeList(_) => Ok(protobuf::ScalarValue {
-                        value: Some(protobuf::scalar_value::Value::LargeListValue(
-                            scalar_list_value,
-                        )),
-                    }),
-                    ScalarValue::FixedSizeList(_) => Ok(protobuf::ScalarValue {
-                        value: Some(protobuf::scalar_value::Value::FixedSizeListValue(
-                            scalar_list_value,
-                        )),
-                    }),
-                    _ => unreachable!(),
-                }
+                Ok(protobuf::ScalarValue {
+                    value: Some(protobuf::scalar_value::Value::LargeListValue(
+                        scalar_list_value,
+                    )),
+                })
             }
             ScalarValue::FixedSizeList(arr) => {
                 // Wrap in a "field_name" column
@@ -1282,24 +1256,12 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
                     schema: Some(schema),
                 };
 
-                match val {
-                    ScalarValue::List(_) => Ok(protobuf::ScalarValue {
-                        value: Some(protobuf::scalar_value::Value::ListValue(
-                            scalar_list_value,
-                        )),
-                    }),
-                    ScalarValue::LargeList(_) => Ok(protobuf::ScalarValue {
-                        value: Some(protobuf::scalar_value::Value::LargeListValue(
-                            scalar_list_value,
-                        )),
-                    }),
-                    ScalarValue::FixedSizeList(_) => Ok(protobuf::ScalarValue {
-                        value: Some(protobuf::scalar_value::Value::FixedSizeListValue(
-                            scalar_list_value,
-                        )),
-                    }),
-                    _ => unreachable!(),
-                }
+                
+                Ok(protobuf::ScalarValue {
+                    value: Some(protobuf::scalar_value::Value::FixedSizeListValue(
+                        scalar_list_value,
+                    )),
+                })
             }
             ScalarValue::Date32(val) => {
                 create_proto_scalar(val.as_ref(), &data_type, |s| Value::Date32Value(*s))
