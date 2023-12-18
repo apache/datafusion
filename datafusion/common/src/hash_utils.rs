@@ -213,9 +213,8 @@ fn hash_struct_array(
     random_state: &RandomState,
     hashes_buffer: &mut [u64],
 ) -> Result<()> {
-    let values = array.columns();
     let nulls = array.nulls();
-    let num_columns = values.len();
+    let num_columns = array.num_columns();
 
     // Skip null columns
     let valid_indices: Vec<usize> = if let Some(nulls) = nulls {
