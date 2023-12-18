@@ -667,7 +667,6 @@ mod tests {
                 limit: self.limit,
                 table_partition_cols: vec![],
                 output_ordering: vec![],
-                infinite_source: false,
             };
             let metrics_set = ExecutionPlanMetricsSet::new();
             let file_stream = FileStream::new(&config, 0, self.opener, &metrics_set)

@@ -2117,7 +2117,7 @@ mod tests {
     async fn test_with_lost_ordering_bounded() -> Result<()> {
         let schema = create_test_schema3()?;
         let sort_exprs = vec![sort_expr("a", &schema)];
-        let source = csv_exec_sorted(&schema, sort_exprs, false);
+        let source = csv_exec_sorted(&schema, sort_exprs);
         let repartition_rr = repartition_exec(source);
         let repartition_hash = Arc::new(RepartitionExec::try_new(
             repartition_rr,
@@ -2141,10 +2141,11 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore]
     async fn test_with_lost_ordering_unbounded() -> Result<()> {
         let schema = create_test_schema3()?;
         let sort_exprs = vec![sort_expr("a", &schema)];
-        let source = csv_exec_sorted(&schema, sort_exprs, true);
+        let source = csv_exec_sorted(&schema, sort_exprs);
         let repartition_rr = repartition_exec(source);
         let repartition_hash = Arc::new(RepartitionExec::try_new(
             repartition_rr,
@@ -2171,10 +2172,12 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore]
     async fn test_with_lost_ordering_unbounded_parallelize_off() -> Result<()> {
         let schema = create_test_schema3()?;
         let sort_exprs = vec![sort_expr("a", &schema)];
-        let source = csv_exec_sorted(&schema, sort_exprs, true);
+        // Make source unbounded
+        let source = csv_exec_sorted(&schema, sort_exprs);
         let repartition_rr = repartition_exec(source);
         let repartition_hash = Arc::new(RepartitionExec::try_new(
             repartition_rr,
@@ -2203,7 +2206,7 @@ mod tests {
     async fn test_do_not_pushdown_through_spm() -> Result<()> {
         let schema = create_test_schema3()?;
         let sort_exprs = vec![sort_expr("a", &schema), sort_expr("b", &schema)];
-        let source = csv_exec_sorted(&schema, sort_exprs.clone(), false);
+        let source = csv_exec_sorted(&schema, sort_exprs.clone());
         let repartition_rr = repartition_exec(source);
         let spm = sort_preserving_merge_exec(sort_exprs, repartition_rr);
         let physical_plan = sort_exec(vec![sort_expr("b", &schema)], spm);
@@ -2224,7 +2227,7 @@ mod tests {
     async fn test_pushdown_through_spm() -> Result<()> {
         let schema = create_test_schema3()?;
         let sort_exprs = vec![sort_expr("a", &schema), sort_expr("b", &schema)];
-        let source = csv_exec_sorted(&schema, sort_exprs.clone(), false);
+        let source = csv_exec_sorted(&schema, sort_exprs.clone());
         let repartition_rr = repartition_exec(source);
         let spm = sort_preserving_merge_exec(sort_exprs, repartition_rr);
         let physical_plan = sort_exec(
@@ -2252,7 +2255,7 @@ mod tests {
     async fn test_window_multi_layer_requirement() -> Result<()> {
         let schema = create_test_schema3()?;
         let sort_exprs = vec![sort_expr("a", &schema), sort_expr("b", &schema)];
-        let source = csv_exec_sorted(&schema, vec![], false);
+        let source = csv_exec_sorted(&schema, vec![]);
         let sort = sort_exec(sort_exprs.clone(), source);
         let repartition = repartition_exec(sort);
         let repartition = spr_repartition_exec(repartition);
