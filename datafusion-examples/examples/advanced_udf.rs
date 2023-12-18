@@ -162,7 +162,7 @@ impl ScalarUDFImpl for PowUdf {
                 };
                 Ok(ColumnarValue::Array(res))
             }
-            // Both arguments are arrays s we have to perform the calculation for every row
+            // Both arguments are arrays so we have to perform the calculation for every row
             (ColumnarValue::Array(base_array), ColumnarValue::Array(exp_array)) => {
                 let res: Float64Array = compute::binary(
                     base_array.as_primitive::<Float64Type>(),
