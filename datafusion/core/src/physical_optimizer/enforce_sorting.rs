@@ -769,7 +769,7 @@ mod tests {
     use crate::physical_plan::repartition::RepartitionExec;
     use crate::physical_plan::{displayable, get_plan_string, Partitioning};
     use crate::prelude::{SessionConfig, SessionContext};
-    use crate::test::csv_exec_sorted;
+    use crate::test::{csv_exec_sorted, stream_exec_ordered};
 
     use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
@@ -2141,11 +2141,11 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore]
     async fn test_with_lost_ordering_unbounded() -> Result<()> {
         let schema = create_test_schema3()?;
         let sort_exprs = vec![sort_expr("a", &schema)];
-        let source = csv_exec_sorted(&schema, sort_exprs);
+        // create an unbounded source
+        let source = stream_exec_ordered(&schema, sort_exprs);
         let repartition_rr = repartition_exec(source);
         let repartition_hash = Arc::new(RepartitionExec::try_new(
             repartition_rr,
@@ -2159,25 +2159,24 @@ mod tests {
             "  CoalescePartitionsExec",
             "    RepartitionExec: partitioning=Hash([c@2], 10), input_partitions=10",
             "      RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
-            "        CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], infinite_source=true, output_ordering=[a@0 ASC], has_header=false"
+            "        StreamingTableExec: partition_sizes=1, projection=[a, b, c, d, e], infinite_source=true, output_ordering=[a@0 ASC]",
         ];
         let expected_optimized = [
             "SortPreservingMergeExec: [a@0 ASC]",
             "  RepartitionExec: partitioning=Hash([c@2], 10), input_partitions=10, preserve_order=true, sort_exprs=a@0 ASC",
             "    RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
-            "      CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], infinite_source=true, output_ordering=[a@0 ASC], has_header=false",
+            "      StreamingTableExec: partition_sizes=1, projection=[a, b, c, d, e], infinite_source=true, output_ordering=[a@0 ASC]",
         ];
         assert_optimized!(expected_input, expected_optimized, physical_plan, true);
         Ok(())
     }
 
     #[tokio::test]
-    #[ignore]
     async fn test_with_lost_ordering_unbounded_parallelize_off() -> Result<()> {
         let schema = create_test_schema3()?;
         let sort_exprs = vec![sort_expr("a", &schema)];
-        // Make source unbounded
-        let source = csv_exec_sorted(&schema, sort_exprs);
+        // create an unbounded source
+        let source = stream_exec_ordered(&schema, sort_exprs);
         let repartition_rr = repartition_exec(source);
         let repartition_hash = Arc::new(RepartitionExec::try_new(
             repartition_rr,
@@ -2190,13 +2189,13 @@ mod tests {
             "  CoalescePartitionsExec",
             "    RepartitionExec: partitioning=Hash([c@2], 10), input_partitions=10",
             "      RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
-            "        CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], infinite_source=true, output_ordering=[a@0 ASC], has_header=false"
+            "        StreamingTableExec: partition_sizes=1, projection=[a, b, c, d, e], infinite_source=true, output_ordering=[a@0 ASC]",
         ];
         let expected_optimized = [
             "SortPreservingMergeExec: [a@0 ASC]",
             "  RepartitionExec: partitioning=Hash([c@2], 10), input_partitions=10, preserve_order=true, sort_exprs=a@0 ASC",
             "    RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
-            "      CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], infinite_source=true, output_ordering=[a@0 ASC], has_header=false",
+            "      StreamingTableExec: partition_sizes=1, projection=[a, b, c, d, e], infinite_source=true, output_ordering=[a@0 ASC]",
         ];
         assert_optimized!(expected_input, expected_optimized, physical_plan, false);
         Ok(())
