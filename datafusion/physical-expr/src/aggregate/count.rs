@@ -123,7 +123,7 @@ impl GroupsAccumulator for CountGroupsAccumulator {
         self.counts.resize(total_num_groups, 0);
         accumulate_indices(
             group_indices,
-            values.nulls(), // ignore values
+            values.logical_nulls().as_ref(),
             opt_filter,
             |group_index| {
                 self.counts[group_index] += 1;
@@ -198,16 +198,18 @@ fn null_count_for_multiple_cols(values: &[ArrayRef]) -> usize {
     if values.len() > 1 {
         let result_bool_buf: Option<BooleanBuffer> = values
             .iter()
-            .map(|a| a.nulls())
+            .map(|a| a.logical_nulls())
             .fold(None, |acc, b| match (acc, b) {
                 (Some(acc), Some(b)) => Some(acc.bitand(b.inner())),
                 (Some(acc), None) => Some(acc),
-                (None, Some(b)) => Some(b.inner().clone()),
+                (None, Some(b)) => Some(b.into_inner()),
                 _ => None,
             });
         result_bool_buf.map_or(0, |b| values[0].len() - b.count_set_bits())
     } else {
-        values[0].null_count()
+        values[0]
+            .logical_nulls()
+            .map_or(0, |nulls| nulls.null_count())
     }
 }
 

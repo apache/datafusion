@@ -22,12 +22,6 @@ use crate::expressions::cast_column;
 use arrow::array::Float64Builder;
 use arrow::compute::cast;
 use arrow::{
-    array::TimestampNanosecondArray,
-    compute::kernels::temporal,
-    datatypes::TimeUnit,
-    temporal_conversions::{as_datetime_with_timezone, timestamp_ns_to_datetime},
-};
-use arrow::{
     array::{Array, ArrayRef, Float64Array, OffsetSizeTrait, PrimitiveArray},
     compute::kernels::cast_utils::string_to_timestamp_nanos,
     datatypes::{
@@ -36,14 +30,18 @@ use arrow::{
         TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType,
     },
 };
-use arrow_array::{
-    timezone::Tz, TimestampMicrosecondArray, TimestampMillisecondArray,
-    TimestampSecondArray,
+use arrow::{
+    compute::kernels::temporal,
+    datatypes::TimeUnit,
+    temporal_conversions::{as_datetime_with_timezone, timestamp_ns_to_datetime},
 };
+use arrow_array::temporal_conversions::NANOSECONDS;
+use arrow_array::timezone::Tz;
+use arrow_array::types::ArrowTimestampType;
 use chrono::prelude::*;
 use chrono::{Duration, Months, NaiveDate};
 use datafusion_common::cast::{
-    as_date32_array, as_date64_array, as_generic_string_array,
+    as_date32_array, as_date64_array, as_generic_string_array, as_primitive_array,
     as_timestamp_microsecond_array, as_timestamp_millisecond_array,
     as_timestamp_nanosecond_array, as_timestamp_second_array,
 };
@@ -335,7 +333,7 @@ fn date_trunc_coarse(granularity: &str, value: i64, tz: Option<Tz>) -> Result<i6
 }
 
 // truncates a single value with the given timeunit to the specified granularity
-fn _date_trunc(
+fn general_date_trunc(
     tu: TimeUnit,
     value: &Option<i64>,
     tz: Option<Tz>,
@@ -403,123 +401,61 @@ pub fn date_trunc(args: &[ColumnarValue]) -> Result<ColumnarValue> {
             return exec_err!("Granularity of `date_trunc` must be non-null scalar Utf8");
         };
 
+    fn process_array<T: ArrowTimestampType>(
+        array: &dyn Array,
+        granularity: String,
+        tz_opt: &Option<Arc<str>>,
+    ) -> Result<ColumnarValue> {
+        let parsed_tz = parse_tz(tz_opt)?;
+        let array = as_primitive_array::<T>(array)?;
+        let array = array
+            .iter()
+            .map(|x| general_date_trunc(T::UNIT, &x, parsed_tz, granularity.as_str()))
+            .collect::<Result<PrimitiveArray<T>>>()?
+            .with_timezone_opt(tz_opt.clone());
+        Ok(ColumnarValue::Array(Arc::new(array)))
+    }
+
+    fn process_scalar<T: ArrowTimestampType>(
+        v: &Option<i64>,
+        granularity: String,
+        tz_opt: &Option<Arc<str>>,
+    ) -> Result<ColumnarValue> {
+        let parsed_tz = parse_tz(tz_opt)?;
+        let value = general_date_trunc(T::UNIT, v, parsed_tz, granularity.as_str())?;
+        let value = ScalarValue::new_timestamp::<T>(value, tz_opt.clone());
+        Ok(ColumnarValue::Scalar(value))
+    }
+
     Ok(match array {
         ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(v, tz_opt)) => {
-            let parsed_tz = parse_tz(tz_opt)?;
-            let value =
-                _date_trunc(TimeUnit::Nanosecond, v, parsed_tz, granularity.as_str())?;
-            let value = ScalarValue::TimestampNanosecond(value, tz_opt.clone());
-            ColumnarValue::Scalar(value)
+            process_scalar::<TimestampNanosecondType>(v, granularity, tz_opt)?
         }
         ColumnarValue::Scalar(ScalarValue::TimestampMicrosecond(v, tz_opt)) => {
-            let parsed_tz = parse_tz(tz_opt)?;
-            let value =
-                _date_trunc(TimeUnit::Microsecond, v, parsed_tz, granularity.as_str())?;
-            let value = ScalarValue::TimestampMicrosecond(value, tz_opt.clone());
-            ColumnarValue::Scalar(value)
+            process_scalar::<TimestampMicrosecondType>(v, granularity, tz_opt)?
         }
         ColumnarValue::Scalar(ScalarValue::TimestampMillisecond(v, tz_opt)) => {
-            let parsed_tz = parse_tz(tz_opt)?;
-            let value =
-                _date_trunc(TimeUnit::Millisecond, v, parsed_tz, granularity.as_str())?;
-            let value = ScalarValue::TimestampMillisecond(value, tz_opt.clone());
-            ColumnarValue::Scalar(value)
+            process_scalar::<TimestampMillisecondType>(v, granularity, tz_opt)?
         }
         ColumnarValue::Scalar(ScalarValue::TimestampSecond(v, tz_opt)) => {
-            let parsed_tz = parse_tz(tz_opt)?;
-            let value =
-                _date_trunc(TimeUnit::Second, v, parsed_tz, granularity.as_str())?;
-            let value = ScalarValue::TimestampSecond(value, tz_opt.clone());
-            ColumnarValue::Scalar(value)
+            process_scalar::<TimestampSecondType>(v, granularity, tz_opt)?
         }
         ColumnarValue::Array(array) => {
             let array_type = array.data_type();
             match array_type {
                 DataType::Timestamp(TimeUnit::Second, tz_opt) => {
-                    let parsed_tz = parse_tz(tz_opt)?;
-                    let array = as_timestamp_second_array(array)?;
-                    let array = array
-                        .iter()
-                        .map(|x| {
-                            _date_trunc(
-                                TimeUnit::Second,
-                                &x,
-                                parsed_tz,
-                                granularity.as_str(),
-                            )
-                        })
-                        .collect::<Result<TimestampSecondArray>>()?
-                        .with_timezone_opt(tz_opt.clone());
-                    ColumnarValue::Array(Arc::new(array))
+                    process_array::<TimestampSecondType>(array, granularity, tz_opt)?
                 }
                 DataType::Timestamp(TimeUnit::Millisecond, tz_opt) => {
-                    let parsed_tz = parse_tz(tz_opt)?;
-                    let array = as_timestamp_millisecond_array(array)?;
-                    let array = array
-                        .iter()
-                        .map(|x| {
-                            _date_trunc(
-                                TimeUnit::Millisecond,
-                                &x,
-                                parsed_tz,
-                                granularity.as_str(),
-                            )
-                        })
-                        .collect::<Result<TimestampMillisecondArray>>()?
-                        .with_timezone_opt(tz_opt.clone());
-                    ColumnarValue::Array(Arc::new(array))
+                    process_array::<TimestampMillisecondType>(array, granularity, tz_opt)?
                 }
                 DataType::Timestamp(TimeUnit::Microsecond, tz_opt) => {
-                    let parsed_tz = parse_tz(tz_opt)?;
-                    let array = as_timestamp_microsecond_array(array)?;
-                    let array = array
-                        .iter()
-                        .map(|x| {
-                            _date_trunc(
-                                TimeUnit::Microsecond,
-                                &x,
-                                parsed_tz,
-                                granularity.as_str(),
-                            )
-                        })
-                        .collect::<Result<TimestampMicrosecondArray>>()?
-                        .with_timezone_opt(tz_opt.clone());
-                    ColumnarValue::Array(Arc::new(array))
+                    process_array::<TimestampMicrosecondType>(array, granularity, tz_opt)?
                 }
                 DataType::Timestamp(TimeUnit::Nanosecond, tz_opt) => {
-                    let parsed_tz = parse_tz(tz_opt)?;
-                    let array = as_timestamp_nanosecond_array(array)?;
-                    let array = array
-                        .iter()
-                        .map(|x| {
-                            _date_trunc(
-                                TimeUnit::Nanosecond,
-                                &x,
-                                parsed_tz,
-                                granularity.as_str(),
-                            )
-                        })
-                        .collect::<Result<TimestampNanosecondArray>>()?
-                        .with_timezone_opt(tz_opt.clone());
-                    ColumnarValue::Array(Arc::new(array))
+                    process_array::<TimestampNanosecondType>(array, granularity, tz_opt)?
                 }
-                _ => {
-                    let parsed_tz = None;
-                    let array = as_timestamp_nanosecond_array(array)?;
-                    let array = array
-                        .iter()
-                        .map(|x| {
-                            _date_trunc(
-                                TimeUnit::Nanosecond,
-                                &x,
-                                parsed_tz,
-                                granularity.as_str(),
-                            )
-                        })
-                        .collect::<Result<TimestampNanosecondArray>>()?;
-
-                    ColumnarValue::Array(Arc::new(array))
-                }
+                _ => process_array::<TimestampNanosecondType>(array, granularity, &None)?,
             }
         }
         _ => {
@@ -708,89 +644,104 @@ fn date_bin_impl(
         return exec_err!("DATE_BIN stride must be non-zero");
     }
 
-    let f_nanos = |x: Option<i64>| x.map(|x| stride_fn(stride, x, origin));
-    let f_micros = |x: Option<i64>| {
-        let scale = 1_000;
-        x.map(|x| stride_fn(stride, x * scale, origin) / scale)
-    };
-    let f_millis = |x: Option<i64>| {
-        let scale = 1_000_000;
-        x.map(|x| stride_fn(stride, x * scale, origin) / scale)
-    };
-    let f_secs = |x: Option<i64>| {
-        let scale = 1_000_000_000;
-        x.map(|x| stride_fn(stride, x * scale, origin) / scale)
-    };
+    fn stride_map_fn<T: ArrowTimestampType>(
+        origin: i64,
+        stride: i64,
+        stride_fn: fn(i64, i64, i64) -> i64,
+    ) -> impl Fn(Option<i64>) -> Option<i64> {
+        let scale = match T::UNIT {
+            TimeUnit::Nanosecond => 1,
+            TimeUnit::Microsecond => NANOSECONDS / 1_000_000,
+            TimeUnit::Millisecond => NANOSECONDS / 1_000,
+            TimeUnit::Second => NANOSECONDS,
+        };
+        move |x: Option<i64>| x.map(|x| stride_fn(stride, x * scale, origin) / scale)
+    }
 
     Ok(match array {
         ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(v, tz_opt)) => {
+            let apply_stride_fn =
+                stride_map_fn::<TimestampNanosecondType>(origin, stride, stride_fn);
             ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(
-                f_nanos(*v),
+                apply_stride_fn(*v),
                 tz_opt.clone(),
             ))
         }
         ColumnarValue::Scalar(ScalarValue::TimestampMicrosecond(v, tz_opt)) => {
+            let apply_stride_fn =
+                stride_map_fn::<TimestampMicrosecondType>(origin, stride, stride_fn);
             ColumnarValue::Scalar(ScalarValue::TimestampMicrosecond(
-                f_micros(*v),
+                apply_stride_fn(*v),
                 tz_opt.clone(),
             ))
         }
         ColumnarValue::Scalar(ScalarValue::TimestampMillisecond(v, tz_opt)) => {
+            let apply_stride_fn =
+                stride_map_fn::<TimestampMillisecondType>(origin, stride, stride_fn);
             ColumnarValue::Scalar(ScalarValue::TimestampMillisecond(
-                f_millis(*v),
+                apply_stride_fn(*v),
                 tz_opt.clone(),
             ))
         }
         ColumnarValue::Scalar(ScalarValue::TimestampSecond(v, tz_opt)) => {
+            let apply_stride_fn =
+                stride_map_fn::<TimestampSecondType>(origin, stride, stride_fn);
             ColumnarValue::Scalar(ScalarValue::TimestampSecond(
-                f_secs(*v),
+                apply_stride_fn(*v),
                 tz_opt.clone(),
             ))
         }
-        ColumnarValue::Array(array) => match array.data_type() {
-            DataType::Timestamp(TimeUnit::Nanosecond, tz_opt) => {
-                let array = as_timestamp_nanosecond_array(array)?
+
+        ColumnarValue::Array(array) => {
+            fn transform_array_with_stride<T>(
+                origin: i64,
+                stride: i64,
+                stride_fn: fn(i64, i64, i64) -> i64,
+                array: &ArrayRef,
+                tz_opt: &Option<Arc<str>>,
+            ) -> Result<ColumnarValue>
+            where
+                T: ArrowTimestampType,
+            {
+                let array = as_primitive_array::<T>(array)?;
+                let apply_stride_fn = stride_map_fn::<T>(origin, stride, stride_fn);
+                let array = array
                     .iter()
-                    .map(f_nanos)
-                    .collect::<TimestampNanosecondArray>()
+                    .map(apply_stride_fn)
+                    .collect::<PrimitiveArray<T>>()
                     .with_timezone_opt(tz_opt.clone());
 
-                ColumnarValue::Array(Arc::new(array))
+                Ok(ColumnarValue::Array(Arc::new(array)))
             }
-            DataType::Timestamp(TimeUnit::Microsecond, tz_opt) => {
-                let array = as_timestamp_microsecond_array(array)?
-                    .iter()
-                    .map(f_micros)
-                    .collect::<TimestampMicrosecondArray>()
-                    .with_timezone_opt(tz_opt.clone());
-
-                ColumnarValue::Array(Arc::new(array))
+            match array.data_type() {
+                DataType::Timestamp(TimeUnit::Nanosecond, tz_opt) => {
+                    transform_array_with_stride::<TimestampNanosecondType>(
+                        origin, stride, stride_fn, array, tz_opt,
+                    )?
+                }
+                DataType::Timestamp(TimeUnit::Microsecond, tz_opt) => {
+                    transform_array_with_stride::<TimestampMicrosecondType>(
+                        origin, stride, stride_fn, array, tz_opt,
+                    )?
+                }
+                DataType::Timestamp(TimeUnit::Millisecond, tz_opt) => {
+                    transform_array_with_stride::<TimestampMillisecondType>(
+                        origin, stride, stride_fn, array, tz_opt,
+                    )?
+                }
+                DataType::Timestamp(TimeUnit::Second, tz_opt) => {
+                    transform_array_with_stride::<TimestampSecondType>(
+                        origin, stride, stride_fn, array, tz_opt,
+                    )?
+                }
+                _ => {
+                    return exec_err!(
+                        "DATE_BIN expects source argument to be a TIMESTAMP but got {}",
+                        array.data_type()
+                    )
+                }
             }
-            DataType::Timestamp(TimeUnit::Millisecond, tz_opt) => {
-                let array = as_timestamp_millisecond_array(array)?
-                    .iter()
-                    .map(f_millis)
-                    .collect::<TimestampMillisecondArray>()
-                    .with_timezone_opt(tz_opt.clone());
-
-                ColumnarValue::Array(Arc::new(array))
-            }
-            DataType::Timestamp(TimeUnit::Second, tz_opt) => {
-                let array = as_timestamp_second_array(array)?
-                    .iter()
-                    .map(f_secs)
-                    .collect::<TimestampSecondArray>()
-                    .with_timezone_opt(tz_opt.clone());
-
-                ColumnarValue::Array(Arc::new(array))
-            }
-            _ => {
-                return exec_err!(
-                    "DATE_BIN expects source argument to be a TIMESTAMP but got {}",
-                    array.data_type()
-                )
-            }
-        },
+        }
         _ => {
             return exec_err!(
                 "DATE_BIN expects source argument to be a TIMESTAMP scalar or array"
@@ -1122,6 +1073,7 @@ mod tests {
     use arrow::array::{
         as_primitive_array, ArrayRef, Int64Array, IntervalDayTimeArray, StringBuilder,
     };
+    use arrow_array::TimestampNanosecondArray;
 
     use super::*;
 

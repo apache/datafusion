@@ -50,9 +50,9 @@ use crate::{
 use arrow::datatypes::{DataType, Schema, SchemaRef};
 use datafusion_common::display::ToStringifiedPlan;
 use datafusion_common::{
-    plan_datafusion_err, plan_err, Column, DFField, DFSchema, DFSchemaRef,
-    DataFusionError, FileType, OwnedTableReference, Result, ScalarValue, TableReference,
-    ToDFSchema, UnnestOptions,
+    get_target_functional_dependencies, plan_datafusion_err, plan_err, Column, DFField,
+    DFSchema, DFSchemaRef, DataFusionError, FileType, OwnedTableReference, Result,
+    ScalarValue, TableReference, ToDFSchema, UnnestOptions,
 };
 
 /// Default table name for unnamed table
@@ -904,8 +904,27 @@ impl LogicalPlanBuilder {
         group_expr: impl IntoIterator<Item = impl Into<Expr>>,
         aggr_expr: impl IntoIterator<Item = impl Into<Expr>>,
     ) -> Result<Self> {
-        let group_expr = normalize_cols(group_expr, &self.plan)?;
+        let mut group_expr = normalize_cols(group_expr, &self.plan)?;
         let aggr_expr = normalize_cols(aggr_expr, &self.plan)?;
+
+        // Rewrite groupby exprs according to functional dependencies
+        let group_by_expr_names = group_expr
+            .iter()
+            .map(|group_by_expr| group_by_expr.display_name())
+            .collect::<Result<Vec<_>>>()?;
+        let schema = self.plan.schema();
+        if let Some(target_indices) =
+            get_target_functional_dependencies(schema, &group_by_expr_names)
+        {
+            for idx in target_indices {
+                let field = schema.field(idx);
+                let expr =
+                    Expr::Column(Column::new(field.qualifier().cloned(), field.name()));
+                if !group_expr.contains(&expr) {
+                    group_expr.push(expr);
+                }
+            }
+        }
         Aggregate::try_new(Arc::new(self.plan), group_expr, aggr_expr)
             .map(LogicalPlan::Aggregate)
             .map(Self::from)
@@ -1166,8 +1185,8 @@ pub fn build_join_schema(
     );
     let mut metadata = left.metadata().clone();
     metadata.extend(right.metadata().clone());
-    DFSchema::new_with_metadata(fields, metadata)
-        .map(|schema| schema.with_functional_dependencies(func_dependencies))
+    let schema = DFSchema::new_with_metadata(fields, metadata)?;
+    schema.with_functional_dependencies(func_dependencies)
 }
 
 /// Errors if one or more expressions have equal names.
@@ -1324,7 +1343,7 @@ pub fn subquery_alias(
     plan: LogicalPlan,
     alias: impl Into<OwnedTableReference>,
 ) -> Result<LogicalPlan> {
-    SubqueryAlias::try_new(plan, alias).map(LogicalPlan::SubqueryAlias)
+    SubqueryAlias::try_new(Arc::new(plan), alias).map(LogicalPlan::SubqueryAlias)
 }
 
 /// Create a LogicalPlanBuilder representing a scan of a table with the provided name and schema.
@@ -1491,7 +1510,7 @@ pub fn unnest_with_options(
     let df_schema = DFSchema::new_with_metadata(fields, metadata)?;
     // We can use the existing functional dependencies:
     let deps = input_schema.functional_dependencies().clone();
-    let schema = Arc::new(df_schema.with_functional_dependencies(deps));
+    let schema = Arc::new(df_schema.with_functional_dependencies(deps)?);
 
     Ok(LogicalPlan::Unnest(Unnest {
         input: Arc::new(input),

@@ -559,6 +559,15 @@ fn push_down_join(
     let mut is_inner_join = false;
     let infer_predicates = if join.join_type == JoinType::Inner {
         is_inner_join = true;
+        // Only allow both side key is column.
+        let join_col_keys = join
+            .on
+            .iter()
+            .flat_map(|(l, r)| match (l.try_into_col(), r.try_into_col()) {
+                (Ok(l_col), Ok(r_col)) => Some((l_col, r_col)),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
         // TODO refine the logic, introduce EquivalenceProperties to logical plan and infer additional filters to push down
         // For inner joins, duplicate filters for joined columns so filters can be pushed down
         // to both sides. Take the following query as an example:
@@ -582,16 +591,6 @@ fn push_down_join(
                     Ok(columns) => columns,
                     Err(e) => return Some(Err(e)),
                 };
-
-                // Only allow both side key is column.
-                let join_col_keys = join
-                    .on
-                    .iter()
-                    .flat_map(|(l, r)| match (l.try_into_col(), r.try_into_col()) {
-                        (Ok(l_col), Ok(r_col)) => Some((l_col, r_col)),
-                        _ => None,
-                    })
-                    .collect::<Vec<_>>();
 
                 for col in columns.iter() {
                     for (l, r) in join_col_keys.iter() {
@@ -1062,7 +1061,7 @@ mod tests {
         ]);
         let mut optimized_plan = optimizer
             .optimize_recursively(
-                optimizer.rules.get(0).unwrap(),
+                optimizer.rules.first().unwrap(),
                 plan,
                 &OptimizerContext::new(),
             )?

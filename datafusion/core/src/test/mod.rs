@@ -49,6 +49,7 @@ use datafusion_physical_plan::{DisplayAs, DisplayFormatType};
 use bzip2::write::BzEncoder;
 #[cfg(feature = "compression")]
 use bzip2::Compression as BzCompression;
+use datafusion_physical_plan::streaming::{PartitionStream, StreamingTableExec};
 #[cfg(feature = "compression")]
 use flate2::write::GzEncoder;
 #[cfg(feature = "compression")]
@@ -203,7 +204,6 @@ pub fn partitioned_csv_config(
         limit: None,
         table_partition_cols: vec![],
         output_ordering: vec![],
-        infinite_source: false,
     })
 }
 
@@ -277,7 +277,6 @@ fn make_decimal() -> RecordBatch {
 pub fn csv_exec_sorted(
     schema: &SchemaRef,
     sort_exprs: impl IntoIterator<Item = PhysicalSortExpr>,
-    infinite_source: bool,
 ) -> Arc<dyn ExecutionPlan> {
     let sort_exprs = sort_exprs.into_iter().collect();
 
@@ -291,7 +290,6 @@ pub fn csv_exec_sorted(
             limit: None,
             table_partition_cols: vec![],
             output_ordering: vec![sort_exprs],
-            infinite_source,
         },
         false,
         0,
@@ -299,6 +297,41 @@ pub fn csv_exec_sorted(
         None,
         FileCompressionType::UNCOMPRESSED,
     ))
+}
+
+// construct a stream partition for test purposes
+pub(crate) struct TestStreamPartition {
+    pub schema: SchemaRef,
+}
+
+impl PartitionStream for TestStreamPartition {
+    fn schema(&self) -> &SchemaRef {
+        &self.schema
+    }
+    fn execute(&self, _ctx: Arc<TaskContext>) -> SendableRecordBatchStream {
+        unreachable!()
+    }
+}
+
+/// Create an unbounded stream exec
+pub fn stream_exec_ordered(
+    schema: &SchemaRef,
+    sort_exprs: impl IntoIterator<Item = PhysicalSortExpr>,
+) -> Arc<dyn ExecutionPlan> {
+    let sort_exprs = sort_exprs.into_iter().collect();
+
+    Arc::new(
+        StreamingTableExec::try_new(
+            schema.clone(),
+            vec![Arc::new(TestStreamPartition {
+                schema: schema.clone(),
+            }) as _],
+            None,
+            vec![sort_exprs],
+            true,
+        )
+        .unwrap(),
+    )
 }
 
 /// A mock execution plan that simply returns the provided statistics

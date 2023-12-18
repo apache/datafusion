@@ -44,11 +44,12 @@ use datafusion::physical_plan::joins::{
 };
 use datafusion::physical_plan::joins::{HashJoinExec, PartitionMode};
 use datafusion::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
+use datafusion::physical_plan::placeholder_row::PlaceholderRowExec;
 use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::repartition::RepartitionExec;
 use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
-use datafusion::physical_plan::union::UnionExec;
+use datafusion::physical_plan::union::{InterleaveExec, UnionExec};
 use datafusion::physical_plan::windows::{BoundedWindowAggExec, WindowAggExec};
 use datafusion::physical_plan::{
     udaf, AggregateExpr, ExecutionPlan, InputOrderMode, Partitioning, PhysicalExpr,
@@ -426,19 +427,6 @@ impl AsExecutionPlan for PhysicalPlanNode {
                             .transpose()
                     })
                     .collect::<Result<Vec<_>, _>>()?;
-                let physical_order_by_expr = hash_agg
-                    .order_by_expr
-                    .iter()
-                    .map(|expr| {
-                        expr.sort_expr
-                            .iter()
-                            .map(|e| {
-                                parse_physical_sort_expr(e, registry, &physical_schema)
-                            })
-                            .collect::<Result<Vec<_>>>()
-                            .map(|exprs| (!exprs.is_empty()).then_some(exprs))
-                    })
-                    .collect::<Result<Vec<_>>>()?;
 
                 let physical_aggr_expr: Vec<Arc<dyn AggregateExpr>> = hash_agg
                     .aggr_expr
@@ -497,7 +485,6 @@ impl AsExecutionPlan for PhysicalPlanNode {
                     PhysicalGroupBy::new(group_expr, null_expr, groups),
                     physical_aggr_expr,
                     physical_filter_expr,
-                    physical_order_by_expr,
                     input,
                     Arc::new(input_schema.try_into()?),
                 )?))
@@ -545,7 +532,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
                             f.expression.as_ref().ok_or_else(|| {
                                 proto_error("Unexpected empty filter expression")
                             })?,
-                            registry, &schema
+                            registry, &schema,
                         )?;
                         let column_indices = f.column_indices
                             .iter()
@@ -556,7 +543,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
                                         i.side))
                                     )?;
 
-                                Ok(ColumnIndex{
+                                Ok(ColumnIndex {
                                     index: i.index as usize,
                                     side: side.into(),
                                 })
@@ -634,7 +621,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
                             f.expression.as_ref().ok_or_else(|| {
                                 proto_error("Unexpected empty filter expression")
                             })?,
-                            registry, &schema
+                            registry, &schema,
                         )?;
                         let column_indices = f.column_indices
                             .iter()
@@ -645,7 +632,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
                                         i.side))
                                     )?;
 
-                                Ok(ColumnIndex{
+                                Ok(ColumnIndex {
                                     index: i.index as usize,
                                     side: side.into(),
                                 })
@@ -693,6 +680,17 @@ impl AsExecutionPlan for PhysicalPlanNode {
                 }
                 Ok(Arc::new(UnionExec::new(inputs)))
             }
+            PhysicalPlanType::Interleave(interleave) => {
+                let mut inputs: Vec<Arc<dyn ExecutionPlan>> = vec![];
+                for input in &interleave.inputs {
+                    inputs.push(input.try_into_physical_plan(
+                        registry,
+                        runtime,
+                        extension_codec,
+                    )?);
+                }
+                Ok(Arc::new(InterleaveExec::try_new(inputs)?))
+            }
             PhysicalPlanType::CrossJoin(crossjoin) => {
                 let left: Arc<dyn ExecutionPlan> = into_physical_plan(
                     &crossjoin.left,
@@ -710,7 +708,11 @@ impl AsExecutionPlan for PhysicalPlanNode {
             }
             PhysicalPlanType::Empty(empty) => {
                 let schema = Arc::new(convert_required!(empty.schema)?);
-                Ok(Arc::new(EmptyExec::new(empty.produce_one_row, schema)))
+                Ok(Arc::new(EmptyExec::new(schema)))
+            }
+            PhysicalPlanType::PlaceholderRow(placeholder) => {
+                let schema = Arc::new(convert_required!(placeholder.schema)?);
+                Ok(Arc::new(PlaceholderRowExec::new(schema)))
             }
             PhysicalPlanType::Sort(sort) => {
                 let input: Arc<dyn ExecutionPlan> =
@@ -735,7 +737,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
                                 })?
                                 .as_ref();
                             Ok(PhysicalSortExpr {
-                                expr: parse_physical_expr(expr,registry, input.schema().as_ref())?,
+                                expr: parse_physical_expr(expr, registry, input.schema().as_ref())?,
                                 options: SortOptions {
                                     descending: !sort_expr.asc,
                                     nulls_first: sort_expr.nulls_first,
@@ -782,7 +784,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
                                 })?
                                 .as_ref();
                             Ok(PhysicalSortExpr {
-                                expr: parse_physical_expr(expr,registry, input.schema().as_ref())?,
+                                expr: parse_physical_expr(expr, registry, input.schema().as_ref())?,
                                 options: SortOptions {
                                     descending: !sort_expr.asc,
                                     nulls_first: sort_expr.nulls_first,
@@ -845,7 +847,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
                             f.expression.as_ref().ok_or_else(|| {
                                 proto_error("Unexpected empty filter expression")
                             })?,
-                            registry, &schema
+                            registry, &schema,
                         )?;
                         let column_indices = f.column_indices
                             .iter()
@@ -856,7 +858,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
                                         i.side))
                                     )?;
 
-                                Ok(ColumnIndex{
+                                Ok(ColumnIndex {
                                     index: i.index as usize,
                                     side: side.into(),
                                 })
@@ -1221,12 +1223,6 @@ impl AsExecutionPlan for PhysicalPlanNode {
                 .map(|expr| expr.to_owned().try_into())
                 .collect::<Result<Vec<_>>>()?;
 
-            let order_by = exec
-                .order_by_expr()
-                .iter()
-                .map(|expr| expr.to_owned().try_into())
-                .collect::<Result<Vec<_>>>()?;
-
             let agg = exec
                 .aggr_expr()
                 .iter()
@@ -1279,7 +1275,6 @@ impl AsExecutionPlan for PhysicalPlanNode {
                         group_expr_name: group_names,
                         aggr_expr: agg,
                         filter_expr: filter,
-                        order_by_expr: order_by,
                         aggr_expr_name: agg_names,
                         mode: agg_mode as i32,
                         input: Some(Box::new(input)),
@@ -1296,7 +1291,17 @@ impl AsExecutionPlan for PhysicalPlanNode {
             return Ok(protobuf::PhysicalPlanNode {
                 physical_plan_type: Some(PhysicalPlanType::Empty(
                     protobuf::EmptyExecNode {
-                        produce_one_row: empty.produce_one_row(),
+                        schema: Some(schema),
+                    },
+                )),
+            });
+        }
+
+        if let Some(empty) = plan.downcast_ref::<PlaceholderRowExec>() {
+            let schema = empty.schema().as_ref().try_into()?;
+            return Ok(protobuf::PhysicalPlanNode {
+                physical_plan_type: Some(PhysicalPlanType::PlaceholderRow(
+                    protobuf::PlaceholderRowExecNode {
                         schema: Some(schema),
                     },
                 )),
@@ -1459,6 +1464,21 @@ impl AsExecutionPlan for PhysicalPlanNode {
             return Ok(protobuf::PhysicalPlanNode {
                 physical_plan_type: Some(PhysicalPlanType::Union(
                     protobuf::UnionExecNode { inputs },
+                )),
+            });
+        }
+
+        if let Some(interleave) = plan.downcast_ref::<InterleaveExec>() {
+            let mut inputs: Vec<PhysicalPlanNode> = vec![];
+            for input in interleave.inputs() {
+                inputs.push(protobuf::PhysicalPlanNode::try_from_physical_plan(
+                    input.to_owned(),
+                    extension_codec,
+                )?);
+            }
+            return Ok(protobuf::PhysicalPlanNode {
+                physical_plan_type: Some(PhysicalPlanType::Interleave(
+                    protobuf::InterleaveExecNode { inputs },
                 )),
             });
         }

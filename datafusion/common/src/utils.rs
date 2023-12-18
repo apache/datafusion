@@ -25,7 +25,7 @@ use arrow::compute;
 use arrow::compute::{partition, SortColumn, SortOptions};
 use arrow::datatypes::{Field, SchemaRef, UInt32Type};
 use arrow::record_batch::RecordBatch;
-use arrow_array::{Array, LargeListArray, ListArray};
+use arrow_array::{Array, LargeListArray, ListArray, RecordBatchOptions};
 use arrow_schema::DataType;
 use sqlparser::ast::Ident;
 use sqlparser::dialect::GenericDialect;
@@ -90,8 +90,12 @@ pub fn get_record_batch_at_indices(
     indices: &PrimitiveArray<UInt32Type>,
 ) -> Result<RecordBatch> {
     let new_columns = get_arrayref_at_indices(record_batch.columns(), indices)?;
-    RecordBatch::try_new(record_batch.schema(), new_columns)
-        .map_err(DataFusionError::ArrowError)
+    RecordBatch::try_new_with_options(
+        record_batch.schema(),
+        new_columns,
+        &RecordBatchOptions::new().with_row_count(Some(indices.len())),
+    )
+    .map_err(DataFusionError::ArrowError)
 }
 
 /// This function compares two tuples depending on the given sort options.
@@ -135,7 +139,7 @@ pub fn bisect<const SIDE: bool>(
 ) -> Result<usize> {
     let low: usize = 0;
     let high: usize = item_columns
-        .get(0)
+        .first()
         .ok_or_else(|| {
             DataFusionError::Internal("Column array shouldn't be empty".to_string())
         })?
@@ -186,7 +190,7 @@ pub fn linear_search<const SIDE: bool>(
 ) -> Result<usize> {
     let low: usize = 0;
     let high: usize = item_columns
-        .get(0)
+        .first()
         .ok_or_else(|| {
             DataFusionError::Internal("Column array shouldn't be empty".to_string())
         })?

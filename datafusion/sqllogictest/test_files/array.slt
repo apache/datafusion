@@ -183,6 +183,38 @@ AS VALUES
 ;
 
 statement ok
+CREATE TABLE array_distinct_table_1D
+AS VALUES
+  (make_array(1, 1, 2, 2, 3)),
+  (make_array(1, 2, 3, 4, 5)),
+  (make_array(3, 5, 3, 3, 3))
+;
+
+statement ok
+CREATE TABLE array_distinct_table_1D_UTF8
+AS VALUES
+  (make_array('a', 'a', 'bc', 'bc', 'def')),
+  (make_array('a', 'bc', 'def', 'defg', 'defg')),
+  (make_array('defg', 'defg', 'defg', 'defg', 'defg'))
+;
+
+statement ok
+CREATE TABLE array_distinct_table_2D
+AS VALUES
+  (make_array([1,2], [1,2], [3,4], [3,4], [5,6])),
+  (make_array([1,2], [3,4], [5,6], [7,8], [9,10])),
+  (make_array([5,6], [5,6], NULL))
+;
+
+statement ok
+CREATE TABLE array_distinct_table_1D_large
+AS VALUES
+  (arrow_cast(make_array(1, 1, 2, 2, 3), 'LargeList(Int64)')),
+  (arrow_cast(make_array(1, 2, 3, 4, 5), 'LargeList(Int64)')),
+  (arrow_cast(make_array(3, 5, 3, 3, 3), 'LargeList(Int64)'))
+;
+
+statement ok
 CREATE TABLE array_intersect_table_1D
 AS VALUES
   (make_array(1, 2), make_array(1), make_array(1,2,3), make_array(1,3), make_array(1,3,5), make_array(2,4,6,8,1,3)),
@@ -878,9 +910,19 @@ select array_slice(make_array(1, 2, 3, 4, 5), 2, 4), array_slice(make_array('h',
 ----
 [2, 3, 4] [h, e]
 
+query ??
+select array_slice(arrow_cast(make_array(1, 2, 3, 4, 5), 'LargeList(Int64)'), 2, 4), array_slice(arrow_cast(make_array('h', 'e', 'l', 'l', 'o'), 'LargeList(Utf8)'), 1, 2);
+----
+[2, 3, 4] [h, e]
+
 # array_slice scalar function #2 (with positive indexes; full array)
 query ??
 select array_slice(make_array(1, 2, 3, 4, 5), 0, 6), array_slice(make_array('h', 'e', 'l', 'l', 'o'), 0, 5);
+----
+[1, 2, 3, 4, 5] [h, e, l, l, o]
+
+query ??
+select array_slice(arrow_cast(make_array(1, 2, 3, 4, 5), 'LargeList(Int64)'), 0, 6), array_slice(arrow_cast(make_array('h', 'e', 'l', 'l', 'o'), 'LargeList(Utf8)'), 0, 5);
 ----
 [1, 2, 3, 4, 5] [h, e, l, l, o]
 
@@ -890,9 +932,19 @@ select array_slice(make_array(1, 2, 3, 4, 5), 4, 4), array_slice(make_array('h',
 ----
 [4] [l]
 
+query ??
+select array_slice(arrow_cast(make_array(1, 2, 3, 4, 5), 'LargeList(Int64)'), 4, 4), array_slice(arrow_cast(make_array('h', 'e', 'l', 'l', 'o'), 'LargeList(Utf8)'), 3, 3);
+----
+[4] [l]
+
 # array_slice scalar function #4 (with positive indexes; first index > second_index)
 query ??
 select array_slice(make_array(1, 2, 3, 4, 5), 2, 1), array_slice(make_array('h', 'e', 'l', 'l', 'o'), 4, 1);
+----
+[] []
+
+query ??
+select array_slice(arrow_cast(make_array(1, 2, 3, 4, 5), 'LargeList(Int64)'), 2, 1), array_slice(arrow_cast(make_array('h', 'e', 'l', 'l', 'o'), 'LargeList(Utf8)'), 4, 1);
 ----
 [] []
 
@@ -902,9 +954,19 @@ select array_slice(make_array(1, 2, 3, 4, 5), 2, 6), array_slice(make_array('h',
 ----
 [2, 3, 4, 5] [l, l, o]
 
+query ??
+select array_slice(arrow_cast(make_array(1, 2, 3, 4, 5), 'LargeList(Int64)'), 2, 6), array_slice(arrow_cast(make_array('h', 'e', 'l', 'l', 'o'), 'LargeList(Utf8)'), 3, 7);
+----
+[2, 3, 4, 5] [l, l, o]
+
 # array_slice scalar function #6 (with positive indexes; nested array)
 query ?
 select array_slice(make_array(make_array(1, 2, 3, 4, 5), make_array(6, 7, 8, 9, 10)), 1, 1);
+----
+[[1, 2, 3, 4, 5]]
+
+query ?
+select array_slice(arrow_cast(make_array(make_array(1, 2, 3, 4, 5), make_array(6, 7, 8, 9, 10)), 'LargeList(List(Int64))'), 1, 1);
 ----
 [[1, 2, 3, 4, 5]]
 
@@ -914,13 +976,24 @@ select array_slice(make_array(1, 2, 3, 4, 5), 0, 4), array_slice(make_array('h',
 ----
 [1, 2, 3, 4] [h, e, l]
 
+query ??
+select array_slice(arrow_cast(make_array(1, 2, 3, 4, 5), 'LargeList(Int64)'), 0, 4), array_slice(arrow_cast(make_array('h', 'e', 'l', 'l', 'o'), 'LargeList(Utf8)'), 0, 3);
+----
+[1, 2, 3, 4] [h, e, l]
+
 # array_slice scalar function #8 (with NULL and positive number)
 query error
 select array_slice(make_array(1, 2, 3, 4, 5), NULL, 4), array_slice(make_array('h', 'e', 'l', 'l', 'o'), NULL, 3);
 
+query error
+select array_slice(arrow_cast(make_array(1, 2, 3, 4, 5), 'LargeList(Int64)'), NULL, 4), array_slice(arrow_cast(make_array('h', 'e', 'l', 'l', 'o'), 'LargeList(Utf8)'), NULL, 3);
+
 # array_slice scalar function #9 (with positive number and NULL)
 query error
 select array_slice(make_array(1, 2, 3, 4, 5), 2, NULL), array_slice(make_array('h', 'e', 'l', 'l', 'o'), 3, NULL);
+
+query error
+select array_slice(arrow_cast(make_array(1, 2, 3, 4, 5), 'LargeList(Int64)'), 2, NULL), array_slice(arrow_cast(make_array('h', 'e', 'l', 'l', 'o'), 'LargeList(Utf8)'), 3, NULL);
 
 # array_slice scalar function #10 (with zero-zero)
 query ??
@@ -928,9 +1001,18 @@ select array_slice(make_array(1, 2, 3, 4, 5), 0, 0), array_slice(make_array('h',
 ----
 [] []
 
+query ??
+select array_slice(arrow_cast(make_array(1, 2, 3, 4, 5), 'LargeList(Int64)'), 0, 0), array_slice(arrow_cast(make_array('h', 'e', 'l', 'l', 'o'), 'LargeList(Utf8)'), 0, 0);
+----
+[] []
+
 # array_slice scalar function #11 (with NULL-NULL)
 query error
 select array_slice(make_array(1, 2, 3, 4, 5), NULL), array_slice(make_array('h', 'e', 'l', 'l', 'o'), NULL);
+
+query error
+select array_slice(arrow_cast(make_array(1, 2, 3, 4, 5), 'LargeList(Int64)'), NULL), array_slice(arrow_cast(make_array('h', 'e', 'l', 'l', 'o'), 'LargeList(Utf8)'), NULL);
+
 
 # array_slice scalar function #12 (with zero and negative number)
 query ??
@@ -938,17 +1020,33 @@ select array_slice(make_array(1, 2, 3, 4, 5), 0, -4), array_slice(make_array('h'
 ----
 [1] [h, e]
 
+query ??
+select array_slice(arrow_cast(make_array(1, 2, 3, 4, 5), 'LargeList(Int64)'), 0, -4), array_slice(arrow_cast(make_array('h', 'e', 'l', 'l', 'o'), 'LargeList(Utf8)'), 0, -3);
+----
+[1] [h, e]
+
 # array_slice scalar function #13 (with negative number and NULL)
 query error
 select array_slice(make_array(1, 2, 3, 4, 5), -2, NULL), array_slice(make_array('h', 'e', 'l', 'l', 'o'), -3, NULL);
+
+query error
+select array_slice(arrow_cast(make_array(1, 2, 3, 4, 5), 'LargeList(Int64)'), -2, NULL), array_slice(arrow_cast(make_array('h', 'e', 'l', 'l', 'o'), 'LargeList(Utf8)'), -3, NULL);
 
 # array_slice scalar function #14 (with NULL and negative number)
 query error
 select array_slice(make_array(1, 2, 3, 4, 5), NULL, -4), array_slice(make_array('h', 'e', 'l', 'l', 'o'), NULL, -3);
 
+query error
+select array_slice(arrow_cast(make_array(1, 2, 3, 4, 5), 'LargeList(Int64)'), NULL, -4), array_slice(arrow_cast(make_array('h', 'e', 'l', 'l', 'o'), 'LargeList(Utf8)'), NULL, -3);
+
 # array_slice scalar function #15 (with negative indexes)
 query ??
 select array_slice(make_array(1, 2, 3, 4, 5), -4, -1), array_slice(make_array('h', 'e', 'l', 'l', 'o'), -3, -1);
+----
+[2, 3, 4] [l, l]
+
+query ??
+select array_slice(arrow_cast(make_array(1, 2, 3, 4, 5), 'LargeList(Int64)'), -4, -1), array_slice(arrow_cast(make_array('h', 'e', 'l', 'l', 'o'), 'LargeList(Utf8)'), -3, -1);
 ----
 [2, 3, 4] [l, l]
 
@@ -958,9 +1056,19 @@ select array_slice(make_array(1, 2, 3, 4, 5), -5, -1), array_slice(make_array('h
 ----
 [1, 2, 3, 4] [h, e, l, l]
 
+query ??
+select array_slice(arrow_cast(make_array(1, 2, 3, 4, 5), 'LargeList(Int64)'), -5, -1), array_slice(arrow_cast(make_array('h', 'e', 'l', 'l', 'o'), 'LargeList(Utf8)'), -5, -1);
+----
+[1, 2, 3, 4] [h, e, l, l]
+
 # array_slice scalar function #17 (with negative indexes; first index = second index)
 query ??
 select array_slice(make_array(1, 2, 3, 4, 5), -4, -4), array_slice(make_array('h', 'e', 'l', 'l', 'o'), -3, -3);
+----
+[] []
+
+query ??
+select array_slice(arrow_cast(make_array(1, 2, 3, 4, 5), 'LargeList(Int64)'), -4, -4), array_slice(arrow_cast(make_array('h', 'e', 'l', 'l', 'o'), 'LargeList(Utf8)'), -3, -3);
 ----
 [] []
 
@@ -970,9 +1078,19 @@ select array_slice(make_array(1, 2, 3, 4, 5), -4, -6), array_slice(make_array('h
 ----
 [] []
 
+query ??
+select array_slice(arrow_cast(make_array(1, 2, 3, 4, 5), 'LargeList(Int64)'), -4, -6), array_slice(arrow_cast(make_array('h', 'e', 'l', 'l', 'o'), 'LargeList(Utf8)'), -3, -6);
+----
+[] []
+
 # array_slice scalar function #19 (with negative indexes; out of bounds)
 query ??
 select array_slice(make_array(1, 2, 3, 4, 5), -7, -2), array_slice(make_array('h', 'e', 'l', 'l', 'o'), -7, -3);
+----
+[] []
+
+query ??
+select array_slice(arrow_cast(make_array(1, 2, 3, 4, 5), 'LargeList(Int64)'), -7, -2), array_slice(arrow_cast(make_array('h', 'e', 'l', 'l', 'o'), 'LargeList(Utf8)'), -7, -3);
 ----
 [] []
 
@@ -982,9 +1100,20 @@ select array_slice(make_array(make_array(1, 2, 3, 4, 5), make_array(6, 7, 8, 9, 
 ----
 [[1, 2, 3, 4, 5]] []
 
+query ??
+select array_slice(arrow_cast(make_array(make_array(1, 2, 3, 4, 5), make_array(6, 7, 8, 9, 10)), 'LargeList(List(Int64))'), -2, -1), array_slice(arrow_cast(make_array(make_array(1, 2, 3), make_array(6, 7, 8)), 'LargeList(List(Int64))'), -1, -1);
+----
+[[1, 2, 3, 4, 5]] []
+
+
 # array_slice scalar function #21 (with first positive index and last negative index)
 query ??
 select array_slice(make_array(1, 2, 3, 4, 5), 2, -3), array_slice(make_array('h', 'e', 'l', 'l', 'o'), 2, -2);
+----
+[2] [e, l]
+
+query ??
+select array_slice(arrow_cast(make_array(1, 2, 3, 4, 5), 'LargeList(Int64)'), 2, -3), array_slice(arrow_cast(make_array('h', 'e', 'l', 'l', 'o'), 'LargeList(Utf8)'), 2, -2);
 ----
 [2] [e, l]
 
@@ -994,9 +1123,19 @@ select array_slice(make_array(1, 2, 3, 4, 5), -2, 5), array_slice(make_array('h'
 ----
 [4, 5] [l, l]
 
+query ??
+select array_slice(arrow_cast(make_array(1, 2, 3, 4, 5), 'LargeList(Int64)'), -2, 5), array_slice(arrow_cast(make_array('h', 'e', 'l', 'l', 'o'), 'LargeList(Utf8)'), -3, 4);
+----
+[4, 5] [l, l]
+
 # list_slice scalar function #23 (function alias `array_slice`)
 query ??
 select list_slice(make_array(1, 2, 3, 4, 5), 2, 4), list_slice(make_array('h', 'e', 'l', 'l', 'o'), 1, 2);
+----
+[2, 3, 4] [h, e]
+
+query ??
+select array_slice(arrow_cast(make_array(1, 2, 3, 4, 5), 'LargeList(Int64)'), 2, 4), array_slice(arrow_cast(make_array('h', 'e', 'l', 'l', 'o'), 'LargeList(Utf8)'), 1, 2);
 ----
 [2, 3, 4] [h, e]
 
@@ -1012,10 +1151,32 @@ select array_slice(column1, column2, column3) from slices;
 [41, 42, 43, 44, 45, 46]
 [55, 56, 57, 58, 59, 60]
 
+query ?
+select array_slice(arrow_cast(column1, 'LargeList(Int64)'), column2, column3) from slices;
+----
+[]
+[12, 13, 14, 15, 16]
+[]
+[]
+[]
+[41, 42, 43, 44, 45, 46]
+[55, 56, 57, 58, 59, 60]
+
 # TODO: support NULLS in output instead of `[]`
 # array_slice with columns and scalars
 query ???
 select array_slice(make_array(1, 2, 3, 4, 5), column2, column3), array_slice(column1, 3, column3), array_slice(column1, column2, 5) from slices;
+----
+[1] [] [, 2, 3, 4, 5]
+[] [13, 14, 15, 16] [12, 13, 14, 15]
+[] [] [21, 22, 23, , 25]
+[] [33] []
+[4, 5] [] []
+[1, 2, 3, 4, 5] [43, 44, 45, 46] [41, 42, 43, 44, 45]
+[5] [, 54, 55, 56, 57, 58, 59, 60] [55]
+
+query ???
+select array_slice(arrow_cast(make_array(1, 2, 3, 4, 5), 'LargeList(Int64)'), column2, column3), array_slice(arrow_cast(column1, 'LargeList(Int64)'), 3, column3), array_slice(arrow_cast(column1, 'LargeList(Int64)'), column2, 5) from slices;
 ----
 [1] [] [, 2, 3, 4, 5]
 [] [13, 14, 15, 16] [12, 13, 14, 15]
@@ -2886,6 +3047,73 @@ select array_has_all(arrow_cast(make_array(1,2,3), 'LargeList(Int64)'), arrow_ca
 ;
 ----
 true false true false false false true true false false true false true
+
+query BBBBBBBBBBBBB
+select array_has_all(arrow_cast(make_array(1,2,3), 'LargeList(Int64)'), arrow_cast(make_array(1,3), 'LargeList(Int64)')),
+       array_has_all(arrow_cast(make_array(1,2,3),'LargeList(Int64)'), arrow_cast(make_array(1,4), 'LargeList(Int64)')),
+       array_has_all(arrow_cast(make_array([1,2], [3,4]), 'LargeList(List(Int64))'), arrow_cast(make_array([1,2]), 'LargeList(List(Int64))')),
+       array_has_all(arrow_cast(make_array([1,2], [3,4]), 'LargeList(List(Int64))'), arrow_cast(make_array([1,3]), 'LargeList(List(Int64))')),
+       array_has_all(arrow_cast(make_array([1,2], [3,4]), 'LargeList(List(Int64))'), arrow_cast(make_array([1,2], [3,4], [5,6]), 'LargeList(List(Int64))')),
+       array_has_all(arrow_cast(make_array([[1,2,3]]), 'LargeList(List(List(Int64)))'), arrow_cast(make_array([[1]]), 'LargeList(List(List(Int64)))')),
+       array_has_all(arrow_cast(make_array([[1,2,3]]), 'LargeList(List(List(Int64)))'), arrow_cast(make_array([[1,2,3]]), 'LargeList(List(List(Int64)))')),
+       array_has_any(arrow_cast(make_array(1,2,3),'LargeList(Int64)'), arrow_cast(make_array(1,10,100), 'LargeList(Int64)')),
+       array_has_any(arrow_cast(make_array(1,2,3),'LargeList(Int64)'), arrow_cast(make_array(10,100),'LargeList(Int64)')),
+       array_has_any(arrow_cast(make_array([1,2], [3,4]), 'LargeList(List(Int64))'), arrow_cast(make_array([1,10], [10,4]), 'LargeList(List(Int64))')),
+       array_has_any(arrow_cast(make_array([1,2], [3,4]), 'LargeList(List(Int64))'), arrow_cast(make_array([10,20], [3,4]), 'LargeList(List(Int64))')),
+       array_has_any(arrow_cast(make_array([[1,2,3]]), 'LargeList(List(List(Int64)))'), arrow_cast(make_array([[1,2,3], [4,5,6]]), 'LargeList(List(List(Int64)))')),
+       array_has_any(arrow_cast(make_array([[1,2,3]]), 'LargeList(List(List(Int64)))'), arrow_cast(make_array([[1,2,3]], [[4,5,6]]), 'LargeList(List(List(Int64)))'))
+;
+----
+true false true false false false true true false false true false true
+
+## array_distinct
+
+query ?
+select array_distinct(null);
+----
+NULL
+
+query ?
+select array_distinct([]);
+----
+[]
+
+query ?
+select array_distinct([[], []]);
+----
+[[]]
+
+query ?
+select array_distinct(column1)
+from array_distinct_table_1D;
+----
+[1, 2, 3]
+[1, 2, 3, 4, 5]
+[3, 5]
+
+query ?
+select array_distinct(column1)
+from array_distinct_table_1D_UTF8;
+----
+[a, bc, def]
+[a, bc, def, defg]
+[defg]
+
+query ?
+select array_distinct(column1)
+from array_distinct_table_2D;
+----
+[[1, 2], [3, 4], [5, 6]]
+[[1, 2], [3, 4], [5, 6], [7, 8], [9, 10]]
+[, [5, 6]]
+
+query ?
+select array_distinct(column1)
+from array_distinct_table_1D_large;
+----
+[1, 2, 3]
+[1, 2, 3, 4, 5]
+[3, 5]
 
 query ???
 select array_intersect(column1, column2),

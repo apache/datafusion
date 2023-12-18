@@ -1280,6 +1280,7 @@ regexp_replace(str, regexp, replacement, flags)
 - [datepart](#datepart)
 - [extract](#extract)
 - [to_timestamp](#to_timestamp)
+- [today](#today)
 - [to_timestamp_millis](#to_timestamp_millis)
 - [to_timestamp_micros](#to_timestamp_micros)
 - [to_timestamp_seconds](#to_timestamp_seconds)
@@ -1307,6 +1308,14 @@ no matter when in the query plan the function executes.
 ```
 current_date()
 ```
+
+#### Aliases
+
+- today
+
+### `today`
+
+_Alias of [current_date](#current_date)._
 
 ### `current_time`
 

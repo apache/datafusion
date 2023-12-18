@@ -116,6 +116,7 @@ impl ListingTableUrl {
     /// Get object store for specified input_url
     /// if input_url is actually not a url, we assume it is a local file path
     /// if we have a local path, create it if not exists so ListingTableUrl::parse works
+    #[deprecated(note = "Use parse")]
     pub fn parse_create_local_if_not_exists(
         s: impl AsRef<str>,
         is_directory: bool,
@@ -131,6 +132,10 @@ impl ListingTableUrl {
                     if is_directory {
                         fs::create_dir_all(path)?;
                     } else {
+                        // ensure parent directory exists
+                        if let Some(parent) = path.parent() {
+                            fs::create_dir_all(parent)?;
+                        }
                         fs::File::create(path)?;
                     }
                 }

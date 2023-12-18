@@ -1569,15 +1569,13 @@ Projection: join_t1.t1_id, join_t2.t2_id, join_t1.t1_name
 ----TableScan: join_t1 projection=[t1_id, t1_name]
 ----TableScan: join_t2 projection=[t2_id]
 physical_plan
-ProjectionExec: expr=[t1_id@0 as t1_id, t2_id@3 as t2_id, t1_name@1 as t1_name]
+ProjectionExec: expr=[t1_id@1 as t1_id, t2_id@0 as t2_id, t1_name@2 as t1_name]
 --CoalesceBatchesExec: target_batch_size=2
-----HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(join_t1.t1_id + UInt32(11)@2, t2_id@0)]
-------CoalescePartitionsExec
---------ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name, t1_id@0 + 11 as join_t1.t1_id + UInt32(11)]
-----------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
-------------MemoryExec: partitions=1, partition_sizes=[1]
-------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
---------MemoryExec: partitions=1, partition_sizes=[1]
+----HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(t2_id@0, join_t1.t1_id + UInt32(11)@2)]
+------MemoryExec: partitions=1, partition_sizes=[1]
+------ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name, t1_id@0 + 11 as join_t1.t1_id + UInt32(11)]
+--------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+----------MemoryExec: partitions=1, partition_sizes=[1]
 
 statement ok
 set datafusion.optimizer.repartition_joins = true;
@@ -1595,18 +1593,18 @@ Projection: join_t1.t1_id, join_t2.t2_id, join_t1.t1_name
 ----TableScan: join_t1 projection=[t1_id, t1_name]
 ----TableScan: join_t2 projection=[t2_id]
 physical_plan
-ProjectionExec: expr=[t1_id@0 as t1_id, t2_id@3 as t2_id, t1_name@1 as t1_name]
+ProjectionExec: expr=[t1_id@1 as t1_id, t2_id@0 as t2_id, t1_name@2 as t1_name]
 --CoalesceBatchesExec: target_batch_size=2
-----HashJoinExec: mode=Partitioned, join_type=Inner, on=[(join_t1.t1_id + UInt32(11)@2, t2_id@0)]
+----HashJoinExec: mode=Partitioned, join_type=Inner, on=[(t2_id@0, join_t1.t1_id + UInt32(11)@2)]
+------CoalesceBatchesExec: target_batch_size=2
+--------RepartitionExec: partitioning=Hash([t2_id@0], 2), input_partitions=2
+----------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+------------MemoryExec: partitions=1, partition_sizes=[1]
 ------CoalesceBatchesExec: target_batch_size=2
 --------RepartitionExec: partitioning=Hash([join_t1.t1_id + UInt32(11)@2], 2), input_partitions=2
 ----------ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name, t1_id@0 + 11 as join_t1.t1_id + UInt32(11)]
 ------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
 --------------MemoryExec: partitions=1, partition_sizes=[1]
-------CoalesceBatchesExec: target_batch_size=2
---------RepartitionExec: partitioning=Hash([t2_id@0], 2), input_partitions=2
-----------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
-------------MemoryExec: partitions=1, partition_sizes=[1]
 
 # Right side expr key inner join
 
@@ -2821,13 +2819,13 @@ physical_plan
 SortPreservingMergeExec: [t1_id@0 ASC NULLS LAST]
 --SortExec: expr=[t1_id@0 ASC NULLS LAST]
 ----CoalesceBatchesExec: target_batch_size=2
-------HashJoinExec: mode=Partitioned, join_type=LeftSemi, on=[(t1_id@0, t2_id@0)]
+------HashJoinExec: mode=Partitioned, join_type=RightSemi, on=[(t2_id@0, t1_id@0)]
 --------CoalesceBatchesExec: target_batch_size=2
-----------RepartitionExec: partitioning=Hash([t1_id@0], 2), input_partitions=2
+----------RepartitionExec: partitioning=Hash([t2_id@0], 2), input_partitions=2
 ------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
 --------------MemoryExec: partitions=1, partition_sizes=[1]
 --------CoalesceBatchesExec: target_batch_size=2
-----------RepartitionExec: partitioning=Hash([t2_id@0], 2), input_partitions=2
+----------RepartitionExec: partitioning=Hash([t1_id@0], 2), input_partitions=2
 ------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
 --------------MemoryExec: partitions=1, partition_sizes=[1]
 
@@ -2862,13 +2860,13 @@ physical_plan
 SortPreservingMergeExec: [t1_id@0 ASC NULLS LAST]
 --SortExec: expr=[t1_id@0 ASC NULLS LAST]
 ----CoalesceBatchesExec: target_batch_size=2
-------HashJoinExec: mode=Partitioned, join_type=LeftSemi, on=[(t1_id@0, t2_id@0)]
+------HashJoinExec: mode=Partitioned, join_type=RightSemi, on=[(t2_id@0, t1_id@0)]
 --------CoalesceBatchesExec: target_batch_size=2
-----------RepartitionExec: partitioning=Hash([t1_id@0], 2), input_partitions=2
+----------RepartitionExec: partitioning=Hash([t2_id@0], 2), input_partitions=2
 ------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
 --------------MemoryExec: partitions=1, partition_sizes=[1]
 --------CoalesceBatchesExec: target_batch_size=2
-----------RepartitionExec: partitioning=Hash([t2_id@0], 2), input_partitions=2
+----------RepartitionExec: partitioning=Hash([t1_id@0], 2), input_partitions=2
 ------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
 --------------MemoryExec: partitions=1, partition_sizes=[1]
 
@@ -2924,7 +2922,7 @@ physical_plan
 SortPreservingMergeExec: [t1_id@0 ASC NULLS LAST]
 --SortExec: expr=[t1_id@0 ASC NULLS LAST]
 ----CoalesceBatchesExec: target_batch_size=2
-------HashJoinExec: mode=CollectLeft, join_type=LeftSemi, on=[(t1_id@0, t2_id@0)]
+------HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(t2_id@0, t1_id@0)]
 --------MemoryExec: partitions=1, partition_sizes=[1]
 --------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
 ----------MemoryExec: partitions=1, partition_sizes=[1]
@@ -2960,7 +2958,7 @@ physical_plan
 SortPreservingMergeExec: [t1_id@0 ASC NULLS LAST]
 --SortExec: expr=[t1_id@0 ASC NULLS LAST]
 ----CoalesceBatchesExec: target_batch_size=2
-------HashJoinExec: mode=CollectLeft, join_type=LeftSemi, on=[(t1_id@0, t2_id@0)]
+------HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(t2_id@0, t1_id@0)]
 --------MemoryExec: partitions=1, partition_sizes=[1]
 --------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
 ----------MemoryExec: partitions=1, partition_sizes=[1]
@@ -3464,7 +3462,7 @@ SortPreservingMergeExec: [a@0 ASC]
 ----------------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
 ------------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b, c], output_ordering=[a@0 ASC, b@1 ASC NULLS LAST, c@2 ASC NULLS LAST], has_header=true
 ------------------CoalesceBatchesExec: target_batch_size=2
---------------------SortPreservingRepartitionExec: partitioning=Hash([a@0], 2), input_partitions=2, sort_exprs=a@0 ASC,b@1 ASC NULLS LAST
+--------------------RepartitionExec: partitioning=Hash([a@0], 2), input_partitions=2, preserve_order=true, sort_exprs=a@0 ASC,b@1 ASC NULLS LAST
 ----------------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
 ------------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b], output_ordering=[a@0 ASC, b@1 ASC NULLS LAST], has_header=true
 

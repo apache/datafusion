@@ -31,7 +31,7 @@ use async_trait::async_trait;
 use futures::StreamExt;
 use tokio::task::spawn_blocking;
 
-use datafusion_common::{plan_err, DataFusionError, Result};
+use datafusion_common::{plan_err, Constraints, DataFusionError, Result};
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_expr::{CreateExternalTable, Expr, TableType};
 use datafusion_physical_plan::common::AbortOnDropSingle;
@@ -100,6 +100,7 @@ pub struct StreamConfig {
     encoding: StreamEncoding,
     header: bool,
     order: Vec<Vec<Expr>>,
+    constraints: Constraints,
 }
 
 impl StreamConfig {
@@ -118,6 +119,7 @@ impl StreamConfig {
             encoding: StreamEncoding::Csv,
             order: vec![],
             header: false,
+            constraints: Constraints::empty(),
         }
     }
 
@@ -142,6 +144,12 @@ impl StreamConfig {
     /// Specify an encoding for the stream
     pub fn with_encoding(mut self, encoding: StreamEncoding) -> Self {
         self.encoding = encoding;
+        self
+    }
+
+    /// Assign constraints
+    pub fn with_constraints(mut self, constraints: Constraints) -> Self {
+        self.constraints = constraints;
         self
     }
 
@@ -171,7 +179,10 @@ impl StreamConfig {
         match &self.encoding {
             StreamEncoding::Csv => {
                 let header = self.header && !self.location.exists();
-                let file = OpenOptions::new().append(true).open(&self.location)?;
+                let file = OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(&self.location)?;
                 let writer = arrow::csv::WriterBuilder::new()
                     .with_header(header)
                     .build(file);
@@ -179,7 +190,10 @@ impl StreamConfig {
                 Ok(Box::new(writer))
             }
             StreamEncoding::Json => {
-                let file = OpenOptions::new().append(true).open(&self.location)?;
+                let file = OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(&self.location)?;
                 Ok(Box::new(arrow::json::LineDelimitedWriter::new(file)))
             }
         }
@@ -213,6 +227,10 @@ impl TableProvider for StreamTable {
 
     fn schema(&self) -> SchemaRef {
         self.0.schema.clone()
+    }
+
+    fn constraints(&self) -> Option<&Constraints> {
+        Some(&self.0.constraints)
     }
 
     fn table_type(&self) -> TableType {

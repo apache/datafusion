@@ -253,7 +253,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                     Some(a) => match a {
                         protobuf::projection_node::OptionalAlias::Alias(alias) => {
                             Ok(LogicalPlan::SubqueryAlias(SubqueryAlias::try_new(
-                                new_proj,
+                                Arc::new(new_proj),
                                 alias.clone(),
                             )?))
                         }

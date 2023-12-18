@@ -28,8 +28,7 @@ use crate::signature::TIMEZONE_WILDCARD;
 use crate::type_coercion::binary::get_wider_type;
 use crate::type_coercion::functions::data_types;
 use crate::{
-    conditional_expressions, struct_expressions, FuncMonotonicity, Signature,
-    TypeSignature, Volatility,
+    conditional_expressions, FuncMonotonicity, Signature, TypeSignature, Volatility,
 };
 
 use arrow::datatypes::{DataType, Field, Fields, IntervalUnit, TimeUnit};
@@ -146,6 +145,8 @@ pub enum BuiltinScalarFunction {
     ArrayPopBack,
     /// array_dims
     ArrayDims,
+    /// array_distinct
+    ArrayDistinct,
     /// array_element
     ArrayElement,
     /// array_empty
@@ -407,6 +408,7 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::ArrayHasAny => Volatility::Immutable,
             BuiltinScalarFunction::ArrayHas => Volatility::Immutable,
             BuiltinScalarFunction::ArrayDims => Volatility::Immutable,
+            BuiltinScalarFunction::ArrayDistinct => Volatility::Immutable,
             BuiltinScalarFunction::ArrayElement => Volatility::Immutable,
             BuiltinScalarFunction::ArrayExcept => Volatility::Immutable,
             BuiltinScalarFunction::ArrayLength => Volatility::Immutable,
@@ -586,6 +588,7 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::ArrayDims => {
                 Ok(List(Arc::new(Field::new("item", UInt64, true))))
             }
+            BuiltinScalarFunction::ArrayDistinct => Ok(input_expr_types[0].clone()),
             BuiltinScalarFunction::ArrayElement => match &input_expr_types[0] {
                 List(field) => Ok(field.data_type().clone()),
                 _ => plan_err!(
@@ -940,6 +943,7 @@ impl BuiltinScalarFunction {
                 Signature::variadic_any(self.volatility())
             }
             BuiltinScalarFunction::ArrayNdims => Signature::any(1, self.volatility()),
+            BuiltinScalarFunction::ArrayDistinct => Signature::any(1, self.volatility()),
             BuiltinScalarFunction::ArrayPosition => {
                 Signature::variadic_any(self.volatility())
             }
@@ -969,10 +973,7 @@ impl BuiltinScalarFunction {
                 ],
                 self.volatility(),
             ),
-            BuiltinScalarFunction::Struct => Signature::variadic(
-                struct_expressions::SUPPORTED_STRUCT_TYPES.to_vec(),
-                self.volatility(),
-            ),
+            BuiltinScalarFunction::Struct => Signature::variadic_any(self.volatility()),
             BuiltinScalarFunction::Concat
             | BuiltinScalarFunction::ConcatWithSeparator => {
                 Signature::variadic(vec![Utf8], self.volatility())
@@ -1534,7 +1535,7 @@ impl BuiltinScalarFunction {
 
             // time/date functions
             BuiltinScalarFunction::Now => &["now"],
-            BuiltinScalarFunction::CurrentDate => &["current_date"],
+            BuiltinScalarFunction::CurrentDate => &["current_date", "today"],
             BuiltinScalarFunction::CurrentTime => &["current_time"],
             BuiltinScalarFunction::DateBin => &["date_bin"],
             BuiltinScalarFunction::DateTrunc => &["date_trunc", "datetrunc"],
@@ -1573,6 +1574,7 @@ impl BuiltinScalarFunction {
                 &["array_concat", "array_cat", "list_concat", "list_cat"]
             }
             BuiltinScalarFunction::ArrayDims => &["array_dims", "list_dims"],
+            BuiltinScalarFunction::ArrayDistinct => &["array_distinct", "list_distinct"],
             BuiltinScalarFunction::ArrayEmpty => &["empty"],
             BuiltinScalarFunction::ArrayElement => &[
                 "array_element",

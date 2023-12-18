@@ -157,7 +157,7 @@ impl ListingTableConfig {
 
     /// Infer `ListingOptions` based on `table_path` suffix.
     pub async fn infer_options(self, state: &SessionState) -> Result<Self> {
-        let store = if let Some(url) = self.table_paths.get(0) {
+        let store = if let Some(url) = self.table_paths.first() {
             state.runtime_env().object_store(url)?
         } else {
             return Ok(self);
@@ -165,7 +165,7 @@ impl ListingTableConfig {
 
         let file = self
             .table_paths
-            .get(0)
+            .first()
             .unwrap()
             .list_all_files(state, store.as_ref(), "")
             .await?
@@ -191,7 +191,7 @@ impl ListingTableConfig {
     pub async fn infer_schema(self, state: &SessionState) -> Result<Self> {
         match self.options {
             Some(options) => {
-                let schema = if let Some(url) = self.table_paths.get(0) {
+                let schema = if let Some(url) = self.table_paths.first() {
                     options.infer_schema(state, url).await?
                 } else {
                     Arc::new(Schema::empty())
@@ -246,11 +246,6 @@ pub struct ListingOptions {
     ///       multiple equivalent orderings, the outer `Vec` will have a
     ///       single element.
     pub file_sort_order: Vec<Vec<Expr>>,
-    /// Infinite source means that the input is not guaranteed to end.
-    /// Currently, CSV, JSON, and AVRO formats are supported.
-    /// In order to support infinite inputs, DataFusion may adjust query
-    /// plans (e.g. joins) to run the given query in full pipelining mode.
-    pub infinite_source: bool,
     /// This setting when true indicates that the table is backed by a single file.
     /// Any inserts to the table may only append to this existing file.
     pub single_file: bool,
@@ -274,28 +269,9 @@ impl ListingOptions {
             collect_stat: true,
             target_partitions: 1,
             file_sort_order: vec![],
-            infinite_source: false,
             single_file: false,
             file_type_write_options: None,
         }
-    }
-
-    /// Set unbounded assumption on [`ListingOptions`] and returns self.
-    ///
-    /// ```
-    /// use std::sync::Arc;
-    /// use datafusion::datasource::{listing::ListingOptions, file_format::csv::CsvFormat};
-    /// use datafusion::prelude::SessionContext;
-    /// let ctx = SessionContext::new();
-    /// let listing_options = ListingOptions::new(Arc::new(
-    ///     CsvFormat::default()
-    ///   )).with_infinite_source(true);
-    ///
-    /// assert_eq!(listing_options.infinite_source, true);
-    /// ```
-    pub fn with_infinite_source(mut self, infinite_source: bool) -> Self {
-        self.infinite_source = infinite_source;
-        self
     }
 
     /// Set file extension on [`ListingOptions`] and returns self.
@@ -490,7 +466,7 @@ impl ListingOptions {
 ///
 /// # Features
 ///
-/// 1. Merges schemas if the files have compatible but not indentical schemas
+/// 1. Merges schemas if the files have compatible but not identical schemas
 ///
 /// 2. Hive-style partitioning support, where a path such as
 /// `/files/date=1/1/2022/data.parquet` is injected as a `date` column.
@@ -557,7 +533,6 @@ pub struct ListingTable {
     options: ListingOptions,
     definition: Option<String>,
     collected_statistics: FileStatisticsCache,
-    infinite_source: bool,
     constraints: Constraints,
     column_defaults: HashMap<String, Expr>,
 }
@@ -587,7 +562,6 @@ impl ListingTable {
         for (part_col_name, part_col_type) in &options.table_partition_cols {
             builder.push(Field::new(part_col_name, part_col_type.clone(), false));
         }
-        let infinite_source = options.infinite_source;
 
         let table = Self {
             table_paths: config.table_paths,
@@ -596,7 +570,6 @@ impl ListingTable {
             options,
             definition: None,
             collected_statistics: Arc::new(DefaultFileStatisticsCache::default()),
-            infinite_source,
             constraints: Constraints::empty(),
             column_defaults: HashMap::new(),
         };
@@ -685,7 +658,7 @@ impl TableProvider for ListingTable {
         if partitioned_file_lists.is_empty() {
             let schema = self.schema();
             let projected_schema = project_schema(&schema, projection)?;
-            return Ok(Arc::new(EmptyExec::new(false, projected_schema)));
+            return Ok(Arc::new(EmptyExec::new(projected_schema)));
         }
 
         // extract types of partition columns
@@ -710,10 +683,10 @@ impl TableProvider for ListingTable {
             None
         };
 
-        let object_store_url = if let Some(url) = self.table_paths.get(0) {
+        let object_store_url = if let Some(url) = self.table_paths.first() {
             url.object_store()
         } else {
-            return Ok(Arc::new(EmptyExec::new(false, Arc::new(Schema::empty()))));
+            return Ok(Arc::new(EmptyExec::new(Arc::new(Schema::empty()))));
         };
         // create the execution plan
         self.options
@@ -729,7 +702,6 @@ impl TableProvider for ListingTable {
                     limit,
                     output_ordering: self.try_create_output_ordering()?,
                     table_partition_cols,
-                    infinite_source: self.infinite_source,
                 },
                 filters.as_ref(),
             )
@@ -835,7 +807,7 @@ impl TableProvider for ListingTable {
             // Multiple sort orders in outer vec are equivalent, so we pass only the first one
             let ordering = self
                 .try_create_output_ordering()?
-                .get(0)
+                .first()
                 .ok_or(DataFusionError::Internal(
                     "Expected ListingTable to have a sort order, but none found!".into(),
                 ))?
@@ -872,7 +844,7 @@ impl ListingTable {
         filters: &'a [Expr],
         limit: Option<usize>,
     ) -> Result<(Vec<Vec<PartitionedFile>>, Statistics)> {
-        let store = if let Some(url) = self.table_paths.get(0) {
+        let store = if let Some(url) = self.table_paths.first() {
             ctx.runtime_env().object_store(url)?
         } else {
             return Ok((vec![], Statistics::new_unknown(&self.file_schema)));
@@ -943,7 +915,6 @@ impl ListingTable {
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
-    use std::fs::File;
 
     use super::*;
     #[cfg(feature = "parquet")]
@@ -955,7 +926,6 @@ mod tests {
     use crate::{
         assert_batches_eq,
         datasource::file_format::avro::AvroFormat,
-        execution::options::ReadOptions,
         logical_expr::{col, lit},
         test::{columns, object_store::register_test_store},
     };
@@ -967,36 +937,7 @@ mod tests {
     use datafusion_common::{assert_contains, GetExt, ScalarValue};
     use datafusion_expr::{BinaryExpr, LogicalPlanBuilder, Operator};
     use datafusion_physical_expr::PhysicalSortExpr;
-    use rstest::*;
     use tempfile::TempDir;
-
-    /// It creates dummy file and checks if it can create unbounded input executors.
-    async fn unbounded_table_helper(
-        file_type: FileType,
-        listing_option: ListingOptions,
-        infinite_data: bool,
-    ) -> Result<()> {
-        let ctx = SessionContext::new();
-        register_test_store(
-            &ctx,
-            &[(&format!("table/file{}", file_type.get_ext()), 100)],
-        );
-
-        let schema = Schema::new(vec![Field::new("a", DataType::Boolean, false)]);
-
-        let table_path = ListingTableUrl::parse("test:///table/").unwrap();
-        let config = ListingTableConfig::new(table_path)
-            .with_listing_options(listing_option)
-            .with_schema(Arc::new(schema));
-        // Create a table
-        let table = ListingTable::try_new(config)?;
-        // Create executor from table
-        let source_exec = table.scan(&ctx.state(), None, &[], None).await?;
-
-        assert_eq!(source_exec.unbounded_output(&[])?, infinite_data);
-
-        Ok(())
-    }
 
     #[tokio::test]
     async fn read_single_file() -> Result<()> {
@@ -1203,99 +1144,6 @@ mod tests {
         );
 
         Ok(())
-    }
-
-    #[tokio::test]
-    async fn unbounded_csv_table_without_schema() -> Result<()> {
-        let tmp_dir = TempDir::new()?;
-        let file_path = tmp_dir.path().join("dummy.csv");
-        File::create(file_path)?;
-        let ctx = SessionContext::new();
-        let error = ctx
-            .register_csv(
-                "test",
-                tmp_dir.path().to_str().unwrap(),
-                CsvReadOptions::new().mark_infinite(true),
-            )
-            .await
-            .unwrap_err();
-        match error {
-            DataFusionError::Plan(_) => Ok(()),
-            val => Err(val),
-        }
-    }
-
-    #[tokio::test]
-    async fn unbounded_json_table_without_schema() -> Result<()> {
-        let tmp_dir = TempDir::new()?;
-        let file_path = tmp_dir.path().join("dummy.json");
-        File::create(file_path)?;
-        let ctx = SessionContext::new();
-        let error = ctx
-            .register_json(
-                "test",
-                tmp_dir.path().to_str().unwrap(),
-                NdJsonReadOptions::default().mark_infinite(true),
-            )
-            .await
-            .unwrap_err();
-        match error {
-            DataFusionError::Plan(_) => Ok(()),
-            val => Err(val),
-        }
-    }
-
-    #[tokio::test]
-    async fn unbounded_avro_table_without_schema() -> Result<()> {
-        let tmp_dir = TempDir::new()?;
-        let file_path = tmp_dir.path().join("dummy.avro");
-        File::create(file_path)?;
-        let ctx = SessionContext::new();
-        let error = ctx
-            .register_avro(
-                "test",
-                tmp_dir.path().to_str().unwrap(),
-                AvroReadOptions::default().mark_infinite(true),
-            )
-            .await
-            .unwrap_err();
-        match error {
-            DataFusionError::Plan(_) => Ok(()),
-            val => Err(val),
-        }
-    }
-
-    #[rstest]
-    #[tokio::test]
-    async fn unbounded_csv_table(
-        #[values(true, false)] infinite_data: bool,
-    ) -> Result<()> {
-        let config = CsvReadOptions::new().mark_infinite(infinite_data);
-        let session_config = SessionConfig::new().with_target_partitions(1);
-        let listing_options = config.to_listing_options(&session_config);
-        unbounded_table_helper(FileType::CSV, listing_options, infinite_data).await
-    }
-
-    #[rstest]
-    #[tokio::test]
-    async fn unbounded_json_table(
-        #[values(true, false)] infinite_data: bool,
-    ) -> Result<()> {
-        let config = NdJsonReadOptions::default().mark_infinite(infinite_data);
-        let session_config = SessionConfig::new().with_target_partitions(1);
-        let listing_options = config.to_listing_options(&session_config);
-        unbounded_table_helper(FileType::JSON, listing_options, infinite_data).await
-    }
-
-    #[rstest]
-    #[tokio::test]
-    async fn unbounded_avro_table(
-        #[values(true, false)] infinite_data: bool,
-    ) -> Result<()> {
-        let config = AvroReadOptions::default().mark_infinite(infinite_data);
-        let session_config = SessionConfig::new().with_target_partitions(1);
-        let listing_options = config.to_listing_options(&session_config);
-        unbounded_table_helper(FileType::AVRO, listing_options, infinite_data).await
     }
 
     #[tokio::test]

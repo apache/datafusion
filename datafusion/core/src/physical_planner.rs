@@ -91,6 +91,7 @@ use datafusion_expr::{
     WindowFrameBound, WriteOp,
 };
 use datafusion_physical_expr::expressions::Literal;
+use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
 use datafusion_sql::utils::window_expr_common_partition_keys;
 
 use async_trait::async_trait;
@@ -570,11 +571,7 @@ impl DefaultPhysicalPlanner {
                     copy_options,
                 }) => {
                     let input_exec = self.create_initial_plan(input, session_state).await?;
-
-                    // TODO: make this behavior configurable via options (should copy to create path/file as needed?)
-                    // TODO: add additional configurable options for if existing files should be overwritten or
-                    // appended to
-                    let parsed_url = ListingTableUrl::parse_create_local_if_not_exists(output_url, !*single_file_output)?;
+                    let parsed_url = ListingTableUrl::parse(output_url)?;
                     let object_store_url = parsed_url.object_store();
 
                     let schema: Schema = (**input.schema()).clone().into();
@@ -798,14 +795,13 @@ impl DefaultPhysicalPlanner {
                         })
                         .collect::<Result<Vec<_>>>()?;
 
-                    let (aggregates, filters, order_bys) : (Vec<_>, Vec<_>, Vec<_>) = multiunzip(agg_filter);
+                    let (aggregates, filters, _order_bys) : (Vec<_>, Vec<_>, Vec<_>) = multiunzip(agg_filter);
 
                     let initial_aggr = Arc::new(AggregateExec::try_new(
                         AggregateMode::Partial,
                         groups.clone(),
                         aggregates.clone(),
                         filters.clone(),
-                        order_bys,
                         input_exec,
                         physical_input_schema.clone(),
                     )?);
@@ -823,7 +819,6 @@ impl DefaultPhysicalPlanner {
                     // To reflect such changes to subsequent stages, use the updated
                     // `AggregateExpr`/`PhysicalSortExpr` objects.
                     let updated_aggregates = initial_aggr.aggr_expr().to_vec();
-                    let updated_order_bys = initial_aggr.order_by_expr().to_vec();
 
                     let next_partition_mode = if can_repartition {
                         // construct a second aggregation with 'AggregateMode::FinalPartitioned'
@@ -847,7 +842,6 @@ impl DefaultPhysicalPlanner {
                         final_grouping_set,
                         updated_aggregates,
                         filters,
-                        updated_order_bys,
                         initial_aggr,
                         physical_input_schema.clone(),
                     )?))
@@ -1196,10 +1190,15 @@ impl DefaultPhysicalPlanner {
                 }
                 LogicalPlan::Subquery(_) => todo!(),
                 LogicalPlan::EmptyRelation(EmptyRelation {
-                    produce_one_row,
+                    produce_one_row: false,
                     schema,
                 }) => Ok(Arc::new(EmptyExec::new(
-                    *produce_one_row,
+                    SchemaRef::new(schema.as_ref().to_owned().into()),
+                ))),
+                LogicalPlan::EmptyRelation(EmptyRelation {
+                    produce_one_row: true,
+                    schema,
+                }) => Ok(Arc::new(PlaceholderRowExec::new(
                     SchemaRef::new(schema.as_ref().to_owned().into()),
                 ))),
                 LogicalPlan::SubqueryAlias(SubqueryAlias { input, .. }) => {
@@ -2012,7 +2011,7 @@ impl DefaultPhysicalPlanner {
         let mut column_names = StringBuilder::new();
         let mut data_types = StringBuilder::new();
         let mut is_nullables = StringBuilder::new();
-        for (_, field) in table_schema.fields().iter().enumerate() {
+        for field in table_schema.fields() {
             column_names.append_value(field.name());
 
             // "System supplied type" --> Use debug format of the datatype
@@ -2767,7 +2766,7 @@ mod tests {
 
 digraph {
     1[shape=box label="ProjectionExec: expr=[id@0 + 2 as employee.id + Int32(2)]", tooltip=""]
-    2[shape=box label="EmptyExec: produce_one_row=false", tooltip=""]
+    2[shape=box label="EmptyExec", tooltip=""]
     1 -> 2 [arrowhead=none, arrowtail=normal, dir=back]
 }
 // End DataFusion GraphViz Plan

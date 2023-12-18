@@ -517,6 +517,9 @@ make_error!(not_impl_err, not_impl_datafusion_err, NotImplemented);
 // Exposes a macro to create `DataFusionError::Execution`
 make_error!(exec_err, exec_datafusion_err, Execution);
 
+// Exposes a macro to create `DataFusionError::Substrait`
+make_error!(substrait_err, substrait_datafusion_err, Substrait);
+
 // Exposes a macro to create `DataFusionError::SQL`
 #[macro_export]
 macro_rules! sql_err {
@@ -564,18 +567,16 @@ mod test {
         assert_eq!(
             err.split(DataFusionError::BACK_TRACE_SEP)
                 .collect::<Vec<&str>>()
-                .get(0)
+                .first()
                 .unwrap(),
             &"Error during planning: Err"
         );
-        assert!(
-            err.split(DataFusionError::BACK_TRACE_SEP)
-                .collect::<Vec<&str>>()
-                .get(1)
-                .unwrap()
-                .len()
-                > 0
-        );
+        assert!(!err
+            .split(DataFusionError::BACK_TRACE_SEP)
+            .collect::<Vec<&str>>()
+            .get(1)
+            .unwrap()
+            .is_empty());
     }
 
     #[cfg(not(feature = "backtrace"))]
