@@ -24,7 +24,6 @@ use datafusion::{
     logical_expr::Volatility,
 };
 
-use arrow::array::Array;
 use datafusion::prelude::*;
 use datafusion::{error::Result, physical_plan::functions::make_scalar_function};
 use datafusion_common::cast::as_float64_array;
