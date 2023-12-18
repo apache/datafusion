@@ -342,6 +342,8 @@ pub fn longest_consecutive_prefix<T: Borrow<usize>>(
     count
 }
 
+/// Array Utils
+
 /// Wrap an array into a single element `ListArray`.
 /// For example `[1, 2, 3]` would be converted into `[[1, 2, 3]]`
 pub fn array_into_list_array(arr: ArrayRef) -> ListArray {
@@ -426,6 +428,42 @@ pub fn base_type(data_type: &DataType) -> DataType {
         base_type(field.data_type())
     } else {
         data_type.to_owned()
+    }
+}
+
+/// A helper function to coerce base type in List.
+///
+/// Example
+/// ```
+/// use arrow::datatypes::{DataType, Field};
+/// use datafusion_common::utils::coerced_type_with_base_type_only;
+/// use std::sync::Arc;
+///
+/// let data_type = DataType::List(Arc::new(Field::new("item", DataType::Int32, true)));
+/// let base_type = DataType::Float64;
+/// let coerced_type = coerced_type_with_base_type_only(&data_type, &base_type);
+/// assert_eq!(coerced_type, DataType::List(Arc::new(Field::new("item", DataType::Float64, true))));
+pub fn coerced_type_with_base_type_only(
+    data_type: &DataType,
+    base_type: &DataType,
+) -> DataType {
+    match data_type {
+        DataType::List(field) => {
+            let data_type = match field.data_type() {
+                DataType::List(_) => {
+                    coerced_type_with_base_type_only(field.data_type(), base_type)
+                }
+                _ => base_type.to_owned(),
+            };
+
+            DataType::List(Arc::new(Field::new(
+                field.name(),
+                data_type,
+                field.is_nullable(),
+            )))
+        }
+
+        _ => base_type.clone(),
     }
 }
 
