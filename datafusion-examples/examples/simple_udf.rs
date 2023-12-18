@@ -24,28 +24,29 @@ use datafusion::{
     logical_expr::Volatility,
 };
 
+use arrow::array::Array;
 use datafusion::prelude::*;
 use datafusion::{error::Result, physical_plan::functions::make_scalar_function};
 use datafusion_common::cast::as_float64_array;
 use std::sync::Arc;
 
-// create local execution context with an in-memory table
+/// create local execution context with an in-memory table:
+///
+/// ```text
+/// +-----+-----+
+/// | a   | b   |
+/// +-----+-----+
+/// | 2.1 | 1.0 |
+/// | 3.1 | 2.0 |
+/// | 4.1 | 3.0 |
+/// | 5.1 | 4.0 |
+/// +-----+-----+
+/// ```
 fn create_context() -> Result<SessionContext> {
-    use datafusion::arrow::datatypes::{Field, Schema};
-    // define a schema.
-    let schema = Arc::new(Schema::new(vec![
-        Field::new("a", DataType::Float32, false),
-        Field::new("b", DataType::Float64, false),
-    ]));
-
     // define data.
-    let batch = RecordBatch::try_new(
-        schema,
-        vec![
-            Arc::new(Float32Array::from(vec![2.1, 3.1, 4.1, 5.1])),
-            Arc::new(Float64Array::from(vec![1.0, 2.0, 3.0, 4.0])),
-        ],
-    )?;
+    let a: ArrayRef = Arc::new(Float32Array::from(vec![2.1, 3.1, 4.1, 5.1]));
+    let b: ArrayRef = Arc::new(Float64Array::from(vec![1.0, 2.0, 3.0, 4.0]));
+    let batch = RecordBatch::try_from_iter(vec![("a", a), ("b", b)])?;
 
     // declare a new context. In spark API, this corresponds to a new spark SQLsession
     let ctx = SessionContext::new();
