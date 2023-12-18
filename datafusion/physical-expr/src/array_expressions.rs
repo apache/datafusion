@@ -1875,7 +1875,7 @@ fn general_set_op(
     match (array1.data_type(), array2.data_type()) {
         (DataType::Null, DataType::List(field)) => {
             if set_op == SetOp::Intersect {
-                return make_array(dbg!(&[]));
+                return Ok(new_empty_array(&DataType::Null));
             }
             let array = as_list_array(&array2)?;
             general_array_distinct::<i32>(array, field)
@@ -1883,14 +1883,14 @@ fn general_set_op(
 
         (DataType::List(field), DataType::Null) => {
             if set_op == SetOp::Intersect {
-                return make_array(dbg!(&[]));
+                return make_array(&[]);
             }
             let array = as_list_array(&array1)?;
             general_array_distinct::<i32>(array, field)
         }
         (DataType::Null, DataType::LargeList(field)) => {
             if set_op == SetOp::Intersect {
-                return make_array(&[]);
+                return Ok(new_empty_array(&DataType::Null));
             }
             let array = as_large_list_array(&array2)?;
             general_array_distinct::<i64>(array, field)
@@ -1902,7 +1902,7 @@ fn general_set_op(
             let array = as_large_list_array(&array1)?;
             general_array_distinct::<i64>(array, field)
         }
-        (DataType::Null, DataType::Null) => make_array(&[]),
+        (DataType::Null, DataType::Null) => return Ok(new_empty_array(&DataType::Null)),
 
         (DataType::List(_), DataType::List(_)) => {
             let array1 = as_list_array(&array1)?;

@@ -2654,7 +2654,7 @@ select array_union(null, []);
 query ?
 select array_union(null, null);
 ----
-[]
+NULL
 
 # array_union scalar function #11
 query ?
@@ -3615,7 +3615,7 @@ select array_intersect([1, 1, 2, 2, 3, 3], null);
 query ?
 select array_intersect(null, [1, 1, 2, 2, 3, 3]);
 ----
-[]
+NULL
 
 query ?
 select array_intersect([], null);
@@ -3625,12 +3625,12 @@ select array_intersect([], null);
 query ?
 select array_intersect(null, []);
 ----
-[]
+NULL
 
 query ?
 select array_intersect(null, null);
 ----
-[]
+NULL
 
 query ??????
 SELECT  list_intersect(make_array(1,2,3), make_array(2,3,4)),
