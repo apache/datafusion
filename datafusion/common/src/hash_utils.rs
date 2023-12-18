@@ -224,14 +224,12 @@ fn hash_struct_array(
         (0..num_columns).collect()
     };
 
-    for column in array.columns() {
-        let mut values_hashes = vec![0u64; array.len()];
-        create_hashes(&[column.to_owned()], random_state, &mut values_hashes)?;
-        // iterate valid rows and combine hash with the same row from previous column
-        for row in valid_indices.iter().cloned() {
-            let hash = &mut hashes_buffer[row];
-            *hash = combine_hashes(*hash, values_hashes[row]);
-        }
+    let mut values_hashes = vec![0u64; array.len()];
+    create_hashes(array.columns(), random_state, &mut values_hashes)?;
+
+    for i in valid_indices {
+        let hash = &mut hashes_buffer[i];
+        *hash = combine_hashes(*hash, values_hashes[i]);
     }
 
     Ok(())
