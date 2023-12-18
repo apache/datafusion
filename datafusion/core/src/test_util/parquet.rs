@@ -156,7 +156,6 @@ impl TestParquetFile {
             limit: None,
             table_partition_cols: vec![],
             output_ordering: vec![],
-            infinite_source: false,
         };
 
         let df_schema = self.schema.clone().to_dfschema_ref()?;

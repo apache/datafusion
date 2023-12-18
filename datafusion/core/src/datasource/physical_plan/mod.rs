@@ -133,10 +133,6 @@ impl DisplayAs for FileScanConfig {
             write!(f, ", limit={limit}")?;
         }
 
-        if self.infinite_source {
-            write!(f, ", infinite_source=true")?;
-        }
-
         if let Some(ordering) = orderings.first() {
             if !ordering.is_empty() {
                 let start = if orderings.len() == 1 {
