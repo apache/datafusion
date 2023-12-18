@@ -370,18 +370,14 @@ pub fn make_array(arrays: &[ArrayRef]) -> Result<ArrayRef> {
     }
 }
 
-/// array_element SQL function
-///
-/// There are two arguments for array_element, the first one is the array, the second one is the 1-indexed index.
-/// `array_element(array, index)`
-///
-/// For example:
-/// > array_element(\[1, 2, 3], 2) -> 2
-pub fn array_element(args: &[ArrayRef]) -> Result<ArrayRef> {
-    let list_array = as_list_array(&args[0])?;
-    let indexes = as_int64_array(&args[1])?;
-
-    let values = list_array.values();
+fn general_array_element<O: OffsetSizeTrait>(
+    array: &GenericListArray<O>,
+    indexes: &Int64Array,
+) -> Result<ArrayRef>
+where
+    i64: TryInto<O>,
+{
+    let values = array.values();
     let original_data = values.to_data();
     let capacity = Capacities::Array(original_data.len());
 
@@ -389,37 +385,47 @@ pub fn array_element(args: &[ArrayRef]) -> Result<ArrayRef> {
     let mut mutable =
         MutableArrayData::with_capacities(vec![&original_data], true, capacity);
 
-    fn adjusted_array_index(index: i64, len: usize) -> Option<i64> {
+    fn adjusted_array_index<O: OffsetSizeTrait>(index: i64, len: O) -> Result<Option<O>>
+    where
+        i64: TryInto<O>,
+    {
+        let index: O = index.try_into().map_err(|_| {
+            DataFusionError::Execution(format!(
+                "array_element got invalid index: {}",
+                index
+            ))
+        })?;
         // 0 ~ len - 1
-        let adjusted_zero_index = if index < 0 {
-            index + len as i64
+        let adjusted_zero_index = if index < O::usize_as(0) {
+            index + len
         } else {
-            index - 1
+            index - O::usize_as(1)
         };
 
-        if 0 <= adjusted_zero_index && adjusted_zero_index < len as i64 {
-            Some(adjusted_zero_index)
+        if O::usize_as(0) <= adjusted_zero_index && adjusted_zero_index < len {
+            Ok(Some(adjusted_zero_index))
         } else {
             // Out of bounds
-            None
+            Ok(None)
         }
     }
 
-    for (row_index, offset_window) in list_array.offsets().windows(2).enumerate() {
-        let start = offset_window[0] as usize;
-        let end = offset_window[1] as usize;
+    for (row_index, offset_window) in array.offsets().windows(2).enumerate() {
+        let start = offset_window[0];
+        let end = offset_window[1];
         let len = end - start;
 
         // array is null
-        if len == 0 {
+        if len == O::usize_as(0) {
             mutable.extend_nulls(1);
             continue;
         }
 
-        let index = adjusted_array_index(indexes.value(row_index), len);
+        let index = adjusted_array_index::<O>(indexes.value(row_index), len)?;
 
         if let Some(index) = index {
-            mutable.extend(0, start + index as usize, start + index as usize + 1);
+            let start = start.as_usize() + index.as_usize();
+            mutable.extend(0, start, start + 1_usize);
         } else {
             // Index out of bounds
             mutable.extend_nulls(1);
@@ -428,6 +434,32 @@ pub fn array_element(args: &[ArrayRef]) -> Result<ArrayRef> {
 
     let data = mutable.freeze();
     Ok(arrow_array::make_array(data))
+}
+
+/// array_element SQL function
+///
+/// There are two arguments for array_element, the first one is the array, the second one is the 1-indexed index.
+/// `array_element(array, index)`
+///
+/// For example:
+/// > array_element(\[1, 2, 3], 2) -> 2
+pub fn array_element(args: &[ArrayRef]) -> Result<ArrayRef> {
+    match &args[0].data_type() {
+        DataType::List(_) => {
+            let array = as_list_array(&args[0])?;
+            let indexes = as_int64_array(&args[1])?;
+            general_array_element::<i32>(array, indexes)
+        }
+        DataType::LargeList(_) => {
+            let array = as_large_list_array(&args[0])?;
+            let indexes = as_int64_array(&args[1])?;
+            general_array_element::<i64>(array, indexes)
+        }
+        _ => not_impl_err!(
+            "array_element does not support type: {:?}",
+            args[0].data_type()
+        ),
+    }
 }
 
 fn general_except<OffsetSize: OffsetSizeTrait>(
