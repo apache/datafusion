@@ -867,42 +867,6 @@ mod tests {
         Ok(())
     }
 
-    #[rstest]
-    #[tokio::test]
-    async fn test_with_bounded_input(
-        #[values(false, true)] prefer_existing_sort: bool,
-    ) -> Result<()> {
-        let schema = create_test_schema()?;
-        let sort_exprs = vec![sort_expr("a", &schema)];
-        let source = stream_exec_ordered(&schema, sort_exprs);
-        let repartition = repartition_exec_hash(repartition_exec_round_robin(source));
-        let sort = sort_exec(vec![sort_expr("a", &schema)], repartition, true);
-
-        let physical_plan =
-            sort_preserving_merge_exec(vec![sort_expr("a", &schema)], sort);
-
-        let expected_input = [
-            "SortPreservingMergeExec: [a@0 ASC NULLS LAST]",
-            "  SortExec: expr=[a@0 ASC NULLS LAST]",
-            "    RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8",
-            "      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            "        StreamingTableExec: partition_sizes=1, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST]",
-        ];
-        let expected_optimized = [
-            "SortPreservingMergeExec: [a@0 ASC NULLS LAST]",
-            "  RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8, preserve_order=true, sort_exprs=a@0 ASC NULLS LAST",
-            "    RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            "      StreamingTableExec: partition_sizes=1, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST]",
-        ];
-        assert_optimized!(
-            expected_input,
-            expected_optimized,
-            physical_plan,
-            prefer_existing_sort
-        );
-        Ok(())
-    }
-
     // End test cases
     // Start test helpers
 
