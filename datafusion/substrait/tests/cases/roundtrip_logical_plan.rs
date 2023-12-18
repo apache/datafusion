@@ -32,7 +32,7 @@ use datafusion::execution::context::SessionState;
 use datafusion::execution::registry::SerializerRegistry;
 use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::logical_expr::{
-    Extension, LogicalPlan, UserDefinedLogicalNode, Volatility,
+    Extension, LogicalPlan, Repartition, UserDefinedLogicalNode, Volatility,
 };
 use datafusion::optimizer::simplify_expressions::expr_simplifier::THRESHOLD_INLINE_INLIST;
 use datafusion::prelude::*;
@@ -484,6 +484,46 @@ async fn roundtrip_ilike() -> Result<()> {
 }
 
 #[tokio::test]
+async fn roundtrip_not() -> Result<()> {
+    roundtrip("SELECT * FROM data WHERE NOT d").await
+}
+
+#[tokio::test]
+async fn roundtrip_negative() -> Result<()> {
+    roundtrip("SELECT * FROM data WHERE -a = 1").await
+}
+
+#[tokio::test]
+async fn roundtrip_is_true() -> Result<()> {
+    roundtrip("SELECT * FROM data WHERE d IS TRUE").await
+}
+
+#[tokio::test]
+async fn roundtrip_is_false() -> Result<()> {
+    roundtrip("SELECT * FROM data WHERE d IS FALSE").await
+}
+
+#[tokio::test]
+async fn roundtrip_is_not_true() -> Result<()> {
+    roundtrip("SELECT * FROM data WHERE d IS NOT TRUE").await
+}
+
+#[tokio::test]
+async fn roundtrip_is_not_false() -> Result<()> {
+    roundtrip("SELECT * FROM data WHERE d IS NOT FALSE").await
+}
+
+#[tokio::test]
+async fn roundtrip_is_unknown() -> Result<()> {
+    roundtrip("SELECT * FROM data WHERE d IS UNKNOWN").await
+}
+
+#[tokio::test]
+async fn roundtrip_is_not_unknown() -> Result<()> {
+    roundtrip("SELECT * FROM data WHERE d IS NOT UNKNOWN").await
+}
+
+#[tokio::test]
 async fn roundtrip_union() -> Result<()> {
     roundtrip("SELECT a, e FROM data UNION SELECT a, e FROM data").await
 }
@@ -696,6 +736,40 @@ async fn roundtrip_aggregate_udf() -> Result<()> {
     ctx.register_udaf(dummy_agg);
 
     roundtrip_with_ctx("select dummy_agg(a) from data", ctx).await
+}
+
+#[tokio::test]
+async fn roundtrip_repartition_roundrobin() -> Result<()> {
+    let ctx = create_context().await?;
+    let scan_plan = ctx.sql("SELECT * FROM data").await?.into_optimized_plan()?;
+    let plan = LogicalPlan::Repartition(Repartition {
+        input: Arc::new(scan_plan),
+        partitioning_scheme: Partitioning::RoundRobinBatch(8),
+    });
+
+    let proto = to_substrait_plan(&plan, &ctx)?;
+    let plan2 = from_substrait_plan(&ctx, &proto).await?;
+    let plan2 = ctx.state().optimize(&plan2)?;
+
+    assert_eq!(format!("{plan:?}"), format!("{plan2:?}"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn roundtrip_repartition_hash() -> Result<()> {
+    let ctx = create_context().await?;
+    let scan_plan = ctx.sql("SELECT * FROM data").await?.into_optimized_plan()?;
+    let plan = LogicalPlan::Repartition(Repartition {
+        input: Arc::new(scan_plan),
+        partitioning_scheme: Partitioning::Hash(vec![col("data.a")], 8),
+    });
+
+    let proto = to_substrait_plan(&plan, &ctx)?;
+    let plan2 = from_substrait_plan(&ctx, &proto).await?;
+    let plan2 = ctx.state().optimize(&plan2)?;
+
+    assert_eq!(format!("{plan:?}"), format!("{plan2:?}"));
+    Ok(())
 }
 
 fn check_post_join_filters(rel: &Rel) -> Result<()> {
