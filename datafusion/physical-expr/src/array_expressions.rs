@@ -1800,14 +1800,14 @@ fn generic_set_lists<OffsetSize: OffsetSizeTrait>(
 ) -> Result<ArrayRef> {
     if matches!(l.value_type(), DataType::Null) {
         let field = Arc::new(Field::new("item", r.value_type(), true));
-        general_array_distinct::<OffsetSize>(r, &field);
+        return general_array_distinct::<OffsetSize>(r, &field);
     } else if matches!(r.value_type(), DataType::Null) {
         let field = Arc::new(Field::new("item", l.value_type(), true));
-        general_array_distinct::<OffsetSize>(l, &field);
+        return general_array_distinct::<OffsetSize>(l, &field);
     }
 
     if l.value_type() != r.value_type() {
-        internal_err!("{set_op} is not implemented for '{l:?}' and '{r:?}'");
+        return internal_err!("{set_op:?} is not implemented for '{l:?}' and '{r:?}'");
     }
 
     let dt = l.value_type();
@@ -1883,7 +1883,7 @@ fn general_set_op(
 
         (DataType::List(field), DataType::Null) => {
             if set_op == SetOp::Intersect {
-                make_array(&[]);
+                return make_array(&[]);
             }
             let array = as_list_array(&array1)?;
             general_array_distinct::<i32>(array, field)
@@ -1897,7 +1897,7 @@ fn general_set_op(
         }
         (DataType::LargeList(field), DataType::Null) => {
             if set_op == SetOp::Intersect {
-                make_array(&[]);
+                return make_array(&[]);
             }
             let array = as_large_list_array(&array1)?;
             general_array_distinct::<i64>(array, field)
@@ -2305,7 +2305,7 @@ pub fn array_has(args: &[ArrayRef]) -> Result<ArrayRef> {
         DataType::LargeList(_) => {
             general_array_has_dispatch::<i64>(&args[0], &args[1], ComparisonType::Single)
         }
-        _ => internal_err!("array_has does not support type '{array_type:?}'."),
+        _ => exec_err!("array_has does not support type '{array_type:?}'."),
     }
 }
 
