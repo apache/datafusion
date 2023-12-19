@@ -276,6 +276,9 @@ pub(crate) fn replace_with_order_preserving_variants(
 mod tests {
     use super::*;
 
+    use crate::datasource::file_format::file_compression_type::FileCompressionType;
+    use crate::datasource::listing::PartitionedFile;
+    use crate::datasource::physical_plan::{CsvExec, FileScanConfig};
     use crate::physical_plan::coalesce_batches::CoalesceBatchesExec;
     use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
     use crate::physical_plan::filter::FilterExec;
@@ -285,11 +288,8 @@ mod tests {
     use crate::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
     use crate::physical_plan::{displayable, get_plan_string, Partitioning};
     use crate::prelude::SessionConfig;
-
-    use crate::datasource::file_format::file_compression_type::FileCompressionType;
-    use crate::datasource::listing::PartitionedFile;
-    use crate::datasource::physical_plan::{CsvExec, FileScanConfig};
     use crate::test::TestStreamPartition;
+
     use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
     use datafusion_common::tree_node::TreeNode;
@@ -299,20 +299,27 @@ mod tests {
     use datafusion_physical_expr::expressions::{self, col, Column};
     use datafusion_physical_expr::PhysicalSortExpr;
     use datafusion_physical_plan::streaming::StreamingTableExec;
+
     use rstest::rstest;
 
-    /// Runs the `replace_with_order_preserving_variants` sub-rule and asserts the plan
-    /// against the original and expected plans.
+    /// Runs the `replace_with_order_preserving_variants` sub-rule and asserts
+    /// the plan against the original and expected plans for both bounded and
+    /// unbounded cases.
     ///
-    /// `EXPECTED_UNBOUNDED_PLAN_LINES`: expected input unbounded plan
-    /// `EXPECTED_BOUNDED_PLAN_LINES`: expected input bounded plan
-    /// `EXPECTED_UNBOUNDED_OPTIMIZED_PLAN_LINES`: optimized plan when `prefer_existing_sort` flag is `false` and `true`. For unbounded cases these shouldn't be different.
-    /// `EXPECTED_BOUNDED_OPTIMIZED_PLAN_LINES`: optimized plan when `prefer_existing_sort` flag is `false` for bounded cases.
-    /// `EXPECTED_BOUNDED_PREFER_SORT_ON_OPTIMIZED_PLAN_LINES`: optimized plan when `prefer_existing_sort` flag is `true` for bounded cases.
-    /// `$PLAN`: the plan to optimized
-    /// `$SOURCE_UNBOUNDED`: whether given plan has unbounded source or not.
-    macro_rules! assert_optimized_unbounded_bounded_sort_prefer_on_off {
-        ($EXPECTED_UNBOUNDED_PLAN_LINES: expr, $EXPECTED_BOUNDED_PLAN_LINES: expr, $EXPECTED_UNBOUNDED_OPTIMIZED_PLAN_LINES: expr, $EXPECTED_BOUNDED_OPTIMIZED_PLAN_LINES: expr, $EXPECTED_BOUNDED_PREFER_SORT_ON_OPTIMIZED_PLAN_LINES: expr, $PLAN: expr, $SOURCE_UNBOUNDED: expr) => {
+    /// # Parameters
+    ///
+    /// * `EXPECTED_UNBOUNDED_PLAN_LINES`: Expected input unbounded plan.
+    /// * `EXPECTED_BOUNDED_PLAN_LINES`: Expected input bounded plan.
+    /// * `EXPECTED_UNBOUNDED_OPTIMIZED_PLAN_LINES`: Optimized plan, which is
+    ///   the same regardless of the value of the `prefer_existing_sort` flag.
+    /// * `EXPECTED_BOUNDED_OPTIMIZED_PLAN_LINES`: Optimized plan when the flag
+    ///   `prefer_existing_sort` is `false` for bounded cases.
+    /// * `EXPECTED_BOUNDED_PREFER_SORT_ON_OPTIMIZED_PLAN_LINES`: Optimized plan
+    ///   when the flag `prefer_existing_sort` is `true` for bounded cases.
+    /// * `$PLAN`: The plan to optimize.
+    /// * `$SOURCE_UNBOUNDED`: Whether the given plan contains an unbounded source.
+    macro_rules! assert_optimized_in_all_boundedness_situations {
+        ($EXPECTED_UNBOUNDED_PLAN_LINES: expr,  $EXPECTED_BOUNDED_PLAN_LINES: expr, $EXPECTED_UNBOUNDED_OPTIMIZED_PLAN_LINES: expr, $EXPECTED_BOUNDED_OPTIMIZED_PLAN_LINES: expr, $EXPECTED_BOUNDED_PREFER_SORT_ON_OPTIMIZED_PLAN_LINES: expr, $PLAN: expr, $SOURCE_UNBOUNDED: expr) => {
             if $SOURCE_UNBOUNDED {
                 assert_optimized_prefer_sort_on_off!(
                     $EXPECTED_UNBOUNDED_PLAN_LINES,
@@ -331,13 +338,17 @@ mod tests {
         };
     }
 
-    /// Runs the `replace_with_order_preserving_variants` sub-rule and asserts the plan
-    /// against the original and expected plans.
+    /// Runs the `replace_with_order_preserving_variants` sub-rule and asserts
+    /// the plan against the original and expected plans.
     ///
-    /// `$EXPECTED_PLAN_LINES`: input plan
-    /// `EXPECTED_OPTIMIZED_PLAN_LINES`: optimized plan when `prefer_existing_sort` flag is `false`
-    /// `EXPECTED_PREFER_SORT_ON_OPTIMIZED_PLAN_LINES`: optimized plan when `prefer_existing_sort` flag is `true`
-    /// `$PLAN`: the plan to optimized
+    /// # Parameters
+    ///
+    /// * `$EXPECTED_PLAN_LINES`: Expected input plan.
+    /// * `EXPECTED_OPTIMIZED_PLAN_LINES`: Optimized plan when the flag
+    ///   `prefer_existing_sort` is `false`.
+    /// * `EXPECTED_PREFER_SORT_ON_OPTIMIZED_PLAN_LINES`: Optimized plan when
+    ///   the flag `prefer_existing_sort` is `true`.
+    /// * `$PLAN`: The plan to optimize.
     macro_rules! assert_optimized_prefer_sort_on_off {
         ($EXPECTED_PLAN_LINES: expr, $EXPECTED_OPTIMIZED_PLAN_LINES: expr, $EXPECTED_PREFER_SORT_ON_OPTIMIZED_PLAN_LINES: expr, $PLAN: expr) => {
             assert_optimized!(
@@ -355,23 +366,17 @@ mod tests {
         };
     }
 
-    /// Runs the `replace_with_order_preserving_variants` sub-rule and asserts the plan
-    /// against the original and expected plans.
+    /// Runs the `replace_with_order_preserving_variants` sub-rule and asserts
+    /// the plan against the original and expected plans.
     ///
-    /// `$EXPECTED_PLAN_LINES`: input plan
-    /// `$EXPECTED_OPTIMIZED_PLAN_LINES`: optimized plan
-    /// `$PLAN`: the plan to optimized
-    /// `$ALLOW_BOUNDED`: whether to allow the plan to be optimized for bounded cases
+    /// # Parameters
+    ///
+    /// * `$EXPECTED_PLAN_LINES`: Expected input plan.
+    /// * `$EXPECTED_OPTIMIZED_PLAN_LINES`: Expected optimized plan.
+    /// * `$PLAN`: The plan to optimize.
+    /// * `$PREFER_EXISTING_SORT`: Value of the `prefer_existing_sort` flag.
     macro_rules! assert_optimized {
-        ($EXPECTED_PLAN_LINES: expr, $EXPECTED_OPTIMIZED_PLAN_LINES: expr, $PLAN: expr) => {
-            assert_optimized!(
-                $EXPECTED_PLAN_LINES,
-                $EXPECTED_OPTIMIZED_PLAN_LINES,
-                $PLAN,
-                false
-            );
-        };
-        ($EXPECTED_PLAN_LINES: expr, $EXPECTED_OPTIMIZED_PLAN_LINES: expr, $PLAN: expr, $ALLOW_BOUNDED: expr) => {
+        ($EXPECTED_PLAN_LINES: expr, $EXPECTED_OPTIMIZED_PLAN_LINES: expr, $PLAN: expr, $PREFER_EXISTING_SORT: expr) => {
             let physical_plan = $PLAN;
             let formatted = displayable(physical_plan.as_ref()).indent(true).to_string();
             let actual: Vec<&str> = formatted.trim().lines().collect();
@@ -387,7 +392,7 @@ mod tests {
             let expected_optimized_lines: Vec<&str> = $EXPECTED_OPTIMIZED_PLAN_LINES.iter().map(|s| *s).collect();
 
             // Run the rule top-down
-            let config = SessionConfig::new().with_prefer_existing_sort($ALLOW_BOUNDED);
+            let config = SessionConfig::new().with_prefer_existing_sort($PREFER_EXISTING_SORT);
             let plan_with_pipeline_fixer = OrderPreservationContext::new(physical_plan);
             let parallel = plan_with_pipeline_fixer.transform_up(&|plan_with_pipeline_fixer| replace_with_order_preserving_variants(plan_with_pipeline_fixer, false, false, config.options()))?;
             let optimized_physical_plan = parallel.plan;
@@ -458,7 +463,7 @@ mod tests {
             "    RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
             "      CsvExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], output_ordering=[a@0 ASC NULLS LAST], has_header=true",
         ];
-        assert_optimized_unbounded_bounded_sort_prefer_on_off!(
+        assert_optimized_in_all_boundedness_situations!(
             expected_input_unbounded,
             expected_input_bounded,
             expected_optimized_unbounded,
@@ -562,7 +567,7 @@ mod tests {
             "            RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
             "              CsvExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], output_ordering=[a@0 ASC], has_header=true",
         ];
-        assert_optimized_unbounded_bounded_sort_prefer_on_off!(
+        assert_optimized_in_all_boundedness_situations!(
             expected_input_unbounded,
             expected_input_bounded,
             expected_optimized_unbounded,
@@ -637,7 +642,7 @@ mod tests {
             "      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
             "        CsvExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], output_ordering=[a@0 ASC NULLS LAST], has_header=true",
         ];
-        assert_optimized_unbounded_bounded_sort_prefer_on_off!(
+        assert_optimized_in_all_boundedness_situations!(
             expected_input_unbounded,
             expected_input_bounded,
             expected_optimized_unbounded,
@@ -718,7 +723,7 @@ mod tests {
             "        RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
             "          CsvExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], output_ordering=[a@0 ASC NULLS LAST], has_header=true",
         ];
-        assert_optimized_unbounded_bounded_sort_prefer_on_off!(
+        assert_optimized_in_all_boundedness_situations!(
             expected_input_unbounded,
             expected_input_bounded,
             expected_optimized_unbounded,
@@ -806,7 +811,7 @@ mod tests {
             "          RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
             "            CsvExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], output_ordering=[a@0 ASC NULLS LAST], has_header=true",
         ];
-        assert_optimized_unbounded_bounded_sort_prefer_on_off!(
+        assert_optimized_in_all_boundedness_situations!(
             expected_input_unbounded,
             expected_input_bounded,
             expected_optimized_unbounded,
@@ -877,7 +882,7 @@ mod tests {
         ];
         let expected_optimized_bounded_sort_preserve = expected_optimized_bounded;
 
-        assert_optimized_unbounded_bounded_sort_prefer_on_off!(
+        assert_optimized_in_all_boundedness_situations!(
             expected_input_unbounded,
             expected_input_bounded,
             expected_optimized_unbounded,
@@ -964,7 +969,7 @@ mod tests {
             "          RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
             "            CsvExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], output_ordering=[a@0 ASC NULLS LAST], has_header=true",
         ];
-        assert_optimized_unbounded_bounded_sort_prefer_on_off!(
+        assert_optimized_in_all_boundedness_situations!(
             expected_input_unbounded,
             expected_input_bounded,
             expected_optimized_unbounded,
@@ -1036,7 +1041,7 @@ mod tests {
         ];
         let expected_optimized_bounded_sort_preserve = expected_optimized_bounded;
 
-        assert_optimized_unbounded_bounded_sort_prefer_on_off!(
+        assert_optimized_in_all_boundedness_situations!(
             expected_input_unbounded,
             expected_input_bounded,
             expected_optimized_unbounded,
@@ -1104,7 +1109,7 @@ mod tests {
             "    RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
             "      CsvExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], output_ordering=[a@0 ASC NULLS LAST], has_header=true",
         ];
-        assert_optimized_unbounded_bounded_sort_prefer_on_off!(
+        assert_optimized_in_all_boundedness_situations!(
             expected_input_unbounded,
             expected_input_bounded,
             expected_optimized_unbounded,
@@ -1210,7 +1215,7 @@ mod tests {
             "              RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
             "                CsvExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], output_ordering=[a@0 ASC NULLS LAST], has_header=true",
         ];
-        assert_optimized_unbounded_bounded_sort_prefer_on_off!(
+        assert_optimized_in_all_boundedness_situations!(
             expected_input_unbounded,
             expected_input_bounded,
             expected_optimized_unbounded,
@@ -1324,7 +1329,7 @@ mod tests {
         ];
         let expected_optimized_bounded_sort_preserve = expected_optimized_bounded;
 
-        assert_optimized_unbounded_bounded_sort_prefer_on_off!(
+        assert_optimized_in_all_boundedness_situations!(
             expected_input_unbounded,
             expected_input_bounded,
             expected_optimized_unbounded,
