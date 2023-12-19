@@ -15,21 +15,30 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::datatypes::{DataType, Field};
+use arrow::datatypes::{DataType, Field, TimeUnit};
+use arrow_array::types::{
+    ArrowPrimitiveType, Date32Type, Date64Type, Decimal128Type, Decimal256Type,
+    Float32Type, Float64Type, Int16Type, Int32Type, Int64Type, Int8Type,
+    Time32MillisecondType, Time32SecondType, Time64MicrosecondType, Time64NanosecondType,
+    TimestampMicrosecondType, TimestampMillisecondType, TimestampNanosecondType,
+    TimestampSecondType, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
+};
+use arrow_array::{Int64Array, ListArray};
+use itertools::Itertools;
 
 use std::any::Any;
 use std::fmt::Debug;
 use std::sync::Arc;
 
 use ahash::RandomState;
-use arrow::array::{Array, ArrayRef};
-use std::collections::HashSet;
+use arrow::array::{Array, ArrayRef, AsArray};
+use hashbrown::HashSet;
 
-use crate::aggregate::utils::down_cast_any_ref;
+use crate::aggregate::utils::{down_cast_any_ref, Hashable};
 use crate::expressions::format_state_name;
-use crate::{AggregateExpr, PhysicalExpr};
-use datafusion_common::Result;
-use datafusion_common::ScalarValue;
+use crate::{AggregateExpr, GroupsAccumulator, PhysicalExpr};
+use datafusion_common::cast::as_list_array;
+use datafusion_common::{internal_err, DataFusionError, Result, ScalarValue};
 use datafusion_expr::Accumulator;
 
 type DistinctScalarValues = ScalarValue;
@@ -60,6 +69,12 @@ impl DistinctCount {
     }
 }
 
+macro_rules! distinct_count_groups_accumulator {
+    ($SELF:expr, $TYPE:ident) => {{
+        Ok(Box::new(DistinctCountGroupsAccumulator::<$TYPE>::new()))
+    }};
+}
+
 impl AggregateExpr for DistinctCount {
     /// Return a reference to Any that can be used for downcasting
     fn as_any(&self) -> &dyn Any {
@@ -82,11 +97,88 @@ impl AggregateExpr for DistinctCount {
         vec![self.expr.clone()]
     }
 
+    fn groups_accumulator_supported(&self) -> bool {
+        use DataType::*;
+        matches!(
+            self.state_data_type,
+            Int8 | Int16
+                | Int32
+                | Int64
+                | UInt8
+                | UInt16
+                | UInt32
+                | UInt64
+                | Float32
+                | Float64
+                | Decimal128(_, _)
+                | Decimal256(_, _)
+                | Date32
+                | Date64
+                | Time32(_)
+                | Time64(_) // | Timestamp(_, _)
+        )
+    }
+
     fn create_accumulator(&self) -> Result<Box<dyn Accumulator>> {
         Ok(Box::new(DistinctCountAccumulator {
             values: HashSet::default(),
             state_data_type: self.state_data_type.clone(),
         }))
+    }
+
+    fn create_groups_accumulator(&self) -> Result<Box<dyn GroupsAccumulator>> {
+        use DataType::*;
+        use TimeUnit::*;
+
+        match self.state_data_type {
+            Int8 => distinct_count_groups_accumulator!(self, Int8Type),
+            Int16 => distinct_count_groups_accumulator!(self, Int16Type),
+            Int32 => distinct_count_groups_accumulator!(self, Int32Type),
+            Int64 => distinct_count_groups_accumulator!(self, Int64Type),
+            UInt8 => distinct_count_groups_accumulator!(self, UInt8Type),
+            UInt16 => distinct_count_groups_accumulator!(self, UInt16Type),
+            UInt32 => distinct_count_groups_accumulator!(self, UInt32Type),
+            UInt64 => distinct_count_groups_accumulator!(self, UInt64Type),
+            Float32 => distinct_count_groups_accumulator!(self, Float32Type),
+            Float64 => distinct_count_groups_accumulator!(self, Float64Type),
+            Decimal128(_, _) => {
+                distinct_count_groups_accumulator!(self, Decimal128Type)
+            }
+            Decimal256(_, _) => {
+                distinct_count_groups_accumulator!(self, Decimal256Type)
+            }
+            Date32 => distinct_count_groups_accumulator!(self, Date32Type),
+            Date64 => distinct_count_groups_accumulator!(self, Date64Type),
+            Time32(Millisecond) => {
+                distinct_count_groups_accumulator!(self, Time32MillisecondType)
+            }
+            Time32(Second) => {
+                distinct_count_groups_accumulator!(self, Time32SecondType)
+            }
+            Time64(Microsecond) => {
+                distinct_count_groups_accumulator!(self, Time64MicrosecondType)
+            }
+            Time64(Nanosecond) => {
+                distinct_count_groups_accumulator!(self, Time64NanosecondType)
+            }
+            Timestamp(Microsecond, _) => {
+                distinct_count_groups_accumulator!(self, TimestampMicrosecondType)
+            }
+            Timestamp(Millisecond, _) => {
+                distinct_count_groups_accumulator!(self, TimestampMillisecondType)
+            }
+            Timestamp(Nanosecond, _) => {
+                distinct_count_groups_accumulator!(self, TimestampNanosecondType)
+            }
+            Timestamp(Second, _) => {
+                distinct_count_groups_accumulator!(self, TimestampSecondType)
+            }
+
+            _ => internal_err!(
+                "DistinctCountGroupsAccumulator is not supported for {}",
+                self.state_data_type
+            ),
+        }
     }
 
     fn name(&self) -> &str {
@@ -189,6 +281,158 @@ impl Accumulator for DistinctCountAccumulator {
             d if d.is_primitive() => self.fixed_size(),
             _ => self.full_size(),
         }
+    }
+}
+
+struct DistinctCountGroupsAccumulator<T>
+where
+    T: ArrowPrimitiveType + Send,
+{
+    /// Vector for storing unique values sets for each group index
+    unique_values: Vec<HashSet<Hashable<T::Native>>>,
+}
+
+impl<T> DistinctCountGroupsAccumulator<T>
+where
+    T: ArrowPrimitiveType + Send,
+{
+    fn new() -> Self {
+        Self {
+            unique_values: vec![],
+        }
+    }
+}
+
+impl<T> GroupsAccumulator for DistinctCountGroupsAccumulator<T>
+where
+    T: ArrowPrimitiveType + Send,
+{
+    fn update_batch(
+        &mut self,
+        values: &[ArrayRef],
+        group_indices: &[usize],
+        opt_filter: Option<&arrow_array::BooleanArray>,
+        total_num_groups: usize,
+    ) -> Result<()> {
+        let values = values[0].as_primitive::<T>();
+
+        self.unique_values.resize(total_num_groups, HashSet::new());
+
+        // Update current state from incoming values
+        match opt_filter {
+            None => group_indices.iter().zip(values.iter()).for_each(
+                |(group_index, value)| {
+                    if let Some(value) = value {
+                        self.unique_values[*group_index].insert(Hashable(value));
+                    }
+                },
+            ),
+            Some(filter) => group_indices
+                .iter()
+                .zip(values.iter())
+                .zip(filter.iter())
+                .for_each(|((group_index, value), filter_value)| {
+                    if let Some(true) = filter_value {
+                        if let Some(value) = value {
+                            self.unique_values[*group_index].insert(Hashable(value));
+                        }
+                    }
+                }),
+        };
+
+        Ok(())
+    }
+
+    fn merge_batch(
+        &mut self,
+        values: &[ArrayRef],
+        group_indices: &[usize],
+        opt_filter: Option<&arrow_array::BooleanArray>,
+        total_num_groups: usize,
+    ) -> Result<()> {
+        assert_eq!(
+            values.len(),
+            1,
+            "DistinctCountGroupsAccumulator::merge_batch requires single array as state argument"
+        );
+
+        let values = as_list_array(&values[0])?;
+
+        self.unique_values.resize(total_num_groups, HashSet::new());
+
+        // Update current state with `list.values()` for each list in incoming state.
+        // It's safe to iterate over values(), as lists in incoming state don't contain
+        // null values.
+        match opt_filter {
+            None => group_indices.iter().zip(values.iter()).for_each(
+                |(group_idx, maybe_set)| {
+                    if let Some(array) = maybe_set {
+                        self.unique_values[*group_idx].extend(
+                            array
+                                .as_primitive::<T>()
+                                .values()
+                                .iter()
+                                .map(|entry| Hashable(*entry)),
+                        )
+                    };
+                },
+            ),
+            Some(filter) => group_indices
+                .iter()
+                .zip(values.iter())
+                .zip(filter.iter())
+                .for_each(|((group_idx, maybe_set), filter_value)| {
+                    if let Some(true) = filter_value {
+                        if let Some(array) = maybe_set {
+                            self.unique_values[*group_idx].extend(
+                                array
+                                    .as_primitive::<T>()
+                                    .values()
+                                    .iter()
+                                    .map(|entry| Hashable(*entry)),
+                            )
+                        }
+                    }
+                }),
+        };
+
+        Ok(())
+    }
+
+    fn evaluate(&mut self, emit_to: crate::EmitTo) -> Result<ArrayRef> {
+        let unique_values = emit_to.take_needed(&mut self.unique_values);
+
+        // Final state is represented by Int64 array, where each element is a length of corresponding HashSet from `self.unique_values`
+        return Ok(Arc::new(Int64Array::from(
+            unique_values
+                .into_iter()
+                .map(|set| set.len() as i64)
+                .collect_vec(),
+        )));
+    }
+
+    fn state(&mut self, emit_to: crate::EmitTo) -> Result<Vec<ArrayRef>> {
+        let unique_values = emit_to.take_needed(&mut self.unique_values);
+
+        // Intermediate state is represented as ListArray, where each element (list) is a collected HashSet from `self.unique_values`.
+        let uniques = ListArray::from_iter_primitive::<T, _, _>(
+            unique_values
+                .iter()
+                .map(|set| Some(set.iter().map(|val| Some(val.0)).collect_vec()))
+                .collect_vec(),
+        );
+
+        Ok(vec![Arc::new(uniques) as ArrayRef])
+    }
+
+    fn size(&self) -> usize {
+        return
+            // Size of vector of HashSets
+            self.unique_values.capacity() * std::mem::size_of::<HashSet<T::Native>>() +
+            // Each HashSet size
+            self.unique_values.iter()
+                .map(|set| set.capacity() * std::mem::size_of::<T::Native>())
+                .sum::<usize>();
     }
 }
 
