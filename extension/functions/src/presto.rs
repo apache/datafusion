@@ -428,6 +428,105 @@ impl ScalarFunctionDef for FromIso8601DateFunction {
     }
 }
 
+#[derive(Debug)]
+pub struct LastDayOfMonthFunction;
+
+impl ScalarFunctionDef for LastDayOfMonthFunction {
+    fn name(&self) -> &str {
+        "last_day_of_month"
+    }
+
+    fn signature(&self) -> Signature {
+        Signature::one_of(
+            vec![
+                TypeSignature::Exact(vec![DataType::Date32]),
+                TypeSignature::Exact(vec![DataType::Timestamp(
+                    TimeUnit::Nanosecond,
+                    None,
+                )]),
+            ],
+            Volatility::Immutable,
+        )
+    }
+
+    fn return_type(&self) -> ReturnTypeFunction {
+        let return_type = Arc::new(DataType::Date32);
+        Arc::new(move |_| Ok(return_type.clone()))
+    }
+
+    fn execute(&self, args: &[ArrayRef]) -> Result<ArrayRef> {
+        if args.is_empty() || args.len() > 1 {
+            return Err(datafusion::error::DataFusionError::Execution(
+                "last_day_of_month function takes exactly one argument".to_string(),
+            ));
+        }
+        let result = match args[0].data_type() {
+            DataType::Date32 => {
+                let input = args[0]
+                    .as_any()
+                    .downcast_ref::<Date32Array>()
+                    .expect("Failed to downcast to Date32Array");
+
+                let mut res = Vec::new();
+                for i in 0..input.len() {
+                    let date_value = input.value(i);
+                    let naive_date =
+                        NaiveDate::from_num_days_from_ce_opt(date_value as i32).unwrap();
+                    let last_day = cal_last_day_of_month(naive_date);
+                    let epoch = NaiveDate::from_ymd_opt(1, 1, 1).unwrap();
+                    let days_since_epoch =
+                        last_day.signed_duration_since(epoch).num_days();
+                    res.push(Some(days_since_epoch as i32));
+                }
+                Arc::new(Date32Array::from(res)) as ArrayRef
+            }
+            DataType::Timestamp(TimeUnit::Nanosecond, None) => {
+                let timestamp_array = args[0]
+                    .as_any()
+                    .downcast_ref::<TimestampNanosecondArray>()
+                    .expect("Expected a NanosecondTimeStamp array");
+                let milliseconds_array = timestamp_array
+                    .iter()
+                    .map(|timestamp| timestamp.map(|timestamp| timestamp / 1_000_000))
+                    .collect::<TimestampMillisecondArray>();
+
+                let mut res = Vec::new();
+                for i in 0..milliseconds_array.len() {
+                    let timestamp_value = milliseconds_array.value(i);
+                    let naive_datetime =
+                        Utc.timestamp_millis_opt(timestamp_value).unwrap();
+                    let last_day = cal_last_day_of_month(naive_datetime.date_naive());
+                    let epoch = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
+                    let days_since_epoch =
+                        last_day.signed_duration_since(epoch).num_days();
+                    res.push(Some(days_since_epoch as i32));
+                }
+                Arc::new(Date32Array::from(res)) as ArrayRef
+            }
+            //timestamp todo
+            _ => {
+                return Err(datafusion::error::DataFusionError::Execution(
+                    "Invalid input type for last_day_of_month function".to_string(),
+                ))
+            }
+        };
+        Ok(result)
+    }
+}
+
+fn cal_last_day_of_month(date: NaiveDate) -> NaiveDate {
+    let year = date.year();
+    let month = date.month();
+    NaiveDate::from_ymd_opt(year, month, 1).unwrap()
+        + Duration::days(
+            (NaiveDate::from_ymd_opt(year, month.checked_add(1).unwrap_or(1), 1)
+                .unwrap()
+                - NaiveDate::from_ymd_opt(year, month, 1).unwrap())
+            .num_days()
+                - 1,
+        )
+}
+
 // Function package declaration
 pub struct FunctionPackage;
 
@@ -441,6 +540,7 @@ impl ScalarFunctionPackage for FunctionPackage {
             Box::new(CurrentTimestampPFunction),
             Box::new(ToIso8601Function),
             Box::new(FromIso8601DateFunction),
+            Box::new(LastDayOfMonthFunction),
         ]
     }
 }
@@ -565,6 +665,18 @@ mod test {
         test_expression!("from_iso8601_date('2020-W10')", "2020-03-02");
         test_expression!("from_iso8601_date('2020-W10-1')", "2020-03-02");
         test_expression!("from_iso8601_date('2020-123')", "2020-05-02");
+        Ok(())
+    }
+    #[tokio::test]
+    async fn test_last_day_of_month() -> Result<()> {
+        // 测试 last_day_of_month 函数
+        // Date
+        test_expression!("last_day_of_month(DATE '2023-02-15')", "2023-02-28");
+        // Timestamp
+        test_expression!(
+            "last_day_of_month( TIMESTAMP '2023-02-15T08:30:00')",
+            "2023-02-28"
+        );
         Ok(())
     }
 }
