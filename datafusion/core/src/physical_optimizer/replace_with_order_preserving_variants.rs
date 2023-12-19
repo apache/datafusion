@@ -305,14 +305,14 @@ mod tests {
     /// against the original and expected plans.
     ///
     /// `EXPECTED_UNBOUNDED_PLAN_LINES`: expected input unbounded plan
-    /// `EXPECTED_UNBOUNDED_OPTIMIZED_PLAN_LINES`: optimized plan when `prefer_existing_sort` flag is `false` and `true`. For unbounded cases these shouldn't be different.
     /// `EXPECTED_BOUNDED_PLAN_LINES`: expected input bounded plan
+    /// `EXPECTED_UNBOUNDED_OPTIMIZED_PLAN_LINES`: optimized plan when `prefer_existing_sort` flag is `false` and `true`. For unbounded cases these shouldn't be different.
     /// `EXPECTED_BOUNDED_OPTIMIZED_PLAN_LINES`: optimized plan when `prefer_existing_sort` flag is `false` for bounded cases.
     /// `EXPECTED_BOUNDED_PREFER_SORT_ON_OPTIMIZED_PLAN_LINES`: optimized plan when `prefer_existing_sort` flag is `true` for bounded cases.
     /// `$PLAN`: the plan to optimized
     /// `$SOURCE_UNBOUNDED`: whether given plan has unbounded source or not.
     macro_rules! assert_optimized_unbounded_bounded_sort_prefer_on_off {
-        ($EXPECTED_UNBOUNDED_PLAN_LINES: expr, $EXPECTED_UNBOUNDED_OPTIMIZED_PLAN_LINES: expr, $EXPECTED_BOUNDED_PLAN_LINES: expr, $EXPECTED_BOUNDED_OPTIMIZED_PLAN_LINES: expr, $EXPECTED_BOUNDED_PREFER_SORT_ON_OPTIMIZED_PLAN_LINES: expr, $PLAN: expr, $SOURCE_UNBOUNDED: expr) => {
+        ($EXPECTED_UNBOUNDED_PLAN_LINES: expr, $EXPECTED_BOUNDED_PLAN_LINES: expr, $EXPECTED_UNBOUNDED_OPTIMIZED_PLAN_LINES: expr, $EXPECTED_BOUNDED_OPTIMIZED_PLAN_LINES: expr, $EXPECTED_BOUNDED_PREFER_SORT_ON_OPTIMIZED_PLAN_LINES: expr, $PLAN: expr, $SOURCE_UNBOUNDED: expr) => {
             if $SOURCE_UNBOUNDED {
                 assert_optimized_prefer_sort_on_off!(
                     $EXPECTED_UNBOUNDED_PLAN_LINES,
@@ -460,8 +460,8 @@ mod tests {
         ];
         assert_optimized_unbounded_bounded_sort_prefer_on_off!(
             expected_input_unbounded,
-            expected_optimized_unbounded,
             expected_input_bounded,
+            expected_optimized_unbounded,
             expected_optimized_bounded,
             expected_optimized_bounded_sort_preserve,
             physical_plan,
@@ -564,8 +564,8 @@ mod tests {
         ];
         assert_optimized_unbounded_bounded_sort_prefer_on_off!(
             expected_input_unbounded,
-            expected_optimized_unbounded,
             expected_input_bounded,
+            expected_optimized_unbounded,
             expected_optimized_bounded,
             expected_optimized_bounded_sort_preserve,
             physical_plan,
@@ -639,8 +639,8 @@ mod tests {
         ];
         assert_optimized_unbounded_bounded_sort_prefer_on_off!(
             expected_input_unbounded,
-            expected_optimized_unbounded,
             expected_input_bounded,
+            expected_optimized_unbounded,
             expected_optimized_bounded,
             expected_optimized_bounded_sort_preserve,
             physical_plan,
@@ -720,8 +720,8 @@ mod tests {
         ];
         assert_optimized_unbounded_bounded_sort_prefer_on_off!(
             expected_input_unbounded,
-            expected_optimized_unbounded,
             expected_input_bounded,
+            expected_optimized_unbounded,
             expected_optimized_bounded,
             expected_optimized_bounded_sort_preserve,
             physical_plan,
@@ -808,8 +808,8 @@ mod tests {
         ];
         assert_optimized_unbounded_bounded_sort_prefer_on_off!(
             expected_input_unbounded,
-            expected_optimized_unbounded,
             expected_input_bounded,
+            expected_optimized_unbounded,
             expected_optimized_bounded,
             expected_optimized_bounded_sort_preserve,
             physical_plan,
@@ -879,8 +879,8 @@ mod tests {
 
         assert_optimized_unbounded_bounded_sort_prefer_on_off!(
             expected_input_unbounded,
-            expected_optimized_unbounded,
             expected_input_bounded,
+            expected_optimized_unbounded,
             expected_optimized_bounded,
             expected_optimized_bounded_sort_preserve,
             physical_plan,
@@ -966,8 +966,8 @@ mod tests {
         ];
         assert_optimized_unbounded_bounded_sort_prefer_on_off!(
             expected_input_unbounded,
-            expected_optimized_unbounded,
             expected_input_bounded,
+            expected_optimized_unbounded,
             expected_optimized_bounded,
             expected_optimized_bounded_sort_preserve,
             physical_plan,
@@ -1038,8 +1038,8 @@ mod tests {
 
         assert_optimized_unbounded_bounded_sort_prefer_on_off!(
             expected_input_unbounded,
-            expected_optimized_unbounded,
             expected_input_bounded,
+            expected_optimized_unbounded,
             expected_optimized_bounded,
             expected_optimized_bounded_sort_preserve,
             physical_plan,
@@ -1106,8 +1106,8 @@ mod tests {
         ];
         assert_optimized_unbounded_bounded_sort_prefer_on_off!(
             expected_input_unbounded,
-            expected_optimized_unbounded,
             expected_input_bounded,
+            expected_optimized_unbounded,
             expected_optimized_bounded,
             expected_optimized_bounded_sort_preserve,
             physical_plan,
@@ -1212,8 +1212,8 @@ mod tests {
         ];
         assert_optimized_unbounded_bounded_sort_prefer_on_off!(
             expected_input_unbounded,
-            expected_optimized_unbounded,
             expected_input_bounded,
+            expected_optimized_unbounded,
             expected_optimized_bounded,
             expected_optimized_bounded_sort_preserve,
             physical_plan,
@@ -1326,8 +1326,8 @@ mod tests {
 
         assert_optimized_unbounded_bounded_sort_prefer_on_off!(
             expected_input_unbounded,
-            expected_optimized_unbounded,
             expected_input_bounded,
+            expected_optimized_unbounded,
             expected_optimized_bounded,
             expected_optimized_bounded_sort_preserve,
             physical_plan,
