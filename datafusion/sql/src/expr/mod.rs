@@ -516,9 +516,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 self.parse_struct(values, fields, schema, planner_context)
             }
 
-            SQLExpr::Tuple(values) => {
-				self.parse_tuple(values, schema, planner_context)
-            }
+            SQLExpr::Tuple(values) => self.parse_tuple(values, schema, planner_context),
 
             _ => not_impl_err!("Unsupported ast node in sqltorel: {sql:?}"),
         }
@@ -599,14 +597,14 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         if values.is_empty() {
             return not_impl_err!("Empty tuple not supported yet");
         }
-		match values.get(0).unwrap() {
-			SQLExpr::Identifier(_) | SQLExpr::Value(_)=> {
-				self.parse_struct(values, vec![], input_schema, planner_context)
-			}
-			_ => {
-				not_impl_err!("Tuple not supported yet")
-			}
-		}
+        match values.get(0).unwrap() {
+            SQLExpr::Identifier(_) | SQLExpr::Value(_) => {
+                self.parse_struct(values, vec![], input_schema, planner_context)
+            }
+            _ => {
+                not_impl_err!("Tuple not supported yet")
+            }
+        }
     }
 
     fn sql_in_list_to_expr(

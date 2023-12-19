@@ -2490,7 +2490,6 @@ impl ScalarValue {
                 eq_array_primitive!(array, index, DurationNanosecondArray, val)?
             }
             ScalarValue::Struct(_, _) => {
-				//Todo@wy
                 return _not_impl_err!("Struct is not supported yet")
             }
             ScalarValue::Dictionary(key_type, v) => {

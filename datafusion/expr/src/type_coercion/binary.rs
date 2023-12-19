@@ -24,7 +24,7 @@ use crate::Operator;
 use arrow::array::{new_empty_array, Array};
 use arrow::compute::can_cast_types;
 use arrow::datatypes::{
-    DataType, Field, TimeUnit, DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE,
+    DataType, Field, FieldRef, TimeUnit, DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE,
     DECIMAL256_MAX_PRECISION, DECIMAL256_MAX_SCALE,
 };
 
@@ -298,6 +298,7 @@ pub fn comparison_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<D
         .or_else(|| string_numeric_coercion(lhs_type, rhs_type))
         .or_else(|| string_temporal_coercion(lhs_type, rhs_type))
         .or_else(|| binary_coercion(lhs_type, rhs_type))
+        .or_else(|| struct_coercion(lhs_type, rhs_type))
 }
 
 /// Coerce `lhs_type` and `rhs_type` to a common type for the purposes of a comparison operation
@@ -741,6 +742,29 @@ fn binary_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType>
         (Binary | Utf8, Binary) | (Binary, Utf8) => Some(Binary),
         (LargeBinary | Binary | Utf8 | LargeUtf8, LargeBinary)
         | (LargeBinary, Binary | Utf8 | LargeUtf8) => Some(LargeBinary),
+        _ => None,
+    }
+}
+
+fn struct_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
+    use arrow::datatypes::DataType::*;
+    match (lhs_type, rhs_type) {
+        (Struct(lhs_fields), Struct(rhs_fields)) => {
+            let types = lhs_fields
+                .iter()
+                .map(|f| f.data_type())
+                .zip(rhs_fields.iter().map(|f| f.data_type()))
+                .map(|(lhs, rhs)| comparison_coercion(lhs, rhs))
+                .collect::<Option<Vec<DataType>>>()?;
+            let fields = types
+                .into_iter()
+                .enumerate()
+                .map(|(i, datatype)| {
+                    Arc::new(Field::new(format!("c{}", i), datatype, true))
+                })
+                .collect::<Vec<FieldRef>>();
+            Some(Struct(fields.into()))
+        }
         _ => None,
     }
 }
