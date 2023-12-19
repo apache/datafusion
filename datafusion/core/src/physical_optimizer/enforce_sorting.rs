@@ -60,8 +60,8 @@ use crate::physical_plan::{
 use datafusion_common::tree_node::{Transformed, TreeNode, VisitRecursion};
 use datafusion_common::{plan_err, DataFusionError};
 use datafusion_physical_expr::{PhysicalSortExpr, PhysicalSortRequirement};
-
 use datafusion_physical_plan::repartition::RepartitionExec;
+
 use itertools::izip;
 
 /// This rule inspects [`SortExec`]'s in the given physical plan and removes the
@@ -776,6 +776,7 @@ mod tests {
     use datafusion_common::Result;
     use datafusion_expr::JoinType;
     use datafusion_physical_expr::expressions::{col, Column, NotExpr};
+
     use rstest::rstest;
 
     fn create_test_schema() -> Result<SchemaRef> {
