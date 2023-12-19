@@ -223,9 +223,12 @@ fn hash_struct_array(
         (0..num_columns).collect()
     };
 
+    // Create hashes for each row that combines the hashes over all the column at that row.
+    // array.len() is the number of rows.
     let mut values_hashes = vec![0u64; array.len()];
     create_hashes(array.columns(), random_state, &mut values_hashes)?;
 
+    // Skip the null columns, nulls should get hash value 0.
     for i in valid_indices {
         let hash = &mut hashes_buffer[i];
         *hash = combine_hashes(*hash, values_hashes[i]);
