@@ -361,12 +361,79 @@ pub fn make_array(arrays: &[ArrayRef]) -> Result<ArrayRef> {
     match data_type {
         // Either an empty array or all nulls:
         DataType::Null => {
-            let array = new_null_array(&DataType::Null, arrays.len());
+            let array =
+                new_null_array(&DataType::Null, arrays.iter().map(|a| a.len()).sum());
             Ok(Arc::new(array_into_list_array(array)))
         }
         DataType::LargeList(..) => array_array::<i64>(arrays, data_type),
         _ => array_array::<i32>(arrays, data_type),
     }
+}
+
+fn general_array_element<O: OffsetSizeTrait>(
+    array: &GenericListArray<O>,
+    indexes: &Int64Array,
+) -> Result<ArrayRef>
+where
+    i64: TryInto<O>,
+{
+    let values = array.values();
+    let original_data = values.to_data();
+    let capacity = Capacities::Array(original_data.len());
+
+    // use_nulls: true, we don't construct List for array_element, so we need explicit nulls.
+    let mut mutable =
+        MutableArrayData::with_capacities(vec![&original_data], true, capacity);
+
+    fn adjusted_array_index<O: OffsetSizeTrait>(index: i64, len: O) -> Result<Option<O>>
+    where
+        i64: TryInto<O>,
+    {
+        let index: O = index.try_into().map_err(|_| {
+            DataFusionError::Execution(format!(
+                "array_element got invalid index: {}",
+                index
+            ))
+        })?;
+        // 0 ~ len - 1
+        let adjusted_zero_index = if index < O::usize_as(0) {
+            index + len
+        } else {
+            index - O::usize_as(1)
+        };
+
+        if O::usize_as(0) <= adjusted_zero_index && adjusted_zero_index < len {
+            Ok(Some(adjusted_zero_index))
+        } else {
+            // Out of bounds
+            Ok(None)
+        }
+    }
+
+    for (row_index, offset_window) in array.offsets().windows(2).enumerate() {
+        let start = offset_window[0];
+        let end = offset_window[1];
+        let len = end - start;
+
+        // array is null
+        if len == O::usize_as(0) {
+            mutable.extend_nulls(1);
+            continue;
+        }
+
+        let index = adjusted_array_index::<O>(indexes.value(row_index), len)?;
+
+        if let Some(index) = index {
+            let start = start.as_usize() + index.as_usize();
+            mutable.extend(0, start, start + 1_usize);
+        } else {
+            // Index out of bounds
+            mutable.extend_nulls(1);
+        }
+    }
+
+    let data = mutable.freeze();
+    Ok(arrow_array::make_array(data))
 }
 
 /// array_element SQL function
@@ -377,56 +444,22 @@ pub fn make_array(arrays: &[ArrayRef]) -> Result<ArrayRef> {
 /// For example:
 /// > array_element(\[1, 2, 3], 2) -> 2
 pub fn array_element(args: &[ArrayRef]) -> Result<ArrayRef> {
-    let list_array = as_list_array(&args[0])?;
-    let indexes = as_int64_array(&args[1])?;
-
-    let values = list_array.values();
-    let original_data = values.to_data();
-    let capacity = Capacities::Array(original_data.len());
-
-    // use_nulls: true, we don't construct List for array_element, so we need explicit nulls.
-    let mut mutable =
-        MutableArrayData::with_capacities(vec![&original_data], true, capacity);
-
-    fn adjusted_array_index(index: i64, len: usize) -> Option<i64> {
-        // 0 ~ len - 1
-        let adjusted_zero_index = if index < 0 {
-            index + len as i64
-        } else {
-            index - 1
-        };
-
-        if 0 <= adjusted_zero_index && adjusted_zero_index < len as i64 {
-            Some(adjusted_zero_index)
-        } else {
-            // Out of bounds
-            None
+    match &args[0].data_type() {
+        DataType::List(_) => {
+            let array = as_list_array(&args[0])?;
+            let indexes = as_int64_array(&args[1])?;
+            general_array_element::<i32>(array, indexes)
         }
+        DataType::LargeList(_) => {
+            let array = as_large_list_array(&args[0])?;
+            let indexes = as_int64_array(&args[1])?;
+            general_array_element::<i64>(array, indexes)
+        }
+        _ => not_impl_err!(
+            "array_element does not support type: {:?}",
+            args[0].data_type()
+        ),
     }
-
-    for (row_index, offset_window) in list_array.offsets().windows(2).enumerate() {
-        let start = offset_window[0] as usize;
-        let end = offset_window[1] as usize;
-        let len = end - start;
-
-        // array is null
-        if len == 0 {
-            mutable.extend_nulls(1);
-            continue;
-        }
-
-        let index = adjusted_array_index(indexes.value(row_index), len);
-
-        if let Some(index) = index {
-            mutable.extend(0, start + index as usize, start + index as usize + 1);
-        } else {
-            // Index out of bounds
-            mutable.extend_nulls(1);
-        }
-    }
-
-    let data = mutable.freeze();
-    Ok(arrow_array::make_array(data))
 }
 
 fn general_except<OffsetSize: OffsetSizeTrait>(
@@ -827,10 +860,14 @@ pub fn array_append(args: &[ArrayRef]) -> Result<ArrayRef> {
     let list_array = as_list_array(&args[0])?;
     let element_array = &args[1];
 
-    check_datatypes("array_append", &[list_array.values(), element_array])?;
     let res = match list_array.value_type() {
         DataType::List(_) => concat_internal(args)?,
-        DataType::Null => return make_array(&[element_array.to_owned()]),
+        DataType::Null => {
+            return make_array(&[
+                list_array.values().to_owned(),
+                element_array.to_owned(),
+            ]);
+        }
         data_type => {
             return general_append_and_prepend(
                 list_array,
@@ -1284,12 +1321,23 @@ fn general_position<OffsetSize: OffsetSizeTrait>(
 
 /// Array_positions SQL function
 pub fn array_positions(args: &[ArrayRef]) -> Result<ArrayRef> {
-    let arr = as_list_array(&args[0])?;
     let element = &args[1];
 
-    check_datatypes("array_positions", &[arr.values(), element])?;
-
-    general_positions::<i32>(arr, element)
+    match &args[0].data_type() {
+        DataType::List(_) => {
+            let arr = as_list_array(&args[0])?;
+            check_datatypes("array_positions", &[arr.values(), element])?;
+            general_positions::<i32>(arr, element)
+        }
+        DataType::LargeList(_) => {
+            let arr = as_large_list_array(&args[0])?;
+            check_datatypes("array_positions", &[arr.values(), element])?;
+            general_positions::<i64>(arr, element)
+        }
+        array_type => {
+            not_impl_err!("array_positions does not support type '{array_type:?}'.")
+        }
+    }
 }
 
 fn general_positions<OffsetSize: OffsetSizeTrait>(
@@ -2283,19 +2331,5 @@ mod tests {
             datafusion_common::utils::list_ndims(res[0].data_type()),
             expected_dim
         );
-    }
-
-    #[test]
-    fn test_check_invalid_datatypes() {
-        let data = vec![Some(vec![Some(1), Some(2), Some(3)])];
-        let list_array =
-            Arc::new(ListArray::from_iter_primitive::<Int64Type, _, _>(data)) as ArrayRef;
-        let int64_array = Arc::new(StringArray::from(vec![Some("string")])) as ArrayRef;
-
-        let args = [list_array.clone(), int64_array.clone()];
-
-        let array = array_append(&args);
-
-        assert_eq!(array.unwrap_err().strip_backtrace(), "Error during planning: array_append received incompatible types: '[Int64, Utf8]'.");
     }
 }
