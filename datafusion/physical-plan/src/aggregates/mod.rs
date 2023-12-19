@@ -43,7 +43,7 @@ use datafusion_execution::TaskContext;
 use datafusion_expr::Accumulator;
 use datafusion_physical_expr::{
     aggregate::is_order_sensitive,
-    equivalence::collapse_lex_req,
+    equivalence::{collapse_lex_req, ProjectionMapping},
     expressions::{Column, Max, Min, UnKnownColumn},
     physical_exprs_contains, reverse_order_bys, AggregateExpr, EquivalenceProperties,
     LexOrdering, LexRequirement, PhysicalExpr, PhysicalSortExpr, PhysicalSortRequirement,
@@ -59,7 +59,6 @@ mod topk;
 mod topk_stream;
 
 pub use datafusion_expr::AggregateFunction;
-use datafusion_physical_expr::equivalence::ProjectionMapping;
 pub use datafusion_physical_expr::expressions::create_aggregate_expr;
 
 /// Hash aggregate modes
@@ -494,13 +493,14 @@ impl AggregateExec {
         )
     }
 
-    /// Create a new hash aggregate execution plan, with given schema.
-    /// This constructor isn't supposed to be called from outside. It is
-    /// used to enforce schema consistency during re-creation of the AggregateExec across
-    /// different rules.
-    /// Schema field names of the `AggregateExec` depends on the names of aggregate exprs. Since
-    /// `AggregateExec` may re-write aggregate expressions during initialization, these field names
-    /// may change when called with
+    /// Create a new hash aggregate execution plan with the given schema.
+    /// This constructor isn't part of the public API, it is used internally
+    /// by Datafusion to enforce schema consistency during when re-creating
+    /// `AggregateExec`s inside optimization rules. Schema field names of an
+    /// `AggregateExec` depends on the names of aggregate expressions. Since
+    /// a rule may re-write aggregate expressions (e.g. reverse them) during
+    /// initialization, field names may change inadvertently if one re-creates
+    /// the schema in such cases.
     #[allow(clippy::too_many_arguments)]
     fn try_new_with_schema(
         mode: AggregateMode,

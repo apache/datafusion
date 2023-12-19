@@ -355,10 +355,11 @@ impl DFSchema {
         self.fields
             .iter()
             .enumerate()
-            .filter(|(_idx, field)| {
-                field.qualifier().map(|q| q.eq(qualifier)).unwrap_or(false)
+            .filter_map(|(idx, field)| {
+                field
+                    .qualifier()
+                    .and_then(|q| q.eq(qualifier).then_some(idx))
             })
-            .map(|(idx, _)| idx)
             .collect()
     }
 
