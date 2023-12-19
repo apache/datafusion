@@ -1902,7 +1902,7 @@ fn general_set_op(
             let array = as_large_list_array(&array1)?;
             general_array_distinct::<i64>(array, field)
         }
-        (DataType::Null, DataType::Null) => return Ok(new_empty_array(&DataType::Null)),
+        (DataType::Null, DataType::Null) => Ok(new_empty_array(&DataType::Null)),
 
         (DataType::List(_), DataType::List(_)) => {
             let array1 = as_list_array(&array1)?;
