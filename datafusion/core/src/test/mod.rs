@@ -334,6 +334,32 @@ pub fn stream_exec_ordered(
     )
 }
 
+/// Create a csv exec for tests
+pub fn csv_exec_ordered(
+    schema: &SchemaRef,
+    sort_exprs: impl IntoIterator<Item = PhysicalSortExpr>,
+) -> Arc<dyn ExecutionPlan> {
+    let sort_exprs = sort_exprs.into_iter().collect();
+
+    Arc::new(CsvExec::new(
+        FileScanConfig {
+            object_store_url: ObjectStoreUrl::parse("test:///").unwrap(),
+            file_schema: schema.clone(),
+            file_groups: vec![vec![PartitionedFile::new("file_path".to_string(), 100)]],
+            statistics: Statistics::new_unknown(schema),
+            projection: None,
+            limit: None,
+            table_partition_cols: vec![],
+            output_ordering: vec![sort_exprs],
+        },
+        true,
+        0,
+        b'"',
+        None,
+        FileCompressionType::UNCOMPRESSED,
+    ))
+}
+
 /// A mock execution plan that simply returns the provided statistics
 #[derive(Debug, Clone)]
 pub struct StatisticsExec {
