@@ -41,7 +41,7 @@ use crate::error::Result;
 use crate::physical_optimizer::replace_with_order_preserving_variants::{
     replace_with_order_preserving_variants, OrderPreservationContext,
 };
-use crate::physical_optimizer::sort_pushdown::{pushdown_sorts, SortPushDown};
+use crate::physical_optimizer::sort_pushdown::pushdown_requirement_to_children;
 use crate::physical_optimizer::utils::{
     add_sort_above, is_coalesce_partitions, is_limit, is_repartition, is_sort,
     is_sort_preserving_merge, is_union, is_window, ExecTree,
@@ -340,19 +340,19 @@ impl PhysicalOptimizerRule for EnforceSorting {
         let plan_requirements = PlanWithCorrespondingSort::new(plan);
         // Execute a bottom-up traversal to enforce sorting requirements,
         // remove unnecessary sorts, and optimize sort-sensitive operators:
-        let adjusted = plan_requirements.transform_up(&ensure_sorting)?;
+        let adjusted = plan_requirements.transform_up_old(&ensure_sorting)?;
         let new_plan = if config.optimizer.repartition_sorts {
             let plan_with_coalesce_partitions =
                 PlanWithCorrespondingCoalescePartitions::new(adjusted.plan);
             let parallel =
-                plan_with_coalesce_partitions.transform_up(&parallelize_sorts)?;
+                plan_with_coalesce_partitions.transform_up_old(&parallelize_sorts)?;
             parallel.plan
         } else {
             adjusted.plan
         };
         let plan_with_pipeline_fixer = OrderPreservationContext::new(new_plan);
-        let updated_plan =
-            plan_with_pipeline_fixer.transform_up(&|plan_with_pipeline_fixer| {
+        let mut updated_plan =
+            plan_with_pipeline_fixer.transform_up_old(&|plan_with_pipeline_fixer| {
                 replace_with_order_preserving_variants(
                     plan_with_pipeline_fixer,
                     false,
@@ -363,9 +363,64 @@ impl PhysicalOptimizerRule for EnforceSorting {
 
         // Execute a top-down traversal to exploit sort push-down opportunities
         // missed by the bottom-up traversal:
-        let sort_pushdown = SortPushDown::init(updated_plan.plan);
-        let adjusted = sort_pushdown.transform_down(&pushdown_sorts)?;
-        Ok(adjusted.plan)
+        updated_plan.plan.transform_down_with_payload(
+            &mut |plan, required_ordering: Option<Vec<PhysicalSortRequirement>>| {
+                let parent_required = required_ordering.as_deref().unwrap_or(&[]);
+                if let Some(sort_exec) = plan.as_any().downcast_ref::<SortExec>() {
+                    let new_plan = if !plan
+                        .equivalence_properties()
+                        .ordering_satisfy_requirement(parent_required)
+                    {
+                        // If the current plan is a SortExec, modify it to satisfy parent requirements:
+                        let mut new_plan = sort_exec.input().clone();
+                        add_sort_above(&mut new_plan, parent_required, sort_exec.fetch());
+                        new_plan
+                    } else {
+                        plan.clone()
+                    };
+                    let required_ordering = new_plan
+                        .output_ordering()
+                        .map(PhysicalSortRequirement::from_sort_exprs)
+                        .unwrap_or_default();
+                    // Since new_plan is a SortExec, we can safely get the 0th index.
+                    let child = new_plan.children().swap_remove(0);
+                    if let Some(adjusted) =
+                        pushdown_requirement_to_children(&child, &required_ordering)?
+                    {
+                        *plan = child;
+                        Ok((TreeNodeRecursion::Continue, adjusted))
+                    } else {
+                        *plan = new_plan;
+                        // Can not push down requirements
+                        Ok((TreeNodeRecursion::Continue, plan.required_input_ordering()))
+                    }
+                } else {
+                    // Executors other than SortExec
+                    if plan
+                        .equivalence_properties()
+                        .ordering_satisfy_requirement(parent_required)
+                    {
+                        // Satisfies parent requirements, immediately return.
+                        return Ok((
+                            TreeNodeRecursion::Continue,
+                            plan.required_input_ordering(),
+                        ));
+                    }
+                    // Can not satisfy the parent requirements, check whether the requirements can be pushed down:
+                    if let Some(adjusted) =
+                        pushdown_requirement_to_children(plan, parent_required)?
+                    {
+                        Ok((TreeNodeRecursion::Continue, adjusted))
+                    } else {
+                        // Can not push down requirements, add new SortExec:
+                        add_sort_above(plan, parent_required, None);
+                        Ok((TreeNodeRecursion::Continue, plan.required_input_ordering()))
+                    }
+                }
+            },
+            None,
+        )?;
+        Ok(updated_plan.plan)
     }
 
     fn name(&self) -> &str {

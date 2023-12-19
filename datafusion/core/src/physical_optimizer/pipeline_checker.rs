@@ -54,7 +54,7 @@ impl PhysicalOptimizerRule for PipelineChecker {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let pipeline = PipelineStatePropagator::new(plan);
         let state = pipeline
-            .transform_up(&|p| check_finiteness_requirements(p, &config.optimizer))?;
+            .transform_up_old(&|p| check_finiteness_requirements(p, &config.optimizer))?;
         Ok(state.plan)
     }
 

@@ -30,7 +30,7 @@ use crate::{
 
 use arrow::datatypes::SchemaRef;
 use arrow_schema::SortOptions;
-use datafusion_common::tree_node::{Transformed, TreeNode};
+use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
 use datafusion_common::{JoinSide, JoinType, Result};
 
 use indexmap::IndexSet;
@@ -169,10 +169,10 @@ impl ProjectionMapping {
             .enumerate()
             .map(|(expr_idx, (expression, name))| {
                 let target_expr = Arc::new(Column::new(name, expr_idx)) as _;
-                expression
-                    .clone()
-                    .transform_down(&|e| match e.as_any().downcast_ref::<Column>() {
-                        Some(col) => {
+                let mut source_expr = expression.clone();
+                source_expr
+                    .transform_down(&mut |e| {
+                        if let Some(col) = e.as_any().downcast_ref::<Column>() {
                             // Sometimes, an expression and its name in the input_schema
                             // doesn't match. This can cause problems, so we make sure
                             // that the expression name matches with the name in `input_schema`.
@@ -181,11 +181,11 @@ impl ProjectionMapping {
                             let matching_input_field = input_schema.field(idx);
                             let matching_input_column =
                                 Column::new(matching_input_field.name(), idx);
-                            Ok(Transformed::Yes(Arc::new(matching_input_column)))
+                            *e = Arc::new(matching_input_column)
                         }
-                        None => Ok(Transformed::No(e)),
+                        Ok(TreeNodeRecursion::Continue)
                     })
-                    .map(|source_expr| (source_expr, target_expr))
+                    .map(|_| (source_expr, target_expr))
             })
             .collect::<Result<Vec<_>>>()
             .map(|map| Self { map })
@@ -352,7 +352,7 @@ impl EquivalenceGroup {
     /// class it matches with (if any).
     pub fn normalize_expr(&self, expr: Arc<dyn PhysicalExpr>) -> Arc<dyn PhysicalExpr> {
         expr.clone()
-            .transform_up(&|expr| {
+            .transform_up_old(&|expr| {
                 for cls in self.iter() {
                     if cls.contains(&expr) {
                         return Ok(Transformed::Yes(cls.canonical_expr().unwrap()));
@@ -752,7 +752,7 @@ pub fn add_offset_to_expr(
     expr: Arc<dyn PhysicalExpr>,
     offset: usize,
 ) -> Arc<dyn PhysicalExpr> {
-    expr.transform_down(&|e| match e.as_any().downcast_ref::<Column>() {
+    expr.transform_down_old(&|e| match e.as_any().downcast_ref::<Column>() {
         Some(col) => Ok(Transformed::Yes(Arc::new(Column::new(
             col.name(),
             offset + col.index(),
@@ -1517,7 +1517,7 @@ impl EquivalenceProperties {
     /// the given expression.
     pub fn get_expr_ordering(&self, expr: Arc<dyn PhysicalExpr>) -> ExprOrdering {
         ExprOrdering::new(expr.clone())
-            .transform_up(&|expr| Ok(update_ordering(expr, self)))
+            .transform_up_old(&|expr| Ok(update_ordering(expr, self)))
             // Guaranteed to always return `Ok`.
             .unwrap()
     }

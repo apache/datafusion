@@ -1150,7 +1150,7 @@ impl Expr {
     /// For example, gicen an expression like `<int32> = $0` will infer `$0` to
     /// have type `int32`.
     pub fn infer_placeholder_types(self, schema: &DFSchema) -> Result<Expr> {
-        self.transform_up(&|mut expr| {
+        self.transform_up_old(&|mut expr| {
             // Default to assuming the arguments are the same type
             if let Expr::BinaryExpr(BinaryExpr { left, op: _, right }) = &mut expr {
                 rewrite_placeholder(left.as_mut(), right.as_ref(), schema)?;

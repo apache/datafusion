@@ -47,7 +47,7 @@ impl CountWildcardRule {
 
 impl AnalyzerRule for CountWildcardRule {
     fn analyze(&self, plan: LogicalPlan, _: &ConfigOptions) -> Result<LogicalPlan> {
-        plan.transform_down(&analyze_internal)
+        plan.transform_down_old(&analyze_internal)
     }
 
     fn name(&self) -> &str {
@@ -155,7 +155,7 @@ impl TreeNodeTransformer for CountWildcardRewriter {
                 let new_plan = subquery
                     .as_ref()
                     .clone()
-                    .transform_down(&analyze_internal)?;
+                    .transform_down_old(&analyze_internal)?;
                 *subquery = Arc::new(new_plan);
             }
             Expr::InSubquery(InSubquery {
@@ -165,7 +165,7 @@ impl TreeNodeTransformer for CountWildcardRewriter {
                 let new_plan = subquery
                     .as_ref()
                     .clone()
-                    .transform_down(&analyze_internal)?;
+                    .transform_down_old(&analyze_internal)?;
                 *subquery = Arc::new(new_plan);
             }
             Expr::Exists(Exists {
@@ -175,7 +175,7 @@ impl TreeNodeTransformer for CountWildcardRewriter {
                 let new_plan = subquery
                     .as_ref()
                     .clone()
-                    .transform_down(&analyze_internal)?;
+                    .transform_down_old(&analyze_internal)?;
                 *subquery = Arc::new(new_plan);
             }
             _ => {}

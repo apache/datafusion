@@ -200,11 +200,11 @@ impl PhysicalOptimizerRule for EnforceDistribution {
             // Run a top-down process to adjust input key ordering recursively
             let plan_requirements = PlanWithKeyRequirements::new(plan);
             let adjusted =
-                plan_requirements.transform_down(&adjust_input_keys_ordering)?;
+                plan_requirements.transform_down_old(&adjust_input_keys_ordering)?;
             adjusted.plan
         } else {
             // Run a bottom-up process
-            plan.transform_up(&|plan| {
+            plan.transform_up_old(&|plan| {
                 Ok(Transformed::Yes(reorder_join_keys_to_inputs(plan)?))
             })?
         };
@@ -212,7 +212,7 @@ impl PhysicalOptimizerRule for EnforceDistribution {
         let distribution_context = DistributionContext::new(adjusted);
         // Distribution enforcement needs to be applied bottom-up.
         let distribution_context =
-            distribution_context.transform_up(&|distribution_context| {
+            distribution_context.transform_up_old(&|distribution_context| {
                 ensure_distribution(distribution_context, config)
             })?;
         Ok(distribution_context.plan)

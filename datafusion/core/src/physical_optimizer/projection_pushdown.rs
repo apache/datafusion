@@ -72,7 +72,7 @@ impl PhysicalOptimizerRule for ProjectionPushdown {
         plan: Arc<dyn ExecutionPlan>,
         _config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        plan.transform_down(&remove_unnecessary_projections)
+        plan.transform_down_old(&remove_unnecessary_projections)
     }
 
     fn name(&self) -> &str {

@@ -42,8 +42,7 @@ use crate::{
 
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion_common::tree_node::{
-    Transformed, TreeNode, TreeNodeRecursion, TreeNodeRecursionResult,
-    TreeNodeTransformer, VisitRecursionIterator,
+    Transformed, TreeNode, TreeNodeRecursion, TreeNodeTransformer, VisitRecursionIterator,
 };
 use datafusion_common::{
     aggregate_functional_dependencies, internal_err, plan_err, Column, Constraints,
@@ -316,7 +315,7 @@ impl LogicalPlan {
     where
         F: FnMut(&Expr) -> Result<TreeNodeRecursion>,
     {
-        let f = &mut |e: &Expr| f(e).fail_on_prune();
+        let f = &mut |e: &Expr| f(e)?.fail_on_prune();
 
         match self {
             LogicalPlan::Projection(Projection { expr, .. }) => {
@@ -352,7 +351,7 @@ impl LogicalPlan {
                 on.iter()
                     // it not ideal to create an expr here to analyze them, but could cache it on the Join itself
                     .map(|(l, r)| Expr::eq(l.clone(), r.clone()))
-                    .for_each_till_continue(&mut |e| f(&e))
+                    .for_each_till_continue(&mut |e| f(&e))?
                     .and_then_on_continue(|| filter.iter().for_each_till_continue(f))
             }
             LogicalPlan::Sort(Sort { expr, .. }) => expr.iter().for_each_till_continue(f),
@@ -1154,7 +1153,7 @@ impl LogicalPlan {
                     // LogicalPlan::Subquery (even though it is
                     // actually a Subquery alias)
                     let synthetic_plan = LogicalPlan::Subquery(subquery.clone());
-                    f(&synthetic_plan).fail_on_prune()
+                    f(&synthetic_plan)?.fail_on_prune()
                 }
                 _ => Ok(TreeNodeRecursion::Continue),
             })
@@ -1225,7 +1224,7 @@ impl LogicalPlan {
         expr: Expr,
         param_values: &ParamValues,
     ) -> Result<Expr> {
-        expr.transform_up(&|expr| {
+        expr.transform_up_old(&|expr| {
             match &expr {
                 Expr::Placeholder(Placeholder { id, data_type }) => {
                     let value =
@@ -3195,7 +3194,7 @@ digraph {
         // after transformation, because plan is not the same anymore,
         // the parent plan is built again with call to LogicalPlan::with_new_inputs -> with_new_exprs
         let plan = plan
-            .transform_up(&|plan| match plan {
+            .transform_up_old(&|plan| match plan {
                 LogicalPlan::TableScan(table) => {
                     let filter = Filter::try_new(
                         external_filter.clone(),

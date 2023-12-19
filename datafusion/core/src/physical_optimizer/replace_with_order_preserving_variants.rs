@@ -344,7 +344,7 @@ mod tests {
             // let optimized_physical_plan = physical_plan.transform_down(&replace_repartition_execs)?;
             let config = SessionConfig::new().with_prefer_existing_sort($ALLOW_BOUNDED);
             let plan_with_pipeline_fixer = OrderPreservationContext::new(physical_plan);
-            let parallel = plan_with_pipeline_fixer.transform_up(&|plan_with_pipeline_fixer| replace_with_order_preserving_variants(plan_with_pipeline_fixer, false, false, config.options()))?;
+            let parallel = plan_with_pipeline_fixer.transform_up_old(&|plan_with_pipeline_fixer| replace_with_order_preserving_variants(plan_with_pipeline_fixer, false, false, config.options()))?;
             let optimized_physical_plan = parallel.plan;
 
             // Get string representation of the plan
