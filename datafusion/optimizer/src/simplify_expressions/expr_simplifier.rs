@@ -1781,14 +1781,13 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(
-        expected = "called `Result::unwrap()` on an `Err` value: Plan(\"Divide by zero\")"
-    )]
     fn test_simplify_divide_by_zero() {
         // A / 0 -> DivideByZeroError
         let expr = col("c2_non_null") / lit(0);
-
-        simplify(expr);
+        assert_eq!(
+            try_simplify(expr).unwrap_err().strip_backtrace(),
+            "Error during planning: Divide by zero"
+        );
     }
 
     #[test]
@@ -2208,12 +2207,12 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(
-        expected = "called `Result::unwrap()` on an `Err` value: Plan(\"Divide by zero\")"
-    )]
     fn test_simplify_modulo_by_zero_non_null() {
         let expr = col("c2_non_null") % lit(0);
-        simplify(expr);
+        assert_eq!(
+            try_simplify(expr).unwrap_err().strip_backtrace(),
+            "Error during planning: Divide by zero"
+        );
     }
 
     #[test]
