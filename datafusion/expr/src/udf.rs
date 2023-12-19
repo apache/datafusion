@@ -279,8 +279,15 @@ pub trait ScalarUDFImpl {
     /// and treating all arguments as arrays will work, but will be slower.
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue>;
 
-    /// Returns any aliases (alternate names) for this function. This should not
-    /// include the value of [`Self::name`]. Defaults to `[]` (no aliases)
+    /// Returns any aliases (alternate names) for this function.
+    ///
+    /// Aliases can be used to invoke the same function using different names.
+    /// For example in some databases `now()` and `current_timestamp()` are
+    /// aliases for the same function. This behavior can be obtained by
+    /// returning `current_timestamp` as an alias for the `now` function.
+    ///
+    /// Note: `aliases` should only include names other than [`Self::name`].
+    /// Defaults to `[]` (no aliases)
     fn aliases(&self) -> &[String] {
         &[]
     }
