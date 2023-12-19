@@ -347,6 +347,21 @@ impl DFSchema {
             .collect()
     }
 
+    /// Find all fields indices having the given qualifier
+    pub fn fields_indices_with_qualified(
+        &self,
+        qualifier: &TableReference,
+    ) -> Vec<usize> {
+        self.fields
+            .iter()
+            .enumerate()
+            .filter(|(_idx, field)| {
+                field.qualifier().map(|q| q.eq(qualifier)).unwrap_or(false)
+            })
+            .map(|(idx, _)| idx)
+            .collect()
+    }
+
     /// Find all fields match the given name
     pub fn fields_with_unqualified_name(&self, name: &str) -> Vec<&DFField> {
         self.fields

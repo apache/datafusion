@@ -37,6 +37,7 @@ use datafusion_common::{
     DataFusionError, Result, ScalarValue, TableReference,
 };
 
+use datafusion_common::utils::get_at_indices;
 use sqlparser::ast::{ExceptSelectItem, ExcludeSelectItem, WildcardAdditionalOptions};
 
 ///  The value to which `COUNT(*)` is expanded to in
@@ -425,18 +426,18 @@ pub fn expand_qualified_wildcard(
     wildcard_options: Option<&WildcardAdditionalOptions>,
 ) -> Result<Vec<Expr>> {
     let qualifier = TableReference::from(qualifier);
-    let qualified_fields: Vec<DFField> = schema
-        .fields_with_qualified(&qualifier)
-        .into_iter()
-        .cloned()
-        .collect();
+    let qualified_indices = schema.fields_indices_with_qualified(&qualifier);
+    let projected_func_dependencies = schema
+        .functional_dependencies()
+        .project_functional_dependencies(&qualified_indices, qualified_indices.len());
+    let qualified_fields = get_at_indices(schema.fields(), &qualified_indices)?;
     if qualified_fields.is_empty() {
         return plan_err!("Invalid qualifier {qualifier}");
     }
     let qualified_schema =
         DFSchema::new_with_metadata(qualified_fields, schema.metadata().clone())?
             // We can use the functional dependencies as is, since it only stores indices:
-            .with_functional_dependencies(schema.functional_dependencies().clone())?;
+            .with_functional_dependencies(projected_func_dependencies)?;
     let excluded_columns = if let Some(WildcardAdditionalOptions {
         opt_exclude,
         opt_except,
