@@ -536,7 +536,6 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::ArrayConcat => {
                 let mut expr_type: Option<DataType> = None;
                 let mut max_dims = 0;
-                println!("input_expr_types: {:?}", input_expr_types);
                 for input_expr_type in input_expr_types {
                     match input_expr_type {
                         List(_) => {
@@ -557,13 +556,6 @@ impl BuiltinScalarFunction {
                                 expr_type = Some(input_expr_type.clone());
                                 max_dims = dims;
                             }
-
-                            // if !field.data_type().eq(&DataType::Null) {
-                            // }
-                            // // Handle List(Null) cases
-                            // else if expr_type.eq(&DataType::Null) {
-                            //     expr_type = input_expr_type.clone();
-                            // }
                         }
                         DataType::Null => {}
                         _ => {
@@ -575,7 +567,6 @@ impl BuiltinScalarFunction {
                 }
 
                 if let Some(expr_type) = expr_type {
-                    println!("expr_type: {:?}", expr_type);
                     Ok(expr_type)
                 } else {
                     Ok(DataType::Null)
@@ -933,9 +924,6 @@ impl BuiltinScalarFunction {
                 type_signature: ArrayConcat,
                 volatility: self.volatility(),
             },
-            // {
-            //     Signature::variadic_any(self.volatility())
-            // }
             BuiltinScalarFunction::ArrayDims => Signature::any(1, self.volatility()),
             BuiltinScalarFunction::ArrayEmpty => Signature::any(1, self.volatility()),
             BuiltinScalarFunction::ArrayElement => Signature::any(2, self.volatility()),
