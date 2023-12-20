@@ -456,8 +456,8 @@ pub trait TreeNodeVisitor: Sized {
 /// Implements the [visitor pattern](https://en.wikipedia.org/wiki/Visitor_pattern) for
 /// recursively transforming [`TreeNode`]s.
 ///
-/// When passed to [`TreeNode::transform()`], [`TreeNodeVisitor::pre_transform()`] and
-/// [`TreeNodeVisitor::post_transform()`] are invoked recursively on an node tree.
+/// When passed to [`TreeNode::transform()`], [`TreeNodeTransformer::pre_transform()`] and
+/// [`TreeNodeTransformer::post_transform()`] are invoked recursively on an node tree.
 /// See [`TreeNodeRecursion`] for more details on how the traversal can be controlled.
 ///
 /// If an [`Err`] result is returned, recursion is stopped immediately.
