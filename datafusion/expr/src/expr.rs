@@ -956,7 +956,7 @@ impl Expr {
     /// Remove an alias from an expression if one exists.
     pub fn unalias(self) -> Expr {
         match self {
-            Expr::Alias(alias) => alias.expr.as_ref().clone(),
+            Expr::Alias(alias) => *alias.expr,
             _ => self,
         }
     }

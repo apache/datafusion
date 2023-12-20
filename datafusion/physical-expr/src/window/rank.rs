@@ -141,9 +141,16 @@ impl PartitionEvaluator for RankEvaluator {
         // There is no argument, values are order by column values (where rank is calculated)
         let range_columns = values;
         let last_rank_data = get_row_at_idx(range_columns, row_idx)?;
-        let empty = self.state.last_rank_data.is_empty();
-        if empty || self.state.last_rank_data != last_rank_data {
-            self.state.last_rank_data = last_rank_data;
+        let new_rank_encountered =
+            if let Some(state_last_rank_data) = &self.state.last_rank_data {
+                // if rank data changes, new rank is encountered
+                state_last_rank_data != &last_rank_data
+            } else {
+                // First rank seen
+                true
+            };
+        if new_rank_encountered {
+            self.state.last_rank_data = Some(last_rank_data);
             self.state.last_rank_boundary += self.state.current_group_count;
             self.state.current_group_count = 1;
             self.state.n_rank += 1;

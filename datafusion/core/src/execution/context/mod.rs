@@ -964,14 +964,9 @@ impl SessionContext {
         sql_definition: Option<String>,
     ) -> Result<()> {
         let table_path = ListingTableUrl::parse(table_path)?;
-        let resolved_schema = match (provided_schema, options.infinite_source) {
-            (Some(s), _) => s,
-            (None, false) => options.infer_schema(&self.state(), &table_path).await?,
-            (None, true) => {
-                return plan_err!(
-                    "Schema inference for infinite data sources is not supported."
-                )
-            }
+        let resolved_schema = match provided_schema {
+            Some(s) => s,
+            None => options.infer_schema(&self.state(), &table_path).await?,
         };
         let config = ListingTableConfig::new(table_path)
             .with_listing_options(options)

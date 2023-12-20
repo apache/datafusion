@@ -19,7 +19,9 @@ use std::collections::HashMap;
 use std::ops::Deref;
 use std::sync::Arc;
 
-use datafusion::logical_expr::{CrossJoin, Distinct, Like, WindowFrameUnits};
+use datafusion::logical_expr::{
+    CrossJoin, Distinct, Like, Partitioning, WindowFrameUnits,
+};
 use datafusion::{
     arrow::datatypes::{DataType, TimeUnit},
     error::{DataFusionError, Result},
@@ -28,8 +30,8 @@ use datafusion::{
     scalar::ScalarValue,
 };
 
-use datafusion::common::DFSchemaRef;
 use datafusion::common::{exec_err, internal_err, not_impl_err};
+use datafusion::common::{substrait_err, DFSchemaRef};
 #[allow(unused_imports)]
 use datafusion::logical_expr::aggregate_function;
 use datafusion::logical_expr::expr::{
@@ -39,8 +41,9 @@ use datafusion::logical_expr::expr::{
 use datafusion::logical_expr::{expr, Between, JoinConstraint, LogicalPlan, Operator};
 use datafusion::prelude::Expr;
 use prost_types::Any as ProtoAny;
+use substrait::proto::exchange_rel::{ExchangeKind, RoundRobin, ScatterFields};
 use substrait::proto::expression::window_function::BoundsType;
-use substrait::proto::CrossRel;
+use substrait::proto::{CrossRel, ExchangeRel};
 use substrait::{
     proto::{
         aggregate_function::AggregationInvocation,
@@ -408,6 +411,53 @@ pub fn to_substrait_rel(
             project_rel.expressions.extend(window_exprs);
             Ok(Box::new(Rel {
                 rel_type: Some(RelType::Project(project_rel)),
+            }))
+        }
+        LogicalPlan::Repartition(repartition) => {
+            let input =
+                to_substrait_rel(repartition.input.as_ref(), ctx, extension_info)?;
+            let partition_count = match repartition.partitioning_scheme {
+                Partitioning::RoundRobinBatch(num) => num,
+                Partitioning::Hash(_, num) => num,
+                Partitioning::DistributeBy(_) => {
+                    return not_impl_err!(
+                        "Physical plan does not support DistributeBy partitioning"
+                    )
+                }
+            };
+            // ref: https://substrait.io/relations/physical_relations/#exchange-types
+            let exchange_kind = match &repartition.partitioning_scheme {
+                Partitioning::RoundRobinBatch(_) => {
+                    ExchangeKind::RoundRobin(RoundRobin::default())
+                }
+                Partitioning::Hash(exprs, _) => {
+                    let fields = exprs
+                        .iter()
+                        .map(|e| {
+                            try_to_substrait_field_reference(
+                                e,
+                                repartition.input.schema(),
+                            )
+                        })
+                        .collect::<Result<Vec<_>>>()?;
+                    ExchangeKind::ScatterByFields(ScatterFields { fields })
+                }
+                Partitioning::DistributeBy(_) => {
+                    return not_impl_err!(
+                        "Physical plan does not support DistributeBy partitioning"
+                    )
+                }
+            };
+            let exchange_rel = ExchangeRel {
+                common: None,
+                input: Some(input),
+                exchange_kind: Some(exchange_kind),
+                advanced_extension: None,
+                partition_count: partition_count as i32,
+                targets: vec![],
+            };
+            Ok(Box::new(Rel {
+                rel_type: Some(RelType::Exchange(Box::new(exchange_rel))),
             }))
         }
         LogicalPlan::Extension(extension_plan) => {
@@ -1801,6 +1851,31 @@ fn try_to_substrait_null(v: &ScalarValue) -> Result<LiteralType> {
         }
         // TODO: Extend support for remaining data types
         _ => not_impl_err!("Unsupported literal: {v:?}"),
+    }
+}
+
+/// Try to convert an [Expr] to a [FieldReference].
+/// Returns `Err` if the [Expr] is not a [Expr::Column].
+fn try_to_substrait_field_reference(
+    expr: &Expr,
+    schema: &DFSchemaRef,
+) -> Result<FieldReference> {
+    match expr {
+        Expr::Column(col) => {
+            let index = schema.index_of_column(col)?;
+            Ok(FieldReference {
+                reference_type: Some(ReferenceType::DirectReference(ReferenceSegment {
+                    reference_type: Some(reference_segment::ReferenceType::StructField(
+                        Box::new(reference_segment::StructField {
+                            field: index as i32,
+                            child: None,
+                        }),
+                    )),
+                })),
+                root_type: None,
+            })
+        }
+        _ => substrait_err!("Expect a `Column` expr, but found {expr:?}"),
     }
 }
 

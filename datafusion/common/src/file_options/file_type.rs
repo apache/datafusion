@@ -103,13 +103,13 @@ impl FromStr for FileType {
 }
 
 #[cfg(test)]
+#[cfg(feature = "parquet")]
 mod tests {
     use crate::error::DataFusionError;
     use crate::file_options::FileType;
     use std::str::FromStr;
 
     #[test]
-    #[cfg(feature = "parquet")]
     fn from_str() {
         for (ext, file_type) in [
             ("csv", FileType::CSV),

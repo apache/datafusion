@@ -18,7 +18,7 @@
 use crate::aggregate::tdigest::TryIntoF64;
 use crate::aggregate::tdigest::{TDigest, DEFAULT_MAX_SIZE};
 use crate::aggregate::utils::down_cast_any_ref;
-use crate::expressions::{format_state_name, Literal};
+use crate::expressions::format_state_name;
 use crate::{AggregateExpr, PhysicalExpr};
 use arrow::{
     array::{
@@ -27,11 +27,13 @@ use arrow::{
     },
     datatypes::{DataType, Field},
 };
+use arrow_array::RecordBatch;
+use arrow_schema::Schema;
 use datafusion_common::{
     downcast_value, exec_err, internal_err, not_impl_err, plan_err, DataFusionError,
     Result, ScalarValue,
 };
-use datafusion_expr::Accumulator;
+use datafusion_expr::{Accumulator, ColumnarValue};
 use std::{any::Any, iter, sync::Arc};
 
 /// APPROX_PERCENTILE_CONT aggregate expression
@@ -131,18 +133,22 @@ impl PartialEq for ApproxPercentileCont {
     }
 }
 
+fn get_lit_value(expr: &Arc<dyn PhysicalExpr>) -> Result<ScalarValue> {
+    let empty_schema = Schema::empty();
+    let empty_batch = RecordBatch::new_empty(Arc::new(empty_schema));
+    let result = expr.evaluate(&empty_batch)?;
+    match result {
+        ColumnarValue::Array(_) => Err(DataFusionError::Internal(format!(
+            "The expr {:?} can't be evaluated to scalar value",
+            expr
+        ))),
+        ColumnarValue::Scalar(scalar_value) => Ok(scalar_value),
+    }
+}
+
 fn validate_input_percentile_expr(expr: &Arc<dyn PhysicalExpr>) -> Result<f64> {
-    // Extract the desired percentile literal
-    let lit = expr
-        .as_any()
-        .downcast_ref::<Literal>()
-        .ok_or_else(|| {
-            DataFusionError::Internal(
-                "desired percentile argument must be float literal".to_string(),
-            )
-        })?
-        .value();
-    let percentile = match lit {
+    let lit = get_lit_value(expr)?;
+    let percentile = match &lit {
         ScalarValue::Float32(Some(q)) => *q as f64,
         ScalarValue::Float64(Some(q)) => *q,
         got => return not_impl_err!(
@@ -161,17 +167,8 @@ fn validate_input_percentile_expr(expr: &Arc<dyn PhysicalExpr>) -> Result<f64> {
 }
 
 fn validate_input_max_size_expr(expr: &Arc<dyn PhysicalExpr>) -> Result<usize> {
-    // Extract the desired percentile literal
-    let lit = expr
-        .as_any()
-        .downcast_ref::<Literal>()
-        .ok_or_else(|| {
-            DataFusionError::Internal(
-                "desired percentile argument must be float literal".to_string(),
-            )
-        })?
-        .value();
-    let max_size = match lit {
+    let lit = get_lit_value(expr)?;
+    let max_size = match &lit {
         ScalarValue::UInt8(Some(q)) => *q as usize,
         ScalarValue::UInt16(Some(q)) => *q as usize,
         ScalarValue::UInt32(Some(q)) => *q as usize,

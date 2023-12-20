@@ -43,7 +43,7 @@ use datafusion_execution::TaskContext;
 use datafusion_expr::Accumulator;
 use datafusion_physical_expr::{
     aggregate::is_order_sensitive,
-    equivalence::collapse_lex_req,
+    equivalence::{collapse_lex_req, ProjectionMapping},
     expressions::{Column, Max, Min, UnKnownColumn},
     physical_exprs_contains, AggregateExpr, EquivalenceProperties, LexOrdering,
     LexRequirement, PhysicalExpr, PhysicalSortExpr, PhysicalSortRequirement,
@@ -59,7 +59,6 @@ mod topk;
 mod topk_stream;
 
 pub use datafusion_expr::AggregateFunction;
-use datafusion_physical_expr::equivalence::ProjectionMapping;
 pub use datafusion_physical_expr::expressions::create_aggregate_expr;
 
 /// Hash aggregate modes
@@ -324,7 +323,7 @@ impl AggregateExec {
     pub fn try_new(
         mode: AggregateMode,
         group_by: PhysicalGroupBy,
-        mut aggr_expr: Vec<Arc<dyn AggregateExpr>>,
+        aggr_expr: Vec<Arc<dyn AggregateExpr>>,
         filter_expr: Vec<Option<Arc<dyn PhysicalExpr>>>,
         input: Arc<dyn ExecutionPlan>,
         input_schema: SchemaRef,
@@ -336,6 +335,43 @@ impl AggregateExec {
             group_by.contains_null(),
             mode,
         )?;
+
+        let schema = Arc::new(materialize_dict_group_keys(
+            &original_schema,
+            group_by.expr.len(),
+        ));
+        let original_schema = Arc::new(original_schema);
+        AggregateExec::try_new_with_schema(
+            mode,
+            group_by,
+            aggr_expr,
+            filter_expr,
+            input,
+            input_schema,
+            schema,
+            original_schema,
+        )
+    }
+
+    /// Create a new hash aggregate execution plan with the given schema.
+    /// This constructor isn't part of the public API, it is used internally
+    /// by Datafusion to enforce schema consistency during when re-creating
+    /// `AggregateExec`s inside optimization rules. Schema field names of an
+    /// `AggregateExec` depends on the names of aggregate expressions. Since
+    /// a rule may re-write aggregate expressions (e.g. reverse them) during
+    /// initialization, field names may change inadvertently if one re-creates
+    /// the schema in such cases.
+    #[allow(clippy::too_many_arguments)]
+    fn try_new_with_schema(
+        mode: AggregateMode,
+        group_by: PhysicalGroupBy,
+        mut aggr_expr: Vec<Arc<dyn AggregateExpr>>,
+        filter_expr: Vec<Option<Arc<dyn PhysicalExpr>>>,
+        input: Arc<dyn ExecutionPlan>,
+        input_schema: SchemaRef,
+        schema: SchemaRef,
+        original_schema: SchemaRef,
+    ) -> Result<Self> {
         let input_eq_properties = input.equivalence_properties();
         let aggregate_groups = get_aggregate_expr_groups(
             &mut aggr_expr,
@@ -343,11 +379,6 @@ impl AggregateExec {
             &input_eq_properties,
             &mode,
         )?;
-        let schema = Arc::new(materialize_dict_group_keys(
-            &original_schema,
-            group_by.expr.len(),
-        ));
-        let original_schema = Arc::new(original_schema);
 
         // Get GROUP BY expressions:
         let groupby_exprs = group_by.input_exprs();
@@ -695,13 +726,15 @@ impl ExecutionPlan for AggregateExec {
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let mut me = AggregateExec::try_new(
+        let mut me = AggregateExec::try_new_with_schema(
             self.mode,
             self.group_by.clone(),
             self.aggr_expr.clone(),
             self.filter_expr.clone(),
             children[0].clone(),
             self.input_schema.clone(),
+            self.schema.clone(),
+            self.original_schema.clone(),
         )?;
         me.limit = self.limit;
         Ok(Arc::new(me))
@@ -1218,7 +1251,8 @@ mod tests {
         lit, ApproxDistinct, Count, FirstValue, LastValue, Median,
     };
     use datafusion_physical_expr::{
-        AggregateExpr, EquivalenceProperties, PhysicalExpr, PhysicalSortExpr,
+        reverse_order_bys, AggregateExpr, EquivalenceProperties, PhysicalExpr,
+        PhysicalSortExpr,
     };
 
     use datafusion_execution::memory_pool::FairSpillPool;
@@ -2286,6 +2320,58 @@ mod tests {
                 .collect::<Vec<_>>();
             assert_eq!(res, expected);
         }
+        Ok(())
+    }
+
+    #[test]
+    fn test_agg_exec_same_schema() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Float32, true),
+            Field::new("b", DataType::Float32, true),
+        ]));
+
+        let col_a = col("a", &schema)?;
+        let col_b = col("b", &schema)?;
+        let option_desc = SortOptions {
+            descending: true,
+            nulls_first: true,
+        };
+        let sort_expr = vec![PhysicalSortExpr {
+            expr: col_b.clone(),
+            options: option_desc,
+        }];
+        let sort_expr_reverse = reverse_order_bys(&sort_expr);
+        let groups = PhysicalGroupBy::new_single(vec![(col_a, "a".to_string())]);
+
+        let aggregates: Vec<Arc<dyn AggregateExpr>> = vec![
+            Arc::new(FirstValue::new(
+                col_b.clone(),
+                "FIRST_VALUE(b)".to_string(),
+                DataType::Float64,
+                sort_expr_reverse.clone(),
+                vec![DataType::Float64],
+            )),
+            Arc::new(LastValue::new(
+                col_b.clone(),
+                "LAST_VALUE(b)".to_string(),
+                DataType::Float64,
+                sort_expr.clone(),
+                vec![DataType::Float64],
+            )),
+        ];
+        let blocking_exec = Arc::new(BlockingExec::new(Arc::clone(&schema), 1));
+        let aggregate_exec = Arc::new(AggregateExec::try_new(
+            AggregateMode::Partial,
+            groups,
+            aggregates.clone(),
+            vec![None, None],
+            blocking_exec.clone(),
+            schema,
+        )?);
+        let new_agg = aggregate_exec
+            .clone()
+            .with_new_children(vec![blocking_exec])?;
+        assert_eq!(new_agg.schema(), aggregate_exec.schema());
         Ok(())
     }
 }
