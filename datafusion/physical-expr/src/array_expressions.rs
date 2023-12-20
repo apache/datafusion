@@ -1796,6 +1796,7 @@ impl Display for SetOp {
 fn generic_set_lists<OffsetSize: OffsetSizeTrait>(
     l: &GenericListArray<OffsetSize>,
     r: &GenericListArray<OffsetSize>,
+    field: Arc<Field>,
     set_op: SetOp,
 ) -> Result<ArrayRef> {
     if matches!(l.value_type(), DataType::Null) {
@@ -1859,7 +1860,6 @@ fn generic_set_lists<OffsetSize: OffsetSizeTrait>(
         }
     }
 
-    let field = Arc::new(Field::new("item", dt, true));
     let offsets = OffsetBuffer::new(offsets.into());
     let new_arrays_ref = new_arrays.iter().map(|v| v.as_ref()).collect::<Vec<_>>();
     let values = compute::concat(&new_arrays_ref)?;
@@ -1904,15 +1904,15 @@ fn general_set_op(
         }
         (DataType::Null, DataType::Null) => Ok(new_empty_array(&DataType::Null)),
 
-        (DataType::List(_), DataType::List(_)) => {
+        (DataType::List(field), DataType::List(_)) => {
             let array1 = as_list_array(&array1)?;
             let array2 = as_list_array(&array2)?;
-            generic_set_lists::<i32>(array1, array2, set_op)
+            generic_set_lists::<i32>(array1, array2, field.clone(), set_op)
         }
-        (DataType::LargeList(_), DataType::LargeList(_)) => {
+        (DataType::LargeList(field), DataType::LargeList(_)) => {
             let array1 = as_large_list_array(&array1)?;
             let array2 = as_large_list_array(&array2)?;
-            generic_set_lists::<i64>(array1, array2, set_op)
+            generic_set_lists::<i64>(array1, array2, field.clone(), set_op)
         }
         (data_type1, data_type2) => {
             internal_err!(
