@@ -84,7 +84,7 @@ impl TestContext {
                 info!("Registering table with many types");
                 register_table_with_many_types(test_ctx.session_ctx()).await;
             }
-            "explain.slt" => {
+            "map.slt" => {
                 info!("Registering table with map");
                 register_table_with_map(test_ctx.session_ctx()).await;
             }
