@@ -246,9 +246,6 @@ pub struct ListingOptions {
     ///       multiple equivalent orderings, the outer `Vec` will have a
     ///       single element.
     pub file_sort_order: Vec<Vec<Expr>>,
-    /// This setting when true indicates that the table is backed by a single file.
-    /// Any inserts to the table may only append to this existing file.
-    pub single_file: bool,
     /// This setting holds file format specific options which should be used
     /// when inserting into this table.
     pub file_type_write_options: Option<FileTypeWriterOptions>,
@@ -269,7 +266,6 @@ impl ListingOptions {
             collect_stat: true,
             target_partitions: 1,
             file_sort_order: vec![],
-            single_file: false,
             file_type_write_options: None,
         }
     }
@@ -418,12 +414,6 @@ impl ListingOptions {
     /// ```
     pub fn with_file_sort_order(mut self, file_sort_order: Vec<Vec<Expr>>) -> Self {
         self.file_sort_order = file_sort_order;
-        self
-    }
-
-    /// Configure if this table is backed by a sigle file
-    pub fn with_single_file(mut self, single_file: bool) -> Self {
-        self.single_file = single_file;
         self
     }
 
@@ -797,7 +787,7 @@ impl TableProvider for ListingTable {
             // all of the data at the input is sink after execution finishes. See discussion for rationale:
             // https://github.com/apache/arrow-datafusion/pull/7610#issuecomment-1728979918
             unbounded_input: is_plan_streaming(&input)?,
-            single_file_output: self.options.single_file,
+            single_file_output: false,
             overwrite,
             file_type_writer_options,
         };
