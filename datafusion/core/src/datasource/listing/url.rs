@@ -198,7 +198,14 @@ impl ListingTableUrl {
                         glob.matches(&stripped)
                     }
                 }
-                None => true,
+                None => {
+                    if ignore_subdirectory {
+                        let has_subdirectory = segments.collect::<Vec<_>>().len() > 1;
+                        !has_subdirectory
+                    } else {
+                        true
+                    }
+                }
             },
             None => false,
         }
@@ -231,7 +238,7 @@ impl ListingTableUrl {
         file_extension: &'a str,
     ) -> Result<BoxStream<'a, Result<ObjectMeta>>> {
         let exec_options = &ctx.options().execution;
-        let ignore_subdirectory = exec_options.ignore_subdirectory;
+        let ignore_subdirectory = exec_options.listing_table_ignore_subdirectory;
         // If the prefix is a file, use a head request, otherwise list
         let list = match self.is_collection() {
             true => match ctx.runtime_env().cache_manager.get_list_files_cache() {
@@ -433,13 +440,6 @@ mod tests {
         let b = ListingTableUrl::parse("../bar/./foo/../baz").unwrap();
         assert_eq!(a, b);
         assert!(a.prefix.as_ref().ends_with("bar/baz"));
-
-        let url = ListingTableUrl::parse("../foo/*.parquet").unwrap();
-        let child = url.prefix.child("aa.parquet");
-        assert!(url.contains(&child, true));
-        let child = url.prefix.child("dir").child("aa.parquet");
-        assert!(!url.contains(&child, true));
-        assert!(url.contains(&child, false));
     }
 
     #[test]

@@ -378,7 +378,7 @@ pub async fn pruned_partition_list<'a>(
             };
 
             let exec_options = &ctx.options().execution;
-            let ignore_subdirectory = exec_options.ignore_subdirectory;
+            let ignore_subdirectory = exec_options.listing_table_ignore_subdirectory;
 
             let files = files.into_iter().filter(move |o| {
                 let extension_match = o.location.as_ref().ends_with(file_extension);

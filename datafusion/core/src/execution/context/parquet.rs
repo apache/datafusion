@@ -81,6 +81,7 @@ mod tests {
     use crate::parquet::basic::Compression;
     use crate::test_util::parquet_test_data;
     use tempfile::tempdir;
+    use datafusion_execution::config::SessionConfig;
 
     use super::*;
 
@@ -103,13 +104,17 @@ mod tests {
 
     #[tokio::test]
     async fn read_with_glob_path_issue_2465() -> Result<()> {
-        let ctx = SessionContext::new();
-
+        let config =
+            SessionConfig::from_string_hash_map(std::collections::HashMap::from([(
+                "datafusion.execution.listing_table_ignore_subdirectory".to_owned(),
+                "false".to_owned(),
+            )]))?;
+        let ctx = SessionContext::new_with_config(config);
         let df = ctx
             .read_parquet(
                 // it was reported that when a path contains // (two consecutive separator) no files were found
                 // in this test, regardless of parquet_test_data() value, our path now contains a //
-                format!("{}//alltypes_plain*.parquet", parquet_test_data()),
+                format!("{}/..//*/alltypes_plain*.parquet", parquet_test_data()),
                 ParquetReadOptions::default(),
             )
             .await?;

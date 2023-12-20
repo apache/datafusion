@@ -276,6 +276,118 @@ LIMIT 10;
 0 2014-08-27T14:00:00Z Timestamp(Millisecond, Some("UTC"))
 0 2014-08-27T14:00:00Z Timestamp(Millisecond, Some("UTC"))
 
+# test for
+query ITID
+COPY (SELECT * FROM src_table WHERE int_col > 6 LIMIT 3)
+TO 'test_files/scratch/parquet/test_table/subdir/3.parquet'
+(FORMAT PARQUET, SINGLE_FILE_OUTPUT true);
+----
+3
+
+# Test config ignore_subdirectory:
+
+statement ok
+set datafusion.execution.listing_table_ignore_subdirectory = true;
+
+statement ok
+CREATE EXTERNAL TABLE t1_ignore_subdirectory
+STORED AS PARQUET
+WITH HEADER ROW
+LOCATION 'test_files/scratch/parquet/test_table/*.parquet';
+
+query TT
+explain select count(*) from t1_ignore_subdirectory;
+----
+logical_plan
+Aggregate: groupBy=[[]], aggr=[[COUNT(UInt8(1)) AS COUNT(*)]]
+--TableScan: t1_ignore_subdirectory projection=[]
+physical_plan
+AggregateExec: mode=Final, gby=[], aggr=[COUNT(*)]
+--CoalescePartitionsExec
+----AggregateExec: mode=Partial, gby=[], aggr=[COUNT(*)]
+------ParquetExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet/test_table/0.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet/test_table/1.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet/test_table/2.parquet]]}
+
+statement ok
+CREATE EXTERNAL TABLE t2_ignore_subdirectory
+STORED AS PARQUET
+WITH HEADER ROW
+LOCATION 'test_files/scratch/parquet/test_table/';
+
+query TT
+explain select count(*) from t2_ignore_subdirectory;
+----
+logical_plan
+Aggregate: groupBy=[[]], aggr=[[COUNT(UInt8(1)) AS COUNT(*)]]
+--TableScan: t2_ignore_subdirectory projection=[]
+physical_plan
+AggregateExec: mode=Final, gby=[], aggr=[COUNT(*)]
+--CoalescePartitionsExec
+----AggregateExec: mode=Partial, gby=[], aggr=[COUNT(*)]
+------ParquetExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet/test_table/0.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet/test_table/1.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet/test_table/2.parquet]]}
+
+# scan file: 0.parquet 1.parquet 2.parquet
+
+query I
+select count(*) from t1_ignore_subdirectory;
+----
+9
+
+query I
+select count(*) from t2_ignore_subdirectory;
+----
+9
+
+statement ok
+set datafusion.execution.listing_table_ignore_subdirectory = false;
+
+statement ok
+CREATE EXTERNAL TABLE t1_with_subdirectory
+STORED AS PARQUET
+WITH HEADER ROW
+LOCATION 'test_files/scratch/parquet/test_table/*.parquet';
+
+query TT
+explain select count(*) from t1_with_subdirectory;
+----
+logical_plan
+Aggregate: groupBy=[[]], aggr=[[COUNT(UInt8(1)) AS COUNT(*)]]
+--TableScan: t1_with_subdirectory projection=[]
+physical_plan
+AggregateExec: mode=Final, gby=[], aggr=[COUNT(*)]
+--CoalescePartitionsExec
+----AggregateExec: mode=Partial, gby=[], aggr=[COUNT(*)]
+------ParquetExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet/test_table/0.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet/test_table/1.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet/test_table/2.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet/test_table/subdir/3.parquet]]}
+
+
+statement ok
+CREATE EXTERNAL TABLE t2_with_subdirectory
+STORED AS PARQUET
+WITH HEADER ROW
+LOCATION 'test_files/scratch/parquet/test_table/';
+
+query TT
+explain select count(*) from t2_with_subdirectory;
+----
+logical_plan
+Aggregate: groupBy=[[]], aggr=[[COUNT(UInt8(1)) AS COUNT(*)]]
+--TableScan: t2_with_subdirectory projection=[]
+physical_plan
+AggregateExec: mode=Final, gby=[], aggr=[COUNT(*)]
+--CoalescePartitionsExec
+----AggregateExec: mode=Partial, gby=[], aggr=[COUNT(*)]
+------ParquetExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet/test_table/0.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet/test_table/1.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet/test_table/2.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet/test_table/subdir/3.parquet]]}
+
+# scan file: 0.parquet 1.parquet 2.parquet 3.parquet
+query I
+select count(*) from t1_with_subdirectory;
+----
+12
+
+query I
+select count(*) from t2_with_subdirectory;
+----
+12
+
 # Clean up
 statement ok
 DROP TABLE timestamp_with_tz;

@@ -275,7 +275,7 @@ config_namespace! {
 
         /// When scanning file paths, whether to ignore subdirectory files,
         /// ignored by default (true)
-        pub ignore_subdirectory: bool, default = true
+        pub listing_table_ignore_subdirectory: bool, default = true
 
     }
 }
