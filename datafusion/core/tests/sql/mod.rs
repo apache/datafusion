@@ -79,7 +79,6 @@ pub mod expr;
 pub mod group_by;
 pub mod joins;
 pub mod order;
-pub mod parquet;
 pub mod parquet_schema;
 pub mod partitioned_csv;
 pub mod predicates;
