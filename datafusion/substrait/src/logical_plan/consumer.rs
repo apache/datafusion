@@ -27,8 +27,8 @@ use datafusion::logical_expr::{
     BuiltinScalarFunction, Case, Expr, LogicalPlan, Operator,
 };
 use datafusion::logical_expr::{
-    expr, Cast, Extension, GroupingSet, Like, LogicalPlanBuilder, WindowFrameBound,
-    WindowFrameUnits,
+    expr, Cast, Extension, GroupingSet, Like, LogicalPlanBuilder, Partitioning,
+    Repartition, WindowFrameBound, WindowFrameUnits,
 };
 use datafusion::prelude::JoinType;
 use datafusion::sql::TableReference;
@@ -38,7 +38,8 @@ use datafusion::{
     prelude::{Column, SessionContext},
     scalar::ScalarValue,
 };
-use substrait::proto::expression::{Literal, ScalarFunction};
+use substrait::proto::exchange_rel::ExchangeKind;
+use substrait::proto::expression::{FieldReference, Literal, ScalarFunction};
 use substrait::proto::{
     aggregate_function::AggregationInvocation,
     expression::{
@@ -550,6 +551,45 @@ pub async fn from_substrait_rel(
             let plan = plan.from_template(&plan.expressions(), &inputs);
             Ok(LogicalPlan::Extension(Extension { node: plan }))
         }
+        Some(RelType::Exchange(exchange)) => {
+            let Some(input) = exchange.input.as_ref() else {
+                return substrait_err!("Unexpected empty input in ExchangeRel");
+            };
+            let input = Arc::new(from_substrait_rel(ctx, input, extensions).await?);
+
+            let Some(exchange_kind) = &exchange.exchange_kind else {
+                return substrait_err!("Unexpected empty input in ExchangeRel");
+            };
+
+            // ref: https://substrait.io/relations/physical_relations/#exchange-types
+            let partitioning_scheme = match exchange_kind {
+                ExchangeKind::ScatterByFields(scatter_fields) => {
+                    let mut partition_columns = vec![];
+                    let input_schema = input.schema();
+                    for field_ref in &scatter_fields.fields {
+                        let column =
+                            from_substrait_field_reference(field_ref, input_schema)?;
+                        partition_columns.push(column);
+                    }
+                    Partitioning::Hash(
+                        partition_columns,
+                        exchange.partition_count as usize,
+                    )
+                }
+                ExchangeKind::RoundRobin(_) => {
+                    Partitioning::RoundRobinBatch(exchange.partition_count as usize)
+                }
+                ExchangeKind::SingleTarget(_)
+                | ExchangeKind::MultiTarget(_)
+                | ExchangeKind::Broadcast(_) => {
+                    return not_impl_err!("Unsupported exchange kind: {exchange_kind:?}");
+                }
+            };
+            Ok(LogicalPlan::Repartition(Repartition {
+                input,
+                partitioning_scheme,
+            }))
+        }
         _ => not_impl_err!("Unsupported RelType: {:?}", rel.rel_type),
     }
 }
@@ -725,27 +765,9 @@ pub async fn from_substrait_rex(
                 negated: false,
             })))
         }
-        Some(RexType::Selection(field_ref)) => match &field_ref.reference_type {
-            Some(DirectReference(direct)) => match &direct.reference_type.as_ref() {
-                Some(StructField(x)) => match &x.child.as_ref() {
-                    Some(_) => not_impl_err!(
-                        "Direct reference StructField with child is not supported"
-                    ),
-                    None => {
-                        let column =
-                            input_schema.field(x.field as usize).qualified_column();
-                        Ok(Arc::new(Expr::Column(Column {
-                            relation: column.relation,
-                            name: column.name,
-                        })))
-                    }
-                },
-                _ => not_impl_err!(
-                    "Direct reference with types other than StructField is not supported"
-                ),
-            },
-            _ => not_impl_err!("unsupported field ref type"),
-        },
+        Some(RexType::Selection(field_ref)) => Ok(Arc::new(
+            from_substrait_field_reference(field_ref, input_schema)?,
+        )),
         Some(RexType::IfThen(if_then)) => {
             // Parse `ifs`
             // If the first element does not have a `then` part, then we can assume it's a base expression
@@ -1245,6 +1267,32 @@ fn from_substrait_null(null_type: &Type) -> Result<ScalarValue> {
     }
 }
 
+fn from_substrait_field_reference(
+    field_ref: &FieldReference,
+    input_schema: &DFSchema,
+) -> Result<Expr> {
+    match &field_ref.reference_type {
+        Some(DirectReference(direct)) => match &direct.reference_type.as_ref() {
+            Some(StructField(x)) => match &x.child.as_ref() {
+                Some(_) => not_impl_err!(
+                    "Direct reference StructField with child is not supported"
+                ),
+                None => {
+                    let column = input_schema.field(x.field as usize).qualified_column();
+                    Ok(Expr::Column(Column {
+                        relation: column.relation,
+                        name: column.name,
+                    }))
+                }
+            },
+            _ => not_impl_err!(
+                "Direct reference with types other than StructField is not supported"
+            ),
+        },
+        _ => not_impl_err!("unsupported field ref type"),
+    }
+}
+
 /// Build [`Expr`] from its name and required inputs.
 struct BuiltinExprBuilder {
     expr_name: String,
@@ -1253,7 +1301,9 @@ struct BuiltinExprBuilder {
 impl BuiltinExprBuilder {
     pub fn try_from_name(name: &str) -> Option<Self> {
         match name {
-            "not" | "like" | "ilike" | "is_null" | "is_not_null" => Some(Self {
+            "not" | "like" | "ilike" | "is_null" | "is_not_null" | "is_true"
+            | "is_false" | "is_not_true" | "is_not_false" | "is_unknown"
+            | "is_not_unknown" | "negative" => Some(Self {
                 expr_name: name.to_string(),
             }),
             _ => None,
@@ -1267,14 +1317,11 @@ impl BuiltinExprBuilder {
         extensions: &HashMap<u32, &String>,
     ) -> Result<Arc<Expr>> {
         match self.expr_name.as_str() {
-            "not" => Self::build_not_expr(f, input_schema, extensions).await,
             "like" => Self::build_like_expr(false, f, input_schema, extensions).await,
             "ilike" => Self::build_like_expr(true, f, input_schema, extensions).await,
-            "is_null" => {
-                Self::build_is_null_expr(false, f, input_schema, extensions).await
-            }
-            "is_not_null" => {
-                Self::build_is_null_expr(true, f, input_schema, extensions).await
+            "not" | "negative" | "is_null" | "is_not_null" | "is_true" | "is_false"
+            | "is_not_true" | "is_not_false" | "is_unknown" | "is_not_unknown" => {
+                Self::build_unary_expr(&self.expr_name, f, input_schema, extensions).await
             }
             _ => {
                 not_impl_err!("Unsupported builtin expression: {}", self.expr_name)
@@ -1282,22 +1329,39 @@ impl BuiltinExprBuilder {
         }
     }
 
-    async fn build_not_expr(
+    async fn build_unary_expr(
+        fn_name: &str,
         f: &ScalarFunction,
         input_schema: &DFSchema,
         extensions: &HashMap<u32, &String>,
     ) -> Result<Arc<Expr>> {
         if f.arguments.len() != 1 {
-            return not_impl_err!("Expect one argument for `NOT` expr");
+            return substrait_err!("Expect one argument for {fn_name} expr");
         }
         let Some(ArgType::Value(expr_substrait)) = &f.arguments[0].arg_type else {
-            return not_impl_err!("Invalid arguments type for `NOT` expr");
+            return substrait_err!("Invalid arguments type for {fn_name} expr");
         };
-        let expr = from_substrait_rex(expr_substrait, input_schema, extensions)
+        let arg = from_substrait_rex(expr_substrait, input_schema, extensions)
             .await?
             .as_ref()
             .clone();
-        Ok(Arc::new(Expr::Not(Box::new(expr))))
+        let arg = Box::new(arg);
+
+        let expr = match fn_name {
+            "not" => Expr::Not(arg),
+            "negative" => Expr::Negative(arg),
+            "is_null" => Expr::IsNull(arg),
+            "is_not_null" => Expr::IsNotNull(arg),
+            "is_true" => Expr::IsTrue(arg),
+            "is_false" => Expr::IsFalse(arg),
+            "is_not_true" => Expr::IsNotTrue(arg),
+            "is_not_false" => Expr::IsNotFalse(arg),
+            "is_unknown" => Expr::IsUnknown(arg),
+            "is_not_unknown" => Expr::IsNotUnknown(arg),
+            _ => return not_impl_err!("Unsupported builtin expression: {}", fn_name),
+        };
+
+        Ok(Arc::new(expr))
     }
 
     async fn build_like_expr(
@@ -1308,25 +1372,25 @@ impl BuiltinExprBuilder {
     ) -> Result<Arc<Expr>> {
         let fn_name = if case_insensitive { "ILIKE" } else { "LIKE" };
         if f.arguments.len() != 3 {
-            return not_impl_err!("Expect three arguments for `{fn_name}` expr");
+            return substrait_err!("Expect three arguments for `{fn_name}` expr");
         }
 
         let Some(ArgType::Value(expr_substrait)) = &f.arguments[0].arg_type else {
-            return not_impl_err!("Invalid arguments type for `{fn_name}` expr");
+            return substrait_err!("Invalid arguments type for `{fn_name}` expr");
         };
         let expr = from_substrait_rex(expr_substrait, input_schema, extensions)
             .await?
             .as_ref()
             .clone();
         let Some(ArgType::Value(pattern_substrait)) = &f.arguments[1].arg_type else {
-            return not_impl_err!("Invalid arguments type for `{fn_name}` expr");
+            return substrait_err!("Invalid arguments type for `{fn_name}` expr");
         };
         let pattern = from_substrait_rex(pattern_substrait, input_schema, extensions)
             .await?
             .as_ref()
             .clone();
         let Some(ArgType::Value(escape_char_substrait)) = &f.arguments[2].arg_type else {
-            return not_impl_err!("Invalid arguments type for `{fn_name}` expr");
+            return substrait_err!("Invalid arguments type for `{fn_name}` expr");
         };
         let escape_char_expr =
             from_substrait_rex(escape_char_substrait, input_schema, extensions)
@@ -1346,31 +1410,5 @@ impl BuiltinExprBuilder {
             escape_char: escape_char.map(|c| c.chars().next().unwrap()),
             case_insensitive,
         })))
-    }
-
-    async fn build_is_null_expr(
-        is_not: bool,
-        f: &ScalarFunction,
-        input_schema: &DFSchema,
-        extensions: &HashMap<u32, &String>,
-    ) -> Result<Arc<Expr>> {
-        let fn_name = if is_not { "IS NOT NULL" } else { "IS NULL" };
-        let arg = f.arguments.first().ok_or_else(|| {
-            substrait_datafusion_err!("expect one argument for `{fn_name}` expr")
-        })?;
-        match &arg.arg_type {
-            Some(ArgType::Value(e)) => {
-                let expr = from_substrait_rex(e, input_schema, extensions)
-                    .await?
-                    .as_ref()
-                    .clone();
-                if is_not {
-                    Ok(Arc::new(Expr::IsNotNull(Box::new(expr))))
-                } else {
-                    Ok(Arc::new(Expr::IsNull(Box::new(expr))))
-                }
-            }
-            _ => substrait_err!("Invalid arguments for `{fn_name}` expression"),
-        }
     }
 }

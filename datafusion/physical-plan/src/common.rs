@@ -30,6 +30,7 @@ use crate::{ColumnStatistics, ExecutionPlan, Statistics};
 use arrow::datatypes::Schema;
 use arrow::ipc::writer::{FileWriter, IpcWriteOptions};
 use arrow::record_batch::RecordBatch;
+use arrow_array::Array;
 use datafusion_common::stats::Precision;
 use datafusion_common::{plan_err, DataFusionError, Result};
 use datafusion_execution::memory_pool::MemoryReservation;
@@ -139,16 +140,21 @@ pub fn compute_record_batch_statistics(
 ) -> Statistics {
     let nb_rows = batches.iter().flatten().map(RecordBatch::num_rows).sum();
 
-    let total_byte_size = batches
-        .iter()
-        .flatten()
-        .map(|b| b.get_array_memory_size())
-        .sum();
-
     let projection = match projection {
         Some(p) => p,
         None => (0..schema.fields().len()).collect(),
     };
+
+    let total_byte_size = batches
+        .iter()
+        .flatten()
+        .map(|b| {
+            projection
+                .iter()
+                .map(|index| b.column(*index).get_array_memory_size())
+                .sum::<usize>()
+        })
+        .sum();
 
     let mut column_statistics = vec![ColumnStatistics::new_unknown(); projection.len()];
 
@@ -388,6 +394,7 @@ mod tests {
         datatypes::{DataType, Field, Schema},
         record_batch::RecordBatch,
     };
+    use arrow_array::UInt64Array;
     use datafusion_expr::Operator;
     use datafusion_physical_expr::expressions::{col, Column};
 
@@ -685,20 +692,30 @@ mod tests {
         let schema = Arc::new(Schema::new(vec![
             Field::new("f32", DataType::Float32, false),
             Field::new("f64", DataType::Float64, false),
+            Field::new("u64", DataType::UInt64, false),
         ]));
         let batch = RecordBatch::try_new(
             Arc::clone(&schema),
             vec![
                 Arc::new(Float32Array::from(vec![1., 2., 3.])),
                 Arc::new(Float64Array::from(vec![9., 8., 7.])),
+                Arc::new(UInt64Array::from(vec![4, 5, 6])),
             ],
         )?;
-        let actual =
-            compute_record_batch_statistics(&[vec![batch]], &schema, Some(vec![0, 1]));
 
-        let mut expected = Statistics {
+        // just select f32,f64
+        let select_projection = Some(vec![0, 1]);
+        let byte_size = batch
+            .project(&select_projection.clone().unwrap())
+            .unwrap()
+            .get_array_memory_size();
+
+        let actual =
+            compute_record_batch_statistics(&[vec![batch]], &schema, select_projection);
+
+        let expected = Statistics {
             num_rows: Precision::Exact(3),
-            total_byte_size: Precision::Exact(464), // this might change a bit if the way we compute the size changes
+            total_byte_size: Precision::Exact(byte_size),
             column_statistics: vec![
                 ColumnStatistics {
                     distinct_count: Precision::Absent,
@@ -714,9 +731,6 @@ mod tests {
                 },
             ],
         };
-
-        // Prevent test flakiness due to undefined / changing implementation details
-        expected.total_byte_size = actual.total_byte_size.clone();
 
         assert_eq!(actual, expected);
         Ok(())

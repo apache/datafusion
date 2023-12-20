@@ -591,8 +591,9 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::ArrayDistinct => Ok(input_expr_types[0].clone()),
             BuiltinScalarFunction::ArrayElement => match &input_expr_types[0] {
                 List(field) => Ok(field.data_type().clone()),
+                LargeList(field) => Ok(field.data_type().clone()),
                 _ => plan_err!(
-                    "The {self} function can only accept list as the first argument"
+                    "The {self} function can only accept list or largelist as the first argument"
                 ),
             },
             BuiltinScalarFunction::ArrayLength => Ok(UInt64),
@@ -915,9 +916,16 @@ impl BuiltinScalarFunction {
 
         // for now, the list is small, as we do not have many built-in functions.
         match self {
-            BuiltinScalarFunction::ArrayAppend => Signature::any(2, self.volatility()),
             BuiltinScalarFunction::ArraySort => {
                 Signature::variadic_any(self.volatility())
+            }
+            BuiltinScalarFunction::ArrayAppend => Signature {
+                type_signature: ArrayAndElement,
+                volatility: self.volatility(),
+            },
+            BuiltinScalarFunction::MakeArray => {
+                // 0 or more arguments of arbitrary type
+                Signature::one_of(vec![VariadicEqual, Any(0)], self.volatility())
             }
             BuiltinScalarFunction::ArrayPopFront => Signature::any(1, self.volatility()),
             BuiltinScalarFunction::ArrayPopBack => Signature::any(1, self.volatility()),
@@ -958,10 +966,6 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::ArrayIntersect => Signature::any(2, self.volatility()),
             BuiltinScalarFunction::ArrayUnion => Signature::any(2, self.volatility()),
             BuiltinScalarFunction::Cardinality => Signature::any(1, self.volatility()),
-            BuiltinScalarFunction::MakeArray => {
-                // 0 or more arguments of arbitrary type
-                Signature::one_of(vec![VariadicAny, Any(0)], self.volatility())
-            }
             BuiltinScalarFunction::Range => Signature::one_of(
                 vec![
                     Exact(vec![Int64]),

@@ -26,8 +26,8 @@ use crate::datasource::physical_plan::file_stream::{
     FileOpenFuture, FileOpener, FileStream,
 };
 use crate::datasource::physical_plan::{
-    parquet::page_filter::PagePruningPredicate, DisplayAs, FileMeta, FileScanConfig,
-    SchemaAdapter,
+    parquet::page_filter::PagePruningPredicate, DisplayAs, FileGroupPartitioner,
+    FileMeta, FileScanConfig, SchemaAdapter,
 };
 use crate::{
     config::ConfigOptions,
@@ -330,18 +330,18 @@ impl ExecutionPlan for ParquetExec {
     }
 
     /// Redistribute files across partitions according to their size
-    /// See comments on `get_file_groups_repartitioned()` for more detail.
+    /// See comments on [`FileGroupPartitioner`] for more detail.
     fn repartitioned(
         &self,
         target_partitions: usize,
         config: &ConfigOptions,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
         let repartition_file_min_size = config.optimizer.repartition_file_min_size;
-        let repartitioned_file_groups_option = FileScanConfig::repartition_file_groups(
-            self.base_config.file_groups.clone(),
-            target_partitions,
-            repartition_file_min_size,
-        );
+        let repartitioned_file_groups_option = FileGroupPartitioner::new()
+            .with_target_partitions(target_partitions)
+            .with_repartition_file_min_size(repartition_file_min_size)
+            .with_preserve_order_within_groups(self.output_ordering().is_some())
+            .repartition_file_groups(&self.base_config.file_groups);
 
         let mut new_plan = self.clone();
         if let Some(repartitioned_file_groups) = repartitioned_file_groups_option {
@@ -752,7 +752,7 @@ mod tests {
     use crate::datasource::file_format::options::CsvReadOptions;
     use crate::datasource::file_format::parquet::test_util::store_parquet;
     use crate::datasource::file_format::test_util::scan_format;
-    use crate::datasource::listing::{FileRange, PartitionedFile};
+    use crate::datasource::listing::{FileRange, ListingOptions, PartitionedFile};
     use crate::datasource::object_store::ObjectStoreUrl;
     use crate::execution::context::SessionState;
     use crate::physical_plan::displayable;
@@ -772,8 +772,8 @@ mod tests {
     };
     use arrow_array::Date64Array;
     use chrono::{TimeZone, Utc};
-    use datafusion_common::ScalarValue;
     use datafusion_common::{assert_contains, ToDFSchema};
+    use datafusion_common::{FileType, GetExt, ScalarValue};
     use datafusion_expr::{col, lit, when, Expr};
     use datafusion_physical_expr::create_physical_expr;
     use datafusion_physical_expr::execution_props::ExecutionProps;
@@ -882,7 +882,6 @@ mod tests {
                     limit: None,
                     table_partition_cols: vec![],
                     output_ordering: vec![],
-                    infinite_source: false,
                 },
                 predicate,
                 None,
@@ -1539,7 +1538,6 @@ mod tests {
                     limit: None,
                     table_partition_cols: vec![],
                     output_ordering: vec![],
-                    infinite_source: false,
                 },
                 None,
                 None,
@@ -1654,7 +1652,6 @@ mod tests {
                     ),
                 ],
                 output_ordering: vec![],
-                infinite_source: false,
             },
             None,
             None,
@@ -1718,7 +1715,6 @@ mod tests {
                 limit: None,
                 table_partition_cols: vec![],
                 output_ordering: vec![],
-                infinite_source: false,
             },
             None,
             None,
@@ -1942,6 +1938,96 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn write_table_results() -> Result<()> {
+        // create partitioned input file and context
+        let tmp_dir = TempDir::new()?;
+        // let mut ctx = create_ctx(&tmp_dir, 4).await?;
+        let ctx = SessionContext::new_with_config(
+            SessionConfig::new().with_target_partitions(8),
+        );
+        let schema = populate_csv_partitions(&tmp_dir, 4, ".csv")?;
+        // register csv file with the execution context
+        ctx.register_csv(
+            "test",
+            tmp_dir.path().to_str().unwrap(),
+            CsvReadOptions::new().schema(&schema),
+        )
+        .await?;
+
+        // register a local file system object store for /tmp directory
+        let local = Arc::new(LocalFileSystem::new_with_prefix(&tmp_dir)?);
+        let local_url = Url::parse("file://local").unwrap();
+        ctx.runtime_env().register_object_store(&local_url, local);
+
+        // Configure listing options
+        let file_format = ParquetFormat::default().with_enable_pruning(Some(true));
+        let listing_options = ListingOptions::new(Arc::new(file_format))
+            .with_file_extension(FileType::PARQUET.get_ext());
+
+        // execute a simple query and write the results to parquet
+        let out_dir = tmp_dir.as_ref().to_str().unwrap().to_string() + "/out";
+        std::fs::create_dir(&out_dir).unwrap();
+        let df = ctx.sql("SELECT c1, c2 FROM test").await?;
+        let schema: Schema = df.schema().into();
+        // Register a listing table - this will use all files in the directory as data sources
+        // for the query
+        ctx.register_listing_table(
+            "my_table",
+            &out_dir,
+            listing_options,
+            Some(Arc::new(schema)),
+            None,
+        )
+        .await
+        .unwrap();
+        df.write_table("my_table", DataFrameWriteOptions::new())
+            .await?;
+
+        // create a new context and verify that the results were saved to a partitioned parquet file
+        let ctx = SessionContext::new();
+
+        // get write_id
+        let mut paths = fs::read_dir(&out_dir).unwrap();
+        let path = paths.next();
+        let name = path
+            .unwrap()?
+            .path()
+            .file_name()
+            .expect("Should be a file name")
+            .to_str()
+            .expect("Should be a str")
+            .to_owned();
+        let (parsed_id, _) = name.split_once('_').expect("File should contain _ !");
+        let write_id = parsed_id.to_owned();
+
+        // register each partition as well as the top level dir
+        ctx.register_parquet(
+            "part0",
+            &format!("{out_dir}/{write_id}_0.parquet"),
+            ParquetReadOptions::default(),
+        )
+        .await?;
+
+        ctx.register_parquet("allparts", &out_dir, ParquetReadOptions::default())
+            .await?;
+
+        let part0 = ctx.sql("SELECT c1, c2 FROM part0").await?.collect().await?;
+        let allparts = ctx
+            .sql("SELECT c1, c2 FROM allparts")
+            .await?
+            .collect()
+            .await?;
+
+        let allparts_count: usize = allparts.iter().map(|batch| batch.num_rows()).sum();
+
+        assert_eq!(part0[0].schema(), allparts[0].schema());
+
+        assert_eq!(allparts_count, 40);
+
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn write_parquet_results() -> Result<()> {
         // create partitioned input file and context
         let tmp_dir = TempDir::new()?;
@@ -1985,7 +2071,6 @@ mod tests {
             .to_str()
             .expect("Should be a str")
             .to_owned();
-        println!("{name}");
         let (parsed_id, _) = name.split_once('_').expect("File should contain _ !");
         let write_id = parsed_id.to_owned();
 

@@ -90,6 +90,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             let partition_by = window
                 .partition_by
                 .into_iter()
+                // ignore window spec PARTITION BY for scalar values
+                // as they do not change and thus do not generate new partitions
+                .filter(|e| !matches!(e, sqlparser::ast::Expr::Value { .. },))
                 .map(|e| self.sql_expr_to_logical_expr(e, schema, planner_context))
                 .collect::<Result<Vec<_>>>()?;
             let mut order_by = self.order_by_to_sort_expr(
