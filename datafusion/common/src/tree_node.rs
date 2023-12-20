@@ -428,7 +428,7 @@ pub trait TreeNode: Sized {
 }
 
 /// Implements the [visitor pattern](https://en.wikipedia.org/wiki/Visitor_pattern) for
-/// recursively walking [`TreeNode`]s.
+/// recursively visiting [`TreeNode`]s.
 ///
 /// [`TreeNodeVisitor`] allows keeping the algorithms separate from the code to traverse
 /// the structure of the [`TreeNode`] tree and makes it easier to add new types of tree
@@ -450,6 +450,14 @@ pub trait TreeNodeVisitor: Sized {
     fn post_visit(&mut self, _node: &Self::Node) -> Result<TreeNodeRecursion>;
 }
 
+/// Implements the [visitor pattern](https://en.wikipedia.org/wiki/Visitor_pattern) for
+/// recursively transforming [`TreeNode`]s.
+///
+/// When passed to [`TreeNode::transform()`], [`TreeNodeVisitor::pre_transform()`] and
+/// [`TreeNodeVisitor::post_transform()`] are invoked recursively on an node tree.
+/// See [`TreeNodeRecursion`] for more details on how the traversal can be controlled.
+///
+/// If an [`Err`] result is returned, recursion is stopped immediately.
 pub trait TreeNodeTransformer: Sized {
     /// The node type which is visitable.
     type Node: TreeNode;
@@ -492,8 +500,9 @@ pub enum RewriteRecursion {
     Skip,
 }
 
-/// Controls how the [`TreeNode`] recursion should proceed for [`TreeNode::visit_down()`] and
-/// [`TreeNode::visit()`].
+/// Controls how a [`TreeNode`] recursion should proceed for [`TreeNode::visit_down()`],
+/// [`TreeNode::visit()`], [`TreeNode::transform_down()`], [`TreeNode::transform_up()`]
+/// and [`TreeNode::transform()`].
 #[derive(Debug)]
 pub enum TreeNodeRecursion {
     /// Continue the visit to the next node.
@@ -515,6 +524,8 @@ pub enum TreeNodeRecursion {
 }
 
 impl TreeNodeRecursion {
+    /// Helper function to define behavior of a [`TreeNode`] recursion to continue with a
+    /// closure if the recursion so far resulted [`TreeNodeRecursion::Continue]`.
     pub fn and_then_on_continue<F>(self, f: F) -> Result<TreeNodeRecursion>
     where
         F: FnOnce() -> Result<TreeNodeRecursion>,
@@ -525,7 +536,7 @@ impl TreeNodeRecursion {
         }
     }
 
-    pub fn continue_on_prune(self) -> Result<TreeNodeRecursion> {
+    fn continue_on_prune(self) -> Result<TreeNodeRecursion> {
         Ok(match self {
             TreeNodeRecursion::Prune => TreeNodeRecursion::Continue,
             o => o,
@@ -539,7 +550,7 @@ impl TreeNodeRecursion {
         })
     }
 
-    pub fn continue_on_stop(self) -> Result<TreeNodeRecursion> {
+    fn continue_on_stop(self) -> Result<TreeNodeRecursion> {
         Ok(match self {
             TreeNodeRecursion::Stop => TreeNodeRecursion::Continue,
             o => o,
