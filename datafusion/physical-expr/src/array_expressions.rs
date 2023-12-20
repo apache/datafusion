@@ -33,7 +33,7 @@ use datafusion_common::cast::{
     as_generic_list_array, as_generic_string_array, as_int64_array, as_large_list_array,
     as_list_array, as_null_array, as_string_array,
 };
-use datafusion_common::utils::{array_into_list_array, list_ndims};
+use datafusion_common::utils::array_into_list_array;
 use datafusion_common::{
     exec_err, internal_err, not_impl_err, plan_err, DataFusionError, Result,
 };
@@ -1082,7 +1082,6 @@ fn concat_internal(args: &[ArrayRef]) -> Result<ArrayRef> {
 
 /// Array_concat/Array_cat SQL function
 pub fn array_concat(args: &[ArrayRef]) -> Result<ArrayRef> {
-    println!("args: {:?}", args);
     let mut new_args = vec![];
     for arg in args {
         let data_type = arg.data_type();
@@ -1098,13 +1097,10 @@ pub fn array_concat(args: &[ArrayRef]) -> Result<ArrayRef> {
 
     // All the arguments are null, return null
     if new_args.is_empty() {
-        return Ok(new_null_array(&DataType::Null, 0))
+        return Ok(new_null_array(&DataType::Null, 0));
     }
 
-    println!("concat with new_args: {:?}", new_args);
-    let res = concat_internal(new_args.as_slice());
-    println!("res: {:?}", res);
-    res
+    concat_internal(new_args.as_slice())
 }
 
 /// Array_empty SQL function

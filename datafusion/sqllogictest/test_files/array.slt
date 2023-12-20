@@ -1877,6 +1877,30 @@ select array_concat([null], [null]);
 ----
 [, ]
 
+# 3D null + 1D + 2D empty
+query ?
+select array_concat([[[null]]], [1, 2], [[]]);
+----
+[[[]], [[1, 2]], [[]]]
+
+# 1D + 2D + 3D empty
+query ?
+select array_concat([], [[]], [[[]]]);
+----
+[[[]], [[]], [[]]]
+
+# 1D + 2D + 3D null
+query ?
+select array_concat([null], [[null]], [[[null]]]);
+----
+[[[]], [[]], [[]]]
+
+# 0D + 1D + 2D + 3D null
+query ?
+select array_concat(null, [null], [[null]], [[[null]]]);
+----
+[[[]], [[]], [[]]]
+
 ## array_position (aliases: `list_position`, `array_indexof`, `list_indexof`)
 
 # array_position scalar function #1

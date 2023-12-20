@@ -24,7 +24,7 @@ use arrow::{
 use datafusion_common::utils::list_ndims;
 use datafusion_common::{internal_err, plan_err, DataFusionError, Result};
 
-use super::binary::comparison_coercion;
+use super::binary::{comparison_coercion, comparison_coercion_for_iter};
 
 /// Performs type coercion for function arguments.
 ///
@@ -89,18 +89,7 @@ fn get_valid_types(
             .map(|valid_type| (0..*number).map(|_| valid_type.clone()).collect())
             .collect(),
         TypeSignature::VariadicEqual => {
-            let new_type = current_types.iter().skip(1).try_fold(
-                current_types.first().unwrap().clone(),
-                |acc, x| {
-                    let coerced_type = comparison_coercion(&acc, x);
-                    if let Some(coerced_type) = coerced_type {
-                        Ok(coerced_type)
-                    } else {
-                        internal_err!("Coercion from {acc:?} to {x:?} failed.")
-                    }
-                },
-            );
-
+            let new_type = comparison_coercion_for_iter(current_types);
             match new_type {
                 Ok(new_type) => vec![vec![new_type; current_types.len()]],
                 Err(e) => return Err(e),
@@ -149,40 +138,32 @@ fn get_valid_types(
                 return Ok(vec![vec![]]);
             }
         }
-        TypeSignature::ArrayAndArray => {
+        TypeSignature::ArrayConcat => {
+            let base_types = current_types
+                .iter()
+                .map(datafusion_common::utils::base_type)
+                .collect::<Vec<_>>();
 
-
-            // let array_type1 = &current_types[0];
-            // let array_type2 = &current_types[1];
-
-            // // If one of the argument is null, we dont need to coercion
-            // if array_type1.eq(&DataType::Null) || array_type2.eq(&DataType::Null) {
-            //     return Ok(vec![vec![array_type1.clone(), array_type2.clone()]]);
-            // }
-
-            // We need to find the coerced base type, mainly for cases like:
-            // `array_append(List(null), i64)` -> `List(i64)`
-
-            let base_types = current_types.iter().map(|t| datafusion_common::utils::base_type(t)).collect::<Vec<_>>();
-            let new_base_type = base_types.iter().try_fold(base_types[0].clone(), |acc, x| {
-                comparison_coercion(&acc, x)
-            }); 
-
-            if new_base_type.is_none() {
-                return internal_err!(
-                    "Coerce {current_types:?} not supported."
-                );
-            }
-            let new_base_type = new_base_type.unwrap();
-
-            let array_types = current_types.iter().map(|t| {
-                if t.eq(&DataType::Null) {
-                   t.to_owned()
-                } else {
-                    datafusion_common::utils::coerced_type_with_base_type_only(t, &new_base_type)
+            let new_base_type = comparison_coercion_for_iter(base_types.as_slice());
+            match new_base_type {
+                Ok(new_base_type) => {
+                    let array_types = current_types
+                        .iter()
+                        .map(|t| {
+                            if t.eq(&DataType::Null) {
+                                t.to_owned()
+                            } else {
+                                datafusion_common::utils::coerced_type_with_base_type_only(
+                                    t,
+                                    &new_base_type,
+                                )
+                            }
+                        })
+                        .collect::<Vec<_>>();
+                    return Ok(vec![array_types]);
                 }
-            }).collect::<Vec<_>>();
-            return Ok(vec![array_types]);
+                Err(e) => return Err(e),
+            }
         }
         TypeSignature::Any(number) => {
             if current_types.len() != *number {
@@ -225,8 +206,6 @@ fn maybe_data_types(
         if current_type == valid_type {
             new_type.push(current_type.clone())
         } else {
-            println!("attempt coercing {:?} to {:?}", current_type, valid_type);
-
             // attempt to coerce
             if let Some(valid_type) = coerced_from(valid_type, current_type) {
                 new_type.push(valid_type)

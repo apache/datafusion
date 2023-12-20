@@ -123,8 +123,8 @@ pub enum TypeSignature {
     /// List dimension of the non-list is 0.
     ArrayAndElement,
     /// Specialized Signature for ArrayConcat
-    /// Two arguments SHOULD be List/LargeList, and the list dimension MAY NOT be the same.
-    ArrayAndArray,
+    /// Accept arbitrary arguments but they SHOULD be List/LargeList or Null, and the list dimension MAY NOT be the same.
+    ArrayConcat,
 }
 
 impl TypeSignature {
@@ -158,8 +158,8 @@ impl TypeSignature {
             TypeSignature::ArrayAndElement => {
                 vec!["ArrayAndElement(List<T>, T)".to_string()]
             }
-            TypeSignature::ArrayAndArray => {
-                vec!["ArrayAndArray(List<T>, List<T>)".to_string()]
+            TypeSignature::ArrayConcat => {
+                vec!["ArrayConcat(List<T> / NULL, .., List<T> / NULL)".to_string()]
             }
         }
     }
