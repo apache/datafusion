@@ -150,11 +150,11 @@ pub trait TreeNode: Sized {
     fn transform_with_payload<FD, PD, FU, PU>(
         &mut self,
         f_down: &mut FD,
-        payload_down: Option<PD>,
+        payload_down: PD,
         f_up: &mut FU,
     ) -> Result<(TreeNodeRecursion, Option<PU>)>
     where
-        FD: FnMut(&mut Self, Option<PD>) -> Result<(TreeNodeRecursion, Vec<PD>)>,
+        FD: FnMut(&mut Self, PD) -> Result<(TreeNodeRecursion, Vec<PD>)>,
         FU: FnMut(&mut Self, Vec<PU>) -> Result<(TreeNodeRecursion, PU)>,
     {
         // Apply `f_down` on self.
@@ -168,7 +168,7 @@ pub trait TreeNode: Sized {
             let mut payload_up = vec![];
             let tnr = self.transform_children(&mut |c| {
                 let (tnr, p) =
-                    c.transform_with_payload(f_down, new_payload_down_iter.next(), f_up)?;
+                    c.transform_with_payload(f_down, new_payload_down_iter.next().unwrap(), f_up)?;
                 p.into_iter().for_each(|p| payload_up.push(p));
                 Ok(tnr)
             })?;
