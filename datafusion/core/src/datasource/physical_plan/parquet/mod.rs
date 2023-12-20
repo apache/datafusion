@@ -26,8 +26,8 @@ use crate::datasource::physical_plan::file_stream::{
     FileOpenFuture, FileOpener, FileStream,
 };
 use crate::datasource::physical_plan::{
-    parquet::page_filter::PagePruningPredicate, DisplayAs, FileMeta, FileScanConfig,
-    SchemaAdapter,
+    parquet::page_filter::PagePruningPredicate, DisplayAs, FileGroupPartitioner,
+    FileMeta, FileScanConfig, SchemaAdapter,
 };
 use crate::{
     config::ConfigOptions,
@@ -330,18 +330,18 @@ impl ExecutionPlan for ParquetExec {
     }
 
     /// Redistribute files across partitions according to their size
-    /// See comments on `get_file_groups_repartitioned()` for more detail.
+    /// See comments on [`FileGroupPartitioner`] for more detail.
     fn repartitioned(
         &self,
         target_partitions: usize,
         config: &ConfigOptions,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
         let repartition_file_min_size = config.optimizer.repartition_file_min_size;
-        let repartitioned_file_groups_option = FileScanConfig::repartition_file_groups(
-            self.base_config.file_groups.clone(),
-            target_partitions,
-            repartition_file_min_size,
-        );
+        let repartitioned_file_groups_option = FileGroupPartitioner::new()
+            .with_target_partitions(target_partitions)
+            .with_repartition_file_min_size(repartition_file_min_size)
+            .with_preserve_order_within_groups(self.output_ordering().is_some())
+            .repartition_file_groups(&self.base_config.file_groups);
 
         let mut new_plan = self.clone();
         if let Some(repartitioned_file_groups) = repartitioned_file_groups_option {
@@ -882,7 +882,6 @@ mod tests {
                     limit: None,
                     table_partition_cols: vec![],
                     output_ordering: vec![],
-                    infinite_source: false,
                 },
                 predicate,
                 None,
@@ -1539,7 +1538,6 @@ mod tests {
                     limit: None,
                     table_partition_cols: vec![],
                     output_ordering: vec![],
-                    infinite_source: false,
                 },
                 None,
                 None,
@@ -1654,7 +1652,6 @@ mod tests {
                     ),
                 ],
                 output_ordering: vec![],
-                infinite_source: false,
             },
             None,
             None,
@@ -1718,7 +1715,6 @@ mod tests {
                 limit: None,
                 table_partition_cols: vec![],
                 output_ordering: vec![],
-                infinite_source: false,
             },
             None,
             None,

@@ -1761,6 +1761,7 @@ pub(crate) mod tests {
         parquet_exec_with_sort(vec![])
     }
 
+    /// create a single parquet file that is sorted
     pub(crate) fn parquet_exec_with_sort(
         output_ordering: Vec<Vec<PhysicalSortExpr>>,
     ) -> Arc<ParquetExec> {
@@ -1774,7 +1775,6 @@ pub(crate) mod tests {
                 limit: None,
                 table_partition_cols: vec![],
                 output_ordering,
-                infinite_source: false,
             },
             None,
             None,
@@ -1785,7 +1785,7 @@ pub(crate) mod tests {
         parquet_exec_multiple_sorted(vec![])
     }
 
-    // Created a sorted parquet exec with multiple files
+    /// Created a sorted parquet exec with multiple files
     fn parquet_exec_multiple_sorted(
         output_ordering: Vec<Vec<PhysicalSortExpr>>,
     ) -> Arc<ParquetExec> {
@@ -1802,7 +1802,6 @@ pub(crate) mod tests {
                 limit: None,
                 table_partition_cols: vec![],
                 output_ordering,
-                infinite_source: false,
             },
             None,
             None,
@@ -1824,7 +1823,6 @@ pub(crate) mod tests {
                 limit: None,
                 table_partition_cols: vec![],
                 output_ordering,
-                infinite_source: false,
             },
             false,
             b',',
@@ -1855,7 +1853,6 @@ pub(crate) mod tests {
                 limit: None,
                 table_partition_cols: vec![],
                 output_ordering,
-                infinite_source: false,
             },
             false,
             b',',
@@ -3859,6 +3856,56 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn parallelization_multiple_files() -> Result<()> {
+        let schema = schema();
+        let sort_key = vec![PhysicalSortExpr {
+            expr: col("a", &schema).unwrap(),
+            options: SortOptions::default(),
+        }];
+
+        let plan = filter_exec(parquet_exec_multiple_sorted(vec![sort_key]));
+        let plan = sort_required_exec(plan);
+
+        // The groups must have only contiguous ranges of rows from the same file
+        // if any group has rows from multiple files, the data is no longer sorted destroyed
+        // https://github.com/apache/arrow-datafusion/issues/8451
+        let expected = [
+            "SortRequiredExec: [a@0 ASC]",
+            "FilterExec: c@2 = 0",
+            "ParquetExec: file_groups={3 groups: [[x:0..50], [y:0..100], [x:50..100]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC]",        ];
+        let target_partitions = 3;
+        let repartition_size = 1;
+        assert_optimized!(
+            expected,
+            plan,
+            true,
+            true,
+            target_partitions,
+            true,
+            repartition_size
+        );
+
+        let expected = [
+            "SortRequiredExec: [a@0 ASC]",
+            "FilterExec: c@2 = 0",
+            "ParquetExec: file_groups={8 groups: [[x:0..25], [y:0..25], [x:25..50], [y:25..50], [x:50..75], [y:50..75], [x:75..100], [y:75..100]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC]",
+        ];
+        let target_partitions = 8;
+        let repartition_size = 1;
+        assert_optimized!(
+            expected,
+            plan,
+            true,
+            true,
+            target_partitions,
+            true,
+            repartition_size
+        );
+
+        Ok(())
+    }
+
+    #[test]
     /// CsvExec on compressed csv file will not be partitioned
     /// (Not able to decompress chunked csv file)
     fn parallelization_compressed_csv() -> Result<()> {
@@ -3906,7 +3953,6 @@ pub(crate) mod tests {
                         limit: None,
                         table_partition_cols: vec![],
                         output_ordering: vec![],
-                        infinite_source: false,
                     },
                     false,
                     b',',
@@ -4529,15 +4575,11 @@ pub(crate) mod tests {
         assert_plan_txt!(expected, physical_plan);
 
         let expected = &[
-            "SortRequiredExec: [a@0 ASC]",
             // Since at the start of the rule ordering requirement is satisfied
             // EnforceDistribution rule satisfy this requirement also.
-            // ordering is re-satisfied by introduction of SortExec.
-            "SortExec: expr=[a@0 ASC]",
+            "SortRequiredExec: [a@0 ASC]",
             "FilterExec: c@2 = 0",
-            // ordering is lost here
-            "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=2",
-            "ParquetExec: file_groups={2 groups: [[x], [y]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC]",
+            "ParquetExec: file_groups={10 groups: [[x:0..20], [y:0..20], [x:20..40], [y:20..40], [x:40..60], [y:40..60], [x:60..80], [y:60..80], [x:80..100], [y:80..100]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC]",
         ];
 
         let mut config = ConfigOptions::new();
