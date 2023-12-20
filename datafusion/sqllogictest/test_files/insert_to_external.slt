@@ -76,6 +76,44 @@ select * from dictionary_encoded_parquet_partitioned order by (a);
 a foo
 b bar
 
+statement ok
+CREATE EXTERNAL TABLE dictionary_encoded_arrow_partitioned(
+  a varchar,
+  b varchar,
+) 
+STORED AS arrow
+LOCATION 'test_files/scratch/insert_to_external/arrow_dict_partitioned/'
+PARTITIONED BY (b)
+OPTIONS(
+create_local_path 'true',
+insert_mode 'append_new_files',
+);
+
+query TT
+insert into dictionary_encoded_arrow_partitioned 
+select * from dictionary_encoded_values
+----
+2
+
+statement ok
+CREATE EXTERNAL TABLE dictionary_encoded_arrow_test_readback(
+  a varchar,
+) 
+STORED AS arrow
+LOCATION 'test_files/scratch/insert_to_external/arrow_dict_partitioned/b=bar/'
+OPTIONS(
+create_local_path 'true',
+insert_mode 'append_new_files',
+);
+
+query T
+select * from dictionary_encoded_arrow_test_readback;
+----
+b
+
+query error DataFusion error: Arrow error: Schema error: project index 1 out of bounds, max field 1
+select * from dictionary_encoded_arrow_partitioned order by (a);
+
 
 # test_insert_into
 statement ok

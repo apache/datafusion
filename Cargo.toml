@@ -55,6 +55,7 @@ arrow-buffer = { version = "49.0.0", default-features = false }
 arrow-flight = { version = "49.0.0", features = ["flight-sql-experimental"] }
 arrow-ord = { version = "49.0.0", default-features = false }
 arrow-schema = { version = "49.0.0", default-features = false }
+arrow-ipc = { version = "49.0.0", default-features = false }
 async-trait = "0.1.73"
 bigdecimal = "0.4.1"
 bytes = "1.4"

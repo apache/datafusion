@@ -21,10 +21,13 @@
 
 use std::any::Any;
 use std::borrow::Cow;
+use std::fmt::{self, Debug};
 use std::sync::Arc;
 
 use crate::datasource::file_format::FileFormat;
-use crate::datasource::physical_plan::{ArrowExec, FileScanConfig};
+use crate::datasource::physical_plan::{
+    ArrowExec, FileGroupDisplay, FileScanConfig, FileSinkConfig,
+};
 use crate::error::Result;
 use crate::execution::context::SessionState;
 use crate::physical_plan::ExecutionPlan;
@@ -35,13 +38,23 @@ use arrow::ipc::root_as_message;
 use arrow_schema::{ArrowError, Schema, SchemaRef};
 
 use bytes::Bytes;
-use datafusion_common::{FileType, Statistics};
-use datafusion_physical_expr::PhysicalExpr;
+use datafusion_common::{not_impl_err, DataFusionError, FileType, Statistics};
+use datafusion_execution::{SendableRecordBatchStream, TaskContext};
+use datafusion_physical_expr::{PhysicalExpr, PhysicalSortRequirement};
 
+use crate::physical_plan::{DisplayAs, DisplayFormatType};
 use async_trait::async_trait;
+use datafusion_physical_plan::insert::{DataSink, FileSinkExec};
+use datafusion_physical_plan::metrics::MetricsSet;
 use futures::stream::BoxStream;
 use futures::StreamExt;
 use object_store::{GetResultPayload, ObjectMeta, ObjectStore};
+use tokio::io::AsyncWriteExt;
+use tokio::task::JoinSet;
+
+use super::file_compression_type::FileCompressionType;
+use super::write::demux::start_demuxer_task;
+use super::write::{create_writer, SharedBuffer};
 
 /// Arrow `FileFormat` implementation.
 #[derive(Default, Debug)]
@@ -97,8 +110,188 @@ impl FileFormat for ArrowFormat {
         Ok(Arc::new(exec))
     }
 
+    async fn create_writer_physical_plan(
+        &self,
+        input: Arc<dyn ExecutionPlan>,
+        _state: &SessionState,
+        conf: FileSinkConfig,
+        order_requirements: Option<Vec<PhysicalSortRequirement>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        if conf.overwrite {
+            return not_impl_err!("Overwrites are not implemented yet for Arrow format");
+        }
+
+        let sink_schema = conf.output_schema().clone();
+        let sink = Arc::new(ArrowFileSink::new(conf));
+
+        Ok(Arc::new(FileSinkExec::new(
+            input,
+            sink,
+            sink_schema,
+            order_requirements,
+        )) as _)
+    }
+
     fn file_type(&self) -> FileType {
         FileType::ARROW
+    }
+}
+
+/// Implements [`DataSink`] for writing to arrow_ipc files
+struct ArrowFileSink {
+    config: FileSinkConfig,
+}
+
+impl ArrowFileSink {
+    fn new(config: FileSinkConfig) -> Self {
+        Self { config }
+    }
+
+    /// Converts table schema to writer schema, which may differ in the case
+    /// of hive style partitioning where some columns are removed from the
+    /// underlying files.
+    fn get_writer_schema(&self) -> Arc<Schema> {
+        if !self.config.table_partition_cols.is_empty() {
+            let schema = self.config.output_schema();
+            let partition_names: Vec<_> = self
+                .config
+                .table_partition_cols
+                .iter()
+                .map(|(s, _)| s)
+                .collect();
+            Arc::new(Schema::new(
+                schema
+                    .fields()
+                    .iter()
+                    .filter(|f| !partition_names.contains(&f.name()))
+                    .map(|f| (**f).clone())
+                    .collect::<Vec<_>>(),
+            ))
+        } else {
+            self.config.output_schema().clone()
+        }
+    }
+}
+
+impl Debug for ArrowFileSink {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ArrowFileSink").finish()
+    }
+}
+
+impl DisplayAs for ArrowFileSink {
+    fn fmt_as(&self, t: DisplayFormatType, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match t {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => {
+                write!(f, "ArrowFileSink(file_groups=",)?;
+                FileGroupDisplay(&self.config.file_groups).fmt_as(t, f)?;
+                write!(f, ")")
+            }
+        }
+    }
+}
+
+#[async_trait]
+impl DataSink for ArrowFileSink {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn metrics(&self) -> Option<MetricsSet> {
+        None
+    }
+
+    async fn write_all(
+        &self,
+        data: SendableRecordBatchStream,
+        context: &Arc<TaskContext>,
+    ) -> Result<u64> {
+        // No props are supported yet, but can be by updating FileTypeWriterOptions
+        // to populate this struct and use those options to initialize the arrow_ipc::writer::FileWriter
+        let _arrow_props = self.config.file_type_writer_options.try_into_arrow()?;
+
+        let object_store = context
+            .runtime_env()
+            .object_store(&self.config.object_store_url)?;
+
+        let part_col = if !self.config.table_partition_cols.is_empty() {
+            Some(self.config.table_partition_cols.clone())
+        } else {
+            None
+        };
+
+        let (demux_task, mut file_stream_rx) = start_demuxer_task(
+            data,
+            context,
+            part_col,
+            self.config.table_paths[0].clone(),
+            "arrow".into(),
+            self.config.single_file_output,
+        );
+
+        let mut file_write_tasks: JoinSet<std::result::Result<usize, DataFusionError>> =
+            JoinSet::new();
+        while let Some((path, mut rx)) = file_stream_rx.recv().await {
+            let shared_buffer = SharedBuffer::new(1048576);
+            let mut arrow_writer = arrow_ipc::writer::FileWriter::try_new(
+                shared_buffer.clone(),
+                &self.get_writer_schema(),
+            )?;
+            let mut object_store_writer = create_writer(
+                FileCompressionType::UNCOMPRESSED,
+                &path,
+                object_store.clone(),
+            )
+            .await?;
+            file_write_tasks.spawn(async move {
+                let mut row_count = 0;
+                while let Some(batch) = rx.recv().await {
+                    row_count += batch.num_rows();
+                    arrow_writer.write(&batch)?;
+                    let mut buff_to_flush = shared_buffer.buffer.try_lock().unwrap();
+                    if buff_to_flush.len() > 1024000 {
+                        object_store_writer
+                            .write_all(buff_to_flush.as_slice())
+                            .await?;
+                        buff_to_flush.clear();
+                    }
+                }
+                arrow_writer.finish()?;
+                let final_buff = shared_buffer.buffer.try_lock().unwrap();
+
+                object_store_writer.write_all(final_buff.as_slice()).await?;
+                object_store_writer.shutdown().await?;
+                Ok(row_count)
+            });
+        }
+
+        let mut row_count = 0;
+        while let Some(result) = file_write_tasks.join_next().await {
+            match result {
+                Ok(r) => {
+                    row_count += r?;
+                }
+                Err(e) => {
+                    if e.is_panic() {
+                        std::panic::resume_unwind(e.into_panic());
+                    } else {
+                        unreachable!();
+                    }
+                }
+            }
+        }
+
+        match demux_task.await {
+            Ok(r) => r?,
+            Err(e) => {
+                if e.is_panic() {
+                    std::panic::resume_unwind(e.into_panic());
+                } else {
+                    unreachable!();
+                }
+            }
+        }
+        Ok(row_count as u64)
     }
 }
 

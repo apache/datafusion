@@ -230,6 +230,41 @@ select * from validate_csv_with_options;
 1;Foo
 2;Bar
 
+# Copy from table to single arrow file
+query IT
+COPY source_table  to 'test_files/scratch/copy/table.arrow';
+----
+2
+
+# Validate single csv output
+statement ok
+CREATE EXTERNAL TABLE validate_arrow_file
+STORED AS arrow
+LOCATION 'test_files/scratch/copy/table.arrow';
+
+query IT
+select * from validate_arrow_file;
+----
+1 Foo
+2 Bar
+
+# Copy from table to folder of json
+query IT
+COPY source_table to 'test_files/scratch/copy/table_arrow' (format arrow, single_file_output false);
+----
+2
+
+# Validate json output
+statement ok
+CREATE EXTERNAL TABLE validate_arrow STORED AS arrow LOCATION 'test_files/scratch/copy/table_arrow';
+
+query IT
+select * from validate_arrow;
+----
+1 Foo
+2 Bar
+
+
 # Error cases:
 
 # Copy from table with options
