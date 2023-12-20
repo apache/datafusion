@@ -234,10 +234,10 @@ fn create_context() -> Result<SessionContext> {
     let b: ArrayRef = Arc::new(Float64Array::from(vec![1.0, 2.0, 3.0, 4.0]));
     let batch = RecordBatch::try_from_iter(vec![("a", a), ("b", b)])?;
 
-    // declare a new context. In spark API, this corresponds to a new spark SQLsession
+    // declare a new context. In Spark API, this corresponds to a new SparkSession
     let ctx = SessionContext::new();
 
-    // declare a table in memory. In spark API, this corresponds to createDataFrame(...).
+    // declare a table in memory. In Spark API, this corresponds to createDataFrame(...).
     ctx.register_batch("t", batch)?;
     Ok(ctx)
 }
