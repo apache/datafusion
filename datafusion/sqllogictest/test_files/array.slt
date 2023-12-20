@@ -68,6 +68,16 @@ AS VALUES
 ;
 
 statement ok
+CREATE TABLE large_arrays
+AS
+  SELECT
+    arrow_cast(column1, 'LargeList(List(Int64))') AS column1,
+    arrow_cast(column2, 'LargeList(Float64)') AS column2,
+    arrow_cast(column3, 'LargeList(Utf8)') AS column3
+  FROM arrays
+;
+
+statement ok
 CREATE TABLE slices
 AS VALUES
   (make_array(NULL, 2, 3, 4, 5, 6, 7, 8, 9, 10), 1, 1),
@@ -2820,13 +2830,17 @@ NULL 10
 ## array_dims (aliases: `list_dims`)
 
 # array dims error
-# TODO this is a separate bug
-query error Internal error: could not cast value to arrow_array::array::list_array::GenericListArray<i32>\.
+query error Execution error: array_dims does not support type 'Int64'
 select array_dims(1);
 
 # array_dims scalar function
 query ???
 select array_dims(make_array(1, 2, 3)), array_dims(make_array([1, 2], [3, 4])), array_dims(make_array([[[[1], [2]]]]));
+----
+[3] [2, 2] [1, 1, 1, 2, 1]
+
+query ???
+select array_dims(arrow_cast(make_array(1, 2, 3), 'LargeList(Int64)')), array_dims(arrow_cast(make_array([1, 2], [3, 4]), 'LargeList(List(Int64))')), array_dims(arrow_cast(make_array([[[[1], [2]]]]), 'LargeList(List(List(List(List(Int64)))))'));
 ----
 [3] [2, 2] [1, 1, 1, 2, 1]
 
@@ -2842,9 +2856,19 @@ select array_dims(make_array()), array_dims(make_array(make_array()))
 ----
 NULL [1, 0]
 
+query ??
+select array_dims(arrow_cast(make_array(), 'LargeList(Null)')), array_dims(arrow_cast(make_array(make_array()), 'LargeList(List(Null))'))
+----
+NULL [1, 0]
+
 # list_dims scalar function #4 (function alias `array_dims`)
 query ???
 select list_dims(make_array(1, 2, 3)), list_dims(make_array([1, 2], [3, 4])), list_dims(make_array([[[[1], [2]]]]));
+----
+[3] [2, 2] [1, 1, 1, 2, 1]
+
+query ???
+select list_dims(arrow_cast(make_array(1, 2, 3), 'LargeList(Int64)')), list_dims(arrow_cast(make_array([1, 2], [3, 4]), 'LargeList(List(Int64))')), list_dims(arrow_cast(make_array([[[[1], [2]]]]), 'LargeList(List(List(List(List(Int64)))))'));
 ----
 [3] [2, 2] [1, 1, 1, 2, 1]
 
@@ -2859,6 +2883,18 @@ select array_dims(column1), array_dims(column2), array_dims(column3) from arrays
 NULL [3] [4]
 [2, 2] NULL [1]
 [2, 2] [3] NULL
+
+query ???
+select array_dims(column1), array_dims(column2), array_dims(column3) from large_arrays;
+----
+[2, 2] [3] [5]
+[2, 2] [3] [5]
+[2, 2] [3] [5]
+[2, 2] [3] [3]
+NULL [3] [4]
+[2, 2] NULL [1]
+[2, 2] [3] NULL
+
 
 ## array_ndims (aliases: `list_ndims`)
 
