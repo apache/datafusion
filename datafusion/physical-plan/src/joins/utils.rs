@@ -31,7 +31,7 @@ use crate::{ColumnStatistics, ExecutionPlan, Partitioning, Statistics};
 
 use arrow::array::{
     downcast_array, new_null_array, Array, BooleanBufferBuilder, UInt32Array,
-    UInt32Builder, UInt64Array,
+    UInt32BufferBuilder, UInt32Builder, UInt64Array, UInt64BufferBuilder,
 };
 use arrow::compute;
 use arrow::datatypes::{Field, Schema, SchemaBuilder};
@@ -151,6 +151,82 @@ pub trait JoinHashMapType {
     fn get_map(&self) -> &RawTable<(u64, u64)>;
     /// Returns a reference to the next.
     fn get_list(&self) -> &Self::NextType;
+
+    /// Updates hashmap from iterator of row indices & row hashes pairs.
+    fn update_from_iter<'a>(
+        &mut self,
+        iter: impl Iterator<Item = (usize, &'a u64)>,
+        deleted_offset: usize,
+    ) {
+        let (mut_map, mut_list) = self.get_mut();
+        for (row, hash_value) in iter {
+            let item = mut_map.get_mut(*hash_value, |(hash, _)| *hash_value == *hash);
+            if let Some((_, index)) = item {
+                // Already exists: add index to next array
+                let prev_index = *index;
+                // Store new value inside hashmap
+                *index = (row + 1) as u64;
+                // Update chained Vec at row + offset with previous value
+                mut_list[row - deleted_offset] = prev_index;
+            } else {
+                mut_map.insert(
+                    *hash_value,
+                    // store the value + 1 as 0 value reserved for end of list
+                    (*hash_value, (row + 1) as u64),
+                    |(hash, _)| *hash,
+                );
+                // chained list at (row + offset) is already initialized with 0
+                // meaning end of list
+            }
+        }
+    }
+
+    /// Returns all pairs of row indices matched by hash.
+    ///
+    /// This method only compares hashes, so additional further check for actual values
+    /// equality may be required.
+    fn get_matched_indices<'a>(
+        &self,
+        iter: impl Iterator<Item = (usize, &'a u64)>,
+        deleted_offset: Option<usize>,
+    ) -> (UInt32BufferBuilder, UInt64BufferBuilder) {
+        let mut input_indices = UInt32BufferBuilder::new(0);
+        let mut match_indices = UInt64BufferBuilder::new(0);
+
+        let hash_map = self.get_map();
+        let next_chain = self.get_list();
+        for (row_idx, hash_value) in iter {
+            // Get the hash and find it in the index
+            if let Some((_, index)) =
+                hash_map.get(*hash_value, |(hash, _)| *hash_value == *hash)
+            {
+                let mut i = *index - 1;
+                loop {
+                    let match_row_idx = if let Some(offset) = deleted_offset {
+                        // This arguments means that we prune the next index way before here.
+                        if i < offset as u64 {
+                            // End of the list due to pruning
+                            break;
+                        }
+                        i - offset as u64
+                    } else {
+                        i
+                    };
+                    match_indices.append(match_row_idx);
+                    input_indices.append(row_idx as u32);
+                    // Follow the chain to get the next index value
+                    let next = next_chain[match_row_idx as usize];
+                    if next == 0 {
+                        // end of list
+                        break;
+                    }
+                    i = next - 1;
+                }
+            }
+        }
+
+        (input_indices, match_indices)
+    }
 }
 
 /// Implementation of `JoinHashMapType` for `JoinHashMap`.
