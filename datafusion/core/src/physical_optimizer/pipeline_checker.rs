@@ -96,7 +96,7 @@ impl PipelineStatePropagator {
 }
 
 impl TreeNode for PipelineStatePropagator {
-    fn apply_children<F>(&self, f: &mut F) -> Result<TreeNodeRecursion>
+    fn visit_children<F>(&self, f: &mut F) -> Result<TreeNodeRecursion>
     where
         F: FnMut(&Self) -> Result<TreeNodeRecursion>,
     {

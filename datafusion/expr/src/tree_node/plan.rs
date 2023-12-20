@@ -22,18 +22,18 @@ use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion, VisitRecursionIt
 use datafusion_common::Result;
 
 impl TreeNode for LogicalPlan {
-    fn apply_children<F>(&self, f: &mut F) -> Result<TreeNodeRecursion>
+    fn visit_children<F>(&self, f: &mut F) -> Result<TreeNodeRecursion>
     where
         F: FnMut(&Self) -> Result<TreeNodeRecursion>,
     {
         self.inputs().into_iter().for_each_till_continue(f)
     }
 
-    fn apply_inner_children<F>(&self, f: &mut F) -> Result<TreeNodeRecursion>
+    fn visit_inner_children<F>(&self, f: &mut F) -> Result<TreeNodeRecursion>
     where
         F: FnMut(&Self) -> Result<TreeNodeRecursion>,
     {
-        self.apply_subqueries(f)
+        self.visit_subqueries(f)
     }
 
     fn map_children<F>(self, transform: F) -> Result<Self>

@@ -144,7 +144,7 @@ fn check_inner_plan(
     // We want to support as many operators as possible inside the correlated subquery
     match inner_plan {
         LogicalPlan::Aggregate(_) => {
-            inner_plan.apply_children(&mut |plan| {
+            inner_plan.visit_children(&mut |plan| {
                 check_inner_plan(plan, is_scalar, true, can_contain_outer_ref)?;
                 Ok(TreeNodeRecursion::Continue)
             })?;
@@ -169,7 +169,7 @@ fn check_inner_plan(
         }
         LogicalPlan::Window(window) => {
             check_mixed_out_refer_in_window(window)?;
-            inner_plan.apply_children(&mut |plan| {
+            inner_plan.visit_children(&mut |plan| {
                 check_inner_plan(plan, is_scalar, is_aggregate, can_contain_outer_ref)?;
                 Ok(TreeNodeRecursion::Continue)
             })?;
@@ -186,7 +186,7 @@ fn check_inner_plan(
         | LogicalPlan::Values(_)
         | LogicalPlan::Subquery(_)
         | LogicalPlan::SubqueryAlias(_) => {
-            inner_plan.apply_children(&mut |plan| {
+            inner_plan.visit_children(&mut |plan| {
                 check_inner_plan(plan, is_scalar, is_aggregate, can_contain_outer_ref)?;
                 Ok(TreeNodeRecursion::Continue)
             })?;
@@ -199,7 +199,7 @@ fn check_inner_plan(
             ..
         }) => match join_type {
             JoinType::Inner => {
-                inner_plan.apply_children(&mut |plan| {
+                inner_plan.visit_children(&mut |plan| {
                     check_inner_plan(
                         plan,
                         is_scalar,
@@ -219,7 +219,7 @@ fn check_inner_plan(
                 check_inner_plan(right, is_scalar, is_aggregate, can_contain_outer_ref)
             }
             JoinType::Full => {
-                inner_plan.apply_children(&mut |plan| {
+                inner_plan.visit_children(&mut |plan| {
                     check_inner_plan(plan, is_scalar, is_aggregate, false)?;
                     Ok(TreeNodeRecursion::Continue)
                 })?;

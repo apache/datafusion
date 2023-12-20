@@ -23,8 +23,8 @@ use std::sync::Arc;
 use crate::Result;
 
 /// Defines a tree node that can have children of the same type as the parent node. The
-/// implementations must provide [`TreeNode::apply_children()`] and
-/// [`TreeNode::map_children()`] for visiting and changing the structure of the tree.
+/// implementations must provide [`TreeNode::visit_children()`] and
+/// [`TreeNode::transform_children()`] for visiting and changing the structure of the tree.
 ///
 /// [`TreeNode`] is implemented for plans ([`ExecutionPlan`] and [`LogicalPlan`]) as well
 /// as expression trees ([`PhysicalExpr`], [`Expr`]) in DataFusion.
@@ -38,7 +38,7 @@ use crate::Result;
 /// nodes of these subquery plans are the inner children of the containing query plan
 /// node.
 ///
-/// Tree node implementations can provide [`TreeNode::apply_inner_children()`] for
+/// Tree node implementations can provide [`TreeNode::visit_inner_children()`] for
 /// visiting the structure of the inner tree.
 ///
 /// <!-- Since these are in the datafusion-common crate, can't use intra doc links) -->
@@ -64,10 +64,10 @@ pub trait TreeNode: Sized {
                 // Run the recursive `apply` on each inner children, but as they are
                 // unrelated root nodes of inner trees if any returns stop then continue
                 // with the next one.
-                self.apply_inner_children(&mut |c| c.visit_down(f)?.continue_on_stop())?
+                self.visit_inner_children(&mut |c| c.visit_down(f)?.continue_on_stop())?
                     // Run the recursive `apply` on each children.
                     .and_then_on_continue(|| {
-                        self.apply_children(&mut |c| c.visit_down(f))
+                        self.visit_children(&mut |c| c.visit_down(f))
                     })
             })?
             // Applying `f` on self might have returned prune, but we need to propagate
@@ -114,10 +114,10 @@ pub trait TreeNode: Sized {
                 // Run the recursive `visit` on each inner children, but as they are
                 // unrelated subquery plans if any returns stop then continue with the
                 // next one.
-                self.apply_inner_children(&mut |c| c.visit(visitor)?.continue_on_stop())?
+                self.visit_inner_children(&mut |c| c.visit(visitor)?.continue_on_stop())?
                     // Run the recursive `visit` on each children.
                     .and_then_on_continue(|| {
-                        self.apply_children(&mut |c| c.visit(visitor))
+                        self.visit_children(&mut |c| c.visit(visitor))
                     })?
                     // Apply `post_visit` on self.
                     .and_then_on_continue(|| visitor.post_visit(self))
@@ -357,12 +357,12 @@ pub trait TreeNode: Sized {
     }
 
     /// Apply `f` to the node's children.
-    fn apply_children<F>(&self, f: &mut F) -> Result<TreeNodeRecursion>
+    fn visit_children<F>(&self, f: &mut F) -> Result<TreeNodeRecursion>
     where
         F: FnMut(&Self) -> Result<TreeNodeRecursion>;
 
     /// Apply `f` to the node's inner children.
-    fn apply_inner_children<F>(&self, _f: &mut F) -> Result<TreeNodeRecursion>
+    fn visit_inner_children<F>(&self, _f: &mut F) -> Result<TreeNodeRecursion>
     where
         F: FnMut(&Self) -> Result<TreeNodeRecursion>,
     {
@@ -610,7 +610,7 @@ pub trait DynTreeNode {
 /// Blanket implementation for Arc for any tye that implements
 /// [`DynTreeNode`] (such as [`Arc<dyn PhysicalExpr>`])
 impl<T: DynTreeNode + ?Sized> TreeNode for Arc<T> {
-    fn apply_children<F>(&self, f: &mut F) -> Result<TreeNodeRecursion>
+    fn visit_children<F>(&self, f: &mut F) -> Result<TreeNodeRecursion>
     where
         F: FnMut(&Self) -> Result<TreeNodeRecursion>,
     {

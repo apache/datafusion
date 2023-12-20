@@ -28,7 +28,7 @@ use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion, VisitRecursionIt
 use datafusion_common::{internal_err, DataFusionError, Result};
 
 impl TreeNode for Expr {
-    fn apply_children<F>(&self, f: &mut F) -> Result<TreeNodeRecursion>
+    fn visit_children<F>(&self, f: &mut F) -> Result<TreeNodeRecursion>
     where
         F: FnMut(&Self) -> Result<TreeNodeRecursion>,
     {

@@ -275,7 +275,7 @@ impl LogicalPlan {
     /// children
     pub fn expressions(self: &LogicalPlan) -> Vec<Expr> {
         let mut exprs = vec![];
-        self.apply_expressions(&mut |e| {
+        self.visit_expressions(&mut |e| {
             exprs.push(e.clone());
             Ok(TreeNodeRecursion::Continue)
         })
@@ -288,7 +288,7 @@ impl LogicalPlan {
     /// logical plan nodes and all its descendant nodes.
     pub fn all_out_ref_exprs(self: &LogicalPlan) -> Vec<Expr> {
         let mut exprs = vec![];
-        self.apply_expressions(&mut |e| {
+        self.visit_expressions(&mut |e| {
             find_out_reference_exprs(e).into_iter().for_each(|e| {
                 if !exprs.contains(&e) {
                     exprs.push(e)
@@ -311,7 +311,7 @@ impl LogicalPlan {
 
     /// Apply `f` on expressions of the plan node.
     /// `f` is not allowed to return [`TreeNodeRecursion::Prune`].
-    pub fn apply_expressions<F>(&self, f: &mut F) -> Result<TreeNodeRecursion>
+    pub fn visit_expressions<F>(&self, f: &mut F) -> Result<TreeNodeRecursion>
     where
         F: FnMut(&Expr) -> Result<TreeNodeRecursion>,
     {
@@ -1140,11 +1140,11 @@ impl LogicalPlan {
 
     /// Apply `f` on the root nodes of subquery plans of the plan node.
     /// `f` is not allowed to return [`TreeNodeRecursion::Prune`].
-    pub fn apply_subqueries<F>(&self, f: &mut F) -> Result<TreeNodeRecursion>
+    pub fn visit_subqueries<F>(&self, f: &mut F) -> Result<TreeNodeRecursion>
     where
         F: FnMut(&Self) -> Result<TreeNodeRecursion>,
     {
-        self.apply_expressions(&mut |e| {
+        self.visit_expressions(&mut |e| {
             e.visit_down(&mut |e| match e {
                 Expr::Exists(Exists { subquery, .. })
                 | Expr::InSubquery(InSubquery { subquery, .. })
@@ -1194,7 +1194,7 @@ impl LogicalPlan {
         let mut param_types: HashMap<String, Option<DataType>> = HashMap::new();
 
         self.visit_down(&mut |plan| {
-            plan.apply_expressions(&mut |expr| {
+            plan.visit_expressions(&mut |expr| {
                 expr.visit_down(&mut |expr| {
                     if let Expr::Placeholder(Placeholder { id, data_type }) = expr {
                         let prev = param_types.get(id);

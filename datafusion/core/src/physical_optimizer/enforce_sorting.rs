@@ -159,7 +159,7 @@ impl PlanWithCorrespondingSort {
 }
 
 impl TreeNode for PlanWithCorrespondingSort {
-    fn apply_children<F>(&self, f: &mut F) -> Result<TreeNodeRecursion>
+    fn visit_children<F>(&self, f: &mut F) -> Result<TreeNodeRecursion>
     where
         F: FnMut(&Self) -> Result<TreeNodeRecursion>,
     {
@@ -283,7 +283,7 @@ impl PlanWithCorrespondingCoalescePartitions {
 }
 
 impl TreeNode for PlanWithCorrespondingCoalescePartitions {
-    fn apply_children<F>(&self, f: &mut F) -> Result<TreeNodeRecursion>
+    fn visit_children<F>(&self, f: &mut F) -> Result<TreeNodeRecursion>
     where
         F: FnMut(&Self) -> Result<TreeNodeRecursion>,
     {

@@ -117,7 +117,7 @@ impl Analyzer {
 /// Do necessary check and fail the invalid plan
 fn check_plan(plan: &LogicalPlan) -> Result<()> {
     plan.visit_down(&mut |plan: &LogicalPlan| {
-        plan.apply_expressions(&mut |e| {
+        plan.visit_expressions(&mut |e| {
             // recursively look for subqueries
             e.visit_down(&mut |e| {
                 match e {
