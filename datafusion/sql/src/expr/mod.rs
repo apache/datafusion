@@ -602,7 +602,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 self.parse_struct(values, vec![], input_schema, planner_context)
             }
             _ => {
-                not_impl_err!("Tuple not supported yet")
+                not_impl_err!("Only identifiers and literals are supported in tuples")
             }
         }
     }
