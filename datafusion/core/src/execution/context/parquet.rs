@@ -80,8 +80,8 @@ mod tests {
     use crate::dataframe::DataFrameWriteOptions;
     use crate::parquet::basic::Compression;
     use crate::test_util::parquet_test_data;
-    use tempfile::tempdir;
     use datafusion_execution::config::SessionConfig;
+    use tempfile::tempdir;
 
     use super::*;
 

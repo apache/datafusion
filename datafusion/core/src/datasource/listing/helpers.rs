@@ -376,13 +376,10 @@ pub async fn pruned_partition_list<'a>(
                     store.list(Some(&partition.path)).try_collect().await?
                 }
             };
-
-            let exec_options = &ctx.options().execution;
-            let ignore_subdirectory = exec_options.listing_table_ignore_subdirectory;
-
             let files = files.into_iter().filter(move |o| {
                 let extension_match = o.location.as_ref().ends_with(file_extension);
-                let glob_match = table_path.contains(&o.location, ignore_subdirectory);
+                // here need to scan subdirectories(`listing_table_ignore_subdirectory` = false)
+                let glob_match = table_path.contains(&o.location, false);
                 extension_match && glob_match
             });
 
