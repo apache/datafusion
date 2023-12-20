@@ -167,8 +167,11 @@ pub trait TreeNode: Sized {
             // Run the recursive `transform` on each children.
             let mut payload_up = vec![];
             let tnr = self.transform_children(&mut |c| {
-                let (tnr, p) =
-                    c.transform_with_payload(f_down, new_payload_down_iter.next().unwrap(), f_up)?;
+                let (tnr, p) = c.transform_with_payload(
+                    f_down,
+                    new_payload_down_iter.next().unwrap(),
+                    f_up,
+                )?;
                 p.into_iter().for_each(|p| payload_up.push(p));
                 Ok(tnr)
             })?;
