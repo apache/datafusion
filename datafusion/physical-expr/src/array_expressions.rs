@@ -1816,7 +1816,7 @@ fn generic_set_lists<OffsetSize: OffsetSizeTrait>(
     let mut offsets = vec![OffsetSize::usize_as(0)];
     let mut new_arrays = vec![];
 
-    let converter = RowConverter::new(vec![SortField::new(dt.clone())])?;
+    let converter = RowConverter::new(vec![SortField::new(dt)])?;
     for (first_arr, second_arr) in l.iter().zip(r.iter()) {
         if let (Some(first_arr), Some(second_arr)) = (first_arr, second_arr) {
             let l_values = converter.convert_columns(&[first_arr])?;
