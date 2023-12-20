@@ -455,7 +455,7 @@ pub fn array_element(args: &[ArrayRef]) -> Result<ArrayRef> {
             let indexes = as_int64_array(&args[1])?;
             general_array_element::<i64>(array, indexes)
         }
-        _ => not_impl_err!(
+        _ => exec_err!(
             "array_element does not support type: {:?}",
             args[0].data_type()
         ),
@@ -571,7 +571,7 @@ pub fn array_slice(args: &[ArrayRef]) -> Result<ArrayRef> {
             let to_array = as_int64_array(&args[2])?;
             general_array_slice::<i64>(array, from_array, to_array)
         }
-        _ => not_impl_err!("array_slice does not support type: {:?}", array_data_type),
+        _ => exec_err!("array_slice does not support type: {:?}", array_data_type),
     }
 }
 
@@ -1335,7 +1335,7 @@ pub fn array_positions(args: &[ArrayRef]) -> Result<ArrayRef> {
             general_positions::<i64>(arr, element)
         }
         array_type => {
-            not_impl_err!("array_positions does not support type '{array_type:?}'.")
+            exec_err!("array_positions does not support type '{array_type:?}'.")
         }
     }
 }
