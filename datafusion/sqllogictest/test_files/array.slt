@@ -3805,6 +3805,9 @@ statement ok
 drop table arrays;
 
 statement ok
+drop table large_arrays;
+
+statement ok
 drop table slices;
 
 statement ok
