@@ -4368,22 +4368,43 @@ statement ok
 drop table array_intersect_table_1D;
 
 statement ok
+drop table large_array_intersect_table_1D;
+
+statement ok
 drop table array_intersect_table_1D_Float;
+
+statement ok
+drop table large_array_intersect_table_1D_Float;
 
 statement ok
 drop table array_intersect_table_1D_Boolean;
 
 statement ok
+drop table large_array_intersect_table_1D_Boolean;
+
+statement ok
 drop table array_intersect_table_1D_UTF8;
+
+statement ok
+drop table large_array_intersect_table_1D_UTF8;
 
 statement ok
 drop table array_intersect_table_2D;
 
 statement ok
+drop table large_array_intersect_table_2D;
+
+statement ok
 drop table array_intersect_table_2D_float;
 
 statement ok
+drop table large_array_intersect_table_2D_float;
+
+statement ok
 drop table array_intersect_table_3D;
+
+statement ok
+drop table large_array_intersect_table_3D;
 
 statement ok
 drop table arrays_values_without_nulls;
