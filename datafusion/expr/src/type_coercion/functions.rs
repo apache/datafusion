@@ -149,6 +149,41 @@ fn get_valid_types(
                 return Ok(vec![vec![]]);
             }
         }
+        TypeSignature::ArrayAndArray => {
+
+
+            // let array_type1 = &current_types[0];
+            // let array_type2 = &current_types[1];
+
+            // // If one of the argument is null, we dont need to coercion
+            // if array_type1.eq(&DataType::Null) || array_type2.eq(&DataType::Null) {
+            //     return Ok(vec![vec![array_type1.clone(), array_type2.clone()]]);
+            // }
+
+            // We need to find the coerced base type, mainly for cases like:
+            // `array_append(List(null), i64)` -> `List(i64)`
+
+            let base_types = current_types.iter().map(|t| datafusion_common::utils::base_type(t)).collect::<Vec<_>>();
+            let new_base_type = base_types.iter().try_fold(base_types[0].clone(), |acc, x| {
+                comparison_coercion(&acc, x)
+            }); 
+
+            if new_base_type.is_none() {
+                return internal_err!(
+                    "Coerce {current_types:?} not supported."
+                );
+            }
+            let new_base_type = new_base_type.unwrap();
+
+            let array_types = current_types.iter().map(|t| {
+                if t.eq(&DataType::Null) {
+                   t.to_owned()
+                } else {
+                    datafusion_common::utils::coerced_type_with_base_type_only(t, &new_base_type)
+                }
+            }).collect::<Vec<_>>();
+            return Ok(vec![array_types]);
+        }
         TypeSignature::Any(number) => {
             if current_types.len() != *number {
                 return plan_err!(
@@ -190,6 +225,8 @@ fn maybe_data_types(
         if current_type == valid_type {
             new_type.push(current_type.clone())
         } else {
+            println!("attempt coercing {:?} to {:?}", current_type, valid_type);
+
             // attempt to coerce
             if let Some(valid_type) = coerced_from(valid_type, current_type) {
                 new_type.push(valid_type)

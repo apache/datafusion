@@ -32,6 +32,7 @@ use crate::{
 };
 
 use arrow::datatypes::{DataType, Field, Fields, IntervalUnit, TimeUnit};
+use datafusion_common::utils::list_ndims;
 use datafusion_common::{internal_err, plan_err, DataFusionError, Result};
 
 use strum::IntoEnumIterator;
@@ -558,7 +559,8 @@ impl BuiltinScalarFunction {
                     match input_expr_type {
                         List(field) => {
                             if !field.data_type().equals_datatype(&Null) {
-                                let dims = self.return_dimension(input_expr_type);
+                                // let dims = self.return_dimension(input_expr_type);
+                                let dims = list_ndims(input_expr_type);
                                 expr_type = match max_dims.cmp(&dims) {
                                     Ordering::Greater => expr_type,
                                     Ordering::Equal => {
@@ -570,7 +572,11 @@ impl BuiltinScalarFunction {
                                     }
                                 };
                             }
+                            else if expr_type.eq(&DataType::Null) {
+                                expr_type = input_expr_type.clone();
+                            }
                         }
+                        DataType::Null => {}
                         _ => {
                             return plan_err!(
                                 "The {self} function can only accept list as the args."
@@ -929,9 +935,13 @@ impl BuiltinScalarFunction {
             }
             BuiltinScalarFunction::ArrayPopFront => Signature::any(1, self.volatility()),
             BuiltinScalarFunction::ArrayPopBack => Signature::any(1, self.volatility()),
-            BuiltinScalarFunction::ArrayConcat => {
-                Signature::variadic_any(self.volatility())
-            }
+            BuiltinScalarFunction::ArrayConcat => Signature {
+                type_signature: ArrayAndArray,
+                volatility: self.volatility(),
+            },
+            // {
+            //     Signature::variadic_any(self.volatility())
+            // }
             BuiltinScalarFunction::ArrayDims => Signature::any(1, self.volatility()),
             BuiltinScalarFunction::ArrayEmpty => Signature::any(1, self.volatility()),
             BuiltinScalarFunction::ArrayElement => Signature::any(2, self.volatility()),

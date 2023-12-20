@@ -1082,18 +1082,29 @@ fn concat_internal(args: &[ArrayRef]) -> Result<ArrayRef> {
 
 /// Array_concat/Array_cat SQL function
 pub fn array_concat(args: &[ArrayRef]) -> Result<ArrayRef> {
+    println!("args: {:?}", args);
     let mut new_args = vec![];
     for arg in args {
-        let ndim = list_ndims(arg.data_type());
-        let base_type = datafusion_common::utils::base_type(arg.data_type());
-        if ndim == 0 {
-            return not_impl_err!("Array is not type '{base_type:?}'.");
-        } else if !base_type.eq(&DataType::Null) {
+        let data_type = arg.data_type();
+        if let DataType::List(_) = data_type {
             new_args.push(arg.clone());
+        } else if data_type.eq(&DataType::Null) {
+            // Null type is valid.
+            continue;
+        } else {
+            return internal_err!("Expect Array type, found {:?}", data_type);
         }
     }
 
-    concat_internal(new_args.as_slice())
+    // All the arguments are null, return null
+    if new_args.is_empty() {
+        return Ok(new_null_array(&DataType::Null, 0))
+    }
+
+    println!("concat with new_args: {:?}", new_args);
+    let res = concat_internal(new_args.as_slice());
+    println!("res: {:?}", res);
+    res
 }
 
 /// Array_empty SQL function
