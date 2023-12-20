@@ -414,3 +414,16 @@ NULL
 # Clean up
 statement ok
 DROP TABLE single_nan;
+
+# Clean up
+statement ok
+DROP TABLE t1_ignore_subdirectory;
+
+statement ok
+DROP TABLE t2_ignore_subdirectory;
+
+statement ok
+DROP TABLE t1_with_subdirectory;
+
+statement ok
+DROP TABLE t2_with_subdirectory;
