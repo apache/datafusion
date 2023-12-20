@@ -69,7 +69,7 @@ In this example, we write the entirety of `source_table` out to a folder of parq
 The following special options are specific to the `COPY` command.
 
 | Option             | Description                                                                                                                                                                  | Default Value |
-| ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------- |
+| ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------- | --- |
 | SINGLE_FILE_OUTPUT | If true, COPY query will write output to a single file. Otherwise, multiple files will be written to a directory in parallel.                                                | true          |
 | FORMAT             | Specifies the file format COPY query will write out. If single_file_output is false or the format cannot be inferred from the file extension, then FORMAT must be specified. | N/A           |     |
 
