@@ -1264,7 +1264,7 @@ mod tests {
             self
         }
 
-        /// Add contained informaation.
+        /// Add contained information.
         pub fn with_contained(
             mut self,
             values: impl IntoIterator<Item = ScalarValue>,
@@ -1331,7 +1331,7 @@ mod tests {
             self
         }
 
-        /// Add contained informaation for the specified columm.
+        /// Add contained information for the specified columm.
         fn with_contained(
             mut self,
             name: impl Into<String>,
@@ -2692,7 +2692,7 @@ mod tests {
                     Some(true),
                     Some(true),
                     Some(true),
-                    // container 6,7,8  known ro contain  neither "foo" and "bar"
+                    // container 6,7,8  known to contain  neither "foo" and "bar"
                     Some(false),
                     Some(false),
                     Some(false),
@@ -2932,8 +2932,8 @@ mod tests {
         prune_with_expr(
             col("s1").not_eq(lit("foo")).and(
                 col("s2")
-                    .not_eq(lit("bar"))
-                    .or(col("s2").not_eq(lit("baz"))),
+                    .eq(lit("bar"))
+                    .or(col("s2").eq(lit("baz"))),
             ),
             &schema,
             &statistics,
@@ -3057,7 +3057,7 @@ mod tests {
 
         // i = 0 OR s = 'foo'
         prune_with_expr(
-            col("i").eq(lit(0)).or(col("s").not_eq(lit("foo"))),
+            col("i").eq(lit(0)).or(col("s").eq(lit("foo"))),
             &schema,
             &statistics,
             // in theory could rule out containers if we had min/max values for
