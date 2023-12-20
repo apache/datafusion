@@ -311,7 +311,6 @@ fn rountrip_aggregate() -> Result<()> {
         PhysicalGroupBy::new_single(groups.clone()),
         aggregates.clone(),
         vec![None],
-        vec![None],
         Arc::new(EmptyExec::new(schema.clone())),
         schema,
     )?))
@@ -378,7 +377,6 @@ fn roundtrip_aggregate_udaf() -> Result<()> {
             AggregateMode::Final,
             PhysicalGroupBy::new_single(groups.clone()),
             aggregates.clone(),
-            vec![None],
             vec![None],
             Arc::new(EmptyExec::new(schema.clone())),
             schema,
@@ -494,7 +492,6 @@ fn roundtrip_parquet_exec_with_pruning_predicate() -> Result<()> {
         limit: None,
         table_partition_cols: vec![],
         output_ordering: vec![],
-        infinite_source: false,
     };
 
     let predicate = Arc::new(BinaryExpr::new(
@@ -593,7 +590,6 @@ fn roundtrip_distinct_count() -> Result<()> {
         AggregateMode::Final,
         PhysicalGroupBy::new_single(groups),
         aggregates.clone(),
-        vec![None],
         vec![None],
         Arc::new(EmptyExec::new(schema.clone())),
         schema,

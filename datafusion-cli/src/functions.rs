@@ -31,6 +31,7 @@ use datafusion::logical_expr::Expr;
 use datafusion::physical_plan::memory::MemoryExec;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::scalar::ScalarValue;
+use parquet::basic::ConvertedType;
 use parquet::file::reader::FileReader;
 use parquet::file::serialized_reader::SerializedFileReader;
 use parquet::file::statistics::Statistics;
@@ -246,6 +247,52 @@ impl TableProvider for ParquetMetadataTable {
     }
 }
 
+fn convert_parquet_statistics(
+    value: &Statistics,
+    converted_type: ConvertedType,
+) -> (String, String) {
+    match (value, converted_type) {
+        (Statistics::Boolean(val), _) => (val.min().to_string(), val.max().to_string()),
+        (Statistics::Int32(val), _) => (val.min().to_string(), val.max().to_string()),
+        (Statistics::Int64(val), _) => (val.min().to_string(), val.max().to_string()),
+        (Statistics::Int96(val), _) => (val.min().to_string(), val.max().to_string()),
+        (Statistics::Float(val), _) => (val.min().to_string(), val.max().to_string()),
+        (Statistics::Double(val), _) => (val.min().to_string(), val.max().to_string()),
+        (Statistics::ByteArray(val), ConvertedType::UTF8) => {
+            let min_bytes = val.min();
+            let max_bytes = val.max();
+            let min = min_bytes
+                .as_utf8()
+                .map(|v| v.to_string())
+                .unwrap_or_else(|_| min_bytes.to_string());
+
+            let max = max_bytes
+                .as_utf8()
+                .map(|v| v.to_string())
+                .unwrap_or_else(|_| max_bytes.to_string());
+            (min, max)
+        }
+        (Statistics::ByteArray(val), _) => (val.min().to_string(), val.max().to_string()),
+        (Statistics::FixedLenByteArray(val), ConvertedType::UTF8) => {
+            let min_bytes = val.min();
+            let max_bytes = val.max();
+            let min = min_bytes
+                .as_utf8()
+                .map(|v| v.to_string())
+                .unwrap_or_else(|_| min_bytes.to_string());
+
+            let max = max_bytes
+                .as_utf8()
+                .map(|v| v.to_string())
+                .unwrap_or_else(|_| max_bytes.to_string());
+            (min, max)
+        }
+        (Statistics::FixedLenByteArray(val), _) => {
+            (val.min().to_string(), val.max().to_string())
+        }
+    }
+}
+
 pub struct ParquetMetadataFunc {}
 
 impl TableFunctionImpl for ParquetMetadataFunc {
@@ -326,34 +373,12 @@ impl TableFunctionImpl for ParquetMetadataFunc {
                 num_values_arr.push(column.num_values());
                 path_in_schema_arr.push(column.column_path().to_string());
                 type_arr.push(column.column_type().to_string());
+                let converted_type = column.column_descr().converted_type();
+
                 if let Some(s) = column.statistics() {
                     let (min_val, max_val) = if s.has_min_max_set() {
-                        let (min_val, max_val) = match s {
-                            Statistics::Boolean(val) => {
-                                (val.min().to_string(), val.max().to_string())
-                            }
-                            Statistics::Int32(val) => {
-                                (val.min().to_string(), val.max().to_string())
-                            }
-                            Statistics::Int64(val) => {
-                                (val.min().to_string(), val.max().to_string())
-                            }
-                            Statistics::Int96(val) => {
-                                (val.min().to_string(), val.max().to_string())
-                            }
-                            Statistics::Float(val) => {
-                                (val.min().to_string(), val.max().to_string())
-                            }
-                            Statistics::Double(val) => {
-                                (val.min().to_string(), val.max().to_string())
-                            }
-                            Statistics::ByteArray(val) => {
-                                (val.min().to_string(), val.max().to_string())
-                            }
-                            Statistics::FixedLenByteArray(val) => {
-                                (val.min().to_string(), val.max().to_string())
-                            }
-                        };
+                        let (min_val, max_val) =
+                            convert_parquet_statistics(s, converted_type);
                         (Some(min_val), Some(max_val))
                     } else {
                         (None, None)

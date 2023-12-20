@@ -2193,8 +2193,6 @@ pub struct AggregateExecNode {
     pub groups: ::prost::alloc::vec::Vec<bool>,
     #[prost(message, repeated, tag = "10")]
     pub filter_expr: ::prost::alloc::vec::Vec<MaybeFilter>,
-    #[prost(message, repeated, tag = "11")]
-    pub order_by_expr: ::prost::alloc::vec::Vec<MaybePhysicalSortExprs>,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]

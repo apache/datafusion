@@ -21,7 +21,6 @@ use std::sync::Arc;
 
 use arrow::datatypes::{DataType, Schema, SchemaRef};
 use async_trait::async_trait;
-use datafusion_common::{plan_err, DataFusionError};
 
 use crate::datasource::file_format::arrow::ArrowFormat;
 use crate::datasource::file_format::file_compression_type::FileCompressionType;
@@ -72,8 +71,6 @@ pub struct CsvReadOptions<'a> {
     pub table_partition_cols: Vec<(String, DataType)>,
     /// File compression type
     pub file_compression_type: FileCompressionType,
-    /// Flag indicating whether this file may be unbounded (as in a FIFO file).
-    pub infinite: bool,
     /// Indicates how the file is sorted
     pub file_sort_order: Vec<Vec<Expr>>,
 }
@@ -97,7 +94,6 @@ impl<'a> CsvReadOptions<'a> {
             file_extension: DEFAULT_CSV_EXTENSION,
             table_partition_cols: vec![],
             file_compression_type: FileCompressionType::UNCOMPRESSED,
-            infinite: false,
             file_sort_order: vec![],
         }
     }
@@ -105,12 +101,6 @@ impl<'a> CsvReadOptions<'a> {
     /// Configure has_header setting
     pub fn has_header(mut self, has_header: bool) -> Self {
         self.has_header = has_header;
-        self
-    }
-
-    /// Configure mark_infinite setting
-    pub fn mark_infinite(mut self, infinite: bool) -> Self {
-        self.infinite = infinite;
         self
     }
 
@@ -324,8 +314,6 @@ pub struct AvroReadOptions<'a> {
     pub file_extension: &'a str,
     /// Partition Columns
     pub table_partition_cols: Vec<(String, DataType)>,
-    /// Flag indicating whether this file may be unbounded (as in a FIFO file).
-    pub infinite: bool,
 }
 
 impl<'a> Default for AvroReadOptions<'a> {
@@ -334,7 +322,6 @@ impl<'a> Default for AvroReadOptions<'a> {
             schema: None,
             file_extension: DEFAULT_AVRO_EXTENSION,
             table_partition_cols: vec![],
-            infinite: false,
         }
     }
 }
@@ -346,12 +333,6 @@ impl<'a> AvroReadOptions<'a> {
         table_partition_cols: Vec<(String, DataType)>,
     ) -> Self {
         self.table_partition_cols = table_partition_cols;
-        self
-    }
-
-    /// Configure mark_infinite setting
-    pub fn mark_infinite(mut self, infinite: bool) -> Self {
-        self.infinite = infinite;
         self
     }
 
@@ -466,21 +447,17 @@ pub trait ReadOptions<'a> {
         state: SessionState,
         table_path: ListingTableUrl,
         schema: Option<&'a Schema>,
-        infinite: bool,
     ) -> Result<SchemaRef>
     where
         'a: 'async_trait,
     {
-        match (schema, infinite) {
-            (Some(s), _) => Ok(Arc::new(s.to_owned())),
-            (None, false) => Ok(self
-                .to_listing_options(config)
-                .infer_schema(&state, &table_path)
-                .await?),
-            (None, true) => {
-                plan_err!("Schema inference for infinite data sources is not supported.")
-            }
+        if let Some(s) = schema {
+            return Ok(Arc::new(s.to_owned()));
         }
+
+        self.to_listing_options(config)
+            .infer_schema(&state, &table_path)
+            .await
     }
 }
 
@@ -500,7 +477,6 @@ impl ReadOptions<'_> for CsvReadOptions<'_> {
             .with_target_partitions(config.target_partitions())
             .with_table_partition_cols(self.table_partition_cols.clone())
             .with_file_sort_order(self.file_sort_order.clone())
-            .with_infinite_source(self.infinite)
     }
 
     async fn get_resolved_schema(
@@ -509,7 +485,7 @@ impl ReadOptions<'_> for CsvReadOptions<'_> {
         state: SessionState,
         table_path: ListingTableUrl,
     ) -> Result<SchemaRef> {
-        self._get_resolved_schema(config, state, table_path, self.schema, self.infinite)
+        self._get_resolved_schema(config, state, table_path, self.schema)
             .await
     }
 }
@@ -535,7 +511,7 @@ impl ReadOptions<'_> for ParquetReadOptions<'_> {
         state: SessionState,
         table_path: ListingTableUrl,
     ) -> Result<SchemaRef> {
-        self._get_resolved_schema(config, state, table_path, self.schema, false)
+        self._get_resolved_schema(config, state, table_path, self.schema)
             .await
     }
 }
@@ -551,7 +527,6 @@ impl ReadOptions<'_> for NdJsonReadOptions<'_> {
             .with_file_extension(self.file_extension)
             .with_target_partitions(config.target_partitions())
             .with_table_partition_cols(self.table_partition_cols.clone())
-            .with_infinite_source(self.infinite)
             .with_file_sort_order(self.file_sort_order.clone())
     }
 
@@ -561,7 +536,7 @@ impl ReadOptions<'_> for NdJsonReadOptions<'_> {
         state: SessionState,
         table_path: ListingTableUrl,
     ) -> Result<SchemaRef> {
-        self._get_resolved_schema(config, state, table_path, self.schema, self.infinite)
+        self._get_resolved_schema(config, state, table_path, self.schema)
             .await
     }
 }
@@ -575,7 +550,6 @@ impl ReadOptions<'_> for AvroReadOptions<'_> {
             .with_file_extension(self.file_extension)
             .with_target_partitions(config.target_partitions())
             .with_table_partition_cols(self.table_partition_cols.clone())
-            .with_infinite_source(self.infinite)
     }
 
     async fn get_resolved_schema(
@@ -584,7 +558,7 @@ impl ReadOptions<'_> for AvroReadOptions<'_> {
         state: SessionState,
         table_path: ListingTableUrl,
     ) -> Result<SchemaRef> {
-        self._get_resolved_schema(config, state, table_path, self.schema, self.infinite)
+        self._get_resolved_schema(config, state, table_path, self.schema)
             .await
     }
 }
@@ -606,7 +580,7 @@ impl ReadOptions<'_> for ArrowReadOptions<'_> {
         state: SessionState,
         table_path: ListingTableUrl,
     ) -> Result<SchemaRef> {
-        self._get_resolved_schema(config, state, table_path, self.schema, false)
+        self._get_resolved_schema(config, state, table_path, self.schema)
             .await
     }
 }

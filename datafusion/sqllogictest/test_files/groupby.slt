@@ -2021,14 +2021,15 @@ SortPreservingMergeExec: [col0@0 ASC NULLS LAST]
 ----------RepartitionExec: partitioning=Hash([col0@0, col1@1, col2@2], 4), input_partitions=4
 ------------AggregateExec: mode=Partial, gby=[col0@0 as col0, col1@1 as col1, col2@2 as col2], aggr=[LAST_VALUE(r.col1)], ordering_mode=PartiallySorted([0])
 --------------SortExec: expr=[col0@3 ASC NULLS LAST]
-----------------CoalesceBatchesExec: target_batch_size=8192
-------------------HashJoinExec: mode=Partitioned, join_type=Inner, on=[(col0@0, col0@0)]
---------------------CoalesceBatchesExec: target_batch_size=8192
-----------------------RepartitionExec: partitioning=Hash([col0@0], 4), input_partitions=1
-------------------------MemoryExec: partitions=1, partition_sizes=[3]
---------------------CoalesceBatchesExec: target_batch_size=8192
-----------------------RepartitionExec: partitioning=Hash([col0@0], 4), input_partitions=1
-------------------------MemoryExec: partitions=1, partition_sizes=[3]
+----------------ProjectionExec: expr=[col0@2 as col0, col1@3 as col1, col2@4 as col2, col0@0 as col0, col1@1 as col1]
+------------------CoalesceBatchesExec: target_batch_size=8192
+--------------------HashJoinExec: mode=Partitioned, join_type=Inner, on=[(col0@0, col0@0)]
+----------------------CoalesceBatchesExec: target_batch_size=8192
+------------------------RepartitionExec: partitioning=Hash([col0@0], 4), input_partitions=1
+--------------------------MemoryExec: partitions=1, partition_sizes=[3]
+----------------------CoalesceBatchesExec: target_batch_size=8192
+------------------------RepartitionExec: partitioning=Hash([col0@0], 4), input_partitions=1
+--------------------------MemoryExec: partitions=1, partition_sizes=[3]
 
 # Columns in the table are a,b,c,d. Source is CsvExec which is ordered by
 # a,b,c column. Column a has cardinality 2, column b has cardinality 4.
@@ -2329,15 +2330,15 @@ ProjectionExec: expr=[country@0 as country, ARRAY_AGG(s.amount) ORDER BY [s.amou
 ----SortExec: expr=[amount@1 DESC]
 ------MemoryExec: partitions=1, partition_sizes=[1]
 
-query T?R
+query T?R rowsort
 SELECT s.country, ARRAY_AGG(s.amount ORDER BY s.amount DESC) AS amounts,
     SUM(s.amount) AS sum1
   FROM sales_global AS s
   GROUP BY s.country
 ----
 FRA [200.0, 50.0] 250
-TUR [100.0, 75.0] 175
 GRC [80.0, 30.0] 110
+TUR [100.0, 75.0] 175
 
 # test_ordering_sensitive_aggregation3
 # When different aggregators have conflicting requirements, we cannot satisfy all of them in current implementation.
@@ -2373,7 +2374,7 @@ ProjectionExec: expr=[country@0 as country, ARRAY_AGG(s.amount) ORDER BY [s.amou
 ----SortExec: expr=[country@0 ASC NULLS LAST,amount@1 DESC]
 ------MemoryExec: partitions=1, partition_sizes=[1]
 
-query T?R
+query T?R rowsort
 SELECT s.country, ARRAY_AGG(s.amount ORDER BY s.amount DESC) AS amounts,
   SUM(s.amount) AS sum1
     FROM (SELECT *
@@ -2409,7 +2410,7 @@ ProjectionExec: expr=[country@0 as country, zip_code@1 as zip_code, ARRAY_AGG(s.
 ----SortExec: expr=[country@1 ASC NULLS LAST,amount@2 DESC]
 ------MemoryExec: partitions=1, partition_sizes=[1]
 
-query TI?R
+query TI?R rowsort
 SELECT s.country, s.zip_code, ARRAY_AGG(s.amount ORDER BY s.amount DESC) AS amounts,
     SUM(s.amount) AS sum1
       FROM (SELECT *
@@ -2445,7 +2446,7 @@ ProjectionExec: expr=[country@0 as country, ARRAY_AGG(s.amount) ORDER BY [s.coun
 ----SortExec: expr=[country@0 ASC NULLS LAST]
 ------MemoryExec: partitions=1, partition_sizes=[1]
 
-query T?R
+query T?R rowsort
 SELECT s.country, ARRAY_AGG(s.amount ORDER BY s.amount DESC) AS amounts,
   SUM(s.amount) AS sum1
     FROM (SELECT *
@@ -2480,7 +2481,7 @@ ProjectionExec: expr=[country@0 as country, ARRAY_AGG(s.amount) ORDER BY [s.coun
 ----SortExec: expr=[country@0 ASC NULLS LAST,amount@1 DESC]
 ------MemoryExec: partitions=1, partition_sizes=[1]
 
-query T?R
+query T?R rowsort
 SELECT s.country, ARRAY_AGG(s.amount ORDER BY s.country DESC, s.amount DESC) AS amounts,
   SUM(s.amount) AS sum1
     FROM (SELECT *
@@ -2512,7 +2513,7 @@ ProjectionExec: expr=[country@0 as country, ARRAY_AGG(sales_global.amount) ORDER
 ----SortExec: expr=[amount@1 DESC]
 ------MemoryExec: partitions=1, partition_sizes=[1]
 
-query T?RR
+query T?RR rowsort
 SELECT country, ARRAY_AGG(amount ORDER BY amount DESC) AS amounts,
   FIRST_VALUE(amount ORDER BY amount ASC) AS fv1,
   LAST_VALUE(amount ORDER BY amount DESC) AS fv2
@@ -2520,8 +2521,8 @@ SELECT country, ARRAY_AGG(amount ORDER BY amount DESC) AS amounts,
   GROUP BY country
 ----
 FRA [200.0, 50.0] 50 50
-TUR [100.0, 75.0] 75 75
 GRC [80.0, 30.0] 30 30
+TUR [100.0, 75.0] 75 75
 
 # test_reverse_aggregate_expr2
 # Some of the Aggregators can be reversed, by this way we can still run aggregators without re-ordering
@@ -2640,7 +2641,7 @@ ProjectionExec: expr=[country@0 as country, FIRST_VALUE(sales_global.amount) ORD
 ----SortExec: expr=[ts@1 ASC NULLS LAST]
 ------MemoryExec: partitions=1, partition_sizes=[1]
 
-query TRRR
+query TRRR rowsort
 SELECT country, FIRST_VALUE(amount ORDER BY ts DESC) as fv1,
   LAST_VALUE(amount ORDER BY ts DESC) as lv1,
   SUM(amount ORDER BY ts DESC) as sum1
@@ -2649,8 +2650,8 @@ SELECT country, FIRST_VALUE(amount ORDER BY ts DESC) as fv1,
     ORDER BY ts ASC)
   GROUP BY country
 ----
-GRC 80 30 110
 FRA 200 50 250
+GRC 80 30 110
 TUR 100 75 175
 
 # If existing ordering doesn't satisfy requirement, we should do calculations
@@ -2674,16 +2675,16 @@ ProjectionExec: expr=[country@0 as country, FIRST_VALUE(sales_global.amount) ORD
 ----SortExec: expr=[ts@1 DESC]
 ------MemoryExec: partitions=1, partition_sizes=[1]
 
-query TRRR
+query TRRR rowsort
 SELECT country, FIRST_VALUE(amount ORDER BY ts DESC) as fv1,
     LAST_VALUE(amount ORDER BY ts DESC) as lv1,
     SUM(amount ORDER BY ts DESC) as sum1
   FROM sales_global
   GROUP BY country
 ----
-TUR 100 75 175
-GRC 80 30 110
 FRA 200 50 250
+GRC 80 30 110
+TUR 100 75 175
 
 query TT
 EXPLAIN SELECT s.zip_code, s.country, s.sn, s.ts, s.currency, LAST_VALUE(e.amount ORDER BY e.sn) AS last_rate
@@ -2709,13 +2710,13 @@ SortExec: expr=[sn@2 ASC NULLS LAST]
 --ProjectionExec: expr=[zip_code@1 as zip_code, country@2 as country, sn@0 as sn, ts@3 as ts, currency@4 as currency, LAST_VALUE(e.amount) ORDER BY [e.sn ASC NULLS LAST]@5 as last_rate]
 ----AggregateExec: mode=Single, gby=[sn@2 as sn, zip_code@0 as zip_code, country@1 as country, ts@3 as ts, currency@4 as currency], aggr=[LAST_VALUE(e.amount)]
 ------SortExec: expr=[sn@5 ASC NULLS LAST]
---------ProjectionExec: expr=[zip_code@0 as zip_code, country@1 as country, sn@2 as sn, ts@3 as ts, currency@4 as currency, sn@5 as sn, amount@8 as amount]
+--------ProjectionExec: expr=[zip_code@4 as zip_code, country@5 as country, sn@6 as sn, ts@7 as ts, currency@8 as currency, sn@0 as sn, amount@3 as amount]
 ----------CoalesceBatchesExec: target_batch_size=8192
-------------HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(currency@4, currency@2)], filter=ts@0 >= ts@1
+------------HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(currency@2, currency@4)], filter=ts@0 >= ts@1
 --------------MemoryExec: partitions=1, partition_sizes=[1]
 --------------MemoryExec: partitions=1, partition_sizes=[1]
 
-query ITIPTR
+query ITIPTR rowsort
 SELECT s.zip_code, s.country, s.sn, s.ts, s.currency, LAST_VALUE(e.amount ORDER BY e.sn) AS last_rate
 FROM sales_global AS s
 JOIN sales_global AS e
@@ -2725,10 +2726,10 @@ GROUP BY s.sn, s.zip_code, s.country, s.ts, s.currency
 ORDER BY s.sn
 ----
 0 GRC 0 2022-01-01T06:00:00 EUR 30
-1 FRA 1 2022-01-01T08:00:00 EUR 50
-1 TUR 2 2022-01-01T11:30:00 TRY 75
-1 FRA 3 2022-01-02T12:00:00 EUR 200
 0 GRC 4 2022-01-03T10:00:00 EUR 80
+1 FRA 1 2022-01-01T08:00:00 EUR 50
+1 FRA 3 2022-01-02T12:00:00 EUR 200
+1 TUR 2 2022-01-01T11:30:00 TRY 75
 1 TUR 4 2022-01-03T10:00:00 TRY 100
 
 # Run order-sensitive aggregators in multiple partitions
@@ -4073,7 +4074,7 @@ GlobalLimitExec: skip=0, fetch=5
 ----ProjectionExec: expr=[date_bin(Utf8("15 minutes"),unbounded_csv_with_timestamps.ts)@0 as time_chunks]
 ------AggregateExec: mode=FinalPartitioned, gby=[date_bin(Utf8("15 minutes"),unbounded_csv_with_timestamps.ts)@0 as date_bin(Utf8("15 minutes"),unbounded_csv_with_timestamps.ts)], aggr=[], ordering_mode=Sorted
 --------CoalesceBatchesExec: target_batch_size=2
-----------SortPreservingRepartitionExec: partitioning=Hash([date_bin(Utf8("15 minutes"),unbounded_csv_with_timestamps.ts)@0], 8), input_partitions=8, sort_exprs=date_bin(Utf8("15 minutes"),unbounded_csv_with_timestamps.ts)@0 DESC
+----------RepartitionExec: partitioning=Hash([date_bin(Utf8("15 minutes"),unbounded_csv_with_timestamps.ts)@0], 8), input_partitions=8, preserve_order=true, sort_exprs=date_bin(Utf8("15 minutes"),unbounded_csv_with_timestamps.ts)@0 DESC
 ------------AggregateExec: mode=Partial, gby=[date_bin(900000000000, ts@0) as date_bin(Utf8("15 minutes"),unbounded_csv_with_timestamps.ts)], aggr=[], ordering_mode=Sorted
 --------------RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
 ----------------StreamingTableExec: partition_sizes=1, projection=[ts], infinite_source=true, output_ordering=[ts@0 DESC]

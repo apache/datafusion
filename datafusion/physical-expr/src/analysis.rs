@@ -95,7 +95,8 @@ impl ExprBoundaries {
         col_index: usize,
     ) -> Result<Self> {
         let field = &schema.fields()[col_index];
-        let empty_field = ScalarValue::try_from(field.data_type())?;
+        let empty_field =
+            ScalarValue::try_from(field.data_type()).unwrap_or(ScalarValue::Null);
         let interval = Interval::try_new(
             col_stats
                 .min_value

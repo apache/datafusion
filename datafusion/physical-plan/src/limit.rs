@@ -878,7 +878,6 @@ mod tests {
             build_group_by(&csv.schema().clone(), vec!["i".to_string()]),
             vec![],
             vec![None],
-            vec![None],
             csv.clone(),
             csv.schema().clone(),
         )?;

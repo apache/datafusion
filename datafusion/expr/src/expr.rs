@@ -373,6 +373,24 @@ impl ScalarFunctionDefinition {
             ScalarFunctionDefinition::Name(func_name) => func_name.as_ref(),
         }
     }
+
+    /// Whether this function is volatile, i.e. whether it can return different results
+    /// when evaluated multiple times with the same input.
+    pub fn is_volatile(&self) -> Result<bool> {
+        match self {
+            ScalarFunctionDefinition::BuiltIn(fun) => {
+                Ok(fun.volatility() == crate::Volatility::Volatile)
+            }
+            ScalarFunctionDefinition::UDF(udf) => {
+                Ok(udf.signature().volatility == crate::Volatility::Volatile)
+            }
+            ScalarFunctionDefinition::Name(func) => {
+                internal_err!(
+                    "Cannot determine volatility of unresolved function: {func}"
+                )
+            }
+        }
+    }
 }
 
 impl ScalarFunction {
@@ -938,7 +956,7 @@ impl Expr {
     /// Remove an alias from an expression if one exists.
     pub fn unalias(self) -> Expr {
         match self {
-            Expr::Alias(alias) => alias.expr.as_ref().clone(),
+            Expr::Alias(alias) => *alias.expr,
             _ => self,
         }
     }
@@ -1692,14 +1710,28 @@ fn create_names(exprs: &[Expr]) -> Result<String> {
         .join(", "))
 }
 
+/// Whether the given expression is volatile, i.e. whether it can return different results
+/// when evaluated multiple times with the same input.
+pub fn is_volatile(expr: &Expr) -> Result<bool> {
+    match expr {
+        Expr::ScalarFunction(func) => func.func_def.is_volatile(),
+        _ => Ok(false),
+    }
+}
+
 #[cfg(test)]
 mod test {
     use crate::expr::Cast;
     use crate::expr_fn::col;
-    use crate::{case, lit, Expr};
+    use crate::{
+        case, lit, BuiltinScalarFunction, ColumnarValue, Expr, ReturnTypeFunction,
+        ScalarFunctionDefinition, ScalarFunctionImplementation, ScalarUDF, Signature,
+        Volatility,
+    };
     use arrow::datatypes::DataType;
     use datafusion_common::Column;
     use datafusion_common::{Result, ScalarValue};
+    use std::sync::Arc;
 
     #[test]
     fn format_case_when() -> Result<()> {
@@ -1799,5 +1831,46 @@ mod test {
             format!("{}", lit(1u32).or(lit(2u32))),
             "UInt32(1) OR UInt32(2)"
         );
+    }
+
+    #[test]
+    fn test_is_volatile_scalar_func_definition() {
+        // BuiltIn
+        assert!(
+            ScalarFunctionDefinition::BuiltIn(BuiltinScalarFunction::Random)
+                .is_volatile()
+                .unwrap()
+        );
+        assert!(
+            !ScalarFunctionDefinition::BuiltIn(BuiltinScalarFunction::Abs)
+                .is_volatile()
+                .unwrap()
+        );
+
+        // UDF
+        let return_type: ReturnTypeFunction =
+            Arc::new(move |_| Ok(Arc::new(DataType::Utf8)));
+        let fun: ScalarFunctionImplementation =
+            Arc::new(move |_| Ok(ColumnarValue::Scalar(ScalarValue::new_utf8("a"))));
+        let udf = Arc::new(ScalarUDF::new(
+            "TestScalarUDF",
+            &Signature::uniform(1, vec![DataType::Float32], Volatility::Stable),
+            &return_type,
+            &fun,
+        ));
+        assert!(!ScalarFunctionDefinition::UDF(udf).is_volatile().unwrap());
+
+        let udf = Arc::new(ScalarUDF::new(
+            "TestScalarUDF",
+            &Signature::uniform(1, vec![DataType::Float32], Volatility::Volatile),
+            &return_type,
+            &fun,
+        ));
+        assert!(ScalarFunctionDefinition::UDF(udf).is_volatile().unwrap());
+
+        // Unresolved function
+        ScalarFunctionDefinition::Name(Arc::from("UnresolvedFunc"))
+            .is_volatile()
+            .expect_err("Shouldn't determine volatility of unresolved function");
     }
 }
