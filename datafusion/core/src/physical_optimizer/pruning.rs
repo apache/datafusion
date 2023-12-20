@@ -1216,6 +1216,9 @@ mod tests {
             .collect()
         }
 
+        /// Returns the number of containers represented by this statistics This
+        /// picks the length of the first array as all arrays must have the same
+        /// length (which is verified by `assert_invariants`).
         fn len(&self) -> usize {
             // pick the first non zero length
             self.arrays().iter().map(|a| a.len()).next().unwrap_or(0)
@@ -2930,11 +2933,9 @@ mod tests {
 
         // s1 != 'foo' AND (s2 = 'bar' OR s2 = 'baz')
         prune_with_expr(
-            col("s1").not_eq(lit("foo")).and(
-                col("s2")
-                    .eq(lit("bar"))
-                    .or(col("s2").eq(lit("baz"))),
-            ),
+            col("s1")
+                .not_eq(lit("foo"))
+                .and(col("s2").eq(lit("bar")).or(col("s2").eq(lit("baz")))),
             &schema,
             &statistics,
             // Can rule out any container where we know s1 has only the value
