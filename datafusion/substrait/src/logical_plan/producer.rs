@@ -41,8 +41,8 @@ use datafusion::logical_expr::expr::{
 use datafusion::logical_expr::{expr, Between, JoinConstraint, LogicalPlan, Operator};
 use datafusion::prelude::Expr;
 use prost_types::Any as ProtoAny;
-use substrait::proto::expression::subquery::InPredicate;
 use substrait::proto::exchange_rel::{ExchangeKind, RoundRobin, ScatterFields};
+use substrait::proto::expression::subquery::InPredicate;
 use substrait::proto::expression::window_function::BoundsType;
 use substrait::proto::{CrossRel, ExchangeRel};
 use substrait::{
@@ -1209,7 +1209,7 @@ pub fn to_substrait_rex(
             }
         }
         Expr::Not(arg) => to_substrait_unary_scalar_fn(
-            ctx, 
+            ctx,
             "not",
             arg,
             schema,
@@ -1766,7 +1766,8 @@ fn to_substrait_unary_scalar_fn(
     ),
 ) -> Result<Expression> {
     let function_anchor = _register_function(fn_name.to_string(), extension_info);
-    let substrait_expr = to_substrait_rex(ctx, arg, schema, col_ref_offset, extension_info)?;
+    let substrait_expr =
+        to_substrait_rex(ctx, arg, schema, col_ref_offset, extension_info)?;
 
     Ok(Expression {
         rex_type: Some(RexType::ScalarFunction(ScalarFunction {

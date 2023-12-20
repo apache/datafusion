@@ -396,6 +396,8 @@ async fn roundtrip_inlist_4() -> Result<()> {
 
 #[tokio::test]
 async fn roundtrip_inlist_5() -> Result<()> {
+    // on roundtrip there is an additional projection during TableScan which includes all column of the table,
+    // using assert_expected_plan here as a workaround
     assert_expected_plan(
     "SELECT a, f FROM data WHERE (f IN ('a', 'b', 'c') OR a in (SELECT data2.a FROM data2 WHERE f IN ('b', 'c', 'd')))",
     "Filter: data.f = Utf8(\"a\") OR data.f = Utf8(\"b\") OR data.f = Utf8(\"c\") OR data.a IN (<subquery>)\

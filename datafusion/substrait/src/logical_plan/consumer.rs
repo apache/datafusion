@@ -38,8 +38,8 @@ use datafusion::{
     prelude::{Column, SessionContext},
     scalar::ScalarValue,
 };
-use substrait::proto::expression::subquery::SubqueryType;
 use substrait::proto::exchange_rel::ExchangeKind;
+use substrait::proto::expression::subquery::SubqueryType;
 use substrait::proto::expression::{FieldReference, Literal, ScalarFunction};
 use substrait::proto::{
     aggregate_function::AggregationInvocation,
@@ -1015,19 +1015,15 @@ pub async fn from_substrait_rex(
                                 negated: false,
                             })))
                         } else {
-                            Err(DataFusionError::Substrait(
-                                "InPredicate Subquery type must have a Haystack expression".to_string(),
-                            ))
+                            substrait_err!("InPredicate Subquery type must have a Haystack expression")
                         }
                     }
                 }
-                _ => Err(DataFusionError::Substrait(
-                    "Subquery type not implemented".to_string(),
-                )),
+                _ => substrait_err!("Subquery type not implemented"),
             },
-            None => Err(DataFusionError::Substrait(
-                "Subquery experssion without SubqueryType is not allowed".to_string(),
-            )),
+            None => {
+                substrait_err!("Subquery experssion without SubqueryType is not allowed")
+            }
         },
         _ => not_impl_err!("unsupported rex_type"),
     }
@@ -1394,11 +1390,16 @@ impl BuiltinExprBuilder {
         extensions: &HashMap<u32, &String>,
     ) -> Result<Arc<Expr>> {
         match self.expr_name.as_str() {
-            "like" => Self::build_like_expr(ctx, false, f, input_schema, extensions).await,
-            "ilike" => Self::build_like_expr(ctx, true, f, input_schema, extensions).await,
+            "like" => {
+                Self::build_like_expr(ctx, false, f, input_schema, extensions).await
+            }
+            "ilike" => {
+                Self::build_like_expr(ctx, true, f, input_schema, extensions).await
+            }
             "not" | "negative" | "is_null" | "is_not_null" | "is_true" | "is_false"
             | "is_not_true" | "is_not_false" | "is_unknown" | "is_not_unknown" => {
-                Self::build_unary_expr(ctx, &self.expr_name, f, input_schema, extensions).await
+                Self::build_unary_expr(ctx, &self.expr_name, f, input_schema, extensions)
+                    .await
             }
             _ => {
                 not_impl_err!("Unsupported builtin expression: {}", self.expr_name)
@@ -1464,10 +1465,11 @@ impl BuiltinExprBuilder {
         let Some(ArgType::Value(pattern_substrait)) = &f.arguments[1].arg_type else {
             return substrait_err!("Invalid arguments type for `{fn_name}` expr");
         };
-        let pattern = from_substrait_rex(ctx, pattern_substrait, input_schema, extensions)
-            .await?
-            .as_ref()
-            .clone();
+        let pattern =
+            from_substrait_rex(ctx, pattern_substrait, input_schema, extensions)
+                .await?
+                .as_ref()
+                .clone();
         let Some(ArgType::Value(escape_char_substrait)) = &f.arguments[2].arg_type else {
             return substrait_err!("Invalid arguments type for `{fn_name}` expr");
         };
