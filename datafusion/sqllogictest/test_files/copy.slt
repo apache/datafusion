@@ -232,7 +232,7 @@ select * from validate_csv_with_options;
 
 # Copy from table to single arrow file
 query IT
-COPY source_table  to 'test_files/scratch/copy/table.arrow';
+COPY source_table to 'test_files/scratch/copy/table.arrow';
 ----
 2
 
@@ -247,6 +247,27 @@ select * from validate_arrow_file;
 ----
 1 Foo
 2 Bar
+
+# Copy from dict encoded values to single arrow file
+query T?
+COPY (values 
+('c', arrow_cast('foo', 'Dictionary(Int32, Utf8)')), ('d', arrow_cast('bar', 'Dictionary(Int32, Utf8)'))) 
+to 'test_files/scratch/copy/table_dict.arrow';
+----
+2
+
+# Validate single csv output
+statement ok
+CREATE EXTERNAL TABLE validate_arrow_file_dict
+STORED AS arrow
+LOCATION 'test_files/scratch/copy/table_dict.arrow';
+
+query T?
+select * from validate_arrow_file_dict;
+----
+c foo
+d bar
+
 
 # Copy from table to folder of json
 query IT
