@@ -17,6 +17,8 @@
 
 //! Tree node implementation for logical expr
 
+use std::mem;
+
 use crate::expr::{
     AggregateFunction, AggregateFunctionDefinition, Alias, Between, BinaryExpr, Case,
     Cast, GetIndexedField, GroupingSet, InList, InSubquery, Like, Placeholder,
@@ -378,15 +380,14 @@ impl TreeNode for Expr {
     }
 }
 
-fn transform_boxed<F>(boxed_expr: Box<Expr>, transform: &mut F) -> Result<Box<Expr>>
+fn transform_boxed<F>(mut boxed_expr: Box<Expr>, transform: &mut F) -> Result<Box<Expr>>
 where
     F: FnMut(Expr) -> Result<Expr>,
 {
-    // TODO:
-    // It might be possible to avoid an allocation (the Box::new) below by reusing the box.
-    let expr: Expr = *boxed_expr;
-    let rewritten_expr = transform(expr)?;
-    Ok(Box::new(rewritten_expr))
+    // We reuse the existing Box to avoid an allocation:
+    let t = mem::replace(&mut *boxed_expr, Expr::Wildcard { qualifier: None });
+    let _ = mem::replace(&mut *boxed_expr, transform(t)?);
+    Ok(boxed_expr)
 }
 
 fn transform_option_box<F>(
@@ -417,9 +418,14 @@ where
 }
 
 /// &mut transform a `Vec` of `Expr`s
-fn transform_vec<F>(v: Vec<Expr>, transform: &mut F) -> Result<Vec<Expr>>
+fn transform_vec<F>(mut v: Vec<Expr>, transform: &mut F) -> Result<Vec<Expr>>
 where
     F: FnMut(Expr) -> Result<Expr>,
 {
-    v.into_iter().map(transform).collect()
+    // Perform an in-place mutation of the Vec to avoid allocation:
+    for expr in v.iter_mut() {
+        let t = mem::replace(expr, Expr::Wildcard { qualifier: None });
+        let _ = mem::replace(expr, transform(t)?);
+    }
+    Ok(v)
 }
