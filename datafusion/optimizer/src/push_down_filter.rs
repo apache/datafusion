@@ -251,7 +251,6 @@ fn can_evaluate_as_join_condition(predicate: &Expr) -> Result<bool> {
         | Expr::ScalarFunction(..)
         | Expr::InList { .. } => Ok(TreeNodeRecursion::Continue),
         Expr::Sort(_)
-        | Expr::Nop
         | Expr::AggregateFunction(_)
         | Expr::WindowFunction(_)
         | Expr::Wildcard { .. }

@@ -67,7 +67,6 @@ impl ExprSchemable for Expr {
     /// (e.g. `[utf8] + [bool]`).
     fn get_type<S: ExprSchema>(&self, schema: &S) -> Result<DataType> {
         match self {
-            Expr::Nop => Ok(DataType::Null),
             Expr::Alias(Alias { expr, name, .. }) => match &**expr {
                 Expr::Placeholder(Placeholder { data_type, .. }) => match &data_type {
                     None => schema.data_type(&Column::from_name(name)).cloned(),
@@ -252,8 +251,7 @@ impl ExprSchemable for Expr {
             | Expr::WindowFunction { .. }
             | Expr::AggregateFunction { .. }
             | Expr::Placeholder(_) => Ok(true),
-            Expr::Nop
-            | Expr::IsNull(_)
+            Expr::IsNull(_)
             | Expr::IsNotNull(_)
             | Expr::IsTrue(_)
             | Expr::IsFalse(_)

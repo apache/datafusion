@@ -270,8 +270,7 @@ pub fn expr_to_columns(expr: &Expr, accum: &mut HashSet<Column>) -> Result<()> {
             // Use explicit pattern match instead of a default
             // implementation, so that in the future if someone adds
             // new Expr types, they will check here as well
-            Expr::Nop
-            | Expr::ScalarVariable(_, _)
+            Expr::ScalarVariable(_, _)
             | Expr::Alias(_)
             | Expr::Literal(_)
             | Expr::BinaryExpr { .. }

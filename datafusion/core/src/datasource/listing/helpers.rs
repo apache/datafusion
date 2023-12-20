@@ -62,8 +62,7 @@ pub fn expr_applicable_for_cols(col_names: &[String], expr: &Expr) -> bool {
                     Ok(TreeNodeRecursion::Stop)
                 }
             }
-            Expr::Nop
-            | Expr::Literal(_)
+            Expr::Literal(_)
             | Expr::Alias(_)
             | Expr::OuterReferenceColumn(_, _)
             | Expr::ScalarVariable(_, _)

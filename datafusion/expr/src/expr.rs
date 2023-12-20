@@ -81,10 +81,8 @@ use std::{fmt, mem};
 ///   assert_eq!(binary_expr.op, Operator::Eq);
 /// }
 /// ```
-#[derive(Clone, PartialEq, Eq, Hash, Debug, Default)]
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum Expr {
-    #[default]
-    Nop,
     /// An expression with a specific name.
     Alias(Alias),
     /// A named reference to a qualified filed in a schema.
@@ -179,6 +177,12 @@ pub enum Expr {
     /// A place holder which hold a reference to a qualified field
     /// in the outer query, used for correlated sub queries.
     OuterReferenceColumn(DataType, Column),
+}
+
+impl Default for Expr {
+    fn default() -> Self {
+        Expr::Literal(ScalarValue::Null)
+    }
 }
 
 /// Alias expression
@@ -786,7 +790,6 @@ impl Expr {
     /// Useful for non-rust based bindings
     pub fn variant_name(&self) -> &str {
         match self {
-            Expr::Nop { .. } => "Nop",
             Expr::AggregateFunction { .. } => "AggregateFunction",
             Expr::Alias(..) => "Alias",
             Expr::Between { .. } => "Between",
@@ -1207,7 +1210,6 @@ macro_rules! expr_vec_fmt {
 impl fmt::Display for Expr {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Expr::Nop => write!(f, "NOP"),
             Expr::Alias(Alias { expr, name, .. }) => write!(f, "{expr} AS {name}"),
             Expr::Column(c) => write!(f, "{c}"),
             Expr::OuterReferenceColumn(_, c) => write!(f, "outer_ref({c})"),
@@ -1450,7 +1452,6 @@ fn create_function_name(fun: &str, distinct: bool, args: &[Expr]) -> Result<Stri
 /// This function recursively transverses the expression for names such as "CAST(a > 2)".
 fn create_name(e: &Expr) -> Result<String> {
     match e {
-        Expr::Nop => Ok("NOP".to_string()),
         Expr::Alias(Alias { name, .. }) => Ok(name.clone()),
         Expr::Column(c) => Ok(c.flat_name()),
         Expr::OuterReferenceColumn(_, c) => Ok(format!("outer_ref({})", c.flat_name())),

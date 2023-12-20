@@ -331,8 +331,7 @@ impl<'a> ConstEvaluator<'a> {
         // at plan time
         match expr {
             // Has no runtime cost, but needed during planning
-            Expr::Nop
-            | Expr::Alias(..)
+            Expr::Alias(..)
             | Expr::AggregateFunction { .. }
             | Expr::ScalarVariable(_, _)
             | Expr::Column(_)

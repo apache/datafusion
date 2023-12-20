@@ -65,7 +65,6 @@ impl TreeNode for Expr {
             Expr::GroupingSet(GroupingSet::GroupingSets(lists_of_exprs)) => {
                 lists_of_exprs.iter().flatten().for_each_till_continue(f)
             }
-            Expr::Nop
             | Expr::Column(_)
             // Treat OuterReferenceColumn as a leaf expression
             | Expr::OuterReferenceColumn(_, _)
@@ -120,7 +119,6 @@ impl TreeNode for Expr {
         let mut transform = transform;
 
         Ok(match self {
-            Expr::Nop => self,
             Expr::Alias(Alias {
                 expr,
                 relation,
@@ -381,7 +379,6 @@ impl TreeNode for Expr {
             Expr::GroupingSet(GroupingSet::GroupingSets(lists_of_exprs)) => {
                 lists_of_exprs.iter_mut().flatten().for_each_till_continue(f)
             }
-            Expr::Nop
             | Expr::Column(_)
             // Treat OuterReferenceColumn as a leaf expression
             | Expr::OuterReferenceColumn(_, _)
