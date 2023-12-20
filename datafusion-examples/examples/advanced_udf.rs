@@ -134,9 +134,9 @@ impl ScalarUDFImpl for PowUdf {
                     Some(exp) => {
                         // DataFusion has ensured both arguments are Float64:
                         let base_array = base_array.as_primitive::<Float64Type>();
-                        // calculate the result for every row. The `unary` very
-                        // fast,  "vectorized" code and handles things like null
-                        // values for us.
+                        // calculate the result for every row. The `unary`
+                        // kernel creates very fast "vectorized" code and
+                        // handles things like null values for us.
                         let res: Float64Array =
                             compute::unary(base_array, |base| base.powf(*exp));
                         Arc::new(res)
