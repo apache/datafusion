@@ -29,10 +29,7 @@ async fn main() -> Result<(), DataFusionError> {
     let local_url = Url::parse("file://local").unwrap();
     ctx.runtime_env().register_object_store(&local_url, local);
 
-    let mut df = ctx.sql(
-        "values ('a'), ('b'), ('c')"
-    ).await
-    .unwrap();
+    let mut df = ctx.sql("values ('a'), ('b'), ('c')").await.unwrap();
 
     // Ensure the column names and types match the target table
     df = df.with_column_renamed("column1", "tablecol1").unwrap();
@@ -52,23 +49,26 @@ async fn main() -> Result<(), DataFusionError> {
         .await?;
 
     df.clone()
-        .write_parquet("file://local/datafusion-examples/test_parquet/", 
-        DataFrameWriteOptions::new(),
-        None,
-    )
+        .write_parquet(
+            "file://local/datafusion-examples/test_parquet/",
+            DataFrameWriteOptions::new(),
+            None,
+        )
         .await?;
 
     df.clone()
-        .write_csv("file://local/datafusion-examples/test_csv/", 
-        DataFrameWriteOptions::new(),
-        None,
-    )
+        .write_csv(
+            "file://local/datafusion-examples/test_csv/",
+            DataFrameWriteOptions::new(),
+            None,
+        )
         .await?;
 
     df.clone()
-        .write_json("file://local/datafusion-examples/test_json/", 
-        DataFrameWriteOptions::new(),
-    )
+        .write_json(
+            "file://local/datafusion-examples/test_json/",
+            DataFrameWriteOptions::new(),
+        )
         .await?;
 
     Ok(())
