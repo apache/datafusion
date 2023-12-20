@@ -409,7 +409,7 @@ message LogicalExprNode {
 }
 
 message Wildcard {
-  optional string qualifier = 1;
+  string qualifier = 1;
 }
 
 message PlaceholderNode {
