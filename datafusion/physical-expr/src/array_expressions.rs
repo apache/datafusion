@@ -1925,6 +1925,10 @@ pub fn array_length(args: &[ArrayRef]) -> Result<ArrayRef> {
 
 /// Array_dims SQL function
 pub fn array_dims(args: &[ArrayRef]) -> Result<ArrayRef> {
+    if args.len() != 1 {
+        return exec_err!("array_dims needs one argument");
+    }
+
     let data = match args[0].data_type() {
         DataType::List(_) => {
             let array = as_list_array(&args[0])?;
