@@ -40,7 +40,6 @@ use crate::execution::context::SessionState;
 use datafusion_common::tree_node::{TreeNode, VisitRecursion};
 use datafusion_common::{internal_err, Column, DFField, DFSchema, DataFusionError};
 use datafusion_expr::{Expr, ScalarFunctionDefinition, Volatility};
-use datafusion_optimizer::OptimizerConfig;
 use datafusion_physical_expr::create_physical_expr;
 use datafusion_physical_expr::execution_props::ExecutionProps;
 use object_store::path::Path;
