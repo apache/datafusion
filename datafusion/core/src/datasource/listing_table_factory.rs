@@ -36,7 +36,7 @@ use crate::execution::context::SessionState;
 
 use arrow::datatypes::{DataType, SchemaRef};
 use datafusion_common::file_options::{FileTypeWriterOptions, StatementOptions};
-use datafusion_common::{plan_err, DataFusionError, FileType};
+use datafusion_common::{arrow_datafusion_err, plan_err, DataFusionError, FileType};
 use datafusion_expr::CreateExternalTable;
 
 use async_trait::async_trait;
@@ -114,7 +114,7 @@ impl TableProviderFactory for ListingTableFactory {
                 .map(|col| {
                     schema
                         .field_with_name(col)
-                        .map_err(DataFusionError::ArrowError)
+                        .map_err(|e| arrow_datafusion_err!(e))
                 })
                 .collect::<datafusion_common::Result<Vec<_>>>()?
                 .into_iter()
