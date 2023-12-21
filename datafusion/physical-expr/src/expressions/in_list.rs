@@ -354,13 +354,13 @@ impl PhysicalExpr for InListExpr {
         let r = match &self.static_filter {
             Some(f) => f.contains(value.into_array(num_rows)?.as_ref(), self.negated)?,
             None => {
-                let value = value.into_array(batch.num_rows())?;
+                let value = value.into_array(num_rows)?;
                 let found = self.list.iter().map(|expr| expr.evaluate(batch)).try_fold(
-                    BooleanArray::new(BooleanBuffer::new_unset(batch.num_rows()), None),
+                    BooleanArray::new(BooleanBuffer::new_unset(num_rows), None),
                     |result, expr| -> Result<BooleanArray> {
                         Ok(or_kleene(
                             &result,
-                            &eq(&value, &expr?.into_array(batch.num_rows())?)?,
+                            &eq(&value, &expr?.into_array(num_rows)?)?,
                         )?)
                     },
                 )?;
