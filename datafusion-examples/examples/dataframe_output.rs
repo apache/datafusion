@@ -16,7 +16,7 @@
 // under the License.
 
 use datafusion::{dataframe::DataFrameWriteOptions, prelude::*};
-use datafusion_common::DataFusionError;
+use datafusion_common::{parsers::CompressionTypeVariant, DataFusionError};
 
 /// This example demonstrates the various methods to write out a DataFrame to local storage.
 /// See datafusion-examples/examples/external_dependency/dataframe-to-s3.rs for an example
@@ -58,7 +58,9 @@ async fn main() -> Result<(), DataFusionError> {
     df.clone()
         .write_csv(
             "./datafusion-examples/test_csv/",
-            DataFrameWriteOptions::new(),
+            // DataFrameWriteOptions contains options which control how data is written
+            // such as compression codec
+            DataFrameWriteOptions::new().with_compression(CompressionTypeVariant::GZIP),
             None,
         )
         .await?;
