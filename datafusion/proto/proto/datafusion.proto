@@ -1201,9 +1201,8 @@ message FileSinkConfig {
   Schema output_schema = 4;
   repeated PartitionColumn table_partition_cols = 5;
   bool single_file_output = 7;
-  bool unbounded_input = 8;
-  bool overwrite = 9;
-  FileTypeWriterOptions file_type_writer_options = 10;
+  bool overwrite = 8;
+  FileTypeWriterOptions file_type_writer_options = 9;
 }
 
 message JsonSink {
