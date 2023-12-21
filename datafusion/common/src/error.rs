@@ -83,7 +83,7 @@ pub enum DataFusionError {
     /// This error happens with schema-related errors, such as schema inference not possible
     /// and non-unique column names.
     /// 2nd argument is for optional backtrace    
-    /// Boxing the optional backtrace to prevent https://rust-lang.github.io/rust-clippy/master/index.html#/result_large_err
+    /// Boxing the optional backtrace to prevent <https://rust-lang.github.io/rust-clippy/master/index.html#/result_large_err>
     SchemaError(SchemaError, Option<Box<String>>),
     /// Error returned during execution of the query.
     /// Examples include files not found, errors in parsing certain types.
