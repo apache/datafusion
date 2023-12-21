@@ -22,7 +22,9 @@ use std::sync::Arc;
 
 use crate::common::{byte_to_string, proto_error, str_to_byte};
 use crate::protobuf::logical_plan_node::LogicalPlanType::CustomScan;
-use crate::protobuf::{CustomTableScanNode, LogicalExprNodeCollection};
+use crate::protobuf::{
+    copy_to_node, CustomTableScanNode, LogicalExprNodeCollection, SqlOption,
+};
 use crate::{
     convert_required,
     protobuf::{
@@ -44,12 +46,13 @@ use datafusion::{
     datasource::{provider_as_source, source_as_provider},
     prelude::SessionContext,
 };
-use datafusion_common::plan_datafusion_err;
 use datafusion_common::{
-    context, internal_err, not_impl_err, parsers::CompressionTypeVariant,
-    DataFusionError, OwnedTableReference, Result,
+    context, file_options::StatementOptions, internal_err, not_impl_err,
+    parsers::CompressionTypeVariant, plan_datafusion_err, DataFusionError, FileType,
+    OwnedTableReference, Result,
 };
 use datafusion_expr::{
+    dml,
     logical_plan::{
         builder::project, Aggregate, CreateCatalog, CreateCatalogSchema,
         CreateExternalTable, CreateView, CrossJoin, DdlStatement, Distinct,
@@ -59,6 +62,7 @@ use datafusion_expr::{
     DistinctOn, DropView, Expr, LogicalPlan, LogicalPlanBuilder,
 };
 
+use datafusion_expr::dml::CopyOptions;
 use prost::bytes::BufMut;
 use prost::Message;
 
@@ -823,6 +827,36 @@ impl AsLogicalPlan for LogicalPlanNode {
                     schema: Arc::new(convert_required!(dropview.schema)?),
                 }),
             )),
+            LogicalPlanType::CopyTo(copy) => {
+                let input: LogicalPlan =
+                    into_logical_plan!(copy.input, ctx, extension_codec)?;
+
+                let copy_options = match &copy.copy_options {
+                    Some(copy_to_node::CopyOptions::SqlOptions(opt)) => {
+                        let options = opt.option.iter().map(|o| (o.key.clone(), o.value.clone())).collect();
+                        CopyOptions::SQLOptions(StatementOptions::from(
+                            &options,
+                        ))
+                    }
+                    Some(copy_to_node::CopyOptions::WriterOptions(_)) => {
+                        return Err(proto_error(
+                            "LogicalPlan serde is not yet implemented for CopyTo with WriterOptions",
+                        ))
+                    }
+                    other => return Err(proto_error(format!(
+                        "LogicalPlan serde is not yet implemented for CopyTo with CopyOptions {other:?}",
+                    )))
+                };
+                Ok(datafusion_expr::LogicalPlan::Copy(
+                    datafusion_expr::dml::CopyTo {
+                        input: Arc::new(input),
+                        output_url: copy.output_url.clone(),
+                        file_format: FileType::from_str(&copy.file_type)?,
+                        single_file_output: copy.single_file_output,
+                        copy_options,
+                    },
+                ))
+            }
         }
     }
 
@@ -1534,9 +1568,49 @@ impl AsLogicalPlan for LogicalPlanNode {
             LogicalPlan::Dml(_) => Err(proto_error(
                 "LogicalPlan serde is not yet implemented for Dml",
             )),
-            LogicalPlan::Copy(_) => Err(proto_error(
-                "LogicalPlan serde is not yet implemented for Copy",
-            )),
+            LogicalPlan::Copy(dml::CopyTo {
+                input,
+                output_url,
+                single_file_output,
+                file_format,
+                copy_options,
+            }) => {
+                let input = protobuf::LogicalPlanNode::try_from_logical_plan(
+                    input,
+                    extension_codec,
+                )?;
+
+                let copy_options_proto: Option<copy_to_node::CopyOptions> = match copy_options {
+                    CopyOptions::SQLOptions(opt) => {
+                        let options: Vec<SqlOption> = opt.clone().into_inner().iter().map(|(k, v)| SqlOption {
+                            key: k.to_string(),
+                            value: v.to_string(),
+                        }).collect();
+                        Some(copy_to_node::CopyOptions::SqlOptions {
+                            0: protobuf::SqlOptions {
+                                option: options
+                            }
+                        })
+                    }
+                    CopyOptions::WriterOptions(_) => {
+                        return Err(proto_error(
+                            "LogicalPlan serde is not yet implemented for CopyTo with WriterOptions",
+                        ))
+                    }
+                };
+
+                Ok(protobuf::LogicalPlanNode {
+                    logical_plan_type: Some(LogicalPlanType::CopyTo(Box::new(
+                        protobuf::CopyToNode {
+                            input: Some(Box::new(input)),
+                            single_file_output: *single_file_output,
+                            output_url: output_url.to_string(),
+                            file_type: file_format.to_string(),
+                            copy_options: copy_options_proto,
+                        },
+                    ))),
+                })
+            }
             LogicalPlan::DescribeTable(_) => Err(proto_error(
                 "LogicalPlan serde is not yet implemented for DescribeTable",
             )),
