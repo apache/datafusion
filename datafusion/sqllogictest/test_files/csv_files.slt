@@ -63,26 +63,3 @@ id6 value"6
 id7 value"7
 id8 value"8
 id9 value"9
-
-
-# When reading a partitioned table, `listing_table_ignore_subdirectory` is always equal to false, even if set to true
-statement ok
-set datafusion.execution.listing_table_ignore_subdirectory = true;
-
-statement ok
-CREATE EXTERNAL TABLE partition_csv_table (
-  name VARCHAR,
-  ts TIMESTAMP,
-  c_date DATE,
-)
-STORED AS CSV
-PARTITIONED BY (c_date)
-LOCATION '../core/tests/data/partitioned_table';
-
-query I
-select count(*) from partition_csv_table;
-----
-4
-
-statement ok
-DROP TABLE partition_csv_table

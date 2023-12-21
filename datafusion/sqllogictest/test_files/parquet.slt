@@ -336,7 +336,6 @@ NULL
 statement ok
 DROP TABLE single_nan;
 
-
 statement ok
 CREATE EXTERNAL TABLE list_columns
 STORED AS PARQUET
