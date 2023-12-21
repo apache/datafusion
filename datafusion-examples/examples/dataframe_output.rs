@@ -17,17 +17,13 @@
 
 use datafusion::{dataframe::DataFrameWriteOptions, prelude::*};
 use datafusion_common::DataFusionError;
-use object_store::local::LocalFileSystem;
-use std::sync::Arc;
-use url::Url;
 
-/// This example demonstrates the various methods to write out a DataFrame
+/// This example demonstrates the various methods to write out a DataFrame to local storage.
+/// See datafusion-examples/examples/external_dependency/dataframe-to-s3.rs for an example
+/// using a remote object store.
 #[tokio::main]
 async fn main() -> Result<(), DataFusionError> {
     let ctx = SessionContext::new();
-    let local = Arc::new(LocalFileSystem::new_with_prefix("./").unwrap());
-    let local_url = Url::parse("file://local").unwrap();
-    ctx.runtime_env().register_object_store(&local_url, local);
 
     let mut df = ctx.sql("values ('a'), ('b'), ('c')").await.unwrap();
 
@@ -44,13 +40,16 @@ async fn main() -> Result<(), DataFusionError> {
     .collect()
     .await?;
 
+    // This is equivalent to INSERT INTO test VALUES ('a'), ('b'), ('c').
+    // The behavior of write_table depends on the TableProvider's implementation
+    // of the insert_into method.
     df.clone()
         .write_table("test", DataFrameWriteOptions::new())
         .await?;
 
     df.clone()
         .write_parquet(
-            "file://local/datafusion-examples/test_parquet/",
+            "./datafusion-examples/test_parquet/",
             DataFrameWriteOptions::new(),
             None,
         )
@@ -58,7 +57,7 @@ async fn main() -> Result<(), DataFusionError> {
 
     df.clone()
         .write_csv(
-            "file://local/datafusion-examples/test_csv/",
+            "./datafusion-examples/test_csv/",
             DataFrameWriteOptions::new(),
             None,
         )
@@ -66,7 +65,7 @@ async fn main() -> Result<(), DataFusionError> {
 
     df.clone()
         .write_json(
-            "file://local/datafusion-examples/test_json/",
+            "./datafusion-examples/test_json/",
             DataFrameWriteOptions::new(),
         )
         .await?;
