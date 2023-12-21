@@ -51,7 +51,7 @@ use datafusion_common::utils::{
     evaluate_partition_ranges, get_arrayref_at_indices, get_at_indices,
     get_record_batch_at_indices, get_row_at_idx,
 };
-use datafusion_common::{exec_err, DataFusionError, Result};
+use datafusion_common::{arrow_datafusion_err, exec_err, DataFusionError, Result};
 use datafusion_execution::TaskContext;
 use datafusion_expr::window_state::{PartitionBatchState, WindowAggState};
 use datafusion_expr::ColumnarValue;
@@ -499,7 +499,7 @@ impl PartitionSearcher for LinearSearch {
             .iter()
             .map(|items| {
                 concat(&items.iter().map(|e| e.as_ref()).collect::<Vec<_>>())
-                    .map_err(DataFusionError::ArrowError)
+                    .map_err(|e| arrow_datafusion_err!(e))
             })
             .collect::<Result<Vec<_>>>()?;
         // We should emit columns according to row index ordering.

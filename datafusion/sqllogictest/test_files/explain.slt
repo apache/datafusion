@@ -379,7 +379,3 @@ Projection: List([[1, 2, 3], [4, 5, 6]]) AS make_array(make_array(Int64(1),Int64
 physical_plan
 ProjectionExec: expr=[[[1, 2, 3], [4, 5, 6]] as make_array(make_array(Int64(1),Int64(2),Int64(3)),make_array(Int64(4),Int64(5),Int64(6)))]
 --PlaceholderRowExec
-
-# Testing explain on a table with a map filter, registered in test_context.rs.
-statement ok
-explain select * from table_with_map where int_field > 0
