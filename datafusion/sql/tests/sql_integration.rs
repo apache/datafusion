@@ -758,7 +758,7 @@ fn where_selection_with_ambiguous_column() {
     let sql = "SELECT * FROM person a, person b WHERE id = id + 1";
     let err = logical_plan(sql).expect_err("query should have failed");
     assert_eq!(
-        "SchemaError(AmbiguousReference { field: Column { relation: None, name: \"id\" } })",
+        "SchemaError(AmbiguousReference { field: Column { relation: None, name: \"id\" } }, Some(\"\"))",
         format!("{err:?}")
     );
 }
