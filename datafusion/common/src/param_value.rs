@@ -72,17 +72,20 @@ impl ParamValues {
     ) -> Result<ScalarValue> {
         match self {
             ParamValues::LIST(list) => {
-                if id.is_empty() || id == "$0" {
+                if id.is_empty() {
                     return _plan_err!("Empty placeholder id");
                 }
                 // convert id (in format $1, $2, ..) to idx (0, 1, ..)
-                let idx = id[1..].parse::<usize>().map_err(|e| {
-                    DataFusionError::Internal(format!(
-                        "Failed to parse placeholder id: {e}"
-                    ))
-                })? - 1;
+                let idx = id[1..]
+                    .parse::<usize>()
+                    .map_err(|e| {
+                        DataFusionError::Internal(format!(
+                            "Failed to parse placeholder id: {e}"
+                        ))
+                    })?
+                    .checked_sub(1);
                 // value at the idx-th position in param_values should be the value for the placeholder
-                let value = list.get(idx).ok_or_else(|| {
+                let value = idx.and_then(|idx| list.get(idx)).ok_or_else(|| {
                     DataFusionError::Internal(format!(
                         "No value found for placeholder with id {id}"
                     ))
