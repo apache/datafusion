@@ -25,7 +25,8 @@ use arrow::{
 };
 use arrow_array::{ArrayRef, BooleanArray, PrimitiveArray};
 use datafusion_common::{
-    utils::get_arrayref_at_indices, DataFusionError, Result, ScalarValue,
+    arrow_datafusion_err, utils::get_arrayref_at_indices, DataFusionError, Result,
+    ScalarValue,
 };
 use datafusion_expr::Accumulator;
 
@@ -372,7 +373,7 @@ fn get_filter_at_indices(
             )
         })
         .transpose()
-        .map_err(DataFusionError::ArrowError)
+        .map_err(|e| arrow_datafusion_err!(e))
 }
 
 // Copied from physical-plan
@@ -394,7 +395,7 @@ pub(crate) fn slice_and_maybe_filter(
         sliced_arrays
             .iter()
             .map(|array| {
-                compute::filter(array, filter_array).map_err(DataFusionError::ArrowError)
+                compute::filter(array, filter_array).map_err(|e| arrow_datafusion_err!(e))
             })
             .collect()
     } else {

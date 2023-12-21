@@ -7500,9 +7500,6 @@ impl serde::Serialize for FileSinkConfig {
         if self.single_file_output {
             len += 1;
         }
-        if self.unbounded_input {
-            len += 1;
-        }
         if self.overwrite {
             len += 1;
         }
@@ -7527,9 +7524,6 @@ impl serde::Serialize for FileSinkConfig {
         }
         if self.single_file_output {
             struct_ser.serialize_field("singleFileOutput", &self.single_file_output)?;
-        }
-        if self.unbounded_input {
-            struct_ser.serialize_field("unboundedInput", &self.unbounded_input)?;
         }
         if self.overwrite {
             struct_ser.serialize_field("overwrite", &self.overwrite)?;
@@ -7559,8 +7553,6 @@ impl<'de> serde::Deserialize<'de> for FileSinkConfig {
             "tablePartitionCols",
             "single_file_output",
             "singleFileOutput",
-            "unbounded_input",
-            "unboundedInput",
             "overwrite",
             "file_type_writer_options",
             "fileTypeWriterOptions",
@@ -7574,7 +7566,6 @@ impl<'de> serde::Deserialize<'de> for FileSinkConfig {
             OutputSchema,
             TablePartitionCols,
             SingleFileOutput,
-            UnboundedInput,
             Overwrite,
             FileTypeWriterOptions,
         }
@@ -7604,7 +7595,6 @@ impl<'de> serde::Deserialize<'de> for FileSinkConfig {
                             "outputSchema" | "output_schema" => Ok(GeneratedField::OutputSchema),
                             "tablePartitionCols" | "table_partition_cols" => Ok(GeneratedField::TablePartitionCols),
                             "singleFileOutput" | "single_file_output" => Ok(GeneratedField::SingleFileOutput),
-                            "unboundedInput" | "unbounded_input" => Ok(GeneratedField::UnboundedInput),
                             "overwrite" => Ok(GeneratedField::Overwrite),
                             "fileTypeWriterOptions" | "file_type_writer_options" => Ok(GeneratedField::FileTypeWriterOptions),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
@@ -7632,7 +7622,6 @@ impl<'de> serde::Deserialize<'de> for FileSinkConfig {
                 let mut output_schema__ = None;
                 let mut table_partition_cols__ = None;
                 let mut single_file_output__ = None;
-                let mut unbounded_input__ = None;
                 let mut overwrite__ = None;
                 let mut file_type_writer_options__ = None;
                 while let Some(k) = map_.next_key()? {
@@ -7673,12 +7662,6 @@ impl<'de> serde::Deserialize<'de> for FileSinkConfig {
                             }
                             single_file_output__ = Some(map_.next_value()?);
                         }
-                        GeneratedField::UnboundedInput => {
-                            if unbounded_input__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("unboundedInput"));
-                            }
-                            unbounded_input__ = Some(map_.next_value()?);
-                        }
                         GeneratedField::Overwrite => {
                             if overwrite__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("overwrite"));
@@ -7700,7 +7683,6 @@ impl<'de> serde::Deserialize<'de> for FileSinkConfig {
                     output_schema: output_schema__,
                     table_partition_cols: table_partition_cols__.unwrap_or_default(),
                     single_file_output: single_file_output__.unwrap_or_default(),
-                    unbounded_input: unbounded_input__.unwrap_or_default(),
                     overwrite: overwrite__.unwrap_or_default(),
                     file_type_writer_options: file_type_writer_options__,
                 })
@@ -25797,12 +25779,12 @@ impl serde::Serialize for Wildcard {
     {
         use serde::ser::SerializeStruct;
         let mut len = 0;
-        if self.qualifier.is_some() {
+        if !self.qualifier.is_empty() {
             len += 1;
         }
         let mut struct_ser = serializer.serialize_struct("datafusion.Wildcard", len)?;
-        if let Some(v) = self.qualifier.as_ref() {
-            struct_ser.serialize_field("qualifier", v)?;
+        if !self.qualifier.is_empty() {
+            struct_ser.serialize_field("qualifier", &self.qualifier)?;
         }
         struct_ser.end()
     }
@@ -25868,12 +25850,12 @@ impl<'de> serde::Deserialize<'de> for Wildcard {
                             if qualifier__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("qualifier"));
                             }
-                            qualifier__ = map_.next_value()?;
+                            qualifier__ = Some(map_.next_value()?);
                         }
                     }
                 }
                 Ok(Wildcard {
-                    qualifier: qualifier__,
+                    qualifier: qualifier__.unwrap_or_default(),
                 })
             }
         }

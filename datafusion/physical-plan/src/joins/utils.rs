@@ -1370,7 +1370,7 @@ mod tests {
     use arrow::error::{ArrowError, Result as ArrowResult};
     use arrow_schema::SortOptions;
 
-    use datafusion_common::ScalarValue;
+    use datafusion_common::{arrow_datafusion_err, arrow_err, ScalarValue};
 
     fn check(left: &[Column], right: &[Column], on: &[(Column, Column)]) -> Result<()> {
         let left = left
@@ -1406,9 +1406,7 @@ mod tests {
     #[tokio::test]
     async fn check_error_nesting() {
         let once_fut = OnceFut::<()>::new(async {
-            Err(DataFusionError::ArrowError(ArrowError::CsvError(
-                "some error".to_string(),
-            )))
+            arrow_err!(ArrowError::CsvError("some error".to_string()))
         });
 
         struct TestFut(OnceFut<()>);
@@ -1432,10 +1430,10 @@ mod tests {
         let wrapped_err = DataFusionError::from(arrow_err_from_fut);
         let root_err = wrapped_err.find_root();
 
-        assert!(matches!(
-            root_err,
-            DataFusionError::ArrowError(ArrowError::CsvError(_))
-        ))
+        let _expected =
+            arrow_datafusion_err!(ArrowError::CsvError("some error".to_owned()));
+
+        assert!(matches!(root_err, _expected))
     }
 
     #[test]

@@ -629,8 +629,7 @@ mod tests {
     use arrow::datatypes::{
         ArrowNumericType, Decimal128Type, Field, Int32Type, SchemaRef,
     };
-    use arrow_schema::ArrowError;
-    use datafusion_common::Result;
+    use datafusion_common::{plan_datafusion_err, Result};
     use datafusion_expr::type_coercion::binary::get_input_types;
 
     /// Performs a binary operation, applying any type coercion necessary
@@ -3608,10 +3607,9 @@ mod tests {
         )
         .unwrap_err();
 
-        assert!(
-            matches!(err, DataFusionError::ArrowError(ArrowError::DivideByZero)),
-            "{err}"
-        );
+        let _expected = plan_datafusion_err!("Divide by zero");
+
+        assert!(matches!(err, ref _expected), "{err}");
 
         // decimal
         let schema = Arc::new(Schema::new(vec![
@@ -3633,10 +3631,7 @@ mod tests {
         )
         .unwrap_err();
 
-        assert!(
-            matches!(err, DataFusionError::ArrowError(ArrowError::DivideByZero)),
-            "{err}"
-        );
+        assert!(matches!(err, ref _expected), "{err}");
 
         Ok(())
     }

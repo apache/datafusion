@@ -636,8 +636,8 @@ pub mod logical_expr_node {
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Wildcard {
-    #[prost(string, optional, tag = "1")]
-    pub qualifier: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(string, tag = "1")]
+    pub qualifier: ::prost::alloc::string::String,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -1635,10 +1635,8 @@ pub struct FileSinkConfig {
     #[prost(bool, tag = "7")]
     pub single_file_output: bool,
     #[prost(bool, tag = "8")]
-    pub unbounded_input: bool,
-    #[prost(bool, tag = "9")]
     pub overwrite: bool,
-    #[prost(message, optional, tag = "10")]
+    #[prost(message, optional, tag = "9")]
     pub file_type_writer_options: ::core::option::Option<FileTypeWriterOptions>,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
