@@ -36,8 +36,9 @@ use arrow::{
 };
 use datafusion::execution::registry::FunctionRegistry;
 use datafusion_common::{
-    internal_err, plan_datafusion_err, Column, Constraint, Constraints, DFField,
-    DFSchema, DFSchemaRef, DataFusionError, OwnedTableReference, Result, ScalarValue,
+    arrow_datafusion_err, internal_err, plan_datafusion_err, Column, Constraint,
+    Constraints, DFField, DFSchema, DFSchemaRef, DataFusionError, OwnedTableReference,
+    Result, ScalarValue,
 };
 use datafusion_expr::window_frame::{check_window_frame, regularize_window_order_by};
 use datafusion_expr::{
@@ -717,7 +718,7 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
                     None,
                     &message.version(),
                 )
-                .map_err(DataFusionError::ArrowError)
+                .map_err(|e| arrow_datafusion_err!(e))
                 .map_err(|e| e.context("Decoding ScalarValue::List Value"))?;
                 let arr = record_batch.column(0);
                 match value {
