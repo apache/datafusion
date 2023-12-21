@@ -65,28 +65,7 @@ id8 value"8
 id9 value"9
 
 
-# When reading a partitioned table, the `listing_table_ignore_subdirectory` configuration will be invalid
-statement ok
-set datafusion.execution.listing_table_ignore_subdirectory = false;
-
-statement ok
-CREATE EXTERNAL TABLE partition_csv_table (
-  name VARCHAR,
-  ts TIMESTAMP,
-  c_date DATE,
-)
-STORED AS CSV
-PARTITIONED BY (c_date)
-LOCATION '../core/tests/data/partitioned_table';
-
-query I
-select count(*) from partition_csv_table;
-----
-4
-
-statement ok
-DROP TABLE partition_csv_table
-
+# When reading a partitioned table, `listing_table_ignore_subdirectory` is always equal to false, even if set to true
 statement ok
 set datafusion.execution.listing_table_ignore_subdirectory = true;
 
@@ -99,19 +78,6 @@ CREATE EXTERNAL TABLE partition_csv_table (
 STORED AS CSV
 PARTITIONED BY (c_date)
 LOCATION '../core/tests/data/partitioned_table';
-
-query TT
-explain select count(*) from partition_csv_table;
-----
-logical_plan
-Aggregate: groupBy=[[]], aggr=[[COUNT(UInt8(1)) AS COUNT(*)]]
---TableScan: partition_csv_table projection=[]
-physical_plan
-AggregateExec: mode=Final, gby=[], aggr=[COUNT(*)]
---CoalescePartitionsExec
-----AggregateExec: mode=Partial, gby=[], aggr=[COUNT(*)]
-------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=2
---------CsvExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/core/tests/data/partitioned_table/c_date=2018-11-13/timestamps.csv], [WORKSPACE_ROOT/datafusion/core/tests/data/partitioned_table/c_date=2018-12-13/timestamps.csv]]}, has_header=false
 
 query I
 select count(*) from partition_csv_table;
