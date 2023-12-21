@@ -1586,11 +1586,9 @@ impl AsLogicalPlan for LogicalPlanNode {
                             key: k.to_string(),
                             value: v.to_string(),
                         }).collect();
-                        Some(copy_to_node::CopyOptions::SqlOptions {
-                            0: protobuf::SqlOptions {
-                                option: options
-                            }
-                        })
+                        Some(copy_to_node::CopyOptions::SqlOptions(protobuf::SqlOptions {
+                            option: options
+                        }))
                     }
                     CopyOptions::WriterOptions(_) => {
                         return Err(proto_error(
