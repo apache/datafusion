@@ -352,8 +352,6 @@ async fn roundtrip_logical_plan_copy_to_writer_options() -> Result<()> {
 
     let bytes = logical_plan_to_bytes(&plan)?;
     let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx)?;
-    println!("{plan:?}");
-    println!("{logical_round_trip:?}");
     assert_eq!(format!("{plan:?}"), format!("{logical_round_trip:?}"));
 
     Ok(())
