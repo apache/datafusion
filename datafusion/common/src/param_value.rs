@@ -67,7 +67,7 @@ impl ParamValues {
 
     pub fn get_placeholders_with_values(
         &self,
-        id: &String,
+        id: &str,
         data_type: &Option<DataType>,
     ) -> Result<ScalarValue> {
         match self {
