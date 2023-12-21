@@ -23,9 +23,9 @@ use std::collections::HashMap;
 /// The parameter value corresponding to the placeholder
 #[derive(Debug, Clone)]
 pub enum ParamValues {
-    /// for positional query parameters, like select * from test where a > $1 and b = $2
+    /// For positional query parameters, like `SELECT * FROM test WHERE a > $1 AND b = $2`
     List(Vec<ScalarValue>),
-    /// for named query parameters, like select * from test where a > $foo and b = $goo
+    /// For named query parameters, like `SELECT * FROM test WHERE a > $foo AND b = $goo`
     Map(HashMap<String, ScalarValue>),
 }
 
