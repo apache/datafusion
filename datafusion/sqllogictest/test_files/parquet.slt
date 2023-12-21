@@ -336,6 +336,23 @@ NULL
 statement ok
 DROP TABLE single_nan;
 
+
+statement ok
+CREATE EXTERNAL TABLE list_columns
+STORED AS PARQUET
+WITH HEADER ROW
+LOCATION '../../parquet-testing/data/list_columns.parquet';
+
+query ??
+SELECT int64_list, utf8_list FROM list_columns
+----
+[1, 2, 3] [abc, efg, hij]
+[, 1] NULL
+[4] [efg, , hij, xyz]
+
+statement ok
+DROP TABLE list_columns;
+
 # Clean up
 statement ok
 DROP TABLE listing_table;

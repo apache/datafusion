@@ -455,7 +455,7 @@ pub fn array_element(args: &[ArrayRef]) -> Result<ArrayRef> {
             let indexes = as_int64_array(&args[1])?;
             general_array_element::<i64>(array, indexes)
         }
-        _ => not_impl_err!(
+        _ => exec_err!(
             "array_element does not support type: {:?}",
             args[0].data_type()
         ),
@@ -571,7 +571,7 @@ pub fn array_slice(args: &[ArrayRef]) -> Result<ArrayRef> {
             let to_array = as_int64_array(&args[2])?;
             general_array_slice::<i64>(array, from_array, to_array)
         }
-        _ => not_impl_err!("array_slice does not support type: {:?}", array_data_type),
+        _ => exec_err!("array_slice does not support type: {:?}", array_data_type),
     }
 }
 
@@ -1335,7 +1335,7 @@ pub fn array_positions(args: &[ArrayRef]) -> Result<ArrayRef> {
             general_positions::<i64>(arr, element)
         }
         array_type => {
-            not_impl_err!("array_positions does not support type '{array_type:?}'.")
+            exec_err!("array_positions does not support type '{array_type:?}'.")
         }
     }
 }
@@ -1925,12 +1925,33 @@ pub fn array_length(args: &[ArrayRef]) -> Result<ArrayRef> {
 
 /// Array_dims SQL function
 pub fn array_dims(args: &[ArrayRef]) -> Result<ArrayRef> {
-    let list_array = as_list_array(&args[0])?;
+    if args.len() != 1 {
+        return exec_err!("array_dims needs one argument");
+    }
 
-    let data = list_array
-        .iter()
-        .map(compute_array_dims)
-        .collect::<Result<Vec<_>>>()?;
+    let data = match args[0].data_type() {
+        DataType::List(_) => {
+            let array = as_list_array(&args[0])?;
+            array
+                .iter()
+                .map(compute_array_dims)
+                .collect::<Result<Vec<_>>>()?
+        }
+        DataType::LargeList(_) => {
+            let array = as_large_list_array(&args[0])?;
+            array
+                .iter()
+                .map(compute_array_dims)
+                .collect::<Result<Vec<_>>>()?
+        }
+        _ => {
+            return exec_err!(
+                "array_dims does not support type '{:?}'",
+                args[0].data_type()
+            );
+        }
+    };
+
     let result = ListArray::from_iter_primitive::<UInt64Type, _, _>(data);
 
     Ok(Arc::new(result) as ArrayRef)
