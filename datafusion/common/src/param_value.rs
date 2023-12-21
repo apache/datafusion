@@ -31,7 +31,7 @@ pub enum ParamValues {
 
 impl ParamValues {
     /// Verify parameter list length and type
-    pub fn verify(&self, expect: &Vec<DataType>) -> Result<()> {
+    pub fn verify(&self, expect: &[DataType]) -> Result<()> {
         match self {
             ParamValues::LIST(list) => {
                 // Verify if the number of params matches the number of values
