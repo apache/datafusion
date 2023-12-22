@@ -1227,6 +1227,7 @@ message WriterProperties {
   string writer_version = 6;
   string created_by = 7;
   // TODO add advanced writer options
+  // tracking issue: https://github.com/apache/arrow-datafusion/issues/8632
   // key_value_metadata: Option<Vec<KeyValue>>,
   // default_column_properties: ColumnProperties,
   // column_properties: HashMap<ColumnPath, ColumnProperties>,
