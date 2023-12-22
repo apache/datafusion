@@ -1674,7 +1674,9 @@ impl AsLogicalPlan for LogicalPlanNode {
     }
 }
 
-fn writer_properties_to_proto(props: &WriterProperties) -> protobuf::WriterProperties {
+pub(crate) fn writer_properties_to_proto(
+    props: &WriterProperties,
+) -> protobuf::WriterProperties {
     protobuf::WriterProperties {
         data_page_size_limit: props.data_page_size_limit() as i32,
         dictionary_page_size_limit: props.dictionary_page_size_limit() as i32,
@@ -1686,7 +1688,7 @@ fn writer_properties_to_proto(props: &WriterProperties) -> protobuf::WriterPrope
     }
 }
 
-fn writer_options_from_proto(
+pub(crate) fn writer_options_from_proto(
     props: &protobuf::WriterProperties,
 ) -> Result<WriterProperties, DataFusionError> {
     let writer_version = WriterVersion::from_str(&props.writer_version)

@@ -53,8 +53,8 @@ use crate::logical_plan;
 use crate::protobuf;
 use crate::protobuf::physical_expr_node::ExprType;
 
+use crate::logical_plan::writer_options_from_proto;
 use chrono::{TimeZone, Utc};
-use datafusion::parquet::file::properties::WriterProperties;
 use object_store::path::Path;
 use object_store::ObjectMeta;
 
@@ -773,19 +773,7 @@ impl TryFrom<&protobuf::FileTypeWriterOptions> for FileTypeWriterOptions {
             ),
             protobuf::file_type_writer_options::FileType::ParquetOptions(opt) => {
                 let props = opt.writer_properties.clone().unwrap_or_default();
-                let writer_properties = WriterProperties::builder()
-                    //.set_writer_version(props.writer_version)
-                    .set_created_by(props.created_by)
-                    .set_dictionary_page_size_limit(
-                        props.dictionary_page_size_limit as usize,
-                    )
-                    .set_data_page_row_count_limit(
-                        props.data_page_row_count_limit as usize,
-                    )
-                    .set_data_page_size_limit(props.data_page_size_limit as usize)
-                    .set_write_batch_size(props.write_batch_size as usize)
-                    .set_max_row_group_size(props.max_row_group_size as usize)
-                    .build();
+                let writer_properties = writer_options_from_proto(&props)?;
                 Ok(Self::Parquet(ParquetWriterOptions::new(writer_properties)))
             }
         }
