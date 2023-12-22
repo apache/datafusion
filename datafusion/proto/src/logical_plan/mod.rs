@@ -63,7 +63,7 @@ use datafusion_expr::{
     DistinctOn, DropView, Expr, LogicalPlan, LogicalPlanBuilder,
 };
 
-use datafusion::parquet::file::properties::WriterProperties;
+use datafusion::parquet::file::properties::{WriterProperties, WriterVersion};
 use datafusion_common::file_options::parquet_writer::ParquetWriterOptions;
 use datafusion_expr::dml::CopyOptions;
 use prost::bytes::BufMut;
@@ -845,21 +845,22 @@ impl AsLogicalPlan for LogicalPlanNode {
                     }
                     Some(copy_to_node::CopyOptions::WriterOptions(opt)) => {
                         match &opt.file_type {
-                            Some(x) => match x {
+                            Some(ft) => match ft {
                                 file_type_writer_options::FileType::ParquetOptions(
                                     writer_options,
                                 ) => {
-                                    // TODO in progress
-                                    let props =
-                                        writer_options.writer_properties.clone().unwrap();
-                                    let writer_properties = WriterProperties::builder()
-                                        .set_created_by(props.created_by)
-                                        .build();
-                                    let parquet_writer_options =
-                                        ParquetWriterOptions::new(writer_properties);
+                                    let writer_properties =
+                                        match &writer_options.writer_properties {
+                                            Some(serialized_writer_options) => {
+                                                writer_options_from_proto(
+                                                    serialized_writer_options,
+                                                )?
+                                            }
+                                            _ => WriterProperties::default(),
+                                        };
                                     CopyOptions::WriterOptions(Box::new(
                                         FileTypeWriterOptions::Parquet(
-                                            parquet_writer_options,
+                                            ParquetWriterOptions::new(writer_properties),
                                         ),
                                     ))
                                 }
@@ -1643,7 +1644,10 @@ impl AsLogicalPlan for LogicalPlanNode {
                                         write_batch_size: props.write_batch_size() as i32,
                                         max_row_group_size: props.max_row_group_size()
                                             as i32,
-                                        writer_version: "".to_string(), //TODO
+                                        writer_version: format!(
+                                            "{:?}",
+                                            props.writer_version()
+                                        ),
                                         created_by: props.created_by().to_string(),
                                     };
                                     let parquet_writer_options =
@@ -1683,4 +1687,20 @@ impl AsLogicalPlan for LogicalPlanNode {
             )),
         }
     }
+}
+
+fn writer_options_from_proto(
+    props: &protobuf::WriterProperties,
+) -> Result<WriterProperties, DataFusionError> {
+    let writer_version = WriterVersion::from_str(&props.writer_version)
+        .map_err(|e| proto_error(format!("{}", e)))?;
+    Ok(WriterProperties::builder()
+        .set_created_by(props.created_by.clone())
+        .set_writer_version(writer_version)
+        .set_dictionary_page_size_limit(props.dictionary_page_size_limit as usize)
+        .set_data_page_row_count_limit(props.data_page_row_count_limit as usize)
+        .set_data_page_size_limit(props.data_page_size_limit as usize)
+        .set_write_batch_size(props.write_batch_size as usize)
+        .set_max_row_group_size(props.max_row_group_size as usize)
+        .build())
 }
