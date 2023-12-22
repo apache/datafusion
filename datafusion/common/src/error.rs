@@ -84,7 +84,7 @@ pub enum DataFusionError {
     /// and non-unique column names.
     /// 2nd argument is for optional backtrace    
     /// Boxing the optional backtrace to prevent <https://rust-lang.github.io/rust-clippy/master/index.html#/result_large_err>
-    SchemaError(SchemaError, Option<Box<String>>),
+    SchemaError(SchemaError, Box<Option<String>>),
     /// Error returned during execution of the query.
     /// Examples include files not found, errors in parsing certain types.
     Execution(String),
@@ -289,8 +289,8 @@ impl Display for DataFusionError {
                 write!(f, "Error during planning: {desc}")
             }
             DataFusionError::SchemaError(ref desc, ref backtrace) => {
-                let backtrace: String =
-                    *backtrace.clone().unwrap_or(Box::new("".to_owned()));
+                let backtrace: &str =
+                    &backtrace.as_ref().clone().unwrap_or("".to_owned());
                 write!(f, "Schema error: {desc}{backtrace}")
             }
             DataFusionError::Execution(ref desc) => {
@@ -538,7 +538,7 @@ macro_rules! schema_datafusion_err {
     ($ERR:expr) => {
         DataFusionError::SchemaError(
             $ERR,
-            Some(Box::new(DataFusionError::get_back_trace())),
+            Box::new(Some(DataFusionError::get_back_trace())),
         )
     };
 }
@@ -549,7 +549,7 @@ macro_rules! schema_err {
     ($ERR:expr) => {
         Err(DataFusionError::SchemaError(
             $ERR,
-            Some(Box::new(DataFusionError::get_back_trace())),
+            Box::new(Some(DataFusionError::get_back_trace())),
         ))
     };
 }
