@@ -1683,13 +1683,6 @@ pub struct WriterProperties {
     pub max_row_group_size: i32,
     #[prost(string, tag = "6")]
     pub writer_version: ::prost::alloc::string::String,
-    /// TODO add advanced writer options
-    /// tracking issue: <https://github.com/apache/arrow-datafusion/issues/8632>
-    /// key_value_metadata: Option<Vec<KeyValue>>,
-    /// default_column_properties: ColumnProperties,
-    /// column_properties: HashMap<ColumnPath, ColumnProperties>,
-    /// sorting_columns: Option<Vec<SortingColumn>>,
-    /// column_index_truncate_length: Option<usize>,
     #[prost(string, tag = "7")]
     pub created_by: ::prost::alloc::string::String,
 }
