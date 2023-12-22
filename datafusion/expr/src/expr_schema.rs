@@ -411,8 +411,8 @@ pub fn cast_subquery(subquery: Subquery, cast_to_type: &DataType) -> Result<Subq
 mod tests {
     use super::*;
     use crate::{col, lit};
-    use arrow::datatypes::DataType;
-    use datafusion_common::{Column, ScalarValue};
+    use arrow::datatypes::{DataType, Fields};
+    use datafusion_common::{Column, ScalarValue, TableReference};
 
     macro_rules! test_is_expr_nullable {
         ($EXPR_TYPE:ident) => {{
@@ -546,6 +546,27 @@ mod tests {
 
         // verify to_field method populates metadata
         assert_eq!(&meta, expr.to_field(&schema).unwrap().metadata());
+    }
+
+    #[test]
+    fn test_nested_schema_nullability() {
+        let fields = DFField::new(
+            Some(TableReference::Bare {
+                table: "nexmark".into(),
+            }),
+            "bid",
+            DataType::Struct(Fields::from(vec![Field::new(
+                "auction",
+                DataType::Int64,
+                false,
+            )])),
+            true,
+        );
+
+        let schema = DFSchema::new_with_metadata(vec![fields], HashMap::new()).unwrap();
+
+        let expr = col("bid").field("auction");
+        assert_eq!(expr.nullable(&schema).unwrap(), true);
     }
 
     #[derive(Debug)]
