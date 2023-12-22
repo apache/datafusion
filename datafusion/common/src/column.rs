@@ -275,8 +275,12 @@ impl Column {
                                 None => true,
                             };
                             if tables_match && field.name() == self.name.to_lowercase() {
+                                let qualifier = match &self.relation {
+                                    Some(tb) => Some(tb.clone()),
+                                    None => field.qualifier().cloned(),
+                                };
                                 return Some(DFField::new(
-                                    field.qualifier().cloned(),
+                                    qualifier,
                                     self.name.as_str(), // We want to use the original name
                                     // in case there's some casing difference
                                     field.data_type().clone(),
@@ -284,7 +288,6 @@ impl Column {
                                 ));
                             }
                             None
-                            // tables_match && field.name() == self.name
                         })
                         .collect::<Vec<_>>()
                 })
