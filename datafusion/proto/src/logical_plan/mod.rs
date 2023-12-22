@@ -1628,9 +1628,41 @@ impl AsLogicalPlan for LogicalPlanNode {
                             ))
                         }
                         CopyOptions::WriterOptions(opt) => {
-                            Some(copy_to_node::CopyOptions::WriterOptions(
-                                protobuf::FileTypeWriterOptions { file_type: None },
-                            ))
+                            match opt.as_ref() {
+                                FileTypeWriterOptions::Parquet(parquet_opts) => {
+                                    let props = &parquet_opts.writer_options;
+                                    let writer_properties = protobuf::WriterProperties {
+                                        data_page_size_limit: props.data_page_size_limit()
+                                            as i32,
+                                        dictionary_page_size_limit: props
+                                            .dictionary_page_size_limit()
+                                            as i32,
+                                        data_page_row_count_limit: props
+                                            .data_page_row_count_limit()
+                                            as i32,
+                                        write_batch_size: props.write_batch_size() as i32,
+                                        max_row_group_size: props.max_row_group_size()
+                                            as i32,
+                                        writer_version: "".to_string(), //TODO
+                                        created_by: props.created_by().to_string(),
+                                    };
+                                    let parquet_writer_options =
+                                        protobuf::ParquetWriterOptions {
+                                            writer_properties: Some(writer_properties),
+                                        };
+                                    let parquet_options = file_type_writer_options::FileType::ParquetOptions(parquet_writer_options);
+                                    Some(copy_to_node::CopyOptions::WriterOptions(
+                                        protobuf::FileTypeWriterOptions {
+                                            file_type: Some(parquet_options),
+                                        },
+                                    ))
+                                }
+                                _ => {
+                                    return Err(proto_error(
+                                        "Unsupported FileTypeWriterOptions in CopyTo",
+                                    ))
+                                }
+                            }
                         }
                     };
 
