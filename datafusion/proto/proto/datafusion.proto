@@ -1206,11 +1206,32 @@ message PartitionColumn {
 message FileTypeWriterOptions {
   oneof FileType {
     JsonWriterOptions json_options = 1;
+    ParquetWriterOptions parquet_options = 2;
   }
 }
 
 message JsonWriterOptions {
   CompressionTypeVariant compression = 1;
+}
+
+message ParquetWriterOptions {
+    WriterProperties writer_properties = 1;
+}
+
+message WriterProperties {
+  int32 data_page_size_limit = 1;
+  int32 dictionary_page_size_limit = 2;
+  int32 data_page_row_count_limit = 3;
+  int32 write_batch_size = 4;
+  int32 max_row_group_size = 5;
+  string writer_version = 6;
+  string created_by = 7;
+  // TODO add advanced writer options
+  // key_value_metadata: Option<Vec<KeyValue>>,
+  // default_column_properties: ColumnProperties,
+  // column_properties: HashMap<ColumnPath, ColumnProperties>,
+  // sorting_columns: Option<Vec<SortingColumn>>,
+  // column_index_truncate_length: Option<usize>,
 }
 
 message FileSinkConfig {

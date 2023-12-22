@@ -330,7 +330,6 @@ async fn roundtrip_logical_plan_copy_to_sql_options() -> Result<()> {
 }
 
 #[tokio::test]
-#[ignore] // see https://github.com/apache/arrow-datafusion/issues/8619
 async fn roundtrip_logical_plan_copy_to_writer_options() -> Result<()> {
     let ctx = SessionContext::new();
 
