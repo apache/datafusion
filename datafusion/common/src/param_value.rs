@@ -23,17 +23,17 @@ use std::collections::HashMap;
 /// The parameter value corresponding to the placeholder
 #[derive(Debug, Clone)]
 pub enum ParamValues {
-    /// for positional query parameters, like select * from test where a > $1 and b = $2
-    LIST(Vec<ScalarValue>),
-    /// for named query parameters, like select * from test where a > $foo and b = $goo
-    MAP(HashMap<String, ScalarValue>),
+    /// For positional query parameters, like `SELECT * FROM test WHERE a > $1 AND b = $2`
+    List(Vec<ScalarValue>),
+    /// For named query parameters, like `SELECT * FROM test WHERE a > $foo AND b = $goo`
+    Map(HashMap<String, ScalarValue>),
 }
 
 impl ParamValues {
     /// Verify parameter list length and type
     pub fn verify(&self, expect: &Vec<DataType>) -> Result<()> {
         match self {
-            ParamValues::LIST(list) => {
+            ParamValues::List(list) => {
                 // Verify if the number of params matches the number of values
                 if expect.len() != list.len() {
                     return _plan_err!(
@@ -57,7 +57,7 @@ impl ParamValues {
                 }
                 Ok(())
             }
-            ParamValues::MAP(_) => {
+            ParamValues::Map(_) => {
                 // If it is a named query, variables can be reused,
                 // but the lengths are not necessarily equal
                 Ok(())
@@ -71,7 +71,7 @@ impl ParamValues {
         data_type: &Option<DataType>,
     ) -> Result<ScalarValue> {
         match self {
-            ParamValues::LIST(list) => {
+            ParamValues::List(list) => {
                 if id.is_empty() {
                     return _plan_err!("Empty placeholder id");
                 }
@@ -100,7 +100,7 @@ impl ParamValues {
                 }
                 Ok(value.clone())
             }
-            ParamValues::MAP(map) => {
+            ParamValues::Map(map) => {
                 // convert name (in format $a, $b, ..) to mapped values (a, b, ..)
                 let name = &id[1..];
                 // value at the name position in param_values should be the value for the placeholder
@@ -125,7 +125,7 @@ impl ParamValues {
 
 impl From<Vec<ScalarValue>> for ParamValues {
     fn from(value: Vec<ScalarValue>) -> Self {
-        Self::LIST(value)
+        Self::List(value)
     }
 }
 
@@ -136,7 +136,7 @@ where
     fn from(value: Vec<(K, ScalarValue)>) -> Self {
         let value: HashMap<String, ScalarValue> =
             value.into_iter().map(|(k, v)| (k.into(), v)).collect();
-        Self::MAP(value)
+        Self::Map(value)
     }
 }
 
@@ -147,6 +147,6 @@ where
     fn from(value: HashMap<K, ScalarValue>) -> Self {
         let value: HashMap<String, ScalarValue> =
             value.into_iter().map(|(k, v)| (k.into(), v)).collect();
-        Self::MAP(value)
+        Self::Map(value)
     }
 }
