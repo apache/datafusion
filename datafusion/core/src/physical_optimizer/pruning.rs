@@ -248,14 +248,14 @@ impl PruningPredicate {
                     // values in the set for the predicate to evaluate to true.
                     // If `contained` returns false, that means the column is
                     // not any of the values so we can prune the container
-                    Guarantee::In => builder.append_array(&results),
+                    Guarantee::In => builder.combine_array(&results),
                     // `NotIn` means the values in the column must must not be
                     // any of the values in the set for the predicate to
                     // evaluate to true. If contained returns true, it means the
                     // column is only in the set of values so we can prune the
                     // container
                     Guarantee::NotIn => {
-                        builder.append_array(&arrow::compute::not(&results)?)
+                        builder.combine_array(&arrow::compute::not(&results)?)
                     }
                 }
             }
@@ -270,7 +270,7 @@ impl PruningPredicate {
             build_statistics_record_batch(statistics, &self.required_columns)?;
 
         // Evaluate the pruning predicate on that record batch and append any results to the builder
-        builder.append_value(self.predicate_expr.evaluate(&statistics_batch)?);
+        builder.combine_value(self.predicate_expr.evaluate(&statistics_batch)?);
 
         Ok(builder.build())
     }
@@ -336,14 +336,14 @@ impl BoolVecBuilder {
         }
     }
 
-    /// Combines result `array` for a  conjunct (e.g. `AND` clause) of a
+    /// Combines result `array` for a conjunct (e.g. `AND` clause) of a
     /// predicate into the currently in progress array.
     ///
     /// Each `array` element is:
     /// * `true`: container has row that may pass the predicate
     /// * `false`: all container rows DEFINITELY DO NOT pass the predicate
     /// * `null`: container may or may not have rows that pass the predicate
-    fn append_array(&mut self, array: &BooleanArray) {
+    fn combine_array(&mut self, array: &BooleanArray) {
         assert_eq!(array.len(), self.inner.len());
         for (cur, new) in self.inner.iter_mut().zip(array.iter()) {
             // `false` for this conjunct means we know for sure no rows could
@@ -356,14 +356,14 @@ impl BoolVecBuilder {
     }
 
     /// Combines the results in the [`ColumnarValue`] to the currently in
-    /// progress array, following the same rules as [`Self::append_array`].
+    /// progress array, following the same rules as [`Self::combine_array`].
     ///
     /// # Panics
     /// If `value` is not boolean
-    fn append_value(&mut self, value: ColumnarValue) {
+    fn combine_value(&mut self, value: ColumnarValue) {
         match value {
             ColumnarValue::Array(array) => {
-                self.append_array(array.as_boolean());
+                self.combine_array(array.as_boolean());
             }
             ColumnarValue::Scalar(ScalarValue::Boolean(Some(false))) => {
                 // False means all containers can not pass the predicate
