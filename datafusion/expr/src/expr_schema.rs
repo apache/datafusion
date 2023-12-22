@@ -559,11 +559,11 @@ mod tests {
     fn test_nested_schema_nullability() {
         let fields = DFField::new(
             Some(TableReference::Bare {
-                table: "nexmark".into(),
+                table: "table_name".into(),
             }),
-            "bid",
+            "parent",
             DataType::Struct(Fields::from(vec![Field::new(
-                "auction",
+                "child",
                 DataType::Int64,
                 false,
             )])),
@@ -572,7 +572,7 @@ mod tests {
 
         let schema = DFSchema::new_with_metadata(vec![fields], HashMap::new()).unwrap();
 
-        let expr = col("bid").field("auction");
+        let expr = col("parent").field("child");
         assert_eq!(expr.nullable(&schema).unwrap(), true);
     }
 
