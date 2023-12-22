@@ -1000,7 +1000,7 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
             }
             Expr::Wildcard { qualifier } => Self {
                 expr_type: Some(ExprType::Wildcard(protobuf::Wildcard {
-                    qualifier: qualifier.clone(),
+                    qualifier: qualifier.clone().unwrap_or("".to_string()),
                 })),
             },
             Expr::ScalarSubquery(_)

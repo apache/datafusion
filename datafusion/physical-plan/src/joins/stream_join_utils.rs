@@ -33,7 +33,9 @@ use arrow_buffer::{ArrowNativeType, BooleanBufferBuilder};
 use arrow_schema::{Schema, SchemaRef};
 use async_trait::async_trait;
 use datafusion_common::tree_node::{Transformed, TreeNode};
-use datafusion_common::{DataFusionError, JoinSide, Result, ScalarValue};
+use datafusion_common::{
+    arrow_datafusion_err, DataFusionError, JoinSide, Result, ScalarValue,
+};
 use datafusion_execution::SendableRecordBatchStream;
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_physical_expr::expressions::Column;
@@ -595,7 +597,7 @@ pub fn combine_two_batches(
         (Some(left_batch), Some(right_batch)) => {
             // If both batches are present, concatenate them:
             concat_batches(output_schema, &[left_batch, right_batch])
-                .map_err(DataFusionError::ArrowError)
+                .map_err(|e| arrow_datafusion_err!(e))
                 .map(Some)
         }
         (None, None) => {
