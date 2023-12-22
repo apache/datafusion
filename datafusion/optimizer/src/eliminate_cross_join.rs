@@ -54,13 +54,14 @@ impl OptimizerRule for EliminateCrossJoin {
         plan: &LogicalPlan,
         config: &dyn OptimizerConfig,
     ) -> Result<Option<LogicalPlan>> {
-        match plan {
+        let mut possible_join_keys: Vec<(Expr, Expr)> = vec![];
+        let mut all_inputs: Vec<LogicalPlan> = vec![];
+        let mut parent_predicate = None;
+        let did_flat_successfully = match plan {
             LogicalPlan::Filter(filter) => {
                 let input = filter.input.as_ref().clone();
-
-                let mut possible_join_keys: Vec<(Expr, Expr)> = vec![];
-                let mut all_inputs: Vec<LogicalPlan> = vec![];
-                let did_flat_successfully = match &input {
+                parent_predicate = Some(&filter.predicate);
+                match &input {
                     LogicalPlan::Join(Join {
                         join_type: JoinType::Inner,
                         ..
@@ -73,94 +74,69 @@ impl OptimizerRule for EliminateCrossJoin {
                     _ => {
                         return utils::optimize_children(self, plan, config);
                     }
-                };
-
-                if !did_flat_successfully {
-                    return Ok(None);
-                }
-
-                let predicate = &filter.predicate;
-                // join keys are handled locally
-                let mut all_join_keys: HashSet<(Expr, Expr)> = HashSet::new();
-
-                extract_possible_join_keys(predicate, &mut possible_join_keys)?;
-
-                let mut left = all_inputs.remove(0);
-                while !all_inputs.is_empty() {
-                    left = find_inner_join(
-                        &left,
-                        &mut all_inputs,
-                        &mut possible_join_keys,
-                        &mut all_join_keys,
-                    )?;
-                }
-
-                left = utils::optimize_children(self, &left, config)?.unwrap_or(left);
-
-                if plan.schema() != left.schema() {
-                    left = LogicalPlan::Projection(Projection::new_from_schema(
-                        Arc::new(left.clone()),
-                        plan.schema().clone(),
-                    ));
-                }
-
-                // if there are no join keys then do nothing.
-                if all_join_keys.is_empty() {
-                    Ok(Some(LogicalPlan::Filter(Filter::try_new(
-                        predicate.clone(),
-                        Arc::new(left),
-                    )?)))
-                } else {
-                    // remove join expressions from filter
-                    match remove_join_expressions(predicate, &all_join_keys)? {
-                        Some(filter_expr) => Ok(Some(LogicalPlan::Filter(
-                            Filter::try_new(filter_expr, Arc::new(left))?,
-                        ))),
-                        _ => Ok(Some(left)),
-                    }
                 }
             }
             LogicalPlan::Join(Join {
                 join_type: JoinType::Inner,
                 ..
             }) => {
-                let mut possible_join_keys: Vec<(Expr, Expr)> = vec![];
-                let mut all_inputs: Vec<LogicalPlan> = vec![];
-                let did_flat_successfully = try_flatten_join_inputs(
-                    &plan,
-                    &mut possible_join_keys,
-                    &mut all_inputs,
-                )?;
-
-                if !did_flat_successfully {
-                    return Ok(None);
-                }
-
-                // join keys are handled locally
-                let mut all_join_keys: HashSet<(Expr, Expr)> = HashSet::new();
-
-                let mut left = all_inputs.remove(0);
-                while !all_inputs.is_empty() {
-                    left = find_inner_join(
-                        &left,
-                        &mut all_inputs,
-                        &mut possible_join_keys,
-                        &mut all_join_keys,
-                    )?;
-                }
-
-                left = utils::optimize_children(self, &left, config)?.unwrap_or(left);
-
-                if plan.schema() != left.schema() {
-                    left = LogicalPlan::Projection(Projection::new_from_schema(
-                        Arc::new(left.clone()),
-                        plan.schema().clone(),
-                    ));
-                }
-                Ok(Some(left))
+                try_flatten_join_inputs(plan, &mut possible_join_keys, &mut all_inputs)?
             }
 
-            _ => utils::optimize_children(self, plan, config),
+            _ => return utils::optimize_children(self, plan, config),
+        };
+        if !did_flat_successfully {
+            return Ok(None);
+        }
+
+        // join keys are handled locally
+        let mut all_join_keys: HashSet<(Expr, Expr)> = HashSet::new();
+
+        if let Some(predicate) = parent_predicate {
+            extract_possible_join_keys(predicate, &mut possible_join_keys)?;
+        }
+
+        let mut left = all_inputs.remove(0);
+        while !all_inputs.is_empty() {
+            left = find_inner_join(
+                &left,
+                &mut all_inputs,
+                &mut possible_join_keys,
+                &mut all_join_keys,
+            )?;
+        }
+
+        left = utils::optimize_children(self, &left, config)?.unwrap_or(left);
+
+        if plan.schema() != left.schema() {
+            left = LogicalPlan::Projection(Projection::new_from_schema(
+                Arc::new(left.clone()),
+                plan.schema().clone(),
+            ));
+        }
+
+        let predicate = if let Some(predicate) = parent_predicate {
+            // there is a filter at the top. Consider its predicate also.
+            predicate
+        } else {
+            return Ok(Some(left));
+        };
+
+        // if there are no join keys then do nothing.
+        if all_join_keys.is_empty() {
+            Ok(Some(LogicalPlan::Filter(Filter::try_new(
+                predicate.clone(),
+                Arc::new(left),
+            )?)))
+        } else {
+            // remove join expressions from filter
+            match remove_join_expressions(predicate, &all_join_keys)? {
+                Some(filter_expr) => Ok(Some(LogicalPlan::Filter(Filter::try_new(
+                    filter_expr,
+                    Arc::new(left),
+                )?))),
+                _ => Ok(Some(left)),
+            }
         }
     }
 
