@@ -88,7 +88,7 @@ impl DFSchema {
         let mut qualified_names = qualified_names
             .iter()
             .map(|(l, r)| (l.to_owned(), r.to_owned()))
-            .collect::<Vec<(&OwnedTableReference, &String)>>();
+            .collect::<Vec<(&OwnedTableReference, String)>>();
         qualified_names.sort();
         for (qualifier, name) in &qualified_names {
             if unqualified_names.contains(name) {
@@ -153,9 +153,9 @@ impl DFSchema {
         for field in other_schema.fields() {
             // skip duplicate columns
             let duplicated_field = match field.qualifier() {
-                Some(q) => self.field_with_name(Some(q), field.name()).is_ok(),
+                Some(q) => self.field_with_name(Some(q), &field.name()).is_ok(),
                 // for unqualified columns, check as unqualified name
-                None => self.field_with_unqualified_name(field.name()).is_ok(),
+                None => self.field_with_unqualified_name(&field.name()).is_ok(),
             };
             if !duplicated_field {
                 self.fields.push(field.clone());
@@ -179,14 +179,15 @@ impl DFSchema {
     /// Find the index of the column with the given unqualified name
     pub fn index_of(&self, name: &str) -> Result<usize> {
         for i in 0..self.fields.len() {
-            if self.fields[i].name() == name {
+            if self.fields[i].name().to_lowercase() == name.to_lowercase() {
                 return Ok(i);
             } else {
                 // Now that `index_of` is deprecated an error is thrown if
                 // a fully qualified field name is provided.
                 match &self.fields[i].qualifier {
                     Some(qualifier) => {
-                        if (qualifier.to_string() + "." + self.fields[i].name()) == name {
+                        if (qualifier.to_string() + "." + &self.fields[i].name()) == name
+                        {
                             return Err(DataFusionError::Plan(format!(
                                 "Fully qualified field name '{name}' was supplied to `index_of` \
                                 which is deprecated. Please use `index_of_column_by_name` instead"
@@ -215,7 +216,8 @@ impl DFSchema {
                 // current field is qualified and not shared between relations, compare both
                 // qualifier and name.
                 (Some(q), Some(field_q)) => {
-                    q.resolved_eq(field_q) && field.name() == name
+                    q.resolved_eq(field_q)
+                        && field.name().to_lowercase() == name.to_lowercase()
                 }
                 // field to lookup is qualified but current field is unqualified.
                 (Some(qq), None) => {
@@ -226,12 +228,16 @@ impl DFSchema {
                         Column {
                             relation: Some(r),
                             name: column_name,
-                        } => &r == qq && column_name == name,
+                        } => {
+                            &r == qq && column_name.to_lowercase() == name.to_lowercase()
+                        }
                         _ => false,
                     }
                 }
                 // field to lookup is unqualified, no need to compare qualifier
-                (None, Some(_)) | (None, None) => field.name() == name,
+                (None, Some(_)) | (None, None) => {
+                    field.name().to_lowercase() == name.to_lowercase()
+                }
             })
             .map(|(idx, _)| idx);
         Ok(matches.next())
@@ -274,7 +280,7 @@ impl DFSchema {
     pub fn fields_with_unqualified_name(&self, name: &str) -> Vec<&DFField> {
         self.fields
             .iter()
-            .filter(|field| field.name() == name)
+            .filter(|field| field.name().to_lowercase() == name.to_lowercase())
             .collect()
     }
 
@@ -342,10 +348,11 @@ impl DFSchema {
 
     /// Check to see if unqualified field names matches field names in Arrow schema
     pub fn matches_arrow_schema(&self, arrow_schema: &Schema) -> bool {
-        self.fields
-            .iter()
-            .zip(arrow_schema.fields().iter())
-            .all(|(dffield, arrowfield)| dffield.name() == arrowfield.name())
+        self.fields.iter().zip(arrow_schema.fields().iter()).all(
+            |(dffield, arrowfield)| {
+                dffield.name().to_lowercase() == arrowfield.name().to_lowercase()
+            },
+        )
     }
 
     /// Check to see if fields in 2 Arrow schemas are compatible
@@ -386,7 +393,7 @@ impl DFSchema {
         let other_fields = other.fields().iter();
         self_fields.zip(other_fields).all(|(f1, f2)| {
             f1.qualifier() == f2.qualifier()
-                && f1.name() == f2.name()
+                && f1.name().to_lowercase() == f2.name().to_lowercase()
                 && Self::datatype_is_semantically_equal(f1.data_type(), f2.data_type())
         })
     }
@@ -431,7 +438,7 @@ impl DFSchema {
     }
 
     fn field_is_semantically_equal(f1: &Field, f2: &Field) -> bool {
-        f1.name() == f2.name()
+        f1.name().to_lowercase() == f2.name().to_lowercase()
             && Self::datatype_is_semantically_equal(f1.data_type(), f2.data_type())
     }
 
@@ -664,8 +671,12 @@ impl DFField {
     }
 
     /// Returns an immutable reference to the `DFField`'s unqualified name
-    pub fn name(&self) -> &String {
-        self.field.name()
+    pub fn name(&self) -> String {
+        self.field.name().to_lowercase()
+    }
+
+    pub fn name_with_casing(&self) -> String {
+        self.field.name().to_owned()
     }
 
     /// Returns an immutable reference to the `DFField`'s data-type
@@ -772,7 +783,7 @@ impl SchemaExt for Schema {
             .iter()
             .zip(other.fields().iter())
             .all(|(f1, f2)| {
-                f1.name() == f2.name()
+                f1.name().to_lowercase() == f2.name().to_lowercase()
                     && DFSchema::datatype_is_semantically_equal(
                         f1.data_type(),
                         f2.data_type(),

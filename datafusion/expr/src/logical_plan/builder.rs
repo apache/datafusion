@@ -1210,13 +1210,13 @@ pub fn project_with_column_index(
         .into_iter()
         .enumerate()
         .map(|(i, e)| match e {
-            Expr::Alias(Alias { ref name, .. }) if name != schema.field(i).name() => {
+            Expr::Alias(Alias { ref name, .. }) if name != &schema.field(i).name() => {
                 e.unalias().alias(schema.field(i).name())
             }
             Expr::Column(Column {
                 relation: _,
                 ref name,
-            }) if name != schema.field(i).name() => e.alias(schema.field(i).name()),
+            }) if name != &schema.field(i).name() => e.alias(schema.field(i).name()),
             Expr::Alias { .. } | Expr::Column { .. } => e,
             _ => e.alias(schema.field(i).name()),
         })
@@ -1257,7 +1257,7 @@ pub fn union(left_plan: LogicalPlan, right_plan: LogicalPlan) -> Result<LogicalP
 
             Ok(DFField::new(
                 left_field.qualifier().cloned(),
-                left_field.name(),
+                &left_field.name(),
                 data_type,
                 nullable,
             ))
@@ -1467,7 +1467,7 @@ pub fn unnest_with_options(
         | DataType::FixedSizeList(field, _)
         | DataType::LargeList(field) => DFField::new(
             unnest_field.qualifier().cloned(),
-            unnest_field.name(),
+            &unnest_field.name(),
             field.data_type().clone(),
             unnest_field.is_nullable(),
         ),

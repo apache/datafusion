@@ -145,7 +145,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 // aliases from the projection can conflict with same-named expressions in the input
                 let mut alias_map = alias_map.clone();
                 for f in plan.schema().fields() {
-                    alias_map.remove(f.name());
+                    alias_map.remove(&f.name());
                 }
                 let group_by_expr = resolve_aliases_to_exprs(&group_by_expr, &alias_map)?;
                 let group_by_expr =
@@ -373,7 +373,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     &[&[plan.schema()]],
                     &plan.using_columns()?,
                 )?;
-                let expr = Expr::Alias(Alias::new(col, self.normalizer.normalize_column(alias)));
+                let expr =
+                    Expr::Alias(Alias::new(col, self.normalizer.normalize_column(alias)));
                 Ok(vec![expr])
             }
             SelectItem::Wildcard(options) => {

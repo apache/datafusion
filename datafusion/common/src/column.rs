@@ -18,7 +18,9 @@
 //! Column
 
 use crate::utils::{parse_identifiers_normalized, quote_identifier};
-use crate::{DFSchema, DataFusionError, OwnedTableReference, Result, SchemaError};
+use crate::{
+    DFField, DFSchema, DataFusionError, OwnedTableReference, Result, SchemaError,
+};
 use std::collections::HashSet;
 use std::convert::Infallible;
 use std::fmt;
@@ -264,7 +266,7 @@ impl Column {
                 .flat_map(|s| {
                     s.fields()
                         .iter()
-                        .filter(|field| {
+                        .filter_map(|field| {
                             let tables_match = match &self.relation {
                                 Some(tb) => match field.qualifier() {
                                     None => true,
@@ -272,7 +274,17 @@ impl Column {
                                 },
                                 None => true,
                             };
-                            tables_match && field.name() == &self.name
+                            if tables_match && field.name() == self.name.to_lowercase() {
+                                return Some(DFField::new(
+                                    field.qualifier().cloned(),
+                                    self.name.as_str(), // We want to use the original name
+                                    // in case there's some casing difference
+                                    field.data_type().clone(),
+                                    field.is_nullable(),
+                                ));
+                            }
+                            None
+                            // tables_match && field.name() == self.name
                         })
                         .collect::<Vec<_>>()
                 })
