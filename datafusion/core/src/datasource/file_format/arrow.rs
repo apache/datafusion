@@ -208,6 +208,7 @@ impl DataSink for ArrowFileSink {
     ) -> Result<u64> {
         // No props are supported yet, but can be by updating FileTypeWriterOptions
         // to populate this struct and use those options to initialize the arrow_ipc::writer::FileWriter
+        // https://github.com/apache/arrow-datafusion/issues/8635
         let _arrow_props = self.config.file_type_writer_options.try_into_arrow()?;
 
         let object_store = context
