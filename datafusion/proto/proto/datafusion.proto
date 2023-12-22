@@ -74,6 +74,7 @@ message LogicalPlanNode {
     PrepareNode prepare = 26;
     DropViewNode drop_view = 27;
     DistinctOnNode distinct_on = 28;
+    CopyToNode copy_to = 29;
   }
 }
 
@@ -315,6 +316,26 @@ message DistinctOnNode {
   repeated LogicalExprNode select_expr = 2;
   repeated LogicalExprNode sort_expr = 3;
   LogicalPlanNode input = 4;
+}
+
+message CopyToNode {
+    LogicalPlanNode input = 1;
+    string output_url = 2;
+    bool single_file_output = 3;
+    oneof CopyOptions {
+        SQLOptions sql_options = 4;
+        FileTypeWriterOptions writer_options = 5;
+    }
+    string file_type = 6;
+}
+
+message SQLOptions {
+  repeated SQLOption option = 1;
+}
+
+message SQLOption {
+    string key = 1;
+    string value = 2;
 }
 
 message UnionNode {
