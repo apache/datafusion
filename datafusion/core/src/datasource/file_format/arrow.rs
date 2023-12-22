@@ -35,6 +35,8 @@ use crate::physical_plan::ExecutionPlan;
 use arrow::ipc::convert::fb_to_schema;
 use arrow::ipc::reader::FileReader;
 use arrow::ipc::root_as_message;
+use arrow_ipc::writer::IpcWriteOptions;
+use arrow_ipc::CompressionType;
 use arrow_schema::{ArrowError, Schema, SchemaRef};
 
 use bytes::Bytes;
@@ -232,11 +234,16 @@ impl DataSink for ArrowFileSink {
 
         let mut file_write_tasks: JoinSet<std::result::Result<usize, DataFusionError>> =
             JoinSet::new();
+
+        let ipc_options =
+            IpcWriteOptions::try_new(64, false, arrow_ipc::MetadataVersion::V5)?
+                .try_with_compression(Some(CompressionType::LZ4_FRAME))?;
         while let Some((path, mut rx)) = file_stream_rx.recv().await {
             let shared_buffer = SharedBuffer::new(1048576);
-            let mut arrow_writer = arrow_ipc::writer::FileWriter::try_new(
+            let mut arrow_writer = arrow_ipc::writer::FileWriter::try_new_with_options(
                 shared_buffer.clone(),
                 &self.get_writer_schema(),
+                ipc_options.clone(),
             )?;
             let mut object_store_writer = create_writer(
                 FileCompressionType::UNCOMPRESSED,
