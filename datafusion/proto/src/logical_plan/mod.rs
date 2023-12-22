@@ -1692,7 +1692,7 @@ pub(crate) fn writer_options_from_proto(
     props: &protobuf::WriterProperties,
 ) -> Result<WriterProperties, DataFusionError> {
     let writer_version = WriterVersion::from_str(&props.writer_version)
-        .map_err(|e| proto_error(format!("{}", e)))?;
+        .map_err(|e| proto_error(e.to_string()))?;
     Ok(WriterProperties::builder()
         .set_created_by(props.created_by.clone())
         .set_writer_version(writer_version)
