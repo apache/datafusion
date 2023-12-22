@@ -27,7 +27,7 @@ use arrow::array::{
 };
 use arrow_array::builder::{GenericStringBuilder, ListBuilder};
 use arrow_schema::ArrowError;
-use datafusion_common::plan_err;
+use datafusion_common::{arrow_datafusion_err, plan_err};
 use datafusion_common::{
     cast::as_generic_string_array, internal_err, DataFusionError, Result,
 };
@@ -59,7 +59,7 @@ pub fn regexp_match<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
         2 => {
             let values = as_generic_string_array::<T>(&args[0])?;
             let regex = as_generic_string_array::<T>(&args[1])?;
-            _regexp_match(values, regex, None).map_err(DataFusionError::ArrowError)
+            _regexp_match(values, regex, None).map_err(|e| arrow_datafusion_err!(e))
         }
         3 => {
             let values = as_generic_string_array::<T>(&args[0])?;
@@ -70,7 +70,7 @@ pub fn regexp_match<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
                 Some(f) if f.iter().any(|s| s == Some("g")) => {
                     plan_err!("regexp_match() does not support the \"global\" option")
                 },
-                _ => _regexp_match(values, regex, flags).map_err(DataFusionError::ArrowError),
+                _ => _regexp_match(values, regex, flags).map_err(|e| arrow_datafusion_err!(e)),
             }
         }
         other => internal_err!(
