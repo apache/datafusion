@@ -277,6 +277,13 @@ impl ExprSchemable for Expr {
                 "Wildcard expressions are not valid in a logical query plan"
             ),
             Expr::GetIndexedField(GetIndexedField { expr, field }) => {
+                // If schema is nested, check if parent is nullable
+                // if it is, return early
+                if let Expr::Column(col) = expr.as_ref() {
+                    if input_schema.nullable(col)? {
+                        return Ok(true);
+                    }
+                }
                 field_for_index(expr, field, input_schema).map(|x| x.is_nullable())
             }
             Expr::GroupingSet(_) => {
