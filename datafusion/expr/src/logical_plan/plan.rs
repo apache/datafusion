@@ -3099,6 +3099,19 @@ digraph {
             .build()
             .unwrap();
 
+        plan.replace_params_with_values(&param_values.clone().into())
+            .expect_err("unexpectedly succeeded to replace an invalid placeholder");
+
+        // test $00 placeholder
+        let schema = Schema::new(vec![Field::new("id", DataType::Int32, false)]);
+
+        let plan = table_scan(TableReference::none(), &schema, None)
+            .unwrap()
+            .filter(col("id").eq(placeholder("$00")))
+            .unwrap()
+            .build()
+            .unwrap();
+
         plan.replace_params_with_values(&param_values.into())
             .expect_err("unexpectedly succeeded to replace an invalid placeholder");
     }
