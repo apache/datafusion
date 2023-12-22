@@ -80,6 +80,7 @@ pub fn regexp_match<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
 }
 
 /// TODO: Remove this once it is included in arrow-rs new release.
+/// <https://github.com/apache/arrow-rs/pull/5235>
 fn _regexp_match<OffsetSize: OffsetSizeTrait>(
     array: &GenericStringArray<OffsetSize>,
     regex_array: &GenericStringArray<OffsetSize>,
