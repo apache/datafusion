@@ -1825,12 +1825,44 @@ mod tests {
         let df_results = collect(physical_plan, ctx.task_ctx()).await?;
 
         #[rustfmt::skip]
-        assert_batches_sorted_eq!(
-            [    "+----+",
+        assert_batches_sorted_eq!([
+                "+----+",
                 "| id |",
                 "+----+",
                 "| 1  |",
                 "+----+",],
+            &df_results
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_aggregate_alias() -> Result<()> {
+        let df = test_table().await?;
+
+        let df = df
+            // GROUP BY `c2 + 1`
+            .aggregate(vec![col("c2") + lit(1)], vec![])?
+            // SELECT `c2 + 1` as c2
+            .select(vec![(col("c2") + lit(1)).alias("c2")])?
+            // GROUP BY c2 as "c2" (alias in expr is not supported by SQL)
+            .aggregate(vec![col("c2").alias("c2")], vec![])?;
+
+        let df_results = df.collect().await?;
+
+        #[rustfmt::skip]
+        assert_batches_sorted_eq!([
+                "+----+",
+                "| c2 |",
+                "+----+",
+                "| 2  |",
+                "| 3  |",
+                "| 4  |",
+                "| 5  |",
+                "| 6  |",
+                "+----+",
+            ],
             &df_results
         );
 
