@@ -31,7 +31,7 @@ pub enum ParamValues {
 
 impl ParamValues {
     /// Verify parameter list length and type
-    pub fn verify(&self, expect: &Vec<DataType>) -> Result<()> {
+    pub fn verify(&self, expect: &[DataType]) -> Result<()> {
         match self {
             ParamValues::List(list) => {
                 // Verify if the number of params matches the number of values
@@ -67,8 +67,8 @@ impl ParamValues {
 
     pub fn get_placeholders_with_values(
         &self,
-        id: &String,
-        data_type: &Option<DataType>,
+        id: &str,
+        data_type: Option<&DataType>,
     ) -> Result<ScalarValue> {
         match self {
             ParamValues::List(list) => {
@@ -88,7 +88,7 @@ impl ParamValues {
                     ))
                 })?;
                 // check if the data type of the value matches the data type of the placeholder
-                if Some(value.data_type()) != *data_type {
+                if Some(&value.data_type()) != data_type {
                     return _internal_err!(
                         "Placeholder value type mismatch: expected {:?}, got {:?}",
                         data_type,
@@ -107,7 +107,7 @@ impl ParamValues {
                     ))
                 })?;
                 // check if the data type of the value matches the data type of the placeholder
-                if Some(value.data_type()) != *data_type {
+                if Some(&value.data_type()) != data_type {
                     return _internal_err!(
                         "Placeholder value type mismatch: expected {:?}, got {:?}",
                         data_type,
