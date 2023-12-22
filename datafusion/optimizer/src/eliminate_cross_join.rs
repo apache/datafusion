@@ -120,6 +120,45 @@ impl OptimizerRule for EliminateCrossJoin {
                     }
                 }
             }
+            LogicalPlan::Join(Join {
+                join_type: JoinType::Inner,
+                ..
+            }) => {
+                let mut possible_join_keys: Vec<(Expr, Expr)> = vec![];
+                let mut all_inputs: Vec<LogicalPlan> = vec![];
+                let did_flat_successfully = try_flatten_join_inputs(
+                    &plan,
+                    &mut possible_join_keys,
+                    &mut all_inputs,
+                )?;
+
+                if !did_flat_successfully {
+                    return Ok(None);
+                }
+
+                // join keys are handled locally
+                let mut all_join_keys: HashSet<(Expr, Expr)> = HashSet::new();
+
+                let mut left = all_inputs.remove(0);
+                while !all_inputs.is_empty() {
+                    left = find_inner_join(
+                        &left,
+                        &mut all_inputs,
+                        &mut possible_join_keys,
+                        &mut all_join_keys,
+                    )?;
+                }
+
+                left = utils::optimize_children(self, &left, config)?.unwrap_or(left);
+
+                if plan.schema() != left.schema() {
+                    left = LogicalPlan::Projection(Projection::new_from_schema(
+                        Arc::new(left.clone()),
+                        plan.schema().clone(),
+                    ));
+                }
+                Ok(Some(left))
+            }
 
             _ => utils::optimize_children(self, plan, config),
         }

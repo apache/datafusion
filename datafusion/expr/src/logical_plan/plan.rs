@@ -780,7 +780,52 @@ impl LogicalPlan {
             LogicalPlan::CrossJoin(_) => {
                 let left = inputs[0].clone();
                 let right = inputs[1].clone();
-                LogicalPlanBuilder::from(left).cross_join(right)?.build()
+                if expr.is_empty() {
+                    // If expr is empty, construct cross join from children
+                    LogicalPlanBuilder::from(left).cross_join(right)?.build()
+                } else {
+                    let exprs = expr
+                        .iter()
+                        .flat_map(|expr| split_conjunction(expr))
+                        .collect::<Vec<_>>();
+                    let mut new_on: Vec<(Expr, Expr)> = vec![];
+                    let mut new_filters = vec![];
+                    for expr in exprs {
+                        // SimplifyExpression rule may add alias to the equi_expr.
+                        let unalias_expr = expr.clone().unalias();
+                        if let Expr::BinaryExpr(BinaryExpr {
+                            left,
+                            op: Operator::Eq,
+                            right,
+                        }) = unalias_expr
+                        {
+                            new_on.push((*left, *right));
+                        } else {
+                            new_filters.push(expr.clone());
+                        }
+                    }
+                    let filter = if new_filters.is_empty() {
+                        None
+                    } else {
+                        Some(new_filters.into_iter().reduce(Expr::and).unwrap())
+                    };
+                    let join_schema = build_join_schema(
+                        left.schema(),
+                        right.schema(),
+                        &JoinType::Inner,
+                    )?;
+                    // predicate is given
+                    Ok(LogicalPlan::Join(Join {
+                        left: Arc::new(left),
+                        right: Arc::new(right),
+                        join_type: JoinType::Inner,
+                        join_constraint: JoinConstraint::On,
+                        on: new_on,
+                        filter,
+                        schema: DFSchemaRef::new(join_schema),
+                        null_equals_null: true,
+                    }))
+                }
             }
             LogicalPlan::Subquery(Subquery {
                 outer_ref_columns, ..

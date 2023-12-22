@@ -857,7 +857,7 @@ impl OptimizerRule for PushDownFilter {
                     left,
                     right,
                     vec![],
-                    false,
+                    true,
                 )?
             }
             LogicalPlan::TableScan(scan) => {
