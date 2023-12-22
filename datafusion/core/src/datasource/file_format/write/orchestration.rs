@@ -52,7 +52,6 @@ pub(crate) async fn serialize_rb_stream_to_object_store(
     mut data_rx: Receiver<RecordBatch>,
     mut serializer: Box<dyn BatchSerializer>,
     mut writer: AbortableWrite<Box<dyn AsyncWrite + Send + Unpin>>,
-    unbounded_input: bool,
 ) -> std::result::Result<(WriterType, u64), (WriterType, DataFusionError)> {
     let (tx, mut rx) =
         mpsc::channel::<JoinHandle<Result<(usize, Bytes), DataFusionError>>>(100);
@@ -71,9 +70,6 @@ pub(crate) async fn serialize_rb_stream_to_object_store(
                             "Unknown error writing to object store".into(),
                         )
                     })?;
-                    if unbounded_input {
-                        tokio::task::yield_now().await;
-                    }
                 }
                 Err(_) => {
                     return Err(DataFusionError::Internal(
@@ -140,7 +136,6 @@ type FileWriteBundle = (Receiver<RecordBatch>, SerializerType, WriterType);
 pub(crate) async fn stateless_serialize_and_write_files(
     mut rx: Receiver<FileWriteBundle>,
     tx: tokio::sync::oneshot::Sender<u64>,
-    unbounded_input: bool,
 ) -> Result<()> {
     let mut row_count = 0;
     // tracks if any writers encountered an error triggering the need to abort
@@ -153,13 +148,7 @@ pub(crate) async fn stateless_serialize_and_write_files(
     let mut join_set = JoinSet::new();
     while let Some((data_rx, serializer, writer)) = rx.recv().await {
         join_set.spawn(async move {
-            serialize_rb_stream_to_object_store(
-                data_rx,
-                serializer,
-                writer,
-                unbounded_input,
-            )
-            .await
+            serialize_rb_stream_to_object_store(data_rx, serializer, writer).await
         });
     }
     let mut finished_writers = Vec::new();
@@ -241,7 +230,6 @@ pub(crate) async fn stateless_multipart_put(
 
     let single_file_output = config.single_file_output;
     let base_output_path = &config.table_paths[0];
-    let unbounded_input = config.unbounded_input;
     let part_cols = if !config.table_partition_cols.is_empty() {
         Some(config.table_partition_cols.clone())
     } else {
@@ -266,8 +254,7 @@ pub(crate) async fn stateless_multipart_put(
     let (tx_file_bundle, rx_file_bundle) = tokio::sync::mpsc::channel(rb_buffer_size / 2);
     let (tx_row_cnt, rx_row_cnt) = tokio::sync::oneshot::channel();
     let write_coordinater_task = tokio::spawn(async move {
-        stateless_serialize_and_write_files(rx_file_bundle, tx_row_cnt, unbounded_input)
-            .await
+        stateless_serialize_and_write_files(rx_file_bundle, tx_row_cnt).await
     });
     while let Some((location, rb_stream)) = file_stream_rx.recv().await {
         let serializer = get_serializer();

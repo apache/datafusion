@@ -17,8 +17,8 @@
 
 //! This module provides the bisect function, which implements binary search.
 
-use crate::error::_internal_err;
-use crate::{DataFusionError, Result, ScalarValue};
+use crate::error::{_internal_datafusion_err, _internal_err};
+use crate::{arrow_datafusion_err, DataFusionError, Result, ScalarValue};
 use arrow::array::{ArrayRef, PrimitiveArray};
 use arrow::buffer::OffsetBuffer;
 use arrow::compute;
@@ -95,7 +95,7 @@ pub fn get_record_batch_at_indices(
         new_columns,
         &RecordBatchOptions::new().with_row_count(Some(indices.len())),
     )
-    .map_err(DataFusionError::ArrowError)
+    .map_err(|e| arrow_datafusion_err!(e))
 }
 
 /// This function compares two tuples depending on the given sort options.
@@ -117,7 +117,7 @@ pub fn compare_rows(
                 lhs.partial_cmp(rhs)
             }
             .ok_or_else(|| {
-                DataFusionError::Internal("Column array shouldn't be empty".to_string())
+                _internal_datafusion_err!("Column array shouldn't be empty")
             })?,
             (true, true, _) => continue,
         };
@@ -291,7 +291,7 @@ pub fn get_arrayref_at_indices(
                 indices,
                 None, // None: no index check
             )
-            .map_err(DataFusionError::ArrowError)
+            .map_err(|e| arrow_datafusion_err!(e))
         })
         .collect()
 }
