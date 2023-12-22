@@ -111,6 +111,7 @@ select * from dictionary_encoded_arrow_test_readback;
 ----
 b
 
+# https://github.com/apache/arrow-datafusion/issues/7816
 query error DataFusion error: Arrow error: Schema error: project index 1 out of bounds, max field 1
 select * from dictionary_encoded_arrow_partitioned order by (a);
 
