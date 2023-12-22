@@ -353,6 +353,19 @@ async fn roundtrip_logical_plan_copy_to_writer_options() -> Result<()> {
     let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx)?;
     assert_eq!(format!("{plan:?}"), format!("{logical_round_trip:?}"));
 
+    match logical_round_trip {
+        LogicalPlan::Copy(x) => match &x.copy_options {
+            CopyOptions::WriterOptions(y) => match y.as_ref() {
+                FileTypeWriterOptions::Parquet(p) => {
+                    assert_eq!("DataFusion Test", p.writer_options.created_by());
+                }
+                _ => panic!(),
+            },
+            _ => panic!(),
+        },
+        _ => panic!(),
+    }
+
     Ok(())
 }
 
