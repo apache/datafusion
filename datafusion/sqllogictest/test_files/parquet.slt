@@ -276,6 +276,39 @@ LIMIT 10;
 0 2014-08-27T14:00:00Z Timestamp(Millisecond, Some("UTC"))
 0 2014-08-27T14:00:00Z Timestamp(Millisecond, Some("UTC"))
 
+# Test config listing_table_ignore_subdirectory:
+
+query ITID
+COPY (SELECT * FROM src_table WHERE int_col > 6 LIMIT 3)
+TO 'test_files/scratch/parquet/test_table/subdir/3.parquet'
+(FORMAT PARQUET, SINGLE_FILE_OUTPUT true);
+----
+3
+
+statement ok
+CREATE EXTERNAL TABLE listing_table
+STORED AS PARQUET
+WITH HEADER ROW
+LOCATION 'test_files/scratch/parquet/test_table/*.parquet';
+
+statement ok
+set datafusion.execution.listing_table_ignore_subdirectory = true;
+
+# scan file: 0.parquet 1.parquet 2.parquet
+query I
+select count(*) from listing_table;
+----
+9
+
+statement ok
+set datafusion.execution.listing_table_ignore_subdirectory = false;
+
+# scan file: 0.parquet 1.parquet 2.parquet 3.parquet
+query I
+select count(*) from listing_table;
+----
+12
+
 # Clean up
 statement ok
 DROP TABLE timestamp_with_tz;
@@ -303,7 +336,6 @@ NULL
 statement ok
 DROP TABLE single_nan;
 
-
 statement ok
 CREATE EXTERNAL TABLE list_columns
 STORED AS PARQUET
@@ -319,3 +351,7 @@ SELECT int64_list, utf8_list FROM list_columns
 
 statement ok
 DROP TABLE list_columns;
+
+# Clean up
+statement ok
+DROP TABLE listing_table;
