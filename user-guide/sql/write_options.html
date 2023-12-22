@@ -368,11 +368,6 @@
     </a>
    </li>
    <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#create-external-table-specific-options">
-     CREATE EXTERNAL TABLE Specific Options
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
     <a class="reference internal nav-link" href="#json-format-specific-options">
      JSON Format Specific Options
     </a>
@@ -456,12 +451,11 @@
 <span class="k">DELIMITER</span><span class="w"> </span><span class="s1">&#39;;&#39;</span>
 <span class="k">LOCATION</span><span class="w"> </span><span class="s1">&#39;/test/location/my_csv_table/&#39;</span>
 <span class="k">OPTIONS</span><span class="p">(</span>
-<span class="n">CREATE_LOCAL_PATH</span><span class="w"> </span><span class="s1">&#39;true&#39;</span><span class="p">,</span>
 <span class="n">NULL_VALUE</span><span class="w"> </span><span class="s1">&#39;NAN&#39;</span>
 <span class="p">);</span>
 </pre></div>
 </div>
-<p>When running <code class="docutils literal notranslate"><span class="pre">INSERT</span> <span class="pre">INTO</span> <span class="pre">my_table</span> <span class="pre">...</span></code>, the options from the <code class="docutils literal notranslate"><span class="pre">CREATE</span> <span class="pre">TABLE</span></code> will be respected (gzip compression, special delimiter, and header row included). Note that compression, header, and delimiter settings can also be specified within the <code class="docutils literal notranslate"><span class="pre">OPTIONS</span></code> tuple list. Dedicated syntax within the SQL statement always takes precedence over arbitrary option tuples, so if both are specified the <code class="docutils literal notranslate"><span class="pre">OPTIONS</span></code> setting will be ignored. CREATE_LOCAL_PATH is a special option that indicates if DataFusion should create local file paths when writing new files if they do not already exist. This option is useful if you wish to create an external table from scratch, using only DataFusion SQL statements. Finally, NULL_VALUE is a CSV format specific option that determines how null values should be encoded within the CSV file.</p>
+<p>When running <code class="docutils literal notranslate"><span class="pre">INSERT</span> <span class="pre">INTO</span> <span class="pre">my_table</span> <span class="pre">...</span></code>, the options from the <code class="docutils literal notranslate"><span class="pre">CREATE</span> <span class="pre">TABLE</span></code> will be respected (gzip compression, special delimiter, and header row included). Note that compression, header, and delimiter settings can also be specified within the <code class="docutils literal notranslate"><span class="pre">OPTIONS</span></code> tuple list. Dedicated syntax within the SQL statement always takes precedence over arbitrary option tuples, so if both are specified the <code class="docutils literal notranslate"><span class="pre">OPTIONS</span></code> setting will be ignored. NULL_VALUE is a CSV format specific option that determines how null values should be encoded within the CSV file.</p>
 <p>Finally, options can be passed when running a <code class="docutils literal notranslate"><span class="pre">COPY</span></code> command.</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">COPY</span><span class="w"> </span><span class="n">source_table</span>
 <span class="k">TO</span><span class="w"> </span><span class="s1">&#39;test/table_with_options&#39;</span>
@@ -479,42 +473,10 @@
 <section id="copy-specific-options">
 <h3>COPY Specific Options<a class="headerlink" href="#copy-specific-options" title="Link to this heading">¶</a></h3>
 <p>The following special options are specific to the <code class="docutils literal notranslate"><span class="pre">COPY</span></code> command.</p>
-<table class="table">
-<thead>
-<tr class="row-odd"><th class="head"><p>Option</p></th>
-<th class="head"><p>Description</p></th>
-<th class="head"><p>Default Value</p></th>
-</tr>
-</thead>
-<tbody>
-<tr class="row-even"><td><p>SINGLE_FILE_OUTPUT</p></td>
-<td><p>If true, COPY query will write output to a single file. Otherwise, multiple files will be written to a directory in parallel.</p></td>
-<td><p>true</p></td>
-</tr>
-<tr class="row-odd"><td><p>FORMAT</p></td>
-<td><p>Specifies the file format COPY query will write out. If single_file_output is false or the format cannot be inferred from the file extension, then FORMAT must be specified.</p></td>
-<td><p>N/A</p></td>
-</tr>
-</tbody>
-</table>
-</section>
-<section id="create-external-table-specific-options">
-<h3>CREATE EXTERNAL TABLE Specific Options<a class="headerlink" href="#create-external-table-specific-options" title="Link to this heading">¶</a></h3>
-<p>The following special options are specific to creating an external table.</p>
-<table class="table">
-<thead>
-<tr class="row-odd"><th class="head"><p>Option</p></th>
-<th class="head"><p>Description</p></th>
-<th class="head"><p>Default Value</p></th>
-</tr>
-</thead>
-<tbody>
-<tr class="row-even"><td><p>SINGLE_FILE</p></td>
-<td><p>If true, indicates that this external table is backed by a single file. INSERT INTO queries will append to this file.</p></td>
-<td><p>false</p></td>
-</tr>
-</tbody>
-</table>
+<p>| Option             | Description                                                                                                                                                                  | Default Value |
+| —————— | —————————————————————————————————————————————————————————- | ————- | — |
+| SINGLE_FILE_OUTPUT | If true, COPY query will write output to a single file. Otherwise, multiple files will be written to a directory in parallel.                                                | true          |
+| FORMAT             | Specifies the file format COPY query will write out. If single_file_output is false or the format cannot be inferred from the file extension, then FORMAT must be specified. | N/A           |     |</p>
 </section>
 <section id="json-format-specific-options">
 <h3>JSON Format Specific Options<a class="headerlink" href="#json-format-specific-options" title="Link to this heading">¶</a></h3>
