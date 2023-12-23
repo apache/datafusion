@@ -50,7 +50,7 @@ use datafusion_expr::{
     col, create_udaf, lit, Accumulator, AggregateFunction,
     BuiltinScalarFunction::{Sqrt, Substr},
     Expr, LogicalPlan, Operator, PartitionEvaluator, Signature, TryCast, Volatility,
-    WindowFrame, WindowFrameBound, WindowFrameUnits, WindowFunction, WindowUDF,
+    WindowFrame, WindowFrameBound, WindowFrameUnits, WindowFunctionDefinition, WindowUDF,
 };
 use datafusion_proto::bytes::{
     logical_plan_from_bytes, logical_plan_from_bytes_with_extension_codec,
@@ -1568,8 +1568,8 @@ fn roundtrip_window() {
 
     // 1. without window_frame
     let test_expr1 = Expr::WindowFunction(expr::WindowFunction::new(
-        WindowFunction::BuiltInWindowFunction(
-            datafusion_expr::window_function::BuiltInWindowFunction::Rank,
+        WindowFunctionDefinition::BuiltInWindowFunction(
+            datafusion_expr::BuiltInWindowFunction::Rank,
         ),
         vec![],
         vec![col("col1")],
@@ -1579,8 +1579,8 @@ fn roundtrip_window() {
 
     // 2. with default window_frame
     let test_expr2 = Expr::WindowFunction(expr::WindowFunction::new(
-        WindowFunction::BuiltInWindowFunction(
-            datafusion_expr::window_function::BuiltInWindowFunction::Rank,
+        WindowFunctionDefinition::BuiltInWindowFunction(
+            datafusion_expr::BuiltInWindowFunction::Rank,
         ),
         vec![],
         vec![col("col1")],
@@ -1596,8 +1596,8 @@ fn roundtrip_window() {
     };
 
     let test_expr3 = Expr::WindowFunction(expr::WindowFunction::new(
-        WindowFunction::BuiltInWindowFunction(
-            datafusion_expr::window_function::BuiltInWindowFunction::Rank,
+        WindowFunctionDefinition::BuiltInWindowFunction(
+            datafusion_expr::BuiltInWindowFunction::Rank,
         ),
         vec![],
         vec![col("col1")],
@@ -1613,7 +1613,7 @@ fn roundtrip_window() {
     };
 
     let test_expr4 = Expr::WindowFunction(expr::WindowFunction::new(
-        WindowFunction::AggregateFunction(AggregateFunction::Max),
+        WindowFunctionDefinition::AggregateFunction(AggregateFunction::Max),
         vec![col("col1")],
         vec![col("col1")],
         vec![col("col2")],
@@ -1664,7 +1664,7 @@ fn roundtrip_window() {
     );
 
     let test_expr5 = Expr::WindowFunction(expr::WindowFunction::new(
-        WindowFunction::AggregateUDF(Arc::new(dummy_agg.clone())),
+        WindowFunctionDefinition::AggregateUDF(Arc::new(dummy_agg.clone())),
         vec![col("col1")],
         vec![col("col1")],
         vec![col("col2")],
@@ -1713,7 +1713,7 @@ fn roundtrip_window() {
     );
 
     let test_expr6 = Expr::WindowFunction(expr::WindowFunction::new(
-        WindowFunction::WindowUDF(Arc::new(dummy_window_udf.clone())),
+        WindowFunctionDefinition::WindowUDF(Arc::new(dummy_window_udf.clone())),
         vec![col("col1")],
         vec![col("col1")],
         vec![col("col2")],

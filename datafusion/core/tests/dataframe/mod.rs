@@ -45,7 +45,7 @@ use datafusion_expr::expr::{GroupingSet, Sort};
 use datafusion_expr::{
     array_agg, avg, col, count, exists, expr, in_subquery, lit, max, out_ref_col,
     scalar_subquery, sum, wildcard, AggregateFunction, Expr, ExprSchemable, WindowFrame,
-    WindowFrameBound, WindowFrameUnits, WindowFunction,
+    WindowFrameBound, WindowFrameUnits, WindowFunctionDefinition,
 };
 use datafusion_physical_expr::var_provider::{VarProvider, VarType};
 
@@ -170,7 +170,7 @@ async fn test_count_wildcard_on_window() -> Result<()> {
         .table("t1")
         .await?
         .select(vec![Expr::WindowFunction(expr::WindowFunction::new(
-            WindowFunction::AggregateFunction(AggregateFunction::Count),
+            WindowFunctionDefinition::AggregateFunction(AggregateFunction::Count),
             vec![wildcard()],
             vec![],
             vec![Expr::Sort(Sort::new(Box::new(col("a")), false, true))],

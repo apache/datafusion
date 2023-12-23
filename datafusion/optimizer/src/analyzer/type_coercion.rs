@@ -45,7 +45,7 @@ use datafusion_expr::type_coercion::{is_datetime, is_utf8_or_large_utf8};
 use datafusion_expr::utils::merge_schema;
 use datafusion_expr::{
     is_false, is_not_false, is_not_true, is_not_unknown, is_true, is_unknown,
-    type_coercion, window_function, AggregateFunction, BuiltinScalarFunction, Expr,
+    type_coercion, AggregateFunction, BuiltinScalarFunction, Expr,
     ExprSchemable, LogicalPlan, Operator, Projection, ScalarFunctionDefinition,
     Signature, WindowFrame, WindowFrameBound, WindowFrameUnits,
 };
@@ -390,7 +390,7 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                     coerce_window_frame(window_frame, &self.schema, &order_by)?;
 
                 let args = match &fun {
-                    window_function::WindowFunction::AggregateFunction(fun) => {
+                    expr::WindowFunctionDefinition::AggregateFunction(fun) => {
                         coerce_agg_exprs_for_signature(
                             fun,
                             &args,
