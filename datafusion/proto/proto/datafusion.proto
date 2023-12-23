@@ -1219,11 +1219,11 @@ message ParquetWriterOptions {
 }
 
 message WriterProperties {
-  int32 data_page_size_limit = 1;
-  int32 dictionary_page_size_limit = 2;
-  int32 data_page_row_count_limit = 3;
-  int32 write_batch_size = 4;
-  int32 max_row_group_size = 5;
+  uint32 data_page_size_limit = 1;
+  uint32 dictionary_page_size_limit = 2;
+  uint32 data_page_row_count_limit = 3;
+  uint32 write_batch_size = 4;
+  uint32 max_row_group_size = 5;
   string writer_version = 6;
   string created_by = 7;
 }

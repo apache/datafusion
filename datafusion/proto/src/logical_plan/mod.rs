@@ -852,7 +852,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                                     let writer_properties =
                                         match &writer_options.writer_properties {
                                             Some(serialized_writer_options) => {
-                                                writer_options_from_proto(
+                                                writer_properties_from_proto(
                                                     serialized_writer_options,
                                                 )?
                                             }
@@ -1678,17 +1678,17 @@ pub(crate) fn writer_properties_to_proto(
     props: &WriterProperties,
 ) -> protobuf::WriterProperties {
     protobuf::WriterProperties {
-        data_page_size_limit: props.data_page_size_limit() as i32,
-        dictionary_page_size_limit: props.dictionary_page_size_limit() as i32,
-        data_page_row_count_limit: props.data_page_row_count_limit() as i32,
-        write_batch_size: props.write_batch_size() as i32,
-        max_row_group_size: props.max_row_group_size() as i32,
+        data_page_size_limit: props.data_page_size_limit() as u32,
+        dictionary_page_size_limit: props.dictionary_page_size_limit() as u32,
+        data_page_row_count_limit: props.data_page_row_count_limit() as u32,
+        write_batch_size: props.write_batch_size() as u32,
+        max_row_group_size: props.max_row_group_size() as u32,
         writer_version: format!("{:?}", props.writer_version()),
         created_by: props.created_by().to_string(),
     }
 }
 
-pub(crate) fn writer_options_from_proto(
+pub(crate) fn writer_properties_from_proto(
     props: &protobuf::WriterProperties,
 ) -> Result<WriterProperties, DataFusionError> {
     let writer_version = WriterVersion::from_str(&props.writer_version)

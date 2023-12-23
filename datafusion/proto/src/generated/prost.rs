@@ -1671,16 +1671,16 @@ pub struct ParquetWriterOptions {
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct WriterProperties {
-    #[prost(int32, tag = "1")]
-    pub data_page_size_limit: i32,
-    #[prost(int32, tag = "2")]
-    pub dictionary_page_size_limit: i32,
-    #[prost(int32, tag = "3")]
-    pub data_page_row_count_limit: i32,
-    #[prost(int32, tag = "4")]
-    pub write_batch_size: i32,
-    #[prost(int32, tag = "5")]
-    pub max_row_group_size: i32,
+    #[prost(uint32, tag = "1")]
+    pub data_page_size_limit: u32,
+    #[prost(uint32, tag = "2")]
+    pub dictionary_page_size_limit: u32,
+    #[prost(uint32, tag = "3")]
+    pub data_page_row_count_limit: u32,
+    #[prost(uint32, tag = "4")]
+    pub write_batch_size: u32,
+    #[prost(uint32, tag = "5")]
+    pub max_row_group_size: u32,
     #[prost(string, tag = "6")]
     pub writer_version: ::prost::alloc::string::String,
     #[prost(string, tag = "7")]
