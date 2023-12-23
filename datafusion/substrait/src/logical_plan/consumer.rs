@@ -23,8 +23,8 @@ use datafusion::common::{
 
 use datafusion::execution::FunctionRegistry;
 use datafusion::logical_expr::{
-    aggregate_function, expr::find_df_window_func, BinaryExpr,
-    BuiltinScalarFunction, Case, Expr, LogicalPlan, Operator,
+    aggregate_function, expr::find_df_window_func, BinaryExpr, BuiltinScalarFunction,
+    Case, Expr, LogicalPlan, Operator,
 };
 use datafusion::logical_expr::{
     expr, Cast, Extension, GroupingSet, Like, LogicalPlanBuilder, Partitioning,
