@@ -56,29 +56,27 @@ impl OptimizerRule for EliminateCrossJoin {
     ) -> Result<Option<LogicalPlan>> {
         let mut possible_join_keys: Vec<(Expr, Expr)> = vec![];
         let mut all_inputs: Vec<LogicalPlan> = vec![];
-        let mut parent_predicate = None;
-        if !match plan {
+        let parent_predicate = match plan {
             LogicalPlan::Filter(filter) => {
                 let input = filter.input.as_ref();
-                parent_predicate = Some(&filter.predicate);
                 match input {
                     LogicalPlan::Join(Join {
                         join_type: JoinType::Inner,
                         ..
                     })
                     | LogicalPlan::CrossJoin(_) => {
-                        let success = try_flatten_join_inputs(
+                        if !try_flatten_join_inputs(
                             input,
                             &mut possible_join_keys,
                             &mut all_inputs,
-                        )?;
-                        if success {
-                            extract_possible_join_keys(
-                                &filter.predicate,
-                                &mut possible_join_keys,
-                            )?;
+                        )? {
+                            return Ok(None);
                         }
-                        success
+                        extract_possible_join_keys(
+                            &filter.predicate,
+                            &mut possible_join_keys,
+                        )?;
+                        Some(&filter.predicate)
                     }
                     _ => {
                         return utils::optimize_children(self, plan, config);
@@ -89,12 +87,17 @@ impl OptimizerRule for EliminateCrossJoin {
                 join_type: JoinType::Inner,
                 ..
             }) => {
-                try_flatten_join_inputs(plan, &mut possible_join_keys, &mut all_inputs)?
+                if !try_flatten_join_inputs(
+                    plan,
+                    &mut possible_join_keys,
+                    &mut all_inputs,
+                )? {
+                    return Ok(None);
+                }
+                None
             }
             _ => return utils::optimize_children(self, plan, config),
-        } {
-            return Ok(None);
-        }
+        };
 
         // Join keys are handled locally:
         let mut all_join_keys = HashSet::<(Expr, Expr)>::new();
