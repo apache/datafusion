@@ -194,12 +194,12 @@ pub fn regexp_replace<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef>
 
                     // if patterns hashmap already has regexp then use else else create and return
                     let re = match patterns.get(pattern) {
-                        Some(re) => Ok(re.clone()),
+                        Some(re) => Ok(re),
                         None => {
                             match Regex::new(pattern) {
                                 Ok(re) => {
-                                    patterns.insert(pattern.to_string(), re.clone());
-                                    Ok(re)
+                                    patterns.insert(pattern.to_string(), re);
+                                    Ok(patterns.get(pattern).unwrap())
                                 },
                                 Err(err) => Err(DataFusionError::External(Box::new(err))),
                             }
@@ -240,12 +240,12 @@ pub fn regexp_replace<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef>
 
                     // if patterns hashmap already has regexp then use else else create and return
                     let re = match patterns.get(&pattern) {
-                        Some(re) => Ok(re.clone()),
+                        Some(re) => Ok(re),
                         None => {
                             match Regex::new(pattern.as_str()) {
                                 Ok(re) => {
-                                    patterns.insert(pattern, re.clone());
-                                    Ok(re)
+                                    patterns.insert(pattern.clone(), re);
+                                    Ok(patterns.get(&pattern).unwrap())
                                 },
                                 Err(err) => Err(DataFusionError::External(Box::new(err))),
                             }
