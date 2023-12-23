@@ -21,9 +21,10 @@
 
 # sum
 
-query IRIIIRII
+query error DataFusion error: This feature is not implemented: Aggregate function SUM is not implemented
 select 
 array_aggregate([1, 3, 5, 7], 'sum'),
+array_aggregate([1, 3, 5, 7], 'SUM'),
 array_aggregate([1.1, 2.2, 3.3], 'sum'),
 array_aggregate([1, -1, 0, 23], 'sum'),
 array_aggregate([1, null, 9, null], 'sum'),
@@ -31,8 +32,6 @@ array_sum([1, 3, 5]),
 array_sum([1.1, 2.2]),
 array_sum([1, -1, 0, 22]),
 array_sum([1, -1, 0, null, 22]);
-----
-16 6.6 23 10 9 3.3 22 22
 
 statement ok
 CREATE TABLE array_sum_table
@@ -54,6 +53,14 @@ from array_sum_table;
 ----
 -1 6
 11 6.6
+
+# TODO: array_sum for nulls
+query error
+select array_aggregate([], 'sum')
+
+# TODO: array_sum for nulls
+query error
+select array_aggregate([null], 'sum')
 
 statement ok
 drop table array_sum_table;

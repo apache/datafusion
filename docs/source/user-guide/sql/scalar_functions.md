@@ -2611,6 +2611,10 @@ _Alias of [array_replace_all](#array_replace_all)._
 
 _Alias of [array_slice](#array_slice)._
 
+### `list_sum`
+
+_Alias of [array_sum](#array_sum)._
+
 ### `list_to_string`
 
 _Alias of [list_to_string](#list_to_string)._
