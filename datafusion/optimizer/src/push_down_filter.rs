@@ -15,26 +15,29 @@
 //! [`PushDownFilter`] Moves filters so they are applied as early as possible in
 //! the plan.
 
+use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
+
 use crate::optimizer::ApplyOrder;
 use crate::{OptimizerConfig, OptimizerRule};
+
 use datafusion_common::tree_node::{Transformed, TreeNode, VisitRecursion};
 use datafusion_common::{
     internal_err, plan_datafusion_err, Column, DFSchema, DFSchemaRef, DataFusionError,
     JoinConstraint, Result,
 };
 use datafusion_expr::expr::Alias;
+use datafusion_expr::expr_rewriter::replace_col;
+use datafusion_expr::logical_plan::{
+    CrossJoin, Join, JoinType, LogicalPlan, TableScan, Union,
+};
 use datafusion_expr::utils::{conjunction, split_conjunction, split_conjunction_owned};
 use datafusion_expr::{
-    and,
-    expr_rewriter::replace_col,
-    logical_plan::{CrossJoin, Join, JoinType, LogicalPlan, TableScan, Union},
-    or, BinaryExpr, Expr, Filter, LogicalPlanBuilder, Operator, ScalarFunctionDefinition,
-    TableProviderFilterPushDown,
+    and, build_join_schema, or, BinaryExpr, Expr, Filter, LogicalPlanBuilder, Operator,
+    ScalarFunctionDefinition, TableProviderFilterPushDown, Volatility,
 };
-use datafusion_expr::{build_join_schema, Volatility};
+
 use itertools::Itertools;
-use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
 
 /// Optimizer rule for pushing (moving) filter expressions down in a plan so
 /// they are applied as early as possible.
@@ -1063,13 +1066,16 @@ fn contain(e: &Expr, check_map: &HashMap<String, Expr>) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::fmt::{Debug, Formatter};
+    use std::sync::Arc;
+
     use super::*;
     use crate::optimizer::Optimizer;
     use crate::rewrite_disjunctive_predicate::RewriteDisjunctivePredicate;
     use crate::test::*;
     use crate::OptimizerContext;
+
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-    use async_trait::async_trait;
     use datafusion_common::{DFSchema, DFSchemaRef};
     use datafusion_expr::logical_plan::table_scan;
     use datafusion_expr::{
@@ -1077,8 +1083,8 @@ mod tests {
         BinaryExpr, Expr, Extension, LogicalPlanBuilder, Operator, TableSource,
         TableType, UserDefinedLogicalNodeCore,
     };
-    use std::fmt::{Debug, Formatter};
-    use std::sync::Arc;
+
+    use async_trait::async_trait;
 
     fn assert_optimized_plan_eq(plan: &LogicalPlan, expected: &str) -> Result<()> {
         crate::test::assert_optimized_plan_eq(
