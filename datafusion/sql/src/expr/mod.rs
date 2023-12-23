@@ -37,6 +37,7 @@ use datafusion_common::{
 use datafusion_expr::expr::AggregateFunctionDefinition;
 use datafusion_expr::expr::InList;
 use datafusion_expr::expr::ScalarFunction;
+use datafusion_expr::ScalarFunctionDefinition;
 use datafusion_expr::{
     col, expr, lit, AggregateFunction, Between, BinaryExpr, BuiltinScalarFunction, Cast,
     Expr, ExprSchemable, GetFieldAccess, GetIndexedField, Like, Operator, TryCast,
@@ -98,11 +99,184 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 StackEntry::Operator(op) => {
                     let right = eval_stack.pop().unwrap();
                     let left = eval_stack.pop().unwrap();
-                    let expr = Expr::BinaryExpr(BinaryExpr::new(
-                        Box::new(left),
-                        op,
-                        Box::new(right),
-                    ));
+
+                    // Summary of the logic below:
+                    // array || array -> array concat
+                    // array || scalar -> array append
+                    // scalar || array -> array prepend
+                    // (arry concat, array append, array prepend) || array -> array concat
+                    // (arry concat, array append, array prepend) || scalar -> array append
+
+                    // Convert `Array StringConcat Array` to ScalarFunction::ArrayConcat
+                    let expr = match (op, &left, &right) {
+                        // Chain concat operator (a || b) || array,
+                        // (arry concat, array append, array prepend) || array -> array concat
+                        (
+                            Operator::StringConcat,
+                            Expr::ScalarFunction(ScalarFunction {
+                                func_def:
+                                    ScalarFunctionDefinition::BuiltIn(
+                                        BuiltinScalarFunction::ArrayConcat,
+                                    ),
+                                args: _left_args,
+                            }),
+                            Expr::ScalarFunction(ScalarFunction {
+                                func_def:
+                                    ScalarFunctionDefinition::BuiltIn(
+                                        BuiltinScalarFunction::MakeArray,
+                                    ),
+                                args: _right_args,
+                            }),
+                        )
+                        | (
+                            Operator::StringConcat,
+                            Expr::ScalarFunction(ScalarFunction {
+                                func_def:
+                                    ScalarFunctionDefinition::BuiltIn(
+                                        BuiltinScalarFunction::ArrayAppend,
+                                    ),
+                                args: _left_args,
+                            }),
+                            Expr::ScalarFunction(ScalarFunction {
+                                func_def:
+                                    ScalarFunctionDefinition::BuiltIn(
+                                        BuiltinScalarFunction::MakeArray,
+                                    ),
+                                args: _right_args,
+                            }),
+                        )
+                        | (
+                            Operator::StringConcat,
+                            Expr::ScalarFunction(ScalarFunction {
+                                func_def:
+                                    ScalarFunctionDefinition::BuiltIn(
+                                        BuiltinScalarFunction::ArrayPrepend,
+                                    ),
+                                args: _left_args,
+                            }),
+                            Expr::ScalarFunction(ScalarFunction {
+                                func_def:
+                                    ScalarFunctionDefinition::BuiltIn(
+                                        BuiltinScalarFunction::MakeArray,
+                                    ),
+                                args: _right_args,
+                            }),
+                        ) => {
+                            let args = vec![left.clone(), right.clone()];
+                            Expr::ScalarFunction(ScalarFunction::new(
+                                BuiltinScalarFunction::ArrayConcat,
+                                args,
+                            ))
+                        }
+                        // Chain concat operator (a || b) || scalar,
+                        // (arry concat, array append, array prepend) || scalar -> array append
+                        (
+                            Operator::StringConcat,
+                            Expr::ScalarFunction(ScalarFunction {
+                                func_def:
+                                    ScalarFunctionDefinition::BuiltIn(
+                                        BuiltinScalarFunction::ArrayConcat,
+                                    ),
+                                args: _left_args,
+                            }),
+                            _,
+                        )
+                        | (
+                            Operator::StringConcat,
+                            Expr::ScalarFunction(ScalarFunction {
+                                func_def:
+                                    ScalarFunctionDefinition::BuiltIn(
+                                        BuiltinScalarFunction::ArrayAppend,
+                                    ),
+                                args: _left_args,
+                            }),
+                            _,
+                        )
+                        | (
+                            Operator::StringConcat,
+                            Expr::ScalarFunction(ScalarFunction {
+                                func_def:
+                                    ScalarFunctionDefinition::BuiltIn(
+                                        BuiltinScalarFunction::ArrayPrepend,
+                                    ),
+                                args: _left_args,
+                            }),
+                            _,
+                        ) => {
+                            let args = vec![left.clone(), right.clone()];
+                            Expr::ScalarFunction(ScalarFunction::new(
+                                BuiltinScalarFunction::ArrayAppend,
+                                args,
+                            ))
+                        }
+                        // array || array -> array concat
+                        (
+                            Operator::StringConcat,
+                            Expr::ScalarFunction(ScalarFunction {
+                                func_def:
+                                    ScalarFunctionDefinition::BuiltIn(
+                                        BuiltinScalarFunction::MakeArray,
+                                    ),
+                                args: _left_args,
+                            }),
+                            Expr::ScalarFunction(ScalarFunction {
+                                func_def:
+                                    ScalarFunctionDefinition::BuiltIn(
+                                        BuiltinScalarFunction::MakeArray,
+                                    ),
+                                args: _right_args,
+                            }),
+                        ) => {
+                            let args = vec![left.clone(), right.clone()];
+                            Expr::ScalarFunction(ScalarFunction::new(
+                                BuiltinScalarFunction::ArrayConcat,
+                                args,
+                            ))
+                        }
+                        // array || scalar -> array append
+                        (
+                            Operator::StringConcat,
+                            Expr::ScalarFunction(ScalarFunction {
+                                func_def:
+                                    ScalarFunctionDefinition::BuiltIn(
+                                        BuiltinScalarFunction::MakeArray,
+                                    ),
+                                args: _left_args,
+                            }),
+                            _,
+                        ) => {
+                            let args = vec![left.clone(), right.clone()];
+                            Expr::ScalarFunction(ScalarFunction::new(
+                                BuiltinScalarFunction::ArrayAppend,
+                                args,
+                            ))
+                        }
+                        // scalar || array -> array prepend
+                        (
+                            Operator::StringConcat,
+                            _,
+                            Expr::ScalarFunction(ScalarFunction {
+                                func_def:
+                                    ScalarFunctionDefinition::BuiltIn(
+                                        BuiltinScalarFunction::MakeArray,
+                                    ),
+                                args: _right_args,
+                            }),
+                        ) => {
+                            let args = vec![left.clone(), right.clone()];
+                            Expr::ScalarFunction(ScalarFunction::new(
+                                BuiltinScalarFunction::ArrayPrepend,
+                                args,
+                            ))
+                        }
+                        // Any other cases fall back to the default Binary Operation
+                        _ => Expr::BinaryExpr(BinaryExpr::new(
+                            Box::new(left),
+                            op,
+                            Box::new(right),
+                        )),
+                    };
+
                     eval_stack.push(expr);
                 }
             }
