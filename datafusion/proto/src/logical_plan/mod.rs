@@ -23,7 +23,8 @@ use std::sync::Arc;
 use crate::common::{byte_to_string, proto_error, str_to_byte};
 use crate::protobuf::logical_plan_node::LogicalPlanType::CustomScan;
 use crate::protobuf::{
-    copy_to_node, CustomTableScanNode, LogicalExprNodeCollection, SqlOption,
+    copy_to_node, file_type_writer_options, CustomTableScanNode,
+    LogicalExprNodeCollection, SqlOption,
 };
 use crate::{
     convert_required,
@@ -49,7 +50,7 @@ use datafusion::{
 use datafusion_common::{
     context, file_options::StatementOptions, internal_err, not_impl_err,
     parsers::CompressionTypeVariant, plan_datafusion_err, DataFusionError, FileType,
-    OwnedTableReference, Result,
+    FileTypeWriterOptions, OwnedTableReference, Result,
 };
 use datafusion_expr::{
     dml,
@@ -62,6 +63,8 @@ use datafusion_expr::{
     DistinctOn, DropView, Expr, LogicalPlan, LogicalPlanBuilder,
 };
 
+use datafusion::parquet::file::properties::{WriterProperties, WriterVersion};
+use datafusion_common::file_options::parquet_writer::ParquetWriterOptions;
 use datafusion_expr::dml::CopyOptions;
 use prost::bytes::BufMut;
 use prost::Message;
@@ -833,19 +836,48 @@ impl AsLogicalPlan for LogicalPlanNode {
 
                 let copy_options = match &copy.copy_options {
                     Some(copy_to_node::CopyOptions::SqlOptions(opt)) => {
-                        let options = opt.option.iter().map(|o| (o.key.clone(), o.value.clone())).collect();
-                        CopyOptions::SQLOptions(StatementOptions::from(
-                            &options,
-                        ))
+                        let options = opt
+                            .option
+                            .iter()
+                            .map(|o| (o.key.clone(), o.value.clone()))
+                            .collect();
+                        CopyOptions::SQLOptions(StatementOptions::from(&options))
                     }
-                    Some(copy_to_node::CopyOptions::WriterOptions(_)) => {
-                        return Err(proto_error(
-                            "LogicalPlan serde is not yet implemented for CopyTo with WriterOptions",
-                        ))
+                    Some(copy_to_node::CopyOptions::WriterOptions(opt)) => {
+                        match &opt.file_type {
+                            Some(ft) => match ft {
+                                file_type_writer_options::FileType::ParquetOptions(
+                                    writer_options,
+                                ) => {
+                                    let writer_properties =
+                                        match &writer_options.writer_properties {
+                                            Some(serialized_writer_options) => {
+                                                writer_properties_from_proto(
+                                                    serialized_writer_options,
+                                                )?
+                                            }
+                                            _ => WriterProperties::default(),
+                                        };
+                                    CopyOptions::WriterOptions(Box::new(
+                                        FileTypeWriterOptions::Parquet(
+                                            ParquetWriterOptions::new(writer_properties),
+                                        ),
+                                    ))
+                                }
+                                _ => {
+                                    return Err(proto_error(
+                                        "WriterOptions unsupported file_type",
+                                    ))
+                                }
+                            },
+                            None => {
+                                return Err(proto_error(
+                                    "WriterOptions missing file_type",
+                                ))
+                            }
+                        }
                     }
-                    other => return Err(proto_error(format!(
-                        "LogicalPlan serde is not yet implemented for CopyTo with CopyOptions {other:?}",
-                    )))
+                    None => return Err(proto_error("CopyTo missing CopyOptions")),
                 };
                 Ok(datafusion_expr::LogicalPlan::Copy(
                     datafusion_expr::dml::CopyTo {
@@ -1580,22 +1612,48 @@ impl AsLogicalPlan for LogicalPlanNode {
                     extension_codec,
                 )?;
 
-                let copy_options_proto: Option<copy_to_node::CopyOptions> = match copy_options {
-                    CopyOptions::SQLOptions(opt) => {
-                        let options: Vec<SqlOption> = opt.clone().into_inner().iter().map(|(k, v)| SqlOption {
-                            key: k.to_string(),
-                            value: v.to_string(),
-                        }).collect();
-                        Some(copy_to_node::CopyOptions::SqlOptions(protobuf::SqlOptions {
-                            option: options
-                        }))
-                    }
-                    CopyOptions::WriterOptions(_) => {
-                        return Err(proto_error(
-                            "LogicalPlan serde is not yet implemented for CopyTo with WriterOptions",
-                        ))
-                    }
-                };
+                let copy_options_proto: Option<copy_to_node::CopyOptions> =
+                    match copy_options {
+                        CopyOptions::SQLOptions(opt) => {
+                            let options: Vec<SqlOption> = opt
+                                .clone()
+                                .into_inner()
+                                .iter()
+                                .map(|(k, v)| SqlOption {
+                                    key: k.to_string(),
+                                    value: v.to_string(),
+                                })
+                                .collect();
+                            Some(copy_to_node::CopyOptions::SqlOptions(
+                                protobuf::SqlOptions { option: options },
+                            ))
+                        }
+                        CopyOptions::WriterOptions(opt) => {
+                            match opt.as_ref() {
+                                FileTypeWriterOptions::Parquet(parquet_opts) => {
+                                    let parquet_writer_options =
+                                        protobuf::ParquetWriterOptions {
+                                            writer_properties: Some(
+                                                writer_properties_to_proto(
+                                                    &parquet_opts.writer_options,
+                                                ),
+                                            ),
+                                        };
+                                    let parquet_options = file_type_writer_options::FileType::ParquetOptions(parquet_writer_options);
+                                    Some(copy_to_node::CopyOptions::WriterOptions(
+                                        protobuf::FileTypeWriterOptions {
+                                            file_type: Some(parquet_options),
+                                        },
+                                    ))
+                                }
+                                _ => {
+                                    return Err(proto_error(
+                                        "Unsupported FileTypeWriterOptions in CopyTo",
+                                    ))
+                                }
+                            }
+                        }
+                    };
 
                 Ok(protobuf::LogicalPlanNode {
                     logical_plan_type: Some(LogicalPlanType::CopyTo(Box::new(
@@ -1614,4 +1672,34 @@ impl AsLogicalPlan for LogicalPlanNode {
             )),
         }
     }
+}
+
+pub(crate) fn writer_properties_to_proto(
+    props: &WriterProperties,
+) -> protobuf::WriterProperties {
+    protobuf::WriterProperties {
+        data_page_size_limit: props.data_page_size_limit() as u64,
+        dictionary_page_size_limit: props.dictionary_page_size_limit() as u64,
+        data_page_row_count_limit: props.data_page_row_count_limit() as u64,
+        write_batch_size: props.write_batch_size() as u64,
+        max_row_group_size: props.max_row_group_size() as u64,
+        writer_version: format!("{:?}", props.writer_version()),
+        created_by: props.created_by().to_string(),
+    }
+}
+
+pub(crate) fn writer_properties_from_proto(
+    props: &protobuf::WriterProperties,
+) -> Result<WriterProperties, DataFusionError> {
+    let writer_version = WriterVersion::from_str(&props.writer_version)
+        .map_err(|e| proto_error(e.to_string()))?;
+    Ok(WriterProperties::builder()
+        .set_created_by(props.created_by.clone())
+        .set_writer_version(writer_version)
+        .set_dictionary_page_size_limit(props.dictionary_page_size_limit as usize)
+        .set_data_page_row_count_limit(props.data_page_row_count_limit as usize)
+        .set_data_page_size_limit(props.data_page_size_limit as usize)
+        .set_write_batch_size(props.write_batch_size as usize)
+        .set_max_row_group_size(props.max_row_group_size as usize)
+        .build())
 }
