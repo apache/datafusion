@@ -31,7 +31,7 @@ use datafusion::datasource::provider::TableProviderFactory;
 use datafusion::datasource::TableProvider;
 use datafusion::execution::context::SessionState;
 use datafusion::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
-use datafusion::parquet::file::properties::WriterProperties;
+use datafusion::parquet::file::properties::{WriterProperties, WriterVersion};
 use datafusion::physical_plan::functions::make_scalar_function;
 use datafusion::prelude::{create_udf, CsvReadOptions, SessionConfig, SessionContext};
 use datafusion::test_util::{TestTableFactory, TestTableProvider};
@@ -330,7 +330,6 @@ async fn roundtrip_logical_plan_copy_to_sql_options() -> Result<()> {
 }
 
 #[tokio::test]
-#[ignore] // see https://github.com/apache/arrow-datafusion/issues/8619
 async fn roundtrip_logical_plan_copy_to_writer_options() -> Result<()> {
     let ctx = SessionContext::new();
 
@@ -339,11 +338,17 @@ async fn roundtrip_logical_plan_copy_to_writer_options() -> Result<()> {
     let writer_properties = WriterProperties::builder()
         .set_bloom_filter_enabled(true)
         .set_created_by("DataFusion Test".to_string())
+        .set_writer_version(WriterVersion::PARQUET_2_0)
+        .set_write_batch_size(111)
+        .set_data_page_size_limit(222)
+        .set_data_page_row_count_limit(333)
+        .set_dictionary_page_size_limit(444)
+        .set_max_row_group_size(555)
         .build();
     let plan = LogicalPlan::Copy(CopyTo {
         input: Arc::new(input),
-        output_url: "test.csv".to_string(),
-        file_format: FileType::CSV,
+        output_url: "test.parquet".to_string(),
+        file_format: FileType::PARQUET,
         single_file_output: true,
         copy_options: CopyOptions::WriterOptions(Box::new(
             FileTypeWriterOptions::Parquet(ParquetWriterOptions::new(writer_properties)),
@@ -353,6 +358,34 @@ async fn roundtrip_logical_plan_copy_to_writer_options() -> Result<()> {
     let bytes = logical_plan_to_bytes(&plan)?;
     let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx)?;
     assert_eq!(format!("{plan:?}"), format!("{logical_round_trip:?}"));
+
+    match logical_round_trip {
+        LogicalPlan::Copy(copy_to) => {
+            assert_eq!("test.parquet", copy_to.output_url);
+            assert_eq!(FileType::PARQUET, copy_to.file_format);
+            assert!(copy_to.single_file_output);
+            match &copy_to.copy_options {
+                CopyOptions::WriterOptions(y) => match y.as_ref() {
+                    FileTypeWriterOptions::Parquet(p) => {
+                        let props = &p.writer_options;
+                        assert_eq!("DataFusion Test", props.created_by());
+                        assert_eq!(
+                            "PARQUET_2_0",
+                            format!("{:?}", props.writer_version())
+                        );
+                        assert_eq!(111, props.write_batch_size());
+                        assert_eq!(222, props.data_page_size_limit());
+                        assert_eq!(333, props.data_page_row_count_limit());
+                        assert_eq!(444, props.dictionary_page_size_limit());
+                        assert_eq!(555, props.max_row_group_size());
+                    }
+                    _ => panic!(),
+                },
+                _ => panic!(),
+            }
+        }
+        _ => panic!(),
+    }
 
     Ok(())
 }
