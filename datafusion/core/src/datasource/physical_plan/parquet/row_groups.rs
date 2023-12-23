@@ -16,6 +16,7 @@
 // under the License.
 
 use arrow::{array::ArrayRef, datatypes::Schema};
+use arrow_array::BooleanArray;
 use arrow_schema::FieldRef;
 use datafusion_common::tree_node::{TreeNode, VisitRecursion};
 use datafusion_common::{Column, DataFusionError, Result, ScalarValue};
@@ -339,6 +340,14 @@ impl<'a> PruningStatistics for RowGroupPruningStatistics<'a> {
         let (c, _) = self.column(&column.name)?;
         let scalar = ScalarValue::UInt64(Some(c.statistics()?.null_count()));
         scalar.to_array().ok()
+    }
+
+    fn contained(
+        &self,
+        _column: &Column,
+        _values: &HashSet<ScalarValue>,
+    ) -> Option<BooleanArray> {
+        None
     }
 }
 
