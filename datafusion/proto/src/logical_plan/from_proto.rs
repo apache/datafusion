@@ -476,6 +476,7 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::Ltrim => Self::Ltrim,
             ScalarFunction::Rtrim => Self::Rtrim,
             ScalarFunction::ToTimestamp => Self::ToTimestamp,
+            ScalarFunction::ArrayAggregate => Self::ArrayAggregate,
             ScalarFunction::ArrayAppend => Self::ArrayAppend,
             ScalarFunction::ArraySort => Self::ArraySort,
             ScalarFunction::ArrayConcat => Self::ArrayConcat,
@@ -503,6 +504,7 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::ArrayReplaceN => Self::ArrayReplaceN,
             ScalarFunction::ArrayReplaceAll => Self::ArrayReplaceAll,
             ScalarFunction::ArraySlice => Self::ArraySlice,
+            ScalarFunction::ArraySum => Self::ArraySum,
             ScalarFunction::ArrayToString => Self::ArrayToString,
             ScalarFunction::ArrayIntersect => Self::ArrayIntersect,
             ScalarFunction::ArrayUnion => Self::ArrayUnion,
@@ -1361,6 +1363,10 @@ pub fn parse_expr(
                         .map(|expr| parse_expr(expr, registry))
                         .collect::<Result<Vec<_>, _>>()?,
                 )),
+                ScalarFunction::ArrayAggregate => Ok(array_aggregate(
+                    parse_expr(&args[0], registry)?,
+                    parse_expr(&args[1], registry)?,
+                )),
                 ScalarFunction::ArrayAppend => Ok(array_append(
                     parse_expr(&args[0], registry)?,
                     parse_expr(&args[1], registry)?,
@@ -1453,6 +1459,9 @@ pub fn parse_expr(
                     parse_expr(&args[1], registry)?,
                     parse_expr(&args[2], registry)?,
                 )),
+                ScalarFunction::ArraySum => {
+                    Ok(array_sum(parse_expr(&args[0], registry)?))
+                }
                 ScalarFunction::ArrayToString => Ok(array_to_string(
                     parse_expr(&args[0], registry)?,
                     parse_expr(&args[1], registry)?,
