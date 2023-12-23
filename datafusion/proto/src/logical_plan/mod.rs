@@ -1678,11 +1678,11 @@ pub(crate) fn writer_properties_to_proto(
     props: &WriterProperties,
 ) -> protobuf::WriterProperties {
     protobuf::WriterProperties {
-        data_page_size_limit: props.data_page_size_limit() as u32,
-        dictionary_page_size_limit: props.dictionary_page_size_limit() as u32,
-        data_page_row_count_limit: props.data_page_row_count_limit() as u32,
-        write_batch_size: props.write_batch_size() as u32,
-        max_row_group_size: props.max_row_group_size() as u32,
+        data_page_size_limit: props.data_page_size_limit() as u64,
+        dictionary_page_size_limit: props.dictionary_page_size_limit() as u64,
+        data_page_row_count_limit: props.data_page_row_count_limit() as u64,
+        write_batch_size: props.write_batch_size() as u64,
+        max_row_group_size: props.max_row_group_size() as u64,
         writer_version: format!("{:?}", props.writer_version()),
         created_by: props.created_by().to_string(),
     }

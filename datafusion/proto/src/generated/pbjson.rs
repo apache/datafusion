@@ -27281,19 +27281,24 @@ impl serde::Serialize for WriterProperties {
         }
         let mut struct_ser = serializer.serialize_struct("datafusion.WriterProperties", len)?;
         if self.data_page_size_limit != 0 {
-            struct_ser.serialize_field("dataPageSizeLimit", &self.data_page_size_limit)?;
+            #[allow(clippy::needless_borrow)]
+            struct_ser.serialize_field("dataPageSizeLimit", ToString::to_string(&self.data_page_size_limit).as_str())?;
         }
         if self.dictionary_page_size_limit != 0 {
-            struct_ser.serialize_field("dictionaryPageSizeLimit", &self.dictionary_page_size_limit)?;
+            #[allow(clippy::needless_borrow)]
+            struct_ser.serialize_field("dictionaryPageSizeLimit", ToString::to_string(&self.dictionary_page_size_limit).as_str())?;
         }
         if self.data_page_row_count_limit != 0 {
-            struct_ser.serialize_field("dataPageRowCountLimit", &self.data_page_row_count_limit)?;
+            #[allow(clippy::needless_borrow)]
+            struct_ser.serialize_field("dataPageRowCountLimit", ToString::to_string(&self.data_page_row_count_limit).as_str())?;
         }
         if self.write_batch_size != 0 {
-            struct_ser.serialize_field("writeBatchSize", &self.write_batch_size)?;
+            #[allow(clippy::needless_borrow)]
+            struct_ser.serialize_field("writeBatchSize", ToString::to_string(&self.write_batch_size).as_str())?;
         }
         if self.max_row_group_size != 0 {
-            struct_ser.serialize_field("maxRowGroupSize", &self.max_row_group_size)?;
+            #[allow(clippy::needless_borrow)]
+            struct_ser.serialize_field("maxRowGroupSize", ToString::to_string(&self.max_row_group_size).as_str())?;
         }
         if !self.writer_version.is_empty() {
             struct_ser.serialize_field("writerVersion", &self.writer_version)?;
