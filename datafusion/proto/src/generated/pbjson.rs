@@ -5151,6 +5151,223 @@ impl<'de> serde::Deserialize<'de> for CsvScanExecNode {
         deserializer.deserialize_struct("datafusion.CsvScanExecNode", FIELDS, GeneratedVisitor)
     }
 }
+impl serde::Serialize for CsvWriterOptions {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if !self.delimiter.is_empty() {
+            len += 1;
+        }
+        if self.has_header {
+            len += 1;
+        }
+        if !self.date_format.is_empty() {
+            len += 1;
+        }
+        if !self.datetime_format.is_empty() {
+            len += 1;
+        }
+        if !self.timestamp_format.is_empty() {
+            len += 1;
+        }
+        if !self.timestamp_tz_format.is_empty() {
+            len += 1;
+        }
+        if !self.time_format.is_empty() {
+            len += 1;
+        }
+        if !self.null_value.is_empty() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("datafusion.CsvWriterOptions", len)?;
+        if !self.delimiter.is_empty() {
+            struct_ser.serialize_field("delimiter", &self.delimiter)?;
+        }
+        if self.has_header {
+            struct_ser.serialize_field("hasHeader", &self.has_header)?;
+        }
+        if !self.date_format.is_empty() {
+            struct_ser.serialize_field("dateFormat", &self.date_format)?;
+        }
+        if !self.datetime_format.is_empty() {
+            struct_ser.serialize_field("datetimeFormat", &self.datetime_format)?;
+        }
+        if !self.timestamp_format.is_empty() {
+            struct_ser.serialize_field("timestampFormat", &self.timestamp_format)?;
+        }
+        if !self.timestamp_tz_format.is_empty() {
+            struct_ser.serialize_field("timestampTzFormat", &self.timestamp_tz_format)?;
+        }
+        if !self.time_format.is_empty() {
+            struct_ser.serialize_field("timeFormat", &self.time_format)?;
+        }
+        if !self.null_value.is_empty() {
+            struct_ser.serialize_field("nullValue", &self.null_value)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for CsvWriterOptions {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "delimiter",
+            "has_header",
+            "hasHeader",
+            "date_format",
+            "dateFormat",
+            "datetime_format",
+            "datetimeFormat",
+            "timestamp_format",
+            "timestampFormat",
+            "timestamp_tz_format",
+            "timestampTzFormat",
+            "time_format",
+            "timeFormat",
+            "null_value",
+            "nullValue",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Delimiter,
+            HasHeader,
+            DateFormat,
+            DatetimeFormat,
+            TimestampFormat,
+            TimestampTzFormat,
+            TimeFormat,
+            NullValue,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "delimiter" => Ok(GeneratedField::Delimiter),
+                            "hasHeader" | "has_header" => Ok(GeneratedField::HasHeader),
+                            "dateFormat" | "date_format" => Ok(GeneratedField::DateFormat),
+                            "datetimeFormat" | "datetime_format" => Ok(GeneratedField::DatetimeFormat),
+                            "timestampFormat" | "timestamp_format" => Ok(GeneratedField::TimestampFormat),
+                            "timestampTzFormat" | "timestamp_tz_format" => Ok(GeneratedField::TimestampTzFormat),
+                            "timeFormat" | "time_format" => Ok(GeneratedField::TimeFormat),
+                            "nullValue" | "null_value" => Ok(GeneratedField::NullValue),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = CsvWriterOptions;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct datafusion.CsvWriterOptions")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<CsvWriterOptions, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut delimiter__ = None;
+                let mut has_header__ = None;
+                let mut date_format__ = None;
+                let mut datetime_format__ = None;
+                let mut timestamp_format__ = None;
+                let mut timestamp_tz_format__ = None;
+                let mut time_format__ = None;
+                let mut null_value__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::Delimiter => {
+                            if delimiter__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("delimiter"));
+                            }
+                            delimiter__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::HasHeader => {
+                            if has_header__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("hasHeader"));
+                            }
+                            has_header__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::DateFormat => {
+                            if date_format__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("dateFormat"));
+                            }
+                            date_format__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::DatetimeFormat => {
+                            if datetime_format__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("datetimeFormat"));
+                            }
+                            datetime_format__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::TimestampFormat => {
+                            if timestamp_format__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("timestampFormat"));
+                            }
+                            timestamp_format__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::TimestampTzFormat => {
+                            if timestamp_tz_format__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("timestampTzFormat"));
+                            }
+                            timestamp_tz_format__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::TimeFormat => {
+                            if time_format__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("timeFormat"));
+                            }
+                            time_format__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::NullValue => {
+                            if null_value__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("nullValue"));
+                            }
+                            null_value__ = Some(map_.next_value()?);
+                        }
+                    }
+                }
+                Ok(CsvWriterOptions {
+                    delimiter: delimiter__.unwrap_or_default(),
+                    has_header: has_header__.unwrap_or_default(),
+                    date_format: date_format__.unwrap_or_default(),
+                    datetime_format: datetime_format__.unwrap_or_default(),
+                    timestamp_format: timestamp_format__.unwrap_or_default(),
+                    timestamp_tz_format: timestamp_tz_format__.unwrap_or_default(),
+                    time_format: time_format__.unwrap_or_default(),
+                    null_value: null_value__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("datafusion.CsvWriterOptions", FIELDS, GeneratedVisitor)
+    }
+}
 impl serde::Serialize for CubeNode {
     #[allow(deprecated)]
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
@@ -7893,6 +8110,9 @@ impl serde::Serialize for FileTypeWriterOptions {
                 file_type_writer_options::FileType::ParquetOptions(v) => {
                     struct_ser.serialize_field("parquetOptions", v)?;
                 }
+                file_type_writer_options::FileType::CsvOptions(v) => {
+                    struct_ser.serialize_field("csvOptions", v)?;
+                }
             }
         }
         struct_ser.end()
@@ -7909,12 +8129,15 @@ impl<'de> serde::Deserialize<'de> for FileTypeWriterOptions {
             "jsonOptions",
             "parquet_options",
             "parquetOptions",
+            "csv_options",
+            "csvOptions",
         ];
 
         #[allow(clippy::enum_variant_names)]
         enum GeneratedField {
             JsonOptions,
             ParquetOptions,
+            CsvOptions,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -7938,6 +8161,7 @@ impl<'de> serde::Deserialize<'de> for FileTypeWriterOptions {
                         match value {
                             "jsonOptions" | "json_options" => Ok(GeneratedField::JsonOptions),
                             "parquetOptions" | "parquet_options" => Ok(GeneratedField::ParquetOptions),
+                            "csvOptions" | "csv_options" => Ok(GeneratedField::CsvOptions),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -7972,6 +8196,13 @@ impl<'de> serde::Deserialize<'de> for FileTypeWriterOptions {
                                 return Err(serde::de::Error::duplicate_field("parquetOptions"));
                             }
                             file_type__ = map_.next_value::<::std::option::Option<_>>()?.map(file_type_writer_options::FileType::ParquetOptions)
+;
+                        }
+                        GeneratedField::CsvOptions => {
+                            if file_type__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("csvOptions"));
+                            }
+                            file_type__ = map_.next_value::<::std::option::Option<_>>()?.map(file_type_writer_options::FileType::CsvOptions)
 ;
                         }
                     }

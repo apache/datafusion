@@ -20,6 +20,7 @@ use std::fmt::{self, Debug, Formatter};
 use std::sync::Arc;
 
 use arrow::array::{ArrayRef, FixedSizeListArray};
+use arrow::csv::WriterBuilder;
 use arrow::datatypes::{
     DataType, Field, Fields, Int32Type, IntervalDayTimeType, IntervalMonthDayNanoType,
     IntervalUnit, Schema, SchemaRef, TimeUnit, UnionFields, UnionMode,
@@ -35,8 +36,10 @@ use datafusion::parquet::file::properties::{WriterProperties, WriterVersion};
 use datafusion::physical_plan::functions::make_scalar_function;
 use datafusion::prelude::{create_udf, CsvReadOptions, SessionConfig, SessionContext};
 use datafusion::test_util::{TestTableFactory, TestTableProvider};
+use datafusion_common::file_options::csv_writer::CsvWriterOptions;
 use datafusion_common::file_options::parquet_writer::ParquetWriterOptions;
 use datafusion_common::file_options::StatementOptions;
+use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{internal_err, not_impl_err, plan_err, FileTypeWriterOptions};
 use datafusion_common::{DFField, DFSchema, DFSchemaRef, DataFusionError, ScalarValue};
 use datafusion_common::{FileType, Result};
@@ -386,10 +389,74 @@ async fn roundtrip_logical_plan_copy_to_writer_options() -> Result<()> {
         }
         _ => panic!(),
     }
-
     Ok(())
 }
 
+#[tokio::test]
+async fn roundtrip_logical_plan_copy_to_csv() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    let input = create_csv_scan(&ctx).await?;
+
+    let writer_properties = WriterBuilder::new()
+        .with_delimiter(b'*')
+        .with_date_format("dd/MM/yyyy".to_string())
+        .with_datetime_format("dd/MM/yyyy HH:mm:ss".to_string())
+        .with_timestamp_format("HH:mm:ss.SSSSSS".to_string())
+        //.with_timestamp_tz_format("HH:mm:ss.SSSSSS".to_string())
+        .with_time_format("HH:mm:ss".to_string())
+        .with_null("NIL".to_string());
+
+    let plan = LogicalPlan::Copy(CopyTo {
+        input: Arc::new(input),
+        output_url: "test.csv".to_string(),
+        file_format: FileType::CSV,
+        single_file_output: true,
+        copy_options: CopyOptions::WriterOptions(Box::new(FileTypeWriterOptions::CSV(
+            CsvWriterOptions::new(
+                writer_properties,
+                CompressionTypeVariant::UNCOMPRESSED,
+            ),
+        ))),
+    });
+
+    let bytes = logical_plan_to_bytes(&plan)?;
+    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx)?;
+    assert_eq!(format!("{plan:?}"), format!("{logical_round_trip:?}"));
+
+    match logical_round_trip {
+        LogicalPlan::Copy(copy_to) => {
+            assert_eq!("test.csv", copy_to.output_url);
+            assert_eq!(FileType::CSV, copy_to.file_format);
+            assert!(copy_to.single_file_output);
+            match &copy_to.copy_options {
+                CopyOptions::WriterOptions(y) => match y.as_ref() {
+                    FileTypeWriterOptions::CSV(p) => {
+                        let props = &p.writer_options;
+                        assert_eq!(b'*', props.delimiter());
+                        assert_eq!("dd/MM/yyyy", props.date_format().unwrap());
+                        assert_eq!(
+                            "dd/MM/yyyy HH:mm:ss",
+                            props.datetime_format().unwrap()
+                        );
+                        assert_eq!(
+                            "dd/MM/yyyy HH:mm:ss",
+                            props.timestamp_format().unwrap()
+                        );
+                        // assert_eq!("dd/MM/yyyy HH:mm:ss", props.timestamp_tz_format().unwrap());
+                        assert_eq!("HH:mm:ss", props.time_format().unwrap());
+                        assert_eq!("NIL", props.null());
+                    }
+                    _ => panic!(),
+                },
+                _ => panic!(),
+            }
+        }
+        _ => panic!(),
+    }
+
+    Ok(())
+}
 async fn create_csv_scan(ctx: &SessionContext) -> Result<LogicalPlan, DataFusionError> {
     ctx.register_csv("t1", "tests/testdata/test.csv", CsvReadOptions::default())
         .await?;
