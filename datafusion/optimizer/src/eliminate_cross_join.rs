@@ -59,23 +59,25 @@ impl OptimizerRule for EliminateCrossJoin {
         let mut parent_predicate = None;
         if !match plan {
             LogicalPlan::Filter(filter) => {
-                let input = filter.input.as_ref().clone();
+                let input = filter.input.as_ref();
                 parent_predicate = Some(&filter.predicate);
-                match &input {
+                match input {
                     LogicalPlan::Join(Join {
                         join_type: JoinType::Inner,
                         ..
                     })
                     | LogicalPlan::CrossJoin(_) => {
                         let success = try_flatten_join_inputs(
-                            &input,
+                            input,
                             &mut possible_join_keys,
                             &mut all_inputs,
                         )?;
-                        extract_possible_join_keys(
-                            &filter.predicate,
-                            &mut possible_join_keys,
-                        )?;
+                        if success {
+                            extract_possible_join_keys(
+                                &filter.predicate,
+                                &mut possible_join_keys,
+                            )?;
+                        }
                         success
                     }
                     _ => {
@@ -110,7 +112,7 @@ impl OptimizerRule for EliminateCrossJoin {
 
         if plan.schema() != left.schema() {
             left = LogicalPlan::Projection(Projection::new_from_schema(
-                Arc::new(left.clone()),
+                Arc::new(left),
                 plan.schema().clone(),
             ));
         }
