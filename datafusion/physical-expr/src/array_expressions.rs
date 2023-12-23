@@ -472,6 +472,10 @@ where
 /// For example:
 /// > array_element(\[1, 2, 3], 2) -> 2
 pub fn array_element(args: &[ArrayRef]) -> Result<ArrayRef> {
+    if args.len() != 2 {
+        return exec_err!("array_element needs two arguments");
+    }
+
     match &args[0].data_type() {
         DataType::List(_) => {
             let array = as_list_array(&args[0])?;
@@ -585,6 +589,10 @@ pub fn array_except(args: &[ArrayRef]) -> Result<ArrayRef> {
 ///
 /// See test cases in `array.slt` for more details.
 pub fn array_slice(args: &[ArrayRef]) -> Result<ArrayRef> {
+    if args.len() != 3 {
+        return exec_err!("array_slice needs three arguments");
+    }
+
     let array_data_type = args[0].data_type();
     match array_data_type {
         DataType::List(_) => {
@@ -736,6 +744,10 @@ where
 
 /// array_pop_back SQL function
 pub fn array_pop_back(args: &[ArrayRef]) -> Result<ArrayRef> {
+    if args.len() != 1 {
+        return exec_err!("array_pop_back needs one argument");
+    }
+
     let list_array = as_list_array(&args[0])?;
     let from_array = Int64Array::from(vec![1; list_array.len()]);
     let to_array = Int64Array::from(
@@ -885,6 +897,10 @@ pub fn array_pop_front(args: &[ArrayRef]) -> Result<ArrayRef> {
 
 /// Array_append SQL function
 pub fn array_append(args: &[ArrayRef]) -> Result<ArrayRef> {
+    if args.len() != 2 {
+        return exec_err!("array_append expects two arguments");
+    }
+
     let list_array = as_list_array(&args[0])?;
     let element_array = &args[1];
 
@@ -911,6 +927,10 @@ pub fn array_append(args: &[ArrayRef]) -> Result<ArrayRef> {
 
 /// Array_sort SQL function
 pub fn array_sort(args: &[ArrayRef]) -> Result<ArrayRef> {
+    if args.is_empty() || args.len() > 3 {
+        return exec_err!("array_sort expects one to three arguments");
+    }
+
     let sort_option = match args.len() {
         1 => None,
         2 => {
@@ -990,6 +1010,10 @@ fn order_nulls_first(modifier: &str) -> Result<bool> {
 
 /// Array_prepend SQL function
 pub fn array_prepend(args: &[ArrayRef]) -> Result<ArrayRef> {
+    if args.len() != 2 {
+        return exec_err!("array_prepend expects two arguments");
+    }
+
     let list_array = as_list_array(&args[1])?;
     let element_array = &args[0];
 
@@ -1110,6 +1134,10 @@ fn concat_internal(args: &[ArrayRef]) -> Result<ArrayRef> {
 
 /// Array_concat/Array_cat SQL function
 pub fn array_concat(args: &[ArrayRef]) -> Result<ArrayRef> {
+    if args.is_empty() {
+        return exec_err!("array_concat expects at least one arguments");
+    }
+
     let mut new_args = vec![];
     for arg in args {
         let ndim = list_ndims(arg.data_type());
@@ -1126,6 +1154,10 @@ pub fn array_concat(args: &[ArrayRef]) -> Result<ArrayRef> {
 
 /// Array_empty SQL function
 pub fn array_empty(args: &[ArrayRef]) -> Result<ArrayRef> {
+    if args.len() != 1 {
+        return exec_err!("array_empty expects one argument");
+    }
+
     if as_null_array(&args[0]).is_ok() {
         // Make sure to return Boolean type.
         return Ok(Arc::new(BooleanArray::new_null(args[0].len())));
@@ -1150,6 +1182,10 @@ fn array_empty_dispatch<O: OffsetSizeTrait>(array: &ArrayRef) -> Result<ArrayRef
 
 /// Array_repeat SQL function
 pub fn array_repeat(args: &[ArrayRef]) -> Result<ArrayRef> {
+    if args.len() != 2 {
+        return exec_err!("array_repeat expects two arguments");
+    }
+
     let element = &args[0];
     let count_array = as_int64_array(&args[1])?;
 
@@ -1285,6 +1321,10 @@ fn general_list_repeat(
 
 /// Array_position SQL function
 pub fn array_position(args: &[ArrayRef]) -> Result<ArrayRef> {
+    if args.len() < 2 || args.len() > 3 {
+        return exec_err!("array_position expects two or three arguments");
+    }
+
     let list_array = as_list_array(&args[0])?;
     let element_array = &args[1];
 
@@ -1349,6 +1389,10 @@ fn general_position<OffsetSize: OffsetSizeTrait>(
 
 /// Array_positions SQL function
 pub fn array_positions(args: &[ArrayRef]) -> Result<ArrayRef> {
+    if args.len() != 2 {
+        return exec_err!("array_positions expects two arguments");
+    }
+
     let element = &args[1];
 
     match &args[0].data_type() {
@@ -1508,16 +1552,28 @@ fn array_remove_internal(
 }
 
 pub fn array_remove_all(args: &[ArrayRef]) -> Result<ArrayRef> {
+    if args.len() != 2 {
+        return exec_err!("array_remove_all expects two arguments");
+    }
+
     let arr_n = vec![i64::MAX; args[0].len()];
     array_remove_internal(&args[0], &args[1], arr_n)
 }
 
 pub fn array_remove(args: &[ArrayRef]) -> Result<ArrayRef> {
+    if args.len() != 2 {
+        return exec_err!("array_remove expects two arguments");
+    }
+
     let arr_n = vec![1; args[0].len()];
     array_remove_internal(&args[0], &args[1], arr_n)
 }
 
 pub fn array_remove_n(args: &[ArrayRef]) -> Result<ArrayRef> {
+    if args.len() != 3 {
+        return exec_err!("array_remove_n expects three arguments");
+    }
+
     let arr_n = as_int64_array(&args[2])?.values().to_vec();
     array_remove_internal(&args[0], &args[1], arr_n)
 }
@@ -1634,6 +1690,10 @@ fn general_replace<O: OffsetSizeTrait>(
 }
 
 pub fn array_replace(args: &[ArrayRef]) -> Result<ArrayRef> {
+    if args.len() != 3 {
+        return exec_err!("array_replace expects three arguments");
+    }
+
     // replace at most one occurence for each element
     let arr_n = vec![1; args[0].len()];
     let array = &args[0];
@@ -1651,6 +1711,10 @@ pub fn array_replace(args: &[ArrayRef]) -> Result<ArrayRef> {
 }
 
 pub fn array_replace_n(args: &[ArrayRef]) -> Result<ArrayRef> {
+    if args.len() != 4 {
+        return exec_err!("array_replace_n expects four arguments");
+    }
+
     // replace the specified number of occurences
     let arr_n = as_int64_array(&args[3])?.values().to_vec();
     let array = &args[0];
@@ -1670,6 +1734,10 @@ pub fn array_replace_n(args: &[ArrayRef]) -> Result<ArrayRef> {
 }
 
 pub fn array_replace_all(args: &[ArrayRef]) -> Result<ArrayRef> {
+    if args.len() != 3 {
+        return exec_err!("array_replace_all expects three arguments");
+    }
+
     // replace all occurrences (up to "i64::MAX")
     let arr_n = vec![i64::MAX; args[0].len()];
     let array = &args[0];
@@ -1760,7 +1828,7 @@ fn union_generic_lists<OffsetSize: OffsetSizeTrait>(
 /// Array_union SQL function
 pub fn array_union(args: &[ArrayRef]) -> Result<ArrayRef> {
     if args.len() != 2 {
-        return exec_err!("array_union needs two arguments");
+        return exec_err!("array_union needs 2 arguments");
     }
     let array1 = &args[0];
     let array2 = &args[1];
@@ -1802,6 +1870,10 @@ pub fn array_union(args: &[ArrayRef]) -> Result<ArrayRef> {
 
 /// Array_to_string SQL function
 pub fn array_to_string(args: &[ArrayRef]) -> Result<ArrayRef> {
+    if args.len() < 2 || args.len() > 3 {
+        return exec_err!("array_to_string expects two or three arguments");
+    }
+
     let arr = &args[0];
 
     let delimiters = as_string_array(&args[1])?;
@@ -1911,6 +1983,10 @@ pub fn array_to_string(args: &[ArrayRef]) -> Result<ArrayRef> {
 
 /// Cardinality SQL function
 pub fn cardinality(args: &[ArrayRef]) -> Result<ArrayRef> {
+    if args.len() != 1 {
+        return exec_err!("cardinality expects one argument");
+    }
+
     let list_array = as_list_array(&args[0])?.clone();
 
     let result = list_array
@@ -1967,6 +2043,10 @@ fn flatten_internal(
 
 /// Flatten SQL function
 pub fn flatten(args: &[ArrayRef]) -> Result<ArrayRef> {
+    if args.len() != 1 {
+        return exec_err!("flatten expects one argument");
+    }
+
     let flattened_array = flatten_internal(&args[0], None)?;
     Ok(Arc::new(flattened_array) as ArrayRef)
 }
@@ -1991,6 +2071,10 @@ fn array_length_dispatch<O: OffsetSizeTrait>(array: &[ArrayRef]) -> Result<Array
 
 /// Array_length SQL function
 pub fn array_length(args: &[ArrayRef]) -> Result<ArrayRef> {
+    if args.len() != 1 && args.len() != 2 {
+        return exec_err!("array_length expects one or two arguments");
+    }
+
     match &args[0].data_type() {
         DataType::List(_) => array_length_dispatch::<i32>(args),
         DataType::LargeList(_) => array_length_dispatch::<i64>(args),
@@ -2037,6 +2121,10 @@ pub fn array_dims(args: &[ArrayRef]) -> Result<ArrayRef> {
 
 /// Array_ndims SQL function
 pub fn array_ndims(args: &[ArrayRef]) -> Result<ArrayRef> {
+    if args.len() != 1 {
+        return exec_err!("array_ndims needs one argument");
+    }
+
     if let Some(list_array) = args[0].as_list_opt::<i32>() {
         let ndims = datafusion_common::utils::list_ndims(list_array.data_type());
 
@@ -2127,6 +2215,10 @@ fn general_array_has_dispatch<O: OffsetSizeTrait>(
 
 /// Array_has SQL function
 pub fn array_has(args: &[ArrayRef]) -> Result<ArrayRef> {
+    if args.len() != 2 {
+        return exec_err!("array_has needs two arguments");
+    }
+
     let array_type = args[0].data_type();
 
     match array_type {
@@ -2142,6 +2234,10 @@ pub fn array_has(args: &[ArrayRef]) -> Result<ArrayRef> {
 
 /// Array_has_any SQL function
 pub fn array_has_any(args: &[ArrayRef]) -> Result<ArrayRef> {
+    if args.len() != 2 {
+        return exec_err!("array_has_any needs two arguments");
+    }
+
     let array_type = args[0].data_type();
 
     match array_type {
@@ -2157,6 +2253,10 @@ pub fn array_has_any(args: &[ArrayRef]) -> Result<ArrayRef> {
 
 /// Array_has_all SQL function
 pub fn array_has_all(args: &[ArrayRef]) -> Result<ArrayRef> {
+    if args.len() != 2 {
+        return exec_err!("array_has_all needs two arguments");
+    }
+
     let array_type = args[0].data_type();
 
     match array_type {
@@ -2261,7 +2361,9 @@ pub fn string_to_array<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef
 
 /// array_intersect SQL function
 pub fn array_intersect(args: &[ArrayRef]) -> Result<ArrayRef> {
-    assert_eq!(args.len(), 2);
+    if args.len() != 2 {
+        return exec_err!("array_intersect needs two arguments");
+    }
 
     let first_array = &args[0];
     let second_array = &args[1];
@@ -2364,7 +2466,9 @@ pub fn general_array_distinct<OffsetSize: OffsetSizeTrait>(
 /// array_distinct SQL function
 /// example: from list [1, 3, 2, 3, 1, 2, 4] to [1, 2, 3, 4]
 pub fn array_distinct(args: &[ArrayRef]) -> Result<ArrayRef> {
-    assert_eq!(args.len(), 1);
+    if args.len() != 1 {
+        return exec_err!("array_distinct needs one argument");
+    }
 
     // handle null
     if args[0].data_type() == &DataType::Null {
