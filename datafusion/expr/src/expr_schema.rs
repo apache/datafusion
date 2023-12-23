@@ -573,7 +573,7 @@ mod tests {
         let schema = DFSchema::new_with_metadata(vec![fields], HashMap::new()).unwrap();
 
         let expr = col("parent").field("child");
-        assert_eq!(expr.nullable(&schema).unwrap(), true);
+        assert!(expr.nullable(&schema).unwrap());
     }
 
     #[derive(Debug)]
