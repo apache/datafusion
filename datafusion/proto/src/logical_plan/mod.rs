@@ -852,7 +852,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                                     writer_options,
                                 ) => {
                                     let writer_builder =
-                                        csv_writer_options_from_proto(writer_options);
+                                        csv_writer_options_from_proto(writer_options)?;
                                     CopyOptions::WriterOptions(Box::new(
                                         FileTypeWriterOptions::CSV(
                                             CsvWriterOptions::new(
@@ -1649,7 +1649,8 @@ impl AsLogicalPlan for LogicalPlanNode {
                                 FileTypeWriterOptions::CSV(csv_opts) => {
                                     let csv_options = &csv_opts.writer_options;
                                     let csv_writer_options = protobuf::CsvWriterOptions {
-                                        delimiter: csv_options.delimiter().to_string(),
+                                        delimiter: (csv_options.delimiter() as char)
+                                            .to_string(),
                                         has_header: csv_options.header(),
                                         date_format: csv_options
                                             .date_format()
@@ -1726,16 +1727,27 @@ impl AsLogicalPlan for LogicalPlanNode {
 
 pub(crate) fn csv_writer_options_from_proto(
     writer_options: &protobuf::CsvWriterOptions,
-) -> WriterBuilder {
-    WriterBuilder::new()
-        //.with_delimiter(writer_options.delimiter)
+) -> Result<WriterBuilder> {
+    let mut builder = WriterBuilder::new();
+    if writer_options.delimiter.len() > 0 {
+        if let Some(delimiter) = writer_options.delimiter.chars().next() {
+            if delimiter.is_ascii() {
+                builder = builder.with_delimiter(delimiter as u8);
+            } else {
+                return Err(proto_error("CSV Delimiter is not ASCII"));
+            }
+        } else {
+            return Err(proto_error("Error parsing CSV Delimiter"));
+        }
+    }
+    Ok(builder
         .with_header(writer_options.has_header)
         .with_date_format(writer_options.date_format.clone())
         .with_datetime_format(writer_options.datetime_format.clone())
         .with_timestamp_format(writer_options.timestamp_format.clone())
         // .with_timestamp_tz_format(writer_options.timestamp_tz_format.clone())
         .with_time_format(writer_options.time_format.clone())
-        .with_null(writer_options.null_value.clone())
+        .with_null(writer_options.null_value.clone()))
 }
 
 pub(crate) fn writer_properties_to_proto(

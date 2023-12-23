@@ -773,7 +773,7 @@ impl TryFrom<&protobuf::FileTypeWriterOptions> for FileTypeWriterOptions {
                 Self::JSON(JsonWriterOptions::new(opts.compression().into())),
             ),
             protobuf::file_type_writer_options::FileType::CsvOptions(opt) => {
-                let write_options = csv_writer_options_from_proto(opt);
+                let write_options = csv_writer_options_from_proto(opt)?;
                 Ok(Self::CSV(CsvWriterOptions::new(
                     write_options,
                     CompressionTypeVariant::UNCOMPRESSED,

@@ -439,11 +439,8 @@ async fn roundtrip_logical_plan_copy_to_csv() -> Result<()> {
                             "dd/MM/yyyy HH:mm:ss",
                             props.datetime_format().unwrap()
                         );
-                        assert_eq!(
-                            "dd/MM/yyyy HH:mm:ss",
-                            props.timestamp_format().unwrap()
-                        );
-                        // assert_eq!("dd/MM/yyyy HH:mm:ss", props.timestamp_tz_format().unwrap());
+                        assert_eq!("HH:mm:ss.SSSSSS", props.timestamp_format().unwrap());
+                        // assert_eq!("HH:mm:ss.SSSSSS", props.timestamp_tz_format().unwrap());
                         assert_eq!("HH:mm:ss", props.time_format().unwrap());
                         assert_eq!("NIL", props.null());
                     }
