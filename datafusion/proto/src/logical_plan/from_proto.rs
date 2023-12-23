@@ -42,15 +42,15 @@ use datafusion_common::{
 };
 use datafusion_expr::window_frame::{check_window_frame, regularize_window_order_by};
 use datafusion_expr::{
-    abs, acos, acosh, array, array_append, array_concat, array_dims, array_distinct,
-    array_element, array_except, array_has, array_has_all, array_has_any,
+    abs, acos, acosh, array, array_aggregate, array_append, array_concat, array_dims,
+    array_distinct, array_element, array_except, array_has, array_has_all, array_has_any,
     array_intersect, array_length, array_ndims, array_position, array_positions,
     array_prepend, array_remove, array_remove_all, array_remove_n, array_repeat,
     array_replace, array_replace_all, array_replace_n, array_slice, array_sort,
-    array_to_string, arrow_typeof, ascii, asin, asinh, atan, atan2, atanh, bit_length,
-    btrim, cardinality, cbrt, ceil, character_length, chr, coalesce, concat_expr,
-    concat_ws_expr, cos, cosh, cot, current_date, current_time, date_bin, date_part,
-    date_trunc, decode, degrees, digest, encode, exp,
+    array_sum, array_to_string, arrow_typeof, ascii, asin, asinh, atan, atan2, atanh,
+    bit_length, btrim, cardinality, cbrt, ceil, character_length, chr, coalesce,
+    concat_expr, concat_ws_expr, cos, cosh, cot, current_date, current_time, date_bin,
+    date_part, date_trunc, decode, degrees, digest, encode, exp,
     expr::{self, InList, Sort, WindowFunction},
     factorial, find_in_set, flatten, floor, from_unixtime, gcd, gen_range, isnan, iszero,
     lcm, left, levenshtein, ln, log, log10, log2,
