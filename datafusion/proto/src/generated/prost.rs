@@ -1689,8 +1689,7 @@ pub struct CsvWriterOptions {
     #[prost(string, tag = "5")]
     pub timestamp_format: ::prost::alloc::string::String,
     /// Optional timestamp format for timestamp with timezone arrays
-    #[prost(string, tag = "6")]
-    pub timestamp_tz_format: ::prost::alloc::string::String,
+    /// string timestamp_tz_format = 6;
     /// Optional time format for time arrays
     #[prost(string, tag = "7")]
     pub time_format: ::prost::alloc::string::String,

@@ -5174,9 +5174,6 @@ impl serde::Serialize for CsvWriterOptions {
         if !self.timestamp_format.is_empty() {
             len += 1;
         }
-        if !self.timestamp_tz_format.is_empty() {
-            len += 1;
-        }
         if !self.time_format.is_empty() {
             len += 1;
         }
@@ -5198,9 +5195,6 @@ impl serde::Serialize for CsvWriterOptions {
         }
         if !self.timestamp_format.is_empty() {
             struct_ser.serialize_field("timestampFormat", &self.timestamp_format)?;
-        }
-        if !self.timestamp_tz_format.is_empty() {
-            struct_ser.serialize_field("timestampTzFormat", &self.timestamp_tz_format)?;
         }
         if !self.time_format.is_empty() {
             struct_ser.serialize_field("timeFormat", &self.time_format)?;
@@ -5227,8 +5221,6 @@ impl<'de> serde::Deserialize<'de> for CsvWriterOptions {
             "datetimeFormat",
             "timestamp_format",
             "timestampFormat",
-            "timestamp_tz_format",
-            "timestampTzFormat",
             "time_format",
             "timeFormat",
             "null_value",
@@ -5242,7 +5234,6 @@ impl<'de> serde::Deserialize<'de> for CsvWriterOptions {
             DateFormat,
             DatetimeFormat,
             TimestampFormat,
-            TimestampTzFormat,
             TimeFormat,
             NullValue,
         }
@@ -5271,7 +5262,6 @@ impl<'de> serde::Deserialize<'de> for CsvWriterOptions {
                             "dateFormat" | "date_format" => Ok(GeneratedField::DateFormat),
                             "datetimeFormat" | "datetime_format" => Ok(GeneratedField::DatetimeFormat),
                             "timestampFormat" | "timestamp_format" => Ok(GeneratedField::TimestampFormat),
-                            "timestampTzFormat" | "timestamp_tz_format" => Ok(GeneratedField::TimestampTzFormat),
                             "timeFormat" | "time_format" => Ok(GeneratedField::TimeFormat),
                             "nullValue" | "null_value" => Ok(GeneratedField::NullValue),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
@@ -5298,7 +5288,6 @@ impl<'de> serde::Deserialize<'de> for CsvWriterOptions {
                 let mut date_format__ = None;
                 let mut datetime_format__ = None;
                 let mut timestamp_format__ = None;
-                let mut timestamp_tz_format__ = None;
                 let mut time_format__ = None;
                 let mut null_value__ = None;
                 while let Some(k) = map_.next_key()? {
@@ -5333,12 +5322,6 @@ impl<'de> serde::Deserialize<'de> for CsvWriterOptions {
                             }
                             timestamp_format__ = Some(map_.next_value()?);
                         }
-                        GeneratedField::TimestampTzFormat => {
-                            if timestamp_tz_format__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("timestampTzFormat"));
-                            }
-                            timestamp_tz_format__ = Some(map_.next_value()?);
-                        }
                         GeneratedField::TimeFormat => {
                             if time_format__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("timeFormat"));
@@ -5359,7 +5342,6 @@ impl<'de> serde::Deserialize<'de> for CsvWriterOptions {
                     date_format: date_format__.unwrap_or_default(),
                     datetime_format: datetime_format__.unwrap_or_default(),
                     timestamp_format: timestamp_format__.unwrap_or_default(),
-                    timestamp_tz_format: timestamp_tz_format__.unwrap_or_default(),
                     time_format: time_format__.unwrap_or_default(),
                     null_value: null_value__.unwrap_or_default(),
                 })

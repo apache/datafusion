@@ -1664,7 +1664,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                                             .timestamp_format()
                                             .unwrap_or("")
                                             .to_owned(),
-                                        timestamp_tz_format: "".to_string(),
+                                        //timestamp_tz_format: "".to_string(),
                                         time_format: csv_options
                                             .time_format()
                                             .unwrap_or("")
