@@ -598,7 +598,7 @@ Environment variables are read during <code class="docutils literal notranslate"
 </tr>
 <tr class="row-odd"><td><p>datafusion.execution.listing_table_ignore_subdirectory</p></td>
 <td><p>true</p></td>
-<td><p>When scanning file paths, whether to ignore subdirectory files, ignored by default (true), when reading a partitioned table, <code class="docutils literal notranslate"><span class="pre">listing_table_ignore_subdirectory</span></code> is always equal to false, even if set to true</p></td>
+<td><p>Should sub directories be ignored when scanning directories for data files. Defaults to true (ignores subdirectories), consistent with Hive. Note that this setting does not affect reading partitioned tables (e.g. <code class="docutils literal notranslate"><span class="pre">/table/year=2021/month=01/data.parquet</span></code>).</p></td>
 </tr>
 <tr class="row-even"><td><p>datafusion.optimizer.enable_distinct_aggregation_soft_limit</p></td>
 <td><p>true</p></td>
