@@ -22,7 +22,7 @@ use std::io::BufReader;
 use std::sync::Arc;
 use std::task::Poll;
 
-use super::FileScanConfig;
+use super::{FileGroupPartitioner, FileScanConfig};
 use crate::datasource::file_format::file_compression_type::FileCompressionType;
 use crate::datasource::listing::ListingTableUrl;
 use crate::datasource::physical_plan::file_stream::{
@@ -132,6 +132,30 @@ impl ExecutionPlan for NdJsonExec {
         _: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         Ok(self)
+    }
+
+    fn repartitioned(
+        &self,
+        target_partitions: usize,
+        config: &datafusion_common::config::ConfigOptions,
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        let repartition_file_min_size = config.optimizer.repartition_file_min_size;
+        let preserve_order_within_groups = self.output_ordering().is_some();
+        let file_groups = &self.base_config.file_groups;
+
+        let repartitioned_file_groups_option = FileGroupPartitioner::new()
+            .with_target_partitions(target_partitions)
+            .with_preserve_order_within_groups(preserve_order_within_groups)
+            .with_repartition_file_min_size(repartition_file_min_size)
+            .repartition_file_groups(file_groups);
+
+        if let Some(repartitioned_file_groups) = repartitioned_file_groups_option {
+            let mut new_plan = self.clone();
+            new_plan.base_config.file_groups = repartitioned_file_groups;
+            return Ok(Some(Arc::new(new_plan)));
+        }
+
+        Ok(None)
     }
 
     fn execute(
