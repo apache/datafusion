@@ -273,11 +273,11 @@ config_namespace! {
         /// memory consumption
         pub max_buffered_batches_per_output_file: usize, default = 2
 
-        /// When scanning file paths, whether to ignore subdirectory files,
-        /// ignored by default (true), when reading a partitioned table,
-        /// `listing_table_ignore_subdirectory` is always equal to false, even if set to true
+        /// Should sub directories be ignored when scanning directories for data
+        /// files. Defaults to true (ignores subdirectories), consistent with
+        /// Hive. Note that this setting does not affect reading partitioned
+        /// tables (e.g. `/table/year=2021/month=01/data.parquet`).
         pub listing_table_ignore_subdirectory: bool, default = true
-
     }
 }
 
