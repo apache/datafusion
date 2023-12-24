@@ -1187,6 +1187,8 @@ message PhysicalPlanNode {
     SymmetricHashJoinExecNode symmetric_hash_join = 25;
     InterleaveExecNode  interleave = 26;
     PlaceholderRowExecNode placeholder_row = 27;
+    CsvSinkExecNode csv_sink = 28;
+    ParquetSinkExecNode parquet_sink = 29;
   }
 }
 
@@ -1248,6 +1250,28 @@ message JsonSink {
 message JsonSinkExecNode {
   PhysicalPlanNode input = 1;
   JsonSink sink = 2;
+  Schema sink_schema = 3;
+  PhysicalSortExprNodeCollection sort_order = 4;
+}
+
+message CsvSink {
+  FileSinkConfig config = 1;
+}
+
+message CsvSinkExecNode {
+  PhysicalPlanNode input = 1;
+  CsvSink sink = 2;
+  Schema sink_schema = 3;
+  PhysicalSortExprNodeCollection sort_order = 4;
+}
+
+message ParquetSink {
+  FileSinkConfig config = 1;
+}
+
+message ParquetSinkExecNode {
+  PhysicalPlanNode input = 1;
+  ParquetSink sink = 2;
   Schema sink_schema = 3;
   PhysicalSortExprNodeCollection sort_order = 4;
 }

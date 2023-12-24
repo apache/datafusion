@@ -28,7 +28,11 @@ use crate::protobuf::{
     ScalarValue,
 };
 
+#[cfg(feature = "parquet")]
+use datafusion::datasource::file_format::parquet::ParquetSink;
+
 use datafusion::datasource::{
+    file_format::csv::CsvSink,
     file_format::json::JsonSink,
     listing::{FileRange, PartitionedFile},
     physical_plan::FileScanConfig,
@@ -808,6 +812,27 @@ impl TryFrom<&JsonSink> for protobuf::JsonSink {
     type Error = DataFusionError;
 
     fn try_from(value: &JsonSink) -> Result<Self, Self::Error> {
+        Ok(Self {
+            config: Some(value.config().try_into()?),
+        })
+    }
+}
+
+impl TryFrom<&CsvSink> for protobuf::CsvSink {
+    type Error = DataFusionError;
+
+    fn try_from(value: &CsvSink) -> Result<Self, Self::Error> {
+        Ok(Self {
+            config: Some(value.config().try_into()?),
+        })
+    }
+}
+
+#[cfg(feature = "parquet")]
+impl TryFrom<&ParquetSink> for protobuf::ParquetSink {
+    type Error = DataFusionError;
+
+    fn try_from(value: &ParquetSink) -> Result<Self, Self::Error> {
         Ok(Self {
             config: Some(value.config().try_into()?),
         })

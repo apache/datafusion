@@ -22,7 +22,10 @@ use std::sync::Arc;
 
 use arrow::compute::SortOptions;
 use datafusion::arrow::datatypes::Schema;
+use datafusion::datasource::file_format::csv::CsvSink;
 use datafusion::datasource::file_format::json::JsonSink;
+#[cfg(feature = "parquet")]
+use datafusion::datasource::file_format::parquet::ParquetSink;
 use datafusion::datasource::listing::{FileRange, ListingTableUrl, PartitionedFile};
 use datafusion::datasource::object_store::ObjectStoreUrl;
 use datafusion::datasource::physical_plan::{FileScanConfig, FileSinkConfig};
@@ -708,6 +711,23 @@ impl TryFrom<&protobuf::JsonSink> for JsonSink {
     type Error = DataFusionError;
 
     fn try_from(value: &protobuf::JsonSink) -> Result<Self, Self::Error> {
+        Ok(Self::new(convert_required!(value.config)?))
+    }
+}
+
+#[cfg(feature = "parquet")]
+impl TryFrom<&protobuf::ParquetSink> for ParquetSink {
+    type Error = DataFusionError;
+
+    fn try_from(value: &protobuf::ParquetSink) -> Result<Self, Self::Error> {
+        Ok(Self::new(convert_required!(value.config)?))
+    }
+}
+
+impl TryFrom<&protobuf::CsvSink> for CsvSink {
+    type Error = DataFusionError;
+
+    fn try_from(value: &protobuf::CsvSink) -> Result<Self, Self::Error> {
         Ok(Self::new(convert_required!(value.config)?))
     }
 }
