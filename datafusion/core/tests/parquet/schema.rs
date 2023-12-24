@@ -22,6 +22,7 @@ use ::parquet::arrow::ArrowWriter;
 use tempfile::TempDir;
 
 use super::*;
+use datafusion_common::assert_batches_sorted_eq;
 
 #[tokio::test]
 async fn schema_merge_ignores_metadata_by_default() {
@@ -90,7 +91,13 @@ async fn schema_merge_ignores_metadata_by_default() {
         .await
         .unwrap();
 
-    let actual = execute_to_batches(&ctx, "SELECT * from t").await;
+    let actual = ctx
+        .sql("SELECT * from t")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
     assert_batches_sorted_eq!(expected, &actual);
     assert_no_metadata(&actual);
 }
@@ -151,7 +158,13 @@ async fn schema_merge_can_preserve_metadata() {
         .await
         .unwrap();
 
-    let actual = execute_to_batches(&ctx, "SELECT * from t").await;
+    let actual = ctx
+        .sql("SELECT * from t")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
     assert_batches_sorted_eq!(expected, &actual);
     assert_metadata(&actual, &expected_metadata);
 }
