@@ -1743,6 +1743,32 @@ impl AsExecutionPlan for PhysicalPlanNode {
                 });
             }
 
+            if let Some(sink) = exec.sink().as_any().downcast_ref::<CsvSink>() {
+                return Ok(protobuf::PhysicalPlanNode {
+                    physical_plan_type: Some(PhysicalPlanType::CsvSink(Box::new(
+                        protobuf::CsvSinkExecNode {
+                            input: Some(Box::new(input)),
+                            sink: Some(sink.try_into()?),
+                            sink_schema: Some(exec.schema().as_ref().try_into()?),
+                            sort_order,
+                        },
+                    ))),
+                });
+            }
+
+            if let Some(sink) = exec.sink().as_any().downcast_ref::<ParquetSink>() {
+                return Ok(protobuf::PhysicalPlanNode {
+                    physical_plan_type: Some(PhysicalPlanType::ParquetSink(Box::new(
+                        protobuf::ParquetSinkExecNode {
+                            input: Some(Box::new(input)),
+                            sink: Some(sink.try_into()?),
+                            sink_schema: Some(exec.schema().as_ref().try_into()?),
+                            sort_order,
+                        },
+                    ))),
+                });
+            }
+
             // If unknown DataSink then let extension handle it
         }
 
