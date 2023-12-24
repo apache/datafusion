@@ -1688,13 +1688,11 @@ pub struct CsvWriterOptions {
     /// Optional timestamp format for timestamp arrays
     #[prost(string, tag = "5")]
     pub timestamp_format: ::prost::alloc::string::String,
-    /// Optional timestamp format for timestamp with timezone arrays
-    /// string timestamp_tz_format = 6;
     /// Optional time format for time arrays
-    #[prost(string, tag = "7")]
+    #[prost(string, tag = "6")]
     pub time_format: ::prost::alloc::string::String,
     /// Optional value to represent null
-    #[prost(string, tag = "8")]
+    #[prost(string, tag = "7")]
     pub null_value: ::prost::alloc::string::String,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]

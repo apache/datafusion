@@ -1230,12 +1230,10 @@ message CsvWriterOptions {
   string datetime_format = 4;
   // Optional timestamp format for timestamp arrays
   string timestamp_format = 5;
-  // Optional timestamp format for timestamp with timezone arrays
-  //string timestamp_tz_format = 6;
   // Optional time format for time arrays
-  string time_format = 7;
+  string time_format = 6;
   // Optional value to represent null
-  string null_value = 8;
+  string null_value = 7;
 }
 
 message WriterProperties {

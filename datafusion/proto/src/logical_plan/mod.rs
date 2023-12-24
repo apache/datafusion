@@ -1664,7 +1664,6 @@ impl AsLogicalPlan for LogicalPlanNode {
                                             .timestamp_format()
                                             .unwrap_or("")
                                             .to_owned(),
-                                        //timestamp_tz_format: "".to_string(),
                                         time_format: csv_options
                                             .time_format()
                                             .unwrap_or("")
@@ -1729,7 +1728,7 @@ pub(crate) fn csv_writer_options_from_proto(
     writer_options: &protobuf::CsvWriterOptions,
 ) -> Result<WriterBuilder> {
     let mut builder = WriterBuilder::new();
-    if writer_options.delimiter.len() > 0 {
+    if !writer_options.delimiter.is_empty() {
         if let Some(delimiter) = writer_options.delimiter.chars().next() {
             if delimiter.is_ascii() {
                 builder = builder.with_delimiter(delimiter as u8);
@@ -1745,7 +1744,6 @@ pub(crate) fn csv_writer_options_from_proto(
         .with_date_format(writer_options.date_format.clone())
         .with_datetime_format(writer_options.datetime_format.clone())
         .with_timestamp_format(writer_options.timestamp_format.clone())
-        // .with_timestamp_tz_format(writer_options.timestamp_tz_format.clone())
         .with_time_format(writer_options.time_format.clone())
         .with_null(writer_options.null_value.clone()))
 }
