@@ -158,9 +158,8 @@ impl ExprSchemable for Expr {
             }) => get_result_type(&left.get_type(schema)?, op, &right.get_type(schema)?),
             Expr::Like { .. } | Expr::SimilarTo { .. } => Ok(DataType::Boolean),
             Expr::Placeholder(Placeholder { data_type, .. }) => {
-                data_type.clone().ok_or_else(|| {
-                    plan_datafusion_err!("Placeholder type could not be resolved")
-                })
+                // default to Utf8 type if the data_type couldn't be resolved
+                data_type.clone().unwrap_or(DataType::Utf8)
             }
             Expr::Wildcard { qualifier } => {
                 // Wildcard do not really have a type and do not appear in projections
