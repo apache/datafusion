@@ -24,7 +24,6 @@ pub mod crypto_expressions;
 pub mod datetime_expressions;
 #[cfg(feature = "encoding_expressions")]
 pub mod encoding_expressions;
-pub mod equivalence;
 pub mod execution_props;
 pub mod expressions;
 pub mod functions;
@@ -53,7 +52,6 @@ pub use aggregate::groups_accumulator::{
 };
 pub use aggregate::AggregateExpr;
 pub use analysis::{analyze, AnalysisContext, ExprBoundaries};
-pub use equivalence::EquivalenceProperties;
 pub use partitioning::{Distribution, Partitioning};
 pub use physical_expr::{
     physical_exprs_bag_equal, physical_exprs_contains, physical_exprs_equal,
