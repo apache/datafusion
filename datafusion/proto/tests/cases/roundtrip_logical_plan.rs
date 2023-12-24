@@ -403,7 +403,6 @@ async fn roundtrip_logical_plan_copy_to_csv() -> Result<()> {
         .with_date_format("dd/MM/yyyy".to_string())
         .with_datetime_format("dd/MM/yyyy HH:mm:ss".to_string())
         .with_timestamp_format("HH:mm:ss.SSSSSS".to_string())
-        //.with_timestamp_tz_format("HH:mm:ss.SSSSSS".to_string())
         .with_time_format("HH:mm:ss".to_string())
         .with_null("NIL".to_string());
 
@@ -440,7 +439,6 @@ async fn roundtrip_logical_plan_copy_to_csv() -> Result<()> {
                             props.datetime_format().unwrap()
                         );
                         assert_eq!("HH:mm:ss.SSSSSS", props.timestamp_format().unwrap());
-                        // assert_eq!("HH:mm:ss.SSSSSS", props.timestamp_tz_format().unwrap());
                         assert_eq!("HH:mm:ss", props.time_format().unwrap());
                         assert_eq!("NIL", props.null());
                     }
