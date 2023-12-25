@@ -965,11 +965,11 @@ impl PushDownFilter {
     }
 }
 
-/// Convert cross join to join by pushing down filter predicate to the join condition
+/// Converts the given cross join to an inner join with an empty equality
+/// predicate and an empty filter condition.
 fn convert_cross_join_to_inner_join(cross_join: CrossJoin) -> Result<Join> {
     let CrossJoin { left, right, .. } = cross_join;
     let join_schema = build_join_schema(left.schema(), right.schema(), &JoinType::Inner)?;
-    // predicate is given
     Ok(Join {
         left,
         right,
@@ -982,7 +982,8 @@ fn convert_cross_join_to_inner_join(cross_join: CrossJoin) -> Result<Join> {
     })
 }
 
-/// Converts the inner join with empty equality predicate and empty filter condition to the cross join
+/// Converts the given inner join with an empty equality predicate and an
+/// empty filter condition to a cross join.
 fn convert_to_cross_join_if_beneficial(plan: LogicalPlan) -> Result<LogicalPlan> {
     if let LogicalPlan::Join(join) = &plan {
         // Can be converted back to cross join
@@ -991,6 +992,11 @@ fn convert_to_cross_join_if_beneficial(plan: LogicalPlan) -> Result<LogicalPlan>
                 .cross_join(join.right.as_ref().clone())?
                 .build();
         }
+    } else if let LogicalPlan::Filter(filter) = &plan {
+        let new_input =
+            convert_to_cross_join_if_beneficial(filter.input.as_ref().clone())?;
+        return Filter::try_new(filter.predicate.clone(), Arc::new(new_input))
+            .map(LogicalPlan::Filter);
     }
     Ok(plan)
 }
