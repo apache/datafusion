@@ -852,7 +852,12 @@ pub fn expr_as_column_expr(expr: &Expr, plan: &LogicalPlan) -> Result<Expr> {
     match expr {
         Expr::Column(col) => {
             let field = plan.schema().field_from_column(col)?;
-            Ok(Expr::Column(field.qualified_column()))
+            // We create a column instead of taking the qualified one as we want to keep the casing
+            // of the column we have in hand
+            Ok(Expr::Column(Column {
+                relation: field.qualifier().cloned(),
+                name: col.name.clone()
+            }))
         }
         _ => Ok(Expr::Column(Column::from_name(expr.display_name()?))),
     }

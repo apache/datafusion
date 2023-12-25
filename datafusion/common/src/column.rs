@@ -28,12 +28,18 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 /// A named reference to a qualified field in a schema.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, Clone, Eq, Hash, PartialOrd, Ord)]
 pub struct Column {
     /// relation/table reference.
     pub relation: Option<OwnedTableReference>,
     /// field/column name.
     pub name: String,
+}
+
+impl PartialEq for Column {
+    fn eq(&self, other: &Self) -> bool {
+        return self.relation == other.relation && self.name.to_lowercase() == other.name.to_lowercase(); 
+    }
 }
 
 impl Column {
