@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::{ArrayRef, Int64Array};
+use arrow::array::ArrayRef;
 use async_trait::async_trait;
 use datafusion::execution::context::SessionState;
 use datafusion::logical_expr::{create_udf, Expr, ScalarUDF, Volatility};
@@ -35,7 +35,7 @@ use datafusion::{
     datasource::{MemTable, TableProvider, TableType},
     prelude::{CsvReadOptions, SessionContext},
 };
-use datafusion_common::cast::{as_float64_array, as_int32_array};
+use datafusion_common::cast::as_float64_array;
 use datafusion_common::DataFusionError;
 use log::info;
 use std::collections::HashMap;
@@ -105,8 +105,8 @@ impl TestContext {
             }
             "joins.slt" => {
                 info!("Registering partition table tables");
-                let twice = create_pow_udf();
-                test_ctx.ctx.register_udf(twice);
+                let pow = create_pow_udf();
+                test_ctx.ctx.register_udf(pow);
                 register_partition_table(&mut test_ctx).await;
             }
             "metadata.slt" => {
@@ -398,7 +398,7 @@ fn create_pow_udf() -> ScalarUDF {
     // * give it a name so that it shows nicely when the plan is printed
     // * declare what input it expects
     // * declare its return type
-    let pow = create_udf(
+    create_udf(
         "pow_udf",
         // expects two f64
         vec![DataType::Float64, DataType::Float64],
@@ -406,6 +406,5 @@ fn create_pow_udf() -> ScalarUDF {
         Arc::new(DataType::Float64),
         Volatility::Immutable,
         pow,
-    );
-    pow
+    )
 }
