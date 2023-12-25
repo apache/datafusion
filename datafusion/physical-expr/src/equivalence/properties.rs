@@ -16,19 +16,24 @@
 // under the License.
 
 use arrow_schema::SchemaRef;
-use std::collections::HashSet;
+use indexmap::IndexSet;
+use std::collections::{HashMap, HashSet};
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 use crate::equivalence::{
     collapse_lex_req, EquivalenceGroup, OrderingEquivalenceClass, ProjectionMapping,
 };
 
+use crate::expressions::Literal;
 use crate::sort_properties::{ExprOrdering, SortProperties};
 use crate::{
     physical_exprs_contains, LexOrdering, LexOrderingRef, LexRequirement,
     LexRequirementRef, PhysicalExpr, PhysicalSortExpr, PhysicalSortRequirement,
 };
 use datafusion_common::tree_node::{Transformed, TreeNode};
+
+use super::ordering::collapse_lex_ordering;
 
 /// A `EquivalenceProperties` object stores useful information related to a schema.
 /// Currently, it keeps track of:

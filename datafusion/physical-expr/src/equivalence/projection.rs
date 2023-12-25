@@ -30,7 +30,7 @@ use datafusion_common::Result;
 pub struct ProjectionMapping {
     /// Mapping between source expressions and target expressions.
     /// Vector indices correspond to the indices after projection.
-    map: Vec<(Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>)>,
+    pub map: Vec<(Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>)>,
 }
 
 impl ProjectionMapping {
