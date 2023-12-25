@@ -3466,6 +3466,23 @@ SortPreservingMergeExec: [a@0 ASC]
 ----------------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
 ------------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b], output_ordering=[a@0 ASC, b@1 ASC NULLS LAST], has_header=true
 
+query TT
+EXPLAIN SELECT *
+FROM annotated_data as l, annotated_data as r
+WHERE l.a > r.a
+----
+logical_plan
+Inner Join:  Filter: l.a > r.a
+--SubqueryAlias: l
+----TableScan: annotated_data projection=[a0, a, b, c, d]
+--SubqueryAlias: r
+----TableScan: annotated_data projection=[a0, a, b, c, d]
+physical_plan
+NestedLoopJoinExec: join_type=Inner, filter=a@0 > a@1
+--RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+----CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a0, a, b, c, d], output_ordering=[a@1 ASC, b@2 ASC NULLS LAST, c@3 ASC NULLS LAST], has_header=true
+--CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a0, a, b, c, d], output_ordering=[a@1 ASC, b@2 ASC NULLS LAST, c@3 ASC NULLS LAST], has_header=true
+
 ####
 # Config teardown
 ####
