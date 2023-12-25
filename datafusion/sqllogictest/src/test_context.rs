@@ -15,34 +15,33 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::ArrayRef;
-use async_trait::async_trait;
+use std::collections::HashMap;
+use std::fs::File;
+use std::io::Write;
+use std::path::Path;
+use std::sync::Arc;
+
+use arrow::array::{
+    ArrayRef, BinaryArray, Float64Array, Int32Array, LargeBinaryArray, LargeStringArray,
+    StringArray, TimestampNanosecondArray,
+};
+use arrow::datatypes::{DataType, Field, Schema, SchemaRef, TimeUnit};
+use arrow::record_batch::RecordBatch;
 use datafusion::execution::context::SessionState;
 use datafusion::logical_expr::{create_udf, Expr, ScalarUDF, Volatility};
 use datafusion::physical_expr::functions::make_scalar_function;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::SessionConfig;
 use datafusion::{
-    arrow::{
-        array::{
-            BinaryArray, Float64Array, Int32Array, LargeBinaryArray, LargeStringArray,
-            StringArray, TimestampNanosecondArray,
-        },
-        datatypes::{DataType, Field, Schema, SchemaRef, TimeUnit},
-        record_batch::RecordBatch,
-    },
     catalog::{schema::MemorySchemaProvider, CatalogProvider, MemoryCatalogProvider},
     datasource::{MemTable, TableProvider, TableType},
     prelude::{CsvReadOptions, SessionContext},
 };
 use datafusion_common::cast::as_float64_array;
 use datafusion_common::DataFusionError;
+
+use async_trait::async_trait;
 use log::info;
-use std::collections::HashMap;
-use std::fs::File;
-use std::io::Write;
-use std::path::Path;
-use std::sync::Arc;
 use tempfile::TempDir;
 
 /// Context for running tests
@@ -105,8 +104,8 @@ impl TestContext {
             }
             "joins.slt" => {
                 info!("Registering partition table tables");
-                let example = create_example_udf();
-                test_ctx.ctx.register_udf(example);
+                let example_udf = create_example_udf();
+                test_ctx.ctx.register_udf(example_udf);
                 register_partition_table(&mut test_ctx).await;
             }
             "metadata.slt" => {
@@ -354,55 +353,27 @@ pub async fn register_metadata_tables(ctx: &SessionContext) {
     ctx.register_batch("table_with_metadata", batch).unwrap();
 }
 
-/// Create a UDF function named "example"
+/// Create a UDF function named "example". See the `sample_udf.rs` example
+/// file for an explanation of the API.
 fn create_example_udf() -> ScalarUDF {
-    // First, declare the actual implementation of the calculation
-    let adder = |args: &[ArrayRef]| {
-        // in DataFusion, all `args` and output are dynamically-typed arrays, which means that we need to:
-        // 1. cast the values to the type we want
-        // 2. perform the computation for every element in the array (using a loop or SIMD) and construct the result
-
-        // this is guaranteed by DataFusion based on the function's signature.
-        assert_eq!(args.len(), 2);
-
-        // 1. cast both arguments to f64. These casts MUST be aligned with the signature or this function panics!
+    let adder = make_scalar_function(|args: &[ArrayRef]| {
         let lhs = as_float64_array(&args[0]).expect("cast failed");
         let rhs = as_float64_array(&args[1]).expect("cast failed");
-
-        // this is guaranteed by DataFusion. We place it just to make it obvious.
-        assert_eq!(lhs.len(), rhs.len());
-
-        // 2. perform the computation
         let array = lhs
             .iter()
             .zip(rhs.iter())
-            .map(|(lhs, rhs)| {
-                match (lhs, rhs) {
-                    // in arrow, any value can be null.
-                    // Here we decide to make our UDF to return null when either base or exponent is null.
-                    (Some(lhs), Some(rhs)) => Some(lhs + rhs),
-                    _ => None,
-                }
+            .map(|(lhs, rhs)| match (lhs, rhs) {
+                (Some(lhs), Some(rhs)) => Some(lhs + rhs),
+                _ => None,
             })
             .collect::<Float64Array>();
-
-        // `Ok` because no error occurred during the calculation
-        // `Arc` because arrays are immutable, thread-safe, trait objects.
         Ok(Arc::new(array) as ArrayRef)
-    };
-    // the function above expects an `ArrayRef`, but DataFusion may pass a scalar to a UDF.
-    // thus, we use `make_scalar_function` to decorare the closure so that it can handle both Arrays and Scalar values.
-    let adder = make_scalar_function(adder);
-
-    // Next:
-    // * give it a name so that it shows nicely when the plan is printed
-    // * declare what input it expects
-    // * declare its return type
+    });
     create_udf(
         "example",
-        // expects two f64
+        // Expects two f64 values:
         vec![DataType::Float64, DataType::Float64],
-        // returns f64
+        // Returns an f64 value:
         Arc::new(DataType::Float64),
         Volatility::Immutable,
         adder,
