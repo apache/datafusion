@@ -19,10 +19,7 @@
 
 use std::sync::Arc;
 
-use crate::physical_plan::aggregates::AggregateExec;
 use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
-use crate::physical_plan::joins::{CrossJoinExec, HashJoinExec, NestedLoopJoinExec};
-use crate::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use crate::physical_plan::repartition::RepartitionExec;
 use crate::physical_plan::sorts::sort::SortExec;
 use crate::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
@@ -31,6 +28,7 @@ use crate::physical_plan::windows::{BoundedWindowAggExec, WindowAggExec};
 use crate::physical_plan::ExecutionPlan;
 
 use datafusion_physical_expr::{LexRequirementRef, PhysicalSortRequirement};
+use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 
 /// This utility function adds a `SortExec` above an operator according to the
 /// given ordering requirements while preserving the original partitioning.
