@@ -46,7 +46,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             // interpret names with '.' as if they were
             // compound identifiers, but this is not a compound
             // identifier. (e.g. it is "foo.bar" not foo.bar)
-            let normalize_ident = self.normalizer.normalize_column(id);
+            // let normalize_ident = self.normalizer.normalize_column(id);
+            let normalize_ident = id.value;
             match schema.field_with_unqualified_name(normalize_ident.as_str()) {
                 Ok(_) => {
                     // found a match without a qualified name, this is a inner table column
@@ -64,7 +65,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                                 // found an exact match on a qualified name in the outer plan schema, so this is an outer reference column
                                 Ok(Expr::OuterReferenceColumn(
                                     field.data_type().clone(),
-                                    field.qualified_column(),
+                                    Column {
+                                        relation: field.qualifier().cloned(),
+                                        name: normalize_ident,
+                                    },
                                 ))
                             }
                             Err(_) => Ok(Expr::Column(Column {
@@ -113,7 +117,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 .into_iter()
                 .map(|id| self.normalizer.normalize(id))
                 .collect::<Vec<_>>();
-            ids.push(self.normalizer.normalize_column(col_name));
+            ids.push(col_name.value.clone());
 
             // Currently not supporting more than one nested level
             // Though ideally once that support is in place, this code should work with it
@@ -137,9 +141,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     Ok(Expr::Column(field.qualified_column()).field(nested_name))
                 }
                 // found matching field with no spare identifier(s)
-                Some((field, _nested_names)) => {
-                    Ok(Expr::Column(field.qualified_column()))
-                }
+                Some((field, _nested_names)) => Ok(Expr::Column(Column {
+                    relation: field.qualifier().cloned(),
+                    name: col_name.value,
+                })),
                 None => {
                     // return default where use all identifiers to not have a nested field
                     // this len check is because at 5 identifiers will have to have a nested field
@@ -165,7 +170,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                                     // found an exact match on a qualified name in the outer plan schema, so this is an outer reference column
                                     Ok(Expr::OuterReferenceColumn(
                                         field.data_type().clone(),
-                                        field.qualified_column(),
+                                        Column {
+                                            relation: field.qualifier().cloned(),
+                                            name: col_name.value,
+                                        },
                                     ))
                                 }
                                 // found no matching field, will return a default

@@ -136,7 +136,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         .iter()
                         .find(|field| match field.qualifier() {
                             Some(field_q) => {
-                                field.name() == &col.name
+                                field.name() == col.name
                                     && field_q.to_string().ends_with(&format!(".{q}"))
                             }
                             _ => false,
