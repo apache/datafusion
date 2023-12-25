@@ -31,7 +31,6 @@ use arrow::compute::concat_batches;
 use arrow_array::{ArrowPrimitiveType, NativeAdapter, PrimitiveArray, RecordBatch};
 use arrow_buffer::{ArrowNativeType, BooleanBufferBuilder};
 use arrow_schema::{Schema, SchemaRef};
-use async_trait::async_trait;
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{
     arrow_datafusion_err, plan_datafusion_err, DataFusionError, JoinSide, Result,
@@ -40,10 +39,11 @@ use datafusion_common::{
 use datafusion_execution::SendableRecordBatchStream;
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_physical_expr::expressions::Column;
+use datafusion_physical_expr::intervals::cp_solver::ExprIntervalGraph;
 use datafusion_physical_expr::utils::collect_columns;
 use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
 
-use datafusion_physical_expr::intervals::cp_solver::ExprIntervalGraph;
+use async_trait::async_trait;
 use futures::{ready, FutureExt, StreamExt};
 use hashbrown::raw::RawTable;
 use hashbrown::HashSet;
@@ -1128,62 +1128,15 @@ pub mod tests {
     };
     use crate::{
         expressions::{Column, PhysicalSortExpr},
+        joins::test_utils::complicated_filter,
         joins::utils::{ColumnIndex, JoinFilter},
     };
 
     use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field, Schema};
-    use datafusion_common::{JoinSide, ScalarValue};
+    use datafusion_common::JoinSide;
     use datafusion_expr::Operator;
-    use datafusion_physical_expr::expressions::{binary, cast, col, lit};
-
-    /// Filter expr for a + b > c + 10 AND a + b < c + 100
-    pub(crate) fn complicated_filter(
-        filter_schema: &Schema,
-    ) -> Result<Arc<dyn PhysicalExpr>> {
-        let left_expr = binary(
-            cast(
-                binary(
-                    col("0", filter_schema)?,
-                    Operator::Plus,
-                    col("1", filter_schema)?,
-                    filter_schema,
-                )?,
-                filter_schema,
-                DataType::Int64,
-            )?,
-            Operator::Gt,
-            binary(
-                cast(col("2", filter_schema)?, filter_schema, DataType::Int64)?,
-                Operator::Plus,
-                lit(ScalarValue::Int64(Some(10))),
-                filter_schema,
-            )?,
-            filter_schema,
-        )?;
-
-        let right_expr = binary(
-            cast(
-                binary(
-                    col("0", filter_schema)?,
-                    Operator::Plus,
-                    col("1", filter_schema)?,
-                    filter_schema,
-                )?,
-                filter_schema,
-                DataType::Int64,
-            )?,
-            Operator::Lt,
-            binary(
-                cast(col("2", filter_schema)?, filter_schema, DataType::Int64)?,
-                Operator::Plus,
-                lit(ScalarValue::Int64(Some(100))),
-                filter_schema,
-            )?,
-            filter_schema,
-        )?;
-        binary(left_expr, Operator::And, right_expr, filter_schema)
-    }
+    use datafusion_physical_expr::expressions::{binary, cast, col};
 
     #[test]
     fn test_column_exchange() -> Result<()> {
