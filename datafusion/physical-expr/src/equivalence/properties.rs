@@ -15,6 +15,21 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use arrow_schema::SchemaRef;
+use std::collections::HashSet;
+use std::sync::Arc;
+
+use crate::equivalence::{
+    collapse_lex_req, EquivalenceGroup, OrderingEquivalenceClass, ProjectionMapping,
+};
+
+use crate::sort_properties::{ExprOrdering, SortProperties};
+use crate::{
+    physical_exprs_contains, LexOrdering, LexOrderingRef, LexRequirement,
+    LexRequirementRef, PhysicalExpr, PhysicalSortExpr, PhysicalSortRequirement,
+};
+use datafusion_common::tree_node::{Transformed, TreeNode};
+
 /// A `EquivalenceProperties` object stores useful information related to a schema.
 /// Currently, it keeps track of:
 /// - Equivalent expressions, e.g expressions that have same value.

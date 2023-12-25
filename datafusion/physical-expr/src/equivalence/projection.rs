@@ -15,6 +15,15 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::sync::Arc;
+
+use crate::expressions::Column;
+use crate::PhysicalExpr;
+
+use arrow::datatypes::SchemaRef;
+use datafusion_common::tree_node::{Transformed, TreeNode};
+use datafusion_common::Result;
+
 /// Stores the mapping between source expressions and target expressions for a
 /// projection.
 #[derive(Debug, Clone)]

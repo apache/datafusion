@@ -24,6 +24,7 @@ pub mod crypto_expressions;
 pub mod datetime_expressions;
 #[cfg(feature = "encoding_expressions")]
 pub mod encoding_expressions;
+pub mod equivalence;
 pub mod execution_props;
 pub mod expressions;
 pub mod functions;

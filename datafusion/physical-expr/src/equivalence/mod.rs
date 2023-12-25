@@ -19,11 +19,16 @@ mod class;
 mod ordering;
 mod projection;
 mod properties;
-
+use crate::expressions::Column;
+use crate::{LexRequirement, PhysicalExpr, PhysicalSortRequirement};
+use arrow::datatypes::SchemaRef;
 pub use class::{EquivalenceClass, EquivalenceGroup};
+use datafusion_common::tree_node::{Transformed, TreeNode};
+use datafusion_common::{JoinSide, JoinType};
 pub use ordering::OrderingEquivalenceClass;
 pub use projection::ProjectionMapping;
 pub use properties::EquivalenceProperties;
+use std::sync::Arc;
 
 /// This function constructs a duplicate-free `LexOrderingReq` by filtering out
 /// duplicate entries that have same physical expression inside. For example,
