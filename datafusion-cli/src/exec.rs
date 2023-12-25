@@ -17,6 +17,11 @@
 
 //! Execution functions
 
+use std::io::prelude::*;
+use std::io::BufReader;
+use std::time::Instant;
+use std::{fs::File, sync::Arc};
+
 use crate::{
     command::{Command, OutputFormat},
     helper::{unescape_input, CliHelper},
@@ -26,21 +31,19 @@ use crate::{
     },
     print_options::{MaxRows, PrintOptions},
 };
-use datafusion::common::plan_datafusion_err;
+
+use datafusion::common::{exec_datafusion_err, plan_datafusion_err};
+use datafusion::datasource::listing::ListingTableUrl;
+use datafusion::datasource::physical_plan::is_plan_streaming;
+use datafusion::error::{DataFusionError, Result};
+use datafusion::logical_expr::{CreateExternalTable, DdlStatement, LogicalPlan};
+use datafusion::physical_plan::{collect, execute_stream};
+use datafusion::prelude::SessionContext;
 use datafusion::sql::{parser::DFParser, sqlparser::dialect::dialect_from_str};
-use datafusion::{
-    datasource::listing::ListingTableUrl,
-    error::{DataFusionError, Result},
-    logical_expr::{CreateExternalTable, DdlStatement},
-};
-use datafusion::{logical_expr::LogicalPlan, prelude::SessionContext};
+
 use object_store::ObjectStore;
 use rustyline::error::ReadlineError;
 use rustyline::Editor;
-use std::io::prelude::*;
-use std::io::BufReader;
-use std::time::Instant;
-use std::{fs::File, sync::Arc};
 use url::Url;
 
 /// run and execute SQL statements and commands, against a context with the given print options
@@ -228,17 +231,24 @@ async fn exec_and_print(
             create_external_table(ctx, cmd).await?;
         }
         let df = ctx.execute_logical_plan(plan).await?;
-        let results = df.collect().await?;
+        let physical_plan = df.clone().create_physical_plan().await?;
 
-        let print_options = if should_ignore_maxrows {
-            PrintOptions {
-                maxrows: MaxRows::Unlimited,
-                ..print_options.clone()
-            }
+        if is_plan_streaming(&physical_plan)? {
+            let stream = execute_stream(physical_plan, task_ctx.clone())?;
+            print_options.print_stream(stream, now).await?;
         } else {
-            print_options.clone()
-        };
-        print_options.print_batches(&results, now)?;
+            let print_options = if should_ignore_maxrows {
+                PrintOptions {
+                    maxrows: MaxRows::Unlimited,
+                    ..print_options.clone()
+                }
+            } else {
+                print_options.clone()
+            };
+
+            let results = collect(physical_plan, task_ctx.clone()).await?;
+            print_options.print_batches(&results, now)?;
+        }
     }
 
     Ok(())
@@ -272,10 +282,7 @@ async fn create_external_table(
                 .object_store_registry
                 .get_store(url)
                 .map_err(|_| {
-                    DataFusionError::Execution(format!(
-                        "Unsupported object store scheme: {}",
-                        scheme
-                    ))
+                    exec_datafusion_err!("Unsupported object store scheme: {}", scheme)
                 })?
         }
     };
@@ -290,8 +297,9 @@ mod tests {
     use std::str::FromStr;
 
     use super::*;
-    use datafusion::common::plan_err;
-    use datafusion_common::{file_options::StatementOptions, FileTypeWriterOptions};
+
+    use datafusion_common::file_options::StatementOptions;
+    use datafusion_common::{plan_err, FileTypeWriterOptions};
 
     async fn create_external_table_test(location: &str, sql: &str) -> Result<()> {
         let ctx = SessionContext::new();

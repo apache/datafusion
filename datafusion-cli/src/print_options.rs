@@ -15,12 +15,18 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::print_format::PrintFormat;
-use datafusion::arrow::record_batch::RecordBatch;
-use datafusion::error::Result;
 use std::fmt::{Display, Formatter};
+use std::pin::Pin;
 use std::str::FromStr;
 use std::time::Instant;
+
+use crate::print_format::PrintFormat;
+
+use arrow::record_batch::RecordBatch;
+use datafusion::error::Result;
+use datafusion::physical_plan::RecordBatchStream;
+
+use futures::StreamExt;
 
 #[derive(Debug, Clone, PartialEq, Copy)]
 pub enum MaxRows {
@@ -97,6 +103,30 @@ impl PrintOptions {
 
         self.format.print_batches(batches, self.maxrows)?;
 
+        if !self.quiet {
+            println!("{timing_info}");
+        }
+
+        Ok(())
+    }
+
+    #[allow(clippy::println_empty_string)]
+    pub async fn print_stream(
+        &self,
+        mut stream: Pin<Box<dyn RecordBatchStream>>,
+        query_start_time: Instant,
+    ) -> Result<()> {
+        let mut row_count = 0_usize;
+        let mut with_header = true;
+
+        while let Some(Ok(batch)) = stream.next().await {
+            row_count += batch.num_rows();
+            self.format.print_stream(&batch, with_header)?;
+            with_header = false;
+        }
+        println!("");
+
+        let timing_info = get_timing_info_str(row_count, self.maxrows, query_start_time);
         if !self.quiet {
             println!("{timing_info}");
         }

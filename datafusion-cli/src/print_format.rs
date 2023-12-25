@@ -16,14 +16,17 @@
 // under the License.
 
 //! Print format variants
+
+use std::str::FromStr;
+
 use crate::print_options::MaxRows;
+
 use arrow::csv::writer::WriterBuilder;
 use arrow::json::{ArrayWriter, LineDelimitedWriter};
+use arrow::record_batch::RecordBatch;
 use arrow::util::pretty::pretty_format_batches_with_options;
-use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::common::format::DEFAULT_FORMAT_OPTIONS;
 use datafusion::error::{DataFusionError, Result};
-use std::str::FromStr;
 
 /// Allow records to be printed in different formats
 #[derive(Debug, PartialEq, Eq, clap::ArgEnum, Clone)]
@@ -33,6 +36,7 @@ pub enum PrintFormat {
     Table,
     Json,
     NdJson,
+    Automatic,
 }
 
 impl FromStr for PrintFormat {
@@ -55,6 +59,18 @@ macro_rules! batches_to_json {
     }};
 }
 
+macro_rules! stream_to_json {
+    ($WRITER: ident, $batch: expr) => {{
+        let mut bytes = vec![];
+        {
+            let mut writer = $WRITER::new(&mut bytes);
+            writer.write($batch)?;
+            writer.finish()?;
+        }
+        String::from_utf8(bytes).map_err(|e| DataFusionError::External(Box::new(e)))?
+    }};
+}
+
 fn print_batches_with_sep(batches: &[RecordBatch], delimiter: u8) -> Result<String> {
     let mut bytes = vec![];
     {
@@ -66,9 +82,26 @@ fn print_batches_with_sep(batches: &[RecordBatch], delimiter: u8) -> Result<Stri
             writer.write(batch)?;
         }
     }
-    let formatted =
-        String::from_utf8(bytes).map_err(|e| DataFusionError::External(Box::new(e)))?;
-    Ok(formatted)
+    String::from_utf8(bytes).map_err(|e| DataFusionError::External(Box::new(e)))
+}
+
+fn print_stream_with_sep(
+    batch: &RecordBatch,
+    delimiter: u8,
+    with_header: bool,
+) -> Result<String> {
+    let mut bytes = vec![];
+    {
+        let builder = WriterBuilder::new()
+            .with_header(with_header)
+            .with_delimiter(delimiter);
+        let mut writer = builder.build(&mut bytes);
+        writer.write(batch)?;
+    }
+    if bytes.last() == Some(&b'\n') {
+        bytes.pop();
+    }
+    String::from_utf8(bytes).map_err(|e| DataFusionError::External(Box::new(e)))
 }
 
 fn keep_only_maxrows(s: &str, maxrows: usize) -> String {
@@ -84,7 +117,6 @@ fn keep_only_maxrows(s: &str, maxrows: usize) -> String {
     let mut result = lines[0..(maxrows + 3)].to_vec(); // Keep top border and `maxrows` lines
     result.extend(vec![dotted_line; 3]); // Append ... lines
     result.push(last_line.clone());
-
     result.join("\n")
 }
 
@@ -146,7 +178,7 @@ impl PrintFormat {
         match self {
             Self::Csv => println!("{}", print_batches_with_sep(batches, b',')?),
             Self::Tsv => println!("{}", print_batches_with_sep(batches, b'\t')?),
-            Self::Table => {
+            Self::Table | Self::Automatic => {
                 if maxrows == MaxRows::Limited(0) {
                     return Ok(());
                 }
@@ -159,14 +191,41 @@ impl PrintFormat {
         }
         Ok(())
     }
+
+    pub fn print_stream(&self, batch: &RecordBatch, with_header: bool) -> Result<()> {
+        if batch.num_rows() == 0 {
+            return Ok(());
+        }
+
+        match self {
+            Self::Csv | Self::Automatic => {
+                println!("{}", print_stream_with_sep(batch, b',', with_header)?)
+            }
+            Self::Tsv => {
+                println!("{}", print_stream_with_sep(batch, b'\t', with_header)?)
+            }
+            Self::Table => {
+                return Err(DataFusionError::External(
+                    "PrintFormat::Table is not implemented".to_string().into(),
+                ))
+            }
+            Self::Json => println!("{}", stream_to_json!(ArrayWriter, batch)),
+            Self::NdJson => {
+                println!("{}", stream_to_json!(LineDelimitedWriter, batch))
+            }
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use super::*;
+
     use arrow::array::Int32Array;
     use arrow::datatypes::{DataType, Field, Schema};
-    use std::sync::Arc;
 
     #[test]
     fn test_print_batches_with_sep() {
