@@ -15,25 +15,29 @@
 //! [`PushDownFilter`] Moves filters so they are applied as early as possible in
 //! the plan.
 
-use crate::optimizer::ApplyOrder;
-use crate::{OptimizerConfig, OptimizerRule};
-use datafusion_common::tree_node::{Transformed, TreeNode, VisitRecursion};
-use datafusion_common::{
-    internal_err, plan_datafusion_err, Column, DFSchema, DataFusionError, Result,
-};
-use datafusion_expr::expr::Alias;
-use datafusion_expr::utils::{conjunction, split_conjunction, split_conjunction_owned};
-use datafusion_expr::Volatility;
-use datafusion_expr::{
-    and,
-    expr_rewriter::replace_col,
-    logical_plan::{CrossJoin, Join, JoinType, LogicalPlan, TableScan, Union},
-    or, BinaryExpr, Expr, Filter, Operator, ScalarFunctionDefinition,
-    TableProviderFilterPushDown,
-};
-use itertools::Itertools;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
+
+use crate::optimizer::ApplyOrder;
+use crate::{OptimizerConfig, OptimizerRule};
+
+use datafusion_common::tree_node::{Transformed, TreeNode, VisitRecursion};
+use datafusion_common::{
+    internal_err, plan_datafusion_err, Column, DFSchema, DFSchemaRef, DataFusionError,
+    JoinConstraint, Result,
+};
+use datafusion_expr::expr::Alias;
+use datafusion_expr::expr_rewriter::replace_col;
+use datafusion_expr::logical_plan::{
+    CrossJoin, Join, JoinType, LogicalPlan, TableScan, Union,
+};
+use datafusion_expr::utils::{conjunction, split_conjunction, split_conjunction_owned};
+use datafusion_expr::{
+    and, build_join_schema, or, BinaryExpr, Expr, Filter, LogicalPlanBuilder, Operator,
+    ScalarFunctionDefinition, TableProviderFilterPushDown, Volatility,
+};
+
+use itertools::Itertools;
 
 /// Optimizer rule for pushing (moving) filter expressions down in a plan so
 /// they are applied as early as possible.
@@ -848,17 +852,23 @@ impl OptimizerRule for PushDownFilter {
                     None => return Ok(None),
                 }
             }
-            LogicalPlan::CrossJoin(CrossJoin { left, right, .. }) => {
+            LogicalPlan::CrossJoin(cross_join) => {
                 let predicates = split_conjunction_owned(filter.predicate.clone());
-                push_down_all_join(
+                let join = convert_cross_join_to_inner_join(cross_join.clone())?;
+                let join_plan = LogicalPlan::Join(join);
+                let inputs = join_plan.inputs();
+                let left = inputs[0];
+                let right = inputs[1];
+                let plan = push_down_all_join(
                     predicates,
                     vec![],
-                    &filter.input,
+                    &join_plan,
                     left,
                     right,
                     vec![],
-                    false,
-                )?
+                    true,
+                )?;
+                convert_to_cross_join_if_beneficial(plan)?
             }
             LogicalPlan::TableScan(scan) => {
                 let filter_predicates = split_conjunction(&filter.predicate);
@@ -955,6 +965,36 @@ impl PushDownFilter {
     }
 }
 
+/// Convert cross join to join by pushing down filter predicate to the join condition
+fn convert_cross_join_to_inner_join(cross_join: CrossJoin) -> Result<Join> {
+    let CrossJoin { left, right, .. } = cross_join;
+    let join_schema = build_join_schema(left.schema(), right.schema(), &JoinType::Inner)?;
+    // predicate is given
+    Ok(Join {
+        left,
+        right,
+        join_type: JoinType::Inner,
+        join_constraint: JoinConstraint::On,
+        on: vec![],
+        filter: None,
+        schema: DFSchemaRef::new(join_schema),
+        null_equals_null: true,
+    })
+}
+
+/// Converts the inner join with empty equality predicate and empty filter condition to the cross join
+fn convert_to_cross_join_if_beneficial(plan: LogicalPlan) -> Result<LogicalPlan> {
+    if let LogicalPlan::Join(join) = &plan {
+        // Can be converted back to cross join
+        if join.on.is_empty() && join.filter.is_none() {
+            return LogicalPlanBuilder::from(join.left.as_ref().clone())
+                .cross_join(join.right.as_ref().clone())?
+                .build();
+        }
+    }
+    Ok(plan)
+}
+
 /// replaces columns by its name on the projection.
 pub fn replace_cols_by_name(
     e: Expr,
@@ -1026,13 +1066,16 @@ fn contain(e: &Expr, check_map: &HashMap<String, Expr>) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::fmt::{Debug, Formatter};
+    use std::sync::Arc;
+
     use super::*;
     use crate::optimizer::Optimizer;
     use crate::rewrite_disjunctive_predicate::RewriteDisjunctivePredicate;
     use crate::test::*;
     use crate::OptimizerContext;
+
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-    use async_trait::async_trait;
     use datafusion_common::{DFSchema, DFSchemaRef};
     use datafusion_expr::logical_plan::table_scan;
     use datafusion_expr::{
@@ -1040,8 +1083,8 @@ mod tests {
         BinaryExpr, Expr, Extension, LogicalPlanBuilder, Operator, TableSource,
         TableType, UserDefinedLogicalNodeCore,
     };
-    use std::fmt::{Debug, Formatter};
-    use std::sync::Arc;
+
+    use async_trait::async_trait;
 
     fn assert_optimized_plan_eq(plan: &LogicalPlan, expected: &str) -> Result<()> {
         crate::test::assert_optimized_plan_eq(
@@ -2665,14 +2708,12 @@ Projection: a, b
             .cross_join(right)?
             .filter(filter)?
             .build()?;
-
         let expected = "\
-        Filter: test.a = d AND test.b > UInt32(1) OR test.b = e AND test.c < UInt32(10)\
-        \n  CrossJoin:\
-        \n    Projection: test.a, test.b, test.c\
-        \n      TableScan: test, full_filters=[test.b > UInt32(1) OR test.c < UInt32(10)]\
-        \n    Projection: test1.a AS d, test1.a AS e\
-        \n      TableScan: test1";
+        Inner Join:  Filter: test.a = d AND test.b > UInt32(1) OR test.b = e AND test.c < UInt32(10)\
+        \n  Projection: test.a, test.b, test.c\
+        \n    TableScan: test, full_filters=[test.b > UInt32(1) OR test.c < UInt32(10)]\
+        \n  Projection: test1.a AS d, test1.a AS e\
+        \n    TableScan: test1";
         assert_optimized_plan_eq_with_rewrite_predicate(&plan, expected)?;
 
         // Originally global state which can help to avoid duplicate Filters been generated and pushed down.
