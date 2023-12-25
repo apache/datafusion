@@ -17,6 +17,7 @@
 
 use arrow_schema::SchemaRef;
 use indexmap::IndexSet;
+use itertools::Itertools;
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
