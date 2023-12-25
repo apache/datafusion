@@ -44,7 +44,7 @@ use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{EquivalenceProperties, LexOrdering};
 
 use bytes::{Buf, Bytes};
-use futures::{ready, StreamExt, TryStreamExt};
+use futures::{ready, stream, StreamExt, TryStreamExt};
 use object_store::path::Path;
 use object_store::{self, GetOptions};
 use object_store::{GetResultPayload, ObjectStore};
@@ -247,6 +247,46 @@ async fn find_first_newline(
     Ok(index)
 }
 
+enum RangeCalculation {
+    Range(Option<Range<usize>>),
+    TerminateEarly,
+}
+
+async fn calculate_range(
+    file_meta: &FileMeta,
+    store: &Arc<dyn ObjectStore>,
+) -> Result<RangeCalculation> {
+    let location = file_meta.location();
+    let file_size = file_meta.object_meta.size;
+
+    match file_meta.range {
+        None => Ok(RangeCalculation::Range(None)),
+        Some(FileRange { start, end }) => {
+            let (start, end) = (start as usize, end as usize);
+
+            let start_delta = if start != 0 {
+                find_first_newline(&store, location, start - 1, file_size).await?
+            } else {
+                0
+            };
+
+            let end_delta = if end != file_size {
+                find_first_newline(&store, location, end - 1, file_size).await?
+            } else {
+                0
+            };
+
+            let range = start + start_delta..end + end_delta;
+
+            if range.start == range.end {
+                return Ok(RangeCalculation::TerminateEarly);
+            }
+
+            Ok(RangeCalculation::Range(Some(range)))
+        }
+    }
+}
+
 impl FileOpener for JsonOpener {
     fn open(&self, file_meta: FileMeta) -> Result<FileOpenFuture> {
         let store = self.object_store.clone();
@@ -255,35 +295,15 @@ impl FileOpener for JsonOpener {
         let file_compression_type = self.file_compression_type.to_owned();
 
         Ok(Box::pin(async move {
-            let location = file_meta.location();
-            let file_size = file_meta.object_meta.size;
+            let calculated_range = calculate_range(&file_meta, &store).await?;
 
-            let range = match file_meta.range {
-                None => None,
-                Some(FileRange { start, end }) => {
-                    let (start, end) = (start as usize, end as usize);
-
-                    let start_delta = if start != 0 {
-                        find_first_newline(&store, location, start - 1, file_size).await?
-                    } else {
-                        0
-                    };
-
-                    let end_delta = if end != file_size {
-                        find_first_newline(&store, location, end - 1, file_size).await?
-                    } else {
-                        0
-                    };
-
-                    let range = start + start_delta..end + end_delta;
-
-                    if range.start == range.end {
-                        return Ok(
-                            futures::stream::poll_fn(move |_| Poll::Ready(None)).boxed()
-                        );
-                    }
-
-                    Some(range)
+            let range = match calculated_range {
+                RangeCalculation::Range(None) => None,
+                RangeCalculation::Range(Some(range)) => Some(range),
+                RangeCalculation::TerminateEarly => {
+                    return Ok(
+                        futures::stream::poll_fn(move |_| Poll::Ready(None)).boxed()
+                    )
                 }
             };
 
@@ -292,7 +312,7 @@ impl FileOpener for JsonOpener {
                 ..Default::default()
             };
 
-            let result = store.get_opts(location, options).await?;
+            let result = store.get_opts(file_meta.location(), options).await?;
 
             match result.payload {
                 GetResultPayload::File(mut file, _) => {
