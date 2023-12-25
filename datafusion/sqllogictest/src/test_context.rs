@@ -105,7 +105,7 @@ impl TestContext {
             }
             "joins.slt" => {
                 info!("Registering partition table tables");
-                let twice = create_twice_udf();
+                let twice = create_pow_udf();
                 test_ctx.ctx.register_udf(twice);
                 register_partition_table(&mut test_ctx).await;
             }
@@ -354,8 +354,8 @@ pub async fn register_metadata_tables(ctx: &SessionContext) {
     ctx.register_batch("table_with_metadata", batch).unwrap();
 }
 
-/// Create a UDF function named "TWICE"
-fn create_twice_udf() -> ScalarUDF {
+/// Create a UDF function named "pow_udf"
+fn create_pow_udf() -> ScalarUDF {
     // First, declare the actual implementation of the calculation
     let pow = |args: &[ArrayRef]| {
         // in DataFusion, all `args` and output are dynamically-typed arrays, which means that we need to:
