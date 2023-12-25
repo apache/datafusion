@@ -1,3 +1,20 @@
+// Licensed to the Apache Software Foundation (ASF) under one
+// or more contributor license agreements.  See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership.  The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// "License"); you may not use this file except in compliance
+// with the License.  You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing,
+// software distributed under the License is distributed on an
+// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+// KIND, either express or implied.  See the License for the
+// specific language governing permissions and limitations
+// under the License.
+
 /// An `OrderingEquivalenceClass` object keeps track of different alternative
 /// orderings than can describe a schema. For example, consider the following table:
 ///
@@ -178,4 +195,18 @@ pub fn collapse_lex_ordering(input: LexOrdering) -> LexOrdering {
         }
     }
     output
+}
+
+/// Trims `orderings[idx]` if some suffix of it overlaps with a prefix of
+/// `orderings[pre_idx]`. Returns `true` if there is any overlap, `false` otherwise.
+fn resolve_overlap(orderings: &mut [LexOrdering], idx: usize, pre_idx: usize) -> bool {
+    let length = orderings[idx].len();
+    let other_length = orderings[pre_idx].len();
+    for overlap in 1..=length.min(other_length) {
+        if orderings[idx][length - overlap..] == orderings[pre_idx][..overlap] {
+            orderings[idx].truncate(length - overlap);
+            return true;
+        }
+    }
+    false
 }
