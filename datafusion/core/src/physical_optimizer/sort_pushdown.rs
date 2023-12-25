@@ -36,8 +36,6 @@ use datafusion_physical_expr::{
     LexRequirementRef, PhysicalSortExpr, PhysicalSortRequirement,
 };
 
-use itertools::izip;
-
 /// This is a "data class" we use within the [`EnforceSorting`] rule to push
 /// down [`SortExec`] in the plan. In some cases, we can reduce the total
 /// computational cost by pushing down `SortExec`s through some executors.
@@ -49,35 +47,26 @@ pub(crate) struct SortPushDown {
     pub plan: Arc<dyn ExecutionPlan>,
     /// Parent required sort ordering
     required_ordering: Option<Vec<PhysicalSortRequirement>>,
-    /// The adjusted request sort ordering to children.
-    /// By default they are the same as the plan's required input ordering, but can be adjusted based on parent required sort ordering properties.
-    adjusted_request_ordering: Vec<Option<Vec<PhysicalSortRequirement>>>,
+    children_nodes: Vec<SortPushDown>,
 }
 
 impl SortPushDown {
-    pub fn init(plan: Arc<dyn ExecutionPlan>) -> Self {
-        let request_ordering = plan.required_input_ordering();
-        SortPushDown {
+    /// Creates an empty tree with empty `required_ordering`'s.
+    pub fn new(plan: Arc<dyn ExecutionPlan>) -> Self {
+        let children = plan.children();
+        Self {
             plan,
             required_ordering: None,
-            adjusted_request_ordering: request_ordering,
+            children_nodes: children.into_iter().map(Self::new).collect(),
         }
     }
 
-    pub fn children(&self) -> Vec<SortPushDown> {
-        izip!(
-            self.plan.children().into_iter(),
-            self.adjusted_request_ordering.clone().into_iter(),
-        )
-        .map(|(child, from_parent)| {
-            let child_request_ordering = child.required_input_ordering();
-            SortPushDown {
-                plan: child,
-                required_ordering: from_parent,
-                adjusted_request_ordering: child_request_ordering,
-            }
-        })
-        .collect()
+    /// Assigns the ordering requirement of the root node to the its children.
+    pub fn assign_initial_requirements(&mut self) {
+        let reqs = self.plan.required_input_ordering();
+        for (child, requirement) in self.children_nodes.iter_mut().zip(reqs) {
+            child.required_ordering = requirement;
+        }
     }
 }
 
@@ -86,9 +75,8 @@ impl TreeNode for SortPushDown {
     where
         F: FnMut(&Self) -> Result<VisitRecursion>,
     {
-        let children = self.children();
-        for child in children {
-            match op(&child)? {
+        for child in &self.children_nodes {
+            match op(child)? {
                 VisitRecursion::Continue => {}
                 VisitRecursion::Skip => return Ok(VisitRecursion::Continue),
                 VisitRecursion::Stop => return Ok(VisitRecursion::Stop),
@@ -97,64 +85,74 @@ impl TreeNode for SortPushDown {
 
         Ok(VisitRecursion::Continue)
     }
-
-    fn map_children<F>(mut self, transform: F) -> Result<Self>
+    fn map_children<F>(self, transform: F) -> Result<Self>
     where
         F: FnMut(Self) -> Result<Self>,
     {
-        let children = self.children();
-        if !children.is_empty() {
-            let children_plans = children
+        if self.children_nodes.is_empty() {
+            Ok(self)
+        } else {
+            let children_nodes = self
+                .children_nodes
                 .into_iter()
                 .map(transform)
-                .map(|r| r.map(|s| s.plan))
                 .collect::<Result<Vec<_>>>()?;
 
-            match with_new_children_if_necessary(self.plan, children_plans)? {
-                Transformed::Yes(plan) | Transformed::No(plan) => {
-                    self.plan = plan;
-                }
-            }
-        };
-        Ok(self)
+            Ok(Self {
+                plan: with_new_children_if_necessary(
+                    self.plan,
+                    children_nodes.iter().map(|c| c.plan.clone()).collect(),
+                )?
+                .into(),
+                required_ordering: self.required_ordering,
+                children_nodes,
+            })
+        }
     }
 }
 
 pub(crate) fn pushdown_sorts(
-    requirements: SortPushDown,
+    mut requirements: SortPushDown,
 ) -> Result<Transformed<SortPushDown>> {
     let plan = &requirements.plan;
     let parent_required = requirements.required_ordering.as_deref().unwrap_or(&[]);
+
     if let Some(sort_exec) = plan.as_any().downcast_ref::<SortExec>() {
-        let new_plan = if !plan
+        if !plan
             .equivalence_properties()
             .ordering_satisfy_requirement(parent_required)
         {
             // If the current plan is a SortExec, modify it to satisfy parent requirements:
             let mut new_plan = sort_exec.input().clone();
             add_sort_above(&mut new_plan, parent_required, sort_exec.fetch());
-            new_plan
-        } else {
-            requirements.plan
+            requirements.plan = new_plan;
         };
-        let required_ordering = new_plan
+        let mut new_node = requirements;
+
+        let required_ordering = new_node
+            .plan
             .output_ordering()
             .map(PhysicalSortRequirement::from_sort_exprs)
             .unwrap_or_default();
         // Since new_plan is a SortExec, we can safely get the 0th index.
-        let child = new_plan.children().swap_remove(0);
+        let mut child = new_node.children_nodes.swap_remove(0);
         if let Some(adjusted) =
-            pushdown_requirement_to_children(&child, &required_ordering)?
+            pushdown_requirement_to_children(&child.plan, &required_ordering)?
         {
+            for (c, o) in child.children_nodes.iter_mut().zip(adjusted) {
+                c.required_ordering = o;
+            }
             // Can push down requirements
             Ok(Transformed::Yes(SortPushDown {
-                plan: child,
+                plan: child.plan,
                 required_ordering: None,
-                adjusted_request_ordering: adjusted,
+                children_nodes: child.children_nodes,
             }))
         } else {
             // Can not push down requirements
-            Ok(Transformed::Yes(SortPushDown::init(new_plan)))
+            let mut empty_node = SortPushDown::new(new_node.plan);
+            empty_node.assign_initial_requirements();
+            Ok(Transformed::Yes(empty_node))
         }
     } else {
         // Executors other than SortExec
@@ -163,23 +161,30 @@ pub(crate) fn pushdown_sorts(
             .ordering_satisfy_requirement(parent_required)
         {
             // Satisfies parent requirements, immediately return.
-            return Ok(Transformed::Yes(SortPushDown {
-                required_ordering: None,
-                ..requirements
-            }));
+            let reqs = requirements.plan.required_input_ordering();
+            for (child, order) in requirements.children_nodes.iter_mut().zip(reqs) {
+                child.required_ordering = order;
+            }
+            return Ok(Transformed::Yes(requirements));
         }
         // Can not satisfy the parent requirements, check whether the requirements can be pushed down:
         if let Some(adjusted) = pushdown_requirement_to_children(plan, parent_required)? {
+            for (c, o) in requirements.children_nodes.iter_mut().zip(adjusted) {
+                c.required_ordering = o;
+            }
             Ok(Transformed::Yes(SortPushDown {
                 plan: requirements.plan,
                 required_ordering: None,
-                adjusted_request_ordering: adjusted,
+                children_nodes: requirements.children_nodes,
             }))
         } else {
             // Can not push down requirements, add new SortExec:
             let mut new_plan = requirements.plan;
             add_sort_above(&mut new_plan, parent_required, None);
-            Ok(Transformed::Yes(SortPushDown::init(new_plan)))
+            let mut new_empty = SortPushDown::new(new_plan);
+            new_empty.assign_initial_requirements();
+            // Can not push down requirements
+            Ok(Transformed::Yes(new_empty))
         }
     }
 }

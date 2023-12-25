@@ -24,13 +24,13 @@ use std::sync::Arc;
 use crate::config::ConfigOptions;
 use crate::error::Result;
 use crate::physical_optimizer::PhysicalOptimizerRule;
-use crate::physical_plan::joins::SymmetricHashJoinExec;
 use crate::physical_plan::{with_new_children_if_necessary, ExecutionPlan};
 
 use datafusion_common::config::OptimizerOptions;
 use datafusion_common::tree_node::{Transformed, TreeNode, VisitRecursion};
 use datafusion_common::{plan_err, DataFusionError};
 use datafusion_physical_expr::intervals::utils::{check_support, is_datatype_supported};
+use datafusion_physical_plan::joins::SymmetricHashJoinExec;
 
 /// The PipelineChecker rule rejects non-runnable query plans that use
 /// pipeline-breaking operators on infinite input(s).
@@ -113,21 +113,24 @@ impl TreeNode for PipelineStatePropagator {
     where
         F: FnMut(Self) -> Result<Self>,
     {
-        if !self.children.is_empty() {
-            let new_children = self
+        if self.children.is_empty() {
+            Ok(self)
+        } else {
+            let children = self
                 .children
                 .into_iter()
                 .map(transform)
                 .collect::<Result<Vec<_>>>()?;
-            let children_plans = new_children.iter().map(|c| c.plan.clone()).collect();
 
-            Ok(PipelineStatePropagator {
-                plan: with_new_children_if_necessary(self.plan, children_plans)?.into(),
+            Ok(Self {
+                plan: with_new_children_if_necessary(
+                    self.plan,
+                    children.iter().map(|c| c.plan.clone()).collect(),
+                )?
+                .into(),
                 unbounded: self.unbounded,
-                children: new_children,
+                children,
             })
-        } else {
-            Ok(self)
         }
     }
 }
