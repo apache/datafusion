@@ -115,13 +115,19 @@ fn check_column_satisfies_expr(
     expr: &Expr,
     message_prefix: &str,
 ) -> Result<()> {
-    if !columns.contains(expr) {
+    if !columns.iter().any(|c| match (c, expr) {
+       (Expr::Column(c), Expr::Column(c2)) => {
+           c.name.to_lowercase() == c2.name.to_lowercase() && c.relation == c2.relation 
+       },
+       _ => false // This should be unreachable
+    }) {  
         return plan_err!(
             "{}: Expression {} could not be resolved from available columns: {}",
             message_prefix,
             expr,
             expr_vec_fmt!(columns)
         );
+
     }
     Ok(())
 }
