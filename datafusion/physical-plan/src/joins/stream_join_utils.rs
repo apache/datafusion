@@ -25,7 +25,7 @@ use std::usize;
 
 use crate::joins::utils::{JoinFilter, JoinHashMapType, StatefulStreamResult};
 use crate::metrics::{ExecutionPlanMetricsSet, MetricBuilder};
-use crate::{handle_async_state, handle_state, metrics};
+use crate::{handle_async_state, handle_state, metrics, ExecutionPlan};
 
 use arrow::compute::concat_batches;
 use arrow_array::{ArrowPrimitiveType, NativeAdapter, PrimitiveArray, RecordBatch};
@@ -34,7 +34,8 @@ use arrow_schema::{Schema, SchemaRef};
 use async_trait::async_trait;
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{
-    arrow_datafusion_err, DataFusionError, JoinSide, Result, ScalarValue,
+    arrow_datafusion_err, plan_datafusion_err, DataFusionError, JoinSide, Result,
+    ScalarValue,
 };
 use datafusion_execution::SendableRecordBatchStream;
 use datafusion_expr::interval_arithmetic::Interval;
@@ -42,6 +43,7 @@ use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::utils::collect_columns;
 use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
 
+use datafusion_physical_expr::intervals::cp_solver::ExprIntervalGraph;
 use futures::{ready, FutureExt, StreamExt};
 use hashbrown::raw::RawTable;
 use hashbrown::HashSet;
@@ -175,7 +177,7 @@ impl PruningJoinHashMap {
         prune_length: usize,
         deleting_offset: u64,
         shrink_factor: usize,
-    ) -> Result<()> {
+    ) {
         // Remove elements from the list based on the pruning length.
         self.next.drain(0..prune_length);
 
@@ -198,11 +200,10 @@ impl PruningJoinHashMap {
 
         // Shrink the map if necessary.
         self.shrink_if_necessary(shrink_factor);
-        Ok(())
     }
 }
 
-pub fn check_filter_expr_contains_sort_information(
+fn check_filter_expr_contains_sort_information(
     expr: &Arc<dyn PhysicalExpr>,
     reference: &Arc<dyn PhysicalExpr>,
 ) -> bool {
@@ -227,7 +228,7 @@ pub fn map_origin_col_to_filter_col(
     side: &JoinSide,
 ) -> Result<HashMap<Column, Column>> {
     let filter_schema = filter.schema();
-    let mut col_to_col_map: HashMap<Column, Column> = HashMap::new();
+    let mut col_to_col_map = HashMap::<Column, Column>::new();
     for (filter_schema_index, index) in filter.column_indices().iter().enumerate() {
         if index.side.eq(side) {
             // Get the main field from column index:
@@ -581,7 +582,7 @@ where
     // get the semi index
     (0..prune_length)
         .filter_map(|idx| (bitmap.get_bit(idx)).then_some(T::Native::from_usize(idx)))
-        .collect::<PrimitiveArray<T>>()
+        .collect()
 }
 
 pub fn combine_two_batches(
@@ -763,7 +764,6 @@ pub trait EagerJoinStream {
                 if batch.num_rows() == 0 {
                     return Ok(StatefulStreamResult::Continue);
                 }
-
                 self.set_state(EagerJoinStreamState::PullLeft);
                 self.process_batch_from_right(batch)
             }
@@ -1030,6 +1030,91 @@ impl StreamJoinMetrics {
             output_rows,
         }
     }
+}
+
+/// Updates sorted filter expressions with corresponding node indices from the
+/// expression interval graph.
+///
+/// This function iterates through the provided sorted filter expressions,
+/// gathers the corresponding node indices from the expression interval graph,
+/// and then updates the sorted expressions with these indices. It ensures
+/// that these sorted expressions are aligned with the structure of the graph.
+fn update_sorted_exprs_with_node_indices(
+    graph: &mut ExprIntervalGraph,
+    sorted_exprs: &mut [SortedFilterExpr],
+) {
+    // Extract filter expressions from the sorted expressions:
+    let filter_exprs = sorted_exprs
+        .iter()
+        .map(|expr| expr.filter_expr().clone())
+        .collect::<Vec<_>>();
+
+    // Gather corresponding node indices for the extracted filter expressions from the graph:
+    let child_node_indices = graph.gather_node_indices(&filter_exprs);
+
+    // Iterate through the sorted expressions and the gathered node indices:
+    for (sorted_expr, (_, index)) in sorted_exprs.iter_mut().zip(child_node_indices) {
+        // Update each sorted expression with the corresponding node index:
+        sorted_expr.set_node_index(index);
+    }
+}
+
+/// Prepares and sorts expressions based on a given filter, left and right execution plans, and sort expressions.
+///
+/// # Arguments
+///
+/// * `filter` - The join filter to base the sorting on.
+/// * `left` - The left execution plan.
+/// * `right` - The right execution plan.
+/// * `left_sort_exprs` - The expressions to sort on the left side.
+/// * `right_sort_exprs` - The expressions to sort on the right side.
+///
+/// # Returns
+///
+/// * A tuple consisting of the sorted filter expression for the left and right sides, and an expression interval graph.
+pub fn prepare_sorted_exprs(
+    filter: &JoinFilter,
+    left: &Arc<dyn ExecutionPlan>,
+    right: &Arc<dyn ExecutionPlan>,
+    left_sort_exprs: &[PhysicalSortExpr],
+    right_sort_exprs: &[PhysicalSortExpr],
+) -> Result<(SortedFilterExpr, SortedFilterExpr, ExprIntervalGraph)> {
+    // Build the filter order for the left side
+    let err = || plan_datafusion_err!("Filter does not include the child order");
+
+    let left_temp_sorted_filter_expr = build_filter_input_order(
+        JoinSide::Left,
+        filter,
+        &left.schema(),
+        &left_sort_exprs[0],
+    )?
+    .ok_or_else(err)?;
+
+    // Build the filter order for the right side
+    let right_temp_sorted_filter_expr = build_filter_input_order(
+        JoinSide::Right,
+        filter,
+        &right.schema(),
+        &right_sort_exprs[0],
+    )?
+    .ok_or_else(err)?;
+
+    // Collect the sorted expressions
+    let mut sorted_exprs =
+        vec![left_temp_sorted_filter_expr, right_temp_sorted_filter_expr];
+
+    // Build the expression interval graph
+    let mut graph =
+        ExprIntervalGraph::try_new(filter.expression().clone(), filter.schema())?;
+
+    // Update sorted expressions with node indices
+    update_sorted_exprs_with_node_indices(&mut graph, &mut sorted_exprs);
+
+    // Swap and remove to get the final sorted filter expressions
+    let right_sorted_filter_expr = sorted_exprs.swap_remove(1);
+    let left_sorted_filter_expr = sorted_exprs.swap_remove(0);
+
+    Ok((left_sorted_filter_expr, right_sorted_filter_expr, graph))
 }
 
 #[cfg(test)]
