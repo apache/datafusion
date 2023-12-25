@@ -18,13 +18,14 @@
 //! Execution plan for reading line-delimited JSON files
 
 use std::any::Any;
-use std::io::BufReader;
+use std::io::{BufReader, Read, Seek, SeekFrom};
+use std::ops::Range;
 use std::sync::Arc;
 use std::task::Poll;
 
 use super::{FileGroupPartitioner, FileScanConfig};
 use crate::datasource::file_format::file_compression_type::FileCompressionType;
-use crate::datasource::listing::ListingTableUrl;
+use crate::datasource::listing::{FileRange, ListingTableUrl};
 use crate::datasource::physical_plan::file_stream::{
     FileOpenFuture, FileOpener, FileStream,
 };
@@ -43,8 +44,9 @@ use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{EquivalenceProperties, LexOrdering};
 
 use bytes::{Buf, Bytes};
-use futures::{ready, stream, StreamExt, TryStreamExt};
-use object_store;
+use futures::{ready, StreamExt, TryStreamExt};
+use object_store::path::Path;
+use object_store::{self, GetOptions};
 use object_store::{GetResultPayload, ObjectStore};
 use tokio::io::AsyncWriteExt;
 use tokio::task::JoinSet;
@@ -216,59 +218,133 @@ impl JsonOpener {
     }
 }
 
+async fn find_first_newline(
+    object_store: &Arc<dyn ObjectStore>,
+    location: &Path,
+    start: usize,
+    end: usize,
+) -> Result<usize> {
+    let range = Some(Range { start, end });
+
+    let options = GetOptions {
+        range,
+        ..Default::default()
+    };
+
+    let result = object_store.get_opts(location, options).await?;
+    let mut result_stream = result.into_stream();
+
+    let mut index = 0;
+
+    while let Some(chunk) = result_stream.next().await.transpose()? {
+        if let Some(position) = chunk.iter().position(|&byte| byte == b'\n') {
+            return Ok(index + position);
+        }
+
+        index += chunk.len();
+    }
+
+    Ok(index)
+}
+
 impl FileOpener for JsonOpener {
     fn open(&self, file_meta: FileMeta) -> Result<FileOpenFuture> {
         let store = self.object_store.clone();
         let schema = self.projected_schema.clone();
         let batch_size = self.batch_size;
-
         let file_compression_type = self.file_compression_type.to_owned();
+
         Ok(Box::pin(async move {
-            let r = store.get(file_meta.location()).await?;
-            match r.payload {
-                GetResultPayload::File(file, _) => {
-                    let bytes = file_compression_type.convert_read(file)?;
+            let location = file_meta.location();
+            let file_size = file_meta.object_meta.size;
+
+            let range = match file_meta.range {
+                None => None,
+                Some(FileRange { start, end }) => {
+                    let (start, end) = (start as usize, end as usize);
+
+                    let start_delta = if start != 0 {
+                        find_first_newline(&store, location, start - 1, file_size).await?
+                    } else {
+                        0
+                    };
+
+                    let end_delta = if end != file_size {
+                        find_first_newline(&store, location, end - 1, file_size).await?
+                    } else {
+                        0
+                    };
+
+                    let range = start + start_delta..end + end_delta;
+
+                    if range.start == range.end {
+                        return Ok(
+                            futures::stream::poll_fn(move |_| Poll::Ready(None)).boxed()
+                        );
+                    }
+
+                    Some(range)
+                }
+            };
+
+            let options = GetOptions {
+                range,
+                ..Default::default()
+            };
+
+            let result = store.get_opts(location, options).await?;
+
+            match result.payload {
+                GetResultPayload::File(mut file, _) => {
+                    let bytes = match file_meta.range {
+                        None => file_compression_type.convert_read(file)?,
+                        Some(_) => {
+                            file.seek(SeekFrom::Start(result.range.start as _))?;
+                            let limit = result.range.end - result.range.start;
+                            file_compression_type.convert_read(file.take(limit as u64))?
+                        }
+                    };
+
                     let reader = ReaderBuilder::new(schema)
                         .with_batch_size(batch_size)
                         .build(BufReader::new(bytes))?;
+
                     Ok(futures::stream::iter(reader).boxed())
                 }
                 GetResultPayload::Stream(s) => {
+                    let s = s.map_err(DataFusionError::from);
+
                     let mut decoder = ReaderBuilder::new(schema)
                         .with_batch_size(batch_size)
                         .build_decoder()?;
 
-                    let s = s.map_err(DataFusionError::from);
                     let mut input =
                         file_compression_type.convert_stream(s.boxed())?.fuse();
-                    let mut buffered = Bytes::new();
+                    let mut buffer = Bytes::new();
 
-                    let s = stream::poll_fn(move |cx| {
+                    let s = futures::stream::poll_fn(move |cx| {
                         loop {
-                            if buffered.is_empty() {
-                                buffered = match ready!(input.poll_next_unpin(cx)) {
-                                    Some(Ok(b)) => b,
+                            if buffer.is_empty() {
+                                match ready!(input.poll_next_unpin(cx)) {
+                                    Some(Ok(b)) => buffer = b,
                                     Some(Err(e)) => {
                                         return Poll::Ready(Some(Err(e.into())))
                                     }
-                                    None => break,
+                                    None => {}
                                 };
                             }
-                            let read = buffered.len();
-
-                            let decoded = match decoder.decode(buffered.as_ref()) {
+                            let decoded = match decoder.decode(buffer.as_ref()) {
+                                Ok(0) => break,
                                 Ok(decoded) => decoded,
                                 Err(e) => return Poll::Ready(Some(Err(e))),
                             };
 
-                            buffered.advance(decoded);
-                            if decoded != read {
-                                break;
-                            }
+                            buffer.advance(decoded);
                         }
 
                         Poll::Ready(decoder.flush().transpose())
                     });
+
                     Ok(s.boxed())
                 }
             }
