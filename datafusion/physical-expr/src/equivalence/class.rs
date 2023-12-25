@@ -136,7 +136,7 @@ pub struct EquivalenceGroup {
 
 impl EquivalenceGroup {
     /// Creates an empty equivalence group.
-    fn empty() -> Self {
+    pub fn empty() -> Self {
         Self { classes: vec![] }
     }
 
@@ -165,7 +165,7 @@ impl EquivalenceGroup {
     /// Adds the equality `left` = `right` to this equivalence group.
     /// New equality conditions often arise after steps like `Filter(a = b)`,
     /// `Alias(a, a as b)` etc.
-    fn add_equal_conditions(
+    pub fn add_equal_conditions(
         &mut self,
         left: &Arc<dyn PhysicalExpr>,
         right: &Arc<dyn PhysicalExpr>,
@@ -250,7 +250,7 @@ impl EquivalenceGroup {
     }
 
     /// Extends this equivalence group with the `other` equivalence group.
-    fn extend(&mut self, other: Self) {
+    pub fn extend(&mut self, other: Self) {
         self.classes.extend(other.classes);
         self.remove_redundant_entries();
     }
@@ -338,7 +338,7 @@ impl EquivalenceGroup {
 
     /// Projects `expr` according to the given projection mapping.
     /// If the resulting expression is invalid after projection, returns `None`.
-    fn project_expr(
+    pub fn project_expr(
         &self,
         mapping: &ProjectionMapping,
         expr: &Arc<dyn PhysicalExpr>,

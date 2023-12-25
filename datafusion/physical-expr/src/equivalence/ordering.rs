@@ -42,7 +42,7 @@ pub struct OrderingEquivalenceClass {
 
 impl OrderingEquivalenceClass {
     /// Creates new empty ordering equivalence class.
-    fn empty() -> Self {
+    pub fn empty() -> Self {
         Self { orderings: vec![] }
     }
 
