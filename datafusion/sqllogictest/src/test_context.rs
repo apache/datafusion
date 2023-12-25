@@ -15,9 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use arrow::array::{ArrayRef, Int64Array};
 use async_trait::async_trait;
 use datafusion::execution::context::SessionState;
-use datafusion::logical_expr::Expr;
+use datafusion::logical_expr::{create_udf, Expr, ScalarUDF, Volatility};
+use datafusion::physical_expr::functions::make_scalar_function;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::SessionConfig;
 use datafusion::{
@@ -33,6 +35,7 @@ use datafusion::{
     datasource::{MemTable, TableProvider, TableType},
     prelude::{CsvReadOptions, SessionContext},
 };
+use datafusion_common::cast::{as_float64_array, as_int32_array};
 use datafusion_common::DataFusionError;
 use log::info;
 use std::collections::HashMap;
@@ -102,6 +105,8 @@ impl TestContext {
             }
             "joins.slt" => {
                 info!("Registering partition table tables");
+                let twice = create_twice_udf();
+                test_ctx.ctx.register_udf(twice);
                 register_partition_table(&mut test_ctx).await;
             }
             "metadata.slt" => {
@@ -347,4 +352,60 @@ pub async fn register_metadata_tables(ctx: &SessionContext) {
     .unwrap();
 
     ctx.register_batch("table_with_metadata", batch).unwrap();
+}
+
+/// Create a UDF function named "TWICE"
+fn create_twice_udf() -> ScalarUDF {
+    // First, declare the actual implementation of the calculation
+    let pow = |args: &[ArrayRef]| {
+        // in DataFusion, all `args` and output are dynamically-typed arrays, which means that we need to:
+        // 1. cast the values to the type we want
+        // 2. perform the computation for every element in the array (using a loop or SIMD) and construct the result
+
+        // this is guaranteed by DataFusion based on the function's signature.
+        assert_eq!(args.len(), 2);
+
+        // 1. cast both arguments to f64. These casts MUST be aligned with the signature or this function panics!
+        let base = as_float64_array(&args[0]).expect("cast failed");
+        let exponent = as_float64_array(&args[1]).expect("cast failed");
+
+        // this is guaranteed by DataFusion. We place it just to make it obvious.
+        assert_eq!(exponent.len(), base.len());
+
+        // 2. perform the computation
+        let array = base
+            .iter()
+            .zip(exponent.iter())
+            .map(|(base, exponent)| {
+                match (base, exponent) {
+                    // in arrow, any value can be null.
+                    // Here we decide to make our UDF to return null when either base or exponent is null.
+                    (Some(base), Some(exponent)) => Some(base.powf(exponent)),
+                    _ => None,
+                }
+            })
+            .collect::<Float64Array>();
+
+        // `Ok` because no error occurred during the calculation (we should add one if exponent was [0, 1[ and the base < 0 because that panics!)
+        // `Arc` because arrays are immutable, thread-safe, trait objects.
+        Ok(Arc::new(array) as ArrayRef)
+    };
+    // the function above expects an `ArrayRef`, but DataFusion may pass a scalar to a UDF.
+    // thus, we use `make_scalar_function` to decorare the closure so that it can handle both Arrays and Scalar values.
+    let pow = make_scalar_function(pow);
+
+    // Next:
+    // * give it a name so that it shows nicely when the plan is printed
+    // * declare what input it expects
+    // * declare its return type
+    let pow = create_udf(
+        "pow_udf",
+        // expects two f64
+        vec![DataType::Float64, DataType::Float64],
+        // returns f64
+        Arc::new(DataType::Float64),
+        Volatility::Immutable,
+        pow,
+    );
+    pow
 }
