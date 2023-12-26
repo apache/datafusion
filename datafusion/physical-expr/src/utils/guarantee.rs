@@ -106,7 +106,6 @@ impl LiteralGuarantee {
         })
     }
 
-    //Note@wy build literal guarantee from expr
     /// Return a list of [`LiteralGuarantee`]s that must be satisfied for `expr`
     /// to evaluate to `true`.
     ///
