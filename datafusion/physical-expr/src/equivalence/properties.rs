@@ -83,13 +83,13 @@ use super::ordering::collapse_lex_ordering;
 pub struct EquivalenceProperties {
     /// Collection of equivalence classes that store expressions with the same
     /// value.
-    eq_group: EquivalenceGroup,
+    pub eq_group: EquivalenceGroup,
     /// Equivalent sort expressions for this table.
     pub oeq_class: OrderingEquivalenceClass,
     /// Expressions whose values are constant throughout the table.
     /// TODO: We do not need to track constants separately, they can be tracked
     ///       inside `eq_groups` as `Literal` expressions.
-    constants: Vec<Arc<dyn PhysicalExpr>>,
+    pub constants: Vec<Arc<dyn PhysicalExpr>>,
     /// Schema associated with this object.
     schema: SchemaRef,
 }
