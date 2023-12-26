@@ -1210,8 +1210,9 @@ mod tests {
     use super::*;
     use crate::equivalence::add_offset_to_expr;
     use crate::equivalence::tests::{
-        convert_to_orderings, create_random_schema, create_test_schema,
-        generate_table_for_eq_properties, is_table_same_after_sort, output_schema,
+        convert_to_orderings, convert_to_sort_exprs, create_random_schema,
+        create_test_params, create_test_schema, generate_table_for_eq_properties,
+        is_table_same_after_sort, output_schema,
     };
     use crate::execution_props::ExecutionProps;
     use crate::expressions::{col, BinaryExpr};
@@ -1758,6 +1759,86 @@ mod tests {
                     );
                 }
             }
+        }
+
+        Ok(())
+    }
+    #[test]
+    fn test_find_longest_permutation() -> Result<()> {
+        // Schema satisfies following orderings:
+        // [a ASC], [d ASC, b ASC], [e DESC, f ASC, g ASC]
+        // and
+        // Column [a=c] (e.g they are aliases).
+        // At below we add [d ASC, h DESC] also, for test purposes
+        let (test_schema, mut eq_properties) = create_test_params()?;
+        let col_a = &col("a", &test_schema)?;
+        let col_b = &col("b", &test_schema)?;
+        let col_c = &col("c", &test_schema)?;
+        let col_d = &col("d", &test_schema)?;
+        let col_e = &col("e", &test_schema)?;
+        let col_h = &col("h", &test_schema)?;
+        // a + d
+        let a_plus_d = Arc::new(BinaryExpr::new(
+            col_a.clone(),
+            Operator::Plus,
+            col_d.clone(),
+        )) as Arc<dyn PhysicalExpr>;
+
+        let option_asc = SortOptions {
+            descending: false,
+            nulls_first: false,
+        };
+        let option_desc = SortOptions {
+            descending: true,
+            nulls_first: true,
+        };
+        // [d ASC, h ASC] also satisfies schema.
+        eq_properties.add_new_orderings([vec![
+            PhysicalSortExpr {
+                expr: col_d.clone(),
+                options: option_asc,
+            },
+            PhysicalSortExpr {
+                expr: col_h.clone(),
+                options: option_desc,
+            },
+        ]]);
+        let test_cases = vec![
+            // TEST CASE 1
+            (vec![col_a], vec![(col_a, option_asc)]),
+            // TEST CASE 2
+            (vec![col_c], vec![(col_c, option_asc)]),
+            // TEST CASE 3
+            (
+                vec![col_d, col_e, col_b],
+                vec![
+                    (col_d, option_asc),
+                    (col_e, option_desc),
+                    (col_b, option_asc),
+                ],
+            ),
+            // TEST CASE 4
+            (vec![col_b], vec![]),
+            // TEST CASE 5
+            (vec![col_d], vec![(col_d, option_asc)]),
+            // TEST CASE 5
+            (vec![&a_plus_d], vec![(&a_plus_d, option_asc)]),
+            // TEST CASE 6
+            (
+                vec![col_b, col_d],
+                vec![(col_d, option_asc), (col_b, option_asc)],
+            ),
+            // TEST CASE 6
+            (
+                vec![col_c, col_e],
+                vec![(col_c, option_asc), (col_e, option_desc)],
+            ),
+        ];
+        for (exprs, expected) in test_cases {
+            let exprs = exprs.into_iter().cloned().collect::<Vec<_>>();
+            let expected = convert_to_sort_exprs(&expected);
+            let (actual, _) = eq_properties.find_longest_permutation(&exprs);
+            assert_eq!(actual, expected);
         }
 
         Ok(())
