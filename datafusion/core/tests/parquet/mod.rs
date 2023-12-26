@@ -44,6 +44,7 @@ mod file_statistics;
 mod filter_pushdown;
 mod page_pruning;
 mod row_group_pruning;
+mod schema;
 mod schema_coercion;
 
 #[cfg(test)]

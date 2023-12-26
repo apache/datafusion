@@ -1642,7 +1642,7 @@ pub struct PartitionColumn {
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct FileTypeWriterOptions {
-    #[prost(oneof = "file_type_writer_options::FileType", tags = "1")]
+    #[prost(oneof = "file_type_writer_options::FileType", tags = "1, 2")]
     pub file_type: ::core::option::Option<file_type_writer_options::FileType>,
 }
 /// Nested message and enum types in `FileTypeWriterOptions`.
@@ -1652,6 +1652,8 @@ pub mod file_type_writer_options {
     pub enum FileType {
         #[prost(message, tag = "1")]
         JsonOptions(super::JsonWriterOptions),
+        #[prost(message, tag = "2")]
+        ParquetOptions(super::ParquetWriterOptions),
     }
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
@@ -1659,6 +1661,30 @@ pub mod file_type_writer_options {
 pub struct JsonWriterOptions {
     #[prost(enumeration = "CompressionTypeVariant", tag = "1")]
     pub compression: i32,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ParquetWriterOptions {
+    #[prost(message, optional, tag = "1")]
+    pub writer_properties: ::core::option::Option<WriterProperties>,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct WriterProperties {
+    #[prost(uint64, tag = "1")]
+    pub data_page_size_limit: u64,
+    #[prost(uint64, tag = "2")]
+    pub dictionary_page_size_limit: u64,
+    #[prost(uint64, tag = "3")]
+    pub data_page_row_count_limit: u64,
+    #[prost(uint64, tag = "4")]
+    pub write_batch_size: u64,
+    #[prost(uint64, tag = "5")]
+    pub max_row_group_size: u64,
+    #[prost(string, tag = "6")]
+    pub writer_version: ::prost::alloc::string::String,
+    #[prost(string, tag = "7")]
+    pub created_by: ::prost::alloc::string::String,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]

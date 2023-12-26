@@ -7890,6 +7890,9 @@ impl serde::Serialize for FileTypeWriterOptions {
                 file_type_writer_options::FileType::JsonOptions(v) => {
                     struct_ser.serialize_field("jsonOptions", v)?;
                 }
+                file_type_writer_options::FileType::ParquetOptions(v) => {
+                    struct_ser.serialize_field("parquetOptions", v)?;
+                }
             }
         }
         struct_ser.end()
@@ -7904,11 +7907,14 @@ impl<'de> serde::Deserialize<'de> for FileTypeWriterOptions {
         const FIELDS: &[&str] = &[
             "json_options",
             "jsonOptions",
+            "parquet_options",
+            "parquetOptions",
         ];
 
         #[allow(clippy::enum_variant_names)]
         enum GeneratedField {
             JsonOptions,
+            ParquetOptions,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -7931,6 +7937,7 @@ impl<'de> serde::Deserialize<'de> for FileTypeWriterOptions {
                     {
                         match value {
                             "jsonOptions" | "json_options" => Ok(GeneratedField::JsonOptions),
+                            "parquetOptions" | "parquet_options" => Ok(GeneratedField::ParquetOptions),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -7958,6 +7965,13 @@ impl<'de> serde::Deserialize<'de> for FileTypeWriterOptions {
                                 return Err(serde::de::Error::duplicate_field("jsonOptions"));
                             }
                             file_type__ = map_.next_value::<::std::option::Option<_>>()?.map(file_type_writer_options::FileType::JsonOptions)
+;
+                        }
+                        GeneratedField::ParquetOptions => {
+                            if file_type__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("parquetOptions"));
+                            }
+                            file_type__ = map_.next_value::<::std::option::Option<_>>()?.map(file_type_writer_options::FileType::ParquetOptions)
 ;
                         }
                     }
@@ -15169,6 +15183,98 @@ impl<'de> serde::Deserialize<'de> for ParquetScanExecNode {
             }
         }
         deserializer.deserialize_struct("datafusion.ParquetScanExecNode", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for ParquetWriterOptions {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if self.writer_properties.is_some() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("datafusion.ParquetWriterOptions", len)?;
+        if let Some(v) = self.writer_properties.as_ref() {
+            struct_ser.serialize_field("writerProperties", v)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for ParquetWriterOptions {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "writer_properties",
+            "writerProperties",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            WriterProperties,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "writerProperties" | "writer_properties" => Ok(GeneratedField::WriterProperties),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = ParquetWriterOptions;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct datafusion.ParquetWriterOptions")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<ParquetWriterOptions, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut writer_properties__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::WriterProperties => {
+                            if writer_properties__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("writerProperties"));
+                            }
+                            writer_properties__ = map_.next_value()?;
+                        }
+                    }
+                }
+                Ok(ParquetWriterOptions {
+                    writer_properties: writer_properties__,
+                })
+            }
+        }
+        deserializer.deserialize_struct("datafusion.ParquetWriterOptions", FIELDS, GeneratedVisitor)
     }
 }
 impl serde::Serialize for PartialTableReference {
@@ -27142,5 +27248,220 @@ impl<'de> serde::Deserialize<'de> for WindowNode {
             }
         }
         deserializer.deserialize_struct("datafusion.WindowNode", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for WriterProperties {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if self.data_page_size_limit != 0 {
+            len += 1;
+        }
+        if self.dictionary_page_size_limit != 0 {
+            len += 1;
+        }
+        if self.data_page_row_count_limit != 0 {
+            len += 1;
+        }
+        if self.write_batch_size != 0 {
+            len += 1;
+        }
+        if self.max_row_group_size != 0 {
+            len += 1;
+        }
+        if !self.writer_version.is_empty() {
+            len += 1;
+        }
+        if !self.created_by.is_empty() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("datafusion.WriterProperties", len)?;
+        if self.data_page_size_limit != 0 {
+            #[allow(clippy::needless_borrow)]
+            struct_ser.serialize_field("dataPageSizeLimit", ToString::to_string(&self.data_page_size_limit).as_str())?;
+        }
+        if self.dictionary_page_size_limit != 0 {
+            #[allow(clippy::needless_borrow)]
+            struct_ser.serialize_field("dictionaryPageSizeLimit", ToString::to_string(&self.dictionary_page_size_limit).as_str())?;
+        }
+        if self.data_page_row_count_limit != 0 {
+            #[allow(clippy::needless_borrow)]
+            struct_ser.serialize_field("dataPageRowCountLimit", ToString::to_string(&self.data_page_row_count_limit).as_str())?;
+        }
+        if self.write_batch_size != 0 {
+            #[allow(clippy::needless_borrow)]
+            struct_ser.serialize_field("writeBatchSize", ToString::to_string(&self.write_batch_size).as_str())?;
+        }
+        if self.max_row_group_size != 0 {
+            #[allow(clippy::needless_borrow)]
+            struct_ser.serialize_field("maxRowGroupSize", ToString::to_string(&self.max_row_group_size).as_str())?;
+        }
+        if !self.writer_version.is_empty() {
+            struct_ser.serialize_field("writerVersion", &self.writer_version)?;
+        }
+        if !self.created_by.is_empty() {
+            struct_ser.serialize_field("createdBy", &self.created_by)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for WriterProperties {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "data_page_size_limit",
+            "dataPageSizeLimit",
+            "dictionary_page_size_limit",
+            "dictionaryPageSizeLimit",
+            "data_page_row_count_limit",
+            "dataPageRowCountLimit",
+            "write_batch_size",
+            "writeBatchSize",
+            "max_row_group_size",
+            "maxRowGroupSize",
+            "writer_version",
+            "writerVersion",
+            "created_by",
+            "createdBy",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            DataPageSizeLimit,
+            DictionaryPageSizeLimit,
+            DataPageRowCountLimit,
+            WriteBatchSize,
+            MaxRowGroupSize,
+            WriterVersion,
+            CreatedBy,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "dataPageSizeLimit" | "data_page_size_limit" => Ok(GeneratedField::DataPageSizeLimit),
+                            "dictionaryPageSizeLimit" | "dictionary_page_size_limit" => Ok(GeneratedField::DictionaryPageSizeLimit),
+                            "dataPageRowCountLimit" | "data_page_row_count_limit" => Ok(GeneratedField::DataPageRowCountLimit),
+                            "writeBatchSize" | "write_batch_size" => Ok(GeneratedField::WriteBatchSize),
+                            "maxRowGroupSize" | "max_row_group_size" => Ok(GeneratedField::MaxRowGroupSize),
+                            "writerVersion" | "writer_version" => Ok(GeneratedField::WriterVersion),
+                            "createdBy" | "created_by" => Ok(GeneratedField::CreatedBy),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = WriterProperties;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct datafusion.WriterProperties")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<WriterProperties, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut data_page_size_limit__ = None;
+                let mut dictionary_page_size_limit__ = None;
+                let mut data_page_row_count_limit__ = None;
+                let mut write_batch_size__ = None;
+                let mut max_row_group_size__ = None;
+                let mut writer_version__ = None;
+                let mut created_by__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::DataPageSizeLimit => {
+                            if data_page_size_limit__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("dataPageSizeLimit"));
+                            }
+                            data_page_size_limit__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::DictionaryPageSizeLimit => {
+                            if dictionary_page_size_limit__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("dictionaryPageSizeLimit"));
+                            }
+                            dictionary_page_size_limit__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::DataPageRowCountLimit => {
+                            if data_page_row_count_limit__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("dataPageRowCountLimit"));
+                            }
+                            data_page_row_count_limit__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::WriteBatchSize => {
+                            if write_batch_size__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("writeBatchSize"));
+                            }
+                            write_batch_size__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::MaxRowGroupSize => {
+                            if max_row_group_size__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("maxRowGroupSize"));
+                            }
+                            max_row_group_size__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::WriterVersion => {
+                            if writer_version__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("writerVersion"));
+                            }
+                            writer_version__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::CreatedBy => {
+                            if created_by__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("createdBy"));
+                            }
+                            created_by__ = Some(map_.next_value()?);
+                        }
+                    }
+                }
+                Ok(WriterProperties {
+                    data_page_size_limit: data_page_size_limit__.unwrap_or_default(),
+                    dictionary_page_size_limit: dictionary_page_size_limit__.unwrap_or_default(),
+                    data_page_row_count_limit: data_page_row_count_limit__.unwrap_or_default(),
+                    write_batch_size: write_batch_size__.unwrap_or_default(),
+                    max_row_group_size: max_row_group_size__.unwrap_or_default(),
+                    writer_version: writer_version__.unwrap_or_default(),
+                    created_by: created_by__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("datafusion.WriterProperties", FIELDS, GeneratedVisitor)
     }
 }
