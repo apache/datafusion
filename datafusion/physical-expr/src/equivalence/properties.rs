@@ -1610,4 +1610,77 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    fn test_update_ordering() -> Result<()> {
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Int32, true),
+            Field::new("c", DataType::Int32, true),
+            Field::new("d", DataType::Int32, true),
+        ]);
+
+        let mut eq_properties = EquivalenceProperties::new(Arc::new(schema.clone()));
+        let col_a = &col("a", &schema)?;
+        let col_b = &col("b", &schema)?;
+        let col_c = &col("c", &schema)?;
+        let col_d = &col("d", &schema)?;
+        let option_asc = SortOptions {
+            descending: false,
+            nulls_first: false,
+        };
+        // b=a (e.g they are aliases)
+        eq_properties.add_equal_conditions(col_b, col_a);
+        // [b ASC], [d ASC]
+        eq_properties.add_new_orderings(vec![
+            vec![PhysicalSortExpr {
+                expr: col_b.clone(),
+                options: option_asc,
+            }],
+            vec![PhysicalSortExpr {
+                expr: col_d.clone(),
+                options: option_asc,
+            }],
+        ]);
+
+        let test_cases = vec![
+            // d + b
+            (
+                Arc::new(BinaryExpr::new(
+                    col_d.clone(),
+                    Operator::Plus,
+                    col_b.clone(),
+                )) as Arc<dyn PhysicalExpr>,
+                SortProperties::Ordered(option_asc),
+            ),
+            // b
+            (col_b.clone(), SortProperties::Ordered(option_asc)),
+            // a
+            (col_a.clone(), SortProperties::Ordered(option_asc)),
+            // a + c
+            (
+                Arc::new(BinaryExpr::new(
+                    col_a.clone(),
+                    Operator::Plus,
+                    col_c.clone(),
+                )),
+                SortProperties::Unordered,
+            ),
+        ];
+        for (expr, expected) in test_cases {
+            let leading_orderings = eq_properties
+                .oeq_class()
+                .iter()
+                .flat_map(|ordering| ordering.first().cloned())
+                .collect::<Vec<_>>();
+            let expr_ordering = eq_properties.get_expr_ordering(expr.clone());
+            let err_msg = format!(
+                "expr:{:?}, expected: {:?}, actual: {:?}, leading_orderings: {leading_orderings:?}",
+                expr, expected, expr_ordering.state
+            );
+            assert_eq!(expr_ordering.state, expected, "{}", err_msg);
+        }
+
+        Ok(())
+    }
 }
