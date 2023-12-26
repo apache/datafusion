@@ -1208,9 +1208,13 @@ impl Hash for ExprWrapper {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::equivalence::tests::output_schema;
+    use crate::equivalence::add_offset_to_expr;
+    use crate::equivalence::tests::{
+        convert_to_orderings, create_test_schema, output_schema,
+    };
     use crate::expressions::col;
     use arrow::datatypes::{DataType, Field, Schema};
+    use arrow_schema::SortOptions;
     use datafusion_common::Result;
     use std::sync::Arc;
 
@@ -1260,6 +1264,94 @@ mod tests {
         assert!(eq_class.contains(col_a3));
         assert!(eq_class.contains(col_a4));
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_join_equivalence_properties() -> Result<()> {
+        let schema = create_test_schema()?;
+        let col_a = &col("a", &schema)?;
+        let col_b = &col("b", &schema)?;
+        let col_c = &col("c", &schema)?;
+        let offset = schema.fields.len();
+        let col_a2 = &add_offset_to_expr(col_a.clone(), offset);
+        let col_b2 = &add_offset_to_expr(col_b.clone(), offset);
+        let option_asc = SortOptions {
+            descending: false,
+            nulls_first: false,
+        };
+        let test_cases = vec![
+            // ------- TEST CASE 1 --------
+            // [a ASC], [b ASC]
+            (
+                // [a ASC], [b ASC]
+                vec![vec![(col_a, option_asc)], vec![(col_b, option_asc)]],
+                // [a ASC], [b ASC]
+                vec![vec![(col_a, option_asc)], vec![(col_b, option_asc)]],
+                // expected [a ASC, a2 ASC], [a ASC, b2 ASC], [b ASC, a2 ASC], [b ASC, b2 ASC]
+                vec![
+                    vec![(col_a, option_asc), (col_a2, option_asc)],
+                    vec![(col_a, option_asc), (col_b2, option_asc)],
+                    vec![(col_b, option_asc), (col_a2, option_asc)],
+                    vec![(col_b, option_asc), (col_b2, option_asc)],
+                ],
+            ),
+            // ------- TEST CASE 2 --------
+            // [a ASC], [b ASC]
+            (
+                // [a ASC], [b ASC], [c ASC]
+                vec![
+                    vec![(col_a, option_asc)],
+                    vec![(col_b, option_asc)],
+                    vec![(col_c, option_asc)],
+                ],
+                // [a ASC], [b ASC]
+                vec![vec![(col_a, option_asc)], vec![(col_b, option_asc)]],
+                // expected [a ASC, a2 ASC], [a ASC, b2 ASC], [b ASC, a2 ASC], [b ASC, b2 ASC], [c ASC, a2 ASC], [c ASC, b2 ASC]
+                vec![
+                    vec![(col_a, option_asc), (col_a2, option_asc)],
+                    vec![(col_a, option_asc), (col_b2, option_asc)],
+                    vec![(col_b, option_asc), (col_a2, option_asc)],
+                    vec![(col_b, option_asc), (col_b2, option_asc)],
+                    vec![(col_c, option_asc), (col_a2, option_asc)],
+                    vec![(col_c, option_asc), (col_b2, option_asc)],
+                ],
+            ),
+        ];
+        for (left_orderings, right_orderings, expected) in test_cases {
+            let mut left_eq_properties = EquivalenceProperties::new(schema.clone());
+            let mut right_eq_properties = EquivalenceProperties::new(schema.clone());
+            let left_orderings = convert_to_orderings(&left_orderings);
+            let right_orderings = convert_to_orderings(&right_orderings);
+            let expected = convert_to_orderings(&expected);
+            left_eq_properties.add_new_orderings(left_orderings);
+            right_eq_properties.add_new_orderings(right_orderings);
+            let join_eq = join_equivalence_properties(
+                left_eq_properties,
+                right_eq_properties,
+                &JoinType::Inner,
+                Arc::new(Schema::empty()),
+                &[true, false],
+                Some(JoinSide::Left),
+                &[],
+            );
+            let orderings = &join_eq.oeq_class.orderings;
+            let err_msg = format!("expected: {:?}, actual:{:?}", expected, orderings);
+            assert_eq!(
+                join_eq.oeq_class.orderings.len(),
+                expected.len(),
+                "{}",
+                err_msg
+            );
+            for ordering in orderings {
+                assert!(
+                    expected.contains(ordering),
+                    "{}, ordering: {:?}",
+                    err_msg,
+                    ordering
+                );
+            }
+        }
         Ok(())
     }
 }

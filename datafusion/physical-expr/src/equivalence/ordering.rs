@@ -37,7 +37,7 @@ use crate::{LexOrdering, PhysicalExpr, PhysicalSortExpr};
 /// ordering. In this case, we say that these orderings are equivalent.
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub struct OrderingEquivalenceClass {
-    orderings: Vec<LexOrdering>,
+    pub orderings: Vec<LexOrdering>,
 }
 
 impl OrderingEquivalenceClass {
