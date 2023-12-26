@@ -2595,32 +2595,4 @@ mod tests {
 
         Ok(())
     }
-
-    #[test]
-    fn test_expr_consists_of_constants() -> Result<()> {
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("a", DataType::Int32, true),
-            Field::new("b", DataType::Int32, true),
-            Field::new("c", DataType::Int32, true),
-            Field::new("d", DataType::Int32, true),
-            Field::new("ts", DataType::Timestamp(TimeUnit::Nanosecond, None), true),
-        ]));
-        let col_a = col("a", &schema)?;
-        let col_b = col("b", &schema)?;
-        let col_d = col("d", &schema)?;
-        let b_plus_d = Arc::new(BinaryExpr::new(
-            col_b.clone(),
-            Operator::Plus,
-            col_d.clone(),
-        )) as Arc<dyn PhysicalExpr>;
-
-        let constants = vec![col_a.clone(), col_b.clone()];
-        let expr = b_plus_d.clone();
-        assert!(!is_constant_recurse(&constants, &expr));
-
-        let constants = vec![col_a.clone(), col_b.clone(), col_d.clone()];
-        let expr = b_plus_d.clone();
-        assert!(is_constant_recurse(&constants, &expr));
-        Ok(())
-    }
 }
