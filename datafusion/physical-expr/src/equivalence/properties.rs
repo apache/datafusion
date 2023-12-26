@@ -1217,6 +1217,7 @@ mod tests {
     use arrow_schema::{Fields, SortOptions, TimeUnit};
     use datafusion_common::Result;
     use datafusion_expr::Operator;
+    use std::ops::Not;
     use std::sync::Arc;
 
     #[test]
@@ -1494,6 +1495,118 @@ mod tests {
         let oeq_class = eq_properties.oeq_class().clone();
         let expected = expected_eqs.oeq_class();
         assert!(oeq_class.eq(expected));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_get_indices_of_matching_sort_exprs_with_order_eq() -> Result<()> {
+        let sort_options = SortOptions::default();
+        let sort_options_not = SortOptions::default().not();
+
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Int32, true),
+        ]);
+        let col_a = &col("a", &schema)?;
+        let col_b = &col("b", &schema)?;
+        let required_columns = [col_b.clone(), col_a.clone()];
+        let mut eq_properties = EquivalenceProperties::new(Arc::new(schema));
+        eq_properties.add_new_orderings([vec![
+            PhysicalSortExpr {
+                expr: Arc::new(Column::new("b", 1)),
+                options: sort_options_not,
+            },
+            PhysicalSortExpr {
+                expr: Arc::new(Column::new("a", 0)),
+                options: sort_options,
+            },
+        ]]);
+        let (result, idxs) = eq_properties.find_longest_permutation(&required_columns);
+        assert_eq!(idxs, vec![0, 1]);
+        assert_eq!(
+            result,
+            vec![
+                PhysicalSortExpr {
+                    expr: col_b.clone(),
+                    options: sort_options_not
+                },
+                PhysicalSortExpr {
+                    expr: col_a.clone(),
+                    options: sort_options
+                }
+            ]
+        );
+
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Int32, true),
+            Field::new("c", DataType::Int32, true),
+        ]);
+        let col_a = &col("a", &schema)?;
+        let col_b = &col("b", &schema)?;
+        let required_columns = [col_b.clone(), col_a.clone()];
+        let mut eq_properties = EquivalenceProperties::new(Arc::new(schema));
+        eq_properties.add_new_orderings([
+            vec![PhysicalSortExpr {
+                expr: Arc::new(Column::new("c", 2)),
+                options: sort_options,
+            }],
+            vec![
+                PhysicalSortExpr {
+                    expr: Arc::new(Column::new("b", 1)),
+                    options: sort_options_not,
+                },
+                PhysicalSortExpr {
+                    expr: Arc::new(Column::new("a", 0)),
+                    options: sort_options,
+                },
+            ],
+        ]);
+        let (result, idxs) = eq_properties.find_longest_permutation(&required_columns);
+        assert_eq!(idxs, vec![0, 1]);
+        assert_eq!(
+            result,
+            vec![
+                PhysicalSortExpr {
+                    expr: col_b.clone(),
+                    options: sort_options_not
+                },
+                PhysicalSortExpr {
+                    expr: col_a.clone(),
+                    options: sort_options
+                }
+            ]
+        );
+
+        let required_columns = [
+            Arc::new(Column::new("b", 1)) as _,
+            Arc::new(Column::new("a", 0)) as _,
+        ];
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Int32, true),
+            Field::new("c", DataType::Int32, true),
+        ]);
+        let mut eq_properties = EquivalenceProperties::new(Arc::new(schema));
+
+        // not satisfied orders
+        eq_properties.add_new_orderings([vec![
+            PhysicalSortExpr {
+                expr: Arc::new(Column::new("b", 1)),
+                options: sort_options_not,
+            },
+            PhysicalSortExpr {
+                expr: Arc::new(Column::new("c", 2)),
+                options: sort_options,
+            },
+            PhysicalSortExpr {
+                expr: Arc::new(Column::new("a", 0)),
+                options: sort_options,
+            },
+        ]]);
+        let (_, idxs) = eq_properties.find_longest_permutation(&required_columns);
+        assert_eq!(idxs, vec![0]);
 
         Ok(())
     }
