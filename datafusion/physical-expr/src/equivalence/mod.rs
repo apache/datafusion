@@ -61,26 +61,19 @@ pub fn add_offset_to_expr(
 
 #[cfg(test)]
 mod tests {
-    use std::ops::Not;
-    use std::sync::Arc;
-
     use super::*;
-    use crate::execution_props::ExecutionProps;
-    use crate::expressions::{col, lit, BinaryExpr, Column, Literal};
-    use crate::functions::create_physical_expr;
+    use crate::expressions::{col, Column};
     use crate::PhysicalSortExpr;
-
     use arrow::compute::{lexsort_to_indices, SortColumn};
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow_array::{ArrayRef, Float64Array, RecordBatch, UInt32Array};
-    use arrow_schema::{Fields, SchemaRef, SortOptions, TimeUnit};
-    use datafusion_common::{plan_datafusion_err, DataFusionError, Result, ScalarValue};
-    use datafusion_expr::{BuiltinScalarFunction, Operator};
-
-    use itertools::{izip, Itertools};
+    use arrow_schema::{SchemaRef, SortOptions};
+    use datafusion_common::{plan_datafusion_err, DataFusionError, Result};
+    use itertools::izip;
     use rand::rngs::StdRng;
     use rand::seq::SliceRandom;
     use rand::{Rng, SeedableRng};
+    use std::sync::Arc;
 
     pub fn output_schema(
         mapping: &ProjectionMapping,
@@ -536,41 +529,5 @@ mod tests {
             .collect();
 
         Ok(RecordBatch::try_from_iter(res)?)
-    }
-
-    #[test]
-    fn test_schema_normalize_sort_requirement_with_equivalence() -> Result<()> {
-        let option1 = SortOptions {
-            descending: false,
-            nulls_first: false,
-        };
-        // Assume that column a and c are aliases.
-        let (test_schema, eq_properties) = create_test_params()?;
-        let col_a = &col("a", &test_schema)?;
-        let col_c = &col("c", &test_schema)?;
-        let col_d = &col("d", &test_schema)?;
-
-        // Test cases for equivalence normalization
-        // First entry in the tuple is PhysicalSortRequirement, second entry in the tuple is
-        // expected PhysicalSortRequirement after normalization.
-        let test_cases = vec![
-            (vec![(col_a, Some(option1))], vec![(col_a, Some(option1))]),
-            // In the normalized version column c should be replace with column a
-            (vec![(col_c, Some(option1))], vec![(col_a, Some(option1))]),
-            (vec![(col_c, None)], vec![(col_a, None)]),
-            (vec![(col_d, Some(option1))], vec![(col_d, Some(option1))]),
-        ];
-        for (reqs, expected) in test_cases.into_iter() {
-            let reqs = convert_to_sort_reqs(&reqs);
-            let expected = convert_to_sort_reqs(&expected);
-
-            let normalized = eq_properties.normalize_sort_requirements(&reqs);
-            assert!(
-                expected.eq(&normalized),
-                "error in test: reqs: {reqs:?}, expected: {expected:?}, normalized: {normalized:?}"
-            );
-        }
-
-        Ok(())
     }
 }
