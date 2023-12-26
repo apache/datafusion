@@ -461,14 +461,15 @@ impl EquivalenceGroup {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use crate::equivalence::tests::create_test_params;
     use crate::equivalence::{EquivalenceClass, EquivalenceGroup};
     use crate::expressions::lit;
-    use datafusion_common::Result;
-    use std::sync::Arc;
-
-    use super::*;
     use crate::expressions::Column;
+    use crate::expressions::Literal;
+    use datafusion_common::Result;
+    use datafusion_common::ScalarValue;
+    use std::sync::Arc;
 
     #[test]
     fn test_bridge_groups() -> Result<()> {
@@ -570,5 +571,28 @@ mod tests {
         }
 
         Ok(())
+    }
+
+    #[test]
+    fn test_contains_any() {
+        let lit_true = Arc::new(Literal::new(ScalarValue::Boolean(Some(true))))
+            as Arc<dyn PhysicalExpr>;
+        let lit_false = Arc::new(Literal::new(ScalarValue::Boolean(Some(false))))
+            as Arc<dyn PhysicalExpr>;
+        let lit2 =
+            Arc::new(Literal::new(ScalarValue::Int32(Some(2)))) as Arc<dyn PhysicalExpr>;
+        let lit1 =
+            Arc::new(Literal::new(ScalarValue::Int32(Some(1)))) as Arc<dyn PhysicalExpr>;
+        let col_b_expr = Arc::new(Column::new("b", 1)) as Arc<dyn PhysicalExpr>;
+
+        let cls1 = EquivalenceClass::new(vec![lit_true.clone(), lit_false.clone()]);
+        let cls2 = EquivalenceClass::new(vec![lit_true.clone(), col_b_expr.clone()]);
+        let cls3 = EquivalenceClass::new(vec![lit2.clone(), lit1.clone()]);
+
+        // lit_true is common
+        assert!(cls1.contains_any(&cls2));
+        // there is no common entry
+        assert!(!cls1.contains_any(&cls3));
+        assert!(!cls2.contains_any(&cls3));
     }
 }
