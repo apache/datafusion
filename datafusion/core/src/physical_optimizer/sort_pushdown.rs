@@ -85,29 +85,23 @@ impl TreeNode for SortPushDown {
 
         Ok(VisitRecursion::Continue)
     }
-    fn map_children<F>(self, transform: F) -> Result<Self>
+    fn map_children<F>(mut self, transform: F) -> Result<Self>
     where
         F: FnMut(Self) -> Result<Self>,
     {
-        if self.children_nodes.is_empty() {
-            Ok(self)
-        } else {
-            let children_nodes = self
+        if !self.children_nodes.is_empty() {
+            self.children_nodes = self
                 .children_nodes
                 .into_iter()
                 .map(transform)
-                .collect::<Result<Vec<_>>>()?;
-
-            Ok(Self {
-                plan: with_new_children_if_necessary(
-                    self.plan,
-                    children_nodes.iter().map(|c| c.plan.clone()).collect(),
-                )?
-                .into(),
-                required_ordering: self.required_ordering,
-                children_nodes,
-            })
+                .collect::<Result<_>>()?;
+            self.plan = with_new_children_if_necessary(
+                self.plan,
+                self.children_nodes.iter().map(|c| c.plan.clone()).collect(),
+            )?
+            .into();
         }
+        Ok(self)
     }
 }
 
@@ -127,15 +121,14 @@ pub(crate) fn pushdown_sorts(
             add_sort_above(&mut new_plan, parent_required, sort_exec.fetch());
             requirements.plan = new_plan;
         };
-        let mut new_node = requirements;
 
-        let required_ordering = new_node
+        let required_ordering = requirements
             .plan
             .output_ordering()
             .map(PhysicalSortRequirement::from_sort_exprs)
             .unwrap_or_default();
         // Since new_plan is a SortExec, we can safely get the 0th index.
-        let mut child = new_node.children_nodes.swap_remove(0);
+        let mut child = requirements.children_nodes.swap_remove(0);
         if let Some(adjusted) =
             pushdown_requirement_to_children(&child.plan, &required_ordering)?
         {
@@ -143,14 +136,11 @@ pub(crate) fn pushdown_sorts(
                 c.required_ordering = o;
             }
             // Can push down requirements
-            Ok(Transformed::Yes(SortPushDown {
-                plan: child.plan,
-                required_ordering: None,
-                children_nodes: child.children_nodes,
-            }))
+            child.required_ordering = None;
+            Ok(Transformed::Yes(child))
         } else {
             // Can not push down requirements
-            let mut empty_node = SortPushDown::new(new_node.plan);
+            let mut empty_node = SortPushDown::new(requirements.plan);
             empty_node.assign_initial_requirements();
             Ok(Transformed::Yes(empty_node))
         }
@@ -172,11 +162,8 @@ pub(crate) fn pushdown_sorts(
             for (c, o) in requirements.children_nodes.iter_mut().zip(adjusted) {
                 c.required_ordering = o;
             }
-            Ok(Transformed::Yes(SortPushDown {
-                plan: requirements.plan,
-                required_ordering: None,
-                children_nodes: requirements.children_nodes,
-            }))
+            requirements.required_ordering = None;
+            Ok(Transformed::Yes(requirements))
         } else {
             // Can not push down requirements, add new SortExec:
             let mut new_plan = requirements.plan;
@@ -302,10 +289,11 @@ fn pushdown_requirement_to_children(
     // TODO: Add support for Projection push down
 }
 
-/// Determine the children requirements
-/// If the children requirements are more specific, do not push down the parent requirements
-/// If the the parent requirements are more specific, push down the parent requirements
-/// If they are not compatible, need to add Sort.
+/// Determine children requirements:
+/// - If children requirements are more specific, do not push down parent
+///   requirements.
+/// - If parent requirements are more specific, push down parent requirements.
+/// - If they are not compatible, need to add a sort.
 fn determine_children_requirement(
     parent_required: LexRequirementRef,
     request_child: LexRequirementRef,
@@ -315,18 +303,15 @@ fn determine_children_requirement(
         .equivalence_properties()
         .requirements_compatible(request_child, parent_required)
     {
-        // request child requirements are more specific, no need to push down the parent requirements
+        // Child requirements are more specific, no need to push down.
         RequirementsCompatibility::Satisfy
     } else if child_plan
         .equivalence_properties()
         .requirements_compatible(parent_required, request_child)
     {
-        // parent requirements are more specific, adjust the request child requirements and push down the new requirements
-        let adjusted = if parent_required.is_empty() {
-            None
-        } else {
-            Some(parent_required.to_vec())
-        };
+        // Parent requirements are more specific, adjust child's requirements
+        // and push down the new requirements:
+        let adjusted = (!parent_required.is_empty()).then(|| parent_required.to_vec());
         RequirementsCompatibility::Compatible(adjusted)
     } else {
         RequirementsCompatibility::NonCompatible

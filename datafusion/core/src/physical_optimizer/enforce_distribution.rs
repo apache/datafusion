@@ -270,11 +270,12 @@ impl PhysicalOptimizerRule for EnforceDistribution {
 /// 5) For other types of operators, by default, pushdown the parent requirements to children.
 ///
 fn adjust_input_keys_ordering(
-    requirements: PlanWithKeyRequirements,
+    mut requirements: PlanWithKeyRequirements,
 ) -> Result<Transformed<PlanWithKeyRequirements>> {
     let parent_required = requirements.required_key_ordering.clone();
     let plan_any = requirements.plan.as_any();
-    let transformed = if let Some(HashJoinExec {
+
+    if let Some(HashJoinExec {
         left,
         right,
         on,
@@ -299,13 +300,13 @@ fn adjust_input_keys_ordering(
                             *null_equals_null,
                         )?) as Arc<dyn ExecutionPlan>)
                     };
-                Some(reorder_partitioned_join_keys(
+                Ok(Transformed::Yes(reorder_partitioned_join_keys(
                     requirements.plan.clone(),
                     &parent_required,
                     on,
                     vec![],
                     &join_constructor,
-                )?)
+                )?))
             }
             PartitionMode::CollectLeft => {
                 let new_right_request = match join_type {
@@ -323,15 +324,15 @@ fn adjust_input_keys_ordering(
                 };
 
                 // Push down requirements to the right side
-                Some(PlanWithKeyRequirements {
-                    plan: requirements.plan.clone(),
-                    required_key_ordering: vec![],
-                    request_key_ordering: vec![None, new_right_request],
-                })
+                requirements.children[1].required_key_ordering =
+                    new_right_request.unwrap_or(vec![]);
+                Ok(Transformed::Yes(requirements))
             }
             PartitionMode::Auto => {
                 // Can not satisfy, clear the current requirements and generate new empty requirements
-                Some(PlanWithKeyRequirements::new(requirements.plan.clone()))
+                Ok(Transformed::Yes(PlanWithKeyRequirements::new(
+                    requirements.plan.clone(),
+                )))
             }
         }
     } else if let Some(CrossJoinExec { left, .. }) =
@@ -339,14 +340,9 @@ fn adjust_input_keys_ordering(
     {
         let left_columns_len = left.schema().fields().len();
         // Push down requirements to the right side
-        Some(PlanWithKeyRequirements {
-            plan: requirements.plan.clone(),
-            required_key_ordering: vec![],
-            request_key_ordering: vec![
-                None,
-                shift_right_required(&parent_required, left_columns_len),
-            ],
-        })
+        requirements.children[1].required_key_ordering =
+            shift_right_required(&parent_required, left_columns_len).unwrap_or_default();
+        Ok(Transformed::Yes(requirements))
     } else if let Some(SortMergeJoinExec {
         left,
         right,
@@ -368,26 +364,30 @@ fn adjust_input_keys_ordering(
                     *null_equals_null,
                 )?) as Arc<dyn ExecutionPlan>)
             };
-        Some(reorder_partitioned_join_keys(
+        Ok(Transformed::Yes(reorder_partitioned_join_keys(
             requirements.plan.clone(),
             &parent_required,
             on,
             sort_options.clone(),
             &join_constructor,
-        )?)
+        )?))
     } else if let Some(aggregate_exec) = plan_any.downcast_ref::<AggregateExec>() {
         if !parent_required.is_empty() {
             match aggregate_exec.mode() {
-                AggregateMode::FinalPartitioned => Some(reorder_aggregate_keys(
+                AggregateMode::FinalPartitioned => {
+                    Ok(Transformed::Yes(reorder_aggregate_keys(
+                        requirements.plan.clone(),
+                        &parent_required,
+                        aggregate_exec,
+                    )?))
+                }
+                _ => Ok(Transformed::Yes(PlanWithKeyRequirements::new(
                     requirements.plan.clone(),
-                    &parent_required,
-                    aggregate_exec,
-                )?),
-                _ => Some(PlanWithKeyRequirements::new(requirements.plan.clone())),
+                ))),
             }
         } else {
             // Keep everything unchanged
-            None
+            Ok(Transformed::No(requirements))
         }
     } else if let Some(proj) = plan_any.downcast_ref::<ProjectionExec>() {
         let expr = proj.expr();
@@ -396,34 +396,28 @@ fn adjust_input_keys_ordering(
         // Construct a mapping from new name to the the orginal Column
         let new_required = map_columns_before_projection(&parent_required, expr);
         if new_required.len() == parent_required.len() {
-            Some(PlanWithKeyRequirements {
-                plan: requirements.plan.clone(),
-                required_key_ordering: vec![],
-                request_key_ordering: vec![Some(new_required.clone())],
-            })
+            requirements.children[0].required_key_ordering = new_required.clone();
+            Ok(Transformed::Yes(requirements))
         } else {
             // Can not satisfy, clear the current requirements and generate new empty requirements
-            Some(PlanWithKeyRequirements::new(requirements.plan.clone()))
+            Ok(Transformed::Yes(PlanWithKeyRequirements::new(
+                requirements.plan.clone(),
+            )))
         }
     } else if plan_any.downcast_ref::<RepartitionExec>().is_some()
         || plan_any.downcast_ref::<CoalescePartitionsExec>().is_some()
         || plan_any.downcast_ref::<WindowAggExec>().is_some()
     {
-        Some(PlanWithKeyRequirements::new(requirements.plan.clone()))
+        Ok(Transformed::Yes(PlanWithKeyRequirements::new(
+            requirements.plan.clone(),
+        )))
     } else {
         // By default, push down the parent requirements to children
-        let children_len = requirements.plan.children().len();
-        Some(PlanWithKeyRequirements {
-            plan: requirements.plan.clone(),
-            required_key_ordering: vec![],
-            request_key_ordering: vec![Some(parent_required.clone()); children_len],
-        })
-    };
-    Ok(if let Some(transformed) = transformed {
-        Transformed::Yes(transformed)
-    } else {
-        Transformed::No(requirements)
-    })
+        requirements.children.iter_mut().for_each(|child| {
+            child.required_key_ordering = parent_required.clone();
+        });
+        Ok(Transformed::Yes(requirements))
+    }
 }
 
 fn reorder_partitioned_join_keys<F>(
@@ -454,28 +448,24 @@ where
             for idx in 0..sort_options.len() {
                 new_sort_options.push(sort_options[new_positions[idx]])
             }
-
-            Ok(PlanWithKeyRequirements {
-                plan: join_constructor((new_join_on, new_sort_options))?,
-                required_key_ordering: vec![],
-                request_key_ordering: vec![Some(left_keys), Some(right_keys)],
-            })
+            let mut requirement_tree = PlanWithKeyRequirements::new(join_constructor((
+                new_join_on,
+                new_sort_options,
+            ))?);
+            requirement_tree.children[0].required_key_ordering = left_keys;
+            requirement_tree.children[1].required_key_ordering = right_keys;
+            Ok(requirement_tree)
         } else {
-            Ok(PlanWithKeyRequirements {
-                plan: join_plan,
-                required_key_ordering: vec![],
-                request_key_ordering: vec![Some(left_keys), Some(right_keys)],
-            })
+            let mut requirement_tree = PlanWithKeyRequirements::new(join_plan);
+            requirement_tree.children[0].required_key_ordering = left_keys;
+            requirement_tree.children[1].required_key_ordering = right_keys;
+            Ok(requirement_tree)
         }
     } else {
-        Ok(PlanWithKeyRequirements {
-            plan: join_plan,
-            required_key_ordering: vec![],
-            request_key_ordering: vec![
-                Some(join_key_pairs.left_keys),
-                Some(join_key_pairs.right_keys),
-            ],
-        })
+        let mut requirement_tree = PlanWithKeyRequirements::new(join_plan);
+        requirement_tree.children[0].required_key_ordering = join_key_pairs.left_keys;
+        requirement_tree.children[1].required_key_ordering = join_key_pairs.right_keys;
+        Ok(requirement_tree)
     }
 }
 
@@ -1430,29 +1420,23 @@ impl TreeNode for DistributionContext {
         Ok(VisitRecursion::Continue)
     }
 
-    fn map_children<F>(self, transform: F) -> Result<Self>
+    fn map_children<F>(mut self, transform: F) -> Result<Self>
     where
         F: FnMut(Self) -> Result<Self>,
     {
-        if self.children_nodes.is_empty() {
-            Ok(self)
-        } else {
-            let children_nodes = self
+        if !self.children_nodes.is_empty() {
+            self.children_nodes = self
                 .children_nodes
                 .into_iter()
                 .map(transform)
-                .collect::<Result<Vec<_>>>()?;
-
-            Ok(Self {
-                plan: with_new_children_if_necessary(
-                    self.plan,
-                    children_nodes.iter().map(|c| c.plan.clone()).collect(),
-                )?
-                .into(),
-                distribution_connection: false,
-                children_nodes,
-            })
+                .collect::<Result<_>>()?;
+            self.plan = with_new_children_if_necessary(
+                self.plan,
+                self.children_nodes.iter().map(|c| c.plan.clone()).collect(),
+            )?
+            .into();
         }
+        Ok(self)
     }
 }
 
@@ -1481,36 +1465,17 @@ struct PlanWithKeyRequirements {
     plan: Arc<dyn ExecutionPlan>,
     /// Parent required key ordering
     required_key_ordering: Vec<Arc<dyn PhysicalExpr>>,
-    /// The request key ordering to children
-    request_key_ordering: Vec<Option<Vec<Arc<dyn PhysicalExpr>>>>,
+    children: Vec<Self>,
 }
 
 impl PlanWithKeyRequirements {
     fn new(plan: Arc<dyn ExecutionPlan>) -> Self {
-        let children_len = plan.children().len();
-        PlanWithKeyRequirements {
+        let children = plan.children();
+        Self {
             plan,
             required_key_ordering: vec![],
-            request_key_ordering: vec![None; children_len],
+            children: children.into_iter().map(Self::new).collect(),
         }
-    }
-
-    fn children(&self) -> Vec<PlanWithKeyRequirements> {
-        let plan_children = self.plan.children();
-        assert_eq!(plan_children.len(), self.request_key_ordering.len());
-        plan_children
-            .into_iter()
-            .zip(self.request_key_ordering.clone())
-            .map(|(child, required)| {
-                let from_parent = required.unwrap_or_default();
-                let length = child.children().len();
-                PlanWithKeyRequirements {
-                    plan: child,
-                    required_key_ordering: from_parent,
-                    request_key_ordering: vec![None; length],
-                }
-            })
-            .collect()
     }
 }
 
@@ -1519,9 +1484,9 @@ impl TreeNode for PlanWithKeyRequirements {
     where
         F: FnMut(&Self) -> Result<VisitRecursion>,
     {
-        let children = self.children();
+        let children = &self.children;
         for child in children {
-            match op(&child)? {
+            match op(child)? {
                 VisitRecursion::Continue => {}
                 VisitRecursion::Skip => return Ok(VisitRecursion::Continue),
                 VisitRecursion::Stop => return Ok(VisitRecursion::Stop),
@@ -1531,28 +1496,23 @@ impl TreeNode for PlanWithKeyRequirements {
         Ok(VisitRecursion::Continue)
     }
 
-    fn map_children<F>(self, transform: F) -> Result<Self>
+    fn map_children<F>(mut self, transform: F) -> Result<Self>
     where
         F: FnMut(Self) -> Result<Self>,
     {
-        let children = self.children();
-        if !children.is_empty() {
-            let new_children: Result<Vec<_>> =
-                children.into_iter().map(transform).collect();
-
-            let children_plans = new_children?
+        if !self.children.is_empty() {
+            self.children = self
+                .children
                 .into_iter()
-                .map(|child| child.plan)
-                .collect::<Vec<_>>();
-            let new_plan = with_new_children_if_necessary(self.plan, children_plans)?;
-            Ok(PlanWithKeyRequirements {
-                plan: new_plan.into(),
-                required_key_ordering: self.required_key_ordering,
-                request_key_ordering: self.request_key_ordering,
-            })
-        } else {
-            Ok(self)
+                .map(transform)
+                .collect::<Result<_>>()?;
+            self.plan = with_new_children_if_necessary(
+                self.plan,
+                self.children.iter().map(|c| c.plan.clone()).collect(),
+            )?
+            .into();
         }
+        Ok(self)
     }
 }
 

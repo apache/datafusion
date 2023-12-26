@@ -160,29 +160,23 @@ impl TreeNode for PlanWithCorrespondingSort {
         Ok(VisitRecursion::Continue)
     }
 
-    fn map_children<F>(self, transform: F) -> Result<Self>
+    fn map_children<F>(mut self, transform: F) -> Result<Self>
     where
         F: FnMut(Self) -> Result<Self>,
     {
-        if self.children_nodes.is_empty() {
-            Ok(self)
-        } else {
-            let children_nodes = self
+        if !self.children_nodes.is_empty() {
+            self.children_nodes = self
                 .children_nodes
                 .into_iter()
                 .map(transform)
-                .collect::<Result<Vec<_>>>()?;
-
-            Ok(Self {
-                plan: with_new_children_if_necessary(
-                    self.plan,
-                    children_nodes.iter().map(|c| c.plan.clone()).collect(),
-                )?
-                .into(),
-                sort_connection: false,
-                children_nodes,
-            })
+                .collect::<Result<_>>()?;
+            self.plan = with_new_children_if_necessary(
+                self.plan,
+                self.children_nodes.iter().map(|c| c.plan.clone()).collect(),
+            )?
+            .into();
         }
+        Ok(self)
     }
 }
 
@@ -263,29 +257,23 @@ impl TreeNode for PlanWithCorrespondingCoalescePartitions {
         Ok(VisitRecursion::Continue)
     }
 
-    fn map_children<F>(self, transform: F) -> Result<Self>
+    fn map_children<F>(mut self, transform: F) -> Result<Self>
     where
         F: FnMut(Self) -> Result<Self>,
     {
-        if self.children_nodes.is_empty() {
-            Ok(self)
-        } else {
-            let children_nodes = self
+        if !self.children_nodes.is_empty() {
+            self.children_nodes = self
                 .children_nodes
                 .into_iter()
                 .map(transform)
-                .collect::<Result<Vec<_>>>()?;
-
-            Ok(Self {
-                plan: with_new_children_if_necessary(
-                    self.plan,
-                    children_nodes.iter().map(|c| c.plan.clone()).collect(),
-                )?
-                .into(),
-                coalesce_connection: false,
-                children_nodes,
-            })
+                .collect::<Result<_>>()?;
+            self.plan = with_new_children_if_necessary(
+                self.plan,
+                self.children_nodes.iter().map(|c| c.plan.clone()).collect(),
+            )?
+            .into();
         }
+        Ok(self)
     }
 }
 

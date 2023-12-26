@@ -109,29 +109,23 @@ impl TreeNode for PipelineStatePropagator {
         Ok(VisitRecursion::Continue)
     }
 
-    fn map_children<F>(self, transform: F) -> Result<Self>
+    fn map_children<F>(mut self, transform: F) -> Result<Self>
     where
         F: FnMut(Self) -> Result<Self>,
     {
-        if self.children.is_empty() {
-            Ok(self)
-        } else {
-            let children = self
+        if !self.children.is_empty() {
+            self.children = self
                 .children
                 .into_iter()
                 .map(transform)
-                .collect::<Result<Vec<_>>>()?;
-
-            Ok(Self {
-                plan: with_new_children_if_necessary(
-                    self.plan,
-                    children.iter().map(|c| c.plan.clone()).collect(),
-                )?
-                .into(),
-                unbounded: self.unbounded,
-                children,
-            })
+                .collect::<Result<_>>()?;
+            self.plan = with_new_children_if_necessary(
+                self.plan,
+                self.children.iter().map(|c| c.plan.clone()).collect(),
+            )?
+            .into();
         }
+        Ok(self)
     }
 }
 

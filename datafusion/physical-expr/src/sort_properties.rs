@@ -187,24 +187,17 @@ impl TreeNode for ExprOrdering {
         Ok(VisitRecursion::Continue)
     }
 
-    fn map_children<F>(self, transform: F) -> Result<Self>
+    fn map_children<F>(mut self, transform: F) -> Result<Self>
     where
         F: FnMut(Self) -> Result<Self>,
     {
-        if self.children.is_empty() {
-            Ok(self)
-        } else {
-            let children = self
+        if !self.children.is_empty() {
+            self.children = self
                 .children
                 .into_iter()
                 .map(transform)
-                .collect::<Result<Vec<_>>>()?;
-
-            Ok(Self {
-                expr: self.expr,
-                state: self.state,
-                children,
-            })
+                .collect::<Result<_>>()?;
         }
+        Ok(self)
     }
 }
