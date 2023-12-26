@@ -85,7 +85,7 @@ pub struct EquivalenceProperties {
     /// value.
     eq_group: EquivalenceGroup,
     /// Equivalent sort expressions for this table.
-    oeq_class: OrderingEquivalenceClass,
+    pub oeq_class: OrderingEquivalenceClass,
     /// Expressions whose values are constant throughout the table.
     /// TODO: We do not need to track constants separately, they can be tracked
     ///       inside `eq_groups` as `Literal` expressions.

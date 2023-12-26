@@ -219,4 +219,44 @@ fn resolve_overlap(orderings: &mut [LexOrdering], idx: usize, pre_idx: usize) ->
 }
 
 #[cfg(test)]
-mod tests {}
+mod tests {
+    use crate::equivalence::EquivalenceProperties;
+    use crate::expressions::Column;
+    use crate::PhysicalSortExpr;
+    use arrow::datatypes::{DataType, Field, Schema};
+    use arrow_schema::SortOptions;
+    use datafusion_common::Result;
+    use std::sync::Arc;
+
+    #[test]
+    fn test_ordering_satisfy() -> Result<()> {
+        let input_schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int64, true),
+            Field::new("b", DataType::Int64, true),
+        ]));
+        let crude = vec![PhysicalSortExpr {
+            expr: Arc::new(Column::new("a", 0)),
+            options: SortOptions::default(),
+        }];
+        let finer = vec![
+            PhysicalSortExpr {
+                expr: Arc::new(Column::new("a", 0)),
+                options: SortOptions::default(),
+            },
+            PhysicalSortExpr {
+                expr: Arc::new(Column::new("b", 1)),
+                options: SortOptions::default(),
+            },
+        ];
+        // finer ordering satisfies, crude ordering should return true
+        let mut eq_properties_finer = EquivalenceProperties::new(input_schema.clone());
+        eq_properties_finer.oeq_class.push(finer.clone());
+        assert!(eq_properties_finer.ordering_satisfy(&crude));
+
+        // Crude ordering doesn't satisfy finer ordering. should return false
+        let mut eq_properties_crude = EquivalenceProperties::new(input_schema.clone());
+        eq_properties_crude.oeq_class.push(crude.clone());
+        assert!(!eq_properties_crude.ordering_satisfy(&finer));
+        Ok(())
+    }
+}
