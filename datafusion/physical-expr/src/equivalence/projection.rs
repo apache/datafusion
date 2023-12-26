@@ -105,3 +105,6 @@ impl ProjectionMapping {
             .map(|(_, target)| target.clone())
     }
 }
+
+#[cfg(test)]
+mod tests {}

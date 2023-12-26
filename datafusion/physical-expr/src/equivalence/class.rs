@@ -131,7 +131,7 @@ impl EquivalenceClass {
 /// class represents a distinct equivalence class in a relation.
 #[derive(Debug, Clone)]
 pub struct EquivalenceGroup {
-    classes: Vec<EquivalenceClass>,
+    pub classes: Vec<EquivalenceClass>,
 }
 
 impl EquivalenceGroup {
@@ -148,7 +148,7 @@ impl EquivalenceGroup {
     }
 
     /// Returns how many equivalence classes there are in this group.
-    fn len(&self) -> usize {
+    pub fn len(&self) -> usize {
         self.classes.len()
     }
 
@@ -458,3 +458,6 @@ impl EquivalenceGroup {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {}

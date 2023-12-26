@@ -217,3 +217,6 @@ fn resolve_overlap(orderings: &mut [LexOrdering], idx: usize, pre_idx: usize) ->
     }
     false
 }
+
+#[cfg(test)]
+mod tests {}

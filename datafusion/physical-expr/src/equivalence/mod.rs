@@ -21,10 +21,8 @@ mod projection;
 mod properties;
 use crate::expressions::Column;
 use crate::{LexRequirement, PhysicalExpr, PhysicalSortRequirement};
-use arrow::datatypes::SchemaRef;
 pub use class::{EquivalenceClass, EquivalenceGroup};
 use datafusion_common::tree_node::{Transformed, TreeNode};
-use datafusion_common::{JoinSide, JoinType};
 pub use ordering::OrderingEquivalenceClass;
 pub use projection::ProjectionMapping;
 pub use properties::EquivalenceProperties;
@@ -70,11 +68,12 @@ mod tests {
     use crate::execution_props::ExecutionProps;
     use crate::expressions::{col, lit, BinaryExpr, Column, Literal};
     use crate::functions::create_physical_expr;
+    use crate::PhysicalSortExpr;
 
     use arrow::compute::{lexsort_to_indices, SortColumn};
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow_array::{ArrayRef, Float64Array, RecordBatch, UInt32Array};
-    use arrow_schema::{Fields, SortOptions, TimeUnit};
+    use arrow_schema::{Fields, SchemaRef, SortOptions, TimeUnit};
     use datafusion_common::{plan_datafusion_err, DataFusionError, Result, ScalarValue};
     use datafusion_expr::{BuiltinScalarFunction, Operator};
 
