@@ -550,13 +550,13 @@ async fn calculate_range(
             let (start, end) = (start as usize, end as usize);
 
             let start_delta = if start != 0 {
-                find_first_newline(&store, location, start - 1, file_size).await?
+                find_first_newline(store, location, start - 1, file_size).await?
             } else {
                 0
             };
 
             let end_delta = if end != file_size {
-                find_first_newline(&store, location, end - 1, file_size).await?
+                find_first_newline(store, location, end - 1, file_size).await?
             } else {
                 0
             };
