@@ -470,7 +470,7 @@ mod tests {
 
     #[rstest(n_partitions, case(1), case(2), case(3), case(4))]
     #[tokio::test]
-    async fn test_ndjson_parallel_basic(n_partitions: usize) -> Result<()> {
+    async fn it_can_read_ndjson_in_parallel(n_partitions: usize) -> Result<()> {
         let config = SessionConfig::new()
             .with_repartition_file_scans(true)
             .with_repartition_file_min_size(0)
@@ -487,6 +487,7 @@ mod tests {
         let query = "SELECT SUM(a) FROM json_parallel;";
 
         let result = ctx.sql(query).await?.collect().await?;
+        let actual_partitions = count_num_partitions(&ctx, query).await?;
 
         #[rustfmt::skip]
         let expected = [
@@ -498,10 +499,40 @@ mod tests {
         ];
 
         assert_batches_eq!(expected, &result);
+        assert_eq!(n_partitions, actual_partitions);
 
+        Ok(())
+    }
+
+    #[rstest(n_partitions, case(1), case(2), case(3), case(4))]
+    #[tokio::test]
+    async fn it_can_read_empty_ndjson_in_parallel(n_partitions: usize) -> Result<()> {
+        let config = SessionConfig::new()
+            .with_repartition_file_scans(true)
+            .with_repartition_file_min_size(0)
+            .with_target_partitions(n_partitions);
+
+        let ctx = SessionContext::new_with_config(config);
+
+        let table_path = "tests/data/empty.json";
+        let options = NdJsonReadOptions::default();
+
+        ctx.register_json("json_parallel_empty", table_path, options)
+            .await?;
+
+        let query = "SELECT * FROM json_parallel_empty WHERE random() > 0.5;";
+
+        let result = ctx.sql(query).await?.collect().await?;
         let actual_partitions = count_num_partitions(&ctx, query).await?;
 
-        assert_eq!(n_partitions, actual_partitions);
+        #[rustfmt::skip]
+        let expected = [
+            "++",
+            "++",
+        ];
+
+        assert_batches_eq!(expected, &result);
+        assert_eq!(1, actual_partitions);
 
         Ok(())
     }
