@@ -44,7 +44,7 @@ use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{EquivalenceProperties, LexOrdering};
 
 use bytes::{Buf, Bytes};
-use futures::{ready, stream, StreamExt, TryStreamExt};
+use futures::{ready, StreamExt, TryStreamExt};
 use object_store::path::Path;
 use object_store::{self, GetOptions};
 use object_store::{GetResultPayload, ObjectStore};
@@ -343,26 +343,22 @@ impl FileOpener for JsonOpener {
                     let mut buffer = Bytes::new();
 
                     let s = futures::stream::poll_fn(move |cx| {
-                        loop {
-                            if buffer.is_empty() {
-                                match ready!(input.poll_next_unpin(cx)) {
-                                    Some(Ok(b)) => buffer = b,
-                                    Some(Err(e)) => {
-                                        return Poll::Ready(Some(Err(e.into())))
-                                    }
-                                    None => {}
-                                };
-                            }
-                            let decoded = match decoder.decode(buffer.as_ref()) {
-                                Ok(0) => break,
-                                Ok(decoded) => decoded,
-                                Err(e) => return Poll::Ready(Some(Err(e))),
+                        while buffer.is_empty() {
+                            match ready!(input.poll_next_unpin(cx)) {
+                                Some(Ok(b)) => buffer = b,
+                                Some(Err(e)) => return Poll::Ready(Some(Err(e.into()))),
+                                None => return Poll::Ready(None),
                             };
-
-                            buffer.advance(decoded);
                         }
 
-                        Poll::Ready(decoder.flush().transpose())
+                        match decoder.decode(buffer.as_ref()) {
+                            Ok(0) => Poll::Ready(None),
+                            Ok(decoded) => {
+                                buffer.advance(decoded);
+                                Poll::Ready(decoder.flush().transpose())
+                            }
+                            Err(e) => Poll::Ready(Some(Err(e))),
+                        }
                     });
 
                     Ok(s.boxed())
