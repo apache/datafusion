@@ -275,30 +275,33 @@ impl FileOpener for JsonOpener {
                     let mut decoder = ReaderBuilder::new(schema)
                         .with_batch_size(batch_size)
                         .build_decoder()?;
-
                     let mut input =
                         file_compression_type.convert_stream(s.boxed())?.fuse();
                     let mut buffer = Bytes::new();
 
                     let s = futures::stream::poll_fn(move |cx| {
-                        while buffer.is_empty() {
-                            match ready!(input.poll_next_unpin(cx)) {
-                                Some(Ok(b)) => buffer = b,
-                                Some(Err(e)) => return Poll::Ready(Some(Err(e.into()))),
-                                None => return Poll::Ready(None),
-                            };
-                        }
-
-                        match decoder.decode(buffer.as_ref()) {
-                            Ok(0) => Poll::Ready(None),
-                            Ok(decoded) => {
-                                buffer.advance(decoded);
-                                Poll::Ready(decoder.flush().transpose())
+                        loop {
+                            if buffer.is_empty() {
+                                match ready!(input.poll_next_unpin(cx)) {
+                                    Some(Ok(b)) => buffer = b,
+                                    Some(Err(e)) => {
+                                        return Poll::Ready(Some(Err(e.into())))
+                                    }
+                                    None => {}
+                                };
                             }
-                            Err(e) => Poll::Ready(Some(Err(e))),
-                        }
-                    });
 
+                            let decoded = match decoder.decode(buffer.as_ref()) {
+                                Ok(0) => break,
+                                Ok(decoded) => decoded,
+                                Err(e) => return Poll::Ready(Some(Err(e))),
+                            };
+
+                            buffer.advance(decoded);
+                        }
+
+                        Poll::Ready(decoder.flush().transpose())
+                    });
                     Ok(s.boxed())
                 }
             }
