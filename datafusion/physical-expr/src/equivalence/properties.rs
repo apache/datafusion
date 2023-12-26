@@ -15,7 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::expressions::Column;
 use arrow_schema::SchemaRef;
+use datafusion_common::{JoinSide, JoinType};
 use indexmap::IndexSet;
 use itertools::Itertools;
 use std::collections::{HashMap, HashSet};
@@ -1089,6 +1091,102 @@ fn construct_orderings(
     }
 }
 
+/// Calculate ordering equivalence properties for the given join operation.
+pub fn join_equivalence_properties(
+    left: EquivalenceProperties,
+    right: EquivalenceProperties,
+    join_type: &JoinType,
+    join_schema: SchemaRef,
+    maintains_input_order: &[bool],
+    probe_side: Option<JoinSide>,
+    on: &[(Column, Column)],
+) -> EquivalenceProperties {
+    let left_size = left.schema.fields.len();
+    let mut result = EquivalenceProperties::new(join_schema);
+    result.add_equivalence_group(left.eq_group().join(
+        right.eq_group(),
+        join_type,
+        left_size,
+        on,
+    ));
+
+    let left_oeq_class = left.oeq_class;
+    let mut right_oeq_class = right.oeq_class;
+    match maintains_input_order {
+        [true, false] => {
+            // In this special case, right side ordering can be prefixed with
+            // the left side ordering.
+            if let (Some(JoinSide::Left), JoinType::Inner) = (probe_side, join_type) {
+                updated_right_ordering_equivalence_class(
+                    &mut right_oeq_class,
+                    join_type,
+                    left_size,
+                );
+
+                // Right side ordering equivalence properties should be prepended
+                // with those of the left side while constructing output ordering
+                // equivalence properties since stream side is the left side.
+                //
+                // For example, if the right side ordering equivalences contain
+                // `b ASC`, and the left side ordering equivalences contain `a ASC`,
+                // then we should add `a ASC, b ASC` to the ordering equivalences
+                // of the join output.
+                let out_oeq_class = left_oeq_class.join_suffix(&right_oeq_class);
+                result.add_ordering_equivalence_class(out_oeq_class);
+            } else {
+                result.add_ordering_equivalence_class(left_oeq_class);
+            }
+        }
+        [false, true] => {
+            updated_right_ordering_equivalence_class(
+                &mut right_oeq_class,
+                join_type,
+                left_size,
+            );
+            // In this special case, left side ordering can be prefixed with
+            // the right side ordering.
+            if let (Some(JoinSide::Right), JoinType::Inner) = (probe_side, join_type) {
+                // Left side ordering equivalence properties should be prepended
+                // with those of the right side while constructing output ordering
+                // equivalence properties since stream side is the right side.
+                //
+                // For example, if the left side ordering equivalences contain
+                // `a ASC`, and the right side ordering equivalences contain `b ASC`,
+                // then we should add `b ASC, a ASC` to the ordering equivalences
+                // of the join output.
+                let out_oeq_class = right_oeq_class.join_suffix(&left_oeq_class);
+                result.add_ordering_equivalence_class(out_oeq_class);
+            } else {
+                result.add_ordering_equivalence_class(right_oeq_class);
+            }
+        }
+        [false, false] => {}
+        [true, true] => unreachable!("Cannot maintain ordering of both sides"),
+        _ => unreachable!("Join operators can not have more than two children"),
+    }
+    result
+}
+
+/// In the context of a join, update the right side `OrderingEquivalenceClass`
+/// so that they point to valid indices in the join output schema.
+///
+/// To do so, we increment column indices by the size of the left table when
+/// join schema consists of a combination of the left and right schemas. This
+/// is the case for `Inner`, `Left`, `Full` and `Right` joins. For other cases,
+/// indices do not change.
+fn updated_right_ordering_equivalence_class(
+    right_oeq_class: &mut OrderingEquivalenceClass,
+    join_type: &JoinType,
+    left_size: usize,
+) {
+    if matches!(
+        join_type,
+        JoinType::Inner | JoinType::Left | JoinType::Full | JoinType::Right
+    ) {
+        right_oeq_class.add_offset(left_size);
+    }
+}
+
 /// Wrapper struct for `Arc<dyn PhysicalExpr>` to use them as keys in a hash map.
 #[derive(Debug, Clone)]
 struct ExprWrapper(Arc<dyn PhysicalExpr>);
@@ -1106,3 +1204,6 @@ impl Hash for ExprWrapper {
         self.0.hash(state);
     }
 }
+
+#[cfg(test)]
+mod tests {}
