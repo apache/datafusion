@@ -1843,4 +1843,47 @@ mod tests {
 
         Ok(())
     }
+    #[test]
+    fn test_get_meet_ordering() -> Result<()> {
+        let schema = create_test_schema()?;
+        let col_a = &col("a", &schema)?;
+        let col_b = &col("b", &schema)?;
+        let eq_properties = EquivalenceProperties::new(schema);
+        let option_asc = SortOptions {
+            descending: false,
+            nulls_first: false,
+        };
+        let option_desc = SortOptions {
+            descending: true,
+            nulls_first: true,
+        };
+        let tests_cases = vec![
+            // Get meet ordering between [a ASC] and [a ASC, b ASC]
+            // result should be [a ASC]
+            (
+                vec![(col_a, option_asc)],
+                vec![(col_a, option_asc), (col_b, option_asc)],
+                Some(vec![(col_a, option_asc)]),
+            ),
+            // Get meet ordering between [a ASC] and [a DESC]
+            // result should be None.
+            (vec![(col_a, option_asc)], vec![(col_a, option_desc)], None),
+            // Get meet ordering between [a ASC, b ASC] and [a ASC, b DESC]
+            // result should be [a ASC].
+            (
+                vec![(col_a, option_asc), (col_b, option_asc)],
+                vec![(col_a, option_asc), (col_b, option_desc)],
+                Some(vec![(col_a, option_asc)]),
+            ),
+        ];
+        for (lhs, rhs, expected) in tests_cases {
+            let lhs = convert_to_sort_exprs(&lhs);
+            let rhs = convert_to_sort_exprs(&rhs);
+            let expected = expected.map(|expected| convert_to_sort_exprs(&expected));
+            let finer = eq_properties.get_meet_ordering(&lhs, &rhs);
+            assert_eq!(finer, expected)
+        }
+
+        Ok(())
+    }
 }
