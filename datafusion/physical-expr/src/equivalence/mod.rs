@@ -375,32 +375,6 @@ mod tests {
     }
 
     #[test]
-    fn test_remove_redundant_entries_eq_group() -> Result<()> {
-        let entries = vec![
-            EquivalenceClass::new(vec![lit(1), lit(1), lit(2)]),
-            // This group is meaningless should be removed
-            EquivalenceClass::new(vec![lit(3), lit(3)]),
-            EquivalenceClass::new(vec![lit(4), lit(5), lit(6)]),
-        ];
-        // Given equivalences classes are not in succinct form.
-        // Expected form is the most plain representation that is functionally same.
-        let expected = vec![
-            EquivalenceClass::new(vec![lit(1), lit(2)]),
-            EquivalenceClass::new(vec![lit(4), lit(5), lit(6)]),
-        ];
-        let mut eq_groups = EquivalenceGroup::new(entries);
-        eq_groups.remove_redundant_entries();
-
-        let eq_groups = eq_groups.classes;
-        assert_eq!(eq_groups.len(), expected.len());
-        assert_eq!(eq_groups.len(), 2);
-
-        assert_eq!(eq_groups[0], expected[0]);
-        assert_eq!(eq_groups[1], expected[1]);
-        Ok(())
-    }
-
-    #[test]
     fn test_remove_redundant_entries_oeq_class() -> Result<()> {
         let schema = create_test_schema()?;
         let col_a = &col("a", &schema)?;
