@@ -683,15 +683,103 @@ mod test {
 
     #[test]
     fn test_single_inlist() {
-        // a IN (1, 2, 3)
+        // b IN (1, 2, 3)
         test_analyze(
-            col("a").in_list(vec![lit(1), lit(2), lit(3)], true),
-            vec![in_guarantee("a", [1, 2, 3])],
+            col("b").in_list(vec![lit(1), lit(2), lit(3)], false),
+            vec![in_guarantee("b", [1, 2, 3])],
         );
-        // a NOT IN (1, 2, 3)
+        // b NOT IN (1, 2, 3)
         test_analyze(
-            col("a").in_list(vec![lit(1), lit(2), lit(3)], false),
-            vec![not_in_guarantee("a", [1, 2, 3])],
+            col("b").in_list(vec![lit(1), lit(2), lit(3)], true),
+            vec![not_in_guarantee("b", [1, 2, 3])],
+        );
+    }
+
+    #[test]
+    fn test_inlist_conjunction() {
+        // b IN (1, 2, 3) AND b IN (2, 3, 4)
+        test_analyze(
+            col("b")
+                .in_list(vec![lit(1), lit(2), lit(3)], false)
+                .and(col("b").in_list(vec![lit(2), lit(3), lit(4)], false)),
+            vec![in_guarantee("b", [2, 3])],
+        );
+        // b NOT IN (1, 2, 3) AND b IN (2, 3, 4)
+        test_analyze(
+            col("b")
+                .in_list(vec![lit(1), lit(2), lit(3)], true)
+                .and(col("b").in_list(vec![lit(2), lit(3), lit(4)], false)),
+            vec![
+                not_in_guarantee("b", [1, 2, 3]),
+                in_guarantee("b", [2, 3, 4]),
+            ],
+        );
+        // b NOT IN (1, 2, 3) AND b NOT IN (2, 3, 4)
+        test_analyze(
+            col("b")
+                .in_list(vec![lit(1), lit(2), lit(3)], true)
+                .and(col("b").in_list(vec![lit(2), lit(3), lit(4)], true)),
+            vec![not_in_guarantee("b", [1, 2, 3, 4])],
+        );
+        // b IN (1, 2, 3) AND b = 4
+        test_analyze(
+            col("b")
+                .in_list(vec![lit(1), lit(2), lit(3)], false)
+                .and(col("b").eq(lit(4))),
+            vec![],
+        );
+        // b IN (1, 2, 3) AND b = 2
+        test_analyze(
+            col("b")
+                .in_list(vec![lit(1), lit(2), lit(3)], false)
+                .and(col("b").eq(lit(2))),
+            vec![in_guarantee("b", [2])],
+        );
+        // b IN (1, 2, 3) AND b != 2
+        test_analyze(
+            col("b")
+                .in_list(vec![lit(1), lit(2), lit(3)], false)
+                .and(col("b").not_eq(lit(2))),
+            vec![in_guarantee("b", [1, 2, 3]), not_in_guarantee("b", [2])],
+        );
+        // b NOT IN (1, 2, 3) AND b != 4
+        test_analyze(
+            col("b")
+                .in_list(vec![lit(1), lit(2), lit(3)], true)
+                .and(col("b").not_eq(lit(4))),
+            vec![not_in_guarantee("b", [1, 2, 3, 4])],
+        );
+        // b NOT IN (1, 2, 3) AND b != 2
+        test_analyze(
+            col("b")
+                .in_list(vec![lit(1), lit(2), lit(3)], true)
+                .and(col("b").not_eq(lit(2))),
+            vec![not_in_guarantee("b", [1, 2, 3])],
+        );
+    }
+
+    #[test]
+    fn test_inlist_with_disjunction() {
+        // b IN (1, 2, 3) AND (b = 3 OR b = 4)
+        test_analyze(
+            col("b")
+                .in_list(vec![lit(1), lit(2), lit(3)], false)
+                .and(col("b").eq(lit(3)).or(col("b").eq(lit(4)))),
+            vec![in_guarantee("b", [3])],
+        );
+        // b IN (1, 2, 3) AND (b = 4 OR b = 5)
+        test_analyze(
+            col("b")
+                .in_list(vec![lit(1), lit(2), lit(3)], false)
+                .and(col("b").eq(lit(4)).or(col("b").eq(lit(5)))),
+            vec![],
+        );
+        // b not in (1, 2, 3) AND (b = 3 OR b = 4)
+        test_analyze(
+            col("b")
+                .in_list(vec![lit(1), lit(2), lit(3)], true)
+                .and(col("b").eq(lit(3)).or(col("b").eq(lit(4)))),
+            vec![not_in_guarantee("b", [1, 2, 3]), in_guarantee("b", [3, 4])],
         );
     }
 
