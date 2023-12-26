@@ -1207,22 +1207,25 @@ impl Hash for ExprWrapper {
 
 #[cfg(test)]
 mod tests {
+    use std::ops::Not;
+    use std::sync::Arc;
+
     use super::*;
     use crate::equivalence::add_offset_to_expr;
     use crate::equivalence::tests::{
-        convert_to_orderings, convert_to_sort_exprs, create_random_schema,
-        create_test_params, create_test_schema, generate_table_for_eq_properties,
-        is_table_same_after_sort, output_schema,
+        convert_to_orderings, convert_to_sort_exprs, convert_to_sort_reqs,
+        create_random_schema, create_test_params, create_test_schema,
+        generate_table_for_eq_properties, is_table_same_after_sort, output_schema,
     };
     use crate::execution_props::ExecutionProps;
-    use crate::expressions::{col, BinaryExpr};
+    use crate::expressions::{col, BinaryExpr, Column};
     use crate::functions::create_physical_expr;
+    use crate::PhysicalSortExpr;
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow_schema::{Fields, SortOptions, TimeUnit};
     use datafusion_common::Result;
     use datafusion_expr::{BuiltinScalarFunction, Operator};
-    use std::ops::Not;
-    use std::sync::Arc;
+    use itertools::Itertools;
 
     #[test]
     fn project_equivalence_properties_test() -> Result<()> {
@@ -1881,6 +1884,65 @@ mod tests {
             let rhs = convert_to_sort_exprs(&rhs);
             let expected = expected.map(|expected| convert_to_sort_exprs(&expected));
             let finer = eq_properties.get_meet_ordering(&lhs, &rhs);
+            assert_eq!(finer, expected)
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_get_finer() -> Result<()> {
+        let schema = create_test_schema()?;
+        let col_a = &col("a", &schema)?;
+        let col_b = &col("b", &schema)?;
+        let col_c = &col("c", &schema)?;
+        let eq_properties = EquivalenceProperties::new(schema);
+        let option_asc = SortOptions {
+            descending: false,
+            nulls_first: false,
+        };
+        let option_desc = SortOptions {
+            descending: true,
+            nulls_first: true,
+        };
+        // First entry, and second entry are the physical sort requirement that are argument for get_finer_requirement.
+        // Third entry is the expected result.
+        let tests_cases = vec![
+            // Get finer requirement between [a Some(ASC)] and [a None, b Some(ASC)]
+            // result should be [a Some(ASC), b Some(ASC)]
+            (
+                vec![(col_a, Some(option_asc))],
+                vec![(col_a, None), (col_b, Some(option_asc))],
+                Some(vec![(col_a, Some(option_asc)), (col_b, Some(option_asc))]),
+            ),
+            // Get finer requirement between [a Some(ASC), b Some(ASC), c Some(ASC)] and [a Some(ASC), b Some(ASC)]
+            // result should be [a Some(ASC), b Some(ASC), c Some(ASC)]
+            (
+                vec![
+                    (col_a, Some(option_asc)),
+                    (col_b, Some(option_asc)),
+                    (col_c, Some(option_asc)),
+                ],
+                vec![(col_a, Some(option_asc)), (col_b, Some(option_asc))],
+                Some(vec![
+                    (col_a, Some(option_asc)),
+                    (col_b, Some(option_asc)),
+                    (col_c, Some(option_asc)),
+                ]),
+            ),
+            // Get finer requirement between [a Some(ASC), b Some(ASC)] and [a Some(ASC), b Some(DESC)]
+            // result should be None
+            (
+                vec![(col_a, Some(option_asc)), (col_b, Some(option_asc))],
+                vec![(col_a, Some(option_asc)), (col_b, Some(option_desc))],
+                None,
+            ),
+        ];
+        for (lhs, rhs, expected) in tests_cases {
+            let lhs = convert_to_sort_reqs(&lhs);
+            let rhs = convert_to_sort_reqs(&rhs);
+            let expected = expected.map(|expected| convert_to_sort_reqs(&expected));
+            let finer = eq_properties.get_finer_requirement(&lhs, &rhs);
             assert_eq!(finer, expected)
         }
 
