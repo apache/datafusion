@@ -513,7 +513,13 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             Statement::StartTransaction {
                 modes,
                 begin: false,
+                modifier,
             } => {
+                if let Some(modifier) = modifier {
+                    return not_impl_err!(
+                        "Transaction modifier not supported: {modifier}"
+                    );
+                }
                 let isolation_level: ast::TransactionIsolationLevel = modes
                     .iter()
                     .filter_map(|m: &ast::TransactionMode| match m {
