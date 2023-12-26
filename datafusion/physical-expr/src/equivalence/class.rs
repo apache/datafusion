@@ -460,4 +460,51 @@ impl EquivalenceGroup {
 }
 
 #[cfg(test)]
-mod tests {}
+mod tests {
+    use crate::equivalence::{EquivalenceClass, EquivalenceGroup};
+    use crate::expressions::lit;
+    use datafusion_common::Result;
+
+    #[test]
+    fn test_bridge_groups() -> Result<()> {
+        // First entry in the tuple is argument, second entry is the bridged result
+        let test_cases = vec![
+            // ------- TEST CASE 1 -----------//
+            (
+                vec![vec![1, 2, 3], vec![2, 4, 5], vec![11, 12, 9], vec![7, 6, 5]],
+                // Expected is compared with set equality. Order of the specific results may change.
+                vec![vec![1, 2, 3, 4, 5, 6, 7], vec![9, 11, 12]],
+            ),
+            // ------- TEST CASE 2 -----------//
+            (
+                vec![vec![1, 2, 3], vec![3, 4, 5], vec![9, 8, 7], vec![7, 6, 5]],
+                // Expected
+                vec![vec![1, 2, 3, 4, 5, 6, 7, 8, 9]],
+            ),
+        ];
+        for (entries, expected) in test_cases {
+            let entries = entries
+                .into_iter()
+                .map(|entry| entry.into_iter().map(lit).collect::<Vec<_>>())
+                .map(EquivalenceClass::new)
+                .collect::<Vec<_>>();
+            let expected = expected
+                .into_iter()
+                .map(|entry| entry.into_iter().map(lit).collect::<Vec<_>>())
+                .map(EquivalenceClass::new)
+                .collect::<Vec<_>>();
+            let mut eq_groups = EquivalenceGroup::new(entries.clone());
+            eq_groups.bridge_classes();
+            let eq_groups = eq_groups.classes;
+            let err_msg = format!(
+                "error in test entries: {:?}, expected: {:?}, actual:{:?}",
+                entries, expected, eq_groups
+            );
+            assert_eq!(eq_groups.len(), expected.len(), "{}", err_msg);
+            for idx in 0..eq_groups.len() {
+                assert_eq!(&eq_groups[idx], &expected[idx], "{}", err_msg);
+            }
+        }
+        Ok(())
+    }
+}
