@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Apache Arrow format abstractions
+//! [`ArrowFormat`]: Apache Arrow [`FileFormat`] abstractions
 //!
 //! Works with files following the [Arrow IPC format](https://arrow.apache.org/docs/format/Columnar.html#ipc-file-format)
 
@@ -57,6 +57,13 @@ use tokio::task::JoinSet;
 use super::file_compression_type::FileCompressionType;
 use super::write::demux::start_demuxer_task;
 use super::write::{create_writer, SharedBuffer};
+
+/// Initial writing buffer size. Note this is just a size hint for efficiency. It
+/// will grow beyond the set value if needed.
+const INITIAL_BUFFER_BYTES: usize = 1048576;
+
+/// If the buffered Arrow data exceeds this size, it is flushed to object store
+const BUFFER_FLUSH_BYTES: usize = 1024000;
 
 /// Arrow `FileFormat` implementation.
 #[derive(Default, Debug)]
@@ -192,13 +199,6 @@ impl DisplayAs for ArrowFileSink {
         }
     }
 }
-
-/// Initial writing buffer size. Note this is just a size hint for efficiency. It
-/// will grow beyond the set value if needed.
-const INITIAL_BUFFER_BYTES: usize = 1048576;
-
-/// If the buffered Arrow data exceeds this size, it is flushed to object store
-const BUFFER_FLUSH_BYTES: usize = 1024000;
 
 #[async_trait]
 impl DataSink for ArrowFileSink {
