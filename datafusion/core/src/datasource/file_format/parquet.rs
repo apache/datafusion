@@ -75,6 +75,9 @@ use crate::physical_plan::{
     Statistics,
 };
 
+/// Size of the buffer for [`AsyncArrowWriter`].
+const PARQUET_WRITER_BUFFER_SIZE: usize = 10485760;
+
 /// Initial writing buffer size. Note this is just a size hint for efficiency. It
 /// will grow beyond the set value if needed.
 const INITIAL_BUFFER_BYTES: usize = 1048576;
@@ -688,7 +691,7 @@ impl ParquetSink {
         let writer = AsyncArrowWriter::try_new(
             multipart_writer,
             self.get_writer_schema(),
-            INITIAL_BUFFER_BYTES,
+            PARQUET_WRITER_BUFFER_SIZE,
             Some(parquet_props),
         )?;
         Ok(writer)
