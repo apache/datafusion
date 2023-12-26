@@ -1214,7 +1214,7 @@ mod tests {
     };
     use crate::expressions::{col, BinaryExpr};
     use arrow::datatypes::{DataType, Field, Schema};
-    use arrow_schema::{SortOptions, TimeUnit};
+    use arrow_schema::{Fields, SortOptions, TimeUnit};
     use datafusion_common::Result;
     use datafusion_expr::Operator;
     use std::sync::Arc;
@@ -1381,6 +1381,74 @@ mod tests {
         let constants = vec![col_a.clone(), col_b.clone(), col_d.clone()];
         let expr = b_plus_d.clone();
         assert!(is_constant_recurse(&constants, &expr));
+        Ok(())
+    }
+
+    #[test]
+    fn test_get_updated_right_ordering_equivalence_properties() -> Result<()> {
+        let join_type = JoinType::Inner;
+        // Join right child schema
+        let child_fields: Fields = ["x", "y", "z", "w"]
+            .into_iter()
+            .map(|name| Field::new(name, DataType::Int32, true))
+            .collect();
+        let child_schema = Schema::new(child_fields);
+        let col_x = &col("x", &child_schema)?;
+        let col_y = &col("y", &child_schema)?;
+        let col_z = &col("z", &child_schema)?;
+        let col_w = &col("w", &child_schema)?;
+        let option_asc = SortOptions {
+            descending: false,
+            nulls_first: false,
+        };
+        // [x ASC, y ASC], [z ASC, w ASC]
+        let orderings = vec![
+            vec![(col_x, option_asc), (col_y, option_asc)],
+            vec![(col_z, option_asc), (col_w, option_asc)],
+        ];
+        let orderings = convert_to_orderings(&orderings);
+        // Right child ordering equivalences
+        let mut right_oeq_class = OrderingEquivalenceClass::new(orderings);
+
+        let left_columns_len = 4;
+
+        let fields: Fields = ["a", "b", "c", "d", "x", "y", "z", "w"]
+            .into_iter()
+            .map(|name| Field::new(name, DataType::Int32, true))
+            .collect();
+
+        // Join Schema
+        let schema = Schema::new(fields);
+        let col_a = &col("a", &schema)?;
+        let col_d = &col("d", &schema)?;
+        let col_x = &col("x", &schema)?;
+        let col_y = &col("y", &schema)?;
+        let col_z = &col("z", &schema)?;
+        let col_w = &col("w", &schema)?;
+
+        let mut join_eq_properties = EquivalenceProperties::new(Arc::new(schema));
+        // a=x and d=w
+        join_eq_properties.add_equal_conditions(col_a, col_x);
+        join_eq_properties.add_equal_conditions(col_d, col_w);
+
+        updated_right_ordering_equivalence_class(
+            &mut right_oeq_class,
+            &join_type,
+            left_columns_len,
+        );
+        join_eq_properties.add_ordering_equivalence_class(right_oeq_class);
+        let result = join_eq_properties.oeq_class().clone();
+
+        // [x ASC, y ASC], [z ASC, w ASC]
+        let orderings = vec![
+            vec![(col_x, option_asc), (col_y, option_asc)],
+            vec![(col_z, option_asc), (col_w, option_asc)],
+        ];
+        let orderings = convert_to_orderings(&orderings);
+        let expected = OrderingEquivalenceClass::new(orderings);
+
+        assert_eq!(result, expected);
+
         Ok(())
     }
 }

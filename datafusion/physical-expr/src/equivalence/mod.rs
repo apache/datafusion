@@ -374,74 +374,6 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn test_get_updated_right_ordering_equivalence_properties() -> Result<()> {
-        let join_type = JoinType::Inner;
-        // Join right child schema
-        let child_fields: Fields = ["x", "y", "z", "w"]
-            .into_iter()
-            .map(|name| Field::new(name, DataType::Int32, true))
-            .collect();
-        let child_schema = Schema::new(child_fields);
-        let col_x = &col("x", &child_schema)?;
-        let col_y = &col("y", &child_schema)?;
-        let col_z = &col("z", &child_schema)?;
-        let col_w = &col("w", &child_schema)?;
-        let option_asc = SortOptions {
-            descending: false,
-            nulls_first: false,
-        };
-        // [x ASC, y ASC], [z ASC, w ASC]
-        let orderings = vec![
-            vec![(col_x, option_asc), (col_y, option_asc)],
-            vec![(col_z, option_asc), (col_w, option_asc)],
-        ];
-        let orderings = convert_to_orderings(&orderings);
-        // Right child ordering equivalences
-        let mut right_oeq_class = OrderingEquivalenceClass::new(orderings);
-
-        let left_columns_len = 4;
-
-        let fields: Fields = ["a", "b", "c", "d", "x", "y", "z", "w"]
-            .into_iter()
-            .map(|name| Field::new(name, DataType::Int32, true))
-            .collect();
-
-        // Join Schema
-        let schema = Schema::new(fields);
-        let col_a = &col("a", &schema)?;
-        let col_d = &col("d", &schema)?;
-        let col_x = &col("x", &schema)?;
-        let col_y = &col("y", &schema)?;
-        let col_z = &col("z", &schema)?;
-        let col_w = &col("w", &schema)?;
-
-        let mut join_eq_properties = EquivalenceProperties::new(Arc::new(schema));
-        // a=x and d=w
-        join_eq_properties.add_equal_conditions(col_a, col_x);
-        join_eq_properties.add_equal_conditions(col_d, col_w);
-
-        updated_right_ordering_equivalence_class(
-            &mut right_oeq_class,
-            &join_type,
-            left_columns_len,
-        );
-        join_eq_properties.add_ordering_equivalence_class(right_oeq_class);
-        let result = join_eq_properties.oeq_class().clone();
-
-        // [x ASC, y ASC], [z ASC, w ASC]
-        let orderings = vec![
-            vec![(col_x, option_asc), (col_y, option_asc)],
-            vec![(col_z, option_asc), (col_w, option_asc)],
-        ];
-        let orderings = convert_to_orderings(&orderings);
-        let expected = OrderingEquivalenceClass::new(orderings);
-
-        assert_eq!(result, expected);
-
-        Ok(())
-    }
-
     /// Checks if the table (RecordBatch) remains unchanged when sorted according to the provided `required_ordering`.
     ///
     /// The function works by adding a unique column of ascending integers to the original table. This column ensures
@@ -604,39 +536,6 @@ mod tests {
             .collect();
 
         Ok(RecordBatch::try_from_iter(res)?)
-    }
-
-    #[test]
-    fn test_schema_normalize_expr_with_equivalence() -> Result<()> {
-        let col_a = &Column::new("a", 0);
-        let col_b = &Column::new("b", 1);
-        let col_c = &Column::new("c", 2);
-        // Assume that column a and c are aliases.
-        let (_test_schema, eq_properties) = create_test_params()?;
-
-        let col_a_expr = Arc::new(col_a.clone()) as Arc<dyn PhysicalExpr>;
-        let col_b_expr = Arc::new(col_b.clone()) as Arc<dyn PhysicalExpr>;
-        let col_c_expr = Arc::new(col_c.clone()) as Arc<dyn PhysicalExpr>;
-        // Test cases for equivalence normalization,
-        // First entry in the tuple is argument, second entry is expected result after normalization.
-        let expressions = vec![
-            // Normalized version of the column a and c should go to a
-            // (by convention all the expressions inside equivalence class are mapped to the first entry
-            // in this case a is the first entry in the equivalence class.)
-            (&col_a_expr, &col_a_expr),
-            (&col_c_expr, &col_a_expr),
-            // Cannot normalize column b
-            (&col_b_expr, &col_b_expr),
-        ];
-        let eq_group = eq_properties.eq_group();
-        for (expr, expected_eq) in expressions {
-            assert!(
-                expected_eq.eq(&eq_group.normalize_expr(expr.clone())),
-                "error in test: expr: {expr:?}"
-            );
-        }
-
-        Ok(())
     }
 
     #[test]

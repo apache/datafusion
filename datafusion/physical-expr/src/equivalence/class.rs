@@ -461,9 +461,14 @@ impl EquivalenceGroup {
 
 #[cfg(test)]
 mod tests {
+    use crate::equivalence::tests::create_test_params;
     use crate::equivalence::{EquivalenceClass, EquivalenceGroup};
     use crate::expressions::lit;
     use datafusion_common::Result;
+    use std::sync::Arc;
+
+    use super::*;
+    use crate::expressions::Column;
 
     #[test]
     fn test_bridge_groups() -> Result<()> {
@@ -531,6 +536,39 @@ mod tests {
 
         assert_eq!(eq_groups[0], expected[0]);
         assert_eq!(eq_groups[1], expected[1]);
+        Ok(())
+    }
+
+    #[test]
+    fn test_schema_normalize_expr_with_equivalence() -> Result<()> {
+        let col_a = &Column::new("a", 0);
+        let col_b = &Column::new("b", 1);
+        let col_c = &Column::new("c", 2);
+        // Assume that column a and c are aliases.
+        let (_test_schema, eq_properties) = create_test_params()?;
+
+        let col_a_expr = Arc::new(col_a.clone()) as Arc<dyn PhysicalExpr>;
+        let col_b_expr = Arc::new(col_b.clone()) as Arc<dyn PhysicalExpr>;
+        let col_c_expr = Arc::new(col_c.clone()) as Arc<dyn PhysicalExpr>;
+        // Test cases for equivalence normalization,
+        // First entry in the tuple is argument, second entry is expected result after normalization.
+        let expressions = vec![
+            // Normalized version of the column a and c should go to a
+            // (by convention all the expressions inside equivalence class are mapped to the first entry
+            // in this case a is the first entry in the equivalence class.)
+            (&col_a_expr, &col_a_expr),
+            (&col_c_expr, &col_a_expr),
+            // Cannot normalize column b
+            (&col_b_expr, &col_b_expr),
+        ];
+        let eq_group = eq_properties.eq_group();
+        for (expr, expected_eq) in expressions {
+            assert!(
+                expected_eq.eq(&eq_group.normalize_expr(expr.clone())),
+                "error in test: expr: {expr:?}"
+            );
+        }
+
         Ok(())
     }
 }
