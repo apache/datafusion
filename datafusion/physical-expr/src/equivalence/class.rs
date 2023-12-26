@@ -141,7 +141,7 @@ impl EquivalenceGroup {
     }
 
     /// Creates an equivalence group from the given equivalence classes.
-    fn new(classes: Vec<EquivalenceClass>) -> Self {
+    pub fn new(classes: Vec<EquivalenceClass>) -> Self {
         let mut result = Self { classes };
         result.remove_redundant_entries();
         result
