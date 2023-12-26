@@ -47,7 +47,7 @@ pub(crate) struct SortPushDown {
     pub plan: Arc<dyn ExecutionPlan>,
     /// Parent required sort ordering
     required_ordering: Option<Vec<PhysicalSortRequirement>>,
-    children_nodes: Vec<SortPushDown>,
+    children_nodes: Vec<Self>,
 }
 
 impl SortPushDown {

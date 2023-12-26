@@ -290,7 +290,7 @@ fn adjust_input_keys_ordering(
             PartitionMode::Partitioned => {
                 let join_constructor =
                     |new_conditions: (Vec<(Column, Column)>, Vec<SortOptions>)| {
-                        Ok(Arc::new(HashJoinExec::try_new(
+                        HashJoinExec::try_new(
                             left.clone(),
                             right.clone(),
                             new_conditions.0,
@@ -298,15 +298,17 @@ fn adjust_input_keys_ordering(
                             join_type,
                             PartitionMode::Partitioned,
                             *null_equals_null,
-                        )?) as Arc<dyn ExecutionPlan>)
+                        )
+                        .map(|e| Arc::new(e) as _)
                     };
-                Ok(Transformed::Yes(reorder_partitioned_join_keys(
+                reorder_partitioned_join_keys(
                     requirements.plan.clone(),
                     &parent_required,
                     on,
                     vec![],
                     &join_constructor,
-                )?))
+                )
+                .map(Transformed::Yes)
             }
             PartitionMode::CollectLeft => {
                 let new_right_request = match join_type {
@@ -331,7 +333,7 @@ fn adjust_input_keys_ordering(
             PartitionMode::Auto => {
                 // Can not satisfy, clear the current requirements and generate new empty requirements
                 Ok(Transformed::Yes(PlanWithKeyRequirements::new(
-                    requirements.plan.clone(),
+                    requirements.plan,
                 )))
             }
         }
@@ -355,34 +357,35 @@ fn adjust_input_keys_ordering(
     {
         let join_constructor =
             |new_conditions: (Vec<(Column, Column)>, Vec<SortOptions>)| {
-                Ok(Arc::new(SortMergeJoinExec::try_new(
+                SortMergeJoinExec::try_new(
                     left.clone(),
                     right.clone(),
                     new_conditions.0,
                     *join_type,
                     new_conditions.1,
                     *null_equals_null,
-                )?) as Arc<dyn ExecutionPlan>)
+                )
+                .map(|e| Arc::new(e) as _)
             };
-        Ok(Transformed::Yes(reorder_partitioned_join_keys(
+        reorder_partitioned_join_keys(
             requirements.plan.clone(),
             &parent_required,
             on,
             sort_options.clone(),
             &join_constructor,
-        )?))
+        )
+        .map(Transformed::Yes)
     } else if let Some(aggregate_exec) = plan_any.downcast_ref::<AggregateExec>() {
         if !parent_required.is_empty() {
             match aggregate_exec.mode() {
-                AggregateMode::FinalPartitioned => {
-                    Ok(Transformed::Yes(reorder_aggregate_keys(
-                        requirements.plan.clone(),
-                        &parent_required,
-                        aggregate_exec,
-                    )?))
-                }
-                _ => Ok(Transformed::Yes(PlanWithKeyRequirements::new(
+                AggregateMode::FinalPartitioned => reorder_aggregate_keys(
                     requirements.plan.clone(),
+                    &parent_required,
+                    aggregate_exec,
+                )
+                .map(Transformed::Yes),
+                _ => Ok(Transformed::Yes(PlanWithKeyRequirements::new(
+                    requirements.plan,
                 ))),
             }
         } else {
@@ -396,12 +399,12 @@ fn adjust_input_keys_ordering(
         // Construct a mapping from new name to the the orginal Column
         let new_required = map_columns_before_projection(&parent_required, expr);
         if new_required.len() == parent_required.len() {
-            requirements.children[0].required_key_ordering = new_required.clone();
+            requirements.children[0].required_key_ordering = new_required;
             Ok(Transformed::Yes(requirements))
         } else {
             // Can not satisfy, clear the current requirements and generate new empty requirements
             Ok(Transformed::Yes(PlanWithKeyRequirements::new(
-                requirements.plan.clone(),
+                requirements.plan,
             )))
         }
     } else if plan_any.downcast_ref::<RepartitionExec>().is_some()
@@ -409,7 +412,7 @@ fn adjust_input_keys_ordering(
         || plan_any.downcast_ref::<WindowAggExec>().is_some()
     {
         Ok(Transformed::Yes(PlanWithKeyRequirements::new(
-            requirements.plan.clone(),
+            requirements.plan,
         )))
     } else {
         // By default, push down the parent requirements to children
@@ -987,7 +990,7 @@ fn add_spm_on_top(input: DistributionContext) -> DistributionContext {
         // (determined by flag `config.optimizer.bounded_order_preserving_variants`)
         let should_preserve_ordering = input.plan.output_ordering().is_some();
 
-        let new_plan: Arc<dyn ExecutionPlan> = if should_preserve_ordering {
+        let new_plan = if should_preserve_ordering {
             Arc::new(SortPreservingMergeExec::new(
                 input.plan.output_ordering().unwrap_or(&[]).to_vec(),
                 input.plan.clone(),
@@ -1342,7 +1345,7 @@ struct DistributionContext {
     /// Indicates whether this plan is connected to a distribution-changing
     /// operator.
     distribution_connection: bool,
-    children_nodes: Vec<DistributionContext>,
+    children_nodes: Vec<Self>,
 }
 
 impl DistributionContext {
@@ -1484,8 +1487,7 @@ impl TreeNode for PlanWithKeyRequirements {
     where
         F: FnMut(&Self) -> Result<VisitRecursion>,
     {
-        let children = &self.children;
-        for child in children {
+        for child in &self.children {
             match op(child)? {
                 VisitRecursion::Continue => {}
                 VisitRecursion::Skip => return Ok(VisitRecursion::Continue),

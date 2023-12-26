@@ -151,7 +151,7 @@ impl Neg for SortProperties {
 pub struct ExprOrdering {
     pub expr: Arc<dyn PhysicalExpr>,
     pub state: SortProperties,
-    pub children: Vec<ExprOrdering>,
+    pub children: Vec<Self>,
 }
 
 impl ExprOrdering {

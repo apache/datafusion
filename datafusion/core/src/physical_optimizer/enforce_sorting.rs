@@ -85,13 +85,13 @@ struct PlanWithCorrespondingSort {
     // the `SortExec`(s). If the child has no connection to any sort, it simply
     // stores false.
     sort_connection: bool,
-    children_nodes: Vec<PlanWithCorrespondingSort>,
+    children_nodes: Vec<Self>,
 }
 
 impl PlanWithCorrespondingSort {
     fn new(plan: Arc<dyn ExecutionPlan>) -> Self {
         let children = plan.children();
-        PlanWithCorrespondingSort {
+        Self {
             plan,
             sort_connection: false,
             children_nodes: children.into_iter().map(Self::new).collect(),
@@ -100,8 +100,8 @@ impl PlanWithCorrespondingSort {
 
     fn update_children(
         parent_plan: Arc<dyn ExecutionPlan>,
-        mut children_nodes: Vec<PlanWithCorrespondingSort>,
-    ) -> Result<PlanWithCorrespondingSort> {
+        mut children_nodes: Vec<Self>,
+    ) -> Result<Self> {
         for node in children_nodes.iter_mut() {
             let plan = &node.plan;
             // Leaves of `sort_onwards` are `SortExec` operators, which impose
@@ -136,7 +136,7 @@ impl PlanWithCorrespondingSort {
             .collect::<Vec<_>>();
         let plan = with_new_children_if_necessary(parent_plan, children_plans)?.into();
 
-        Ok(PlanWithCorrespondingSort {
+        Ok(Self {
             plan,
             sort_connection: false,
             children_nodes,
@@ -188,22 +188,22 @@ struct PlanWithCorrespondingCoalescePartitions {
     // Stores whether the plan is a `CoalescePartitionsExec` or it is connected to
     // a `CoalescePartitionsExec` via its children.
     coalesce_connection: bool,
-    children_nodes: Vec<PlanWithCorrespondingCoalescePartitions>,
+    children_nodes: Vec<Self>,
 }
 
 impl PlanWithCorrespondingCoalescePartitions {
     /// Creates an empty tree with empty connections.
     fn new(plan: Arc<dyn ExecutionPlan>) -> Self {
         let children = plan.children();
-        PlanWithCorrespondingCoalescePartitions {
+        Self {
             plan,
             coalesce_connection: false,
             children_nodes: children.into_iter().map(Self::new).collect(),
         }
     }
 
-    fn update_children(self) -> Result<Self> {
-        let coalesce_connection = if self.plan.children().is_empty() {
+    fn update_children(mut self) -> Result<Self> {
+        self.coalesce_connection = if self.plan.children().is_empty() {
             // Plan has no children, it cannot be a `CoalescePartitionsExec`.
             false
         } else if is_coalesce_partitions(&self.plan) {
@@ -231,13 +231,8 @@ impl PlanWithCorrespondingCoalescePartitions {
             .iter()
             .map(|item| item.plan.clone())
             .collect();
-        let plan = with_new_children_if_necessary(self.plan, children_plans)?.into();
-
-        Ok(Self {
-            plan,
-            coalesce_connection,
-            children_nodes: self.children_nodes,
-        })
+        self.plan = with_new_children_if_necessary(self.plan, children_plans)?.into();
+        Ok(self)
     }
 }
 

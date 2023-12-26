@@ -70,14 +70,14 @@ impl PhysicalOptimizerRule for PipelineChecker {
 pub struct PipelineStatePropagator {
     pub(crate) plan: Arc<dyn ExecutionPlan>,
     pub(crate) unbounded: bool,
-    pub(crate) children: Vec<PipelineStatePropagator>,
+    pub(crate) children: Vec<Self>,
 }
 
 impl PipelineStatePropagator {
     /// Constructs a new, default pipelining state.
     pub fn new(plan: Arc<dyn ExecutionPlan>) -> Self {
         let children = plan.children();
-        PipelineStatePropagator {
+        Self {
             plan,
             unbounded: false,
             children: children.into_iter().map(Self::new).collect(),
@@ -86,10 +86,7 @@ impl PipelineStatePropagator {
 
     /// Returns the children unboundedness information.
     pub fn children_unbounded(&self) -> Vec<bool> {
-        self.children
-            .iter()
-            .map(|c| c.unbounded)
-            .collect::<Vec<_>>()
+        self.children.iter().map(|c| c.unbounded).collect()
     }
 }
 

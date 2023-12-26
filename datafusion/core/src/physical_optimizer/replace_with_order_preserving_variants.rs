@@ -40,7 +40,7 @@ use datafusion_physical_plan::unbounded_output;
 pub(crate) struct OrderPreservationContext {
     pub(crate) plan: Arc<dyn ExecutionPlan>,
     ordering_connection: bool,
-    children_nodes: Vec<OrderPreservationContext>,
+    children_nodes: Vec<Self>,
 }
 
 impl OrderPreservationContext {
