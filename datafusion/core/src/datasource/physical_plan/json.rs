@@ -19,13 +19,12 @@
 
 use std::any::Any;
 use std::io::{BufReader, Read, Seek, SeekFrom};
-use std::ops::Range;
 use std::sync::Arc;
 use std::task::Poll;
 
-use super::{FileGroupPartitioner, FileScanConfig};
+use super::{calculate_range, FileGroupPartitioner, FileScanConfig, RangeCalculation};
 use crate::datasource::file_format::file_compression_type::FileCompressionType;
-use crate::datasource::listing::{FileRange, ListingTableUrl};
+use crate::datasource::listing::ListingTableUrl;
 use crate::datasource::physical_plan::file_stream::{
     FileOpenFuture, FileOpener, FileStream,
 };
@@ -45,7 +44,6 @@ use datafusion_physical_expr::{EquivalenceProperties, LexOrdering};
 
 use bytes::{Buf, Bytes};
 use futures::{ready, StreamExt, TryStreamExt};
-use object_store::path::Path;
 use object_store::{self, GetOptions};
 use object_store::{GetResultPayload, ObjectStore};
 use tokio::io::AsyncWriteExt;
@@ -214,75 +212,6 @@ impl JsonOpener {
             projected_schema,
             file_compression_type,
             object_store,
-        }
-    }
-}
-
-async fn find_first_newline(
-    object_store: &Arc<dyn ObjectStore>,
-    location: &Path,
-    start: usize,
-    end: usize,
-) -> Result<usize> {
-    let range = Some(Range { start, end });
-
-    let options = GetOptions {
-        range,
-        ..Default::default()
-    };
-
-    let result = object_store.get_opts(location, options).await?;
-    let mut result_stream = result.into_stream();
-
-    let mut index = 0;
-
-    while let Some(chunk) = result_stream.next().await.transpose()? {
-        if let Some(position) = chunk.iter().position(|&byte| byte == b'\n') {
-            return Ok(index + position);
-        }
-
-        index += chunk.len();
-    }
-
-    Ok(index)
-}
-
-enum RangeCalculation {
-    Range(Option<Range<usize>>),
-    TerminateEarly,
-}
-
-async fn calculate_range(
-    file_meta: &FileMeta,
-    store: &Arc<dyn ObjectStore>,
-) -> Result<RangeCalculation> {
-    let location = file_meta.location();
-    let file_size = file_meta.object_meta.size;
-
-    match file_meta.range {
-        None => Ok(RangeCalculation::Range(None)),
-        Some(FileRange { start, end }) => {
-            let (start, end) = (start as usize, end as usize);
-
-            let start_delta = if start != 0 {
-                find_first_newline(&store, location, start - 1, file_size).await?
-            } else {
-                0
-            };
-
-            let end_delta = if end != file_size {
-                find_first_newline(&store, location, end - 1, file_size).await?
-            } else {
-                0
-            };
-
-            let range = start + start_delta..end + end_delta;
-
-            if range.start == range.end {
-                return Ok(RangeCalculation::TerminateEarly);
-            }
-
-            Ok(RangeCalculation::Range(Some(range)))
         }
     }
 }

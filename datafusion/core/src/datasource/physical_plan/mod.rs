@@ -27,6 +27,7 @@ mod json;
 #[cfg(feature = "parquet")]
 pub mod parquet;
 pub use file_groups::FileGroupPartitioner;
+use futures::StreamExt;
 
 pub(crate) use self::csv::plan_to_csv;
 pub use self::csv::{CsvConfig, CsvExec, CsvOpener};
@@ -45,6 +46,7 @@ pub use json::{JsonOpener, NdJsonExec};
 
 use std::{
     fmt::{Debug, Formatter, Result as FmtResult},
+    ops::Range,
     sync::Arc,
     vec,
 };
@@ -71,8 +73,8 @@ use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::PhysicalSortExpr;
 
 use log::debug;
-use object_store::path::Path;
 use object_store::ObjectMeta;
+use object_store::{path::Path, GetOptions, ObjectStore};
 
 /// The base configurations to provide when creating a physical plan for
 /// writing to any given file format.
@@ -505,6 +507,74 @@ fn get_projected_output_ordering(
         }
     }
     all_orderings
+}
+enum RangeCalculation {
+    Range(Option<Range<usize>>),
+    TerminateEarly,
+}
+
+async fn calculate_range(
+    file_meta: &FileMeta,
+    store: &Arc<dyn ObjectStore>,
+) -> Result<RangeCalculation> {
+    let location = file_meta.location();
+    let file_size = file_meta.object_meta.size;
+
+    match file_meta.range {
+        None => Ok(RangeCalculation::Range(None)),
+        Some(FileRange { start, end }) => {
+            let (start, end) = (start as usize, end as usize);
+
+            let start_delta = if start != 0 {
+                find_first_newline(&store, location, start - 1, file_size).await?
+            } else {
+                0
+            };
+
+            let end_delta = if end != file_size {
+                find_first_newline(&store, location, end - 1, file_size).await?
+            } else {
+                0
+            };
+
+            let range = start + start_delta..end + end_delta;
+
+            if range.start == range.end {
+                return Ok(RangeCalculation::TerminateEarly);
+            }
+
+            Ok(RangeCalculation::Range(Some(range)))
+        }
+    }
+}
+
+async fn find_first_newline(
+    object_store: &Arc<dyn ObjectStore>,
+    location: &Path,
+    start: usize,
+    end: usize,
+) -> Result<usize> {
+    let range = Some(Range { start, end });
+
+    let options = GetOptions {
+        range,
+        ..Default::default()
+    };
+
+    let result = object_store.get_opts(location, options).await?;
+    let mut result_stream = result.into_stream();
+
+    let mut index = 0;
+
+    while let Some(chunk) = result_stream.next().await.transpose()? {
+        if let Some(position) = chunk.iter().position(|&byte| byte == b'\n') {
+            return Ok(index + position);
+        }
+
+        index += chunk.len();
+    }
+
+    Ok(index)
 }
 
 #[cfg(test)]
