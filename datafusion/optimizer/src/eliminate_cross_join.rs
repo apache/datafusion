@@ -45,6 +45,7 @@ impl EliminateCrossJoin {
 /// 'select ... from a, b where (a.x = b.y and b.xx = 100) or (a.x = b.y and b.xx = 200);'
 /// 'select ... from a, b, c where (a.x = b.y and b.xx = 100 and a.z = c.z)
 /// or (a.x = b.y and b.xx = 200 and a.z=c.z);'
+/// 'select ... from a, b where a.x > b.y'
 /// For above queries, the join predicate is available in filters and they are moved to
 /// join nodes appropriately
 /// This fix helps to improve the performance of TPCH Q19. issue#78

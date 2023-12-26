@@ -3483,6 +3483,28 @@ NestedLoopJoinExec: join_type=Inner, filter=a@0 > a@1
 ----CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a0, a, b, c, d], output_ordering=[a@1 ASC, b@2 ASC NULLS LAST, c@3 ASC NULLS LAST], has_header=true
 --CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a0, a, b, c, d], output_ordering=[a@1 ASC, b@2 ASC NULLS LAST, c@3 ASC NULLS LAST], has_header=true
 
+# Currently datafusion cannot pushdown filter conditions with scalar UDF into
+# cross join.
+query TT
+EXPLAIN SELECT *
+FROM annotated_data as t1, annotated_data as t2
+WHERE EXAMPLE(t1.a, t2.a) > 3
+----
+logical_plan
+Filter: example(CAST(t1.a AS Float64), CAST(t2.a AS Float64)) > Float64(3)
+--CrossJoin:
+----SubqueryAlias: t1
+------TableScan: annotated_data projection=[a0, a, b, c, d]
+----SubqueryAlias: t2
+------TableScan: annotated_data projection=[a0, a, b, c, d]
+physical_plan
+CoalesceBatchesExec: target_batch_size=2
+--FilterExec: example(CAST(a@1 AS Float64), CAST(a@6 AS Float64)) > 3
+----CrossJoinExec
+------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a0, a, b, c, d], output_ordering=[a@1 ASC, b@2 ASC NULLS LAST, c@3 ASC NULLS LAST], has_header=true
+------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+--------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a0, a, b, c, d], output_ordering=[a@1 ASC, b@2 ASC NULLS LAST, c@3 ASC NULLS LAST], has_header=true
+
 ####
 # Config teardown
 ####
