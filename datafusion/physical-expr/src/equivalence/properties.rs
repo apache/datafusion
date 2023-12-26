@@ -1451,4 +1451,50 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    fn test_normalize_ordering_equivalence_classes() -> Result<()> {
+        let sort_options = SortOptions::default();
+
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Int32, true),
+            Field::new("c", DataType::Int32, true),
+        ]);
+        let col_a_expr = col("a", &schema)?;
+        let col_b_expr = col("b", &schema)?;
+        let col_c_expr = col("c", &schema)?;
+        let mut eq_properties = EquivalenceProperties::new(Arc::new(schema.clone()));
+
+        eq_properties.add_equal_conditions(&col_a_expr, &col_c_expr);
+        let others = vec![
+            vec![PhysicalSortExpr {
+                expr: col_b_expr.clone(),
+                options: sort_options,
+            }],
+            vec![PhysicalSortExpr {
+                expr: col_c_expr.clone(),
+                options: sort_options,
+            }],
+        ];
+        eq_properties.add_new_orderings(others);
+
+        let mut expected_eqs = EquivalenceProperties::new(Arc::new(schema));
+        expected_eqs.add_new_orderings([
+            vec![PhysicalSortExpr {
+                expr: col_b_expr.clone(),
+                options: sort_options,
+            }],
+            vec![PhysicalSortExpr {
+                expr: col_c_expr.clone(),
+                options: sort_options,
+            }],
+        ]);
+
+        let oeq_class = eq_properties.oeq_class().clone();
+        let expected = expected_eqs.oeq_class();
+        assert!(oeq_class.eq(expected));
+
+        Ok(())
+    }
 }
