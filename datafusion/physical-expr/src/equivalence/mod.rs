@@ -82,7 +82,7 @@ mod tests {
     use rand::seq::SliceRandom;
     use rand::{Rng, SeedableRng};
 
-    fn output_schema(
+    pub fn output_schema(
         mapping: &ProjectionMapping,
         input_schema: &Arc<Schema>,
     ) -> Result<SchemaRef> {
@@ -370,55 +370,6 @@ mod tests {
         assert!(eq_groups.contains(&col_c_expr));
         assert!(eq_groups.contains(&col_x_expr));
         assert!(eq_groups.contains(&col_y_expr));
-
-        Ok(())
-    }
-
-    #[test]
-    fn project_equivalence_properties_test() -> Result<()> {
-        let input_schema = Arc::new(Schema::new(vec![
-            Field::new("a", DataType::Int64, true),
-            Field::new("b", DataType::Int64, true),
-            Field::new("c", DataType::Int64, true),
-        ]));
-
-        let input_properties = EquivalenceProperties::new(input_schema.clone());
-        let col_a = col("a", &input_schema)?;
-
-        // a as a1, a as a2, a as a3, a as a3
-        let proj_exprs = vec![
-            (col_a.clone(), "a1".to_string()),
-            (col_a.clone(), "a2".to_string()),
-            (col_a.clone(), "a3".to_string()),
-            (col_a.clone(), "a4".to_string()),
-        ];
-        let projection_mapping = ProjectionMapping::try_new(&proj_exprs, &input_schema)?;
-
-        let out_schema = output_schema(&projection_mapping, &input_schema)?;
-        // a as a1, a as a2, a as a3, a as a3
-        let proj_exprs = vec![
-            (col_a.clone(), "a1".to_string()),
-            (col_a.clone(), "a2".to_string()),
-            (col_a.clone(), "a3".to_string()),
-            (col_a.clone(), "a4".to_string()),
-        ];
-        let projection_mapping = ProjectionMapping::try_new(&proj_exprs, &input_schema)?;
-
-        // a as a1, a as a2, a as a3, a as a3
-        let col_a1 = &col("a1", &out_schema)?;
-        let col_a2 = &col("a2", &out_schema)?;
-        let col_a3 = &col("a3", &out_schema)?;
-        let col_a4 = &col("a4", &out_schema)?;
-        let out_properties = input_properties.project(&projection_mapping, out_schema);
-
-        // At the output a1=a2=a3=a4
-        assert_eq!(out_properties.eq_group().len(), 1);
-        let eq_class = &out_properties.eq_group().classes[0];
-        assert_eq!(eq_class.len(), 4);
-        assert!(eq_class.contains(col_a1));
-        assert!(eq_class.contains(col_a2));
-        assert!(eq_class.contains(col_a3));
-        assert!(eq_class.contains(col_a4));
 
         Ok(())
     }
