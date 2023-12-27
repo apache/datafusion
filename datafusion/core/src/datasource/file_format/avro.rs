@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Apache Avro format abstractions
+//! [`AvroFormat`] Apache Avro [`FileFormat`] abstractions
 
 use std::any::Any;
 use std::sync::Arc;
