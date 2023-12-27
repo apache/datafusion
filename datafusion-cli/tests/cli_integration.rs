@@ -31,19 +31,19 @@ fn init() {
 #[rstest]
 #[case::exec_from_commands(
     ["--command", "select 1", "--format", "json", "-q"],
-    "[{\"Int64(1)\":1}]\n"
+    "[{\"Int64(1)\":1}]\n\n\n"
 )]
 #[case::exec_multiple_statements(
     ["--command", "select 1; select 2;", "--format", "json", "-q"],
-    "[{\"Int64(1)\":1}]\n[{\"Int64(2)\":2}]\n"
+    "[{\"Int64(1)\":1}]\n\n\n[{\"Int64(2)\":2}]\n\n\n"
 )]
 #[case::exec_from_files(
     ["--file", "tests/data/sql.txt", "--format", "json", "-q"],
-    "[{\"Int64(1)\":1}]\n"
+    "[{\"Int64(1)\":1}]\n\n\n"
 )]
 #[case::set_batch_size(
     ["--command", "show datafusion.execution.batch_size", "--format", "json", "-q", "-b", "1"],
-    "[{\"name\":\"datafusion.execution.batch_size\",\"value\":\"1\"}]\n"
+    "[{\"name\":\"datafusion.execution.batch_size\",\"value\":\"1\"}]\n\n\n"
 )]
 #[test]
 fn cli_quick_test<'a>(

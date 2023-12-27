@@ -84,7 +84,7 @@ fn get_timing_info_str(
     };
 
     format!(
-        "\n{} {} in set{}. Query took {:.3} seconds.\n",
+        "{} {} in set{}. Query took {:.3} seconds.\n",
         row_count,
         row_word,
         nrows_shown_msg,
@@ -106,9 +106,19 @@ impl PrintOptions {
             .print_batches(&mut writer, batches, self.maxrows, true)?;
 
         let row_count: usize = batches.iter().map(|b| b.num_rows()).sum();
-        let timing_info = get_timing_info_str(row_count, self.maxrows, query_start_time);
+        let timing_info = get_timing_info_str(
+            row_count,
+            if self.format == PrintFormat::Table {
+                self.maxrows
+            } else {
+                MaxRows::Unlimited
+            },
+            query_start_time,
+        );
+
+        writeln!(writer, "\n")?;
         if !self.quiet {
-            writeln!(writer, "\n{timing_info}")?;
+            writeln!(writer, "{timing_info}")?;
         }
 
         Ok(())
@@ -143,9 +153,11 @@ impl PrintOptions {
             with_header = false;
         }
 
-        let timing_info = get_timing_info_str(row_count, self.maxrows, query_start_time);
+        let timing_info =
+            get_timing_info_str(row_count, MaxRows::Unlimited, query_start_time);
+        writeln!(writer, "\n")?;
         if !self.quiet {
-            writeln!(writer, "\n{timing_info}")?;
+            writeln!(writer, "{timing_info}")?;
         }
 
         Ok(())

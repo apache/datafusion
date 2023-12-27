@@ -22,6 +22,7 @@ use std::io::BufReader;
 use std::time::Instant;
 use std::{fs::File, sync::Arc};
 
+use crate::print_format::PrintFormat;
 use crate::{
     command::{Command, OutputFormat},
     helper::{unescape_input, CliHelper},
@@ -237,13 +238,18 @@ async fn exec_and_print(
             let stream = execute_stream(physical_plan, task_ctx.clone())?;
             print_options.print_stream(stream, now).await?;
         } else {
-            let print_options = if should_ignore_maxrows {
-                PrintOptions {
-                    maxrows: MaxRows::Unlimited,
-                    ..*print_options
-                }
-            } else {
-                *print_options
+            let print_options = PrintOptions {
+                maxrows: if should_ignore_maxrows {
+                    MaxRows::Unlimited
+                } else {
+                    print_options.maxrows
+                },
+                format: if print_options.format == PrintFormat::Automatic {
+                    PrintFormat::Table
+                } else {
+                    print_options.format
+                },
+                quiet: print_options.quiet,
             };
 
             let results = collect(physical_plan, task_ctx.clone()).await?;

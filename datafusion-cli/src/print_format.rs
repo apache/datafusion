@@ -134,9 +134,11 @@ impl PrintFormat {
         }
 
         match self {
-            Self::Csv => print_batches_with_sep(writer, batches, b',', with_header),
+            Self::Csv | Self::Automatic => {
+                print_batches_with_sep(writer, batches, b',', with_header)
+            }
             Self::Tsv => print_batches_with_sep(writer, batches, b'\t', with_header),
-            Self::Table | Self::Automatic => {
+            Self::Table => {
                 if maxrows == MaxRows::Limited(0) {
                     return Ok(());
                 }
