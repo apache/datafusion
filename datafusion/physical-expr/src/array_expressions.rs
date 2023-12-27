@@ -742,33 +742,35 @@ where
     )?))
 }
 
-/// If from_front is true, it is array_pop_front, otherwise array_pop_back
-fn general_pop_list<O: OffsetSizeTrait>(
+fn general_pop_front_list<O: OffsetSizeTrait>(
     array: &GenericListArray<O>,
-    from_front: bool,
 ) -> Result<ArrayRef>
 where
     i64: TryInto<O>,
 {
-    let (from_array, to_array) = if from_front {
-        let from_array = Int64Array::from(vec![2; array.len()]);
-        let to_array = Int64Array::from(
-            array
-                .iter()
-                .map(|arr| arr.map_or(0, |arr| arr.len() as i64))
-                .collect::<Vec<i64>>(),
-        );
-        (from_array, to_array)
-    } else {
-        let from_array = Int64Array::from(vec![1; array.len()]);
-        let to_array = Int64Array::from(
-            array
-                .iter()
-                .map(|arr| arr.map_or(0, |arr| arr.len() as i64 - 1))
-                .collect::<Vec<i64>>(),
-        );
-        (from_array, to_array)
-    };
+    let from_array = Int64Array::from(vec![2; array.len()]);
+    let to_array = Int64Array::from(
+        array
+            .iter()
+            .map(|arr| arr.map_or(0, |arr| arr.len() as i64))
+            .collect::<Vec<i64>>(),
+    );
+    general_array_slice::<O>(array, &from_array, &to_array)
+}
+
+fn general_pop_back_list<O: OffsetSizeTrait>(
+    array: &GenericListArray<O>,
+) -> Result<ArrayRef>
+where
+    i64: TryInto<O>,
+{
+    let from_array = Int64Array::from(vec![1; array.len()]);
+    let to_array = Int64Array::from(
+        array
+            .iter()
+            .map(|arr| arr.map_or(0, |arr| arr.len() as i64 - 1))
+            .collect::<Vec<i64>>(),
+    );
     general_array_slice::<O>(array, &from_array, &to_array)
 }
 
@@ -778,11 +780,11 @@ pub fn array_pop_front(args: &[ArrayRef]) -> Result<ArrayRef> {
     match array_data_type {
         DataType::List(_) => {
             let array = as_list_array(&args[0])?;
-            general_pop_list::<i32>(array, true)
+            general_pop_front_list::<i32>(array)
         }
         DataType::LargeList(_) => {
             let array = as_large_list_array(&args[0])?;
-            general_pop_list::<i64>(array, true)
+            general_pop_front_list::<i64>(array)
         }
         _ => exec_err!(
             "array_pop_front does not support type: {:?}",
@@ -801,11 +803,11 @@ pub fn array_pop_back(args: &[ArrayRef]) -> Result<ArrayRef> {
     match array_data_type {
         DataType::List(_) => {
             let array = as_list_array(&args[0])?;
-            general_pop_list::<i32>(array, false)
+            general_pop_back_list::<i32>(array)
         }
         DataType::LargeList(_) => {
             let array = as_large_list_array(&args[0])?;
-            general_pop_list::<i64>(array, false)
+            general_pop_back_list::<i64>(array)
         }
         _ => exec_err!(
             "array_pop_back does not support type: {:?}",
