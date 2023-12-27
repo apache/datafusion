@@ -196,11 +196,11 @@ impl LiteralGuarantee {
                     // if all terms are 'col <op> literal' with the same column
                     // and operation we can infer any guarantees
                     //
-                    // For those like (a != bar OR a != baz).
+                    // For those like (a != foo AND (a != bar OR a != baz)).
                     // We can't combine the (a != bar OR a != baz) part, but
                     // it also doesn't invalidate our knowledge that a !=
                     // foo is required for the expression to be true.
-                    // So we can only create a multi guarantee for `=`
+                    // So we can only create a multi value guarantee for `=`
                     // (or a single value). (e.g. ignore `a != foo OR a != bar`)
                     let first_term = &terms[0];
                     if terms.iter().all(|term| {
@@ -773,7 +773,7 @@ mod test {
                 .and(col("b").eq(lit(4)).or(col("b").eq(lit(5)))),
             vec![],
         );
-        // b not in (1, 2, 3) AND (b = 3 OR b = 4)
+        // b NOT IN (1, 2, 3) AND (b = 3 OR b = 4)
         test_analyze(
             col("b")
                 .in_list(vec![lit(1), lit(2), lit(3)], true)
