@@ -60,6 +60,44 @@ pub fn create_table_provider(column_prefix: &str, num_columns: usize) -> Arc<Mem
     MemTable::try_new(schema, vec![]).map(Arc::new).unwrap()
 }
 
+pub fn create_tpch_schemas() -> [(String, Schema); 2] {
+    let lineitem_schema = Schema::new(vec![
+        Field::new("l_orderkey", DataType::Int32, false),
+        Field::new("l_partkey", DataType::Int32, false),
+        Field::new("l_suppkey", DataType::Int32, false),
+        Field::new("l_linenumber", DataType::Int32, false),
+        Field::new("l_quantity", DataType::Float64, false),
+        Field::new("l_extendedprice", DataType::Float64, false),
+        Field::new("l_discount", DataType::Float64, false),
+        Field::new("l_tax", DataType::Float64, false),
+        Field::new("l_returnflag", DataType::Utf8, false),
+        Field::new("l_linestatus", DataType::Utf8, false),
+        Field::new("l_shipdate", DataType::Date32, false),
+        Field::new("l_commitdate", DataType::Date32, false),
+        Field::new("l_receiptdate", DataType::Date32, false),
+        Field::new("l_shipinstruct", DataType::Utf8, false),
+        Field::new("l_shipmode", DataType::Utf8, false),
+        Field::new("l_comment", DataType::Utf8, false),
+    ]);
+
+    let orders_schema = Schema::new(vec![
+        Field::new("o_orderkey", DataType::Int32, false),
+        Field::new("o_custkey", DataType::Int32, false),
+        Field::new("o_orderstatus", DataType::Utf8, false),
+        Field::new("o_totalprice", DataType::Float64, false),
+        Field::new("o_orderdate", DataType::Date32, false),
+        Field::new("o_orderpriority", DataType::Utf8, false),
+        Field::new("o_clerk", DataType::Utf8, false),
+        Field::new("o_shippriority", DataType::Int32, false),
+        Field::new("o_comment", DataType::Utf8, false),
+    ]);
+
+    return [
+        ("lineitem".to_string(), lineitem_schema),
+        ("orders".to_string(), orders_schema),
+    ];
+}
+
 fn create_context() -> SessionContext {
     let ctx = SessionContext::new();
     ctx.register_table("t1", create_table_provider("a", 200))
@@ -68,6 +106,16 @@ fn create_context() -> SessionContext {
         .unwrap();
     ctx.register_table("t700", create_table_provider("c", 700))
         .unwrap();
+
+    let tpch_schemas = create_tpch_schemas();
+    tpch_schemas.iter().for_each(|(name, schema)| {
+        ctx.register_table(
+            name,
+            Arc::new(MemTable::try_new(Arc::new(schema.clone()), vec![]).unwrap()),
+        )
+        .unwrap();
+    });
+
     ctx
 }
 
@@ -114,6 +162,16 @@ fn criterion_benchmark(c: &mut Criterion) {
                  FROM t1 JOIN t2 ON t1.a199 = t2.b199 GROUP BY t1.a99",
             )
         })
+    });
+
+    let q1_sql = std::fs::read_to_string("../../benchmarks/queries/q1.sql").unwrap();
+    c.bench_function("physical_plan_tpch_q1", |b| {
+        b.iter(|| physical_plan(&ctx, &q1_sql))
+    });
+
+    let q12_sql = std::fs::read_to_string("../../benchmarks/queries/q12.sql").unwrap();
+    c.bench_function("physical_plan_tpch_q12", |b| {
+        b.iter(|| physical_plan(&ctx, &q12_sql))
     });
 }
 
