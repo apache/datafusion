@@ -38,7 +38,7 @@ use arrow::datatypes::{Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use arrow_schema::DataType;
 use datafusion_common::stats::Precision;
-use datafusion_common::{plan_datafusion_err, plan_err, DataFusionError, Result};
+use datafusion_common::{not_impl_err, plan_err, DataFusionError, Result};
 use datafusion_execution::TaskContext;
 use datafusion_expr::Accumulator;
 use datafusion_physical_expr::{
@@ -918,9 +918,12 @@ fn get_aggregate_exprs_requirement(
         {
             requirement = finer_ordering;
         } else {
-            return Err(plan_datafusion_err!(
-                "Conflicting ordering requirement is not supported"
-            ));
+            // If neither of the requirements satisfy the other, this means
+            // requirements are conflicting. Currently, we do not support
+            // conflicting requirements.
+            return not_impl_err!(
+                "Conflicting ordering requirements in aggregate functions is not supported"
+            );
         }
     }
     Ok(PhysicalSortRequirement::from_sort_exprs(&requirement))
