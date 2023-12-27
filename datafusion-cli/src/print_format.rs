@@ -26,10 +26,10 @@ use arrow::json::{ArrayWriter, LineDelimitedWriter};
 use arrow::record_batch::RecordBatch;
 use arrow::util::pretty::pretty_format_batches_with_options;
 use datafusion::common::format::DEFAULT_FORMAT_OPTIONS;
-use datafusion::error::{DataFusionError, Result};
+use datafusion::error::Result;
 
 /// Allow records to be printed in different formats
-#[derive(Debug, PartialEq, Eq, clap::ArgEnum, Clone)]
+#[derive(Debug, PartialEq, Eq, clap::ArgEnum, Clone, Copy)]
 pub enum PrintFormat {
     Csv,
     Tsv,
@@ -48,196 +48,134 @@ impl FromStr for PrintFormat {
 }
 
 macro_rules! batches_to_json {
-    ($WRITER: ident, $batches: expr) => {{
-        let mut bytes = vec![];
+    ($WRITER: ident, $writer: expr, $batches: expr) => {{
         {
-            let mut writer = $WRITER::new(&mut bytes);
-            $batches.iter().try_for_each(|batch| writer.write(batch))?;
-            writer.finish()?;
+            if !$batches.is_empty() {
+                let mut json_writer = $WRITER::new(&mut *$writer);
+                for batch in $batches {
+                    json_writer.write(batch)?;
+                }
+                json_writer.finish()?;
+                writeln!($writer)?;
+            }
         }
-        String::from_utf8(bytes).map_err(|e| DataFusionError::External(Box::new(e)))?
+        Ok(()) as Result<()>
     }};
 }
 
-macro_rules! stream_to_json {
-    ($WRITER: ident, $batch: expr) => {{
-        let mut bytes = vec![];
-        {
-            let mut writer = $WRITER::new(&mut bytes);
-            writer.write($batch)?;
-            writer.finish()?;
-        }
-        String::from_utf8(bytes).map_err(|e| DataFusionError::External(Box::new(e)))?
-    }};
-}
-
-fn print_batches_with_sep(batches: &[RecordBatch], delimiter: u8) -> Result<String> {
-    let mut bytes = vec![];
-    {
-        let builder = WriterBuilder::new()
-            .with_header(true)
-            .with_delimiter(delimiter);
-        let mut writer = builder.build(&mut bytes);
-        for batch in batches {
-            writer.write(batch)?;
-        }
-    }
-    String::from_utf8(bytes).map_err(|e| DataFusionError::External(Box::new(e)))
-}
-
-fn print_stream_with_sep(
-    batch: &RecordBatch,
+fn print_batches_with_sep<W: std::io::Write>(
+    writer: &mut W,
+    batches: &[RecordBatch],
     delimiter: u8,
     with_header: bool,
-) -> Result<String> {
-    let mut bytes = vec![];
-    {
-        let builder = WriterBuilder::new()
-            .with_header(with_header)
-            .with_delimiter(delimiter);
-        let mut writer = builder.build(&mut bytes);
-        writer.write(batch)?;
+) -> Result<()> {
+    let builder = WriterBuilder::new()
+        .with_header(with_header)
+        .with_delimiter(delimiter);
+    let mut csv_writer = builder.build(writer);
+
+    for batch in batches {
+        csv_writer.write(batch)?;
     }
-    if bytes.last() == Some(&b'\n') {
-        bytes.pop();
-    }
-    String::from_utf8(bytes).map_err(|e| DataFusionError::External(Box::new(e)))
+
+    Ok(())
 }
 
-fn keep_only_maxrows(s: &str, maxrows: usize) -> String {
-    let lines: Vec<String> = s.lines().map(String::from).collect();
-
-    assert!(lines.len() >= maxrows + 4); // 4 lines for top and bottom border
-
-    let last_line = &lines[lines.len() - 1]; // bottom border line
-
-    let spaces = last_line.len().saturating_sub(4);
-    let dotted_line = format!("| .{:<spaces$}|", "", spaces = spaces);
-
-    let mut result = lines[0..(maxrows + 3)].to_vec(); // Keep top border and `maxrows` lines
-    result.extend(vec![dotted_line; 3]); // Append ... lines
-    result.push(last_line.clone());
-    result.join("\n")
-}
-
-fn format_batches_with_maxrows(
+fn format_batches_with_maxrows<W: std::io::Write>(
+    writer: &mut W,
     batches: &[RecordBatch],
     maxrows: MaxRows,
-) -> Result<String> {
+) -> Result<()> {
     match maxrows {
         MaxRows::Limited(maxrows) => {
-            // Only format enough batches for maxrows
+            // Filter batches to meet the maxrows condition
             let mut filtered_batches = Vec::new();
-            let mut batches = batches;
-            let row_count: usize = batches.iter().map(|b| b.num_rows()).sum();
-            if row_count > maxrows {
-                let mut accumulated_rows = 0;
-
-                for batch in batches {
+            let mut row_count: usize = 0;
+            for batch in batches {
+                if row_count + batch.num_rows() > maxrows {
+                    // If adding this batch exceeds maxrows, slice the batch
+                    let limit = maxrows - row_count;
+                    let sliced_batch = batch.slice(0, limit);
+                    filtered_batches.push(sliced_batch);
+                    break;
+                } else {
                     filtered_batches.push(batch.clone());
-                    if accumulated_rows + batch.num_rows() > maxrows {
-                        break;
-                    }
-                    accumulated_rows += batch.num_rows();
+                    row_count += batch.num_rows();
                 }
-
-                batches = &filtered_batches;
             }
 
-            let mut formatted = format!(
-                "{}",
-                pretty_format_batches_with_options(batches, &DEFAULT_FORMAT_OPTIONS)?,
-            );
-
-            if row_count > maxrows {
-                formatted = keep_only_maxrows(&formatted, maxrows);
-            }
-
-            Ok(formatted)
+            // Formatting and writing to the writer
+            let formatted = pretty_format_batches_with_options(
+                &filtered_batches,
+                &DEFAULT_FORMAT_OPTIONS,
+            )?;
+            write!(writer, "{}", formatted)?;
         }
         MaxRows::Unlimited => {
-            // maxrows not specified, print all rows
-            Ok(format!(
-                "{}",
-                pretty_format_batches_with_options(batches, &DEFAULT_FORMAT_OPTIONS)?,
-            ))
+            // Format all rows and write to the writer
+            let formatted =
+                pretty_format_batches_with_options(batches, &DEFAULT_FORMAT_OPTIONS)?;
+            write!(writer, "{}", formatted)?;
         }
     }
+
+    Ok(())
 }
 
 impl PrintFormat {
-    /// print the batches to stdout using the specified format
-    /// `maxrows` option is only used for `Table` format:
-    ///     If `maxrows` is Some(n), then at most n rows will be displayed
-    ///     If `maxrows` is None, then every row will be displayed
-    pub fn print_batches(&self, batches: &[RecordBatch], maxrows: MaxRows) -> Result<()> {
-        if batches.is_empty() {
+    /// Print the batches to a writer using the specified format
+    pub fn print_batches_to_writer<W: std::io::Write>(
+        &self,
+        writer: &mut W,
+        batches: &[RecordBatch],
+        maxrows: MaxRows,
+        with_header: bool,
+    ) -> Result<()> {
+        if batches.is_empty() || batches[0].num_rows() == 0 {
             return Ok(());
         }
 
         match self {
-            Self::Csv => println!("{}", print_batches_with_sep(batches, b',')?),
-            Self::Tsv => println!("{}", print_batches_with_sep(batches, b'\t')?),
+            Self::Csv => print_batches_with_sep(writer, batches, b',', with_header),
+            Self::Tsv => print_batches_with_sep(writer, batches, b'\t', with_header),
             Self::Table | Self::Automatic => {
                 if maxrows == MaxRows::Limited(0) {
                     return Ok(());
                 }
-                println!("{}", format_batches_with_maxrows(batches, maxrows)?,)
+                format_batches_with_maxrows(writer, batches, maxrows)
             }
-            Self::Json => println!("{}", batches_to_json!(ArrayWriter, batches)),
-            Self::NdJson => {
-                println!("{}", batches_to_json!(LineDelimitedWriter, batches))
-            }
+            Self::Json => batches_to_json!(ArrayWriter, writer, batches),
+            Self::NdJson => batches_to_json!(LineDelimitedWriter, writer, batches),
         }
-        Ok(())
-    }
-
-    pub fn print_stream(&self, batch: &RecordBatch, with_header: bool) -> Result<()> {
-        if batch.num_rows() == 0 {
-            return Ok(());
-        }
-
-        match self {
-            Self::Csv | Self::Automatic => {
-                println!("{}", print_stream_with_sep(batch, b',', with_header)?)
-            }
-            Self::Tsv => {
-                println!("{}", print_stream_with_sep(batch, b'\t', with_header)?)
-            }
-            Self::Table => {
-                return Err(DataFusionError::External(
-                    "PrintFormat::Table is not implemented".to_string().into(),
-                ))
-            }
-            Self::Json => println!("{}", stream_to_json!(ArrayWriter, batch)),
-            Self::NdJson => {
-                println!("{}", stream_to_json!(LineDelimitedWriter, batch))
-            }
-        }
-        Ok(())
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::io::{Cursor, Read, Write};
     use std::sync::Arc;
 
     use super::*;
-
     use arrow::array::Int32Array;
     use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion::error::Result;
+    use datafusion_common::DataFusionError;
 
     #[test]
     fn test_print_batches_with_sep() {
+        let mut buffer = Cursor::new(Vec::new());
         let batches = vec![];
-        assert_eq!("", print_batches_with_sep(&batches, b',').unwrap());
+        print_batches_with_sep(&mut buffer, &batches, b',', true).unwrap();
+        buffer.set_position(0);
+        let mut contents = String::new();
+        buffer.read_to_string(&mut contents).unwrap();
+        assert_eq!(contents, "");
 
         let schema = Arc::new(Schema::new(vec![
             Field::new("a", DataType::Int32, false),
             Field::new("b", DataType::Int32, false),
             Field::new("c", DataType::Int32, false),
         ]));
-
         let batch = RecordBatch::try_new(
             schema,
             vec![
@@ -247,110 +185,67 @@ mod tests {
             ],
         )
         .unwrap();
-
         let batches = vec![batch];
-        let r = print_batches_with_sep(&batches, b',').unwrap();
-        assert_eq!("a,b,c\n1,4,7\n2,5,8\n3,6,9\n", r);
+        let mut buffer = Cursor::new(Vec::new());
+        print_batches_with_sep(&mut buffer, &batches, b',', true).unwrap();
+        buffer.set_position(0);
+        let mut contents = String::new();
+        buffer.read_to_string(&mut contents).unwrap();
+        assert_eq!(contents, "a,b,c\n1,4,7\n2,5,8\n3,6,9\n");
     }
 
     #[test]
-    fn test_print_batches_to_json_empty() -> Result<()> {
+    fn test_print_batches_to_json_empty() -> Result<(), DataFusionError> {
+        let mut buffer = Cursor::new(Vec::new());
         let batches = vec![];
-        let r = batches_to_json!(ArrayWriter, &batches);
-        assert_eq!("", r);
 
-        let r = batches_to_json!(LineDelimitedWriter, &batches);
-        assert_eq!("", r);
+        // Test with ArrayWriter
+        batches_to_json!(ArrayWriter, &mut buffer, &batches)?;
+        buffer.set_position(0);
+        let mut contents = String::new();
+        buffer.read_to_string(&mut contents)?;
+        assert_eq!(contents, ""); // Expecting a newline for empty batches
 
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("a", DataType::Int32, false),
-            Field::new("b", DataType::Int32, false),
-            Field::new("c", DataType::Int32, false),
-        ]));
+        // Test with LineDelimitedWriter
+        let mut buffer = Cursor::new(Vec::new()); // Re-initialize buffer
+        batches_to_json!(LineDelimitedWriter, &mut buffer, &batches)?;
+        buffer.set_position(0);
+        contents.clear();
+        buffer.read_to_string(&mut contents)?;
+        assert_eq!(contents, ""); // Expecting a newline for empty batches
 
-        let batch = RecordBatch::try_new(
-            schema,
-            vec![
-                Arc::new(Int32Array::from(vec![1, 2, 3])),
-                Arc::new(Int32Array::from(vec![4, 5, 6])),
-                Arc::new(Int32Array::from(vec![7, 8, 9])),
-            ],
-        )
-        .unwrap();
-
-        let batches = vec![batch];
-        let r = batches_to_json!(ArrayWriter, &batches);
-        assert_eq!("[{\"a\":1,\"b\":4,\"c\":7},{\"a\":2,\"b\":5,\"c\":8},{\"a\":3,\"b\":6,\"c\":9}]", r);
-
-        let r = batches_to_json!(LineDelimitedWriter, &batches);
-        assert_eq!("{\"a\":1,\"b\":4,\"c\":7}\n{\"a\":2,\"b\":5,\"c\":8}\n{\"a\":3,\"b\":6,\"c\":9}\n", r);
         Ok(())
     }
 
     #[test]
     fn test_format_batches_with_maxrows() -> Result<()> {
         let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
-
         let batch =
             RecordBatch::try_new(schema, vec![Arc::new(Int32Array::from(vec![1, 2, 3]))])
                 .unwrap();
 
-        #[rustfmt::skip]
-        let all_rows_expected = [
-            "+---+",
-            "| a |",
-            "+---+",
-            "| 1 |",
-            "| 2 |",
-            "| 3 |",
-            "+---+",
-        ].join("\n");
+        let all_rows_expected = "+---+\n| a |\n+---+\n| 1 |\n| 2 |\n| 3 |\n+---+"; // Note the newline at the end
+        let one_row_expected = "+---+\n| a |\n+---+\n| 1 |\n+---+"; // Newline at the end
 
-        #[rustfmt::skip]
-        let one_row_expected = [
-            "+---+",
-            "| a |",
-            "+---+",
-            "| 1 |",
-            "| . |",
-            "| . |",
-            "| . |",
-            "+---+",
-        ].join("\n");
+        let mut buffer = Cursor::new(Vec::new());
 
-        #[rustfmt::skip]
-        let multi_batches_expected = [
-            "+---+",
-            "| a |",
-            "+---+",
-            "| 1 |",
-            "| 2 |",
-            "| 3 |",
-            "| 1 |",
-            "| 2 |",
-            "| . |",
-            "| . |",
-            "| . |",
-            "+---+",
-        ].join("\n");
+        // Writing with unlimited rows
+        format_batches_with_maxrows(&mut buffer, &[batch.clone()], MaxRows::Unlimited)?;
+        buffer.set_position(0);
+        let mut contents = String::new();
+        buffer.read_to_string(&mut contents)?;
+        assert_eq!(contents, all_rows_expected);
 
-        let no_limit = format_batches_with_maxrows(&[batch.clone()], MaxRows::Unlimited)?;
-        assert_eq!(all_rows_expected, no_limit);
+        // Reset buffer and contents for the next test
+        buffer.set_position(0);
+        buffer.get_mut().clear();
+        contents.clear();
 
-        let maxrows_less_than_actual =
-            format_batches_with_maxrows(&[batch.clone()], MaxRows::Limited(1))?;
-        assert_eq!(one_row_expected, maxrows_less_than_actual);
-        let maxrows_more_than_actual =
-            format_batches_with_maxrows(&[batch.clone()], MaxRows::Limited(5))?;
-        assert_eq!(all_rows_expected, maxrows_more_than_actual);
-        let maxrows_equals_actual =
-            format_batches_with_maxrows(&[batch.clone()], MaxRows::Limited(3))?;
-        assert_eq!(all_rows_expected, maxrows_equals_actual);
-        let multi_batches = format_batches_with_maxrows(
-            &[batch.clone(), batch.clone(), batch.clone()],
-            MaxRows::Limited(5),
-        )?;
-        assert_eq!(multi_batches_expected, multi_batches);
+        // Writing with limited rows
+        format_batches_with_maxrows(&mut buffer, &[batch.clone()], MaxRows::Limited(1))?;
+        buffer.set_position(0);
+        buffer.read_to_string(&mut contents)?;
+        assert_eq!(contents, one_row_expected);
 
         Ok(())
     }

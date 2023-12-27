@@ -201,7 +201,6 @@ async fn exec_and_print(
     sql: String,
 ) -> Result<()> {
     let now = Instant::now();
-
     let sql = unescape_input(&sql)?;
     let task_ctx = ctx.task_ctx();
     let dialect = &task_ctx.session_config().options().sql_parser.dialect;
@@ -216,7 +215,6 @@ async fn exec_and_print(
     for statement in statements {
         let mut plan = ctx.state().statement_to_plan(statement).await?;
 
-        // For plans like `Explain` ignore `MaxRows` option and always display all rows
         let should_ignore_maxrows = matches!(
             plan,
             LogicalPlan::Explain(_)
@@ -224,14 +222,12 @@ async fn exec_and_print(
                 | LogicalPlan::Analyze(_)
         );
 
-        // Note that cmd is a mutable reference so that create_external_table function can remove all
-        // datafusion-cli specific options before passing through to datafusion. Otherwise, datafusion
-        // will raise Configuration errors.
         if let LogicalPlan::Ddl(DdlStatement::CreateExternalTable(cmd)) = &mut plan {
             create_external_table(ctx, cmd).await?;
         }
+
         let df = ctx.execute_logical_plan(plan).await?;
-        let physical_plan = df.clone().create_physical_plan().await?;
+        let physical_plan = df.create_physical_plan().await?;
 
         if is_plan_streaming(&physical_plan)? {
             let stream = execute_stream(physical_plan, task_ctx.clone())?;
@@ -240,10 +236,10 @@ async fn exec_and_print(
             let print_options = if should_ignore_maxrows {
                 PrintOptions {
                     maxrows: MaxRows::Unlimited,
-                    ..print_options.clone()
+                    ..*print_options
                 }
             } else {
-                print_options.clone()
+                *print_options
             };
 
             let results = collect(physical_plan, task_ctx.clone()).await?;
