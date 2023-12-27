@@ -198,21 +198,47 @@ mod tests {
     fn test_print_batches_to_json_empty() -> Result<(), DataFusionError> {
         let mut buffer = Cursor::new(Vec::new());
         let batches = vec![];
-
-        // Test with ArrayWriter
         batches_to_json!(ArrayWriter, &mut buffer, &batches)?;
         buffer.set_position(0);
         let mut contents = String::new();
         buffer.read_to_string(&mut contents)?;
-        assert_eq!(contents, ""); // Expecting a newline for empty batches
+        assert_eq!(contents, "");
 
-        // Test with LineDelimitedWriter
-        let mut buffer = Cursor::new(Vec::new()); // Re-initialize buffer
+        let mut buffer = Cursor::new(Vec::new());
         batches_to_json!(LineDelimitedWriter, &mut buffer, &batches)?;
         buffer.set_position(0);
         contents.clear();
         buffer.read_to_string(&mut contents)?;
-        assert_eq!(contents, ""); // Expecting a newline for empty batches
+        assert_eq!(contents, "");
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+            Field::new("c", DataType::Int32, false),
+        ]));
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(Int32Array::from(vec![1, 2, 3])),
+                Arc::new(Int32Array::from(vec![4, 5, 6])),
+                Arc::new(Int32Array::from(vec![7, 8, 9])),
+            ],
+        )?;
+        let batches = vec![batch];
+
+        let mut buffer = Cursor::new(Vec::new());
+        batches_to_json!(ArrayWriter, &mut buffer, &batches)?;
+        buffer.set_position(0);
+        contents.clear();
+        buffer.read_to_string(&mut contents)?;
+        assert_eq!(contents, "[{\"a\":1,\"b\":4,\"c\":7},{\"a\":2,\"b\":5,\"c\":8},{\"a\":3,\"b\":6,\"c\":9}]\n");
+
+        let mut buffer = Cursor::new(Vec::new());
+        batches_to_json!(LineDelimitedWriter, &mut buffer, &batches)?;
+        buffer.set_position(0);
+        contents.clear();
+        buffer.read_to_string(&mut contents)?;
+        assert_eq!(contents, "{\"a\":1,\"b\":4,\"c\":7}\n{\"a\":2,\"b\":5,\"c\":8}\n{\"a\":3,\"b\":6,\"c\":9}\n\n");
 
         Ok(())
     }
@@ -224,28 +250,42 @@ mod tests {
             RecordBatch::try_new(schema, vec![Arc::new(Int32Array::from(vec![1, 2, 3]))])
                 .unwrap();
 
-        let all_rows_expected = "+---+\n| a |\n+---+\n| 1 |\n| 2 |\n| 3 |\n+---+"; // Note the newline at the end
-        let one_row_expected = "+---+\n| a |\n+---+\n| 1 |\n+---+"; // Newline at the end
-
+        let all_rows_expected = "+---+\n| a |\n+---+\n| 1 |\n| 2 |\n| 3 |\n+---+";
+        let one_row_expected = "+---+\n| a |\n+---+\n| 1 |\n+---+";
+        let multi_batches_expected =
+            "+---+\n| a |\n+---+\n| 1 |\n| 2 |\n| 3 |\n| 1 |\n| 2 |\n+---+";
         let mut buffer = Cursor::new(Vec::new());
 
-        // Writing with unlimited rows
         format_batches_with_maxrows(&mut buffer, &[batch.clone()], MaxRows::Unlimited)?;
         buffer.set_position(0);
         let mut contents = String::new();
         buffer.read_to_string(&mut contents)?;
         assert_eq!(contents, all_rows_expected);
 
-        // Reset buffer and contents for the next test
-        buffer.set_position(0);
-        buffer.get_mut().clear();
-        contents.clear();
-
-        // Writing with limited rows
+        let mut buffer = Cursor::new(Vec::new());
         format_batches_with_maxrows(&mut buffer, &[batch.clone()], MaxRows::Limited(1))?;
         buffer.set_position(0);
+        contents.clear();
         buffer.read_to_string(&mut contents)?;
         assert_eq!(contents, one_row_expected);
+
+        let mut buffer = Cursor::new(Vec::new());
+        format_batches_with_maxrows(&mut buffer, &[batch.clone()], MaxRows::Limited(5))?;
+        buffer.set_position(0);
+        contents.clear();
+        buffer.read_to_string(&mut contents)?;
+        assert_eq!(contents, all_rows_expected);
+
+        let mut buffer = Cursor::new(Vec::new());
+        format_batches_with_maxrows(
+            &mut buffer,
+            &[batch.clone(), batch.clone()],
+            MaxRows::Limited(5),
+        )?;
+        buffer.set_position(0);
+        contents.clear();
+        buffer.read_to_string(&mut contents)?;
+        assert_eq!(contents, multi_batches_expected);
 
         Ok(())
     }
