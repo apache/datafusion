@@ -618,7 +618,18 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::ArrayReplaceAll => Ok(input_expr_types[0].clone()),
             BuiltinScalarFunction::ArraySlice => Ok(input_expr_types[0].clone()),
             BuiltinScalarFunction::ArrayToString => Ok(Utf8),
-            BuiltinScalarFunction::ArrayUnion | BuiltinScalarFunction::ArrayIntersect => {
+            BuiltinScalarFunction::ArrayIntersect => {
+                match (input_expr_types[0].clone(), input_expr_types[1].clone()) {
+                    (DataType::Null, DataType::Null) | (DataType::Null, _) => {
+                        Ok(DataType::Null)
+                    }
+                    (_, DataType::Null) => {
+                        Ok(List(Arc::new(Field::new("item", Null, true))))
+                    }
+                    (dt, _) => Ok(dt),
+                }
+            }
+            BuiltinScalarFunction::ArrayUnion => {
                 match (input_expr_types[0].clone(), input_expr_types[1].clone()) {
                     (DataType::Null, dt) => Ok(dt),
                     (dt, DataType::Null) => Ok(dt),
