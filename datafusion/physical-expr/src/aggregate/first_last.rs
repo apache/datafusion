@@ -20,7 +20,7 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use crate::aggregate::utils::{down_cast_any_ref, ordering_fields};
+use crate::aggregate::utils::{down_cast_any_ref, get_sort_options, ordering_fields};
 use crate::expressions::format_state_name;
 use crate::{
     reverse_order_bys, AggregateExpr, LexOrdering, PhysicalExpr, PhysicalSortExpr,
@@ -29,7 +29,6 @@ use crate::{
 use arrow::array::{Array, ArrayRef, AsArray, BooleanArray};
 use arrow::compute::{self, lexsort_to_indices, SortColumn};
 use arrow::datatypes::{DataType, Field};
-use arrow_schema::SortOptions;
 use datafusion_common::utils::{compare_rows, get_arrayref_at_indices, get_row_at_idx};
 use datafusion_common::{arrow_datafusion_err, DataFusionError, Result, ScalarValue};
 use datafusion_expr::Accumulator;
@@ -211,10 +210,47 @@ impl FirstValueAccumulator {
     }
 
     // Updates state with the values in the given row.
-    fn update_with_new_row(&mut self, row: &[ScalarValue]) {
-        self.first = row[0].clone();
-        self.orderings = row[1..].to_vec();
-        self.is_set = true;
+    fn update_with_new_row(&mut self, row: &[ScalarValue]) -> Result<()> {
+        let value = &row[0];
+        let orderings = &row[1..];
+        // Update when
+        // - no entry in the state
+        // - There is an earlier entry in according to requirements
+        if !self.is_set
+            || compare_rows(
+                &self.orderings,
+                orderings,
+                &get_sort_options(&self.ordering_req),
+            )?
+            .is_gt()
+        {
+            self.first = value.clone();
+            self.orderings = orderings.to_vec();
+            self.is_set = true;
+        }
+        Ok(())
+    }
+
+    fn get_first_idx(&self, values: &[ArrayRef]) -> Result<Option<usize>> {
+        let value = &values[0];
+        let ordering_values = &values[1..];
+        assert_eq!(ordering_values.len(), self.ordering_req.len());
+        if self.ordering_req.is_empty() {
+            return Ok((!value.is_empty()).then_some(0));
+        }
+        let sort_columns = ordering_values
+            .iter()
+            .zip(self.ordering_req.iter())
+            .map(|(values, req)| SortColumn {
+                values: values.clone(),
+                options: Some(req.options),
+            })
+            .collect::<Vec<_>>();
+        let indices = lexsort_to_indices(&sort_columns, Some(1))?;
+        if !indices.is_empty() {
+            return Ok(Some(indices.value(0) as usize));
+        }
+        Ok(None)
     }
 }
 
@@ -227,11 +263,9 @@ impl Accumulator for FirstValueAccumulator {
     }
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
-        // If we have seen first value, we shouldn't update it
-        if !values[0].is_empty() && !self.is_set {
-            let row = get_row_at_idx(values, 0)?;
-            // Update with first value in the array.
-            self.update_with_new_row(&row);
+        if let Some(first_idx) = self.get_first_idx(values)? {
+            let row = get_row_at_idx(values, first_idx)?;
+            self.update_with_new_row(&row)?;
         }
         Ok(())
     }
@@ -265,7 +299,7 @@ impl Accumulator for FirstValueAccumulator {
                 // Update with first value in the state. Note that we should exclude the
                 // is_set flag from the state. Otherwise, we will end up with a state
                 // containing two is_set flags.
-                self.update_with_new_row(&first_row[0..is_set_idx]);
+                self.update_with_new_row(&first_row[0..is_set_idx])?;
             }
         }
         Ok(())
@@ -459,10 +493,52 @@ impl LastValueAccumulator {
     }
 
     // Updates state with the values in the given row.
-    fn update_with_new_row(&mut self, row: &[ScalarValue]) {
-        self.last = row[0].clone();
-        self.orderings = row[1..].to_vec();
-        self.is_set = true;
+    fn update_with_new_row(&mut self, row: &[ScalarValue]) -> Result<()> {
+        let value = &row[0];
+        let orderings = &row[1..];
+        // Update when
+        // - no value in the state
+        // - There is no specific requirement, but a new value (most recent entry in terms of execution)
+        // - There is a more recent entry in terms of requirement
+        if !self.is_set
+            || self.orderings.is_empty()
+            || compare_rows(
+                &self.orderings,
+                orderings,
+                &get_sort_options(&self.ordering_req),
+            )?
+            .is_lt()
+        {
+            self.last = value.clone();
+            self.orderings = orderings.to_vec();
+            self.is_set = true;
+        }
+        Ok(())
+    }
+
+    fn get_last_idx(&self, values: &[ArrayRef]) -> Result<Option<usize>> {
+        let value = &values[0];
+        let ordering_values = &values[1..];
+        assert_eq!(ordering_values.len(), self.ordering_req.len());
+        if self.ordering_req.is_empty() {
+            return Ok((!value.is_empty()).then_some(value.len() - 1));
+        }
+        let sort_columns = ordering_values
+            .iter()
+            .zip(self.ordering_req.iter())
+            .map(|(values, req)| {
+                // Take reverse ordering requirement this would enable us to use fetch=1 for last value.
+                SortColumn {
+                    values: values.clone(),
+                    options: Some(!req.options),
+                }
+            })
+            .collect::<Vec<_>>();
+        let indices = lexsort_to_indices(&sort_columns, Some(1))?;
+        if !indices.is_empty() {
+            return Ok(Some(indices.value(0) as usize));
+        }
+        Ok(None)
     }
 }
 
@@ -475,10 +551,9 @@ impl Accumulator for LastValueAccumulator {
     }
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
-        if !values[0].is_empty() {
-            let row = get_row_at_idx(values, values[0].len() - 1)?;
-            // Update with last value in the array.
-            self.update_with_new_row(&row);
+        if let Some(last_idx) = self.get_last_idx(values)? {
+            let row = get_row_at_idx(values, last_idx)?;
+            self.update_with_new_row(&row)?;
         }
         Ok(())
     }
@@ -515,7 +590,7 @@ impl Accumulator for LastValueAccumulator {
                 // Update with last value in the state. Note that we should exclude the
                 // is_set flag from the state. Otherwise, we will end up with a state
                 // containing two is_set flags.
-                self.update_with_new_row(&last_row[0..is_set_idx]);
+                self.update_with_new_row(&last_row[0..is_set_idx])?;
             }
         }
         Ok(())
@@ -556,14 +631,6 @@ fn convert_to_sort_cols(
             values: item.clone(),
             options: Some(sort_expr.options),
         })
-        .collect::<Vec<_>>()
-}
-
-/// Selects the sort option attribute from all the given `PhysicalSortExpr`s.
-fn get_sort_options(ordering_req: &[PhysicalSortExpr]) -> Vec<SortOptions> {
-    ordering_req
-        .iter()
-        .map(|item| item.options)
         .collect::<Vec<_>>()
 }
 

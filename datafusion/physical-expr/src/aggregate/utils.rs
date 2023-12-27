@@ -26,7 +26,7 @@ use arrow_array::types::{
 };
 use arrow_array::ArrowNativeTypeOp;
 use arrow_buffer::ArrowNativeType;
-use arrow_schema::{DataType, Field};
+use arrow_schema::{DataType, Field, SortOptions};
 use datafusion_common::{exec_err, DataFusionError, Result};
 use datafusion_expr::Accumulator;
 use std::any::Any;
@@ -204,4 +204,12 @@ pub(crate) fn ordering_fields(
             )
         })
         .collect()
+}
+
+/// Selects the sort option attribute from all the given `PhysicalSortExpr`s.
+pub fn get_sort_options(ordering_req: &[PhysicalSortExpr]) -> Vec<SortOptions> {
+    ordering_req
+        .iter()
+        .map(|item| item.options)
+        .collect::<Vec<_>>()
 }

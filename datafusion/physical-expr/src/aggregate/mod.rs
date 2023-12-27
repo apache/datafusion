@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::expressions::{FirstValue, LastValue, OrderSensitiveArrayAgg};
+use crate::expressions::OrderSensitiveArrayAgg;
 use crate::{PhysicalExpr, PhysicalSortExpr};
 use arrow::datatypes::Field;
 use datafusion_common::{not_impl_err, DataFusionError, Result};
@@ -134,10 +134,7 @@ pub trait AggregateExpr: Send + Sync + Debug + PartialEq<dyn Any> {
 
 /// Checks whether the given aggregate expression is order-sensitive.
 /// For instance, a `SUM` aggregation doesn't depend on the order of its inputs.
-/// However, a `FirstValue` depends on the input ordering (if the order changes,
-/// the first value in the list would change).
+/// However, a `ARRAY_AGG` with `ORDER BY` depends on the input ordering.
 pub fn is_order_sensitive(aggr_expr: &Arc<dyn AggregateExpr>) -> bool {
-    aggr_expr.as_any().is::<FirstValue>()
-        || aggr_expr.as_any().is::<LastValue>()
-        || aggr_expr.as_any().is::<OrderSensitiveArrayAgg>()
+    aggr_expr.as_any().is::<OrderSensitiveArrayAgg>()
 }
