@@ -236,6 +236,7 @@ impl FirstValueAccumulator {
         let ordering_values = &values[1..];
         assert_eq!(ordering_values.len(), self.ordering_req.len());
         if self.ordering_req.is_empty() {
+            // Get first entry according to receive order (0th index)
             return Ok((!value.is_empty()).then_some(0));
         }
         let sort_columns = ordering_values
@@ -521,13 +522,14 @@ impl LastValueAccumulator {
         let ordering_values = &values[1..];
         assert_eq!(ordering_values.len(), self.ordering_req.len());
         if self.ordering_req.is_empty() {
+            // Get last entry according to receive order (last index)
             return Ok((!value.is_empty()).then_some(value.len() - 1));
         }
         let sort_columns = ordering_values
             .iter()
             .zip(self.ordering_req.iter())
             .map(|(values, req)| {
-                // Take reverse ordering requirement this would enable us to use fetch=1 for last value.
+                // Take reverse ordering requirement this enables us to use fetch=1 for last value.
                 SortColumn {
                     values: values.clone(),
                     options: Some(!req.options),
