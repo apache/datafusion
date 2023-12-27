@@ -129,8 +129,6 @@ pub async fn exec_from_repl(
     )));
     rl.load_history(".history").ok();
 
-    let mut print_options = *print_options;
-
     loop {
         match rl.readline("❯ ") {
             Ok(line) if line.starts_with('\\') => {
@@ -142,9 +140,7 @@ pub async fn exec_from_repl(
                         Command::OutputFormat(subcommand) => {
                             if let Some(subcommand) = subcommand {
                                 if let Ok(command) = subcommand.parse::<OutputFormat>() {
-                                    if let Err(e) =
-                                        command.execute(&mut print_options).await
-                                    {
+                                    if let Err(e) = command.execute(print_options).await {
                                         eprintln!("{e}")
                                     }
                                 } else {
@@ -158,7 +154,7 @@ pub async fn exec_from_repl(
                             }
                         }
                         _ => {
-                            if let Err(e) = cmd.execute(ctx, &mut print_options).await {
+                            if let Err(e) = cmd.execute(ctx, print_options).await {
                                 eprintln!("{e}")
                             }
                         }
@@ -169,7 +165,7 @@ pub async fn exec_from_repl(
             }
             Ok(line) => {
                 rl.add_history_entry(line.trim_end())?;
-                match exec_and_print(ctx, &print_options, line).await {
+                match exec_and_print(ctx, print_options, line).await {
                     Ok(_) => {}
                     Err(err) => eprintln!("{err}"),
                 }
@@ -238,20 +234,13 @@ async fn exec_and_print(
             let stream = execute_stream(physical_plan, task_ctx.clone())?;
             print_options.print_stream(stream, now).await?;
         } else {
-            let print_options = PrintOptions {
-                maxrows: if should_ignore_maxrows {
-                    MaxRows::Unlimited
-                } else {
-                    print_options.maxrows
-                },
-                format: if print_options.format == PrintFormat::Automatic {
-                    PrintFormat::Table
-                } else {
-                    print_options.format
-                },
-                quiet: print_options.quiet,
-            };
-
+            let mut print_options = print_options.clone();
+            if should_ignore_maxrows {
+                print_options.maxrows = MaxRows::Unlimited;
+            }
+            if print_options.format == PrintFormat::Automatic {
+                print_options.format = PrintFormat::Table;
+            }
             let results = collect(physical_plan, task_ctx.clone()).await?;
             print_options.print_batches(&results, now)?;
         }

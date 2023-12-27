@@ -24,10 +24,10 @@ use std::time::Instant;
 use crate::print_format::PrintFormat;
 
 use arrow::record_batch::RecordBatch;
+use datafusion::common::DataFusionError;
 use datafusion::error::Result;
 use datafusion::physical_plan::RecordBatchStream;
 
-use datafusion_common::DataFusionError;
 use futures::StreamExt;
 
 #[derive(Debug, Clone, PartialEq, Copy)]
@@ -65,7 +65,7 @@ impl Display for MaxRows {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct PrintOptions {
     pub format: PrintFormat,
     pub quiet: bool,
@@ -116,7 +116,6 @@ impl PrintOptions {
             query_start_time,
         );
 
-        writeln!(writer, "\n")?;
         if !self.quiet {
             writeln!(writer, "{timing_info}")?;
         }
@@ -155,7 +154,7 @@ impl PrintOptions {
 
         let timing_info =
             get_timing_info_str(row_count, MaxRows::Unlimited, query_start_time);
-        writeln!(writer, "\n")?;
+
         if !self.quiet {
             writeln!(writer, "{timing_info}")?;
         }

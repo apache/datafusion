@@ -56,11 +56,18 @@ macro_rules! batches_to_json {
                     json_writer.write(batch)?;
                 }
                 json_writer.finish()?;
-                writeln!($writer)?;
+                json_finish!($WRITER, $writer);
             }
         }
         Ok(()) as Result<()>
     }};
+}
+
+macro_rules! json_finish {
+    (ArrayWriter, $writer: expr) => {{
+        writeln!($writer)?;
+    }};
+    (LineDelimitedWriter, $writer: expr) => {{}};
 }
 
 fn print_batches_with_sep<W: std::io::Write>(
@@ -81,6 +88,23 @@ fn print_batches_with_sep<W: std::io::Write>(
     Ok(())
 }
 
+fn keep_only_maxrows(s: &str, maxrows: usize) -> String {
+    let lines: Vec<String> = s.lines().map(String::from).collect();
+
+    assert!(lines.len() >= maxrows + 4); // 4 lines for top and bottom border
+
+    let last_line = &lines[lines.len() - 1]; // bottom border line
+
+    let spaces = last_line.len().saturating_sub(4);
+    let dotted_line = format!("| .{:<spaces$}|", "", spaces = spaces);
+
+    let mut result = lines[0..(maxrows + 3)].to_vec(); // Keep top border and `maxrows` lines
+    result.extend(vec![dotted_line; 3]); // Append ... lines
+    result.push(last_line.clone());
+
+    result.join("\n")
+}
+
 fn format_batches_with_maxrows<W: std::io::Write>(
     writer: &mut W,
     batches: &[RecordBatch],
@@ -91,12 +115,14 @@ fn format_batches_with_maxrows<W: std::io::Write>(
             // Filter batches to meet the maxrows condition
             let mut filtered_batches = Vec::new();
             let mut row_count: usize = 0;
+            let mut over_limit = false;
             for batch in batches {
                 if row_count + batch.num_rows() > maxrows {
                     // If adding this batch exceeds maxrows, slice the batch
                     let limit = maxrows - row_count;
                     let sliced_batch = batch.slice(0, limit);
                     filtered_batches.push(sliced_batch);
+                    over_limit = true;
                     break;
                 } else {
                     filtered_batches.push(batch.clone());
@@ -108,7 +134,13 @@ fn format_batches_with_maxrows<W: std::io::Write>(
                 &filtered_batches,
                 &DEFAULT_FORMAT_OPTIONS,
             )?;
-            write!(writer, "{}", formatted)?;
+            if over_limit {
+                let mut formatted_str = format!("{}", formatted);
+                formatted_str = keep_only_maxrows(&formatted_str, maxrows);
+                write!(writer, "{}", formatted_str)?;
+            } else {
+                write!(writer, "{}", formatted)?;
+            }
         }
         MaxRows::Unlimited => {
             let formatted =
@@ -156,19 +188,28 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
+
     use arrow::array::Int32Array;
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion::error::Result;
-    use datafusion_common::DataFusionError;
 
-    #[test]
-    fn test_print_batches_with_sep() {
+    fn run_test<F>(batches: &[RecordBatch], test_fn: F) -> Result<String>
+    where
+        F: Fn(&mut Cursor<Vec<u8>>, &[RecordBatch]) -> Result<()>,
+    {
         let mut buffer = Cursor::new(Vec::new());
-        let batches = vec![];
-        print_batches_with_sep(&mut buffer, &batches, b',', true).unwrap();
+        test_fn(&mut buffer, batches)?;
         buffer.set_position(0);
         let mut contents = String::new();
-        buffer.read_to_string(&mut contents).unwrap();
+        buffer.read_to_string(&mut contents)?;
+        Ok(contents)
+    }
+
+    #[test]
+    fn test_print_batches_with_sep() -> Result<()> {
+        let contents = run_test(&[], |buffer, batches| {
+            print_batches_with_sep(buffer, batches, b',', true)
+        })?;
         assert_eq!(contents, "");
 
         let schema = Arc::new(Schema::new(vec![
@@ -183,32 +224,26 @@ mod tests {
                 Arc::new(Int32Array::from(vec![4, 5, 6])),
                 Arc::new(Int32Array::from(vec![7, 8, 9])),
             ],
-        )
-        .unwrap();
-        let batches = vec![batch];
-        let mut buffer = Cursor::new(Vec::new());
-        print_batches_with_sep(&mut buffer, &batches, b',', true).unwrap();
-        buffer.set_position(0);
-        let mut contents = String::new();
-        buffer.read_to_string(&mut contents).unwrap();
+        )?;
+
+        let contents = run_test(&[batch], |buffer, batches| {
+            print_batches_with_sep(buffer, batches, b',', true)
+        })?;
         assert_eq!(contents, "a,b,c\n1,4,7\n2,5,8\n3,6,9\n");
+
+        Ok(())
     }
 
     #[test]
-    fn test_print_batches_to_json_empty() -> Result<(), DataFusionError> {
-        let mut buffer = Cursor::new(Vec::new());
-        let batches = vec![];
-        batches_to_json!(ArrayWriter, &mut buffer, &batches)?;
-        buffer.set_position(0);
-        let mut contents = String::new();
-        buffer.read_to_string(&mut contents)?;
+    fn test_print_batches_to_json_empty() -> Result<()> {
+        let contents = run_test(&[], |buffer, batches| {
+            batches_to_json!(ArrayWriter, buffer, batches)
+        })?;
         assert_eq!(contents, "");
 
-        let mut buffer = Cursor::new(Vec::new());
-        batches_to_json!(LineDelimitedWriter, &mut buffer, &batches)?;
-        buffer.set_position(0);
-        contents.clear();
-        buffer.read_to_string(&mut contents)?;
+        let contents = run_test(&[], |buffer, batches| {
+            batches_to_json!(LineDelimitedWriter, buffer, batches)
+        })?;
         assert_eq!(contents, "");
 
         let schema = Arc::new(Schema::new(vec![
@@ -226,19 +261,15 @@ mod tests {
         )?;
         let batches = vec![batch];
 
-        let mut buffer = Cursor::new(Vec::new());
-        batches_to_json!(ArrayWriter, &mut buffer, &batches)?;
-        buffer.set_position(0);
-        contents.clear();
-        buffer.read_to_string(&mut contents)?;
+        let contents = run_test(&batches, |buffer, batches| {
+            batches_to_json!(ArrayWriter, buffer, batches)
+        })?;
         assert_eq!(contents, "[{\"a\":1,\"b\":4,\"c\":7},{\"a\":2,\"b\":5,\"c\":8},{\"a\":3,\"b\":6,\"c\":9}]\n");
 
-        let mut buffer = Cursor::new(Vec::new());
-        batches_to_json!(LineDelimitedWriter, &mut buffer, &batches)?;
-        buffer.set_position(0);
-        contents.clear();
-        buffer.read_to_string(&mut contents)?;
-        assert_eq!(contents, "{\"a\":1,\"b\":4,\"c\":7}\n{\"a\":2,\"b\":5,\"c\":8}\n{\"a\":3,\"b\":6,\"c\":9}\n\n");
+        let contents = run_test(&batches, |buffer, batches| {
+            batches_to_json!(LineDelimitedWriter, buffer, batches)
+        })?;
+        assert_eq!(contents, "{\"a\":1,\"b\":4,\"c\":7}\n{\"a\":2,\"b\":5,\"c\":8}\n{\"a\":3,\"b\":6,\"c\":9}\n");
 
         Ok(())
     }
@@ -246,46 +277,77 @@ mod tests {
     #[test]
     fn test_format_batches_with_maxrows() -> Result<()> {
         let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
-        let batch =
-            RecordBatch::try_new(schema, vec![Arc::new(Int32Array::from(vec![1, 2, 3]))])
-                .unwrap();
-
-        let all_rows_expected = "+---+\n| a |\n+---+\n| 1 |\n| 2 |\n| 3 |\n+---+";
-        let one_row_expected = "+---+\n| a |\n+---+\n| 1 |\n+---+";
-        let multi_batches_expected =
-            "+---+\n| a |\n+---+\n| 1 |\n| 2 |\n| 3 |\n| 1 |\n| 2 |\n+---+";
-        let mut buffer = Cursor::new(Vec::new());
-
-        format_batches_with_maxrows(&mut buffer, &[batch.clone()], MaxRows::Unlimited)?;
-        buffer.set_position(0);
-        let mut contents = String::new();
-        buffer.read_to_string(&mut contents)?;
-        assert_eq!(contents, all_rows_expected);
-
-        let mut buffer = Cursor::new(Vec::new());
-        format_batches_with_maxrows(&mut buffer, &[batch.clone()], MaxRows::Limited(1))?;
-        buffer.set_position(0);
-        contents.clear();
-        buffer.read_to_string(&mut contents)?;
-        assert_eq!(contents, one_row_expected);
-
-        let mut buffer = Cursor::new(Vec::new());
-        format_batches_with_maxrows(&mut buffer, &[batch.clone()], MaxRows::Limited(5))?;
-        buffer.set_position(0);
-        contents.clear();
-        buffer.read_to_string(&mut contents)?;
-        assert_eq!(contents, all_rows_expected);
-
-        let mut buffer = Cursor::new(Vec::new());
-        format_batches_with_maxrows(
-            &mut buffer,
-            &[batch.clone(), batch.clone()],
-            MaxRows::Limited(5),
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![Arc::new(Int32Array::from(vec![1, 2, 3]))],
         )?;
-        buffer.set_position(0);
-        contents.clear();
-        buffer.read_to_string(&mut contents)?;
-        assert_eq!(contents, multi_batches_expected);
+
+        #[rustfmt::skip]
+        let all_rows_expected = [
+            "+---+",
+            "| a |",
+            "+---+",
+            "| 1 |",
+            "| 2 |",
+            "| 3 |",
+            "+---+",
+        ].join("\n");
+
+        #[rustfmt::skip]
+        let one_row_expected = [
+            "+---+",
+            "| a |",
+            "+---+",
+            "| 1 |",
+            "| . |",
+            "| . |",
+            "| . |",
+            "+---+",
+        ].join("\n");
+
+        #[rustfmt::skip]
+        let multi_batches_expected = [
+            "+---+",
+            "| a |",
+            "+---+",
+            "| 1 |",
+            "| 2 |",
+            "| 3 |",
+            "| 1 |",
+            "| 2 |",
+            "| . |",
+            "| . |",
+            "| . |",
+            "+---+",
+        ].join("\n");
+
+        let no_limit = run_test(&[batch.clone()], |buffer, batches| {
+            format_batches_with_maxrows(buffer, batches, MaxRows::Unlimited)
+        })?;
+        assert_eq!(no_limit, all_rows_expected);
+
+        let maxrows_less_than_actual = run_test(&[batch.clone()], |buffer, batches| {
+            format_batches_with_maxrows(buffer, batches, MaxRows::Limited(1))
+        })?;
+        assert_eq!(maxrows_less_than_actual, one_row_expected);
+
+        let maxrows_more_than_actual = run_test(&[batch.clone()], |buffer, batches| {
+            format_batches_with_maxrows(buffer, batches, MaxRows::Limited(5))
+        })?;
+        assert_eq!(maxrows_more_than_actual, all_rows_expected);
+
+        let maxrows_equals_actual = run_test(&[batch.clone()], |buffer, batches| {
+            format_batches_with_maxrows(buffer, batches, MaxRows::Limited(3))
+        })?;
+        assert_eq!(maxrows_equals_actual, all_rows_expected);
+
+        let multi_batches = run_test(
+            &[batch.clone(), batch.clone(), batch.clone()],
+            |buffer, batches| {
+                format_batches_with_maxrows(buffer, batches, MaxRows::Limited(5))
+            },
+        )?;
+        assert_eq!(multi_batches, multi_batches_expected);
 
         Ok(())
     }
