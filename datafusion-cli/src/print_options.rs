@@ -103,7 +103,7 @@ impl PrintOptions {
         let mut writer = stdout.lock();
 
         self.format
-            .print_batches_to_writer(&mut writer, batches, self.maxrows, true)?;
+            .print_batches(&mut writer, batches, self.maxrows, true)?;
 
         let row_count: usize = batches.iter().map(|b| b.num_rows()).sum();
         let timing_info = get_timing_info_str(row_count, self.maxrows, query_start_time);
@@ -134,9 +134,9 @@ impl PrintOptions {
 
         while let Some(Ok(batch)) = stream.next().await {
             row_count += batch.num_rows();
-            self.format.print_batches_to_writer(
+            self.format.print_batches(
                 &mut writer,
-                &vec![batch],
+                &[batch],
                 MaxRows::Unlimited,
                 with_header,
             )?;

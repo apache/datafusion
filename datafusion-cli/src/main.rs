@@ -334,7 +334,6 @@ fn extract_memory_pool_size(size: &str) -> Result<usize, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
     use datafusion::assert_batches_eq;
 
     fn assert_conversion(input: &str, expected: Result<usize, String>) {

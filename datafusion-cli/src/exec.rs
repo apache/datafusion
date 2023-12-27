@@ -128,7 +128,7 @@ pub async fn exec_from_repl(
     )));
     rl.load_history(".history").ok();
 
-    let mut print_options = print_options.clone();
+    let mut print_options = *print_options;
 
     loop {
         match rl.readline("❯ ") {
@@ -215,6 +215,7 @@ async fn exec_and_print(
     for statement in statements {
         let mut plan = ctx.state().statement_to_plan(statement).await?;
 
+        // For plans like `Explain` ignore `MaxRows` option and always display all rows
         let should_ignore_maxrows = matches!(
             plan,
             LogicalPlan::Explain(_)
@@ -222,6 +223,9 @@ async fn exec_and_print(
                 | LogicalPlan::Analyze(_)
         );
 
+        // Note that cmd is a mutable reference so that create_external_table function can remove all
+        // datafusion-cli specific options before passing through to datafusion. Otherwise, datafusion
+        // will raise Configuration errors.
         if let LogicalPlan::Ddl(DdlStatement::CreateExternalTable(cmd)) = &mut plan {
             create_external_table(ctx, cmd).await?;
         }
@@ -293,9 +297,8 @@ mod tests {
     use std::str::FromStr;
 
     use super::*;
-
-    use datafusion_common::file_options::StatementOptions;
-    use datafusion_common::{plan_err, FileTypeWriterOptions};
+    use datafusion::common::plan_err;
+    use datafusion_common::{file_options::StatementOptions, FileTypeWriterOptions};
 
     async fn create_external_table_test(location: &str, sql: &str) -> Result<()> {
         let ctx = SessionContext::new();

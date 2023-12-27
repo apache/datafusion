@@ -104,7 +104,6 @@ fn format_batches_with_maxrows<W: std::io::Write>(
                 }
             }
 
-            // Formatting and writing to the writer
             let formatted = pretty_format_batches_with_options(
                 &filtered_batches,
                 &DEFAULT_FORMAT_OPTIONS,
@@ -112,7 +111,6 @@ fn format_batches_with_maxrows<W: std::io::Write>(
             write!(writer, "{}", formatted)?;
         }
         MaxRows::Unlimited => {
-            // Format all rows and write to the writer
             let formatted =
                 pretty_format_batches_with_options(batches, &DEFAULT_FORMAT_OPTIONS)?;
             write!(writer, "{}", formatted)?;
@@ -124,7 +122,7 @@ fn format_batches_with_maxrows<W: std::io::Write>(
 
 impl PrintFormat {
     /// Print the batches to a writer using the specified format
-    pub fn print_batches_to_writer<W: std::io::Write>(
+    pub fn print_batches<W: std::io::Write>(
         &self,
         writer: &mut W,
         batches: &[RecordBatch],
