@@ -294,11 +294,11 @@ impl AggregateExec {
             group_by.contains_null(),
             mode,
         )?;
+
         let schema = Arc::new(materialize_dict_group_keys(
             &original_schema,
             group_by.expr.len(),
         ));
-
         let original_schema = Arc::new(original_schema);
         AggregateExec::try_new_with_schema(
             mode,
@@ -892,20 +892,19 @@ fn finer_ordering(
     eq_properties.get_finer_ordering(existing_req, &aggr_req)
 }
 
-/// Groups aggregate expressions based on their ordering requirements.
+/// Get common requirement that satisfies all of the aggregate expressions
 ///
 /// # Parameters
 ///
-/// - `aggr_exprs`: A mutable slice of `Arc<dyn AggregateExpr>` representing the aggregate expressions to be grouped.
+/// - `aggr_exprs`: A slice of `Arc<dyn AggregateExpr>` containing all of the aggregate expressions.
 /// - `group_by`: A reference to a `PhysicalGroupBy` instance representing the physical group-by expression.
 /// - `eq_properties`: A reference to an `EquivalenceProperties` instance representing equivalence properties for ordering.
 /// - `agg_mode`: A reference to an `AggregateMode` instance representing the mode of aggregation.
 ///
 /// # Returns
 ///
-/// A vector of `AggregateExprGroup` instances, each containing indices and ordering requirements for a group of
-/// related aggregate expressions.
-/// TODO: Update docstring
+/// A `LexRequirement` instance, which is the requirement that satisfies all of the aggregate requirements. If there are
+/// conflicting e.g un-compatible requirements returns Error.
 fn get_aggregate_exprs_requirement(
     aggr_exprs: &[Arc<dyn AggregateExpr>],
     group_by: &PhysicalGroupBy,
