@@ -39,6 +39,7 @@ use datafusion::physical_plan::windows::create_window_expr;
 use datafusion::physical_plan::{
     functions, ColumnStatistics, Partitioning, PhysicalExpr, Statistics, WindowExpr,
 };
+use datafusion_common::file_options::csv_writer::CsvWriterOptions;
 use datafusion_common::file_options::json_writer::JsonWriterOptions;
 use datafusion_common::file_options::parquet_writer::ParquetWriterOptions;
 use datafusion_common::parsers::CompressionTypeVariant;
@@ -53,7 +54,7 @@ use crate::logical_plan;
 use crate::protobuf;
 use crate::protobuf::physical_expr_node::ExprType;
 
-use crate::logical_plan::writer_properties_from_proto;
+use crate::logical_plan::{csv_writer_options_from_proto, writer_properties_from_proto};
 use chrono::{TimeZone, Utc};
 use object_store::path::Path;
 use object_store::ObjectMeta;
@@ -766,11 +767,18 @@ impl TryFrom<&protobuf::FileTypeWriterOptions> for FileTypeWriterOptions {
         let file_type = value
             .file_type
             .as_ref()
-            .ok_or_else(|| proto_error("Missing required field in protobuf"))?;
+            .ok_or_else(|| proto_error("Missing required file_type field in protobuf"))?;
         match file_type {
             protobuf::file_type_writer_options::FileType::JsonOptions(opts) => Ok(
                 Self::JSON(JsonWriterOptions::new(opts.compression().into())),
             ),
+            protobuf::file_type_writer_options::FileType::CsvOptions(opt) => {
+                let write_options = csv_writer_options_from_proto(opt)?;
+                Ok(Self::CSV(CsvWriterOptions::new(
+                    write_options,
+                    CompressionTypeVariant::UNCOMPRESSED,
+                )))
+            }
             protobuf::file_type_writer_options::FileType::ParquetOptions(opt) => {
                 let props = opt.writer_properties.clone().unwrap_or_default();
                 let writer_properties = writer_properties_from_proto(&props)?;
