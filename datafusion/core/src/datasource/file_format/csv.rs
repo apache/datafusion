@@ -19,21 +19,8 @@
 
 use std::any::Any;
 use std::collections::HashSet;
-use std::fmt;
-use std::fmt::Debug;
-
+use std::fmt::{self, Debug};
 use std::sync::Arc;
-
-use arrow_array::RecordBatch;
-use datafusion_common::{exec_err, not_impl_err, DataFusionError, FileType};
-use datafusion_execution::TaskContext;
-use datafusion_physical_expr::{PhysicalExpr, PhysicalSortRequirement};
-
-use bytes::{Buf, Bytes};
-use datafusion_physical_plan::metrics::MetricsSet;
-use futures::stream::BoxStream;
-use futures::{pin_mut, Stream, StreamExt, TryStreamExt};
-use object_store::{delimited::newline_delimited_stream, ObjectMeta, ObjectStore};
 
 use super::write::orchestration::stateless_multipart_put;
 use super::{FileFormat, DEFAULT_SCHEMA_INFER_MAX_RECORD};
@@ -48,11 +35,20 @@ use crate::physical_plan::insert::{DataSink, FileSinkExec};
 use crate::physical_plan::{DisplayAs, DisplayFormatType, Statistics};
 use crate::physical_plan::{ExecutionPlan, SendableRecordBatchStream};
 
+use arrow::array::RecordBatch;
 use arrow::csv::WriterBuilder;
 use arrow::datatypes::{DataType, Field, Fields, Schema};
 use arrow::{self, datatypes::SchemaRef};
+use datafusion_common::{exec_err, not_impl_err, DataFusionError, FileType};
+use datafusion_execution::TaskContext;
+use datafusion_physical_expr::{PhysicalExpr, PhysicalSortRequirement};
+use datafusion_physical_plan::metrics::MetricsSet;
 
 use async_trait::async_trait;
+use bytes::{Buf, Bytes};
+use futures::stream::BoxStream;
+use futures::{pin_mut, Stream, StreamExt, TryStreamExt};
+use object_store::{delimited::newline_delimited_stream, ObjectMeta, ObjectStore};
 
 /// Character Separated Value `FileFormat` implementation.
 #[derive(Debug)]
@@ -435,10 +431,10 @@ impl SerializationSchema for CsvSerializationSchema {
         let mut writer = builder.with_header(self.header).build(&mut buffer);
         writer.write(&batch)?;
         drop(writer);
-        Ok(Bytes::from(std::mem::take(&mut buffer)))
+        Ok(Bytes::from(buffer))
     }
 
-    fn create_headless_serializer(&self) -> Arc<dyn SerializationSchema> {
+    fn duplicate_headerless(&self) -> Arc<dyn SerializationSchema> {
         let new_self = CsvSerializationSchema::new()
             .with_builder(self.builder.clone())
             .with_header(false);
@@ -485,13 +481,11 @@ impl CsvSink {
         let builder_clone = builder.clone();
         let options_clone = writer_options.clone();
         let get_serializer = move || {
-            let inner_clone = builder_clone.clone();
-            let serializer: Arc<dyn SerializationSchema> = Arc::new(
+            Arc::new(
                 CsvSerializationSchema::new()
-                    .with_builder(inner_clone)
+                    .with_builder(builder_clone.clone())
                     .with_header(options_clone.writer_options.header()),
-            );
-            serializer
+            ) as _
         };
 
         stateless_multipart_put(
@@ -538,15 +532,15 @@ mod tests {
     use crate::physical_plan::collect;
     use crate::prelude::{CsvReadOptions, SessionConfig, SessionContext};
     use crate::test_util::arrow_test_data;
+
     use arrow::compute::concat_batches;
+    use datafusion_common::cast::as_string_array;
+    use datafusion_common::stats::Precision;
+    use datafusion_common::{internal_err, FileType, GetExt};
+    use datafusion_expr::{col, lit};
+
     use bytes::Bytes;
     use chrono::DateTime;
-    use datafusion_common::cast::as_string_array;
-    use datafusion_common::internal_err;
-    use datafusion_common::stats::Precision;
-    use datafusion_common::FileType;
-    use datafusion_common::GetExt;
-    use datafusion_expr::{col, lit};
     use futures::StreamExt;
     use object_store::local::LocalFileSystem;
     use object_store::path::Path;

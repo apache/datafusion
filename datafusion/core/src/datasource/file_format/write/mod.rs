@@ -24,20 +24,16 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use crate::datasource::file_format::file_compression_type::FileCompressionType;
-
 use crate::error::Result;
 
 use arrow_array::RecordBatch;
-
 use datafusion_common::DataFusionError;
 
 use async_trait::async_trait;
 use bytes::Bytes;
-
 use futures::future::BoxFuture;
 use object_store::path::Path;
 use object_store::{MultipartId, ObjectStore};
-
 use tokio::io::AsyncWrite;
 
 pub(crate) mod demux;
@@ -153,9 +149,10 @@ pub trait SerializationSchema: Sync + Send {
     /// Asynchronously serializes a `RecordBatch` and returns the serialized bytes.
     async fn serialize(&self, batch: RecordBatch) -> Result<Bytes>;
 
-    /// Creates itself without header to support serializing multiple batches in parallel on multiple cores.
-    /// Unless it is CSV, this method is no op.
-    fn create_headless_serializer(&self) -> Arc<dyn SerializationSchema>;
+    /// Duplicates itself (sans header configuration) to support serializing
+    /// multiple batches in parallel on multiple cores. Unless we are serializing
+    /// a CSV file, this method is no-op.
+    fn duplicate_headerless(&self) -> Arc<dyn SerializationSchema>;
 }
 
 /// Returns an [`AbortableWrite`] which writes to the given object store location

@@ -21,25 +21,22 @@
 
 use std::sync::Arc;
 
+use super::demux::start_demuxer_task;
+use super::{create_writer, AbortableWrite, SerializationSchema};
 use crate::datasource::file_format::file_compression_type::FileCompressionType;
 use crate::datasource::physical_plan::FileSinkConfig;
 use crate::error::Result;
 use crate::physical_plan::SendableRecordBatchStream;
 
 use arrow_array::RecordBatch;
-
-use datafusion_common::DataFusionError;
-
-use bytes::Bytes;
+use datafusion_common::{internal_datafusion_err, internal_err, DataFusionError};
 use datafusion_execution::TaskContext;
 
+use bytes::Bytes;
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 use tokio::sync::mpsc::{self, Receiver};
 use tokio::task::{JoinHandle, JoinSet};
 use tokio::try_join;
-
-use super::demux::start_demuxer_task;
-use super::{create_writer, AbortableWrite, SerializationSchema};
 
 type WriterType = AbortableWrite<Box<dyn AsyncWrite + Send + Unpin>>;
 type SerializerType = Arc<dyn SerializationSchema>;
@@ -55,8 +52,8 @@ pub(crate) async fn serialize_rb_stream_to_object_store(
 ) -> std::result::Result<(WriterType, u64), (WriterType, DataFusionError)> {
     let (tx, mut rx) =
         mpsc::channel::<JoinHandle<Result<(usize, Bytes), DataFusionError>>>(100);
-    // Initially, has_header can be true for CSV use cases. Then, we must turn into false to keep integrity
-    // of the writing process.
+    // Initially, has_header can be true for CSV use cases. Then, we must turn
+    // it off to maintain the integrity of the writing process.
     let serialize_task = tokio::spawn(async move {
         let mut initial = true;
         while let Some(batch) = data_rx.recv().await {
@@ -67,11 +64,11 @@ pub(crate) async fn serialize_rb_stream_to_object_store(
                 Ok((num_rows, bytes))
             });
             if initial {
-                serializer = serializer.create_headless_serializer() as _;
+                serializer = serializer.duplicate_headerless();
                 initial = false;
             }
             tx.send(handle).await.map_err(|_| {
-                DataFusionError::Internal("Unknown error writing to object store".into())
+                internal_datafusion_err!("Unknown error writing to object store")
             })?;
         }
         Ok(())
@@ -116,7 +113,7 @@ pub(crate) async fn serialize_rb_stream_to_object_store(
         Err(_) => {
             return Err((
                 writer,
-                DataFusionError::Internal("Unknown error writing to object store".into()),
+                internal_datafusion_err!("Unknown error writing to object store"),
             ))
         }
     };
@@ -167,9 +164,9 @@ pub(crate) async fn stateless_serialize_and_write_files(
                 // this thread, so we cannot clean it up (hence any_abort_errors is true)
                 any_errors = true;
                 any_abort_errors = true;
-                triggering_error = Some(DataFusionError::Internal(format!(
+                triggering_error = Some(internal_datafusion_err!(
                     "Unexpected join error while serializing file {e}"
-                )));
+                ));
             }
         }
     }
@@ -186,24 +183,24 @@ pub(crate) async fn stateless_serialize_and_write_files(
             false => {
                 writer.shutdown()
                     .await
-                    .map_err(|_| DataFusionError::Internal("Error encountered while finalizing writes! Partial results may have been written to ObjectStore!".into()))?;
+                    .map_err(|_| internal_datafusion_err!("Error encountered while finalizing writes! Partial results may have been written to ObjectStore!"))?;
             }
         }
     }
 
     if any_errors {
         match any_abort_errors{
-            true => return Err(DataFusionError::Internal("Error encountered during writing to ObjectStore and failed to abort all writers. Partial result may have been written.".into())),
+            true => return internal_err!("Error encountered during writing to ObjectStore and failed to abort all writers. Partial result may have been written."),
             false => match triggering_error {
                 Some(e) => return Err(e),
-                None => return Err(DataFusionError::Internal("Unknown Error encountered during writing to ObjectStore. All writers succesfully aborted.".into()))
+                None => return internal_err!("Unknown Error encountered during writing to ObjectStore. All writers succesfully aborted.")
             }
         }
     }
 
     tx.send(row_count).map_err(|_| {
-        DataFusionError::Internal(
-            "Error encountered while sending row count back to file sink!".into(),
+        internal_datafusion_err!(
+            "Error encountered while sending row count back to file sink!"
         )
     })?;
     Ok(())
@@ -260,8 +257,8 @@ pub(crate) async fn stateless_multipart_put(
             .send((rb_stream, serializer, writer))
             .await
             .map_err(|_| {
-                DataFusionError::Internal(
-                    "Writer receive file bundle channel closed unexpectedly!".into(),
+                internal_datafusion_err!(
+                    "Writer receive file bundle channel closed unexpectedly!"
                 )
             })?;
     }
@@ -284,9 +281,7 @@ pub(crate) async fn stateless_multipart_put(
     }
 
     let total_count = rx_row_cnt.await.map_err(|_| {
-        DataFusionError::Internal(
-            "Did not receieve row count from write coordinater".into(),
-        )
+        internal_datafusion_err!("Did not receieve row count from write coordinater")
     })?;
 
     Ok(total_count)
