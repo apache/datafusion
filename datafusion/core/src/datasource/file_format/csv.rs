@@ -21,7 +21,7 @@ use std::any::Any;
 use std::collections::HashSet;
 use std::fmt;
 use std::fmt::Debug;
-use std::sync::atomic::{AtomicBool, Ordering};
+
 use std::sync::Arc;
 
 use arrow_array::RecordBatch;

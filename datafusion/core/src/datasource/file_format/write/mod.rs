@@ -153,6 +153,8 @@ pub trait SerializationSchema: Sync + Send {
     /// Asynchronously serializes a `RecordBatch` and returns the serialized bytes.
     async fn serialize(&self, batch: RecordBatch) -> Result<Bytes>;
 
+    /// Creates itself without header to support serializing multiple batches in parallel on multiple cores.
+    /// Unless it is CSV, this method is no op.
     fn create_headless_serializer(&self) -> Arc<dyn SerializationSchema>;
 }
 
