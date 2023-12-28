@@ -319,11 +319,9 @@ pub(crate) fn calc_requirements<
 // resulting vector (a, b) is a preset of the existing ordering (a, b, c).
 pub(crate) fn get_ordered_partition_by_indices(
     partition_by_exprs: &[Arc<dyn PhysicalExpr>],
-    input: &Arc<dyn ExecutionPlan>,
+    input_eq_properties: &EquivalenceProperties,
 ) -> Vec<usize> {
-    let (_, indices) = input
-        .equivalence_properties()
-        .find_longest_permutation(partition_by_exprs);
+    let (_, indices) = input_eq_properties.find_longest_permutation(partition_by_exprs);
     indices
 }
 

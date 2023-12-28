@@ -80,8 +80,10 @@ impl WindowAggExec {
         let schema = create_schema(&input.schema(), &window_expr)?;
         let schema = Arc::new(schema);
 
-        let ordered_partition_by_indices =
-            get_ordered_partition_by_indices(window_expr[0].partition_by(), &input);
+        let ordered_partition_by_indices = get_ordered_partition_by_indices(
+            window_expr[0].partition_by(),
+            &input.equivalence_properties(),
+        );
         Ok(Self {
             input,
             window_expr,

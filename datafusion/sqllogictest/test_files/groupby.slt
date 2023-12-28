@@ -2019,17 +2019,16 @@ SortPreservingMergeExec: [col0@0 ASC NULLS LAST]
 ------AggregateExec: mode=FinalPartitioned, gby=[col0@0 as col0, col1@1 as col1, col2@2 as col2], aggr=[LAST_VALUE(r.col1)]
 --------CoalesceBatchesExec: target_batch_size=8192
 ----------RepartitionExec: partitioning=Hash([col0@0, col1@1, col2@2], 4), input_partitions=4
-------------AggregateExec: mode=Partial, gby=[col0@0 as col0, col1@1 as col1, col2@2 as col2], aggr=[LAST_VALUE(r.col1)], ordering_mode=PartiallySorted([0])
---------------SortExec: expr=[col0@3 ASC NULLS LAST]
-----------------ProjectionExec: expr=[col0@2 as col0, col1@3 as col1, col2@4 as col2, col0@0 as col0, col1@1 as col1]
-------------------CoalesceBatchesExec: target_batch_size=8192
---------------------HashJoinExec: mode=Partitioned, join_type=Inner, on=[(col0@0, col0@0)]
-----------------------CoalesceBatchesExec: target_batch_size=8192
-------------------------RepartitionExec: partitioning=Hash([col0@0], 4), input_partitions=1
---------------------------MemoryExec: partitions=1, partition_sizes=[3]
-----------------------CoalesceBatchesExec: target_batch_size=8192
-------------------------RepartitionExec: partitioning=Hash([col0@0], 4), input_partitions=1
---------------------------MemoryExec: partitions=1, partition_sizes=[3]
+------------AggregateExec: mode=Partial, gby=[col0@0 as col0, col1@1 as col1, col2@2 as col2], aggr=[LAST_VALUE(r.col1)]
+--------------ProjectionExec: expr=[col0@2 as col0, col1@3 as col1, col2@4 as col2, col0@0 as col0, col1@1 as col1]
+----------------CoalesceBatchesExec: target_batch_size=8192
+------------------HashJoinExec: mode=Partitioned, join_type=Inner, on=[(col0@0, col0@0)]
+--------------------CoalesceBatchesExec: target_batch_size=8192
+----------------------RepartitionExec: partitioning=Hash([col0@0], 4), input_partitions=1
+------------------------MemoryExec: partitions=1, partition_sizes=[3]
+--------------------CoalesceBatchesExec: target_batch_size=8192
+----------------------RepartitionExec: partitioning=Hash([col0@0], 4), input_partitions=1
+------------------------MemoryExec: partitions=1, partition_sizes=[3]
 
 # Columns in the table are a,b,c,d. Source is CsvExec which is ordered by
 # a,b,c column. Column a has cardinality 2, column b has cardinality 4.
@@ -2297,8 +2296,7 @@ Projection: sales_global.country, ARRAY_AGG(sales_global.amount) ORDER BY [sales
 physical_plan
 ProjectionExec: expr=[country@0 as country, ARRAY_AGG(sales_global.amount) ORDER BY [sales_global.amount ASC NULLS LAST]@1 as amounts]
 --AggregateExec: mode=Single, gby=[country@0 as country], aggr=[ARRAY_AGG(sales_global.amount)]
-----SortExec: expr=[amount@1 ASC NULLS LAST]
-------MemoryExec: partitions=1, partition_sizes=[1]
+----MemoryExec: partitions=1, partition_sizes=[1]
 
 
 query T?
@@ -2327,8 +2325,7 @@ Projection: s.country, ARRAY_AGG(s.amount) ORDER BY [s.amount DESC NULLS FIRST] 
 physical_plan
 ProjectionExec: expr=[country@0 as country, ARRAY_AGG(s.amount) ORDER BY [s.amount DESC NULLS FIRST]@1 as amounts, SUM(s.amount)@2 as sum1]
 --AggregateExec: mode=Single, gby=[country@0 as country], aggr=[ARRAY_AGG(s.amount), SUM(s.amount)]
-----SortExec: expr=[amount@1 DESC]
-------MemoryExec: partitions=1, partition_sizes=[1]
+----MemoryExec: partitions=1, partition_sizes=[1]
 
 query T?R rowsort
 SELECT s.country, ARRAY_AGG(s.amount ORDER BY s.amount DESC) AS amounts,
@@ -2340,15 +2337,37 @@ FRA [200.0, 50.0] 250
 GRC [80.0, 30.0] 110
 TUR [100.0, 75.0] 175
 
-# test_ordering_sensitive_aggregation3
-# When different aggregators have conflicting requirements, we cannot satisfy all of them in current implementation.
-# test below should raise Plan Error.
-statement error DataFusion error: This feature is not implemented: Conflicting ordering requirements in aggregate functions is not supported
-SELECT ARRAY_AGG(s.amount ORDER BY s.amount DESC) AS amounts,
+query TT
+EXPLAIN SELECT s.country, ARRAY_AGG(s.amount ORDER BY s.amount DESC) AS amounts,
     ARRAY_AGG(s.amount ORDER BY s.amount ASC) AS amounts2,
     ARRAY_AGG(s.amount ORDER BY s.sn ASC) AS amounts3
   FROM sales_global AS s
   GROUP BY s.country
+  ORDER BY s.country
+----
+logical_plan
+Sort: s.country ASC NULLS LAST
+--Projection: s.country, ARRAY_AGG(s.amount) ORDER BY [s.amount DESC NULLS FIRST] AS amounts, ARRAY_AGG(s.amount) ORDER BY [s.amount ASC NULLS LAST] AS amounts2, ARRAY_AGG(s.amount) ORDER BY [s.sn ASC NULLS LAST] AS amounts3
+----Aggregate: groupBy=[[s.country]], aggr=[[ARRAY_AGG(s.amount) ORDER BY [s.amount DESC NULLS FIRST], ARRAY_AGG(s.amount) ORDER BY [s.amount ASC NULLS LAST], ARRAY_AGG(s.amount) ORDER BY [s.sn ASC NULLS LAST]]]
+------SubqueryAlias: s
+--------TableScan: sales_global projection=[country, sn, amount]
+physical_plan
+SortExec: expr=[country@0 ASC NULLS LAST]
+--ProjectionExec: expr=[country@0 as country, ARRAY_AGG(s.amount) ORDER BY [s.amount DESC NULLS FIRST]@1 as amounts, ARRAY_AGG(s.amount) ORDER BY [s.amount ASC NULLS LAST]@2 as amounts2, ARRAY_AGG(s.amount) ORDER BY [s.sn ASC NULLS LAST]@3 as amounts3]
+----AggregateExec: mode=Single, gby=[country@0 as country], aggr=[ARRAY_AGG(s.amount), ARRAY_AGG(s.amount), ARRAY_AGG(s.amount)]
+------MemoryExec: partitions=1, partition_sizes=[1]
+
+query T??? rowsort
+SELECT s.country, ARRAY_AGG(s.amount ORDER BY s.amount DESC) AS amounts,
+    ARRAY_AGG(s.amount ORDER BY s.amount ASC) AS amounts2,
+    ARRAY_AGG(s.amount ORDER BY s.sn ASC) AS amounts3
+  FROM sales_global AS s
+  GROUP BY s.country
+  ORDER BY s.country
+----
+FRA [200.0, 50.0] [50.0, 200.0] [50.0, 200.0]
+GRC [80.0, 30.0] [30.0, 80.0] [30.0, 80.0]
+TUR [100.0, 75.0] [75.0, 100.0] [75.0, 100.0]
 
 # test_ordering_sensitive_aggregation4
 # If aggregators can work with bounded memory (Sorted or PartiallySorted mode), we should append requirement to
@@ -2371,7 +2390,7 @@ Projection: s.country, ARRAY_AGG(s.amount) ORDER BY [s.amount DESC NULLS FIRST] 
 physical_plan
 ProjectionExec: expr=[country@0 as country, ARRAY_AGG(s.amount) ORDER BY [s.amount DESC NULLS FIRST]@1 as amounts, SUM(s.amount)@2 as sum1]
 --AggregateExec: mode=Single, gby=[country@0 as country], aggr=[ARRAY_AGG(s.amount), SUM(s.amount)], ordering_mode=Sorted
-----SortExec: expr=[country@0 ASC NULLS LAST,amount@1 DESC]
+----SortExec: expr=[country@0 ASC NULLS LAST]
 ------MemoryExec: partitions=1, partition_sizes=[1]
 
 query T?R rowsort
@@ -2407,7 +2426,7 @@ Projection: s.country, s.zip_code, ARRAY_AGG(s.amount) ORDER BY [s.amount DESC N
 physical_plan
 ProjectionExec: expr=[country@0 as country, zip_code@1 as zip_code, ARRAY_AGG(s.amount) ORDER BY [s.amount DESC NULLS FIRST]@2 as amounts, SUM(s.amount)@3 as sum1]
 --AggregateExec: mode=Single, gby=[country@1 as country, zip_code@0 as zip_code], aggr=[ARRAY_AGG(s.amount), SUM(s.amount)], ordering_mode=PartiallySorted([0])
-----SortExec: expr=[country@1 ASC NULLS LAST,amount@2 DESC]
+----SortExec: expr=[country@1 ASC NULLS LAST]
 ------MemoryExec: partitions=1, partition_sizes=[1]
 
 query TI?R rowsort
@@ -2478,7 +2497,7 @@ Projection: s.country, ARRAY_AGG(s.amount) ORDER BY [s.country DESC NULLS FIRST,
 physical_plan
 ProjectionExec: expr=[country@0 as country, ARRAY_AGG(s.amount) ORDER BY [s.country DESC NULLS FIRST, s.amount DESC NULLS FIRST]@1 as amounts, SUM(s.amount)@2 as sum1]
 --AggregateExec: mode=Single, gby=[country@0 as country], aggr=[ARRAY_AGG(s.amount), SUM(s.amount)], ordering_mode=Sorted
-----SortExec: expr=[country@0 ASC NULLS LAST,amount@1 DESC]
+----SortExec: expr=[country@0 ASC NULLS LAST]
 ------MemoryExec: partitions=1, partition_sizes=[1]
 
 query T?R rowsort
@@ -2510,8 +2529,7 @@ Projection: sales_global.country, ARRAY_AGG(sales_global.amount) ORDER BY [sales
 physical_plan
 ProjectionExec: expr=[country@0 as country, ARRAY_AGG(sales_global.amount) ORDER BY [sales_global.amount DESC NULLS FIRST]@1 as amounts, FIRST_VALUE(sales_global.amount) ORDER BY [sales_global.amount ASC NULLS LAST]@2 as fv1, LAST_VALUE(sales_global.amount) ORDER BY [sales_global.amount DESC NULLS FIRST]@3 as fv2]
 --AggregateExec: mode=Single, gby=[country@0 as country], aggr=[ARRAY_AGG(sales_global.amount), LAST_VALUE(sales_global.amount), LAST_VALUE(sales_global.amount)]
-----SortExec: expr=[amount@1 DESC]
-------MemoryExec: partitions=1, partition_sizes=[1]
+----MemoryExec: partitions=1, partition_sizes=[1]
 
 query T?RR rowsort
 SELECT country, ARRAY_AGG(amount ORDER BY amount DESC) AS amounts,
@@ -2541,8 +2559,7 @@ Projection: sales_global.country, ARRAY_AGG(sales_global.amount) ORDER BY [sales
 physical_plan
 ProjectionExec: expr=[country@0 as country, ARRAY_AGG(sales_global.amount) ORDER BY [sales_global.amount ASC NULLS LAST]@1 as amounts, FIRST_VALUE(sales_global.amount) ORDER BY [sales_global.amount ASC NULLS LAST]@2 as fv1, LAST_VALUE(sales_global.amount) ORDER BY [sales_global.amount DESC NULLS FIRST]@3 as fv2]
 --AggregateExec: mode=Single, gby=[country@0 as country], aggr=[ARRAY_AGG(sales_global.amount), FIRST_VALUE(sales_global.amount), FIRST_VALUE(sales_global.amount)]
-----SortExec: expr=[amount@1 ASC NULLS LAST]
-------MemoryExec: partitions=1, partition_sizes=[1]
+----MemoryExec: partitions=1, partition_sizes=[1]
 
 query T?RR
 SELECT country, ARRAY_AGG(amount ORDER BY amount ASC) AS amounts,
@@ -2573,8 +2590,7 @@ Projection: sales_global.country, FIRST_VALUE(sales_global.amount) ORDER BY [sal
 physical_plan
 ProjectionExec: expr=[country@0 as country, FIRST_VALUE(sales_global.amount) ORDER BY [sales_global.amount ASC NULLS LAST]@1 as fv1, LAST_VALUE(sales_global.amount) ORDER BY [sales_global.amount DESC NULLS FIRST]@2 as fv2, ARRAY_AGG(sales_global.amount) ORDER BY [sales_global.amount ASC NULLS LAST]@3 as amounts]
 --AggregateExec: mode=Single, gby=[country@0 as country], aggr=[FIRST_VALUE(sales_global.amount), FIRST_VALUE(sales_global.amount), ARRAY_AGG(sales_global.amount)]
-----SortExec: expr=[amount@1 ASC NULLS LAST]
-------MemoryExec: partitions=1, partition_sizes=[1]
+----MemoryExec: partitions=1, partition_sizes=[1]
 
 query TRR?
 SELECT country, FIRST_VALUE(amount ORDER BY amount ASC) AS fv1,
@@ -2603,8 +2619,7 @@ Projection: sales_global.country, SUM(sales_global.amount) ORDER BY [sales_globa
 physical_plan
 ProjectionExec: expr=[country@0 as country, SUM(sales_global.amount) ORDER BY [sales_global.ts DESC NULLS FIRST]@1 as sum1, ARRAY_AGG(sales_global.amount) ORDER BY [sales_global.amount ASC NULLS LAST]@2 as amounts]
 --AggregateExec: mode=Single, gby=[country@0 as country], aggr=[SUM(sales_global.amount), ARRAY_AGG(sales_global.amount)]
-----SortExec: expr=[amount@2 ASC NULLS LAST]
-------MemoryExec: partitions=1, partition_sizes=[1]
+----MemoryExec: partitions=1, partition_sizes=[1]
 
 query TR?
 SELECT country, SUM(amount ORDER BY ts DESC) AS sum1,
@@ -2637,9 +2652,8 @@ Projection: sales_global.country, FIRST_VALUE(sales_global.amount) ORDER BY [sal
 ------TableScan: sales_global projection=[country, ts, amount]
 physical_plan
 ProjectionExec: expr=[country@0 as country, FIRST_VALUE(sales_global.amount) ORDER BY [sales_global.ts DESC NULLS FIRST]@1 as fv1, LAST_VALUE(sales_global.amount) ORDER BY [sales_global.ts DESC NULLS FIRST]@2 as lv1, SUM(sales_global.amount) ORDER BY [sales_global.ts DESC NULLS FIRST]@3 as sum1]
---AggregateExec: mode=Single, gby=[country@0 as country], aggr=[LAST_VALUE(sales_global.amount), FIRST_VALUE(sales_global.amount), SUM(sales_global.amount)]
-----SortExec: expr=[ts@1 ASC NULLS LAST]
-------MemoryExec: partitions=1, partition_sizes=[1]
+--AggregateExec: mode=Single, gby=[country@0 as country], aggr=[FIRST_VALUE(sales_global.amount), LAST_VALUE(sales_global.amount), SUM(sales_global.amount)]
+----MemoryExec: partitions=1, partition_sizes=[1]
 
 query TRRR rowsort
 SELECT country, FIRST_VALUE(amount ORDER BY ts DESC) as fv1,
@@ -2672,8 +2686,7 @@ Projection: sales_global.country, FIRST_VALUE(sales_global.amount) ORDER BY [sal
 physical_plan
 ProjectionExec: expr=[country@0 as country, FIRST_VALUE(sales_global.amount) ORDER BY [sales_global.ts DESC NULLS FIRST]@1 as fv1, LAST_VALUE(sales_global.amount) ORDER BY [sales_global.ts DESC NULLS FIRST]@2 as lv1, SUM(sales_global.amount) ORDER BY [sales_global.ts DESC NULLS FIRST]@3 as sum1]
 --AggregateExec: mode=Single, gby=[country@0 as country], aggr=[FIRST_VALUE(sales_global.amount), LAST_VALUE(sales_global.amount), SUM(sales_global.amount)]
-----SortExec: expr=[ts@1 DESC]
-------MemoryExec: partitions=1, partition_sizes=[1]
+----MemoryExec: partitions=1, partition_sizes=[1]
 
 query TRRR rowsort
 SELECT country, FIRST_VALUE(amount ORDER BY ts DESC) as fv1,
@@ -2709,12 +2722,11 @@ physical_plan
 SortExec: expr=[sn@2 ASC NULLS LAST]
 --ProjectionExec: expr=[zip_code@1 as zip_code, country@2 as country, sn@0 as sn, ts@3 as ts, currency@4 as currency, LAST_VALUE(e.amount) ORDER BY [e.sn ASC NULLS LAST]@5 as last_rate]
 ----AggregateExec: mode=Single, gby=[sn@2 as sn, zip_code@0 as zip_code, country@1 as country, ts@3 as ts, currency@4 as currency], aggr=[LAST_VALUE(e.amount)]
-------SortExec: expr=[sn@5 ASC NULLS LAST]
---------ProjectionExec: expr=[zip_code@4 as zip_code, country@5 as country, sn@6 as sn, ts@7 as ts, currency@8 as currency, sn@0 as sn, amount@3 as amount]
-----------CoalesceBatchesExec: target_batch_size=8192
-------------HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(currency@2, currency@4)], filter=ts@0 >= ts@1
---------------MemoryExec: partitions=1, partition_sizes=[1]
---------------MemoryExec: partitions=1, partition_sizes=[1]
+------ProjectionExec: expr=[zip_code@4 as zip_code, country@5 as country, sn@6 as sn, ts@7 as ts, currency@8 as currency, sn@0 as sn, amount@3 as amount]
+--------CoalesceBatchesExec: target_batch_size=8192
+----------HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(currency@2, currency@4)], filter=ts@0 >= ts@1
+------------MemoryExec: partitions=1, partition_sizes=[1]
+------------MemoryExec: partitions=1, partition_sizes=[1]
 
 query ITIPTR rowsort
 SELECT s.zip_code, s.country, s.sn, s.ts, s.currency, LAST_VALUE(e.amount ORDER BY e.sn) AS last_rate
@@ -2759,8 +2771,7 @@ SortPreservingMergeExec: [country@0 ASC NULLS LAST]
 ----------RepartitionExec: partitioning=Hash([country@0], 8), input_partitions=8
 ------------RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
 --------------AggregateExec: mode=Partial, gby=[country@0 as country], aggr=[FIRST_VALUE(sales_global.amount), LAST_VALUE(sales_global.amount)]
-----------------SortExec: expr=[ts@1 ASC NULLS LAST]
-------------------MemoryExec: partitions=1, partition_sizes=[1]
+----------------MemoryExec: partitions=1, partition_sizes=[1]
 
 query TRR
 SELECT country, FIRST_VALUE(amount ORDER BY ts ASC) AS fv1,
@@ -2796,8 +2807,7 @@ SortPreservingMergeExec: [country@0 ASC NULLS LAST]
 ----------RepartitionExec: partitioning=Hash([country@0], 8), input_partitions=8
 ------------RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
 --------------AggregateExec: mode=Partial, gby=[country@0 as country], aggr=[FIRST_VALUE(sales_global.amount), FIRST_VALUE(sales_global.amount)]
-----------------SortExec: expr=[ts@1 ASC NULLS LAST]
-------------------MemoryExec: partitions=1, partition_sizes=[1]
+----------------MemoryExec: partitions=1, partition_sizes=[1]
 
 query TRR
 SELECT country, FIRST_VALUE(amount ORDER BY ts ASC) AS fv1,
@@ -2831,9 +2841,8 @@ ProjectionExec: expr=[FIRST_VALUE(sales_global.amount) ORDER BY [sales_global.ts
 --AggregateExec: mode=Final, gby=[], aggr=[FIRST_VALUE(sales_global.amount), LAST_VALUE(sales_global.amount)]
 ----CoalescePartitionsExec
 ------AggregateExec: mode=Partial, gby=[], aggr=[FIRST_VALUE(sales_global.amount), LAST_VALUE(sales_global.amount)]
---------SortExec: expr=[ts@0 ASC NULLS LAST]
-----------RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
-------------MemoryExec: partitions=1, partition_sizes=[1]
+--------RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+----------MemoryExec: partitions=1, partition_sizes=[1]
 
 query RR
 SELECT FIRST_VALUE(amount ORDER BY ts ASC) AS fv1,
@@ -2858,9 +2867,8 @@ ProjectionExec: expr=[FIRST_VALUE(sales_global.amount) ORDER BY [sales_global.ts
 --AggregateExec: mode=Final, gby=[], aggr=[FIRST_VALUE(sales_global.amount), FIRST_VALUE(sales_global.amount)]
 ----CoalescePartitionsExec
 ------AggregateExec: mode=Partial, gby=[], aggr=[FIRST_VALUE(sales_global.amount), FIRST_VALUE(sales_global.amount)]
---------SortExec: expr=[ts@0 ASC NULLS LAST]
-----------RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
-------------MemoryExec: partitions=1, partition_sizes=[1]
+--------RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+----------MemoryExec: partitions=1, partition_sizes=[1]
 
 query RR
 SELECT FIRST_VALUE(amount ORDER BY ts ASC) AS fv1,
@@ -2883,9 +2891,8 @@ ProjectionExec: expr=[ARRAY_AGG(sales_global.amount) ORDER BY [sales_global.ts A
 --AggregateExec: mode=Final, gby=[], aggr=[ARRAY_AGG(sales_global.amount)]
 ----CoalescePartitionsExec
 ------AggregateExec: mode=Partial, gby=[], aggr=[ARRAY_AGG(sales_global.amount)]
---------SortExec: expr=[ts@0 ASC NULLS LAST]
-----------RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
-------------MemoryExec: partitions=1, partition_sizes=[1]
+--------RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+----------MemoryExec: partitions=1, partition_sizes=[1]
 
 query ?
 SELECT ARRAY_AGG(amount ORDER BY ts ASC) AS array_agg1
@@ -2907,9 +2914,8 @@ ProjectionExec: expr=[ARRAY_AGG(sales_global.amount) ORDER BY [sales_global.ts D
 --AggregateExec: mode=Final, gby=[], aggr=[ARRAY_AGG(sales_global.amount)]
 ----CoalescePartitionsExec
 ------AggregateExec: mode=Partial, gby=[], aggr=[ARRAY_AGG(sales_global.amount)]
---------SortExec: expr=[ts@0 DESC]
-----------RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
-------------MemoryExec: partitions=1, partition_sizes=[1]
+--------RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+----------MemoryExec: partitions=1, partition_sizes=[1]
 
 query ?
 SELECT ARRAY_AGG(amount ORDER BY ts DESC) AS array_agg1
@@ -2931,9 +2937,8 @@ ProjectionExec: expr=[ARRAY_AGG(sales_global.amount) ORDER BY [sales_global.amou
 --AggregateExec: mode=Final, gby=[], aggr=[ARRAY_AGG(sales_global.amount)]
 ----CoalescePartitionsExec
 ------AggregateExec: mode=Partial, gby=[], aggr=[ARRAY_AGG(sales_global.amount)]
---------SortExec: expr=[amount@0 ASC NULLS LAST]
-----------RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
-------------MemoryExec: partitions=1, partition_sizes=[1]
+--------RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+----------MemoryExec: partitions=1, partition_sizes=[1]
 
 query ?
 SELECT ARRAY_AGG(amount ORDER BY amount ASC) AS array_agg1
@@ -2961,9 +2966,8 @@ SortPreservingMergeExec: [country@0 ASC NULLS LAST]
 --------CoalesceBatchesExec: target_batch_size=4
 ----------RepartitionExec: partitioning=Hash([country@0], 8), input_partitions=8
 ------------AggregateExec: mode=Partial, gby=[country@0 as country], aggr=[ARRAY_AGG(sales_global.amount)]
---------------SortExec: expr=[amount@1 ASC NULLS LAST]
-----------------RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
-------------------MemoryExec: partitions=1, partition_sizes=[1]
+--------------RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+----------------MemoryExec: partitions=1, partition_sizes=[1]
 
 query T?
 SELECT country, ARRAY_AGG(amount ORDER BY amount ASC) AS array_agg1
@@ -2997,9 +3001,8 @@ SortPreservingMergeExec: [country@0 ASC NULLS LAST]
 --------CoalesceBatchesExec: target_batch_size=4
 ----------RepartitionExec: partitioning=Hash([country@0], 8), input_partitions=8
 ------------AggregateExec: mode=Partial, gby=[country@0 as country], aggr=[ARRAY_AGG(sales_global.amount), LAST_VALUE(sales_global.amount), LAST_VALUE(sales_global.amount)]
---------------SortExec: expr=[amount@1 DESC]
-----------------RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
-------------------MemoryExec: partitions=1, partition_sizes=[1]
+--------------RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+----------------MemoryExec: partitions=1, partition_sizes=[1]
 
 query T?RR
 SELECT country, ARRAY_AGG(amount ORDER BY amount DESC) AS amounts,
@@ -3639,10 +3642,10 @@ Projection: FIRST_VALUE(multiple_ordered_table.a) ORDER BY [multiple_ordered_tab
 ----TableScan: multiple_ordered_table projection=[a, c, d]
 physical_plan
 ProjectionExec: expr=[FIRST_VALUE(multiple_ordered_table.a) ORDER BY [multiple_ordered_table.a ASC NULLS LAST]@1 as first_a, LAST_VALUE(multiple_ordered_table.c) ORDER BY [multiple_ordered_table.c DESC NULLS FIRST]@2 as last_c]
---AggregateExec: mode=FinalPartitioned, gby=[d@0 as d], aggr=[FIRST_VALUE(multiple_ordered_table.a), FIRST_VALUE(multiple_ordered_table.c)]
+--AggregateExec: mode=FinalPartitioned, gby=[d@0 as d], aggr=[FIRST_VALUE(multiple_ordered_table.a), LAST_VALUE(multiple_ordered_table.c)]
 ----CoalesceBatchesExec: target_batch_size=2
 ------RepartitionExec: partitioning=Hash([d@0], 8), input_partitions=8
---------AggregateExec: mode=Partial, gby=[d@2 as d], aggr=[FIRST_VALUE(multiple_ordered_table.a), FIRST_VALUE(multiple_ordered_table.c)]
+--------AggregateExec: mode=Partial, gby=[d@2 as d], aggr=[FIRST_VALUE(multiple_ordered_table.a), LAST_VALUE(multiple_ordered_table.c)]
 ----------RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
 ------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, c, d], output_orderings=[[a@0 ASC NULLS LAST], [c@1 ASC NULLS LAST]], has_header=true
 
@@ -4250,7 +4253,6 @@ set datafusion.sql_parser.dialect = 'Generic';
 statement ok
 drop table aggregate_test_100;
 
-
 # Create an unbounded external table with primary key
 # column c
 statement ok
@@ -4281,6 +4283,236 @@ LIMIT 5
 3 0 0
 4 0 1
 
+statement ok
+set datafusion.optimizer.prefer_existing_sort = true;
+
+query TT
+EXPLAIN SELECT a, b, ARRAY_AGG(d ORDER BY c DESC), ARRAY_AGG(d ORDER BY d DESC)
+  FROM multiple_ordered_table
+  GROUP BY a, b
+  ORDER BY a, b
+----
+logical_plan
+Sort: multiple_ordered_table.a ASC NULLS LAST, multiple_ordered_table.b ASC NULLS LAST
+--Aggregate: groupBy=[[multiple_ordered_table.a, multiple_ordered_table.b]], aggr=[[ARRAY_AGG(multiple_ordered_table.d) ORDER BY [multiple_ordered_table.c DESC NULLS FIRST], ARRAY_AGG(multiple_ordered_table.d) ORDER BY [multiple_ordered_table.d DESC NULLS FIRST]]]
+----TableScan: multiple_ordered_table projection=[a, b, c, d]
+physical_plan
+SortPreservingMergeExec: [a@0 ASC NULLS LAST,b@1 ASC NULLS LAST]
+--AggregateExec: mode=FinalPartitioned, gby=[a@0 as a, b@1 as b], aggr=[ARRAY_AGG(multiple_ordered_table.d), ARRAY_AGG(multiple_ordered_table.d)], ordering_mode=Sorted
+----CoalesceBatchesExec: target_batch_size=2
+------RepartitionExec: partitioning=Hash([a@0, b@1], 8), input_partitions=8, preserve_order=true, sort_exprs=a@0 ASC NULLS LAST,b@1 ASC NULLS LAST
+--------AggregateExec: mode=Partial, gby=[a@0 as a, b@1 as b], aggr=[ARRAY_AGG(multiple_ordered_table.d), ARRAY_AGG(multiple_ordered_table.d)], ordering_mode=Sorted
+----------RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b, c, d], output_orderings=[[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST], [c@2 ASC NULLS LAST]], has_header=true
+
+statement ok
+set datafusion.execution.target_partitions = 1;
+
+query II?? rowsort
+SELECT a, b, ARRAY_AGG(d ORDER BY c DESC), ARRAY_AGG(d ORDER BY d DESC)
+  FROM multiple_ordered_table
+  GROUP BY a, b
+  ORDER BY a, b
+----
+0 0 [4, 0, 0, 3, 0, 4, 1, 2, 3, 3, 2, 1, 2, 2, 4, 4, 1, 2, 0, 1, 1, 0, 0, 2, 0] [4, 4, 4, 4, 3, 3, 3, 2, 2, 2, 2, 2, 2, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0]
+0 1 [3, 1, 1, 0, 0, 3, 2, 3, 3, 1, 1, 0, 4, 1, 0, 4, 2, 2, 4, 3, 1, 1, 0, 2, 0] [4, 4, 4, 3, 3, 3, 3, 3, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0]
+1 2 [4, 1, 1, 2, 0, 1, 1, 4, 2, 0, 4, 4, 1, 3, 4, 2, 1, 1, 1, 2, 4, 1, 1, 3, 0] [4, 4, 4, 4, 4, 4, 3, 3, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0]
+1 3 [3, 4, 2, 4, 0, 2, 0, 0, 2, 1, 4, 3, 4, 1, 1, 1, 2, 4, 0, 2, 4, 1, 2, 0, 2] [4, 4, 4, 4, 4, 4, 3, 3, 2, 2, 2, 2, 2, 2, 2, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0]
+
+statement ok
+set datafusion.execution.target_partitions = 8;
+
+query II?? rowsort
+SELECT a, b, ARRAY_AGG(d ORDER BY c DESC), ARRAY_AGG(d ORDER BY d DESC)
+  FROM multiple_ordered_table
+  GROUP BY a, b
+  ORDER BY a, b
+----
+0 0 [4, 0, 0, 3, 0, 4, 1, 2, 3, 3, 2, 1, 2, 2, 4, 4, 1, 2, 0, 1, 1, 0, 0, 2, 0] [4, 4, 4, 4, 3, 3, 3, 2, 2, 2, 2, 2, 2, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0]
+0 1 [3, 1, 1, 0, 0, 3, 2, 3, 3, 1, 1, 0, 4, 1, 0, 4, 2, 2, 4, 3, 1, 1, 0, 2, 0] [4, 4, 4, 3, 3, 3, 3, 3, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0]
+1 2 [4, 1, 1, 2, 0, 1, 1, 4, 2, 0, 4, 4, 1, 3, 4, 2, 1, 1, 1, 2, 4, 1, 1, 3, 0] [4, 4, 4, 4, 4, 4, 3, 3, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0]
+1 3 [3, 4, 2, 4, 0, 2, 0, 0, 2, 1, 4, 3, 4, 1, 1, 1, 2, 4, 0, 2, 4, 1, 2, 0, 2] [4, 4, 4, 4, 4, 4, 3, 3, 2, 2, 2, 2, 2, 2, 2, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0]
+
+query TT
+EXPLAIN SELECT a, b, FIRST_VALUE(d ORDER BY c DESC), LAST_VALUE(d ORDER BY c DESC), ARRAY_AGG(d ORDER BY d DESC)
+  FROM multiple_ordered_table
+  GROUP BY a, b
+  ORDER BY a, b
+----
+logical_plan
+Sort: multiple_ordered_table.a ASC NULLS LAST, multiple_ordered_table.b ASC NULLS LAST
+--Aggregate: groupBy=[[multiple_ordered_table.a, multiple_ordered_table.b]], aggr=[[FIRST_VALUE(multiple_ordered_table.d) ORDER BY [multiple_ordered_table.c DESC NULLS FIRST], LAST_VALUE(multiple_ordered_table.d) ORDER BY [multiple_ordered_table.c DESC NULLS FIRST], ARRAY_AGG(multiple_ordered_table.d) ORDER BY [multiple_ordered_table.d DESC NULLS FIRST]]]
+----TableScan: multiple_ordered_table projection=[a, b, c, d]
+physical_plan
+SortPreservingMergeExec: [a@0 ASC NULLS LAST,b@1 ASC NULLS LAST]
+--AggregateExec: mode=FinalPartitioned, gby=[a@0 as a, b@1 as b], aggr=[FIRST_VALUE(multiple_ordered_table.d), LAST_VALUE(multiple_ordered_table.d), ARRAY_AGG(multiple_ordered_table.d)], ordering_mode=Sorted
+----CoalesceBatchesExec: target_batch_size=2
+------RepartitionExec: partitioning=Hash([a@0, b@1], 8), input_partitions=8, preserve_order=true, sort_exprs=a@0 ASC NULLS LAST,b@1 ASC NULLS LAST
+--------AggregateExec: mode=Partial, gby=[a@0 as a, b@1 as b], aggr=[FIRST_VALUE(multiple_ordered_table.d), LAST_VALUE(multiple_ordered_table.d), ARRAY_AGG(multiple_ordered_table.d)], ordering_mode=Sorted
+----------RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b, c, d], output_orderings=[[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST], [c@2 ASC NULLS LAST]], has_header=true
+
+statement ok
+set datafusion.execution.target_partitions = 1;
+
+query IIII? rowsort
+SELECT a, b, FIRST_VALUE(d ORDER BY c DESC), LAST_VALUE(d ORDER BY c DESC), ARRAY_AGG(d ORDER BY d DESC)
+  FROM multiple_ordered_table
+  GROUP BY a, b
+  ORDER BY a, b
+----
+0 0 4 0 [4, 4, 4, 4, 3, 3, 3, 2, 2, 2, 2, 2, 2, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0]
+0 1 3 0 [4, 4, 4, 3, 3, 3, 3, 3, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0]
+1 2 4 0 [4, 4, 4, 4, 4, 4, 3, 3, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0]
+1 3 3 2 [4, 4, 4, 4, 4, 4, 3, 3, 2, 2, 2, 2, 2, 2, 2, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0]
+
+statement ok
+set datafusion.execution.target_partitions = 8;
+
+query IIII?
+SELECT a, b, FIRST_VALUE(d ORDER BY c DESC), LAST_VALUE(d ORDER BY c DESC), ARRAY_AGG(d ORDER BY d DESC)
+  FROM multiple_ordered_table
+  GROUP BY a, b
+  ORDER BY a, b
+----
+0 0 4 0 [4, 4, 4, 4, 3, 3, 3, 2, 2, 2, 2, 2, 2, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0]
+0 1 3 0 [4, 4, 4, 3, 3, 3, 3, 3, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0]
+1 2 4 0 [4, 4, 4, 4, 4, 4, 3, 3, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0]
+1 3 3 2 [4, 4, 4, 4, 4, 4, 3, 3, 2, 2, 2, 2, 2, 2, 2, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0]
+
+# Test same queries where there is sort inserted (source ordering is not preserved)
+statement ok
+set datafusion.optimizer.prefer_existing_sort = false;
+
+query TT
+EXPLAIN SELECT a, b, ARRAY_AGG(d ORDER BY c DESC), ARRAY_AGG(d ORDER BY d DESC)
+  FROM multiple_ordered_table
+  GROUP BY a, b
+  ORDER BY a, b
+----
+logical_plan
+Sort: multiple_ordered_table.a ASC NULLS LAST, multiple_ordered_table.b ASC NULLS LAST
+--Aggregate: groupBy=[[multiple_ordered_table.a, multiple_ordered_table.b]], aggr=[[ARRAY_AGG(multiple_ordered_table.d) ORDER BY [multiple_ordered_table.c DESC NULLS FIRST], ARRAY_AGG(multiple_ordered_table.d) ORDER BY [multiple_ordered_table.d DESC NULLS FIRST]]]
+----TableScan: multiple_ordered_table projection=[a, b, c, d]
+physical_plan
+SortPreservingMergeExec: [a@0 ASC NULLS LAST,b@1 ASC NULLS LAST]
+--AggregateExec: mode=FinalPartitioned, gby=[a@0 as a, b@1 as b], aggr=[ARRAY_AGG(multiple_ordered_table.d), ARRAY_AGG(multiple_ordered_table.d)], ordering_mode=Sorted
+----SortExec: expr=[a@0 ASC NULLS LAST,b@1 ASC NULLS LAST]
+------CoalesceBatchesExec: target_batch_size=2
+--------RepartitionExec: partitioning=Hash([a@0, b@1], 8), input_partitions=8
+----------AggregateExec: mode=Partial, gby=[a@0 as a, b@1 as b], aggr=[ARRAY_AGG(multiple_ordered_table.d), ARRAY_AGG(multiple_ordered_table.d)], ordering_mode=Sorted
+------------RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+--------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b, c, d], output_orderings=[[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST], [c@2 ASC NULLS LAST]], has_header=true
+
+statement ok
+set datafusion.execution.target_partitions = 1;
+
+query II?? rowsort
+SELECT a, b, ARRAY_AGG(d ORDER BY c DESC), ARRAY_AGG(d ORDER BY d DESC)
+  FROM multiple_ordered_table
+  GROUP BY a, b
+  ORDER BY a, b
+----
+0 0 [4, 0, 0, 3, 0, 4, 1, 2, 3, 3, 2, 1, 2, 2, 4, 4, 1, 2, 0, 1, 1, 0, 0, 2, 0] [4, 4, 4, 4, 3, 3, 3, 2, 2, 2, 2, 2, 2, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0]
+0 1 [3, 1, 1, 0, 0, 3, 2, 3, 3, 1, 1, 0, 4, 1, 0, 4, 2, 2, 4, 3, 1, 1, 0, 2, 0] [4, 4, 4, 3, 3, 3, 3, 3, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0]
+1 2 [4, 1, 1, 2, 0, 1, 1, 4, 2, 0, 4, 4, 1, 3, 4, 2, 1, 1, 1, 2, 4, 1, 1, 3, 0] [4, 4, 4, 4, 4, 4, 3, 3, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0]
+1 3 [3, 4, 2, 4, 0, 2, 0, 0, 2, 1, 4, 3, 4, 1, 1, 1, 2, 4, 0, 2, 4, 1, 2, 0, 2] [4, 4, 4, 4, 4, 4, 3, 3, 2, 2, 2, 2, 2, 2, 2, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0]
+
+statement ok
+set datafusion.execution.target_partitions = 8;
+
+query II??
+SELECT a, b, ARRAY_AGG(d ORDER BY c DESC), ARRAY_AGG(d ORDER BY d DESC)
+  FROM multiple_ordered_table
+  GROUP BY a, b
+  ORDER BY a, b
+----
+0 0 [4, 0, 0, 3, 0, 4, 1, 2, 3, 3, 2, 1, 2, 2, 4, 4, 1, 2, 0, 1, 1, 0, 0, 2, 0] [4, 4, 4, 4, 3, 3, 3, 2, 2, 2, 2, 2, 2, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0]
+0 1 [3, 1, 1, 0, 0, 3, 2, 3, 3, 1, 1, 0, 4, 1, 0, 4, 2, 2, 4, 3, 1, 1, 0, 2, 0] [4, 4, 4, 3, 3, 3, 3, 3, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0]
+1 2 [4, 1, 1, 2, 0, 1, 1, 4, 2, 0, 4, 4, 1, 3, 4, 2, 1, 1, 1, 2, 4, 1, 1, 3, 0] [4, 4, 4, 4, 4, 4, 3, 3, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0]
+1 3 [3, 4, 2, 4, 0, 2, 0, 0, 2, 1, 4, 3, 4, 1, 1, 1, 2, 4, 0, 2, 4, 1, 2, 0, 2] [4, 4, 4, 4, 4, 4, 3, 3, 2, 2, 2, 2, 2, 2, 2, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0]
+
+query TT
+EXPLAIN SELECT a, b, FIRST_VALUE(d ORDER BY c DESC), LAST_VALUE(d ORDER BY c DESC), ARRAY_AGG(d ORDER BY d DESC)
+  FROM multiple_ordered_table
+  GROUP BY a, b
+  ORDER BY a, b
+----
+logical_plan
+Sort: multiple_ordered_table.a ASC NULLS LAST, multiple_ordered_table.b ASC NULLS LAST
+--Aggregate: groupBy=[[multiple_ordered_table.a, multiple_ordered_table.b]], aggr=[[FIRST_VALUE(multiple_ordered_table.d) ORDER BY [multiple_ordered_table.c DESC NULLS FIRST], LAST_VALUE(multiple_ordered_table.d) ORDER BY [multiple_ordered_table.c DESC NULLS FIRST], ARRAY_AGG(multiple_ordered_table.d) ORDER BY [multiple_ordered_table.d DESC NULLS FIRST]]]
+----TableScan: multiple_ordered_table projection=[a, b, c, d]
+physical_plan
+SortPreservingMergeExec: [a@0 ASC NULLS LAST,b@1 ASC NULLS LAST]
+--AggregateExec: mode=FinalPartitioned, gby=[a@0 as a, b@1 as b], aggr=[FIRST_VALUE(multiple_ordered_table.d), LAST_VALUE(multiple_ordered_table.d), ARRAY_AGG(multiple_ordered_table.d)], ordering_mode=Sorted
+----SortExec: expr=[a@0 ASC NULLS LAST,b@1 ASC NULLS LAST]
+------CoalesceBatchesExec: target_batch_size=2
+--------RepartitionExec: partitioning=Hash([a@0, b@1], 8), input_partitions=8
+----------AggregateExec: mode=Partial, gby=[a@0 as a, b@1 as b], aggr=[FIRST_VALUE(multiple_ordered_table.d), LAST_VALUE(multiple_ordered_table.d), ARRAY_AGG(multiple_ordered_table.d)], ordering_mode=Sorted
+------------RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+--------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b, c, d], output_orderings=[[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST], [c@2 ASC NULLS LAST]], has_header=true
+
+statement ok
+set datafusion.execution.target_partitions = 1;
+
+query IIII? rowsort
+SELECT a, b, FIRST_VALUE(d ORDER BY c DESC), LAST_VALUE(d ORDER BY c DESC), ARRAY_AGG(d ORDER BY d DESC)
+  FROM multiple_ordered_table
+  GROUP BY a, b
+  ORDER BY a, b
+----
+0 0 4 0 [4, 4, 4, 4, 3, 3, 3, 2, 2, 2, 2, 2, 2, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0]
+0 1 3 0 [4, 4, 4, 3, 3, 3, 3, 3, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0]
+1 2 4 0 [4, 4, 4, 4, 4, 4, 3, 3, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0]
+1 3 3 2 [4, 4, 4, 4, 4, 4, 3, 3, 2, 2, 2, 2, 2, 2, 2, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0]
+
+# Test conflicting ordering requirement in single partition
+query IIII rowsort
+SELECT a, b, FIRST_VALUE(d ORDER BY c DESC), LAST_VALUE(d ORDER BY d DESC)
+  FROM multiple_ordered_table
+  GROUP BY a, b
+  ORDER BY a, b
+----
+0 0 4 0
+0 1 3 0
+1 2 4 0
+1 3 3 0
+
+statement ok
+set datafusion.execution.target_partitions = 8;
+
+# Test conflicting ordering requirement in multiple partitions
+query IIII?
+SELECT a, b, FIRST_VALUE(d ORDER BY c DESC), LAST_VALUE(d ORDER BY c DESC), ARRAY_AGG(d ORDER BY d DESC)
+  FROM multiple_ordered_table
+  GROUP BY a, b
+  ORDER BY a, b
+----
+0 0 4 0 [4, 4, 4, 4, 3, 3, 3, 2, 2, 2, 2, 2, 2, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0]
+0 1 3 0 [4, 4, 4, 3, 3, 3, 3, 3, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0]
+1 2 4 0 [4, 4, 4, 4, 4, 4, 3, 3, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0]
+1 3 3 2 [4, 4, 4, 4, 4, 4, 3, 3, 2, 2, 2, 2, 2, 2, 2, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0]
+
+# Test a query with conflicting ordering requirements (where aggregate groups are not consecutive.
+# For query below aggregate groups are at indices [0, 2] and [1]). Please note that there is no group by
+query III rowsort
+SELECT FIRST_VALUE(d ORDER BY c DESC), FIRST_VALUE(d ORDER BY d DESC, c DESC), FIRST_VALUE(d ORDER BY c ASC)
+  FROM multiple_ordered_table
+----
+3 4 0
+
+# Test a query with conflicting ordering requirements (where aggregate groups are not consecutive.
+# For query below aggregate groups are at indices [0, 2] and [1]) with group by. . Please note that there is  group by
+query IIIII rowsort
+SELECT a, b, FIRST_VALUE(d ORDER BY c DESC), FIRST_VALUE(d ORDER BY d DESC, c DESC), FIRST_VALUE(d ORDER BY c ASC)
+  FROM multiple_ordered_table
+  GROUP BY a, b
+  ORDER BY a, b
+----
+0 0 4 4 0
+0 1 3 4 0
+1 2 4 4 0
+1 3 3 4 2
 
 query ITIPTR rowsort
 SELECT r.*

@@ -24,8 +24,8 @@ use std::vec;
 use crate::aggregates::group_values::{new_group_values, GroupValues};
 use crate::aggregates::order::GroupOrderingFull;
 use crate::aggregates::{
-    evaluate_group_by, evaluate_many, evaluate_optional, group_schema, AggregateMode,
-    PhysicalGroupBy,
+    evaluate_group_by, evaluate_many, evaluate_optional, group_schema,
+    reorder_aggregate_expr_results, AggregateExprGroup, AggregateMode, PhysicalGroupBy,
 };
 use crate::common::IPCWriter;
 use crate::metrics::{BaselineMetrics, RecordOutput};
@@ -46,9 +46,11 @@ use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::{
-    AggregateExpr, EmitTo, GroupsAccumulator, GroupsAccumulatorAdapter, PhysicalSortExpr,
+    AggregateExpr, EmitTo, GroupsAccumulator, GroupsAccumulatorAdapter, LexOrdering,
+    PhysicalSortExpr,
 };
 
+use datafusion_common::utils::get_at_indices;
 use futures::ready;
 use futures::stream::{Stream, StreamExt};
 use log::debug;
@@ -81,11 +83,56 @@ struct SpillState {
     /// true when streaming merge is in progress
     is_stream_merging: bool,
 
-    /// aggregate_arguments for merging spilled data
-    merging_aggregate_arguments: Vec<Vec<Arc<dyn PhysicalExpr>>>,
-
     /// GROUP BY expressions for merging spilled data
     merging_group_by: PhysicalGroupBy,
+}
+
+pub struct HashAggregateGroup {
+    /// Accumulators, one for each `AggregateExpr` in the query
+    ///
+    /// For example, if the query has aggregates, `SUM(x)`,
+    /// `COUNT(y)`, there will be two accumulators, each one
+    /// specialized for that particular aggregate and its input types
+    accumulators: Vec<Box<dyn GroupsAccumulator>>,
+
+    /// Arguments to pass to each accumulator.
+    ///
+    /// The arguments in `accumulator[i]` is passed `aggregate_arguments[i]`
+    ///
+    /// The argument to each accumulator is itself a `Vec` because
+    /// some aggregates such as `CORR` can accept more than one
+    /// argument.
+    aggregate_arguments: Vec<Vec<Arc<dyn PhysicalExpr>>>,
+
+    /// aggregate_arguments at the input of the merging (may have additional fields)
+    merging_aggregate_arguments: Vec<Vec<Arc<dyn PhysicalExpr>>>,
+
+    /// Optional filter expression to evaluate, one for each for
+    /// accumulator. If present, only those rows for which the filter
+    /// evaluate to true should be included in the aggregate results.
+    ///
+    /// For example, for an aggregate like `SUM(x) FILTER (WHERE x >= 100)`,
+    /// the filter expression is  `x > 100`.
+    filter_expressions: Vec<Option<Arc<dyn PhysicalExpr>>>,
+    /// Ordering Requirement for the aggregate group
+    requirement: LexOrdering,
+    /// Indices stores the position of the each aggregate expression
+    /// among all aggregate expressions (prior to grouping).
+    group_indices: Vec<usize>,
+}
+
+impl HashAggregateGroup {
+    /// Initialize an empty group.
+    fn empty() -> Self {
+        HashAggregateGroup {
+            accumulators: vec![],
+            aggregate_arguments: vec![],
+            merging_aggregate_arguments: vec![],
+            filter_expressions: vec![],
+            requirement: vec![],
+            group_indices: vec![],
+        }
+    }
 }
 
 /// HashTable based Grouping Aggregator
@@ -208,30 +255,9 @@ pub(crate) struct GroupedHashAggregateStream {
     input: SendableRecordBatchStream,
     mode: AggregateMode,
 
-    /// Accumulators, one for each `AggregateExpr` in the query
-    ///
-    /// For example, if the query has aggregates, `SUM(x)`,
-    /// `COUNT(y)`, there will be two accumulators, each one
-    /// specialized for that particular aggregate and its input types
-    accumulators: Vec<Box<dyn GroupsAccumulator>>,
-
-    /// Arguments to pass to each accumulator.
-    ///
-    /// The arguments in `accumulator[i]` is passed `aggregate_arguments[i]`
-    ///
-    /// The argument to each accumulator is itself a `Vec` because
-    /// some aggregates such as `CORR` can accept more than one
-    /// argument.
-    aggregate_arguments: Vec<Vec<Arc<dyn PhysicalExpr>>>,
-
-    /// Optional filter expression to evaluate, one for each for
-    /// accumulator. If present, only those rows for which the filter
-    /// evaluate to true should be included in the aggregate results.
-    ///
-    /// For example, for an aggregate like `SUM(x) FILTER (WHERE x >= 100)`,
-    /// the filter expression is  `x > 100`.
-    filter_expressions: Vec<Option<Arc<dyn PhysicalExpr>>>,
-
+    /// Stores aggregate groups that have different ordering requirements
+    /// Aggregate groups are calculated using `get_aggregate_expr_groups` function.
+    aggregate_groups: Vec<HashAggregateGroup>,
     /// GROUP BY expressions
     group_by: PhysicalGroupBy,
 
@@ -293,8 +319,6 @@ impl GroupedHashAggregateStream {
 
         let timer = baseline_metrics.elapsed_compute().timer();
 
-        let aggregate_exprs = agg.aggr_expr.clone();
-
         // arguments for each aggregate, one vec of expressions per
         // aggregate
         let aggregate_arguments = aggregates::aggregate_expressions(
@@ -318,11 +342,47 @@ impl GroupedHashAggregateStream {
             }
         };
 
-        // Instantiate the accumulators
-        let accumulators: Vec<_> = aggregate_exprs
+        let mut aggregate_groups = agg
+            .aggregate_groups
             .iter()
-            .map(create_group_accumulator)
-            .collect::<Result<_>>()?;
+            .map(
+                |AggregateExprGroup {
+                     indices,
+                     requirement,
+                 }| {
+                    let aggregate_arguments =
+                        get_at_indices(&aggregate_arguments, indices)?;
+                    let merging_aggregate_arguments =
+                        get_at_indices(&merging_aggregate_arguments, indices)?;
+                    let filter_expressions =
+                        get_at_indices(&filter_expressions, indices)?;
+                    let aggr_exprs = get_at_indices(&agg.aggr_expr, indices)?;
+                    // Instantiate the accumulators
+                    let accumulators: Vec<_> = aggr_exprs
+                        .iter()
+                        .map(create_group_accumulator)
+                        .collect::<Result<_>>()?;
+
+                    Ok(HashAggregateGroup {
+                        accumulators,
+                        aggregate_arguments,
+                        merging_aggregate_arguments,
+                        filter_expressions,
+                        requirement: requirement.to_vec(),
+                        group_indices: indices.to_vec(),
+                    })
+                },
+            )
+            .collect::<Result<Vec<_>>>()?;
+        if aggregate_groups.is_empty() {
+            // Make sure there is at least one empty group.
+            // This situations can arise in queries in following form
+            // SELECT a, b
+            // FROM table
+            // GROUP BY a,b
+            // where there is no aggregate expression.
+            aggregate_groups = vec![HashAggregateGroup::empty()]
+        }
 
         // we need to use original schema so RowConverter in group_values below
         // will do the proper coversion of dictionaries into value types
@@ -360,7 +420,6 @@ impl GroupedHashAggregateStream {
             spill_expr,
             spill_schema: agg_schema.clone(),
             is_stream_merging: false,
-            merging_aggregate_arguments,
             merging_group_by: PhysicalGroupBy::new_single(agg_group_by.expr.clone()),
         };
 
@@ -368,9 +427,7 @@ impl GroupedHashAggregateStream {
             schema: agg_schema,
             input,
             mode: agg.mode,
-            accumulators,
-            aggregate_arguments,
-            filter_expressions,
+            aggregate_groups,
             group_by: agg_group_by,
             reservation,
             group_values,
@@ -522,79 +579,87 @@ impl RecordBatchStream for GroupedHashAggregateStream {
 impl GroupedHashAggregateStream {
     /// Perform group-by aggregation for the given [`RecordBatch`].
     fn group_aggregate_batch(&mut self, batch: RecordBatch) -> Result<()> {
-        // Evaluate the grouping expressions
-        let group_by_values = if self.spill_state.is_stream_merging {
-            evaluate_group_by(&self.spill_state.merging_group_by, &batch)?
-        } else {
-            evaluate_group_by(&self.group_by, &batch)?
-        };
+        for aggregate_group in &mut self.aggregate_groups {
+            let batch = if aggregate_group.requirement.is_empty() {
+                batch.clone()
+            } else {
+                sort_batch(&batch, &aggregate_group.requirement, None)?
+            };
+            // Evaluate the grouping expressions
+            let group_by_values = if self.spill_state.is_stream_merging {
+                evaluate_group_by(&self.spill_state.merging_group_by, &batch)?
+            } else {
+                evaluate_group_by(&self.group_by, &batch)?
+            };
 
-        // Evaluate the aggregation expressions.
-        let input_values = if self.spill_state.is_stream_merging {
-            evaluate_many(&self.spill_state.merging_aggregate_arguments, &batch)?
-        } else {
-            evaluate_many(&self.aggregate_arguments, &batch)?
-        };
+            // Evaluate the aggregation expressions.
+            let input_values = if self.spill_state.is_stream_merging {
+                evaluate_many(&aggregate_group.merging_aggregate_arguments, &batch)?
+            } else {
+                evaluate_many(&aggregate_group.aggregate_arguments, &batch)?
+            };
 
-        // Evaluate the filter expressions, if any, against the inputs
-        let filter_values = if self.spill_state.is_stream_merging {
-            let filter_expressions = vec![None; self.accumulators.len()];
-            evaluate_optional(&filter_expressions, &batch)?
-        } else {
-            evaluate_optional(&self.filter_expressions, &batch)?
-        };
+            // Evaluate the filter expressions, if any, against the inputs
+            let filter_values = if self.spill_state.is_stream_merging {
+                let filter_expressions = vec![None; aggregate_group.accumulators.len()];
+                evaluate_optional(&filter_expressions, &batch)?
+            } else {
+                evaluate_optional(&aggregate_group.filter_expressions, &batch)?
+            };
 
-        for group_values in &group_by_values {
-            // calculate the group indices for each input row
-            let starting_num_groups = self.group_values.len();
-            self.group_values
-                .intern(group_values, &mut self.current_group_indices)?;
-            let group_indices = &self.current_group_indices;
+            for group_values in &group_by_values {
+                // calculate the group indices for each input row
+                let starting_num_groups = self.group_values.len();
+                self.group_values
+                    .intern(group_values, &mut self.current_group_indices)?;
+                let group_indices = &self.current_group_indices;
 
-            // Update ordering information if necessary
-            let total_num_groups = self.group_values.len();
-            if total_num_groups > starting_num_groups {
-                self.group_ordering.new_groups(
-                    group_values,
-                    group_indices,
-                    total_num_groups,
-                )?;
-            }
+                // Update ordering information if necessary
+                let total_num_groups = self.group_values.len();
+                if total_num_groups > starting_num_groups {
+                    self.group_ordering.new_groups(
+                        group_values,
+                        group_indices,
+                        total_num_groups,
+                    )?;
+                }
 
-            // Gather the inputs to call the actual accumulator
-            let t = self
-                .accumulators
-                .iter_mut()
-                .zip(input_values.iter())
-                .zip(filter_values.iter());
+                // Gather the inputs to call the actual accumulator
+                let t = aggregate_group
+                    .accumulators
+                    .iter_mut()
+                    .zip(input_values.iter())
+                    .zip(filter_values.iter());
 
-            for ((acc, values), opt_filter) in t {
-                let opt_filter = opt_filter.as_ref().map(|filter| filter.as_boolean());
+                for ((acc, values), opt_filter) in t {
+                    let opt_filter =
+                        opt_filter.as_ref().map(|filter| filter.as_boolean());
 
-                // Call the appropriate method on each aggregator with
-                // the entire input row and the relevant group indexes
-                match self.mode {
-                    AggregateMode::Partial
-                    | AggregateMode::Single
-                    | AggregateMode::SinglePartitioned
-                        if !self.spill_state.is_stream_merging =>
-                    {
-                        acc.update_batch(
-                            values,
-                            group_indices,
-                            opt_filter,
-                            total_num_groups,
-                        )?;
-                    }
-                    _ => {
-                        // if aggregation is over intermediate states,
-                        // use merge
-                        acc.merge_batch(
-                            values,
-                            group_indices,
-                            opt_filter,
-                            total_num_groups,
-                        )?;
+                    // Call the appropriate method on each aggregator with
+                    // the entire input row and the relevant group indexes
+                    match self.mode {
+                        AggregateMode::Partial
+                        | AggregateMode::Single
+                        | AggregateMode::SinglePartitioned
+                            if !self.spill_state.is_stream_merging =>
+                        {
+                            acc.update_batch(
+                                values,
+                                group_indices,
+                                opt_filter,
+                                total_num_groups,
+                            )?;
+                        }
+                        _ => {
+                            // if aggregation is over intermediate states,
+                            // use merge
+                            acc.merge_batch(
+                                values,
+                                group_indices,
+                                opt_filter,
+                                total_num_groups,
+                            )?;
+                        }
                     }
                 }
             }
@@ -613,12 +678,19 @@ impl GroupedHashAggregateStream {
     }
 
     fn update_memory_reservation(&mut self) -> Result<()> {
-        let acc = self.accumulators.iter().map(|x| x.size()).sum::<usize>();
-        self.reservation.try_resize(
-            acc + self.group_values.size()
-                + self.group_ordering.size()
-                + self.current_group_indices.allocated_size(),
-        )
+        for aggregate_group in &self.aggregate_groups {
+            let acc = aggregate_group
+                .accumulators
+                .iter()
+                .map(|x| x.size())
+                .sum::<usize>();
+            self.reservation.try_resize(
+                acc + self.group_values.size()
+                    + self.group_ordering.size()
+                    + self.current_group_indices.allocated_size(),
+            )?;
+        }
+        Ok(())
     }
 
     /// Create an output RecordBatch with the group keys and
@@ -639,21 +711,39 @@ impl GroupedHashAggregateStream {
         }
 
         // Next output each aggregate value
-        for acc in self.accumulators.iter_mut() {
-            match self.mode {
-                AggregateMode::Partial => output.extend(acc.state(emit_to)?),
-                _ if spilling => {
-                    // If spilling, output partial state because the spilled data will be
-                    // merged and re-evaluated later.
-                    output.extend(acc.state(emit_to)?)
+        let outputs = self
+            .aggregate_groups
+            .iter_mut()
+            .map(|aggregate_group| {
+                let mut aggregate_group_output = vec![];
+                for acc in aggregate_group.accumulators.iter_mut() {
+                    match self.mode {
+                        AggregateMode::Partial => {
+                            aggregate_group_output.push(acc.state(emit_to)?)
+                        }
+                        _ if spilling => {
+                            // If spilling, output partial state because the spilled data will be
+                            // merged and re-evaluated later.
+                            aggregate_group_output.push(acc.state(emit_to)?)
+                        }
+                        AggregateMode::Final
+                        | AggregateMode::FinalPartitioned
+                        | AggregateMode::Single
+                        | AggregateMode::SinglePartitioned => {
+                            aggregate_group_output.push(vec![acc.evaluate(emit_to)?])
+                        }
+                    }
                 }
-                AggregateMode::Final
-                | AggregateMode::FinalPartitioned
-                | AggregateMode::Single
-                | AggregateMode::SinglePartitioned => output.push(acc.evaluate(emit_to)?),
-            }
-        }
-
+                Ok(aggregate_group_output)
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let group_indices = self
+            .aggregate_groups
+            .iter()
+            .map(|aggregate_group| aggregate_group.group_indices.to_vec())
+            .collect::<Vec<_>>();
+        let aggregate_outputs = reorder_aggregate_expr_results(outputs, group_indices);
+        output.extend(aggregate_outputs);
         // emit reduces the memory usage. Ignore Err from update_memory_reservation. Even if it is
         // over the target memory size after emission, we can emit again rather than returning Err.
         let _ = self.update_memory_reservation();
