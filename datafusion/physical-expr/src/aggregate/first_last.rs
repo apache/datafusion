@@ -30,7 +30,9 @@ use arrow::array::{Array, ArrayRef, AsArray, BooleanArray};
 use arrow::compute::{self, lexsort_to_indices, SortColumn};
 use arrow::datatypes::{DataType, Field};
 use datafusion_common::utils::{compare_rows, get_arrayref_at_indices, get_row_at_idx};
-use datafusion_common::{arrow_datafusion_err, DataFusionError, Result, ScalarValue};
+use datafusion_common::{
+    arrow_datafusion_err, internal_err, DataFusionError, Result, ScalarValue,
+};
 use datafusion_expr::Accumulator;
 
 /// FIRST_VALUE aggregate expression
@@ -211,11 +213,11 @@ impl FirstValueAccumulator {
 
     // Updates state with the values in the given row.
     fn update_with_new_row(&mut self, row: &[ScalarValue]) -> Result<()> {
-        let value = &row[0];
-        let orderings = &row[1..];
-        // Update when
-        // - no entry in the state
-        // - There is an earlier entry in according to requirements
+        let [value, orderings @ ..] = row else {
+            return internal_err!("Empty row in FIRST_VALUE");
+        };
+        // Update when there is no entry in the state, or we have an "earlier"
+        // entry according to sort requirements.
         if !self.is_set
             || compare_rows(
                 &self.orderings,
@@ -232,9 +234,9 @@ impl FirstValueAccumulator {
     }
 
     fn get_first_idx(&self, values: &[ArrayRef]) -> Result<Option<usize>> {
-        let value = &values[0];
-        let ordering_values = &values[1..];
-        assert_eq!(ordering_values.len(), self.ordering_req.len());
+        let [value, ordering_values @ ..] = values else {
+            return internal_err!("Empty row in FIRST_VALUE");
+        };
         if self.ordering_req.is_empty() {
             // Get first entry according to receive order (0th index)
             return Ok((!value.is_empty()).then_some(0));
@@ -248,10 +250,7 @@ impl FirstValueAccumulator {
             })
             .collect::<Vec<_>>();
         let indices = lexsort_to_indices(&sort_columns, Some(1))?;
-        if !indices.is_empty() {
-            return Ok(Some(indices.value(0) as usize));
-        }
-        Ok(None)
+        Ok((!indices.is_empty()).then_some(indices.value(0) as _))
     }
 }
 
@@ -495,12 +494,11 @@ impl LastValueAccumulator {
 
     // Updates state with the values in the given row.
     fn update_with_new_row(&mut self, row: &[ScalarValue]) -> Result<()> {
-        let value = &row[0];
-        let orderings = &row[1..];
-        // Update when
-        // - no value in the state
-        // - There is no specific requirement, but a new value (most recent entry in terms of execution)
-        // - There is a more recent entry in terms of requirement
+        let [value, orderings @ ..] = row else {
+            return internal_err!("Empty row in LAST_VALUE");
+        };
+        // Update when there is no entry in the state, or we have a "later"
+        // entry (either according to sort requirements or the order of execution).
         if !self.is_set
             || self.orderings.is_empty()
             || compare_rows(
@@ -518,18 +516,19 @@ impl LastValueAccumulator {
     }
 
     fn get_last_idx(&self, values: &[ArrayRef]) -> Result<Option<usize>> {
-        let value = &values[0];
-        let ordering_values = &values[1..];
-        assert_eq!(ordering_values.len(), self.ordering_req.len());
+        let [value, ordering_values @ ..] = values else {
+            return internal_err!("Empty row in LAST_VALUE");
+        };
         if self.ordering_req.is_empty() {
-            // Get last entry according to receive order (last index)
+            // Get last entry according to the order of data:
             return Ok((!value.is_empty()).then_some(value.len() - 1));
         }
         let sort_columns = ordering_values
             .iter()
             .zip(self.ordering_req.iter())
             .map(|(values, req)| {
-                // Take reverse ordering requirement this enables us to use fetch=1 for last value.
+                // Take the reverse ordering requirement. This enables us to
+                // use "fetch = 1" to get the last value.
                 SortColumn {
                     values: values.clone(),
                     options: Some(!req.options),
@@ -537,10 +536,7 @@ impl LastValueAccumulator {
             })
             .collect::<Vec<_>>();
         let indices = lexsort_to_indices(&sort_columns, Some(1))?;
-        if !indices.is_empty() {
-            return Ok(Some(indices.value(0) as usize));
-        }
-        Ok(None)
+        Ok((!indices.is_empty()).then_some(indices.value(0) as _))
     }
 }
 
@@ -638,15 +634,15 @@ fn convert_to_sort_cols(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use crate::aggregate::first_last::{FirstValueAccumulator, LastValueAccumulator};
 
+    use arrow::compute::concat;
     use arrow_array::{ArrayRef, Int64Array};
     use arrow_schema::DataType;
     use datafusion_common::{Result, ScalarValue};
     use datafusion_expr::Accumulator;
-
-    use arrow::compute::concat;
-    use std::sync::Arc;
 
     #[test]
     fn test_first_last_value_value() -> Result<()> {
