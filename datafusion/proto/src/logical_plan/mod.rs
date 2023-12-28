@@ -1648,28 +1648,8 @@ impl AsLogicalPlan for LogicalPlanNode {
                             match opt.as_ref() {
                                 FileTypeWriterOptions::CSV(csv_opts) => {
                                     let csv_options = &csv_opts.writer_options;
-                                    let csv_writer_options = protobuf::CsvWriterOptions {
-                                        delimiter: (csv_options.delimiter() as char)
-                                            .to_string(),
-                                        has_header: csv_options.header(),
-                                        date_format: csv_options
-                                            .date_format()
-                                            .unwrap_or("")
-                                            .to_owned(),
-                                        datetime_format: csv_options
-                                            .datetime_format()
-                                            .unwrap_or("")
-                                            .to_owned(),
-                                        timestamp_format: csv_options
-                                            .timestamp_format()
-                                            .unwrap_or("")
-                                            .to_owned(),
-                                        time_format: csv_options
-                                            .time_format()
-                                            .unwrap_or("")
-                                            .to_owned(),
-                                        null_value: csv_options.null().to_owned(),
-                                    };
+                                    let csv_writer_options =
+                                        csv_writer_options_to_proto(csv_options);
                                     let csv_options =
                                         file_type_writer_options::FileType::CsvOptions(
                                             csv_writer_options,
@@ -1721,6 +1701,20 @@ impl AsLogicalPlan for LogicalPlanNode {
                 "LogicalPlan serde is not yet implemented for DescribeTable",
             )),
         }
+    }
+}
+
+pub(crate) fn csv_writer_options_to_proto(
+    csv_options: &WriterBuilder,
+) -> protobuf::CsvWriterOptions {
+    protobuf::CsvWriterOptions {
+        delimiter: (csv_options.delimiter() as char).to_string(),
+        has_header: csv_options.header(),
+        date_format: csv_options.date_format().unwrap_or("").to_owned(),
+        datetime_format: csv_options.datetime_format().unwrap_or("").to_owned(),
+        timestamp_format: csv_options.timestamp_format().unwrap_or("").to_owned(),
+        time_format: csv_options.time_format().unwrap_or("").to_owned(),
+        null_value: csv_options.null().to_owned(),
     }
 }
 

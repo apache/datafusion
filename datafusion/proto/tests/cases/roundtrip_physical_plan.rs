@@ -15,12 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use arrow::csv::WriterBuilder;
 use std::ops::Deref;
 use std::sync::Arc;
 
 use datafusion::arrow::array::ArrayRef;
 use datafusion::arrow::compute::kernels::sort::SortOptions;
 use datafusion::arrow::datatypes::{DataType, Field, Fields, IntervalUnit, Schema};
+use datafusion::datasource::file_format::csv::CsvSink;
 use datafusion::datasource::file_format::json::JsonSink;
 //use datafusion::datasource::file_format::csv::CsvSink;
 use datafusion::datasource::file_format::parquet::ParquetSink;
@@ -65,6 +67,7 @@ use datafusion::physical_plan::{
 };
 use datafusion::prelude::SessionContext;
 use datafusion::scalar::ScalarValue;
+use datafusion_common::file_options::csv_writer::CsvWriterOptions;
 use datafusion_common::file_options::json_writer::JsonWriterOptions;
 use datafusion_common::file_options::parquet_writer::ParquetWriterOptions;
 use datafusion_common::parsers::CompressionTypeVariant;
@@ -759,41 +762,42 @@ fn roundtrip_json_sink() -> Result<()> {
     )))
 }
 
-// #[test]
-// fn roundtrip_csv_sink() -> Result<()> {
-//     let field_a = Field::new("plan_type", DataType::Utf8, false);
-//     let field_b = Field::new("plan", DataType::Utf8, false);
-//     let schema = Arc::new(Schema::new(vec![field_a, field_b]));
-//     let input = Arc::new(PlaceholderRowExec::new(schema.clone()));
-//
-//     let file_sink_config = FileSinkConfig {
-//         object_store_url: ObjectStoreUrl::local_filesystem(),
-//         file_groups: vec![PartitionedFile::new("/tmp".to_string(), 1)],
-//         table_paths: vec![ListingTableUrl::parse("file:///")?],
-//         output_schema: schema.clone(),
-//         table_partition_cols: vec![("plan_type".to_string(), DataType::Utf8)],
-//         single_file_output: true,
-//         overwrite: true,
-//         file_type_writer_options: FileTypeWriterOptions::CSV(CsvWriterOptions::new(
-//             CompressionTypeVariant::UNCOMPRESSED,
-//         )),
-//     };
-//     let data_sink = Arc::new(CsvSink::new(file_sink_config));
-//     let sort_order = vec![PhysicalSortRequirement::new(
-//         Arc::new(Column::new("plan_type", 0)),
-//         Some(SortOptions {
-//             descending: true,
-//             nulls_first: false,
-//         }),
-//     )];
-//
-//     roundtrip_test(Arc::new(FileSinkExec::new(
-//         input,
-//         data_sink,
-//         schema.clone(),
-//         Some(sort_order),
-//     )))
-// }
+#[test]
+fn roundtrip_csv_sink() -> Result<()> {
+    let field_a = Field::new("plan_type", DataType::Utf8, false);
+    let field_b = Field::new("plan", DataType::Utf8, false);
+    let schema = Arc::new(Schema::new(vec![field_a, field_b]));
+    let input = Arc::new(PlaceholderRowExec::new(schema.clone()));
+
+    let file_sink_config = FileSinkConfig {
+        object_store_url: ObjectStoreUrl::local_filesystem(),
+        file_groups: vec![PartitionedFile::new("/tmp".to_string(), 1)],
+        table_paths: vec![ListingTableUrl::parse("file:///")?],
+        output_schema: schema.clone(),
+        table_partition_cols: vec![("plan_type".to_string(), DataType::Utf8)],
+        single_file_output: true,
+        overwrite: true,
+        file_type_writer_options: FileTypeWriterOptions::CSV(CsvWriterOptions::new(
+            WriterBuilder::default(),
+            CompressionTypeVariant::UNCOMPRESSED,
+        )),
+    };
+    let data_sink = Arc::new(CsvSink::new(file_sink_config));
+    let sort_order = vec![PhysicalSortRequirement::new(
+        Arc::new(Column::new("plan_type", 0)),
+        Some(SortOptions {
+            descending: true,
+            nulls_first: false,
+        }),
+    )];
+
+    roundtrip_test(Arc::new(FileSinkExec::new(
+        input,
+        data_sink,
+        schema.clone(),
+        Some(sort_order),
+    )))
+}
 
 #[test]
 fn roundtrip_parquet_sink() -> Result<()> {

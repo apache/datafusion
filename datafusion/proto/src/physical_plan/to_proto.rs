@@ -31,7 +31,7 @@ use crate::protobuf::{
 #[cfg(feature = "parquet")]
 use datafusion::datasource::file_format::parquet::ParquetSink;
 
-use crate::logical_plan::writer_properties_to_proto;
+use crate::logical_plan::{csv_writer_options_to_proto, writer_properties_to_proto};
 use datafusion::datasource::{
     file_format::csv::CsvSink,
     file_format::json::JsonSink,
@@ -906,9 +906,14 @@ impl TryFrom<&FileTypeWriterOptions> for protobuf::FileTypeWriterOptions {
                 )
             }
             FileTypeWriterOptions::CSV(CsvWriterOptions {
-                writer_options: _,
-                compression: _,
-            }) => return not_impl_err!("CSV file sink protobuf serialization"),
+                writer_options,
+                compression,
+            }) => {
+                let _compression: protobuf::CompressionTypeVariant = compression.into();
+                protobuf::file_type_writer_options::FileType::CsvOptions(
+                    csv_writer_options_to_proto(writer_options),
+                )
+            }
             FileTypeWriterOptions::JSON(JsonWriterOptions { compression }) => {
                 let compression: protobuf::CompressionTypeVariant = compression.into();
                 protobuf::file_type_writer_options::FileType::JsonOptions(
