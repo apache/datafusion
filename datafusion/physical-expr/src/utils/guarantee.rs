@@ -135,16 +135,16 @@ impl LiteralGuarantee {
                         .downcast_ref::<crate::expressions::Column>();
                     let Some(col) = col else {
                         return builder;
-                    }
+                    };
 
                     let literals = inlist
                         .list()
                         .iter()
                         .map(|e| e.as_any().downcast_ref::<crate::expressions::Literal>())
                         .collect::<Option<Vec<_>>>();
-                    if literals.is_none() {
+                    let Some(literals) = literals else {
                         return builder;
-                    }
+                    };
 
                     let guarantee = if inlist.negated() {
                         Guarantee::NotIn
@@ -153,9 +153,9 @@ impl LiteralGuarantee {
                     };
 
                     builder.aggregate_multi_conjunct(
-                        col.unwrap(),
+                        col,
                         guarantee,
-                        literals.unwrap().iter().map(|e| e.value()),
+                        literals.iter().map(|e| e.value()),
                     )
                 } else {
                     // split disjunction: <expr> OR <expr> OR ...
@@ -378,7 +378,6 @@ impl<'a> ColOpLit<'a> {
             left.downcast_ref::<crate::expressions::Literal>(),
             right.downcast_ref::<crate::expressions::Column>(),
         ) {
-            // Used swapped operator operator, if possible
             Some(Self {
                 col,
                 guarantee,
@@ -779,6 +778,21 @@ mod test {
                 .in_list(vec![lit(1), lit(2), lit(3)], true)
                 .and(col("b").eq(lit(3)).or(col("b").eq(lit(4)))),
             vec![not_in_guarantee("b", [1, 2, 3]), in_guarantee("b", [3, 4])],
+        );
+        // b IN (1, 2, 3) OR b = 2
+        // TODO this should be in_guarantee("b", [1, 2, 3]) but currently we don't support to anylize this kind of disjunction. Only `ColOpLit OR ColOpLit` is supported.
+        test_analyze(
+            col("b")
+                .in_list(vec![lit(1), lit(2), lit(3)], false)
+                .or(col("b").eq(lit(2))),
+            vec![],
+        );
+        // b IN (1, 2, 3) OR b != 3
+        test_analyze(
+            col("b")
+                .in_list(vec![lit(1), lit(2), lit(3)], false)
+                .or(col("b").not_eq(lit(3))),
+            vec![],
         );
     }
 
