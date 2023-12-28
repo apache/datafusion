@@ -891,6 +891,9 @@ impl TryFrom<&FileTypeWriterOptions> for protobuf::FileTypeWriterOptions {
             FileTypeWriterOptions::Arrow(ArrowWriterOptions {}) => {
                 return not_impl_err!("Arrow file sink protobuf serialization")
             }
+            FileTypeWriterOptions::Extension => {
+                return not_impl_err!("Extension file sink protobuf serialization")
+            }
         };
         Ok(Self {
             file_type: Some(file_type),

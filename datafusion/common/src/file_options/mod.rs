@@ -154,6 +154,9 @@ pub enum FileTypeWriterOptions {
     JSON(JsonWriterOptions),
     Avro(AvroWriterOptions),
     Arrow(ArrowWriterOptions),
+    /// For extension [FileType]s, FileTypeWriterOptions ignores all
+    /// passed options and returns an empty variant.
+    Extension,
 }
 
 impl FileTypeWriterOptions {
@@ -184,6 +187,7 @@ impl FileTypeWriterOptions {
             FileType::ARROW => {
                 FileTypeWriterOptions::Arrow(ArrowWriterOptions::try_from(options)?)
             }
+            FileType::Extension(_) => FileTypeWriterOptions::Extension,
         };
 
         Ok(file_type_write_options)
@@ -191,7 +195,7 @@ impl FileTypeWriterOptions {
 
     /// Constructs a FileTypeWriterOptions from session defaults only.
     pub fn build_default(
-        file_type: &FileType,
+        file_type: &mut FileType,
         config_defaults: &ConfigOptions,
     ) -> Result<Self> {
         let empty_statement = StatementOptions::new(vec![]);
@@ -214,6 +218,7 @@ impl FileTypeWriterOptions {
             FileType::ARROW => {
                 FileTypeWriterOptions::Arrow(ArrowWriterOptions::try_from(options)?)
             }
+            FileType::Extension(_) => FileTypeWriterOptions::Extension,
         };
 
         Ok(file_type_write_options)
@@ -290,6 +295,7 @@ impl Display for FileTypeWriterOptions {
             FileTypeWriterOptions::JSON(_) => "JsonWriterOptions",
             #[cfg(feature = "parquet")]
             FileTypeWriterOptions::Parquet(_) => "ParquetWriterOptions",
+            FileTypeWriterOptions::Extension => "ExensionWriterOptions",
         };
         write!(f, "{}", name)
     }
