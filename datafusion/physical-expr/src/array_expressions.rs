@@ -2453,7 +2453,7 @@ pub fn general_array_distinct<OffsetSize: OffsetSizeTrait>(
         let last_offset: OffsetSize = offsets.last().copied().unwrap();
         offsets.push(last_offset + OffsetSize::usize_as(rows.len()));
         let arrays = converter.convert_rows(rows)?;
-        let array = match arrays.get(0) {
+        let array = match arrays.first() {
             Some(array) => array.clone(),
             None => {
                 return internal_err!("array_distinct: failed to get array from rows")
