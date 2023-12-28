@@ -140,5 +140,11 @@ async fn main() -> Result<()> {
     // print the results
     df.show().await?;
 
+    // Given that `pow` is registered in the context, we can also use it in SQL:
+    let sql_df = ctx.sql("SELECT pow(a, b) FROM t").await?;
+
+    // print the results
+    sql_df.show().await?;
+
     Ok(())
 }
