@@ -137,15 +137,15 @@ fn format_batches_with_maxrows<W: std::io::Write>(
             if over_limit {
                 let mut formatted_str = format!("{}", formatted);
                 formatted_str = keep_only_maxrows(&formatted_str, maxrows);
-                write!(writer, "{}", formatted_str)?;
+                writeln!(writer, "{}", formatted_str)?;
             } else {
-                write!(writer, "{}", formatted)?;
+                writeln!(writer, "{}", formatted)?;
             }
         }
         MaxRows::Unlimited => {
             let formatted =
                 pretty_format_batches_with_options(batches, &DEFAULT_FORMAT_OPTIONS)?;
-            write!(writer, "{}", formatted)?;
+            writeln!(writer, "{}", formatted)?;
         }
     }
 
@@ -290,7 +290,7 @@ mod tests {
             "| 1 |",
             "| 2 |",
             "| 3 |",
-            "+---+",
+            "+---+\n",
         ].join("\n");
 
         #[rustfmt::skip]
@@ -302,7 +302,7 @@ mod tests {
             "| . |",
             "| . |",
             "| . |",
-            "+---+",
+            "+---+\n",
         ].join("\n");
 
         #[rustfmt::skip]
@@ -318,7 +318,7 @@ mod tests {
             "| . |",
             "| . |",
             "| . |",
-            "+---+",
+            "+---+\n",
         ].join("\n");
 
         let no_limit = run_test(&[batch.clone()], |buffer, batches| {
