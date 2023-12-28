@@ -154,9 +154,10 @@ pub enum FileTypeWriterOptions {
     JSON(JsonWriterOptions),
     Avro(AvroWriterOptions),
     Arrow(ArrowWriterOptions),
-    /// For extension [FileType]s, FileTypeWriterOptions ignores all
-    /// passed options and returns an empty variant.
-    Extension,
+    /// For extension [FileType]s, FileTypeWriterOptions simply stores
+    /// any passed StatementOptions to be handled later by any custom
+    /// physical plans (Such as a FileFormat::create_writer_physical_plan)
+    Extension(Option<StatementOptions>),
 }
 
 impl FileTypeWriterOptions {
@@ -187,7 +188,9 @@ impl FileTypeWriterOptions {
             FileType::ARROW => {
                 FileTypeWriterOptions::Arrow(ArrowWriterOptions::try_from(options)?)
             }
-            FileType::Extension(_) => FileTypeWriterOptions::Extension,
+            FileType::Extension(_) => {
+                FileTypeWriterOptions::Extension(Some(statement_options.clone()))
+            }
         };
 
         Ok(file_type_write_options)
@@ -218,7 +221,7 @@ impl FileTypeWriterOptions {
             FileType::ARROW => {
                 FileTypeWriterOptions::Arrow(ArrowWriterOptions::try_from(options)?)
             }
-            FileType::Extension(_) => FileTypeWriterOptions::Extension,
+            FileType::Extension(_) => FileTypeWriterOptions::Extension(None),
         };
 
         Ok(file_type_write_options)
@@ -295,7 +298,7 @@ impl Display for FileTypeWriterOptions {
             FileTypeWriterOptions::JSON(_) => "JsonWriterOptions",
             #[cfg(feature = "parquet")]
             FileTypeWriterOptions::Parquet(_) => "ParquetWriterOptions",
-            FileTypeWriterOptions::Extension => "ExensionWriterOptions",
+            FileTypeWriterOptions::Extension(_) => "ExensionWriterOptions",
         };
         write!(f, "{}", name)
     }
