@@ -22,15 +22,16 @@ use crate::expr::{
     Placeholder, ScalarFunction, TryCast,
 };
 use crate::function::PartitionEvaluatorFactory;
-use crate::WindowUDF;
 use crate::{
     aggregate_function, built_in_function, conditional_expressions::CaseBuilder,
     logical_plan::Subquery, AccumulatorFactoryFunction, AggregateUDF,
     BuiltinScalarFunction, Expr, LogicalPlan, Operator, ReturnTypeFunction,
     ScalarFunctionImplementation, ScalarUDF, Signature, StateTypeFunction, Volatility,
 };
+use crate::{ColumnarValue, ScalarUDFImpl, WindowUDF};
 use arrow::datatypes::DataType;
 use datafusion_common::{Column, Result};
+use std::any::Any;
 use std::ops::Not;
 use std::sync::Arc;
 
@@ -944,11 +945,18 @@ pub fn when(when: Expr, then: Expr) -> CaseBuilder {
     CaseBuilder::new(None, vec![when], vec![then], None)
 }
 
-/// Creates a new UDF with a specific signature and specific return type.
-/// This is a helper function to create a new UDF.
-/// The function `create_udf` returns a subset of all possible `ScalarFunction`:
-/// * the UDF has a fixed return type
-/// * the UDF has a fixed signature (e.g. [f64, f64])
+/// Convenience method to create a new user defined scalar function (UDF) with a
+/// specific signature and specific return type.
+///
+/// Note this function does not expose all available features of [`ScalarUDF`],
+/// such as
+///
+/// * computing return types based on input types
+/// * multiple [`Signature`]s
+/// * aliases
+///
+/// See [`ScalarUDF`] for details and examples on how to use the full
+/// functionality.
 pub fn create_udf(
     name: &str,
     input_types: Vec<DataType>,
@@ -956,13 +964,66 @@ pub fn create_udf(
     volatility: Volatility,
     fun: ScalarFunctionImplementation,
 ) -> ScalarUDF {
-    let return_type: ReturnTypeFunction = Arc::new(move |_| Ok(return_type.clone()));
-    ScalarUDF::new(
+    let return_type = Arc::try_unwrap(return_type).unwrap_or_else(|t| t.as_ref().clone());
+    ScalarUDF::from(SimpleScalarUDF::new(
         name,
-        &Signature::exact(input_types, volatility),
-        &return_type,
-        &fun,
-    )
+        input_types,
+        return_type,
+        volatility,
+        fun,
+    ))
+}
+
+/// Implements [`ScalarUDFImpl`] for functions that have a single signature and
+/// return type.
+pub struct SimpleScalarUDF {
+    name: String,
+    signature: Signature,
+    return_type: DataType,
+    fun: ScalarFunctionImplementation,
+}
+
+impl SimpleScalarUDF {
+    /// Create a new `SimpleScalarUDF` from a name, input types, return type and
+    /// implementation. Implementing [`ScalarUDFImpl`] allows more flexibility
+    pub fn new(
+        name: impl Into<String>,
+        input_types: Vec<DataType>,
+        return_type: DataType,
+        volatility: Volatility,
+        fun: ScalarFunctionImplementation,
+    ) -> Self {
+        let name = name.into();
+        let signature = Signature::exact(input_types, volatility);
+        Self {
+            name,
+            signature,
+            return_type,
+            fun,
+        }
+    }
+}
+
+impl ScalarUDFImpl for SimpleScalarUDF {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        Ok(self.return_type.clone())
+    }
+
+    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+        (self.fun)(args)
+    }
 }
 
 /// Creates a new UDAF with a specific signature, state type and return type.
