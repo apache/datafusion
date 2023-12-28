@@ -43,6 +43,7 @@ pub trait GetExt {
 }
 
 /// Readable file type
+#[allow(clippy::derived_hash_with_manual_eq)]
 #[derive(Debug, Clone, Hash)]
 pub enum FileType {
     /// Apache Arrow file
@@ -65,9 +66,12 @@ pub trait ExtensionFileType:
     std::fmt::Debug + ExtensionFileTypeClone + Send + Sync
 {
     /// Returns the default file extension for this type, e.g. CSV would return ".csv".to_owned()
+    /// The default_extension is also used to uniquely identify a specific FileType::Extension variant,
+    /// so ensure this String is unique from any built in FileType and any other ExtensionFileTypes
+    /// defined.
     fn default_extension(&self) -> String;
 
-    /// Returns the file extension when it is compressed with a given [FileCompressionType]
+    /// Returns the file extension when it is compressed with a given [CompressionTypeVariant]
     fn extension_with_compression(
         &self,
         compression: CompressionTypeVariant,
