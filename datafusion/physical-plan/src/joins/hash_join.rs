@@ -155,8 +155,48 @@ impl JoinLeftData {
 ///
 /// Execution proceeds in 2 stages:
 ///
-/// 1. the **build phase** where a hash table is created from the tuples of the
-/// build side.
+/// 1. the **build phase** creates a hash table from the tuples of the build side,
+/// and single concatenated batch containing data from all fetched record batches.
+/// Resulting hash table stores hashed join-key fields for each row as a key, and
+/// indices of corresponding rows in concatenated batch.
+///
+/// Hash join uses LIFO data structure as a hash table, and in order to retain
+/// original build-side input order while obtaining data during probe phase, hash
+/// table is updated by iterating batch sequence in reverse order -- it allows to
+/// keep rows with smaller indices "on the top" of hash table, and still maintain
+/// correct indexing for concatenated build-side data batch.
+///
+/// Example of build phase for 3 record batches:
+///
+///
+/// ```text
+///
+///  Original build-side data   Inserting build-side values into hashmap    Concatenated build-side batch
+///                                                                         ┌───────────────────────────┐
+///                             hasmap.insert(row-hash, row-idx + offset)   │                      idx  │
+///            ┌───────┐                                                    │          ┌───────┐        │
+///            │ Row 1 │        1) update_hash for batch 3 with offset 0    │          │ Row 6 │    0   │
+///   Batch 1  │       │           - hashmap.insert(Row 7, idx 1)           │ Batch 3  │       │        │
+///            │ Row 2 │           - hashmap.insert(Row 6, idx 0)           │          │ Row 7 │    1   │
+///            └───────┘                                                    │          └───────┘        │
+///                                                                         │                           │
+///            ┌───────┐                                                    │          ┌───────┐        │
+///            │ Row 3 │        2) update_hash for batch 2 with offset 2    │          │ Row 3 │    2   │
+///            │       │           - hashmap.insert(Row 5, idx 4)           │          │       │        │
+///   Batch 2  │ Row 4 │           - hashmap.insert(Row 4, idx 3)           │ Batch 2  │ Row 4 │    3   │
+///            │       │           - hashmap.insert(Row 3, idx 2)           │          │       │        │
+///            │ Row 5 │                                                    │          │ Row 5 │    4   │
+///            └───────┘                                                    │          └───────┘        │
+///                                                                         │                           │
+///            ┌───────┐                                                    │          ┌───────┐        │
+///            │ Row 6 │        3) update_hash for batch 1 with offset 5    │          │ Row 1 │    5   │
+///   Batch 3  │       │           - hashmap.insert(Row 2, idx 5)           │ Batch 1  │       │        │
+///            │ Row 7 │           - hashmap.insert(Row 1, idx 6)           │          │ Row 2 │    6   │
+///            └───────┘                                                    │          └───────┘        │
+///                                                                         │                           │
+///                                                                         └───────────────────────────┘
+///
+/// ```
 ///
 /// 2. the **probe phase** where the tuples of the probe side are streamed
 /// through, checking for matches of the join keys in the hash table.
@@ -715,7 +755,7 @@ async fn collect_left_input(
     let mut hashes_buffer = Vec::new();
     let mut offset = 0;
 
-    // Reverse iteration over build-side input batches allows to create FIFO hashmap
+    // Updating hashmap starting from the last batch
     let batches_iter = batches.iter().rev();
     for batch in batches_iter.clone() {
         hashes_buffer.clear();

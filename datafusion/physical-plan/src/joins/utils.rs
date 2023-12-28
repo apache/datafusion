@@ -166,7 +166,7 @@ pub trait JoinHashMapType {
                 let prev_index = *index;
                 // Store new value inside hashmap
                 *index = (row + 1) as u64;
-                // Update chained Vec at row + offset with previous value
+                // Update chained Vec at `row` with previous value
                 mut_list[row - deleted_offset] = prev_index;
             } else {
                 mut_map.insert(
@@ -175,7 +175,7 @@ pub trait JoinHashMapType {
                     (*hash_value, (row + 1) as u64),
                     |(hash, _)| *hash,
                 );
-                // chained list at (row + offset) is already initialized with 0
+                // chained list at `row` is already initialized with 0
                 // meaning end of list
             }
         }
