@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Line delimited JSON format abstractions
+//! [`JsonFormat`]: Line delimited JSON [`FileFormat`] abstractions
 
 use std::any::Any;
 use std::fmt;

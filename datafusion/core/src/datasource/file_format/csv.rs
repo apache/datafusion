@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! CSV format abstractions
+//! [`CsvFormat`], Comma Separated Value (CSV) [`FileFormat`] abstractions
 
 use std::any::Any;
 use std::collections::HashSet;

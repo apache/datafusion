@@ -489,7 +489,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
                     physical_aggr_expr,
                     physical_filter_expr,
                     input,
-                    Arc::new(input_schema.try_into()?),
+                    physical_schema,
                 )?))
             }
             PhysicalPlanType::HashJoin(hashjoin) => {
