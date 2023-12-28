@@ -136,7 +136,7 @@ pub struct ExprTreeNode<T> {
 
 impl<T> ExprTreeNode<T> {
     pub fn new(expr: Arc<dyn PhysicalExpr>) -> Self {
-        let children = expr.children();
+        let children = PhysicalExpr::children(expr.as_ref());
         ExprTreeNode {
             expr,
             data: None,
@@ -154,19 +154,8 @@ impl<T> ExprTreeNode<T> {
 }
 
 impl<T: Clone> TreeNode for ExprTreeNode<T> {
-    fn apply_children<F>(&self, op: &mut F) -> Result<VisitRecursion>
-    where
-        F: FnMut(&Self) -> Result<VisitRecursion>,
-    {
-        for child in self.children() {
-            match op(child)? {
-                VisitRecursion::Continue => {}
-                VisitRecursion::Skip => return Ok(VisitRecursion::Continue),
-                VisitRecursion::Stop => return Ok(VisitRecursion::Stop),
-            }
-        }
-
-        Ok(VisitRecursion::Continue)
+    fn children_nodes(&self) -> Vec<&Self> {
+        self.children().iter().collect()
     }
 
     fn map_children<F>(mut self, transform: F) -> Result<Self>

@@ -33,6 +33,9 @@ use crate::Result;
 /// [`LogicalPlan`]: https://docs.rs/datafusion-expr/latest/datafusion_expr/logical_plan/enum.LogicalPlan.html
 /// [`Expr`]: https://docs.rs/datafusion-expr/latest/datafusion_expr/expr/enum.Expr.html
 pub trait TreeNode: Sized {
+    /// Returns all children of the TreeNode
+    fn children_nodes(&self) -> Vec<&Self>;
+
     /// Use preorder to iterate the node on the tree so that we can
     /// stop fast for some cases.
     ///
@@ -211,7 +214,17 @@ pub trait TreeNode: Sized {
     /// Apply the closure `F` to the node's children
     fn apply_children<F>(&self, op: &mut F) -> Result<VisitRecursion>
     where
-        F: FnMut(&Self) -> Result<VisitRecursion>;
+        F: FnMut(&Self) -> Result<VisitRecursion>,
+    {
+        for child in self.children_nodes() {
+            match op(child)? {
+                VisitRecursion::Continue => {}
+                VisitRecursion::Skip => return Ok(VisitRecursion::Continue),
+                VisitRecursion::Stop => return Ok(VisitRecursion::Stop),
+            }
+        }
+        Ok(VisitRecursion::Continue)
+    }
 
     /// Apply transform `F` to the node's children, the transform `F` might have a direction(Preorder or Postorder)
     fn map_children<F>(self, transform: F) -> Result<Self>
@@ -342,18 +355,21 @@ pub trait DynTreeNode {
 /// Blanket implementation for Arc for any tye that implements
 /// [`DynTreeNode`] (such as [`Arc<dyn PhysicalExpr>`])
 impl<T: DynTreeNode + ?Sized> TreeNode for Arc<T> {
+    fn children_nodes(&self) -> Vec<&Arc<T>> {
+        unimplemented!("Call arc_children instead")
+    }
+
     fn apply_children<F>(&self, op: &mut F) -> Result<VisitRecursion>
     where
         F: FnMut(&Self) -> Result<VisitRecursion>,
     {
-        for child in self.arc_children() {
-            match op(&child)? {
+        for child in &self.arc_children() {
+            match op(child)? {
                 VisitRecursion::Continue => {}
                 VisitRecursion::Skip => return Ok(VisitRecursion::Continue),
                 VisitRecursion::Stop => return Ok(VisitRecursion::Stop),
             }
         }
-
         Ok(VisitRecursion::Continue)
     }
 
@@ -368,7 +384,7 @@ impl<T: DynTreeNode + ?Sized> TreeNode for Arc<T> {
             let arc_self = Arc::clone(&self);
             self.with_new_arc_children(arc_self, new_children?)
         } else {
-            Ok(self)
+            Ok(self.clone())
         }
     }
 }

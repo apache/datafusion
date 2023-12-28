@@ -28,7 +28,7 @@ use crate::physical_plan::repartition::RepartitionExec;
 use crate::physical_plan::sorts::sort::SortExec;
 use crate::physical_plan::{with_new_children_if_necessary, ExecutionPlan};
 
-use datafusion_common::tree_node::{Transformed, TreeNode, VisitRecursion};
+use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{plan_err, DataFusionError, JoinSide, Result};
 use datafusion_expr::JoinType;
 use datafusion_physical_expr::expressions::Column;
@@ -71,20 +71,10 @@ impl SortPushDown {
 }
 
 impl TreeNode for SortPushDown {
-    fn apply_children<F>(&self, op: &mut F) -> Result<VisitRecursion>
-    where
-        F: FnMut(&Self) -> Result<VisitRecursion>,
-    {
-        for child in &self.children_nodes {
-            match op(child)? {
-                VisitRecursion::Continue => {}
-                VisitRecursion::Skip => return Ok(VisitRecursion::Continue),
-                VisitRecursion::Stop => return Ok(VisitRecursion::Stop),
-            }
-        }
-
-        Ok(VisitRecursion::Continue)
+    fn children_nodes(&self) -> Vec<&Self> {
+        self.children_nodes.iter().collect()
     }
+
     fn map_children<F>(mut self, transform: F) -> Result<Self>
     where
         F: FnMut(Self) -> Result<Self>,

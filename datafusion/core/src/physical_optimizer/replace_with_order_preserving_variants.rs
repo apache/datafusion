@@ -29,7 +29,7 @@ use crate::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use crate::physical_plan::{with_new_children_if_necessary, ExecutionPlan};
 
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::tree_node::{Transformed, TreeNode, VisitRecursion};
+use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_physical_plan::unbounded_output;
 
 /// For a given `plan`, this object carries the information one needs from its
@@ -104,18 +104,8 @@ impl OrderPreservationContext {
 }
 
 impl TreeNode for OrderPreservationContext {
-    fn apply_children<F>(&self, op: &mut F) -> Result<VisitRecursion>
-    where
-        F: FnMut(&Self) -> Result<VisitRecursion>,
-    {
-        for child in &self.children_nodes {
-            match op(child)? {
-                VisitRecursion::Continue => {}
-                VisitRecursion::Skip => return Ok(VisitRecursion::Continue),
-                VisitRecursion::Stop => return Ok(VisitRecursion::Stop),
-            }
-        }
-        Ok(VisitRecursion::Continue)
+    fn children_nodes(&self) -> Vec<&Self> {
+        self.children_nodes.iter().collect()
     }
 
     fn map_children<F>(mut self, transform: F) -> Result<Self>

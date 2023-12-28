@@ -145,11 +145,15 @@ impl PlanWithCorrespondingSort {
 }
 
 impl TreeNode for PlanWithCorrespondingSort {
+    fn children_nodes(&self) -> Vec<&Self> {
+        self.children_nodes.iter().collect()
+    }
+
     fn apply_children<F>(&self, op: &mut F) -> Result<VisitRecursion>
     where
         F: FnMut(&Self) -> Result<VisitRecursion>,
     {
-        for child in &self.children_nodes {
+        for child in self.children_nodes() {
             match op(child)? {
                 VisitRecursion::Continue => {}
                 VisitRecursion::Skip => return Ok(VisitRecursion::Continue),
@@ -237,19 +241,8 @@ impl PlanWithCorrespondingCoalescePartitions {
 }
 
 impl TreeNode for PlanWithCorrespondingCoalescePartitions {
-    fn apply_children<F>(&self, op: &mut F) -> Result<VisitRecursion>
-    where
-        F: FnMut(&Self) -> Result<VisitRecursion>,
-    {
-        for child in &self.children_nodes {
-            match op(child)? {
-                VisitRecursion::Continue => {}
-                VisitRecursion::Skip => return Ok(VisitRecursion::Continue),
-                VisitRecursion::Stop => return Ok(VisitRecursion::Stop),
-            }
-        }
-
-        Ok(VisitRecursion::Continue)
+    fn children_nodes(&self) -> Vec<&Self> {
+        self.children_nodes.iter().collect()
     }
 
     fn map_children<F>(mut self, transform: F) -> Result<Self>

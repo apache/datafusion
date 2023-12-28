@@ -20,7 +20,7 @@ use std::{ops::Neg, sync::Arc};
 use arrow_schema::SortOptions;
 
 use crate::PhysicalExpr;
-use datafusion_common::tree_node::{TreeNode, VisitRecursion};
+use datafusion_common::tree_node::TreeNode;
 use datafusion_common::Result;
 
 /// To propagate [`SortOptions`] across the [`PhysicalExpr`], it is insufficient
@@ -158,7 +158,7 @@ impl ExprOrdering {
     /// Creates a new [`ExprOrdering`] with [`SortProperties::Unordered`] states
     /// for `expr` and its children.
     pub fn new(expr: Arc<dyn PhysicalExpr>) -> Self {
-        let children = expr.children();
+        let children = PhysicalExpr::children(expr.as_ref());
         Self {
             expr,
             state: Default::default(),
@@ -173,18 +173,8 @@ impl ExprOrdering {
 }
 
 impl TreeNode for ExprOrdering {
-    fn apply_children<F>(&self, op: &mut F) -> Result<VisitRecursion>
-    where
-        F: FnMut(&Self) -> Result<VisitRecursion>,
-    {
-        for child in &self.children {
-            match op(child)? {
-                VisitRecursion::Continue => {}
-                VisitRecursion::Skip => return Ok(VisitRecursion::Continue),
-                VisitRecursion::Stop => return Ok(VisitRecursion::Stop),
-            }
-        }
-        Ok(VisitRecursion::Continue)
+    fn children_nodes(&self) -> Vec<&Self> {
+        self.children.iter().collect()
     }
 
     fn map_children<F>(mut self, transform: F) -> Result<Self>
