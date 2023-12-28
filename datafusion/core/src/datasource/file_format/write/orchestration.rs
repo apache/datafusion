@@ -39,10 +39,10 @@ use tokio::task::{JoinHandle, JoinSet};
 use tokio::try_join;
 
 use super::demux::start_demuxer_task;
-use super::{create_writer, AbortableWrite, BatchSerializer};
+use super::{create_writer, AbortableWrite, SerializationSchema};
 
 type WriterType = AbortableWrite<Box<dyn AsyncWrite + Send + Unpin>>;
-type SerializerType = Box<dyn BatchSerializer>;
+type SerializerType = Arc<dyn SerializationSchema>;
 
 /// Serializes a single data stream in parallel and writes to an ObjectStore
 /// concurrently. Data order is preserved. In the event of an error,
@@ -50,33 +50,29 @@ type SerializerType = Box<dyn BatchSerializer>;
 /// so that the caller may handle aborting failed writes.
 pub(crate) async fn serialize_rb_stream_to_object_store(
     mut data_rx: Receiver<RecordBatch>,
-    mut serializer: Box<dyn BatchSerializer>,
+    mut serializer: Arc<dyn SerializationSchema>,
     mut writer: AbortableWrite<Box<dyn AsyncWrite + Send + Unpin>>,
 ) -> std::result::Result<(WriterType, u64), (WriterType, DataFusionError)> {
     let (tx, mut rx) =
         mpsc::channel::<JoinHandle<Result<(usize, Bytes), DataFusionError>>>(100);
-
+    // Initially, has_header can be true for CSV use cases. Then, we must turn into false to keep integrity
+    // of the writing process.
     let serialize_task = tokio::spawn(async move {
+        let mut initial = true;
         while let Some(batch) = data_rx.recv().await {
-            match serializer.duplicate() {
-                Ok(mut serializer_clone) => {
-                    let handle = tokio::spawn(async move {
-                        let num_rows = batch.num_rows();
-                        let bytes = serializer_clone.serialize(batch).await?;
-                        Ok((num_rows, bytes))
-                    });
-                    tx.send(handle).await.map_err(|_| {
-                        DataFusionError::Internal(
-                            "Unknown error writing to object store".into(),
-                        )
-                    })?;
-                }
-                Err(_) => {
-                    return Err(DataFusionError::Internal(
-                        "Unknown error writing to object store".into(),
-                    ))
-                }
+            let serializer_clone = serializer.clone();
+            let handle = tokio::spawn(async move {
+                let num_rows = batch.num_rows();
+                let bytes = serializer_clone.serialize(batch).await?;
+                Ok((num_rows, bytes))
+            });
+            if initial {
+                serializer = serializer.create_headless_serializer() as _;
+                initial = false;
             }
+            tx.send(handle).await.map_err(|_| {
+                DataFusionError::Internal("Unknown error writing to object store".into())
+            })?;
         }
         Ok(())
     });
@@ -220,7 +216,7 @@ pub(crate) async fn stateless_multipart_put(
     data: SendableRecordBatchStream,
     context: &Arc<TaskContext>,
     file_extension: String,
-    get_serializer: Box<dyn Fn() -> Box<dyn BatchSerializer> + Send>,
+    get_serializer: Box<dyn Fn() -> Arc<dyn SerializationSchema> + Send>,
     config: &FileSinkConfig,
     compression: FileCompressionType,
 ) -> Result<u64> {

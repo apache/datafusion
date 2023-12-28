@@ -149,15 +149,11 @@ impl<W: AsyncWrite + Unpin + Send> AsyncWrite for AbortableWrite<W> {
 
 /// A trait that defines the methods required for a RecordBatch serializer.
 #[async_trait]
-pub trait BatchSerializer: Unpin + Send {
+pub trait SerializationSchema: Sync + Send {
     /// Asynchronously serializes a `RecordBatch` and returns the serialized bytes.
-    async fn serialize(&mut self, batch: RecordBatch) -> Result<Bytes>;
-    /// Duplicates self to support serializing multiple batches in parallel on multiple cores
-    fn duplicate(&mut self) -> Result<Box<dyn BatchSerializer>> {
-        Err(DataFusionError::NotImplemented(
-            "Parallel serialization is not implemented for this file type".into(),
-        ))
-    }
+    async fn serialize(&self, batch: RecordBatch) -> Result<Bytes>;
+
+    fn create_headless_serializer(&self) -> Arc<dyn SerializationSchema>;
 }
 
 /// Returns an [`AbortableWrite`] which writes to the given object store location

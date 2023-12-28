@@ -524,7 +524,7 @@ mod tests {
     use datafusion_common::Statistics;
 
     use super::*;
-    use crate::datasource::file_format::write::BatchSerializer;
+    use crate::datasource::file_format::write::SerializationSchema;
     use crate::datasource::object_store::ObjectStoreUrl;
     use crate::datasource::physical_plan::FileMeta;
     use crate::physical_plan::metrics::ExecutionPlanMetricsSet;
@@ -992,9 +992,13 @@ mod tests {
     }
 
     #[async_trait]
-    impl BatchSerializer for TestSerializer {
-        async fn serialize(&mut self, _batch: RecordBatch) -> Result<Bytes> {
+    impl SerializationSchema for TestSerializer {
+        async fn serialize(&self, _batch: RecordBatch) -> Result<Bytes> {
             Ok(self.bytes.clone())
+        }
+
+        fn create_headless_serializer(&self) -> Arc<dyn SerializationSchema> {
+            unimplemented!()
         }
     }
 }

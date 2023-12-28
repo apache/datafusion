@@ -21,6 +21,7 @@ use std::any::Any;
 use std::collections::HashSet;
 use std::fmt;
 use std::fmt::Debug;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use arrow_array::RecordBatch;
@@ -37,7 +38,7 @@ use object_store::{delimited::newline_delimited_stream, ObjectMeta, ObjectStore}
 use super::write::orchestration::stateless_multipart_put;
 use super::{FileFormat, DEFAULT_SCHEMA_INFER_MAX_RECORD};
 use crate::datasource::file_format::file_compression_type::FileCompressionType;
-use crate::datasource::file_format::write::BatchSerializer;
+use crate::datasource::file_format::write::SerializationSchema;
 use crate::datasource::physical_plan::{
     CsvExec, FileGroupDisplay, FileScanConfig, FileSinkConfig,
 };
@@ -390,29 +391,26 @@ fn build_schema_helper(names: Vec<String>, types: &[HashSet<DataType>]) -> Schem
     Schema::new(fields)
 }
 
-impl Default for CsvSerializer {
+impl Default for CsvSerializationSchema {
     fn default() -> Self {
         Self::new()
     }
 }
 
 /// Define a struct for serializing CSV records to a stream
-pub struct CsvSerializer {
+pub struct CsvSerializationSchema {
     // CSV writer builder
     builder: WriterBuilder,
-    // Inner buffer for avoiding reallocation
-    buffer: Vec<u8>,
     // Flag to indicate whether there will be a header
     header: bool,
 }
 
-impl CsvSerializer {
-    /// Constructor for the CsvSerializer object
+impl CsvSerializationSchema {
+    /// Constructor for the CsvSerializationSchema object
     pub fn new() -> Self {
         Self {
             builder: WriterBuilder::new(),
             header: true,
-            buffer: Vec::with_capacity(4096),
         }
     }
 
@@ -430,22 +428,21 @@ impl CsvSerializer {
 }
 
 #[async_trait]
-impl BatchSerializer for CsvSerializer {
-    async fn serialize(&mut self, batch: RecordBatch) -> Result<Bytes> {
+impl SerializationSchema for CsvSerializationSchema {
+    async fn serialize(&self, batch: RecordBatch) -> Result<Bytes> {
+        let mut buffer = Vec::with_capacity(4096);
         let builder = self.builder.clone();
-        let mut writer = builder.with_header(self.header).build(&mut self.buffer);
+        let mut writer = builder.with_header(self.header).build(&mut buffer);
         writer.write(&batch)?;
         drop(writer);
-        self.header = false;
-        Ok(Bytes::from(self.buffer.drain(..).collect::<Vec<u8>>()))
+        Ok(Bytes::from(std::mem::take(&mut buffer)))
     }
 
-    fn duplicate(&mut self) -> Result<Box<dyn BatchSerializer>> {
-        let new_self = CsvSerializer::new()
+    fn create_headless_serializer(&self) -> Arc<dyn SerializationSchema> {
+        let new_self = CsvSerializationSchema::new()
             .with_builder(self.builder.clone())
-            .with_header(self.header);
-        self.header = false;
-        Ok(Box::new(new_self))
+            .with_header(false);
+        Arc::new(new_self) as _
     }
 }
 
@@ -489,8 +486,8 @@ impl CsvSink {
         let options_clone = writer_options.clone();
         let get_serializer = move || {
             let inner_clone = builder_clone.clone();
-            let serializer: Box<dyn BatchSerializer> = Box::new(
-                CsvSerializer::new()
+            let serializer: Arc<dyn SerializationSchema> = Arc::new(
+                CsvSerializationSchema::new()
                     .with_builder(inner_clone)
                     .with_header(options_clone.writer_options.header()),
             );
@@ -836,7 +833,7 @@ mod tests {
             .collect()
             .await?;
         let batch = concat_batches(&batches[0].schema(), &batches)?;
-        let mut serializer = CsvSerializer::new();
+        let serializer = CsvSerializationSchema::new();
         let bytes = serializer.serialize(batch).await?;
         assert_eq!(
             "c2,c3\n2,1\n5,-40\n1,29\n1,-85\n5,-82\n4,-111\n3,104\n3,13\n1,38\n4,-38\n",
@@ -860,7 +857,7 @@ mod tests {
             .collect()
             .await?;
         let batch = concat_batches(&batches[0].schema(), &batches)?;
-        let mut serializer = CsvSerializer::new().with_header(false);
+        let serializer = CsvSerializationSchema::new().with_header(false);
         let bytes = serializer.serialize(batch).await?;
         assert_eq!(
             "2,1\n5,-40\n1,29\n1,-85\n5,-82\n4,-111\n3,104\n3,13\n1,38\n4,-38\n",

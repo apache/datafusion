@@ -48,7 +48,7 @@ use crate::physical_plan::{DisplayAs, DisplayFormatType, Statistics};
 use super::write::orchestration::stateless_multipart_put;
 
 use crate::datasource::file_format::file_compression_type::FileCompressionType;
-use crate::datasource::file_format::write::BatchSerializer;
+use crate::datasource::file_format::write::SerializationSchema;
 use crate::datasource::file_format::DEFAULT_SCHEMA_INFER_MAX_RECORD;
 use crate::datasource::physical_plan::{FileSinkConfig, NdJsonExec};
 use crate::error::Result;
@@ -194,38 +194,33 @@ impl FileFormat for JsonFormat {
     }
 }
 
-impl Default for JsonSerializer {
+impl Default for JsonSerializationSchema {
     fn default() -> Self {
         Self::new()
     }
 }
 
 /// Define a struct for serializing Json records to a stream
-pub struct JsonSerializer {
-    // Inner buffer for avoiding reallocation
-    buffer: Vec<u8>,
-}
+pub struct JsonSerializationSchema {}
 
-impl JsonSerializer {
-    /// Constructor for the JsonSerializer object
+impl JsonSerializationSchema {
+    /// Constructor for the JsonSerializationSchema object
     pub fn new() -> Self {
-        Self {
-            buffer: Vec::with_capacity(4096),
-        }
+        Self {}
     }
 }
 
 #[async_trait]
-impl BatchSerializer for JsonSerializer {
-    async fn serialize(&mut self, batch: RecordBatch) -> Result<Bytes> {
-        let mut writer = json::LineDelimitedWriter::new(&mut self.buffer);
+impl SerializationSchema for JsonSerializationSchema {
+    async fn serialize(&self, batch: RecordBatch) -> Result<Bytes> {
+        let mut buffer = Vec::with_capacity(4096);
+        let mut writer = json::LineDelimitedWriter::new(&mut buffer);
         writer.write(&batch)?;
-        //drop(writer);
-        Ok(Bytes::from(self.buffer.drain(..).collect::<Vec<u8>>()))
+        Ok(Bytes::from(std::mem::take(&mut buffer)))
     }
 
-    fn duplicate(&mut self) -> Result<Box<dyn BatchSerializer>> {
-        Ok(Box::new(JsonSerializer::new()))
+    fn create_headless_serializer(&self) -> Arc<dyn SerializationSchema> {
+        Arc::new(JsonSerializationSchema::new()) as _
     }
 }
 
@@ -273,7 +268,8 @@ impl JsonSink {
         let compression = &writer_options.compression;
 
         let get_serializer = move || {
-            let serializer: Box<dyn BatchSerializer> = Box::new(JsonSerializer::new());
+            let serializer: Arc<dyn SerializationSchema> =
+                Arc::new(JsonSerializationSchema::new());
             serializer
         };
 
