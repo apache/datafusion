@@ -47,24 +47,23 @@ type SerializerType = Arc<dyn SerializationSchema>;
 /// so that the caller may handle aborting failed writes.
 pub(crate) async fn serialize_rb_stream_to_object_store(
     mut data_rx: Receiver<RecordBatch>,
-    mut serializer: Arc<dyn SerializationSchema>,
+    serializer: Arc<dyn SerializationSchema>,
     mut writer: AbortableWrite<Box<dyn AsyncWrite + Send + Unpin>>,
 ) -> std::result::Result<(WriterType, u64), (WriterType, DataFusionError)> {
     let (tx, mut rx) =
         mpsc::channel::<JoinHandle<Result<(usize, Bytes), DataFusionError>>>(100);
-    // Initially, has_header can be true for CSV use cases. Then, we must turn
-    // it off to maintain the integrity of the writing process.
     let serialize_task = tokio::spawn(async move {
+        // Some serializers (like CSV) handle the first batch differently than
+        // subsequent batches, so we track that here.
         let mut initial = true;
         while let Some(batch) = data_rx.recv().await {
             let serializer_clone = serializer.clone();
             let handle = tokio::spawn(async move {
                 let num_rows = batch.num_rows();
-                let bytes = serializer_clone.serialize(batch).await?;
+                let bytes = serializer_clone.serialize(batch, initial).await?;
                 Ok((num_rows, bytes))
             });
             if initial {
-                serializer = serializer.duplicate_headerless();
                 initial = false;
             }
             tx.send(handle).await.map_err(|_| {

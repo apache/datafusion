@@ -991,12 +991,8 @@ mod tests {
 
     #[async_trait]
     impl SerializationSchema for TestSerializer {
-        async fn serialize(&self, _batch: RecordBatch) -> Result<Bytes> {
+        async fn serialize(&self, _batch: RecordBatch, _initial: bool) -> Result<Bytes> {
             Ok(self.bytes.clone())
-        }
-
-        fn duplicate_headerless(&self) -> Arc<dyn SerializationSchema> {
-            unimplemented!()
         }
     }
 }

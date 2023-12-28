@@ -206,15 +206,11 @@ impl JsonSerializationSchema {
 
 #[async_trait]
 impl SerializationSchema for JsonSerializationSchema {
-    async fn serialize(&self, batch: RecordBatch) -> Result<Bytes> {
+    async fn serialize(&self, batch: RecordBatch, _initial: bool) -> Result<Bytes> {
         let mut buffer = Vec::with_capacity(4096);
         let mut writer = json::LineDelimitedWriter::new(&mut buffer);
         writer.write(&batch)?;
         Ok(Bytes::from(buffer))
-    }
-
-    fn duplicate_headerless(&self) -> Arc<dyn SerializationSchema> {
-        Arc::new(JsonSerializationSchema::new()) as _
     }
 }
 

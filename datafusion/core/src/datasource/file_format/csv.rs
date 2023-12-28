@@ -425,20 +425,14 @@ impl CsvSerializationSchema {
 
 #[async_trait]
 impl SerializationSchema for CsvSerializationSchema {
-    async fn serialize(&self, batch: RecordBatch) -> Result<Bytes> {
+    async fn serialize(&self, batch: RecordBatch, initial: bool) -> Result<Bytes> {
         let mut buffer = Vec::with_capacity(4096);
         let builder = self.builder.clone();
-        let mut writer = builder.with_header(self.header).build(&mut buffer);
+        let header = self.header && initial;
+        let mut writer = builder.with_header(header).build(&mut buffer);
         writer.write(&batch)?;
         drop(writer);
         Ok(Bytes::from(buffer))
-    }
-
-    fn duplicate_headerless(&self) -> Arc<dyn SerializationSchema> {
-        let new_self = CsvSerializationSchema::new()
-            .with_builder(self.builder.clone())
-            .with_header(false);
-        Arc::new(new_self) as _
     }
 }
 
@@ -828,7 +822,7 @@ mod tests {
             .await?;
         let batch = concat_batches(&batches[0].schema(), &batches)?;
         let serializer = CsvSerializationSchema::new();
-        let bytes = serializer.serialize(batch).await?;
+        let bytes = serializer.serialize(batch, true).await?;
         assert_eq!(
             "c2,c3\n2,1\n5,-40\n1,29\n1,-85\n5,-82\n4,-111\n3,104\n3,13\n1,38\n4,-38\n",
             String::from_utf8(bytes.into()).unwrap()
@@ -852,7 +846,7 @@ mod tests {
             .await?;
         let batch = concat_batches(&batches[0].schema(), &batches)?;
         let serializer = CsvSerializationSchema::new().with_header(false);
-        let bytes = serializer.serialize(batch).await?;
+        let bytes = serializer.serialize(batch, true).await?;
         assert_eq!(
             "2,1\n5,-40\n1,29\n1,-85\n5,-82\n4,-111\n3,104\n3,13\n1,38\n4,-38\n",
             String::from_utf8(bytes.into()).unwrap()

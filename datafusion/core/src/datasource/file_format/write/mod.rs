@@ -147,12 +147,9 @@ impl<W: AsyncWrite + Unpin + Send> AsyncWrite for AbortableWrite<W> {
 #[async_trait]
 pub trait SerializationSchema: Sync + Send {
     /// Asynchronously serializes a `RecordBatch` and returns the serialized bytes.
-    async fn serialize(&self, batch: RecordBatch) -> Result<Bytes>;
-
-    /// Duplicates itself (sans header configuration) to support serializing
-    /// multiple batches in parallel on multiple cores. Unless we are serializing
-    /// a CSV file, this method is no-op.
-    fn duplicate_headerless(&self) -> Arc<dyn SerializationSchema>;
+    /// Parameter `initial` signals whether the given batch is the first batch.
+    /// This distinction is important for certain serializers (like CSV).
+    async fn serialize(&self, batch: RecordBatch, initial: bool) -> Result<Bytes>;
 }
 
 /// Returns an [`AbortableWrite`] which writes to the given object store location
