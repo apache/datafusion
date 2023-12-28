@@ -1642,7 +1642,7 @@ pub struct PartitionColumn {
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct FileTypeWriterOptions {
-    #[prost(oneof = "file_type_writer_options::FileType", tags = "1, 2")]
+    #[prost(oneof = "file_type_writer_options::FileType", tags = "1, 2, 3")]
     pub file_type: ::core::option::Option<file_type_writer_options::FileType>,
 }
 /// Nested message and enum types in `FileTypeWriterOptions`.
@@ -1654,6 +1654,8 @@ pub mod file_type_writer_options {
         JsonOptions(super::JsonWriterOptions),
         #[prost(message, tag = "2")]
         ParquetOptions(super::ParquetWriterOptions),
+        #[prost(message, tag = "3")]
+        CsvOptions(super::CsvWriterOptions),
     }
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
@@ -1667,6 +1669,31 @@ pub struct JsonWriterOptions {
 pub struct ParquetWriterOptions {
     #[prost(message, optional, tag = "1")]
     pub writer_properties: ::core::option::Option<WriterProperties>,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct CsvWriterOptions {
+    /// Optional column delimiter. Defaults to `b','`
+    #[prost(string, tag = "1")]
+    pub delimiter: ::prost::alloc::string::String,
+    /// Whether to write column names as file headers. Defaults to `true`
+    #[prost(bool, tag = "2")]
+    pub has_header: bool,
+    /// Optional date format for date arrays
+    #[prost(string, tag = "3")]
+    pub date_format: ::prost::alloc::string::String,
+    /// Optional datetime format for datetime arrays
+    #[prost(string, tag = "4")]
+    pub datetime_format: ::prost::alloc::string::String,
+    /// Optional timestamp format for timestamp arrays
+    #[prost(string, tag = "5")]
+    pub timestamp_format: ::prost::alloc::string::String,
+    /// Optional time format for time arrays
+    #[prost(string, tag = "6")]
+    pub time_format: ::prost::alloc::string::String,
+    /// Optional value to represent null
+    #[prost(string, tag = "7")]
+    pub null_value: ::prost::alloc::string::String,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
