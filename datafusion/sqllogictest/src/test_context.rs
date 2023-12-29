@@ -15,31 +15,33 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use async_trait::async_trait;
-use datafusion::execution::context::SessionState;
-use datafusion::logical_expr::Expr;
-use datafusion::physical_plan::ExecutionPlan;
-use datafusion::prelude::SessionConfig;
-use datafusion::{
-    arrow::{
-        array::{
-            BinaryArray, Float64Array, Int32Array, LargeBinaryArray, LargeStringArray,
-            StringArray, TimestampNanosecondArray,
-        },
-        datatypes::{DataType, Field, Schema, SchemaRef, TimeUnit},
-        record_batch::RecordBatch,
-    },
-    catalog::{schema::MemorySchemaProvider, CatalogProvider, MemoryCatalogProvider},
-    datasource::{MemTable, TableProvider, TableType},
-    prelude::{CsvReadOptions, SessionContext},
-};
-use datafusion_common::DataFusionError;
-use log::info;
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::Write;
 use std::path::Path;
 use std::sync::Arc;
+
+use arrow::array::{
+    ArrayRef, BinaryArray, Float64Array, Int32Array, LargeBinaryArray, LargeStringArray,
+    StringArray, TimestampNanosecondArray,
+};
+use arrow::datatypes::{DataType, Field, Schema, SchemaRef, TimeUnit};
+use arrow::record_batch::RecordBatch;
+use datafusion::execution::context::SessionState;
+use datafusion::logical_expr::{create_udf, Expr, ScalarUDF, Volatility};
+use datafusion::physical_expr::functions::make_scalar_function;
+use datafusion::physical_plan::ExecutionPlan;
+use datafusion::prelude::SessionConfig;
+use datafusion::{
+    catalog::{schema::MemorySchemaProvider, CatalogProvider, MemoryCatalogProvider},
+    datasource::{MemTable, TableProvider, TableType},
+    prelude::{CsvReadOptions, SessionContext},
+};
+use datafusion_common::cast::as_float64_array;
+use datafusion_common::DataFusionError;
+
+use async_trait::async_trait;
+use log::info;
 use tempfile::TempDir;
 
 /// Context for running tests
@@ -84,7 +86,7 @@ impl TestContext {
                 info!("Registering table with many types");
                 register_table_with_many_types(test_ctx.session_ctx()).await;
             }
-            "explain.slt" => {
+            "map.slt" => {
                 info!("Registering table with map");
                 register_table_with_map(test_ctx.session_ctx()).await;
             }
@@ -102,6 +104,8 @@ impl TestContext {
             }
             "joins.slt" => {
                 info!("Registering partition table tables");
+                let example_udf = create_example_udf();
+                test_ctx.ctx.register_udf(example_udf);
                 register_partition_table(&mut test_ctx).await;
             }
             "metadata.slt" => {
@@ -347,4 +351,31 @@ pub async fn register_metadata_tables(ctx: &SessionContext) {
     .unwrap();
 
     ctx.register_batch("table_with_metadata", batch).unwrap();
+}
+
+/// Create a UDF function named "example". See the `sample_udf.rs` example
+/// file for an explanation of the API.
+fn create_example_udf() -> ScalarUDF {
+    let adder = make_scalar_function(|args: &[ArrayRef]| {
+        let lhs = as_float64_array(&args[0]).expect("cast failed");
+        let rhs = as_float64_array(&args[1]).expect("cast failed");
+        let array = lhs
+            .iter()
+            .zip(rhs.iter())
+            .map(|(lhs, rhs)| match (lhs, rhs) {
+                (Some(lhs), Some(rhs)) => Some(lhs + rhs),
+                _ => None,
+            })
+            .collect::<Float64Array>();
+        Ok(Arc::new(array) as ArrayRef)
+    });
+    create_udf(
+        "example",
+        // Expects two f64 values:
+        vec![DataType::Float64, DataType::Float64],
+        // Returns an f64 value:
+        Arc::new(DataType::Float64),
+        Volatility::Immutable,
+        adder,
+    )
 }

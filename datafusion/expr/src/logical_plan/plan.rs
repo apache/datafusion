@@ -1250,8 +1250,8 @@ impl LogicalPlan {
         expr.transform(&|expr| {
             match &expr {
                 Expr::Placeholder(Placeholder { id, data_type }) => {
-                    let value =
-                        param_values.get_placeholders_with_values(id, data_type)?;
+                    let value = param_values
+                        .get_placeholders_with_values(id, data_type.as_ref())?;
                     // Replace the placeholder with the value
                     Ok(Transformed::Yes(Expr::Literal(value)))
                 }
@@ -3095,6 +3095,19 @@ digraph {
         let plan = table_scan(TableReference::none(), &schema, None)
             .unwrap()
             .filter(col("id").eq(placeholder("$0")))
+            .unwrap()
+            .build()
+            .unwrap();
+
+        plan.replace_params_with_values(&param_values.clone().into())
+            .expect_err("unexpectedly succeeded to replace an invalid placeholder");
+
+        // test $00 placeholder
+        let schema = Schema::new(vec![Field::new("id", DataType::Int32, false)]);
+
+        let plan = table_scan(TableReference::none(), &schema, None)
+            .unwrap()
+            .filter(col("id").eq(placeholder("$00")))
             .unwrap()
             .build()
             .unwrap();

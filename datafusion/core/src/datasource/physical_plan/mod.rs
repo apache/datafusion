@@ -93,8 +93,6 @@ pub struct FileSinkConfig {
     /// regardless of input partitioning. Otherwise, each table path is assumed to be a directory
     /// to which each output partition is written to its own output file.
     pub single_file_output: bool,
-    /// If input is unbounded, tokio tasks need to yield to not block execution forever
-    pub unbounded_input: bool,
     /// Controls whether existing data should be overwritten by this sink
     pub overwrite: bool,
     /// Contains settings specific to writing a given FileType, e.g. parquet max_row_group_size
@@ -510,9 +508,9 @@ fn get_projected_output_ordering(
     all_orderings
 }
 
-// Get output (un)boundedness information for the given `plan`.
-pub(crate) fn is_plan_streaming(plan: &Arc<dyn ExecutionPlan>) -> Result<bool> {
-    let result = if plan.children().is_empty() {
+/// Get output (un)boundedness information for the given `plan`.
+pub fn is_plan_streaming(plan: &Arc<dyn ExecutionPlan>) -> Result<bool> {
+    if plan.children().is_empty() {
         plan.unbounded_output(&[])
     } else {
         let children_unbounded_output = plan
@@ -521,8 +519,7 @@ pub(crate) fn is_plan_streaming(plan: &Arc<dyn ExecutionPlan>) -> Result<bool> {
             .map(is_plan_streaming)
             .collect::<Result<Vec<_>>>();
         plan.unbounded_output(&children_unbounded_output?)
-    };
-    result
+    }
 }
 
 #[cfg(test)]

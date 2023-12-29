@@ -15,12 +15,20 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::print_format::PrintFormat;
-use datafusion::arrow::record_batch::RecordBatch;
-use datafusion::error::Result;
 use std::fmt::{Display, Formatter};
+use std::io::Write;
+use std::pin::Pin;
 use std::str::FromStr;
 use std::time::Instant;
+
+use crate::print_format::PrintFormat;
+
+use arrow::record_batch::RecordBatch;
+use datafusion::common::DataFusionError;
+use datafusion::error::Result;
+use datafusion::physical_plan::RecordBatchStream;
+
+use futures::StreamExt;
 
 #[derive(Debug, Clone, PartialEq, Copy)]
 pub enum MaxRows {
@@ -85,20 +93,70 @@ fn get_timing_info_str(
 }
 
 impl PrintOptions {
-    /// print the batches to stdout using the specified format
+    /// Print the batches to stdout using the specified format
     pub fn print_batches(
         &self,
         batches: &[RecordBatch],
         query_start_time: Instant,
     ) -> Result<()> {
-        let row_count: usize = batches.iter().map(|b| b.num_rows()).sum();
-        // Elapsed time should not count time for printing batches
-        let timing_info = get_timing_info_str(row_count, self.maxrows, query_start_time);
+        let stdout = std::io::stdout();
+        let mut writer = stdout.lock();
 
-        self.format.print_batches(batches, self.maxrows)?;
+        self.format
+            .print_batches(&mut writer, batches, self.maxrows, true)?;
+
+        let row_count: usize = batches.iter().map(|b| b.num_rows()).sum();
+        let timing_info = get_timing_info_str(
+            row_count,
+            if self.format == PrintFormat::Table {
+                self.maxrows
+            } else {
+                MaxRows::Unlimited
+            },
+            query_start_time,
+        );
 
         if !self.quiet {
-            println!("{timing_info}");
+            writeln!(writer, "{timing_info}")?;
+        }
+
+        Ok(())
+    }
+
+    /// Print the stream to stdout using the specified format
+    pub async fn print_stream(
+        &self,
+        mut stream: Pin<Box<dyn RecordBatchStream>>,
+        query_start_time: Instant,
+    ) -> Result<()> {
+        if self.format == PrintFormat::Table {
+            return Err(DataFusionError::External(
+                "PrintFormat::Table is not implemented".to_string().into(),
+            ));
+        };
+
+        let stdout = std::io::stdout();
+        let mut writer = stdout.lock();
+
+        let mut row_count = 0_usize;
+        let mut with_header = true;
+
+        while let Some(Ok(batch)) = stream.next().await {
+            row_count += batch.num_rows();
+            self.format.print_batches(
+                &mut writer,
+                &[batch],
+                MaxRows::Unlimited,
+                with_header,
+            )?;
+            with_header = false;
+        }
+
+        let timing_info =
+            get_timing_info_str(row_count, MaxRows::Unlimited, query_start_time);
+
+        if !self.quiet {
+            writeln!(writer, "{timing_info}")?;
         }
 
         Ok(())

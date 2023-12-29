@@ -25,8 +25,9 @@ use arrow::array::{
     new_null_array, Array, ArrayDataBuilder, ArrayRef, BufferBuilder, GenericStringArray,
     OffsetSizeTrait,
 };
-use arrow::compute;
-use datafusion_common::plan_err;
+use arrow_array::builder::{GenericStringBuilder, ListBuilder};
+use arrow_schema::ArrowError;
+use datafusion_common::{arrow_datafusion_err, plan_err};
 use datafusion_common::{
     cast::as_generic_string_array, internal_err, DataFusionError, Result,
 };
@@ -58,7 +59,7 @@ pub fn regexp_match<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
         2 => {
             let values = as_generic_string_array::<T>(&args[0])?;
             let regex = as_generic_string_array::<T>(&args[1])?;
-            compute::regexp_match(values, regex, None).map_err(DataFusionError::ArrowError)
+            _regexp_match(values, regex, None).map_err(|e| arrow_datafusion_err!(e))
         }
         3 => {
             let values = as_generic_string_array::<T>(&args[0])?;
@@ -69,13 +70,90 @@ pub fn regexp_match<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
                 Some(f) if f.iter().any(|s| s == Some("g")) => {
                     plan_err!("regexp_match() does not support the \"global\" option")
                 },
-                _ => compute::regexp_match(values, regex, flags).map_err(DataFusionError::ArrowError),
+                _ => _regexp_match(values, regex, flags).map_err(|e| arrow_datafusion_err!(e)),
             }
         }
         other => internal_err!(
             "regexp_match was called with {other} arguments. It requires at least 2 and at most 3."
         ),
     }
+}
+
+/// TODO: Remove this once it is included in arrow-rs new release.
+/// <https://github.com/apache/arrow-rs/pull/5235>
+fn _regexp_match<OffsetSize: OffsetSizeTrait>(
+    array: &GenericStringArray<OffsetSize>,
+    regex_array: &GenericStringArray<OffsetSize>,
+    flags_array: Option<&GenericStringArray<OffsetSize>>,
+) -> std::result::Result<ArrayRef, ArrowError> {
+    let mut patterns: std::collections::HashMap<String, Regex> =
+        std::collections::HashMap::new();
+    let builder: GenericStringBuilder<OffsetSize> =
+        GenericStringBuilder::with_capacity(0, 0);
+    let mut list_builder = ListBuilder::new(builder);
+
+    let complete_pattern = match flags_array {
+        Some(flags) => Box::new(regex_array.iter().zip(flags.iter()).map(
+            |(pattern, flags)| {
+                pattern.map(|pattern| match flags {
+                    Some(value) => format!("(?{value}){pattern}"),
+                    None => pattern.to_string(),
+                })
+            },
+        )) as Box<dyn Iterator<Item = Option<String>>>,
+        None => Box::new(
+            regex_array
+                .iter()
+                .map(|pattern| pattern.map(|pattern| pattern.to_string())),
+        ),
+    };
+
+    array
+        .iter()
+        .zip(complete_pattern)
+        .map(|(value, pattern)| {
+            match (value, pattern) {
+                // Required for Postgres compatibility:
+                // SELECT regexp_match('foobarbequebaz', ''); = {""}
+                (Some(_), Some(pattern)) if pattern == *"" => {
+                    list_builder.values().append_value("");
+                    list_builder.append(true);
+                }
+                (Some(value), Some(pattern)) => {
+                    let existing_pattern = patterns.get(&pattern);
+                    let re = match existing_pattern {
+                        Some(re) => re,
+                        None => {
+                            let re = Regex::new(pattern.as_str()).map_err(|e| {
+                                ArrowError::ComputeError(format!(
+                                    "Regular expression did not compile: {e:?}"
+                                ))
+                            })?;
+                            patterns.insert(pattern.clone(), re);
+                            patterns.get(&pattern).unwrap()
+                        }
+                    };
+                    match re.captures(value) {
+                        Some(caps) => {
+                            let mut iter = caps.iter();
+                            if caps.len() > 1 {
+                                iter.next();
+                            }
+                            for m in iter.flatten() {
+                                list_builder.values().append_value(m.as_str());
+                            }
+
+                            list_builder.append(true);
+                        }
+                        None => list_builder.append(false),
+                    }
+                }
+                _ => list_builder.append(false),
+            }
+            Ok(())
+        })
+        .collect::<std::result::Result<Vec<()>, ArrowError>>()?;
+    Ok(Arc::new(list_builder.finish()))
 }
 
 /// replace POSIX capture groups (like \1) with Rust Regex group (like ${1})
@@ -116,12 +194,12 @@ pub fn regexp_replace<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef>
 
                     // if patterns hashmap already has regexp then use else else create and return
                     let re = match patterns.get(pattern) {
-                        Some(re) => Ok(re.clone()),
+                        Some(re) => Ok(re),
                         None => {
                             match Regex::new(pattern) {
                                 Ok(re) => {
-                                    patterns.insert(pattern.to_string(), re.clone());
-                                    Ok(re)
+                                    patterns.insert(pattern.to_string(), re);
+                                    Ok(patterns.get(pattern).unwrap())
                                 },
                                 Err(err) => Err(DataFusionError::External(Box::new(err))),
                             }
@@ -162,12 +240,12 @@ pub fn regexp_replace<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef>
 
                     // if patterns hashmap already has regexp then use else else create and return
                     let re = match patterns.get(&pattern) {
-                        Some(re) => Ok(re.clone()),
+                        Some(re) => Ok(re),
                         None => {
                             match Regex::new(pattern.as_str()) {
                                 Ok(re) => {
-                                    patterns.insert(pattern, re.clone());
-                                    Ok(re)
+                                    patterns.insert(pattern.clone(), re);
+                                    Ok(patterns.get(&pattern).unwrap())
                                 },
                                 Err(err) => Err(DataFusionError::External(Box::new(err))),
                             }

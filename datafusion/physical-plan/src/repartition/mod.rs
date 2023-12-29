@@ -34,7 +34,7 @@ use log::trace;
 use parking_lot::Mutex;
 use tokio::task::JoinHandle;
 
-use datafusion_common::{not_impl_err, DataFusionError, Result};
+use datafusion_common::{arrow_datafusion_err, not_impl_err, DataFusionError, Result};
 use datafusion_execution::memory_pool::MemoryConsumer;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{EquivalenceProperties, PhysicalExpr};
@@ -200,7 +200,7 @@ impl BatchPartitioner {
                                 .iter()
                                 .map(|c| {
                                     arrow::compute::take(c.as_ref(), &indices, None)
-                                        .map_err(DataFusionError::ArrowError)
+                                        .map_err(|e| arrow_datafusion_err!(e))
                                 })
                                 .collect::<Result<Vec<ArrayRef>>>()?;
 
@@ -1414,9 +1414,8 @@ mod tests {
         // pull partitions
         for i in 0..exec.partitioning.partition_count() {
             let mut stream = exec.execute(i, task_ctx.clone())?;
-            let err = DataFusionError::ArrowError(
-                stream.next().await.unwrap().unwrap_err().into(),
-            );
+            let err =
+                arrow_datafusion_err!(stream.next().await.unwrap().unwrap_err().into());
             let err = err.find_root();
             assert!(
                 matches!(err, DataFusionError::ResourcesExhausted(_)),

@@ -36,13 +36,14 @@ use crate::joins::hash_join::{build_equal_condition_join_indices, update_hash};
 use crate::joins::stream_join_utils::{
     calculate_filter_expr_intervals, combine_two_batches,
     convert_sort_expr_with_filter_schema, get_pruning_anti_indices,
-    get_pruning_semi_indices, record_visited_indices, EagerJoinStream,
-    EagerJoinStreamState, PruningJoinHashMap, SortedFilterExpr, StreamJoinMetrics,
+    get_pruning_semi_indices, prepare_sorted_exprs, record_visited_indices,
+    EagerJoinStream, EagerJoinStreamState, PruningJoinHashMap, SortedFilterExpr,
+    StreamJoinMetrics,
 };
 use crate::joins::utils::{
     build_batch_from_indices, build_join_schema, check_join_is_valid,
-    partitioned_join_output_partitioning, prepare_sorted_exprs, ColumnIndex, JoinFilter,
-    JoinOn, StatefulStreamResult,
+    partitioned_join_output_partitioning, ColumnIndex, JoinFilter, JoinOn,
+    StatefulStreamResult,
 };
 use crate::{
     expressions::{Column, PhysicalSortExpr},
@@ -938,7 +939,7 @@ impl OneSideHashJoiner {
             prune_length,
             self.deleted_offset as u64,
             HASHMAP_SHRINK_SCALE_FACTOR,
-        )?;
+        );
         // Remove pruned rows from the visited rows set:
         for row in self.deleted_offset..(self.deleted_offset + prune_length) {
             self.visited_rows.remove(&row);

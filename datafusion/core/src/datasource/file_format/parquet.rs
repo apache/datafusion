@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Parquet format abstractions
+//! [`ParquetFormat`]: Parquet [`FileFormat`] abstractions
 
 use arrow_array::RecordBatch;
 use async_trait::async_trait;
@@ -29,7 +29,6 @@ use parquet::file::writer::SerializedFileWriter;
 use std::any::Any;
 use std::fmt;
 use std::fmt::Debug;
-use std::io::Write;
 use std::sync::Arc;
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 use tokio::sync::mpsc::{self, Receiver, Sender};
@@ -56,7 +55,7 @@ use parquet::file::properties::WriterProperties;
 use parquet::file::statistics::Statistics as ParquetStatistics;
 
 use super::write::demux::start_demuxer_task;
-use super::write::{create_writer, AbortableWrite};
+use super::write::{create_writer, AbortableWrite, SharedBuffer};
 use super::{FileFormat, FileScanConfig};
 use crate::arrow::array::{
     BooleanArray, Float32Array, Float64Array, Int32Array, Int64Array,
@@ -75,6 +74,17 @@ use crate::physical_plan::{
     Accumulator, DisplayAs, DisplayFormatType, ExecutionPlan, SendableRecordBatchStream,
     Statistics,
 };
+
+/// Size of the buffer for [`AsyncArrowWriter`].
+const PARQUET_WRITER_BUFFER_SIZE: usize = 10485760;
+
+/// Initial writing buffer size. Note this is just a size hint for efficiency. It
+/// will grow beyond the set value if needed.
+const INITIAL_BUFFER_BYTES: usize = 1048576;
+
+/// When writing parquet files in parallel, if the buffered Parquet data exceeds
+/// this size, it is flushed to object store
+const BUFFER_FLUSH_BYTES: usize = 1024000;
 
 /// The Apache Parquet `FileFormat` implementation
 ///
@@ -681,7 +691,7 @@ impl ParquetSink {
         let writer = AsyncArrowWriter::try_new(
             multipart_writer,
             self.get_writer_schema(),
-            10485760,
+            PARQUET_WRITER_BUFFER_SIZE,
             Some(parquet_props),
         )?;
         Ok(writer)
@@ -1005,7 +1015,7 @@ async fn concatenate_parallel_row_groups(
     writer_props: Arc<WriterProperties>,
     mut object_store_writer: AbortableWrite<Box<dyn AsyncWrite + Send + Unpin>>,
 ) -> Result<usize> {
-    let merged_buff = SharedBuffer::new(1048576);
+    let merged_buff = SharedBuffer::new(INITIAL_BUFFER_BYTES);
 
     let schema_desc = arrow_to_parquet_schema(schema.as_ref())?;
     let mut parquet_writer = SerializedFileWriter::new(
@@ -1026,7 +1036,7 @@ async fn concatenate_parallel_row_groups(
                 for chunk in serialized_columns {
                     chunk.append_to_row_group(&mut rg_out)?;
                     let mut buff_to_flush = merged_buff.buffer.try_lock().unwrap();
-                    if buff_to_flush.len() > 1024000 {
+                    if buff_to_flush.len() > BUFFER_FLUSH_BYTES {
                         object_store_writer
                             .write_all(buff_to_flush.as_slice())
                             .await?;
@@ -1099,37 +1109,6 @@ async fn output_single_parquet_file_parallelized(
     };
 
     Ok(row_count)
-}
-
-/// A buffer with interior mutability shared by the SerializedFileWriter and
-/// ObjectStore writer
-#[derive(Clone)]
-struct SharedBuffer {
-    /// The inner buffer for reading and writing
-    ///
-    /// The lock is used to obtain internal mutability, so no worry about the
-    /// lock contention.
-    buffer: Arc<futures::lock::Mutex<Vec<u8>>>,
-}
-
-impl SharedBuffer {
-    pub fn new(capacity: usize) -> Self {
-        Self {
-            buffer: Arc::new(futures::lock::Mutex::new(Vec::with_capacity(capacity))),
-        }
-    }
-}
-
-impl Write for SharedBuffer {
-    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        let mut buffer = self.buffer.try_lock().unwrap();
-        Write::write(&mut *buffer, buf)
-    }
-
-    fn flush(&mut self) -> std::io::Result<()> {
-        let mut buffer = self.buffer.try_lock().unwrap();
-        Write::flush(&mut *buffer)
-    }
 }
 
 #[cfg(test)]

@@ -44,3 +44,22 @@ DELETE 24
 query T
 SELECT strings['not_found'] FROM data LIMIT 1;
 ----
+
+statement ok
+drop table data;
+
+
+# Testing explain on a table with a map filter, registered in test_context.rs.
+query TT
+explain select * from table_with_map where int_field > 0;
+----
+logical_plan
+Filter: table_with_map.int_field > Int64(0)
+--TableScan: table_with_map projection=[int_field, map_field]
+physical_plan
+CoalesceBatchesExec: target_batch_size=8192
+--FilterExec: int_field@0 > 0
+----MemoryExec: partitions=1, partition_sizes=[0]
+
+statement ok
+drop table table_with_map;
