@@ -91,8 +91,8 @@ impl PipelineStatePropagator {
 }
 
 impl TreeNode for PipelineStatePropagator {
-    fn children_nodes(&self) -> Vec<&Self> {
-        self.children.iter().collect()
+    fn children_nodes(&self) -> Vec<Self> {
+        self.children.iter().map(|c| c.clone()).collect()
     }
 
     fn map_children<F>(mut self, transform: F) -> Result<Self>

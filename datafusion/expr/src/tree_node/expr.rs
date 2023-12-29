@@ -24,13 +24,13 @@ use crate::expr::{
 };
 use crate::{Expr, GetFieldAccess};
 
-use datafusion_common::tree_node::{TreeNode, VisitRecursion};
+use datafusion_common::tree_node::TreeNode;
 use datafusion_common::{internal_err, DataFusionError, Result};
 
 impl TreeNode for Expr {
-    fn children_nodes(&self) -> Vec<&Self> {
+    fn children_nodes(&self) -> Vec<Self> {
         match self {
-            Expr::Alias(Alias{expr,..})
+            Expr::Alias(Alias { expr, .. })
             | Expr::Not(expr)
             | Expr::IsNotNull(expr)
             | Expr::IsTrue(expr)
@@ -44,28 +44,26 @@ impl TreeNode for Expr {
             | Expr::Cast(Cast { expr, .. })
             | Expr::TryCast(TryCast { expr, .. })
             | Expr::Sort(Sort { expr, .. })
-            | Expr::InSubquery(InSubquery{ expr, .. }) => vec![expr.as_ref()],
+            | Expr::InSubquery(InSubquery { expr, .. }) => vec![expr.as_ref().clone()],
             Expr::GetIndexedField(GetIndexedField { expr, field }) => {
-                let expr = expr.as_ref();
+                let expr = expr.as_ref().clone();
                 match field {
-                    GetFieldAccess::ListIndex {key} => {
-                        vec![key.as_ref(), expr]
-                    },
-                    GetFieldAccess::ListRange {start, stop} => {
-                        vec![start.as_ref(), stop.as_ref(), expr]
+                    GetFieldAccess::ListIndex { key } => {
+                        vec![key.as_ref().clone(), expr]
                     }
-                    GetFieldAccess::NamedStructField {name: _name} => {
+                    GetFieldAccess::ListRange { start, stop } => {
+                        vec![start.as_ref().clone(), stop.as_ref().clone(), expr]
+                    }
+                    GetFieldAccess::NamedStructField { name: _name } => {
                         vec![expr]
                     }
                 }
             }
             Expr::GroupingSet(GroupingSet::Rollup(exprs))
-            | Expr::GroupingSet(GroupingSet::Cube(exprs)) => exprs.iter().collect(),
-            Expr::ScalarFunction (ScalarFunction{ args, .. } )  => {
-                args.iter().collect()
-            }
+            | Expr::GroupingSet(GroupingSet::Cube(exprs)) => exprs.clone(),
+            Expr::ScalarFunction(ScalarFunction { args, .. }) => args.clone(),
             Expr::GroupingSet(GroupingSet::GroupingSets(lists_of_exprs)) => {
-                lists_of_exprs.iter().map(|a| a.iter().collect::<Vec<_>>()).flatten().collect()
+                lists_of_exprs.clone().into_iter().flatten().collect()
             }
             Expr::Column(_)
             // Treat OuterReferenceColumn as a leaf expression
@@ -74,91 +72,71 @@ impl TreeNode for Expr {
             | Expr::Literal(_)
             | Expr::Exists { .. }
             | Expr::ScalarSubquery(_)
-            | Expr::Wildcard {..}
-            | Expr::Placeholder (_) => vec![],
+            | Expr::Wildcard { .. }
+            | Expr::Placeholder(_) => vec![],
             Expr::BinaryExpr(BinaryExpr { left, right, .. }) => {
-                vec![left.as_ref(), right.as_ref()]
+                vec![left.as_ref().clone(), right.as_ref().clone()]
             }
             Expr::Like(Like { expr, pattern, .. })
             | Expr::SimilarTo(Like { expr, pattern, .. }) => {
-                vec![expr.as_ref(), pattern.as_ref()]
+                vec![expr.as_ref().clone(), pattern.as_ref().clone()]
             }
             Expr::Between(Between {
-                              expr, low, high, ..
-                          }) => vec![
-                expr.as_ref(),
-                low.as_ref(),
-                high.as_ref(),
+                expr, low, high, ..
+            }) => vec![
+                expr.as_ref().clone(),
+                low.as_ref().clone(),
+                high.as_ref().clone(),
             ],
             Expr::Case(case) => {
                 let mut expr_vec = vec![];
                 if let Some(expr) = case.expr.as_ref() {
-                    expr_vec.push(expr.as_ref());
+                    expr_vec.push(expr.as_ref().clone());
                 };
                 for (when, then) in case.when_then_expr.iter() {
-                    expr_vec.push(when.as_ref());
-                    expr_vec.push(then.as_ref());
+                    expr_vec.push(when.as_ref().clone());
+                    expr_vec.push(then.as_ref().clone());
                 }
                 if let Some(else_expr) = case.else_expr.as_ref() {
-                    expr_vec.push(else_expr.as_ref());
+                    expr_vec.push(else_expr.as_ref().clone());
                 }
                 expr_vec
             }
-            Expr::AggregateFunction(AggregateFunction { args, filter, order_by, .. })
-            => {
-                let mut expr_vec: Vec<&Expr> = args.iter().collect();
+            Expr::AggregateFunction(AggregateFunction {
+                args,
+                filter,
+                order_by,
+                ..
+            }) => {
+                let mut expr_vec = args.clone();
 
                 if let Some(f) = filter {
-                    expr_vec.push(f.as_ref());
+                    expr_vec.push(f.as_ref().clone());
                 }
                 if let Some(o) = order_by {
-                    for x in o {
-                       expr_vec.push(x);
-                    }
+                    expr_vec.extend(o.clone());
                 }
 
                 expr_vec
             }
             Expr::WindowFunction(WindowFunction {
-                                     args,
-                                     partition_by,
-                                     order_by,
-                                     ..
-                                 }) => {
-                let mut expr_vec: Vec<&Expr> = args.iter().collect();
-                for x in partition_by {
-                   expr_vec.push(x);
-                }
-                for x in order_by {
-                   expr_vec.push(x);
-                }
+                args,
+                partition_by,
+                order_by,
+                ..
+            }) => {
+                let mut expr_vec = args.clone();
+                expr_vec.extend(partition_by.clone());
+                expr_vec.extend(order_by.clone());
                 expr_vec
             }
             Expr::InList(InList { expr, list, .. }) => {
                 let mut expr_vec = vec![];
-                expr_vec.push(expr.as_ref());
-                for x in list {
-                   expr_vec.push(x);
-                }
+                expr_vec.push(expr.as_ref().clone());
+                expr_vec.extend(list.clone());
                 expr_vec
             }
         }
-    }
-
-    fn apply_children<F>(&self, op: &mut F) -> Result<VisitRecursion>
-    where
-        F: FnMut(&Self) -> Result<VisitRecursion>,
-    {
-        let children = self.children_nodes();
-        for child in children.into_iter() {
-            match op(child)? {
-                VisitRecursion::Continue => {}
-                VisitRecursion::Skip => return Ok(VisitRecursion::Continue),
-                VisitRecursion::Stop => return Ok(VisitRecursion::Stop),
-            }
-        }
-
-        Ok(VisitRecursion::Continue)
     }
 
     fn map_children<F>(self, transform: F) -> Result<Self>

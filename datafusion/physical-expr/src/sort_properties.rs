@@ -147,7 +147,7 @@ impl Neg for SortProperties {
 /// It encapsulates the orderings (`state`) associated with the expression (`expr`), and
 /// orderings of the children expressions (`children_states`). The [`ExprOrdering`] of a parent
 /// expression is determined based on the [`ExprOrdering`] states of its children expressions.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ExprOrdering {
     pub expr: Arc<dyn PhysicalExpr>,
     pub state: SortProperties,
@@ -173,8 +173,8 @@ impl ExprOrdering {
 }
 
 impl TreeNode for ExprOrdering {
-    fn children_nodes(&self) -> Vec<&Self> {
-        self.children.iter().collect()
+    fn children_nodes(&self) -> Vec<Self> {
+        self.children.iter().map(|c| c.clone()).collect()
     }
 
     fn map_children<F>(mut self, transform: F) -> Result<Self>

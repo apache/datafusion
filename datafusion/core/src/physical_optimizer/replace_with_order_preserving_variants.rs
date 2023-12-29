@@ -104,8 +104,8 @@ impl OrderPreservationContext {
 }
 
 impl TreeNode for OrderPreservationContext {
-    fn children_nodes(&self) -> Vec<&Self> {
-        self.children_nodes.iter().collect()
+    fn children_nodes(&self) -> Vec<Self> {
+        self.children_nodes.iter().map(|c| c.clone()).collect()
     }
 
     fn map_children<F>(mut self, transform: F) -> Result<Self>
