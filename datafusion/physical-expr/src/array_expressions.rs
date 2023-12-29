@@ -1015,10 +1015,17 @@ fn general_append_and_prepend<O: OffsetSizeTrait>(
 where
     i64: TryInto<O>,
 {
-    let list_array = as_generic_list_array::<O>(&args[0])?;
-    let element_array = &args[1];
-
-    check_datatypes("array_append", &[element_array, list_array.values()])?;
+    let (list_array, element_array) = if is_append {
+        let list_array = as_generic_list_array::<O>(&args[0])?;
+        let element_array = &args[1];
+        check_datatypes("array_append", &[element_array, list_array.values()])?;
+        (list_array, element_array)
+    } else {
+        let list_array = as_generic_list_array::<O>(&args[1])?;
+        let element_array = &args[0];
+        check_datatypes("array_prepend", &[list_array.values(), element_array])?;
+        (list_array, element_array)
+    };
 
     let res = match list_array.value_type() {
         DataType::List(_) => concat_internal::<i32>(args)?,
