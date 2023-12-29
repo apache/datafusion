@@ -22,7 +22,7 @@
 use std::sync::Arc;
 
 use super::demux::start_demuxer_task;
-use super::{create_writer, AbortableWrite, SerializationSchema};
+use super::{create_writer, AbortableWrite, BatchSerializer};
 use crate::datasource::file_format::file_compression_type::FileCompressionType;
 use crate::datasource::physical_plan::FileSinkConfig;
 use crate::error::Result;
@@ -39,7 +39,7 @@ use tokio::task::{JoinHandle, JoinSet};
 use tokio::try_join;
 
 type WriterType = AbortableWrite<Box<dyn AsyncWrite + Send + Unpin>>;
-type SerializerType = Arc<dyn SerializationSchema>;
+type SerializerType = Arc<dyn BatchSerializer>;
 
 /// Serializes a single data stream in parallel and writes to an ObjectStore
 /// concurrently. Data order is preserved. In the event of an error,
@@ -47,7 +47,7 @@ type SerializerType = Arc<dyn SerializationSchema>;
 /// so that the caller may handle aborting failed writes.
 pub(crate) async fn serialize_rb_stream_to_object_store(
     mut data_rx: Receiver<RecordBatch>,
-    serializer: Arc<dyn SerializationSchema>,
+    serializer: Arc<dyn BatchSerializer>,
     mut writer: AbortableWrite<Box<dyn AsyncWrite + Send + Unpin>>,
 ) -> std::result::Result<(WriterType, u64), (WriterType, DataFusionError)> {
     let (tx, mut rx) =
@@ -212,7 +212,7 @@ pub(crate) async fn stateless_multipart_put(
     data: SendableRecordBatchStream,
     context: &Arc<TaskContext>,
     file_extension: String,
-    get_serializer: Box<dyn Fn() -> Arc<dyn SerializationSchema> + Send>,
+    get_serializer: Box<dyn Fn() -> Arc<dyn BatchSerializer> + Send>,
     config: &FileSinkConfig,
     compression: FileCompressionType,
 ) -> Result<u64> {

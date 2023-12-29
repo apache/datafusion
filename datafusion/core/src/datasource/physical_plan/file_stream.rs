@@ -522,7 +522,7 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
-    use crate::datasource::file_format::write::SerializationSchema;
+    use crate::datasource::file_format::write::BatchSerializer;
     use crate::datasource::object_store::ObjectStoreUrl;
     use crate::datasource::physical_plan::FileMeta;
     use crate::physical_plan::metrics::ExecutionPlanMetricsSet;
@@ -990,7 +990,7 @@ mod tests {
     }
 
     #[async_trait]
-    impl SerializationSchema for TestSerializer {
+    impl BatchSerializer for TestSerializer {
         async fn serialize(&self, _batch: RecordBatch, _initial: bool) -> Result<Bytes> {
             Ok(self.bytes.clone())
         }

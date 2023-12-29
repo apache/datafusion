@@ -26,7 +26,7 @@ use std::sync::Arc;
 use super::write::orchestration::stateless_multipart_put;
 use super::{FileFormat, FileScanConfig};
 use crate::datasource::file_format::file_compression_type::FileCompressionType;
-use crate::datasource::file_format::write::SerializationSchema;
+use crate::datasource::file_format::write::BatchSerializer;
 use crate::datasource::file_format::DEFAULT_SCHEMA_INFER_MAX_RECORD;
 use crate::datasource::physical_plan::FileGroupDisplay;
 use crate::datasource::physical_plan::{FileSinkConfig, NdJsonExec};
@@ -188,24 +188,24 @@ impl FileFormat for JsonFormat {
     }
 }
 
-impl Default for JsonSerializationSchema {
+impl Default for JsonSerializer {
     fn default() -> Self {
         Self::new()
     }
 }
 
 /// Define a struct for serializing Json records to a stream
-pub struct JsonSerializationSchema {}
+pub struct JsonSerializer {}
 
-impl JsonSerializationSchema {
-    /// Constructor for the JsonSerializationSchema object
+impl JsonSerializer {
+    /// Constructor for the JsonSerializer object
     pub fn new() -> Self {
         Self {}
     }
 }
 
 #[async_trait]
-impl SerializationSchema for JsonSerializationSchema {
+impl BatchSerializer for JsonSerializer {
     async fn serialize(&self, batch: RecordBatch, _initial: bool) -> Result<Bytes> {
         let mut buffer = Vec::with_capacity(4096);
         let mut writer = json::LineDelimitedWriter::new(&mut buffer);
@@ -257,7 +257,7 @@ impl JsonSink {
         let writer_options = self.config.file_type_writer_options.try_into_json()?;
         let compression = &writer_options.compression;
 
-        let get_serializer = move || Arc::new(JsonSerializationSchema::new()) as _;
+        let get_serializer = move || Arc::new(JsonSerializer::new()) as _;
 
         stateless_multipart_put(
             data,
