@@ -437,7 +437,7 @@ impl BatchSerializer for CsvSerializer {
 }
 
 /// Implements [`DataSink`] for writing to a CSV file.
-struct CsvSink {
+pub struct CsvSink {
     /// Config options for writing data
     config: FileSinkConfig,
 }
@@ -461,9 +461,16 @@ impl DisplayAs for CsvSink {
 }
 
 impl CsvSink {
-    fn new(config: FileSinkConfig) -> Self {
+    /// Create from config.
+    pub fn new(config: FileSinkConfig) -> Self {
         Self { config }
     }
+
+    /// Retrieve the inner [`FileSinkConfig`].
+    pub fn config(&self) -> &FileSinkConfig {
+        &self.config
+    }
+
     async fn multipartput_all(
         &self,
         data: SendableRecordBatchStream,
