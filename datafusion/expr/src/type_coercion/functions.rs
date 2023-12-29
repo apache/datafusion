@@ -311,9 +311,9 @@ fn coerced_from<'a>(
         Utf8 | LargeUtf8 => Some(type_into.clone()),
         Null if can_cast_types(type_from, type_into) => Some(type_into.clone()),
 
-        // Only accept list with the same number of dimensions unless the type is Null.
-        // List with different dimensions should be handled in TypeSignature or other places before this.
-        List(_)
+        // Only accept list and largelist with the same number of dimensions unless the type is Null.
+        // List or LargeList with different dimensions should be handled in TypeSignature or other places before this.
+        List(_) | LargeList(_)
             if datafusion_common::utils::base_type(type_from).eq(&Null)
                 || list_ndims(type_from) == list_ndims(type_into) =>
         {
