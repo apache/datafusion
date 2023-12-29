@@ -23,7 +23,7 @@ use datafusion_common::{tree_node::TreeNode, Result};
 
 impl TreeNode for LogicalPlan {
     fn children_nodes(&self) -> Vec<Self> {
-        self.inputs().into_iter().map(|p| p.clone()).collect()
+        self.inputs().into_iter().cloned().collect()
     }
 
     fn apply<F>(&self, op: &mut F) -> Result<VisitRecursion>

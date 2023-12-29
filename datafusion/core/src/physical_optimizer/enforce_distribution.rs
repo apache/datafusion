@@ -1410,7 +1410,7 @@ impl DistributionContext {
 
 impl TreeNode for DistributionContext {
     fn children_nodes(&self) -> Vec<Self> {
-        self.children_nodes.iter().map(|c| c.clone()).collect()
+        self.children_nodes.to_vec()
     }
 
     fn map_children<F>(mut self, transform: F) -> Result<Self>
@@ -1474,7 +1474,7 @@ impl PlanWithKeyRequirements {
 
 impl TreeNode for PlanWithKeyRequirements {
     fn children_nodes(&self) -> Vec<Self> {
-        self.children.iter().map(|c| c.clone()).collect()
+        self.children.to_vec()
     }
 
     fn map_children<F>(mut self, transform: F) -> Result<Self>
