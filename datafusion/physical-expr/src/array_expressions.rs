@@ -1067,7 +1067,7 @@ pub fn array_prepend(args: &[ArrayRef]) -> Result<ArrayRef> {
         return exec_err!("array_prepend expects two arguments");
     }
 
-    match args[0].data_type() {
+    match args[1].data_type() {
         DataType::LargeList(_) => general_append_and_prepend::<i64>(args, false),
         _ => general_append_and_prepend::<i32>(args, false),
     }
