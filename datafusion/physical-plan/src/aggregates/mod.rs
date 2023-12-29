@@ -45,8 +45,8 @@ use datafusion_physical_expr::{
     aggregate::is_order_sensitive,
     equivalence::{collapse_lex_req, ProjectionMapping},
     expressions::{Column, Max, Min, UnKnownColumn},
-    physical_exprs_contains, AggregateExpr, EquivalenceProperties, LexOrdering,
-    LexRequirement, PhysicalExpr, PhysicalSortExpr, PhysicalSortRequirement,
+    physical_exprs_contains, reverse_order_bys, AggregateExpr, EquivalenceProperties,
+    LexOrdering, LexRequirement, PhysicalExpr, PhysicalSortExpr, PhysicalSortRequirement,
 };
 
 use itertools::Itertools;
@@ -60,6 +60,7 @@ mod topk_stream;
 
 pub use datafusion_expr::AggregateFunction;
 pub use datafusion_physical_expr::expressions::create_aggregate_expr;
+use datafusion_physical_expr::expressions::{FirstValue, LastValue};
 
 /// Hash aggregate modes
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -324,7 +325,7 @@ impl AggregateExec {
     fn try_new_with_schema(
         mode: AggregateMode,
         group_by: PhysicalGroupBy,
-        aggr_expr: Vec<Arc<dyn AggregateExpr>>,
+        mut aggr_expr: Vec<Arc<dyn AggregateExpr>>,
         filter_expr: Vec<Option<Arc<dyn PhysicalExpr>>>,
         input: Arc<dyn ExecutionPlan>,
         input_schema: SchemaRef,
@@ -347,7 +348,8 @@ impl AggregateExec {
             .collect::<Vec<_>>();
 
         let req = get_aggregate_exprs_requirement(
-            &aggr_expr,
+            &new_requirement,
+            &mut aggr_expr,
             &group_by,
             &input_eq_properties,
             &mode,
@@ -896,6 +898,11 @@ fn finer_ordering(
     eq_properties.get_finer_ordering(existing_req, &aggr_req)
 }
 
+/// Concatenates two slices
+fn concat_slices<T: Clone>(lhs: &[T], rhs: &[T]) -> Vec<T> {
+    [lhs, rhs].concat()
+}
+
 /// Get the common requirement that satisfies all the aggregate expressions.
 ///
 /// # Parameters
@@ -914,14 +921,64 @@ fn finer_ordering(
 /// A `LexRequirement` instance, which is the requirement that satisfies all the
 /// aggregate requirements. Returns an error in case of conflicting requirements.
 fn get_aggregate_exprs_requirement(
-    aggr_exprs: &[Arc<dyn AggregateExpr>],
+    prefix_requirement: &[PhysicalSortRequirement],
+    aggr_exprs: &mut [Arc<dyn AggregateExpr>],
     group_by: &PhysicalGroupBy,
     eq_properties: &EquivalenceProperties,
     agg_mode: &AggregateMode,
 ) -> Result<LexRequirement> {
     let mut requirement = vec![];
-    for aggr_expr in aggr_exprs.iter() {
-        if let Some(finer_ordering) =
+    for aggr_expr in aggr_exprs.iter_mut() {
+        let aggr_req = aggr_expr.order_bys().unwrap_or(&[]);
+        let reverse_aggr_req = reverse_order_bys(aggr_req);
+        let aggr_req = PhysicalSortRequirement::from_sort_exprs(aggr_req);
+        let reverse_aggr_req =
+            PhysicalSortRequirement::from_sort_exprs(&reverse_aggr_req);
+        if let Some(first_value) = aggr_expr.as_any().downcast_ref::<FirstValue>() {
+            let mut first_value = first_value.clone();
+            if eq_properties.ordering_satisfy_requirement(&concat_slices(
+                prefix_requirement,
+                &aggr_req,
+            )) {
+                first_value = first_value.with_requirement_satisfied(true);
+                *aggr_expr = Arc::new(first_value) as _;
+            } else if eq_properties.ordering_satisfy_requirement(&concat_slices(
+                prefix_requirement,
+                &reverse_aggr_req,
+            )) {
+                // converting to last value helps in more efficient execution
+                // given existing ordering
+                let mut last_value = first_value.convert_to_last();
+                last_value = last_value.with_requirement_satisfied(true);
+                *aggr_expr = Arc::new(last_value) as _;
+            } else {
+                // Requirement is not satisfied with existing ordering.
+                first_value = first_value.with_requirement_satisfied(false);
+                *aggr_expr = Arc::new(first_value) as _;
+            }
+        } else if let Some(last_value) = aggr_expr.as_any().downcast_ref::<LastValue>() {
+            let mut last_value = last_value.clone();
+            if eq_properties.ordering_satisfy_requirement(&concat_slices(
+                prefix_requirement,
+                &aggr_req,
+            )) {
+                last_value = last_value.with_requirement_satisfied(true);
+                *aggr_expr = Arc::new(last_value) as _;
+            } else if eq_properties.ordering_satisfy_requirement(&concat_slices(
+                prefix_requirement,
+                &reverse_aggr_req,
+            )) {
+                // converting to first value helps in more efficient execution
+                // given existing ordering
+                let mut first_value = last_value.convert_to_first();
+                first_value = first_value.with_requirement_satisfied(true);
+                *aggr_expr = Arc::new(first_value) as _;
+            } else {
+                // Requirement is not satisfied with existing ordering.
+                last_value = last_value.with_requirement_satisfied(false);
+                *aggr_expr = Arc::new(last_value) as _;
+            }
+        } else if let Some(finer_ordering) =
             finer_ordering(&requirement, aggr_expr, group_by, eq_properties, agg_mode)
         {
             requirement = finer_ordering;
@@ -2071,7 +2128,7 @@ mod tests {
                 options: options1,
             },
         ];
-        let aggr_exprs = order_by_exprs
+        let mut aggr_exprs = order_by_exprs
             .into_iter()
             .map(|order_by_expr| {
                 Arc::new(OrderSensitiveArrayAgg::new(
@@ -2086,7 +2143,8 @@ mod tests {
             .collect::<Vec<_>>();
         let group_by = PhysicalGroupBy::new_single(vec![]);
         let res = get_aggregate_exprs_requirement(
-            &aggr_exprs,
+            &[],
+            &mut aggr_exprs,
             &group_by,
             &eq_properties,
             &AggregateMode::Partial,
