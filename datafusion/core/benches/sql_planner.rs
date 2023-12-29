@@ -146,7 +146,7 @@ pub fn create_tpch_schemas() -> [(String, Schema); 8] {
         Field::new("r_comment", DataType::Utf8, false),
     ]);
 
-    return [
+    [
         ("lineitem".to_string(), lineitem_schema),
         ("orders".to_string(), orders_schema),
         ("part".to_string(), part_schema),
@@ -155,7 +155,7 @@ pub fn create_tpch_schemas() -> [(String, Schema); 8] {
         ("customer".to_string(), customer_schema),
         ("nation".to_string(), nation_schema),
         ("region".to_string(), region_schema),
-    ];
+    ]
 }
 
 fn create_context() -> SessionContext {
