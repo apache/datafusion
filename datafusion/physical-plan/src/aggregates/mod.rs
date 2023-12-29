@@ -44,7 +44,7 @@ use datafusion_expr::Accumulator;
 use datafusion_physical_expr::{
     aggregate::is_order_sensitive,
     equivalence::{collapse_lex_req, ProjectionMapping},
-    expressions::{Column, Max, Min, UnKnownColumn},
+    expressions::{Column, FirstValue, LastValue, Max, Min, UnKnownColumn},
     physical_exprs_contains, reverse_order_bys, AggregateExpr, EquivalenceProperties,
     LexOrdering, LexRequirement, PhysicalExpr, PhysicalSortExpr, PhysicalSortRequirement,
 };
@@ -60,7 +60,6 @@ mod topk_stream;
 
 pub use datafusion_expr::AggregateFunction;
 pub use datafusion_physical_expr::expressions::create_aggregate_expr;
-use datafusion_physical_expr::expressions::{FirstValue, LastValue};
 
 /// Hash aggregate modes
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -898,7 +897,7 @@ fn finer_ordering(
     eq_properties.get_finer_ordering(existing_req, &aggr_req)
 }
 
-/// Concatenates two slices
+/// Concatenates the given slices.
 fn concat_slices<T: Clone>(lhs: &[T], rhs: &[T]) -> Vec<T> {
     [lhs, rhs].concat()
 }
@@ -946,8 +945,8 @@ fn get_aggregate_exprs_requirement(
                 prefix_requirement,
                 &reverse_aggr_req,
             )) {
-                // converting to last value helps in more efficient execution
-                // given existing ordering
+                // Converting to LAST_VALUE enables more efficient execution
+                // given the existing ordering:
                 let mut last_value = first_value.convert_to_last();
                 last_value = last_value.with_requirement_satisfied(true);
                 *aggr_expr = Arc::new(last_value) as _;
@@ -968,8 +967,8 @@ fn get_aggregate_exprs_requirement(
                 prefix_requirement,
                 &reverse_aggr_req,
             )) {
-                // converting to first value helps in more efficient execution
-                // given existing ordering
+                // Converting to FIRST_VALUE enables more efficient execution
+                // given the existing ordering:
                 let mut first_value = last_value.convert_to_first();
                 first_value = first_value.with_requirement_satisfied(true);
                 *aggr_expr = Arc::new(first_value) as _;
