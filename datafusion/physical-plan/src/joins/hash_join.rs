@@ -1819,6 +1819,7 @@ mod tests {
             ("c1", &vec![8, 7]),
         );
         let schema = batch1.schema();
+
         let left = Arc::new(
             MemoryExec::try_new(&[vec![batch1], vec![batch2]], schema, None).unwrap(),
         );
