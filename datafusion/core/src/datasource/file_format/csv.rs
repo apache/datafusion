@@ -19,20 +19,8 @@
 
 use std::any::Any;
 use std::collections::HashSet;
-use std::fmt;
-use std::fmt::Debug;
+use std::fmt::{self, Debug};
 use std::sync::Arc;
-
-use arrow_array::RecordBatch;
-use datafusion_common::{exec_err, not_impl_err, DataFusionError, FileType};
-use datafusion_execution::TaskContext;
-use datafusion_physical_expr::{PhysicalExpr, PhysicalSortRequirement};
-
-use bytes::{Buf, Bytes};
-use datafusion_physical_plan::metrics::MetricsSet;
-use futures::stream::BoxStream;
-use futures::{pin_mut, Stream, StreamExt, TryStreamExt};
-use object_store::{delimited::newline_delimited_stream, ObjectMeta, ObjectStore};
 
 use super::write::orchestration::stateless_multipart_put;
 use super::{FileFormat, DEFAULT_SCHEMA_INFER_MAX_RECORD};
@@ -47,11 +35,20 @@ use crate::physical_plan::insert::{DataSink, FileSinkExec};
 use crate::physical_plan::{DisplayAs, DisplayFormatType, Statistics};
 use crate::physical_plan::{ExecutionPlan, SendableRecordBatchStream};
 
+use arrow::array::RecordBatch;
 use arrow::csv::WriterBuilder;
 use arrow::datatypes::{DataType, Field, Fields, Schema};
 use arrow::{self, datatypes::SchemaRef};
+use datafusion_common::{exec_err, not_impl_err, DataFusionError, FileType};
+use datafusion_execution::TaskContext;
+use datafusion_physical_expr::{PhysicalExpr, PhysicalSortRequirement};
+use datafusion_physical_plan::metrics::MetricsSet;
 
 use async_trait::async_trait;
+use bytes::{Buf, Bytes};
+use futures::stream::BoxStream;
+use futures::{pin_mut, Stream, StreamExt, TryStreamExt};
+use object_store::{delimited::newline_delimited_stream, ObjectMeta, ObjectStore};
 
 /// Character Separated Value `FileFormat` implementation.
 #[derive(Debug)]
@@ -400,8 +397,6 @@ impl Default for CsvSerializer {
 pub struct CsvSerializer {
     // CSV writer builder
     builder: WriterBuilder,
-    // Inner buffer for avoiding reallocation
-    buffer: Vec<u8>,
     // Flag to indicate whether there will be a header
     header: bool,
 }
@@ -412,7 +407,6 @@ impl CsvSerializer {
         Self {
             builder: WriterBuilder::new(),
             header: true,
-            buffer: Vec::with_capacity(4096),
         }
     }
 
@@ -431,21 +425,14 @@ impl CsvSerializer {
 
 #[async_trait]
 impl BatchSerializer for CsvSerializer {
-    async fn serialize(&mut self, batch: RecordBatch) -> Result<Bytes> {
+    async fn serialize(&self, batch: RecordBatch, initial: bool) -> Result<Bytes> {
+        let mut buffer = Vec::with_capacity(4096);
         let builder = self.builder.clone();
-        let mut writer = builder.with_header(self.header).build(&mut self.buffer);
+        let header = self.header && initial;
+        let mut writer = builder.with_header(header).build(&mut buffer);
         writer.write(&batch)?;
         drop(writer);
-        self.header = false;
-        Ok(Bytes::from(self.buffer.drain(..).collect::<Vec<u8>>()))
-    }
-
-    fn duplicate(&mut self) -> Result<Box<dyn BatchSerializer>> {
-        let new_self = CsvSerializer::new()
-            .with_builder(self.builder.clone())
-            .with_header(self.header);
-        self.header = false;
-        Ok(Box::new(new_self))
+        Ok(Bytes::from(buffer))
     }
 }
 
@@ -488,13 +475,11 @@ impl CsvSink {
         let builder_clone = builder.clone();
         let options_clone = writer_options.clone();
         let get_serializer = move || {
-            let inner_clone = builder_clone.clone();
-            let serializer: Box<dyn BatchSerializer> = Box::new(
+            Arc::new(
                 CsvSerializer::new()
-                    .with_builder(inner_clone)
+                    .with_builder(builder_clone.clone())
                     .with_header(options_clone.writer_options.header()),
-            );
-            serializer
+            ) as _
         };
 
         stateless_multipart_put(
@@ -541,15 +526,15 @@ mod tests {
     use crate::physical_plan::collect;
     use crate::prelude::{CsvReadOptions, SessionConfig, SessionContext};
     use crate::test_util::arrow_test_data;
+
     use arrow::compute::concat_batches;
+    use datafusion_common::cast::as_string_array;
+    use datafusion_common::stats::Precision;
+    use datafusion_common::{internal_err, FileType, GetExt};
+    use datafusion_expr::{col, lit};
+
     use bytes::Bytes;
     use chrono::DateTime;
-    use datafusion_common::cast::as_string_array;
-    use datafusion_common::internal_err;
-    use datafusion_common::stats::Precision;
-    use datafusion_common::FileType;
-    use datafusion_common::GetExt;
-    use datafusion_expr::{col, lit};
     use futures::StreamExt;
     use object_store::local::LocalFileSystem;
     use object_store::path::Path;
@@ -836,8 +821,8 @@ mod tests {
             .collect()
             .await?;
         let batch = concat_batches(&batches[0].schema(), &batches)?;
-        let mut serializer = CsvSerializer::new();
-        let bytes = serializer.serialize(batch).await?;
+        let serializer = CsvSerializer::new();
+        let bytes = serializer.serialize(batch, true).await?;
         assert_eq!(
             "c2,c3\n2,1\n5,-40\n1,29\n1,-85\n5,-82\n4,-111\n3,104\n3,13\n1,38\n4,-38\n",
             String::from_utf8(bytes.into()).unwrap()
@@ -860,8 +845,8 @@ mod tests {
             .collect()
             .await?;
         let batch = concat_batches(&batches[0].schema(), &batches)?;
-        let mut serializer = CsvSerializer::new().with_header(false);
-        let bytes = serializer.serialize(batch).await?;
+        let serializer = CsvSerializer::new().with_header(false);
+        let bytes = serializer.serialize(batch, true).await?;
         assert_eq!(
             "2,1\n5,-40\n1,29\n1,-85\n5,-82\n4,-111\n3,104\n3,13\n1,38\n4,-38\n",
             String::from_utf8(bytes.into()).unwrap()
