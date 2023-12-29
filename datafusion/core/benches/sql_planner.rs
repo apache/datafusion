@@ -247,7 +247,7 @@ fn criterion_benchmark(c: &mut Criterion) {
     let q21_sql = std::fs::read_to_string("../../benchmarks/queries/q21.sql").unwrap();
     let q22_sql = std::fs::read_to_string("../../benchmarks/queries/q22.sql").unwrap();
 
-    c.bench("physical_plan_tpch", |b| {
+    c.bench_function("physical_plan_tpch", |b| {
         b.iter(|| physical_plan(&ctx, &q1_sql));
         b.iter(|| physical_plan(&ctx, &q2_sql));
         b.iter(|| physical_plan(&ctx, &q3_sql));
