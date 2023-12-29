@@ -1648,8 +1648,10 @@ impl AsLogicalPlan for LogicalPlanNode {
                             match opt.as_ref() {
                                 FileTypeWriterOptions::CSV(csv_opts) => {
                                     let csv_options = &csv_opts.writer_options;
-                                    let csv_writer_options =
-                                        csv_writer_options_to_proto(csv_options);
+                                    let csv_writer_options = csv_writer_options_to_proto(
+                                        csv_options,
+                                        &CompressionTypeVariant::UNCOMPRESSED,
+                                    );
                                     let csv_options =
                                         file_type_writer_options::FileType::CsvOptions(
                                             csv_writer_options,
@@ -1706,8 +1708,11 @@ impl AsLogicalPlan for LogicalPlanNode {
 
 pub(crate) fn csv_writer_options_to_proto(
     csv_options: &WriterBuilder,
+    compression: &CompressionTypeVariant,
 ) -> protobuf::CsvWriterOptions {
+    let compression: protobuf::CompressionTypeVariant = compression.into();
     protobuf::CsvWriterOptions {
+        compression: compression.into(),
         delimiter: (csv_options.delimiter() as char).to_string(),
         has_header: csv_options.header(),
         date_format: csv_options.date_format().unwrap_or("").to_owned(),

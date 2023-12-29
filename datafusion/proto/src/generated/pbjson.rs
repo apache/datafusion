@@ -5394,6 +5394,9 @@ impl serde::Serialize for CsvWriterOptions {
     {
         use serde::ser::SerializeStruct;
         let mut len = 0;
+        if self.compression != 0 {
+            len += 1;
+        }
         if !self.delimiter.is_empty() {
             len += 1;
         }
@@ -5416,6 +5419,11 @@ impl serde::Serialize for CsvWriterOptions {
             len += 1;
         }
         let mut struct_ser = serializer.serialize_struct("datafusion.CsvWriterOptions", len)?;
+        if self.compression != 0 {
+            let v = CompressionTypeVariant::try_from(self.compression)
+                .map_err(|_| serde::ser::Error::custom(format!("Invalid variant {}", self.compression)))?;
+            struct_ser.serialize_field("compression", &v)?;
+        }
         if !self.delimiter.is_empty() {
             struct_ser.serialize_field("delimiter", &self.delimiter)?;
         }
@@ -5447,6 +5455,7 @@ impl<'de> serde::Deserialize<'de> for CsvWriterOptions {
         D: serde::Deserializer<'de>,
     {
         const FIELDS: &[&str] = &[
+            "compression",
             "delimiter",
             "has_header",
             "hasHeader",
@@ -5464,6 +5473,7 @@ impl<'de> serde::Deserialize<'de> for CsvWriterOptions {
 
         #[allow(clippy::enum_variant_names)]
         enum GeneratedField {
+            Compression,
             Delimiter,
             HasHeader,
             DateFormat,
@@ -5492,6 +5502,7 @@ impl<'de> serde::Deserialize<'de> for CsvWriterOptions {
                         E: serde::de::Error,
                     {
                         match value {
+                            "compression" => Ok(GeneratedField::Compression),
                             "delimiter" => Ok(GeneratedField::Delimiter),
                             "hasHeader" | "has_header" => Ok(GeneratedField::HasHeader),
                             "dateFormat" | "date_format" => Ok(GeneratedField::DateFormat),
@@ -5518,6 +5529,7 @@ impl<'de> serde::Deserialize<'de> for CsvWriterOptions {
                 where
                     V: serde::de::MapAccess<'de>,
             {
+                let mut compression__ = None;
                 let mut delimiter__ = None;
                 let mut has_header__ = None;
                 let mut date_format__ = None;
@@ -5527,6 +5539,12 @@ impl<'de> serde::Deserialize<'de> for CsvWriterOptions {
                 let mut null_value__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
+                        GeneratedField::Compression => {
+                            if compression__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("compression"));
+                            }
+                            compression__ = Some(map_.next_value::<CompressionTypeVariant>()? as i32);
+                        }
                         GeneratedField::Delimiter => {
                             if delimiter__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("delimiter"));
@@ -5572,6 +5590,7 @@ impl<'de> serde::Deserialize<'de> for CsvWriterOptions {
                     }
                 }
                 Ok(CsvWriterOptions {
+                    compression: compression__.unwrap_or_default(),
                     delimiter: delimiter__.unwrap_or_default(),
                     has_header: has_header__.unwrap_or_default(),
                     date_format: date_format__.unwrap_or_default(),

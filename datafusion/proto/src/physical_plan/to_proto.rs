@@ -908,12 +908,9 @@ impl TryFrom<&FileTypeWriterOptions> for protobuf::FileTypeWriterOptions {
             FileTypeWriterOptions::CSV(CsvWriterOptions {
                 writer_options,
                 compression,
-            }) => {
-                let _compression: protobuf::CompressionTypeVariant = compression.into();
-                protobuf::file_type_writer_options::FileType::CsvOptions(
-                    csv_writer_options_to_proto(writer_options),
-                )
-            }
+            }) => protobuf::file_type_writer_options::FileType::CsvOptions(
+                csv_writer_options_to_proto(writer_options, compression),
+            ),
             FileTypeWriterOptions::JSON(JsonWriterOptions { compression }) => {
                 let compression: protobuf::CompressionTypeVariant = compression.into();
                 protobuf::file_type_writer_options::FileType::JsonOptions(
