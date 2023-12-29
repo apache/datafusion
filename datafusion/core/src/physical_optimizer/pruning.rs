@@ -258,6 +258,11 @@ impl PruningPredicate {
                         builder.combine_array(&arrow::compute::not(&results)?)
                     }
                 }
+                // if all containers are pruned (has rows that DEFINITELY DO NOT pass the predicate)
+                // can return early without evaluating the rest of predicates.
+                if builder.check_all_pruned() {
+                    return Ok(builder.build());
+                }
             }
         }
 
@@ -379,6 +384,11 @@ impl BoolVecBuilder {
     /// Convert this builder into a Vec of bools
     fn build(self) -> Vec<bool> {
         self.inner
+    }
+
+    /// Check all containers has rows that DEFINITELY DO NOT pass the predicate
+    fn check_all_pruned(&self) -> bool {
+        self.inner.iter().all(|&x| !x)
     }
 }
 
