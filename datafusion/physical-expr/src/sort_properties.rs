@@ -158,7 +158,7 @@ impl ExprOrdering {
     /// Creates a new [`ExprOrdering`] with [`SortProperties::Unordered`] states
     /// for `expr` and its children.
     pub fn new(expr: Arc<dyn PhysicalExpr>) -> Self {
-        let children = PhysicalExpr::children(expr.as_ref());
+        let children = expr.children();
         Self {
             expr,
             state: Default::default(),

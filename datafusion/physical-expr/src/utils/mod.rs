@@ -136,7 +136,7 @@ pub struct ExprTreeNode<T> {
 
 impl<T> ExprTreeNode<T> {
     pub fn new(expr: Arc<dyn PhysicalExpr>) -> Self {
-        let children = PhysicalExpr::children(expr.as_ref());
+        let children = expr.children();
         ExprTreeNode {
             expr,
             data: None,
