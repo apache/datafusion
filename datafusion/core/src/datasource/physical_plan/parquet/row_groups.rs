@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::compute::{can_cast_types, cast_with_options, CastOptions};
+use arrow::compute::{cast_with_options, CastOptions};
 use arrow::{array::ArrayRef, datatypes::Schema};
 use arrow_array::{Array, BooleanArray};
 use arrow_schema::{DataType, FieldRef};
@@ -311,12 +311,13 @@ impl<'a> PruningStatistics for RowGroupPruningStatistics<'a> {
                 break;
             }
             // The filter values should be cast to the boundary's data type
-            if !can_cast_types(&value.data_type(), &target_data_type) {
-                return None;
-            }
-            let value =
+            let value = if let Ok(value) =
                 cast_scalar_value(value, &target_data_type, &DEFAULT_CAST_OPTIONS)
-                    .ok()?;
+            {
+                value
+            } else {
+                return None;
+            };
 
             // If the filter value is within the boundary, will not be able to filter out this row group
             if value >= min_value && value <= max_value {
@@ -647,7 +648,7 @@ mod tests {
         ]));
         let schema_descr = arrow_to_parquet_schema(&schema).unwrap();
 
-        // int > 1 and IsNull(bool) => c1_max > 1 and bool_null_count > 0
+        // c1 > 15 and c2 IS NULL  => c1_max > 15 and bool_null_count > 0
         let expr = col("c1").gt(lit(15)).and(col("c2").is_null());
         let expr = logical2physical(&expr, &schema);
         let pruning_predicate = PruningPredicate::try_new(expr, schema.clone()).unwrap();
@@ -667,6 +668,7 @@ mod tests {
             vec![1]
         );
 
+        // c1 < 5 and c2 IS NULL  => c1_min < 5 and bool_null_count > 0
         let expr = col("c1").lt(lit(5)).and(col("c2").is_null());
         let expr = logical2physical(&expr, &schema);
         let pruning_predicate = PruningPredicate::try_new(expr, schema.clone()).unwrap();
@@ -697,7 +699,7 @@ mod tests {
         ]));
         let schema_descr = arrow_to_parquet_schema(&schema).unwrap();
 
-        // int > 1 and bool = NULL => c1_max > 1 and null
+        // c1 > 15 and c2 IS NULL  => c1_max > 15 and bool_null_count > 0
         let expr = col("c1")
             .gt(lit(15))
             .and(col("c2").eq(lit(ScalarValue::Boolean(None))));
@@ -720,6 +722,7 @@ mod tests {
             vec![1]
         );
 
+        // c1 < 5 and c2 IS NULL  => c1_min < 5 and bool_null_count > 0
         let expr = col("c1")
             .lt(lit(5))
             .and(col("c2").eq(lit(ScalarValue::Boolean(None))));
