@@ -24,7 +24,6 @@ use datafusion::arrow::compute::kernels::sort::SortOptions;
 use datafusion::arrow::datatypes::{DataType, Field, Fields, IntervalUnit, Schema};
 use datafusion::datasource::file_format::csv::CsvSink;
 use datafusion::datasource::file_format::json::JsonSink;
-//use datafusion::datasource::file_format::csv::CsvSink;
 use datafusion::datasource::file_format::parquet::ParquetSink;
 use datafusion::datasource::listing::{ListingTableUrl, PartitionedFile};
 use datafusion::datasource::object_store::ObjectStoreUrl;
@@ -80,7 +79,23 @@ use datafusion_expr::{
 use datafusion_proto::physical_plan::{AsExecutionPlan, DefaultPhysicalExtensionCodec};
 use datafusion_proto::protobuf;
 
+/// Perform a serde roundtrip and assert that the string representation of the before and after plans
+/// are identical. Note that this often isn't sufficient to guarantee that no information is
+/// lost during serde because the string representation of a plan often only shows a subset of state.
 fn roundtrip_test(exec_plan: Arc<dyn ExecutionPlan>) -> Result<()> {
+    let _ = roundtrip_test_and_return(exec_plan);
+    Ok(())
+}
+
+/// Perform a serde roundtrip and assert that the string representation of the before and after plans
+/// are identical. Note that this often isn't sufficient to guarantee that no information is
+/// lost during serde because the string representation of a plan often only shows a subset of state.
+///
+/// This version of the roundtrip_test method returns the final plan after serde so that it can be inspected
+/// farther in tests.
+fn roundtrip_test_and_return(
+    exec_plan: Arc<dyn ExecutionPlan>,
+) -> Result<Arc<dyn ExecutionPlan>> {
     let ctx = SessionContext::new();
     let codec = DefaultPhysicalExtensionCodec {};
     let proto: protobuf::PhysicalPlanNode =
@@ -91,9 +106,15 @@ fn roundtrip_test(exec_plan: Arc<dyn ExecutionPlan>) -> Result<()> {
         .try_into_physical_plan(&ctx, runtime.deref(), &codec)
         .expect("from proto");
     assert_eq!(format!("{exec_plan:?}"), format!("{result_exec_plan:?}"));
-    Ok(())
+    Ok(result_exec_plan)
 }
 
+/// Perform a serde roundtrip and assert that the string representation of the before and after plans
+/// are identical. Note that this often isn't sufficient to guarantee that no information is
+/// lost during serde because the string representation of a plan often only shows a subset of state.
+///
+/// This version of the roundtrip_test function accepts a SessionContext, which is required when
+/// performing serde on some plans.
 fn roundtrip_test_with_context(
     exec_plan: Arc<dyn ExecutionPlan>,
     ctx: SessionContext,
@@ -779,7 +800,7 @@ fn roundtrip_csv_sink() -> Result<()> {
         overwrite: true,
         file_type_writer_options: FileTypeWriterOptions::CSV(CsvWriterOptions::new(
             WriterBuilder::default(),
-            CompressionTypeVariant::UNCOMPRESSED,
+            CompressionTypeVariant::ZSTD,
         )),
     };
     let data_sink = Arc::new(CsvSink::new(file_sink_config));
@@ -791,12 +812,34 @@ fn roundtrip_csv_sink() -> Result<()> {
         }),
     )];
 
-    roundtrip_test(Arc::new(FileSinkExec::new(
+    let roundtrip_plan = roundtrip_test_and_return(Arc::new(FileSinkExec::new(
         input,
         data_sink,
         schema.clone(),
         Some(sort_order),
     )))
+    .unwrap();
+
+    let roundtrip_plan = roundtrip_plan
+        .as_any()
+        .downcast_ref::<FileSinkExec>()
+        .unwrap();
+    let csv_sink = roundtrip_plan
+        .sink()
+        .as_any()
+        .downcast_ref::<CsvSink>()
+        .unwrap();
+    assert_eq!(
+        CompressionTypeVariant::ZSTD,
+        csv_sink
+            .config()
+            .file_type_writer_options
+            .try_into_csv()
+            .unwrap()
+            .compression
+    );
+
+    Ok(())
 }
 
 #[test]

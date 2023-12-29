@@ -788,16 +788,16 @@ impl TryFrom<&protobuf::FileTypeWriterOptions> for FileTypeWriterOptions {
             .file_type
             .as_ref()
             .ok_or_else(|| proto_error("Missing required file_type field in protobuf"))?;
+
         match file_type {
-            protobuf::file_type_writer_options::FileType::JsonOptions(opts) => Ok(
-                Self::JSON(JsonWriterOptions::new(opts.compression().into())),
-            ),
-            protobuf::file_type_writer_options::FileType::CsvOptions(opt) => {
-                let write_options = csv_writer_options_from_proto(opt)?;
-                Ok(Self::CSV(CsvWriterOptions::new(
-                    write_options,
-                    CompressionTypeVariant::UNCOMPRESSED,
-                )))
+            protobuf::file_type_writer_options::FileType::JsonOptions(opts) => {
+                let compression: CompressionTypeVariant = opts.compression().into();
+                Ok(Self::JSON(JsonWriterOptions::new(compression)))
+            }
+            protobuf::file_type_writer_options::FileType::CsvOptions(opts) => {
+                let write_options = csv_writer_options_from_proto(opts)?;
+                let compression: CompressionTypeVariant = opts.compression().into();
+                Ok(Self::CSV(CsvWriterOptions::new(write_options, compression)))
             }
             protobuf::file_type_writer_options::FileType::ParquetOptions(opt) => {
                 let props = opt.writer_properties.clone().unwrap_or_default();
