@@ -409,8 +409,7 @@ impl LastValue {
     }
 
     pub fn with_requirement_satisfied(mut self, requirement_satisfied: bool) -> Self {
-        self.requirement_satisfied =
-            requirement_satisfied || self.ordering_req.is_empty();
+        self.requirement_satisfied = requirement_satisfied;
         self
     }
 
@@ -589,8 +588,7 @@ impl LastValueAccumulator {
     }
 
     fn with_requirement_satisfied(mut self, requirement_satisfied: bool) -> Self {
-        self.requirement_satisfied =
-            requirement_satisfied || self.ordering_req.is_empty();
+        self.requirement_satisfied = requirement_satisfied;
         self
     }
 }
