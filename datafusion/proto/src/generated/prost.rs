@@ -1566,7 +1566,7 @@ pub mod owned_table_reference {
 pub struct PhysicalPlanNode {
     #[prost(
         oneof = "physical_plan_node::PhysicalPlanType",
-        tags = "1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27"
+        tags = "1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29"
     )]
     pub physical_plan_type: ::core::option::Option<physical_plan_node::PhysicalPlanType>,
 }
@@ -1629,6 +1629,10 @@ pub mod physical_plan_node {
         Interleave(super::InterleaveExecNode),
         #[prost(message, tag = "27")]
         PlaceholderRow(super::PlaceholderRowExecNode),
+        #[prost(message, tag = "28")]
+        CsvSink(::prost::alloc::boxed::Box<super::CsvSinkExecNode>),
+        #[prost(message, tag = "29")]
+        ParquetSink(::prost::alloc::boxed::Box<super::ParquetSinkExecNode>),
     }
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
@@ -1673,26 +1677,29 @@ pub struct ParquetWriterOptions {
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CsvWriterOptions {
+    /// Compression type
+    #[prost(enumeration = "CompressionTypeVariant", tag = "1")]
+    pub compression: i32,
     /// Optional column delimiter. Defaults to `b','`
-    #[prost(string, tag = "1")]
+    #[prost(string, tag = "2")]
     pub delimiter: ::prost::alloc::string::String,
     /// Whether to write column names as file headers. Defaults to `true`
-    #[prost(bool, tag = "2")]
+    #[prost(bool, tag = "3")]
     pub has_header: bool,
     /// Optional date format for date arrays
-    #[prost(string, tag = "3")]
+    #[prost(string, tag = "4")]
     pub date_format: ::prost::alloc::string::String,
     /// Optional datetime format for datetime arrays
-    #[prost(string, tag = "4")]
+    #[prost(string, tag = "5")]
     pub datetime_format: ::prost::alloc::string::String,
     /// Optional timestamp format for timestamp arrays
-    #[prost(string, tag = "5")]
+    #[prost(string, tag = "6")]
     pub timestamp_format: ::prost::alloc::string::String,
     /// Optional time format for time arrays
-    #[prost(string, tag = "6")]
+    #[prost(string, tag = "7")]
     pub time_format: ::prost::alloc::string::String,
     /// Optional value to represent null
-    #[prost(string, tag = "7")]
+    #[prost(string, tag = "8")]
     pub null_value: ::prost::alloc::string::String,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
@@ -1746,6 +1753,42 @@ pub struct JsonSinkExecNode {
     pub input: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalPlanNode>>,
     #[prost(message, optional, tag = "2")]
     pub sink: ::core::option::Option<JsonSink>,
+    #[prost(message, optional, tag = "3")]
+    pub sink_schema: ::core::option::Option<Schema>,
+    #[prost(message, optional, tag = "4")]
+    pub sort_order: ::core::option::Option<PhysicalSortExprNodeCollection>,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct CsvSink {
+    #[prost(message, optional, tag = "1")]
+    pub config: ::core::option::Option<FileSinkConfig>,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct CsvSinkExecNode {
+    #[prost(message, optional, boxed, tag = "1")]
+    pub input: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalPlanNode>>,
+    #[prost(message, optional, tag = "2")]
+    pub sink: ::core::option::Option<CsvSink>,
+    #[prost(message, optional, tag = "3")]
+    pub sink_schema: ::core::option::Option<Schema>,
+    #[prost(message, optional, tag = "4")]
+    pub sort_order: ::core::option::Option<PhysicalSortExprNodeCollection>,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ParquetSink {
+    #[prost(message, optional, tag = "1")]
+    pub config: ::core::option::Option<FileSinkConfig>,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ParquetSinkExecNode {
+    #[prost(message, optional, boxed, tag = "1")]
+    pub input: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalPlanNode>>,
+    #[prost(message, optional, tag = "2")]
+    pub sink: ::core::option::Option<ParquetSink>,
     #[prost(message, optional, tag = "3")]
     pub sink_schema: ::core::option::Option<Schema>,
     #[prost(message, optional, tag = "4")]

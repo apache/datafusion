@@ -621,7 +621,7 @@ async fn fetch_statistics(
 }
 
 /// Implements [`DataSink`] for writing to a parquet file.
-struct ParquetSink {
+pub struct ParquetSink {
     /// Config options for writing data
     config: FileSinkConfig,
 }
@@ -645,10 +645,15 @@ impl DisplayAs for ParquetSink {
 }
 
 impl ParquetSink {
-    fn new(config: FileSinkConfig) -> Self {
+    /// Create from config.
+    pub fn new(config: FileSinkConfig) -> Self {
         Self { config }
     }
 
+    /// Retrieve the inner [`FileSinkConfig`].
+    pub fn config(&self) -> &FileSinkConfig {
+        &self.config
+    }
     /// Converts table schema to writer schema, which may differ in the case
     /// of hive style partitioning where some columns are removed from the
     /// underlying files.

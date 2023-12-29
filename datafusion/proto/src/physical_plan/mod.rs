@@ -21,8 +21,11 @@ use std::sync::Arc;
 
 use datafusion::arrow::compute::SortOptions;
 use datafusion::arrow::datatypes::SchemaRef;
+use datafusion::datasource::file_format::csv::CsvSink;
 use datafusion::datasource::file_format::file_compression_type::FileCompressionType;
 use datafusion::datasource::file_format::json::JsonSink;
+#[cfg(feature = "parquet")]
+use datafusion::datasource::file_format::parquet::ParquetSink;
 #[cfg(feature = "parquet")]
 use datafusion::datasource::physical_plan::ParquetExec;
 use datafusion::datasource::physical_plan::{AvroExec, CsvExec};
@@ -921,6 +924,68 @@ impl AsExecutionPlan for PhysicalPlanNode {
                     sort_order,
                 )))
             }
+            PhysicalPlanType::CsvSink(sink) => {
+                let input =
+                    into_physical_plan(&sink.input, registry, runtime, extension_codec)?;
+
+                let data_sink: CsvSink = sink
+                    .sink
+                    .as_ref()
+                    .ok_or_else(|| proto_error("Missing required field in protobuf"))?
+                    .try_into()?;
+                let sink_schema = convert_required!(sink.sink_schema)?;
+                let sort_order = sink
+                    .sort_order
+                    .as_ref()
+                    .map(|collection| {
+                        collection
+                            .physical_sort_expr_nodes
+                            .iter()
+                            .map(|proto| {
+                                parse_physical_sort_expr(proto, registry, &sink_schema)
+                                    .map(Into::into)
+                            })
+                            .collect::<Result<Vec<_>>>()
+                    })
+                    .transpose()?;
+                Ok(Arc::new(FileSinkExec::new(
+                    input,
+                    Arc::new(data_sink),
+                    Arc::new(sink_schema),
+                    sort_order,
+                )))
+            }
+            PhysicalPlanType::ParquetSink(sink) => {
+                let input =
+                    into_physical_plan(&sink.input, registry, runtime, extension_codec)?;
+
+                let data_sink: ParquetSink = sink
+                    .sink
+                    .as_ref()
+                    .ok_or_else(|| proto_error("Missing required field in protobuf"))?
+                    .try_into()?;
+                let sink_schema = convert_required!(sink.sink_schema)?;
+                let sort_order = sink
+                    .sort_order
+                    .as_ref()
+                    .map(|collection| {
+                        collection
+                            .physical_sort_expr_nodes
+                            .iter()
+                            .map(|proto| {
+                                parse_physical_sort_expr(proto, registry, &sink_schema)
+                                    .map(Into::into)
+                            })
+                            .collect::<Result<Vec<_>>>()
+                    })
+                    .transpose()?;
+                Ok(Arc::new(FileSinkExec::new(
+                    input,
+                    Arc::new(data_sink),
+                    Arc::new(sink_schema),
+                    sort_order,
+                )))
+            }
         }
     }
 
@@ -1669,6 +1734,32 @@ impl AsExecutionPlan for PhysicalPlanNode {
                 return Ok(protobuf::PhysicalPlanNode {
                     physical_plan_type: Some(PhysicalPlanType::JsonSink(Box::new(
                         protobuf::JsonSinkExecNode {
+                            input: Some(Box::new(input)),
+                            sink: Some(sink.try_into()?),
+                            sink_schema: Some(exec.schema().as_ref().try_into()?),
+                            sort_order,
+                        },
+                    ))),
+                });
+            }
+
+            if let Some(sink) = exec.sink().as_any().downcast_ref::<CsvSink>() {
+                return Ok(protobuf::PhysicalPlanNode {
+                    physical_plan_type: Some(PhysicalPlanType::CsvSink(Box::new(
+                        protobuf::CsvSinkExecNode {
+                            input: Some(Box::new(input)),
+                            sink: Some(sink.try_into()?),
+                            sink_schema: Some(exec.schema().as_ref().try_into()?),
+                            sort_order,
+                        },
+                    ))),
+                });
+            }
+
+            if let Some(sink) = exec.sink().as_any().downcast_ref::<ParquetSink>() {
+                return Ok(protobuf::PhysicalPlanNode {
+                    physical_plan_type: Some(PhysicalPlanType::ParquetSink(Box::new(
+                        protobuf::ParquetSinkExecNode {
                             input: Some(Box::new(input)),
                             sink: Some(sink.try_into()?),
                             sink_schema: Some(exec.schema().as_ref().try_into()?),
