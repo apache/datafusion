@@ -198,9 +198,7 @@ select * from json_table;
 4
 5
 
-## In the future it would be cool to see the file read as "4" groups with even sizes (offsets)
-## but for now it is just one group
-## https://github.com/apache/arrow-datafusion/issues/8502
+## Expect to see the scan read the file as "4" groups with even sizes (offsets)
 query TT
 EXPLAIN SELECT column1 FROM json_table WHERE column1 <> 42;
 ----
