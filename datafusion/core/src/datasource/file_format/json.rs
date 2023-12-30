@@ -309,12 +309,6 @@ mod tests {
     use crate::prelude::{SessionConfig, SessionContext};
     use crate::test::object_store::local_unpartitioned_file;
 
-    use datafusion_common::cast::as_int64_array;
-    use datafusion_common::stats::Precision;
-
-    use futures::StreamExt;
-    use object_store::local::LocalFileSystem;
-
     #[tokio::test]
     async fn read_small_batches() -> Result<()> {
         let config = SessionConfig::new().with_batch_size(2);
