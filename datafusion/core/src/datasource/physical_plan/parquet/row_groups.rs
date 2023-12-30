@@ -81,7 +81,7 @@ pub(crate) fn prune_row_groups_by_statistics(
                 Ok(values) => {
                     // NB: false means don't scan row group
                     if !values[0] {
-                        metrics.row_groups_pruned.add(1);
+                        metrics.row_groups_pruned_statistics.add(1);
                         continue;
                     }
                 }
@@ -159,7 +159,7 @@ pub(crate) async fn prune_row_groups_by_bloom_filters<
         };
 
         if prune_group {
-            metrics.row_groups_pruned.add(1);
+            metrics.row_groups_pruned_sbbf.add(1);
         } else {
             filtered.push(*idx);
         }
