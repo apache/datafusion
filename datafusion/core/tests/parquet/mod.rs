@@ -115,7 +115,9 @@ impl TestOutput {
 
     /// The number of times the pruning predicate evaluation errors
     fn row_groups_pruned(&self) -> Option<usize> {
-        self.metric_value("row_groups_pruned")
+        self.metric_value("row_groups_pruned_sbbf")
+            .zip(self.metric_value("row_groups_pruned_statistics"))
+            .map(|(a, b)| a + b)
     }
 
     /// The number of times the pruning predicate evaluation errors

@@ -738,7 +738,8 @@ async fn parquet_explain_analyze() {
 
     // should contain aggregated stats
     assert_contains!(&formatted, "output_rows=8");
-    assert_contains!(&formatted, "row_groups_pruned=0");
+    assert_contains!(&formatted, "row_groups_pruned_sbbf=0");
+    assert_contains!(&formatted, "row_groups_pruned_statistics=0");
 }
 
 #[tokio::test]
@@ -754,7 +755,8 @@ async fn parquet_explain_analyze_verbose() {
         .to_string();
 
     // should contain the raw per file stats (with the label)
-    assert_contains!(&formatted, "row_groups_pruned{partition=0");
+    assert_contains!(&formatted, "row_groups_pruned_sbbf{partition=0");
+    assert_contains!(&formatted, "row_groups_pruned_statistics{partition=0");
 }
 
 #[tokio::test]
