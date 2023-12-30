@@ -1650,7 +1650,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                                     let csv_options = &csv_opts.writer_options;
                                     let csv_writer_options = csv_writer_options_to_proto(
                                         csv_options,
-                                        (&csv_opts.compression).into(),
+                                        &csv_opts.compression,
                                     );
                                     let csv_options =
                                         file_type_writer_options::FileType::CsvOptions(
