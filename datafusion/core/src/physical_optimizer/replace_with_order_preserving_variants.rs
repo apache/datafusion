@@ -19,6 +19,7 @@
 //! order-preserving variants when it is helpful; either in terms of
 //! performance or to accommodate unbounded streams by fixing the pipeline.
 
+use std::borrow::Cow;
 use std::sync::Arc;
 
 use super::utils::is_repartition;
@@ -104,8 +105,8 @@ impl OrderPreservationContext {
 }
 
 impl TreeNode for OrderPreservationContext {
-    fn children_nodes(&self) -> Vec<Self> {
-        self.children_nodes.to_vec()
+    fn children_nodes(&self) -> Vec<Cow<Self>> {
+        self.children_nodes.iter().map(Cow::Borrowed).collect()
     }
 
     fn map_children<F>(mut self, transform: F) -> Result<Self>

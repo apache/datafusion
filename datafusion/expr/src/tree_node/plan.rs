@@ -20,10 +20,11 @@
 use crate::LogicalPlan;
 use datafusion_common::tree_node::{TreeNodeVisitor, VisitRecursion};
 use datafusion_common::{tree_node::TreeNode, Result};
+use std::borrow::Cow;
 
 impl TreeNode for LogicalPlan {
-    fn children_nodes(&self) -> Vec<Self> {
-        self.inputs().into_iter().cloned().collect()
+    fn children_nodes(&self) -> Vec<Cow<Self>> {
+        self.inputs().into_iter().map(Cow::Borrowed).collect()
     }
 
     fn apply<F>(&self, op: &mut F) -> Result<VisitRecursion>

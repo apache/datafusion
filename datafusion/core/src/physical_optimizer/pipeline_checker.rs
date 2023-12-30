@@ -19,6 +19,7 @@
 //! infinite sources, if there are any. It will reject non-runnable query plans
 //! that use pipeline-breaking operators on infinite input(s).
 
+use std::borrow::Cow;
 use std::sync::Arc;
 
 use crate::config::ConfigOptions;
@@ -91,8 +92,8 @@ impl PipelineStatePropagator {
 }
 
 impl TreeNode for PipelineStatePropagator {
-    fn children_nodes(&self) -> Vec<Self> {
-        self.children.to_vec()
+    fn children_nodes(&self) -> Vec<Cow<Self>> {
+        self.children.iter().map(Cow::Borrowed).collect()
     }
 
     fn map_children<F>(mut self, transform: F) -> Result<Self>

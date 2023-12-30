@@ -18,6 +18,7 @@
 //! This module provides common traits for visiting or rewriting tree
 //! data structures easily.
 
+use std::borrow::Cow;
 use std::sync::Arc;
 
 use crate::Result;
@@ -32,9 +33,9 @@ use crate::Result;
 /// [`PhysicalExpr`]: https://docs.rs/datafusion/latest/datafusion/physical_plan/trait.PhysicalExpr.html
 /// [`LogicalPlan`]: https://docs.rs/datafusion-expr/latest/datafusion_expr/logical_plan/enum.LogicalPlan.html
 /// [`Expr`]: https://docs.rs/datafusion-expr/latest/datafusion_expr/expr/enum.Expr.html
-pub trait TreeNode: Sized {
+pub trait TreeNode: Sized + Clone {
     /// Returns all children of the TreeNode
-    fn children_nodes(&self) -> Vec<Self>;
+    fn children_nodes(&self) -> Vec<Cow<Self>>;
 
     /// Use preorder to iterate the node on the tree so that we can
     /// stop fast for some cases.
@@ -355,8 +356,8 @@ pub trait DynTreeNode {
 /// Blanket implementation for Arc for any tye that implements
 /// [`DynTreeNode`] (such as [`Arc<dyn PhysicalExpr>`])
 impl<T: DynTreeNode + ?Sized> TreeNode for Arc<T> {
-    fn children_nodes(&self) -> Vec<Arc<T>> {
-        self.arc_children()
+    fn children_nodes(&self) -> Vec<Cow<Self>> {
+        self.arc_children().into_iter().map(Cow::Owned).collect()
     }
 
     fn apply_children<F>(&self, op: &mut F) -> Result<VisitRecursion>
