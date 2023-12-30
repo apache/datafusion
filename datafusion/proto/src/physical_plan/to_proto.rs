@@ -28,7 +28,12 @@ use crate::protobuf::{
     ScalarValue,
 };
 
+#[cfg(feature = "parquet")]
+use datafusion::datasource::file_format::parquet::ParquetSink;
+
+use crate::logical_plan::{csv_writer_options_to_proto, writer_properties_to_proto};
 use datafusion::datasource::{
+    file_format::csv::CsvSink,
     file_format::json::JsonSink,
     listing::{FileRange, PartitionedFile},
     physical_plan::FileScanConfig,
@@ -814,6 +819,27 @@ impl TryFrom<&JsonSink> for protobuf::JsonSink {
     }
 }
 
+impl TryFrom<&CsvSink> for protobuf::CsvSink {
+    type Error = DataFusionError;
+
+    fn try_from(value: &CsvSink) -> Result<Self, Self::Error> {
+        Ok(Self {
+            config: Some(value.config().try_into()?),
+        })
+    }
+}
+
+#[cfg(feature = "parquet")]
+impl TryFrom<&ParquetSink> for protobuf::ParquetSink {
+    type Error = DataFusionError;
+
+    fn try_from(value: &ParquetSink) -> Result<Self, Self::Error> {
+        Ok(Self {
+            config: Some(value.config().try_into()?),
+        })
+    }
+}
+
 impl TryFrom<&FileSinkConfig> for protobuf::FileSinkConfig {
     type Error = DataFusionError;
 
@@ -870,13 +896,21 @@ impl TryFrom<&FileTypeWriterOptions> for protobuf::FileTypeWriterOptions {
     fn try_from(opts: &FileTypeWriterOptions) -> Result<Self, Self::Error> {
         let file_type = match opts {
             #[cfg(feature = "parquet")]
-            FileTypeWriterOptions::Parquet(ParquetWriterOptions {
-                writer_options: _,
-            }) => return not_impl_err!("Parquet file sink protobuf serialization"),
+            FileTypeWriterOptions::Parquet(ParquetWriterOptions { writer_options }) => {
+                protobuf::file_type_writer_options::FileType::ParquetOptions(
+                    protobuf::ParquetWriterOptions {
+                        writer_properties: Some(writer_properties_to_proto(
+                            writer_options,
+                        )),
+                    },
+                )
+            }
             FileTypeWriterOptions::CSV(CsvWriterOptions {
-                writer_options: _,
-                compression: _,
-            }) => return not_impl_err!("CSV file sink protobuf serialization"),
+                writer_options,
+                compression,
+            }) => protobuf::file_type_writer_options::FileType::CsvOptions(
+                csv_writer_options_to_proto(writer_options, compression),
+            ),
             FileTypeWriterOptions::JSON(JsonWriterOptions { compression }) => {
                 let compression: protobuf::CompressionTypeVariant = compression.into();
                 protobuf::file_type_writer_options::FileType::JsonOptions(

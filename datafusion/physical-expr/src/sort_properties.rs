@@ -151,7 +151,7 @@ impl Neg for SortProperties {
 pub struct ExprOrdering {
     pub expr: Arc<dyn PhysicalExpr>,
     pub state: SortProperties,
-    pub children: Vec<ExprOrdering>,
+    pub children: Vec<Self>,
 }
 
 impl ExprOrdering {
@@ -191,15 +191,13 @@ impl TreeNode for ExprOrdering {
     where
         F: FnMut(Self) -> Result<Self>,
     {
-        if self.children.is_empty() {
-            Ok(self)
-        } else {
+        if !self.children.is_empty() {
             self.children = self
                 .children
                 .into_iter()
                 .map(transform)
-                .collect::<Result<Vec<_>>>()?;
-            Ok(self)
+                .collect::<Result<_>>()?;
         }
+        Ok(self)
     }
 }

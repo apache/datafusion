@@ -20,7 +20,7 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use crate::aggregate::utils::{down_cast_any_ref, ordering_fields};
+use crate::aggregate::utils::{down_cast_any_ref, get_sort_options, ordering_fields};
 use crate::expressions::format_state_name;
 use crate::{
     reverse_order_bys, AggregateExpr, LexOrdering, PhysicalExpr, PhysicalSortExpr,
@@ -29,19 +29,21 @@ use crate::{
 use arrow::array::{Array, ArrayRef, AsArray, BooleanArray};
 use arrow::compute::{self, lexsort_to_indices, SortColumn};
 use arrow::datatypes::{DataType, Field};
-use arrow_schema::SortOptions;
 use datafusion_common::utils::{compare_rows, get_arrayref_at_indices, get_row_at_idx};
-use datafusion_common::{arrow_datafusion_err, DataFusionError, Result, ScalarValue};
+use datafusion_common::{
+    arrow_datafusion_err, internal_err, DataFusionError, Result, ScalarValue,
+};
 use datafusion_expr::Accumulator;
 
 /// FIRST_VALUE aggregate expression
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct FirstValue {
     name: String,
     input_data_type: DataType,
     order_by_data_types: Vec<DataType>,
     expr: Arc<dyn PhysicalExpr>,
     ordering_req: LexOrdering,
+    requirement_satisfied: bool,
 }
 
 impl FirstValue {
@@ -53,12 +55,14 @@ impl FirstValue {
         ordering_req: LexOrdering,
         order_by_data_types: Vec<DataType>,
     ) -> Self {
+        let requirement_satisfied = ordering_req.is_empty();
         Self {
             name: name.into(),
             input_data_type,
             order_by_data_types,
             expr,
             ordering_req,
+            requirement_satisfied,
         }
     }
 
@@ -86,6 +90,33 @@ impl FirstValue {
     pub fn ordering_req(&self) -> &LexOrdering {
         &self.ordering_req
     }
+
+    pub fn with_requirement_satisfied(mut self, requirement_satisfied: bool) -> Self {
+        self.requirement_satisfied = requirement_satisfied;
+        self
+    }
+
+    pub fn convert_to_last(self) -> LastValue {
+        let name = if self.name.starts_with("FIRST") {
+            format!("LAST{}", &self.name[5..])
+        } else {
+            format!("LAST_VALUE({})", self.expr)
+        };
+        let FirstValue {
+            expr,
+            input_data_type,
+            ordering_req,
+            order_by_data_types,
+            ..
+        } = self;
+        LastValue::new(
+            expr,
+            name,
+            input_data_type,
+            reverse_order_bys(&ordering_req),
+            order_by_data_types,
+        )
+    }
 }
 
 impl AggregateExpr for FirstValue {
@@ -99,11 +130,14 @@ impl AggregateExpr for FirstValue {
     }
 
     fn create_accumulator(&self) -> Result<Box<dyn Accumulator>> {
-        Ok(Box::new(FirstValueAccumulator::try_new(
+        FirstValueAccumulator::try_new(
             &self.input_data_type,
             &self.order_by_data_types,
             self.ordering_req.clone(),
-        )?))
+        )
+        .map(|acc| {
+            Box::new(acc.with_requirement_satisfied(self.requirement_satisfied)) as _
+        })
     }
 
     fn state_fields(&self) -> Result<Vec<Field>> {
@@ -129,11 +163,7 @@ impl AggregateExpr for FirstValue {
     }
 
     fn order_bys(&self) -> Option<&[PhysicalSortExpr]> {
-        if self.ordering_req.is_empty() {
-            None
-        } else {
-            Some(&self.ordering_req)
-        }
+        (!self.ordering_req.is_empty()).then_some(&self.ordering_req)
     }
 
     fn name(&self) -> &str {
@@ -141,26 +171,18 @@ impl AggregateExpr for FirstValue {
     }
 
     fn reverse_expr(&self) -> Option<Arc<dyn AggregateExpr>> {
-        let name = if self.name.starts_with("FIRST") {
-            format!("LAST{}", &self.name[5..])
-        } else {
-            format!("LAST_VALUE({})", self.expr)
-        };
-        Some(Arc::new(LastValue::new(
-            self.expr.clone(),
-            name,
-            self.input_data_type.clone(),
-            reverse_order_bys(&self.ordering_req),
-            self.order_by_data_types.clone(),
-        )))
+        Some(Arc::new(self.clone().convert_to_last()))
     }
 
     fn create_sliding_accumulator(&self) -> Result<Box<dyn Accumulator>> {
-        Ok(Box::new(FirstValueAccumulator::try_new(
+        FirstValueAccumulator::try_new(
             &self.input_data_type,
             &self.order_by_data_types,
             self.ordering_req.clone(),
-        )?))
+        )
+        .map(|acc| {
+            Box::new(acc.with_requirement_satisfied(self.requirement_satisfied)) as _
+        })
     }
 }
 
@@ -189,6 +211,8 @@ struct FirstValueAccumulator {
     orderings: Vec<ScalarValue>,
     // Stores the applicable ordering requirement.
     ordering_req: LexOrdering,
+    // Stores whether incoming data already satisfies the ordering requirement.
+    requirement_satisfied: bool,
 }
 
 impl FirstValueAccumulator {
@@ -202,11 +226,13 @@ impl FirstValueAccumulator {
             .iter()
             .map(ScalarValue::try_from)
             .collect::<Result<Vec<_>>>()?;
-        ScalarValue::try_from(data_type).map(|value| Self {
-            first: value,
+        let requirement_satisfied = ordering_req.is_empty();
+        ScalarValue::try_from(data_type).map(|first| Self {
+            first,
             is_set: false,
             orderings,
             ordering_req,
+            requirement_satisfied,
         })
     }
 
@@ -215,6 +241,31 @@ impl FirstValueAccumulator {
         self.first = row[0].clone();
         self.orderings = row[1..].to_vec();
         self.is_set = true;
+    }
+
+    fn get_first_idx(&self, values: &[ArrayRef]) -> Result<Option<usize>> {
+        let [value, ordering_values @ ..] = values else {
+            return internal_err!("Empty row in FIRST_VALUE");
+        };
+        if self.requirement_satisfied {
+            // Get first entry according to the pre-existing ordering (0th index):
+            return Ok((!value.is_empty()).then_some(0));
+        }
+        let sort_columns = ordering_values
+            .iter()
+            .zip(self.ordering_req.iter())
+            .map(|(values, req)| SortColumn {
+                values: values.clone(),
+                options: Some(req.options),
+            })
+            .collect::<Vec<_>>();
+        let indices = lexsort_to_indices(&sort_columns, Some(1))?;
+        Ok((!indices.is_empty()).then_some(indices.value(0) as _))
+    }
+
+    fn with_requirement_satisfied(mut self, requirement_satisfied: bool) -> Self {
+        self.requirement_satisfied = requirement_satisfied;
+        self
     }
 }
 
@@ -227,11 +278,25 @@ impl Accumulator for FirstValueAccumulator {
     }
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
-        // If we have seen first value, we shouldn't update it
-        if !values[0].is_empty() && !self.is_set {
-            let row = get_row_at_idx(values, 0)?;
-            // Update with first value in the array.
-            self.update_with_new_row(&row);
+        if !self.is_set {
+            if let Some(first_idx) = self.get_first_idx(values)? {
+                let row = get_row_at_idx(values, first_idx)?;
+                self.update_with_new_row(&row);
+            }
+        } else if !self.requirement_satisfied {
+            if let Some(first_idx) = self.get_first_idx(values)? {
+                let row = get_row_at_idx(values, first_idx)?;
+                let orderings = &row[1..];
+                if compare_rows(
+                    &self.orderings,
+                    orderings,
+                    &get_sort_options(&self.ordering_req),
+                )?
+                .is_gt()
+                {
+                    self.update_with_new_row(&row);
+                }
+            }
         }
         Ok(())
     }
@@ -260,7 +325,7 @@ impl Accumulator for FirstValueAccumulator {
             let sort_options = get_sort_options(&self.ordering_req);
             // Either there is no existing value, or there is an earlier version in new data.
             if !self.is_set
-                || compare_rows(first_ordering, &self.orderings, &sort_options)?.is_lt()
+                || compare_rows(&self.orderings, first_ordering, &sort_options)?.is_gt()
             {
                 // Update with first value in the state. Note that we should exclude the
                 // is_set flag from the state. Otherwise, we will end up with a state
@@ -284,13 +349,14 @@ impl Accumulator for FirstValueAccumulator {
 }
 
 /// LAST_VALUE aggregate expression
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct LastValue {
     name: String,
     input_data_type: DataType,
     order_by_data_types: Vec<DataType>,
     expr: Arc<dyn PhysicalExpr>,
     ordering_req: LexOrdering,
+    requirement_satisfied: bool,
 }
 
 impl LastValue {
@@ -302,12 +368,14 @@ impl LastValue {
         ordering_req: LexOrdering,
         order_by_data_types: Vec<DataType>,
     ) -> Self {
+        let requirement_satisfied = ordering_req.is_empty();
         Self {
             name: name.into(),
             input_data_type,
             order_by_data_types,
             expr,
             ordering_req,
+            requirement_satisfied,
         }
     }
 
@@ -335,6 +403,33 @@ impl LastValue {
     pub fn ordering_req(&self) -> &LexOrdering {
         &self.ordering_req
     }
+
+    pub fn with_requirement_satisfied(mut self, requirement_satisfied: bool) -> Self {
+        self.requirement_satisfied = requirement_satisfied;
+        self
+    }
+
+    pub fn convert_to_first(self) -> FirstValue {
+        let name = if self.name.starts_with("LAST") {
+            format!("FIRST{}", &self.name[4..])
+        } else {
+            format!("FIRST_VALUE({})", self.expr)
+        };
+        let LastValue {
+            expr,
+            input_data_type,
+            ordering_req,
+            order_by_data_types,
+            ..
+        } = self;
+        FirstValue::new(
+            expr,
+            name,
+            input_data_type,
+            reverse_order_bys(&ordering_req),
+            order_by_data_types,
+        )
+    }
 }
 
 impl AggregateExpr for LastValue {
@@ -348,11 +443,14 @@ impl AggregateExpr for LastValue {
     }
 
     fn create_accumulator(&self) -> Result<Box<dyn Accumulator>> {
-        Ok(Box::new(LastValueAccumulator::try_new(
+        LastValueAccumulator::try_new(
             &self.input_data_type,
             &self.order_by_data_types,
             self.ordering_req.clone(),
-        )?))
+        )
+        .map(|acc| {
+            Box::new(acc.with_requirement_satisfied(self.requirement_satisfied)) as _
+        })
     }
 
     fn state_fields(&self) -> Result<Vec<Field>> {
@@ -378,11 +476,7 @@ impl AggregateExpr for LastValue {
     }
 
     fn order_bys(&self) -> Option<&[PhysicalSortExpr]> {
-        if self.ordering_req.is_empty() {
-            None
-        } else {
-            Some(&self.ordering_req)
-        }
+        (!self.ordering_req.is_empty()).then_some(&self.ordering_req)
     }
 
     fn name(&self) -> &str {
@@ -390,26 +484,18 @@ impl AggregateExpr for LastValue {
     }
 
     fn reverse_expr(&self) -> Option<Arc<dyn AggregateExpr>> {
-        let name = if self.name.starts_with("LAST") {
-            format!("FIRST{}", &self.name[4..])
-        } else {
-            format!("FIRST_VALUE({})", self.expr)
-        };
-        Some(Arc::new(FirstValue::new(
-            self.expr.clone(),
-            name,
-            self.input_data_type.clone(),
-            reverse_order_bys(&self.ordering_req),
-            self.order_by_data_types.clone(),
-        )))
+        Some(Arc::new(self.clone().convert_to_first()))
     }
 
     fn create_sliding_accumulator(&self) -> Result<Box<dyn Accumulator>> {
-        Ok(Box::new(LastValueAccumulator::try_new(
+        LastValueAccumulator::try_new(
             &self.input_data_type,
             &self.order_by_data_types,
             self.ordering_req.clone(),
-        )?))
+        )
+        .map(|acc| {
+            Box::new(acc.with_requirement_satisfied(self.requirement_satisfied)) as _
+        })
     }
 }
 
@@ -437,6 +523,8 @@ struct LastValueAccumulator {
     orderings: Vec<ScalarValue>,
     // Stores the applicable ordering requirement.
     ordering_req: LexOrdering,
+    // Stores whether incoming data already satisfies the ordering requirement.
+    requirement_satisfied: bool,
 }
 
 impl LastValueAccumulator {
@@ -450,11 +538,13 @@ impl LastValueAccumulator {
             .iter()
             .map(ScalarValue::try_from)
             .collect::<Result<Vec<_>>>()?;
-        Ok(Self {
-            last: ScalarValue::try_from(data_type)?,
+        let requirement_satisfied = ordering_req.is_empty();
+        ScalarValue::try_from(data_type).map(|last| Self {
+            last,
             is_set: false,
             orderings,
             ordering_req,
+            requirement_satisfied,
         })
     }
 
@@ -463,6 +553,35 @@ impl LastValueAccumulator {
         self.last = row[0].clone();
         self.orderings = row[1..].to_vec();
         self.is_set = true;
+    }
+
+    fn get_last_idx(&self, values: &[ArrayRef]) -> Result<Option<usize>> {
+        let [value, ordering_values @ ..] = values else {
+            return internal_err!("Empty row in LAST_VALUE");
+        };
+        if self.requirement_satisfied {
+            // Get last entry according to the order of data:
+            return Ok((!value.is_empty()).then_some(value.len() - 1));
+        }
+        let sort_columns = ordering_values
+            .iter()
+            .zip(self.ordering_req.iter())
+            .map(|(values, req)| {
+                // Take the reverse ordering requirement. This enables us to
+                // use "fetch = 1" to get the last value.
+                SortColumn {
+                    values: values.clone(),
+                    options: Some(!req.options),
+                }
+            })
+            .collect::<Vec<_>>();
+        let indices = lexsort_to_indices(&sort_columns, Some(1))?;
+        Ok((!indices.is_empty()).then_some(indices.value(0) as _))
+    }
+
+    fn with_requirement_satisfied(mut self, requirement_satisfied: bool) -> Self {
+        self.requirement_satisfied = requirement_satisfied;
+        self
     }
 }
 
@@ -475,11 +594,26 @@ impl Accumulator for LastValueAccumulator {
     }
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
-        if !values[0].is_empty() {
-            let row = get_row_at_idx(values, values[0].len() - 1)?;
-            // Update with last value in the array.
-            self.update_with_new_row(&row);
+        if !self.is_set || self.requirement_satisfied {
+            if let Some(last_idx) = self.get_last_idx(values)? {
+                let row = get_row_at_idx(values, last_idx)?;
+                self.update_with_new_row(&row);
+            }
+        } else if let Some(last_idx) = self.get_last_idx(values)? {
+            let row = get_row_at_idx(values, last_idx)?;
+            let orderings = &row[1..];
+            // Update when there is a more recent entry
+            if compare_rows(
+                &self.orderings,
+                orderings,
+                &get_sort_options(&self.ordering_req),
+            )?
+            .is_lt()
+            {
+                self.update_with_new_row(&row);
+            }
         }
+
         Ok(())
     }
 
@@ -510,7 +644,7 @@ impl Accumulator for LastValueAccumulator {
             // Either there is no existing value, or there is a newer (latest)
             // version in the new data:
             if !self.is_set
-                || compare_rows(last_ordering, &self.orderings, &sort_options)?.is_gt()
+                || compare_rows(&self.orderings, last_ordering, &sort_options)?.is_lt()
             {
                 // Update with last value in the state. Note that we should exclude the
                 // is_set flag from the state. Otherwise, we will end up with a state
@@ -559,25 +693,17 @@ fn convert_to_sort_cols(
         .collect::<Vec<_>>()
 }
 
-/// Selects the sort option attribute from all the given `PhysicalSortExpr`s.
-fn get_sort_options(ordering_req: &[PhysicalSortExpr]) -> Vec<SortOptions> {
-    ordering_req
-        .iter()
-        .map(|item| item.options)
-        .collect::<Vec<_>>()
-}
-
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use crate::aggregate::first_last::{FirstValueAccumulator, LastValueAccumulator};
 
+    use arrow::compute::concat;
     use arrow_array::{ArrayRef, Int64Array};
     use arrow_schema::DataType;
     use datafusion_common::{Result, ScalarValue};
     use datafusion_expr::Accumulator;
-
-    use arrow::compute::concat;
-    use std::sync::Arc;
 
     #[test]
     fn test_first_last_value_value() -> Result<()> {

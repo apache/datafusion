@@ -80,7 +80,7 @@ pub use signature::{
 };
 pub use table_source::{TableProviderFilterPushDown, TableSource, TableType};
 pub use udaf::AggregateUDF;
-pub use udf::ScalarUDF;
+pub use udf::{ScalarUDF, ScalarUDFImpl};
 pub use udwf::WindowUDF;
 pub use window_frame::{WindowFrame, WindowFrameBound, WindowFrameUnits};
 pub use window_function::{BuiltInWindowFunction, WindowFunction};

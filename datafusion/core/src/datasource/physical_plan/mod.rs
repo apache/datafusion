@@ -71,6 +71,7 @@ use arrow::{
 use datafusion_common::{file_options::FileTypeWriterOptions, plan_err};
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::PhysicalSortExpr;
+use datafusion_physical_plan::ExecutionPlan;
 
 use log::debug;
 use object_store::ObjectMeta;
@@ -507,6 +508,20 @@ fn get_projected_output_ordering(
         }
     }
     all_orderings
+}
+
+/// Get output (un)boundedness information for the given `plan`.
+pub fn is_plan_streaming(plan: &Arc<dyn ExecutionPlan>) -> Result<bool> {
+    if plan.children().is_empty() {
+        plan.unbounded_output(&[])
+    } else {
+        let children_unbounded_output = plan
+            .children()
+            .iter()
+            .map(is_plan_streaming)
+            .collect::<Result<Vec<_>>>();
+        plan.unbounded_output(&children_unbounded_output?)
+    }
 }
 
 /// Represents the possible outcomes of a range calculation.
