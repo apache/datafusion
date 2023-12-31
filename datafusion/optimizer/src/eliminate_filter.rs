@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Optimizer rule to replace `where false` on a plan with an empty relation.
+//! Optimizer rule to replace `where false or null` on a plan with an empty relation.
 //! This saves time in planning and executing the query.
 //! Note that this rule should be applied after simplify expressions optimizer rule.
 use crate::optimizer::ApplyOrder;
@@ -27,7 +27,7 @@ use datafusion_expr::{
 
 use crate::{OptimizerConfig, OptimizerRule};
 
-/// Optimization rule that eliminate the scalar value (true/false) filter with an [LogicalPlan::EmptyRelation]
+/// Optimization rule that eliminate the scalar value (true/false/null) filter with an [LogicalPlan::EmptyRelation]
 #[derive(Default)]
 pub struct EliminateFilter;
 
@@ -46,20 +46,22 @@ impl OptimizerRule for EliminateFilter {
     ) -> Result<Option<LogicalPlan>> {
         match plan {
             LogicalPlan::Filter(Filter {
-                predicate: Expr::Literal(ScalarValue::Boolean(Some(v))),
+                predicate: Expr::Literal(ScalarValue::Boolean(v)),
                 input,
                 ..
             }) => {
                 match *v {
                     // input also can be filter, apply again
-                    true => Ok(Some(
+                    Some(true) => Ok(Some(
                         self.try_optimize(input, _config)?
                             .unwrap_or_else(|| input.as_ref().clone()),
                     )),
-                    false => Ok(Some(LogicalPlan::EmptyRelation(EmptyRelation {
-                        produce_one_row: false,
-                        schema: input.schema().clone(),
-                    }))),
+                    Some(false) | None => {
+                        Ok(Some(LogicalPlan::EmptyRelation(EmptyRelation {
+                            produce_one_row: false,
+                            schema: input.schema().clone(),
+                        })))
+                    }
                 }
             }
             _ => Ok(None),
@@ -93,6 +95,21 @@ mod tests {
     #[test]
     fn filter_false() -> Result<()> {
         let filter_expr = Expr::Literal(ScalarValue::Boolean(Some(false)));
+
+        let table_scan = test_table_scan().unwrap();
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .aggregate(vec![col("a")], vec![sum(col("b"))])?
+            .filter(filter_expr)?
+            .build()?;
+
+        // No aggregate / scan / limit
+        let expected = "EmptyRelation";
+        assert_optimized_plan_equal(&plan, expected)
+    }
+
+    #[test]
+    fn filter_null() -> Result<()> {
+        let filter_expr = Expr::Literal(ScalarValue::Boolean(None));
 
         let table_scan = test_table_scan().unwrap();
         let plan = LogicalPlanBuilder::from(table_scan)
