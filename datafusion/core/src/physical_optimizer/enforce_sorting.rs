@@ -34,6 +34,7 @@
 //! in the physical plan. The first sort is unnecessary since its result is overwritten
 //! by another [`SortExec`]. Therefore, this rule removes it from the physical plan.
 
+use std::borrow::Cow;
 use std::sync::Arc;
 
 use crate::config::ConfigOptions;
@@ -145,8 +146,8 @@ impl PlanWithCorrespondingSort {
 }
 
 impl TreeNode for PlanWithCorrespondingSort {
-    fn children_nodes(&self) -> Vec<Self> {
-        self.children_nodes.to_vec()
+    fn children_nodes(&self) -> Vec<Cow<Self>> {
+        self.children_nodes.iter().map(Cow::Borrowed).collect()
     }
 
     fn map_children<F>(mut self, transform: F) -> Result<Self>
@@ -226,8 +227,8 @@ impl PlanWithCorrespondingCoalescePartitions {
 }
 
 impl TreeNode for PlanWithCorrespondingCoalescePartitions {
-    fn children_nodes(&self) -> Vec<Self> {
-        self.children_nodes.to_vec()
+    fn children_nodes(&self) -> Vec<Cow<Self>> {
+        self.children_nodes.iter().map(Cow::Borrowed).collect()
     }
 
     fn map_children<F>(mut self, transform: F) -> Result<Self>
