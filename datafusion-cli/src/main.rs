@@ -15,7 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use clap::Parser;
+use std::collections::HashMap;
+use std::env;
+use std::path::Path;
+use std::str::FromStr;
+use std::sync::{Arc, OnceLock};
+
 use datafusion::error::{DataFusionError, Result};
 use datafusion::execution::context::SessionConfig;
 use datafusion::execution::memory_pool::{FairSpillPool, GreedyMemoryPool};
@@ -29,12 +34,9 @@ use datafusion_cli::{
     print_options::{MaxRows, PrintOptions},
     DATAFUSION_CLI_VERSION,
 };
+
+use clap::Parser;
 use mimalloc::MiMalloc;
-use std::collections::HashMap;
-use std::env;
-use std::path::Path;
-use std::str::FromStr;
-use std::sync::{Arc, OnceLock};
 
 #[global_allocator]
 static GLOBAL: MiMalloc = MiMalloc;
@@ -111,7 +113,7 @@ struct Args {
     )]
     rc: Option<Vec<String>>,
 
-    #[clap(long, arg_enum, default_value_t = PrintFormat::Table)]
+    #[clap(long, arg_enum, default_value_t = PrintFormat::Automatic)]
     format: PrintFormat,
 
     #[clap(
@@ -331,9 +333,8 @@ fn extract_memory_pool_size(size: &str) -> Result<usize, String> {
 
 #[cfg(test)]
 mod tests {
-    use datafusion::assert_batches_eq;
-
     use super::*;
+    use datafusion::assert_batches_eq;
 
     fn assert_conversion(input: &str, expected: Result<usize, String>) {
         let result = extract_memory_pool_size(input);

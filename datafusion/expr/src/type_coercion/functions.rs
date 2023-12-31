@@ -21,7 +21,10 @@ use arrow::{
     compute::can_cast_types,
     datatypes::{DataType, TimeUnit},
 };
-use datafusion_common::{plan_err, DataFusionError, Result};
+use datafusion_common::utils::list_ndims;
+use datafusion_common::{internal_err, plan_err, DataFusionError, Result};
+
+use super::binary::comparison_coercion;
 
 /// Performs type coercion for function arguments.
 ///
@@ -76,6 +79,55 @@ fn get_valid_types(
     signature: &TypeSignature,
     current_types: &[DataType],
 ) -> Result<Vec<Vec<DataType>>> {
+    fn array_append_or_prepend_valid_types(
+        current_types: &[DataType],
+        is_append: bool,
+    ) -> Result<Vec<Vec<DataType>>> {
+        if current_types.len() != 2 {
+            return Ok(vec![vec![]]);
+        }
+
+        let (array_type, elem_type) = if is_append {
+            (&current_types[0], &current_types[1])
+        } else {
+            (&current_types[1], &current_types[0])
+        };
+
+        // We follow Postgres on `array_append(Null, T)`, which is not valid.
+        if array_type.eq(&DataType::Null) {
+            return Ok(vec![vec![]]);
+        }
+
+        // We need to find the coerced base type, mainly for cases like:
+        // `array_append(List(null), i64)` -> `List(i64)`
+        let array_base_type = datafusion_common::utils::base_type(array_type);
+        let elem_base_type = datafusion_common::utils::base_type(elem_type);
+        let new_base_type = comparison_coercion(&array_base_type, &elem_base_type);
+
+        if new_base_type.is_none() {
+            return internal_err!(
+                "Coercion from {array_base_type:?} to {elem_base_type:?} not supported."
+            );
+        }
+        let new_base_type = new_base_type.unwrap();
+
+        let array_type = datafusion_common::utils::coerced_type_with_base_type_only(
+            array_type,
+            &new_base_type,
+        );
+
+        if let DataType::List(ref field) = array_type {
+            let elem_type = field.data_type();
+            if is_append {
+                Ok(vec![vec![array_type.clone(), elem_type.to_owned()]])
+            } else {
+                Ok(vec![vec![elem_type.to_owned(), array_type.clone()]])
+            }
+        } else {
+            Ok(vec![vec![]])
+        }
+    }
+
     let valid_types = match signature {
         TypeSignature::Variadic(valid_types) => valid_types
             .iter()
@@ -86,16 +138,34 @@ fn get_valid_types(
             .map(|valid_type| (0..*number).map(|_| valid_type.clone()).collect())
             .collect(),
         TypeSignature::VariadicEqual => {
-            // one entry with the same len as current_types, whose type is `current_types[0]`.
-            vec![current_types
-                .iter()
-                .map(|_| current_types[0].clone())
-                .collect()]
+            let new_type = current_types.iter().skip(1).try_fold(
+                current_types.first().unwrap().clone(),
+                |acc, x| {
+                    let coerced_type = comparison_coercion(&acc, x);
+                    if let Some(coerced_type) = coerced_type {
+                        Ok(coerced_type)
+                    } else {
+                        internal_err!("Coercion from {acc:?} to {x:?} failed.")
+                    }
+                },
+            );
+
+            match new_type {
+                Ok(new_type) => vec![vec![new_type; current_types.len()]],
+                Err(e) => return Err(e),
+            }
         }
         TypeSignature::VariadicAny => {
             vec![current_types.to_vec()]
         }
+
         TypeSignature::Exact(valid_types) => vec![valid_types.clone()],
+        TypeSignature::ArrayAndElement => {
+            return array_append_or_prepend_valid_types(current_types, true)
+        }
+        TypeSignature::ElementAndArray => {
+            return array_append_or_prepend_valid_types(current_types, false)
+        }
         TypeSignature::Any(number) => {
             if current_types.len() != *number {
                 return plan_err!(
@@ -240,6 +310,15 @@ fn coerced_from<'a>(
         // Any type can be coerced into strings
         Utf8 | LargeUtf8 => Some(type_into.clone()),
         Null if can_cast_types(type_from, type_into) => Some(type_into.clone()),
+
+        // Only accept list with the same number of dimensions unless the type is Null.
+        // List with different dimensions should be handled in TypeSignature or other places before this.
+        List(_)
+            if datafusion_common::utils::base_type(type_from).eq(&Null)
+                || list_ndims(type_from) == list_ndims(type_into) =>
+        {
+            Some(type_into.clone())
+        }
 
         Timestamp(unit, Some(tz)) if tz.as_ref() == TIMEZONE_WILDCARD => {
             match type_from {

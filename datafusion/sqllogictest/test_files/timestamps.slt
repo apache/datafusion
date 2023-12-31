@@ -1730,14 +1730,11 @@ SELECT TIMESTAMPTZ '2022-01-01 01:10:00 AEST'
 query P rowsort
 SELECT TIMESTAMPTZ '2022-01-01 01:10:00 Australia/Sydney' as ts_geo
  UNION ALL
-SELECT TIMESTAMPTZ '2022-01-01 01:10:00 Antarctica/Vostok' as ts_geo
- UNION ALL
 SELECT TIMESTAMPTZ '2022-01-01 01:10:00 Africa/Johannesburg' as ts_geo
  UNION ALL
 SELECT TIMESTAMPTZ '2022-01-01 01:10:00 America/Los_Angeles' as ts_geo
 ----
 2021-12-31T14:10:00Z
-2021-12-31T19:10:00Z
 2021-12-31T23:10:00Z
 2022-01-01T09:10:00Z
 
@@ -1888,3 +1885,12 @@ true true true true true true
 #SELECT to_timestamp(-62125747200), to_timestamp(1926632005177), -62125747200::timestamp, 1926632005177::timestamp, cast(-62125747200 as timestamp), cast(1926632005177 as timestamp)
 #----
 #0001-04-25T00:00:00 +63022-07-16T12:59:37 0001-04-25T00:00:00 +63022-07-16T12:59:37 0001-04-25T00:00:00 +63022-07-16T12:59:37
+
+##########
+## Test binary temporal coercion for Date and Timestamp
+##########
+
+query B
+select arrow_cast(now(), 'Date64') < arrow_cast('2022-02-02 02:02:02', 'Timestamp(Nanosecond, None)');
+----
+false

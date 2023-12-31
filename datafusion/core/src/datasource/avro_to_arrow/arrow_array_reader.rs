@@ -45,6 +45,7 @@ use arrow::array::{BinaryArray, FixedSizeBinaryArray, GenericListArray};
 use arrow::datatypes::{Fields, SchemaRef};
 use arrow::error::ArrowError::SchemaError;
 use arrow::error::Result as ArrowResult;
+use datafusion_common::arrow_err;
 use num_traits::NumCast;
 use std::collections::BTreeMap;
 use std::io::Read;
@@ -86,9 +87,9 @@ impl<'a, R: Read> AvroArrowArrayReader<'a, R> {
                 }
                 Ok(lookup)
             }
-            _ => Err(DataFusionError::ArrowError(SchemaError(
+            _ => arrow_err!(SchemaError(
                 "expected avro schema to be a record".to_string(),
-            ))),
+            )),
         }
     }
 

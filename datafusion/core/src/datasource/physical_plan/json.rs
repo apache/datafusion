@@ -18,11 +18,11 @@
 //! Execution plan for reading line-delimited JSON files
 
 use std::any::Any;
-use std::io::BufReader;
+use std::io::{BufReader, Read, Seek, SeekFrom};
 use std::sync::Arc;
 use std::task::Poll;
 
-use super::FileScanConfig;
+use super::{calculate_range, FileGroupPartitioner, FileScanConfig, RangeCalculation};
 use crate::datasource::file_format::file_compression_type::FileCompressionType;
 use crate::datasource::listing::ListingTableUrl;
 use crate::datasource::physical_plan::file_stream::{
@@ -43,8 +43,8 @@ use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{EquivalenceProperties, LexOrdering};
 
 use bytes::{Buf, Bytes};
-use futures::{ready, stream, StreamExt, TryStreamExt};
-use object_store;
+use futures::{ready, StreamExt, TryStreamExt};
+use object_store::{self, GetOptions};
 use object_store::{GetResultPayload, ObjectStore};
 use tokio::io::AsyncWriteExt;
 use tokio::task::JoinSet;
@@ -110,10 +110,6 @@ impl ExecutionPlan for NdJsonExec {
         Partitioning::UnknownPartitioning(self.base_config.file_groups.len())
     }
 
-    fn unbounded_output(&self, _: &[bool]) -> Result<bool> {
-        Ok(self.base_config.infinite_source)
-    }
-
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
         self.projected_output_ordering
             .first()
@@ -136,6 +132,30 @@ impl ExecutionPlan for NdJsonExec {
         _: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         Ok(self)
+    }
+
+    fn repartitioned(
+        &self,
+        target_partitions: usize,
+        config: &datafusion_common::config::ConfigOptions,
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        let repartition_file_min_size = config.optimizer.repartition_file_min_size;
+        let preserve_order_within_groups = self.output_ordering().is_some();
+        let file_groups = &self.base_config.file_groups;
+
+        let repartitioned_file_groups_option = FileGroupPartitioner::new()
+            .with_target_partitions(target_partitions)
+            .with_preserve_order_within_groups(preserve_order_within_groups)
+            .with_repartition_file_min_size(repartition_file_min_size)
+            .repartition_file_groups(file_groups);
+
+        if let Some(repartitioned_file_groups) = repartitioned_file_groups_option {
+            let mut new_plan = self.clone();
+            new_plan.base_config.file_groups = repartitioned_file_groups;
+            return Ok(Some(Arc::new(new_plan)));
+        }
+
+        Ok(None)
     }
 
     fn execute(
@@ -197,54 +217,89 @@ impl JsonOpener {
 }
 
 impl FileOpener for JsonOpener {
+    /// Open a partitioned NDJSON file.
+    ///
+    /// If `file_meta.range` is `None`, the entire file is opened.
+    /// Else `file_meta.range` is `Some(FileRange{start, end})`, which corresponds to the byte range [start, end) within the file.
+    ///
+    /// Note: `start` or `end` might be in the middle of some lines. In such cases, the following rules
+    /// are applied to determine which lines to read:
+    /// 1. The first line of the partition is the line in which the index of the first character >= `start`.
+    /// 2. The last line of the partition is the line in which the byte at position `end - 1` resides.
+    ///
+    /// See [`CsvOpener`](super::CsvOpener) for an example.
     fn open(&self, file_meta: FileMeta) -> Result<FileOpenFuture> {
         let store = self.object_store.clone();
         let schema = self.projected_schema.clone();
         let batch_size = self.batch_size;
-
         let file_compression_type = self.file_compression_type.to_owned();
+
         Ok(Box::pin(async move {
-            let r = store.get(file_meta.location()).await?;
-            match r.payload {
-                GetResultPayload::File(file, _) => {
-                    let bytes = file_compression_type.convert_read(file)?;
+            let calculated_range = calculate_range(&file_meta, &store).await?;
+
+            let range = match calculated_range {
+                RangeCalculation::Range(None) => None,
+                RangeCalculation::Range(Some(range)) => Some(range),
+                RangeCalculation::TerminateEarly => {
+                    return Ok(
+                        futures::stream::poll_fn(move |_| Poll::Ready(None)).boxed()
+                    )
+                }
+            };
+
+            let options = GetOptions {
+                range,
+                ..Default::default()
+            };
+
+            let result = store.get_opts(file_meta.location(), options).await?;
+
+            match result.payload {
+                GetResultPayload::File(mut file, _) => {
+                    let bytes = match file_meta.range {
+                        None => file_compression_type.convert_read(file)?,
+                        Some(_) => {
+                            file.seek(SeekFrom::Start(result.range.start as _))?;
+                            let limit = result.range.end - result.range.start;
+                            file_compression_type.convert_read(file.take(limit as u64))?
+                        }
+                    };
+
                     let reader = ReaderBuilder::new(schema)
                         .with_batch_size(batch_size)
                         .build(BufReader::new(bytes))?;
+
                     Ok(futures::stream::iter(reader).boxed())
                 }
                 GetResultPayload::Stream(s) => {
+                    let s = s.map_err(DataFusionError::from);
+
                     let mut decoder = ReaderBuilder::new(schema)
                         .with_batch_size(batch_size)
                         .build_decoder()?;
-
-                    let s = s.map_err(DataFusionError::from);
                     let mut input =
                         file_compression_type.convert_stream(s.boxed())?.fuse();
-                    let mut buffered = Bytes::new();
+                    let mut buffer = Bytes::new();
 
-                    let s = stream::poll_fn(move |cx| {
+                    let s = futures::stream::poll_fn(move |cx| {
                         loop {
-                            if buffered.is_empty() {
-                                buffered = match ready!(input.poll_next_unpin(cx)) {
-                                    Some(Ok(b)) => b,
+                            if buffer.is_empty() {
+                                match ready!(input.poll_next_unpin(cx)) {
+                                    Some(Ok(b)) => buffer = b,
                                     Some(Err(e)) => {
                                         return Poll::Ready(Some(Err(e.into())))
                                     }
-                                    None => break,
+                                    None => {}
                                 };
                             }
-                            let read = buffered.len();
 
-                            let decoded = match decoder.decode(buffered.as_ref()) {
+                            let decoded = match decoder.decode(buffer.as_ref()) {
+                                Ok(0) => break,
                                 Ok(decoded) => decoded,
                                 Err(e) => return Poll::Ready(Some(Err(e))),
                             };
 
-                            buffered.advance(decoded);
-                            if decoded != read {
-                                break;
-                            }
+                            buffer.advance(decoded);
                         }
 
                         Poll::Ready(decoder.flush().transpose())
@@ -462,7 +517,6 @@ mod tests {
                 limit: Some(3),
                 table_partition_cols: vec![],
                 output_ordering: vec![],
-                infinite_source: false,
             },
             file_compression_type.to_owned(),
         );
@@ -541,7 +595,6 @@ mod tests {
                 limit: Some(3),
                 table_partition_cols: vec![],
                 output_ordering: vec![],
-                infinite_source: false,
             },
             file_compression_type.to_owned(),
         );
@@ -589,7 +642,6 @@ mod tests {
                 limit: None,
                 table_partition_cols: vec![],
                 output_ordering: vec![],
-                infinite_source: false,
             },
             file_compression_type.to_owned(),
         );
@@ -642,7 +694,6 @@ mod tests {
                 limit: None,
                 table_partition_cols: vec![],
                 output_ordering: vec![],
-                infinite_source: false,
             },
             file_compression_type.to_owned(),
         );

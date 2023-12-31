@@ -17,20 +17,21 @@
 
 //! Utilities used in aggregates
 
+use std::any::Any;
+use std::sync::Arc;
+
 use crate::{AggregateExpr, PhysicalSortExpr};
-use arrow::array::ArrayRef;
+
+use arrow::array::{ArrayRef, ArrowNativeTypeOp};
 use arrow_array::cast::AsArray;
 use arrow_array::types::{
     Decimal128Type, DecimalType, TimestampMicrosecondType, TimestampMillisecondType,
     TimestampNanosecondType, TimestampSecondType,
 };
-use arrow_array::ArrowNativeTypeOp;
 use arrow_buffer::{ArrowNativeType, ToByteSlice};
-use arrow_schema::{DataType, Field};
+use arrow_schema::{DataType, Field, SortOptions};
 use datafusion_common::{exec_err, DataFusionError, Result};
 use datafusion_expr::Accumulator;
-use std::any::Any;
-use std::sync::Arc;
 
 /// Convert scalar values from an accumulator into arrays.
 pub fn get_accum_scalar_values_as_arrays(
@@ -40,7 +41,7 @@ pub fn get_accum_scalar_values_as_arrays(
         .state()?
         .iter()
         .map(|s| s.to_array_of_size(1))
-        .collect::<Result<Vec<_>>>()
+        .collect()
 }
 
 /// Computes averages for `Decimal128`/`Decimal256` values, checking for overflow
@@ -204,6 +205,11 @@ pub(crate) fn ordering_fields(
             )
         })
         .collect()
+}
+
+/// Selects the sort option attribute from all the given `PhysicalSortExpr`s.
+pub fn get_sort_options(ordering_req: &[PhysicalSortExpr]) -> Vec<SortOptions> {
+    ordering_req.iter().map(|item| item.options).collect()
 }
 
 /// A wrapper around a type to provide hash for primitive arrow types
