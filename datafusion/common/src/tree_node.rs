@@ -371,7 +371,7 @@ impl<T: DynTreeNode + ?Sized> TreeNode for Arc<T> {
             let arc_self = Arc::clone(&self);
             self.with_new_arc_children(arc_self, new_children?)
         } else {
-            Ok(self.clone())
+            Ok(self)
         }
     }
 }
