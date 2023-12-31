@@ -122,6 +122,10 @@ pub enum TypeSignature {
     /// List dimension of the List/LargeList is equivalent to the number of List.
     /// List dimension of the non-list is 0.
     ArrayAndElement,
+    /// Specialized Signature for ArrayPrepend and similar functions
+    /// The first argument should be non-list or list, and the second argument should be List/LargeList.
+    /// The first argument's list dimension should be one dimension less than the second argument's list dimension.
+    ElementAndArray,
 }
 
 impl TypeSignature {
@@ -154,6 +158,9 @@ impl TypeSignature {
             }
             TypeSignature::ArrayAndElement => {
                 vec!["ArrayAndElement(List<T>, T)".to_string()]
+            }
+            TypeSignature::ElementAndArray => {
+                vec!["ElementAndArray(T, List<T>)".to_string()]
             }
         }
     }

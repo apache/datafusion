@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Line delimited JSON format abstractions
+//! [`JsonFormat`]: Line delimited JSON [`FileFormat`] abstractions
 
 use std::any::Any;
 use std::fmt;
@@ -23,40 +23,34 @@ use std::fmt::Debug;
 use std::io::BufReader;
 use std::sync::Arc;
 
-use super::{FileFormat, FileScanConfig};
-use arrow::datatypes::Schema;
-use arrow::datatypes::SchemaRef;
-use arrow::json;
-use arrow::json::reader::infer_json_schema_from_iterator;
-use arrow::json::reader::ValueIter;
-use arrow_array::RecordBatch;
-use async_trait::async_trait;
-use bytes::Buf;
-
-use bytes::Bytes;
-use datafusion_physical_expr::PhysicalExpr;
-use datafusion_physical_expr::PhysicalSortRequirement;
-use datafusion_physical_plan::ExecutionPlan;
-use object_store::{GetResultPayload, ObjectMeta, ObjectStore};
-
-use crate::datasource::physical_plan::FileGroupDisplay;
-use crate::physical_plan::insert::DataSink;
-use crate::physical_plan::insert::FileSinkExec;
-use crate::physical_plan::SendableRecordBatchStream;
-use crate::physical_plan::{DisplayAs, DisplayFormatType, Statistics};
-
 use super::write::orchestration::stateless_multipart_put;
-
+use super::{FileFormat, FileScanConfig};
 use crate::datasource::file_format::file_compression_type::FileCompressionType;
 use crate::datasource::file_format::write::BatchSerializer;
 use crate::datasource::file_format::DEFAULT_SCHEMA_INFER_MAX_RECORD;
+use crate::datasource::physical_plan::FileGroupDisplay;
 use crate::datasource::physical_plan::{FileSinkConfig, NdJsonExec};
 use crate::error::Result;
 use crate::execution::context::SessionState;
+use crate::physical_plan::insert::{DataSink, FileSinkExec};
+use crate::physical_plan::{
+    DisplayAs, DisplayFormatType, SendableRecordBatchStream, Statistics,
+};
 
+use arrow::datatypes::Schema;
+use arrow::datatypes::SchemaRef;
+use arrow::json;
+use arrow::json::reader::{infer_json_schema_from_iterator, ValueIter};
+use arrow_array::RecordBatch;
 use datafusion_common::{not_impl_err, DataFusionError, FileType};
 use datafusion_execution::TaskContext;
+use datafusion_physical_expr::{PhysicalExpr, PhysicalSortRequirement};
 use datafusion_physical_plan::metrics::MetricsSet;
+use datafusion_physical_plan::ExecutionPlan;
+
+use async_trait::async_trait;
+use bytes::{Buf, Bytes};
+use object_store::{GetResultPayload, ObjectMeta, ObjectStore};
 
 /// New line delimited JSON `FileFormat` implementation.
 #[derive(Debug)]
@@ -201,31 +195,22 @@ impl Default for JsonSerializer {
 }
 
 /// Define a struct for serializing Json records to a stream
-pub struct JsonSerializer {
-    // Inner buffer for avoiding reallocation
-    buffer: Vec<u8>,
-}
+pub struct JsonSerializer {}
 
 impl JsonSerializer {
     /// Constructor for the JsonSerializer object
     pub fn new() -> Self {
-        Self {
-            buffer: Vec::with_capacity(4096),
-        }
+        Self {}
     }
 }
 
 #[async_trait]
 impl BatchSerializer for JsonSerializer {
-    async fn serialize(&mut self, batch: RecordBatch) -> Result<Bytes> {
-        let mut writer = json::LineDelimitedWriter::new(&mut self.buffer);
+    async fn serialize(&self, batch: RecordBatch, _initial: bool) -> Result<Bytes> {
+        let mut buffer = Vec::with_capacity(4096);
+        let mut writer = json::LineDelimitedWriter::new(&mut buffer);
         writer.write(&batch)?;
-        //drop(writer);
-        Ok(Bytes::from(self.buffer.drain(..).collect::<Vec<u8>>()))
-    }
-
-    fn duplicate(&mut self) -> Result<Box<dyn BatchSerializer>> {
-        Ok(Box::new(JsonSerializer::new()))
+        Ok(Bytes::from(buffer))
     }
 }
 
@@ -272,10 +257,7 @@ impl JsonSink {
         let writer_options = self.config.file_type_writer_options.try_into_json()?;
         let compression = &writer_options.compression;
 
-        let get_serializer = move || {
-            let serializer: Box<dyn BatchSerializer> = Box::new(JsonSerializer::new());
-            serializer
-        };
+        let get_serializer = move || Arc::new(JsonSerializer::new()) as _;
 
         stateless_multipart_put(
             data,
@@ -312,12 +294,17 @@ impl DataSink for JsonSink {
 #[cfg(test)]
 mod tests {
     use super::super::test_util::scan_format;
+    use arrow::util::pretty;
     use datafusion_common::cast::as_int64_array;
     use datafusion_common::stats::Precision;
+    use datafusion_common::{assert_batches_eq, internal_err};
     use futures::StreamExt;
     use object_store::local::LocalFileSystem;
+    use regex::Regex;
+    use rstest::rstest;
 
     use super::*;
+    use crate::execution::options::NdJsonReadOptions;
     use crate::physical_plan::collect;
     use crate::prelude::{SessionConfig, SessionContext};
     use crate::test::object_store::local_unpartitioned_file;
@@ -440,5 +427,95 @@ mod tests {
             .map(|f| format!("{}: {:?}", f.name(), f.data_type()))
             .collect::<Vec<_>>();
         assert_eq!(vec!["a: Int64", "b: Float64", "c: Boolean"], fields);
+    }
+
+    async fn count_num_partitions(ctx: &SessionContext, query: &str) -> Result<usize> {
+        let result = ctx
+            .sql(&format!("EXPLAIN {query}"))
+            .await?
+            .collect()
+            .await?;
+
+        let plan = format!("{}", &pretty::pretty_format_batches(&result)?);
+
+        let re = Regex::new(r"file_groups=\{(\d+) group").unwrap();
+
+        if let Some(captures) = re.captures(&plan) {
+            if let Some(match_) = captures.get(1) {
+                let count = match_.as_str().parse::<usize>().unwrap();
+                return Ok(count);
+            }
+        }
+
+        internal_err!("Query contains no Exec: file_groups")
+    }
+
+    #[rstest(n_partitions, case(1), case(2), case(3), case(4))]
+    #[tokio::test]
+    async fn it_can_read_ndjson_in_parallel(n_partitions: usize) -> Result<()> {
+        let config = SessionConfig::new()
+            .with_repartition_file_scans(true)
+            .with_repartition_file_min_size(0)
+            .with_target_partitions(n_partitions);
+
+        let ctx = SessionContext::new_with_config(config);
+
+        let table_path = "tests/data/1.json";
+        let options = NdJsonReadOptions::default();
+
+        ctx.register_json("json_parallel", table_path, options)
+            .await?;
+
+        let query = "SELECT SUM(a) FROM json_parallel;";
+
+        let result = ctx.sql(query).await?.collect().await?;
+        let actual_partitions = count_num_partitions(&ctx, query).await?;
+
+        #[rustfmt::skip]
+        let expected = [
+            "+----------------------+",
+            "| SUM(json_parallel.a) |",
+            "+----------------------+",
+            "| -7                   |",
+            "+----------------------+"
+        ];
+
+        assert_batches_eq!(expected, &result);
+        assert_eq!(n_partitions, actual_partitions);
+
+        Ok(())
+    }
+
+    #[rstest(n_partitions, case(1), case(2), case(3), case(4))]
+    #[tokio::test]
+    async fn it_can_read_empty_ndjson_in_parallel(n_partitions: usize) -> Result<()> {
+        let config = SessionConfig::new()
+            .with_repartition_file_scans(true)
+            .with_repartition_file_min_size(0)
+            .with_target_partitions(n_partitions);
+
+        let ctx = SessionContext::new_with_config(config);
+
+        let table_path = "tests/data/empty.json";
+        let options = NdJsonReadOptions::default();
+
+        ctx.register_json("json_parallel_empty", table_path, options)
+            .await?;
+
+        let query = "SELECT * FROM json_parallel_empty WHERE random() > 0.5;";
+
+        let result = ctx.sql(query).await?.collect().await?;
+        let actual_partitions = count_num_partitions(&ctx, query).await?;
+
+        #[rustfmt::skip]
+        let expected = [
+            "++",
+            "++",
+        ];
+
+        assert_batches_eq!(expected, &result);
+        assert_eq!(1, actual_partitions);
+
+        Ok(())
     }
 }

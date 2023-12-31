@@ -1160,6 +1160,7 @@ dependencies = [
  "datafusion-common",
  "dirs",
  "env_logger",
+ "futures",
  "mimalloc",
  "object_store",
  "parking_lot",

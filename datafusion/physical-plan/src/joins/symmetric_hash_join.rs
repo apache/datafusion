@@ -771,6 +771,7 @@ pub(crate) fn join_with_probe_batch(
         filter,
         build_hash_joiner.build_side,
         Some(build_hash_joiner.deleted_offset),
+        false,
     )?;
     if need_to_produce_result_in_final(build_hash_joiner.build_side, join_type) {
         record_visited_indices(
@@ -883,6 +884,7 @@ impl OneSideHashJoiner {
             random_state,
             &mut self.hashes_buffer,
             self.deleted_offset,
+            false,
         )?;
         Ok(())
     }

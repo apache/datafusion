@@ -38,6 +38,7 @@ datafusion = { path = "../datafusion/core", version = "34.0.0", features = ["avr
 datafusion-common = { path = "../datafusion/common" }
 dirs = "4.0.0"
 env_logger = "0.9"
+futures = "0.3"
 mimalloc = { version = "0.1", default-features = false }
 object_store = { version = "0.8.0", features = ["aws", "gcp"] }
 parking_lot = { version = "0.12" }

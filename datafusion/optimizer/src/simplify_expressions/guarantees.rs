@@ -47,6 +47,10 @@ impl<'a> GuaranteeRewriter<'a> {
         guarantees: impl IntoIterator<Item = &'a (Expr, NullableInterval)>,
     ) -> Self {
         Self {
+            // TODO: Clippy wants the "map" call removed, but doing so generates
+            //       a compilation error. Remove the clippy directive once this
+            //       issue is fixed.
+            #[allow(clippy::map_identity)]
             guarantees: guarantees.into_iter().map(|(k, v)| (k, v)).collect(),
         }
     }
