@@ -61,10 +61,10 @@ impl TreeNode for Expr {
                 }
             }
             Expr::GroupingSet(GroupingSet::Rollup(exprs))
-            | Expr::GroupingSet(GroupingSet::Cube(exprs)) => exprs.into_iter().map(Cow::Borrowed).collect(),
-            Expr::ScalarFunction(ScalarFunction { args, .. }) => args.into_iter().map(Cow::Borrowed).collect(),
+            | Expr::GroupingSet(GroupingSet::Cube(exprs)) => exprs.iter().map(Cow::Borrowed).collect(),
+            Expr::ScalarFunction(ScalarFunction { args, .. }) => args.iter().map(Cow::Borrowed).collect(),
             Expr::GroupingSet(GroupingSet::GroupingSets(lists_of_exprs)) => {
-                lists_of_exprs.into_iter().flatten().map(Cow::Borrowed).collect()
+                lists_of_exprs.iter().flatten().map(Cow::Borrowed).collect()
             }
             Expr::Column(_)
             // Treat OuterReferenceColumn as a leaf expression
@@ -109,13 +109,13 @@ impl TreeNode for Expr {
                 order_by,
                 ..
             }) => {
-                let mut expr_vec: Vec<_> = args.into_iter().map(Cow::Borrowed).collect();
+                let mut expr_vec: Vec<_> = args.iter().map(Cow::Borrowed).collect();
 
                 if let Some(f) = filter {
                     expr_vec.push(Cow::Borrowed(f));
                 }
                 if let Some(o) = order_by {
-                    expr_vec.extend(o.into_iter().map(Cow::Borrowed).collect::<Vec<_>>());
+                    expr_vec.extend(o.iter().map(Cow::Borrowed).collect::<Vec<_>>());
                 }
 
                 expr_vec
@@ -126,14 +126,14 @@ impl TreeNode for Expr {
                 order_by,
                 ..
             }) => {
-                let mut expr_vec: Vec<_> = args.into_iter().map(Cow::Borrowed).collect();
-                expr_vec.extend(partition_by.into_iter().map(Cow::Borrowed).collect::<Vec<_>>());
-                expr_vec.extend(order_by.into_iter().map(Cow::Borrowed).collect::<Vec<_>>());
+                let mut expr_vec: Vec<_> = args.iter().map(Cow::Borrowed).collect();
+                expr_vec.extend(partition_by.iter().map(Cow::Borrowed).collect::<Vec<_>>());
+                expr_vec.extend(order_by.iter().map(Cow::Borrowed).collect::<Vec<_>>());
                 expr_vec
             }
             Expr::InList(InList { expr, list, .. }) => {
                 let mut expr_vec = vec![Cow::Borrowed(expr.as_ref())];
-                expr_vec.extend(list.into_iter().map(Cow::Borrowed).collect::<Vec<_>>());
+                expr_vec.extend(list.iter().map(Cow::Borrowed).collect::<Vec<_>>());
                 expr_vec
             }
         }

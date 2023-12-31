@@ -155,7 +155,7 @@ impl<T> ExprTreeNode<T> {
 
 impl<T: Clone> TreeNode for ExprTreeNode<T> {
     fn children_nodes(&self) -> Vec<Cow<Self>> {
-        self.children().into_iter().map(Cow::Borrowed).collect()
+        self.children().iter().map(Cow::Borrowed).collect()
     }
 
     fn map_children<F>(mut self, transform: F) -> Result<Self>
