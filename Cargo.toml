@@ -17,7 +17,7 @@
 
 [workspace]
 exclude = ["datafusion-cli"]
-members = ["datafusion/common", "datafusion/core", "datafusion/expr", "datafusion/execution", "datafusion/optimizer", "datafusion/physical-expr", "datafusion/physical-plan", "datafusion/proto", "datafusion/proto/gen", "datafusion/sql", "datafusion/sqllogictest", "datafusion/substrait", "datafusion/wasmtest", "datafusion-examples", "docs", "test-utils", "benchmarks",
+members = ["datafusion/common", "datafusion/core", "datafusion/expr", "datafusion/execution", "datafusion/functions", "datafusion/optimizer", "datafusion/physical-expr", "datafusion/physical-plan", "datafusion/proto", "datafusion/proto/gen", "datafusion/sql", "datafusion/sqllogictest", "datafusion/substrait", "datafusion/wasmtest", "datafusion-examples", "docs", "test-utils", "benchmarks",
 ]
 resolver = "2"
 
@@ -49,6 +49,7 @@ datafusion = { path = "datafusion/core", version = "34.0.0" }
 datafusion-common = { path = "datafusion/common", version = "34.0.0" }
 datafusion-execution = { path = "datafusion/execution", version = "34.0.0" }
 datafusion-expr = { path = "datafusion/expr", version = "34.0.0" }
+datafusion-functions = { path = "datafusion/functions", version = "34.0.0" }
 datafusion-optimizer = { path = "datafusion/optimizer", version = "34.0.0" }
 datafusion-physical-expr = { path = "datafusion/physical-expr", version = "34.0.0" }
 datafusion-physical-plan = { path = "datafusion/physical-plan", version = "34.0.0" }

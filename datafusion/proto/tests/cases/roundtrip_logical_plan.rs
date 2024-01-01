@@ -34,7 +34,9 @@ use datafusion::execution::context::SessionState;
 use datafusion::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
 use datafusion::parquet::file::properties::{WriterProperties, WriterVersion};
 use datafusion::physical_plan::functions::make_scalar_function;
-use datafusion::prelude::{create_udf, CsvReadOptions, SessionConfig, SessionContext};
+use datafusion::prelude::{
+    create_udf, decode, encode, CsvReadOptions, SessionConfig, SessionContext,
+};
 use datafusion::test_util::{TestTableFactory, TestTableProvider};
 use datafusion_common::file_options::csv_writer::CsvWriterOptions;
 use datafusion_common::file_options::parquet_writer::ParquetWriterOptions;
@@ -52,8 +54,9 @@ use datafusion_expr::logical_plan::{Extension, UserDefinedLogicalNodeCore};
 use datafusion_expr::{
     col, create_udaf, lit, Accumulator, AggregateFunction,
     BuiltinScalarFunction::{Sqrt, Substr},
-    Expr, LogicalPlan, Operator, PartitionEvaluator, Signature, TryCast, Volatility,
-    WindowFrame, WindowFrameBound, WindowFrameUnits, WindowFunctionDefinition, WindowUDF,
+    Expr, ExprSchemable, LogicalPlan, Operator, PartitionEvaluator, Signature, TryCast,
+    Volatility, WindowFrame, WindowFrameBound, WindowFrameUnits,
+    WindowFunctionDefinition, WindowUDF,
 };
 use datafusion_proto::bytes::{
     logical_plan_from_bytes, logical_plan_from_bytes_with_extension_codec,
@@ -518,6 +521,30 @@ async fn roundtrip_logical_plan_with_extension() -> Result<()> {
     ctx.register_csv("t1", "tests/testdata/test.csv", CsvReadOptions::default())
         .await?;
     let plan = ctx.table("t1").await?.into_optimized_plan()?;
+    let bytes = logical_plan_to_bytes(&plan)?;
+    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx)?;
+    assert_eq!(format!("{plan:?}"), format!("{logical_round_trip:?}"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn roundtrip_expr_api() -> Result<()> {
+    let ctx = SessionContext::new();
+    ctx.register_csv("t1", "tests/testdata/test.csv", CsvReadOptions::default())
+        .await?;
+    let table = ctx.table("t1").await?;
+    let schema = table.schema().clone();
+
+    // ensure expressions created with the expr api can be round tripped
+    let plan = table
+        .select(vec![
+            encode(vec![
+                col("a").cast_to(&DataType::Utf8, &schema)?,
+                lit("hex"),
+            ]),
+            decode(vec![lit("1234"), lit("hex")]),
+        ])?
+        .into_optimized_plan()?;
     let bytes = logical_plan_to_bytes(&plan)?;
     let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx)?;
     assert_eq!(format!("{plan:?}"), format!("{logical_round_trip:?}"));

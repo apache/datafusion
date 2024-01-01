@@ -20,6 +20,7 @@ use arrow::{
     array::{Int32Array, StringArray},
     record_batch::RecordBatch,
 };
+use arrow_schema::SchemaRef;
 use std::sync::Arc;
 
 use datafusion::dataframe::DataFrame;
@@ -31,14 +32,19 @@ use datafusion::prelude::*;
 use datafusion::execution::context::SessionContext;
 
 use datafusion::assert_batches_eq;
+use datafusion_common::DFSchema;
 use datafusion_expr::expr::Alias;
-use datafusion_expr::{approx_median, cast};
+use datafusion_expr::{approx_median, cast, ExprSchemable};
 
-async fn create_test_table() -> Result<DataFrame> {
-    let schema = Arc::new(Schema::new(vec![
+fn test_schema() -> SchemaRef {
+    Arc::new(Schema::new(vec![
         Field::new("a", DataType::Utf8, false),
         Field::new("b", DataType::Int32, false),
-    ]));
+    ]))
+}
+
+async fn create_test_table() -> Result<DataFrame> {
+    let schema = test_schema();
 
     // define data.
     let batch = RecordBatch::try_new(
@@ -745,6 +751,51 @@ async fn test_fn_upper() -> Result<()> {
         "| CBADEF        |",
         "| 123ABCDEF     |",
         "+---------------+",
+    ];
+    assert_fn_batches!(expr, expected);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_fn_encode() -> Result<()> {
+    let expr = encode(vec![col("a"), lit("hex")]);
+
+    let expected = [
+        "+----------------------------+",
+        "| encode(test.a,Utf8(\"hex\")) |",
+        "+----------------------------+",
+        "| 616263444546               |",
+        "| 616263313233               |",
+        "| 434241646566               |",
+        "| 313233416263446566         |",
+        "+----------------------------+",
+    ];
+    assert_fn_batches!(expr, expected);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_fn_decode() -> Result<()> {
+    // Note that the decode function returns binary, and the default display of
+    // binary is "hexadecimal" and therefore the output looks like decode did
+    // nothing. So compare to a constant.
+    let df_schema = DFSchema::try_from(test_schema().as_ref().clone())?;
+    let expr = decode(vec![encode(vec![col("a"), lit("hex")]), lit("hex")])
+        // need to cast to utf8 otherwise the default display of binary array is hex
+        // so it looks like nothing is done
+        .cast_to(&DataType::Utf8, &df_schema)?;
+
+    let expected = [
+        "+------------------------------------------------+",
+        "| decode(encode(test.a,Utf8(\"hex\")),Utf8(\"hex\")) |",
+        "+------------------------------------------------+",
+        "| abcDEF                                         |",
+        "| abc123                                         |",
+        "| CBAdef                                         |",
+        "| 123AbcDef                                      |",
+        "+------------------------------------------------+",
     ];
     assert_fn_batches!(expr, expected);
 

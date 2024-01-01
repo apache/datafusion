@@ -491,6 +491,11 @@ pub mod sql {
     pub use datafusion_sql::*;
 }
 
+/// re-export of [`datafusion_functions`] crate
+pub mod functions {
+    pub use datafusion_functions::*;
+}
+
 #[cfg(test)]
 pub mod test;
 pub mod test_util;
