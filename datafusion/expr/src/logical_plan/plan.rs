@@ -540,38 +540,6 @@ impl LogicalPlan {
         }
     }
 
-    /// Returns a copy of this `LogicalPlan` with the new inputs
-    pub fn with_new_inputs(&self, inputs: &[LogicalPlan]) -> Result<LogicalPlan> {
-        // with_new_inputs use original expression,
-        // so we don't need to recompute Schema.
-        match &self {
-            LogicalPlan::Projection(projection) => {
-                // Schema of the projection may change
-                // when its input changes. Hence we should use
-                // `try_new` method instead of `try_new_with_schema`.
-                Projection::try_new(projection.expr.to_vec(), Arc::new(inputs[0].clone()))
-                    .map(LogicalPlan::Projection)
-            }
-            LogicalPlan::Window(Window { window_expr, .. }) => Ok(LogicalPlan::Window(
-                Window::try_new(window_expr.to_vec(), Arc::new(inputs[0].clone()))?,
-            )),
-            LogicalPlan::Aggregate(Aggregate {
-                group_expr,
-                aggr_expr,
-                ..
-            }) => Aggregate::try_new(
-                // Schema of the aggregate may change
-                // when its input changes. Hence we should use
-                // `try_new` method instead of `try_new_with_schema`.
-                Arc::new(inputs[0].clone()),
-                group_expr.to_vec(),
-                aggr_expr.to_vec(),
-            )
-            .map(LogicalPlan::Aggregate),
-            _ => self.with_new_exprs(self.expressions(), inputs),
-        }
-    }
-
     /// Returns a new `LogicalPlan` based on `self` with inputs and
     /// expressions replaced.
     ///
@@ -591,10 +559,6 @@ impl LogicalPlan {
     /// // create new plan using rewritten_exprs in same position
     /// let new_plan = plan.new_with_exprs(rewritten_exprs, new_inputs);
     /// ```
-    ///
-    /// Note: sometimes [`Self::with_new_exprs`] will use schema of
-    /// original plan, it will not change the scheam.  Such as
-    /// `Projection/Aggregate/Window`
     pub fn with_new_exprs(
         &self,
         mut expr: Vec<Expr>,
@@ -706,17 +670,10 @@ impl LogicalPlan {
                     }))
                 }
             },
-            LogicalPlan::Window(Window {
-                window_expr,
-                schema,
-                ..
-            }) => {
+            LogicalPlan::Window(Window { window_expr, .. }) => {
                 assert_eq!(window_expr.len(), expr.len());
-                Ok(LogicalPlan::Window(Window {
-                    input: Arc::new(inputs[0].clone()),
-                    window_expr: expr,
-                    schema: schema.clone(),
-                }))
+                Window::try_new(expr, Arc::new(inputs[0].clone()))
+                    .map(LogicalPlan::Window)
             }
             LogicalPlan::Aggregate(Aggregate { group_expr, .. }) => {
                 // group exprs are the first expressions
