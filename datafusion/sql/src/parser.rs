@@ -213,13 +213,6 @@ impl fmt::Display for CreateExternalTable {
     }
 }
 
-/// DataFusion extension DDL for `DESCRIBE TABLE`
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DescribeTableStmt {
-    /// Table name
-    pub table_name: ObjectName,
-}
-
 /// DataFusion SQL Statement.
 ///
 /// This can either be a [`Statement`] from [`sqlparser`] from a
@@ -233,8 +226,6 @@ pub enum Statement {
     Statement(Box<SQLStatement>),
     /// Extension: `CREATE EXTERNAL TABLE`
     CreateExternalTable(CreateExternalTable),
-    /// Extension: `DESCRIBE TABLE`
-    DescribeTableStmt(DescribeTableStmt),
     /// Extension: `COPY TO`
     CopyTo(CopyToStatement),
     /// EXPLAIN for extensions
@@ -246,7 +237,6 @@ impl fmt::Display for Statement {
         match self {
             Statement::Statement(stmt) => write!(f, "{stmt}"),
             Statement::CreateExternalTable(stmt) => write!(f, "{stmt}"),
-            Statement::DescribeTableStmt(_) => write!(f, "DESCRIBE TABLE ..."),
             Statement::CopyTo(stmt) => write!(f, "{stmt}"),
             Statement::Explain(stmt) => write!(f, "{stmt}"),
         }
@@ -345,10 +335,6 @@ impl<'a> DFParser<'a> {
                         self.parser.next_token(); // COPY
                         self.parse_copy()
                     }
-                    Keyword::DESCRIBE => {
-                        self.parser.next_token(); // DESCRIBE
-                        self.parse_describe()
-                    }
                     Keyword::EXPLAIN => {
                         // (TODO parse all supported statements)
                         self.parser.next_token(); // EXPLAIN
@@ -369,14 +355,6 @@ impl<'a> DFParser<'a> {
                 )))
             }
         }
-    }
-
-    /// Parse a SQL `DESCRIBE` statement
-    pub fn parse_describe(&mut self) -> Result<Statement, ParserError> {
-        let table_name = self.parser.parse_object_name()?;
-        Ok(Statement::DescribeTableStmt(DescribeTableStmt {
-            table_name,
-        }))
     }
 
     /// Parse a SQL `COPY TO` statement
