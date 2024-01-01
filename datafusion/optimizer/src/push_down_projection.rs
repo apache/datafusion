@@ -37,7 +37,7 @@ mod tests {
     };
     use datafusion_expr::{
         col, count, lit, max, min, AggregateFunction, Expr, LogicalPlan, Projection,
-        WindowFrame, WindowFunction,
+        WindowFrame, WindowFunctionDefinition,
     };
 
     #[test]
@@ -582,7 +582,7 @@ mod tests {
         let table_scan = test_table_scan()?;
 
         let max1 = Expr::WindowFunction(expr::WindowFunction::new(
-            WindowFunction::AggregateFunction(AggregateFunction::Max),
+            WindowFunctionDefinition::AggregateFunction(AggregateFunction::Max),
             vec![col("test.a")],
             vec![col("test.b")],
             vec![],
@@ -590,7 +590,7 @@ mod tests {
         ));
 
         let max2 = Expr::WindowFunction(expr::WindowFunction::new(
-            WindowFunction::AggregateFunction(AggregateFunction::Max),
+            WindowFunctionDefinition::AggregateFunction(AggregateFunction::Max),
             vec![col("test.b")],
             vec![],
             vec![],
