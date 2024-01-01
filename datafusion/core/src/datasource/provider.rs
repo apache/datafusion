@@ -141,7 +141,11 @@ pub trait TableProvider: Sync + Send {
     /// (though it may return more).  Like Projection Pushdown and Filter
     /// Pushdown, DataFusion pushes `LIMIT`s  as far down in the plan as
     /// possible, called "Limit Pushdown" as some sources can use this
-    /// information to improve their performance.
+    /// information to improve their performance. Note that if there are any
+    /// Inexact filters pushed down, the LIMIT cannot be pushed down. This is
+    /// because inexact filters do not guarentee that every filtered row is
+    /// removed, so applying the limit could lead to too few rows being available
+    /// to return as a final result.
     async fn scan(
         &self,
         state: &SessionState,

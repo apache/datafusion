@@ -185,12 +185,12 @@ COPY  (VALUES (1), (2), (3), (4), (5)) TO 'test_files/scratch/repartition_scan/j
 (FORMAT json, SINGLE_FILE_OUTPUT true);
 
 statement ok
-CREATE EXTERNAL TABLE json_table(column1 int)
+CREATE EXTERNAL TABLE json_table (column1 int)
 STORED AS json
 LOCATION 'test_files/scratch/repartition_scan/json_table/';
 
 query I
-select * from json_table;
+select * from "json_table";
 ----
 1
 2
@@ -198,11 +198,9 @@ select * from json_table;
 4
 5
 
-## In the future it would be cool to see the file read as "4" groups with even sizes (offsets)
-## but for now it is just one group
-## https://github.com/apache/arrow-datafusion/issues/8502
+## Expect to see the scan read the file as "4" groups with even sizes (offsets)
 query TT
-EXPLAIN SELECT column1 FROM json_table WHERE column1 <> 42;
+EXPLAIN SELECT column1 FROM "json_table" WHERE column1 <> 42;
 ----
 logical_plan
 Filter: json_table.column1 != Int32(42)
@@ -210,9 +208,7 @@ Filter: json_table.column1 != Int32(42)
 physical_plan
 CoalesceBatchesExec: target_batch_size=8192
 --FilterExec: column1@0 != 42
-----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-------JsonExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/repartition_scan/json_table/1.json]]}, projection=[column1]
-
+----JsonExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/repartition_scan/json_table/1.json:0..18], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/repartition_scan/json_table/1.json:18..36], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/repartition_scan/json_table/1.json:36..54], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/repartition_scan/json_table/1.json:54..70]]}, projection=[column1]
 
 # Cleanup
 statement ok

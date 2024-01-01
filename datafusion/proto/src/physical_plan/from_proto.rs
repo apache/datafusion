@@ -22,7 +22,10 @@ use std::sync::Arc;
 
 use arrow::compute::SortOptions;
 use datafusion::arrow::datatypes::Schema;
+use datafusion::datasource::file_format::csv::CsvSink;
 use datafusion::datasource::file_format::json::JsonSink;
+#[cfg(feature = "parquet")]
+use datafusion::datasource::file_format::parquet::ParquetSink;
 use datafusion::datasource::listing::{FileRange, ListingTableUrl, PartitionedFile};
 use datafusion::datasource::object_store::ObjectStoreUrl;
 use datafusion::datasource::physical_plan::{FileScanConfig, FileSinkConfig};
@@ -39,7 +42,9 @@ use datafusion::physical_plan::windows::create_window_expr;
 use datafusion::physical_plan::{
     functions, ColumnStatistics, Partitioning, PhysicalExpr, Statistics, WindowExpr,
 };
+use datafusion_common::file_options::csv_writer::CsvWriterOptions;
 use datafusion_common::file_options::json_writer::JsonWriterOptions;
+use datafusion_common::file_options::parquet_writer::ParquetWriterOptions;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::stats::Precision;
 use datafusion_common::{
@@ -52,6 +57,7 @@ use crate::logical_plan;
 use crate::protobuf;
 use crate::protobuf::physical_expr_node::ExprType;
 
+use crate::logical_plan::{csv_writer_options_from_proto, writer_properties_from_proto};
 use chrono::{TimeZone, Utc};
 use object_store::path::Path;
 use object_store::ObjectMeta;
@@ -710,6 +716,23 @@ impl TryFrom<&protobuf::JsonSink> for JsonSink {
     }
 }
 
+#[cfg(feature = "parquet")]
+impl TryFrom<&protobuf::ParquetSink> for ParquetSink {
+    type Error = DataFusionError;
+
+    fn try_from(value: &protobuf::ParquetSink) -> Result<Self, Self::Error> {
+        Ok(Self::new(convert_required!(value.config)?))
+    }
+}
+
+impl TryFrom<&protobuf::CsvSink> for CsvSink {
+    type Error = DataFusionError;
+
+    fn try_from(value: &protobuf::CsvSink) -> Result<Self, Self::Error> {
+        Ok(Self::new(convert_required!(value.config)?))
+    }
+}
+
 impl TryFrom<&protobuf::FileSinkConfig> for FileSinkConfig {
     type Error = DataFusionError;
 
@@ -764,11 +787,23 @@ impl TryFrom<&protobuf::FileTypeWriterOptions> for FileTypeWriterOptions {
         let file_type = value
             .file_type
             .as_ref()
-            .ok_or_else(|| proto_error("Missing required field in protobuf"))?;
+            .ok_or_else(|| proto_error("Missing required file_type field in protobuf"))?;
+
         match file_type {
-            protobuf::file_type_writer_options::FileType::JsonOptions(opts) => Ok(
-                Self::JSON(JsonWriterOptions::new(opts.compression().into())),
-            ),
+            protobuf::file_type_writer_options::FileType::JsonOptions(opts) => {
+                let compression: CompressionTypeVariant = opts.compression().into();
+                Ok(Self::JSON(JsonWriterOptions::new(compression)))
+            }
+            protobuf::file_type_writer_options::FileType::CsvOptions(opts) => {
+                let write_options = csv_writer_options_from_proto(opts)?;
+                let compression: CompressionTypeVariant = opts.compression().into();
+                Ok(Self::CSV(CsvWriterOptions::new(write_options, compression)))
+            }
+            protobuf::file_type_writer_options::FileType::ParquetOptions(opt) => {
+                let props = opt.writer_properties.clone().unwrap_or_default();
+                let writer_properties = writer_properties_from_proto(&props)?;
+                Ok(Self::Parquet(ParquetWriterOptions::new(writer_properties)))
+            }
         }
     }
 }
