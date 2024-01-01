@@ -31,7 +31,7 @@ use arrow::compute::{self, lexsort_to_indices, SortColumn};
 use arrow::datatypes::{DataType, Field};
 use arrow_schema::SortOptions;
 use datafusion_common::utils::{compare_rows, get_arrayref_at_indices, get_row_at_idx};
-use datafusion_common::{DataFusionError, Result, ScalarValue};
+use datafusion_common::{arrow_datafusion_err, DataFusionError, Result, ScalarValue};
 use datafusion_expr::Accumulator;
 
 /// FIRST_VALUE aggregate expression
@@ -541,7 +541,7 @@ fn filter_states_according_to_is_set(
 ) -> Result<Vec<ArrayRef>> {
     states
         .iter()
-        .map(|state| compute::filter(state, flags).map_err(DataFusionError::ArrowError))
+        .map(|state| compute::filter(state, flags).map_err(|e| arrow_datafusion_err!(e)))
         .collect::<Result<Vec<_>>>()
 }
 
