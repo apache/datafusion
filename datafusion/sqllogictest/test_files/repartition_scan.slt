@@ -185,12 +185,12 @@ COPY  (VALUES (1), (2), (3), (4), (5)) TO 'test_files/scratch/repartition_scan/j
 (FORMAT json, SINGLE_FILE_OUTPUT true);
 
 statement ok
-CREATE EXTERNAL TABLE json_table(column1 int)
+CREATE EXTERNAL TABLE json_table (column1 int)
 STORED AS json
 LOCATION 'test_files/scratch/repartition_scan/json_table/';
 
 query I
-select * from json_table;
+select * from "json_table";
 ----
 1
 2
@@ -200,7 +200,7 @@ select * from json_table;
 
 ## Expect to see the scan read the file as "4" groups with even sizes (offsets)
 query TT
-EXPLAIN SELECT column1 FROM json_table WHERE column1 <> 42;
+EXPLAIN SELECT column1 FROM "json_table" WHERE column1 <> 42;
 ----
 logical_plan
 Filter: json_table.column1 != Int32(42)
