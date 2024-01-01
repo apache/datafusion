@@ -25,7 +25,6 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::usize;
 
-use crate::joins::stream_join_utils::{build_filter_input_order, SortedFilterExpr};
 use crate::metrics::{self, ExecutionPlanMetricsSet, MetricBuilder};
 use crate::{ColumnStatistics, ExecutionPlan, Partitioning, Statistics};
 
@@ -39,13 +38,11 @@ use arrow::record_batch::{RecordBatch, RecordBatchOptions};
 use datafusion_common::cast::as_boolean_array;
 use datafusion_common::stats::Precision;
 use datafusion_common::{
-    plan_datafusion_err, plan_err, DataFusionError, JoinSide, JoinType, Result,
-    SharedResult,
+    plan_err, DataFusionError, JoinSide, JoinType, Result, SharedResult,
 };
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_physical_expr::equivalence::add_offset_to_expr;
 use datafusion_physical_expr::expressions::Column;
-use datafusion_physical_expr::intervals::cp_solver::ExprIntervalGraph;
 use datafusion_physical_expr::utils::merge_vectors;
 use datafusion_physical_expr::{
     LexOrdering, LexOrderingRef, PhysicalExpr, PhysicalSortExpr,
@@ -849,6 +846,22 @@ impl<T: 'static> OnceFut<T> {
             ),
         }
     }
+
+    /// Get shared reference to the result of the computation if it is ready, without consuming it
+    pub(crate) fn get_shared(&mut self, cx: &mut Context<'_>) -> Poll<Result<Arc<T>>> {
+        if let OnceFutState::Pending(fut) = &mut self.state {
+            let r = ready!(fut.poll_unpin(cx));
+            self.state = OnceFutState::Ready(r);
+        }
+
+        match &self.state {
+            OnceFutState::Pending(_) => unreachable!(),
+            OnceFutState::Ready(r) => Poll::Ready(
+                r.clone()
+                    .map_err(|e| DataFusionError::External(Box::new(e))),
+            ),
+        }
+    }
 }
 
 /// Some type `join_type` of join need to maintain the matched indices bit map for the left side, and
@@ -1192,89 +1205,71 @@ impl BuildProbeJoinMetrics {
     }
 }
 
-/// Updates sorted filter expressions with corresponding node indices from the
-/// expression interval graph.
+/// The `handle_state` macro is designed to process the result of a state-changing
+/// operation, encountered e.g. in implementations of `EagerJoinStream`. It
+/// operates on a `StatefulStreamResult` by matching its variants and executing
+/// corresponding actions. This macro is used to streamline code that deals with
+/// state transitions, reducing boilerplate and improving readability.
 ///
-/// This function iterates through the provided sorted filter expressions,
-/// gathers the corresponding node indices from the expression interval graph,
-/// and then updates the sorted expressions with these indices. It ensures
-/// that these sorted expressions are aligned with the structure of the graph.
-fn update_sorted_exprs_with_node_indices(
-    graph: &mut ExprIntervalGraph,
-    sorted_exprs: &mut [SortedFilterExpr],
-) {
-    // Extract filter expressions from the sorted expressions:
-    let filter_exprs = sorted_exprs
-        .iter()
-        .map(|expr| expr.filter_expr().clone())
-        .collect::<Vec<_>>();
-
-    // Gather corresponding node indices for the extracted filter expressions from the graph:
-    let child_node_indices = graph.gather_node_indices(&filter_exprs);
-
-    // Iterate through the sorted expressions and the gathered node indices:
-    for (sorted_expr, (_, index)) in sorted_exprs.iter_mut().zip(child_node_indices) {
-        // Update each sorted expression with the corresponding node index:
-        sorted_expr.set_node_index(index);
-    }
-}
-
-/// Prepares and sorts expressions based on a given filter, left and right execution plans, and sort expressions.
+/// # Cases
+///
+/// - `Ok(StatefulStreamResult::Continue)`: Continues the loop, indicating the
+///   stream join operation should proceed to the next step.
+/// - `Ok(StatefulStreamResult::Ready(result))`: Returns a `Poll::Ready` with the
+///   result, either yielding a value or indicating the stream is awaiting more
+///   data.
+/// - `Err(e)`: Returns a `Poll::Ready` containing an error, signaling an issue
+///   during the stream join operation.
 ///
 /// # Arguments
 ///
-/// * `filter` - The join filter to base the sorting on.
-/// * `left` - The left execution plan.
-/// * `right` - The right execution plan.
-/// * `left_sort_exprs` - The expressions to sort on the left side.
-/// * `right_sort_exprs` - The expressions to sort on the right side.
+/// * `$match_case`: An expression that evaluates to a `Result<StatefulStreamResult<_>>`.
+#[macro_export]
+macro_rules! handle_state {
+    ($match_case:expr) => {
+        match $match_case {
+            Ok(StatefulStreamResult::Continue) => continue,
+            Ok(StatefulStreamResult::Ready(result)) => {
+                Poll::Ready(Ok(result).transpose())
+            }
+            Err(e) => Poll::Ready(Some(Err(e))),
+        }
+    };
+}
+
+/// The `handle_async_state` macro adapts the `handle_state` macro for use in
+/// asynchronous operations, particularly when dealing with `Poll` results within
+/// async traits like `EagerJoinStream`. It polls the asynchronous state-changing
+/// function using `poll_unpin` and then passes the result to `handle_state` for
+/// further processing.
 ///
-/// # Returns
+/// # Arguments
 ///
-/// * A tuple consisting of the sorted filter expression for the left and right sides, and an expression interval graph.
-pub fn prepare_sorted_exprs(
-    filter: &JoinFilter,
-    left: &Arc<dyn ExecutionPlan>,
-    right: &Arc<dyn ExecutionPlan>,
-    left_sort_exprs: &[PhysicalSortExpr],
-    right_sort_exprs: &[PhysicalSortExpr],
-) -> Result<(SortedFilterExpr, SortedFilterExpr, ExprIntervalGraph)> {
-    // Build the filter order for the left side
-    let err = || plan_datafusion_err!("Filter does not include the child order");
+/// * `$state_func`: An async function or future that returns a
+///   `Result<StatefulStreamResult<_>>`.
+/// * `$cx`: The context to be passed for polling, usually of type `&mut Context`.
+///
+#[macro_export]
+macro_rules! handle_async_state {
+    ($state_func:expr, $cx:expr) => {
+        $crate::handle_state!(ready!($state_func.poll_unpin($cx)))
+    };
+}
 
-    let left_temp_sorted_filter_expr = build_filter_input_order(
-        JoinSide::Left,
-        filter,
-        &left.schema(),
-        &left_sort_exprs[0],
-    )?
-    .ok_or_else(err)?;
-
-    // Build the filter order for the right side
-    let right_temp_sorted_filter_expr = build_filter_input_order(
-        JoinSide::Right,
-        filter,
-        &right.schema(),
-        &right_sort_exprs[0],
-    )?
-    .ok_or_else(err)?;
-
-    // Collect the sorted expressions
-    let mut sorted_exprs =
-        vec![left_temp_sorted_filter_expr, right_temp_sorted_filter_expr];
-
-    // Build the expression interval graph
-    let mut graph =
-        ExprIntervalGraph::try_new(filter.expression().clone(), filter.schema())?;
-
-    // Update sorted expressions with node indices
-    update_sorted_exprs_with_node_indices(&mut graph, &mut sorted_exprs);
-
-    // Swap and remove to get the final sorted filter expressions
-    let right_sorted_filter_expr = sorted_exprs.swap_remove(1);
-    let left_sorted_filter_expr = sorted_exprs.swap_remove(0);
-
-    Ok((left_sorted_filter_expr, right_sorted_filter_expr, graph))
+/// Represents the result of an operation on stateful join stream.
+///
+/// This enumueration indicates whether the state produced a result that is
+/// ready for use (`Ready`) or if the operation requires continuation (`Continue`).
+///
+/// Variants:
+/// - `Ready(T)`: Indicates that the operation is complete with a result of type `T`.
+/// - `Continue`: Indicates that the operation is not yet complete and requires further
+///   processing or more data. When this variant is returned, it typically means that the
+///   current invocation of the state did not produce a final result, and the operation
+///   should be invoked again later with more data and possibly with a different state.
+pub enum StatefulStreamResult<T> {
+    Ready(T),
+    Continue,
 }
 
 #[cfg(test)]
@@ -1287,7 +1282,7 @@ mod tests {
     use arrow::error::{ArrowError, Result as ArrowResult};
     use arrow_schema::SortOptions;
 
-    use datafusion_common::ScalarValue;
+    use datafusion_common::{arrow_datafusion_err, arrow_err, ScalarValue};
 
     fn check(left: &[Column], right: &[Column], on: &[(Column, Column)]) -> Result<()> {
         let left = left
@@ -1323,9 +1318,7 @@ mod tests {
     #[tokio::test]
     async fn check_error_nesting() {
         let once_fut = OnceFut::<()>::new(async {
-            Err(DataFusionError::ArrowError(ArrowError::CsvError(
-                "some error".to_string(),
-            )))
+            arrow_err!(ArrowError::CsvError("some error".to_string()))
         });
 
         struct TestFut(OnceFut<()>);
@@ -1349,10 +1342,10 @@ mod tests {
         let wrapped_err = DataFusionError::from(arrow_err_from_fut);
         let root_err = wrapped_err.find_root();
 
-        assert!(matches!(
-            root_err,
-            DataFusionError::ArrowError(ArrowError::CsvError(_))
-        ))
+        let _expected =
+            arrow_datafusion_err!(ArrowError::CsvError("some error".to_owned()));
+
+        assert!(matches!(root_err, _expected))
     }
 
     #[test]

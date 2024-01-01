@@ -29,11 +29,11 @@ use crate::simplify_expressions::SimplifyInfo;
 use arrow::{
     array::new_null_array,
     datatypes::{DataType, Field, Schema},
-    error::ArrowError,
     record_batch::RecordBatch,
 };
 use datafusion_common::{
     cast::{as_large_list_array, as_list_array},
+    plan_err,
     tree_node::{RewriteRecursion, TreeNode, TreeNodeRewriter},
 };
 use datafusion_common::{
@@ -332,7 +332,6 @@ impl<'a> ConstEvaluator<'a> {
             // Has no runtime cost, but needed during planning
             Expr::Alias(..)
             | Expr::AggregateFunction { .. }
-            | Expr::AggregateUDF { .. }
             | Expr::ScalarVariable(_, _)
             | Expr::Column(_)
             | Expr::OuterReferenceColumn(_, _)
@@ -345,7 +344,7 @@ impl<'a> ConstEvaluator<'a> {
             | Expr::Wildcard { .. }
             | Expr::Placeholder(_) => false,
             Expr::ScalarFunction(ScalarFunction { func_def, .. }) => match func_def {
-                ScalarFunctionDefinition::BuiltIn { fun, .. } => {
+                ScalarFunctionDefinition::BuiltIn(fun) => {
                     Self::volatility_ok(fun.volatility())
                 }
                 ScalarFunctionDefinition::UDF(fun) => {
@@ -793,7 +792,7 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 op: Divide,
                 right,
             }) if is_null(&right) => *right,
-            // A / 0 -> DivideByZero Error if A is not null and not floating
+            // A / 0 -> Divide by zero error if A is not null and not floating
             // (float / 0 -> inf | -inf | NAN)
             Expr::BinaryExpr(BinaryExpr {
                 left,
@@ -803,7 +802,7 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 && !info.get_data_type(&left)?.is_floating()
                 && is_zero(&right) =>
             {
-                return Err(DataFusionError::ArrowError(ArrowError::DivideByZero));
+                return plan_err!("Divide by zero");
             }
 
             //
@@ -833,7 +832,7 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
             {
                 lit(0)
             }
-            // A % 0 --> DivideByZero Error (if A is not floating and not null)
+            // A % 0 --> Divide by zero Error (if A is not floating and not null)
             // A % 0 --> NAN (if A is floating and not null)
             Expr::BinaryExpr(BinaryExpr {
                 left,
@@ -844,9 +843,7 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                     DataType::Float32 => lit(f32::NAN),
                     DataType::Float64 => lit(f64::NAN),
                     _ => {
-                        return Err(DataFusionError::ArrowError(
-                            ArrowError::DivideByZero,
-                        ));
+                        return plan_err!("Divide by zero");
                     }
                 }
             }
@@ -1203,41 +1200,28 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
 
             // log
             Expr::ScalarFunction(ScalarFunction {
-                func_def:
-                    ScalarFunctionDefinition::BuiltIn {
-                        fun: BuiltinScalarFunction::Log,
-                        ..
-                    },
+                func_def: ScalarFunctionDefinition::BuiltIn(BuiltinScalarFunction::Log),
                 args,
             }) => simpl_log(args, <&S>::clone(&info))?,
 
             // power
             Expr::ScalarFunction(ScalarFunction {
-                func_def:
-                    ScalarFunctionDefinition::BuiltIn {
-                        fun: BuiltinScalarFunction::Power,
-                        ..
-                    },
+                func_def: ScalarFunctionDefinition::BuiltIn(BuiltinScalarFunction::Power),
                 args,
             }) => simpl_power(args, <&S>::clone(&info))?,
 
             // concat
             Expr::ScalarFunction(ScalarFunction {
-                func_def:
-                    ScalarFunctionDefinition::BuiltIn {
-                        fun: BuiltinScalarFunction::Concat,
-                        ..
-                    },
+                func_def: ScalarFunctionDefinition::BuiltIn(BuiltinScalarFunction::Concat),
                 args,
             }) => simpl_concat(args)?,
 
             // concat_ws
             Expr::ScalarFunction(ScalarFunction {
                 func_def:
-                    ScalarFunctionDefinition::BuiltIn {
-                        fun: BuiltinScalarFunction::ConcatWithSeparator,
-                        ..
-                    },
+                    ScalarFunctionDefinition::BuiltIn(
+                        BuiltinScalarFunction::ConcatWithSeparator,
+                    ),
                 args,
             }) => match &args[..] {
                 [delimiter, vals @ ..] => simpl_concat_ws(delimiter, vals)?,
@@ -1329,7 +1313,9 @@ mod tests {
         array::{ArrayRef, Int32Array},
         datatypes::{DataType, Field, Schema},
     };
-    use datafusion_common::{assert_contains, cast::as_int32_array, DFField, ToDFSchema};
+    use datafusion_common::{
+        assert_contains, cast::as_int32_array, plan_datafusion_err, DFField, ToDFSchema,
+    };
     use datafusion_expr::{interval_arithmetic::Interval, *};
     use datafusion_physical_expr::{
         execution_props::ExecutionProps, functions::make_scalar_function,
@@ -1785,25 +1771,23 @@ mod tests {
 
     #[test]
     fn test_simplify_divide_zero_by_zero() {
-        // 0 / 0 -> DivideByZero
+        // 0 / 0 -> Divide by zero
         let expr = lit(0) / lit(0);
         let err = try_simplify(expr).unwrap_err();
 
-        assert!(
-            matches!(err, DataFusionError::ArrowError(ArrowError::DivideByZero)),
-            "{err}"
-        );
+        let _expected = plan_datafusion_err!("Divide by zero");
+
+        assert!(matches!(err, ref _expected), "{err}");
     }
 
     #[test]
-    #[should_panic(
-        expected = "called `Result::unwrap()` on an `Err` value: ArrowError(DivideByZero)"
-    )]
     fn test_simplify_divide_by_zero() {
         // A / 0 -> DivideByZeroError
         let expr = col("c2_non_null") / lit(0);
-
-        simplify(expr);
+        assert_eq!(
+            try_simplify(expr).unwrap_err().strip_backtrace(),
+            "Error during planning: Divide by zero"
+        );
     }
 
     #[test]
@@ -2223,12 +2207,12 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(
-        expected = "called `Result::unwrap()` on an `Err` value: ArrowError(DivideByZero)"
-    )]
     fn test_simplify_modulo_by_zero_non_null() {
         let expr = col("c2_non_null") % lit(0);
-        simplify(expr);
+        assert_eq!(
+            try_simplify(expr).unwrap_err().strip_backtrace(),
+            "Error during planning: Divide by zero"
+        );
     }
 
     #[test]
@@ -3311,10 +3295,7 @@ mod tests {
                 col("c4"),
                 NullableInterval::from(ScalarValue::UInt32(Some(9))),
             ),
-            (
-                col("c1"),
-                NullableInterval::from(ScalarValue::Utf8(Some("a".to_string()))),
-            ),
+            (col("c1"), NullableInterval::from(ScalarValue::from("a"))),
         ];
         let output = simplify_with_guarantee(expr.clone(), guarantees);
         assert_eq!(output, lit(false));
@@ -3337,8 +3318,8 @@ mod tests {
                 col("c1"),
                 NullableInterval::NotNull {
                     values: Interval::try_new(
-                        ScalarValue::Utf8(Some("d".to_string())),
-                        ScalarValue::Utf8(Some("f".to_string())),
+                        ScalarValue::from("d"),
+                        ScalarValue::from("f"),
                     )
                     .unwrap(),
                 },

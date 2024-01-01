@@ -19,9 +19,9 @@
 
 use datafusion_physical_plan::metrics::MetricsSet;
 use futures::StreamExt;
-use hashbrown::HashMap;
 use log::debug;
 use std::any::Any;
+use std::collections::HashMap;
 use std::fmt::{self, Debug};
 use std::sync::Arc;
 
@@ -423,7 +423,7 @@ mod tests {
             .scan(&session_ctx.state(), Some(&projection), &[], None)
             .await
         {
-            Err(DataFusionError::ArrowError(ArrowError::SchemaError(e))) => {
+            Err(DataFusionError::ArrowError(ArrowError::SchemaError(e), _)) => {
                 assert_eq!(
                     "\"project index 4 out of bounds, max field 3\"",
                     format!("{e:?}")

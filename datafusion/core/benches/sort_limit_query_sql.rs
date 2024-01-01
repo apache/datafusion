@@ -99,7 +99,7 @@ fn create_context() -> Arc<Mutex<SessionContext>> {
         ctx_holder.lock().push(Arc::new(Mutex::new(ctx)))
     });
 
-    let ctx = ctx_holder.lock().get(0).unwrap().clone();
+    let ctx = ctx_holder.lock().first().unwrap().clone();
     ctx
 }
 

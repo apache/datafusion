@@ -47,7 +47,8 @@ pub type GenericError = Box<dyn Error + Send + Sync>;
 #[derive(Debug)]
 pub enum DataFusionError {
     /// Error returned by arrow.
-    ArrowError(ArrowError),
+    /// 2nd argument is for optional backtrace
+    ArrowError(ArrowError, Option<String>),
     /// Wraps an error from the Parquet crate
     #[cfg(feature = "parquet")]
     ParquetError(ParquetError),
@@ -60,7 +61,8 @@ pub enum DataFusionError {
     /// Error associated to I/O operations and associated traits.
     IoError(io::Error),
     /// Error returned when SQL is syntactically incorrect.
-    SQL(ParserError),
+    /// 2nd argument is for optional backtrace    
+    SQL(ParserError, Option<String>),
     /// Error returned on a branch that we know it is possible
     /// but to which we still have no implementation for.
     /// Often, these errors are tracked in our issue tracker.
@@ -223,14 +225,14 @@ impl From<io::Error> for DataFusionError {
 
 impl From<ArrowError> for DataFusionError {
     fn from(e: ArrowError) -> Self {
-        DataFusionError::ArrowError(e)
+        DataFusionError::ArrowError(e, None)
     }
 }
 
 impl From<DataFusionError> for ArrowError {
     fn from(e: DataFusionError) -> Self {
         match e {
-            DataFusionError::ArrowError(e) => e,
+            DataFusionError::ArrowError(e, _) => e,
             DataFusionError::External(e) => ArrowError::ExternalError(e),
             other => ArrowError::ExternalError(Box::new(other)),
         }
@@ -267,7 +269,7 @@ impl From<object_store::path::Error> for DataFusionError {
 
 impl From<ParserError> for DataFusionError {
     fn from(e: ParserError) -> Self {
-        DataFusionError::SQL(e)
+        DataFusionError::SQL(e, None)
     }
 }
 
@@ -280,8 +282,9 @@ impl From<GenericError> for DataFusionError {
 impl Display for DataFusionError {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
         match *self {
-            DataFusionError::ArrowError(ref desc) => {
-                write!(f, "Arrow error: {desc}")
+            DataFusionError::ArrowError(ref desc, ref backtrace) => {
+                let backtrace = backtrace.clone().unwrap_or("".to_owned());
+                write!(f, "Arrow error: {desc}{backtrace}")
             }
             #[cfg(feature = "parquet")]
             DataFusionError::ParquetError(ref desc) => {
@@ -294,8 +297,9 @@ impl Display for DataFusionError {
             DataFusionError::IoError(ref desc) => {
                 write!(f, "IO error: {desc}")
             }
-            DataFusionError::SQL(ref desc) => {
-                write!(f, "SQL error: {desc:?}")
+            DataFusionError::SQL(ref desc, ref backtrace) => {
+                let backtrace = backtrace.clone().unwrap_or("".to_owned());
+                write!(f, "SQL error: {desc:?}{backtrace}")
             }
             DataFusionError::Configuration(ref desc) => {
                 write!(f, "Invalid or Unsupported Configuration: {desc}")
@@ -339,7 +343,7 @@ impl Display for DataFusionError {
 impl Error for DataFusionError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
-            DataFusionError::ArrowError(e) => Some(e),
+            DataFusionError::ArrowError(e, _) => Some(e),
             #[cfg(feature = "parquet")]
             DataFusionError::ParquetError(e) => Some(e),
             #[cfg(feature = "avro")]
@@ -347,7 +351,7 @@ impl Error for DataFusionError {
             #[cfg(feature = "object_store")]
             DataFusionError::ObjectStore(e) => Some(e),
             DataFusionError::IoError(e) => Some(e),
-            DataFusionError::SQL(e) => Some(e),
+            DataFusionError::SQL(e, _) => Some(e),
             DataFusionError::NotImplemented(_) => None,
             DataFusionError::Internal(_) => None,
             DataFusionError::Configuration(_) => None,
@@ -505,29 +509,57 @@ macro_rules! make_error {
     };
 }
 
-// Exposes a macro to create `DataFusionError::Plan`
+// Exposes a macro to create `DataFusionError::Plan` with optional backtrace
 make_error!(plan_err, plan_datafusion_err, Plan);
 
-// Exposes a macro to create `DataFusionError::Internal`
+// Exposes a macro to create `DataFusionError::Internal` with optional backtrace
 make_error!(internal_err, internal_datafusion_err, Internal);
 
-// Exposes a macro to create `DataFusionError::NotImplemented`
+// Exposes a macro to create `DataFusionError::NotImplemented` with optional backtrace
 make_error!(not_impl_err, not_impl_datafusion_err, NotImplemented);
 
-// Exposes a macro to create `DataFusionError::Execution`
+// Exposes a macro to create `DataFusionError::Execution` with optional backtrace
 make_error!(exec_err, exec_datafusion_err, Execution);
 
-// Exposes a macro to create `DataFusionError::SQL`
+// Exposes a macro to create `DataFusionError::Substrait` with optional backtrace
+make_error!(substrait_err, substrait_datafusion_err, Substrait);
+
+// Exposes a macro to create `DataFusionError::SQL` with optional backtrace
+#[macro_export]
+macro_rules! sql_datafusion_err {
+    ($ERR:expr) => {
+        DataFusionError::SQL($ERR, Some(DataFusionError::get_back_trace()))
+    };
+}
+
+// Exposes a macro to create `Err(DataFusionError::SQL)` with optional backtrace
 #[macro_export]
 macro_rules! sql_err {
     ($ERR:expr) => {
-        Err(DataFusionError::SQL($ERR))
+        Err(datafusion_common::sql_datafusion_err!($ERR))
+    };
+}
+
+// Exposes a macro to create `DataFusionError::ArrowError` with optional backtrace
+#[macro_export]
+macro_rules! arrow_datafusion_err {
+    ($ERR:expr) => {
+        DataFusionError::ArrowError($ERR, Some(DataFusionError::get_back_trace()))
+    };
+}
+
+// Exposes a macro to create `Err(DataFusionError::ArrowError)` with optional backtrace
+#[macro_export]
+macro_rules! arrow_err {
+    ($ERR:expr) => {
+        Err(datafusion_common::arrow_datafusion_err!($ERR))
     };
 }
 
 // To avoid compiler error when using macro in the same crate:
 // macros from the current crate cannot be referred to by absolute paths
 pub use exec_err as _exec_err;
+pub use internal_datafusion_err as _internal_datafusion_err;
 pub use internal_err as _internal_err;
 pub use not_impl_err as _not_impl_err;
 pub use plan_err as _plan_err;
@@ -564,18 +596,16 @@ mod test {
         assert_eq!(
             err.split(DataFusionError::BACK_TRACE_SEP)
                 .collect::<Vec<&str>>()
-                .get(0)
+                .first()
                 .unwrap(),
             &"Error during planning: Err"
         );
-        assert!(
-            err.split(DataFusionError::BACK_TRACE_SEP)
-                .collect::<Vec<&str>>()
-                .get(1)
-                .unwrap()
-                .len()
-                > 0
-        );
+        assert!(!err
+            .split(DataFusionError::BACK_TRACE_SEP)
+            .collect::<Vec<&str>>()
+            .get(1)
+            .unwrap()
+            .is_empty());
     }
 
     #[cfg(not(feature = "backtrace"))]
@@ -599,9 +629,12 @@ mod test {
         );
 
         do_root_test(
-            DataFusionError::ArrowError(ArrowError::ExternalError(Box::new(
-                DataFusionError::ResourcesExhausted("foo".to_string()),
-            ))),
+            DataFusionError::ArrowError(
+                ArrowError::ExternalError(Box::new(DataFusionError::ResourcesExhausted(
+                    "foo".to_string(),
+                ))),
+                None,
+            ),
             DataFusionError::ResourcesExhausted("foo".to_string()),
         );
 
@@ -620,11 +653,12 @@ mod test {
         );
 
         do_root_test(
-            DataFusionError::ArrowError(ArrowError::ExternalError(Box::new(
-                ArrowError::ExternalError(Box::new(DataFusionError::ResourcesExhausted(
-                    "foo".to_string(),
-                ))),
-            ))),
+            DataFusionError::ArrowError(
+                ArrowError::ExternalError(Box::new(ArrowError::ExternalError(Box::new(
+                    DataFusionError::ResourcesExhausted("foo".to_string()),
+                )))),
+                None,
+            ),
             DataFusionError::ResourcesExhausted("foo".to_string()),
         );
 

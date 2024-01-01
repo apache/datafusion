@@ -279,13 +279,13 @@ SortPreservingMergeExec: [b@0 ASC NULLS LAST]
 ------------AggregateExec: mode=Partial, gby=[b@1 as b], aggr=[MAX(d.a)]
 --------------UnionExec
 ----------------ProjectionExec: expr=[1 as a, aa as b]
-------------------EmptyExec: produce_one_row=true
+------------------PlaceholderRowExec
 ----------------ProjectionExec: expr=[3 as a, aa as b]
-------------------EmptyExec: produce_one_row=true
+------------------PlaceholderRowExec
 ----------------ProjectionExec: expr=[5 as a, bb as b]
-------------------EmptyExec: produce_one_row=true
+------------------PlaceholderRowExec
 ----------------ProjectionExec: expr=[7 as a, bb as b]
-------------------EmptyExec: produce_one_row=true
+------------------PlaceholderRowExec
 
 # Check actual result:
 query TI
@@ -365,13 +365,13 @@ SortPreservingMergeExec: [b@0 ASC NULLS LAST]
 --------------RepartitionExec: partitioning=Hash([b@1], 4), input_partitions=4
 ----------------UnionExec
 ------------------ProjectionExec: expr=[1 as a, aa as b]
---------------------EmptyExec: produce_one_row=true
+--------------------PlaceholderRowExec
 ------------------ProjectionExec: expr=[3 as a, aa as b]
---------------------EmptyExec: produce_one_row=true
+--------------------PlaceholderRowExec
 ------------------ProjectionExec: expr=[5 as a, bb as b]
---------------------EmptyExec: produce_one_row=true
+--------------------PlaceholderRowExec
 ------------------ProjectionExec: expr=[7 as a, bb as b]
---------------------EmptyExec: produce_one_row=true
+--------------------PlaceholderRowExec
 
 
 # check actual result
@@ -1731,26 +1731,28 @@ logical_plan
 Projection: COUNT(*) AS global_count
 --Aggregate: groupBy=[[]], aggr=[[COUNT(UInt8(1)) AS COUNT(*)]]
 ----SubqueryAlias: a
-------Sort: aggregate_test_100.c1 ASC NULLS LAST
---------Aggregate: groupBy=[[aggregate_test_100.c1]], aggr=[[]]
-----------Projection: aggregate_test_100.c1
-------------Filter: aggregate_test_100.c13 != Utf8("C2GT5KVyOPZpgKVl110TyZO0NcJ434")
---------------TableScan: aggregate_test_100 projection=[c1, c13], partial_filters=[aggregate_test_100.c13 != Utf8("C2GT5KVyOPZpgKVl110TyZO0NcJ434")]
+------Projection:
+--------Sort: aggregate_test_100.c1 ASC NULLS LAST
+----------Aggregate: groupBy=[[aggregate_test_100.c1]], aggr=[[]]
+------------Projection: aggregate_test_100.c1
+--------------Filter: aggregate_test_100.c13 != Utf8("C2GT5KVyOPZpgKVl110TyZO0NcJ434")
+----------------TableScan: aggregate_test_100 projection=[c1, c13], partial_filters=[aggregate_test_100.c13 != Utf8("C2GT5KVyOPZpgKVl110TyZO0NcJ434")]
 physical_plan
 ProjectionExec: expr=[COUNT(*)@0 as global_count]
 --AggregateExec: mode=Final, gby=[], aggr=[COUNT(*)]
 ----CoalescePartitionsExec
 ------AggregateExec: mode=Partial, gby=[], aggr=[COUNT(*)]
 --------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=2
-----------AggregateExec: mode=FinalPartitioned, gby=[c1@0 as c1], aggr=[]
-------------CoalesceBatchesExec: target_batch_size=4096
---------------RepartitionExec: partitioning=Hash([c1@0], 2), input_partitions=2
-----------------AggregateExec: mode=Partial, gby=[c1@0 as c1], aggr=[]
-------------------ProjectionExec: expr=[c1@0 as c1]
---------------------CoalesceBatchesExec: target_batch_size=4096
-----------------------FilterExec: c13@1 != C2GT5KVyOPZpgKVl110TyZO0NcJ434
-------------------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
---------------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c13], has_header=true
+----------ProjectionExec: expr=[]
+------------AggregateExec: mode=FinalPartitioned, gby=[c1@0 as c1], aggr=[]
+--------------CoalesceBatchesExec: target_batch_size=4096
+----------------RepartitionExec: partitioning=Hash([c1@0], 2), input_partitions=2
+------------------AggregateExec: mode=Partial, gby=[c1@0 as c1], aggr=[]
+--------------------ProjectionExec: expr=[c1@0 as c1]
+----------------------CoalesceBatchesExec: target_batch_size=4096
+------------------------FilterExec: c13@1 != C2GT5KVyOPZpgKVl110TyZO0NcJ434
+--------------------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+----------------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c13], has_header=true
 
 query I
 SELECT count(*) as global_count FROM
@@ -3243,17 +3245,17 @@ physical_plan
 ProjectionExec: expr=[SUM(annotated_data_infinite2.a) PARTITION BY [annotated_data_infinite2.a, annotated_data_infinite2.b] ORDER BY [annotated_data_infinite2.c ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@2 as sum1, SUM(annotated_data_infinite2.a) PARTITION BY [annotated_data_infinite2.b, annotated_data_infinite2.a] ORDER BY [annotated_data_infinite2.c ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@4 as sum2, SUM(annotated_data_infinite2.a) PARTITION BY [annotated_data_infinite2.a, annotated_data_infinite2.d] ORDER BY [annotated_data_infinite2.b ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3 as sum3, SUM(annotated_data_infinite2.a) PARTITION BY [annotated_data_infinite2.d] ORDER BY [annotated_data_infinite2.a ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@5 as sum4]
 --BoundedWindowAggExec: wdw=[SUM(annotated_data_infinite2.a) PARTITION BY [annotated_data_infinite2.d] ORDER BY [annotated_data_infinite2.a ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Ok(Field { name: "SUM(annotated_data_infinite2.a) PARTITION BY [annotated_data_infinite2.d] ORDER BY [annotated_data_infinite2.a ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(Int32(NULL)), end_bound: CurrentRow }], mode=[Linear]
 ----CoalesceBatchesExec: target_batch_size=4096
-------SortPreservingRepartitionExec: partitioning=Hash([d@1], 2), input_partitions=2, sort_exprs=a@0 ASC NULLS LAST
+------RepartitionExec: partitioning=Hash([d@1], 2), input_partitions=2, preserve_order=true, sort_exprs=a@0 ASC NULLS LAST
 --------ProjectionExec: expr=[a@0 as a, d@3 as d, SUM(annotated_data_infinite2.a) PARTITION BY [annotated_data_infinite2.a, annotated_data_infinite2.b] ORDER BY [annotated_data_infinite2.c ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@4 as SUM(annotated_data_infinite2.a) PARTITION BY [annotated_data_infinite2.a, annotated_data_infinite2.b] ORDER BY [annotated_data_infinite2.c ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, SUM(annotated_data_infinite2.a) PARTITION BY [annotated_data_infinite2.a, annotated_data_infinite2.d] ORDER BY [annotated_data_infinite2.b ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@5 as SUM(annotated_data_infinite2.a) PARTITION BY [annotated_data_infinite2.a, annotated_data_infinite2.d] ORDER BY [annotated_data_infinite2.b ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, SUM(annotated_data_infinite2.a) PARTITION BY [annotated_data_infinite2.b, annotated_data_infinite2.a] ORDER BY [annotated_data_infinite2.c ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@6 as SUM(annotated_data_infinite2.a) PARTITION BY [annotated_data_infinite2.b, annotated_data_infinite2.a] ORDER BY [annotated_data_infinite2.c ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]
 ----------BoundedWindowAggExec: wdw=[SUM(annotated_data_infinite2.a) PARTITION BY [annotated_data_infinite2.b, annotated_data_infinite2.a] ORDER BY [annotated_data_infinite2.c ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Ok(Field { name: "SUM(annotated_data_infinite2.a) PARTITION BY [annotated_data_infinite2.b, annotated_data_infinite2.a] ORDER BY [annotated_data_infinite2.c ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(Int32(NULL)), end_bound: CurrentRow }], mode=[Sorted]
 ------------CoalesceBatchesExec: target_batch_size=4096
---------------SortPreservingRepartitionExec: partitioning=Hash([b@1, a@0], 2), input_partitions=2, sort_exprs=a@0 ASC NULLS LAST,b@1 ASC NULLS LAST,c@2 ASC NULLS LAST
+--------------RepartitionExec: partitioning=Hash([b@1, a@0], 2), input_partitions=2, preserve_order=true, sort_exprs=a@0 ASC NULLS LAST,b@1 ASC NULLS LAST,c@2 ASC NULLS LAST
 ----------------BoundedWindowAggExec: wdw=[SUM(annotated_data_infinite2.a) PARTITION BY [annotated_data_infinite2.a, annotated_data_infinite2.d] ORDER BY [annotated_data_infinite2.b ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Ok(Field { name: "SUM(annotated_data_infinite2.a) PARTITION BY [annotated_data_infinite2.a, annotated_data_infinite2.d] ORDER BY [annotated_data_infinite2.b ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(Int32(NULL)), end_bound: CurrentRow }], mode=[PartiallySorted([0])]
 ------------------CoalesceBatchesExec: target_batch_size=4096
---------------------SortPreservingRepartitionExec: partitioning=Hash([a@0, d@3], 2), input_partitions=2, sort_exprs=a@0 ASC NULLS LAST,b@1 ASC NULLS LAST,c@2 ASC NULLS LAST
+--------------------RepartitionExec: partitioning=Hash([a@0, d@3], 2), input_partitions=2, preserve_order=true, sort_exprs=a@0 ASC NULLS LAST,b@1 ASC NULLS LAST,c@2 ASC NULLS LAST
 ----------------------BoundedWindowAggExec: wdw=[SUM(annotated_data_infinite2.a) PARTITION BY [annotated_data_infinite2.a, annotated_data_infinite2.b] ORDER BY [annotated_data_infinite2.c ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Ok(Field { name: "SUM(annotated_data_infinite2.a) PARTITION BY [annotated_data_infinite2.a, annotated_data_infinite2.b] ORDER BY [annotated_data_infinite2.c ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(Int32(NULL)), end_bound: CurrentRow }], mode=[Sorted]
 ------------------------CoalesceBatchesExec: target_batch_size=4096
---------------------------SortPreservingRepartitionExec: partitioning=Hash([a@0, b@1], 2), input_partitions=2, sort_exprs=a@0 ASC NULLS LAST,b@1 ASC NULLS LAST,c@2 ASC NULLS LAST
+--------------------------RepartitionExec: partitioning=Hash([a@0, b@1], 2), input_partitions=2, preserve_order=true, sort_exprs=a@0 ASC NULLS LAST,b@1 ASC NULLS LAST,c@2 ASC NULLS LAST
 ----------------------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
 ------------------------------StreamingTableExec: partition_sizes=1, projection=[a, b, c, d], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST, c@2 ASC NULLS LAST]
 
@@ -3493,6 +3495,56 @@ select sum(1) over() x, sum(1) over () y
 ----
 1 1
 
+# NTH_VALUE requirement is c DESC, However existing ordering is c ASC
+# if we reverse window expression: "NTH_VALUE(c, 2) OVER(order by c DESC ) as nv1"
+# as "NTH_VALUE(c, -2) OVER(order by c ASC RANGE BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING) as nv1"
+# Please note that: "NTH_VALUE(c, 2) OVER(order by c DESC ) as nv1" is same with
+#                   "NTH_VALUE(c, 2) OVER(order by c DESC RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) as nv1" "
+# we can produce same result without re-sorting the table.
+# Unfortunately since window expression names are string, this change is not seen the plan (we do not do string manipulation).
+# TODO: Reflect window expression reversal in the plans.
+query TT
+EXPLAIN SELECT c, NTH_VALUE(c, 2) OVER(order by c DESC) as nv1
+  FROM multiple_ordered_table
+  ORDER BY c ASC
+  LIMIT 5
+----
+logical_plan
+Limit: skip=0, fetch=5
+--Sort: multiple_ordered_table.c ASC NULLS LAST, fetch=5
+----Projection: multiple_ordered_table.c, NTH_VALUE(multiple_ordered_table.c,Int64(2)) ORDER BY [multiple_ordered_table.c DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS nv1
+------WindowAggr: windowExpr=[[NTH_VALUE(multiple_ordered_table.c, Int64(2)) ORDER BY [multiple_ordered_table.c DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+--------TableScan: multiple_ordered_table projection=[c]
+physical_plan
+GlobalLimitExec: skip=0, fetch=5
+--ProjectionExec: expr=[c@0 as c, NTH_VALUE(multiple_ordered_table.c,Int64(2)) ORDER BY [multiple_ordered_table.c DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@1 as nv1]
+----WindowAggExec: wdw=[NTH_VALUE(multiple_ordered_table.c,Int64(2)) ORDER BY [multiple_ordered_table.c DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Ok(Field { name: "NTH_VALUE(multiple_ordered_table.c,Int64(2)) ORDER BY [multiple_ordered_table.c DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: CurrentRow, end_bound: Following(Int32(NULL)) }]
+------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[c], output_ordering=[c@0 ASC NULLS LAST], has_header=true
+
+query II
+SELECT c, NTH_VALUE(c, 2) OVER(order by c DESC) as nv1
+  FROM multiple_ordered_table
+  ORDER BY c ASC
+  LIMIT 5
+----
+0 98
+1 98
+2 98
+3 98
+4 98
+
+query II
+SELECT c, NTH_VALUE(c, 2) OVER(order by c DESC) as nv1
+  FROM multiple_ordered_table
+  ORDER BY c DESC
+  LIMIT 5
+----
+99 NULL
+98 98
+97 98
+96 98
+95 98
+
 statement ok
 set datafusion.execution.target_partitions = 2;
 
@@ -3519,7 +3571,7 @@ SortPreservingMergeExec: [c@3 ASC NULLS LAST]
 --ProjectionExec: expr=[a0@0 as a0, a@1 as a, b@2 as b, c@3 as c, d@4 as d, AVG(multiple_ordered_table_inf.d) PARTITION BY [multiple_ordered_table_inf.d] ORDER BY [multiple_ordered_table_inf.a ASC NULLS LAST] RANGE BETWEEN 10 PRECEDING AND CURRENT ROW@5 as avg_d]
 ----BoundedWindowAggExec: wdw=[AVG(multiple_ordered_table_inf.d) PARTITION BY [multiple_ordered_table_inf.d] ORDER BY [multiple_ordered_table_inf.a ASC NULLS LAST] RANGE BETWEEN 10 PRECEDING AND CURRENT ROW: Ok(Field { name: "AVG(multiple_ordered_table_inf.d) PARTITION BY [multiple_ordered_table_inf.d] ORDER BY [multiple_ordered_table_inf.a ASC NULLS LAST] RANGE BETWEEN 10 PRECEDING AND CURRENT ROW", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(Int32(10)), end_bound: CurrentRow }], mode=[Linear]
 ------CoalesceBatchesExec: target_batch_size=4096
---------SortPreservingRepartitionExec: partitioning=Hash([d@4], 2), input_partitions=2, sort_exprs=a@1 ASC NULLS LAST,b@2 ASC NULLS LAST
+--------RepartitionExec: partitioning=Hash([d@4], 2), input_partitions=2, preserve_order=true, sort_exprs=a@1 ASC NULLS LAST,b@2 ASC NULLS LAST
 ----------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
 ------------StreamingTableExec: partition_sizes=1, projection=[a0, a, b, c, d], infinite_source=true, output_ordering=[a@1 ASC NULLS LAST, b@2 ASC NULLS LAST]
 
@@ -3529,3 +3581,255 @@ CREATE TABLE new_table AS SELECT NTILE(2) OVER(ORDER BY c1) AS ntile_2 FROM aggr
 
 statement ok
 DROP TABLE new_table;
+
+statement ok
+CREATE TABLE t1 (a int) AS VALUES (1), (2), (3);
+
+query I
+SELECT NTILE(9223377) OVER(ORDER BY a) FROM t1;
+----
+1
+2
+3
+
+query I
+SELECT NTILE(9223372036854775809) OVER(ORDER BY a) FROM t1;
+----
+1
+2
+3
+
+query error DataFusion error: Execution error: NTILE requires a positive integer
+SELECT NTILE(-922337203685477580) OVER(ORDER BY a) FROM t1;
+
+query error DataFusion error: Execution error: Table 't' doesn't exist\.
+DROP TABLE t;
+
+# NTILE with PARTITION BY, those tests from duckdb: https://github.com/duckdb/duckdb/blob/main/test/sql/window/test_ntile.test
+statement ok
+CREATE TABLE score_board (team_name VARCHAR, player VARCHAR, score INTEGER) as VALUES
+          ('Mongrels', 'Apu', 350),
+          ('Mongrels', 'Ned', 666),
+          ('Mongrels', 'Meg', 1030),
+          ('Mongrels', 'Burns', 1270),
+          ('Simpsons', 'Homer', 1),
+          ('Simpsons', 'Lisa', 710),
+          ('Simpsons', 'Marge', 990),
+          ('Simpsons', 'Bart', 2010)
+
+query TTII
+SELECT
+  team_name,
+  player,
+  score,
+  NTILE(2) OVER (PARTITION BY team_name ORDER BY score ASC) AS NTILE
+FROM score_board s
+ORDER BY team_name, score;
+----
+Mongrels	Apu	350	1
+Mongrels	Ned	666	1
+Mongrels	Meg	1030	2
+Mongrels	Burns	1270	2
+Simpsons	Homer	1	1
+Simpsons	Lisa	710	1
+Simpsons	Marge	990	2
+Simpsons	Bart	2010	2
+
+query TTII
+SELECT
+  team_name,
+  player,
+  score,
+  NTILE(2) OVER (ORDER BY score ASC) AS NTILE
+FROM score_board s
+ORDER BY score;
+----
+Simpsons	Homer	1	1
+Mongrels	Apu	350	1
+Mongrels	Ned	666	1
+Simpsons	Lisa	710	1
+Simpsons	Marge	990	2
+Mongrels	Meg	1030	2
+Mongrels	Burns	1270	2
+Simpsons	Bart	2010	2
+
+query TTII
+SELECT
+  team_name,
+  player,
+  score,
+  NTILE(1000) OVER (PARTITION BY team_name ORDER BY score ASC) AS NTILE
+FROM score_board s
+ORDER BY team_name, score;
+----
+Mongrels	Apu	350	1
+Mongrels	Ned	666	2
+Mongrels	Meg	1030	3
+Mongrels	Burns	1270	4
+Simpsons	Homer	1	1
+Simpsons	Lisa	710	2
+Simpsons	Marge	990	3
+Simpsons	Bart	2010	4
+
+query TTII
+SELECT
+  team_name,
+  player,
+  score,
+  NTILE(1) OVER (PARTITION BY team_name ORDER BY score ASC) AS NTILE
+FROM score_board s
+ORDER BY team_name, score;
+----
+Mongrels	Apu	350	1
+Mongrels	Ned	666	1
+Mongrels	Meg	1030	1
+Mongrels	Burns	1270	1
+Simpsons	Homer	1	1
+Simpsons	Lisa	710	1
+Simpsons	Marge	990	1
+Simpsons	Bart	2010	1
+
+# incorrect number of parameters for ntile
+query error DataFusion error: Execution error: NTILE requires a positive integer, but finds NULL
+SELECT
+  NTILE(NULL) OVER (PARTITION BY team_name ORDER BY score ASC) AS NTILE
+FROM score_board s
+
+query error DataFusion error: Execution error: NTILE requires a positive integer
+SELECT
+  NTILE(-1) OVER (PARTITION BY team_name ORDER BY score ASC) AS NTILE
+FROM score_board s
+
+query error DataFusion error: Execution error: NTILE requires a positive integer
+SELECT
+  NTILE(0) OVER (PARTITION BY team_name ORDER BY score ASC) AS NTILE
+FROM score_board s
+
+statement error
+SELECT
+  NTILE() OVER (PARTITION BY team_name ORDER BY score ASC) AS NTILE
+FROM score_board s
+
+statement error
+SELECT
+  NTILE(1,2) OVER (PARTITION BY team_name ORDER BY score ASC) AS NTILE
+FROM score_board s
+
+statement error
+SELECT
+  NTILE(1,2,3) OVER (PARTITION BY team_name ORDER BY score ASC) AS NTILE
+FROM score_board s
+
+statement error
+SELECT
+  NTILE(1,2,3,4) OVER (PARTITION BY team_name ORDER BY score ASC) AS NTILE
+FROM score_board s
+
+statement ok
+DROP TABLE score_board;
+
+# Regularize RANGE frame
+query error DataFusion error: Error during planning: RANGE requires exactly one ORDER BY column
+select a,
+       rank() over (order by a, a + 1 RANGE BETWEEN UNBOUNDED PRECEDING AND 1 FOLLOWING) rnk
+       from (select 1 a union select 2 a) q ORDER BY a
+
+query II
+select a,
+       rank() over (order by a RANGE BETWEEN UNBOUNDED PRECEDING AND 1 FOLLOWING) rnk
+       from (select 1 a union select 2 a) q ORDER BY a
+----
+1 1
+2 2
+
+query error DataFusion error: Error during planning: RANGE requires exactly one ORDER BY column
+select a,
+       rank() over (RANGE BETWEEN UNBOUNDED PRECEDING AND 1 FOLLOWING) rnk
+       from (select 1 a union select 2 a) q ORDER BY a
+
+query II
+select a,
+       rank() over (order by a, a + 1 RANGE BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) rnk
+       from (select 1 a union select 2 a) q ORDER BY a
+----
+1 1
+2 2
+
+query II
+select a,
+       rank() over (order by a RANGE BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) rnk
+       from (select 1 a union select 2 a) q ORDER BY a
+----
+1 1
+2 2
+
+query II
+select a,
+      rank() over (RANGE BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) rnk
+      from (select 1 a union select 2 a) q ORDER BY a
+----
+1 1
+2 1
+
+query I
+select rank() over (RANGE between UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) rnk
+       from (select 1 a union select 2 a) q;
+----
+1
+1
+
+query II
+select a,
+       rank() over (order by 1 RANGE BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) rnk
+       from (select 1 a union select 2 a) q ORDER BY a
+----
+1 1
+2 1
+
+query II
+select a,
+       rank() over (order by null RANGE BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) rnk
+       from (select 1 a union select 2 a) q ORDER BY a
+----
+1 1
+2 1
+
+# support scalar value in ORDER BY 
+query I
+select rank() over (order by 1) rnk from (select 1 a union all select 2 a) x
+----
+1
+1
+
+# support scalar value in ORDER BY
+query I
+select dense_rank() over () rnk from (select 1 a union all select 2 a) x
+----
+1
+1
+
+# support scalar value in both ORDER BY and PARTITION BY, RANK function
+query IIIIII
+select rank() over (partition by 1 order by 1) rnk,
+       rank() over (partition by a, 1 order by 1) rnk1,
+       rank() over (partition by a, 1 order by a, 1) rnk2,
+       rank() over (partition by 1) rnk3,
+       rank() over (partition by null) rnk4,
+       rank() over (partition by 1, null, a) rnk5
+from (select 1 a union all select 2 a) x
+----
+1 1 1 1 1 1
+1 1 1 1 1 1
+
+# support scalar value in both ORDER BY and PARTITION BY, ROW_NUMBER function
+query IIIIII
+select row_number() over (partition by 1 order by 1) rn,
+       row_number() over (partition by a, 1 order by 1) rn1,
+       row_number() over (partition by a, 1 order by a, 1) rn2,
+       row_number() over (partition by 1) rn3,
+       row_number() over (partition by null) rn4,
+       row_number() over (partition by 1, null, a) rn5
+from (select 1 a union all select 2 a) x;
+----
+1 1 1 1 1 1
+2 1 1 2 2 1

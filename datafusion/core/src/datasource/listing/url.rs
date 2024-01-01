@@ -20,6 +20,7 @@ use std::fs;
 use crate::datasource::object_store::ObjectStoreUrl;
 use crate::execution::context::SessionState;
 use datafusion_common::{DataFusionError, Result};
+use datafusion_optimizer::OptimizerConfig;
 use futures::stream::BoxStream;
 use futures::{StreamExt, TryStreamExt};
 use glob::Pattern;
@@ -116,6 +117,7 @@ impl ListingTableUrl {
     /// Get object store for specified input_url
     /// if input_url is actually not a url, we assume it is a local file path
     /// if we have a local path, create it if not exists so ListingTableUrl::parse works
+    #[deprecated(note = "Use parse")]
     pub fn parse_create_local_if_not_exists(
         s: impl AsRef<str>,
         is_directory: bool,
@@ -131,6 +133,10 @@ impl ListingTableUrl {
                     if is_directory {
                         fs::create_dir_all(path)?;
                     } else {
+                        // ensure parent directory exists
+                        if let Some(parent) = path.parent() {
+                            fs::create_dir_all(parent)?;
+                        }
                         fs::File::create(path)?;
                     }
                 }
@@ -179,14 +185,27 @@ impl ListingTableUrl {
     }
 
     /// Returns `true` if `path` matches this [`ListingTableUrl`]
-    pub fn contains(&self, path: &Path) -> bool {
+    pub fn contains(&self, path: &Path, ignore_subdirectory: bool) -> bool {
         match self.strip_prefix(path) {
             Some(mut segments) => match &self.glob {
                 Some(glob) => {
-                    let stripped = segments.join("/");
-                    glob.matches(&stripped)
+                    if ignore_subdirectory {
+                        segments
+                            .next()
+                            .map_or(false, |file_name| glob.matches(file_name))
+                    } else {
+                        let stripped = segments.join("/");
+                        glob.matches(&stripped)
+                    }
                 }
-                None => true,
+                None => {
+                    if ignore_subdirectory {
+                        let has_subdirectory = segments.collect::<Vec<_>>().len() > 1;
+                        !has_subdirectory
+                    } else {
+                        true
+                    }
+                }
             },
             None => false,
         }
@@ -218,6 +237,8 @@ impl ListingTableUrl {
         store: &'a dyn ObjectStore,
         file_extension: &'a str,
     ) -> Result<BoxStream<'a, Result<ObjectMeta>>> {
+        let exec_options = &ctx.options().execution;
+        let ignore_subdirectory = exec_options.listing_table_ignore_subdirectory;
         // If the prefix is a file, use a head request, otherwise list
         let list = match self.is_collection() {
             true => match ctx.runtime_env().cache_manager.get_list_files_cache() {
@@ -241,7 +262,7 @@ impl ListingTableUrl {
             .try_filter(move |meta| {
                 let path = &meta.location;
                 let extension_match = path.as_ref().ends_with(file_extension);
-                let glob_match = self.contains(path);
+                let glob_match = self.contains(path, ignore_subdirectory);
                 futures::future::ready(extension_match && glob_match)
             })
             .map_err(DataFusionError::ObjectStore)

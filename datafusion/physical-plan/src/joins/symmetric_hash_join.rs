@@ -36,18 +36,19 @@ use crate::joins::hash_join::{build_equal_condition_join_indices, update_hash};
 use crate::joins::stream_join_utils::{
     calculate_filter_expr_intervals, combine_two_batches,
     convert_sort_expr_with_filter_schema, get_pruning_anti_indices,
-    get_pruning_semi_indices, record_visited_indices, EagerJoinStream,
-    EagerJoinStreamState, PruningJoinHashMap, SortedFilterExpr, StreamJoinStateResult,
+    get_pruning_semi_indices, prepare_sorted_exprs, record_visited_indices,
+    EagerJoinStream, EagerJoinStreamState, PruningJoinHashMap, SortedFilterExpr,
+    StreamJoinMetrics,
 };
 use crate::joins::utils::{
     build_batch_from_indices, build_join_schema, check_join_is_valid,
-    partitioned_join_output_partitioning, prepare_sorted_exprs, ColumnIndex, JoinFilter,
-    JoinOn,
+    partitioned_join_output_partitioning, ColumnIndex, JoinFilter, JoinOn,
+    StatefulStreamResult,
 };
 use crate::{
     expressions::{Column, PhysicalSortExpr},
     joins::StreamJoinPartitionMode,
-    metrics::{self, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet},
+    metrics::{ExecutionPlanMetricsSet, MetricsSet},
     DisplayAs, DisplayFormatType, Distribution, EquivalenceProperties, ExecutionPlan,
     Partitioning, RecordBatchStream, SendableRecordBatchStream, Statistics,
 };
@@ -182,65 +183,6 @@ pub struct SymmetricHashJoinExec {
     pub(crate) null_equals_null: bool,
     /// Partition Mode
     mode: StreamJoinPartitionMode,
-}
-
-#[derive(Debug)]
-pub struct StreamJoinSideMetrics {
-    /// Number of batches consumed by this operator
-    pub(crate) input_batches: metrics::Count,
-    /// Number of rows consumed by this operator
-    pub(crate) input_rows: metrics::Count,
-}
-
-/// Metrics for HashJoinExec
-#[derive(Debug)]
-pub struct StreamJoinMetrics {
-    /// Number of left batches/rows consumed by this operator
-    pub(crate) left: StreamJoinSideMetrics,
-    /// Number of right batches/rows consumed by this operator
-    pub(crate) right: StreamJoinSideMetrics,
-    /// Memory used by sides in bytes
-    pub(crate) stream_memory_usage: metrics::Gauge,
-    /// Number of batches produced by this operator
-    pub(crate) output_batches: metrics::Count,
-    /// Number of rows produced by this operator
-    pub(crate) output_rows: metrics::Count,
-}
-
-impl StreamJoinMetrics {
-    pub fn new(partition: usize, metrics: &ExecutionPlanMetricsSet) -> Self {
-        let input_batches =
-            MetricBuilder::new(metrics).counter("input_batches", partition);
-        let input_rows = MetricBuilder::new(metrics).counter("input_rows", partition);
-        let left = StreamJoinSideMetrics {
-            input_batches,
-            input_rows,
-        };
-
-        let input_batches =
-            MetricBuilder::new(metrics).counter("input_batches", partition);
-        let input_rows = MetricBuilder::new(metrics).counter("input_rows", partition);
-        let right = StreamJoinSideMetrics {
-            input_batches,
-            input_rows,
-        };
-
-        let stream_memory_usage =
-            MetricBuilder::new(metrics).gauge("stream_memory_usage", partition);
-
-        let output_batches =
-            MetricBuilder::new(metrics).counter("output_batches", partition);
-
-        let output_rows = MetricBuilder::new(metrics).output_rows(partition);
-
-        Self {
-            left,
-            right,
-            output_batches,
-            stream_memory_usage,
-            output_rows,
-        }
-    }
 }
 
 impl SymmetricHashJoinExec {
@@ -995,7 +937,7 @@ impl OneSideHashJoiner {
             prune_length,
             self.deleted_offset as u64,
             HASHMAP_SHRINK_SCALE_FACTOR,
-        )?;
+        );
         // Remove pruned rows from the visited rows set:
         for row in self.deleted_offset..(self.deleted_offset + prune_length) {
             self.visited_rows.remove(&row);
@@ -1014,13 +956,13 @@ impl EagerJoinStream for SymmetricHashJoinStream {
     fn process_batch_from_right(
         &mut self,
         batch: RecordBatch,
-    ) -> Result<StreamJoinStateResult<Option<RecordBatch>>> {
+    ) -> Result<StatefulStreamResult<Option<RecordBatch>>> {
         self.perform_join_for_given_side(batch, JoinSide::Right)
             .map(|maybe_batch| {
                 if maybe_batch.is_some() {
-                    StreamJoinStateResult::Ready(maybe_batch)
+                    StatefulStreamResult::Ready(maybe_batch)
                 } else {
-                    StreamJoinStateResult::Continue
+                    StatefulStreamResult::Continue
                 }
             })
     }
@@ -1028,13 +970,13 @@ impl EagerJoinStream for SymmetricHashJoinStream {
     fn process_batch_from_left(
         &mut self,
         batch: RecordBatch,
-    ) -> Result<StreamJoinStateResult<Option<RecordBatch>>> {
+    ) -> Result<StatefulStreamResult<Option<RecordBatch>>> {
         self.perform_join_for_given_side(batch, JoinSide::Left)
             .map(|maybe_batch| {
                 if maybe_batch.is_some() {
-                    StreamJoinStateResult::Ready(maybe_batch)
+                    StatefulStreamResult::Ready(maybe_batch)
                 } else {
-                    StreamJoinStateResult::Continue
+                    StatefulStreamResult::Continue
                 }
             })
     }
@@ -1042,20 +984,20 @@ impl EagerJoinStream for SymmetricHashJoinStream {
     fn process_batch_after_left_end(
         &mut self,
         right_batch: RecordBatch,
-    ) -> Result<StreamJoinStateResult<Option<RecordBatch>>> {
+    ) -> Result<StatefulStreamResult<Option<RecordBatch>>> {
         self.process_batch_from_right(right_batch)
     }
 
     fn process_batch_after_right_end(
         &mut self,
         left_batch: RecordBatch,
-    ) -> Result<StreamJoinStateResult<Option<RecordBatch>>> {
+    ) -> Result<StatefulStreamResult<Option<RecordBatch>>> {
         self.process_batch_from_left(left_batch)
     }
 
     fn process_batches_before_finalization(
         &mut self,
-    ) -> Result<StreamJoinStateResult<Option<RecordBatch>>> {
+    ) -> Result<StatefulStreamResult<Option<RecordBatch>>> {
         // Get the left side results:
         let left_result = build_side_determined_results(
             &self.left,
@@ -1083,9 +1025,9 @@ impl EagerJoinStream for SymmetricHashJoinStream {
             // Update the metrics:
             self.metrics.output_batches.add(1);
             self.metrics.output_rows.add(batch.num_rows());
-            return Ok(StreamJoinStateResult::Ready(result));
+            return Ok(StatefulStreamResult::Ready(result));
         }
-        Ok(StreamJoinStateResult::Continue)
+        Ok(StatefulStreamResult::Continue)
     }
 
     fn right_stream(&mut self) -> &mut SendableRecordBatchStream {

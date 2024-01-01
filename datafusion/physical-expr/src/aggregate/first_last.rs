@@ -31,7 +31,7 @@ use arrow::compute::{self, lexsort_to_indices, SortColumn};
 use arrow::datatypes::{DataType, Field};
 use arrow_schema::SortOptions;
 use datafusion_common::utils::{compare_rows, get_arrayref_at_indices, get_row_at_idx};
-use datafusion_common::{DataFusionError, Result, ScalarValue};
+use datafusion_common::{arrow_datafusion_err, DataFusionError, Result, ScalarValue};
 use datafusion_expr::Accumulator;
 
 /// FIRST_VALUE aggregate expression
@@ -60,6 +60,31 @@ impl FirstValue {
             expr,
             ordering_req,
         }
+    }
+
+    /// Returns the name of the aggregate expression.
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Returns the input data type of the aggregate expression.
+    pub fn input_data_type(&self) -> &DataType {
+        &self.input_data_type
+    }
+
+    /// Returns the data types of the order-by columns.
+    pub fn order_by_data_types(&self) -> &Vec<DataType> {
+        &self.order_by_data_types
+    }
+
+    /// Returns the expression associated with the aggregate function.
+    pub fn expr(&self) -> &Arc<dyn PhysicalExpr> {
+        &self.expr
+    }
+
+    /// Returns the lexical ordering requirements of the aggregate expression.
+    pub fn ordering_req(&self) -> &LexOrdering {
+        &self.ordering_req
     }
 }
 
@@ -285,6 +310,31 @@ impl LastValue {
             ordering_req,
         }
     }
+
+    /// Returns the name of the aggregate expression.
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Returns the input data type of the aggregate expression.
+    pub fn input_data_type(&self) -> &DataType {
+        &self.input_data_type
+    }
+
+    /// Returns the data types of the order-by columns.
+    pub fn order_by_data_types(&self) -> &Vec<DataType> {
+        &self.order_by_data_types
+    }
+
+    /// Returns the expression associated with the aggregate function.
+    pub fn expr(&self) -> &Arc<dyn PhysicalExpr> {
+        &self.expr
+    }
+
+    /// Returns the lexical ordering requirements of the aggregate expression.
+    pub fn ordering_req(&self) -> &LexOrdering {
+        &self.ordering_req
+    }
 }
 
 impl AggregateExpr for LastValue {
@@ -491,7 +541,7 @@ fn filter_states_according_to_is_set(
 ) -> Result<Vec<ArrayRef>> {
     states
         .iter()
-        .map(|state| compute::filter(state, flags).map_err(DataFusionError::ArrowError))
+        .map(|state| compute::filter(state, flags).map_err(|e| arrow_datafusion_err!(e)))
         .collect::<Result<Vec<_>>>()
 }
 

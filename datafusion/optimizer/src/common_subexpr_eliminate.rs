@@ -29,7 +29,7 @@ use datafusion_common::tree_node::{
 use datafusion_common::{
     internal_err, Column, DFField, DFSchema, DFSchemaRef, DataFusionError, Result,
 };
-use datafusion_expr::expr::Alias;
+use datafusion_expr::expr::{is_volatile, Alias};
 use datafusion_expr::logical_plan::{
     Aggregate, Filter, LogicalPlan, Projection, Sort, Window,
 };
@@ -113,6 +113,8 @@ impl CommonSubexprEliminate {
         let Projection { expr, input, .. } = projection;
         let input_schema = Arc::clone(input.schema());
         let mut expr_set = ExprSet::new();
+
+        // Visit expr list and build expr identifier to occuring count map (`expr_set`).
         let arrays = to_arrays(expr, input_schema, &mut expr_set, ExprMask::Normal)?;
 
         let (mut new_expr, new_input) =
@@ -509,15 +511,14 @@ enum ExprMask {
     /// - [`Sort`](Expr::Sort)
     /// - [`Wildcard`](Expr::Wildcard)
     /// - [`AggregateFunction`](Expr::AggregateFunction)
-    /// - [`AggregateUDF`](Expr::AggregateUDF)
     Normal,
 
-    /// Like [`Normal`](Self::Normal), but includes [`AggregateFunction`](Expr::AggregateFunction) and [`AggregateUDF`](Expr::AggregateUDF).
+    /// Like [`Normal`](Self::Normal), but includes [`AggregateFunction`](Expr::AggregateFunction).
     NormalAndAggregates,
 }
 
 impl ExprMask {
-    fn ignores(&self, expr: &Expr) -> bool {
+    fn ignores(&self, expr: &Expr) -> Result<bool> {
         let is_normal_minus_aggregates = matches!(
             expr,
             Expr::Literal(..)
@@ -528,15 +529,14 @@ impl ExprMask {
                 | Expr::Wildcard { .. }
         );
 
-        let is_aggr = matches!(
-            expr,
-            Expr::AggregateFunction(..) | Expr::AggregateUDF { .. }
-        );
+        let is_volatile = is_volatile(expr)?;
 
-        match self {
-            Self::Normal => is_normal_minus_aggregates || is_aggr,
-            Self::NormalAndAggregates => is_normal_minus_aggregates,
-        }
+        let is_aggr = matches!(expr, Expr::AggregateFunction(..));
+
+        Ok(match self {
+            Self::Normal => is_volatile || is_normal_minus_aggregates || is_aggr,
+            Self::NormalAndAggregates => is_volatile || is_normal_minus_aggregates,
+        })
     }
 }
 
@@ -628,7 +628,7 @@ impl TreeNodeVisitor for ExprIdentifierVisitor<'_> {
 
         let (idx, sub_expr_desc) = self.pop_enter_mark();
         // skip exprs should not be recognize.
-        if self.expr_mask.ignores(expr) {
+        if self.expr_mask.ignores(expr)? {
             self.id_array[idx].0 = self.series_number;
             let desc = Self::desc_expr(expr);
             self.visit_stack.push(VisitRecord::ExprItem(desc));
@@ -908,7 +908,7 @@ mod test {
         let accumulator: AccumulatorFactoryFunction = Arc::new(|_| unimplemented!());
         let state_type: StateTypeFunction = Arc::new(|_| unimplemented!());
         let udf_agg = |inner: Expr| {
-            Expr::AggregateUDF(datafusion_expr::expr::AggregateUDF::new(
+            Expr::AggregateFunction(datafusion_expr::expr::AggregateFunction::new_udf(
                 Arc::new(AggregateUDF::new(
                     "my_agg",
                     &Signature::exact(vec![DataType::UInt32], Volatility::Stable),
@@ -917,6 +917,7 @@ mod test {
                     &state_type,
                 )),
                 vec![inner],
+                false,
                 None,
                 None,
             ))

@@ -15,7 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::any::Any;
+use std::fmt::Debug;
+use std::ops::Range;
+use std::sync::Arc;
+
 use crate::{PhysicalExpr, PhysicalSortExpr};
+
 use arrow::array::{new_empty_array, Array, ArrayRef};
 use arrow::compute::kernels::sort::SortColumn;
 use arrow::compute::SortOptions;
@@ -25,13 +31,9 @@ use datafusion_common::{internal_err, DataFusionError, Result, ScalarValue};
 use datafusion_expr::window_state::{
     PartitionBatchState, WindowAggState, WindowFrameContext,
 };
-use datafusion_expr::PartitionEvaluator;
-use datafusion_expr::{Accumulator, WindowFrame};
+use datafusion_expr::{Accumulator, PartitionEvaluator, WindowFrame};
+
 use indexmap::IndexMap;
-use std::any::Any;
-use std::fmt::Debug;
-use std::ops::Range;
-use std::sync::Arc;
 
 /// Common trait for [window function] implementations
 ///
@@ -272,7 +274,7 @@ pub enum WindowFn {
 #[derive(Debug, Clone, Default)]
 pub struct RankState {
     /// The last values for rank as these values change, we increase n_rank
-    pub last_rank_data: Vec<ScalarValue>,
+    pub last_rank_data: Option<Vec<ScalarValue>>,
     /// The index where last_rank_boundary is started
     pub last_rank_boundary: usize,
     /// Keep the number of entries in current rank
@@ -292,7 +294,7 @@ pub struct NumRowsState {
 pub enum NthValueKind {
     First,
     Last,
-    Nth(u32),
+    Nth(i64),
 }
 
 #[derive(Debug, Clone)]

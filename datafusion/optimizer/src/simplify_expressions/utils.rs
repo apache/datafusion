@@ -365,11 +365,7 @@ pub fn simpl_log(current_args: Vec<Expr>, info: &dyn SimplifyInfo) -> Result<Exp
             )?))
         }
         Expr::ScalarFunction(ScalarFunction {
-            func_def:
-                ScalarFunctionDefinition::BuiltIn {
-                    fun: BuiltinScalarFunction::Power,
-                    ..
-                },
+            func_def: ScalarFunctionDefinition::BuiltIn(BuiltinScalarFunction::Power),
             args,
         }) if base == &args[0] => Ok(args[1].clone()),
         _ => {
@@ -409,11 +405,7 @@ pub fn simpl_power(current_args: Vec<Expr>, info: &dyn SimplifyInfo) -> Result<E
             Ok(base.clone())
         }
         Expr::ScalarFunction(ScalarFunction {
-            func_def:
-                ScalarFunctionDefinition::BuiltIn {
-                    fun: BuiltinScalarFunction::Log,
-                    ..
-                },
+            func_def: ScalarFunctionDefinition::BuiltIn(BuiltinScalarFunction::Log),
             args,
         }) if base == &args[0] => Ok(args[1].clone()),
         _ => Ok(Expr::ScalarFunction(ScalarFunction::new(

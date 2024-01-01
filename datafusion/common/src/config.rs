@@ -273,6 +273,11 @@ config_namespace! {
         /// memory consumption
         pub max_buffered_batches_per_output_file: usize, default = 2
 
+        /// Should sub directories be ignored when scanning directories for data
+        /// files. Defaults to true (ignores subdirectories), consistent with
+        /// Hive. Note that this setting does not affect reading partitioned
+        /// tables (e.g. `/table/year=2021/month=01/data.parquet`).
+        pub listing_table_ignore_subdirectory: bool, default = true
     }
 }
 
@@ -524,6 +529,11 @@ config_namespace! {
         /// The maximum estimated size in bytes for one input side of a HashJoin
         /// will be collected into a single partition
         pub hash_join_single_partition_threshold: usize, default = 1024 * 1024
+
+        /// The default filter selectivity used by Filter Statistics
+        /// when an exact selectivity cannot be determined. Valid values are
+        /// between 0 (no selectivity) and 100 (all rows are selected).
+        pub default_filter_selectivity: u8, default = 20
     }
 }
 
@@ -877,6 +887,7 @@ config_field!(String);
 config_field!(bool);
 config_field!(usize);
 config_field!(f64);
+config_field!(u8);
 config_field!(u64);
 
 /// An implementation trait used to recursively walk configuration

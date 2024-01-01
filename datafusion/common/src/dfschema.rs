@@ -199,9 +199,16 @@ impl DFSchema {
     pub fn with_functional_dependencies(
         mut self,
         functional_dependencies: FunctionalDependencies,
-    ) -> Self {
-        self.functional_dependencies = functional_dependencies;
-        self
+    ) -> Result<Self> {
+        if functional_dependencies.is_valid(self.fields.len()) {
+            self.functional_dependencies = functional_dependencies;
+            Ok(self)
+        } else {
+            _plan_err!(
+                "Invalid functional dependency: {:?}",
+                functional_dependencies
+            )
+        }
     }
 
     /// Create a new schema that contains the fields from this schema followed by the fields
@@ -337,6 +344,22 @@ impl DFSchema {
         self.fields
             .iter()
             .filter(|field| field.qualifier().map(|q| q.eq(qualifier)).unwrap_or(false))
+            .collect()
+    }
+
+    /// Find all fields indices having the given qualifier
+    pub fn fields_indices_with_qualified(
+        &self,
+        qualifier: &TableReference,
+    ) -> Vec<usize> {
+        self.fields
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, field)| {
+                field
+                    .qualifier()
+                    .and_then(|q| q.eq(qualifier).then_some(idx))
+            })
             .collect()
     }
 
@@ -1476,8 +1499,8 @@ mod tests {
             DFSchema::new_with_metadata([a, b].to_vec(), HashMap::new()).unwrap(),
         );
         let schema: Schema = df_schema.as_ref().clone().into();
-        let a_df = df_schema.fields.get(0).unwrap().field();
-        let a_arrow = schema.fields.get(0).unwrap();
+        let a_df = df_schema.fields.first().unwrap().field();
+        let a_arrow = schema.fields.first().unwrap();
         assert_eq!(a_df.metadata(), a_arrow.metadata())
     }
 

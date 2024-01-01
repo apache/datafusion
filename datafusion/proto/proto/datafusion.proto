@@ -74,6 +74,7 @@ message LogicalPlanNode {
     PrepareNode prepare = 26;
     DropViewNode drop_view = 27;
     DistinctOnNode distinct_on = 28;
+    CopyToNode copy_to = 29;
   }
 }
 
@@ -216,6 +217,7 @@ message CreateExternalTableNode {
   bool unbounded = 14;
   map<string, string> options = 11;
   Constraints constraints = 15;
+  map<string, LogicalExprNode> column_defaults = 16;
 }
 
 message PrepareNode {
@@ -316,6 +318,26 @@ message DistinctOnNode {
   LogicalPlanNode input = 4;
 }
 
+message CopyToNode {
+    LogicalPlanNode input = 1;
+    string output_url = 2;
+    bool single_file_output = 3;
+    oneof CopyOptions {
+        SQLOptions sql_options = 4;
+        FileTypeWriterOptions writer_options = 5;
+    }
+    string file_type = 6;
+}
+
+message SQLOptions {
+  repeated SQLOption option = 1;
+}
+
+message SQLOption {
+    string key = 1;
+    string value = 2;
+}
+
 message UnionNode {
   repeated LogicalPlanNode inputs = 1;
 }
@@ -408,7 +430,7 @@ message LogicalExprNode {
 }
 
 message Wildcard {
-  optional string qualifier = 1;
+  string qualifier = 1;
 }
 
 message PlaceholderNode {
@@ -642,6 +664,9 @@ enum ScalarFunction {
   ArrayPopFront = 124;
   Levenshtein = 125;
   SubstrIndex = 126;
+  FindInSet = 127;
+  ArraySort = 128;
+  ArrayDistinct = 129;
 }
 
 message ScalarFunctionNode {
@@ -837,6 +862,8 @@ message Field {
   // for complex data types like structs, unions
   repeated Field children = 4;
   map<string, string> metadata = 5;
+  int64 dict_id = 6;
+  bool dict_ordered = 7;
 }
 
 message FixedSizeBinary{
@@ -1158,6 +1185,8 @@ message PhysicalPlanNode {
     AnalyzeExecNode analyze = 23;
     JsonSinkExecNode json_sink = 24;
     SymmetricHashJoinExecNode symmetric_hash_join = 25;
+    InterleaveExecNode  interleave = 26;
+    PlaceholderRowExecNode placeholder_row = 27;
   }
 }
 
@@ -1177,11 +1206,26 @@ message PartitionColumn {
 message FileTypeWriterOptions {
   oneof FileType {
     JsonWriterOptions json_options = 1;
+    ParquetWriterOptions parquet_options = 2;
   }
 }
 
 message JsonWriterOptions {
   CompressionTypeVariant compression = 1;
+}
+
+message ParquetWriterOptions {
+    WriterProperties writer_properties = 1;
+}
+
+message WriterProperties {
+  uint64 data_page_size_limit = 1;
+  uint64 dictionary_page_size_limit = 2;
+  uint64 data_page_row_count_limit = 3;
+  uint64 write_batch_size = 4;
+  uint64 max_row_group_size = 5;
+  string writer_version = 6;
+  string created_by = 7;
 }
 
 message FileSinkConfig {
@@ -1193,9 +1237,8 @@ message FileSinkConfig {
   Schema output_schema = 4;
   repeated PartitionColumn table_partition_cols = 5;
   bool single_file_output = 7;
-  bool unbounded_input = 8;
-  bool overwrite = 9;
-  FileTypeWriterOptions file_type_writer_options = 10;
+  bool overwrite = 8;
+  FileTypeWriterOptions file_type_writer_options = 9;
 }
 
 message JsonSink {
@@ -1367,6 +1410,7 @@ message PhysicalNegativeNode {
 message FilterExecNode {
   PhysicalPlanNode input = 1;
   PhysicalExprNode expr = 2;
+  uint32 default_filter_selectivity = 3;
 }
 
 message FileGroup {
@@ -1450,6 +1494,10 @@ message SymmetricHashJoinExecNode {
   JoinFilter filter = 8;
 }
 
+message InterleaveExecNode {
+  repeated PhysicalPlanNode inputs = 1;
+}
+
 message UnionExecNode {
   repeated PhysicalPlanNode inputs = 1;
 }
@@ -1483,8 +1531,11 @@ message JoinOn {
 }
 
 message EmptyExecNode {
-  bool produce_one_row = 1;
-  Schema schema = 2;
+  Schema schema = 1;
+}
+
+message PlaceholderRowExecNode {
+  Schema schema = 1;
 }
 
 message ProjectionExecNode {
@@ -1501,7 +1552,7 @@ enum AggregateMode {
   SINGLE_PARTITIONED = 4;
 }
 
-message PartiallySortedPartitionSearchMode {
+message PartiallySortedInputOrderMode {
   repeated uint64 columns = 6;
 }
 
@@ -1510,9 +1561,9 @@ message WindowAggExecNode {
   repeated PhysicalWindowExprNode window_expr = 2;
   repeated PhysicalExprNode partition_keys = 5;
   // Set optional to `None` for `BoundedWindowAggExec`.
-  oneof partition_search_mode {
+  oneof input_order_mode {
     EmptyMessage linear = 7;
-    PartiallySortedPartitionSearchMode partially_sorted = 8;
+    PartiallySortedInputOrderMode partially_sorted = 8;
     EmptyMessage sorted = 9;
   }
 }
@@ -1537,7 +1588,6 @@ message AggregateExecNode {
   repeated PhysicalExprNode null_expr = 8;
   repeated bool groups = 9;
   repeated MaybeFilter filter_expr = 10;
-  repeated MaybePhysicalSortExprs order_by_expr = 11;
 }
 
 message GlobalLimitExecNode {

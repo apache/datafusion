@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::convert::TryFrom;
 use std::sync::Arc;
 
 use arrow::{
@@ -80,8 +79,6 @@ pub mod expr;
 pub mod group_by;
 pub mod joins;
 pub mod order;
-pub mod parquet;
-pub mod parquet_schema;
 pub mod partitioned_csv;
 pub mod predicates;
 pub mod references;

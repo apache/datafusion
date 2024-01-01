@@ -28,8 +28,8 @@ use datafusion_common::{
     DataFusionError, Result, ScalarValue,
 };
 use datafusion_expr::expr::{
-    self, Between, BinaryExpr, Case, Exists, InList, InSubquery, Like, ScalarFunction,
-    WindowFunction,
+    self, AggregateFunctionDefinition, Between, BinaryExpr, Case, Exists, InList,
+    InSubquery, Like, ScalarFunction, WindowFunction,
 };
 use datafusion_expr::expr_rewriter::rewrite_preserving_name;
 use datafusion_expr::expr_schema::cast_subquery;
@@ -42,16 +42,15 @@ use datafusion_expr::type_coercion::other::{
     get_coerce_type_for_case_expression, get_coerce_type_for_list,
 };
 use datafusion_expr::type_coercion::{is_datetime, is_utf8_or_large_utf8};
+use datafusion_expr::utils::merge_schema;
 use datafusion_expr::{
     is_false, is_not_false, is_not_true, is_not_unknown, is_true, is_unknown,
     type_coercion, window_function, AggregateFunction, BuiltinScalarFunction, Expr,
-    LogicalPlan, Operator, Projection, ScalarFunctionDefinition, WindowFrame,
-    WindowFrameBound, WindowFrameUnits,
+    ExprSchemable, LogicalPlan, Operator, Projection, ScalarFunctionDefinition,
+    Signature, WindowFrame, WindowFrameBound, WindowFrameUnits,
 };
-use datafusion_expr::{ExprSchemable, Signature};
 
 use crate::analyzer::AnalyzerRule;
-use crate::utils::merge_schema;
 
 #[derive(Default)]
 pub struct TypeCoercion {}
@@ -321,7 +320,7 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                 Ok(Expr::Case(case))
             }
             Expr::ScalarFunction(ScalarFunction { func_def, args }) => match func_def {
-                ScalarFunctionDefinition::BuiltIn { fun, .. } => {
+                ScalarFunctionDefinition::BuiltIn(fun) => {
                     let new_args = coerce_arguments_for_signature(
                         args.as_slice(),
                         &self.schema,
@@ -347,39 +346,39 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                 }
             },
             Expr::AggregateFunction(expr::AggregateFunction {
-                fun,
+                func_def,
                 args,
                 distinct,
                 filter,
                 order_by,
-            }) => {
-                let new_expr = coerce_agg_exprs_for_signature(
-                    &fun,
-                    &args,
-                    &self.schema,
-                    &fun.signature(),
-                )?;
-                let expr = Expr::AggregateFunction(expr::AggregateFunction::new(
-                    fun, new_expr, distinct, filter, order_by,
-                ));
-                Ok(expr)
-            }
-            Expr::AggregateUDF(expr::AggregateUDF {
-                fun,
-                args,
-                filter,
-                order_by,
-            }) => {
-                let new_expr = coerce_arguments_for_signature(
-                    args.as_slice(),
-                    &self.schema,
-                    fun.signature(),
-                )?;
-                let expr = Expr::AggregateUDF(expr::AggregateUDF::new(
-                    fun, new_expr, filter, order_by,
-                ));
-                Ok(expr)
-            }
+            }) => match func_def {
+                AggregateFunctionDefinition::BuiltIn(fun) => {
+                    let new_expr = coerce_agg_exprs_for_signature(
+                        &fun,
+                        &args,
+                        &self.schema,
+                        &fun.signature(),
+                    )?;
+                    let expr = Expr::AggregateFunction(expr::AggregateFunction::new(
+                        fun, new_expr, distinct, filter, order_by,
+                    ));
+                    Ok(expr)
+                }
+                AggregateFunctionDefinition::UDF(fun) => {
+                    let new_expr = coerce_arguments_for_signature(
+                        args.as_slice(),
+                        &self.schema,
+                        fun.signature(),
+                    )?;
+                    let expr = Expr::AggregateFunction(expr::AggregateFunction::new_udf(
+                        fun, new_expr, false, filter, order_by,
+                    ));
+                    Ok(expr)
+                }
+                AggregateFunctionDefinition::Name(_) => {
+                    internal_err!("Function `Expr` with name should be resolved.")
+                }
+            },
             Expr::WindowFunction(WindowFunction {
                 fun,
                 args,
@@ -504,7 +503,10 @@ fn coerce_window_frame(
     let target_type = match window_frame.units {
         WindowFrameUnits::Range => {
             if let Some(col_type) = current_types.first() {
-                if col_type.is_numeric() || is_utf8_or_large_utf8(col_type) {
+                if col_type.is_numeric()
+                    || is_utf8_or_large_utf8(col_type)
+                    || matches!(col_type, DataType::Null)
+                {
                     col_type
                 } else if is_datetime(col_type) {
                     &DataType::Interval(IntervalUnit::MonthDayNano)
@@ -588,46 +590,12 @@ fn coerce_arguments_for_fun(
             .collect::<Result<Vec<_>>>()?;
     }
 
-    if *fun == BuiltinScalarFunction::MakeArray {
-        // Find the final data type for the function arguments
-        let current_types = expressions
-            .iter()
-            .map(|e| e.get_type(schema))
-            .collect::<Result<Vec<_>>>()?;
-
-        let new_type = current_types
-            .iter()
-            .skip(1)
-            .fold(current_types.first().unwrap().clone(), |acc, x| {
-                comparison_coercion(&acc, x).unwrap_or(acc)
-            });
-
-        return expressions
-            .iter()
-            .zip(current_types)
-            .map(|(expr, from_type)| cast_array_expr(expr, &from_type, &new_type, schema))
-            .collect();
-    }
     Ok(expressions)
 }
 
 /// Cast `expr` to the specified type, if possible
 fn cast_expr(expr: &Expr, to_type: &DataType, schema: &DFSchema) -> Result<Expr> {
     expr.clone().cast_to(to_type, schema)
-}
-
-/// Cast array `expr` to the specified type, if possible
-fn cast_array_expr(
-    expr: &Expr,
-    from_type: &DataType,
-    to_type: &DataType,
-    schema: &DFSchema,
-) -> Result<Expr> {
-    if from_type.equals_datatype(&DataType::Null) {
-        Ok(expr.clone())
-    } else {
-        cast_expr(expr, to_type, schema)
-    }
 }
 
 /// Returns the coerced exprs for each `input_exprs`.
@@ -915,9 +883,10 @@ mod test {
             Arc::new(|_| Ok(Box::<AvgAccumulator>::default())),
             Arc::new(vec![DataType::UInt64, DataType::Float64]),
         );
-        let udaf = Expr::AggregateUDF(expr::AggregateUDF::new(
+        let udaf = Expr::AggregateFunction(expr::AggregateFunction::new_udf(
             Arc::new(my_avg),
             vec![lit(10i64)],
+            false,
             None,
             None,
         ));
@@ -942,9 +911,10 @@ mod test {
             &accumulator,
             &state_type,
         );
-        let udaf = Expr::AggregateUDF(expr::AggregateUDF::new(
+        let udaf = Expr::AggregateFunction(expr::AggregateFunction::new_udf(
             Arc::new(my_avg),
             vec![lit("10")],
+            false,
             None,
             None,
         ));

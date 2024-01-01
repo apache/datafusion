@@ -40,6 +40,7 @@ use datafusion::physical_plan::{
     functions, ColumnStatistics, Partitioning, PhysicalExpr, Statistics, WindowExpr,
 };
 use datafusion_common::file_options::json_writer::JsonWriterOptions;
+use datafusion_common::file_options::parquet_writer::ParquetWriterOptions;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::stats::Precision;
 use datafusion_common::{
@@ -52,6 +53,7 @@ use crate::logical_plan;
 use crate::protobuf;
 use crate::protobuf::physical_expr_node::ExprType;
 
+use crate::logical_plan::writer_properties_from_proto;
 use chrono::{TimeZone, Utc};
 use object_store::path::Path;
 use object_store::ObjectMeta;
@@ -526,7 +528,6 @@ pub fn parse_protobuf_file_scan_config(
         limit: proto.limit.as_ref().map(|sl| sl.limit as usize),
         table_partition_cols,
         output_ordering,
-        infinite_source: false,
     })
 }
 
@@ -740,7 +741,6 @@ impl TryFrom<&protobuf::FileSinkConfig> for FileSinkConfig {
             output_schema: Arc::new(convert_required!(conf.output_schema)?),
             table_partition_cols,
             single_file_output: conf.single_file_output,
-            unbounded_input: conf.unbounded_input,
             overwrite: conf.overwrite,
             file_type_writer_options: convert_required!(conf.file_type_writer_options)?,
         })
@@ -771,6 +771,11 @@ impl TryFrom<&protobuf::FileTypeWriterOptions> for FileTypeWriterOptions {
             protobuf::file_type_writer_options::FileType::JsonOptions(opts) => Ok(
                 Self::JSON(JsonWriterOptions::new(opts.compression().into())),
             ),
+            protobuf::file_type_writer_options::FileType::ParquetOptions(opt) => {
+                let props = opt.writer_properties.clone().unwrap_or_default();
+                let writer_properties = writer_properties_from_proto(&props)?;
+                Ok(Self::Parquet(ParquetWriterOptions::new(writer_properties)))
+            }
         }
     }
 }

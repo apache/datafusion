@@ -34,6 +34,7 @@ use datafusion_common::{
     internal_err, not_impl_err, plan_err, Column, DFSchema, DataFusionError, Result,
     ScalarValue,
 };
+use datafusion_expr::expr::AggregateFunctionDefinition;
 use datafusion_expr::expr::InList;
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::{
@@ -170,7 +171,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 Ok(Expr::ScalarFunction(ScalarFunction::new(
                     BuiltinScalarFunction::DatePart,
                     vec![
-                        Expr::Literal(ScalarValue::Utf8(Some(format!("{field}")))),
+                        Expr::Literal(ScalarValue::from(format!("{field}"))),
                         self.sql_expr_to_logical_expr(*expr, schema, planner_context)?,
                     ],
                 )))
@@ -554,7 +555,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         } = array_agg;
 
         let order_by = if let Some(order_by) = order_by {
-            Some(self.order_by_to_sort_expr(&order_by, input_schema, planner_context)?)
+            Some(self.order_by_to_sort_expr(
+                &order_by,
+                input_schema,
+                planner_context,
+                true,
+            )?)
         } else {
             None
         };
@@ -706,7 +712,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     ) -> Result<Expr> {
         match self.sql_expr_to_logical_expr(expr, schema, planner_context)? {
             Expr::AggregateFunction(expr::AggregateFunction {
-                fun,
+                func_def: AggregateFunctionDefinition::BuiltIn(fun),
                 args,
                 distinct,
                 order_by,
@@ -738,7 +744,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             SQLExpr::Value(
                 Value::SingleQuotedString(s) | Value::DoubleQuotedString(s),
             ) => GetFieldAccess::NamedStructField {
-                name: ScalarValue::Utf8(Some(s)),
+                name: ScalarValue::from(s),
             },
             SQLExpr::JsonAccess {
                 left,

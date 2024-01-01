@@ -89,10 +89,6 @@ impl ExecutionPlan for AvroExec {
         Partitioning::UnknownPartitioning(self.base_config.file_groups.len())
     }
 
-    fn unbounded_output(&self, _: &[bool]) -> Result<bool> {
-        Ok(self.base_config().infinite_source)
-    }
-
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
         self.projected_output_ordering
             .first()
@@ -276,7 +272,6 @@ mod tests {
             limit: None,
             table_partition_cols: vec![],
             output_ordering: vec![],
-            infinite_source: false,
         });
         assert_eq!(avro_exec.output_partitioning().partition_count(), 1);
         let mut results = avro_exec
@@ -348,7 +343,6 @@ mod tests {
             limit: None,
             table_partition_cols: vec![],
             output_ordering: vec![],
-            infinite_source: false,
         });
         assert_eq!(avro_exec.output_partitioning().partition_count(), 1);
 
@@ -406,8 +400,7 @@ mod tests {
             .await?;
 
         let mut partitioned_file = PartitionedFile::from(meta);
-        partitioned_file.partition_values =
-            vec![ScalarValue::Utf8(Some("2021-10-26".to_owned()))];
+        partitioned_file.partition_values = vec![ScalarValue::from("2021-10-26")];
 
         let avro_exec = AvroExec::new(FileScanConfig {
             // select specific columns of the files as well as the partitioning
@@ -420,7 +413,6 @@ mod tests {
             limit: None,
             table_partition_cols: vec![Field::new("date", DataType::Utf8, false)],
             output_ordering: vec![],
-            infinite_source: false,
         });
         assert_eq!(avro_exec.output_partitioning().partition_count(), 1);
 

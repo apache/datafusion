@@ -86,7 +86,7 @@ impl SessionConfig {
 
     /// Set a generic `str` configuration option
     pub fn set_str(self, key: &str, value: &str) -> Self {
-        self.set(key, ScalarValue::Utf8(Some(value.to_string())))
+        self.set(key, ScalarValue::from(value))
     }
 
     /// Customize batch size

@@ -31,12 +31,16 @@ use datafusion::datasource::provider::TableProviderFactory;
 use datafusion::datasource::TableProvider;
 use datafusion::execution::context::SessionState;
 use datafusion::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
+use datafusion::parquet::file::properties::{WriterProperties, WriterVersion};
 use datafusion::physical_plan::functions::make_scalar_function;
 use datafusion::prelude::{create_udf, CsvReadOptions, SessionConfig, SessionContext};
 use datafusion::test_util::{TestTableFactory, TestTableProvider};
-use datafusion_common::Result;
-use datafusion_common::{internal_err, not_impl_err, plan_err};
+use datafusion_common::file_options::parquet_writer::ParquetWriterOptions;
+use datafusion_common::file_options::StatementOptions;
+use datafusion_common::{internal_err, not_impl_err, plan_err, FileTypeWriterOptions};
 use datafusion_common::{DFField, DFSchema, DFSchemaRef, DataFusionError, ScalarValue};
+use datafusion_common::{FileType, Result};
+use datafusion_expr::dml::{CopyOptions, CopyTo};
 use datafusion_expr::expr::{
     self, Between, BinaryExpr, Case, Cast, GroupingSet, InList, Like, ScalarFunction,
     Sort,
@@ -217,11 +221,10 @@ async fn roundtrip_custom_memory_tables() -> Result<()> {
 async fn roundtrip_custom_listing_tables() -> Result<()> {
     let ctx = SessionContext::new();
 
-    // Make sure during round-trip, constraint information is preserved
     let query = "CREATE EXTERNAL TABLE multiple_ordered_table_with_pk (
               a0 INTEGER,
-              a INTEGER,
-              b INTEGER,
+              a INTEGER DEFAULT 1*2 + 3,
+              b INTEGER DEFAULT NULL,
               c INTEGER,
               d INTEGER,
               primary key(c)
@@ -232,11 +235,13 @@ async fn roundtrip_custom_listing_tables() -> Result<()> {
             WITH ORDER (c ASC)
             LOCATION '../core/tests/data/window_2.csv';";
 
-    let plan = ctx.sql(query).await?.into_optimized_plan()?;
+    let plan = ctx.state().create_logical_plan(query).await?;
 
     let bytes = logical_plan_to_bytes(&plan)?;
     let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx)?;
-    assert_eq!(format!("{plan:?}"), format!("{logical_round_trip:?}"));
+    // Use exact matching to verify everything. Make sure during round-trip,
+    // information like constraints, column defaults, and other aspects of the plan are preserved.
+    assert_eq!(plan, logical_round_trip);
 
     Ok(())
 }
@@ -298,6 +303,99 @@ async fn roundtrip_logical_plan_aggregation() -> Result<()> {
     assert_eq!(format!("{plan:?}"), format!("{logical_round_trip:?}"));
 
     Ok(())
+}
+
+#[tokio::test]
+async fn roundtrip_logical_plan_copy_to_sql_options() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    let input = create_csv_scan(&ctx).await?;
+
+    let mut options = HashMap::new();
+    options.insert("foo".to_string(), "bar".to_string());
+
+    let plan = LogicalPlan::Copy(CopyTo {
+        input: Arc::new(input),
+        output_url: "test.csv".to_string(),
+        file_format: FileType::CSV,
+        single_file_output: true,
+        copy_options: CopyOptions::SQLOptions(StatementOptions::from(&options)),
+    });
+
+    let bytes = logical_plan_to_bytes(&plan)?;
+    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx)?;
+    assert_eq!(format!("{plan:?}"), format!("{logical_round_trip:?}"));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn roundtrip_logical_plan_copy_to_writer_options() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    let input = create_csv_scan(&ctx).await?;
+
+    let writer_properties = WriterProperties::builder()
+        .set_bloom_filter_enabled(true)
+        .set_created_by("DataFusion Test".to_string())
+        .set_writer_version(WriterVersion::PARQUET_2_0)
+        .set_write_batch_size(111)
+        .set_data_page_size_limit(222)
+        .set_data_page_row_count_limit(333)
+        .set_dictionary_page_size_limit(444)
+        .set_max_row_group_size(555)
+        .build();
+    let plan = LogicalPlan::Copy(CopyTo {
+        input: Arc::new(input),
+        output_url: "test.parquet".to_string(),
+        file_format: FileType::PARQUET,
+        single_file_output: true,
+        copy_options: CopyOptions::WriterOptions(Box::new(
+            FileTypeWriterOptions::Parquet(ParquetWriterOptions::new(writer_properties)),
+        )),
+    });
+
+    let bytes = logical_plan_to_bytes(&plan)?;
+    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx)?;
+    assert_eq!(format!("{plan:?}"), format!("{logical_round_trip:?}"));
+
+    match logical_round_trip {
+        LogicalPlan::Copy(copy_to) => {
+            assert_eq!("test.parquet", copy_to.output_url);
+            assert_eq!(FileType::PARQUET, copy_to.file_format);
+            assert!(copy_to.single_file_output);
+            match &copy_to.copy_options {
+                CopyOptions::WriterOptions(y) => match y.as_ref() {
+                    FileTypeWriterOptions::Parquet(p) => {
+                        let props = &p.writer_options;
+                        assert_eq!("DataFusion Test", props.created_by());
+                        assert_eq!(
+                            "PARQUET_2_0",
+                            format!("{:?}", props.writer_version())
+                        );
+                        assert_eq!(111, props.write_batch_size());
+                        assert_eq!(222, props.data_page_size_limit());
+                        assert_eq!(333, props.data_page_row_count_limit());
+                        assert_eq!(444, props.dictionary_page_size_limit());
+                        assert_eq!(555, props.max_row_group_size());
+                    }
+                    _ => panic!(),
+                },
+                _ => panic!(),
+            }
+        }
+        _ => panic!(),
+    }
+
+    Ok(())
+}
+
+async fn create_csv_scan(ctx: &SessionContext) -> Result<LogicalPlan, DataFusionError> {
+    ctx.register_csv("t1", "tests/testdata/test.csv", CsvReadOptions::default())
+        .await?;
+
+    let input = ctx.table("t1").await?.into_optimized_plan()?;
+    Ok(input)
 }
 
 #[tokio::test]
@@ -730,7 +828,7 @@ fn round_trip_scalar_values() {
         ))),
         ScalarValue::Dictionary(
             Box::new(DataType::Int32),
-            Box::new(ScalarValue::Utf8(Some("foo".into()))),
+            Box::new(ScalarValue::from("foo")),
         ),
         ScalarValue::Dictionary(
             Box::new(DataType::Int32),
@@ -969,6 +1067,45 @@ fn round_trip_datatype() {
         let roundtrip: DataType = (&proto).try_into().unwrap();
         assert_eq!(format!("{test_case:?}"), format!("{roundtrip:?}"));
     }
+}
+
+#[test]
+fn roundtrip_dict_id() -> Result<()> {
+    let dict_id = 42;
+    let field = Field::new(
+        "keys",
+        DataType::List(Arc::new(Field::new_dict(
+            "item",
+            DataType::Dictionary(Box::new(DataType::UInt16), Box::new(DataType::Utf8)),
+            true,
+            dict_id,
+            false,
+        ))),
+        false,
+    );
+    let schema = Arc::new(Schema::new(vec![field]));
+
+    // encode
+    let mut buf: Vec<u8> = vec![];
+    let schema_proto: datafusion_proto::generated::datafusion::Schema =
+        schema.try_into().unwrap();
+    schema_proto.encode(&mut buf).unwrap();
+
+    // decode
+    let schema_proto =
+        datafusion_proto::generated::datafusion::Schema::decode(buf.as_slice()).unwrap();
+    let decoded: Schema = (&schema_proto).try_into()?;
+
+    // assert
+    let keys = decoded.fields().iter().last().unwrap();
+    match keys.data_type() {
+        DataType::List(field) => {
+            assert_eq!(field.dict_id(), Some(dict_id), "dict_id should be retained");
+        }
+        _ => panic!("Invalid type"),
+    }
+
+    Ok(())
 }
 
 #[test]
@@ -1375,9 +1512,10 @@ fn roundtrip_aggregate_udf() {
         Arc::new(vec![DataType::Float64, DataType::UInt32]),
     );
 
-    let test_expr = Expr::AggregateUDF(expr::AggregateUDF::new(
+    let test_expr = Expr::AggregateFunction(expr::AggregateFunction::new_udf(
         Arc::new(dummy_agg.clone()),
         vec![lit(1.0_f64)],
+        false,
         Some(Box::new(lit(true))),
         None,
     ));

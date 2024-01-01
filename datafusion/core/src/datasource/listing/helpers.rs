@@ -92,7 +92,7 @@ pub fn expr_applicable_for_cols(col_names: &[String], expr: &Expr) -> bool {
 
             Expr::ScalarFunction(scalar_function) => {
                 match &scalar_function.func_def {
-                    ScalarFunctionDefinition::BuiltIn { fun, .. } => {
+                    ScalarFunctionDefinition::BuiltIn(fun) => {
                         match fun.volatility() {
                             Volatility::Immutable => Ok(VisitRecursion::Continue),
                             // TODO: Stable functions could be `applicable`, but that would require access to the context
@@ -122,8 +122,7 @@ pub fn expr_applicable_for_cols(col_names: &[String], expr: &Expr) -> bool {
             // - AGGREGATE, WINDOW and SORT should not end up in filter conditions, except maybe in some edge cases
             // - Can `Wildcard` be considered as a `Literal`?
             // - ScalarVariable could be `applicable`, but that would require access to the context
-            Expr::AggregateUDF { .. }
-            | Expr::AggregateFunction { .. }
+            Expr::AggregateFunction { .. }
             | Expr::Sort { .. }
             | Expr::WindowFunction { .. }
             | Expr::Wildcard { .. }
@@ -142,12 +141,18 @@ const CONCURRENCY_LIMIT: usize = 100;
 
 /// Partition the list of files into `n` groups
 pub fn split_files(
-    partitioned_files: Vec<PartitionedFile>,
+    mut partitioned_files: Vec<PartitionedFile>,
     n: usize,
 ) -> Vec<Vec<PartitionedFile>> {
     if partitioned_files.is_empty() {
         return vec![];
     }
+
+    // ObjectStore::list does not guarantee any consistent order and for some
+    // implementations such as LocalFileSystem, it may be inconsistent. Thus
+    // Sort files by path to ensure consistent plans when run more than once.
+    partitioned_files.sort_by(|a, b| a.path().cmp(b.path()));
+
     // effectively this is div with rounding up instead of truncating
     let chunk_size = (partitioned_files.len() + n - 1) / n;
     partitioned_files
@@ -370,10 +375,10 @@ pub async fn pruned_partition_list<'a>(
                     store.list(Some(&partition.path)).try_collect().await?
                 }
             };
-
             let files = files.into_iter().filter(move |o| {
                 let extension_match = o.location.as_ref().ends_with(file_extension);
-                let glob_match = table_path.contains(&o.location);
+                // here need to scan subdirectories(`listing_table_ignore_subdirectory` = false)
+                let glob_match = table_path.contains(&o.location, false);
                 extension_match && glob_match
             });
 
@@ -527,19 +532,13 @@ mod tests {
             f1.object_meta.location.as_ref(),
             "tablepath/mypartition=val1/file.parquet"
         );
-        assert_eq!(
-            &f1.partition_values,
-            &[ScalarValue::Utf8(Some(String::from("val1"))),]
-        );
+        assert_eq!(&f1.partition_values, &[ScalarValue::from("val1")]);
         let f2 = &pruned[1];
         assert_eq!(
             f2.object_meta.location.as_ref(),
             "tablepath/mypartition=val1/other=val3/file.parquet"
         );
-        assert_eq!(
-            f2.partition_values,
-            &[ScalarValue::Utf8(Some(String::from("val1"))),]
-        );
+        assert_eq!(f2.partition_values, &[ScalarValue::from("val1"),]);
     }
 
     #[tokio::test]
@@ -580,10 +579,7 @@ mod tests {
         );
         assert_eq!(
             &f1.partition_values,
-            &[
-                ScalarValue::Utf8(Some(String::from("p1v2"))),
-                ScalarValue::Utf8(Some(String::from("p2v1")))
-            ]
+            &[ScalarValue::from("p1v2"), ScalarValue::from("p2v1"),]
         );
         let f2 = &pruned[1];
         assert_eq!(
@@ -592,10 +588,7 @@ mod tests {
         );
         assert_eq!(
             &f2.partition_values,
-            &[
-                ScalarValue::Utf8(Some(String::from("p1v2"))),
-                ScalarValue::Utf8(Some(String::from("p2v1")))
-            ]
+            &[ScalarValue::from("p1v2"), ScalarValue::from("p2v1")]
         );
     }
 

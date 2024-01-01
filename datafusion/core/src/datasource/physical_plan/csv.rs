@@ -23,7 +23,7 @@ use std::ops::Range;
 use std::sync::Arc;
 use std::task::Poll;
 
-use super::FileScanConfig;
+use super::{FileGroupPartitioner, FileScanConfig};
 use crate::datasource::file_format::file_compression_type::FileCompressionType;
 use crate::datasource::listing::{FileRange, ListingTableUrl};
 use crate::datasource::physical_plan::file_stream::{
@@ -146,10 +146,6 @@ impl ExecutionPlan for CsvExec {
         Partitioning::UnknownPartitioning(self.base_config.file_groups.len())
     }
 
-    fn unbounded_output(&self, _: &[bool]) -> Result<bool> {
-        Ok(self.base_config().infinite_source)
-    }
-
     /// See comments on `impl ExecutionPlan for ParquetExec`: output order can't be
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
         self.projected_output_ordering
@@ -177,7 +173,7 @@ impl ExecutionPlan for CsvExec {
     }
 
     /// Redistribute files across partitions according to their size
-    /// See comments on `repartition_file_groups()` for more detail.
+    /// See comments on [`FileGroupPartitioner`] for more detail.
     ///
     /// Return `None` if can't get repartitioned(empty/compressed file).
     fn repartitioned(
@@ -191,11 +187,11 @@ impl ExecutionPlan for CsvExec {
             return Ok(None);
         }
 
-        let repartitioned_file_groups_option = FileScanConfig::repartition_file_groups(
-            self.base_config.file_groups.clone(),
-            target_partitions,
-            repartition_file_min_size,
-        );
+        let repartitioned_file_groups_option = FileGroupPartitioner::new()
+            .with_target_partitions(target_partitions)
+            .with_preserve_order_within_groups(self.output_ordering().is_some())
+            .with_repartition_file_min_size(repartition_file_min_size)
+            .repartition_file_groups(&self.base_config.file_groups);
 
         if let Some(repartitioned_file_groups) = repartitioned_file_groups_option {
             let mut new_plan = self.clone();
@@ -872,8 +868,7 @@ mod tests {
 
         // Add partition columns
         config.table_partition_cols = vec![Field::new("date", DataType::Utf8, false)];
-        config.file_groups[0][0].partition_values =
-            vec![ScalarValue::Utf8(Some("2021-10-26".to_owned()))];
+        config.file_groups[0][0].partition_values = vec![ScalarValue::from("2021-10-26")];
 
         // We should be able to project on the partition column
         // Which is supposed to be after the file fields

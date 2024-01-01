@@ -20,6 +20,7 @@
 //! projections one by one if the operator below is amenable to this. If a
 //! projection reaches a source, it can even dissappear from the plan entirely.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use super::output_requirements::OutputRequirementExec;
@@ -42,9 +43,9 @@ use crate::physical_plan::{Distribution, ExecutionPlan};
 
 use arrow_schema::SchemaRef;
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::tree_node::{Transformed, TreeNode};
+use datafusion_common::tree_node::{Transformed, TreeNode, VisitRecursion};
 use datafusion_common::JoinSide;
-use datafusion_physical_expr::expressions::Column;
+use datafusion_physical_expr::expressions::{Column, Literal};
 use datafusion_physical_expr::{
     Partitioning, PhysicalExpr, PhysicalSortExpr, PhysicalSortRequirement,
 };
@@ -245,12 +246,36 @@ fn try_swapping_with_streaming_table(
 }
 
 /// Unifies `projection` with its input (which is also a [`ProjectionExec`]).
-/// Two consecutive projections can always merge into a single projection.
 fn try_unifying_projections(
     projection: &ProjectionExec,
     child: &ProjectionExec,
 ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
     let mut projected_exprs = vec![];
+    let mut column_ref_map: HashMap<Column, usize> = HashMap::new();
+
+    // Collect the column references usage in the outer projection.
+    projection.expr().iter().for_each(|(expr, _)| {
+        expr.apply(&mut |expr| {
+            Ok({
+                if let Some(column) = expr.as_any().downcast_ref::<Column>() {
+                    *column_ref_map.entry(column.clone()).or_default() += 1;
+                }
+                VisitRecursion::Continue
+            })
+        })
+        .unwrap();
+    });
+
+    // Merging these projections is not beneficial, e.g
+    // If an expression is not trivial and it is referred more than 1, unifies projections will be
+    // beneficial as caching mechanism for non-trivial computations.
+    // See discussion in: https://github.com/apache/arrow-datafusion/issues/8296
+    if column_ref_map.iter().any(|(column, count)| {
+        *count > 1 && !is_expr_trivial(&child.expr()[column.index()].0.clone())
+    }) {
+        return Ok(None);
+    }
+
     for (expr, alias) in projection.expr() {
         // If there is no match in the input projection, we cannot unify these
         // projections. This case will arise if the projection expression contains
@@ -263,6 +288,13 @@ fn try_unifying_projections(
 
     ProjectionExec::try_new(projected_exprs, child.input().clone())
         .map(|e| Some(Arc::new(e) as _))
+}
+
+/// Checks if the given expression is trivial.
+/// An expression is considered trivial if it is either a `Column` or a `Literal`.
+fn is_expr_trivial(expr: &Arc<dyn PhysicalExpr>) -> bool {
+    expr.as_any().downcast_ref::<Column>().is_some()
+        || expr.as_any().downcast_ref::<Literal>().is_some()
 }
 
 /// Tries to swap `projection` with its input (`output_req`). If possible,
@@ -348,6 +380,10 @@ fn try_swapping_with_filter(
     };
 
     FilterExec::try_new(new_predicate, make_with_child(projection, filter.input())?)
+        .and_then(|e| {
+            let selectivity = filter.default_selectivity();
+            e.with_default_selectivity(selectivity)
+        })
         .map(|e| Some(Arc::new(e) as _))
 }
 
@@ -418,7 +454,8 @@ fn try_swapping_with_sort(
 
     Ok(Some(Arc::new(
         SortExec::new(updated_exprs, make_with_child(projection, sort.input())?)
-            .with_fetch(sort.fetch()),
+            .with_fetch(sort.fetch())
+            .with_preserve_partitioning(sort.preserve_partitioning()),
     )))
 }
 
@@ -1130,7 +1167,6 @@ mod tests {
     use crate::physical_optimizer::projection_pushdown::{
         join_table_borders, update_expr, ProjectionPushdown,
     };
-    use crate::physical_optimizer::utils::get_plan_string;
     use crate::physical_optimizer::PhysicalOptimizerRule;
     use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
     use crate::physical_plan::filter::FilterExec;
@@ -1141,7 +1177,7 @@ mod tests {
     use crate::physical_plan::repartition::RepartitionExec;
     use crate::physical_plan::sorts::sort::SortExec;
     use crate::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
-    use crate::physical_plan::ExecutionPlan;
+    use crate::physical_plan::{get_plan_string, ExecutionPlan};
 
     use arrow_schema::{DataType, Field, Schema, SchemaRef, SortOptions};
     use datafusion_common::config::ConfigOptions;
@@ -1505,7 +1541,6 @@ mod tests {
                 limit: None,
                 table_partition_cols: vec![],
                 output_ordering: vec![vec![]],
-                infinite_source: false,
             },
             false,
             0,
@@ -1532,7 +1567,6 @@ mod tests {
                 limit: None,
                 table_partition_cols: vec![],
                 output_ordering: vec![vec![]],
-                infinite_source: false,
             },
             false,
             0,

@@ -34,7 +34,7 @@ use log::trace;
 use parking_lot::Mutex;
 use tokio::task::JoinHandle;
 
-use datafusion_common::{not_impl_err, DataFusionError, Result};
+use datafusion_common::{arrow_datafusion_err, not_impl_err, DataFusionError, Result};
 use datafusion_execution::memory_pool::MemoryConsumer;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{EquivalenceProperties, PhysicalExpr};
@@ -200,7 +200,7 @@ impl BatchPartitioner {
                                 .iter()
                                 .map(|c| {
                                     arrow::compute::take(c.as_ref(), &indices, None)
-                                        .map_err(DataFusionError::ArrowError)
+                                        .map_err(|e| arrow_datafusion_err!(e))
                                 })
                                 .collect::<Result<Vec<ArrayRef>>>()?;
 
@@ -370,11 +370,7 @@ impl RepartitionExec {
 
     /// Get name used to display this Exec
     pub fn name(&self) -> &str {
-        if self.preserve_order {
-            "SortPreservingRepartitionExec"
-        } else {
-            "RepartitionExec"
-        }
+        "RepartitionExec"
     }
 }
 
@@ -393,6 +389,10 @@ impl DisplayAs for RepartitionExec {
                     self.partitioning,
                     self.input.output_partitioning().partition_count()
                 )?;
+
+                if self.preserve_order {
+                    write!(f, ", preserve_order=true")?;
+                }
 
                 if let Some(sort_exprs) = self.sort_exprs() {
                     write!(
@@ -1414,9 +1414,8 @@ mod tests {
         // pull partitions
         for i in 0..exec.partitioning.partition_count() {
             let mut stream = exec.execute(i, task_ctx.clone())?;
-            let err = DataFusionError::ArrowError(
-                stream.next().await.unwrap().unwrap_err().into(),
-            );
+            let err =
+                arrow_datafusion_err!(stream.next().await.unwrap().unwrap_err().into());
             let err = err.find_root();
             assert!(
                 matches!(err, DataFusionError::ResourcesExhausted(_)),
@@ -1491,7 +1490,7 @@ mod test {
 
         // Repartition should preserve order
         let expected_plan = [
-            "SortPreservingRepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=2, sort_exprs=c0@0 ASC",
+            "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=2, preserve_order=true, sort_exprs=c0@0 ASC",
             "  UnionExec",
             "    MemoryExec: partitions=1, partition_sizes=[0], output_ordering=c0@0 ASC",
             "    MemoryExec: partitions=1, partition_sizes=[0], output_ordering=c0@0 ASC",

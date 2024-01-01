@@ -15,6 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
+mod guarantee;
+pub use guarantee::{Guarantee, LiteralGuarantee};
+
 use std::borrow::Borrow;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -41,25 +44,29 @@ use petgraph::stable_graph::StableGraph;
 pub fn split_conjunction(
     predicate: &Arc<dyn PhysicalExpr>,
 ) -> Vec<&Arc<dyn PhysicalExpr>> {
-    split_conjunction_impl(predicate, vec![])
+    split_impl(Operator::And, predicate, vec![])
 }
 
-fn split_conjunction_impl<'a>(
+/// Assume the predicate is in the form of DNF, split the predicate to a Vec of PhysicalExprs.
+///
+/// For example, split "a1 = a2 OR b1 <= b2 OR c1 != c2" into ["a1 = a2", "b1 <= b2", "c1 != c2"]
+pub fn split_disjunction(
+    predicate: &Arc<dyn PhysicalExpr>,
+) -> Vec<&Arc<dyn PhysicalExpr>> {
+    split_impl(Operator::Or, predicate, vec![])
+}
+
+fn split_impl<'a>(
+    operator: Operator,
     predicate: &'a Arc<dyn PhysicalExpr>,
     mut exprs: Vec<&'a Arc<dyn PhysicalExpr>>,
 ) -> Vec<&'a Arc<dyn PhysicalExpr>> {
     match predicate.as_any().downcast_ref::<BinaryExpr>() {
-        Some(binary) => match binary.op() {
-            Operator::And => {
-                let exprs = split_conjunction_impl(binary.left(), exprs);
-                split_conjunction_impl(binary.right(), exprs)
-            }
-            _ => {
-                exprs.push(predicate);
-                exprs
-            }
-        },
-        None => {
+        Some(binary) if binary.op() == &operator => {
+            let exprs = split_impl(operator, binary.left(), exprs);
+            split_impl(operator, binary.right(), exprs)
+        }
+        Some(_) | None => {
             exprs.push(predicate);
             exprs
         }
@@ -129,10 +136,11 @@ pub struct ExprTreeNode<T> {
 
 impl<T> ExprTreeNode<T> {
     pub fn new(expr: Arc<dyn PhysicalExpr>) -> Self {
+        let children = expr.children();
         ExprTreeNode {
             expr,
             data: None,
-            child_nodes: vec![],
+            child_nodes: children.into_iter().map(Self::new).collect_vec(),
         }
     }
 
@@ -140,12 +148,8 @@ impl<T> ExprTreeNode<T> {
         &self.expr
     }
 
-    pub fn children(&self) -> Vec<ExprTreeNode<T>> {
-        self.expr
-            .children()
-            .into_iter()
-            .map(ExprTreeNode::new)
-            .collect()
+    pub fn children(&self) -> &[ExprTreeNode<T>] {
+        &self.child_nodes
     }
 }
 
@@ -155,7 +159,7 @@ impl<T: Clone> TreeNode for ExprTreeNode<T> {
         F: FnMut(&Self) -> Result<VisitRecursion>,
     {
         for child in self.children() {
-            match op(&child)? {
+            match op(child)? {
                 VisitRecursion::Continue => {}
                 VisitRecursion::Skip => return Ok(VisitRecursion::Continue),
                 VisitRecursion::Stop => return Ok(VisitRecursion::Stop),
@@ -170,7 +174,7 @@ impl<T: Clone> TreeNode for ExprTreeNode<T> {
         F: FnMut(Self) -> Result<Self>,
     {
         self.child_nodes = self
-            .children()
+            .child_nodes
             .into_iter()
             .map(transform)
             .collect::<Result<Vec<_>>>()?;

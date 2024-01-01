@@ -32,7 +32,7 @@ use datafusion::execution::context::SessionState;
 use datafusion::execution::registry::SerializerRegistry;
 use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::logical_expr::{
-    Extension, LogicalPlan, UserDefinedLogicalNode, Volatility,
+    Extension, LogicalPlan, Repartition, UserDefinedLogicalNode, Volatility,
 };
 use datafusion::optimizer::simplify_expressions::expr_simplifier::THRESHOLD_INLINE_INLIST;
 use datafusion::prelude::*;
@@ -395,6 +395,29 @@ async fn roundtrip_inlist_4() -> Result<()> {
 }
 
 #[tokio::test]
+async fn roundtrip_inlist_5() -> Result<()> {
+    // on roundtrip there is an additional projection during TableScan which includes all column of the table,
+    // using assert_expected_plan here as a workaround
+    assert_expected_plan(
+    "SELECT a, f FROM data WHERE (f IN ('a', 'b', 'c') OR a in (SELECT data2.a FROM data2 WHERE f IN ('b', 'c', 'd')))",
+    "Filter: data.f = Utf8(\"a\") OR data.f = Utf8(\"b\") OR data.f = Utf8(\"c\") OR data.a IN (<subquery>)\
+    \n  Subquery:\
+    \n    Projection: data2.a\
+    \n      Filter: data2.f IN ([Utf8(\"b\"), Utf8(\"c\"), Utf8(\"d\")])\
+    \n        TableScan: data2 projection=[a, b, c, d, e, f]\
+    \n  TableScan: data projection=[a, f], partial_filters=[data.f = Utf8(\"a\") OR data.f = Utf8(\"b\") OR data.f = Utf8(\"c\") OR data.a IN (<subquery>)]\
+    \n    Subquery:\
+    \n      Projection: data2.a\
+    \n        Filter: data2.f IN ([Utf8(\"b\"), Utf8(\"c\"), Utf8(\"d\")])\
+    \n          TableScan: data2 projection=[a, b, c, d, e, f]").await
+}
+
+#[tokio::test]
+async fn roundtrip_cross_join() -> Result<()> {
+    roundtrip("SELECT * FROM data CROSS JOIN data2").await
+}
+
+#[tokio::test]
 async fn roundtrip_inner_join() -> Result<()> {
     roundtrip("SELECT data.a FROM data JOIN data2 ON data.a = data2.a").await
 }
@@ -479,6 +502,46 @@ async fn roundtrip_ilike() -> Result<()> {
 }
 
 #[tokio::test]
+async fn roundtrip_not() -> Result<()> {
+    roundtrip("SELECT * FROM data WHERE NOT d").await
+}
+
+#[tokio::test]
+async fn roundtrip_negative() -> Result<()> {
+    roundtrip("SELECT * FROM data WHERE -a = 1").await
+}
+
+#[tokio::test]
+async fn roundtrip_is_true() -> Result<()> {
+    roundtrip("SELECT * FROM data WHERE d IS TRUE").await
+}
+
+#[tokio::test]
+async fn roundtrip_is_false() -> Result<()> {
+    roundtrip("SELECT * FROM data WHERE d IS FALSE").await
+}
+
+#[tokio::test]
+async fn roundtrip_is_not_true() -> Result<()> {
+    roundtrip("SELECT * FROM data WHERE d IS NOT TRUE").await
+}
+
+#[tokio::test]
+async fn roundtrip_is_not_false() -> Result<()> {
+    roundtrip("SELECT * FROM data WHERE d IS NOT FALSE").await
+}
+
+#[tokio::test]
+async fn roundtrip_is_unknown() -> Result<()> {
+    roundtrip("SELECT * FROM data WHERE d IS UNKNOWN").await
+}
+
+#[tokio::test]
+async fn roundtrip_is_not_unknown() -> Result<()> {
+    roundtrip("SELECT * FROM data WHERE d IS NOT UNKNOWN").await
+}
+
+#[tokio::test]
 async fn roundtrip_union() -> Result<()> {
     roundtrip("SELECT a, e FROM data UNION SELECT a, e FROM data").await
 }
@@ -501,10 +564,11 @@ async fn simple_intersect() -> Result<()> {
     assert_expected_plan(
         "SELECT COUNT(*) FROM (SELECT data.a FROM data INTERSECT SELECT data2.a FROM data2);",
         "Aggregate: groupBy=[[]], aggr=[[COUNT(UInt8(1))]]\
-         \n  LeftSemi Join: data.a = data2.a\
-         \n    Aggregate: groupBy=[[data.a]], aggr=[[]]\
-         \n      TableScan: data projection=[a]\
-         \n    TableScan: data2 projection=[a]",
+         \n  Projection: \
+         \n    LeftSemi Join: data.a = data2.a\
+         \n      Aggregate: groupBy=[[data.a]], aggr=[[]]\
+         \n        TableScan: data projection=[a]\
+         \n      TableScan: data2 projection=[a]",
     )
         .await
 }
@@ -514,10 +578,11 @@ async fn simple_intersect_table_reuse() -> Result<()> {
     assert_expected_plan(
         "SELECT COUNT(*) FROM (SELECT data.a FROM data INTERSECT SELECT data.a FROM data);",
         "Aggregate: groupBy=[[]], aggr=[[COUNT(UInt8(1))]]\
-         \n  LeftSemi Join: data.a = data.a\
-         \n    Aggregate: groupBy=[[data.a]], aggr=[[]]\
-         \n      TableScan: data projection=[a]\
-         \n    TableScan: data projection=[a]",
+         \n  Projection: \
+         \n    LeftSemi Join: data.a = data.a\
+         \n      Aggregate: groupBy=[[data.a]], aggr=[[]]\
+         \n        TableScan: data projection=[a]\
+         \n      TableScan: data projection=[a]",
     )
         .await
 }
@@ -689,6 +754,40 @@ async fn roundtrip_aggregate_udf() -> Result<()> {
     ctx.register_udaf(dummy_agg);
 
     roundtrip_with_ctx("select dummy_agg(a) from data", ctx).await
+}
+
+#[tokio::test]
+async fn roundtrip_repartition_roundrobin() -> Result<()> {
+    let ctx = create_context().await?;
+    let scan_plan = ctx.sql("SELECT * FROM data").await?.into_optimized_plan()?;
+    let plan = LogicalPlan::Repartition(Repartition {
+        input: Arc::new(scan_plan),
+        partitioning_scheme: Partitioning::RoundRobinBatch(8),
+    });
+
+    let proto = to_substrait_plan(&plan, &ctx)?;
+    let plan2 = from_substrait_plan(&ctx, &proto).await?;
+    let plan2 = ctx.state().optimize(&plan2)?;
+
+    assert_eq!(format!("{plan:?}"), format!("{plan2:?}"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn roundtrip_repartition_hash() -> Result<()> {
+    let ctx = create_context().await?;
+    let scan_plan = ctx.sql("SELECT * FROM data").await?.into_optimized_plan()?;
+    let plan = LogicalPlan::Repartition(Repartition {
+        input: Arc::new(scan_plan),
+        partitioning_scheme: Partitioning::Hash(vec![col("data.a")], 8),
+    });
+
+    let proto = to_substrait_plan(&plan, &ctx)?;
+    let plan2 = from_substrait_plan(&ctx, &proto).await?;
+    let plan2 = ctx.state().optimize(&plan2)?;
+
+    assert_eq!(format!("{plan:?}"), format!("{plan2:?}"));
+    Ok(())
 }
 
 fn check_post_join_filters(rel: &Rel) -> Result<()> {

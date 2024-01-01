@@ -36,7 +36,7 @@ use crate::execution::context::SessionState;
 
 use arrow::datatypes::{DataType, SchemaRef};
 use datafusion_common::file_options::{FileTypeWriterOptions, StatementOptions};
-use datafusion_common::{plan_err, DataFusionError, FileType};
+use datafusion_common::{arrow_datafusion_err, plan_err, DataFusionError, FileType};
 use datafusion_expr::CreateExternalTable;
 
 use async_trait::async_trait;
@@ -67,12 +67,20 @@ impl TableProviderFactory for ListingTableFactory {
         let file_extension = get_extension(cmd.location.as_str());
 
         let file_format: Arc<dyn FileFormat> = match file_type {
-            FileType::CSV => Arc::new(
-                CsvFormat::default()
+            FileType::CSV => {
+                let mut statement_options = StatementOptions::from(&cmd.options);
+                let mut csv_format = CsvFormat::default()
                     .with_has_header(cmd.has_header)
                     .with_delimiter(cmd.delimiter as u8)
-                    .with_file_compression_type(file_compression_type),
-            ),
+                    .with_file_compression_type(file_compression_type);
+                if let Some(quote) = statement_options.take_str_option("quote") {
+                    csv_format = csv_format.with_quote(quote.as_bytes()[0])
+                }
+                if let Some(escape) = statement_options.take_str_option("escape") {
+                    csv_format = csv_format.with_escape(Some(escape.as_bytes()[0]))
+                }
+                Arc::new(csv_format)
+            }
             #[cfg(feature = "parquet")]
             FileType::PARQUET => Arc::new(ParquetFormat::default()),
             FileType::AVRO => Arc::new(AvroFormat),
@@ -106,7 +114,7 @@ impl TableProviderFactory for ListingTableFactory {
                 .map(|col| {
                     schema
                         .field_with_name(col)
-                        .map_err(DataFusionError::ArrowError)
+                        .map_err(|e| arrow_datafusion_err!(e))
                 })
                 .collect::<datafusion_common::Result<Vec<_>>>()?
                 .into_iter()
@@ -125,34 +133,18 @@ impl TableProviderFactory for ListingTableFactory {
             (Some(schema), table_partition_cols)
         };
 
-        // look for 'infinite' as an option
-        let infinite_source = cmd.unbounded;
-
         let mut statement_options = StatementOptions::from(&cmd.options);
 
-        // Extract ListingTable specific options if present or set default
-        let unbounded = if infinite_source {
-            statement_options.take_str_option("unbounded");
-            infinite_source
-        } else {
-            statement_options
-                .take_bool_option("unbounded")?
-                .unwrap_or(false)
-        };
-
-        let create_local_path = statement_options
-            .take_bool_option("create_local_path")?
-            .unwrap_or(false);
-        let single_file = statement_options
-            .take_bool_option("single_file")?
-            .unwrap_or(false);
-
-        // Backwards compatibility
+        // Backwards compatibility (#8547), discard deprecated options
+        statement_options.take_bool_option("single_file")?;
         if let Some(s) = statement_options.take_str_option("insert_mode") {
             if !s.eq_ignore_ascii_case("append_new_files") {
-                return plan_err!("Unknown or unsupported insert mode {s}. Only append_to_file supported");
+                return plan_err!("Unknown or unsupported insert mode {s}. Only append_new_files supported");
             }
         }
+        statement_options.take_bool_option("create_local_path")?;
+        statement_options.take_str_option("unbounded");
+
         let file_type = file_format.file_type();
 
         // Use remaining options and session state to build FileTypeWriterOptions
@@ -191,13 +183,7 @@ impl TableProviderFactory for ListingTableFactory {
             FileType::AVRO => file_type_writer_options,
         };
 
-        let table_path = match create_local_path {
-            true => ListingTableUrl::parse_create_local_if_not_exists(
-                &cmd.location,
-                !single_file,
-            ),
-            false => ListingTableUrl::parse(&cmd.location),
-        }?;
+        let table_path = ListingTableUrl::parse(&cmd.location)?;
 
         let options = ListingOptions::new(file_format)
             .with_collect_stat(state.config().collect_statistics())
@@ -205,9 +191,7 @@ impl TableProviderFactory for ListingTableFactory {
             .with_target_partitions(state.config().target_partitions())
             .with_table_partition_cols(table_partition_cols)
             .with_file_sort_order(cmd.order_exprs.clone())
-            .with_single_file(single_file)
-            .with_write_options(file_type_writer_options)
-            .with_infinite_source(unbounded);
+            .with_write_options(file_type_writer_options);
 
         let resolved_schema = match provided_schema {
             None => options.infer_schema(state, &table_path).await?,
@@ -220,7 +204,8 @@ impl TableProviderFactory for ListingTableFactory {
             .with_cache(state.runtime_env().cache_manager.get_file_statistic_cache());
         let table = provider
             .with_definition(cmd.definition.clone())
-            .with_constraints(cmd.constraints.clone());
+            .with_constraints(cmd.constraints.clone())
+            .with_column_defaults(cmd.column_defaults.clone());
         Ok(Arc::new(table))
     }
 }
@@ -271,6 +256,7 @@ mod tests {
             unbounded: false,
             options: HashMap::new(),
             constraints: Constraints::empty(),
+            column_defaults: HashMap::new(),
         };
         let table_provider = factory.create(&state, &cmd).await.unwrap();
         let listing_table = table_provider
