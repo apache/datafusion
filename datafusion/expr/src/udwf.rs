@@ -107,7 +107,7 @@ impl WindowUDF {
         order_by: Vec<Expr>,
         window_frame: WindowFrame,
     ) -> Expr {
-        let fun = crate::WindowFunction::WindowUDF(Arc::new(self.clone()));
+        let fun = crate::WindowFunctionDefinition::WindowUDF(Arc::new(self.clone()));
 
         Expr::WindowFunction(crate::expr::WindowFunction {
             fun,

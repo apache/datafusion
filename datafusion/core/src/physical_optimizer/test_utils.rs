@@ -41,7 +41,7 @@ use crate::prelude::{CsvReadOptions, SessionContext};
 use arrow_schema::{Schema, SchemaRef, SortOptions};
 use datafusion_common::{JoinType, Statistics};
 use datafusion_execution::object_store::ObjectStoreUrl;
-use datafusion_expr::{AggregateFunction, WindowFrame, WindowFunction};
+use datafusion_expr::{AggregateFunction, WindowFrame, WindowFunctionDefinition};
 use datafusion_physical_expr::expressions::col;
 use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
 
@@ -234,7 +234,7 @@ pub fn bounded_window_exec(
     Arc::new(
         crate::physical_plan::windows::BoundedWindowAggExec::try_new(
             vec![create_window_expr(
-                &WindowFunction::AggregateFunction(AggregateFunction::Count),
+                &WindowFunctionDefinition::AggregateFunction(AggregateFunction::Count),
                 "count".to_owned(),
                 &[col(col_name, &schema).unwrap()],
                 &[],
