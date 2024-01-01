@@ -1824,13 +1824,13 @@ mod test {
     use crate::expr::Cast;
     use crate::expr_fn::col;
     use crate::{
-        case, lit, BuiltinScalarFunction, ColumnarValue, Expr, ReturnTypeFunction,
-        ScalarFunctionDefinition, ScalarFunctionImplementation, ScalarUDF, Signature,
-        Volatility,
+        case, lit, BuiltinScalarFunction, ColumnarValue, Expr, ScalarFunctionDefinition,
+        ScalarUDF, ScalarUDFImpl, Signature, Volatility,
     };
     use arrow::datatypes::DataType;
     use datafusion_common::Column;
     use datafusion_common::{Result, ScalarValue};
+    use std::any::Any;
     use std::sync::Arc;
 
     #[test]
@@ -1948,24 +1948,41 @@ mod test {
         );
 
         // UDF
-        let return_type: ReturnTypeFunction =
-            Arc::new(move |_| Ok(Arc::new(DataType::Utf8)));
-        let fun: ScalarFunctionImplementation =
-            Arc::new(move |_| Ok(ColumnarValue::Scalar(ScalarValue::new_utf8("a"))));
-        let udf = Arc::new(ScalarUDF::new(
-            "TestScalarUDF",
-            &Signature::uniform(1, vec![DataType::Float32], Volatility::Stable),
-            &return_type,
-            &fun,
-        ));
+        struct TestScalarUDF {
+            signature: Signature,
+        }
+        impl ScalarUDFImpl for TestScalarUDF {
+            fn as_any(&self) -> &dyn Any {
+                self
+            }
+            fn name(&self) -> &str {
+                "TestScalarUDF"
+            }
+
+            fn signature(&self) -> &Signature {
+                &self.signature
+            }
+
+            fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+                Ok(DataType::Utf8)
+            }
+
+            fn invoke(&self, _args: &[ColumnarValue]) -> Result<ColumnarValue> {
+                Ok(ColumnarValue::Scalar(ScalarValue::from("a")))
+            }
+        }
+        let udf = Arc::new(ScalarUDF::from(TestScalarUDF {
+            signature: Signature::uniform(1, vec![DataType::Float32], Volatility::Stable),
+        }));
         assert!(!ScalarFunctionDefinition::UDF(udf).is_volatile().unwrap());
 
-        let udf = Arc::new(ScalarUDF::new(
-            "TestScalarUDF",
-            &Signature::uniform(1, vec![DataType::Float32], Volatility::Volatile),
-            &return_type,
-            &fun,
-        ));
+        let udf = Arc::new(ScalarUDF::from(TestScalarUDF {
+            signature: Signature::uniform(
+                1,
+                vec![DataType::Float32],
+                Volatility::Volatile,
+            ),
+        }));
         assert!(ScalarFunctionDefinition::UDF(udf).is_volatile().unwrap());
 
         // Unresolved function

@@ -18,7 +18,7 @@
 mod guarantee;
 pub use guarantee::{Guarantee, LiteralGuarantee};
 
-use std::borrow::Borrow;
+use std::borrow::{Borrow, Cow};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -154,19 +154,8 @@ impl<T> ExprTreeNode<T> {
 }
 
 impl<T: Clone> TreeNode for ExprTreeNode<T> {
-    fn apply_children<F>(&self, op: &mut F) -> Result<VisitRecursion>
-    where
-        F: FnMut(&Self) -> Result<VisitRecursion>,
-    {
-        for child in self.children() {
-            match op(child)? {
-                VisitRecursion::Continue => {}
-                VisitRecursion::Skip => return Ok(VisitRecursion::Continue),
-                VisitRecursion::Stop => return Ok(VisitRecursion::Stop),
-            }
-        }
-
-        Ok(VisitRecursion::Continue)
+    fn children_nodes(&self) -> Vec<Cow<Self>> {
+        self.children().iter().map(Cow::Borrowed).collect()
     }
 
     fn map_children<F>(mut self, transform: F) -> Result<Self>

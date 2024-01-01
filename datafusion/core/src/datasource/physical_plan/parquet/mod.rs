@@ -522,6 +522,7 @@ impl FileOpener for ParquetOpener {
             if enable_bloom_filter && !row_groups.is_empty() {
                 if let Some(predicate) = predicate {
                     row_groups = row_groups::prune_row_groups_by_bloom_filters(
+                        &file_schema,
                         &mut builder,
                         &row_groups,
                         file_metadata.row_groups(),

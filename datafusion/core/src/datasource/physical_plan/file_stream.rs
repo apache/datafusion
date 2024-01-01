@@ -518,10 +518,8 @@ impl<F: FileOpener> RecordBatchStream for FileStream<F> {
 
 #[cfg(test)]
 mod tests {
-    use arrow_schema::Schema;
-    use datafusion_common::internal_err;
-    use datafusion_common::DataFusionError;
-    use datafusion_common::Statistics;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
 
     use super::*;
     use crate::datasource::file_format::write::BatchSerializer;
@@ -534,8 +532,8 @@ mod tests {
         test::{make_partition, object_store::register_test_store},
     };
 
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::sync::Arc;
+    use arrow_schema::Schema;
+    use datafusion_common::{internal_err, DataFusionError, Statistics};
 
     use async_trait::async_trait;
     use bytes::Bytes;
@@ -993,7 +991,7 @@ mod tests {
 
     #[async_trait]
     impl BatchSerializer for TestSerializer {
-        async fn serialize(&mut self, _batch: RecordBatch) -> Result<Bytes> {
+        async fn serialize(&self, _batch: RecordBatch, _initial: bool) -> Result<Bytes> {
             Ok(self.bytes.clone())
         }
     }

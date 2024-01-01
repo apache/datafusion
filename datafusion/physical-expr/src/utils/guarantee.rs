@@ -77,7 +77,7 @@ pub struct LiteralGuarantee {
 }
 
 /// What is guaranteed about the values for a [`LiteralGuarantee`]?
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Guarantee {
     /// Guarantee that the expression is `true` if `column` is one of the values. If
     /// `column` is not one of the values, the expression can not be `true`.
@@ -94,15 +94,9 @@ impl LiteralGuarantee {
     /// create these structures from an predicate (boolean expression).
     fn try_new<'a>(
         column_name: impl Into<String>,
-        op: Operator,
+        guarantee: Guarantee,
         literals: impl IntoIterator<Item = &'a ScalarValue>,
     ) -> Option<Self> {
-        let guarantee = match op {
-            Operator::Eq => Guarantee::In,
-            Operator::NotEq => Guarantee::NotIn,
-            _ => return None,
-        };
-
         let literals: HashSet<_> = literals.into_iter().cloned().collect();
 
         Some(Self {
@@ -120,7 +114,7 @@ impl LiteralGuarantee {
     /// expression is guaranteed to be `null` or `false`.
     ///
     /// # Notes:
-    /// 1. `expr` must be a boolean expression.
+    /// 1. `expr` must be a boolean expression or inlist expression.
     /// 2. `expr` is not simplified prior to analysis.
     pub fn analyze(expr: &Arc<dyn PhysicalExpr>) -> Vec<LiteralGuarantee> {
         // split conjunction: <expr> AND <expr> AND ...
@@ -130,6 +124,39 @@ impl LiteralGuarantee {
             .fold(GuaranteeBuilder::new(), |builder, expr| {
                 if let Some(cel) = ColOpLit::try_new(expr) {
                     return builder.aggregate_conjunct(cel);
+                } else if let Some(inlist) = expr
+                    .as_any()
+                    .downcast_ref::<crate::expressions::InListExpr>()
+                {
+                    // Only support single-column inlist currently, multi-column inlist is not supported
+                    let col = inlist
+                        .expr()
+                        .as_any()
+                        .downcast_ref::<crate::expressions::Column>();
+                    let Some(col) = col else {
+                        return builder;
+                    };
+
+                    let literals = inlist
+                        .list()
+                        .iter()
+                        .map(|e| e.as_any().downcast_ref::<crate::expressions::Literal>())
+                        .collect::<Option<Vec<_>>>();
+                    let Some(literals) = literals else {
+                        return builder;
+                    };
+
+                    let guarantee = if inlist.negated() {
+                        Guarantee::NotIn
+                    } else {
+                        Guarantee::In
+                    };
+
+                    builder.aggregate_multi_conjunct(
+                        col,
+                        guarantee,
+                        literals.iter().map(|e| e.value()),
+                    )
                 } else {
                     // split disjunction: <expr> OR <expr> OR ...
                     let disjunctions = split_disjunction(expr);
@@ -168,14 +195,21 @@ impl LiteralGuarantee {
 
                     // if all terms are 'col <op> literal' with the same column
                     // and operation we can infer any guarantees
+                    //
+                    // For those like (a != foo AND (a != bar OR a != baz)).
+                    // We can't combine the (a != bar OR a != baz) part, but
+                    // it also doesn't invalidate our knowledge that a !=
+                    // foo is required for the expression to be true.
+                    // So we can only create a multi value guarantee for `=`
+                    // (or a single value). (e.g. ignore `a != foo OR a != bar`)
                     let first_term = &terms[0];
                     if terms.iter().all(|term| {
                         term.col.name() == first_term.col.name()
-                            && term.op == first_term.op
+                            && term.guarantee == Guarantee::In
                     }) {
                         builder.aggregate_multi_conjunct(
                             first_term.col,
-                            first_term.op,
+                            Guarantee::In,
                             terms.iter().map(|term| term.lit.value()),
                         )
                     } else {
@@ -197,9 +231,9 @@ struct GuaranteeBuilder<'a> {
     /// e.g. `a = foo AND a = bar` then the relevant guarantee will be None
     guarantees: Vec<Option<LiteralGuarantee>>,
 
-    /// Key is the (column name, operator type)
+    /// Key is the (column name, guarantee type)
     /// Value is the index into `guarantees`
-    map: HashMap<(&'a crate::expressions::Column, Operator), usize>,
+    map: HashMap<(&'a crate::expressions::Column, Guarantee), usize>,
 }
 
 impl<'a> GuaranteeBuilder<'a> {
@@ -216,7 +250,7 @@ impl<'a> GuaranteeBuilder<'a> {
     fn aggregate_conjunct(self, col_op_lit: ColOpLit<'a>) -> Self {
         self.aggregate_multi_conjunct(
             col_op_lit.col,
-            col_op_lit.op,
+            col_op_lit.guarantee,
             [col_op_lit.lit.value()],
         )
     }
@@ -233,10 +267,10 @@ impl<'a> GuaranteeBuilder<'a> {
     fn aggregate_multi_conjunct(
         mut self,
         col: &'a crate::expressions::Column,
-        op: Operator,
+        guarantee: Guarantee,
         new_values: impl IntoIterator<Item = &'a ScalarValue>,
     ) -> Self {
-        let key = (col, op);
+        let key = (col, guarantee);
         if let Some(index) = self.map.get(&key) {
             // already have a guarantee for this column
             let entry = &mut self.guarantees[*index];
@@ -257,26 +291,20 @@ impl<'a> GuaranteeBuilder<'a> {
                 // another `AND a != 6` we know that a must not be either 5 or 6
                 // for the expression to be true
                 Guarantee::NotIn => {
-                    // can extend if only single literal, otherwise invalidate
                     let new_values: HashSet<_> = new_values.into_iter().collect();
-                    if new_values.len() == 1 {
-                        existing.literals.extend(new_values.into_iter().cloned())
-                    } else {
-                        // this is like (a != foo AND (a != bar OR a != baz)).
-                        // We can't combine the (a != bar OR a != baz) part, but
-                        // it also doesn't invalidate our knowledge that a !=
-                        // foo is required for the expression to be true
-                    }
+                    existing.literals.extend(new_values.into_iter().cloned());
                 }
                 Guarantee::In => {
-                    // for an IN guarantee, it is ok if the value is the same
-                    // e.g. `a = foo AND a = foo` but not if the value is different
-                    // e.g. `a = foo AND a = bar`
-                    if new_values
+                    let intersection = new_values
                         .into_iter()
-                        .all(|new_value| existing.literals.contains(new_value))
-                    {
-                        // all values are already in the set
+                        .filter(|new_value| existing.literals.contains(*new_value))
+                        .collect::<Vec<_>>();
+                    // for an In guarantee, if the intersection is not empty,  we can extend the guarantee
+                    // e.g. `a IN (1,2,3) AND a IN (2,3,4)` is `a IN (2,3)`
+                    // otherwise, we invalidate the guarantee
+                    // e.g. `a IN (1,2,3) AND a IN (4,5,6)` is `a IN ()`, which is invalid
+                    if !intersection.is_empty() {
+                        existing.literals = intersection.into_iter().cloned().collect();
                     } else {
                         // at least one was not, so invalidate the guarantee
                         *entry = None;
@@ -287,17 +315,12 @@ impl<'a> GuaranteeBuilder<'a> {
             // This is a new guarantee
             let new_values: HashSet<_> = new_values.into_iter().collect();
 
-            // new_values are combined with OR, so we can only create a
-            // multi-column guarantee for `=` (or a single value).
-            // (e.g. ignore `a != foo OR a != bar`)
-            if op == Operator::Eq || new_values.len() == 1 {
-                if let Some(guarantee) =
-                    LiteralGuarantee::try_new(col.name(), op, new_values)
-                {
-                    // add it to the list of guarantees
-                    self.guarantees.push(Some(guarantee));
-                    self.map.insert(key, self.guarantees.len() - 1);
-                }
+            if let Some(guarantee) =
+                LiteralGuarantee::try_new(col.name(), guarantee, new_values)
+            {
+                // add it to the list of guarantees
+                self.guarantees.push(Some(guarantee));
+                self.map.insert(key, self.guarantees.len() - 1);
             }
         }
 
@@ -311,10 +334,10 @@ impl<'a> GuaranteeBuilder<'a> {
     }
 }
 
-/// Represents a single `col <op> literal` expression
+/// Represents a single `col [not]in literal` expression
 struct ColOpLit<'a> {
     col: &'a crate::expressions::Column,
-    op: Operator,
+    guarantee: Guarantee,
     lit: &'a crate::expressions::Literal,
 }
 
@@ -322,7 +345,7 @@ impl<'a> ColOpLit<'a> {
     /// Returns Some(ColEqLit) if the expression is either:
     /// 1. `col <op> literal`
     /// 2. `literal <op> col`
-    ///
+    /// 3. operator is `=` or `!=`
     /// Returns None otherwise
     fn try_new(expr: &'a Arc<dyn PhysicalExpr>) -> Option<Self> {
         let binary_expr = expr
@@ -334,21 +357,32 @@ impl<'a> ColOpLit<'a> {
             binary_expr.op(),
             binary_expr.right().as_any(),
         );
-
+        let guarantee = match op {
+            Operator::Eq => Guarantee::In,
+            Operator::NotEq => Guarantee::NotIn,
+            _ => return None,
+        };
         // col <op> literal
         if let (Some(col), Some(lit)) = (
             left.downcast_ref::<crate::expressions::Column>(),
             right.downcast_ref::<crate::expressions::Literal>(),
         ) {
-            Some(Self { col, op: *op, lit })
+            Some(Self {
+                col,
+                guarantee,
+                lit,
+            })
         }
         // literal <op> col
         else if let (Some(lit), Some(col)) = (
             left.downcast_ref::<crate::expressions::Literal>(),
             right.downcast_ref::<crate::expressions::Column>(),
         ) {
-            // Used swapped operator operator, if possible
-            op.swap().map(|op| Self { col, op, lit })
+            Some(Self {
+                col,
+                guarantee,
+                lit,
+            })
         } else {
             None
         }
@@ -645,9 +679,122 @@ mod test {
         );
     }
 
-    // TODO https://github.com/apache/arrow-datafusion/issues/8436
-    // a IN (...)
-    // b NOT IN (...)
+    #[test]
+    fn test_single_inlist() {
+        // b IN (1, 2, 3)
+        test_analyze(
+            col("b").in_list(vec![lit(1), lit(2), lit(3)], false),
+            vec![in_guarantee("b", [1, 2, 3])],
+        );
+        // b NOT IN (1, 2, 3)
+        test_analyze(
+            col("b").in_list(vec![lit(1), lit(2), lit(3)], true),
+            vec![not_in_guarantee("b", [1, 2, 3])],
+        );
+    }
+
+    #[test]
+    fn test_inlist_conjunction() {
+        // b IN (1, 2, 3) AND b IN (2, 3, 4)
+        test_analyze(
+            col("b")
+                .in_list(vec![lit(1), lit(2), lit(3)], false)
+                .and(col("b").in_list(vec![lit(2), lit(3), lit(4)], false)),
+            vec![in_guarantee("b", [2, 3])],
+        );
+        // b NOT IN (1, 2, 3) AND b IN (2, 3, 4)
+        test_analyze(
+            col("b")
+                .in_list(vec![lit(1), lit(2), lit(3)], true)
+                .and(col("b").in_list(vec![lit(2), lit(3), lit(4)], false)),
+            vec![
+                not_in_guarantee("b", [1, 2, 3]),
+                in_guarantee("b", [2, 3, 4]),
+            ],
+        );
+        // b NOT IN (1, 2, 3) AND b NOT IN (2, 3, 4)
+        test_analyze(
+            col("b")
+                .in_list(vec![lit(1), lit(2), lit(3)], true)
+                .and(col("b").in_list(vec![lit(2), lit(3), lit(4)], true)),
+            vec![not_in_guarantee("b", [1, 2, 3, 4])],
+        );
+        // b IN (1, 2, 3) AND b = 4
+        test_analyze(
+            col("b")
+                .in_list(vec![lit(1), lit(2), lit(3)], false)
+                .and(col("b").eq(lit(4))),
+            vec![],
+        );
+        // b IN (1, 2, 3) AND b = 2
+        test_analyze(
+            col("b")
+                .in_list(vec![lit(1), lit(2), lit(3)], false)
+                .and(col("b").eq(lit(2))),
+            vec![in_guarantee("b", [2])],
+        );
+        // b IN (1, 2, 3) AND b != 2
+        test_analyze(
+            col("b")
+                .in_list(vec![lit(1), lit(2), lit(3)], false)
+                .and(col("b").not_eq(lit(2))),
+            vec![in_guarantee("b", [1, 2, 3]), not_in_guarantee("b", [2])],
+        );
+        // b NOT IN (1, 2, 3) AND b != 4
+        test_analyze(
+            col("b")
+                .in_list(vec![lit(1), lit(2), lit(3)], true)
+                .and(col("b").not_eq(lit(4))),
+            vec![not_in_guarantee("b", [1, 2, 3, 4])],
+        );
+        // b NOT IN (1, 2, 3) AND b != 2
+        test_analyze(
+            col("b")
+                .in_list(vec![lit(1), lit(2), lit(3)], true)
+                .and(col("b").not_eq(lit(2))),
+            vec![not_in_guarantee("b", [1, 2, 3])],
+        );
+    }
+
+    #[test]
+    fn test_inlist_with_disjunction() {
+        // b IN (1, 2, 3) AND (b = 3 OR b = 4)
+        test_analyze(
+            col("b")
+                .in_list(vec![lit(1), lit(2), lit(3)], false)
+                .and(col("b").eq(lit(3)).or(col("b").eq(lit(4)))),
+            vec![in_guarantee("b", [3])],
+        );
+        // b IN (1, 2, 3) AND (b = 4 OR b = 5)
+        test_analyze(
+            col("b")
+                .in_list(vec![lit(1), lit(2), lit(3)], false)
+                .and(col("b").eq(lit(4)).or(col("b").eq(lit(5)))),
+            vec![],
+        );
+        // b NOT IN (1, 2, 3) AND (b = 3 OR b = 4)
+        test_analyze(
+            col("b")
+                .in_list(vec![lit(1), lit(2), lit(3)], true)
+                .and(col("b").eq(lit(3)).or(col("b").eq(lit(4)))),
+            vec![not_in_guarantee("b", [1, 2, 3]), in_guarantee("b", [3, 4])],
+        );
+        // b IN (1, 2, 3) OR b = 2
+        // TODO this should be in_guarantee("b", [1, 2, 3]) but currently we don't support to anylize this kind of disjunction. Only `ColOpLit OR ColOpLit` is supported.
+        test_analyze(
+            col("b")
+                .in_list(vec![lit(1), lit(2), lit(3)], false)
+                .or(col("b").eq(lit(2))),
+            vec![],
+        );
+        // b IN (1, 2, 3) OR b != 3
+        test_analyze(
+            col("b")
+                .in_list(vec![lit(1), lit(2), lit(3)], false)
+                .or(col("b").not_eq(lit(3))),
+            vec![],
+        );
+    }
 
     /// Tests that analyzing expr results in the expected guarantees
     fn test_analyze(expr: Expr, expected: Vec<LiteralGuarantee>) {
@@ -673,7 +820,7 @@ mod test {
         S: Into<ScalarValue> + 'a,
     {
         let literals: Vec<_> = literals.into_iter().map(|s| s.into()).collect();
-        LiteralGuarantee::try_new(column, Operator::Eq, literals.iter()).unwrap()
+        LiteralGuarantee::try_new(column, Guarantee::In, literals.iter()).unwrap()
     }
 
     /// Guarantee that the expression is true if the column is NOT any of the specified values
@@ -683,7 +830,7 @@ mod test {
         S: Into<ScalarValue> + 'a,
     {
         let literals: Vec<_> = literals.into_iter().map(|s| s.into()).collect();
-        LiteralGuarantee::try_new(column, Operator::NotEq, literals.iter()).unwrap()
+        LiteralGuarantee::try_new(column, Guarantee::NotIn, literals.iter()).unwrap()
     }
 
     /// Convert a logical expression to a physical expression (without any simplification, etc)

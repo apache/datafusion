@@ -15,12 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::borrow::Cow;
 use std::{ops::Neg, sync::Arc};
 
 use arrow_schema::SortOptions;
 
 use crate::PhysicalExpr;
-use datafusion_common::tree_node::{TreeNode, VisitRecursion};
+use datafusion_common::tree_node::TreeNode;
 use datafusion_common::Result;
 
 /// To propagate [`SortOptions`] across the [`PhysicalExpr`], it is insufficient
@@ -147,11 +148,11 @@ impl Neg for SortProperties {
 /// It encapsulates the orderings (`state`) associated with the expression (`expr`), and
 /// orderings of the children expressions (`children_states`). The [`ExprOrdering`] of a parent
 /// expression is determined based on the [`ExprOrdering`] states of its children expressions.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ExprOrdering {
     pub expr: Arc<dyn PhysicalExpr>,
     pub state: SortProperties,
-    pub children: Vec<ExprOrdering>,
+    pub children: Vec<Self>,
 }
 
 impl ExprOrdering {
@@ -173,33 +174,21 @@ impl ExprOrdering {
 }
 
 impl TreeNode for ExprOrdering {
-    fn apply_children<F>(&self, op: &mut F) -> Result<VisitRecursion>
-    where
-        F: FnMut(&Self) -> Result<VisitRecursion>,
-    {
-        for child in &self.children {
-            match op(child)? {
-                VisitRecursion::Continue => {}
-                VisitRecursion::Skip => return Ok(VisitRecursion::Continue),
-                VisitRecursion::Stop => return Ok(VisitRecursion::Stop),
-            }
-        }
-        Ok(VisitRecursion::Continue)
+    fn children_nodes(&self) -> Vec<Cow<Self>> {
+        self.children.iter().map(Cow::Borrowed).collect()
     }
 
     fn map_children<F>(mut self, transform: F) -> Result<Self>
     where
         F: FnMut(Self) -> Result<Self>,
     {
-        if self.children.is_empty() {
-            Ok(self)
-        } else {
+        if !self.children.is_empty() {
             self.children = self
                 .children
                 .into_iter()
                 .map(transform)
-                .collect::<Result<Vec<_>>>()?;
-            Ok(self)
+                .collect::<Result<_>>()?;
         }
+        Ok(self)
     }
 }

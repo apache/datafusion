@@ -1187,6 +1187,8 @@ message PhysicalPlanNode {
     SymmetricHashJoinExecNode symmetric_hash_join = 25;
     InterleaveExecNode  interleave = 26;
     PlaceholderRowExecNode placeholder_row = 27;
+    CsvSinkExecNode csv_sink = 28;
+    ParquetSinkExecNode parquet_sink = 29;
   }
 }
 
@@ -1206,11 +1208,46 @@ message PartitionColumn {
 message FileTypeWriterOptions {
   oneof FileType {
     JsonWriterOptions json_options = 1;
+    ParquetWriterOptions parquet_options = 2;
+    CsvWriterOptions csv_options = 3;
   }
 }
 
 message JsonWriterOptions {
   CompressionTypeVariant compression = 1;
+}
+
+message ParquetWriterOptions {
+    WriterProperties writer_properties = 1;
+}
+
+message CsvWriterOptions {
+  // Compression type
+  CompressionTypeVariant compression = 1;
+  // Optional column delimiter. Defaults to `b','`
+  string delimiter = 2;
+  // Whether to write column names as file headers. Defaults to `true`
+  bool has_header = 3;
+  // Optional date format for date arrays
+  string date_format = 4;
+  // Optional datetime format for datetime arrays
+  string datetime_format = 5;
+  // Optional timestamp format for timestamp arrays
+  string timestamp_format = 6;
+  // Optional time format for time arrays
+  string time_format = 7;
+  // Optional value to represent null
+  string null_value = 8;
+}
+
+message WriterProperties {
+  uint64 data_page_size_limit = 1;
+  uint64 dictionary_page_size_limit = 2;
+  uint64 data_page_row_count_limit = 3;
+  uint64 write_batch_size = 4;
+  uint64 max_row_group_size = 5;
+  string writer_version = 6;
+  string created_by = 7;
 }
 
 message FileSinkConfig {
@@ -1233,6 +1270,28 @@ message JsonSink {
 message JsonSinkExecNode {
   PhysicalPlanNode input = 1;
   JsonSink sink = 2;
+  Schema sink_schema = 3;
+  PhysicalSortExprNodeCollection sort_order = 4;
+}
+
+message CsvSink {
+  FileSinkConfig config = 1;
+}
+
+message CsvSinkExecNode {
+  PhysicalPlanNode input = 1;
+  CsvSink sink = 2;
+  Schema sink_schema = 3;
+  PhysicalSortExprNodeCollection sort_order = 4;
+}
+
+message ParquetSink {
+  FileSinkConfig config = 1;
+}
+
+message ParquetSinkExecNode {
+  PhysicalPlanNode input = 1;
+  ParquetSink sink = 2;
   Schema sink_schema = 3;
   PhysicalSortExprNodeCollection sort_order = 4;
 }
