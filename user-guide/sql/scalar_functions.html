@@ -4599,6 +4599,7 @@ Can be a constant, column, or function.</p></li>
 The following date parts are supported:</p>
 <ul>
 <li><p>year</p></li>
+<li><p>quarter <em>(emits value in inclusive range [1, 4] based on which quartile of the year the date is in)</em></p></li>
 <li><p>month</p></li>
 <li><p>week <em>(week of the year)</em></p></li>
 <li><p>day <em>(day of the month)</em></p></li>
@@ -4610,6 +4611,7 @@ The following date parts are supported:</p>
 <li><p>nanosecond</p></li>
 <li><p>dow <em>(day of the week)</em></p></li>
 <li><p>doy <em>(day of the year)</em></p></li>
+<li><p>epoch <em>(seconds since Unix epoch)</em></p></li>
 </ul>
 </li>
 <li><p><strong>expression</strong>: Time expression to operate on.
@@ -4641,6 +4643,7 @@ Similar to <code class="docutils literal notranslate"><span class="pre">date_par
 The following date fields are supported:</p>
 <ul>
 <li><p>year</p></li>
+<li><p>quarter <em>(emits value in inclusive range [1, 4] based on which quartile of the year the date is in)</em></p></li>
 <li><p>month</p></li>
 <li><p>week <em>(week of the year)</em></p></li>
 <li><p>day <em>(day of the month)</em></p></li>
@@ -4652,6 +4655,7 @@ The following date fields are supported:</p>
 <li><p>nanosecond</p></li>
 <li><p>dow <em>(day of the week)</em></p></li>
 <li><p>doy <em>(day of the year)</em></p></li>
+<li><p>epoch <em>(seconds since Unix epoch)</em></p></li>
 </ul>
 </li>
 <li><p><strong>source</strong>: Source time expression to operate on.
