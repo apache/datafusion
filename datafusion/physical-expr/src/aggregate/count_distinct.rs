@@ -439,17 +439,20 @@ where
 #[cfg(test)]
 mod tests {
     use crate::expressions::NoOp;
+    use crate::EmitTo;
 
     use super::*;
     use arrow::array::{
         ArrayRef, BooleanArray, Float32Array, Float64Array, Int16Array, Int32Array,
-        Int64Array, Int8Array, UInt16Array, UInt32Array, UInt64Array, UInt8Array,
+        Int64Array, Int8Array, PrimitiveArray, UInt16Array, UInt32Array, UInt64Array,
+        UInt8Array,
     };
     use arrow::datatypes::DataType;
     use arrow::datatypes::{
         Float32Type, Float64Type, Int16Type, Int32Type, Int64Type, Int8Type, UInt16Type,
         UInt32Type, UInt64Type, UInt8Type,
     };
+    use arrow_buffer::i256;
     use datafusion_common::cast::{as_boolean_array, as_list_array, as_primitive_array};
     use datafusion_common::internal_err;
     use datafusion_common::DataFusionError;
@@ -804,6 +807,659 @@ mod tests {
         )?;
         assert_eq!(states.len(), 1);
         assert_eq!(result, ScalarValue::Int64(Some(2)));
+        Ok(())
+    }
+
+    macro_rules! assert_distinct_count_groups_states_eq {
+        ($ACTUAL:expr, $EXPECTED:expr, $DATA_TYPE: ident) => {
+            $ACTUAL
+                .iter()
+                .zip($EXPECTED.iter())
+                .for_each(|(actual, expected)| {
+                    let mut actual = actual
+                        .unwrap()
+                        .as_primitive::<$DATA_TYPE>()
+                        .values()
+                        .to_vec();
+                    actual.sort();
+
+                    let mut expected = expected.clone();
+                    expected.sort();
+
+                    assert_eq!(actual, expected);
+                });
+        };
+    }
+
+    macro_rules! assert_float_distinct_count_groups_states_eq {
+        ($ACTUAL:expr, $EXPECTED:expr, $DATA_TYPE: ident) => {
+            $ACTUAL
+                .iter()
+                .zip($EXPECTED.iter())
+                .for_each(|(actual, expected)| {
+                    let mut actual = actual
+                        .unwrap()
+                        .as_primitive::<$DATA_TYPE>()
+                        .values()
+                        .to_vec();
+                    actual.sort_by(|a, b| a.total_cmp(b));
+
+                    let mut expected = expected.clone();
+                    expected.sort_by(|a, b| a.total_cmp(b));
+
+                    assert_eq!(actual, expected);
+                });
+        };
+    }
+
+    macro_rules! integer_count_distinct_groups_accumulator {
+        ($DATA_TYPE:ident, $PRIM_TYPE:ty, $ACCUM:ident) => {
+            let group_indices = vec![0, 1, 1, 2, 0, 3, 3, 3, 4];
+            let input_values: Vec<Option<$PRIM_TYPE>> = vec![
+                Some(1),
+                Some(1),
+                Some(1),
+                None,
+                Some(2),
+                Some(4),
+                Some(5),
+                None,
+                Some(7),
+            ];
+            let values = Arc::new(PrimitiveArray::<$DATA_TYPE>::from(input_values));
+
+            // Prepare accumulator and update it with input values
+            let mut $ACCUM = DistinctCountGroupsAccumulator::<$DATA_TYPE>::new();
+            $ACCUM.update_batch(&[values], &group_indices, None, 5)?;
+        };
+    }
+
+    macro_rules! test_count_distinct_groups_evaluate {
+        ($DATA_TYPE:ident, $PRIM_TYPE:ty) => {
+            test_count_distinct_groups_evaluate!($DATA_TYPE, $PRIM_TYPE, EmitTo::All);
+            test_count_distinct_groups_evaluate!(
+                $DATA_TYPE,
+                $PRIM_TYPE,
+                EmitTo::First(3)
+            );
+
+            return Ok(())
+        };
+
+        ($DATA_TYPE:ident, $PRIM_TYPE:ty, $EMIT_TO:expr) => {
+            integer_count_distinct_groups_accumulator!(
+                $DATA_TYPE,
+                $PRIM_TYPE,
+                accumulator
+            );
+
+            // Get accumulator evaluation result
+            let evaluated = accumulator.evaluate($EMIT_TO)?;
+            let actual = evaluated.as_primitive::<Int64Type>();
+
+            let mut expected_values = vec![2, 1, 0, 2, 1];
+            let expected = Int64Array::from($EMIT_TO.take_needed(&mut expected_values));
+
+            assert_eq!(*actual, expected);
+        };
+    }
+
+    #[test]
+    fn count_distinct_groups_evaluate_i8() -> Result<()> {
+        test_count_distinct_groups_evaluate!(Int8Type, i8);
+    }
+
+    #[test]
+    fn count_distinct_groups_evaluate_i16() -> Result<()> {
+        test_count_distinct_groups_evaluate!(Int16Type, i16);
+    }
+
+    #[test]
+    fn count_distinct_groups_evaluate_i32() -> Result<()> {
+        test_count_distinct_groups_evaluate!(Int32Type, i32);
+    }
+
+    #[test]
+    fn count_distinct_groups_evaluate_i64() -> Result<()> {
+        test_count_distinct_groups_evaluate!(Int64Type, i64);
+    }
+
+    #[test]
+    fn count_distinct_groups_evaluate_u8() -> Result<()> {
+        test_count_distinct_groups_evaluate!(UInt8Type, u8);
+    }
+
+    #[test]
+    fn count_distinct_groups_evaluate_u16() -> Result<()> {
+        test_count_distinct_groups_evaluate!(UInt16Type, u16);
+    }
+
+    #[test]
+    fn count_distinct_groups_evaluate_u32() -> Result<()> {
+        test_count_distinct_groups_evaluate!(UInt32Type, u32);
+    }
+
+    #[test]
+    fn count_distinct_groups_evaluate_u64() -> Result<()> {
+        test_count_distinct_groups_evaluate!(UInt64Type, u64);
+    }
+
+    #[test]
+    fn count_distinct_groups_evaluate_i128() -> Result<()> {
+        test_count_distinct_groups_evaluate!(Decimal128Type, i128);
+    }
+
+    macro_rules! test_count_distinct_groups_state {
+        ($DATA_TYPE:ident, $PRIM_TYPE:ty) => {
+            test_count_distinct_groups_state!($DATA_TYPE, $PRIM_TYPE, EmitTo::All);
+            test_count_distinct_groups_state!($DATA_TYPE, $PRIM_TYPE, EmitTo::First(3));
+
+            return Ok(())
+        };
+        ($DATA_TYPE:ident, $PRIM_TYPE:ty, $EMIT_TO:expr) => {
+            // Prepare accumulator and update it with input values
+            integer_count_distinct_groups_accumulator!(
+                $DATA_TYPE,
+                $PRIM_TYPE,
+                accumulator
+            );
+
+            // Get result state from accumulator
+            let state = accumulator.state($EMIT_TO)?;
+            let actual = as_list_array(&state[0])?;
+
+            let expected: Vec<Vec<$PRIM_TYPE>> =
+                vec![vec![1, 2], vec![1], vec![], vec![4, 5], vec![7]];
+
+            assert_distinct_count_groups_states_eq!(actual, expected, $DATA_TYPE);
+        };
+    }
+
+    #[test]
+    fn count_distinct_groups_state_i8() -> Result<()> {
+        test_count_distinct_groups_state!(Int8Type, i8);
+    }
+
+    #[test]
+    fn count_distinct_groups_state_i16() -> Result<()> {
+        test_count_distinct_groups_state!(Int16Type, i16);
+    }
+
+    #[test]
+    fn count_distinct_groups_state_i32() -> Result<()> {
+        test_count_distinct_groups_state!(Int32Type, i32);
+    }
+
+    #[test]
+    fn count_distinct_groups_state_i64() -> Result<()> {
+        test_count_distinct_groups_state!(Int64Type, i64);
+    }
+
+    #[test]
+    fn count_distinct_groups_state_u8() -> Result<()> {
+        test_count_distinct_groups_state!(UInt8Type, u8);
+    }
+
+    #[test]
+    fn count_distinct_groups_state_u16() -> Result<()> {
+        test_count_distinct_groups_state!(UInt16Type, u16);
+    }
+
+    #[test]
+    fn count_distinct_groups_state_u32() -> Result<()> {
+        test_count_distinct_groups_state!(UInt32Type, u32);
+    }
+
+    #[test]
+    fn count_distinct_groups_state_u64() -> Result<()> {
+        test_count_distinct_groups_state!(UInt64Type, u64);
+    }
+
+    #[test]
+    fn count_distinct_groups_state_i128() -> Result<()> {
+        test_count_distinct_groups_state!(Decimal128Type, i128);
+    }
+
+    macro_rules! test_count_distinct_groups_merge {
+        ($DATA_TYPE:ident, $PRIM_TYPE:ty) => {
+            test_count_distinct_groups_merge!($DATA_TYPE, $PRIM_TYPE, EmitTo::All);
+            test_count_distinct_groups_merge!($DATA_TYPE, $PRIM_TYPE, EmitTo::First(3));
+
+            return Ok(())
+        };
+        ($DATA_TYPE:ident, $PRIM_TYPE:ty, $EMIT_TO:expr) => {
+            // Prepare accumulator and update it with input values
+            integer_count_distinct_groups_accumulator!(
+                $DATA_TYPE,
+                $PRIM_TYPE,
+                accumulator
+            );
+
+            // Prepare merge input and merge it into accumulators state
+            let merge_group_indices = vec![0, 1, 2, 3, 5];
+            let merge_input_values: Vec<Option<Vec<Option<$PRIM_TYPE>>>> = vec![
+                Some(vec![Some(10), Some(12)]),
+                Some(vec![]),
+                Some(vec![]),
+                Some(vec![Some(4)]),
+                Some(vec![Some(8)]),
+            ];
+            let merge_input = Arc::new(
+                ListArray::from_iter_primitive::<$DATA_TYPE, _, _>(merge_input_values),
+            ) as ArrayRef;
+
+            accumulator.merge_batch(&[merge_input], &merge_group_indices, None, 6)?;
+
+            // Get result state from accumulator
+            let state = accumulator.state($EMIT_TO)?;
+            let actual = as_list_array(&state[0])?;
+
+            let expected: Vec<Vec<$PRIM_TYPE>> = vec![
+                vec![1, 2, 10, 12],
+                vec![1],
+                vec![],
+                vec![4, 5],
+                vec![7],
+                vec![8],
+            ];
+
+            assert_distinct_count_groups_states_eq!(actual, expected, $DATA_TYPE);
+        };
+    }
+
+    #[test]
+    fn count_distinct_groups_merge_i8() -> Result<()> {
+        test_count_distinct_groups_merge!(Int8Type, i8);
+    }
+
+    #[test]
+    fn count_distinct_groups_merge_i16() -> Result<()> {
+        test_count_distinct_groups_merge!(Int16Type, i16);
+    }
+
+    #[test]
+    fn count_distinct_groups_merge_i32() -> Result<()> {
+        test_count_distinct_groups_merge!(Int32Type, i32);
+    }
+
+    #[test]
+    fn count_distinct_groups_merge_i64() -> Result<()> {
+        test_count_distinct_groups_merge!(Int64Type, i64);
+    }
+
+    #[test]
+    fn count_distinct_groups_merge_u8() -> Result<()> {
+        test_count_distinct_groups_merge!(UInt8Type, u8);
+    }
+
+    #[test]
+    fn count_distinct_groups_merge_u16() -> Result<()> {
+        test_count_distinct_groups_merge!(UInt16Type, u16);
+    }
+
+    #[test]
+    fn count_distinct_groups_merge_u32() -> Result<()> {
+        test_count_distinct_groups_merge!(UInt32Type, u32);
+    }
+
+    #[test]
+    fn count_distinct_groups_merge_u64() -> Result<()> {
+        test_count_distinct_groups_merge!(UInt64Type, u64);
+    }
+
+    #[test]
+    fn count_distinct_groups_merge_i128() -> Result<()> {
+        test_count_distinct_groups_merge!(Decimal128Type, i128);
+    }
+
+    macro_rules! float_count_distinct_groups_accumulator {
+        ($DATA_TYPE:ident, $PRIM_TYPE:ty, $ACCUM:ident) => {
+            let group_indices = vec![0, 1, 1, 2, 0, 3, 3, 3, 4, 5, 5];
+            let input_values: Vec<Option<$PRIM_TYPE>> = vec![
+                Some(1.2345),
+                Some(1.234),
+                Some(1.234),
+                None,
+                Some(2.6543),
+                Some(4.752399),
+                Some(5.239493),
+                None,
+                Some(7.34058740),
+                Some(<$PRIM_TYPE>::INFINITY),
+                Some(<$PRIM_TYPE>::NEG_INFINITY),
+            ];
+            let values = Arc::new(PrimitiveArray::<$DATA_TYPE>::from(input_values));
+
+            // Prepare accumulator and update it with input values
+            let mut $ACCUM = DistinctCountGroupsAccumulator::<$DATA_TYPE>::new();
+            $ACCUM.update_batch(&[values], &group_indices, None, 6)?;
+        };
+    }
+
+    macro_rules! test_float_count_distinct_groups_evaluate {
+        ($DATA_TYPE:ident, $PRIM_TYPE:ty) => {
+            test_float_count_distinct_groups_evaluate!(
+                $DATA_TYPE,
+                $PRIM_TYPE,
+                EmitTo::All
+            );
+            test_float_count_distinct_groups_evaluate!(
+                $DATA_TYPE,
+                $PRIM_TYPE,
+                EmitTo::First(3)
+            );
+
+            return Ok(())
+        };
+
+        ($DATA_TYPE:ident, $PRIM_TYPE:ty, $EMIT_TO:expr) => {
+            // Prepare accumulator and update it with input values
+            float_count_distinct_groups_accumulator!($DATA_TYPE, $PRIM_TYPE, accumulator);
+
+            // Get accumulator evaluation result
+            let evaluated = accumulator.evaluate($EMIT_TO)?;
+            let actual = evaluated.as_primitive::<Int64Type>();
+
+            let mut expected_values = vec![2, 1, 0, 2, 1, 2];
+            let expected = Int64Array::from($EMIT_TO.take_needed(&mut expected_values));
+
+            assert_eq!(*actual, expected);
+        };
+    }
+
+    #[test]
+    fn count_distinct_groups_evaluate_f32() -> Result<()> {
+        test_float_count_distinct_groups_evaluate!(Float32Type, f32);
+    }
+
+    #[test]
+    fn count_distinct_groups_evaluate_f64() -> Result<()> {
+        test_float_count_distinct_groups_evaluate!(Float64Type, f64);
+    }
+
+    macro_rules! test_float_count_distinct_groups_state {
+        ($DATA_TYPE:ident, $PRIM_TYPE:ty) => {
+            test_float_count_distinct_groups_state!($DATA_TYPE, $PRIM_TYPE, EmitTo::All);
+            test_float_count_distinct_groups_state!(
+                $DATA_TYPE,
+                $PRIM_TYPE,
+                EmitTo::First(3)
+            );
+
+            return Ok(())
+        };
+        ($DATA_TYPE:ident, $PRIM_TYPE:ty, $EMIT_TO:expr) => {
+            float_count_distinct_groups_accumulator!($DATA_TYPE, $PRIM_TYPE, accumulator);
+
+            // Get result state from accumulator
+            let state = accumulator.state($EMIT_TO)?;
+            let actual = as_list_array(&state[0])?;
+
+            let expected: Vec<Vec<$PRIM_TYPE>> = vec![
+                vec![1.2345, 2.6543],
+                vec![1.234],
+                vec![],
+                vec![4.752399, 5.239493],
+                vec![7.34058740],
+                vec![<$PRIM_TYPE>::INFINITY, <$PRIM_TYPE>::NEG_INFINITY],
+            ];
+
+            assert_float_distinct_count_groups_states_eq!(actual, expected, $DATA_TYPE);
+        };
+    }
+
+    #[test]
+    fn count_distinct_groups_state_f32() -> Result<()> {
+        test_float_count_distinct_groups_state!(Float32Type, f32);
+    }
+
+    #[test]
+    fn count_distinct_groups_state_f64() -> Result<()> {
+        test_float_count_distinct_groups_state!(Float64Type, f64);
+    }
+
+    macro_rules! test_float_count_distinct_groups_merge {
+        ($DATA_TYPE:ident, $PRIM_TYPE:ty) => {
+            test_float_count_distinct_groups_merge!($DATA_TYPE, $PRIM_TYPE, EmitTo::All);
+            test_float_count_distinct_groups_merge!(
+                $DATA_TYPE,
+                $PRIM_TYPE,
+                EmitTo::First(3)
+            );
+
+            return Ok(())
+        };
+        ($DATA_TYPE:ident, $PRIM_TYPE:ty, $EMIT_TO:expr) => {
+            // Prepare accumulator and update it with input values
+            float_count_distinct_groups_accumulator!($DATA_TYPE, $PRIM_TYPE, accumulator);
+
+            // Prepare merge input and merge it into accumulators state
+            let merge_group_indices = vec![0, 1, 2, 3, 6];
+            let merge_input_values: Vec<Option<Vec<Option<$PRIM_TYPE>>>> = vec![
+                Some(vec![Some(10.123), Some(12.633434)]),
+                Some(vec![]),
+                Some(vec![]),
+                Some(vec![Some(4.752399)]),
+                Some(vec![Some(8.23329)]),
+            ];
+            let merge_input = Arc::new(
+                ListArray::from_iter_primitive::<$DATA_TYPE, _, _>(merge_input_values),
+            ) as ArrayRef;
+
+            accumulator.merge_batch(&[merge_input], &merge_group_indices, None, 7)?;
+
+            // Get result state from accumulator
+            let state = accumulator.state($EMIT_TO)?;
+            let actual = as_list_array(&state[0])?;
+
+            let expected: Vec<Vec<$PRIM_TYPE>> = vec![
+                vec![1.2345, 2.6543, 10.123, 12.633434],
+                vec![1.234],
+                vec![],
+                vec![4.752399, 5.239493],
+                vec![7.34058740],
+                vec![<$PRIM_TYPE>::INFINITY, <$PRIM_TYPE>::NEG_INFINITY],
+                vec![8.23329],
+            ];
+
+            assert_float_distinct_count_groups_states_eq!(actual, expected, $DATA_TYPE);
+        };
+    }
+
+    #[test]
+    fn count_distinct_groups_merge_f32() -> Result<()> {
+        test_float_count_distinct_groups_merge!(Float32Type, f32);
+    }
+
+    #[test]
+    fn count_distinct_groups_merge_f64() -> Result<()> {
+        test_float_count_distinct_groups_merge!(Float64Type, f64);
+    }
+
+    fn bigint_count_distinct_groups_accumulator(
+    ) -> Result<DistinctCountGroupsAccumulator<Decimal256Type>> {
+        let group_indices = vec![0, 1, 1, 2, 0, 3, 3, 3, 4];
+        let input_values: Vec<Option<i256>> = vec![
+            Some(i256::from(1)),
+            Some(i256::from(1)),
+            Some(i256::from(1)),
+            None,
+            Some(i256::from(2)),
+            Some(i256::from(4)),
+            Some(i256::from(5)),
+            None,
+            Some(i256::from(7)),
+        ];
+        let values = Arc::new(PrimitiveArray::<Decimal256Type>::from(input_values));
+
+        // Prepare accumulator and update it with input values
+        let mut accumulator = DistinctCountGroupsAccumulator::<Decimal256Type>::new();
+        accumulator.update_batch(&[values], &group_indices, None, 5)?;
+
+        Ok(accumulator)
+    }
+
+    #[test]
+    fn count_distinct_groups_evaluate_i256() -> Result<()> {
+        let mut accumulator = bigint_count_distinct_groups_accumulator()?;
+
+        // Get accumulator evaluation result
+        let evaluated = accumulator.evaluate(EmitTo::All)?;
+        let actual = evaluated.as_primitive::<Int64Type>();
+
+        let expected = PrimitiveArray::<Int64Type>::from(vec![2, 1, 0, 2, 1]);
+
+        // Assert that evaluation result and expected counts for each group are equal
+        assert_eq!(*actual, expected);
+
+        Ok(())
+    }
+
+    #[test]
+    fn count_distinct_groups_state_i256() -> Result<()> {
+        let mut accumulator = bigint_count_distinct_groups_accumulator()?;
+
+        // Get accumulator state
+        let state = accumulator.state(EmitTo::All)?;
+        let actual = as_list_array(&state[0])?;
+
+        let expected = vec![
+            vec![i256::from(1), i256::from(2)],
+            vec![i256::from(1)],
+            vec![],
+            vec![i256::from(4), i256::from(5)],
+            vec![i256::from(7)],
+        ];
+
+        assert_distinct_count_groups_states_eq!(actual, expected, Decimal256Type);
+        Ok(())
+    }
+
+    #[test]
+    fn count_distinct_groups_merge_i256() -> Result<()> {
+        let mut accumulator = bigint_count_distinct_groups_accumulator()?;
+
+        // Prepare merge input and merge it into accumulators state
+        let merge_group_indices = vec![0, 1, 2, 3, 5];
+        let merge_input_values = vec![
+            Some(vec![Some(i256::from(10)), Some(i256::from(12))]),
+            Some(vec![]),
+            Some(vec![]),
+            Some(vec![Some(i256::from(4))]),
+            Some(vec![Some(i256::from(8))]),
+        ];
+        let merge_input = Arc::new(
+            ListArray::from_iter_primitive::<Decimal256Type, _, _>(merge_input_values),
+        ) as ArrayRef;
+
+        accumulator.merge_batch(&[merge_input], &merge_group_indices, None, 6)?;
+
+        // Get result state from accumulator
+        let state = accumulator.state(EmitTo::All)?;
+        let actual = as_list_array(&state[0])?;
+
+        let expected = vec![
+            vec![i256::from(1), i256::from(2), i256::from(10), i256::from(12)],
+            vec![i256::from(1)],
+            vec![],
+            vec![i256::from(4), i256::from(5)],
+            vec![i256::from(7)],
+            vec![i256::from(8)],
+        ];
+
+        assert_distinct_count_groups_states_eq!(actual, expected, Decimal256Type);
+
+        Ok(())
+    }
+
+    #[test]
+    fn count_distinct_groups_update_filtered() -> Result<()> {
+        let group_indices = vec![0, 1, 1, 2, 0, 3, 3, 3, 4];
+        let input_values = vec![
+            Some(1),
+            Some(1),
+            Some(1),
+            None,
+            Some(2),
+            Some(4),
+            Some(5),
+            None,
+            Some(7),
+        ];
+        let values = Arc::new(PrimitiveArray::<Int32Type>::from(input_values));
+        let filter: BooleanArray =
+            vec![true, true, false, true, true, true, false, true, false].into();
+
+        // Prepare accumulator and update it with input values
+        let mut accumulator = DistinctCountGroupsAccumulator::<Int32Type>::new();
+        accumulator.update_batch(&[values], &group_indices, Some(&filter), 5)?;
+
+        // Get accumulator state
+        let state = accumulator.state(EmitTo::All)?;
+        let actual = as_list_array(&state[0])?;
+
+        let expected = vec![vec![1, 2], vec![1], vec![], vec![4], vec![]];
+
+        assert_distinct_count_groups_states_eq!(actual, expected, Int32Type);
+
+        Ok(())
+    }
+
+    #[test]
+    fn count_distinct_groups_merge_filtered() -> Result<()> {
+        let group_indices = vec![0, 1, 1, 2, 0, 3, 3, 3, 4];
+        let input_values = vec![
+            Some(1),
+            Some(1),
+            Some(1),
+            None,
+            Some(2),
+            Some(4),
+            Some(5),
+            None,
+            Some(7),
+        ];
+        let values = Arc::new(PrimitiveArray::<Int32Type>::from(input_values));
+
+        // Prepare accumulator and update it with input values
+        let mut accumulator = DistinctCountGroupsAccumulator::<Int32Type>::new();
+        accumulator.update_batch(&[values], &group_indices, None, 5)?;
+
+        // Prepare merge input and merge it into accumulators state
+        let merge_group_indices = vec![0, 1, 2, 3, 5];
+        let merge_input_values = vec![
+            Some(vec![Some(10), Some(12)]),
+            Some(vec![Some(13)]),
+            Some(vec![]),
+            Some(vec![Some(4)]),
+            Some(vec![Some(18)]),
+        ];
+        let merge_input = Arc::new(ListArray::from_iter_primitive::<Int32Type, _, _>(
+            merge_input_values,
+        )) as ArrayRef;
+        let merge_filter: BooleanArray = vec![true, false, true, true, false].into();
+
+        accumulator.merge_batch(
+            &[merge_input],
+            &merge_group_indices,
+            Some(&merge_filter),
+            6,
+        )?;
+
+        // Get result state from accumulator
+        let state = accumulator.state(EmitTo::All)?;
+        let actual = as_list_array(&state[0])?;
+
+        let expected = vec![
+            vec![1, 2, 10, 12],
+            vec![1],
+            vec![],
+            vec![4, 5],
+            vec![7],
+            vec![],
+        ];
+
+        assert_distinct_count_groups_states_eq!(actual, expected, Int32Type);
         Ok(())
     }
 }
