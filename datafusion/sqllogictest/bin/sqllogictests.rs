@@ -79,6 +79,7 @@ async fn run_tests() -> Result<()> {
     env_logger::init();
 
     let options: Options = clap::Parser::parse();
+    options.warn_on_ignored();
 
     // Run all tests in parallel, reporting failures at the end
     //
@@ -364,5 +365,20 @@ impl Options {
     fn check_pg_compat_file(&self, path: &Path) -> bool {
         let file_name = path.file_name().unwrap().to_str().unwrap().to_string();
         !self.postgres_runner || file_name.starts_with(PG_COMPAT_FILE_PREFIX)
+    }
+
+    /// Logs warning messages to stdout if any ignored options are passed
+    fn warn_on_ignored(&self) {
+        if self.format.is_some() {
+            println!("WARNING: Ignoring `--format` compatibility option");
+        }
+
+        if self.z_options.is_some() {
+            println!("WARNING: Ignoring `-Z` compatibility option");
+        }
+
+        if self.show_output {
+            println!("WARNING: Ignoring `--show-output` compatibility option");
+        }
     }
 }
