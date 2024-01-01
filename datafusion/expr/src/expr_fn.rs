@@ -32,6 +32,7 @@ use crate::{ColumnarValue, ScalarUDFImpl, WindowUDF};
 use arrow::datatypes::DataType;
 use datafusion_common::{Column, Result};
 use std::any::Any;
+use std::fmt::Debug;
 use std::ops::Not;
 use std::sync::Arc;
 
@@ -981,6 +982,16 @@ pub struct SimpleScalarUDF {
     signature: Signature,
     return_type: DataType,
     fun: ScalarFunctionImplementation,
+}
+
+impl Debug for SimpleScalarUDF {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.debug_struct("ScalarUDF")
+            .field("name", &self.name)
+            .field("signature", &self.signature)
+            .field("fun", &"<FUNC>")
+            .finish()
+    }
 }
 
 impl SimpleScalarUDF {

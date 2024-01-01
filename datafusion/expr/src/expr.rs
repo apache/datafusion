@@ -1948,6 +1948,7 @@ mod test {
         );
 
         // UDF
+        #[derive(Debug)]
         struct TestScalarUDF {
             signature: Signature,
         }
