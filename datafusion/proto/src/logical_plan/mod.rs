@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use arrow::csv::WriterBuilder;
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::str::FromStr;
@@ -64,6 +65,7 @@ use datafusion_expr::{
 };
 
 use datafusion::parquet::file::properties::{WriterProperties, WriterVersion};
+use datafusion_common::file_options::csv_writer::CsvWriterOptions;
 use datafusion_common::file_options::parquet_writer::ParquetWriterOptions;
 use datafusion_expr::dml::CopyOptions;
 use prost::bytes::BufMut;
@@ -846,6 +848,20 @@ impl AsLogicalPlan for LogicalPlanNode {
                     Some(copy_to_node::CopyOptions::WriterOptions(opt)) => {
                         match &opt.file_type {
                             Some(ft) => match ft {
+                                file_type_writer_options::FileType::CsvOptions(
+                                    writer_options,
+                                ) => {
+                                    let writer_builder =
+                                        csv_writer_options_from_proto(writer_options)?;
+                                    CopyOptions::WriterOptions(Box::new(
+                                        FileTypeWriterOptions::CSV(
+                                            CsvWriterOptions::new(
+                                                writer_builder,
+                                                CompressionTypeVariant::UNCOMPRESSED,
+                                            ),
+                                        ),
+                                    ))
+                                }
                                 file_type_writer_options::FileType::ParquetOptions(
                                     writer_options,
                                 ) => {
@@ -1630,6 +1646,22 @@ impl AsLogicalPlan for LogicalPlanNode {
                         }
                         CopyOptions::WriterOptions(opt) => {
                             match opt.as_ref() {
+                                FileTypeWriterOptions::CSV(csv_opts) => {
+                                    let csv_options = &csv_opts.writer_options;
+                                    let csv_writer_options = csv_writer_options_to_proto(
+                                        csv_options,
+                                        &csv_opts.compression,
+                                    );
+                                    let csv_options =
+                                        file_type_writer_options::FileType::CsvOptions(
+                                            csv_writer_options,
+                                        );
+                                    Some(copy_to_node::CopyOptions::WriterOptions(
+                                        protobuf::FileTypeWriterOptions {
+                                            file_type: Some(csv_options),
+                                        },
+                                    ))
+                                }
                                 FileTypeWriterOptions::Parquet(parquet_opts) => {
                                     let parquet_writer_options =
                                         protobuf::ParquetWriterOptions {
@@ -1674,6 +1706,47 @@ impl AsLogicalPlan for LogicalPlanNode {
     }
 }
 
+pub(crate) fn csv_writer_options_to_proto(
+    csv_options: &WriterBuilder,
+    compression: &CompressionTypeVariant,
+) -> protobuf::CsvWriterOptions {
+    let compression: protobuf::CompressionTypeVariant = compression.into();
+    protobuf::CsvWriterOptions {
+        compression: compression.into(),
+        delimiter: (csv_options.delimiter() as char).to_string(),
+        has_header: csv_options.header(),
+        date_format: csv_options.date_format().unwrap_or("").to_owned(),
+        datetime_format: csv_options.datetime_format().unwrap_or("").to_owned(),
+        timestamp_format: csv_options.timestamp_format().unwrap_or("").to_owned(),
+        time_format: csv_options.time_format().unwrap_or("").to_owned(),
+        null_value: csv_options.null().to_owned(),
+    }
+}
+
+pub(crate) fn csv_writer_options_from_proto(
+    writer_options: &protobuf::CsvWriterOptions,
+) -> Result<WriterBuilder> {
+    let mut builder = WriterBuilder::new();
+    if !writer_options.delimiter.is_empty() {
+        if let Some(delimiter) = writer_options.delimiter.chars().next() {
+            if delimiter.is_ascii() {
+                builder = builder.with_delimiter(delimiter as u8);
+            } else {
+                return Err(proto_error("CSV Delimiter is not ASCII"));
+            }
+        } else {
+            return Err(proto_error("Error parsing CSV Delimiter"));
+        }
+    }
+    Ok(builder
+        .with_header(writer_options.has_header)
+        .with_date_format(writer_options.date_format.clone())
+        .with_datetime_format(writer_options.datetime_format.clone())
+        .with_timestamp_format(writer_options.timestamp_format.clone())
+        .with_time_format(writer_options.time_format.clone())
+        .with_null(writer_options.null_value.clone()))
+}
+
 pub(crate) fn writer_properties_to_proto(
     props: &WriterProperties,
 ) -> protobuf::WriterProperties {
@@ -1691,8 +1764,8 @@ pub(crate) fn writer_properties_to_proto(
 pub(crate) fn writer_properties_from_proto(
     props: &protobuf::WriterProperties,
 ) -> Result<WriterProperties, DataFusionError> {
-    let writer_version = WriterVersion::from_str(&props.writer_version)
-        .map_err(|e| proto_error(e.to_string()))?;
+    let writer_version =
+        WriterVersion::from_str(&props.writer_version).map_err(proto_error)?;
     Ok(WriterProperties::builder()
         .set_created_by(props.created_by.clone())
         .set_writer_version(writer_version)

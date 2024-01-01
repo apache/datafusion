@@ -24,20 +24,16 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use crate::datasource::file_format::file_compression_type::FileCompressionType;
-
 use crate::error::Result;
 
 use arrow_array::RecordBatch;
-
 use datafusion_common::DataFusionError;
 
 use async_trait::async_trait;
 use bytes::Bytes;
-
 use futures::future::BoxFuture;
 use object_store::path::Path;
 use object_store::{MultipartId, ObjectStore};
-
 use tokio::io::AsyncWrite;
 
 pub(crate) mod demux;
@@ -149,15 +145,11 @@ impl<W: AsyncWrite + Unpin + Send> AsyncWrite for AbortableWrite<W> {
 
 /// A trait that defines the methods required for a RecordBatch serializer.
 #[async_trait]
-pub trait BatchSerializer: Unpin + Send {
+pub trait BatchSerializer: Sync + Send {
     /// Asynchronously serializes a `RecordBatch` and returns the serialized bytes.
-    async fn serialize(&mut self, batch: RecordBatch) -> Result<Bytes>;
-    /// Duplicates self to support serializing multiple batches in parallel on multiple cores
-    fn duplicate(&mut self) -> Result<Box<dyn BatchSerializer>> {
-        Err(DataFusionError::NotImplemented(
-            "Parallel serialization is not implemented for this file type".into(),
-        ))
-    }
+    /// Parameter `initial` signals whether the given batch is the first batch.
+    /// This distinction is important for certain serializers (like CSV).
+    async fn serialize(&self, batch: RecordBatch, initial: bool) -> Result<Bytes>;
 }
 
 /// Returns an [`AbortableWrite`] which writes to the given object store location

@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::borrow::Cow;
 use std::sync::Arc;
 
 use crate::physical_optimizer::utils::{
@@ -28,15 +29,13 @@ use crate::physical_plan::repartition::RepartitionExec;
 use crate::physical_plan::sorts::sort::SortExec;
 use crate::physical_plan::{with_new_children_if_necessary, ExecutionPlan};
 
-use datafusion_common::tree_node::{Transformed, TreeNode, VisitRecursion};
+use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{plan_err, DataFusionError, JoinSide, Result};
 use datafusion_expr::JoinType;
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::{
     LexRequirementRef, PhysicalSortExpr, PhysicalSortRequirement,
 };
-
-use itertools::izip;
 
 /// This is a "data class" we use within the [`EnforceSorting`] rule to push
 /// down [`SortExec`] in the plan. In some cases, we can reduce the total
@@ -49,112 +48,92 @@ pub(crate) struct SortPushDown {
     pub plan: Arc<dyn ExecutionPlan>,
     /// Parent required sort ordering
     required_ordering: Option<Vec<PhysicalSortRequirement>>,
-    /// The adjusted request sort ordering to children.
-    /// By default they are the same as the plan's required input ordering, but can be adjusted based on parent required sort ordering properties.
-    adjusted_request_ordering: Vec<Option<Vec<PhysicalSortRequirement>>>,
+    children_nodes: Vec<Self>,
 }
 
 impl SortPushDown {
-    pub fn init(plan: Arc<dyn ExecutionPlan>) -> Self {
-        let request_ordering = plan.required_input_ordering();
-        SortPushDown {
+    /// Creates an empty tree with empty `required_ordering`'s.
+    pub fn new(plan: Arc<dyn ExecutionPlan>) -> Self {
+        let children = plan.children();
+        Self {
             plan,
             required_ordering: None,
-            adjusted_request_ordering: request_ordering,
+            children_nodes: children.into_iter().map(Self::new).collect(),
         }
     }
 
-    pub fn children(&self) -> Vec<SortPushDown> {
-        izip!(
-            self.plan.children().into_iter(),
-            self.adjusted_request_ordering.clone().into_iter(),
-        )
-        .map(|(child, from_parent)| {
-            let child_request_ordering = child.required_input_ordering();
-            SortPushDown {
-                plan: child,
-                required_ordering: from_parent,
-                adjusted_request_ordering: child_request_ordering,
-            }
-        })
-        .collect()
+    /// Assigns the ordering requirement of the root node to the its children.
+    pub fn assign_initial_requirements(&mut self) {
+        let reqs = self.plan.required_input_ordering();
+        for (child, requirement) in self.children_nodes.iter_mut().zip(reqs) {
+            child.required_ordering = requirement;
+        }
     }
 }
 
 impl TreeNode for SortPushDown {
-    fn apply_children<F>(&self, op: &mut F) -> Result<VisitRecursion>
-    where
-        F: FnMut(&Self) -> Result<VisitRecursion>,
-    {
-        let children = self.children();
-        for child in children {
-            match op(&child)? {
-                VisitRecursion::Continue => {}
-                VisitRecursion::Skip => return Ok(VisitRecursion::Continue),
-                VisitRecursion::Stop => return Ok(VisitRecursion::Stop),
-            }
-        }
-
-        Ok(VisitRecursion::Continue)
+    fn children_nodes(&self) -> Vec<Cow<Self>> {
+        self.children_nodes.iter().map(Cow::Borrowed).collect()
     }
 
     fn map_children<F>(mut self, transform: F) -> Result<Self>
     where
         F: FnMut(Self) -> Result<Self>,
     {
-        let children = self.children();
-        if !children.is_empty() {
-            let children_plans = children
+        if !self.children_nodes.is_empty() {
+            self.children_nodes = self
+                .children_nodes
                 .into_iter()
                 .map(transform)
-                .map(|r| r.map(|s| s.plan))
-                .collect::<Result<Vec<_>>>()?;
-
-            match with_new_children_if_necessary(self.plan, children_plans)? {
-                Transformed::Yes(plan) | Transformed::No(plan) => {
-                    self.plan = plan;
-                }
-            }
-        };
+                .collect::<Result<_>>()?;
+            self.plan = with_new_children_if_necessary(
+                self.plan,
+                self.children_nodes.iter().map(|c| c.plan.clone()).collect(),
+            )?
+            .into();
+        }
         Ok(self)
     }
 }
 
 pub(crate) fn pushdown_sorts(
-    requirements: SortPushDown,
+    mut requirements: SortPushDown,
 ) -> Result<Transformed<SortPushDown>> {
     let plan = &requirements.plan;
     let parent_required = requirements.required_ordering.as_deref().unwrap_or(&[]);
+
     if let Some(sort_exec) = plan.as_any().downcast_ref::<SortExec>() {
-        let new_plan = if !plan
+        if !plan
             .equivalence_properties()
             .ordering_satisfy_requirement(parent_required)
         {
             // If the current plan is a SortExec, modify it to satisfy parent requirements:
             let mut new_plan = sort_exec.input().clone();
             add_sort_above(&mut new_plan, parent_required, sort_exec.fetch());
-            new_plan
-        } else {
-            requirements.plan
+            requirements.plan = new_plan;
         };
-        let required_ordering = new_plan
+
+        let required_ordering = requirements
+            .plan
             .output_ordering()
             .map(PhysicalSortRequirement::from_sort_exprs)
             .unwrap_or_default();
         // Since new_plan is a SortExec, we can safely get the 0th index.
-        let child = new_plan.children().swap_remove(0);
+        let mut child = requirements.children_nodes.swap_remove(0);
         if let Some(adjusted) =
-            pushdown_requirement_to_children(&child, &required_ordering)?
+            pushdown_requirement_to_children(&child.plan, &required_ordering)?
         {
+            for (c, o) in child.children_nodes.iter_mut().zip(adjusted) {
+                c.required_ordering = o;
+            }
             // Can push down requirements
-            Ok(Transformed::Yes(SortPushDown {
-                plan: child,
-                required_ordering: None,
-                adjusted_request_ordering: adjusted,
-            }))
+            child.required_ordering = None;
+            Ok(Transformed::Yes(child))
         } else {
             // Can not push down requirements
-            Ok(Transformed::Yes(SortPushDown::init(new_plan)))
+            let mut empty_node = SortPushDown::new(requirements.plan);
+            empty_node.assign_initial_requirements();
+            Ok(Transformed::Yes(empty_node))
         }
     } else {
         // Executors other than SortExec
@@ -163,23 +142,27 @@ pub(crate) fn pushdown_sorts(
             .ordering_satisfy_requirement(parent_required)
         {
             // Satisfies parent requirements, immediately return.
-            return Ok(Transformed::Yes(SortPushDown {
-                required_ordering: None,
-                ..requirements
-            }));
+            let reqs = requirements.plan.required_input_ordering();
+            for (child, order) in requirements.children_nodes.iter_mut().zip(reqs) {
+                child.required_ordering = order;
+            }
+            return Ok(Transformed::Yes(requirements));
         }
         // Can not satisfy the parent requirements, check whether the requirements can be pushed down:
         if let Some(adjusted) = pushdown_requirement_to_children(plan, parent_required)? {
-            Ok(Transformed::Yes(SortPushDown {
-                plan: requirements.plan,
-                required_ordering: None,
-                adjusted_request_ordering: adjusted,
-            }))
+            for (c, o) in requirements.children_nodes.iter_mut().zip(adjusted) {
+                c.required_ordering = o;
+            }
+            requirements.required_ordering = None;
+            Ok(Transformed::Yes(requirements))
         } else {
             // Can not push down requirements, add new SortExec:
             let mut new_plan = requirements.plan;
             add_sort_above(&mut new_plan, parent_required, None);
-            Ok(Transformed::Yes(SortPushDown::init(new_plan)))
+            let mut new_empty = SortPushDown::new(new_plan);
+            new_empty.assign_initial_requirements();
+            // Can not push down requirements
+            Ok(Transformed::Yes(new_empty))
         }
     }
 }
@@ -297,10 +280,11 @@ fn pushdown_requirement_to_children(
     // TODO: Add support for Projection push down
 }
 
-/// Determine the children requirements
-/// If the children requirements are more specific, do not push down the parent requirements
-/// If the the parent requirements are more specific, push down the parent requirements
-/// If they are not compatible, need to add Sort.
+/// Determine children requirements:
+/// - If children requirements are more specific, do not push down parent
+///   requirements.
+/// - If parent requirements are more specific, push down parent requirements.
+/// - If they are not compatible, need to add a sort.
 fn determine_children_requirement(
     parent_required: LexRequirementRef,
     request_child: LexRequirementRef,
@@ -310,18 +294,15 @@ fn determine_children_requirement(
         .equivalence_properties()
         .requirements_compatible(request_child, parent_required)
     {
-        // request child requirements are more specific, no need to push down the parent requirements
+        // Child requirements are more specific, no need to push down.
         RequirementsCompatibility::Satisfy
     } else if child_plan
         .equivalence_properties()
         .requirements_compatible(parent_required, request_child)
     {
-        // parent requirements are more specific, adjust the request child requirements and push down the new requirements
-        let adjusted = if parent_required.is_empty() {
-            None
-        } else {
-            Some(parent_required.to_vec())
-        };
+        // Parent requirements are more specific, adjust child's requirements
+        // and push down the new requirements:
+        let adjusted = (!parent_required.is_empty()).then(|| parent_required.to_vec());
         RequirementsCompatibility::Compatible(adjusted)
     } else {
         RequirementsCompatibility::NonCompatible
