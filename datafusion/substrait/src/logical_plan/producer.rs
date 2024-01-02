@@ -608,7 +608,7 @@ pub fn parse_flat_grouping_exprs(
 
 pub fn to_substrait_groupings(
     ctx: &SessionContext,
-    exprs: &Vec<Expr>,
+    exprs: &[Expr],
     schema: &DFSchemaRef,
     extension_info: &mut (
         Vec<extensions::SimpleExtensionDeclaration>,
