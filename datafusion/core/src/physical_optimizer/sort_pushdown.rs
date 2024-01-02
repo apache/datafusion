@@ -18,15 +18,19 @@
 use std::sync::Arc;
 
 use crate::physical_optimizer::utils::{
-    is_limit, is_sort_preserving_merge, is_union, is_window,
+    add_sort_above, is_limit, is_sort_preserving_merge, is_union, is_window,
 };
 use crate::physical_plan::filter::FilterExec;
 use crate::physical_plan::joins::utils::calculate_join_output_ordering;
 use crate::physical_plan::joins::{HashJoinExec, SortMergeJoinExec};
 use crate::physical_plan::projection::ProjectionExec;
 use crate::physical_plan::repartition::RepartitionExec;
-use crate::physical_plan::ExecutionPlan;
+use crate::physical_plan::sorts::sort::SortExec;
+use crate::physical_plan::{with_new_children_if_necessary, ExecutionPlan};
 
+use datafusion_common::tree_node::{
+    Transformed, TreeNode, TreeNodeRecursion, VisitRecursionIterator,
+};
 use datafusion_common::{plan_err, DataFusionError, JoinSide, Result};
 use datafusion_expr::JoinType;
 use datafusion_physical_expr::expressions::Column;
@@ -34,7 +38,162 @@ use datafusion_physical_expr::{
     LexRequirementRef, PhysicalSortExpr, PhysicalSortRequirement,
 };
 
-pub fn pushdown_requirement_to_children(
+use itertools::izip;
+
+/// This is a "data class" we use within the [`EnforceSorting`] rule to push
+/// down [`SortExec`] in the plan. In some cases, we can reduce the total
+/// computational cost by pushing down `SortExec`s through some executors.
+///
+/// [`EnforceSorting`]: crate::physical_optimizer::enforce_sorting::EnforceSorting
+#[derive(Debug, Clone)]
+pub(crate) struct SortPushDown {
+    /// Current plan
+    pub plan: Arc<dyn ExecutionPlan>,
+    /// Parent required sort ordering
+    required_ordering: Option<Vec<PhysicalSortRequirement>>,
+    /// The adjusted request sort ordering to children.
+    /// By default they are the same as the plan's required input ordering, but can be adjusted based on parent required sort ordering properties.
+    adjusted_request_ordering: Vec<Option<Vec<PhysicalSortRequirement>>>,
+}
+
+impl SortPushDown {
+    pub fn init(plan: Arc<dyn ExecutionPlan>) -> Self {
+        let request_ordering = plan.required_input_ordering();
+        SortPushDown {
+            plan,
+            required_ordering: None,
+            adjusted_request_ordering: request_ordering,
+        }
+    }
+
+    pub fn children(&self) -> Vec<SortPushDown> {
+        izip!(
+            self.plan.children().into_iter(),
+            self.adjusted_request_ordering.clone().into_iter(),
+        )
+        .map(|(child, from_parent)| {
+            let child_request_ordering = child.required_input_ordering();
+            SortPushDown {
+                plan: child,
+                required_ordering: from_parent,
+                adjusted_request_ordering: child_request_ordering,
+            }
+        })
+        .collect()
+    }
+}
+
+impl TreeNode for SortPushDown {
+    fn visit_children<F>(&self, f: &mut F) -> Result<TreeNodeRecursion>
+    where
+        F: FnMut(&Self) -> Result<TreeNodeRecursion>,
+    {
+        self.children().iter().for_each_till_continue(f)
+    }
+
+    fn map_children<F>(mut self, transform: F) -> Result<Self>
+    where
+        F: FnMut(Self) -> Result<Self>,
+    {
+        let children = self.children();
+        if !children.is_empty() {
+            let children_plans = children
+                .into_iter()
+                .map(transform)
+                .map(|r| r.map(|s| s.plan))
+                .collect::<Result<Vec<_>>>()?;
+
+            match with_new_children_if_necessary(self.plan, children_plans)? {
+                Transformed::Yes(plan) | Transformed::No(plan) => {
+                    self.plan = plan;
+                }
+            }
+        };
+        Ok(self)
+    }
+
+    fn transform_children<F>(&mut self, f: &mut F) -> Result<TreeNodeRecursion>
+    where
+        F: FnMut(&mut Self) -> Result<TreeNodeRecursion>,
+    {
+        let mut children = self.children();
+        if !children.is_empty() {
+            let tnr = children.iter_mut().for_each_till_continue(f)?;
+            let children_plans = children.into_iter().map(|c| c.plan).collect();
+            self.plan =
+                with_new_children_if_necessary(self.plan.clone(), children_plans)?.into();
+            Ok(tnr)
+        } else {
+            Ok(TreeNodeRecursion::Continue)
+        }
+    }
+}
+
+pub(crate) fn pushdown_sorts(
+    requirements: SortPushDown,
+) -> Result<Transformed<SortPushDown>> {
+    let plan = &requirements.plan;
+    let parent_required = requirements.required_ordering.as_deref().unwrap_or(&[]);
+    if let Some(sort_exec) = plan.as_any().downcast_ref::<SortExec>() {
+        let new_plan = if !plan
+            .equivalence_properties()
+            .ordering_satisfy_requirement(parent_required)
+        {
+            // If the current plan is a SortExec, modify it to satisfy parent requirements:
+            let mut new_plan = sort_exec.input().clone();
+            add_sort_above(&mut new_plan, parent_required, sort_exec.fetch());
+            new_plan
+        } else {
+            requirements.plan
+        };
+        let required_ordering = new_plan
+            .output_ordering()
+            .map(PhysicalSortRequirement::from_sort_exprs)
+            .unwrap_or_default();
+        // Since new_plan is a SortExec, we can safely get the 0th index.
+        let child = new_plan.children().swap_remove(0);
+        if let Some(adjusted) =
+            pushdown_requirement_to_children(&child, &required_ordering)?
+        {
+            // Can push down requirements
+            Ok(Transformed::Yes(SortPushDown {
+                plan: child,
+                required_ordering: None,
+                adjusted_request_ordering: adjusted,
+            }))
+        } else {
+            // Can not push down requirements
+            Ok(Transformed::Yes(SortPushDown::init(new_plan)))
+        }
+    } else {
+        // Executors other than SortExec
+        if plan
+            .equivalence_properties()
+            .ordering_satisfy_requirement(parent_required)
+        {
+            // Satisfies parent requirements, immediately return.
+            return Ok(Transformed::Yes(SortPushDown {
+                required_ordering: None,
+                ..requirements
+            }));
+        }
+        // Can not satisfy the parent requirements, check whether the requirements can be pushed down:
+        if let Some(adjusted) = pushdown_requirement_to_children(plan, parent_required)? {
+            Ok(Transformed::Yes(SortPushDown {
+                plan: requirements.plan,
+                required_ordering: None,
+                adjusted_request_ordering: adjusted,
+            }))
+        } else {
+            // Can not push down requirements, add new SortExec:
+            let mut new_plan = requirements.plan;
+            add_sort_above(&mut new_plan, parent_required, None);
+            Ok(Transformed::Yes(SortPushDown::init(new_plan)))
+        }
+    }
+}
+
+fn pushdown_requirement_to_children(
     plan: &Arc<dyn ExecutionPlan>,
     parent_required: LexRequirementRef,
 ) -> Result<Option<Vec<Option<Vec<PhysicalSortRequirement>>>>> {

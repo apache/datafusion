@@ -147,47 +147,6 @@ pub trait TreeNode: Sized {
             .continue_on_prune()
     }
 
-    fn transform_with_payload<FD, PD, FU, PU>(
-        &mut self,
-        f_down: &mut FD,
-        payload_down: PD,
-        f_up: &mut FU,
-    ) -> Result<(TreeNodeRecursion, Option<PU>)>
-    where
-        FD: FnMut(&mut Self, PD) -> Result<(TreeNodeRecursion, Vec<PD>)>,
-        FU: FnMut(&mut Self, Vec<PU>) -> Result<(TreeNodeRecursion, PU)>,
-    {
-        // Apply `f_down` on self.
-        let (tnr, new_payload_down) = f_down(self, payload_down)?;
-        let mut new_payload_down_iter = new_payload_down.into_iter();
-        // If it returns continue (not prune or stop or stop all) then continue traversal
-        // on inner children and children.
-        let mut new_payload_up = None;
-        tnr.and_then_on_continue(|| {
-            // Run the recursive `transform` on each children.
-            let mut payload_up = vec![];
-            let tnr = self.transform_children(&mut |c| {
-                let (tnr, p) = c.transform_with_payload(
-                    f_down,
-                    new_payload_down_iter.next().unwrap(),
-                    f_up,
-                )?;
-                p.into_iter().for_each(|p| payload_up.push(p));
-                Ok(tnr)
-            })?;
-            // Apply `f_up` on self.
-            tnr.and_then_on_continue(|| {
-                let (tnr, np) = f_up(self, payload_up)?;
-                new_payload_up = Some(np);
-                Ok(tnr)
-            })
-        })?
-        // Applying `f_down` or `f_up` on self might have returned prune, but we need to propagate
-        // continue.
-        .continue_on_prune()
-        .map(|tnr| (tnr, new_payload_up))
-    }
-
     fn transform_down<F>(&mut self, f: &mut F) -> Result<TreeNodeRecursion>
     where
         F: FnMut(&mut Self) -> Result<TreeNodeRecursion>,
@@ -204,27 +163,6 @@ pub trait TreeNode: Sized {
             .continue_on_prune()
     }
 
-    fn transform_down_with_payload<F, P>(
-        &mut self,
-        f: &mut F,
-        payload: P,
-    ) -> Result<TreeNodeRecursion>
-    where
-        F: FnMut(&mut Self, P) -> Result<(TreeNodeRecursion, Vec<P>)>,
-    {
-        // Apply `f` on self.
-        let (tnr, new_payload) = f(self, payload)?;
-        let mut new_payload_iter = new_payload.into_iter();
-        // If it returns continue (not prune or stop or stop all) then continue
-        // traversal on inner children and children.
-        tnr.and_then_on_continue(||
-            // Run the recursive `transform` on each children.
-            self.transform_children(&mut |c| c.transform_down_with_payload(f, new_payload_iter.next().unwrap())))?
-        // Applying `f` on self might have returned prune, but we need to propagate
-        // continue.
-        .continue_on_prune()
-    }
-
     fn transform_up<F>(&mut self, f: &mut F) -> Result<TreeNodeRecursion>
     where
         F: FnMut(&mut Self) -> Result<TreeNodeRecursion>,
@@ -236,33 +174,6 @@ pub trait TreeNode: Sized {
             // Applying `f` on self might have returned prune, but we need to propagate
             // continue.
             .continue_on_prune()
-    }
-
-    fn transform_up_with_payload<F, P>(
-        &mut self,
-        f: &mut F,
-    ) -> Result<(TreeNodeRecursion, Option<P>)>
-    where
-        F: FnMut(&mut Self, Vec<P>) -> Result<(TreeNodeRecursion, P)>,
-    {
-        // Run the recursive `transform` on each children.
-        let mut payload = vec![];
-        let tnr = self.transform_children(&mut |c| {
-            let (tnr, p) = c.transform_up_with_payload(f)?;
-            p.into_iter().for_each(|p| payload.push(p));
-            Ok(tnr)
-        })?;
-        let mut new_payload = None;
-        // Apply `f` on self.
-        tnr.and_then_on_continue(|| {
-            let (tnr, np) = f(self, payload)?;
-            new_payload = Some(np);
-            Ok(tnr)
-        })?
-        // Applying `f` on self might have returned prune, but we need to propagate
-        // continue.
-        .continue_on_prune()
-        .map(|tnr| (tnr, new_payload))
     }
 
     /// Convenience utils for writing optimizers rule: recursively apply the given 'op' to the node and all of its
