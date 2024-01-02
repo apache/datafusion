@@ -40,6 +40,7 @@ macro_rules! export_functions {
     ($($name:ident),*) => {
         pub mod expr_fn {
             $(
+                #[doc = concat!("Call the `", $name, "`function")]
                 /// Return $name(arg)
                 pub fn $name(args: Vec<datafusion_expr::Expr>) -> datafusion_expr::Expr {
                     super::$name().call(args)
@@ -97,12 +98,14 @@ macro_rules! make_udf_function {
 /// instead of getting a cryptic "no function found" message at runtime.
 
 macro_rules! make_package {
-    ($name:ident, $feature:literal) => {
+    ($name:ident, $feature:literal, $DOC:expr) => {
         #[cfg(feature = $feature)]
+        #[doc = $DOC ]
+        #[doc = concat!("Enabled via feature flag `", $feature, "`")]
         pub mod $name;
 
         #[cfg(not(feature = $feature))]
-        /// Stub module when feature is not enabled
+        #[doc = concat!("Disabled. Enable via feature flag `", $feature, "`")]
         pub mod $name {
             use datafusion_expr::ScalarUDF;
             use log::debug;

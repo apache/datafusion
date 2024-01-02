@@ -66,7 +66,7 @@ pub trait SerializerRegistry: Send + Sync {
     ) -> Result<Arc<dyn UserDefinedLogicalNode>>;
 }
 
-/// A  [`FunctionRegistry`] that uses in memory HashMaps
+/// A  [`FunctionRegistry`] that uses in memory [`HashMap`]s
 #[derive(Default, Debug)]
 pub struct MemoryFunctionRegistry {
     /// Scalar Functions
