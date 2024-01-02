@@ -125,7 +125,7 @@ fn get_valid_types(
                     Ok(vec![vec![elem_type.to_owned(), array_type.clone()]])
                 }
             }
-            _ => {Ok(vec![vec![]])},
+            _ => Ok(vec![vec![]]),
         }
     }
     let valid_types = match signature {
