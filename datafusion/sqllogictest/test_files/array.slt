@@ -364,6 +364,17 @@ AS VALUES
 ;
 
 statement ok
+CREATE TABLE large_arrays_values_without_nulls
+AS SELECT
+  arrow_cast(column1, 'LargeList(Int64)') AS column1,
+  column2,
+  column3,
+  column4,
+  arrow_cast(column5, 'LargeList(Int64)') AS column5
+FROM arrays_values_without_nulls
+;
+
+statement ok
 CREATE TABLE arrays_range
 AS VALUES
   (3, 10, 2),
@@ -2054,9 +2065,19 @@ select array_position(['h', 'e', 'l', 'l', 'o'], 'l'), array_position([1, 2, 3, 
 ----
 3 5 1
 
+query III
+select array_position(arrow_cast(['h', 'e', 'l', 'l', 'o'], 'LargeList(Utf8)'), 'l'), array_position(arrow_cast([1, 2, 3, 4, 5], 'LargeList(Int64)'), 5), array_position(arrow_cast([1, 1, 1], 'LargeList(Int64)'), 1);
+----
+3 5 1
+
 # array_position scalar function #2 (with optional argument)
 query III
 select array_position(['h', 'e', 'l', 'l', 'o'], 'l', 4), array_position([1, 2, 5, 4, 5], 5, 4), array_position([1, 1, 1], 1, 2);
+----
+4 5 2
+
+query III
+select array_position(arrow_cast(['h', 'e', 'l', 'l', 'o'], 'LargeList(Utf8)'), 'l', 4), array_position(arrow_cast([1, 2, 3, 4, 5], 'LargeList(Int64)'), 5, 4), array_position(arrow_cast([1, 1, 1], 'LargeList(Int64)'), 1, 2);
 ----
 4 5 2
 
@@ -2072,9 +2093,19 @@ select array_position(make_array([1, 2, 3], [4, 5, 6], [5, 5, 5], [4, 5, 6], [7,
 ----
 4 3
 
+query II
+select array_position(arrow_cast(make_array([1, 2, 3], [4, 5, 6], [5, 5, 5], [4, 5, 6], [7, 8, 9]), 'LargeList(List(Int64))'), [4, 5, 6]), array_position(arrow_cast(make_array([1, 3, 2], [2, 3, 4], [2, 3, 4], [5, 3, 1], [1, 3, 2]), 'LargeList(List(Int64))'), [2, 3, 4]);
+----
+2 2
+
 # list_position scalar function #5 (function alias `array_position`)
 query III
 select list_position(['h', 'e', 'l', 'l', 'o'], 'l'), list_position([1, 2, 3, 4, 5], 5), list_position([1, 1, 1], 1);
+----
+3 5 1
+
+query III
+select list_position(arrow_cast(['h', 'e', 'l', 'l', 'o'], 'LargeList(Utf8)'), 'l'), list_position(arrow_cast([1, 2, 3, 4, 5], 'LargeList(Int64)'), 5), list_position(arrow_cast([1, 1, 1], 'LargeList(Int64)'), 1);
 ----
 3 5 1
 
@@ -2084,15 +2115,33 @@ select array_indexof(['h', 'e', 'l', 'l', 'o'], 'l'), array_indexof([1, 2, 3, 4,
 ----
 3 5 1
 
+query III
+select array_indexof(arrow_cast(['h', 'e', 'l', 'l', 'o'], 'LargeList(Utf8)'), 'l'), array_indexof(arrow_cast([1, 2, 3, 4, 5], 'LargeList(Int64)'), 5), array_indexof(arrow_cast([1, 1, 1], 'LargeList(Int64)'), 1);
+----
+3 5 1
+
 # list_indexof scalar function #7 (function alias `array_position`)
 query III
 select list_indexof(['h', 'e', 'l', 'l', 'o'], 'l'), list_indexof([1, 2, 3, 4, 5], 5), list_indexof([1, 1, 1], 1);
 ----
 3 5 1
 
+query III
+select list_indexof(arrow_cast(['h', 'e', 'l', 'l', 'o'], 'LargeList(Utf8)'), 'l'), list_indexof(arrow_cast([1, 2, 3, 4, 5], 'LargeList(Int64)'), 5), list_indexof(arrow_cast([1, 1, 1], 'LargeList(Int64)'), 1);
+----
+3 5 1
+
 # array_position with columns #1
 query II
 select array_position(column1, column2), array_position(column1, column2, column3) from arrays_values_without_nulls;
+----
+1 1
+2 2
+3 3
+4 4
+
+query II
+select array_position(column1, column2), array_position(column1, column2, column3) from large_arrays_values_without_nulls;
 ----
 1 1
 2 2
@@ -2106,9 +2155,24 @@ select array_position(column1, column2), array_position(column1, column2, column
 3 3
 2 5
 
+#TODO: add this test when #8305 is fixed
+#query II
+#select array_position(column1, column2), array_position(column1, column2, column3) from nested_arrays;
+#----
+#3 3
+#2 5
+
 # array_position with columns and scalars #1
 query III
 select array_position(make_array(1, 2, 3, 4, 5), column2), array_position(column1, 3), array_position(column1, 3, 5) from arrays_values_without_nulls;
+----
+1 3 NULL
+NULL NULL NULL
+NULL NULL NULL
+NULL NULL NULL
+
+query III
+select array_position(arrow_cast(make_array(1, 2, 3, 4, 5), 'LargeList(Int64)'), column2), array_position(column1, 3), array_position(column1, 3, 5) from large_arrays_values_without_nulls;
 ----
 1 3 NULL
 NULL NULL NULL
@@ -2121,6 +2185,13 @@ select array_position(make_array([1, 2, 3], [4, 5, 6], [11, 12, 13]), column2), 
 ----
 NULL 6 4
 NULL 1 NULL
+
+#TODO: add this test when #8305 is fixed
+#query III
+#select array_position(arrow_cast(make_array([1, 2, 3], [4, 5, 6], [11, 12, 13]), 'LargeList(List(Int64))'), column2), array_position(column1, make_array(4, 5, 6)), array_position(column1, make_array(1, 2, 3), 2) from large_nested_arrays;
+#----
+#NULL 6 4
+#NULL 1 NULL
 
 ## array_positions (aliases: `list_positions`)
 
