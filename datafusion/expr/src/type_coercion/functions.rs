@@ -116,18 +116,18 @@ fn get_valid_types(
             &new_base_type,
         );
 
-        if let DataType::List(ref field) = array_type {
-            let elem_type = field.data_type();
-            if is_append {
-                Ok(vec![vec![array_type.clone(), elem_type.to_owned()]])
-            } else {
-                Ok(vec![vec![elem_type.to_owned(), array_type.clone()]])
+        match array_type {
+            DataType::List(ref field) | DataType::LargeList(ref field) => {
+                let elem_type = field.data_type();
+                if is_append {
+                    Ok(vec![vec![array_type.clone(), elem_type.to_owned()]])
+                } else {
+                    Ok(vec![vec![elem_type.to_owned(), array_type.clone()]])
+                }
             }
-        } else {
-            Ok(vec![vec![]])
+            _ => {Ok(vec![vec![]])},
         }
     }
-
     let valid_types = match signature {
         TypeSignature::Variadic(valid_types) => valid_types
             .iter()
