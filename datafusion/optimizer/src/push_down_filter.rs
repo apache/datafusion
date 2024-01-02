@@ -691,9 +691,11 @@ impl OptimizerRule for PushDownFilter {
             | LogicalPlan::Distinct(_)
             | LogicalPlan::Sort(_) => {
                 // commutable
-                let new_filter =
-                    plan.with_new_inputs(&[child_plan.inputs()[0].clone()])?;
-                child_plan.with_new_inputs(&[new_filter])?
+                let new_filter = plan.with_new_exprs(
+                    plan.expressions(),
+                    &[child_plan.inputs()[0].clone()],
+                )?;
+                child_plan.with_new_exprs(child_plan.expressions(), &[new_filter])?
             }
             LogicalPlan::SubqueryAlias(subquery_alias) => {
                 let mut replace_map = HashMap::new();
@@ -716,7 +718,7 @@ impl OptimizerRule for PushDownFilter {
                     new_predicate,
                     subquery_alias.input.clone(),
                 )?);
-                child_plan.with_new_inputs(&[new_filter])?
+                child_plan.with_new_exprs(child_plan.expressions(), &[new_filter])?
             }
             LogicalPlan::Projection(projection) => {
                 // A projection is filter-commutable if it do not contain volatile predicates or contain volatile
@@ -760,10 +762,15 @@ impl OptimizerRule for PushDownFilter {
                         )?);
 
                         match conjunction(keep_predicates) {
-                            None => child_plan.with_new_inputs(&[new_filter])?,
+                            None => child_plan.with_new_exprs(
+                                child_plan.expressions(),
+                                &[new_filter],
+                            )?,
                             Some(keep_predicate) => {
-                                let child_plan =
-                                    child_plan.with_new_inputs(&[new_filter])?;
+                                let child_plan = child_plan.with_new_exprs(
+                                    child_plan.expressions(),
+                                    &[new_filter],
+                                )?;
                                 LogicalPlan::Filter(Filter::try_new(
                                     keep_predicate,
                                     Arc::new(child_plan),
@@ -837,7 +844,9 @@ impl OptimizerRule for PushDownFilter {
                     )?),
                     None => (*agg.input).clone(),
                 };
-                let new_agg = filter.input.with_new_inputs(&vec![child])?;
+                let new_agg = filter
+                    .input
+                    .with_new_exprs(filter.input.expressions(), &vec![child])?;
                 match conjunction(keep_predicates) {
                     Some(predicate) => LogicalPlan::Filter(Filter::try_new(
                         predicate,
@@ -942,7 +951,8 @@ impl OptimizerRule for PushDownFilter {
                     None => extension_plan.node.inputs().into_iter().cloned().collect(),
                 };
                 // extension with new inputs.
-                let new_extension = child_plan.with_new_inputs(&new_children)?;
+                let new_extension =
+                    child_plan.with_new_exprs(child_plan.expressions(), &new_children)?;
 
                 match conjunction(keep_predicates) {
                     Some(predicate) => LogicalPlan::Filter(Filter::try_new(
