@@ -115,7 +115,8 @@ impl AggregateExpr for DistinctCount {
                 | Date32
                 | Date64
                 | Time32(_)
-                | Time64(_) // | Timestamp(_, _)
+                | Time64(_)
+                | Timestamp(_, _)
         )
     }
 
@@ -403,12 +404,12 @@ where
         let unique_values = emit_to.take_needed(&mut self.unique_values);
 
         // Final state is represented by Int64 array, where each element is a length of corresponding HashSet from `self.unique_values`
-        return Ok(Arc::new(Int64Array::from(
+        Ok(Arc::new(Int64Array::from(
             unique_values
                 .into_iter()
                 .map(|set| set.len() as i64)
                 .collect_vec(),
-        )));
+        )))
     }
 
     fn state(&mut self, emit_to: crate::EmitTo) -> Result<Vec<ArrayRef>> {
@@ -1124,7 +1125,7 @@ mod tests {
                 Some(4.752399),
                 Some(5.239493),
                 None,
-                Some(7.34058740),
+                Some(7.3405874),
                 Some(<$PRIM_TYPE>::INFINITY),
                 Some(<$PRIM_TYPE>::NEG_INFINITY),
             ];
@@ -1200,7 +1201,7 @@ mod tests {
                 vec![1.234],
                 vec![],
                 vec![4.752399, 5.239493],
-                vec![7.34058740],
+                vec![7.3405874],
                 vec![<$PRIM_TYPE>::INFINITY, <$PRIM_TYPE>::NEG_INFINITY],
             ];
 
@@ -1257,7 +1258,7 @@ mod tests {
                 vec![1.234],
                 vec![],
                 vec![4.752399, 5.239493],
-                vec![7.34058740],
+                vec![7.3405874],
                 vec![<$PRIM_TYPE>::INFINITY, <$PRIM_TYPE>::NEG_INFINITY],
                 vec![8.23329],
             ];
