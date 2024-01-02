@@ -20,13 +20,11 @@
 use crate::LogicalPlan;
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion, VisitRecursionIterator};
 use datafusion_common::Result;
+use std::borrow::Cow;
 
 impl TreeNode for LogicalPlan {
-    fn visit_children<F>(&self, f: &mut F) -> Result<TreeNodeRecursion>
-    where
-        F: FnMut(&Self) -> Result<TreeNodeRecursion>,
-    {
-        self.inputs().into_iter().for_each_till_continue(f)
+    fn children_nodes(&self) -> Vec<Cow<Self>> {
+        self.inputs().into_iter().map(Cow::Borrowed).collect()
     }
 
     fn visit_inner_children<F>(&self, f: &mut F) -> Result<TreeNodeRecursion>
@@ -53,7 +51,7 @@ impl TreeNode for LogicalPlan {
             .zip(new_children.iter())
             .any(|(c1, c2)| c1 != &c2)
         {
-            self.with_new_inputs(new_children.as_slice())
+            self.with_new_exprs(self.expressions(), new_children.as_slice())
         } else {
             Ok(self)
         }
@@ -74,7 +72,7 @@ impl TreeNode for LogicalPlan {
             .zip(new_children.iter())
             .any(|(c1, c2)| c1 != &c2)
         {
-            *self = self.with_new_inputs(new_children.as_slice())?;
+            *self = self.with_new_exprs(self.expressions(), new_children.as_slice())?;
         }
         Ok(tnr)
     }

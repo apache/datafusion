@@ -445,7 +445,7 @@ impl LogicalPlanBuilder {
                         )
                     })
                     .collect::<Result<Vec<_>>>()?;
-                curr_plan.with_new_inputs(&new_inputs)
+                curr_plan.with_new_exprs(curr_plan.expressions(), &new_inputs)
             }
         }
     }
@@ -904,27 +904,11 @@ impl LogicalPlanBuilder {
         group_expr: impl IntoIterator<Item = impl Into<Expr>>,
         aggr_expr: impl IntoIterator<Item = impl Into<Expr>>,
     ) -> Result<Self> {
-        let mut group_expr = normalize_cols(group_expr, &self.plan)?;
+        let group_expr = normalize_cols(group_expr, &self.plan)?;
         let aggr_expr = normalize_cols(aggr_expr, &self.plan)?;
 
-        // Rewrite groupby exprs according to functional dependencies
-        let group_by_expr_names = group_expr
-            .iter()
-            .map(|group_by_expr| group_by_expr.display_name())
-            .collect::<Result<Vec<_>>>()?;
-        let schema = self.plan.schema();
-        if let Some(target_indices) =
-            get_target_functional_dependencies(schema, &group_by_expr_names)
-        {
-            for idx in target_indices {
-                let field = schema.field(idx);
-                let expr =
-                    Expr::Column(Column::new(field.qualifier().cloned(), field.name()));
-                if !group_expr.contains(&expr) {
-                    group_expr.push(expr);
-                }
-            }
-        }
+        let group_expr =
+            add_group_by_exprs_from_dependencies(group_expr, self.plan.schema())?;
         Aggregate::try_new(Arc::new(self.plan), group_expr, aggr_expr)
             .map(LogicalPlan::Aggregate)
             .map(Self::from)
@@ -1189,6 +1173,42 @@ pub fn build_join_schema(
     schema.with_functional_dependencies(func_dependencies)
 }
 
+/// Add additional "synthetic" group by expressions based on functional
+/// dependencies.
+///
+/// For example, if we are grouping on `[c1]`, and we know from
+/// functional dependencies that column `c1` determines `c2`, this function
+/// adds `c2` to the group by list.
+///
+/// This allows MySQL style selects like
+/// `SELECT col FROM t WHERE pk = 5` if col is unique
+fn add_group_by_exprs_from_dependencies(
+    mut group_expr: Vec<Expr>,
+    schema: &DFSchemaRef,
+) -> Result<Vec<Expr>> {
+    // Names of the fields produced by the GROUP BY exprs for example, `GROUP BY
+    // c1 + 1` produces an output field named `"c1 + 1"`
+    let mut group_by_field_names = group_expr
+        .iter()
+        .map(|e| e.display_name())
+        .collect::<Result<Vec<_>>>()?;
+
+    if let Some(target_indices) =
+        get_target_functional_dependencies(schema, &group_by_field_names)
+    {
+        for idx in target_indices {
+            let field = schema.field(idx);
+            let expr =
+                Expr::Column(Column::new(field.qualifier().cloned(), field.name()));
+            let expr_name = expr.display_name()?;
+            if !group_by_field_names.contains(&expr_name) {
+                group_by_field_names.push(expr_name);
+                group_expr.push(expr);
+            }
+        }
+    }
+    Ok(group_expr)
+}
 /// Errors if one or more expressions have equal names.
 pub(crate) fn validate_unique_names<'a>(
     node_name: &str,

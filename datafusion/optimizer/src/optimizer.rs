@@ -382,7 +382,7 @@ impl Optimizer {
             })
             .collect::<Vec<_>>();
 
-        Ok(Some(plan.with_new_inputs(&new_inputs)?))
+        Ok(Some(plan.with_new_exprs(plan.expressions(), &new_inputs)?))
     }
 
     /// Use a rule to optimize the whole plan.

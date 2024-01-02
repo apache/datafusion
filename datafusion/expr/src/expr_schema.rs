@@ -277,6 +277,13 @@ impl ExprSchemable for Expr {
                 "Wildcard expressions are not valid in a logical query plan"
             ),
             Expr::GetIndexedField(GetIndexedField { expr, field }) => {
+                // If schema is nested, check if parent is nullable
+                // if it is, return early
+                if let Expr::Column(col) = expr.as_ref() {
+                    if input_schema.nullable(col)? {
+                        return Ok(true);
+                    }
+                }
                 field_for_index(expr, field, input_schema).map(|x| x.is_nullable())
             }
             Expr::GroupingSet(_) => {
@@ -411,8 +418,8 @@ pub fn cast_subquery(subquery: Subquery, cast_to_type: &DataType) -> Result<Subq
 mod tests {
     use super::*;
     use crate::{col, lit};
-    use arrow::datatypes::DataType;
-    use datafusion_common::{Column, ScalarValue};
+    use arrow::datatypes::{DataType, Fields};
+    use datafusion_common::{Column, ScalarValue, TableReference};
 
     macro_rules! test_is_expr_nullable {
         ($EXPR_TYPE:ident) => {{
@@ -546,6 +553,27 @@ mod tests {
 
         // verify to_field method populates metadata
         assert_eq!(&meta, expr.to_field(&schema).unwrap().metadata());
+    }
+
+    #[test]
+    fn test_nested_schema_nullability() {
+        let fields = DFField::new(
+            Some(TableReference::Bare {
+                table: "table_name".into(),
+            }),
+            "parent",
+            DataType::Struct(Fields::from(vec![Field::new(
+                "child",
+                DataType::Int64,
+                false,
+            )])),
+            true,
+        );
+
+        let schema = DFSchema::new_with_metadata(vec![fields], HashMap::new()).unwrap();
+
+        let expr = col("parent").field("child");
+        assert!(expr.nullable(&schema).unwrap());
     }
 
     #[derive(Debug)]

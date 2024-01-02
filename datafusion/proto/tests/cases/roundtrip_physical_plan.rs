@@ -15,13 +15,16 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use arrow::csv::WriterBuilder;
 use std::ops::Deref;
 use std::sync::Arc;
 
 use datafusion::arrow::array::ArrayRef;
 use datafusion::arrow::compute::kernels::sort::SortOptions;
 use datafusion::arrow::datatypes::{DataType, Field, Fields, IntervalUnit, Schema};
+use datafusion::datasource::file_format::csv::CsvSink;
 use datafusion::datasource::file_format::json::JsonSink;
+use datafusion::datasource::file_format::parquet::ParquetSink;
 use datafusion::datasource::listing::{ListingTableUrl, PartitionedFile};
 use datafusion::datasource::object_store::ObjectStoreUrl;
 use datafusion::datasource::physical_plan::{
@@ -31,6 +34,7 @@ use datafusion::execution::context::ExecutionProps;
 use datafusion::logical_expr::{
     create_udf, BuiltinScalarFunction, JoinType, Operator, Volatility,
 };
+use datafusion::parquet::file::properties::WriterProperties;
 use datafusion::physical_expr::window::SlidingAggregateWindowExpr;
 use datafusion::physical_expr::{PhysicalSortRequirement, ScalarFunctionExpr};
 use datafusion::physical_plan::aggregates::{
@@ -62,7 +66,9 @@ use datafusion::physical_plan::{
 };
 use datafusion::prelude::SessionContext;
 use datafusion::scalar::ScalarValue;
+use datafusion_common::file_options::csv_writer::CsvWriterOptions;
 use datafusion_common::file_options::json_writer::JsonWriterOptions;
+use datafusion_common::file_options::parquet_writer::ParquetWriterOptions;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::stats::Precision;
 use datafusion_common::{FileTypeWriterOptions, Result};
@@ -73,7 +79,23 @@ use datafusion_expr::{
 use datafusion_proto::physical_plan::{AsExecutionPlan, DefaultPhysicalExtensionCodec};
 use datafusion_proto::protobuf;
 
+/// Perform a serde roundtrip and assert that the string representation of the before and after plans
+/// are identical. Note that this often isn't sufficient to guarantee that no information is
+/// lost during serde because the string representation of a plan often only shows a subset of state.
 fn roundtrip_test(exec_plan: Arc<dyn ExecutionPlan>) -> Result<()> {
+    let _ = roundtrip_test_and_return(exec_plan);
+    Ok(())
+}
+
+/// Perform a serde roundtrip and assert that the string representation of the before and after plans
+/// are identical. Note that this often isn't sufficient to guarantee that no information is
+/// lost during serde because the string representation of a plan often only shows a subset of state.
+///
+/// This version of the roundtrip_test method returns the final plan after serde so that it can be inspected
+/// farther in tests.
+fn roundtrip_test_and_return(
+    exec_plan: Arc<dyn ExecutionPlan>,
+) -> Result<Arc<dyn ExecutionPlan>> {
     let ctx = SessionContext::new();
     let codec = DefaultPhysicalExtensionCodec {};
     let proto: protobuf::PhysicalPlanNode =
@@ -84,9 +106,15 @@ fn roundtrip_test(exec_plan: Arc<dyn ExecutionPlan>) -> Result<()> {
         .try_into_physical_plan(&ctx, runtime.deref(), &codec)
         .expect("from proto");
     assert_eq!(format!("{exec_plan:?}"), format!("{result_exec_plan:?}"));
-    Ok(())
+    Ok(result_exec_plan)
 }
 
+/// Perform a serde roundtrip and assert that the string representation of the before and after plans
+/// are identical. Note that this often isn't sufficient to guarantee that no information is
+/// lost during serde because the string representation of a plan often only shows a subset of state.
+///
+/// This version of the roundtrip_test function accepts a SessionContext, which is required when
+/// performing serde on some plans.
 fn roundtrip_test_with_context(
     exec_plan: Arc<dyn ExecutionPlan>,
     ctx: SessionContext,
@@ -733,13 +761,107 @@ fn roundtrip_json_sink() -> Result<()> {
         output_schema: schema.clone(),
         table_partition_cols: vec![("plan_type".to_string(), DataType::Utf8)],
         single_file_output: true,
-        unbounded_input: false,
         overwrite: true,
         file_type_writer_options: FileTypeWriterOptions::JSON(JsonWriterOptions::new(
             CompressionTypeVariant::UNCOMPRESSED,
         )),
     };
     let data_sink = Arc::new(JsonSink::new(file_sink_config));
+    let sort_order = vec![PhysicalSortRequirement::new(
+        Arc::new(Column::new("plan_type", 0)),
+        Some(SortOptions {
+            descending: true,
+            nulls_first: false,
+        }),
+    )];
+
+    roundtrip_test(Arc::new(FileSinkExec::new(
+        input,
+        data_sink,
+        schema.clone(),
+        Some(sort_order),
+    )))
+}
+
+#[test]
+fn roundtrip_csv_sink() -> Result<()> {
+    let field_a = Field::new("plan_type", DataType::Utf8, false);
+    let field_b = Field::new("plan", DataType::Utf8, false);
+    let schema = Arc::new(Schema::new(vec![field_a, field_b]));
+    let input = Arc::new(PlaceholderRowExec::new(schema.clone()));
+
+    let file_sink_config = FileSinkConfig {
+        object_store_url: ObjectStoreUrl::local_filesystem(),
+        file_groups: vec![PartitionedFile::new("/tmp".to_string(), 1)],
+        table_paths: vec![ListingTableUrl::parse("file:///")?],
+        output_schema: schema.clone(),
+        table_partition_cols: vec![("plan_type".to_string(), DataType::Utf8)],
+        single_file_output: true,
+        overwrite: true,
+        file_type_writer_options: FileTypeWriterOptions::CSV(CsvWriterOptions::new(
+            WriterBuilder::default(),
+            CompressionTypeVariant::ZSTD,
+        )),
+    };
+    let data_sink = Arc::new(CsvSink::new(file_sink_config));
+    let sort_order = vec![PhysicalSortRequirement::new(
+        Arc::new(Column::new("plan_type", 0)),
+        Some(SortOptions {
+            descending: true,
+            nulls_first: false,
+        }),
+    )];
+
+    let roundtrip_plan = roundtrip_test_and_return(Arc::new(FileSinkExec::new(
+        input,
+        data_sink,
+        schema.clone(),
+        Some(sort_order),
+    )))
+    .unwrap();
+
+    let roundtrip_plan = roundtrip_plan
+        .as_any()
+        .downcast_ref::<FileSinkExec>()
+        .unwrap();
+    let csv_sink = roundtrip_plan
+        .sink()
+        .as_any()
+        .downcast_ref::<CsvSink>()
+        .unwrap();
+    assert_eq!(
+        CompressionTypeVariant::ZSTD,
+        csv_sink
+            .config()
+            .file_type_writer_options
+            .try_into_csv()
+            .unwrap()
+            .compression
+    );
+
+    Ok(())
+}
+
+#[test]
+fn roundtrip_parquet_sink() -> Result<()> {
+    let field_a = Field::new("plan_type", DataType::Utf8, false);
+    let field_b = Field::new("plan", DataType::Utf8, false);
+    let schema = Arc::new(Schema::new(vec![field_a, field_b]));
+    let input = Arc::new(PlaceholderRowExec::new(schema.clone()));
+
+    let file_sink_config = FileSinkConfig {
+        object_store_url: ObjectStoreUrl::local_filesystem(),
+        file_groups: vec![PartitionedFile::new("/tmp".to_string(), 1)],
+        table_paths: vec![ListingTableUrl::parse("file:///")?],
+        output_schema: schema.clone(),
+        table_partition_cols: vec![("plan_type".to_string(), DataType::Utf8)],
+        single_file_output: true,
+        overwrite: true,
+        file_type_writer_options: FileTypeWriterOptions::Parquet(
+            ParquetWriterOptions::new(WriterProperties::default()),
+        ),
+    };
+    let data_sink = Arc::new(ParquetSink::new(file_sink_config));
     let sort_order = vec![PhysicalSortRequirement::new(
         Arc::new(Column::new("plan_type", 0)),
         Some(SortOptions {

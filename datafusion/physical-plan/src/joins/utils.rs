@@ -25,13 +25,12 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::usize;
 
-use crate::joins::stream_join_utils::{build_filter_input_order, SortedFilterExpr};
 use crate::metrics::{self, ExecutionPlanMetricsSet, MetricBuilder};
 use crate::{ColumnStatistics, ExecutionPlan, Partitioning, Statistics};
 
 use arrow::array::{
     downcast_array, new_null_array, Array, BooleanBufferBuilder, UInt32Array,
-    UInt32Builder, UInt64Array,
+    UInt32BufferBuilder, UInt32Builder, UInt64Array, UInt64BufferBuilder,
 };
 use arrow::compute;
 use arrow::datatypes::{Field, Schema, SchemaBuilder};
@@ -39,13 +38,11 @@ use arrow::record_batch::{RecordBatch, RecordBatchOptions};
 use datafusion_common::cast::as_boolean_array;
 use datafusion_common::stats::Precision;
 use datafusion_common::{
-    plan_datafusion_err, plan_err, DataFusionError, JoinSide, JoinType, Result,
-    SharedResult,
+    plan_err, DataFusionError, JoinSide, JoinType, Result, SharedResult,
 };
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_physical_expr::equivalence::add_offset_to_expr;
 use datafusion_physical_expr::expressions::Column;
-use datafusion_physical_expr::intervals::cp_solver::ExprIntervalGraph;
 use datafusion_physical_expr::utils::merge_vectors;
 use datafusion_physical_expr::{
     LexOrdering, LexOrderingRef, PhysicalExpr, PhysicalSortExpr,
@@ -151,6 +148,82 @@ pub trait JoinHashMapType {
     fn get_map(&self) -> &RawTable<(u64, u64)>;
     /// Returns a reference to the next.
     fn get_list(&self) -> &Self::NextType;
+
+    /// Updates hashmap from iterator of row indices & row hashes pairs.
+    fn update_from_iter<'a>(
+        &mut self,
+        iter: impl Iterator<Item = (usize, &'a u64)>,
+        deleted_offset: usize,
+    ) {
+        let (mut_map, mut_list) = self.get_mut();
+        for (row, hash_value) in iter {
+            let item = mut_map.get_mut(*hash_value, |(hash, _)| *hash_value == *hash);
+            if let Some((_, index)) = item {
+                // Already exists: add index to next array
+                let prev_index = *index;
+                // Store new value inside hashmap
+                *index = (row + 1) as u64;
+                // Update chained Vec at `row` with previous value
+                mut_list[row - deleted_offset] = prev_index;
+            } else {
+                mut_map.insert(
+                    *hash_value,
+                    // store the value + 1 as 0 value reserved for end of list
+                    (*hash_value, (row + 1) as u64),
+                    |(hash, _)| *hash,
+                );
+                // chained list at `row` is already initialized with 0
+                // meaning end of list
+            }
+        }
+    }
+
+    /// Returns all pairs of row indices matched by hash.
+    ///
+    /// This method only compares hashes, so additional further check for actual values
+    /// equality may be required.
+    fn get_matched_indices<'a>(
+        &self,
+        iter: impl Iterator<Item = (usize, &'a u64)>,
+        deleted_offset: Option<usize>,
+    ) -> (UInt32BufferBuilder, UInt64BufferBuilder) {
+        let mut input_indices = UInt32BufferBuilder::new(0);
+        let mut match_indices = UInt64BufferBuilder::new(0);
+
+        let hash_map = self.get_map();
+        let next_chain = self.get_list();
+        for (row_idx, hash_value) in iter {
+            // Get the hash and find it in the index
+            if let Some((_, index)) =
+                hash_map.get(*hash_value, |(hash, _)| *hash_value == *hash)
+            {
+                let mut i = *index - 1;
+                loop {
+                    let match_row_idx = if let Some(offset) = deleted_offset {
+                        // This arguments means that we prune the next index way before here.
+                        if i < offset as u64 {
+                            // End of the list due to pruning
+                            break;
+                        }
+                        i - offset as u64
+                    } else {
+                        i
+                    };
+                    match_indices.append(match_row_idx);
+                    input_indices.append(row_idx as u32);
+                    // Follow the chain to get the next index value
+                    let next = next_chain[match_row_idx as usize];
+                    if next == 0 {
+                        // end of list
+                        break;
+                    }
+                    i = next - 1;
+                }
+            }
+        }
+
+        (input_indices, match_indices)
+    }
 }
 
 /// Implementation of `JoinHashMapType` for `JoinHashMap`.
@@ -1208,91 +1281,6 @@ impl BuildProbeJoinMetrics {
     }
 }
 
-/// Updates sorted filter expressions with corresponding node indices from the
-/// expression interval graph.
-///
-/// This function iterates through the provided sorted filter expressions,
-/// gathers the corresponding node indices from the expression interval graph,
-/// and then updates the sorted expressions with these indices. It ensures
-/// that these sorted expressions are aligned with the structure of the graph.
-fn update_sorted_exprs_with_node_indices(
-    graph: &mut ExprIntervalGraph,
-    sorted_exprs: &mut [SortedFilterExpr],
-) {
-    // Extract filter expressions from the sorted expressions:
-    let filter_exprs = sorted_exprs
-        .iter()
-        .map(|expr| expr.filter_expr().clone())
-        .collect::<Vec<_>>();
-
-    // Gather corresponding node indices for the extracted filter expressions from the graph:
-    let child_node_indices = graph.gather_node_indices(&filter_exprs);
-
-    // Iterate through the sorted expressions and the gathered node indices:
-    for (sorted_expr, (_, index)) in sorted_exprs.iter_mut().zip(child_node_indices) {
-        // Update each sorted expression with the corresponding node index:
-        sorted_expr.set_node_index(index);
-    }
-}
-
-/// Prepares and sorts expressions based on a given filter, left and right execution plans, and sort expressions.
-///
-/// # Arguments
-///
-/// * `filter` - The join filter to base the sorting on.
-/// * `left` - The left execution plan.
-/// * `right` - The right execution plan.
-/// * `left_sort_exprs` - The expressions to sort on the left side.
-/// * `right_sort_exprs` - The expressions to sort on the right side.
-///
-/// # Returns
-///
-/// * A tuple consisting of the sorted filter expression for the left and right sides, and an expression interval graph.
-pub fn prepare_sorted_exprs(
-    filter: &JoinFilter,
-    left: &Arc<dyn ExecutionPlan>,
-    right: &Arc<dyn ExecutionPlan>,
-    left_sort_exprs: &[PhysicalSortExpr],
-    right_sort_exprs: &[PhysicalSortExpr],
-) -> Result<(SortedFilterExpr, SortedFilterExpr, ExprIntervalGraph)> {
-    // Build the filter order for the left side
-    let err = || plan_datafusion_err!("Filter does not include the child order");
-
-    let left_temp_sorted_filter_expr = build_filter_input_order(
-        JoinSide::Left,
-        filter,
-        &left.schema(),
-        &left_sort_exprs[0],
-    )?
-    .ok_or_else(err)?;
-
-    // Build the filter order for the right side
-    let right_temp_sorted_filter_expr = build_filter_input_order(
-        JoinSide::Right,
-        filter,
-        &right.schema(),
-        &right_sort_exprs[0],
-    )?
-    .ok_or_else(err)?;
-
-    // Collect the sorted expressions
-    let mut sorted_exprs =
-        vec![left_temp_sorted_filter_expr, right_temp_sorted_filter_expr];
-
-    // Build the expression interval graph
-    let mut graph =
-        ExprIntervalGraph::try_new(filter.expression().clone(), filter.schema())?;
-
-    // Update sorted expressions with node indices
-    update_sorted_exprs_with_node_indices(&mut graph, &mut sorted_exprs);
-
-    // Swap and remove to get the final sorted filter expressions
-    let right_sorted_filter_expr = sorted_exprs.swap_remove(1);
-    let left_sorted_filter_expr = sorted_exprs.swap_remove(0);
-
-    Ok((left_sorted_filter_expr, right_sorted_filter_expr, graph))
-}
-
 /// The `handle_state` macro is designed to process the result of a state-changing
 /// operation, encountered e.g. in implementations of `EagerJoinStream`. It
 /// operates on a `StatefulStreamResult` by matching its variants and executing
@@ -1370,7 +1358,7 @@ mod tests {
     use arrow::error::{ArrowError, Result as ArrowResult};
     use arrow_schema::SortOptions;
 
-    use datafusion_common::ScalarValue;
+    use datafusion_common::{arrow_datafusion_err, arrow_err, ScalarValue};
 
     fn check(left: &[Column], right: &[Column], on: &[(Column, Column)]) -> Result<()> {
         let left = left
@@ -1406,9 +1394,7 @@ mod tests {
     #[tokio::test]
     async fn check_error_nesting() {
         let once_fut = OnceFut::<()>::new(async {
-            Err(DataFusionError::ArrowError(ArrowError::CsvError(
-                "some error".to_string(),
-            )))
+            arrow_err!(ArrowError::CsvError("some error".to_string()))
         });
 
         struct TestFut(OnceFut<()>);
@@ -1432,10 +1418,10 @@ mod tests {
         let wrapped_err = DataFusionError::from(arrow_err_from_fut);
         let root_err = wrapped_err.find_root();
 
-        assert!(matches!(
-            root_err,
-            DataFusionError::ArrowError(ArrowError::CsvError(_))
-        ))
+        let _expected =
+            arrow_datafusion_err!(ArrowError::CsvError("some error".to_owned()));
+
+        assert!(matches!(root_err, _expected))
     }
 
     #[test]

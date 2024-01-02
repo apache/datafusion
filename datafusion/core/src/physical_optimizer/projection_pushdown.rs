@@ -990,6 +990,10 @@ fn update_join_on(
     proj_right_exprs: &[(Column, String)],
     hash_join_on: &[(Column, Column)],
 ) -> Option<Vec<(Column, Column)>> {
+    // TODO: Clippy wants the "map" call removed, but doing so generates
+    //       a compilation error. Remove the clippy directive once this
+    //       issue is fixed.
+    #[allow(clippy::map_identity)]
     let (left_idx, right_idx): (Vec<_>, Vec<_>) = hash_join_on
         .iter()
         .map(|(left, right)| (left, right))

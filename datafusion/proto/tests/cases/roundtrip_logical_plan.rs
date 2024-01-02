@@ -20,6 +20,7 @@ use std::fmt::{self, Debug, Formatter};
 use std::sync::Arc;
 
 use arrow::array::{ArrayRef, FixedSizeListArray};
+use arrow::csv::WriterBuilder;
 use arrow::datatypes::{
     DataType, Field, Fields, Int32Type, IntervalDayTimeType, IntervalMonthDayNanoType,
     IntervalUnit, Schema, SchemaRef, TimeUnit, UnionFields, UnionMode,
@@ -31,12 +32,18 @@ use datafusion::datasource::provider::TableProviderFactory;
 use datafusion::datasource::TableProvider;
 use datafusion::execution::context::SessionState;
 use datafusion::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
+use datafusion::parquet::file::properties::{WriterProperties, WriterVersion};
 use datafusion::physical_plan::functions::make_scalar_function;
 use datafusion::prelude::{create_udf, CsvReadOptions, SessionConfig, SessionContext};
 use datafusion::test_util::{TestTableFactory, TestTableProvider};
-use datafusion_common::Result;
-use datafusion_common::{internal_err, not_impl_err, plan_err};
+use datafusion_common::file_options::csv_writer::CsvWriterOptions;
+use datafusion_common::file_options::parquet_writer::ParquetWriterOptions;
+use datafusion_common::file_options::StatementOptions;
+use datafusion_common::parsers::CompressionTypeVariant;
+use datafusion_common::{internal_err, not_impl_err, plan_err, FileTypeWriterOptions};
 use datafusion_common::{DFField, DFSchema, DFSchemaRef, DataFusionError, ScalarValue};
+use datafusion_common::{FileType, Result};
+use datafusion_expr::dml::{CopyOptions, CopyTo};
 use datafusion_expr::expr::{
     self, Between, BinaryExpr, Case, Cast, GroupingSet, InList, Like, ScalarFunction,
     Sort,
@@ -46,7 +53,7 @@ use datafusion_expr::{
     col, create_udaf, lit, Accumulator, AggregateFunction,
     BuiltinScalarFunction::{Sqrt, Substr},
     Expr, LogicalPlan, Operator, PartitionEvaluator, Signature, TryCast, Volatility,
-    WindowFrame, WindowFrameBound, WindowFrameUnits, WindowFunction, WindowUDF,
+    WindowFrame, WindowFrameBound, WindowFrameUnits, WindowFunctionDefinition, WindowUDF,
 };
 use datafusion_proto::bytes::{
     logical_plan_from_bytes, logical_plan_from_bytes_with_extension_codec,
@@ -299,6 +306,158 @@ async fn roundtrip_logical_plan_aggregation() -> Result<()> {
     assert_eq!(format!("{plan:?}"), format!("{logical_round_trip:?}"));
 
     Ok(())
+}
+
+#[tokio::test]
+async fn roundtrip_logical_plan_copy_to_sql_options() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    let input = create_csv_scan(&ctx).await?;
+
+    let mut options = HashMap::new();
+    options.insert("foo".to_string(), "bar".to_string());
+
+    let plan = LogicalPlan::Copy(CopyTo {
+        input: Arc::new(input),
+        output_url: "test.csv".to_string(),
+        file_format: FileType::CSV,
+        single_file_output: true,
+        copy_options: CopyOptions::SQLOptions(StatementOptions::from(&options)),
+    });
+
+    let bytes = logical_plan_to_bytes(&plan)?;
+    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx)?;
+    assert_eq!(format!("{plan:?}"), format!("{logical_round_trip:?}"));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn roundtrip_logical_plan_copy_to_writer_options() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    let input = create_csv_scan(&ctx).await?;
+
+    let writer_properties = WriterProperties::builder()
+        .set_bloom_filter_enabled(true)
+        .set_created_by("DataFusion Test".to_string())
+        .set_writer_version(WriterVersion::PARQUET_2_0)
+        .set_write_batch_size(111)
+        .set_data_page_size_limit(222)
+        .set_data_page_row_count_limit(333)
+        .set_dictionary_page_size_limit(444)
+        .set_max_row_group_size(555)
+        .build();
+    let plan = LogicalPlan::Copy(CopyTo {
+        input: Arc::new(input),
+        output_url: "test.parquet".to_string(),
+        file_format: FileType::PARQUET,
+        single_file_output: true,
+        copy_options: CopyOptions::WriterOptions(Box::new(
+            FileTypeWriterOptions::Parquet(ParquetWriterOptions::new(writer_properties)),
+        )),
+    });
+
+    let bytes = logical_plan_to_bytes(&plan)?;
+    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx)?;
+    assert_eq!(format!("{plan:?}"), format!("{logical_round_trip:?}"));
+
+    match logical_round_trip {
+        LogicalPlan::Copy(copy_to) => {
+            assert_eq!("test.parquet", copy_to.output_url);
+            assert_eq!(FileType::PARQUET, copy_to.file_format);
+            assert!(copy_to.single_file_output);
+            match &copy_to.copy_options {
+                CopyOptions::WriterOptions(y) => match y.as_ref() {
+                    FileTypeWriterOptions::Parquet(p) => {
+                        let props = &p.writer_options;
+                        assert_eq!("DataFusion Test", props.created_by());
+                        assert_eq!(
+                            "PARQUET_2_0",
+                            format!("{:?}", props.writer_version())
+                        );
+                        assert_eq!(111, props.write_batch_size());
+                        assert_eq!(222, props.data_page_size_limit());
+                        assert_eq!(333, props.data_page_row_count_limit());
+                        assert_eq!(444, props.dictionary_page_size_limit());
+                        assert_eq!(555, props.max_row_group_size());
+                    }
+                    _ => panic!(),
+                },
+                _ => panic!(),
+            }
+        }
+        _ => panic!(),
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn roundtrip_logical_plan_copy_to_csv() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    let input = create_csv_scan(&ctx).await?;
+
+    let writer_properties = WriterBuilder::new()
+        .with_delimiter(b'*')
+        .with_date_format("dd/MM/yyyy".to_string())
+        .with_datetime_format("dd/MM/yyyy HH:mm:ss".to_string())
+        .with_timestamp_format("HH:mm:ss.SSSSSS".to_string())
+        .with_time_format("HH:mm:ss".to_string())
+        .with_null("NIL".to_string());
+
+    let plan = LogicalPlan::Copy(CopyTo {
+        input: Arc::new(input),
+        output_url: "test.csv".to_string(),
+        file_format: FileType::CSV,
+        single_file_output: true,
+        copy_options: CopyOptions::WriterOptions(Box::new(FileTypeWriterOptions::CSV(
+            CsvWriterOptions::new(
+                writer_properties,
+                CompressionTypeVariant::UNCOMPRESSED,
+            ),
+        ))),
+    });
+
+    let bytes = logical_plan_to_bytes(&plan)?;
+    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx)?;
+    assert_eq!(format!("{plan:?}"), format!("{logical_round_trip:?}"));
+
+    match logical_round_trip {
+        LogicalPlan::Copy(copy_to) => {
+            assert_eq!("test.csv", copy_to.output_url);
+            assert_eq!(FileType::CSV, copy_to.file_format);
+            assert!(copy_to.single_file_output);
+            match &copy_to.copy_options {
+                CopyOptions::WriterOptions(y) => match y.as_ref() {
+                    FileTypeWriterOptions::CSV(p) => {
+                        let props = &p.writer_options;
+                        assert_eq!(b'*', props.delimiter());
+                        assert_eq!("dd/MM/yyyy", props.date_format().unwrap());
+                        assert_eq!(
+                            "dd/MM/yyyy HH:mm:ss",
+                            props.datetime_format().unwrap()
+                        );
+                        assert_eq!("HH:mm:ss.SSSSSS", props.timestamp_format().unwrap());
+                        assert_eq!("HH:mm:ss", props.time_format().unwrap());
+                        assert_eq!("NIL", props.null());
+                    }
+                    _ => panic!(),
+                },
+                _ => panic!(),
+            }
+        }
+        _ => panic!(),
+    }
+
+    Ok(())
+}
+async fn create_csv_scan(ctx: &SessionContext) -> Result<LogicalPlan, DataFusionError> {
+    ctx.register_csv("t1", "tests/testdata/test.csv", CsvReadOptions::default())
+        .await?;
+
+    let input = ctx.table("t1").await?.into_optimized_plan()?;
+    Ok(input)
 }
 
 #[tokio::test]
@@ -1504,8 +1663,8 @@ fn roundtrip_window() {
 
     // 1. without window_frame
     let test_expr1 = Expr::WindowFunction(expr::WindowFunction::new(
-        WindowFunction::BuiltInWindowFunction(
-            datafusion_expr::window_function::BuiltInWindowFunction::Rank,
+        WindowFunctionDefinition::BuiltInWindowFunction(
+            datafusion_expr::BuiltInWindowFunction::Rank,
         ),
         vec![],
         vec![col("col1")],
@@ -1515,8 +1674,8 @@ fn roundtrip_window() {
 
     // 2. with default window_frame
     let test_expr2 = Expr::WindowFunction(expr::WindowFunction::new(
-        WindowFunction::BuiltInWindowFunction(
-            datafusion_expr::window_function::BuiltInWindowFunction::Rank,
+        WindowFunctionDefinition::BuiltInWindowFunction(
+            datafusion_expr::BuiltInWindowFunction::Rank,
         ),
         vec![],
         vec![col("col1")],
@@ -1532,8 +1691,8 @@ fn roundtrip_window() {
     };
 
     let test_expr3 = Expr::WindowFunction(expr::WindowFunction::new(
-        WindowFunction::BuiltInWindowFunction(
-            datafusion_expr::window_function::BuiltInWindowFunction::Rank,
+        WindowFunctionDefinition::BuiltInWindowFunction(
+            datafusion_expr::BuiltInWindowFunction::Rank,
         ),
         vec![],
         vec![col("col1")],
@@ -1549,7 +1708,7 @@ fn roundtrip_window() {
     };
 
     let test_expr4 = Expr::WindowFunction(expr::WindowFunction::new(
-        WindowFunction::AggregateFunction(AggregateFunction::Max),
+        WindowFunctionDefinition::AggregateFunction(AggregateFunction::Max),
         vec![col("col1")],
         vec![col("col1")],
         vec![col("col2")],
@@ -1600,7 +1759,7 @@ fn roundtrip_window() {
     );
 
     let test_expr5 = Expr::WindowFunction(expr::WindowFunction::new(
-        WindowFunction::AggregateUDF(Arc::new(dummy_agg.clone())),
+        WindowFunctionDefinition::AggregateUDF(Arc::new(dummy_agg.clone())),
         vec![col("col1")],
         vec![col("col1")],
         vec![col("col2")],
@@ -1649,7 +1808,7 @@ fn roundtrip_window() {
     );
 
     let test_expr6 = Expr::WindowFunction(expr::WindowFunction::new(
-        WindowFunction::WindowUDF(Arc::new(dummy_window_udf.clone())),
+        WindowFunctionDefinition::WindowUDF(Arc::new(dummy_window_udf.clone())),
         vec![col("col1")],
         vec![col("col1")],
         vec![col("col2")],

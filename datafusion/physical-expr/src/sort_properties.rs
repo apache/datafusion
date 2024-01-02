@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::borrow::Cow;
 use std::{ops::Neg, sync::Arc};
 
 use arrow_schema::SortOptions;
@@ -148,11 +149,11 @@ impl Neg for SortProperties {
 /// It encapsulates the orderings (`state`) associated with the expression (`expr`), and
 /// orderings of the children expressions (`children_states`). The [`ExprOrdering`] of a parent
 /// expression is determined based on the [`ExprOrdering`] states of its children expressions.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ExprOrdering {
     pub expr: Arc<dyn PhysicalExpr>,
     pub state: SortProperties,
-    pub children: Vec<ExprOrdering>,
+    pub children: Vec<Self>,
 }
 
 impl ExprOrdering {
@@ -174,27 +175,22 @@ impl ExprOrdering {
 }
 
 impl TreeNode for ExprOrdering {
-    fn visit_children<F>(&self, f: &mut F) -> Result<TreeNodeRecursion>
-    where
-        F: FnMut(&Self) -> Result<TreeNodeRecursion>,
-    {
-        self.children.iter().for_each_till_continue(f)
+    fn children_nodes(&self) -> Vec<Cow<Self>> {
+        self.children.iter().map(Cow::Borrowed).collect()
     }
 
     fn map_children<F>(mut self, transform: F) -> Result<Self>
     where
         F: FnMut(Self) -> Result<Self>,
     {
-        if self.children.is_empty() {
-            Ok(self)
-        } else {
+        if !self.children.is_empty() {
             self.children = self
                 .children
                 .into_iter()
                 .map(transform)
-                .collect::<Result<Vec<_>>>()?;
-            Ok(self)
+                .collect::<Result<_>>()?;
         }
+        Ok(self)
     }
 
     fn transform_children<F>(&mut self, f: &mut F) -> Result<TreeNodeRecursion>

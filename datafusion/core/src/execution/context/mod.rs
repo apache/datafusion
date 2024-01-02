@@ -1621,9 +1621,6 @@ impl SessionState {
                         .0
                         .insert(ObjectName(vec![Ident::from(table.name.as_str())]));
                 }
-                DFStatement::DescribeTableStmt(table) => {
-                    visitor.insert(&table.table_name)
-                }
                 DFStatement::CopyTo(CopyToStatement {
                     source,
                     target: _,

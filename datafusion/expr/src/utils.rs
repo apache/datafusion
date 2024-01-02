@@ -1200,7 +1200,7 @@ mod tests {
     use super::*;
     use crate::{
         col, cube, expr, expr_vec_fmt, grouping_set, lit, rollup, AggregateFunction,
-        WindowFrame, WindowFunction,
+        WindowFrame, WindowFunctionDefinition,
     };
 
     #[test]
@@ -1214,28 +1214,28 @@ mod tests {
     #[test]
     fn test_group_window_expr_by_sort_keys_empty_window() -> Result<()> {
         let max1 = Expr::WindowFunction(expr::WindowFunction::new(
-            WindowFunction::AggregateFunction(AggregateFunction::Max),
+            WindowFunctionDefinition::AggregateFunction(AggregateFunction::Max),
             vec![col("name")],
             vec![],
             vec![],
             WindowFrame::new(false),
         ));
         let max2 = Expr::WindowFunction(expr::WindowFunction::new(
-            WindowFunction::AggregateFunction(AggregateFunction::Max),
+            WindowFunctionDefinition::AggregateFunction(AggregateFunction::Max),
             vec![col("name")],
             vec![],
             vec![],
             WindowFrame::new(false),
         ));
         let min3 = Expr::WindowFunction(expr::WindowFunction::new(
-            WindowFunction::AggregateFunction(AggregateFunction::Min),
+            WindowFunctionDefinition::AggregateFunction(AggregateFunction::Min),
             vec![col("name")],
             vec![],
             vec![],
             WindowFrame::new(false),
         ));
         let sum4 = Expr::WindowFunction(expr::WindowFunction::new(
-            WindowFunction::AggregateFunction(AggregateFunction::Sum),
+            WindowFunctionDefinition::AggregateFunction(AggregateFunction::Sum),
             vec![col("age")],
             vec![],
             vec![],
@@ -1257,28 +1257,28 @@ mod tests {
         let created_at_desc =
             Expr::Sort(expr::Sort::new(Box::new(col("created_at")), false, true));
         let max1 = Expr::WindowFunction(expr::WindowFunction::new(
-            WindowFunction::AggregateFunction(AggregateFunction::Max),
+            WindowFunctionDefinition::AggregateFunction(AggregateFunction::Max),
             vec![col("name")],
             vec![],
             vec![age_asc.clone(), name_desc.clone()],
             WindowFrame::new(true),
         ));
         let max2 = Expr::WindowFunction(expr::WindowFunction::new(
-            WindowFunction::AggregateFunction(AggregateFunction::Max),
+            WindowFunctionDefinition::AggregateFunction(AggregateFunction::Max),
             vec![col("name")],
             vec![],
             vec![],
             WindowFrame::new(false),
         ));
         let min3 = Expr::WindowFunction(expr::WindowFunction::new(
-            WindowFunction::AggregateFunction(AggregateFunction::Min),
+            WindowFunctionDefinition::AggregateFunction(AggregateFunction::Min),
             vec![col("name")],
             vec![],
             vec![age_asc.clone(), name_desc.clone()],
             WindowFrame::new(true),
         ));
         let sum4 = Expr::WindowFunction(expr::WindowFunction::new(
-            WindowFunction::AggregateFunction(AggregateFunction::Sum),
+            WindowFunctionDefinition::AggregateFunction(AggregateFunction::Sum),
             vec![col("age")],
             vec![],
             vec![name_desc.clone(), age_asc.clone(), created_at_desc.clone()],
@@ -1309,7 +1309,7 @@ mod tests {
     fn test_find_sort_exprs() -> Result<()> {
         let exprs = &[
             Expr::WindowFunction(expr::WindowFunction::new(
-                WindowFunction::AggregateFunction(AggregateFunction::Max),
+                WindowFunctionDefinition::AggregateFunction(AggregateFunction::Max),
                 vec![col("name")],
                 vec![],
                 vec![
@@ -1319,7 +1319,7 @@ mod tests {
                 WindowFrame::new(true),
             )),
             Expr::WindowFunction(expr::WindowFunction::new(
-                WindowFunction::AggregateFunction(AggregateFunction::Sum),
+                WindowFunctionDefinition::AggregateFunction(AggregateFunction::Sum),
                 vec![col("age")],
                 vec![],
                 vec![

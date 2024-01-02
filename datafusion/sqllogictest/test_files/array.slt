@@ -68,6 +68,16 @@ AS VALUES
 ;
 
 statement ok
+CREATE TABLE large_arrays
+AS
+  SELECT
+    arrow_cast(column1, 'LargeList(List(Int64))') AS column1,
+    arrow_cast(column2, 'LargeList(Float64)') AS column2,
+    arrow_cast(column3, 'LargeList(Utf8)') AS column3
+  FROM arrays
+;
+
+statement ok
 CREATE TABLE slices
 AS VALUES
   (make_array(NULL, 2, 3, 4, 5, 6, 7, 8, 9, 10), 1, 1),
@@ -222,10 +232,36 @@ AS VALUES
 ;
 
 statement ok
+CREATE TABLE large_array_intersect_table_1D
+AS
+  SELECT
+    arrow_cast(column1, 'LargeList(Int64)') as column1,
+    arrow_cast(column2, 'LargeList(Int64)') as column2,
+    arrow_cast(column3, 'LargeList(Int64)') as column3,
+    arrow_cast(column4, 'LargeList(Int64)') as column4,
+    arrow_cast(column5, 'LargeList(Int64)') as column5,
+    arrow_cast(column6, 'LargeList(Int64)') as column6
+FROM array_intersect_table_1D
+;
+
+statement ok
 CREATE TABLE array_intersect_table_1D_Float
 AS VALUES
   (make_array(1.0, 2.0), make_array(1.0), make_array(1.0,2.0,3.0), make_array(1.0,3.0), make_array(1.11), make_array(2.22, 3.33)),
   (make_array(3.0, 4.0, 5.0), make_array(2.0), make_array(1.0,2.0,3.0,4.0), make_array(2.0,5.0), make_array(2.22, 1.11), make_array(1.11, 3.33))
+;
+
+statement ok
+CREATE TABLE large_array_intersect_table_1D_Float
+AS
+  SELECT
+    arrow_cast(column1, 'LargeList(Float64)') as column1,
+    arrow_cast(column2, 'LargeList(Float64)') as column2,
+    arrow_cast(column3, 'LargeList(Float64)') as column3,
+    arrow_cast(column4, 'LargeList(Float64)') as column4,
+    arrow_cast(column5, 'LargeList(Float64)') as column5,
+    arrow_cast(column6, 'LargeList(Float64)') as column6
+FROM array_intersect_table_1D_Float
 ;
 
 statement ok
@@ -236,10 +272,36 @@ AS VALUES
 ;
 
 statement ok
+CREATE TABLE large_array_intersect_table_1D_Boolean
+AS
+  SELECT
+    arrow_cast(column1, 'LargeList(Boolean)') as column1,
+    arrow_cast(column2, 'LargeList(Boolean)') as column2,
+    arrow_cast(column3, 'LargeList(Boolean)') as column3,
+    arrow_cast(column4, 'LargeList(Boolean)') as column4,
+    arrow_cast(column5, 'LargeList(Boolean)') as column5,
+    arrow_cast(column6, 'LargeList(Boolean)') as column6
+FROM array_intersect_table_1D_Boolean
+;
+
+statement ok
 CREATE TABLE array_intersect_table_1D_UTF8
 AS VALUES
   (make_array('a', 'bc', 'def'), make_array('bc'), make_array('datafusion', 'rust', 'arrow'), make_array('rust', 'arrow'), make_array('rust', 'arrow', 'python'), make_array('data')),
   (make_array('a', 'bc', 'def'), make_array('defg'), make_array('datafusion', 'rust', 'arrow'), make_array('datafusion', 'rust', 'arrow', 'python'), make_array('rust', 'arrow'), make_array('datafusion', 'rust', 'arrow'))
+;
+
+statement ok
+CREATE TABLE large_array_intersect_table_1D_UTF8
+AS
+  SELECT
+    arrow_cast(column1, 'LargeList(Utf8)') as column1,
+    arrow_cast(column2, 'LargeList(Utf8)') as column2,
+    arrow_cast(column3, 'LargeList(Utf8)') as column3,
+    arrow_cast(column4, 'LargeList(Utf8)') as column4,
+    arrow_cast(column5, 'LargeList(Utf8)') as column5,
+    arrow_cast(column6, 'LargeList(Utf8)') as column6
+FROM array_intersect_table_1D_UTF8
 ;
 
 statement ok
@@ -250,6 +312,17 @@ AS VALUES
 ;
 
 statement ok
+CREATE TABLE large_array_intersect_table_2D
+AS
+  SELECT
+    arrow_cast(column1, 'LargeList(List(Int64))') as column1,
+    arrow_cast(column2, 'LargeList(List(Int64))') as column2,
+    arrow_cast(column3, 'LargeList(List(Int64))') as column3,
+    arrow_cast(column4, 'LargeList(List(Int64))') as column4
+FROM array_intersect_table_2D
+;
+
+statement ok
 CREATE TABLE array_intersect_table_2D_float
 AS VALUES
   (make_array([1.0, 2.0, 3.0], [1.1, 2.2], [3.3]), make_array([1.1, 2.2], [3.3])),
@@ -257,10 +330,28 @@ AS VALUES
 ;
 
 statement ok
+CREATE TABLE large_array_intersect_table_2D_Float
+AS
+  SELECT
+    arrow_cast(column1, 'LargeList(List(Float64))') as column1,
+    arrow_cast(column2, 'LargeList(List(Float64))') as column2
+FROM array_intersect_table_2D_Float
+;
+
+statement ok
 CREATE TABLE array_intersect_table_3D
 AS VALUES
   (make_array([[1,2]]), make_array([[1]])),
   (make_array([[1,2]]), make_array([[1,2]]))
+;
+
+statement ok
+CREATE TABLE large_array_intersect_table_3D
+AS
+  SELECT
+    arrow_cast(column1, 'LargeList(List(List(Int64)))') as column1,
+    arrow_cast(column2, 'LargeList(List(List(Int64)))') as column2
+FROM array_intersect_table_3D
 ;
 
 statement ok
@@ -289,12 +380,34 @@ AS VALUES
 ;
 
 statement ok
+CREATE TABLE large_arrays_with_repeating_elements
+AS
+  SELECT
+    arrow_cast(column1, 'LargeList(Int64)') AS column1,
+    column2,
+    column3,
+    column4
+  FROM arrays_with_repeating_elements
+;
+
+statement ok
 CREATE TABLE nested_arrays_with_repeating_elements
 AS VALUES
   (make_array([1, 2, 3], [4, 5, 6], [1, 2, 3], [7, 8, 9], [4, 5, 6], [4, 5, 6], [1, 2, 3], [7, 8, 9], [4, 5, 6], [7, 8, 9]), [4, 5, 6], [10, 11, 12], 3),
   (make_array([10, 11, 12], [10, 11, 12], [13, 14, 15], [13, 14, 15], [16, 17, 18], [13, 14, 15], [13, 14, 15], [13, 14, 15], [10, 11, 12], [10, 11, 12]), [10, 11, 12], [19, 20, 21], 2),
   (make_array([19, 20, 21], [19, 20, 21], [19, 20, 21], [22, 23, 24], [19, 20, 21], [25, 26, 27], [19, 20, 21], [22, 23, 24], [19, 20, 21], [19, 20, 21]), [19, 20, 21], [28, 29, 30], 5),
   (make_array([28, 29, 30], [31, 32, 33], [34, 35, 36], [28, 29, 30], [31, 32, 33], [34, 35, 36], [28, 29, 30], [31, 32, 33], [34, 35, 36], [28, 29, 30]), [28, 29, 30], [37, 38, 39], 10)
+;
+
+statement ok
+CREATE TABLE large_nested_arrays_with_repeating_elements
+AS
+  SELECT
+    arrow_cast(column1, 'LargeList(List(Int64))') AS column1,
+    column2,
+    column3,
+    column4
+  FROM nested_arrays_with_repeating_elements
 ;
 
 query error
@@ -881,15 +994,30 @@ select array_pop_back(make_array(1, 2, 3, 4, 5)), array_pop_back(make_array('h',
 ----
 [1, 2, 3, 4] [h, e, l, l]
 
+query ??
+select array_pop_back(arrow_cast(make_array(1, 2, 3, 4, 5), 'LargeList(Int64)')), array_pop_back(arrow_cast(make_array('h', 'e', 'l', 'l', 'o'), 'LargeList(Utf8)'));
+----
+[1, 2, 3, 4] [h, e, l, l]
+
 # array_pop_back scalar function #2 (after array_pop_back, array is empty)
 query ?
 select array_pop_back(make_array(1));
 ----
 []
 
+query ?
+select array_pop_back(arrow_cast(make_array(1), 'LargeList(Int64)'));
+----
+[]
+
 # array_pop_back scalar function #3 (array_pop_back the empty array)
 query ?
 select array_pop_back(array_pop_back(make_array(1)));
+----
+[]
+
+query ?
+select array_pop_back(array_pop_back(arrow_cast(make_array(1), 'LargeList(Int64)')));
 ----
 []
 
@@ -905,9 +1033,19 @@ select array_pop_back(make_array(make_array(1, 2, 3), make_array(2, 9, 1), make_
 ----
 [[1, 2, 3], [2, 9, 1], [7, 8, 9], [1, 2, 3], [1, 7, 4]]
 
+query ?
+select array_pop_back(arrow_cast(make_array(make_array(1, 2, 3), make_array(2, 9, 1), make_array(7, 8, 9), make_array(1, 2, 3), make_array(1, 7, 4), make_array(4, 5, 6)), 'LargeList(List(Int64))'));
+----
+[[1, 2, 3], [2, 9, 1], [7, 8, 9], [1, 2, 3], [1, 7, 4]]
+
 # array_pop_back scalar function #6 (array_pop_back the nested arrays with NULL)
 query ?
 select array_pop_back(make_array(make_array(1, 2, 3), make_array(2, 9, 1), make_array(7, 8, 9), make_array(1, 2, 3), make_array(1, 7, 4), NULL));
+----
+[[1, 2, 3], [2, 9, 1], [7, 8, 9], [1, 2, 3], [1, 7, 4]]
+
+query ?
+select array_pop_back(arrow_cast(make_array(make_array(1, 2, 3), make_array(2, 9, 1), make_array(7, 8, 9), make_array(1, 2, 3), make_array(1, 7, 4), NULL), 'LargeList(List(Int64))'));
 ----
 [[1, 2, 3], [2, 9, 1], [7, 8, 9], [1, 2, 3], [1, 7, 4]]
 
@@ -917,15 +1055,35 @@ select array_pop_back(make_array(make_array(1, 2, 3), make_array(2, 9, 1), make_
 ----
 [[1, 2, 3], [2, 9, 1], [7, 8, 9], ]
 
+query ?
+select array_pop_back(arrow_cast(make_array(make_array(1, 2, 3), make_array(2, 9, 1), make_array(7, 8, 9), NULL, make_array(1, 7, 4)), 'LargeList(List(Int64))'));
+----
+[[1, 2, 3], [2, 9, 1], [7, 8, 9], ]
+
 # array_pop_back scalar function #8 (after array_pop_back, nested array is empty)
 query ?
 select array_pop_back(make_array(make_array(1, 2, 3)));
 ----
 []
 
+query ?
+select array_pop_back(arrow_cast(make_array(make_array(1, 2, 3)), 'LargeList(List(Int64))'));
+----
+[]
+
 # array_pop_back with columns
 query ?
 select array_pop_back(column1) from arrayspop;
+----
+[1, 2]
+[3, 4, 5]
+[6, 7, 8, ]
+[, ]
+[]
+[, 10, 11]
+
+query ?
+select array_pop_back(arrow_cast(column1, 'LargeList(Int64)')) from arrayspop;
 ----
 [1, 2]
 [3, 4, 5]
@@ -942,9 +1100,19 @@ select array_pop_front(make_array(1, 2, 3, 4, 5)), array_pop_front(make_array('h
 ----
 [2, 3, 4, 5] [e, l, l, o]
 
+query ??
+select array_pop_front(arrow_cast(make_array(1, 2, 3, 4, 5), 'LargeList(Int64)')), array_pop_front(arrow_cast(make_array('h', 'e', 'l', 'l', 'o'), 'LargeList(Utf8)'));
+----
+[2, 3, 4, 5] [e, l, l, o]
+
 # array_pop_front scalar function #2 (after array_pop_front, array is empty)
 query ?
 select array_pop_front(make_array(1));
+----
+[]
+
+query ?
+select array_pop_front(arrow_cast(make_array(1), 'LargeList(Int64)'));
 ----
 []
 
@@ -954,9 +1122,19 @@ select array_pop_front(array_pop_front(make_array(1)));
 ----
 []
 
+query ?
+select array_pop_front(array_pop_front(arrow_cast(make_array(1), 'LargeList(Int64)')));
+----
+[]
+
 # array_pop_front scalar function #5 (array_pop_front the nested arrays)
 query ?
 select array_pop_front(make_array(make_array(1, 2, 3), make_array(2, 9, 1), make_array(7, 8, 9), make_array(1, 2, 3), make_array(1, 7, 4), make_array(4, 5, 6)));
+----
+[[2, 9, 1], [7, 8, 9], [1, 2, 3], [1, 7, 4], [4, 5, 6]]
+
+query ?
+select array_pop_front(arrow_cast(make_array(make_array(1, 2, 3), make_array(2, 9, 1), make_array(7, 8, 9), make_array(1, 2, 3), make_array(1, 7, 4), make_array(4, 5, 6)), 'LargeList(List(Int64))'));
 ----
 [[2, 9, 1], [7, 8, 9], [1, 2, 3], [1, 7, 4], [4, 5, 6]]
 
@@ -966,9 +1144,19 @@ select array_pop_front(make_array(NULL, make_array(1, 2, 3), make_array(2, 9, 1)
 ----
 [[1, 2, 3], [2, 9, 1], [7, 8, 9], [1, 2, 3], [1, 7, 4]]
 
+query ?
+select array_pop_front(arrow_cast(make_array(NULL, make_array(1, 2, 3), make_array(2, 9, 1), make_array(7, 8, 9), make_array(1, 2, 3), make_array(1, 7, 4)), 'LargeList(List(Int64))'));
+----
+[[1, 2, 3], [2, 9, 1], [7, 8, 9], [1, 2, 3], [1, 7, 4]]
+
 # array_pop_front scalar function #8 (after array_pop_front, nested array is empty)
 query ?
 select array_pop_front(make_array(make_array(1, 2, 3)));
+----
+[]
+
+query ?
+select array_pop_front(arrow_cast(make_array(make_array(1, 2, 3)), 'LargeList(List(Int64))'));
 ----
 []
 
@@ -1430,18 +1618,58 @@ select array_append(column1, make_array(1, 11, 111)), array_append(make_array(ma
 
 ## array_prepend (aliases: `list_prepend`, `array_push_front`, `list_push_front`)
 
-# TODO: array_prepend with NULLs
-# array_prepend scalar function #1
-# query ?
-# select array_prepend(4, make_array());
-# ----
-# [4]
+# array_prepend with NULLs
 
-# array_prepend scalar function #2
-# query ??
-# select array_prepend(make_array(), make_array()), array_prepend(make_array(4), make_array());
-# ----
-# [[]] [[4]]
+# DuckDB: [4]
+# ClickHouse: Null
+# Since they dont have the same result, we just follow Postgres, return error
+query error
+select array_prepend(4, NULL);
+
+query ?
+select array_prepend(4, []);
+----
+[4]
+
+query ?
+select array_prepend(4, [null]);
+----
+[4, ]
+
+# DuckDB: [null]
+# ClickHouse: [null]
+query ?
+select array_prepend(null, []);
+----
+[]
+
+query ?
+select array_prepend(null, [1]);
+----
+[, 1]
+
+query ?
+select array_prepend(null, [[1,2,3]]);
+----
+[, [1, 2, 3]]
+
+# DuckDB: [[]]
+# ClickHouse: [[]]
+# TODO: We may also return [[]]
+query error
+select array_prepend([], []);
+
+# DuckDB: [null]
+# ClickHouse: [null]
+# TODO: We may also return [null]
+query error
+select array_prepend(null, null);
+
+query ?
+select array_append([], null);
+----
+[]
+
 
 # array_prepend scalar function #3
 query ???
@@ -2000,6 +2228,14 @@ select
 ----
 [1, 3, 3, 4] [1, 0, 4, 5, 4, 6, 7] [1, 2, 3]
 
+query ???
+select
+  array_replace(arrow_cast(make_array(1, 2, 3, 4), 'LargeList(Int64)'), 2, 3),
+  array_replace(arrow_cast(make_array(1, 4, 4, 5, 4, 6, 7), 'LargeList(Int64)'), 4, 0),
+  array_replace(arrow_cast(make_array(1, 2, 3), 'LargeList(Int64)'), 4, 0);
+----
+[1, 3, 3, 4] [1, 0, 4, 5, 4, 6, 7] [1, 2, 3]
+
 # array_replace scalar function #2 (element is list)
 query ??
 select
@@ -2016,6 +2252,21 @@ select
 ----
 [[1, 2, 3], [1, 1, 1], [5, 5, 5], [4, 5, 6], [7, 8, 9]] [[1, 3, 2], [3, 1, 4], [2, 3, 4], [5, 3, 1], [1, 3, 2]]
 
+query ??
+select
+  array_replace(
+    arrow_cast(make_array([1, 2, 3], [4, 5, 6], [5, 5, 5], [4, 5, 6], [7, 8, 9]), 'LargeList(List(Int64))'),
+    [4, 5, 6],
+    [1, 1, 1]
+  ),
+  array_replace(
+    arrow_cast(make_array([1, 3, 2], [2, 3, 4], [2, 3, 4], [5, 3, 1], [1, 3, 2]), 'LargeList(List(Int64))'),
+    [2, 3, 4],
+    [3, 1, 4]
+  );
+----
+[[1, 2, 3], [1, 1, 1], [5, 5, 5], [4, 5, 6], [7, 8, 9]] [[1, 3, 2], [3, 1, 4], [2, 3, 4], [5, 3, 1], [1, 3, 2]]
+
 # list_replace scalar function #3 (function alias `list_replace`)
 query ???
 select list_replace(
@@ -2025,9 +2276,25 @@ select list_replace(
 ----
 [1, 3, 3, 4] [1, 0, 4, 5, 4, 6, 7] [1, 2, 3]
 
+query ???
+select list_replace(
+  arrow_cast(make_array(1, 2, 3, 4), 'LargeList(Int64)'), 2, 3),
+  list_replace(arrow_cast(make_array(1, 4, 4, 5, 4, 6, 7), 'LargeList(Int64)'), 4, 0),
+  list_replace(arrow_cast(make_array(1, 2, 3), 'LargeList(Int64)'), 4, 0);
+----
+[1, 3, 3, 4] [1, 0, 4, 5, 4, 6, 7] [1, 2, 3]
+
 # array_replace scalar function with columns #1
 query ?
 select array_replace(column1, column2, column3) from arrays_with_repeating_elements;
+----
+[1, 4, 1, 3, 2, 2, 1, 3, 2, 3]
+[7, 4, 5, 5, 6, 5, 5, 5, 4, 4]
+[10, 7, 7, 8, 7, 9, 7, 8, 7, 7]
+[13, 11, 12, 10, 11, 12, 10, 11, 12, 10]
+
+query ?
+select array_replace(column1, column2, column3) from large_arrays_with_repeating_elements;
 ----
 [1, 4, 1, 3, 2, 2, 1, 3, 2, 3]
 [7, 4, 5, 5, 6, 5, 5, 5, 4, 4]
@@ -2043,6 +2310,14 @@ select array_replace(column1, column2, column3) from nested_arrays_with_repeatin
 [[28, 29, 30], [19, 20, 21], [19, 20, 21], [22, 23, 24], [19, 20, 21], [25, 26, 27], [19, 20, 21], [22, 23, 24], [19, 20, 21], [19, 20, 21]]
 [[37, 38, 39], [31, 32, 33], [34, 35, 36], [28, 29, 30], [31, 32, 33], [34, 35, 36], [28, 29, 30], [31, 32, 33], [34, 35, 36], [28, 29, 30]]
 
+query ?
+select array_replace(column1, column2, column3) from large_nested_arrays_with_repeating_elements;
+----
+[[1, 2, 3], [10, 11, 12], [1, 2, 3], [7, 8, 9], [4, 5, 6], [4, 5, 6], [1, 2, 3], [7, 8, 9], [4, 5, 6], [7, 8, 9]]
+[[19, 20, 21], [10, 11, 12], [13, 14, 15], [13, 14, 15], [16, 17, 18], [13, 14, 15], [13, 14, 15], [13, 14, 15], [10, 11, 12], [10, 11, 12]]
+[[28, 29, 30], [19, 20, 21], [19, 20, 21], [22, 23, 24], [19, 20, 21], [25, 26, 27], [19, 20, 21], [22, 23, 24], [19, 20, 21], [19, 20, 21]]
+[[37, 38, 39], [31, 32, 33], [34, 35, 36], [28, 29, 30], [31, 32, 33], [34, 35, 36], [28, 29, 30], [31, 32, 33], [34, 35, 36], [28, 29, 30]]
+
 # array_replace scalar function with columns and scalars #1
 query ???
 select
@@ -2050,6 +2325,18 @@ select
   array_replace(column1, 1, column3),
   array_replace(column1, column2, 4)
 from arrays_with_repeating_elements;
+----
+[1, 4, 2, 4, 5, 4, 4, 7, 7, 10, 7, 8] [4, 2, 1, 3, 2, 2, 1, 3, 2, 3] [1, 4, 1, 3, 2, 2, 1, 3, 2, 3]
+[1, 2, 2, 7, 5, 4, 4, 7, 7, 10, 7, 8] [4, 4, 5, 5, 6, 5, 5, 5, 4, 4] [4, 4, 5, 5, 6, 5, 5, 5, 4, 4]
+[1, 2, 2, 4, 5, 4, 4, 10, 7, 10, 7, 8] [7, 7, 7, 8, 7, 9, 7, 8, 7, 7] [4, 7, 7, 8, 7, 9, 7, 8, 7, 7]
+[1, 2, 2, 4, 5, 4, 4, 7, 7, 13, 7, 8] [10, 11, 12, 10, 11, 12, 10, 11, 12, 10] [4, 11, 12, 10, 11, 12, 10, 11, 12, 10]
+
+query ???
+select
+  array_replace(arrow_cast(make_array(1, 2, 2, 4, 5, 4, 4, 7, 7, 10, 7, 8), 'LargeList(Int64)'), column2, column3),
+  array_replace(column1, 1, column3),
+  array_replace(column1, column2, 4)
+from large_arrays_with_repeating_elements;
 ----
 [1, 4, 2, 4, 5, 4, 4, 7, 7, 10, 7, 8] [4, 2, 1, 3, 2, 2, 1, 3, 2, 3] [1, 4, 1, 3, 2, 2, 1, 3, 2, 3]
 [1, 2, 2, 7, 5, 4, 4, 7, 7, 10, 7, 8] [4, 4, 5, 5, 6, 5, 5, 5, 4, 4] [4, 4, 5, 5, 6, 5, 5, 5, 4, 4]
@@ -2074,6 +2361,23 @@ from nested_arrays_with_repeating_elements;
 [[1, 2, 3], [4, 5, 6], [4, 5, 6], [10, 11, 12], [13, 14, 15], [10, 11, 12], [10, 11, 12], [28, 29, 30], [19, 20, 21], [28, 29, 30], [19, 20, 21], [22, 23, 24]] [[19, 20, 21], [19, 20, 21], [19, 20, 21], [22, 23, 24], [19, 20, 21], [25, 26, 27], [19, 20, 21], [22, 23, 24], [19, 20, 21], [19, 20, 21]] [[11, 12, 13], [19, 20, 21], [19, 20, 21], [22, 23, 24], [19, 20, 21], [25, 26, 27], [19, 20, 21], [22, 23, 24], [19, 20, 21], [19, 20, 21]]
 [[1, 2, 3], [4, 5, 6], [4, 5, 6], [10, 11, 12], [13, 14, 15], [10, 11, 12], [10, 11, 12], [19, 20, 21], [19, 20, 21], [37, 38, 39], [19, 20, 21], [22, 23, 24]] [[28, 29, 30], [31, 32, 33], [34, 35, 36], [28, 29, 30], [31, 32, 33], [34, 35, 36], [28, 29, 30], [31, 32, 33], [34, 35, 36], [28, 29, 30]] [[11, 12, 13], [31, 32, 33], [34, 35, 36], [28, 29, 30], [31, 32, 33], [34, 35, 36], [28, 29, 30], [31, 32, 33], [34, 35, 36], [28, 29, 30]]
 
+query ???
+select
+  array_replace(
+    arrow_cast(make_array(
+      [1, 2, 3], [4, 5, 6], [4, 5, 6], [10, 11, 12], [13, 14, 15], [10, 11, 12], [10, 11, 12], [19, 20, 21], [19, 20, 21], [28, 29, 30], [19, 20, 21], [22, 23, 24]),'LargeList(List(Int64))'),
+      column2,
+      column3
+    ),
+  array_replace(column1, make_array(1, 2, 3), column3),
+  array_replace(column1, column2, make_array(11, 12, 13))
+from large_nested_arrays_with_repeating_elements;
+----
+[[1, 2, 3], [10, 11, 12], [4, 5, 6], [10, 11, 12], [13, 14, 15], [10, 11, 12], [10, 11, 12], [19, 20, 21], [19, 20, 21], [28, 29, 30], [19, 20, 21], [22, 23, 24]] [[10, 11, 12], [4, 5, 6], [1, 2, 3], [7, 8, 9], [4, 5, 6], [4, 5, 6], [1, 2, 3], [7, 8, 9], [4, 5, 6], [7, 8, 9]] [[1, 2, 3], [11, 12, 13], [1, 2, 3], [7, 8, 9], [4, 5, 6], [4, 5, 6], [1, 2, 3], [7, 8, 9], [4, 5, 6], [7, 8, 9]]
+[[1, 2, 3], [4, 5, 6], [4, 5, 6], [19, 20, 21], [13, 14, 15], [10, 11, 12], [10, 11, 12], [19, 20, 21], [19, 20, 21], [28, 29, 30], [19, 20, 21], [22, 23, 24]] [[10, 11, 12], [10, 11, 12], [13, 14, 15], [13, 14, 15], [16, 17, 18], [13, 14, 15], [13, 14, 15], [13, 14, 15], [10, 11, 12], [10, 11, 12]] [[11, 12, 13], [10, 11, 12], [13, 14, 15], [13, 14, 15], [16, 17, 18], [13, 14, 15], [13, 14, 15], [13, 14, 15], [10, 11, 12], [10, 11, 12]]
+[[1, 2, 3], [4, 5, 6], [4, 5, 6], [10, 11, 12], [13, 14, 15], [10, 11, 12], [10, 11, 12], [28, 29, 30], [19, 20, 21], [28, 29, 30], [19, 20, 21], [22, 23, 24]] [[19, 20, 21], [19, 20, 21], [19, 20, 21], [22, 23, 24], [19, 20, 21], [25, 26, 27], [19, 20, 21], [22, 23, 24], [19, 20, 21], [19, 20, 21]] [[11, 12, 13], [19, 20, 21], [19, 20, 21], [22, 23, 24], [19, 20, 21], [25, 26, 27], [19, 20, 21], [22, 23, 24], [19, 20, 21], [19, 20, 21]]
+[[1, 2, 3], [4, 5, 6], [4, 5, 6], [10, 11, 12], [13, 14, 15], [10, 11, 12], [10, 11, 12], [19, 20, 21], [19, 20, 21], [37, 38, 39], [19, 20, 21], [22, 23, 24]] [[28, 29, 30], [31, 32, 33], [34, 35, 36], [28, 29, 30], [31, 32, 33], [34, 35, 36], [28, 29, 30], [31, 32, 33], [34, 35, 36], [28, 29, 30]] [[11, 12, 13], [31, 32, 33], [34, 35, 36], [28, 29, 30], [31, 32, 33], [34, 35, 36], [28, 29, 30], [31, 32, 33], [34, 35, 36], [28, 29, 30]]
+
 ## array_replace_n (aliases: `list_replace_n`)
 
 # array_replace_n scalar function #1
@@ -2082,6 +2386,14 @@ select
   array_replace_n(make_array(1, 2, 3, 4), 2, 3, 2),
   array_replace_n(make_array(1, 4, 4, 5, 4, 6, 7), 4, 0, 2),
   array_replace_n(make_array(1, 2, 3), 4, 0, 3);
+----
+[1, 3, 3, 4] [1, 0, 0, 5, 4, 6, 7] [1, 2, 3]
+
+query ???
+select
+  array_replace_n(arrow_cast(make_array(1, 2, 3, 4), 'LargeList(Int64)'), 2, 3, 2),
+  array_replace_n(arrow_cast(make_array(1, 4, 4, 5, 4, 6, 7), 'LargeList(Int64)'), 4, 0, 2),
+  array_replace_n(arrow_cast(make_array(1, 2, 3), 'LargeList(Int64)'), 4, 0, 3);
 ----
 [1, 3, 3, 4] [1, 0, 0, 5, 4, 6, 7] [1, 2, 3]
 
@@ -2103,6 +2415,23 @@ select
 ----
 [[1, 2, 3], [1, 1, 1], [5, 5, 5], [1, 1, 1], [7, 8, 9]] [[1, 3, 2], [3, 1, 4], [3, 1, 4], [5, 3, 1], [1, 3, 2]]
 
+query ??
+select
+  array_replace_n(
+    arrow_cast(make_array([1, 2, 3], [4, 5, 6], [5, 5, 5], [4, 5, 6], [7, 8, 9]), 'LargeList(List(Int64))'),
+      [4, 5, 6],
+      [1, 1, 1],
+      2
+    ),
+  array_replace_n(
+    arrow_cast(make_array([1, 3, 2], [2, 3, 4], [2, 3, 4], [5, 3, 1], [1, 3, 2]), 'LargeList(List(Int64))'),
+    [2, 3, 4],
+    [3, 1, 4],
+    2
+  );
+----
+[[1, 2, 3], [1, 1, 1], [5, 5, 5], [1, 1, 1], [7, 8, 9]] [[1, 3, 2], [3, 1, 4], [3, 1, 4], [5, 3, 1], [1, 3, 2]]
+
 # list_replace_n scalar function #3 (function alias `array_replace_n`)
 query ???
 select
@@ -2112,11 +2441,29 @@ select
 ----
 [1, 3, 3, 4] [1, 0, 0, 5, 4, 6, 7] [1, 2, 3]
 
+query ???
+select
+  list_replace_n(arrow_cast(make_array(1, 2, 3, 4), 'LargeList(Int64)'), 2, 3, 2),
+  list_replace_n(arrow_cast(make_array(1, 4, 4, 5, 4, 6, 7), 'LargeList(Int64)'), 4, 0, 2),
+  list_replace_n(arrow_cast(make_array(1, 2, 3), 'LargeList(Int64)'), 4, 0, 3);
+----
+[1, 3, 3, 4] [1, 0, 0, 5, 4, 6, 7] [1, 2, 3]
+
 # array_replace_n scalar function with columns #1
 query ?
 select
   array_replace_n(column1, column2, column3, column4)
 from arrays_with_repeating_elements;
+----
+[1, 4, 1, 3, 4, 4, 1, 3, 2, 3]
+[7, 7, 5, 5, 6, 5, 5, 5, 4, 4]
+[10, 10, 10, 8, 10, 9, 10, 8, 7, 7]
+[13, 11, 12, 13, 11, 12, 13, 11, 12, 13]
+
+query ?
+select
+  array_replace_n(column1, column2, column3, column4)
+from large_arrays_with_repeating_elements;
 ----
 [1, 4, 1, 3, 4, 4, 1, 3, 2, 3]
 [7, 7, 5, 5, 6, 5, 5, 5, 4, 4]
@@ -2134,6 +2481,17 @@ from nested_arrays_with_repeating_elements;
 [[28, 29, 30], [28, 29, 30], [28, 29, 30], [22, 23, 24], [28, 29, 30], [25, 26, 27], [28, 29, 30], [22, 23, 24], [19, 20, 21], [19, 20, 21]]
 [[37, 38, 39], [31, 32, 33], [34, 35, 36], [37, 38, 39], [31, 32, 33], [34, 35, 36], [37, 38, 39], [31, 32, 33], [34, 35, 36], [37, 38, 39]]
 
+query ?
+select
+  array_replace_n(column1, column2, column3, column4)
+from large_nested_arrays_with_repeating_elements;
+----
+[[1, 2, 3], [10, 11, 12], [1, 2, 3], [7, 8, 9], [10, 11, 12], [10, 11, 12], [1, 2, 3], [7, 8, 9], [4, 5, 6], [7, 8, 9]]
+[[19, 20, 21], [19, 20, 21], [13, 14, 15], [13, 14, 15], [16, 17, 18], [13, 14, 15], [13, 14, 15], [13, 14, 15], [10, 11, 12], [10, 11, 12]]
+[[28, 29, 30], [28, 29, 30], [28, 29, 30], [22, 23, 24], [28, 29, 30], [25, 26, 27], [28, 29, 30], [22, 23, 24], [19, 20, 21], [19, 20, 21]]
+[[37, 38, 39], [31, 32, 33], [34, 35, 36], [37, 38, 39], [31, 32, 33], [34, 35, 36], [37, 38, 39], [31, 32, 33], [34, 35, 36], [37, 38, 39]]
+
+
 # array_replace_n scalar function with columns and scalars #1
 query ????
 select
@@ -2142,6 +2500,19 @@ select
   array_replace_n(column1, column2, 4, column4),
   array_replace_n(column1, column2, column3, 2)
 from arrays_with_repeating_elements;
+----
+[1, 4, 4, 4, 5, 4, 4, 7, 7, 10, 7, 8] [4, 2, 4, 3, 2, 2, 4, 3, 2, 3] [1, 4, 1, 3, 4, 4, 1, 3, 2, 3] [1, 4, 1, 3, 4, 2, 1, 3, 2, 3]
+[1, 2, 2, 7, 5, 7, 4, 7, 7, 10, 7, 8] [4, 4, 5, 5, 6, 5, 5, 5, 4, 4] [4, 4, 5, 5, 6, 5, 5, 5, 4, 4] [7, 7, 5, 5, 6, 5, 5, 5, 4, 4]
+[1, 2, 2, 4, 5, 4, 4, 10, 10, 10, 10, 8] [7, 7, 7, 8, 7, 9, 7, 8, 7, 7] [4, 4, 4, 8, 4, 9, 4, 8, 7, 7] [10, 10, 7, 8, 7, 9, 7, 8, 7, 7]
+[1, 2, 2, 4, 5, 4, 4, 7, 7, 13, 7, 8] [10, 11, 12, 10, 11, 12, 10, 11, 12, 10] [4, 11, 12, 4, 11, 12, 4, 11, 12, 4] [13, 11, 12, 13, 11, 12, 10, 11, 12, 10]
+
+query ????
+select
+  array_replace_n(arrow_cast(make_array(1, 2, 2, 4, 5, 4, 4, 7, 7, 10, 7, 8), 'LargeList(Int64)'), column2, column3, column4),
+  array_replace_n(column1, 1, column3, column4),
+  array_replace_n(column1, column2, 4, column4),
+  array_replace_n(column1, column2, column3, 2)
+from large_arrays_with_repeating_elements;
 ----
 [1, 4, 4, 4, 5, 4, 4, 7, 7, 10, 7, 8] [4, 2, 4, 3, 2, 2, 4, 3, 2, 3] [1, 4, 1, 3, 4, 4, 1, 3, 2, 3] [1, 4, 1, 3, 4, 2, 1, 3, 2, 3]
 [1, 2, 2, 7, 5, 7, 4, 7, 7, 10, 7, 8] [4, 4, 5, 5, 6, 5, 5, 5, 4, 4] [4, 4, 5, 5, 6, 5, 5, 5, 4, 4] [7, 7, 5, 5, 6, 5, 5, 5, 4, 4]
@@ -2168,6 +2539,25 @@ from nested_arrays_with_repeating_elements;
 [[7, 8, 9], [2, 1, 3], [1, 5, 6], [10, 11, 12], [2, 1, 3], [7, 8, 9], [4, 5, 6]] [[19, 20, 21], [19, 20, 21], [19, 20, 21], [22, 23, 24], [19, 20, 21], [25, 26, 27], [19, 20, 21], [22, 23, 24], [19, 20, 21], [19, 20, 21]] [[11, 12, 13], [11, 12, 13], [11, 12, 13], [22, 23, 24], [11, 12, 13], [25, 26, 27], [11, 12, 13], [22, 23, 24], [19, 20, 21], [19, 20, 21]] [[28, 29, 30], [28, 29, 30], [19, 20, 21], [22, 23, 24], [19, 20, 21], [25, 26, 27], [19, 20, 21], [22, 23, 24], [19, 20, 21], [19, 20, 21]]
 [[7, 8, 9], [2, 1, 3], [1, 5, 6], [10, 11, 12], [2, 1, 3], [7, 8, 9], [4, 5, 6]] [[28, 29, 30], [31, 32, 33], [34, 35, 36], [28, 29, 30], [31, 32, 33], [34, 35, 36], [28, 29, 30], [31, 32, 33], [34, 35, 36], [28, 29, 30]] [[11, 12, 13], [31, 32, 33], [34, 35, 36], [11, 12, 13], [31, 32, 33], [34, 35, 36], [11, 12, 13], [31, 32, 33], [34, 35, 36], [11, 12, 13]] [[37, 38, 39], [31, 32, 33], [34, 35, 36], [37, 38, 39], [31, 32, 33], [34, 35, 36], [28, 29, 30], [31, 32, 33], [34, 35, 36], [28, 29, 30]]
 
+query ????
+select
+  array_replace_n(
+    arrow_cast(make_array(
+      [7, 8, 9], [2, 1, 3], [1, 5, 6], [10, 11, 12], [2, 1, 3], [7, 8, 9], [4, 5, 6]), 'LargeList(List(Int64))'),
+      column2,
+      column3,
+      column4
+    ),
+    array_replace_n(column1, make_array(1, 2, 3), column3, column4),
+    array_replace_n(column1, column2, make_array(11, 12, 13), column4),
+    array_replace_n(column1, column2, column3, 2)
+from large_nested_arrays_with_repeating_elements;
+----
+[[7, 8, 9], [2, 1, 3], [1, 5, 6], [10, 11, 12], [2, 1, 3], [7, 8, 9], [10, 11, 12]] [[10, 11, 12], [4, 5, 6], [10, 11, 12], [7, 8, 9], [4, 5, 6], [4, 5, 6], [10, 11, 12], [7, 8, 9], [4, 5, 6], [7, 8, 9]] [[1, 2, 3], [11, 12, 13], [1, 2, 3], [7, 8, 9], [11, 12, 13], [11, 12, 13], [1, 2, 3], [7, 8, 9], [4, 5, 6], [7, 8, 9]] [[1, 2, 3], [10, 11, 12], [1, 2, 3], [7, 8, 9], [10, 11, 12], [4, 5, 6], [1, 2, 3], [7, 8, 9], [4, 5, 6], [7, 8, 9]]
+[[7, 8, 9], [2, 1, 3], [1, 5, 6], [19, 20, 21], [2, 1, 3], [7, 8, 9], [4, 5, 6]] [[10, 11, 12], [10, 11, 12], [13, 14, 15], [13, 14, 15], [16, 17, 18], [13, 14, 15], [13, 14, 15], [13, 14, 15], [10, 11, 12], [10, 11, 12]] [[11, 12, 13], [11, 12, 13], [13, 14, 15], [13, 14, 15], [16, 17, 18], [13, 14, 15], [13, 14, 15], [13, 14, 15], [10, 11, 12], [10, 11, 12]] [[19, 20, 21], [19, 20, 21], [13, 14, 15], [13, 14, 15], [16, 17, 18], [13, 14, 15], [13, 14, 15], [13, 14, 15], [10, 11, 12], [10, 11, 12]]
+[[7, 8, 9], [2, 1, 3], [1, 5, 6], [10, 11, 12], [2, 1, 3], [7, 8, 9], [4, 5, 6]] [[19, 20, 21], [19, 20, 21], [19, 20, 21], [22, 23, 24], [19, 20, 21], [25, 26, 27], [19, 20, 21], [22, 23, 24], [19, 20, 21], [19, 20, 21]] [[11, 12, 13], [11, 12, 13], [11, 12, 13], [22, 23, 24], [11, 12, 13], [25, 26, 27], [11, 12, 13], [22, 23, 24], [19, 20, 21], [19, 20, 21]] [[28, 29, 30], [28, 29, 30], [19, 20, 21], [22, 23, 24], [19, 20, 21], [25, 26, 27], [19, 20, 21], [22, 23, 24], [19, 20, 21], [19, 20, 21]]
+[[7, 8, 9], [2, 1, 3], [1, 5, 6], [10, 11, 12], [2, 1, 3], [7, 8, 9], [4, 5, 6]] [[28, 29, 30], [31, 32, 33], [34, 35, 36], [28, 29, 30], [31, 32, 33], [34, 35, 36], [28, 29, 30], [31, 32, 33], [34, 35, 36], [28, 29, 30]] [[11, 12, 13], [31, 32, 33], [34, 35, 36], [11, 12, 13], [31, 32, 33], [34, 35, 36], [11, 12, 13], [31, 32, 33], [34, 35, 36], [11, 12, 13]] [[37, 38, 39], [31, 32, 33], [34, 35, 36], [37, 38, 39], [31, 32, 33], [34, 35, 36], [28, 29, 30], [31, 32, 33], [34, 35, 36], [28, 29, 30]]
+
 ## array_replace_all (aliases: `list_replace_all`)
 
 # array_replace_all scalar function #1
@@ -2176,6 +2566,14 @@ select
   array_replace_all(make_array(1, 2, 3, 4), 2, 3),
   array_replace_all(make_array(1, 4, 4, 5, 4, 6, 7), 4, 0),
   array_replace_all(make_array(1, 2, 3), 4, 0);
+----
+[1, 3, 3, 4] [1, 0, 0, 5, 0, 6, 7] [1, 2, 3]
+
+query ???
+select
+  array_replace_all(arrow_cast(make_array(1, 2, 3, 4), 'LargeList(Int64)'), 2, 3),
+  array_replace_all(arrow_cast(make_array(1, 4, 4, 5, 4, 6, 7), 'LargeList(Int64)'), 4, 0),
+  array_replace_all(arrow_cast(make_array(1, 2, 3), 'LargeList(Int64)'), 4, 0);
 ----
 [1, 3, 3, 4] [1, 0, 0, 5, 0, 6, 7] [1, 2, 3]
 
@@ -2195,12 +2593,35 @@ select
 ----
 [[1, 2, 3], [1, 1, 1], [5, 5, 5], [1, 1, 1], [7, 8, 9]] [[1, 3, 2], [3, 1, 4], [3, 1, 4], [5, 3, 1], [1, 3, 2]]
 
+query ??
+select
+  array_replace_all(
+    arrow_cast(make_array([1, 2, 3], [4, 5, 6], [5, 5, 5], [4, 5, 6], [7, 8, 9]), 'LargeList(List(Int64))'),
+    [4, 5, 6],
+    [1, 1, 1]
+  ),
+  array_replace_all(
+    arrow_cast(make_array([1, 3, 2], [2, 3, 4], [2, 3, 4], [5, 3, 1], [1, 3, 2]), 'LargeList(List(Int64))'),
+    [2, 3, 4],
+    [3, 1, 4]
+  );
+----
+[[1, 2, 3], [1, 1, 1], [5, 5, 5], [1, 1, 1], [7, 8, 9]] [[1, 3, 2], [3, 1, 4], [3, 1, 4], [5, 3, 1], [1, 3, 2]]
+
 # list_replace_all scalar function #3 (function alias `array_replace_all`)
 query ???
 select
   list_replace_all(make_array(1, 2, 3, 4), 2, 3),
   list_replace_all(make_array(1, 4, 4, 5, 4, 6, 7), 4, 0),
   list_replace_all(make_array(1, 2, 3), 4, 0);
+----
+[1, 3, 3, 4] [1, 0, 0, 5, 0, 6, 7] [1, 2, 3]
+
+query ???
+select
+  list_replace_all(arrow_cast(make_array(1, 2, 3, 4), 'LargeList(Int64)'), 2, 3),
+  list_replace_all(arrow_cast(make_array(1, 4, 4, 5, 4, 6, 7), 'LargeList(Int64)'), 4, 0),
+  list_replace_all(arrow_cast(make_array(1, 2, 3), 'LargeList(Int64)'), 4, 0);
 ----
 [1, 3, 3, 4] [1, 0, 0, 5, 0, 6, 7] [1, 2, 3]
 
@@ -2215,11 +2636,31 @@ from arrays_with_repeating_elements;
 [10, 10, 10, 8, 10, 9, 10, 8, 10, 10]
 [13, 11, 12, 13, 11, 12, 13, 11, 12, 13]
 
+query ?
+select
+  array_replace_all(column1, column2, column3)
+from large_arrays_with_repeating_elements;
+----
+[1, 4, 1, 3, 4, 4, 1, 3, 4, 3]
+[7, 7, 5, 5, 6, 5, 5, 5, 7, 7]
+[10, 10, 10, 8, 10, 9, 10, 8, 10, 10]
+[13, 11, 12, 13, 11, 12, 13, 11, 12, 13]
+
 # array_replace_all scalar function with columns #2 (element is list)
 query ?
 select
   array_replace_all(column1, column2, column3)
 from nested_arrays_with_repeating_elements;
+----
+[[1, 2, 3], [10, 11, 12], [1, 2, 3], [7, 8, 9], [10, 11, 12], [10, 11, 12], [1, 2, 3], [7, 8, 9], [10, 11, 12], [7, 8, 9]]
+[[19, 20, 21], [19, 20, 21], [13, 14, 15], [13, 14, 15], [16, 17, 18], [13, 14, 15], [13, 14, 15], [13, 14, 15], [19, 20, 21], [19, 20, 21]]
+[[28, 29, 30], [28, 29, 30], [28, 29, 30], [22, 23, 24], [28, 29, 30], [25, 26, 27], [28, 29, 30], [22, 23, 24], [28, 29, 30], [28, 29, 30]]
+[[37, 38, 39], [31, 32, 33], [34, 35, 36], [37, 38, 39], [31, 32, 33], [34, 35, 36], [37, 38, 39], [31, 32, 33], [34, 35, 36], [37, 38, 39]]
+
+query ?
+select
+  array_replace_all(column1, column2, column3)
+from large_nested_arrays_with_repeating_elements;
 ----
 [[1, 2, 3], [10, 11, 12], [1, 2, 3], [7, 8, 9], [10, 11, 12], [10, 11, 12], [1, 2, 3], [7, 8, 9], [10, 11, 12], [7, 8, 9]]
 [[19, 20, 21], [19, 20, 21], [13, 14, 15], [13, 14, 15], [16, 17, 18], [13, 14, 15], [13, 14, 15], [13, 14, 15], [19, 20, 21], [19, 20, 21]]
@@ -2239,11 +2680,39 @@ from arrays_with_repeating_elements;
 [1, 2, 2, 4, 5, 4, 4, 10, 10, 10, 10, 8] [7, 7, 7, 8, 7, 9, 7, 8, 7, 7] [4, 4, 4, 8, 4, 9, 4, 8, 4, 4]
 [1, 2, 2, 4, 5, 4, 4, 7, 7, 13, 7, 8] [10, 11, 12, 10, 11, 12, 10, 11, 12, 10] [4, 11, 12, 4, 11, 12, 4, 11, 12, 4]
 
+query ???
+select
+  array_replace_all(arrow_cast(make_array(1, 2, 2, 4, 5, 4, 4, 7, 7, 10, 7, 8), 'LargeList(Int64)'), column2, column3),
+  array_replace_all(column1, 1, column3),
+  array_replace_all(column1, column2, 4)
+from large_arrays_with_repeating_elements;
+----
+[1, 4, 4, 4, 5, 4, 4, 7, 7, 10, 7, 8] [4, 2, 4, 3, 2, 2, 4, 3, 2, 3] [1, 4, 1, 3, 4, 4, 1, 3, 4, 3]
+[1, 2, 2, 7, 5, 7, 7, 7, 7, 10, 7, 8] [4, 4, 5, 5, 6, 5, 5, 5, 4, 4] [4, 4, 5, 5, 6, 5, 5, 5, 4, 4]
+[1, 2, 2, 4, 5, 4, 4, 10, 10, 10, 10, 8] [7, 7, 7, 8, 7, 9, 7, 8, 7, 7] [4, 4, 4, 8, 4, 9, 4, 8, 4, 4]
+[1, 2, 2, 4, 5, 4, 4, 7, 7, 13, 7, 8] [10, 11, 12, 10, 11, 12, 10, 11, 12, 10] [4, 11, 12, 4, 11, 12, 4, 11, 12, 4]
+
 # array_replace_all scalar function with columns and scalars #2 (element is list)
 query ???
 select
   array_replace_all(
     make_array([1, 2, 3], [4, 5, 6], [4, 5, 6], [10, 11, 12], [13, 14, 15], [10, 11, 12], [10, 11, 12], [19, 20, 21], [19, 20, 21], [28, 29, 30], [19, 20, 21], [22, 23, 24]),
+    column2,
+    column3
+  ),
+  array_replace_all(column1, make_array(1, 2, 3), column3),
+  array_replace_all(column1, column2, make_array(11, 12, 13))
+from nested_arrays_with_repeating_elements;
+----
+[[1, 2, 3], [10, 11, 12], [10, 11, 12], [10, 11, 12], [13, 14, 15], [10, 11, 12], [10, 11, 12], [19, 20, 21], [19, 20, 21], [28, 29, 30], [19, 20, 21], [22, 23, 24]] [[10, 11, 12], [4, 5, 6], [10, 11, 12], [7, 8, 9], [4, 5, 6], [4, 5, 6], [10, 11, 12], [7, 8, 9], [4, 5, 6], [7, 8, 9]] [[1, 2, 3], [11, 12, 13], [1, 2, 3], [7, 8, 9], [11, 12, 13], [11, 12, 13], [1, 2, 3], [7, 8, 9], [11, 12, 13], [7, 8, 9]]
+[[1, 2, 3], [4, 5, 6], [4, 5, 6], [19, 20, 21], [13, 14, 15], [19, 20, 21], [19, 20, 21], [19, 20, 21], [19, 20, 21], [28, 29, 30], [19, 20, 21], [22, 23, 24]] [[10, 11, 12], [10, 11, 12], [13, 14, 15], [13, 14, 15], [16, 17, 18], [13, 14, 15], [13, 14, 15], [13, 14, 15], [10, 11, 12], [10, 11, 12]] [[11, 12, 13], [11, 12, 13], [13, 14, 15], [13, 14, 15], [16, 17, 18], [13, 14, 15], [13, 14, 15], [13, 14, 15], [11, 12, 13], [11, 12, 13]]
+[[1, 2, 3], [4, 5, 6], [4, 5, 6], [10, 11, 12], [13, 14, 15], [10, 11, 12], [10, 11, 12], [28, 29, 30], [28, 29, 30], [28, 29, 30], [28, 29, 30], [22, 23, 24]] [[19, 20, 21], [19, 20, 21], [19, 20, 21], [22, 23, 24], [19, 20, 21], [25, 26, 27], [19, 20, 21], [22, 23, 24], [19, 20, 21], [19, 20, 21]] [[11, 12, 13], [11, 12, 13], [11, 12, 13], [22, 23, 24], [11, 12, 13], [25, 26, 27], [11, 12, 13], [22, 23, 24], [11, 12, 13], [11, 12, 13]]
+[[1, 2, 3], [4, 5, 6], [4, 5, 6], [10, 11, 12], [13, 14, 15], [10, 11, 12], [10, 11, 12], [19, 20, 21], [19, 20, 21], [37, 38, 39], [19, 20, 21], [22, 23, 24]] [[28, 29, 30], [31, 32, 33], [34, 35, 36], [28, 29, 30], [31, 32, 33], [34, 35, 36], [28, 29, 30], [31, 32, 33], [34, 35, 36], [28, 29, 30]] [[11, 12, 13], [31, 32, 33], [34, 35, 36], [11, 12, 13], [31, 32, 33], [34, 35, 36], [11, 12, 13], [31, 32, 33], [34, 35, 36], [11, 12, 13]]
+
+query ???
+select
+  array_replace_all(
+    arrow_cast(make_array([1, 2, 3], [4, 5, 6], [4, 5, 6], [10, 11, 12], [13, 14, 15], [10, 11, 12], [10, 11, 12], [19, 20, 21], [19, 20, 21], [28, 29, 30], [19, 20, 21], [22, 23, 24]), 'LargeList(List(Int64))'),
     column2,
     column3
   ),
@@ -2316,9 +2785,19 @@ select array_union([1, 2, 3, 4], [5, 6, 3, 4]);
 ----
 [1, 2, 3, 4, 5, 6]
 
+query ?
+select array_union(arrow_cast([1, 2, 3, 4], 'LargeList(Int64)'), arrow_cast([5, 6, 3, 4], 'LargeList(Int64)'));
+----
+[1, 2, 3, 4, 5, 6]
+
 # array_union scalar function #2
 query ?
 select array_union([1, 2, 3, 4], [5, 6, 7, 8]);
+----
+[1, 2, 3, 4, 5, 6, 7, 8]
+
+query ?
+select array_union(arrow_cast([1, 2, 3, 4], 'LargeList(Int64)'), arrow_cast([5, 6, 7, 8], 'LargeList(Int64)'));
 ----
 [1, 2, 3, 4, 5, 6, 7, 8]
 
@@ -2328,9 +2807,19 @@ select array_union([1,2,3], []);
 ----
 [1, 2, 3]
 
+query ?
+select array_union(arrow_cast([1,2,3], 'LargeList(Int64)'), arrow_cast([], 'LargeList(Null)'));
+----
+[1, 2, 3]
+
 # array_union scalar function #4
 query ?
 select array_union([1, 2, 3, 4], [5, 4]);
+----
+[1, 2, 3, 4, 5]
+
+query ?
+select array_union(arrow_cast([1, 2, 3, 4], 'LargeList(Int64)'), arrow_cast([5, 4], 'LargeList(Int64)'));
 ----
 [1, 2, 3, 4, 5]
 
@@ -2350,6 +2839,13 @@ select array_union(column1, column2) from arrays_with_repeating_elements_for_uni
 [2, 3]
 [3, 4]
 
+query ?
+select array_union(arrow_cast(column1, 'LargeList(Int64)'), arrow_cast(column2, 'LargeList(Int64)')) from arrays_with_repeating_elements_for_union;
+----
+[1, 2]
+[2, 3]
+[3, 4]
+
 statement ok
 drop table arrays_with_repeating_elements_for_union;
 
@@ -2359,9 +2855,19 @@ select array_union([], []);
 ----
 []
 
+query ?
+select array_union(arrow_cast([], 'LargeList(Null)'), arrow_cast([], 'LargeList(Null)'));
+----
+[]
+
 # array_union scalar function #7
 query ?
 select array_union([[null]], []);
+----
+[[]]
+
+query ?
+select array_union(arrow_cast([[null]], 'LargeList(List(Null))'), arrow_cast([], 'LargeList(Null)'));
 ----
 [[]]
 
@@ -2371,9 +2877,19 @@ select array_union([null], [null]);
 ----
 []
 
+query ?
+select array_union(arrow_cast([[null]], 'LargeList(List(Null))'), arrow_cast([[null]], 'LargeList(List(Null))'));
+----
+[[]]
+
 # array_union scalar function #9
 query ?
 select array_union(null, []);
+----
+[]
+
+query ?
+select array_union(null, arrow_cast([], 'LargeList(Null)'));
 ----
 []
 
@@ -2385,21 +2901,47 @@ NULL
 
 # array_union scalar function #11
 query ?
+select array_union([1, 1, 2, 2, 3, 3], null);
+----
+[1, 2, 3]
+
+query ?
+select array_union(arrow_cast([1, 1, 2, 2, 3, 3], 'LargeList(Int64)'), null);
+----
+[1, 2, 3]
+
+# array_union scalar function #12
+query ?
+select array_union(null, [1, 1, 2, 2, 3, 3]);
+----
+[1, 2, 3]
+
+query ?
+select array_union(null, arrow_cast([1, 1, 2, 2, 3, 3], 'LargeList(Int64)'));
+----
+[1, 2, 3]
+
+# array_union scalar function #13
+query ?
 select array_union([1.2, 3.0], [1.2, 3.0, 5.7]);
 ----
 [1.2, 3.0, 5.7]
 
-# array_union scalar function #12
+query ?
+select array_union(arrow_cast([1.2, 3.0], 'LargeList(Float64)'), arrow_cast([1.2, 3.0, 5.7], 'LargeList(Float64)'));
+----
+[1.2, 3.0, 5.7]
+
+# array_union scalar function #14
 query ?
 select array_union(['hello'], ['hello','datafusion']);
 ----
 [hello, datafusion]
 
-
-
-
-
-
+query ?
+select array_union(arrow_cast(['hello'], 'LargeList(Utf8)'), arrow_cast(['hello','datafusion'], 'LargeList(Utf8)'));
+----
+[hello, datafusion]
 
 
 # list_to_string scalar function #4 (function alias `array_to_string`)
@@ -2820,13 +3362,17 @@ NULL 10
 ## array_dims (aliases: `list_dims`)
 
 # array dims error
-# TODO this is a separate bug
-query error Internal error: could not cast value to arrow_array::array::list_array::GenericListArray<i32>\.
+query error Execution error: array_dims does not support type 'Int64'
 select array_dims(1);
 
 # array_dims scalar function
 query ???
 select array_dims(make_array(1, 2, 3)), array_dims(make_array([1, 2], [3, 4])), array_dims(make_array([[[[1], [2]]]]));
+----
+[3] [2, 2] [1, 1, 1, 2, 1]
+
+query ???
+select array_dims(arrow_cast(make_array(1, 2, 3), 'LargeList(Int64)')), array_dims(arrow_cast(make_array([1, 2], [3, 4]), 'LargeList(List(Int64))')), array_dims(arrow_cast(make_array([[[[1], [2]]]]), 'LargeList(List(List(List(List(Int64)))))'));
 ----
 [3] [2, 2] [1, 1, 1, 2, 1]
 
@@ -2842,9 +3388,19 @@ select array_dims(make_array()), array_dims(make_array(make_array()))
 ----
 NULL [1, 0]
 
+query ??
+select array_dims(arrow_cast(make_array(), 'LargeList(Null)')), array_dims(arrow_cast(make_array(make_array()), 'LargeList(List(Null))'))
+----
+NULL [1, 0]
+
 # list_dims scalar function #4 (function alias `array_dims`)
 query ???
 select list_dims(make_array(1, 2, 3)), list_dims(make_array([1, 2], [3, 4])), list_dims(make_array([[[[1], [2]]]]));
+----
+[3] [2, 2] [1, 1, 1, 2, 1]
+
+query ???
+select list_dims(arrow_cast(make_array(1, 2, 3), 'LargeList(Int64)')), list_dims(arrow_cast(make_array([1, 2], [3, 4]), 'LargeList(List(Int64))')), list_dims(arrow_cast(make_array([[[[1], [2]]]]), 'LargeList(List(List(List(List(Int64)))))'));
 ----
 [3] [2, 2] [1, 1, 1, 2, 1]
 
@@ -2859,6 +3415,18 @@ select array_dims(column1), array_dims(column2), array_dims(column3) from arrays
 NULL [3] [4]
 [2, 2] NULL [1]
 [2, 2] [3] NULL
+
+query ???
+select array_dims(column1), array_dims(column2), array_dims(column3) from large_arrays;
+----
+[2, 2] [3] [5]
+[2, 2] [3] [5]
+[2, 2] [3] [5]
+[2, 2] [3] [3]
+NULL [3] [4]
+[2, 2] NULL [1]
+[2, 2] [3] NULL
+
 
 ## array_ndims (aliases: `list_ndims`)
 
@@ -3241,6 +3809,15 @@ query ???
 select array_intersect(column1, column2),
        array_intersect(column3, column4),
        array_intersect(column5, column6)
+from large_array_intersect_table_1D;
+----
+[1] [1, 3] [1, 3]
+[11] [11, 33] [11, 33]
+
+query ???
+select array_intersect(column1, column2),
+       array_intersect(column3, column4),
+       array_intersect(column5, column6)
 from array_intersect_table_1D_Float;
 ----
 [1.0] [1.0, 3.0] []
@@ -3259,7 +3836,25 @@ query ???
 select array_intersect(column1, column2),
        array_intersect(column3, column4),
        array_intersect(column5, column6)
+from large_array_intersect_table_1D_Boolean;
+----
+[] [false, true] [false]
+[false] [true] [true]
+
+query ???
+select array_intersect(column1, column2),
+       array_intersect(column3, column4),
+       array_intersect(column5, column6)
 from array_intersect_table_1D_UTF8;
+----
+[bc] [arrow, rust] []
+[] [arrow, datafusion, rust] [arrow, rust]
+
+query ???
+select array_intersect(column1, column2),
+       array_intersect(column3, column4),
+       array_intersect(column5, column6)
+from large_array_intersect_table_1D_UTF8;
 ----
 [bc] [arrow, rust] []
 [] [arrow, datafusion, rust] [arrow, rust]
@@ -3272,6 +3867,15 @@ from array_intersect_table_2D;
 [] [[4, 5], [6, 7]]
 [[3, 4]] [[5, 6, 7], [8, 9, 10]]
 
+query ??
+select array_intersect(column1, column2),
+       array_intersect(column3, column4)
+from large_array_intersect_table_2D;
+----
+[] [[4, 5], [6, 7]]
+[[3, 4]] [[5, 6, 7], [8, 9, 10]]
+
+
 query ?
 select array_intersect(column1, column2)
 from array_intersect_table_2D_float;
@@ -3281,7 +3885,21 @@ from array_intersect_table_2D_float;
 
 query ?
 select array_intersect(column1, column2)
+from large_array_intersect_table_2D_float;
+----
+[[1.1, 2.2], [3.3]]
+[[1.1, 2.2], [3.3]]
+
+query ?
+select array_intersect(column1, column2)
 from array_intersect_table_3D;
+----
+[]
+[[[1, 2]]]
+
+query ?
+select array_intersect(column1, column2)
+from large_array_intersect_table_3D;
 ----
 []
 [[[1, 2]]]
@@ -3297,10 +3915,46 @@ SELECT  array_intersect(make_array(1,2,3), make_array(2,3,4)),
 ----
 [2, 3] [] [aa, cc] [true] [2.2, 3.3] [[2, 2], [3, 3]]
 
+query ??????
+SELECT  array_intersect(arrow_cast(make_array(1,2,3), 'LargeList(Int64)'), arrow_cast(make_array(2,3,4), 'LargeList(Int64)')),
+        array_intersect(arrow_cast(make_array(1,3,5), 'LargeList(Int64)'), arrow_cast(make_array(2,4,6), 'LargeList(Int64)')),
+        array_intersect(arrow_cast(make_array('aa','bb','cc'), 'LargeList(Utf8)'), arrow_cast(make_array('cc','aa','dd'), 'LargeList(Utf8)')),
+        array_intersect(arrow_cast(make_array(true, false), 'LargeList(Boolean)'), arrow_cast(make_array(true), 'LargeList(Boolean)')),
+        array_intersect(arrow_cast(make_array(1.1, 2.2, 3.3), 'LargeList(Float64)'), arrow_cast(make_array(2.2, 3.3, 4.4), 'LargeList(Float64)')),
+        array_intersect(arrow_cast(make_array([1, 1], [2, 2], [3, 3]), 'LargeList(List(Int64))'), arrow_cast(make_array([2, 2], [3, 3], [4, 4]), 'LargeList(List(Int64))'))
+;
+----
+[2, 3] [] [aa, cc] [true] [2.2, 3.3] [[2, 2], [3, 3]]
+
 query ?
 select array_intersect([], []);
 ----
 []
+
+query ?
+select array_intersect(arrow_cast([], 'LargeList(Null)'), arrow_cast([], 'LargeList(Null)'));
+----
+[]
+
+query ?
+select array_intersect([1, 1, 2, 2, 3, 3], null);
+----
+[]
+
+query ?
+select array_intersect(arrow_cast([1, 1, 2, 2, 3, 3], 'LargeList(Int64)'), null);
+----
+[]
+
+query ?
+select array_intersect(null, [1, 1, 2, 2, 3, 3]);
+----
+NULL
+
+query ?
+select array_intersect(null, arrow_cast([1, 1, 2, 2, 3, 3], 'LargeList(Int64)'));
+----
+NULL
 
 query ?
 select array_intersect([], null);
@@ -3308,9 +3962,19 @@ select array_intersect([], null);
 []
 
 query ?
-select array_intersect(null, []);
+select array_intersect(arrow_cast([], 'LargeList(Null)'), null);
 ----
 []
+
+query ?
+select array_intersect(null, []);
+----
+NULL
+
+query ?
+select array_intersect(null, arrow_cast([], 'LargeList(Null)'));
+----
+NULL
 
 query ?
 select array_intersect(null, null);
@@ -3324,6 +3988,17 @@ SELECT  list_intersect(make_array(1,2,3), make_array(2,3,4)),
         list_intersect(make_array(true, false), make_array(true)),
         list_intersect(make_array(1.1, 2.2, 3.3), make_array(2.2, 3.3, 4.4)),
         list_intersect(make_array([1, 1], [2, 2], [3, 3]), make_array([2, 2], [3, 3], [4, 4]))
+;
+----
+[2, 3] [] [aa, cc] [true] [2.2, 3.3] [[2, 2], [3, 3]]
+
+query ??????
+SELECT  list_intersect(arrow_cast(make_array(1,2,3), 'LargeList(Int64)'), arrow_cast(make_array(2,3,4), 'LargeList(Int64)')),
+        list_intersect(arrow_cast(make_array(1,3,5), 'LargeList(Int64)'), arrow_cast(make_array(2,4,6), 'LargeList(Int64)')),
+        list_intersect(arrow_cast(make_array('aa','bb','cc'), 'LargeList(Utf8)'), arrow_cast(make_array('cc','aa','dd'), 'LargeList(Utf8)')),
+        list_intersect(arrow_cast(make_array(true, false), 'LargeList(Boolean)'), arrow_cast(make_array(true), 'LargeList(Boolean)')),
+        list_intersect(arrow_cast(make_array(1.1, 2.2, 3.3), 'LargeList(Float64)'), arrow_cast(make_array(2.2, 3.3, 4.4), 'LargeList(Float64)')),
+        list_intersect(arrow_cast(make_array([1, 1], [2, 2], [3, 3]), 'LargeList(List(Int64))'), arrow_cast(make_array([2, 2], [3, 3], [4, 4]), 'LargeList(List(Int64))'))
 ;
 ----
 [2, 3] [] [aa, cc] [true] [2.2, 3.3] [[2, 2], [3, 3]]
@@ -3769,6 +4444,9 @@ statement ok
 drop table arrays;
 
 statement ok
+drop table large_arrays;
+
+statement ok
 drop table slices;
 
 statement ok
@@ -3805,22 +4483,43 @@ statement ok
 drop table array_intersect_table_1D;
 
 statement ok
+drop table large_array_intersect_table_1D;
+
+statement ok
 drop table array_intersect_table_1D_Float;
+
+statement ok
+drop table large_array_intersect_table_1D_Float;
 
 statement ok
 drop table array_intersect_table_1D_Boolean;
 
 statement ok
+drop table large_array_intersect_table_1D_Boolean;
+
+statement ok
 drop table array_intersect_table_1D_UTF8;
+
+statement ok
+drop table large_array_intersect_table_1D_UTF8;
 
 statement ok
 drop table array_intersect_table_2D;
 
 statement ok
+drop table large_array_intersect_table_2D;
+
+statement ok
 drop table array_intersect_table_2D_float;
 
 statement ok
+drop table large_array_intersect_table_2D_float;
+
+statement ok
 drop table array_intersect_table_3D;
+
+statement ok
+drop table large_array_intersect_table_3D;
 
 statement ok
 drop table arrays_values_without_nulls;
@@ -3832,7 +4531,13 @@ statement ok
 drop table arrays_with_repeating_elements;
 
 statement ok
+drop table large_arrays_with_repeating_elements;
+
+statement ok
 drop table nested_arrays_with_repeating_elements;
+
+statement ok
+drop table large_nested_arrays_with_repeating_elements;
 
 statement ok
 drop table flatten_table;

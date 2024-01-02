@@ -18,6 +18,7 @@
 //! This module provides common traits for visiting or rewriting tree
 //! data structures easily.
 
+use std::borrow::Cow;
 use std::sync::Arc;
 
 use crate::Result;
@@ -46,7 +47,10 @@ use crate::Result;
 /// [`PhysicalExpr`]: https://docs.rs/datafusion/latest/datafusion/physical_plan/trait.PhysicalExpr.html
 /// [`LogicalPlan`]: https://docs.rs/datafusion-expr/latest/datafusion_expr/logical_plan/enum.LogicalPlan.html
 /// [`Expr`]: https://docs.rs/datafusion-expr/latest/datafusion_expr/expr/enum.Expr.html
-pub trait TreeNode: Sized {
+pub trait TreeNode: Sized + Clone {
+    /// Returns all children of the TreeNode
+    fn children_nodes(&self) -> Vec<Cow<Self>>;
+
     /// Applies `f` to the tree node, then to its inner children and then to its children
     /// depending on the result of `f` in a preorder traversal.
     /// See [`TreeNodeRecursion`] for more details on how the preorder traversal can be
@@ -270,10 +274,14 @@ pub trait TreeNode: Sized {
         }
     }
 
-    /// Apply `f` to the node's children.
     fn visit_children<F>(&self, f: &mut F) -> Result<TreeNodeRecursion>
     where
-        F: FnMut(&Self) -> Result<TreeNodeRecursion>;
+        F: FnMut(&Self) -> Result<TreeNodeRecursion>,
+    {
+        self.children_nodes()
+            .iter()
+            .for_each_till_continue(&mut |c| f(c))
+    }
 
     /// Apply `f` to the node's inner children.
     fn visit_inner_children<F>(&self, _f: &mut F) -> Result<TreeNodeRecursion>
@@ -535,11 +543,8 @@ pub trait DynTreeNode {
 /// Blanket implementation for Arc for any tye that implements
 /// [`DynTreeNode`] (such as [`Arc<dyn PhysicalExpr>`])
 impl<T: DynTreeNode + ?Sized> TreeNode for Arc<T> {
-    fn visit_children<F>(&self, f: &mut F) -> Result<TreeNodeRecursion>
-    where
-        F: FnMut(&Self) -> Result<TreeNodeRecursion>,
-    {
-        self.arc_children().iter().for_each_till_continue(f)
+    fn children_nodes(&self) -> Vec<Cow<Self>> {
+        self.arc_children().into_iter().map(Cow::Owned).collect()
     }
 
     fn map_children<F>(self, transform: F) -> Result<Self>

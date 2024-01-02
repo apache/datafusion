@@ -19,12 +19,12 @@
 //! infinite sources, if there are any. It will reject non-runnable query plans
 //! that use pipeline-breaking operators on infinite input(s).
 
+use std::borrow::Cow;
 use std::sync::Arc;
 
 use crate::config::ConfigOptions;
 use crate::error::Result;
 use crate::physical_optimizer::PhysicalOptimizerRule;
-use crate::physical_plan::joins::SymmetricHashJoinExec;
 use crate::physical_plan::{with_new_children_if_necessary, ExecutionPlan};
 
 use datafusion_common::config::OptimizerOptions;
@@ -33,6 +33,7 @@ use datafusion_common::tree_node::{
 };
 use datafusion_common::{plan_err, DataFusionError};
 use datafusion_physical_expr::intervals::utils::{check_support, is_datatype_supported};
+use datafusion_physical_plan::joins::SymmetricHashJoinExec;
 
 /// The PipelineChecker rule rejects non-runnable query plans that use
 /// pipeline-breaking operators on infinite input(s).
@@ -72,14 +73,14 @@ impl PhysicalOptimizerRule for PipelineChecker {
 pub struct PipelineStatePropagator {
     pub(crate) plan: Arc<dyn ExecutionPlan>,
     pub(crate) unbounded: bool,
-    pub(crate) children: Vec<PipelineStatePropagator>,
+    pub(crate) children: Vec<Self>,
 }
 
 impl PipelineStatePropagator {
     /// Constructs a new, default pipelining state.
     pub fn new(plan: Arc<dyn ExecutionPlan>) -> Self {
         let children = plan.children();
-        PipelineStatePropagator {
+        Self {
             plan,
             unbounded: false,
             children: children.into_iter().map(Self::new).collect(),
@@ -88,41 +89,32 @@ impl PipelineStatePropagator {
 
     /// Returns the children unboundedness information.
     pub fn children_unbounded(&self) -> Vec<bool> {
-        self.children
-            .iter()
-            .map(|c| c.unbounded)
-            .collect::<Vec<_>>()
+        self.children.iter().map(|c| c.unbounded).collect()
     }
 }
 
 impl TreeNode for PipelineStatePropagator {
-    fn visit_children<F>(&self, f: &mut F) -> Result<TreeNodeRecursion>
-    where
-        F: FnMut(&Self) -> Result<TreeNodeRecursion>,
-    {
-        self.children.iter().for_each_till_continue(f)
+    fn children_nodes(&self) -> Vec<Cow<Self>> {
+        self.children.iter().map(Cow::Borrowed).collect()
     }
 
-    fn map_children<F>(self, transform: F) -> Result<Self>
+    fn map_children<F>(mut self, transform: F) -> Result<Self>
     where
         F: FnMut(Self) -> Result<Self>,
     {
         if !self.children.is_empty() {
-            let new_children = self
+            self.children = self
                 .children
                 .into_iter()
                 .map(transform)
-                .collect::<Result<Vec<_>>>()?;
-            let children_plans = new_children.iter().map(|c| c.plan.clone()).collect();
-
-            Ok(PipelineStatePropagator {
-                plan: with_new_children_if_necessary(self.plan, children_plans)?.into(),
-                unbounded: self.unbounded,
-                children: new_children,
-            })
-        } else {
-            Ok(self)
+                .collect::<Result<_>>()?;
+            self.plan = with_new_children_if_necessary(
+                self.plan,
+                self.children.iter().map(|c| c.plan.clone()).collect(),
+            )?
+            .into();
         }
+        Ok(self)
     }
 
     fn transform_children<F>(&mut self, f: &mut F) -> Result<TreeNodeRecursion>
@@ -131,9 +123,11 @@ impl TreeNode for PipelineStatePropagator {
     {
         if !self.children.is_empty() {
             let tnr = self.children.iter_mut().for_each_till_continue(f)?;
-            let children_plans = self.children.iter().map(|c| c.plan.clone()).collect();
-            self.plan =
-                with_new_children_if_necessary(self.plan.clone(), children_plans)?.into();
+            self.plan = with_new_children_if_necessary(
+                self.plan.clone(),
+                self.children.iter().map(|c| c.plan.clone()).collect(),
+            )?
+            .into();
             Ok(tnr)
         } else {
             Ok(TreeNodeRecursion::Continue)
