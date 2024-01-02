@@ -2244,11 +2244,13 @@ pub fn array_ndims(args: &[ArrayRef]) -> Result<ArrayRef> {
         return exec_err!("array_ndims needs one argument");
     }
 
-    if let Some(list_array) = args[0].as_list_opt::<i32>() {
-        let ndims = datafusion_common::utils::list_ndims(list_array.data_type());
+    fn general_list_ndims<O: OffsetSizeTrait>(
+        array: &GenericListArray<O>,
+    ) -> Result<ArrayRef> {
+        let mut data = Vec::new();
+        let ndims = datafusion_common::utils::list_ndims(array.data_type());
 
-        let mut data = vec![];
-        for arr in list_array.iter() {
+        for arr in array.iter() {
             if arr.is_some() {
                 data.push(Some(ndims))
             } else {
@@ -2257,8 +2259,18 @@ pub fn array_ndims(args: &[ArrayRef]) -> Result<ArrayRef> {
         }
 
         Ok(Arc::new(UInt64Array::from(data)) as ArrayRef)
-    } else {
-        Ok(Arc::new(UInt64Array::from(vec![0; args[0].len()])) as ArrayRef)
+    }
+
+    match args[0].data_type() {
+        DataType::List(_) => {
+            let array = as_list_array(&args[0])?;
+            general_list_ndims::<i32>(array)
+        }
+        DataType::LargeList(_) => {
+            let array = as_large_list_array(&args[0])?;
+            general_list_ndims::<i64>(array)
+        }
+        _ => Ok(Arc::new(UInt64Array::from(vec![0; args[0].len()])) as ArrayRef),
     }
 }
 
