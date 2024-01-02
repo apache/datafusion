@@ -1367,8 +1367,14 @@ pub fn array_position(args: &[ArrayRef]) -> Result<ArrayRef> {
     if args.len() < 2 || args.len() > 3 {
         return exec_err!("array_position expects two or three arguments");
     }
-
-    let list_array = as_list_array(&args[0])?;
+    match &args[0].data_type() {
+        DataType::List(_) => general_position_dispatch::<i32>(args),
+        DataType::LargeList(_) => general_position_dispatch::<i64>(args),
+        array_type => exec_err!("array_position does not support type '{array_type:?}'."),
+    }
+}
+fn general_position_dispatch<O: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
+    let list_array = as_generic_list_array::<O>(&args[0])?;
     let element_array = &args[1];
 
     check_datatypes("array_position", &[list_array.values(), element_array])?;
@@ -1395,10 +1401,10 @@ pub fn array_position(args: &[ArrayRef]) -> Result<ArrayRef> {
         }
     }
 
-    general_position::<i32>(list_array, element_array, arr_from)
+    generic_position::<O>(list_array, element_array, arr_from)
 }
 
-fn general_position<OffsetSize: OffsetSizeTrait>(
+fn generic_position<OffsetSize: OffsetSizeTrait>(
     list_array: &GenericListArray<OffsetSize>,
     element_array: &ArrayRef,
     arr_from: Vec<i64>, // 0-indexed
