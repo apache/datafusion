@@ -530,6 +530,10 @@ config_namespace! {
         /// will be collected into a single partition
         pub hash_join_single_partition_threshold: usize, default = 1024 * 1024
 
+        /// The maximum estimated size in rows for one input side of a HashJoin
+        /// will be collected into a single partition
+        pub hash_join_single_partition_threshold_rows: usize, default = 1024 * 128
+
         /// The default filter selectivity used by Filter Statistics
         /// when an exact selectivity cannot be determined. Valid values are
         /// between 0 (no selectivity) and 100 (all rows are selected).
