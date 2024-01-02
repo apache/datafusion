@@ -1719,7 +1719,7 @@ impl SessionState {
             let mut stringified_plans = e.stringified_plans.clone();
 
             // analyze & capture output of each rule
-            let analyzed_plan = match self.analyzer.execute_and_check(
+            let analyzer_result = self.analyzer.execute_and_check(
                 e.plan.as_ref(),
                 self.options(),
                 |analyzed_plan, analyzer| {
@@ -1727,7 +1727,8 @@ impl SessionState {
                     let plan_type = PlanType::AnalyzedLogicalPlan { analyzer_name };
                     stringified_plans.push(analyzed_plan.to_stringified(plan_type));
                 },
-            ) {
+            );
+            let analyzed_plan = match analyzer_result {
                 Ok(plan) => plan,
                 Err(DataFusionError::Context(analyzer_name, err)) => {
                     let plan_type = PlanType::AnalyzedLogicalPlan { analyzer_name };
@@ -1750,7 +1751,7 @@ impl SessionState {
                 .push(analyzed_plan.to_stringified(PlanType::FinalAnalyzedLogicalPlan));
 
             // optimize the child plan, capturing the output of each optimizer
-            let (plan, logical_optimization_succeeded) = match self.optimizer.optimize(
+            let optimized_plan = self.optimizer.optimize(
                 &analyzed_plan,
                 self,
                 |optimized_plan, optimizer| {
@@ -1758,7 +1759,8 @@ impl SessionState {
                     let plan_type = PlanType::OptimizedLogicalPlan { optimizer_name };
                     stringified_plans.push(optimized_plan.to_stringified(plan_type));
                 },
-            ) {
+            );
+            let (plan, logical_optimization_succeeded) = match optimized_plan {
                 Ok(plan) => (Arc::new(plan), true),
                 Err(DataFusionError::Context(optimizer_name, err)) => {
                     let plan_type = PlanType::OptimizedLogicalPlan { optimizer_name };
