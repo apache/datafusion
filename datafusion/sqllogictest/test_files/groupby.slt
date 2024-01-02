@@ -2752,10 +2752,9 @@ SortPreservingMergeExec: [country@0 ASC NULLS LAST]
 ----ProjectionExec: expr=[country@0 as country, FIRST_VALUE(sales_global.amount) ORDER BY [sales_global.ts ASC NULLS LAST]@1 as fv1, LAST_VALUE(sales_global.amount) ORDER BY [sales_global.ts ASC NULLS LAST]@2 as fv2]
 ------AggregateExec: mode=FinalPartitioned, gby=[country@0 as country], aggr=[FIRST_VALUE(sales_global.amount), LAST_VALUE(sales_global.amount)]
 --------CoalesceBatchesExec: target_batch_size=8192
-----------RepartitionExec: partitioning=Hash([country@0], 8), input_partitions=8
-------------RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
---------------AggregateExec: mode=Partial, gby=[country@0 as country], aggr=[FIRST_VALUE(sales_global.amount), LAST_VALUE(sales_global.amount)]
-----------------MemoryExec: partitions=1, partition_sizes=[1]
+----------RepartitionExec: partitioning=Hash([country@0], 8), input_partitions=1
+------------AggregateExec: mode=Partial, gby=[country@0 as country], aggr=[FIRST_VALUE(sales_global.amount), LAST_VALUE(sales_global.amount)]
+--------------MemoryExec: partitions=1, partition_sizes=[1]
 
 query TRR
 SELECT country, FIRST_VALUE(amount ORDER BY ts ASC) AS fv1,
@@ -2788,10 +2787,9 @@ SortPreservingMergeExec: [country@0 ASC NULLS LAST]
 ----ProjectionExec: expr=[country@0 as country, FIRST_VALUE(sales_global.amount) ORDER BY [sales_global.ts ASC NULLS LAST]@1 as fv1, LAST_VALUE(sales_global.amount) ORDER BY [sales_global.ts DESC NULLS FIRST]@2 as fv2]
 ------AggregateExec: mode=FinalPartitioned, gby=[country@0 as country], aggr=[FIRST_VALUE(sales_global.amount), LAST_VALUE(sales_global.amount)]
 --------CoalesceBatchesExec: target_batch_size=8192
-----------RepartitionExec: partitioning=Hash([country@0], 8), input_partitions=8
-------------RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
---------------AggregateExec: mode=Partial, gby=[country@0 as country], aggr=[FIRST_VALUE(sales_global.amount), LAST_VALUE(sales_global.amount)]
-----------------MemoryExec: partitions=1, partition_sizes=[1]
+----------RepartitionExec: partitioning=Hash([country@0], 8), input_partitions=1
+------------AggregateExec: mode=Partial, gby=[country@0 as country], aggr=[FIRST_VALUE(sales_global.amount), LAST_VALUE(sales_global.amount)]
+--------------MemoryExec: partitions=1, partition_sizes=[1]
 
 query TRR
 SELECT country, FIRST_VALUE(amount ORDER BY ts ASC) AS fv1,
@@ -4008,10 +4006,9 @@ physical_plan
 ProjectionExec: expr=[SUM(DISTINCT t1.x)@1 as SUM(DISTINCT t1.x), MAX(DISTINCT t1.x)@2 as MAX(DISTINCT t1.x)]
 --AggregateExec: mode=FinalPartitioned, gby=[y@0 as y], aggr=[SUM(DISTINCT t1.x), MAX(DISTINCT t1.x)]
 ----CoalesceBatchesExec: target_batch_size=2
-------RepartitionExec: partitioning=Hash([y@0], 8), input_partitions=8
---------RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
-----------AggregateExec: mode=Partial, gby=[y@1 as y], aggr=[SUM(DISTINCT t1.x), MAX(DISTINCT t1.x)]
-------------MemoryExec: partitions=1, partition_sizes=[1]
+------RepartitionExec: partitioning=Hash([y@0], 8), input_partitions=1
+--------AggregateExec: mode=Partial, gby=[y@1 as y], aggr=[SUM(DISTINCT t1.x), MAX(DISTINCT t1.x)]
+----------MemoryExec: partitions=1, partition_sizes=[1]
 
 query TT
 EXPLAIN SELECT SUM(DISTINCT CAST(x AS DOUBLE)), MAX(DISTINCT CAST(x AS DOUBLE)) FROM t1 GROUP BY y;
@@ -4030,11 +4027,10 @@ ProjectionExec: expr=[SUM(alias1)@1 as SUM(DISTINCT t1.x), MAX(alias1)@2 as MAX(
 --------AggregateExec: mode=Partial, gby=[y@0 as y], aggr=[SUM(alias1), MAX(alias1)]
 ----------AggregateExec: mode=FinalPartitioned, gby=[y@0 as y, alias1@1 as alias1], aggr=[]
 ------------CoalesceBatchesExec: target_batch_size=2
---------------RepartitionExec: partitioning=Hash([y@0, alias1@1], 8), input_partitions=8
-----------------RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
-------------------AggregateExec: mode=Partial, gby=[y@1 as y, CAST(t1.x AS Float64)t1.x@0 as alias1], aggr=[]
---------------------ProjectionExec: expr=[CAST(x@0 AS Float64) as CAST(t1.x AS Float64)t1.x, y@1 as y]
-----------------------MemoryExec: partitions=1, partition_sizes=[1]
+--------------RepartitionExec: partitioning=Hash([y@0, alias1@1], 8), input_partitions=1
+----------------AggregateExec: mode=Partial, gby=[y@1 as y, CAST(t1.x AS Float64)t1.x@0 as alias1], aggr=[]
+------------------ProjectionExec: expr=[CAST(x@0 AS Float64) as CAST(t1.x AS Float64)t1.x, y@1 as y]
+--------------------MemoryExec: partitions=1, partition_sizes=[1]
 
 # create an unbounded table that contains ordered timestamp.
 statement ok

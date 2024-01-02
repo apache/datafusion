@@ -149,11 +149,11 @@ LOCATION 'test_files/scratch/repartition_scan/csv_table/';
 query I
 select * from csv_table;
 ----
-1
+5
 2
 3
 4
-5
+1
 
 ## Expect to see the scan read the file as "4" groups with even sizes (offsets)
 query TT
@@ -192,11 +192,11 @@ LOCATION 'test_files/scratch/repartition_scan/json_table/';
 query I
 select * from "json_table";
 ----
+5
 1
 2
 3
 4
-5
 
 ## Expect to see the scan read the file as "4" groups with even sizes (offsets)
 query TT
