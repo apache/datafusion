@@ -19,7 +19,6 @@
 
 use crate::datetime_expressions;
 use crate::expressions::cast_column;
-use arrow::array::Float64Builder;
 use arrow::compute::cast;
 use arrow::{
     array::{Array, ArrayRef, Float64Array, OffsetSizeTrait, PrimitiveArray},
@@ -887,28 +886,33 @@ where
     T: ArrowTemporalType + ArrowNumericType,
     i64: From<T::Native>,
 {
-    let mut b = Float64Builder::with_capacity(array.len());
-    match array.data_type() {
+    let b = match array.data_type() {
         DataType::Timestamp(tu, _) => {
-            for i in 0..array.len() {
-                if array.is_null(i) {
-                    b.append_null();
-                } else {
-                    let scale = match tu {
-                        TimeUnit::Second => 1,
-                        TimeUnit::Millisecond => 1_000,
-                        TimeUnit::Microsecond => 1_000_000,
-                        TimeUnit::Nanosecond => 1_000_000_000,
-                    };
-
-                    let n: i64 = array.value(i).into();
-                    b.append_value(n as f64 / scale as f64);
-                }
-            }
+            let scale = match tu {
+                TimeUnit::Second => 1,
+                TimeUnit::Millisecond => 1_000,
+                TimeUnit::Microsecond => 1_000_000,
+                TimeUnit::Nanosecond => 1_000_000_000,
+            } as f64;
+            array.unary(|n| {
+                let n: i64 = n.into();
+                n as f64 / scale
+            })
         }
+        DataType::Date32 => {
+            let seconds_in_a_day = 86400_f64;
+            array.unary(|n| {
+                let n: i64 = n.into();
+                n as f64 * seconds_in_a_day
+            })
+        }
+        DataType::Date64 => array.unary(|n| {
+            let n: i64 = n.into();
+            n as f64 / 1_000_f64
+        }),
         _ => return internal_err!("Can not convert {:?} to epoch", array.data_type()),
-    }
-    Ok(b.finish())
+    };
+    Ok(b)
 }
 
 /// to_timestammp() SQL function implementation
