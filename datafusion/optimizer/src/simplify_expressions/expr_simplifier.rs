@@ -481,6 +481,14 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 lit(negated)
             }
 
+            // null in (x, y, z) --> null
+            // null not in (x, y, z) --> null
+            Expr::InList(InList {
+                expr,
+                list: _,
+                negated: _,
+            }) if is_null(&expr) => lit_bool_null(),
+
             // expr IN ((subquery)) -> expr IN (subquery), see ##5529
             Expr::InList(InList {
                 expr,
@@ -3095,6 +3103,18 @@ mod tests {
     fn simplify_inlist() {
         assert_eq!(simplify(in_list(col("c1"), vec![], false)), lit(false));
         assert_eq!(simplify(in_list(col("c1"), vec![], true)), lit(true));
+
+        // null in (...)  --> null
+        assert_eq!(
+            simplify(in_list(lit_bool_null(), vec![col("c1"), lit(1)], false)),
+            lit_bool_null()
+        );
+
+        // null not in (...)  --> null
+        assert_eq!(
+            simplify(in_list(lit_bool_null(), vec![col("c1"), lit(1)], true)),
+            lit_bool_null()
+        );
 
         assert_eq!(
             simplify(in_list(col("c1"), vec![lit(1)], false)),

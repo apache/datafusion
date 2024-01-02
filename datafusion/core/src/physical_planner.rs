@@ -1879,7 +1879,7 @@ impl DefaultPhysicalPlanner {
                             );
                         }
 
-                        match self.optimize_internal(
+                        let optimized_plan = self.optimize_internal(
                             input,
                             session_state,
                             |plan, optimizer| {
@@ -1891,7 +1891,8 @@ impl DefaultPhysicalPlanner {
                                         .to_stringified(e.verbose, plan_type),
                                 );
                             },
-                        ) {
+                        );
+                        match optimized_plan {
                             Ok(input) => {
                                 // This plan will includes statistics if show_statistics is on
                                 stringified_plans.push(

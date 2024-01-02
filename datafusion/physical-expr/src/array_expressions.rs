@@ -1367,8 +1367,14 @@ pub fn array_position(args: &[ArrayRef]) -> Result<ArrayRef> {
     if args.len() < 2 || args.len() > 3 {
         return exec_err!("array_position expects two or three arguments");
     }
-
-    let list_array = as_list_array(&args[0])?;
+    match &args[0].data_type() {
+        DataType::List(_) => general_position_dispatch::<i32>(args),
+        DataType::LargeList(_) => general_position_dispatch::<i64>(args),
+        array_type => exec_err!("array_position does not support type '{array_type:?}'."),
+    }
+}
+fn general_position_dispatch<O: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
+    let list_array = as_generic_list_array::<O>(&args[0])?;
     let element_array = &args[1];
 
     check_datatypes("array_position", &[list_array.values(), element_array])?;
@@ -1395,10 +1401,10 @@ pub fn array_position(args: &[ArrayRef]) -> Result<ArrayRef> {
         }
     }
 
-    general_position::<i32>(list_array, element_array, arr_from)
+    generic_position::<O>(list_array, element_array, arr_from)
 }
 
-fn general_position<OffsetSize: OffsetSizeTrait>(
+fn generic_position<OffsetSize: OffsetSizeTrait>(
     list_array: &GenericListArray<OffsetSize>,
     element_array: &ArrayRef,
     arr_from: Vec<i64>, // 0-indexed
@@ -2244,11 +2250,13 @@ pub fn array_ndims(args: &[ArrayRef]) -> Result<ArrayRef> {
         return exec_err!("array_ndims needs one argument");
     }
 
-    if let Some(list_array) = args[0].as_list_opt::<i32>() {
-        let ndims = datafusion_common::utils::list_ndims(list_array.data_type());
+    fn general_list_ndims<O: OffsetSizeTrait>(
+        array: &GenericListArray<O>,
+    ) -> Result<ArrayRef> {
+        let mut data = Vec::new();
+        let ndims = datafusion_common::utils::list_ndims(array.data_type());
 
-        let mut data = vec![];
-        for arr in list_array.iter() {
+        for arr in array.iter() {
             if arr.is_some() {
                 data.push(Some(ndims))
             } else {
@@ -2257,8 +2265,18 @@ pub fn array_ndims(args: &[ArrayRef]) -> Result<ArrayRef> {
         }
 
         Ok(Arc::new(UInt64Array::from(data)) as ArrayRef)
-    } else {
-        Ok(Arc::new(UInt64Array::from(vec![0; args[0].len()])) as ArrayRef)
+    }
+
+    match args[0].data_type() {
+        DataType::List(_) => {
+            let array = as_list_array(&args[0])?;
+            general_list_ndims::<i32>(array)
+        }
+        DataType::LargeList(_) => {
+            let array = as_large_list_array(&args[0])?;
+            general_list_ndims::<i64>(array)
+        }
+        _ => Ok(Arc::new(UInt64Array::from(vec![0; args[0].len()])) as ArrayRef),
     }
 }
 

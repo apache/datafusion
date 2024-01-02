@@ -19,13 +19,13 @@
 
 use crate::expr_fn::binary_expr;
 use crate::logical_plan::Subquery;
-use crate::udaf;
 use crate::utils::{expr_to_columns, find_out_reference_exprs};
 use crate::window_frame;
-use crate::window_function;
+
 use crate::Operator;
 use crate::{aggregate_function, ExprSchemable};
 use crate::{built_in_function, BuiltinScalarFunction};
+use crate::{built_in_window_function, udaf};
 use arrow::datatypes::DataType;
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{internal_err, DFSchema, OwnedTableReference};
@@ -34,7 +34,10 @@ use std::collections::HashSet;
 use std::fmt;
 use std::fmt::{Display, Formatter, Write};
 use std::hash::{BuildHasher, Hash, Hasher};
+use std::str::FromStr;
 use std::sync::Arc;
+
+use crate::Signature;
 
 /// `Expr` is a central struct of DataFusion's query API, and
 /// represent logical expressions such as `A + 1`, or `CAST(c1 AS
@@ -566,11 +569,64 @@ impl AggregateFunction {
     }
 }
 
+/// WindowFunction
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+/// Defines which implementation of an aggregate function DataFusion should call.
+pub enum WindowFunctionDefinition {
+    /// A built in aggregate function that leverages an aggregate function
+    AggregateFunction(aggregate_function::AggregateFunction),
+    /// A a built-in window function
+    BuiltInWindowFunction(built_in_window_function::BuiltInWindowFunction),
+    /// A user defined aggregate function
+    AggregateUDF(Arc<crate::AggregateUDF>),
+    /// A user defined aggregate function
+    WindowUDF(Arc<crate::WindowUDF>),
+}
+
+impl WindowFunctionDefinition {
+    /// Returns the datatype of the window function
+    pub fn return_type(&self, input_expr_types: &[DataType]) -> Result<DataType> {
+        match self {
+            WindowFunctionDefinition::AggregateFunction(fun) => {
+                fun.return_type(input_expr_types)
+            }
+            WindowFunctionDefinition::BuiltInWindowFunction(fun) => {
+                fun.return_type(input_expr_types)
+            }
+            WindowFunctionDefinition::AggregateUDF(fun) => {
+                fun.return_type(input_expr_types)
+            }
+            WindowFunctionDefinition::WindowUDF(fun) => fun.return_type(input_expr_types),
+        }
+    }
+
+    /// the signatures supported by the function `fun`.
+    pub fn signature(&self) -> Signature {
+        match self {
+            WindowFunctionDefinition::AggregateFunction(fun) => fun.signature(),
+            WindowFunctionDefinition::BuiltInWindowFunction(fun) => fun.signature(),
+            WindowFunctionDefinition::AggregateUDF(fun) => fun.signature().clone(),
+            WindowFunctionDefinition::WindowUDF(fun) => fun.signature().clone(),
+        }
+    }
+}
+
+impl fmt::Display for WindowFunctionDefinition {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            WindowFunctionDefinition::AggregateFunction(fun) => fun.fmt(f),
+            WindowFunctionDefinition::BuiltInWindowFunction(fun) => fun.fmt(f),
+            WindowFunctionDefinition::AggregateUDF(fun) => std::fmt::Debug::fmt(fun, f),
+            WindowFunctionDefinition::WindowUDF(fun) => fun.fmt(f),
+        }
+    }
+}
+
 /// Window function
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct WindowFunction {
     /// Name of the function
-    pub fun: window_function::WindowFunction,
+    pub fun: WindowFunctionDefinition,
     /// List of expressions to feed to the functions as arguments
     pub args: Vec<Expr>,
     /// List of partition by expressions
@@ -584,7 +640,7 @@ pub struct WindowFunction {
 impl WindowFunction {
     /// Create a new Window expression
     pub fn new(
-        fun: window_function::WindowFunction,
+        fun: WindowFunctionDefinition,
         args: Vec<Expr>,
         partition_by: Vec<Expr>,
         order_by: Vec<Expr>,
@@ -598,6 +654,50 @@ impl WindowFunction {
             window_frame,
         }
     }
+}
+
+/// Find DataFusion's built-in window function by name.
+pub fn find_df_window_func(name: &str) -> Option<WindowFunctionDefinition> {
+    let name = name.to_lowercase();
+    // Code paths for window functions leveraging ordinary aggregators and
+    // built-in window functions are quite different, and the same function
+    // may have different implementations for these cases. If the sought
+    // function is not found among built-in window functions, we search for
+    // it among aggregate functions.
+    if let Ok(built_in_function) =
+        built_in_window_function::BuiltInWindowFunction::from_str(name.as_str())
+    {
+        Some(WindowFunctionDefinition::BuiltInWindowFunction(
+            built_in_function,
+        ))
+    } else if let Ok(aggregate) =
+        aggregate_function::AggregateFunction::from_str(name.as_str())
+    {
+        Some(WindowFunctionDefinition::AggregateFunction(aggregate))
+    } else {
+        None
+    }
+}
+
+/// Returns the datatype of the window function
+#[deprecated(
+    since = "27.0.0",
+    note = "please use `WindowFunction::return_type` instead"
+)]
+pub fn return_type(
+    fun: &WindowFunctionDefinition,
+    input_expr_types: &[DataType],
+) -> Result<DataType> {
+    fun.return_type(input_expr_types)
+}
+
+/// the signatures supported by the function `fun`.
+#[deprecated(
+    since = "27.0.0",
+    note = "please use `WindowFunction::signature` instead"
+)]
+pub fn signature(fun: &WindowFunctionDefinition) -> Signature {
+    fun.signature()
 }
 
 // Exists expression.
@@ -1889,5 +1989,188 @@ mod test {
         ScalarFunctionDefinition::Name(Arc::from("UnresolvedFunc"))
             .is_volatile()
             .expect_err("Shouldn't determine volatility of unresolved function");
+    }
+
+    use super::*;
+
+    #[test]
+    fn test_count_return_type() -> Result<()> {
+        let fun = find_df_window_func("count").unwrap();
+        let observed = fun.return_type(&[DataType::Utf8])?;
+        assert_eq!(DataType::Int64, observed);
+
+        let observed = fun.return_type(&[DataType::UInt64])?;
+        assert_eq!(DataType::Int64, observed);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_first_value_return_type() -> Result<()> {
+        let fun = find_df_window_func("first_value").unwrap();
+        let observed = fun.return_type(&[DataType::Utf8])?;
+        assert_eq!(DataType::Utf8, observed);
+
+        let observed = fun.return_type(&[DataType::UInt64])?;
+        assert_eq!(DataType::UInt64, observed);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_last_value_return_type() -> Result<()> {
+        let fun = find_df_window_func("last_value").unwrap();
+        let observed = fun.return_type(&[DataType::Utf8])?;
+        assert_eq!(DataType::Utf8, observed);
+
+        let observed = fun.return_type(&[DataType::Float64])?;
+        assert_eq!(DataType::Float64, observed);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_lead_return_type() -> Result<()> {
+        let fun = find_df_window_func("lead").unwrap();
+        let observed = fun.return_type(&[DataType::Utf8])?;
+        assert_eq!(DataType::Utf8, observed);
+
+        let observed = fun.return_type(&[DataType::Float64])?;
+        assert_eq!(DataType::Float64, observed);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_lag_return_type() -> Result<()> {
+        let fun = find_df_window_func("lag").unwrap();
+        let observed = fun.return_type(&[DataType::Utf8])?;
+        assert_eq!(DataType::Utf8, observed);
+
+        let observed = fun.return_type(&[DataType::Float64])?;
+        assert_eq!(DataType::Float64, observed);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_nth_value_return_type() -> Result<()> {
+        let fun = find_df_window_func("nth_value").unwrap();
+        let observed = fun.return_type(&[DataType::Utf8, DataType::UInt64])?;
+        assert_eq!(DataType::Utf8, observed);
+
+        let observed = fun.return_type(&[DataType::Float64, DataType::UInt64])?;
+        assert_eq!(DataType::Float64, observed);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_percent_rank_return_type() -> Result<()> {
+        let fun = find_df_window_func("percent_rank").unwrap();
+        let observed = fun.return_type(&[])?;
+        assert_eq!(DataType::Float64, observed);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_cume_dist_return_type() -> Result<()> {
+        let fun = find_df_window_func("cume_dist").unwrap();
+        let observed = fun.return_type(&[])?;
+        assert_eq!(DataType::Float64, observed);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_ntile_return_type() -> Result<()> {
+        let fun = find_df_window_func("ntile").unwrap();
+        let observed = fun.return_type(&[DataType::Int16])?;
+        assert_eq!(DataType::UInt64, observed);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_window_function_case_insensitive() -> Result<()> {
+        let names = vec![
+            "row_number",
+            "rank",
+            "dense_rank",
+            "percent_rank",
+            "cume_dist",
+            "ntile",
+            "lag",
+            "lead",
+            "first_value",
+            "last_value",
+            "nth_value",
+            "min",
+            "max",
+            "count",
+            "avg",
+            "sum",
+        ];
+        for name in names {
+            let fun = find_df_window_func(name).unwrap();
+            let fun2 = find_df_window_func(name.to_uppercase().as_str()).unwrap();
+            assert_eq!(fun, fun2);
+            assert_eq!(fun.to_string(), name.to_uppercase());
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_find_df_window_function() {
+        assert_eq!(
+            find_df_window_func("max"),
+            Some(WindowFunctionDefinition::AggregateFunction(
+                aggregate_function::AggregateFunction::Max
+            ))
+        );
+        assert_eq!(
+            find_df_window_func("min"),
+            Some(WindowFunctionDefinition::AggregateFunction(
+                aggregate_function::AggregateFunction::Min
+            ))
+        );
+        assert_eq!(
+            find_df_window_func("avg"),
+            Some(WindowFunctionDefinition::AggregateFunction(
+                aggregate_function::AggregateFunction::Avg
+            ))
+        );
+        assert_eq!(
+            find_df_window_func("cume_dist"),
+            Some(WindowFunctionDefinition::BuiltInWindowFunction(
+                built_in_window_function::BuiltInWindowFunction::CumeDist
+            ))
+        );
+        assert_eq!(
+            find_df_window_func("first_value"),
+            Some(WindowFunctionDefinition::BuiltInWindowFunction(
+                built_in_window_function::BuiltInWindowFunction::FirstValue
+            ))
+        );
+        assert_eq!(
+            find_df_window_func("LAST_value"),
+            Some(WindowFunctionDefinition::BuiltInWindowFunction(
+                built_in_window_function::BuiltInWindowFunction::LastValue
+            ))
+        );
+        assert_eq!(
+            find_df_window_func("LAG"),
+            Some(WindowFunctionDefinition::BuiltInWindowFunction(
+                built_in_window_function::BuiltInWindowFunction::Lag
+            ))
+        );
+        assert_eq!(
+            find_df_window_func("LEAD"),
+            Some(WindowFunctionDefinition::BuiltInWindowFunction(
+                built_in_window_function::BuiltInWindowFunction::Lead
+            ))
+        );
+        assert_eq!(find_df_window_func("not_exist"), None)
     }
 }

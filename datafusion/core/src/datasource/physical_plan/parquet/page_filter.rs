@@ -372,7 +372,7 @@ fn prune_pages_in_one_row_group(
 }
 
 fn create_row_count_in_each_page(
-    location: &Vec<PageLocation>,
+    location: &[PageLocation],
     num_rows: usize,
 ) -> Vec<usize> {
     let mut vec = Vec::with_capacity(location.len());
