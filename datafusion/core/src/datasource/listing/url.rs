@@ -131,6 +131,10 @@ impl ListingTableUrl {
                     if is_directory {
                         fs::create_dir_all(path)?;
                     } else {
+                        // ensure parent directory exists
+                        if let Some(parent) = path.parent() {
+                            fs::create_dir_all(parent)?;
+                        }
                         fs::File::create(path)?;
                     }
                 }
