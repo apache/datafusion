@@ -115,8 +115,12 @@ impl ExecutionPlan for AnalyzeExec {
     /// Specifies whether this plan generates an infinite stream of records.
     /// If the plan does not support pipelining, but its input(s) are
     /// infinite, returns an error to indicate this.
-    fn unbounded_output(&self, _children: &[bool]) -> Result<bool> {
-        internal_err!("Optimization not supported for ANALYZE")
+    fn unbounded_output(&self, children: &[bool]) -> Result<bool> {
+        if children[0] {
+            internal_err!("Streaming execution of AnalyzeExec is not possible")
+        } else {
+            Ok(false)
+        }
     }
 
     /// Get the output partitioning of this plan
