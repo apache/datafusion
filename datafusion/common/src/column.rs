@@ -28,13 +28,14 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 /// A named reference to a qualified field in a schema.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, PartialEq, Clone, Eq, Hash, PartialOrd, Ord)]
 pub struct Column {
     /// relation/table reference.
     pub relation: Option<OwnedTableReference>,
     /// field/column name.
     pub name: String,
 }
+
 
 impl Column {
     /// Create Column from optional qualifier and name. The optional qualifier, if present,
