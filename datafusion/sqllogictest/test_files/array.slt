@@ -3504,7 +3504,7 @@ NULL [3] [4]
 # array_ndims scalar function #1
 
 query III
-select 
+select
   array_ndims(1),
   array_ndims(null),
   array_ndims([2, 3]);
@@ -3520,8 +3520,17 @@ AS VALUES
   (3, [6], [[9]], [[[[[10]]]]])
 ;
 
+statement ok
+CREATE TABLE large_array_ndims_table
+AS SELECT
+  column1,
+  arrow_cast(column2, 'LargeList(Int64)') as column2,
+  arrow_cast(column3, 'LargeList(List(Int64))') as column3,
+  arrow_cast(column4, 'LargeList(List(List(List(List(Int64)))))') as column4
+FROM array_ndims_table;
+
 query IIII
-select 
+select
   array_ndims(column1),
   array_ndims(column2),
   array_ndims(column3),
@@ -3533,8 +3542,24 @@ from array_ndims_table;
 0 1 2 5
 0 1 2 5
 
+query IIII
+select
+  array_ndims(column1),
+  array_ndims(column2),
+  array_ndims(column3),
+  array_ndims(column4)
+from large_array_ndims_table;
+----
+0 1 2 5
+0 1 2 5
+0 1 2 5
+0 1 2 5
+
 statement ok
 drop table array_ndims_table;
+
+statement ok
+drop table large_array_ndims_table
 
 query I
 select array_ndims(arrow_cast([null], 'List(List(List(Int64)))'));
@@ -3553,20 +3578,46 @@ select array_ndims(make_array()), array_ndims(make_array(make_array()))
 ----
 1 2
 
+query II
+select array_ndims(arrow_cast(make_array(), 'LargeList(Null)')), array_ndims(arrow_cast(make_array(make_array()), 'LargeList(List(Null))'))
+----
+1 2
+
 # list_ndims scalar function #4 (function alias `array_ndims`)
 query III
 select list_ndims(make_array(1, 2, 3)), list_ndims(make_array([1, 2], [3, 4])), list_ndims(make_array([[[[1], [2]]]]));
 ----
 1 2 5
 
+query III
+select list_ndims(arrow_cast(make_array(1, 2, 3), 'LargeList(Int64)')), list_ndims(arrow_cast(make_array([1, 2], [3, 4]), 'LargeList(List(Int64))')), list_ndims(arrow_cast(make_array([[[[1], [2]]]]), 'LargeList(List(List(List(List(Int64)))))'));
+----
+1 2 5
+
 query II
-select array_ndims(make_array()), array_ndims(make_array(make_array()))
+select list_ndims(make_array()), list_ndims(make_array(make_array()))
+----
+1 2
+
+query II
+select list_ndims(arrow_cast(make_array(), 'LargeList(Null)')), list_ndims(arrow_cast(make_array(make_array()), 'LargeList(List(Null))'))
 ----
 1 2
 
 # array_ndims with columns
 query III
 select array_ndims(column1), array_ndims(column2), array_ndims(column3) from arrays;
+----
+2 1 1
+2 1 1
+2 1 1
+2 1 1
+NULL 1 1
+2 NULL 1
+2 1 NULL
+
+query III
+select array_ndims(column1), array_ndims(column2), array_ndims(column3) from large_arrays;
 ----
 2 1 1
 2 1 1
