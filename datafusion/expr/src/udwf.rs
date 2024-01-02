@@ -24,8 +24,9 @@ use crate::{
 use arrow::datatypes::DataType;
 use datafusion_common::Result;
 use std::{
+    any::Any,
     fmt::{self, Debug, Display, Formatter},
-    sync::Arc, any::Any,
+    sync::Arc,
 };
 
 /// Logical representation of a user-defined window function (UDWF)
@@ -80,7 +81,11 @@ impl std::hash::Hash for WindowUDF {
 }
 
 impl WindowUDF {
-    /// Create a new WindowUDF
+    /// Create a new WindowUDF from low level details.
+    ///
+    /// See [`WindowUDFImpl`] for a more convenient way to create a
+    /// `WindowUDF` using trait objects
+    #[deprecated(since = "34.0.0", note = "please implement ScalarUDFImpl instead")]
     pub fn new(
         name: &str,
         signature: &Signature,
@@ -95,9 +100,12 @@ impl WindowUDF {
         }
     }
 
+    /// Create a new `WindowUDF` from a `[WindowUDFImpl]` trait object
+    ///
+    /// Note this is the same as using the `From` impl (`WindowUDF::from`)
     pub fn new_from_impl<F>(fun: F) -> WindowUDF
     where
-        F: WindowUDFImpl + Send + Sync + 'static
+        F: WindowUDFImpl + Send + Sync + 'static,
     {
         let arc_fun = Arc::new(fun);
         let captured_self = arc_fun.clone();
@@ -107,14 +115,14 @@ impl WindowUDF {
         });
 
         let captured_self = arc_fun.clone();
-        let partition_evaluator_factory: PartitionEvaluatorFactory = 
+        let partition_evaluator_factory: PartitionEvaluatorFactory =
             Arc::new(move || captured_self.invoke());
-        
+
         Self {
             name: arc_fun.name().to_string(),
             signature: arc_fun.signature().clone(),
             return_type: return_type.clone(),
-            partition_evaluator_factory: partition_evaluator_factory,
+            partition_evaluator_factory,
         }
     }
 
@@ -173,14 +181,76 @@ where
     }
 }
 
+/// Trait for implementing [`WindowUDF`].
+///
+/// This trait exposes the full API for implementing user defined window functions and
+/// can be used to implement any function.
+///
+/// See [`advanced_udwf.rs`] for a full example with complete implementation and
+/// [`WindowUDF`] for other available options.
+///
+///
+/// [`advanced_udwf.rs`]: https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/advanced_udwf.rs
+/// # Basic Example
+/// ```
+/// # use std::any::Any;
+/// # use arrow::datatypes::DataType;
+/// # use datafusion_common::{DataFusionError, plan_err, Result};
+/// # use datafusion_expr::{col, Signature, Volatility, PartitionEvaluator, WindowFrame};
+/// # use datafusion_expr::{WindowUDFImpl, WindowUDF};
+/// struct SmoothIt {
+///   signature: Signature
+/// };
+///
+/// impl SmoothIt {
+///   fn new() -> Self {
+///     Self {
+///       signature: Signature::uniform(1, vec![DataType::Int32], Volatility::Immutable)
+///      }
+///   }
+/// }
+///
+/// /// Implement the WindowUDFImpl trait for AddOne
+/// impl WindowUDFImpl for SmoothIt {
+///    fn as_any(&self) -> &dyn Any { self }
+///    fn name(&self) -> &str { "smooth_it" }
+///    fn signature(&self) -> &Signature { &self.signature }
+///    fn return_type(&self, args: &[DataType]) -> Result<DataType> {
+///      if !matches!(args.get(0), Some(&DataType::Int32)) {
+///        return plan_err!("smooth_it only accepts Int32 arguments");
+///      }
+///      Ok(DataType::Int32)
+///    }
+///    // The actual implementation would add one to the argument
+///    fn invoke(&self) -> Result<Box<dyn PartitionEvaluator>> { unimplemented!() }
+/// }
+///
+/// // Create a new ScalarUDF from the implementation
+/// let smooth_it = WindowUDF::from(SmoothIt::new());
+///
+/// // Call the function `add_one(col)`
+/// let expr = smooth_it.call(
+///     vec![col("speed")],                 // smooth_it(speed)
+///     vec![col("car")],                   // PARTITION BY car
+///     vec![col("time").sort(true, true)], // ORDER BY time ASC
+///     WindowFrame::new(false),
+/// );
+/// ```
 pub trait WindowUDFImpl {
+    /// Returns this object as an [`Any`] trait object
     fn as_any(&self) -> &dyn Any;
 
+    /// Returns this function's name
     fn name(&self) -> &str;
 
+    /// Returns the function's [`Signature`] for information about what input
+    /// types are accepted and the function's Volatility.
     fn signature(&self) -> &Signature;
 
+    /// What [`DataType`] will be returned by this function, given the types of
+    /// the arguments
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType>;
 
+    /// Invoke the function, returning the [`PartitionEvaluator`] instance
     fn invoke(&self) -> Result<Box<dyn PartitionEvaluator>>;
 }

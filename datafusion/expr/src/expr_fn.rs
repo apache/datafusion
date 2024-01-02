@@ -1069,6 +1069,8 @@ pub fn create_udwf(
     ))
 }
 
+/// Implements [`WindowUDFImpl`] for functions that have a single signature and
+/// return type.
 pub struct SimpleWindowUDF {
     name: String,
     signature: Signature,
@@ -1077,6 +1079,8 @@ pub struct SimpleWindowUDF {
 }
 
 impl SimpleWindowUDF {
+    /// Create a new `SimpleWindowUDF` from a name, input types, return type and
+    /// implementation. Implementing [`WindowUDFImpl`] allows more flexibility
     pub fn new(
         name: impl Into<String>,
         input_type: DataType,
