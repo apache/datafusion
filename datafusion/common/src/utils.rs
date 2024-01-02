@@ -469,10 +469,11 @@ pub fn coerced_type_with_base_type_only(
 
 /// Compute the number of dimensions in a list data type.
 pub fn list_ndims(data_type: &DataType) -> u64 {
-    if let DataType::List(field) = data_type {
-        1 + list_ndims(field.data_type())
-    } else {
-        0
+    match data_type {
+        DataType::List(field) | DataType::LargeList(field) => {
+            1 + list_ndims(field.data_type())
+        }
+        _ => 0,
     }
 }
 
