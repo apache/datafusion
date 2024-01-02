@@ -25,7 +25,7 @@ use arrow::datatypes::DataType;
 use datafusion_common::Result;
 use std::{
     fmt::{self, Debug, Display, Formatter},
-    sync::Arc,
+    sync::Arc, any::Any,
 };
 
 /// Logical representation of a user-defined window function (UDWF)
@@ -95,6 +95,29 @@ impl WindowUDF {
         }
     }
 
+    pub fn new_from_impl<F>(fun: F) -> WindowUDF
+    where
+        F: WindowUDFImpl + Send + Sync + 'static
+    {
+        let arc_fun = Arc::new(fun);
+        let captured_self = arc_fun.clone();
+        let return_type: ReturnTypeFunction = Arc::new(move |arg_types| {
+            let return_type = captured_self.return_type(arg_types)?;
+            Ok(Arc::new(return_type))
+        });
+
+        let captured_self = arc_fun.clone();
+        let partition_evaluator_factory: PartitionEvaluatorFactory = 
+            Arc::new(move || captured_self.invoke());
+        
+        Self {
+            name: arc_fun.name().to_string(),
+            signature: arc_fun.signature().clone(),
+            return_type: return_type.clone(),
+            partition_evaluator_factory: partition_evaluator_factory,
+        }
+    }
+
     /// creates a [`Expr`] that calls the window function given
     /// the `partition_by`, `order_by`, and `window_frame` definition
     ///
@@ -139,4 +162,25 @@ impl WindowUDF {
     pub fn partition_evaluator_factory(&self) -> Result<Box<dyn PartitionEvaluator>> {
         (self.partition_evaluator_factory)()
     }
+}
+
+impl<F> From<F> for WindowUDF
+where
+    F: WindowUDFImpl + Send + Sync + 'static,
+{
+    fn from(fun: F) -> Self {
+        Self::new_from_impl(fun)
+    }
+}
+
+pub trait WindowUDFImpl {
+    fn as_any(&self) -> &dyn Any;
+
+    fn name(&self) -> &str;
+
+    fn signature(&self) -> &Signature;
+
+    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType>;
+
+    fn invoke(&self) -> Result<Box<dyn PartitionEvaluator>>;
 }
