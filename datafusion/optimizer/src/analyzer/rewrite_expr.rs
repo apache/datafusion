@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Optimizer rule for expression rewrite
+//! Analyzer rule for to replace operators with function calls (e.g `||` to array_concat`)
 
 use std::sync::Arc;
 
