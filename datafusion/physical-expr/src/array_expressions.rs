@@ -2110,17 +2110,39 @@ pub fn cardinality(args: &[ArrayRef]) -> Result<ArrayRef> {
         return exec_err!("cardinality expects one argument");
     }
 
-    let list_array = as_list_array(&args[0])?.clone();
-
-    let result = list_array
-        .iter()
-        .map(|arr| match compute_array_dims(arr)? {
-            Some(vector) => Ok(Some(vector.iter().map(|x| x.unwrap()).product::<u64>())),
-            None => Ok(None),
-        })
-        .collect::<Result<UInt64Array>>()?;
-
+    let result = match &args[0].data_type() {
+        DataType::List(_) => {
+            let array = as_list_array(&args[0])?;
+            array
+                .iter()
+                .map(|arr| match compute_array_dims(arr)? {
+                    Some(vector) => Ok(Some(vector.iter().map(|x| x.unwrap()).product::<u64>())),
+                    None => Ok(None),
+                })
+                .collect::<Result<UInt64Array>>()?
+        }
+        DataType::LargeList(_) => {
+            let array = as_large_list_array(&args[0])?;
+            array
+                .iter()
+                .map(|arr| match compute_array_dims(arr)? {
+                    Some(vector) => Ok(Some(vector.iter().map(|x| x.unwrap()).product::<u64>())),
+                    None => Ok(None),
+                })
+                .collect::<Result<UInt64Array>>()?
+        }
+        _ => {
+            return exec_err!(
+                "cardinality does not support type '{:?}'",
+                args[0].data_type()
+            );
+        }
+    };
     Ok(Arc::new(result) as ArrayRef)
+
+
+
+
 }
 
 // Create new offsets that are euqiavlent to `flatten` the array.
