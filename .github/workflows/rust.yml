@@ -305,7 +305,7 @@ jobs:
           # do not produce debug symbols to keep memory usage down
           RUSTFLAGS: -Ctarget-feature=+crt-static
           RUST_BACKTRACE: "1"
-
+          RUST_MINSTACK: "2384500"
   macos:
     name: cargo test (mac)
     runs-on: macos-latest
