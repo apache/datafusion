@@ -298,7 +298,7 @@ jobs:
         run: |
           export PATH=$PATH:$HOME/d/protoc/bin
           # cargo test --lib --tests --bins --features avro,json,backtrace
-          cargo test -p datafusion --test tpcds_planning --features backtrace
+          cargo test -p datafusion --test tpcds_planning --features backtrace tpcds_physical_q44
         env:
           # do not produce debug symbols to keep memory usage down
           RUSTFLAGS: "-C debuginfo=0"
