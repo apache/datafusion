@@ -1116,7 +1116,7 @@ impl WindowUDFImpl for SimpleWindowUDF {
         Ok(self.return_type.clone())
     }
 
-    fn invoke(&self) -> Result<Box<dyn crate::PartitionEvaluator>> {
+    fn partition_evaluator(&self) -> Result<Box<dyn crate::PartitionEvaluator>> {
         (self.partition_evaluator_factory)()
     }
 }

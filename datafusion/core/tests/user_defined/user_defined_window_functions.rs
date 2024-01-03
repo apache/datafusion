@@ -507,7 +507,7 @@ impl OddCounter {
                 Ok(self.return_type.clone())
             }
 
-            fn invoke(&self) -> Result<Box<dyn PartitionEvaluator>> {
+            fn partition_evaluator(&self) -> Result<Box<dyn PartitionEvaluator>> {
                 Ok(Box::new(OddCounter::new(Arc::clone(&self.test_state))))
             }
         }

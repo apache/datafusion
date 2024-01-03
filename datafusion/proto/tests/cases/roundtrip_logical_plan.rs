@@ -1823,7 +1823,7 @@ fn roundtrip_window() {
             Ok(arg_types[0].clone())
         }
 
-        fn invoke(&self) -> Result<Box<dyn PartitionEvaluator>> {
+        fn partition_evaluator(&self) -> Result<Box<dyn PartitionEvaluator>> {
             make_partition_evaluator()
         }
     }

@@ -30,8 +30,8 @@ use datafusion_expr::{
 };
 
 /// This example shows how to use the full WindowUDFImpl API to implement a user
-/// defined function. As in the `simple_udwf.rs` example, this struct implements
-/// a function `invoke` that returns the `MyPartitionEvaluator` instance.
+/// defined window function. As in the `simple_udwf.rs` example, this struct implements
+/// a function `partition_evaluator` that returns the `MyPartitionEvaluator` instance.
 ///
 /// To do so, we must implement the `WindowUDFImpl` trait.
 struct SmoothItUdf {
@@ -76,7 +76,7 @@ impl WindowUDFImpl for SmoothItUdf {
 
     /// Create a `PartitionEvalutor` to evaluate this function on a new
     /// partition.
-    fn invoke(&self) -> Result<Box<dyn PartitionEvaluator>> {
+    fn partition_evaluator(&self) -> Result<Box<dyn PartitionEvaluator>> {
         Ok(Box::new(MyPartitionEvaluator::new()))
     }
 }

@@ -116,7 +116,7 @@ impl WindowUDF {
 
         let captured_self = arc_fun.clone();
         let partition_evaluator_factory: PartitionEvaluatorFactory =
-            Arc::new(move || captured_self.invoke());
+            Arc::new(move || captured_self.partition_evaluator());
 
         Self {
             name: arc_fun.name().to_string(),
@@ -222,7 +222,7 @@ where
 ///      Ok(DataType::Int32)
 ///    }
 ///    // The actual implementation would add one to the argument
-///    fn invoke(&self) -> Result<Box<dyn PartitionEvaluator>> { unimplemented!() }
+///    fn partition_evaluator(&self) -> Result<Box<dyn PartitionEvaluator>> { unimplemented!() }
 /// }
 ///
 /// // Create a new ScalarUDF from the implementation
@@ -252,5 +252,5 @@ pub trait WindowUDFImpl {
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType>;
 
     /// Invoke the function, returning the [`PartitionEvaluator`] instance
-    fn invoke(&self) -> Result<Box<dyn PartitionEvaluator>>;
+    fn partition_evaluator(&self) -> Result<Box<dyn PartitionEvaluator>>;
 }
