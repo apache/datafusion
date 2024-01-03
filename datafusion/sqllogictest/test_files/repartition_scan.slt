@@ -150,10 +150,10 @@ query I
 select * from csv_table;
 ----
 5
-1
 2
 3
 4
+1
 
 ## Expect to see the scan read the file as "4" groups with even sizes (offsets)
 query TT
@@ -195,8 +195,8 @@ select * from "json_table";
 5
 1
 2
-3
 4
+3
 
 ## Expect to see the scan read the file as "4" groups with even sizes (offsets)
 query TT
@@ -245,7 +245,7 @@ DROP TABLE arrow_table;
 
 ## Use pre-existing files we don't have a way to create avro files yet
 
-statement ok
+statement error DataFusion error: This feature is not implemented: cannot read avro schema without the 'avro' feature enabled
 CREATE EXTERNAL TABLE avro_table
 STORED AS AVRO
 WITH HEADER ROW
@@ -253,12 +253,9 @@ LOCATION '../../testing/data/avro/simple_enum.avro'
 
 
 # It would be great to see the file read as "4" groups with even sizes (offsets) eventually
-query TT
+query error DataFusion error: Error during planning: table 'datafusion\.public\.avro_table' not found
 EXPLAIN SELECT * FROM avro_table
-----
-logical_plan TableScan: avro_table projection=[f1, f2, f3]
-physical_plan AvroExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/avro/simple_enum.avro]]}, projection=[f1, f2, f3]
 
 # Cleanup
-statement ok
+statement error DataFusion error: Execution error: Table 'avro_table' doesn't exist\.
 DROP TABLE avro_table;

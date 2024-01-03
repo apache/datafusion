@@ -925,6 +925,7 @@ fn add_hash_on_top(
     mut input: DistributionContext,
     hash_exprs: Vec<Arc<dyn PhysicalExpr>>,
     n_target: usize,
+    repartition_beneficial_stats: bool,
 ) -> Result<DistributionContext> {
     let partition_count = input.plan.output_partitioning().partition_count();
     // Early return if hash repartition is unnecessary
@@ -950,6 +951,12 @@ fn add_hash_on_top(
         //   requirements.
         // - Usage of order preserving variants is not desirable (per the flag
         //   `config.optimizer.prefer_existing_sort`).
+        if repartition_beneficial_stats {
+            // Since hashing benefits from partitioning, add a round-robin repartition
+            // before it:
+            input = add_roundrobin_on_top(input, n_target)?;
+        }
+
         let partitioning = Partitioning::Hash(hash_exprs, n_target);
         let repartition = RepartitionExec::try_new(input.plan.clone(), partitioning)?
             .with_preserve_order();
@@ -1231,7 +1238,12 @@ fn ensure_distribution(
                     child = add_spm_on_top(child);
                 }
                 Distribution::HashPartitioned(exprs) => {
-                    child = add_hash_on_top(child, exprs.to_vec(), target_partitions)?;
+                    child = add_hash_on_top(
+                        child,
+                        exprs.to_vec(),
+                        target_partitions,
+                        repartition_beneficial_stats,
+                    )?;
                 }
                 Distribution::UnspecifiedDistribution => {}
             };
