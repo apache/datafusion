@@ -25,7 +25,9 @@ use std::sync::Arc;
 use super::dml::CopyTo;
 use super::DdlStatement;
 use crate::dml::CopyOptions;
-use crate::expr::{Alias, Exists, InSubquery, Placeholder, Sort as SortExpr};
+use crate::expr::{
+    Alias, Exists, InSubquery, Placeholder, Sort as SortExpr, WindowFunction,
+};
 use crate::expr_rewriter::{create_col_from_scalar_expr, normalize_cols};
 use crate::logical_plan::display::{GraphvizVisitor, IndentVisitor};
 use crate::logical_plan::extension::UserDefinedLogicalNode;
@@ -1974,27 +1976,32 @@ impl Window {
         // Update functional dependencies for window:
         let mut window_func_dependencies =
             input.schema().functional_dependencies().clone();
-        // Since we know that ROW_NUMBER generated will be unique (it is consecutive numbers per partition)
+        window_func_dependencies.extend_target_indices(window_fields.len());
+
+        // Since we know that ROW_NUMBER generated will be unique (it consists of consecutive numbers per partition)
         // We can add them as primary key to the schema.
         let row_number_indices = window_expr
             .iter()
             .enumerate()
             .filter_map(|(idx, expr)| {
-                if let Expr::WindowFunction(window_fn) = expr {
-                    if let WindowFunctionDefinition::BuiltInWindowFunction(
-                        BuiltInWindowFunction::RowNumber,
-                    ) = window_fn.fun
-                    {
-                        // When there is no partition by, row number will be unique across table.
-                        if window_fn.partition_by.is_empty() {
-                            return Some(idx + input_len);
-                        }
+                if let Expr::WindowFunction(WindowFunction {
+                    // Function is ROW_NUMBER
+                    fun:
+                        WindowFunctionDefinition::BuiltInWindowFunction(
+                            BuiltInWindowFunction::RowNumber,
+                        ),
+                    partition_by,
+                    ..
+                }) = expr
+                {
+                    // When there is no partition by, row number will be unique across table.
+                    if partition_by.is_empty() {
+                        return Some(idx + input_len);
                     }
                 }
                 None
             })
             .collect::<Vec<_>>();
-        window_func_dependencies.extend_target_indices(window_fields.len());
         let target_indices = (0..window_fields.len()).collect::<Vec<_>>();
         // Construct new dependencies
         let new_dependencies = row_number_indices
@@ -2005,6 +2012,7 @@ impl Window {
             })
             .collect::<Vec<_>>();
         if !new_dependencies.is_empty() {
+            // Add primary key introduced because of ROW_NUMBER window function to the functional dependency
             let new_deps = FunctionalDependencies::new(new_dependencies);
             window_func_dependencies.extend(new_deps);
         }
