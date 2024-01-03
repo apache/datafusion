@@ -99,6 +99,14 @@ jobs:
           rust-version: stable
       - name: Run tests (excluding doctests)
         run: cargo test --lib --tests --bins --features avro,json,backtrace
+        env:
+          # do not produce debug symbols to keep memory usage down
+          # hardcoding other profile params to avoid profile override values
+          # More on Cargo profiles https://doc.rust-lang.org/cargo/reference/profiles.html?profile-settings#profile-settings
+          RUSTFLAGS: "-C debuginfo=0 -C opt-level=0 -C incremental=false -C codegen-units=256"
+          RUST_BACKTRACE: "1"
+          # avoid rust stack overflows on tpc-ds tests
+          RUST_MINSTACK: "3000000"
       - name: Verify Working Directory Clean
         run: git diff --exit-code
 
@@ -290,6 +298,7 @@ jobs:
       # with a OS-dependent path.
       - name: Setup Rust toolchain
         run: |
+          rustup update stable
           rustup toolchain install stable
           rustup default stable
           rustup component add rustfmt
@@ -302,9 +311,13 @@ jobs:
           cargo test --lib --tests --bins --all-features
         env:
           # do not produce debug symbols to keep memory usage down
-          RUSTFLAGS: "-C debuginfo=0"
+          # use higher optimization level to overcome Windows rust slowness for tpc-ds
+          # and speed builds: https://github.com/apache/arrow-datafusion/issues/8696
+          # Cargo profile docs https://doc.rust-lang.org/cargo/reference/profiles.html?profile-settings#profile-settings
+          RUSTFLAGS: "-C debuginfo=0 -C opt-level=1 -C target-feature=+crt-static -C incremental=false -C codegen-units=256"
           RUST_BACKTRACE: "1"
-
+          # avoid rust stack overflows on tpc-ds tests
+          RUST_MINSTACK: "3000000"
   macos:
     name: cargo test (mac)
     runs-on: macos-latest
@@ -327,6 +340,7 @@ jobs:
       # with a OS-dependent path.
       - name: Setup Rust toolchain
         run: |
+          rustup update stable
           rustup toolchain install stable
           rustup default stable
           rustup component add rustfmt
@@ -338,8 +352,12 @@ jobs:
           cargo test --lib --tests --bins --all-features
         env:
           # do not produce debug symbols to keep memory usage down
-          RUSTFLAGS: "-C debuginfo=0"
+          # hardcoding other profile params to avoid profile override values
+          # More on Cargo profiles https://doc.rust-lang.org/cargo/reference/profiles.html?profile-settings#profile-settings
+          RUSTFLAGS: "-C debuginfo=0 -C opt-level=0 -C incremental=false -C codegen-units=256"
           RUST_BACKTRACE: "1"
+          # avoid rust stack overflows on tpc-ds tests
+          RUST_MINSTACK: "3000000"
 
   test-datafusion-pyarrow:
     name: cargo test pyarrow (amd64)
