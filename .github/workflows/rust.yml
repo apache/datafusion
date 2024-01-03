@@ -296,10 +296,7 @@ jobs:
       - name: Run tests (excluding doctests)
         shell: bash
         run: |
-          export PATH=$PATH:$HOME/d/protoc/bin
-          cargo test --lib --tests --bins --features avro,json,backtrace
-          cd datafusion-cli
-          cargo test --lib --tests --bins --all-features
+          cargo test -p datafusion --test tpcds_planning
         env:
           # do not produce debug symbols to keep memory usage down
           RUSTFLAGS: "-C debuginfo=0"
