@@ -306,11 +306,11 @@ fn rewrite_array_concat_operator_to_func_for_column(
         }
         // 2) select column1 || column2
         (Expr::Column(c1), Expr::Column(c2)) => {
-            let d0 = schema.field_from_column(c1)?.data_type();
-            let d1 = schema.field_from_column(c2)?.data_type();
-            let ndim0 = list_ndims(d0);
+            let d1 = schema.field_from_column(c1)?.data_type();
+            let d2 = schema.field_from_column(c2)?.data_type();
             let ndim1 = list_ndims(d1);
-            match (ndim0, ndim1) {
+            let ndim2 = list_ndims(d2);
+            match (ndim1, ndim2) {
                 (0, _) => Ok(Some(BuiltinScalarFunction::ArrayPrepend)),
                 (_, 0) => Ok(Some(BuiltinScalarFunction::ArrayAppend)),
                 _ => Ok(Some(BuiltinScalarFunction::ArrayConcat)),
