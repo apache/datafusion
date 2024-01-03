@@ -36,11 +36,10 @@ use crate::utils::{
     split_conjunction,
 };
 use crate::{
-    build_join_schema, expr_vec_fmt, BinaryExpr, CreateMemoryTable, CreateView, Expr,
-    ExprSchemable, LogicalPlanBuilder, Operator, TableProviderFilterPushDown,
-    TableSource,
+    build_join_schema, expr_vec_fmt, BinaryExpr, BuiltInWindowFunction,
+    CreateMemoryTable, CreateView, Expr, ExprSchemable, LogicalPlanBuilder, Operator,
+    TableProviderFilterPushDown, TableSource, WindowFunctionDefinition,
 };
-
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion_common::tree_node::{
     RewriteRecursion, Transformed, TreeNode, TreeNodeRewriter, TreeNodeVisitor,
@@ -48,8 +47,8 @@ use datafusion_common::tree_node::{
 };
 use datafusion_common::{
     aggregate_functional_dependencies, internal_err, plan_err, Column, Constraints,
-    DFField, DFSchema, DFSchemaRef, DataFusionError, Dependency, FunctionalDependencies,
-    OwnedTableReference, ParamValues, Result, UnnestOptions,
+    DFField, DFSchema, DFSchemaRef, DataFusionError, Dependency, FunctionalDependence,
+    FunctionalDependencies, OwnedTableReference, ParamValues, Result, UnnestOptions,
 };
 // backwards compatibility
 pub use datafusion_common::display::{PlanType, StringifiedPlan, ToStringifiedPlan};
@@ -1967,6 +1966,7 @@ pub struct Window {
 impl Window {
     /// Create a new window operator.
     pub fn try_new(window_expr: Vec<Expr>, input: Arc<LogicalPlan>) -> Result<Self> {
+        let input_len = input.schema().fields().len();
         let mut window_fields: Vec<DFField> = input.schema().fields().clone();
         window_fields.extend_from_slice(&exprlist_to_fields(window_expr.iter(), &input)?);
         let metadata = input.schema().metadata().clone();
@@ -1974,7 +1974,40 @@ impl Window {
         // Update functional dependencies for window:
         let mut window_func_dependencies =
             input.schema().functional_dependencies().clone();
+        // Since we know that ROW_NUMBER generated will be unique (it is consecutive numbers per partition)
+        // We can add them as primary key to the schema.
+        let row_number_indices = window_expr
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, expr)| {
+                if let Expr::WindowFunction(window_fn) = expr {
+                    if let WindowFunctionDefinition::BuiltInWindowFunction(
+                        BuiltInWindowFunction::RowNumber,
+                    ) = window_fn.fun
+                    {
+                        // When there is no partition by, row number will be unique across table.
+                        if window_fn.partition_by.is_empty() {
+                            return Some(idx + input_len);
+                        }
+                    }
+                }
+                None
+            })
+            .collect::<Vec<_>>();
         window_func_dependencies.extend_target_indices(window_fields.len());
+        let target_indices = (0..window_fields.len()).collect::<Vec<_>>();
+        // Construct new dependencies
+        let new_dependencies = row_number_indices
+            .into_iter()
+            .map(|idx| {
+                FunctionalDependence::new(vec![idx], target_indices.clone(), false)
+                    .with_mode(Dependency::Single)
+            })
+            .collect::<Vec<_>>();
+        if !new_dependencies.is_empty() {
+            let new_deps = FunctionalDependencies::new(new_dependencies);
+            window_func_dependencies.extend(new_deps);
+        }
 
         Ok(Window {
             input,
