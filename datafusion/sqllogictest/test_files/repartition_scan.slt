@@ -147,13 +147,13 @@ WITH HEADER ROW
 LOCATION 'test_files/scratch/repartition_scan/csv_table/';
 
 query I
-select * from csv_table;
+select * from csv_table ORDER BY column1;
 ----
-5
 1
 2
 3
 4
+5
 
 ## Expect to see the scan read the file as "4" groups with even sizes (offsets)
 query TT
@@ -190,13 +190,13 @@ STORED AS json
 LOCATION 'test_files/scratch/repartition_scan/json_table/';
 
 query I
-select * from "json_table";
+select * from "json_table" ORDER BY column1;
 ----
-5
 1
 2
 3
 4
+5
 
 ## Expect to see the scan read the file as "4" groups with even sizes (offsets)
 query TT
