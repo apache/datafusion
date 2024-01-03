@@ -150,10 +150,10 @@ query I
 select * from csv_table;
 ----
 5
+1
 2
 3
 4
-1
 
 ## Expect to see the scan read the file as "4" groups with even sizes (offsets)
 query TT

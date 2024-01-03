@@ -118,8 +118,9 @@ SortPreservingMergeExec: [numwait@1 DESC,s_name@0 ASC NULLS LAST]
 --------------------------------------------------CoalesceBatchesExec: target_batch_size=8192
 ----------------------------------------------------HashJoinExec: mode=Partitioned, join_type=Inner, on=[(s_suppkey@0, l_suppkey@1)]
 ------------------------------------------------------CoalesceBatchesExec: target_batch_size=8192
---------------------------------------------------------RepartitionExec: partitioning=Hash([s_suppkey@0], 4), input_partitions=1
-----------------------------------------------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/supplier.tbl]]}, projection=[s_suppkey, s_name, s_nationkey], has_header=false
+--------------------------------------------------------RepartitionExec: partitioning=Hash([s_suppkey@0], 4), input_partitions=4
+----------------------------------------------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+------------------------------------------------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/supplier.tbl]]}, projection=[s_suppkey, s_name, s_nationkey], has_header=false
 ------------------------------------------------------CoalesceBatchesExec: target_batch_size=8192
 --------------------------------------------------------RepartitionExec: partitioning=Hash([l_suppkey@1], 4), input_partitions=4
 ----------------------------------------------------------ProjectionExec: expr=[l_orderkey@0 as l_orderkey, l_suppkey@1 as l_suppkey]
