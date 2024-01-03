@@ -20,13 +20,13 @@
 use std::sync::Arc;
 
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::tree_node::TreeNode;
 use datafusion_common::tree_node::TreeNodeRewriter;
 use datafusion_common::utils::list_ndims;
 use datafusion_common::DFSchema;
 use datafusion_common::DFSchemaRef;
 use datafusion_common::Result;
 use datafusion_expr::expr::ScalarFunction;
+use datafusion_expr::expr_rewriter::rewrite_preserving_name;
 use datafusion_expr::utils::merge_schema;
 use datafusion_expr::BuiltinScalarFunction;
 use datafusion_expr::Operator;
@@ -72,14 +72,18 @@ fn analyze_internal(plan: &LogicalPlan) -> Result<LogicalPlan> {
         schema.merge(&source_schema);
     }
 
-    let mut expr_rewriter = OperatorToFunctionRewriter {
+    let mut expr_rewrite = OperatorToFunctionRewriter {
         schema: Arc::new(schema),
     };
-    
+
     let new_expr = plan
         .expressions()
         .into_iter()
-        .map(|expr| expr.rewrite(&mut expr_rewriter))
+        .map(|expr| {
+            // ensure names don't change:
+            // https://github.com/apache/arrow-datafusion/issues/3555
+            rewrite_preserving_name(expr, &mut expr_rewrite)
+        })
         .collect::<Result<Vec<_>>>()?;
 
     plan.with_new_exprs(new_expr, &new_inputs)
