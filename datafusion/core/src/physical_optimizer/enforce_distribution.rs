@@ -1211,7 +1211,7 @@ fn ensure_distribution(
 
             // When `repartition_file_scans` is set, attempt to increase
             // parallelism at the source.
-            if repartition_file_scans {
+            if repartition_file_scans && repartition_beneficial_stats {
                 if let Some(new_child) =
                     child.plan.repartitioned(target_partitions, config)?
                 {
