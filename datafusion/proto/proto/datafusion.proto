@@ -212,7 +212,7 @@ message CreateExternalTableNode {
   bool if_not_exists = 7;
   string delimiter = 8;
   string definition = 9;
-  string file_compression_type = 10;
+  CompressionTypeVariant file_compression_type = 10;
   repeated LogicalExprNodeCollection order_exprs = 13;
   bool unbounded = 14;
   map<string, string> options = 11;
