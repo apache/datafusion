@@ -303,7 +303,7 @@ jobs:
           cargo test --lib --tests --bins --all-features
         env:
           # do not produce debug symbols to keep memory usage down
-          RUSTFLAGS: "-C debuginfo=0 target-feature=+crt-static"
+          RUSTFLAGS: -Ctarget-feature=+crt-static
           RUST_BACKTRACE: "1"
 
   macos:
