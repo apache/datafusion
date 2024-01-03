@@ -36,8 +36,7 @@ use datafusion::{
     assert_batches_eq,
     error::Result,
     logical_expr::{
-        AccumulatorFactoryFunction, AggregateUDF, ReturnTypeFunction, Signature,
-        StateTypeFunction, TypeSignature, Volatility,
+        AccumulatorFactoryFunction, AggregateUDF, Signature, TypeSignature, Volatility,
     },
     physical_plan::Accumulator,
     prelude::SessionContext,
@@ -46,7 +45,7 @@ use datafusion::{
 use datafusion_common::{
     assert_contains, cast::as_primitive_array, exec_err, DataFusionError,
 };
-use datafusion_expr::create_udaf;
+use datafusion_expr::{create_udaf, SimpleAggregateUDF};
 use datafusion_physical_expr::expressions::AvgAccumulator;
 
 /// Test to show the contents of the setup
@@ -408,26 +407,27 @@ impl TimeSum {
 
     fn register(ctx: &mut SessionContext, test_state: Arc<TestState>, name: &str) {
         let timestamp_type = DataType::Timestamp(TimeUnit::Nanosecond, None);
+        let input_type = vec![timestamp_type.clone()];
 
         // Returns the same type as its input
-        let return_type = Arc::new(timestamp_type.clone());
-        let return_type: ReturnTypeFunction =
-            Arc::new(move |_| Ok(Arc::clone(&return_type)));
+        let return_type = timestamp_type.clone();
 
-        let state_type = Arc::new(vec![timestamp_type.clone()]);
-        let state_type: StateTypeFunction =
-            Arc::new(move |_| Ok(Arc::clone(&state_type)));
+        let state_type = vec![timestamp_type.clone()];
 
         let volatility = Volatility::Immutable;
-
-        let signature = Signature::exact(vec![timestamp_type], volatility);
 
         let captured_state = Arc::clone(&test_state);
         let accumulator: AccumulatorFactoryFunction =
             Arc::new(move |_| Ok(Box::new(Self::new(Arc::clone(&captured_state)))));
 
-        let time_sum =
-            AggregateUDF::new(name, &signature, &return_type, &accumulator, &state_type);
+        let time_sum = AggregateUDF::from(SimpleAggregateUDF::new(
+            name,
+            input_type,
+            return_type,
+            volatility,
+            accumulator,
+            state_type,
+        ));
 
         // register the selector as "time_sum"
         ctx.register_udaf(time_sum)
@@ -510,11 +510,8 @@ impl FirstSelector {
     }
 
     fn register(ctx: &mut SessionContext) {
-        let return_type = Arc::new(Self::output_datatype());
-        let state_type = Arc::new(Self::state_datatypes());
-
-        let return_type: ReturnTypeFunction = Arc::new(move |_| Ok(return_type.clone()));
-        let state_type: StateTypeFunction = Arc::new(move |_| Ok(state_type.clone()));
+        let return_type = Self::output_datatype();
+        let state_type = Self::state_datatypes();
 
         // Possible input signatures
         let signatures = vec![TypeSignature::Exact(Self::input_datatypes())];
@@ -526,13 +523,13 @@ impl FirstSelector {
 
         let name = "first";
 
-        let first = AggregateUDF::new(
-            name,
-            &Signature::one_of(signatures, volatility),
-            &return_type,
-            &accumulator,
-            &state_type,
-        );
+        let first = AggregateUDF::from(SimpleAggregateUDF::new_with_signature(
+            name.to_string(),
+            Signature::one_of(signatures, volatility),
+            return_type,
+            accumulator,
+            state_type,
+        ));
 
         // register the selector as "first"
         ctx.register_udaf(first)

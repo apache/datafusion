@@ -780,8 +780,7 @@ mod test {
         avg, col, lit, logical_plan::builder::LogicalPlanBuilder, sum,
     };
     use datafusion_expr::{
-        grouping_set, AccumulatorFactoryFunction, AggregateUDF, ReturnTypeFunction,
-        Signature, StateTypeFunction, Volatility,
+        grouping_set, AggregateUDF, AggregateUDFImpl, Signature, Volatility,
     };
 
     use crate::optimizer::OptimizerContext;
@@ -899,23 +898,56 @@ mod test {
 
     #[test]
     fn aggregate() -> Result<()> {
+        struct InnerAggregateUDF {
+            signature: Signature,
+        }
+
+        impl InnerAggregateUDF {
+            fn new() -> Self {
+                Self {
+                    signature: Signature::exact(
+                        vec![DataType::UInt32],
+                        Volatility::Stable,
+                    ),
+                }
+            }
+        }
+
+        impl AggregateUDFImpl for InnerAggregateUDF {
+            fn as_any(&self) -> &dyn std::any::Any {
+                self
+            }
+
+            fn name(&self) -> &str {
+                "my_agg"
+            }
+
+            fn signature(&self) -> &Signature {
+                &self.signature
+            }
+
+            fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+                assert_eq!(arg_types, &[DataType::UInt32]);
+                Ok(DataType::UInt32)
+            }
+
+            fn accumulator(
+                &self,
+                _arg: &DataType,
+            ) -> Result<Box<dyn datafusion_expr::Accumulator>> {
+                unimplemented!()
+            }
+
+            fn state_type(&self, _return_type: &DataType) -> Result<Vec<DataType>> {
+                unimplemented!()
+            }
+        }
+
         let table_scan = test_table_scan()?;
 
-        let return_type: ReturnTypeFunction = Arc::new(|inputs| {
-            assert_eq!(inputs, &[DataType::UInt32]);
-            Ok(Arc::new(DataType::UInt32))
-        });
-        let accumulator: AccumulatorFactoryFunction = Arc::new(|_| unimplemented!());
-        let state_type: StateTypeFunction = Arc::new(|_| unimplemented!());
         let udf_agg = |inner: Expr| {
             Expr::AggregateFunction(datafusion_expr::expr::AggregateFunction::new_udf(
-                Arc::new(AggregateUDF::new(
-                    "my_agg",
-                    &Signature::exact(vec![DataType::UInt32], Volatility::Stable),
-                    &return_type,
-                    &accumulator,
-                    &state_type,
-                )),
+                Arc::new(AggregateUDF::from(InnerAggregateUDF::new())),
                 vec![inner],
                 false,
                 None,
