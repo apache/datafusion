@@ -373,7 +373,8 @@ fn optimize_projections(
             // `old_child` during construction:
             .map(|(new_input, old_child)| new_input.unwrap_or_else(|| old_child.clone()))
             .collect::<Vec<_>>();
-        plan.with_new_inputs(&new_inputs).map(Some)
+        plan.with_new_exprs(plan.expressions(), &new_inputs)
+            .map(Some)
     }
 }
 

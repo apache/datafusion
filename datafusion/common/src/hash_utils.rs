@@ -27,7 +27,8 @@ use arrow::{downcast_dictionary_array, downcast_primitive_array};
 use arrow_buffer::i256;
 
 use crate::cast::{
-    as_boolean_array, as_generic_binary_array, as_primitive_array, as_string_array,
+    as_boolean_array, as_generic_binary_array, as_large_list_array, as_list_array,
+    as_primitive_array, as_string_array, as_struct_array,
 };
 use crate::error::{DataFusionError, Result, _internal_err};
 
@@ -207,6 +208,35 @@ fn hash_dictionary<K: ArrowDictionaryKeyType>(
     Ok(())
 }
 
+fn hash_struct_array(
+    array: &StructArray,
+    random_state: &RandomState,
+    hashes_buffer: &mut [u64],
+) -> Result<()> {
+    let nulls = array.nulls();
+    let num_columns = array.num_columns();
+
+    // Skip null columns
+    let valid_indices: Vec<usize> = if let Some(nulls) = nulls {
+        nulls.valid_indices().collect()
+    } else {
+        (0..num_columns).collect()
+    };
+
+    // Create hashes for each row that combines the hashes over all the column at that row.
+    // array.len() is the number of rows.
+    let mut values_hashes = vec![0u64; array.len()];
+    create_hashes(array.columns(), random_state, &mut values_hashes)?;
+
+    // Skip the null columns, nulls should get hash value 0.
+    for i in valid_indices {
+        let hash = &mut hashes_buffer[i];
+        *hash = combine_hashes(*hash, values_hashes[i]);
+    }
+
+    Ok(())
+}
+
 fn hash_list_array<OffsetSize>(
     array: &GenericListArray<OffsetSize>,
     random_state: &RandomState,
@@ -327,12 +357,16 @@ pub fn create_hashes<'a>(
                 array => hash_dictionary(array, random_state, hashes_buffer, rehash)?,
                 _ => unreachable!()
             }
+            DataType::Struct(_) => {
+                let array = as_struct_array(array)?;
+                hash_struct_array(array, random_state, hashes_buffer)?;
+            }
             DataType::List(_) => {
-                let array = as_list_array(array);
+                let array = as_list_array(array)?;
                 hash_list_array(array, random_state, hashes_buffer)?;
             }
             DataType::LargeList(_) => {
-                let array = as_large_list_array(array);
+                let array = as_large_list_array(array)?;
                 hash_list_array(array, random_state, hashes_buffer)?;
             }
             _ => {
@@ -513,6 +547,58 @@ mod tests {
         assert_eq!(hashes[0], hashes[5]);
         assert_eq!(hashes[1], hashes[4]);
         assert_eq!(hashes[2], hashes[3]);
+    }
+
+    #[test]
+    // Tests actual values of hashes, which are different if forcing collisions
+    #[cfg(not(feature = "force_hash_collisions"))]
+    fn create_hashes_for_struct_arrays() {
+        use arrow_buffer::Buffer;
+
+        let boolarr = Arc::new(BooleanArray::from(vec![
+            false, false, true, true, true, true,
+        ]));
+        let i32arr = Arc::new(Int32Array::from(vec![10, 10, 20, 20, 30, 31]));
+
+        let struct_array = StructArray::from((
+            vec![
+                (
+                    Arc::new(Field::new("bool", DataType::Boolean, false)),
+                    boolarr.clone() as ArrayRef,
+                ),
+                (
+                    Arc::new(Field::new("i32", DataType::Int32, false)),
+                    i32arr.clone() as ArrayRef,
+                ),
+                (
+                    Arc::new(Field::new("i32", DataType::Int32, false)),
+                    i32arr.clone() as ArrayRef,
+                ),
+                (
+                    Arc::new(Field::new("bool", DataType::Boolean, false)),
+                    boolarr.clone() as ArrayRef,
+                ),
+            ],
+            Buffer::from(&[0b001011]),
+        ));
+
+        assert!(struct_array.is_valid(0));
+        assert!(struct_array.is_valid(1));
+        assert!(struct_array.is_null(2));
+        assert!(struct_array.is_valid(3));
+        assert!(struct_array.is_null(4));
+        assert!(struct_array.is_null(5));
+
+        let array = Arc::new(struct_array) as ArrayRef;
+
+        let random_state = RandomState::with_seeds(0, 0, 0, 0);
+        let mut hashes = vec![0; array.len()];
+        create_hashes(&[array], &random_state, &mut hashes).unwrap();
+        assert_eq!(hashes[0], hashes[1]);
+        // same value but the third row ( hashes[2] ) is null
+        assert_ne!(hashes[2], hashes[3]);
+        // different values but both are null
+        assert_eq!(hashes[4], hashes[5]);
     }
 
     #[test]

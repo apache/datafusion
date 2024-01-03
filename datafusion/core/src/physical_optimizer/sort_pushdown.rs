@@ -405,9 +405,7 @@ fn shift_right_required(
     let new_right_required: Vec<PhysicalSortRequirement> = parent_required
         .iter()
         .filter_map(|r| {
-            let Some(col) = r.expr.as_any().downcast_ref::<Column>() else {
-                return None;
-            };
+            let col = r.expr.as_any().downcast_ref::<Column>()?;
 
             if col.index() < left_columns_len {
                 return None;
