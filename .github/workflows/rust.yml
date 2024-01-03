@@ -290,8 +290,8 @@ jobs:
       # with a OS-dependent path.
       - name: Setup Rust toolchain
         run: |
-          rustup toolchain install nightly-2023-11-20
-          rustup default nightly-2023-11-20
+          rustup toolchain install 1.75.0
+          rustup default 1.75.0
           rustup component add rustfmt
       - name: Run tests (excluding doctests)
         shell: bash
