@@ -1957,6 +1957,15 @@ select
 ----
 [[1], [1], [1], [1], [1]] [[1.1, 2.2, 3.3], [1.1, 2.2, 3.3], [1.1, 2.2, 3.3]] [[, ], [, ], [, ]] [[[1, 2], [3, 4]], [[1, 2], [3, 4]]]
 
+query ????
+select
+  array_repeat(arrow_cast([1], 'LargeList(Int64)'), 5),
+  array_repeat(arrow_cast([1.1, 2.2, 3.3], 'LargeList(Float64)'), 3),
+  array_repeat(arrow_cast([null, null], 'LargeList(Null)'), 3),
+  array_repeat(arrow_cast([[1, 2], [3, 4]], 'LargeList(List(Int64))'), 2);
+----
+[[1], [1], [1], [1], [1]] [[1.1, 2.2, 3.3], [1.1, 2.2, 3.3], [1.1, 2.2, 3.3]] [[, ], [, ], [, ]] [[[1, 2], [3, 4]], [[1, 2], [3, 4]]]
+
 # array_repeat with columns #1
 
 statement ok
@@ -1966,6 +1975,16 @@ AS VALUES
   (2, null, null, null, null),
   (3, 2, 2.2, 'rust', make_array(7)),
   (0, 3, 3.3, 'datafusion', make_array(8, 9));
+
+statement ok
+CREATE TABLE large_array_repeat_table
+AS SELECT
+  column1,
+  column2,
+  column3,
+  column4,
+  arrow_cast(column5, 'LargeList(Int64)') as column5
+FROM array_repeat_table;
 
 query ??????
 select
@@ -1982,8 +2001,26 @@ from array_repeat_table;
 [2, 2, 2] [2.2, 2.2, 2.2] [rust, rust, rust] [[7], [7], [7]] [2, 2, 2] [[1], [1], [1]]
 [] [] [] [] [3, 3, 3] []
 
+query ??????
+select
+  array_repeat(column2, column1),
+  array_repeat(column3, column1),
+  array_repeat(column4, column1),
+  array_repeat(column5, column1),
+  array_repeat(column2, 3),
+  array_repeat(make_array(1), column1)
+from large_array_repeat_table;
+----
+[1] [1.1] [a] [[4, 5, 6]] [1, 1, 1] [[1]]
+[, ] [, ] [, ] [, ] [, , ] [[1], [1]]
+[2, 2, 2] [2.2, 2.2, 2.2] [rust, rust, rust] [[7], [7], [7]] [2, 2, 2] [[1], [1], [1]]
+[] [] [] [] [3, 3, 3] []
+
 statement ok
 drop table array_repeat_table;
+
+statement ok
+drop table large_array_repeat_table;
 
 ## array_concat (aliases: `array_cat`, `list_concat`, `list_cat`)
 
