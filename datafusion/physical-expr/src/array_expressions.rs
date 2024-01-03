@@ -2116,7 +2116,9 @@ pub fn cardinality(args: &[ArrayRef]) -> Result<ArrayRef> {
             array
                 .iter()
                 .map(|arr| match compute_array_dims(arr)? {
-                    Some(vector) => Ok(Some(vector.iter().map(|x| x.unwrap()).product::<u64>())),
+                    Some(vector) => {
+                        Ok(Some(vector.iter().map(|x| x.unwrap()).product::<u64>()))
+                    }
                     None => Ok(None),
                 })
                 .collect::<Result<UInt64Array>>()?
@@ -2126,7 +2128,9 @@ pub fn cardinality(args: &[ArrayRef]) -> Result<ArrayRef> {
             array
                 .iter()
                 .map(|arr| match compute_array_dims(arr)? {
-                    Some(vector) => Ok(Some(vector.iter().map(|x| x.unwrap()).product::<u64>())),
+                    Some(vector) => {
+                        Ok(Some(vector.iter().map(|x| x.unwrap()).product::<u64>()))
+                    }
                     None => Ok(None),
                 })
                 .collect::<Result<UInt64Array>>()?
@@ -2139,10 +2143,6 @@ pub fn cardinality(args: &[ArrayRef]) -> Result<ArrayRef> {
         }
     };
     Ok(Arc::new(result) as ArrayRef)
-
-
-
-
 }
 
 // Create new offsets that are euqiavlent to `flatten` the array.
