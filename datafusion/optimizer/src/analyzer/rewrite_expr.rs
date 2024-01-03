@@ -19,12 +19,10 @@
 
 use std::sync::Arc;
 
-use arrow::datatypes::DataType;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::TreeNode;
 use datafusion_common::tree_node::TreeNodeRewriter;
 use datafusion_common::utils::list_ndims;
-use datafusion_common::Column;
 use datafusion_common::DFSchema;
 use datafusion_common::DFSchemaRef;
 use datafusion_common::Result;
@@ -77,7 +75,7 @@ fn analyze_internal(plan: &LogicalPlan) -> Result<LogicalPlan> {
     let mut expr_rewriter = OperatorToFunctionRewriter {
         schema: Arc::new(schema),
     };
-
+    
     let new_expr = plan
         .expressions()
         .into_iter()
@@ -85,22 +83,6 @@ fn analyze_internal(plan: &LogicalPlan) -> Result<LogicalPlan> {
         .collect::<Result<Vec<_>>>()?;
 
     plan.with_new_exprs(new_expr, &new_inputs)
-
-    // match &plan {
-    //     LogicalPlan::Projection(_) => Ok(LogicalPlan::Projection(Projection::try_new(
-    //         new_expr,
-    //         Arc::new(new_inputs[0].clone()),
-    //     )?)),
-    //     _ => plan.with_new_exprs(new_expr, &new_inputs),
-    // }
-    // // Not found cases that inputs more than one
-    // assert_eq!(plan.inputs().len(), 1);
-    // let input = plan.inputs()[0];
-
-    // Ok(LogicalPlan::Projection(Projection::try_new(
-    //     new_expr,
-    //     input.to_owned().into(),
-    // )?))
 }
 
 pub(crate) struct OperatorToFunctionRewriter {
