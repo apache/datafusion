@@ -309,7 +309,7 @@ jobs:
           cargo test --lib --tests --bins --all-features
         env:
           # do not produce debug symbols to keep memory usage down
-          RUSTFLAGS: "-C debuginfo=0 -C target-feature=+crt-static -C opt-level=3 -C incremental=true -C codegen-units=256"
+          RUSTFLAGS: "-C debuginfo=0 -C target-feature=+crt-static -C incremental=true -C codegen-units=256"
           RUST_BACKTRACE: "1"
           # avoid rust stack overflows on tpc-ds tests
           RUST_MINSTACK: "3000000"
@@ -347,7 +347,7 @@ jobs:
           cargo test --lib --tests --bins --all-features
         env:
           # do not produce debug symbols to keep memory usage down
-          RUSTFLAGS: "-C debuginfo=0 -C opt-level=3 -C incremental=true -C codegen-units=256"
+          RUSTFLAGS: "-C debuginfo=0 -C incremental=true -C codegen-units=256"
           RUST_BACKTRACE: "1"
           # avoid rust stack overflows on tpc-ds tests
           RUST_MINSTACK: "3000000"
