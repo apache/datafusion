@@ -290,6 +290,7 @@ jobs:
       # with a OS-dependent path.
       - name: Setup Rust toolchain
         run: |
+          rustup update stable
           rustup toolchain install stable
           rustup default stable
           rustup component add rustfmt
@@ -302,7 +303,7 @@ jobs:
           cargo test --lib --tests --bins --all-features
         env:
           # do not produce debug symbols to keep memory usage down
-          RUSTFLAGS: "-C debuginfo=0"
+          RUSTFLAGS: "-C debuginfo=0 target-feature=+crt-static"
           RUST_BACKTRACE: "1"
 
   macos:
