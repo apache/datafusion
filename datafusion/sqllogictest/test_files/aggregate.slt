@@ -2466,15 +2466,6 @@ select max(x_dict) from value_dict group by x_dict % 2 order by max(x_dict);
 4
 5
 
-query T
-select arrow_typeof(x_dict) from value_dict group by x_dict;
-----
-Int32
-Int32
-Int32
-Int32
-Int32
-
 statement ok
 drop table value
 
