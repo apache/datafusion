@@ -15,16 +15,20 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::expressions::{FirstValue, LastValue, OrderSensitiveArrayAgg};
-use crate::{PhysicalExpr, PhysicalSortExpr};
-use arrow::datatypes::Field;
-use datafusion_common::{not_impl_err, DataFusionError, Result};
-use datafusion_expr::Accumulator;
 use std::any::Any;
 use std::fmt::Debug;
 use std::sync::Arc;
 
 use self::groups_accumulator::GroupsAccumulator;
+use crate::expressions::OrderSensitiveArrayAgg;
+use crate::{PhysicalExpr, PhysicalSortExpr};
+
+use arrow::datatypes::Field;
+use datafusion_common::{not_impl_err, DataFusionError, Result};
+use datafusion_expr::Accumulator;
+
+mod hyperloglog;
+mod tdigest;
 
 pub(crate) mod approx_distinct;
 pub(crate) mod approx_median;
@@ -43,20 +47,20 @@ pub(crate) mod covariance;
 pub(crate) mod first_last;
 pub(crate) mod grouping;
 pub(crate) mod median;
+pub(crate) mod string_agg;
 #[macro_use]
 pub(crate) mod min_max;
-pub mod build_in;
 pub(crate) mod groups_accumulator;
-mod hyperloglog;
-pub mod moving_min_max;
 pub(crate) mod regr;
 pub(crate) mod stats;
 pub(crate) mod stddev;
 pub(crate) mod sum;
 pub(crate) mod sum_distinct;
-mod tdigest;
-pub mod utils;
 pub(crate) mod variance;
+
+pub mod build_in;
+pub mod moving_min_max;
+pub mod utils;
 
 /// An aggregate expression that:
 /// * knows its resulting field
@@ -133,10 +137,7 @@ pub trait AggregateExpr: Send + Sync + Debug + PartialEq<dyn Any> {
 
 /// Checks whether the given aggregate expression is order-sensitive.
 /// For instance, a `SUM` aggregation doesn't depend on the order of its inputs.
-/// However, a `FirstValue` depends on the input ordering (if the order changes,
-/// the first value in the list would change).
+/// However, an `ARRAY_AGG` with `ORDER BY` depends on the input ordering.
 pub fn is_order_sensitive(aggr_expr: &Arc<dyn AggregateExpr>) -> bool {
-    aggr_expr.as_any().is::<FirstValue>()
-        || aggr_expr.as_any().is::<LastValue>()
-        || aggr_expr.as_any().is::<OrderSensitiveArrayAgg>()
+    aggr_expr.as_any().is::<OrderSensitiveArrayAgg>()
 }

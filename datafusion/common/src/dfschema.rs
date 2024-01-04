@@ -34,10 +34,75 @@ use crate::{
 use arrow::compute::can_cast_types;
 use arrow::datatypes::{DataType, Field, FieldRef, Fields, Schema, SchemaRef};
 
-/// A reference-counted reference to a `DFSchema`.
+/// A reference-counted reference to a [DFSchema].
 pub type DFSchemaRef = Arc<DFSchema>;
 
-/// DFSchema wraps an Arrow schema and adds relation names
+/// DFSchema wraps an Arrow schema and adds relation names.
+///
+/// The schema may hold the fields across multiple tables. Some fields may be
+/// qualified and some unqualified. A qualified field is a field that has a
+/// relation name associated with it.
+///
+/// Unqualified fields must be unique not only amongst themselves, but also must
+/// have a distinct name from any qualified field names. This allows finding a
+/// qualified field by name to be possible, so long as there aren't multiple
+/// qualified fields with the same name.
+///
+/// There is an alias to `Arc<DFSchema>` named [DFSchemaRef].
+///
+/// # Creating qualified schemas
+///
+/// Use [DFSchema::try_from_qualified_schema] to create a qualified schema from
+/// an Arrow schema.
+///
+/// ```rust
+/// use datafusion_common::{DFSchema, Column};
+/// use arrow_schema::{DataType, Field, Schema};
+///
+/// let arrow_schema = Schema::new(vec![
+///    Field::new("c1", DataType::Int32, false),
+/// ]);
+///
+/// let df_schema = DFSchema::try_from_qualified_schema("t1", &arrow_schema).unwrap();
+/// let column = Column::from_qualified_name("t1.c1");
+/// assert!(df_schema.has_column(&column));
+///
+/// // Can also access qualified fields with unqualified name, if it's unambiguous
+/// let column = Column::from_qualified_name("c1");
+/// assert!(df_schema.has_column(&column));
+/// ```
+///
+/// # Creating unqualified schemas
+///
+/// Create an unqualified schema using TryFrom:
+///
+/// ```rust
+/// use datafusion_common::{DFSchema, Column};
+/// use arrow_schema::{DataType, Field, Schema};
+///
+/// let arrow_schema = Schema::new(vec![
+///    Field::new("c1", DataType::Int32, false),
+/// ]);
+///
+/// let df_schema = DFSchema::try_from(arrow_schema).unwrap();
+/// let column = Column::new_unqualified("c1");
+/// assert!(df_schema.has_column(&column));
+/// ```
+///
+/// # Converting back to Arrow schema
+///
+/// Use the `Into` trait to convert `DFSchema` into an Arrow schema:
+///
+/// ```rust
+/// use datafusion_common::{DFSchema, DFField};
+/// use arrow_schema::Schema;
+///
+/// let df_schema = DFSchema::new(vec![
+///    DFField::new_unqualified("c1", arrow::datatypes::DataType::Int32, false),
+/// ]).unwrap();
+/// let schema = Schema::from(df_schema);
+/// assert_eq!(schema.fields().len(), 1);
+/// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DFSchema {
     /// Fields
@@ -112,6 +177,9 @@ impl DFSchema {
     }
 
     /// Create a `DFSchema` from an Arrow schema and a given qualifier
+    ///
+    /// To create a schema from an Arrow schema without a qualifier, use
+    /// `DFSchema::try_from`.
     pub fn try_from_qualified_schema<'a>(
         qualifier: impl Into<TableReference<'a>>,
         schema: &Schema,
@@ -131,9 +199,16 @@ impl DFSchema {
     pub fn with_functional_dependencies(
         mut self,
         functional_dependencies: FunctionalDependencies,
-    ) -> Self {
-        self.functional_dependencies = functional_dependencies;
-        self
+    ) -> Result<Self> {
+        if functional_dependencies.is_valid(self.fields.len()) {
+            self.functional_dependencies = functional_dependencies;
+            Ok(self)
+        } else {
+            _plan_err!(
+                "Invalid functional dependency: {:?}",
+                functional_dependencies
+            )
+        }
     }
 
     /// Create a new schema that contains the fields from this schema followed by the fields
@@ -269,6 +344,22 @@ impl DFSchema {
         self.fields
             .iter()
             .filter(|field| field.qualifier().map(|q| q.eq(qualifier)).unwrap_or(false))
+            .collect()
+    }
+
+    /// Find all fields indices having the given qualifier
+    pub fn fields_indices_with_qualified(
+        &self,
+        qualifier: &TableReference,
+    ) -> Vec<usize> {
+        self.fields
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, field)| {
+                field
+                    .qualifier()
+                    .and_then(|q| q.eq(qualifier).then_some(idx))
+            })
             .collect()
     }
 
@@ -1408,8 +1499,8 @@ mod tests {
             DFSchema::new_with_metadata([a, b].to_vec(), HashMap::new()).unwrap(),
         );
         let schema: Schema = df_schema.as_ref().clone().into();
-        let a_df = df_schema.fields.get(0).unwrap().field();
-        let a_arrow = schema.fields.get(0).unwrap();
+        let a_df = df_schema.fields.first().unwrap().field();
+        let a_arrow = schema.fields.first().unwrap();
         assert_eq!(a_df.metadata(), a_arrow.metadata())
     }
 

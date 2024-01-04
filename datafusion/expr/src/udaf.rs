@@ -15,12 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Udaf module contains functions and structs supporting user-defined aggregate functions.
+//! [`AggregateUDF`]: User Defined Aggregate Functions
 
-use crate::Expr;
+use crate::{Accumulator, Expr};
 use crate::{
     AccumulatorFactoryFunction, ReturnTypeFunction, Signature, StateTypeFunction,
 };
+use arrow::datatypes::DataType;
+use datafusion_common::Result;
 use std::fmt::{self, Debug, Formatter};
 use std::sync::Arc;
 
@@ -46,15 +48,15 @@ use std::sync::Arc;
 #[derive(Clone)]
 pub struct AggregateUDF {
     /// name
-    pub name: String,
+    name: String,
     /// Signature (input arguments)
-    pub signature: Signature,
+    signature: Signature,
     /// Return type
-    pub return_type: ReturnTypeFunction,
+    return_type: ReturnTypeFunction,
     /// actual implementation
-    pub accumulator: AccumulatorFactoryFunction,
+    accumulator: AccumulatorFactoryFunction,
     /// the accumulator's state's description as a function of the return type
-    pub state_type: StateTypeFunction,
+    state_type: StateTypeFunction,
 }
 
 impl Debug for AggregateUDF {
@@ -105,11 +107,43 @@ impl AggregateUDF {
     /// This utility allows using the UDAF without requiring access to
     /// the registry, such as with the DataFrame API.
     pub fn call(&self, args: Vec<Expr>) -> Expr {
-        Expr::AggregateUDF(crate::expr::AggregateUDF {
-            fun: Arc::new(self.clone()),
+        Expr::AggregateFunction(crate::expr::AggregateFunction::new_udf(
+            Arc::new(self.clone()),
             args,
-            filter: None,
-            order_by: None,
-        })
+            false,
+            None,
+            None,
+        ))
+    }
+
+    /// Returns this function's name
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Returns this function's signature (what input types are accepted)
+    pub fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    /// Return the type of the function given its input types
+    pub fn return_type(&self, args: &[DataType]) -> Result<DataType> {
+        // Old API returns an Arc of the datatype for some reason
+        let res = (self.return_type)(args)?;
+        Ok(res.as_ref().clone())
+    }
+
+    /// Return an accumualator the given aggregate, given
+    /// its return datatype.
+    pub fn accumulator(&self, return_type: &DataType) -> Result<Box<dyn Accumulator>> {
+        (self.accumulator)(return_type)
+    }
+
+    /// Return the type of the intermediate state used by this aggregator, given
+    /// its return datatype. Supports multi-phase aggregations
+    pub fn state_type(&self, return_type: &DataType) -> Result<Vec<DataType>> {
+        // old API returns an Arc for some reason, try and unwrap it here
+        let res = (self.state_type)(return_type)?;
+        Ok(Arc::try_unwrap(res).unwrap_or_else(|res| res.as_ref().clone()))
     }
 }

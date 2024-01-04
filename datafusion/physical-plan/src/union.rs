@@ -21,6 +21,7 @@
 
 //! The Union operator combines multiple inputs with the same schema
 
+use std::borrow::Borrow;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 use std::{any::Any, sync::Arc};
@@ -38,7 +39,7 @@ use crate::stream::ObservedStream;
 use arrow::datatypes::{Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::stats::Precision;
-use datafusion_common::{exec_err, internal_err, DFSchemaRef, DataFusionError, Result};
+use datafusion_common::{exec_err, internal_err, DataFusionError, Result};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::EquivalenceProperties;
 
@@ -95,38 +96,6 @@ pub struct UnionExec {
 }
 
 impl UnionExec {
-    /// Create a new UnionExec with specified schema.
-    /// The `schema` should always be a subset of the schema of `inputs`,
-    /// otherwise, an error will be returned.
-    pub fn try_new_with_schema(
-        inputs: Vec<Arc<dyn ExecutionPlan>>,
-        schema: DFSchemaRef,
-    ) -> Result<Self> {
-        let mut exec = Self::new(inputs);
-        let exec_schema = exec.schema();
-        let fields = schema
-            .fields()
-            .iter()
-            .map(|dff| {
-                exec_schema
-                    .field_with_name(dff.name())
-                    .cloned()
-                    .map_err(|_| {
-                        DataFusionError::Internal(format!(
-                            "Cannot find the field {:?} in child schema",
-                            dff.name()
-                        ))
-                    })
-            })
-            .collect::<Result<Vec<Field>>>()?;
-        let schema = Arc::new(Schema::new_with_metadata(
-            fields,
-            exec.schema().metadata().clone(),
-        ));
-        exec.schema = schema;
-        Ok(exec)
-    }
-
     /// Create a new UnionExec
     pub fn new(inputs: Vec<Arc<dyn ExecutionPlan>>) -> Self {
         let schema = union_schema(&inputs);
@@ -368,7 +337,7 @@ impl InterleaveExec {
     pub fn try_new(inputs: Vec<Arc<dyn ExecutionPlan>>) -> Result<Self> {
         let schema = union_schema(&inputs);
 
-        if !can_interleave(&inputs) {
+        if !can_interleave(inputs.iter()) {
             return internal_err!(
                 "Not all InterleaveExec children have a consistent hash partitioning"
             );
@@ -506,17 +475,18 @@ impl ExecutionPlan for InterleaveExec {
 /// It might be too strict here in the case that the input partition specs are compatible but not exactly the same.
 /// For example one input partition has the partition spec Hash('a','b','c') and
 /// other has the partition spec Hash('a'), It is safe to derive the out partition with the spec Hash('a','b','c').
-pub fn can_interleave(inputs: &[Arc<dyn ExecutionPlan>]) -> bool {
-    if inputs.is_empty() {
+pub fn can_interleave<T: Borrow<Arc<dyn ExecutionPlan>>>(
+    mut inputs: impl Iterator<Item = T>,
+) -> bool {
+    let Some(first) = inputs.next() else {
         return false;
-    }
+    };
 
-    let first_input_partition = inputs[0].output_partitioning();
-    matches!(first_input_partition, Partitioning::Hash(_, _))
+    let reference = first.borrow().output_partitioning();
+    matches!(reference, Partitioning::Hash(_, _))
         && inputs
-            .iter()
-            .map(|plan| plan.output_partitioning())
-            .all(|partition| partition == first_input_partition)
+            .map(|plan| plan.borrow().output_partitioning())
+            .all(|partition| partition == reference)
 }
 
 fn union_schema(inputs: &[Arc<dyn ExecutionPlan>]) -> SchemaRef {
@@ -706,12 +676,8 @@ mod tests {
                 },
                 ColumnStatistics {
                     distinct_count: Precision::Exact(1),
-                    max_value: Precision::Exact(ScalarValue::Utf8(Some(String::from(
-                        "x",
-                    )))),
-                    min_value: Precision::Exact(ScalarValue::Utf8(Some(String::from(
-                        "a",
-                    )))),
+                    max_value: Precision::Exact(ScalarValue::from("x")),
+                    min_value: Precision::Exact(ScalarValue::from("a")),
                     null_count: Precision::Exact(3),
                 },
                 ColumnStatistics {
@@ -735,12 +701,8 @@ mod tests {
                 },
                 ColumnStatistics {
                     distinct_count: Precision::Absent,
-                    max_value: Precision::Exact(ScalarValue::Utf8(Some(String::from(
-                        "c",
-                    )))),
-                    min_value: Precision::Exact(ScalarValue::Utf8(Some(String::from(
-                        "b",
-                    )))),
+                    max_value: Precision::Exact(ScalarValue::from("c")),
+                    min_value: Precision::Exact(ScalarValue::from("b")),
                     null_count: Precision::Absent,
                 },
                 ColumnStatistics {
@@ -765,12 +727,8 @@ mod tests {
                 },
                 ColumnStatistics {
                     distinct_count: Precision::Absent,
-                    max_value: Precision::Exact(ScalarValue::Utf8(Some(String::from(
-                        "x",
-                    )))),
-                    min_value: Precision::Exact(ScalarValue::Utf8(Some(String::from(
-                        "a",
-                    )))),
+                    max_value: Precision::Exact(ScalarValue::from("x")),
+                    min_value: Precision::Exact(ScalarValue::from("a")),
                     null_count: Precision::Absent,
                 },
                 ColumnStatistics {

@@ -57,7 +57,7 @@ CREATE EXTERNAL TABLE dictionary_encoded_parquet_partitioned(
   b varchar,
 ) 
 STORED AS parquet
-LOCATION 'test_files/scratch/insert_to_external/parquet_types_partitioned'
+LOCATION 'test_files/scratch/insert_to_external/parquet_types_partitioned/'
 PARTITIONED BY (b)
 OPTIONS(
 create_local_path 'true',
@@ -75,6 +75,45 @@ select * from dictionary_encoded_parquet_partitioned order by (a);
 ----
 a foo
 b bar
+
+statement ok
+CREATE EXTERNAL TABLE dictionary_encoded_arrow_partitioned(
+  a varchar,
+  b varchar,
+) 
+STORED AS arrow
+LOCATION 'test_files/scratch/insert_to_external/arrow_dict_partitioned/'
+PARTITIONED BY (b)
+OPTIONS(
+create_local_path 'true',
+insert_mode 'append_new_files',
+);
+
+query TT
+insert into dictionary_encoded_arrow_partitioned 
+select * from dictionary_encoded_values
+----
+2
+
+statement ok
+CREATE EXTERNAL TABLE dictionary_encoded_arrow_test_readback(
+  a varchar,
+) 
+STORED AS arrow
+LOCATION 'test_files/scratch/insert_to_external/arrow_dict_partitioned/b=bar/'
+OPTIONS(
+create_local_path 'true',
+insert_mode 'append_new_files',
+);
+
+query T
+select * from dictionary_encoded_arrow_test_readback;
+----
+b
+
+# https://github.com/apache/arrow-datafusion/issues/7816
+query error DataFusion error: Arrow error: Schema error: project index 1 out of bounds, max field 1
+select * from dictionary_encoded_arrow_partitioned order by (a);
 
 
 # test_insert_into
@@ -100,7 +139,7 @@ Dml: op=[Insert Into] table=[ordered_insert_test]
 --Projection: column1 AS a, column2 AS b
 ----Values: (Int64(5), Int64(1)), (Int64(4), Int64(2)), (Int64(7), Int64(7)), (Int64(7), Int64(8)), (Int64(7), Int64(9))...
 physical_plan
-InsertExec: sink=CsvSink(writer_mode=PutMultipart, file_groups=[])
+FileSinkExec: sink=CsvSink(file_groups=[])
 --SortExec: expr=[a@0 ASC NULLS LAST,b@1 DESC]
 ----ProjectionExec: expr=[column1@0 as a, column2@1 as b]
 ------ValuesExec
@@ -254,6 +293,22 @@ create_local_path 'true',
 single_file 'true',
 );
 
+query error DataFusion error: Error during planning: Inserting into a ListingTable backed by a single file is not supported, URL is possibly missing a trailing `/`\. To append to an existing file use StreamTable, e\.g\. by using CREATE UNBOUNDED EXTERNAL TABLE
+INSERT INTO single_file_test values (1, 2), (3, 4);
+
+statement ok
+drop table single_file_test;
+
+statement ok
+CREATE UNBOUNDED EXTERNAL TABLE
+single_file_test(a bigint, b bigint)
+STORED AS csv
+LOCATION 'test_files/scratch/insert_to_external/single_csv_table.csv'
+OPTIONS(
+create_local_path 'true',
+single_file 'true',
+);
+
 query II
 INSERT INTO single_file_test values (1, 2), (3, 4);
 ----
@@ -276,7 +331,7 @@ statement ok
 CREATE EXTERNAL TABLE
 directory_test(a bigint, b bigint)
 STORED AS parquet
-LOCATION 'test_files/scratch/insert_to_external/external_parquet_table_q0'
+LOCATION 'test_files/scratch/insert_to_external/external_parquet_table_q0/'
 OPTIONS(
 create_local_path 'true',
 );
@@ -296,7 +351,7 @@ statement ok
 CREATE EXTERNAL TABLE
 table_without_values(field1 BIGINT NULL, field2 BIGINT NULL)
 STORED AS parquet
-LOCATION 'test_files/scratch/insert_to_external/external_parquet_table_q1'
+LOCATION 'test_files/scratch/insert_to_external/external_parquet_table_q1/'
 OPTIONS (create_local_path 'true');
 
 query TT
@@ -315,7 +370,7 @@ Dml: op=[Insert Into] table=[table_without_values]
 --------WindowAggr: windowExpr=[[SUM(CAST(aggregate_test_100.c4 AS Int64)) PARTITION BY [aggregate_test_100.c1] ORDER BY [aggregate_test_100.c9 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING, COUNT(UInt8(1)) PARTITION BY [aggregate_test_100.c1] ORDER BY [aggregate_test_100.c9 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING AS COUNT(*) PARTITION BY [aggregate_test_100.c1] ORDER BY [aggregate_test_100.c9 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING]]
 ----------TableScan: aggregate_test_100 projection=[c1, c4, c9]
 physical_plan
-InsertExec: sink=ParquetSink(writer_mode=PutMultipart, file_groups=[])
+FileSinkExec: sink=ParquetSink(file_groups=[])
 --ProjectionExec: expr=[SUM(aggregate_test_100.c4) PARTITION BY [aggregate_test_100.c1] ORDER BY [aggregate_test_100.c9 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING@0 as field1, COUNT(*) PARTITION BY [aggregate_test_100.c1] ORDER BY [aggregate_test_100.c9 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING@1 as field2]
 ----SortPreservingMergeExec: [c1@2 ASC NULLS LAST]
 ------ProjectionExec: expr=[SUM(aggregate_test_100.c4) PARTITION BY [aggregate_test_100.c1] ORDER BY [aggregate_test_100.c9 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING@3 as SUM(aggregate_test_100.c4) PARTITION BY [aggregate_test_100.c1] ORDER BY [aggregate_test_100.c9 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING, COUNT(*) PARTITION BY [aggregate_test_100.c1] ORDER BY [aggregate_test_100.c9 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING@4 as COUNT(*) PARTITION BY [aggregate_test_100.c1] ORDER BY [aggregate_test_100.c9 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING, c1@0 as c1]
@@ -362,7 +417,7 @@ statement ok
 CREATE EXTERNAL TABLE
 table_without_values(field1 BIGINT NULL, field2 BIGINT NULL)
 STORED AS parquet
-LOCATION 'test_files/scratch/insert_to_external/external_parquet_table_q2'
+LOCATION 'test_files/scratch/insert_to_external/external_parquet_table_q2/'
 OPTIONS (create_local_path 'true');
 
 query TT
@@ -378,7 +433,7 @@ Dml: op=[Insert Into] table=[table_without_values]
 ----WindowAggr: windowExpr=[[SUM(CAST(aggregate_test_100.c4 AS Int64)) PARTITION BY [aggregate_test_100.c1] ORDER BY [aggregate_test_100.c9 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING, COUNT(UInt8(1)) PARTITION BY [aggregate_test_100.c1] ORDER BY [aggregate_test_100.c9 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING AS COUNT(*) PARTITION BY [aggregate_test_100.c1] ORDER BY [aggregate_test_100.c9 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING]]
 ------TableScan: aggregate_test_100 projection=[c1, c4, c9]
 physical_plan
-InsertExec: sink=ParquetSink(writer_mode=PutMultipart, file_groups=[])
+FileSinkExec: sink=ParquetSink(file_groups=[])
 --CoalescePartitionsExec
 ----ProjectionExec: expr=[SUM(aggregate_test_100.c4) PARTITION BY [aggregate_test_100.c1] ORDER BY [aggregate_test_100.c9 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING@3 as field1, COUNT(*) PARTITION BY [aggregate_test_100.c1] ORDER BY [aggregate_test_100.c9 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING@4 as field2]
 ------BoundedWindowAggExec: wdw=[SUM(aggregate_test_100.c4) PARTITION BY [aggregate_test_100.c1] ORDER BY [aggregate_test_100.c9 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING: Ok(Field { name: "SUM(aggregate_test_100.c4) PARTITION BY [aggregate_test_100.c1] ORDER BY [aggregate_test_100.c9 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(1)), end_bound: Following(UInt64(1)) }, COUNT(*) PARTITION BY [aggregate_test_100.c1] ORDER BY [aggregate_test_100.c9 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING: Ok(Field { name: "COUNT(*) PARTITION BY [aggregate_test_100.c1] ORDER BY [aggregate_test_100.c9 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(1)), end_bound: Following(UInt64(1)) }], mode=[Sorted]
@@ -407,7 +462,7 @@ statement ok
 CREATE EXTERNAL TABLE
 table_without_values(c1 varchar NULL)
 STORED AS parquet
-LOCATION 'test_files/scratch/insert_to_external/external_parquet_table_q3'
+LOCATION 'test_files/scratch/insert_to_external/external_parquet_table_q3/'
 OPTIONS (create_local_path 'true');
 
 # verify that the sort order of the insert query is maintained into the
@@ -422,10 +477,9 @@ Dml: op=[Insert Into] table=[table_without_values]
 ----Sort: aggregate_test_100.c1 ASC NULLS LAST
 ------TableScan: aggregate_test_100 projection=[c1]
 physical_plan
-InsertExec: sink=ParquetSink(writer_mode=PutMultipart, file_groups=[])
---ProjectionExec: expr=[c1@0 as c1]
-----SortExec: expr=[c1@0 ASC NULLS LAST]
-------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1], has_header=true
+FileSinkExec: sink=ParquetSink(file_groups=[])
+--SortExec: expr=[c1@0 ASC NULLS LAST]
+----CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1], has_header=true
 
 query T
 insert into table_without_values select c1 from aggregate_test_100 order by c1;
@@ -447,7 +501,7 @@ statement ok
 CREATE EXTERNAL TABLE
 table_without_values(id BIGINT, name varchar)
 STORED AS parquet
-LOCATION 'test_files/scratch/insert_to_external/external_parquet_table_q4'
+LOCATION 'test_files/scratch/insert_to_external/external_parquet_table_q4/'
 OPTIONS (create_local_path 'true');
 
 query IT
@@ -469,14 +523,18 @@ insert into table_without_values(name, id) values(4, 'zoo');
 statement error Error during planning: Column count doesn't match insert query!
 insert into table_without_values(id) values(4, 'zoo');
 
-statement error Error during planning: Inserting query must have the same schema with the table.
+# insert NULL values for the missing column (name)
+query IT
 insert into table_without_values(id) values(4);
+----
+1
 
 query IT rowsort
 select * from table_without_values;
 ----
 1 foo
 2 bar
+4 NULL
 
 statement ok
 drop table table_without_values;
@@ -486,7 +544,7 @@ statement ok
 CREATE EXTERNAL TABLE
 table_without_values(field1 BIGINT NOT NULL, field2 BIGINT NULL)
 STORED AS parquet
-LOCATION 'test_files/scratch/insert_to_external/external_parquet_table_q5'
+LOCATION 'test_files/scratch/insert_to_external/external_parquet_table_q5/'
 OPTIONS (create_local_path 'true');
 
 query II
@@ -499,6 +557,16 @@ insert into table_without_values values(2, NULL);
 ----
 1
 
+# insert NULL values for the missing column (field2)
+query II
+insert into table_without_values(field1) values(3);
+----
+1
+
+# insert NULL values for the missing column (field1), but column is non-nullable
+statement error Execution error: Invalid batch column at '0' has null but schema specifies non-nullable
+insert into table_without_values(field2) values(300);
+
 statement error Execution error: Invalid batch column at '0' has null but schema specifies non-nullable
 insert into table_without_values values(NULL, 300);
 
@@ -510,6 +578,74 @@ select * from table_without_values;
 ----
 1 100
 2 NULL
+3 NULL
 
 statement ok
 drop table table_without_values;
+
+
+### Test for specifying column's default value
+
+statement ok
+CREATE EXTERNAL TABLE test_column_defaults(
+  a int,
+  b int not null default null,
+  c int default 100*2+300,
+  d text default lower('DEFAULT_TEXT'),
+  e timestamp default now()
+) STORED AS parquet
+LOCATION 'test_files/scratch/insert_to_external/external_parquet_table_q6/'
+OPTIONS (create_local_path 'true');
+
+# fill in all column values
+query IIITP
+insert into test_column_defaults values(1, 10, 100, 'ABC', now())
+----
+1
+
+statement error DataFusion error: Execution error: Invalid batch column at '1' has null but schema specifies non-nullable
+insert into test_column_defaults(a) values(2)
+
+query IIITP
+insert into test_column_defaults(b) values(20)
+----
+1
+
+query IIIT rowsort
+select a,b,c,d from test_column_defaults
+----
+1 10 100 ABC
+NULL 20 500 default_text
+
+# fill the timestamp column with default value `now()` again, it should be different from the previous one
+query IIITP
+insert into test_column_defaults(a, b, c, d) values(2, 20, 200, 'DEF')
+----
+1
+
+# Ensure that the default expression `now()` is evaluated during insertion, not optimized away.
+# Rows are inserted during different time, so their timestamp values should be different.
+query I rowsort
+select count(distinct e) from test_column_defaults
+----
+3
+
+# Expect all rows to be true as now() was inserted into the table
+query B rowsort
+select e < now() from test_column_defaults
+----
+true
+true
+true
+
+statement ok
+drop table test_column_defaults
+
+# test invalid default value
+statement error DataFusion error: Error during planning: Column reference is not allowed in the DEFAULT expression : Schema error: No field named a.
+CREATE EXTERNAL TABLE test_column_defaults(
+  a int,
+  b int default a+1
+) STORED AS parquet
+LOCATION 'test_files/scratch/insert_to_external/external_parquet_table_q7/'
+OPTIONS (create_local_path 'true');

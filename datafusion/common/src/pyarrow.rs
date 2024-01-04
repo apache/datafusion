@@ -54,7 +54,7 @@ impl FromPyArrow for ScalarValue {
 
 impl ToPyArrow for ScalarValue {
     fn to_pyarrow(&self, py: Python) -> PyResult<PyObject> {
-        let array = self.to_array();
+        let array = self.to_array()?;
         // convert to pyarrow array using C data interface
         let pyarray = array.to_data().to_pyarrow(py)?;
         let pyscalar = pyarray.call_method1(py, "__getitem__", (0,))?;
@@ -119,7 +119,7 @@ mod tests {
             ScalarValue::Boolean(Some(true)),
             ScalarValue::Int32(Some(23)),
             ScalarValue::Float64(Some(12.34)),
-            ScalarValue::Utf8(Some("Hello!".to_string())),
+            ScalarValue::from("Hello!"),
             ScalarValue::Date32(Some(1234)),
         ];
 

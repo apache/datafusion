@@ -39,14 +39,13 @@ use datafusion::prelude::JoinType;
 use datafusion::prelude::{CsvReadOptions, ParquetReadOptions};
 use datafusion::test_util::parquet_test_data;
 use datafusion::{assert_batches_eq, assert_batches_sorted_eq};
-use datafusion_common::{DataFusionError, ScalarValue, UnnestOptions};
+use datafusion_common::{assert_contains, DataFusionError, ScalarValue, UnnestOptions};
 use datafusion_execution::config::SessionConfig;
 use datafusion_expr::expr::{GroupingSet, Sort};
-use datafusion_expr::Expr::Wildcard;
 use datafusion_expr::{
     array_agg, avg, col, count, exists, expr, in_subquery, lit, max, out_ref_col,
-    scalar_subquery, sum, AggregateFunction, Expr, ExprSchemable, WindowFrame,
-    WindowFrameBound, WindowFrameUnits, WindowFunction,
+    scalar_subquery, sum, wildcard, AggregateFunction, Expr, ExprSchemable, WindowFrame,
+    WindowFrameBound, WindowFrameUnits, WindowFunctionDefinition,
 };
 use datafusion_physical_expr::var_provider::{VarProvider, VarType};
 
@@ -64,8 +63,8 @@ async fn test_count_wildcard_on_sort() -> Result<()> {
     let df_results = ctx
         .table("t1")
         .await?
-        .aggregate(vec![col("b")], vec![count(Wildcard)])?
-        .sort(vec![count(Wildcard).sort(true, false)])?
+        .aggregate(vec![col("b")], vec![count(wildcard())])?
+        .sort(vec![count(wildcard()).sort(true, false)])?
         .explain(false, false)?
         .collect()
         .await?;
@@ -99,8 +98,8 @@ async fn test_count_wildcard_on_where_in() -> Result<()> {
             Arc::new(
                 ctx.table("t2")
                     .await?
-                    .aggregate(vec![], vec![count(Expr::Wildcard)])?
-                    .select(vec![count(Expr::Wildcard)])?
+                    .aggregate(vec![], vec![count(wildcard())])?
+                    .select(vec![count(wildcard())])?
                     .into_unoptimized_plan(),
                 // Usually, into_optimized_plan() should be used here, but due to
                 // https://github.com/apache/arrow-datafusion/issues/5771,
@@ -136,8 +135,8 @@ async fn test_count_wildcard_on_where_exist() -> Result<()> {
         .filter(exists(Arc::new(
             ctx.table("t2")
                 .await?
-                .aggregate(vec![], vec![count(Expr::Wildcard)])?
-                .select(vec![count(Expr::Wildcard)])?
+                .aggregate(vec![], vec![count(wildcard())])?
+                .select(vec![count(wildcard())])?
                 .into_unoptimized_plan(),
             // Usually, into_optimized_plan() should be used here, but due to
             // https://github.com/apache/arrow-datafusion/issues/5771,
@@ -171,8 +170,8 @@ async fn test_count_wildcard_on_window() -> Result<()> {
         .table("t1")
         .await?
         .select(vec![Expr::WindowFunction(expr::WindowFunction::new(
-            WindowFunction::AggregateFunction(AggregateFunction::Count),
-            vec![Expr::Wildcard],
+            WindowFunctionDefinition::AggregateFunction(AggregateFunction::Count),
+            vec![wildcard()],
             vec![],
             vec![Expr::Sort(Sort::new(Box::new(col("a")), false, true))],
             WindowFrame {
@@ -202,17 +201,17 @@ async fn test_count_wildcard_on_aggregate() -> Result<()> {
     let sql_results = ctx
         .sql("select count(*) from t1")
         .await?
-        .select(vec![count(Expr::Wildcard)])?
+        .select(vec![count(wildcard())])?
         .explain(false, false)?
         .collect()
         .await?;
 
-    // add `.select(vec![count(Expr::Wildcard)])?` to make sure we can analyze all node instead of just top node.
+    // add `.select(vec![count(wildcard())])?` to make sure we can analyze all node instead of just top node.
     let df_results = ctx
         .table("t1")
         .await?
-        .aggregate(vec![], vec![count(Expr::Wildcard)])?
-        .select(vec![count(Expr::Wildcard)])?
+        .aggregate(vec![], vec![count(wildcard())])?
+        .select(vec![count(wildcard())])?
         .explain(false, false)?
         .collect()
         .await?;
@@ -248,8 +247,8 @@ async fn test_count_wildcard_on_where_scalar_subquery() -> Result<()> {
                 ctx.table("t2")
                     .await?
                     .filter(out_ref_col(DataType::UInt32, "t1.a").eq(col("t2.a")))?
-                    .aggregate(vec![], vec![count(Wildcard)])?
-                    .select(vec![col(count(Wildcard).to_string())])?
+                    .aggregate(vec![], vec![count(wildcard())])?
+                    .select(vec![col(count(wildcard()).to_string())])?
                     .into_unoptimized_plan(),
             ))
             .gt(lit(ScalarValue::UInt8(Some(0)))),
@@ -1320,6 +1319,113 @@ async fn unnest_array_agg() -> Result<()> {
         "+----------+--------+",
     ];
     assert_batches_sorted_eq!(expected, &results);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn unnest_with_redundant_columns() -> Result<()> {
+    let mut shape_id_builder = UInt32Builder::new();
+    let mut tag_id_builder = UInt32Builder::new();
+
+    for shape_id in 1..=3 {
+        for tag_id in 1..=3 {
+            shape_id_builder.append_value(shape_id as u32);
+            tag_id_builder.append_value((shape_id * 10 + tag_id) as u32);
+        }
+    }
+
+    let batch = RecordBatch::try_from_iter(vec![
+        ("shape_id", Arc::new(shape_id_builder.finish()) as ArrayRef),
+        ("tag_id", Arc::new(tag_id_builder.finish()) as ArrayRef),
+    ])?;
+
+    let ctx = SessionContext::new();
+    ctx.register_batch("shapes", batch)?;
+    let df = ctx.table("shapes").await?;
+
+    let results = df.clone().collect().await?;
+    let expected = vec![
+        "+----------+--------+",
+        "| shape_id | tag_id |",
+        "+----------+--------+",
+        "| 1        | 11     |",
+        "| 1        | 12     |",
+        "| 1        | 13     |",
+        "| 2        | 21     |",
+        "| 2        | 22     |",
+        "| 2        | 23     |",
+        "| 3        | 31     |",
+        "| 3        | 32     |",
+        "| 3        | 33     |",
+        "+----------+--------+",
+    ];
+    assert_batches_sorted_eq!(expected, &results);
+
+    // Doing an `array_agg` by `shape_id` produces:
+    let df = df
+        .clone()
+        .aggregate(
+            vec![col("shape_id")],
+            vec![array_agg(col("shape_id")).alias("shape_id2")],
+        )?
+        .unnest_column("shape_id2")?
+        .select(vec![col("shape_id")])?;
+
+    let optimized_plan = df.clone().into_optimized_plan()?;
+    let expected = vec![
+        "Projection: shapes.shape_id [shape_id:UInt32]",
+        "  Unnest: shape_id2 [shape_id:UInt32, shape_id2:UInt32;N]",
+        "    Aggregate: groupBy=[[shapes.shape_id]], aggr=[[ARRAY_AGG(shapes.shape_id) AS shape_id2]] [shape_id:UInt32, shape_id2:List(Field { name: \"item\", data_type: UInt32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} });N]",
+        "      TableScan: shapes projection=[shape_id] [shape_id:UInt32]",
+    ];
+
+    let formatted = optimized_plan.display_indent_schema().to_string();
+    let actual: Vec<&str> = formatted.trim().lines().collect();
+    assert_eq!(
+        expected, actual,
+        "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+    );
+
+    let results = df.collect().await?;
+    let expected = [
+        "+----------+",
+        "| shape_id |",
+        "+----------+",
+        "| 1        |",
+        "| 1        |",
+        "| 1        |",
+        "| 2        |",
+        "| 2        |",
+        "| 2        |",
+        "| 3        |",
+        "| 3        |",
+        "| 3        |",
+        "+----------+",
+    ];
+    assert_batches_sorted_eq!(expected, &results);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn unnest_analyze_metrics() -> Result<()> {
+    const NUM_ROWS: usize = 5;
+
+    let df = table_with_nested_types(NUM_ROWS).await?;
+    let results = df
+        .unnest_column("tags")?
+        .explain(false, true)?
+        .collect()
+        .await?;
+    let formatted = arrow::util::pretty::pretty_format_batches(&results)
+        .unwrap()
+        .to_string();
+    assert_contains!(&formatted, "elapsed_compute=");
+    assert_contains!(&formatted, "input_batches=1");
+    assert_contains!(&formatted, "input_rows=5");
+    assert_contains!(&formatted, "output_rows=10");
+    assert_contains!(&formatted, "output_batches=1");
 
     Ok(())
 }

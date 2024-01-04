@@ -55,6 +55,7 @@ ahash = { version = "0.8", default-features = false, features = ["runtime-rng"] 
 apache-avro = { version = "0.16", optional = true }
 arrow = { workspace = true }
 arrow-array = { workspace = true }
+arrow-ipc = { workspace = true }
 arrow-schema = { workspace = true }
 async-compression = { version = "0.4.0", features = ["bzip2", "gzip", "xz", "zstd", "futures-io", "tokio"], optional = true }
 async-trait = { workspace = true }
@@ -62,11 +63,11 @@ bytes = { workspace = true }
 bzip2 = { version = "0.4.3", optional = true }
 chrono = { workspace = true }
 dashmap = { workspace = true }
-datafusion-common = { path = "../common", version = "33.0.0", features = ["object_store"], default-features = false }
+datafusion-common = { path = "../common", version = "34.0.0", features = ["object_store"], default-features = false }
 datafusion-execution = { workspace = true }
 datafusion-expr = { workspace = true }
-datafusion-optimizer = { path = "../optimizer", version = "33.0.0", default-features = false }
-datafusion-physical-expr = { path = "../physical-expr", version = "33.0.0", default-features = false }
+datafusion-optimizer = { path = "../optimizer", version = "34.0.0", default-features = false }
+datafusion-physical-expr = { path = "../physical-expr", version = "34.0.0", default-features = false }
 datafusion-physical-plan = { workspace = true }
 datafusion-sql = { workspace = true }
 flate2 = { version = "1.0.24", optional = true }
@@ -81,7 +82,7 @@ num-traits = { version = "0.2", optional = true }
 num_cpus = { workspace = true }
 object_store = { workspace = true }
 parking_lot = { workspace = true }
-parquet = { workspace = true, optional = true }
+parquet = { workspace = true, optional = true, default-features = true }
 pin-project-lite = "^0.2.7"
 rand = { workspace = true }
 sqlparser = { workspace = true }
@@ -119,6 +120,10 @@ nix = { version = "0.27.1", features = ["fs"] }
 [[bench]]
 harness = false
 name = "aggregate_query_sql"
+
+[[bench]]
+harness = false
+name = "distinct_query_sql"
 
 [[bench]]
 harness = false
@@ -163,3 +168,7 @@ name = "sort"
 [[bench]]
 harness = false
 name = "topk_aggregate"
+
+[[bench]]
+harness = false
+name = "array_expression"

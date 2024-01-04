@@ -37,7 +37,7 @@ pub fn nullif_func(args: &[ColumnarValue]) -> Result<ColumnarValue> {
 
     match (lhs, rhs) {
         (ColumnarValue::Array(lhs), ColumnarValue::Scalar(rhs)) => {
-            let rhs = rhs.to_scalar();
+            let rhs = rhs.to_scalar()?;
             let array = nullif(lhs, &eq(&lhs, &rhs)?)?;
 
             Ok(ColumnarValue::Array(array))
@@ -47,7 +47,7 @@ pub fn nullif_func(args: &[ColumnarValue]) -> Result<ColumnarValue> {
             Ok(ColumnarValue::Array(array))
         }
         (ColumnarValue::Scalar(lhs), ColumnarValue::Array(rhs)) => {
-            let lhs = lhs.to_array_of_size(rhs.len());
+            let lhs = lhs.to_array_of_size(rhs.len())?;
             let array = nullif(&lhs, &eq(&lhs, &rhs)?)?;
             Ok(ColumnarValue::Array(array))
         }
@@ -89,7 +89,7 @@ mod tests {
         let lit_array = ColumnarValue::Scalar(ScalarValue::Int32(Some(2i32)));
 
         let result = nullif_func(&[a, lit_array])?;
-        let result = result.into_array(0);
+        let result = result.into_array(0).expect("Failed to convert to array");
 
         let expected = Arc::new(Int32Array::from(vec![
             Some(1),
@@ -115,7 +115,7 @@ mod tests {
         let lit_array = ColumnarValue::Scalar(ScalarValue::Int32(Some(1i32)));
 
         let result = nullif_func(&[a, lit_array])?;
-        let result = result.into_array(0);
+        let result = result.into_array(0).expect("Failed to convert to array");
 
         let expected = Arc::new(Int32Array::from(vec![
             None,
@@ -140,7 +140,7 @@ mod tests {
         let lit_array = ColumnarValue::Scalar(ScalarValue::Boolean(Some(false)));
 
         let result = nullif_func(&[a, lit_array])?;
-        let result = result.into_array(0);
+        let result = result.into_array(0).expect("Failed to convert to array");
 
         let expected =
             Arc::new(BooleanArray::from(vec![Some(true), None, None])) as ArrayRef;
@@ -154,10 +154,10 @@ mod tests {
         let a = StringArray::from(vec![Some("foo"), Some("bar"), None, Some("baz")]);
         let a = ColumnarValue::Array(Arc::new(a));
 
-        let lit_array = ColumnarValue::Scalar(ScalarValue::Utf8(Some("bar".to_string())));
+        let lit_array = ColumnarValue::Scalar(ScalarValue::from("bar"));
 
         let result = nullif_func(&[a, lit_array])?;
-        let result = result.into_array(0);
+        let result = result.into_array(0).expect("Failed to convert to array");
 
         let expected = Arc::new(StringArray::from(vec![
             Some("foo"),
@@ -178,7 +178,7 @@ mod tests {
         let lit_array = ColumnarValue::Scalar(ScalarValue::Int32(Some(2i32)));
 
         let result = nullif_func(&[lit_array, a])?;
-        let result = result.into_array(0);
+        let result = result.into_array(0).expect("Failed to convert to array");
 
         let expected = Arc::new(Int32Array::from(vec![
             Some(2),
@@ -198,7 +198,7 @@ mod tests {
         let b_eq = ColumnarValue::Scalar(ScalarValue::Int32(Some(2i32)));
 
         let result_eq = nullif_func(&[a_eq, b_eq])?;
-        let result_eq = result_eq.into_array(1);
+        let result_eq = result_eq.into_array(1).expect("Failed to convert to array");
 
         let expected_eq = Arc::new(Int32Array::from(vec![None])) as ArrayRef;
 
@@ -208,7 +208,9 @@ mod tests {
         let b_neq = ColumnarValue::Scalar(ScalarValue::Int32(Some(1i32)));
 
         let result_neq = nullif_func(&[a_neq, b_neq])?;
-        let result_neq = result_neq.into_array(1);
+        let result_neq = result_neq
+            .into_array(1)
+            .expect("Failed to convert to array");
 
         let expected_neq = Arc::new(Int32Array::from(vec![Some(2i32)])) as ArrayRef;
         assert_eq!(expected_neq.as_ref(), result_neq.as_ref());

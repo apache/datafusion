@@ -32,8 +32,8 @@ use crate::expr_rewriter::{
     rewrite_sort_cols_by_aggs,
 };
 use crate::logical_plan::{
-    Aggregate, Analyze, CrossJoin, Distinct, EmptyRelation, Explain, Filter, Join,
-    JoinConstraint, JoinType, Limit, LogicalPlan, Partitioning, PlanType, Prepare,
+    Aggregate, Analyze, CrossJoin, Distinct, DistinctOn, EmptyRelation, Explain, Filter,
+    Join, JoinConstraint, JoinType, Limit, LogicalPlan, Partitioning, PlanType, Prepare,
     Projection, Repartition, Sort, SubqueryAlias, TableScan, Union, Unnest, Values,
     Window,
 };
@@ -50,9 +50,9 @@ use crate::{
 use arrow::datatypes::{DataType, Schema, SchemaRef};
 use datafusion_common::display::ToStringifiedPlan;
 use datafusion_common::{
-    plan_datafusion_err, plan_err, Column, DFField, DFSchema, DFSchemaRef,
-    DataFusionError, FileType, OwnedTableReference, Result, ScalarValue, TableReference,
-    ToDFSchema, UnnestOptions,
+    get_target_functional_dependencies, plan_datafusion_err, plan_err, Column, DFField,
+    DFSchema, DFSchemaRef, DataFusionError, FileType, OwnedTableReference, Result,
+    ScalarValue, TableReference, ToDFSchema, UnnestOptions,
 };
 
 /// Default table name for unnamed table
@@ -292,7 +292,7 @@ impl LogicalPlanBuilder {
         window_exprs: Vec<Expr>,
     ) -> Result<LogicalPlan> {
         let mut plan = input;
-        let mut groups = group_window_expr_by_sort_keys(&window_exprs)?;
+        let mut groups = group_window_expr_by_sort_keys(window_exprs)?;
         // To align with the behavior of PostgreSQL, we want the sort_keys sorted as same rule as PostgreSQL that first
         // we compare the sort key themselves and if one window's sort keys are a prefix of another
         // put the window with more sort keys first. so more deeply sorted plans gets nested further down as children.
@@ -314,7 +314,7 @@ impl LogicalPlanBuilder {
             key_b.len().cmp(&key_a.len())
         });
         for (_, exprs) in groups {
-            let window_exprs = exprs.into_iter().cloned().collect::<Vec<_>>();
+            let window_exprs = exprs.into_iter().collect::<Vec<_>>();
             // Partition and sorting is done at physical level, see the EnforceDistribution
             // and EnforceSorting rules.
             plan = LogicalPlanBuilder::from(plan)
@@ -445,7 +445,7 @@ impl LogicalPlanBuilder {
                         )
                     })
                     .collect::<Result<Vec<_>>>()?;
-                curr_plan.with_new_inputs(&new_inputs)
+                curr_plan.with_new_exprs(curr_plan.expressions(), &new_inputs)
             }
         }
     }
@@ -551,16 +551,29 @@ impl LogicalPlanBuilder {
         let left_plan: LogicalPlan = self.plan;
         let right_plan: LogicalPlan = plan;
 
-        Ok(Self::from(LogicalPlan::Distinct(Distinct {
-            input: Arc::new(union(left_plan, right_plan)?),
-        })))
+        Ok(Self::from(LogicalPlan::Distinct(Distinct::All(Arc::new(
+            union(left_plan, right_plan)?,
+        )))))
     }
 
     /// Apply deduplication: Only distinct (different) values are returned)
     pub fn distinct(self) -> Result<Self> {
-        Ok(Self::from(LogicalPlan::Distinct(Distinct {
-            input: Arc::new(self.plan),
-        })))
+        Ok(Self::from(LogicalPlan::Distinct(Distinct::All(Arc::new(
+            self.plan,
+        )))))
+    }
+
+    /// Project first values of the specified expression list according to the provided
+    /// sorting expressions grouped by the `DISTINCT ON` clause expressions.
+    pub fn distinct_on(
+        self,
+        on_expr: Vec<Expr>,
+        select_expr: Vec<Expr>,
+        sort_expr: Option<Vec<Expr>>,
+    ) -> Result<Self> {
+        Ok(Self::from(LogicalPlan::Distinct(Distinct::On(
+            DistinctOn::try_new(on_expr, select_expr, sort_expr, Arc::new(self.plan))?,
+        ))))
     }
 
     /// Apply a join to `right` using explicitly specified columns and an
@@ -893,6 +906,9 @@ impl LogicalPlanBuilder {
     ) -> Result<Self> {
         let group_expr = normalize_cols(group_expr, &self.plan)?;
         let aggr_expr = normalize_cols(aggr_expr, &self.plan)?;
+
+        let group_expr =
+            add_group_by_exprs_from_dependencies(group_expr, self.plan.schema())?;
         Aggregate::try_new(Arc::new(self.plan), group_expr, aggr_expr)
             .map(LogicalPlan::Aggregate)
             .map(Self::from)
@@ -1153,10 +1169,46 @@ pub fn build_join_schema(
     );
     let mut metadata = left.metadata().clone();
     metadata.extend(right.metadata().clone());
-    DFSchema::new_with_metadata(fields, metadata)
-        .map(|schema| schema.with_functional_dependencies(func_dependencies))
+    let schema = DFSchema::new_with_metadata(fields, metadata)?;
+    schema.with_functional_dependencies(func_dependencies)
 }
 
+/// Add additional "synthetic" group by expressions based on functional
+/// dependencies.
+///
+/// For example, if we are grouping on `[c1]`, and we know from
+/// functional dependencies that column `c1` determines `c2`, this function
+/// adds `c2` to the group by list.
+///
+/// This allows MySQL style selects like
+/// `SELECT col FROM t WHERE pk = 5` if col is unique
+fn add_group_by_exprs_from_dependencies(
+    mut group_expr: Vec<Expr>,
+    schema: &DFSchemaRef,
+) -> Result<Vec<Expr>> {
+    // Names of the fields produced by the GROUP BY exprs for example, `GROUP BY
+    // c1 + 1` produces an output field named `"c1 + 1"`
+    let mut group_by_field_names = group_expr
+        .iter()
+        .map(|e| e.display_name())
+        .collect::<Result<Vec<_>>>()?;
+
+    if let Some(target_indices) =
+        get_target_functional_dependencies(schema, &group_by_field_names)
+    {
+        for idx in target_indices {
+            let field = schema.field(idx);
+            let expr =
+                Expr::Column(Column::new(field.qualifier().cloned(), field.name()));
+            let expr_name = expr.display_name()?;
+            if !group_by_field_names.contains(&expr_name) {
+                group_by_field_names.push(expr_name);
+                group_expr.push(expr);
+            }
+        }
+    }
+    Ok(group_expr)
+}
 /// Errors if one or more expressions have equal names.
 pub(crate) fn validate_unique_names<'a>(
     node_name: &str,
@@ -1287,11 +1339,16 @@ pub fn project(
     for e in expr {
         let e = e.into();
         match e {
-            Expr::Wildcard => {
+            Expr::Wildcard { qualifier: None } => {
                 projected_expr.extend(expand_wildcard(input_schema, &plan, None)?)
             }
-            Expr::QualifiedWildcard { ref qualifier } => projected_expr
-                .extend(expand_qualified_wildcard(qualifier, input_schema, None)?),
+            Expr::Wildcard {
+                qualifier: Some(qualifier),
+            } => projected_expr.extend(expand_qualified_wildcard(
+                &qualifier,
+                input_schema,
+                None,
+            )?),
             _ => projected_expr
                 .push(columnize_expr(normalize_col(e, &plan)?, input_schema)),
         }
@@ -1306,7 +1363,7 @@ pub fn subquery_alias(
     plan: LogicalPlan,
     alias: impl Into<OwnedTableReference>,
 ) -> Result<LogicalPlan> {
-    SubqueryAlias::try_new(plan, alias).map(LogicalPlan::SubqueryAlias)
+    SubqueryAlias::try_new(Arc::new(plan), alias).map(LogicalPlan::SubqueryAlias)
 }
 
 /// Create a LogicalPlanBuilder representing a scan of a table with the provided name and schema.
@@ -1473,7 +1530,7 @@ pub fn unnest_with_options(
     let df_schema = DFSchema::new_with_metadata(fields, metadata)?;
     // We can use the existing functional dependencies:
     let deps = input_schema.functional_dependencies().clone();
-    let schema = Arc::new(df_schema.with_functional_dependencies(deps));
+    let schema = Arc::new(df_schema.with_functional_dependencies(deps)?);
 
     Ok(LogicalPlan::Unnest(Unnest {
         input: Arc::new(input),
@@ -1590,7 +1647,7 @@ mod tests {
 
         let plan = table_scan(Some("t1"), &employee_schema(), None)?
             .join_using(t2, JoinType::Inner, vec!["id"])?
-            .project(vec![Expr::Wildcard])?
+            .project(vec![Expr::Wildcard { qualifier: None }])?
             .build()?;
 
         // id column should only show up once in projection

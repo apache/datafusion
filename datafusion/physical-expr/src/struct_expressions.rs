@@ -18,8 +18,8 @@
 //! Struct expressions
 
 use arrow::array::*;
-use arrow::datatypes::{DataType, Field};
-use datafusion_common::{exec_err, not_impl_err, DataFusionError, Result};
+use arrow::datatypes::Field;
+use datafusion_common::{exec_err, DataFusionError, Result};
 use datafusion_expr::ColumnarValue;
 use std::sync::Arc;
 
@@ -34,31 +34,14 @@ fn array_struct(args: &[ArrayRef]) -> Result<ArrayRef> {
         .enumerate()
         .map(|(i, arg)| {
             let field_name = format!("c{i}");
-            match arg.data_type() {
-                DataType::Utf8
-                | DataType::LargeUtf8
-                | DataType::Boolean
-                | DataType::Float32
-                | DataType::Float64
-                | DataType::Int8
-                | DataType::Int16
-                | DataType::Int32
-                | DataType::Int64
-                | DataType::UInt8
-                | DataType::UInt16
-                | DataType::UInt32
-                | DataType::UInt64 => Ok((
-                    Arc::new(Field::new(
-                        field_name.as_str(),
-                        arg.data_type().clone(),
-                        true,
-                    )),
-                    arg.clone(),
+            Ok((
+                Arc::new(Field::new(
+                    field_name.as_str(),
+                    arg.data_type().clone(),
+                    true,
                 )),
-                data_type => {
-                    not_impl_err!("Struct is not implemented for type '{data_type:?}'.")
-                }
-            }
+                arg.clone(),
+            ))
         })
         .collect::<Result<Vec<_>>>()?;
 
@@ -67,13 +50,15 @@ fn array_struct(args: &[ArrayRef]) -> Result<ArrayRef> {
 
 /// put values in a struct array.
 pub fn struct_expr(values: &[ColumnarValue]) -> Result<ColumnarValue> {
-    let arrays: Vec<ArrayRef> = values
+    let arrays = values
         .iter()
-        .map(|x| match x {
-            ColumnarValue::Array(array) => array.clone(),
-            ColumnarValue::Scalar(scalar) => scalar.to_array().clone(),
+        .map(|x| {
+            Ok(match x {
+                ColumnarValue::Array(array) => array.clone(),
+                ColumnarValue::Scalar(scalar) => scalar.to_array()?.clone(),
+            })
         })
-        .collect();
+        .collect::<Result<Vec<ArrayRef>>>()?;
     Ok(ColumnarValue::Array(array_struct(arrays.as_slice())?))
 }
 
@@ -93,7 +78,8 @@ mod tests {
         ];
         let struc = struct_expr(&args)
             .expect("failed to initialize function struct")
-            .into_array(1);
+            .into_array(1)
+            .expect("Failed to convert to array");
         let result =
             as_struct_array(&struc).expect("failed to initialize function struct");
         assert_eq!(

@@ -23,27 +23,7 @@ mod parquet;
 use std::any::Any;
 use std::sync::Arc;
 
-use arrow::array::{Array, ArrayRef, Int64Array, StringArray};
-use arrow::compute::{cast, concat};
-use arrow::csv::WriterBuilder;
-use arrow::datatypes::{DataType, Field};
-use async_trait::async_trait;
-use datafusion_common::file_options::csv_writer::CsvWriterOptions;
-use datafusion_common::file_options::json_writer::JsonWriterOptions;
-use datafusion_common::parsers::CompressionTypeVariant;
-use datafusion_common::{
-    DataFusionError, FileType, FileTypeWriterOptions, SchemaError, UnnestOptions,
-};
-use datafusion_expr::dml::CopyOptions;
-
-use datafusion_common::{Column, DFSchema, ScalarValue};
-use datafusion_expr::{
-    avg, count, is_null, max, median, min, stddev, utils::COUNT_STAR_EXPANSION,
-    TableProviderFilterPushDown, UNNAMED_TABLE,
-};
-
-use crate::arrow::datatypes::Schema;
-use crate::arrow::datatypes::SchemaRef;
+use crate::arrow::datatypes::{Schema, SchemaRef};
 use crate::arrow::record_batch::RecordBatch;
 use crate::arrow::util::pretty;
 use crate::datasource::{provider_as_source, MemTable, TableProvider};
@@ -52,14 +32,34 @@ use crate::execution::{
     context::{SessionState, TaskContext},
     FunctionRegistry,
 };
+use crate::logical_expr::utils::find_window_exprs;
 use crate::logical_expr::{
-    col, utils::find_window_exprs, Expr, JoinType, LogicalPlan, LogicalPlanBuilder,
-    Partitioning, TableType,
+    col, Expr, JoinType, LogicalPlan, LogicalPlanBuilder, Partitioning, TableType,
 };
-use crate::physical_plan::SendableRecordBatchStream;
-use crate::physical_plan::{collect, collect_partitioned};
-use crate::physical_plan::{execute_stream, execute_stream_partitioned, ExecutionPlan};
+use crate::physical_plan::{
+    collect, collect_partitioned, execute_stream, execute_stream_partitioned,
+    ExecutionPlan, SendableRecordBatchStream,
+};
 use crate::prelude::SessionContext;
+
+use arrow::array::{Array, ArrayRef, Int64Array, StringArray};
+use arrow::compute::{cast, concat};
+use arrow::csv::WriterBuilder;
+use arrow::datatypes::{DataType, Field};
+use datafusion_common::file_options::csv_writer::CsvWriterOptions;
+use datafusion_common::file_options::json_writer::JsonWriterOptions;
+use datafusion_common::parsers::CompressionTypeVariant;
+use datafusion_common::{
+    Column, DFSchema, DataFusionError, FileType, FileTypeWriterOptions, ParamValues,
+    SchemaError, UnnestOptions,
+};
+use datafusion_expr::dml::CopyOptions;
+use datafusion_expr::{
+    avg, count, is_null, max, median, min, stddev, utils::COUNT_STAR_EXPANSION,
+    TableProviderFilterPushDown, UNNAMED_TABLE,
+};
+
+use async_trait::async_trait;
 
 /// Contains options that control how data is
 /// written out from a DataFrame
@@ -1013,11 +1013,16 @@ impl DataFrame {
         ))
     }
 
-    /// Write this DataFrame to the referenced table
+    /// Write this DataFrame to the referenced table by name.
     /// This method uses on the same underlying implementation
-    /// as the SQL Insert Into statement.
-    /// Unlike most other DataFrame methods, this method executes
-    /// eagerly, writing data, and returning the count of rows written.
+    /// as the SQL Insert Into statement. Unlike most other DataFrame methods,
+    /// this method executes eagerly. Data is written to the table using an
+    /// execution plan returned by the [TableProvider]'s insert_into method.
+    /// Refer to the documentation of the specific [TableProvider] to determine
+    /// the expected data returned by the insert_into plan via this method.
+    /// For the built in ListingTable provider, a single [RecordBatch] containing
+    /// a single column and row representing the count of total rows written
+    /// is returned.
     pub async fn write_table(
         self,
         table_name: &str,
@@ -1227,11 +1232,32 @@ impl DataFrame {
     ///  ],
     ///  &results
     /// );
+    /// // Note you can also provide named parameters
+    /// let results = ctx
+    ///   .sql("SELECT a FROM example WHERE b = $my_param")
+    ///   .await?
+    ///    // replace $my_param with value 2
+    ///    // Note you can also use a HashMap as well
+    ///   .with_param_values(vec![
+    ///       ("my_param", ScalarValue::from(2i64))
+    ///    ])?
+    ///   .collect()
+    ///   .await?;
+    /// assert_batches_eq!(
+    ///  &[
+    ///    "+---+",
+    ///    "| a |",
+    ///    "+---+",
+    ///    "| 1 |",
+    ///    "+---+",
+    ///  ],
+    ///  &results
+    /// );
     /// # Ok(())
     /// # }
     /// ```
-    pub fn with_param_values(self, param_values: Vec<ScalarValue>) -> Result<Self> {
-        let plan = self.plan.with_param_values(param_values)?;
+    pub fn with_param_values(self, query_values: impl Into<ParamValues>) -> Result<Self> {
+        let plan = self.plan.with_param_values(query_values)?;
         Ok(Self::new(self.session_state, plan))
     }
 
@@ -1250,11 +1276,12 @@ impl DataFrame {
     /// ```
     pub async fn cache(self) -> Result<DataFrame> {
         let context = SessionContext::new_with_state(self.session_state.clone());
-        let mem_table = MemTable::try_new(
-            SchemaRef::from(self.schema().clone()),
-            self.collect_partitioned().await?,
-        )?;
-
+        // The schema is consistent with the output
+        let plan = self.clone().create_physical_plan().await?;
+        let schema = plan.schema();
+        let task_ctx = Arc::new(self.task_ctx());
+        let partitions = collect_partitioned(plan, task_ctx).await?;
+        let mem_table = MemTable::try_new(schema, partitions)?;
         context.read_table(Arc::new(mem_table))
     }
 }
@@ -1321,24 +1348,144 @@ impl TableProvider for DataFrameTableProvider {
 mod tests {
     use std::vec;
 
-    use arrow::array::Int32Array;
-    use arrow::datatypes::DataType;
-
-    use datafusion_expr::{
-        avg, cast, count, count_distinct, create_udf, expr, lit, max, min, sum,
-        BuiltInWindowFunction, ScalarFunctionImplementation, Volatility, WindowFrame,
-        WindowFunction,
-    };
-    use datafusion_physical_expr::expressions::Column;
-
+    use super::*;
     use crate::execution::context::SessionConfig;
-    use crate::physical_plan::ColumnarValue;
-    use crate::physical_plan::Partitioning;
-    use crate::physical_plan::PhysicalExpr;
+    use crate::physical_plan::{ColumnarValue, Partitioning, PhysicalExpr};
     use crate::test_util::{register_aggregate_csv, test_table, test_table_with_name};
     use crate::{assert_batches_sorted_eq, execution::context::SessionContext};
 
-    use super::*;
+    use arrow::array::{self, Int32Array};
+    use arrow::datatypes::DataType;
+    use datafusion_common::{Constraint, Constraints};
+    use datafusion_expr::{
+        avg, cast, count, count_distinct, create_udf, expr, lit, max, min, sum,
+        BuiltInWindowFunction, ScalarFunctionImplementation, Volatility, WindowFrame,
+        WindowFunctionDefinition,
+    };
+    use datafusion_physical_expr::expressions::Column;
+    use datafusion_physical_plan::get_plan_string;
+
+    // Get string representation of the plan
+    async fn assert_physical_plan(df: &DataFrame, expected: Vec<&str>) {
+        let physical_plan = df
+            .clone()
+            .create_physical_plan()
+            .await
+            .expect("Error creating physical plan");
+
+        let actual = get_plan_string(&physical_plan);
+        assert_eq!(
+            expected, actual,
+            "\n**Optimized Plan Mismatch\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+        );
+    }
+
+    pub fn table_with_constraints() -> Arc<dyn TableProvider> {
+        let dual_schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("name", DataType::Utf8, false),
+        ]));
+        let batch = RecordBatch::try_new(
+            dual_schema.clone(),
+            vec![
+                Arc::new(array::Int32Array::from(vec![1])),
+                Arc::new(array::StringArray::from(vec!["a"])),
+            ],
+        )
+        .unwrap();
+        let provider = MemTable::try_new(dual_schema, vec![vec![batch]])
+            .unwrap()
+            .with_constraints(Constraints::new_unverified(vec![Constraint::PrimaryKey(
+                vec![0],
+            )]));
+        Arc::new(provider)
+    }
+
+    async fn assert_logical_expr_schema_eq_physical_expr_schema(
+        df: DataFrame,
+    ) -> Result<()> {
+        let logical_expr_dfschema = df.schema();
+        let logical_expr_schema = SchemaRef::from(logical_expr_dfschema.to_owned());
+        let batches = df.collect().await?;
+        let physical_expr_schema = batches[0].schema();
+        assert_eq!(logical_expr_schema, physical_expr_schema);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_array_agg_ord_schema() -> Result<()> {
+        let ctx = SessionContext::new();
+
+        let create_table_query = r#"
+            CREATE TABLE test_table (
+                "double_field" DOUBLE,
+                "string_field" VARCHAR
+            ) AS VALUES
+                (1.0, 'a'),
+                (2.0, 'b'),
+                (3.0, 'c')
+        "#;
+        ctx.sql(create_table_query).await?;
+
+        let query = r#"SELECT
+        array_agg("double_field" ORDER BY "string_field") as "double_field",
+        array_agg("string_field" ORDER BY "string_field") as "string_field"
+    FROM test_table"#;
+
+        let result = ctx.sql(query).await?;
+        assert_logical_expr_schema_eq_physical_expr_schema(result).await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_array_agg_schema() -> Result<()> {
+        let ctx = SessionContext::new();
+
+        let create_table_query = r#"
+            CREATE TABLE test_table (
+                "double_field" DOUBLE,
+                "string_field" VARCHAR
+            ) AS VALUES
+                (1.0, 'a'),
+                (2.0, 'b'),
+                (3.0, 'c')
+        "#;
+        ctx.sql(create_table_query).await?;
+
+        let query = r#"SELECT
+        array_agg("double_field") as "double_field",
+        array_agg("string_field") as "string_field"
+    FROM test_table"#;
+
+        let result = ctx.sql(query).await?;
+        assert_logical_expr_schema_eq_physical_expr_schema(result).await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_array_agg_distinct_schema() -> Result<()> {
+        let ctx = SessionContext::new();
+
+        let create_table_query = r#"
+            CREATE TABLE test_table (
+                "double_field" DOUBLE,
+                "string_field" VARCHAR
+            ) AS VALUES
+                (1.0, 'a'),
+                (2.0, 'b'),
+                (2.0, 'a')
+        "#;
+        ctx.sql(create_table_query).await?;
+
+        let query = r#"SELECT
+        array_agg(distinct "double_field") as "double_field",
+        array_agg(distinct "string_field") as "string_field"
+    FROM test_table"#;
+
+        let result = ctx.sql(query).await?;
+        assert_logical_expr_schema_eq_physical_expr_schema(result).await?;
+        Ok(())
+    }
 
     #[tokio::test]
     async fn select_columns() -> Result<()> {
@@ -1378,7 +1525,9 @@ mod tests {
         // build plan using Table API
         let t = test_table().await?;
         let first_row = Expr::WindowFunction(expr::WindowFunction::new(
-            WindowFunction::BuiltInWindowFunction(BuiltInWindowFunction::FirstValue),
+            WindowFunctionDefinition::BuiltInWindowFunction(
+                BuiltInWindowFunction::FirstValue,
+            ),
             vec![col("aggregate_test_100.c1")],
             vec![col("aggregate_test_100.c2")],
             vec![],
@@ -1444,6 +1593,223 @@ mod tests {
                 "| e  | 0.01479305307777301         | 0.9965400387585364          | 0.48600669271341534         | 10.206140546981722          | 21                            | 21                                     |",
                 "+----+-----------------------------+-----------------------------+-----------------------------+-----------------------------+-------------------------------+----------------------------------------+"],
             &df
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_aggregate_with_pk() -> Result<()> {
+        // create the dataframe
+        let config = SessionConfig::new().with_target_partitions(1);
+        let ctx = SessionContext::new_with_config(config);
+
+        let df = ctx.read_table(table_with_constraints())?;
+
+        // GROUP BY id
+        let group_expr = vec![col("id")];
+        let aggr_expr = vec![];
+        let df = df.aggregate(group_expr, aggr_expr)?;
+
+        // Since id and name are functionally dependant, we can use name among
+        // expression even if it is not part of the group by expression and can
+        // select "name" column even though it wasn't explicitly grouped
+        let df = df.select(vec![col("id"), col("name")])?;
+        assert_physical_plan(
+            &df,
+            vec![
+                "AggregateExec: mode=Single, gby=[id@0 as id, name@1 as name], aggr=[]",
+                "  MemoryExec: partitions=1, partition_sizes=[1]",
+            ],
+        )
+        .await;
+
+        let df_results = df.collect().await?;
+
+        #[rustfmt::skip]
+        assert_batches_sorted_eq!([
+             "+----+------+",
+             "| id | name |",
+             "+----+------+",
+             "| 1  | a    |",
+             "+----+------+"
+            ],
+            &df_results
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_aggregate_with_pk2() -> Result<()> {
+        // create the dataframe
+        let config = SessionConfig::new().with_target_partitions(1);
+        let ctx = SessionContext::new_with_config(config);
+
+        let df = ctx.read_table(table_with_constraints())?;
+
+        // GROUP BY id
+        let group_expr = vec![col("id")];
+        let aggr_expr = vec![];
+        let df = df.aggregate(group_expr, aggr_expr)?;
+
+        // Predicate refers to id, and name fields:
+        // id = 1 AND name = 'a'
+        let predicate = col("id").eq(lit(1i32)).and(col("name").eq(lit("a")));
+        let df = df.filter(predicate)?;
+        assert_physical_plan(
+            &df,
+            vec![
+            "CoalesceBatchesExec: target_batch_size=8192",
+            "  FilterExec: id@0 = 1 AND name@1 = a",
+            "    AggregateExec: mode=Single, gby=[id@0 as id, name@1 as name], aggr=[]",
+            "      MemoryExec: partitions=1, partition_sizes=[1]",
+        ],
+        )
+        .await;
+
+        // Since id and name are functionally dependant, we can use name among expression
+        // even if it is not part of the group by expression.
+        let df_results = df.collect().await?;
+
+        #[rustfmt::skip]
+        assert_batches_sorted_eq!(
+            ["+----+------+",
+             "| id | name |",
+             "+----+------+",
+             "| 1  | a    |",
+             "+----+------+",],
+            &df_results
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_aggregate_with_pk3() -> Result<()> {
+        // create the dataframe
+        let config = SessionConfig::new().with_target_partitions(1);
+        let ctx = SessionContext::new_with_config(config);
+
+        let df = ctx.read_table(table_with_constraints())?;
+
+        // GROUP BY id
+        let group_expr = vec![col("id")];
+        let aggr_expr = vec![];
+        // group by id,
+        let df = df.aggregate(group_expr, aggr_expr)?;
+
+        // Predicate refers to id field
+        // id = 1
+        let predicate = col("id").eq(lit(1i32));
+        let df = df.filter(predicate)?;
+        // Select expression refers to id, and name columns.
+        // id, name
+        let df = df.select(vec![col("id"), col("name")])?;
+        assert_physical_plan(
+            &df,
+            vec![
+            "CoalesceBatchesExec: target_batch_size=8192",
+            "  FilterExec: id@0 = 1",
+            "    AggregateExec: mode=Single, gby=[id@0 as id, name@1 as name], aggr=[]",
+            "      MemoryExec: partitions=1, partition_sizes=[1]",
+        ],
+        )
+        .await;
+
+        // Since id and name are functionally dependant, we can use name among expression
+        // even if it is not part of the group by expression.
+        let df_results = df.collect().await?;
+
+        #[rustfmt::skip]
+        assert_batches_sorted_eq!(
+            ["+----+------+",
+             "| id | name |",
+             "+----+------+",
+             "| 1  | a    |",
+             "+----+------+",],
+            &df_results
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_aggregate_with_pk4() -> Result<()> {
+        // create the dataframe
+        let config = SessionConfig::new().with_target_partitions(1);
+        let ctx = SessionContext::new_with_config(config);
+
+        let df = ctx.read_table(table_with_constraints())?;
+
+        // GROUP BY id
+        let group_expr = vec![col("id")];
+        let aggr_expr = vec![];
+        let df = df.aggregate(group_expr, aggr_expr)?;
+
+        // Predicate refers to id field
+        // id = 1
+        let predicate = col("id").eq(lit(1i32));
+        let df = df.filter(predicate)?;
+        // Select expression refers to id column.
+        // id
+        let df = df.select(vec![col("id")])?;
+
+        // In this case aggregate shouldn't be expanded, since these
+        // columns are not used.
+        assert_physical_plan(
+            &df,
+            vec![
+                "CoalesceBatchesExec: target_batch_size=8192",
+                "  FilterExec: id@0 = 1",
+                "    AggregateExec: mode=Single, gby=[id@0 as id], aggr=[]",
+                "      MemoryExec: partitions=1, partition_sizes=[1]",
+            ],
+        )
+        .await;
+
+        let df_results = df.collect().await?;
+
+        #[rustfmt::skip]
+        assert_batches_sorted_eq!([
+                "+----+",
+                "| id |",
+                "+----+",
+                "| 1  |",
+                "+----+",],
+            &df_results
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_aggregate_alias() -> Result<()> {
+        let df = test_table().await?;
+
+        let df = df
+            // GROUP BY `c2 + 1`
+            .aggregate(vec![col("c2") + lit(1)], vec![])?
+            // SELECT `c2 + 1` as c2
+            .select(vec![(col("c2") + lit(1)).alias("c2")])?
+            // GROUP BY c2 as "c2" (alias in expr is not supported by SQL)
+            .aggregate(vec![col("c2").alias("c2")], vec![])?;
+
+        let df_results = df.collect().await?;
+
+        #[rustfmt::skip]
+        assert_batches_sorted_eq!([
+                "+----+",
+                "| c2 |",
+                "+----+",
+                "| 2  |",
+                "| 3  |",
+                "| 4  |",
+                "| 5  |",
+                "| 6  |",
+                "+----+",
+            ],
+            &df_results
         );
 
         Ok(())
@@ -2248,6 +2614,17 @@ mod tests {
             &df_results
         );
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_cache_mismatch() -> Result<()> {
+        let ctx = SessionContext::new();
+        let df = ctx
+            .sql("SELECT CASE WHEN true THEN NULL ELSE 1 END")
+            .await?;
+        let cache_df = df.cache().await;
+        assert!(cache_df.is_ok());
         Ok(())
     }
 

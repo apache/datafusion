@@ -15,15 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::borrow::Cow;
 use std::{ops::Neg, sync::Arc};
 
-use crate::PhysicalExpr;
-
 use arrow_schema::SortOptions;
-use datafusion_common::tree_node::{TreeNode, VisitRecursion};
-use datafusion_common::Result;
 
-use itertools::Itertools;
+use crate::PhysicalExpr;
+use datafusion_common::tree_node::TreeNode;
+use datafusion_common::Result;
 
 /// To propagate [`SortOptions`] across the [`PhysicalExpr`], it is insufficient
 /// to simply use `Option<SortOptions>`: There must be a differentiation between
@@ -36,11 +35,12 @@ use itertools::Itertools;
 /// sorted data; however the ((a_ordered + 999) + c_ordered) expression can. Therefore,
 /// we need two different variants for literals and unordered columns as literals are
 /// often more ordering-friendly under most mathematical operations.
-#[derive(PartialEq, Debug, Clone, Copy)]
+#[derive(PartialEq, Debug, Clone, Copy, Default)]
 pub enum SortProperties {
     /// Use the ordinary [`SortOptions`] struct to represent ordered data:
     Ordered(SortOptions),
     // This alternative represents unordered data:
+    #[default]
     Unordered,
     // Singleton is used for single-valued literal numbers:
     Singleton,
@@ -99,7 +99,7 @@ impl SortProperties {
         }
     }
 
-    pub fn and(&self, rhs: &Self) -> Self {
+    pub fn and_or(&self, rhs: &Self) -> Self {
         match (self, rhs) {
             (Self::Ordered(lhs), Self::Ordered(rhs))
                 if lhs.descending == rhs.descending =>
@@ -148,75 +148,47 @@ impl Neg for SortProperties {
 /// It encapsulates the orderings (`state`) associated with the expression (`expr`), and
 /// orderings of the children expressions (`children_states`). The [`ExprOrdering`] of a parent
 /// expression is determined based on the [`ExprOrdering`] states of its children expressions.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ExprOrdering {
     pub expr: Arc<dyn PhysicalExpr>,
     pub state: SortProperties,
-    pub children_states: Vec<SortProperties>,
+    pub children: Vec<Self>,
 }
 
 impl ExprOrdering {
     /// Creates a new [`ExprOrdering`] with [`SortProperties::Unordered`] states
     /// for `expr` and its children.
     pub fn new(expr: Arc<dyn PhysicalExpr>) -> Self {
-        let size = expr.children().len();
+        let children = expr.children();
         Self {
             expr,
-            state: SortProperties::Unordered,
-            children_states: vec![SortProperties::Unordered; size],
+            state: Default::default(),
+            children: children.into_iter().map(Self::new).collect(),
         }
     }
 
-    /// Updates this [`ExprOrdering`]'s children states with the given states.
-    pub fn with_new_children(mut self, children_states: Vec<SortProperties>) -> Self {
-        self.children_states = children_states;
-        self
-    }
-
-    /// Creates new [`ExprOrdering`] objects for each child of the expression.
-    pub fn children_expr_orderings(&self) -> Vec<ExprOrdering> {
-        self.expr
-            .children()
-            .into_iter()
-            .map(ExprOrdering::new)
-            .collect()
+    /// Get a reference to each child state.
+    pub fn children_state(&self) -> Vec<SortProperties> {
+        self.children.iter().map(|c| c.state).collect()
     }
 }
 
 impl TreeNode for ExprOrdering {
-    fn apply_children<F>(&self, op: &mut F) -> Result<VisitRecursion>
-    where
-        F: FnMut(&Self) -> Result<VisitRecursion>,
-    {
-        for child in self.children_expr_orderings() {
-            match op(&child)? {
-                VisitRecursion::Continue => {}
-                VisitRecursion::Skip => return Ok(VisitRecursion::Continue),
-                VisitRecursion::Stop => return Ok(VisitRecursion::Stop),
-            }
-        }
-        Ok(VisitRecursion::Continue)
+    fn children_nodes(&self) -> Vec<Cow<Self>> {
+        self.children.iter().map(Cow::Borrowed).collect()
     }
 
-    fn map_children<F>(self, transform: F) -> Result<Self>
+    fn map_children<F>(mut self, transform: F) -> Result<Self>
     where
         F: FnMut(Self) -> Result<Self>,
     {
-        if self.children_states.is_empty() {
-            Ok(self)
-        } else {
-            let child_expr_orderings = self.children_expr_orderings();
-            // After mapping over the children, the function `F` applies to the
-            // current object and updates its state.
-            Ok(self.with_new_children(
-                child_expr_orderings
-                    .into_iter()
-                    // Update children states after this transformation:
-                    .map(transform)
-                    // Extract the state (i.e. sort properties) information:
-                    .map_ok(|c| c.state)
-                    .collect::<Result<Vec<_>>>()?,
-            ))
+        if !self.children.is_empty() {
+            self.children = self
+                .children
+                .into_iter()
+                .map(transform)
+                .collect::<Result<_>>()?;
         }
+        Ok(self)
     }
 }

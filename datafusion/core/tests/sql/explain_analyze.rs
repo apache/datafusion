@@ -560,7 +560,7 @@ async fn csv_explain_verbose_plans() {
     // Since the plan contains path that are environmentally
     // dependant(e.g. full path of the test file), only verify
     // important content
-    assert_contains!(&actual, "logical_plan after push_down_projection");
+    assert_contains!(&actual, "logical_plan after optimize_projections");
     assert_contains!(&actual, "physical_plan");
     assert_contains!(&actual, "FilterExec: c2@1 > 10");
     assert_contains!(actual, "ProjectionExec: expr=[c1@0 as c1]");
@@ -575,7 +575,7 @@ async fn explain_analyze_runs_optimizers() {
 
     // This happens as an optimization pass where count(*) can be
     // answered using statistics only.
-    let expected = "EmptyExec: produce_one_row=true";
+    let expected = "PlaceholderRowExec";
 
     let sql = "EXPLAIN SELECT count(*) from alltypes_plain";
     let actual = execute_to_batches(&ctx, sql).await;
@@ -806,7 +806,7 @@ async fn explain_physical_plan_only() {
     let expected = vec![vec![
         "physical_plan",
         "ProjectionExec: expr=[2 as COUNT(*)]\
-        \n  EmptyExec: produce_one_row=true\
+        \n  PlaceholderRowExec\
         \n",
     ]];
     assert_eq!(expected, actual);
@@ -827,5 +827,8 @@ async fn csv_explain_analyze_with_statistics() {
         .to_string();
 
     // should contain scan statistics
-    assert_contains!(&formatted, ", statistics=[Rows=Absent, Bytes=Absent]");
+    assert_contains!(
+        &formatted,
+        ", statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:)]]"
+    );
 }

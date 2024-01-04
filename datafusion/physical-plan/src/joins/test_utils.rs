@@ -17,6 +17,9 @@
 
 //! This file has test utils for hash joins
 
+use std::sync::Arc;
+use std::usize;
+
 use crate::joins::utils::{JoinFilter, JoinOn};
 use crate::joins::{
     HashJoinExec, PartitionMode, StreamJoinPartitionMode, SymmetricHashJoinExec,
@@ -24,24 +27,24 @@ use crate::joins::{
 use crate::memory::MemoryExec;
 use crate::repartition::RepartitionExec;
 use crate::{common, ExecutionPlan, Partitioning};
+
 use arrow::util::pretty::pretty_format_batches;
 use arrow_array::{
     ArrayRef, Float64Array, Int32Array, IntervalDayTimeArray, RecordBatch,
     TimestampMillisecondArray,
 };
-use arrow_schema::Schema;
-use datafusion_common::Result;
-use datafusion_common::ScalarValue;
+use arrow_schema::{DataType, Schema};
+use datafusion_common::{Result, ScalarValue};
 use datafusion_execution::TaskContext;
 use datafusion_expr::{JoinType, Operator};
+use datafusion_physical_expr::expressions::{binary, cast, col, lit};
 use datafusion_physical_expr::intervals::test_utils::{
     gen_conjunctive_numerical_expr, gen_conjunctive_temporal_expr,
 };
 use datafusion_physical_expr::{LexOrdering, PhysicalExpr};
+
 use rand::prelude::StdRng;
 use rand::{Rng, SeedableRng};
-use std::sync::Arc;
-use std::usize;
 
 pub fn compare_batches(collected_1: &[RecordBatch], collected_2: &[RecordBatch]) {
     // compare
@@ -238,6 +241,20 @@ pub fn join_expr_tests_fixture_temporal(
             ScalarValue::TimestampMillisecond(Some(1672574401000), None), // 2023-01-01:12.00.01
             ScalarValue::TimestampMillisecond(Some(1672574400000), None), // 2023-01-01:12.00.00
             ScalarValue::TimestampMillisecond(Some(1672574402000), None), // 2023-01-01:12.00.02
+            schema,
+        ),
+        // constructs ((left_col - DURATION '3 secs')  > (right_col - DURATION '2 secs')) AND ((left_col - DURATION '5 secs') < (right_col - DURATION '4 secs'))
+        2 => gen_conjunctive_temporal_expr(
+            left_col,
+            right_col,
+            Operator::Minus,
+            Operator::Minus,
+            Operator::Minus,
+            Operator::Minus,
+            ScalarValue::DurationMillisecond(Some(3000)), // 3 secs
+            ScalarValue::DurationMillisecond(Some(2000)), // 2 secs
+            ScalarValue::DurationMillisecond(Some(5000)), // 5 secs
+            ScalarValue::DurationMillisecond(Some(4000)), // 4 secs
             schema,
         ),
         _ => unreachable!(),
@@ -499,4 +516,52 @@ pub fn create_memory_table(
     let right = MemoryExec::try_new(&[right_partition], right_schema, None)?
         .with_sort_information(right_sorted);
     Ok((Arc::new(left), Arc::new(right)))
+}
+
+/// Filter expr for a + b > c + 10 AND a + b < c + 100
+pub(crate) fn complicated_filter(
+    filter_schema: &Schema,
+) -> Result<Arc<dyn PhysicalExpr>> {
+    let left_expr = binary(
+        cast(
+            binary(
+                col("0", filter_schema)?,
+                Operator::Plus,
+                col("1", filter_schema)?,
+                filter_schema,
+            )?,
+            filter_schema,
+            DataType::Int64,
+        )?,
+        Operator::Gt,
+        binary(
+            cast(col("2", filter_schema)?, filter_schema, DataType::Int64)?,
+            Operator::Plus,
+            lit(ScalarValue::Int64(Some(10))),
+            filter_schema,
+        )?,
+        filter_schema,
+    )?;
+
+    let right_expr = binary(
+        cast(
+            binary(
+                col("0", filter_schema)?,
+                Operator::Plus,
+                col("1", filter_schema)?,
+                filter_schema,
+            )?,
+            filter_schema,
+            DataType::Int64,
+        )?,
+        Operator::Lt,
+        binary(
+            cast(col("2", filter_schema)?, filter_schema, DataType::Int64)?,
+            Operator::Plus,
+            lit(ScalarValue::Int64(Some(100))),
+            filter_schema,
+        )?,
+        filter_schema,
+    )?;
+    binary(left_expr, Operator::And, right_expr, filter_schema)
 }

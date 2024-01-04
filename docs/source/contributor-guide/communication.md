@@ -26,15 +26,25 @@ All participation in the Apache Arrow DataFusion project is governed by the
 Apache Software Foundation's [code of
 conduct](https://www.apache.org/foundation/policies/conduct.html).
 
+## GitHub
+
 The vast majority of communication occurs in the open on our
-[github repository](https://github.com/apache/arrow-datafusion).
+[github repository](https://github.com/apache/arrow-datafusion) in the form of tickets, issues, discussions, and Pull Requests.
 
-## Questions?
+## Slack and Discord
 
-### Mailing list
+We use the Slack and Discord platforms for informal discussions and coordination. These are great places to
+meet other contributors and get guidance on where to contribute. It is important to note that any technical designs and
+decisions are made fully in the open, on GitHub.
 
-We use arrow.apache.org's `dev@` mailing list for project management, release
-coordination and design discussions
+Most of us use the `#arrow-datafusion` and `#arrow-rust` channels in the [ASF Slack workspace](https://s.apache.org/slack-invite) .
+Unfortunately, due to spammers, the ASF Slack workspace requires an invitation to join. To get an invitation,
+request one in the `Arrow Rust` channel of the [Arrow Rust Discord server](https://discord.gg/Qw5gKqHxUM).
+
+## Mailing list
+
+We also use arrow.apache.org's `dev@` mailing list for release coordination and occasional design discussions. Other
+than the the release process, most DataFusion mailing list traffic will link to a GitHub issue or PR for discussion.
 ([subscribe](mailto:dev-subscribe@arrow.apache.org),
 [unsubscribe](mailto:dev-unsubscribe@arrow.apache.org),
 [archives](https://lists.apache.org/list.html?dev@arrow.apache.org)).
@@ -42,33 +52,3 @@ coordination and design discussions
 When emailing the dev list, please make sure to prefix the subject line with a
 `[DataFusion]` tag, e.g. `"[DataFusion] New API for remote data sources"`, so
 that the appropriate people in the Apache Arrow community notice the message.
-
-### Slack and Discord
-
-We use the official [ASF](https://s.apache.org/slack-invite) Slack workspace
-for informal discussions and coordination. This is a great place to meet other
-contributors and get guidance on where to contribute. Join us in the
-`#arrow-rust` channel.
-
-We also have a backup Arrow Rust Discord
-server ([invite link](https://discord.gg/Qw5gKqHxUM)) in case you are not able
-to join the Slack workspace. If you need an invite to the Slack workspace, you
-can also ask for one in our Discord server.
-
-### Sync up video calls
-
-We have biweekly sync calls every other Thursdays at both 04:00 UTC
-and 16:00 UTC (starting September 30, 2021) depending on if there are
-items on the agenda to discuss and someone being willing to host.
-
-Please see the [agenda](https://docs.google.com/document/d/1atCVnoff5SR4eM4Lwf2M1BBJTY6g3_HUNR6qswYJW_U/edit)
-for the video call link, add topics and to see what others plan to discuss.
-
-The goals of these calls are:
-
-1. Help "put a face to the name" of some of other contributors we are working with
-2. Discuss / synchronize on the goals and major initiatives from different stakeholders to identify areas where more alignment is needed
-
-No decisions are made on the call and anything of substance will be discussed on the mailing list or in github issues / google docs.
-
-We will send a summary of all sync ups to the dev@arrow.apache.org mailing list.

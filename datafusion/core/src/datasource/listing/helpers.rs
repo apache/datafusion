@@ -38,9 +38,8 @@ use super::PartitionedFile;
 use crate::datasource::listing::ListingTableUrl;
 use crate::execution::context::SessionState;
 use datafusion_common::tree_node::{TreeNode, VisitRecursion};
-use datafusion_common::{Column, DFField, DFSchema, DataFusionError};
-use datafusion_expr::expr::ScalarUDF;
-use datafusion_expr::{Expr, Volatility};
+use datafusion_common::{internal_err, Column, DFField, DFSchema, DataFusionError};
+use datafusion_expr::{Expr, ScalarFunctionDefinition, Volatility};
 use datafusion_physical_expr::create_physical_expr;
 use datafusion_physical_expr::execution_props::ExecutionProps;
 use object_store::path::Path;
@@ -54,13 +53,13 @@ use object_store::{ObjectMeta, ObjectStore};
 pub fn expr_applicable_for_cols(col_names: &[String], expr: &Expr) -> bool {
     let mut is_applicable = true;
     expr.apply(&mut |expr| {
-        Ok(match expr {
+        match expr {
             Expr::Column(Column { ref name, .. }) => {
                 is_applicable &= col_names.contains(name);
                 if is_applicable {
-                    VisitRecursion::Skip
+                    Ok(VisitRecursion::Skip)
                 } else {
-                    VisitRecursion::Stop
+                    Ok(VisitRecursion::Stop)
                 }
             }
             Expr::Literal(_)
@@ -89,25 +88,32 @@ pub fn expr_applicable_for_cols(col_names: &[String], expr: &Expr) -> bool {
             | Expr::ScalarSubquery(_)
             | Expr::GetIndexedField { .. }
             | Expr::GroupingSet(_)
-            | Expr::Case { .. } => VisitRecursion::Continue,
+            | Expr::Case { .. } => Ok(VisitRecursion::Continue),
 
             Expr::ScalarFunction(scalar_function) => {
-                match scalar_function.fun.volatility() {
-                    Volatility::Immutable => VisitRecursion::Continue,
-                    // TODO: Stable functions could be `applicable`, but that would require access to the context
-                    Volatility::Stable | Volatility::Volatile => {
-                        is_applicable = false;
-                        VisitRecursion::Stop
+                match &scalar_function.func_def {
+                    ScalarFunctionDefinition::BuiltIn(fun) => {
+                        match fun.volatility() {
+                            Volatility::Immutable => Ok(VisitRecursion::Continue),
+                            // TODO: Stable functions could be `applicable`, but that would require access to the context
+                            Volatility::Stable | Volatility::Volatile => {
+                                is_applicable = false;
+                                Ok(VisitRecursion::Stop)
+                            }
+                        }
                     }
-                }
-            }
-            Expr::ScalarUDF(ScalarUDF { fun, .. }) => {
-                match fun.signature.volatility {
-                    Volatility::Immutable => VisitRecursion::Continue,
-                    // TODO: Stable functions could be `applicable`, but that would require access to the context
-                    Volatility::Stable | Volatility::Volatile => {
-                        is_applicable = false;
-                        VisitRecursion::Stop
+                    ScalarFunctionDefinition::UDF(fun) => {
+                        match fun.signature().volatility {
+                            Volatility::Immutable => Ok(VisitRecursion::Continue),
+                            // TODO: Stable functions could be `applicable`, but that would require access to the context
+                            Volatility::Stable | Volatility::Volatile => {
+                                is_applicable = false;
+                                Ok(VisitRecursion::Stop)
+                            }
+                        }
+                    }
+                    ScalarFunctionDefinition::Name(_) => {
+                        internal_err!("Function `Expr` with name should be resolved.")
                     }
                 }
             }
@@ -116,17 +122,15 @@ pub fn expr_applicable_for_cols(col_names: &[String], expr: &Expr) -> bool {
             // - AGGREGATE, WINDOW and SORT should not end up in filter conditions, except maybe in some edge cases
             // - Can `Wildcard` be considered as a `Literal`?
             // - ScalarVariable could be `applicable`, but that would require access to the context
-            Expr::AggregateUDF { .. }
-            | Expr::AggregateFunction { .. }
+            Expr::AggregateFunction { .. }
             | Expr::Sort { .. }
             | Expr::WindowFunction { .. }
-            | Expr::Wildcard
-            | Expr::QualifiedWildcard { .. }
+            | Expr::Wildcard { .. }
             | Expr::Placeholder(_) => {
                 is_applicable = false;
-                VisitRecursion::Stop
+                Ok(VisitRecursion::Stop)
             }
-        })
+        }
     })
     .unwrap();
     is_applicable
@@ -137,12 +141,18 @@ const CONCURRENCY_LIMIT: usize = 100;
 
 /// Partition the list of files into `n` groups
 pub fn split_files(
-    partitioned_files: Vec<PartitionedFile>,
+    mut partitioned_files: Vec<PartitionedFile>,
     n: usize,
 ) -> Vec<Vec<PartitionedFile>> {
     if partitioned_files.is_empty() {
         return vec![];
     }
+
+    // ObjectStore::list does not guarantee any consistent order and for some
+    // implementations such as LocalFileSystem, it may be inconsistent. Thus
+    // Sort files by path to ensure consistent plans when run more than once.
+    partitioned_files.sort_by(|a, b| a.path().cmp(b.path()));
+
     // effectively this is div with rounding up instead of truncating
     let chunk_size = (partitioned_files.len() + n - 1) / n;
     partitioned_files
@@ -276,7 +286,10 @@ async fn prune_partitions(
     // Applies `filter` to `batch` returning `None` on error
     let do_filter = |filter| -> Option<ArrayRef> {
         let expr = create_physical_expr(filter, &df_schema, &schema, &props).ok()?;
-        Some(expr.evaluate(&batch).ok()?.into_array(partitions.len()))
+        expr.evaluate(&batch)
+            .ok()?
+            .into_array(partitions.len())
+            .ok()
     };
 
     //.Compute the conjunction of the filters, ignoring errors
@@ -359,14 +372,13 @@ pub async fn pruned_partition_list<'a>(
                 Some(files) => files,
                 None => {
                     trace!("Recursively listing partition {}", partition.path);
-                    let s = store.list(Some(&partition.path)).await?;
-                    s.try_collect().await?
+                    store.list(Some(&partition.path)).try_collect().await?
                 }
             };
-
             let files = files.into_iter().filter(move |o| {
                 let extension_match = o.location.as_ref().ends_with(file_extension);
-                let glob_match = table_path.contains(&o.location);
+                // here need to scan subdirectories(`listing_table_ignore_subdirectory` = false)
+                let glob_match = table_path.contains(&o.location, false);
                 extension_match && glob_match
             });
 
@@ -520,19 +532,13 @@ mod tests {
             f1.object_meta.location.as_ref(),
             "tablepath/mypartition=val1/file.parquet"
         );
-        assert_eq!(
-            &f1.partition_values,
-            &[ScalarValue::Utf8(Some(String::from("val1"))),]
-        );
+        assert_eq!(&f1.partition_values, &[ScalarValue::from("val1")]);
         let f2 = &pruned[1];
         assert_eq!(
             f2.object_meta.location.as_ref(),
             "tablepath/mypartition=val1/other=val3/file.parquet"
         );
-        assert_eq!(
-            f2.partition_values,
-            &[ScalarValue::Utf8(Some(String::from("val1"))),]
-        );
+        assert_eq!(f2.partition_values, &[ScalarValue::from("val1"),]);
     }
 
     #[tokio::test]
@@ -573,10 +579,7 @@ mod tests {
         );
         assert_eq!(
             &f1.partition_values,
-            &[
-                ScalarValue::Utf8(Some(String::from("p1v2"))),
-                ScalarValue::Utf8(Some(String::from("p2v1")))
-            ]
+            &[ScalarValue::from("p1v2"), ScalarValue::from("p2v1"),]
         );
         let f2 = &pruned[1];
         assert_eq!(
@@ -585,10 +588,7 @@ mod tests {
         );
         assert_eq!(
             &f2.partition_values,
-            &[
-                ScalarValue::Utf8(Some(String::from("p1v2"))),
-                ScalarValue::Utf8(Some(String::from("p2v1")))
-            ]
+            &[ScalarValue::from("p1v2"), ScalarValue::from("p2v1")]
         );
     }
 

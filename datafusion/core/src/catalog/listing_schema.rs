@@ -92,12 +92,7 @@ impl ListingSchemaProvider {
 
     /// Reload table information from ObjectStore
     pub async fn refresh(&self, state: &SessionState) -> datafusion_common::Result<()> {
-        let entries: Vec<_> = self
-            .store
-            .list(Some(&self.path))
-            .await?
-            .try_collect()
-            .await?;
+        let entries: Vec<_> = self.store.list(Some(&self.path)).try_collect().await?;
         let base = Path::new(self.path.as_ref());
         let mut tables = HashSet::new();
         for file in entries.iter() {
@@ -154,6 +149,7 @@ impl ListingSchemaProvider {
                             unbounded: false,
                             options: Default::default(),
                             constraints: Constraints::empty(),
+                            column_defaults: Default::default(),
                         },
                     )
                     .await?;

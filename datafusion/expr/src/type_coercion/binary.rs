@@ -116,7 +116,7 @@ fn signature(lhs: &DataType, op: &Operator, rhs: &DataType) -> Result<Signature>
             })
         }
         AtArrow | ArrowAt => {
-            // ArrowAt and AtArrow check for whether one array ic contained in another.
+            // ArrowAt and AtArrow check for whether one array is contained in another.
             // The result type is boolean. Signature::comparison defines this signature.
             // Operation has nothing to do with comparison
             array_coercion(lhs, rhs).map(Signature::comparison).ok_or_else(|| {
@@ -331,26 +331,27 @@ fn string_temporal_coercion(
     rhs_type: &DataType,
 ) -> Option<DataType> {
     use arrow::datatypes::DataType::*;
-    match (lhs_type, rhs_type) {
-        (Utf8, Date32) | (Date32, Utf8) => Some(Date32),
-        (Utf8, Date64) | (Date64, Utf8) => Some(Date64),
-        (Utf8, Time32(unit)) | (Time32(unit), Utf8) => {
-            match is_time_with_valid_unit(Time32(unit.clone())) {
-                false => None,
-                true => Some(Time32(unit.clone())),
-            }
+
+    fn match_rule(l: &DataType, r: &DataType) -> Option<DataType> {
+        match (l, r) {
+            // Coerce Utf8/LargeUtf8 to Date32/Date64/Time32/Time64/Timestamp
+            (Utf8, temporal) | (LargeUtf8, temporal) => match temporal {
+                Date32 | Date64 => Some(temporal.clone()),
+                Time32(_) | Time64(_) => {
+                    if is_time_with_valid_unit(temporal.to_owned()) {
+                        Some(temporal.to_owned())
+                    } else {
+                        None
+                    }
+                }
+                Timestamp(_, tz) => Some(Timestamp(TimeUnit::Nanosecond, tz.clone())),
+                _ => None,
+            },
+            _ => None,
         }
-        (Utf8, Time64(unit)) | (Time64(unit), Utf8) => {
-            match is_time_with_valid_unit(Time64(unit.clone())) {
-                false => None,
-                true => Some(Time64(unit.clone())),
-            }
-        }
-        (Timestamp(_, tz), Utf8) | (Utf8, Timestamp(_, tz)) => {
-            Some(Timestamp(TimeUnit::Nanosecond, tz.clone()))
-        }
-        _ => None,
     }
+
+    match_rule(lhs_type, rhs_type).or_else(|| match_rule(rhs_type, lhs_type))
 }
 
 /// Coerce `lhs_type` and `rhs_type` to a common type for the purposes of a comparison operation
@@ -782,9 +783,14 @@ fn temporal_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataTyp
     use arrow::datatypes::TimeUnit::*;
 
     match (lhs_type, rhs_type) {
-        // interval +/-
         (Interval(_), Interval(_)) => Some(Interval(MonthDayNano)),
         (Date64, Date32) | (Date32, Date64) => Some(Date64),
+        (Timestamp(_, None), Date64) | (Date64, Timestamp(_, None)) => {
+            Some(Timestamp(Nanosecond, None))
+        }
+        (Timestamp(_, _tz), Date64) | (Date64, Timestamp(_, _tz)) => {
+            Some(Timestamp(Nanosecond, None))
+        }
         (Timestamp(_, None), Date32) | (Date32, Timestamp(_, None)) => {
             Some(Timestamp(Nanosecond, None))
         }

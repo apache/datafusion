@@ -55,7 +55,7 @@ impl fmt::Debug for MemoryExec {
         write!(f, "partitions: [...]")?;
         write!(f, "schema: {:?}", self.projected_schema)?;
         write!(f, "projection: {:?}", self.projection)?;
-        if let Some(sort_info) = &self.sort_information.get(0) {
+        if let Some(sort_info) = &self.sort_information.first() {
             write!(f, ", output_ordering: {:?}", sort_info)?;
         }
         Ok(())
@@ -177,6 +177,14 @@ impl MemoryExec {
         })
     }
 
+    pub fn partitions(&self) -> &[Vec<RecordBatch>] {
+        &self.partitions
+    }
+
+    pub fn projection(&self) -> &Option<Vec<usize>> {
+        &self.projection
+    }
+
     /// A memory table can be ordered by multiple expressions simultaneously.
     /// [`EquivalenceProperties`] keeps track of expressions that describe the
     /// global ordering of the schema. These columns are not necessarily same; e.g.
@@ -196,6 +204,10 @@ impl MemoryExec {
     pub fn with_sort_information(mut self, sort_information: Vec<LexOrdering>) -> Self {
         self.sort_information = sort_information;
         self
+    }
+
+    pub fn original_schema(&self) -> SchemaRef {
+        self.schema.clone()
     }
 }
 

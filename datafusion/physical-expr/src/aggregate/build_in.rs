@@ -114,13 +114,16 @@ pub fn create_aggregate_expr(
         ),
         (AggregateFunction::ArrayAgg, false) => {
             let expr = input_phy_exprs[0].clone();
+            let nullable = expr.nullable(input_schema)?;
+
             if ordering_req.is_empty() {
-                Arc::new(expressions::ArrayAgg::new(expr, name, data_type))
+                Arc::new(expressions::ArrayAgg::new(expr, name, data_type, nullable))
             } else {
                 Arc::new(expressions::OrderSensitiveArrayAgg::new(
                     expr,
                     name,
                     data_type,
+                    nullable,
                     ordering_types,
                     ordering_req.to_vec(),
                 ))
@@ -132,10 +135,13 @@ pub fn create_aggregate_expr(
                     "ARRAY_AGG(DISTINCT ORDER BY a ASC) order-sensitive aggregations are not available"
                 );
             }
+            let expr = input_phy_exprs[0].clone();
+            let is_expr_nullable = expr.nullable(input_schema)?;
             Arc::new(expressions::DistinctArrayAgg::new(
-                input_phy_exprs[0].clone(),
+                expr,
                 name,
                 data_type,
+                is_expr_nullable,
             ))
         }
         (AggregateFunction::Min, _) => Arc::new(expressions::Min::new(
@@ -363,6 +369,22 @@ pub fn create_aggregate_expr(
             ordering_req.to_vec(),
             ordering_types,
         )),
+        (AggregateFunction::StringAgg, false) => {
+            if !ordering_req.is_empty() {
+                return not_impl_err!(
+                    "STRING_AGG(ORDER BY a ASC) order-sensitive aggregations are not available"
+                );
+            }
+            Arc::new(expressions::StringAgg::new(
+                input_phy_exprs[0].clone(),
+                input_phy_exprs[1].clone(),
+                name,
+                data_type,
+            ))
+        }
+        (AggregateFunction::StringAgg, true) => {
+            return not_impl_err!("STRING_AGG(DISTINCT) aggregations are not available");
+        }
     })
 }
 
@@ -432,8 +454,8 @@ mod tests {
                         assert_eq!(
                             Field::new_list(
                                 "c1",
-                                Field::new("item", data_type.clone(), true,),
-                                false,
+                                Field::new("item", data_type.clone(), true),
+                                true,
                             ),
                             result_agg_phy_exprs.field().unwrap()
                         );
@@ -471,8 +493,8 @@ mod tests {
                         assert_eq!(
                             Field::new_list(
                                 "c1",
-                                Field::new("item", data_type.clone(), true,),
-                                false,
+                                Field::new("item", data_type.clone(), true),
+                                true,
                             ),
                             result_agg_phy_exprs.field().unwrap()
                         );

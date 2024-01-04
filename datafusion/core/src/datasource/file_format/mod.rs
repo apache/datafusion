@@ -124,7 +124,8 @@ pub(crate) mod test_util {
     use object_store::local::LocalFileSystem;
     use object_store::path::Path;
     use object_store::{
-        GetOptions, GetResult, GetResultPayload, ListResult, MultipartId,
+        GetOptions, GetResult, GetResultPayload, ListResult, MultipartId, PutOptions,
+        PutResult,
     };
     use tokio::io::AsyncWrite;
 
@@ -164,7 +165,6 @@ pub(crate) mod test_util {
                     limit,
                     table_partition_cols: vec![],
                     output_ordering: vec![],
-                    infinite_source: false,
                 },
                 None,
             )
@@ -189,7 +189,12 @@ pub(crate) mod test_util {
 
     #[async_trait]
     impl ObjectStore for VariableStream {
-        async fn put(&self, _location: &Path, _bytes: Bytes) -> object_store::Result<()> {
+        async fn put_opts(
+            &self,
+            _location: &Path,
+            _bytes: Bytes,
+            _opts: PutOptions,
+        ) -> object_store::Result<PutResult> {
             unimplemented!()
         }
 
@@ -228,6 +233,7 @@ pub(crate) mod test_util {
                     last_modified: Default::default(),
                     size: range.end,
                     e_tag: None,
+                    version: None,
                 },
                 range: Default::default(),
             })
@@ -257,11 +263,10 @@ pub(crate) mod test_util {
             unimplemented!()
         }
 
-        async fn list(
+        fn list(
             &self,
             _prefix: Option<&Path>,
-        ) -> object_store::Result<BoxStream<'_, object_store::Result<ObjectMeta>>>
-        {
+        ) -> BoxStream<'_, object_store::Result<ObjectMeta>> {
             unimplemented!()
         }
 

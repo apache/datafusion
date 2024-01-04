@@ -15,30 +15,33 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use async_trait::async_trait;
-use datafusion::execution::context::SessionState;
-use datafusion::logical_expr::Expr;
-use datafusion::physical_plan::ExecutionPlan;
-use datafusion::prelude::SessionConfig;
-use datafusion::{
-    arrow::{
-        array::{
-            BinaryArray, Float64Array, Int32Array, LargeBinaryArray, LargeStringArray,
-            StringArray, TimestampNanosecondArray,
-        },
-        datatypes::{DataType, Field, Schema, SchemaRef, TimeUnit},
-        record_batch::RecordBatch,
-    },
-    catalog::{schema::MemorySchemaProvider, CatalogProvider, MemoryCatalogProvider},
-    datasource::{MemTable, TableProvider, TableType},
-    prelude::{CsvReadOptions, SessionContext},
-};
-use datafusion_common::DataFusionError;
-use log::info;
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::Write;
 use std::path::Path;
 use std::sync::Arc;
+
+use arrow::array::{
+    ArrayRef, BinaryArray, Float64Array, Int32Array, LargeBinaryArray, LargeStringArray,
+    StringArray, TimestampNanosecondArray,
+};
+use arrow::datatypes::{DataType, Field, Schema, SchemaRef, TimeUnit};
+use arrow::record_batch::RecordBatch;
+use datafusion::execution::context::SessionState;
+use datafusion::logical_expr::{create_udf, Expr, ScalarUDF, Volatility};
+use datafusion::physical_expr::functions::make_scalar_function;
+use datafusion::physical_plan::ExecutionPlan;
+use datafusion::prelude::SessionConfig;
+use datafusion::{
+    catalog::{schema::MemorySchemaProvider, CatalogProvider, MemoryCatalogProvider},
+    datasource::{MemTable, TableProvider, TableType},
+    prelude::{CsvReadOptions, SessionContext},
+};
+use datafusion_common::cast::as_float64_array;
+use datafusion_common::DataFusionError;
+
+use async_trait::async_trait;
+use log::info;
 use tempfile::TempDir;
 
 /// Context for running tests
@@ -57,8 +60,8 @@ impl TestContext {
         }
     }
 
-    /// Create a SessionContext, configured for the specific test, if
-    /// possible.
+    /// Create a SessionContext, configured for the specific sqllogictest
+    /// test(.slt file) , if possible.
     ///
     /// If `None` is returned (e.g. because some needed feature is not
     /// enabled), the file should be skipped
@@ -67,7 +70,7 @@ impl TestContext {
             // hardcode target partitions so plans are deterministic
             .with_target_partitions(4);
 
-        let test_ctx = TestContext::new(SessionContext::new_with_config(config));
+        let mut test_ctx = TestContext::new(SessionContext::new_with_config(config));
 
         let file_name = relative_path.file_name().unwrap().to_str().unwrap();
         match file_name {
@@ -83,13 +86,15 @@ impl TestContext {
                 info!("Registering table with many types");
                 register_table_with_many_types(test_ctx.session_ctx()).await;
             }
+            "map.slt" => {
+                info!("Registering table with map");
+                register_table_with_map(test_ctx.session_ctx()).await;
+            }
             "avro.slt" => {
                 #[cfg(feature = "avro")]
                 {
-                    let mut test_ctx = test_ctx;
                     info!("Registering avro tables");
                     register_avro_tables(&mut test_ctx).await;
-                    return Some(test_ctx);
                 }
                 #[cfg(not(feature = "avro"))]
                 {
@@ -99,10 +104,13 @@ impl TestContext {
             }
             "joins.slt" => {
                 info!("Registering partition table tables");
-
-                let mut test_ctx = test_ctx;
+                let example_udf = create_example_udf();
+                test_ctx.ctx.register_udf(example_udf);
                 register_partition_table(&mut test_ctx).await;
-                return Some(test_ctx);
+            }
+            "metadata.slt" => {
+                info!("Registering metadata table tables");
+                register_metadata_tables(test_ctx.session_ctx()).await;
             }
             _ => {
                 info!("Using default SessionContext");
@@ -268,6 +276,23 @@ pub async fn register_table_with_many_types(ctx: &SessionContext) {
         .unwrap();
 }
 
+pub async fn register_table_with_map(ctx: &SessionContext) {
+    let key = Field::new("key", DataType::Int64, false);
+    let value = Field::new("value", DataType::Int64, true);
+    let map_field =
+        Field::new("entries", DataType::Struct(vec![key, value].into()), false);
+    let fields = vec![
+        Field::new("int_field", DataType::Int64, true),
+        Field::new("map_field", DataType::Map(map_field.into(), false), true),
+    ];
+    let schema = Schema::new(fields);
+
+    let memory_table = MemTable::try_new(schema.into(), vec![vec![]]).unwrap();
+
+    ctx.register_table("table_with_map", Arc::new(memory_table))
+        .unwrap();
+}
+
 fn table_with_many_types() -> Arc<dyn TableProvider> {
     let schema = Schema::new(vec![
         Field::new("int32_col", DataType::Int32, false),
@@ -298,4 +323,59 @@ fn table_with_many_types() -> Arc<dyn TableProvider> {
     .unwrap();
     let provider = MemTable::try_new(Arc::new(schema), vec![vec![batch]]).unwrap();
     Arc::new(provider)
+}
+
+/// Registers a table_with_metadata that contains both field level and Table level metadata
+pub async fn register_metadata_tables(ctx: &SessionContext) {
+    let id = Field::new("id", DataType::Int32, true).with_metadata(HashMap::from([(
+        String::from("metadata_key"),
+        String::from("the id field"),
+    )]));
+    let name = Field::new("name", DataType::Utf8, true).with_metadata(HashMap::from([(
+        String::from("metadata_key"),
+        String::from("the name field"),
+    )]));
+
+    let schema = Schema::new(vec![id, name]).with_metadata(HashMap::from([(
+        String::from("metadata_key"),
+        String::from("the entire schema"),
+    )]));
+
+    let batch = RecordBatch::try_new(
+        Arc::new(schema),
+        vec![
+            Arc::new(Int32Array::from(vec![Some(1), None, Some(3)])) as _,
+            Arc::new(StringArray::from(vec![None, Some("bar"), Some("baz")])) as _,
+        ],
+    )
+    .unwrap();
+
+    ctx.register_batch("table_with_metadata", batch).unwrap();
+}
+
+/// Create a UDF function named "example". See the `sample_udf.rs` example
+/// file for an explanation of the API.
+fn create_example_udf() -> ScalarUDF {
+    let adder = make_scalar_function(|args: &[ArrayRef]| {
+        let lhs = as_float64_array(&args[0]).expect("cast failed");
+        let rhs = as_float64_array(&args[1]).expect("cast failed");
+        let array = lhs
+            .iter()
+            .zip(rhs.iter())
+            .map(|(lhs, rhs)| match (lhs, rhs) {
+                (Some(lhs), Some(rhs)) => Some(lhs + rhs),
+                _ => None,
+            })
+            .collect::<Float64Array>();
+        Ok(Arc::new(array) as ArrayRef)
+    });
+    create_udf(
+        "example",
+        // Expects two f64 values:
+        vec![DataType::Float64, DataType::Float64],
+        // Returns an f64 value:
+        Arc::new(DataType::Float64),
+        Volatility::Immutable,
+        adder,
+    )
 }

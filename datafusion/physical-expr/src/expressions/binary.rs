@@ -23,8 +23,8 @@ use std::{any::Any, sync::Arc};
 use crate::array_expressions::{
     array_append, array_concat, array_has_all, array_prepend,
 };
+use crate::expressions::datum::{apply, apply_cmp};
 use crate::intervals::cp_solver::{propagate_arithmetic, propagate_comparison};
-use crate::intervals::{apply_operator, Interval};
 use crate::physical_expr::down_cast_any_ref;
 use crate::sort_properties::SortProperties;
 use crate::PhysicalExpr;
@@ -38,12 +38,13 @@ use arrow::compute::kernels::comparison::regexp_is_match_utf8_scalar;
 use arrow::compute::kernels::concat_elements::concat_elements_utf8;
 use arrow::datatypes::*;
 use arrow::record_batch::RecordBatch;
+
 use datafusion_common::cast::as_boolean_array;
 use datafusion_common::{internal_err, DataFusionError, Result, ScalarValue};
+use datafusion_expr::interval_arithmetic::{apply_operator, Interval};
 use datafusion_expr::type_coercion::binary::get_result_type;
 use datafusion_expr::{ColumnarValue, Operator};
 
-use crate::expressions::datum::{apply, apply_cmp};
 use kernels::{
     bitwise_and_dyn, bitwise_and_dyn_scalar, bitwise_or_dyn, bitwise_or_dyn_scalar,
     bitwise_shift_left_dyn, bitwise_shift_left_dyn_scalar, bitwise_shift_right_dyn,
@@ -304,8 +305,8 @@ impl PhysicalExpr for BinaryExpr {
 
         // if both arrays or both literals - extract arrays and continue execution
         let (left, right) = (
-            lhs.into_array(batch.num_rows()),
-            rhs.into_array(batch.num_rows()),
+            lhs.into_array(batch.num_rows())?,
+            rhs.into_array(batch.num_rows())?,
         );
         self.evaluate_with_resolved_args(left, &left_data_type, right, &right_data_type)
             .map(ColumnarValue::Array)
@@ -338,32 +339,102 @@ impl PhysicalExpr for BinaryExpr {
         &self,
         interval: &Interval,
         children: &[&Interval],
-    ) -> Result<Vec<Option<Interval>>> {
+    ) -> Result<Option<Vec<Interval>>> {
         // Get children intervals.
         let left_interval = children[0];
         let right_interval = children[1];
 
-        let (left, right) = if self.op.is_logic_operator() {
-            // TODO: Currently, this implementation only supports the AND operator
-            //       and does not require any further propagation. In the future,
-            //       upon adding support for additional logical operators, this
-            //       method will require modification to support propagating the
-            //       changes accordingly.
-            return Ok(vec![]);
-        } else if self.op.is_comparison_operator() {
-            if interval == &Interval::CERTAINLY_FALSE {
-                // TODO: We will handle strictly false clauses by negating
-                //       the comparison operator (e.g. GT to LE, LT to GE)
-                //       once open/closed intervals are supported.
-                return Ok(vec![]);
+        if self.op.eq(&Operator::And) {
+            if interval.eq(&Interval::CERTAINLY_TRUE) {
+                // A certainly true logical conjunction can only derive from possibly
+                // true operands. Otherwise, we prove infeasability.
+                Ok((!left_interval.eq(&Interval::CERTAINLY_FALSE)
+                    && !right_interval.eq(&Interval::CERTAINLY_FALSE))
+                .then(|| vec![Interval::CERTAINLY_TRUE, Interval::CERTAINLY_TRUE]))
+            } else if interval.eq(&Interval::CERTAINLY_FALSE) {
+                // If the logical conjunction is certainly false, one of the
+                // operands must be false. However, it's not always possible to
+                // determine which operand is false, leading to different scenarios.
+
+                // If one operand is certainly true and the other one is uncertain,
+                // then the latter must be certainly false.
+                if left_interval.eq(&Interval::CERTAINLY_TRUE)
+                    && right_interval.eq(&Interval::UNCERTAIN)
+                {
+                    Ok(Some(vec![
+                        Interval::CERTAINLY_TRUE,
+                        Interval::CERTAINLY_FALSE,
+                    ]))
+                } else if right_interval.eq(&Interval::CERTAINLY_TRUE)
+                    && left_interval.eq(&Interval::UNCERTAIN)
+                {
+                    Ok(Some(vec![
+                        Interval::CERTAINLY_FALSE,
+                        Interval::CERTAINLY_TRUE,
+                    ]))
+                }
+                // If both children are uncertain, or if one is certainly false,
+                // we cannot conclusively refine their intervals. In this case,
+                // propagation does not result in any interval changes.
+                else {
+                    Ok(Some(vec![]))
+                }
+            } else {
+                // An uncertain logical conjunction result can not shrink the
+                // end-points of its children.
+                Ok(Some(vec![]))
             }
-            // Propagate the comparison operator.
-            propagate_comparison(&self.op, left_interval, right_interval)?
+        } else if self.op.eq(&Operator::Or) {
+            if interval.eq(&Interval::CERTAINLY_FALSE) {
+                // A certainly false logical conjunction can only derive from certainly
+                // false operands. Otherwise, we prove infeasability.
+                Ok((!left_interval.eq(&Interval::CERTAINLY_TRUE)
+                    && !right_interval.eq(&Interval::CERTAINLY_TRUE))
+                .then(|| vec![Interval::CERTAINLY_FALSE, Interval::CERTAINLY_FALSE]))
+            } else if interval.eq(&Interval::CERTAINLY_TRUE) {
+                // If the logical disjunction is certainly true, one of the
+                // operands must be true. However, it's not always possible to
+                // determine which operand is true, leading to different scenarios.
+
+                // If one operand is certainly false and the other one is uncertain,
+                // then the latter must be certainly true.
+                if left_interval.eq(&Interval::CERTAINLY_FALSE)
+                    && right_interval.eq(&Interval::UNCERTAIN)
+                {
+                    Ok(Some(vec![
+                        Interval::CERTAINLY_FALSE,
+                        Interval::CERTAINLY_TRUE,
+                    ]))
+                } else if right_interval.eq(&Interval::CERTAINLY_FALSE)
+                    && left_interval.eq(&Interval::UNCERTAIN)
+                {
+                    Ok(Some(vec![
+                        Interval::CERTAINLY_TRUE,
+                        Interval::CERTAINLY_FALSE,
+                    ]))
+                }
+                // If both children are uncertain, or if one is certainly true,
+                // we cannot conclusively refine their intervals. In this case,
+                // propagation does not result in any interval changes.
+                else {
+                    Ok(Some(vec![]))
+                }
+            } else {
+                // An uncertain logical disjunction result can not shrink the
+                // end-points of its children.
+                Ok(Some(vec![]))
+            }
+        } else if self.op.is_comparison_operator() {
+            Ok(
+                propagate_comparison(&self.op, interval, left_interval, right_interval)?
+                    .map(|(left, right)| vec![left, right]),
+            )
         } else {
-            // Propagate the arithmetic operator.
-            propagate_arithmetic(&self.op, interval, left_interval, right_interval)?
-        };
-        Ok(vec![left, right])
+            Ok(
+                propagate_arithmetic(&self.op, interval, left_interval, right_interval)?
+                    .map(|(left, right)| vec![left, right]),
+            )
+        }
     }
 
     fn dyn_hash(&self, state: &mut dyn Hasher) {
@@ -380,7 +451,7 @@ impl PhysicalExpr for BinaryExpr {
             Operator::Minus => left_child.sub(right_child),
             Operator::Gt | Operator::GtEq => left_child.gt_or_gteq(right_child),
             Operator::Lt | Operator::LtEq => right_child.gt_or_gteq(left_child),
-            Operator::And => left_child.and(right_child),
+            Operator::And | Operator::Or => left_child.and_or(right_child),
             _ => SortProperties::Unordered,
         }
     }
@@ -558,8 +629,7 @@ mod tests {
     use arrow::datatypes::{
         ArrowNumericType, Decimal128Type, Field, Int32Type, SchemaRef,
     };
-    use arrow_schema::ArrowError;
-    use datafusion_common::Result;
+    use datafusion_common::{plan_datafusion_err, Result};
     use datafusion_expr::type_coercion::binary::get_input_types;
 
     /// Performs a binary operation, applying any type coercion necessary
@@ -597,7 +667,10 @@ mod tests {
         let batch =
             RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a), Arc::new(b)])?;
 
-        let result = lt.evaluate(&batch)?.into_array(batch.num_rows());
+        let result = lt
+            .evaluate(&batch)?
+            .into_array(batch.num_rows())
+            .expect("Failed to convert to array");
         assert_eq!(result.len(), 5);
 
         let expected = [false, false, true, true, true];
@@ -641,7 +714,10 @@ mod tests {
 
         assert_eq!("a@0 < b@1 OR a@0 = b@1", format!("{expr}"));
 
-        let result = expr.evaluate(&batch)?.into_array(batch.num_rows());
+        let result = expr
+            .evaluate(&batch)?
+            .into_array(batch.num_rows())
+            .expect("Failed to convert to array");
         assert_eq!(result.len(), 5);
 
         let expected = [true, true, false, true, false];
@@ -685,7 +761,7 @@ mod tests {
             assert_eq!(expression.data_type(&schema)?, $C_TYPE);
 
             // compute
-            let result = expression.evaluate(&batch)?.into_array(batch.num_rows());
+            let result = expression.evaluate(&batch)?.into_array(batch.num_rows()).expect("Failed to convert to array");
 
             // verify that the array's data_type is correct
             assert_eq!(*result.data_type(), $C_TYPE);
@@ -2138,7 +2214,10 @@ mod tests {
         let arithmetic_op =
             binary_op(col("a", &schema)?, op, col("b", &schema)?, &schema)?;
         let batch = RecordBatch::try_new(schema, data)?;
-        let result = arithmetic_op.evaluate(&batch)?.into_array(batch.num_rows());
+        let result = arithmetic_op
+            .evaluate(&batch)?
+            .into_array(batch.num_rows())
+            .expect("Failed to convert to array");
 
         assert_eq!(result.as_ref(), &expected);
         Ok(())
@@ -2154,7 +2233,10 @@ mod tests {
         let lit = Arc::new(Literal::new(literal));
         let arithmetic_op = binary_op(col("a", &schema)?, op, lit, &schema)?;
         let batch = RecordBatch::try_new(schema, data)?;
-        let result = arithmetic_op.evaluate(&batch)?.into_array(batch.num_rows());
+        let result = arithmetic_op
+            .evaluate(&batch)?
+            .into_array(batch.num_rows())
+            .expect("Failed to convert to array");
 
         assert_eq!(&result, &expected);
         Ok(())
@@ -2170,7 +2252,10 @@ mod tests {
         let op = binary_op(col("a", schema)?, op, col("b", schema)?, schema)?;
         let data: Vec<ArrayRef> = vec![left.clone(), right.clone()];
         let batch = RecordBatch::try_new(schema.clone(), data)?;
-        let result = op.evaluate(&batch)?.into_array(batch.num_rows());
+        let result = op
+            .evaluate(&batch)?
+            .into_array(batch.num_rows())
+            .expect("Failed to convert to array");
 
         assert_eq!(result.as_ref(), &expected);
         Ok(())
@@ -2187,7 +2272,10 @@ mod tests {
         let scalar = lit(scalar.clone());
         let op = binary_op(scalar, op, col("a", schema)?, schema)?;
         let batch = RecordBatch::try_new(Arc::clone(schema), vec![Arc::clone(arr)])?;
-        let result = op.evaluate(&batch)?.into_array(batch.num_rows());
+        let result = op
+            .evaluate(&batch)?
+            .into_array(batch.num_rows())
+            .expect("Failed to convert to array");
         assert_eq!(result.as_ref(), expected);
 
         Ok(())
@@ -2204,7 +2292,10 @@ mod tests {
         let scalar = lit(scalar.clone());
         let op = binary_op(col("a", schema)?, op, scalar, schema)?;
         let batch = RecordBatch::try_new(Arc::clone(schema), vec![Arc::clone(arr)])?;
-        let result = op.evaluate(&batch)?.into_array(batch.num_rows());
+        let result = op
+            .evaluate(&batch)?
+            .into_array(batch.num_rows())
+            .expect("Failed to convert to array");
         assert_eq!(result.as_ref(), expected);
 
         Ok(())
@@ -2776,7 +2867,8 @@ mod tests {
         let result = expr
             .evaluate(&batch)
             .expect("evaluation")
-            .into_array(batch.num_rows());
+            .into_array(batch.num_rows())
+            .expect("Failed to convert to array");
 
         let expected: Int32Array = input
             .into_iter()
@@ -3255,7 +3347,10 @@ mod tests {
         let arithmetic_op = binary_op(col("a", schema)?, op, col("b", schema)?, schema)?;
         let data: Vec<ArrayRef> = vec![left.clone(), right.clone()];
         let batch = RecordBatch::try_new(schema.clone(), data)?;
-        let result = arithmetic_op.evaluate(&batch)?.into_array(batch.num_rows());
+        let result = arithmetic_op
+            .evaluate(&batch)?
+            .into_array(batch.num_rows())
+            .expect("Failed to convert to array");
 
         assert_eq!(result.as_ref(), expected.as_ref());
         Ok(())
@@ -3512,10 +3607,9 @@ mod tests {
         )
         .unwrap_err();
 
-        assert!(
-            matches!(err, DataFusionError::ArrowError(ArrowError::DivideByZero)),
-            "{err}"
-        );
+        let _expected = plan_datafusion_err!("Divide by zero");
+
+        assert!(matches!(err, ref _expected), "{err}");
 
         // decimal
         let schema = Arc::new(Schema::new(vec![
@@ -3537,10 +3631,7 @@ mod tests {
         )
         .unwrap_err();
 
-        assert!(
-            matches!(err, DataFusionError::ArrowError(ArrowError::DivideByZero)),
-            "{err}"
-        );
+        assert!(matches!(err, ref _expected), "{err}");
 
         Ok(())
     }

@@ -31,9 +31,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 pub use self::url::ListingTableUrl;
-pub use table::{
-    ListingOptions, ListingTable, ListingTableConfig, ListingTableInsertMode,
-};
+pub use table::{ListingOptions, ListingTable, ListingTableConfig};
 
 /// Stream of files get listed from object store
 pub type PartitionedFileStream =
@@ -42,7 +40,7 @@ pub type PartitionedFileStream =
 /// Only scan a subset of Row Groups from the Parquet file whose data "midpoint"
 /// lies within the [start, end) byte offsets. This option can be used to scan non-overlapping
 /// sections of a Parquet file in parallel.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Hash, Eq, PartialOrd, Ord)]
 pub struct FileRange {
     /// Range start
     pub start: i64,
@@ -72,16 +70,16 @@ pub struct PartitionedFile {
     /// An optional field for user defined per object metadata
     pub extensions: Option<Arc<dyn std::any::Any + Send + Sync>>,
 }
-
 impl PartitionedFile {
     /// Create a simple file without metadata or partition
-    pub fn new(path: String, size: u64) -> Self {
+    pub fn new(path: impl Into<String>, size: u64) -> Self {
         Self {
             object_meta: ObjectMeta {
-                location: Path::from(path),
+                location: Path::from(path.into()),
                 last_modified: chrono::Utc.timestamp_nanos(0),
                 size: size as usize,
                 e_tag: None,
+                version: None,
             },
             partition_values: vec![],
             range: None,
@@ -97,17 +95,30 @@ impl PartitionedFile {
                 last_modified: chrono::Utc.timestamp_nanos(0),
                 size: size as usize,
                 e_tag: None,
+                version: None,
             },
             partition_values: vec![],
-            range: Some(FileRange { start, end }),
+            range: None,
             extensions: None,
         }
+        .with_range(start, end)
     }
 
     /// Return a file reference from the given path
     pub fn from_path(path: String) -> Result<Self> {
         let size = std::fs::metadata(path.clone())?.len();
         Ok(Self::new(path, size))
+    }
+
+    /// Return the path of this partitioned file
+    pub fn path(&self) -> &Path {
+        &self.object_meta.location
+    }
+
+    /// Update the file to only scan the specified range (in bytes)
+    pub fn with_range(mut self, start: i64, end: i64) -> Self {
+        self.range = Some(FileRange { start, end });
+        self
     }
 }
 

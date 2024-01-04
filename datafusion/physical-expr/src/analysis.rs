@@ -21,8 +21,7 @@ use std::fmt::Debug;
 use std::sync::Arc;
 
 use crate::expressions::Column;
-use crate::intervals::cp_solver::PropagationResult;
-use crate::intervals::{cardinality_ratio, ExprIntervalGraph, Interval, IntervalBound};
+use crate::intervals::cp_solver::{ExprIntervalGraph, PropagationResult};
 use crate::utils::collect_columns;
 use crate::PhysicalExpr;
 
@@ -31,6 +30,7 @@ use datafusion_common::stats::Precision;
 use datafusion_common::{
     internal_err, ColumnStatistics, DataFusionError, Result, ScalarValue,
 };
+use datafusion_expr::interval_arithmetic::{cardinality_ratio, Interval};
 
 /// The shared context used during the analysis of an expression. Includes
 /// the boundaries for all known columns.
@@ -72,8 +72,12 @@ impl AnalysisContext {
     }
 }
 
-/// Represents the boundaries of the resulting value from a physical expression,
-/// if it were to be an expression, if it were to be evaluated.
+/// Represents the boundaries (e.g. min and max values) of a particular column
+///
+/// This is used range analysis of expressions, to determine if the expression
+/// limits the value of particular columns (e.g. analyzing an expression such as
+/// `time < 50` would result in a boundary interval for `time` having a max
+/// value of `50`).
 #[derive(Clone, Debug, PartialEq)]
 pub struct ExprBoundaries {
     pub column: Column,
@@ -91,29 +95,43 @@ impl ExprBoundaries {
         col_index: usize,
     ) -> Result<Self> {
         let field = &schema.fields()[col_index];
-        let empty_field = ScalarValue::try_from(field.data_type())?;
-        let interval = Interval::new(
-            IntervalBound::new_closed(
-                col_stats
-                    .min_value
-                    .get_value()
-                    .cloned()
-                    .unwrap_or(empty_field.clone()),
-            ),
-            IntervalBound::new_closed(
-                col_stats
-                    .max_value
-                    .get_value()
-                    .cloned()
-                    .unwrap_or(empty_field),
-            ),
-        );
+        let empty_field =
+            ScalarValue::try_from(field.data_type()).unwrap_or(ScalarValue::Null);
+        let interval = Interval::try_new(
+            col_stats
+                .min_value
+                .get_value()
+                .cloned()
+                .unwrap_or(empty_field.clone()),
+            col_stats
+                .max_value
+                .get_value()
+                .cloned()
+                .unwrap_or(empty_field),
+        )?;
         let column = Column::new(field.name(), col_index);
         Ok(ExprBoundaries {
             column,
             interval,
             distinct_count: col_stats.distinct_count.clone(),
         })
+    }
+
+    /// Create `ExprBoundaries` that represent no known bounds for all the
+    /// columns in `schema`
+    pub fn try_new_unbounded(schema: &Schema) -> Result<Vec<Self>> {
+        schema
+            .fields()
+            .iter()
+            .enumerate()
+            .map(|(i, field)| {
+                Ok(Self {
+                    column: Column::new(field.name(), i),
+                    interval: Interval::make_unbounded(field.data_type())?,
+                    distinct_count: Precision::Absent,
+                })
+            })
+            .collect()
     }
 }
 
@@ -135,47 +153,44 @@ impl ExprBoundaries {
 pub fn analyze(
     expr: &Arc<dyn PhysicalExpr>,
     context: AnalysisContext,
+    schema: &Schema,
 ) -> Result<AnalysisContext> {
     let target_boundaries = context.boundaries;
 
-    let mut graph = ExprIntervalGraph::try_new(expr.clone())?;
+    let mut graph = ExprIntervalGraph::try_new(expr.clone(), schema)?;
 
-    let columns: Vec<Arc<dyn PhysicalExpr>> = collect_columns(expr)
+    let columns = collect_columns(expr)
         .into_iter()
-        .map(|c| Arc::new(c) as Arc<dyn PhysicalExpr>)
-        .collect();
+        .map(|c| Arc::new(c) as _)
+        .collect::<Vec<_>>();
 
-    let target_expr_and_indices: Vec<(Arc<dyn PhysicalExpr>, usize)> =
-        graph.gather_node_indices(columns.as_slice());
+    let target_expr_and_indices = graph.gather_node_indices(columns.as_slice());
 
-    let mut target_indices_and_boundaries: Vec<(usize, Interval)> =
-        target_expr_and_indices
-            .iter()
-            .filter_map(|(expr, i)| {
-                target_boundaries.iter().find_map(|bound| {
-                    expr.as_any()
-                        .downcast_ref::<Column>()
-                        .filter(|expr_column| bound.column.eq(*expr_column))
-                        .map(|_| (*i, bound.interval.clone()))
-                })
+    let mut target_indices_and_boundaries = target_expr_and_indices
+        .iter()
+        .filter_map(|(expr, i)| {
+            target_boundaries.iter().find_map(|bound| {
+                expr.as_any()
+                    .downcast_ref::<Column>()
+                    .filter(|expr_column| bound.column.eq(*expr_column))
+                    .map(|_| (*i, bound.interval.clone()))
             })
-            .collect();
-    Ok(
-        match graph.update_ranges(&mut target_indices_and_boundaries)? {
-            PropagationResult::Success => shrink_boundaries(
-                expr,
-                graph,
-                target_boundaries,
-                target_expr_and_indices,
-            )?,
-            PropagationResult::Infeasible => {
-                AnalysisContext::new(target_boundaries).with_selectivity(0.0)
-            }
-            PropagationResult::CannotPropagate => {
-                AnalysisContext::new(target_boundaries).with_selectivity(1.0)
-            }
-        },
-    )
+        })
+        .collect::<Vec<_>>();
+
+    match graph
+        .update_ranges(&mut target_indices_and_boundaries, Interval::CERTAINLY_TRUE)?
+    {
+        PropagationResult::Success => {
+            shrink_boundaries(graph, target_boundaries, target_expr_and_indices)
+        }
+        PropagationResult::Infeasible => {
+            Ok(AnalysisContext::new(target_boundaries).with_selectivity(0.0))
+        }
+        PropagationResult::CannotPropagate => {
+            Ok(AnalysisContext::new(target_boundaries).with_selectivity(1.0))
+        }
+    }
 }
 
 /// If the `PropagationResult` indicates success, this function calculates the
@@ -183,8 +198,7 @@ pub fn analyze(
 /// Following this, it constructs and returns a new `AnalysisContext` with the
 /// updated parameters.
 fn shrink_boundaries(
-    expr: &Arc<dyn PhysicalExpr>,
-    mut graph: ExprIntervalGraph,
+    graph: ExprIntervalGraph,
     mut target_boundaries: Vec<ExprBoundaries>,
     target_expr_and_indices: Vec<(Arc<dyn PhysicalExpr>, usize)>,
 ) -> Result<AnalysisContext> {
@@ -199,20 +213,12 @@ fn shrink_boundaries(
             };
         }
     });
-    let graph_nodes = graph.gather_node_indices(&[expr.clone()]);
-    let Some((_, root_index)) = graph_nodes.get(0) else {
-        return internal_err!(
-            "The ExprIntervalGraph under investigation does not have any nodes."
-        );
-    };
-    let final_result = graph.get_interval(*root_index);
 
-    let selectivity = calculate_selectivity(
-        &final_result.lower.value,
-        &final_result.upper.value,
-        &target_boundaries,
-        &initial_boundaries,
-    )?;
+    let selectivity = calculate_selectivity(&target_boundaries, &initial_boundaries);
+
+    if !(0.0..=1.0).contains(&selectivity) {
+        return internal_err!("Selectivity is out of limit: {}", selectivity);
+    }
 
     Ok(AnalysisContext::new(target_boundaries).with_selectivity(selectivity))
 }
@@ -220,33 +226,17 @@ fn shrink_boundaries(
 /// This function calculates the filter predicate's selectivity by comparing
 /// the initial and pruned column boundaries. Selectivity is defined as the
 /// ratio of rows in a table that satisfy the filter's predicate.
-///
-/// An exact propagation result at the root, i.e. `[true, true]` or `[false, false]`,
-/// leads to early exit (returning a selectivity value of either 1.0 or 0.0). In such
-/// a case, `[true, true]` indicates that all data values satisfy the predicate (hence,
-/// selectivity is 1.0), and `[false, false]` suggests that no data value meets the
-/// predicate (therefore, selectivity is 0.0).
 fn calculate_selectivity(
-    lower_value: &ScalarValue,
-    upper_value: &ScalarValue,
     target_boundaries: &[ExprBoundaries],
     initial_boundaries: &[ExprBoundaries],
-) -> Result<f64> {
-    match (lower_value, upper_value) {
-        (ScalarValue::Boolean(Some(true)), ScalarValue::Boolean(Some(true))) => Ok(1.0),
-        (ScalarValue::Boolean(Some(false)), ScalarValue::Boolean(Some(false))) => Ok(0.0),
-        _ => {
-            // Since the intervals are assumed uniform and the values
-            // are not correlated, we need to multiply the selectivities
-            // of multiple columns to get the overall selectivity.
-            target_boundaries.iter().enumerate().try_fold(
-                1.0,
-                |acc, (i, ExprBoundaries { interval, .. })| {
-                    let temp =
-                        cardinality_ratio(&initial_boundaries[i].interval, interval)?;
-                    Ok(acc * temp)
-                },
-            )
-        }
-    }
+) -> f64 {
+    // Since the intervals are assumed uniform and the values
+    // are not correlated, we need to multiply the selectivities
+    // of multiple columns to get the overall selectivity.
+    initial_boundaries
+        .iter()
+        .zip(target_boundaries.iter())
+        .fold(1.0, |acc, (initial, target)| {
+            acc * cardinality_ratio(&initial.interval, &target.interval)
+        })
 }

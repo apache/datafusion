@@ -18,7 +18,7 @@
 [package]
 name = "datafusion-cli"
 description = "Command Line Client for DataFusion query engine."
-version = "33.0.0"
+version = "34.0.0"
 authors = ["Apache Arrow <dev@arrow.apache.org>"]
 edition = "2021"
 keywords = ["arrow", "datafusion", "query", "sql"]
@@ -29,20 +29,23 @@ rust-version = "1.70"
 readme = "README.md"
 
 [dependencies]
-arrow = "48.0.0"
+arrow = "49.0.0"
 async-trait = "0.1.41"
 aws-config = "0.55"
 aws-credential-types = "0.55"
 clap = { version = "3", features = ["derive", "cargo"] }
-datafusion = { path = "../datafusion/core", version = "33.0.0", features = ["avro", "crypto_expressions", "encoding_expressions", "parquet", "regex_expressions", "unicode_expressions", "compression"] }
+datafusion = { path = "../datafusion/core", version = "34.0.0", features = ["avro", "crypto_expressions", "encoding_expressions", "parquet", "regex_expressions", "unicode_expressions", "compression"] }
+datafusion-common = { path = "../datafusion/common" }
 dirs = "4.0.0"
 env_logger = "0.9"
+futures = "0.3"
 mimalloc = { version = "0.1", default-features = false }
-object_store = { version = "0.7.0", features = ["aws", "gcp"] }
+object_store = { version = "0.8.0", features = ["aws", "gcp"] }
 parking_lot = { version = "0.12" }
+parquet = { version = "49.0.0", default-features = false }
 regex = "1.8"
 rustyline = "11.0"
-tokio = { version = "1.24", features = ["macros", "rt", "rt-multi-thread", "sync", "parking_lot"] }
+tokio = { version = "1.24", features = ["macros", "rt", "rt-multi-thread", "sync", "parking_lot", "signal"] }
 url = "2.2"
 
 [dev-dependencies]

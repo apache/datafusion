@@ -69,7 +69,6 @@ async fn multi_parquet_coercion() {
             limit: None,
             table_partition_cols: vec![],
             output_ordering: vec![],
-            infinite_source: false,
         },
         None,
         None,
@@ -133,7 +132,6 @@ async fn multi_parquet_coercion_projection() {
             limit: None,
             table_partition_cols: vec![],
             output_ordering: vec![],
-            infinite_source: false,
         },
         None,
         None,
@@ -194,5 +192,6 @@ pub fn local_unpartitioned_file(path: impl AsRef<std::path::Path>) -> ObjectMeta
         last_modified: metadata.modified().map(chrono::DateTime::from).unwrap(),
         size: metadata.len() as usize,
         e_tag: None,
+        version: None,
     }
 }

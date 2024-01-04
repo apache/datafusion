@@ -85,7 +85,6 @@ async fn route_data_access_ops_to_parquet_file_reader_factory() {
             limit: None,
             table_partition_cols: vec![],
             output_ordering: vec![],
-            infinite_source: false,
         },
         None,
         None,
@@ -188,6 +187,7 @@ async fn store_parquet_in_memory(
                 last_modified: chrono::DateTime::from(SystemTime::now()),
                 size: buf.len(),
                 e_tag: None,
+                version: None,
             };
 
             (meta, Bytes::from(buf))

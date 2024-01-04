@@ -126,6 +126,86 @@ select interval '5' nanoseconds
 ----
 0 years 0 mons 0 days 0 hours 0 mins 0.000000005 secs
 
+query ?
+select interval '5 YEAR'
+----
+0 years 60 mons 0 days 0 hours 0 mins 0.000000000 secs
+
+query ?
+select interval '5 MONTH'
+----
+0 years 5 mons 0 days 0 hours 0 mins 0.000000000 secs
+
+query ?
+select interval '5 WEEK'
+----
+0 years 0 mons 35 days 0 hours 0 mins 0.000000000 secs
+
+query ?
+select interval '5 DAY'
+----
+0 years 0 mons 5 days 0 hours 0 mins 0.000000000 secs
+
+query ?
+select interval '5 HOUR'
+----
+0 years 0 mons 0 days 5 hours 0 mins 0.000000000 secs
+
+query ?
+select interval '5 HOURS'
+----
+0 years 0 mons 0 days 5 hours 0 mins 0.000000000 secs
+
+query ?
+select interval '5 MINUTE'
+----
+0 years 0 mons 0 days 0 hours 5 mins 0.000000000 secs
+
+query ?
+select interval '5 SECOND'
+----
+0 years 0 mons 0 days 0 hours 0 mins 5.000000000 secs
+
+query ?
+select interval '5 SECONDS'
+----
+0 years 0 mons 0 days 0 hours 0 mins 5.000000000 secs
+
+query ?
+select interval '5 MILLISECOND'
+----
+0 years 0 mons 0 days 0 hours 0 mins 0.005000000 secs
+
+query ?
+select interval '5 MILLISECONDS'
+----
+0 years 0 mons 0 days 0 hours 0 mins 0.005000000 secs
+
+query ?
+select interval '5 MICROSECOND'
+----
+0 years 0 mons 0 days 0 hours 0 mins 0.000005000 secs
+
+query ?
+select interval '5 MICROSECONDS'
+----
+0 years 0 mons 0 days 0 hours 0 mins 0.000005000 secs
+
+query ?
+select interval '5 NANOSECOND'
+----
+0 years 0 mons 0 days 0 hours 0 mins 0.000000005 secs
+
+query ?
+select interval '5 NANOSECONDS'
+----
+0 years 0 mons 0 days 0 hours 0 mins 0.000000005 secs
+
+query ?
+select interval '5 YEAR 5 MONTH 5 DAY 5 HOUR 5 MINUTE 5 SECOND 5 MILLISECOND 5 MICROSECOND 5 NANOSECOND'
+----
+0 years 65 mons 5 days 5 hours 5 mins 5.005005005 secs
+
 # Interval with string literal addition
 query ?
 select interval '1 month' + '1 month'

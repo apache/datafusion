@@ -21,6 +21,7 @@ use datafusion_physical_plan::metrics::MetricsSet;
 use futures::StreamExt;
 use log::debug;
 use std::any::Any;
+use std::collections::HashMap;
 use std::fmt::{self, Debug};
 use std::sync::Arc;
 
@@ -56,6 +57,7 @@ pub struct MemTable {
     schema: SchemaRef,
     pub(crate) batches: Vec<PartitionData>,
     constraints: Constraints,
+    column_defaults: HashMap<String, Expr>,
 }
 
 impl MemTable {
@@ -79,12 +81,22 @@ impl MemTable {
                 .map(|e| Arc::new(RwLock::new(e)))
                 .collect::<Vec<_>>(),
             constraints: Constraints::empty(),
+            column_defaults: HashMap::new(),
         })
     }
 
     /// Assign constraints
     pub fn with_constraints(mut self, constraints: Constraints) -> Self {
         self.constraints = constraints;
+        self
+    }
+
+    /// Assign column defaults
+    pub fn with_column_defaults(
+        mut self,
+        column_defaults: HashMap<String, Expr>,
+    ) -> Self {
+        self.column_defaults = column_defaults;
         self
     }
 
@@ -227,6 +239,10 @@ impl TableProvider for MemTable {
             self.schema.clone(),
             None,
         )))
+    }
+
+    fn get_column_default(&self, column: &str) -> Option<&Expr> {
+        self.column_defaults.get(column)
     }
 }
 
@@ -407,7 +423,7 @@ mod tests {
             .scan(&session_ctx.state(), Some(&projection), &[], None)
             .await
         {
-            Err(DataFusionError::ArrowError(ArrowError::SchemaError(e))) => {
+            Err(DataFusionError::ArrowError(ArrowError::SchemaError(e), _)) => {
                 assert_eq!(
                     "\"project index 4 out of bounds, max field 3\"",
                     format!("{e:?}")

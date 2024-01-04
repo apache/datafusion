@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::analyzer::{Analyzer, AnalyzerRule};
-use crate::optimizer::Optimizer;
+use crate::optimizer::{assert_schema_is_the_same, Optimizer};
 use crate::{OptimizerContext, OptimizerRule};
 use arrow::datatypes::{DataType, Field, Schema};
 use datafusion_common::config::ConfigOptions;
@@ -155,14 +155,17 @@ pub fn assert_optimized_plan_eq(
     plan: &LogicalPlan,
     expected: &str,
 ) -> Result<()> {
-    let optimizer = Optimizer::with_rules(vec![rule]);
+    let optimizer = Optimizer::with_rules(vec![rule.clone()]);
     let optimized_plan = optimizer
         .optimize_recursively(
-            optimizer.rules.get(0).unwrap(),
+            optimizer.rules.first().unwrap(),
             plan,
             &OptimizerContext::new(),
         )?
         .unwrap_or_else(|| plan.clone());
+
+    // Ensure schemas always match after an optimization
+    assert_schema_is_the_same(rule.name(), plan, &optimized_plan)?;
     let formatted_plan = format!("{optimized_plan:?}");
     assert_eq!(formatted_plan, expected);
 
@@ -196,7 +199,7 @@ pub fn assert_optimized_plan_eq_display_indent(
     let optimizer = Optimizer::with_rules(vec![rule]);
     let optimized_plan = optimizer
         .optimize_recursively(
-            optimizer.rules.get(0).unwrap(),
+            optimizer.rules.first().unwrap(),
             plan,
             &OptimizerContext::new(),
         )
@@ -230,7 +233,7 @@ pub fn assert_optimizer_err(
 ) {
     let optimizer = Optimizer::with_rules(vec![rule]);
     let res = optimizer.optimize_recursively(
-        optimizer.rules.get(0).unwrap(),
+        optimizer.rules.first().unwrap(),
         plan,
         &OptimizerContext::new(),
     );
@@ -252,7 +255,7 @@ pub fn assert_optimization_skipped(
     let optimizer = Optimizer::with_rules(vec![rule]);
     let new_plan = optimizer
         .optimize_recursively(
-            optimizer.rules.get(0).unwrap(),
+            optimizer.rules.first().unwrap(),
             plan,
             &OptimizerContext::new(),
         )?

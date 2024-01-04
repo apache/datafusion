@@ -26,6 +26,7 @@ use crate::stream::RecordBatchStreamAdapter;
 use crate::{ExecutionPlan, Partitioning, SendableRecordBatchStream};
 
 use arrow::datatypes::SchemaRef;
+use arrow_schema::Schema;
 use datafusion_common::{internal_err, plan_err, DataFusionError, Result};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{EquivalenceProperties, LexOrdering, PhysicalSortExpr};
@@ -55,7 +56,7 @@ pub struct StreamingTableExec {
     partitions: Vec<Arc<dyn PartitionStream>>,
     projection: Option<Arc<[usize]>>,
     projected_schema: SchemaRef,
-    projected_output_ordering: Option<LexOrdering>,
+    projected_output_ordering: Vec<LexOrdering>,
     infinite: bool,
 }
 
@@ -65,14 +66,14 @@ impl StreamingTableExec {
         schema: SchemaRef,
         partitions: Vec<Arc<dyn PartitionStream>>,
         projection: Option<&Vec<usize>>,
-        projected_output_ordering: Option<LexOrdering>,
+        projected_output_ordering: impl IntoIterator<Item = LexOrdering>,
         infinite: bool,
     ) -> Result<Self> {
         for x in partitions.iter() {
             let partition_schema = x.schema();
-            if !schema.contains(partition_schema) {
+            if !schema.eq(partition_schema) {
                 debug!(
-                    "target schema does not contain partition schema. \
+                    "Target schema does not match with partition schema. \
                         Target_schema: {schema:?}. Partiton Schema: {partition_schema:?}"
                 );
                 return plan_err!("Mismatch between schema and batches");
@@ -88,9 +89,33 @@ impl StreamingTableExec {
             partitions,
             projected_schema,
             projection: projection.cloned().map(Into::into),
-            projected_output_ordering,
+            projected_output_ordering: projected_output_ordering.into_iter().collect(),
             infinite,
         })
+    }
+
+    pub fn partitions(&self) -> &Vec<Arc<dyn PartitionStream>> {
+        &self.partitions
+    }
+
+    pub fn partition_schema(&self) -> &SchemaRef {
+        self.partitions[0].schema()
+    }
+
+    pub fn projection(&self) -> &Option<Arc<[usize]>> {
+        &self.projection
+    }
+
+    pub fn projected_schema(&self) -> &Schema {
+        &self.projected_schema
+    }
+
+    pub fn projected_output_ordering(&self) -> impl IntoIterator<Item = LexOrdering> {
+        self.projected_output_ordering.clone()
+    }
+
+    pub fn is_infinite(&self) -> bool {
+        self.infinite
     }
 }
 
@@ -125,7 +150,7 @@ impl DisplayAs for StreamingTableExec {
                 }
 
                 self.projected_output_ordering
-                    .as_deref()
+                    .first()
                     .map_or(Ok(()), |ordering| {
                         if !ordering.is_empty() {
                             write!(
@@ -160,15 +185,16 @@ impl ExecutionPlan for StreamingTableExec {
     }
 
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        self.projected_output_ordering.as_deref()
+        self.projected_output_ordering
+            .first()
+            .map(|ordering| ordering.as_slice())
     }
 
     fn equivalence_properties(&self) -> EquivalenceProperties {
-        let mut result = EquivalenceProperties::new(self.schema());
-        if let Some(ordering) = &self.projected_output_ordering {
-            result.add_new_orderings([ordering.clone()])
-        }
-        result
+        EquivalenceProperties::new_with_orderings(
+            self.schema(),
+            &self.projected_output_ordering,
+        )
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {

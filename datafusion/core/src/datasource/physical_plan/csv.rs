@@ -19,11 +19,10 @@
 
 use std::any::Any;
 use std::io::{Read, Seek, SeekFrom};
-use std::ops::Range;
 use std::sync::Arc;
 use std::task::Poll;
 
-use super::FileScanConfig;
+use super::{calculate_range, FileGroupPartitioner, FileScanConfig, RangeCalculation};
 use crate::datasource::file_format::file_compression_type::FileCompressionType;
 use crate::datasource::listing::{FileRange, ListingTableUrl};
 use crate::datasource::physical_plan::file_stream::{
@@ -146,10 +145,6 @@ impl ExecutionPlan for CsvExec {
         Partitioning::UnknownPartitioning(self.base_config.file_groups.len())
     }
 
-    fn unbounded_output(&self, _: &[bool]) -> Result<bool> {
-        Ok(self.base_config().infinite_source)
-    }
-
     /// See comments on `impl ExecutionPlan for ParquetExec`: output order can't be
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
         self.projected_output_ordering
@@ -177,7 +172,7 @@ impl ExecutionPlan for CsvExec {
     }
 
     /// Redistribute files across partitions according to their size
-    /// See comments on `repartition_file_groups()` for more detail.
+    /// See comments on [`FileGroupPartitioner`] for more detail.
     ///
     /// Return `None` if can't get repartitioned(empty/compressed file).
     fn repartitioned(
@@ -191,11 +186,11 @@ impl ExecutionPlan for CsvExec {
             return Ok(None);
         }
 
-        let repartitioned_file_groups_option = FileScanConfig::repartition_file_groups(
-            self.base_config.file_groups.clone(),
-            target_partitions,
-            repartition_file_min_size,
-        );
+        let repartitioned_file_groups_option = FileGroupPartitioner::new()
+            .with_target_partitions(target_partitions)
+            .with_preserve_order_within_groups(self.output_ordering().is_some())
+            .with_repartition_file_min_size(repartition_file_min_size)
+            .repartition_file_groups(&self.base_config.file_groups);
 
         if let Some(repartitioned_file_groups) = repartitioned_file_groups_option {
             let mut new_plan = self.clone();
@@ -322,47 +317,6 @@ impl CsvOpener {
     }
 }
 
-/// Returns the offset of the first newline in the object store range [start, end), or the end offset if no newline is found.
-async fn find_first_newline(
-    object_store: &Arc<dyn ObjectStore>,
-    location: &object_store::path::Path,
-    start_byte: usize,
-    end_byte: usize,
-) -> Result<usize> {
-    let options = GetOptions {
-        range: Some(Range {
-            start: start_byte,
-            end: end_byte,
-        }),
-        ..Default::default()
-    };
-
-    let r = object_store.get_opts(location, options).await?;
-    let mut input = r.into_stream();
-
-    let mut buffered = Bytes::new();
-    let mut index = 0;
-
-    loop {
-        if buffered.is_empty() {
-            match input.next().await {
-                Some(Ok(b)) => buffered = b,
-                Some(Err(e)) => return Err(e.into()),
-                None => return Ok(index),
-            };
-        }
-
-        for byte in &buffered {
-            if *byte == b'\n' {
-                return Ok(index);
-            }
-            index += 1;
-        }
-
-        buffered.advance(buffered.len());
-    }
-}
-
 impl FileOpener for CsvOpener {
     /// Open a partitioned CSV file.
     ///
@@ -412,44 +366,20 @@ impl FileOpener for CsvOpener {
             );
         }
 
+        let store = self.config.object_store.clone();
+
         Ok(Box::pin(async move {
-            let file_size = file_meta.object_meta.size;
             // Current partition contains bytes [start_byte, end_byte) (might contain incomplete lines at boundaries)
-            let range = match file_meta.range {
-                None => None,
-                Some(FileRange { start, end }) => {
-                    let (start, end) = (start as usize, end as usize);
-                    // Partition byte range is [start, end), the boundary might be in the middle of
-                    // some line. Need to find out the exact line boundaries.
-                    let start_delta = if start != 0 {
-                        find_first_newline(
-                            &config.object_store,
-                            file_meta.location(),
-                            start - 1,
-                            file_size,
-                        )
-                        .await?
-                    } else {
-                        0
-                    };
-                    let end_delta = if end != file_size {
-                        find_first_newline(
-                            &config.object_store,
-                            file_meta.location(),
-                            end - 1,
-                            file_size,
-                        )
-                        .await?
-                    } else {
-                        0
-                    };
-                    let range = start + start_delta..end + end_delta;
-                    if range.start == range.end {
-                        return Ok(
-                            futures::stream::poll_fn(move |_| Poll::Ready(None)).boxed()
-                        );
-                    }
-                    Some(range)
+
+            let calculated_range = calculate_range(&file_meta, &store).await?;
+
+            let range = match calculated_range {
+                RangeCalculation::Range(None) => None,
+                RangeCalculation::Range(Some(range)) => Some(range),
+                RangeCalculation::TerminateEarly => {
+                    return Ok(
+                        futures::stream::poll_fn(move |_| Poll::Ready(None)).boxed()
+                    )
                 }
             };
 
@@ -457,10 +387,8 @@ impl FileOpener for CsvOpener {
                 range,
                 ..Default::default()
             };
-            let result = config
-                .object_store
-                .get_opts(file_meta.location(), options)
-                .await?;
+
+            let result = store.get_opts(file_meta.location(), options).await?;
 
             match result.payload {
                 GetResultPayload::File(mut file, _) => {
@@ -872,8 +800,7 @@ mod tests {
 
         // Add partition columns
         config.table_partition_cols = vec![Field::new("date", DataType::Utf8, false)];
-        config.file_groups[0][0].partition_values =
-            vec![ScalarValue::Utf8(Some("2021-10-26".to_owned()))];
+        config.file_groups[0][0].partition_values = vec![ScalarValue::from("2021-10-26")];
 
         // We should be able to project on the partition column
         // Which is supposed to be after the file fields

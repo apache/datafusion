@@ -18,22 +18,20 @@
 //! Tree node implementation for logical expr
 
 use crate::expr::{
-    AggregateFunction, AggregateUDF, Alias, Between, BinaryExpr, Case, Cast,
-    GetIndexedField, GroupingSet, InList, InSubquery, Like, Placeholder, ScalarFunction,
-    ScalarUDF, Sort, TryCast, WindowFunction,
+    AggregateFunction, AggregateFunctionDefinition, Alias, Between, BinaryExpr, Case,
+    Cast, GetIndexedField, GroupingSet, InList, InSubquery, Like, Placeholder,
+    ScalarFunction, ScalarFunctionDefinition, Sort, TryCast, WindowFunction,
 };
 use crate::{Expr, GetFieldAccess};
+use std::borrow::Cow;
 
-use datafusion_common::tree_node::{TreeNode, VisitRecursion};
-use datafusion_common::Result;
+use datafusion_common::tree_node::TreeNode;
+use datafusion_common::{internal_err, DataFusionError, Result};
 
 impl TreeNode for Expr {
-    fn apply_children<F>(&self, op: &mut F) -> Result<VisitRecursion>
-    where
-        F: FnMut(&Self) -> Result<VisitRecursion>,
-    {
-        let children = match self {
-            Expr::Alias(Alias{expr,..})
+    fn children_nodes(&self) -> Vec<Cow<Self>> {
+        match self {
+            Expr::Alias(Alias { expr, .. })
             | Expr::Not(expr)
             | Expr::IsNotNull(expr)
             | Expr::IsTrue(expr)
@@ -47,28 +45,26 @@ impl TreeNode for Expr {
             | Expr::Cast(Cast { expr, .. })
             | Expr::TryCast(TryCast { expr, .. })
             | Expr::Sort(Sort { expr, .. })
-            | Expr::InSubquery(InSubquery{ expr, .. }) => vec![expr.as_ref().clone()],
+            | Expr::InSubquery(InSubquery { expr, .. }) => vec![Cow::Borrowed(expr)],
             Expr::GetIndexedField(GetIndexedField { expr, field }) => {
-                let expr = expr.as_ref().clone();
+                let expr = Cow::Borrowed(expr.as_ref());
                 match field {
-                    GetFieldAccess::ListIndex {key} => {
-                        vec![key.as_ref().clone(), expr]
-                    },
-                    GetFieldAccess::ListRange {start, stop} => {
-                        vec![start.as_ref().clone(), stop.as_ref().clone(), expr]
+                    GetFieldAccess::ListIndex { key } => {
+                        vec![Cow::Borrowed(key.as_ref()), expr]
                     }
-                    GetFieldAccess::NamedStructField {name: _name} => {
+                    GetFieldAccess::ListRange { start, stop } => {
+                        vec![Cow::Borrowed(start), Cow::Borrowed(stop), expr]
+                    }
+                    GetFieldAccess::NamedStructField { name: _name } => {
                         vec![expr]
                     }
                 }
             }
             Expr::GroupingSet(GroupingSet::Rollup(exprs))
-            | Expr::GroupingSet(GroupingSet::Cube(exprs)) => exprs.clone(),
-            Expr::ScalarFunction (ScalarFunction{ args, .. } )| Expr::ScalarUDF(ScalarUDF { args, .. })  => {
-                args.clone()
-            }
+            | Expr::GroupingSet(GroupingSet::Cube(exprs)) => exprs.iter().map(Cow::Borrowed).collect(),
+            Expr::ScalarFunction(ScalarFunction { args, .. }) => args.iter().map(Cow::Borrowed).collect(),
             Expr::GroupingSet(GroupingSet::GroupingSets(lists_of_exprs)) => {
-                lists_of_exprs.clone().into_iter().flatten().collect()
+                lists_of_exprs.iter().flatten().map(Cow::Borrowed).collect()
             }
             Expr::Column(_)
             // Treat OuterReferenceColumn as a leaf expression
@@ -77,46 +73,49 @@ impl TreeNode for Expr {
             | Expr::Literal(_)
             | Expr::Exists { .. }
             | Expr::ScalarSubquery(_)
-            | Expr::Wildcard
-            | Expr::QualifiedWildcard { .. }
-            | Expr::Placeholder (_) => vec![],
+            | Expr::Wildcard { .. }
+            | Expr::Placeholder(_) => vec![],
             Expr::BinaryExpr(BinaryExpr { left, right, .. }) => {
-                vec![left.as_ref().clone(), right.as_ref().clone()]
+                vec![Cow::Borrowed(left), Cow::Borrowed(right)]
             }
             Expr::Like(Like { expr, pattern, .. })
             | Expr::SimilarTo(Like { expr, pattern, .. }) => {
-                vec![expr.as_ref().clone(), pattern.as_ref().clone()]
+                vec![Cow::Borrowed(expr), Cow::Borrowed(pattern)]
             }
             Expr::Between(Between {
                 expr, low, high, ..
             }) => vec![
-                expr.as_ref().clone(),
-                low.as_ref().clone(),
-                high.as_ref().clone(),
+                Cow::Borrowed(expr),
+                Cow::Borrowed(low),
+                Cow::Borrowed(high),
             ],
             Expr::Case(case) => {
                 let mut expr_vec = vec![];
                 if let Some(expr) = case.expr.as_ref() {
-                    expr_vec.push(expr.as_ref().clone());
+                    expr_vec.push(Cow::Borrowed(expr.as_ref()));
                 };
                 for (when, then) in case.when_then_expr.iter() {
-                    expr_vec.push(when.as_ref().clone());
-                    expr_vec.push(then.as_ref().clone());
+                    expr_vec.push(Cow::Borrowed(when));
+                    expr_vec.push(Cow::Borrowed(then));
                 }
                 if let Some(else_expr) = case.else_expr.as_ref() {
-                    expr_vec.push(else_expr.as_ref().clone());
+                    expr_vec.push(Cow::Borrowed(else_expr));
                 }
                 expr_vec
             }
-            Expr::AggregateFunction(AggregateFunction { args, filter, order_by, .. })
-            | Expr::AggregateUDF(AggregateUDF { args, filter, order_by, .. }) => {
-                let mut expr_vec = args.clone();
+            Expr::AggregateFunction(AggregateFunction {
+                args,
+                filter,
+                order_by,
+                ..
+            }) => {
+                let mut expr_vec: Vec<_> = args.iter().map(Cow::Borrowed).collect();
 
                 if let Some(f) = filter {
-                    expr_vec.push(f.as_ref().clone());
+                    expr_vec.push(Cow::Borrowed(f));
                 }
                 if let Some(o) = order_by {
-                    expr_vec.extend(o.clone());
+                    expr_vec.extend(o.iter().map(Cow::Borrowed).collect::<Vec<_>>());
                 }
 
                 expr_vec
@@ -127,28 +126,17 @@ impl TreeNode for Expr {
                 order_by,
                 ..
             }) => {
-                let mut expr_vec = args.clone();
-                expr_vec.extend(partition_by.clone());
-                expr_vec.extend(order_by.clone());
+                let mut expr_vec: Vec<_> = args.iter().map(Cow::Borrowed).collect();
+                expr_vec.extend(partition_by.iter().map(Cow::Borrowed).collect::<Vec<_>>());
+                expr_vec.extend(order_by.iter().map(Cow::Borrowed).collect::<Vec<_>>());
                 expr_vec
             }
             Expr::InList(InList { expr, list, .. }) => {
-                let mut expr_vec = vec![];
-                expr_vec.push(expr.as_ref().clone());
-                expr_vec.extend(list.clone());
+                let mut expr_vec = vec![Cow::Borrowed(expr.as_ref())];
+                expr_vec.extend(list.iter().map(Cow::Borrowed).collect::<Vec<_>>());
                 expr_vec
             }
-        };
-
-        for child in children.iter() {
-            match op(child)? {
-                VisitRecursion::Continue => {}
-                VisitRecursion::Skip => return Ok(VisitRecursion::Continue),
-                VisitRecursion::Stop => return Ok(VisitRecursion::Stop),
-            }
         }
-
-        Ok(VisitRecursion::Continue)
     }
 
     fn map_children<F>(self, transform: F) -> Result<Self>
@@ -158,9 +146,11 @@ impl TreeNode for Expr {
         let mut transform = transform;
 
         Ok(match self {
-            Expr::Alias(Alias { expr, name, .. }) => {
-                Expr::Alias(Alias::new(transform(*expr)?, name))
-            }
+            Expr::Alias(Alias {
+                expr,
+                relation,
+                name,
+            }) => Expr::Alias(Alias::new(transform(*expr)?, relation, name)),
             Expr::Column(_) => self,
             Expr::OuterReferenceColumn(_, _) => self,
             Expr::Exists { .. } => self,
@@ -275,12 +265,19 @@ impl TreeNode for Expr {
                 asc,
                 nulls_first,
             )),
-            Expr::ScalarFunction(ScalarFunction { args, fun }) => Expr::ScalarFunction(
-                ScalarFunction::new(fun, transform_vec(args, &mut transform)?),
-            ),
-            Expr::ScalarUDF(ScalarUDF { args, fun }) => {
-                Expr::ScalarUDF(ScalarUDF::new(fun, transform_vec(args, &mut transform)?))
-            }
+            Expr::ScalarFunction(ScalarFunction { func_def, args }) => match func_def {
+                ScalarFunctionDefinition::BuiltIn(fun) => Expr::ScalarFunction(
+                    ScalarFunction::new(fun, transform_vec(args, &mut transform)?),
+                ),
+                ScalarFunctionDefinition::UDF(fun) => Expr::ScalarFunction(
+                    ScalarFunction::new_udf(fun, transform_vec(args, &mut transform)?),
+                ),
+                ScalarFunctionDefinition::Name(_) => {
+                    return internal_err!(
+                        "Function `Expr` with name should be resolved."
+                    );
+                }
+            },
             Expr::WindowFunction(WindowFunction {
                 args,
                 fun,
@@ -296,17 +293,40 @@ impl TreeNode for Expr {
             )),
             Expr::AggregateFunction(AggregateFunction {
                 args,
-                fun,
+                func_def,
                 distinct,
                 filter,
                 order_by,
-            }) => Expr::AggregateFunction(AggregateFunction::new(
-                fun,
-                transform_vec(args, &mut transform)?,
-                distinct,
-                transform_option_box(filter, &mut transform)?,
-                transform_option_vec(order_by, &mut transform)?,
-            )),
+            }) => match func_def {
+                AggregateFunctionDefinition::BuiltIn(fun) => {
+                    Expr::AggregateFunction(AggregateFunction::new(
+                        fun,
+                        transform_vec(args, &mut transform)?,
+                        distinct,
+                        transform_option_box(filter, &mut transform)?,
+                        transform_option_vec(order_by, &mut transform)?,
+                    ))
+                }
+                AggregateFunctionDefinition::UDF(fun) => {
+                    let order_by = if let Some(order_by) = order_by {
+                        Some(transform_vec(order_by, &mut transform)?)
+                    } else {
+                        None
+                    };
+                    Expr::AggregateFunction(AggregateFunction::new_udf(
+                        fun,
+                        transform_vec(args, &mut transform)?,
+                        false,
+                        transform_option_box(filter, &mut transform)?,
+                        transform_option_vec(order_by, &mut transform)?,
+                    ))
+                }
+                AggregateFunctionDefinition::Name(_) => {
+                    return internal_err!(
+                        "Function `Expr` with name should be resolved."
+                    );
+                }
+            },
             Expr::GroupingSet(grouping_set) => match grouping_set {
                 GroupingSet::Rollup(exprs) => Expr::GroupingSet(GroupingSet::Rollup(
                     transform_vec(exprs, &mut transform)?,
@@ -323,24 +343,7 @@ impl TreeNode for Expr {
                     ))
                 }
             },
-            Expr::AggregateUDF(AggregateUDF {
-                args,
-                fun,
-                filter,
-                order_by,
-            }) => {
-                let order_by = if let Some(order_by) = order_by {
-                    Some(transform_vec(order_by, &mut transform)?)
-                } else {
-                    None
-                };
-                Expr::AggregateUDF(AggregateUDF::new(
-                    fun,
-                    transform_vec(args, &mut transform)?,
-                    transform_option_box(filter, &mut transform)?,
-                    transform_option_vec(order_by, &mut transform)?,
-                ))
-            }
+
             Expr::InList(InList {
                 expr,
                 list,
@@ -350,10 +353,7 @@ impl TreeNode for Expr {
                 transform_vec(list, &mut transform)?,
                 negated,
             )),
-            Expr::Wildcard => Expr::Wildcard,
-            Expr::QualifiedWildcard { qualifier } => {
-                Expr::QualifiedWildcard { qualifier }
-            }
+            Expr::Wildcard { qualifier } => Expr::Wildcard { qualifier },
             Expr::GetIndexedField(GetIndexedField { expr, field }) => {
                 Expr::GetIndexedField(GetIndexedField::new(
                     transform_boxed(expr, &mut transform)?,

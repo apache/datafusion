@@ -28,6 +28,7 @@ in-memory format. [Python Bindings](https://github.com/apache/arrow-datafusion-p
 Here are links to some important information
 
 - [Project Site](https://arrow.apache.org/datafusion)
+- [Installation](https://arrow.apache.org/datafusion/user-guide/cli.html#installation)
 - [Rust Getting Started](https://arrow.apache.org/datafusion/user-guide/example-usage.html)
 - [Rust DataFrame API](https://arrow.apache.org/datafusion/user-guide/dataframe.html)
 - [Rust API docs](https://docs.rs/datafusion/latest/datafusion)
@@ -40,7 +41,18 @@ Here are links to some important information
 DataFusion is great for building projects such as domain specific query engines, new database platforms and data pipelines, query languages and more.
 It lets you start quickly from a fully working engine, and then customize those features specific to your use. [Click Here](https://arrow.apache.org/datafusion/user-guide/introduction.html#known-users) to see a list known users.
 
+## Contributing to DataFusion
+
+Please see the [developer’s guide] for contributing and [communication] for getting in touch with us.
+
+[developer’s guide]: https://arrow.apache.org/datafusion/contributor-guide/index.html#developer-s-guide
+[communication]: https://arrow.apache.org/datafusion/contributor-guide/communication.html
+
 ## Crate features
+
+This crate has several [features] which can be specified in your `Cargo.toml`.
+
+[features]: https://doc.rust-lang.org/cargo/reference/features.html
 
 Default features:
 
@@ -65,9 +77,3 @@ Optional features:
 ## Rust Version Compatibility
 
 This crate is tested with the latest stable version of Rust. We do not currently test against other, older versions of the Rust compiler.
-
-## Contributing to DataFusion
-
-The [developer’s guide] contains information on how to contribute.
-
-[developer’s guide]: https://arrow.apache.org/datafusion/contributor-guide/index.html#developer-s-guide

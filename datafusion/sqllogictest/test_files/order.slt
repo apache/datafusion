@@ -441,13 +441,13 @@ physical_plan
 SortPreservingMergeExec: [result@0 ASC NULLS LAST]
 --ProjectionExec: expr=[b@1 + a@0 + c@2 as result]
 ----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b, c], output_ordering=[a@0 ASC NULLS LAST], has_header=true
+------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b, c], output_orderings=[[a@0 ASC NULLS LAST], [b@1 ASC NULLS LAST], [c@2 ASC NULLS LAST]], has_header=true
 
 statement ok
 drop table multiple_ordered_table;
 
 # Create tables having some ordered columns. In the next step, we will expect to observe that scalar
-# functions, such as mathematical functions like atan(), ceil(), sqrt(), or date_time functions 
+# functions, such as mathematical functions like atan(), ceil(), sqrt(), or date_time functions
 # like date_bin() and date_trunc(), will maintain the order of its argument columns.
 statement ok
 CREATE EXTERNAL TABLE csv_with_timestamps (
@@ -559,7 +559,7 @@ physical_plan
 SortPreservingMergeExec: [log_c11_base_c12@0 ASC NULLS LAST]
 --ProjectionExec: expr=[log(CAST(c11@0 AS Float64), c12@1) as log_c11_base_c12]
 ----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c11, c12], output_ordering=[c11@0 ASC NULLS LAST], has_header=true
+------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c11, c12], output_orderings=[[c11@0 ASC NULLS LAST], [c12@1 DESC]], has_header=true
 
 query TT
 EXPLAIN SELECT LOG(c12, c11) as log_c12_base_c11
@@ -574,7 +574,7 @@ physical_plan
 SortPreservingMergeExec: [log_c12_base_c11@0 DESC]
 --ProjectionExec: expr=[log(c12@1, CAST(c11@0 AS Float64)) as log_c12_base_c11]
 ----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c11, c12], output_ordering=[c11@0 ASC NULLS LAST], has_header=true
+------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c11, c12], output_orderings=[[c11@0 ASC NULLS LAST], [c12@1 DESC]], has_header=true
 
 statement ok
 drop table aggregate_test_100;

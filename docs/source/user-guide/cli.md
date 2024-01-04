@@ -31,7 +31,9 @@ The easiest way to install DataFusion CLI a spin is via `cargo install datafusio
 
 ### Install and run using Homebrew (on MacOS)
 
-DataFusion CLI can also be installed via Homebrew (on MacOS). Install it as any other pre-built software like this:
+DataFusion CLI can also be installed via Homebrew (on MacOS). If you don't have Homebrew installed, you can check how to install it [here](https://docs.brew.sh/Installation).
+
+Install it as any other pre-built software like this:
 
 ```bash
 brew install datafusion
@@ -42,6 +44,34 @@ brew install datafusion
 # ######################################################################## 100.0%
 # ==> Pouring datafusion--12.0.0.big_sur.bottle.tar.gz
 # 🍺  /usr/local/Cellar/datafusion/12.0.0: 9 files, 17.4MB
+
+datafusion-cli
+```
+
+### Install and run using PyPI
+
+DataFusion CLI can also be installed via PyPI. You can check how to install PyPI [here](https://pip.pypa.io/en/latest/installation/).
+
+Install it as any other pre-built software like this:
+
+```bash
+pip3 install datafusion
+# Defaulting to user installation because normal site-packages is not writeable
+# Collecting datafusion
+#   Downloading datafusion-33.0.0-cp38-abi3-macosx_11_0_arm64.whl.metadata (9.6 kB)
+# Collecting pyarrow>=11.0.0 (from datafusion)
+#   Downloading pyarrow-14.0.1-cp39-cp39-macosx_11_0_arm64.whl.metadata (3.0 kB)
+# Requirement already satisfied: numpy>=1.16.6 in /Users/Library/Python/3.9/lib/python/site-packages (from pyarrow>=11.0.0->datafusion) (1.23.4)
+# Downloading datafusion-33.0.0-cp38-abi3-macosx_11_0_arm64.whl (13.5 MB)
+#    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 13.5/13.5 MB 3.6 MB/s eta 0:00:00
+# Downloading pyarrow-14.0.1-cp39-cp39-macosx_11_0_arm64.whl (24.0 MB)
+#    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 24.0/24.0 MB 36.4 MB/s eta 0:00:00
+# Installing collected packages: pyarrow, datafusion
+#   Attempting uninstall: pyarrow
+#     Found existing installation: pyarrow 10.0.1
+#     Uninstalling pyarrow-10.0.1:
+#       Successfully uninstalled pyarrow-10.0.1
+# Successfully installed datafusion-33.0.0 pyarrow-14.0.1
 
 datafusion-cli
 ```

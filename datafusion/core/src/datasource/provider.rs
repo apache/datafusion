@@ -26,6 +26,8 @@ use datafusion_expr::{CreateExternalTable, LogicalPlan};
 pub use datafusion_expr::{TableProviderFilterPushDown, TableType};
 
 use crate::arrow::datatypes::SchemaRef;
+use crate::datasource::listing_table_factory::ListingTableFactory;
+use crate::datasource::stream::StreamTableFactory;
 use crate::error::Result;
 use crate::execution::context::SessionState;
 use crate::logical_expr::Expr;
@@ -61,6 +63,11 @@ pub trait TableProvider: Sync + Send {
 
     /// Get the [`LogicalPlan`] of this table, if available
     fn get_logical_plan(&self) -> Option<&LogicalPlan> {
+        None
+    }
+
+    /// Get the default value for a column, if available.
+    fn get_column_default(&self, _column: &str) -> Option<&Expr> {
         None
     }
 
@@ -134,7 +141,11 @@ pub trait TableProvider: Sync + Send {
     /// (though it may return more).  Like Projection Pushdown and Filter
     /// Pushdown, DataFusion pushes `LIMIT`s  as far down in the plan as
     /// possible, called "Limit Pushdown" as some sources can use this
-    /// information to improve their performance.
+    /// information to improve their performance. Note that if there are any
+    /// Inexact filters pushed down, the LIMIT cannot be pushed down. This is
+    /// because inexact filters do not guarentee that every filtered row is
+    /// removed, so applying the limit could lead to too few rows being available
+    /// to return as a final result.
     async fn scan(
         &self,
         state: &SessionState,
@@ -213,4 +224,42 @@ pub trait TableProviderFactory: Sync + Send {
         state: &SessionState,
         cmd: &CreateExternalTable,
     ) -> Result<Arc<dyn TableProvider>>;
+}
+
+/// The default [`TableProviderFactory`]
+///
+/// If [`CreateExternalTable`] is unbounded calls [`StreamTableFactory::create`],
+/// otherwise calls [`ListingTableFactory::create`]
+#[derive(Debug, Default)]
+pub struct DefaultTableFactory {
+    stream: StreamTableFactory,
+    listing: ListingTableFactory,
+}
+
+impl DefaultTableFactory {
+    /// Creates a new [`DefaultTableFactory`]
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
+#[async_trait]
+impl TableProviderFactory for DefaultTableFactory {
+    async fn create(
+        &self,
+        state: &SessionState,
+        cmd: &CreateExternalTable,
+    ) -> Result<Arc<dyn TableProvider>> {
+        let mut unbounded = cmd.unbounded;
+        for (k, v) in &cmd.options {
+            if k.eq_ignore_ascii_case("unbounded") && v.eq_ignore_ascii_case("true") {
+                unbounded = true
+            }
+        }
+
+        match unbounded {
+            true => self.stream.create(state, cmd).await,
+            false => self.listing.create(state, cmd).await,
+        }
+    }
 }

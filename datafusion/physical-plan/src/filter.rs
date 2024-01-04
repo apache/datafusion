@@ -27,7 +27,6 @@ use super::expressions::PhysicalSortExpr;
 use super::{
     ColumnStatistics, DisplayAs, RecordBatchStream, SendableRecordBatchStream, Statistics,
 };
-
 use crate::{
     metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet},
     Column, DisplayFormatType, ExecutionPlan, Partitioning,
@@ -62,6 +61,8 @@ pub struct FilterExec {
     input: Arc<dyn ExecutionPlan>,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
+    /// Selectivity for statistics. 0 = no rows, 100 all rows
+    default_selectivity: u8,
 }
 
 impl FilterExec {
@@ -75,11 +76,23 @@ impl FilterExec {
                 predicate,
                 input: input.clone(),
                 metrics: ExecutionPlanMetricsSet::new(),
+                default_selectivity: 20,
             }),
             other => {
                 plan_err!("Filter predicate must return boolean values, not {other:?}")
             }
         }
+    }
+
+    pub fn with_default_selectivity(
+        mut self,
+        default_selectivity: u8,
+    ) -> Result<Self, DataFusionError> {
+        if default_selectivity > 100 {
+            return plan_err!("Default flter selectivity needs to be less than 100");
+        }
+        self.default_selectivity = default_selectivity;
+        Ok(self)
     }
 
     /// The expression to filter on. This expression must evaluate to a boolean value.
@@ -90,6 +103,11 @@ impl FilterExec {
     /// The input plan
     pub fn input(&self) -> &Arc<dyn ExecutionPlan> {
         &self.input
+    }
+
+    /// The default selectivity
+    pub fn default_selectivity(&self) -> u8 {
+        self.default_selectivity
     }
 }
 
@@ -167,6 +185,10 @@ impl ExecutionPlan for FilterExec {
         mut children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         FilterExec::try_new(self.predicate.clone(), children.swap_remove(0))
+            .and_then(|e| {
+                let selectivity = e.default_selectivity();
+                e.with_default_selectivity(selectivity)
+            })
             .map(|e| Arc::new(e) as _)
     }
 
@@ -194,11 +216,17 @@ impl ExecutionPlan for FilterExec {
     fn statistics(&self) -> Result<Statistics> {
         let predicate = self.predicate();
 
+        let input_stats = self.input.statistics()?;
         let schema = self.schema();
         if !check_support(predicate, &schema) {
-            return Ok(Statistics::new_unknown(&schema));
+            let selectivity = self.default_selectivity as f64 / 100.0;
+            let mut stats = input_stats.into_inexact();
+            stats.num_rows = stats.num_rows.with_estimated_selectivity(selectivity);
+            stats.total_byte_size = stats
+                .total_byte_size
+                .with_estimated_selectivity(selectivity);
+            return Ok(stats);
         }
-        let input_stats = self.input.statistics()?;
 
         let num_rows = input_stats.num_rows;
         let total_byte_size = input_stats.total_byte_size;
@@ -206,18 +234,13 @@ impl ExecutionPlan for FilterExec {
             &self.input.schema(),
             &input_stats.column_statistics,
         )?;
-        let analysis_ctx = analyze(predicate, input_analysis_ctx)?;
+
+        let analysis_ctx = analyze(predicate, input_analysis_ctx, &self.schema())?;
 
         // Estimate (inexact) selectivity of predicate
         let selectivity = analysis_ctx.selectivity.unwrap_or(1.0);
-        let num_rows = match num_rows.get_value() {
-            Some(nr) => Precision::Inexact((*nr as f64 * selectivity).ceil() as usize),
-            None => Precision::Absent,
-        };
-        let total_byte_size = match total_byte_size.get_value() {
-            Some(tbs) => Precision::Inexact((*tbs as f64 * selectivity).ceil() as usize),
-            None => Precision::Absent,
-        };
+        let num_rows = num_rows.with_estimated_selectivity(selectivity);
+        let total_byte_size = total_byte_size.with_estimated_selectivity(selectivity);
 
         let column_statistics = collect_new_statistics(
             &input_stats.column_statistics,
@@ -251,18 +274,17 @@ fn collect_new_statistics(
                     ..
                 },
             )| {
-                let closed_interval = interval.close_bounds();
+                let (lower, upper) = interval.into_bounds();
+                let (min_value, max_value) = if lower.eq(&upper) {
+                    (Precision::Exact(lower), Precision::Exact(upper))
+                } else {
+                    (Precision::Inexact(lower), Precision::Inexact(upper))
+                };
                 ColumnStatistics {
-                    null_count: match input_column_stats[idx].null_count.get_value() {
-                        Some(nc) => Precision::Inexact(*nc),
-                        None => Precision::Absent,
-                    },
-                    max_value: Precision::Inexact(closed_interval.upper.value),
-                    min_value: Precision::Inexact(closed_interval.lower.value),
-                    distinct_count: match distinct_count.get_value() {
-                        Some(dc) => Precision::Inexact(*dc),
-                        None => Precision::Absent,
-                    },
+                    null_count: input_column_stats[idx].null_count.clone().to_inexact(),
+                    max_value,
+                    min_value,
+                    distinct_count: distinct_count.to_inexact(),
                 }
             },
         )
@@ -288,7 +310,7 @@ pub(crate) fn batch_filter(
 ) -> Result<RecordBatch> {
     predicate
         .evaluate(batch)
-        .map(|v| v.into_array(batch.num_rows()))
+        .and_then(|v| v.into_array(batch.num_rows()))
         .and_then(|array| {
             Ok(as_boolean_array(&array)?)
                 // apply filter array to record batch
@@ -961,6 +983,78 @@ mod tests {
 
         assert_eq!(filter_statistics, expected_filter_statistics);
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_statistics_with_constant_column() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+        let input = Arc::new(StatisticsExec::new(
+            Statistics::new_unknown(&schema),
+            schema,
+        ));
+        // WHERE a = 10
+        let predicate = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("a", 0)),
+            Operator::Eq,
+            Arc::new(Literal::new(ScalarValue::Int32(Some(10)))),
+        ));
+        let filter: Arc<dyn ExecutionPlan> =
+            Arc::new(FilterExec::try_new(predicate, input)?);
+        let filter_statistics = filter.statistics()?;
+        // First column is "a", and it is a column with only one value after the filter.
+        assert!(filter_statistics.column_statistics[0].is_singleton());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_validation_filter_selectivity() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+        let input = Arc::new(StatisticsExec::new(
+            Statistics::new_unknown(&schema),
+            schema,
+        ));
+        // WHERE a = 10
+        let predicate = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("a", 0)),
+            Operator::Eq,
+            Arc::new(Literal::new(ScalarValue::Int32(Some(10)))),
+        ));
+        let filter = FilterExec::try_new(predicate, input)?;
+        assert!(filter.with_default_selectivity(120).is_err());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_custom_filter_selectivity() -> Result<()> {
+        // Need a decimal to trigger inexact selectivity
+        let schema =
+            Schema::new(vec![Field::new("a", DataType::Decimal128(2, 3), false)]);
+        let input = Arc::new(StatisticsExec::new(
+            Statistics {
+                num_rows: Precision::Inexact(1000),
+                total_byte_size: Precision::Inexact(4000),
+                column_statistics: vec![ColumnStatistics {
+                    ..Default::default()
+                }],
+            },
+            schema,
+        ));
+        // WHERE a = 10
+        let predicate = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("a", 0)),
+            Operator::Eq,
+            Arc::new(Literal::new(ScalarValue::Decimal128(Some(10), 10, 10))),
+        ));
+        let filter = FilterExec::try_new(predicate, input)?;
+        let statistics = filter.statistics()?;
+        assert_eq!(statistics.num_rows, Precision::Inexact(200));
+        assert_eq!(statistics.total_byte_size, Precision::Inexact(800));
+        let filter = filter.with_default_selectivity(40)?;
+        let statistics = filter.statistics()?;
+        assert_eq!(statistics.num_rows, Precision::Inexact(400));
+        assert_eq!(statistics.total_byte_size, Precision::Inexact(1600));
         Ok(())
     }
 }

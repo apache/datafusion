@@ -29,10 +29,10 @@ use datafusion_common::{
     exec_err, internal_err, not_impl_err, plan_err, DFSchema, DataFusionError, Result,
     ScalarValue,
 };
-use datafusion_expr::expr::{Alias, Cast, InList, ScalarFunction, ScalarUDF};
+use datafusion_expr::expr::{Alias, Cast, InList, ScalarFunction};
 use datafusion_expr::{
     binary_expr, Between, BinaryExpr, Expr, GetFieldAccess, GetIndexedField, Like,
-    Operator, TryCast,
+    Operator, ScalarFunctionDefinition, TryCast,
 };
 use std::sync::Arc;
 
@@ -348,35 +348,37 @@ pub fn create_physical_expr(
             )))
         }
 
-        Expr::ScalarFunction(ScalarFunction { fun, args }) => {
-            let physical_args = args
+        Expr::ScalarFunction(ScalarFunction { func_def, args }) => {
+            let mut physical_args = args
                 .iter()
                 .map(|e| {
                     create_physical_expr(e, input_dfschema, input_schema, execution_props)
                 })
                 .collect::<Result<Vec<_>>>()?;
-            functions::create_physical_expr(
-                fun,
-                &physical_args,
-                input_schema,
-                execution_props,
-            )
-        }
-        Expr::ScalarUDF(ScalarUDF { fun, args }) => {
-            let mut physical_args = vec![];
-            for e in args {
-                physical_args.push(create_physical_expr(
-                    e,
-                    input_dfschema,
-                    input_schema,
-                    execution_props,
-                )?);
+            match func_def {
+                ScalarFunctionDefinition::BuiltIn(fun) => {
+                    functions::create_physical_expr(
+                        fun,
+                        &physical_args,
+                        input_schema,
+                        execution_props,
+                    )
+                }
+                ScalarFunctionDefinition::UDF(fun) => {
+                    // udfs with zero params expect null array as input
+                    if args.is_empty() {
+                        physical_args.push(Arc::new(Literal::new(ScalarValue::Null)));
+                    }
+                    udf::create_physical_expr(
+                        fun.clone().as_ref(),
+                        &physical_args,
+                        input_schema,
+                    )
+                }
+                ScalarFunctionDefinition::Name(_) => {
+                    internal_err!("Function `Expr` with name should be resolved.")
+                }
             }
-            // udfs with zero params expect null array as input
-            if args.is_empty() {
-                physical_args.push(Arc::new(Literal::new(ScalarValue::Null)));
-            }
-            udf::create_physical_expr(fun.clone().as_ref(), &physical_args, input_schema)
         }
         Expr::Between(Between {
             expr,
@@ -472,7 +474,7 @@ mod tests {
             ]))],
         )?;
         let result = p.evaluate(&batch)?;
-        let result = result.into_array(4);
+        let result = result.into_array(4).expect("Failed to convert to array");
 
         assert_eq!(
             &result,

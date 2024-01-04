@@ -17,24 +17,25 @@
 
 //! Negation (-) expression
 
-use crate::intervals::Interval;
+use std::any::Any;
+use std::hash::{Hash, Hasher};
+use std::sync::Arc;
+
 use crate::physical_expr::down_cast_any_ref;
 use crate::sort_properties::SortProperties;
 use crate::PhysicalExpr;
+
 use arrow::{
     compute::kernels::numeric::neg_wrapping,
     datatypes::{DataType, Schema},
     record_batch::RecordBatch,
 };
 use datafusion_common::{internal_err, DataFusionError, Result};
+use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::{
-    type_coercion::{is_interval, is_null, is_signed_numeric},
+    type_coercion::{is_interval, is_null, is_signed_numeric, is_timestamp},
     ColumnarValue,
 };
-
-use std::any::Any;
-use std::hash::{Hash, Hasher};
-use std::sync::Arc;
 
 /// Negative expression
 #[derive(Debug, Hash)]
@@ -108,10 +109,10 @@ impl PhysicalExpr for NegativeExpr {
     /// It replaces the upper and lower bounds after multiplying them with -1.
     /// Ex: `(a, b]` => `[-b, -a)`
     fn evaluate_bounds(&self, children: &[&Interval]) -> Result<Interval> {
-        Ok(Interval::new(
-            children[0].upper.negate()?,
-            children[0].lower.negate()?,
-        ))
+        Interval::try_new(
+            children[0].upper().arithmetic_negate()?,
+            children[0].lower().arithmetic_negate()?,
+        )
     }
 
     /// Returns a new [`Interval`] of a NegativeExpr  that has the existing `interval` given that
@@ -120,12 +121,16 @@ impl PhysicalExpr for NegativeExpr {
         &self,
         interval: &Interval,
         children: &[&Interval],
-    ) -> Result<Vec<Option<Interval>>> {
+    ) -> Result<Option<Vec<Interval>>> {
         let child_interval = children[0];
-        let negated_interval =
-            Interval::new(interval.upper.negate()?, interval.lower.negate()?);
+        let negated_interval = Interval::try_new(
+            interval.upper().arithmetic_negate()?,
+            interval.lower().arithmetic_negate()?,
+        )?;
 
-        Ok(vec![child_interval.intersect(negated_interval)?])
+        Ok(child_interval
+            .intersect(negated_interval)?
+            .map(|result| vec![result]))
     }
 
     /// The ordering of a [`NegativeExpr`] is simply the reverse of its child.
@@ -155,7 +160,10 @@ pub fn negative(
     let data_type = arg.data_type(input_schema)?;
     if is_null(&data_type) {
         Ok(arg)
-    } else if !is_signed_numeric(&data_type) && !is_interval(&data_type) {
+    } else if !is_signed_numeric(&data_type)
+        && !is_interval(&data_type)
+        && !is_timestamp(&data_type)
+    {
         internal_err!(
             "Can't create negative physical expr for (- '{arg:?}'), the type of child expr is {data_type}, not signed numeric"
         )
@@ -167,14 +175,14 @@ pub fn negative(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        expressions::{col, Column},
-        intervals::Interval,
-    };
+    use crate::expressions::{col, Column};
+
     use arrow::array::*;
     use arrow::datatypes::*;
     use arrow_schema::DataType::{Float32, Float64, Int16, Int32, Int64, Int8};
-    use datafusion_common::{cast::as_primitive_array, Result};
+    use datafusion_common::cast::as_primitive_array;
+    use datafusion_common::Result;
+
     use paste::paste;
 
     macro_rules! test_array_negative_op {
@@ -195,7 +203,7 @@ mod tests {
             let expected = &paste!{[<$DATA_TY Array>]::from(arr_expected)};
             let batch =
                 RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::new(input)])?;
-            let result = expr.evaluate(&batch)?.into_array(batch.num_rows());
+            let result = expr.evaluate(&batch)?.into_array(batch.num_rows()).expect("Failed to convert to array");
             let result =
                 as_primitive_array(&result).expect(format!("failed to downcast to {:?}Array", $DATA_TY).as_str());
             assert_eq!(result, expected);
@@ -218,8 +226,8 @@ mod tests {
         let negative_expr = NegativeExpr {
             arg: Arc::new(Column::new("a", 0)),
         };
-        let child_interval = Interval::make(Some(-2), Some(1), (true, false));
-        let negative_expr_interval = Interval::make(Some(-1), Some(2), (false, true));
+        let child_interval = Interval::make(Some(-2), Some(1))?;
+        let negative_expr_interval = Interval::make(Some(-1), Some(2))?;
         assert_eq!(
             negative_expr.evaluate_bounds(&[&child_interval])?,
             negative_expr_interval
@@ -232,10 +240,9 @@ mod tests {
         let negative_expr = NegativeExpr {
             arg: Arc::new(Column::new("a", 0)),
         };
-        let original_child_interval = Interval::make(Some(-2), Some(3), (false, false));
-        let negative_expr_interval = Interval::make(Some(0), Some(4), (true, false));
-        let after_propagation =
-            vec![Some(Interval::make(Some(-2), Some(0), (false, true)))];
+        let original_child_interval = Interval::make(Some(-2), Some(3))?;
+        let negative_expr_interval = Interval::make(Some(0), Some(4))?;
+        let after_propagation = Some(vec![Interval::make(Some(-2), Some(0))?]);
         assert_eq!(
             negative_expr.propagate_constraints(
                 &negative_expr_interval,

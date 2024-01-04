@@ -176,6 +176,7 @@ mod tests {
                 .into(),
             size: 1024,
             e_tag: None,
+            version: None,
         };
         let cache = DefaultFileStatisticsCache::default();
         assert!(cache.get_with_extra(&meta.location, &meta).is_none());
@@ -219,6 +220,7 @@ mod tests {
                 .into(),
             size: 1024,
             e_tag: None,
+            version: None,
         };
 
         let cache = DefaultListFilesCache::default();
@@ -226,7 +228,7 @@ mod tests {
 
         cache.put(&meta.location, vec![meta.clone()].into());
         assert_eq!(
-            cache.get(&meta.location).unwrap().get(0).unwrap().clone(),
+            cache.get(&meta.location).unwrap().first().unwrap().clone(),
             meta.clone()
         );
     }

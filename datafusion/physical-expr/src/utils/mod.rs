@@ -15,7 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::borrow::Borrow;
+mod guarantee;
+pub use guarantee::{Guarantee, LiteralGuarantee};
+
+use std::borrow::{Borrow, Cow};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -41,25 +44,29 @@ use petgraph::stable_graph::StableGraph;
 pub fn split_conjunction(
     predicate: &Arc<dyn PhysicalExpr>,
 ) -> Vec<&Arc<dyn PhysicalExpr>> {
-    split_conjunction_impl(predicate, vec![])
+    split_impl(Operator::And, predicate, vec![])
 }
 
-fn split_conjunction_impl<'a>(
+/// Assume the predicate is in the form of DNF, split the predicate to a Vec of PhysicalExprs.
+///
+/// For example, split "a1 = a2 OR b1 <= b2 OR c1 != c2" into ["a1 = a2", "b1 <= b2", "c1 != c2"]
+pub fn split_disjunction(
+    predicate: &Arc<dyn PhysicalExpr>,
+) -> Vec<&Arc<dyn PhysicalExpr>> {
+    split_impl(Operator::Or, predicate, vec![])
+}
+
+fn split_impl<'a>(
+    operator: Operator,
     predicate: &'a Arc<dyn PhysicalExpr>,
     mut exprs: Vec<&'a Arc<dyn PhysicalExpr>>,
 ) -> Vec<&'a Arc<dyn PhysicalExpr>> {
     match predicate.as_any().downcast_ref::<BinaryExpr>() {
-        Some(binary) => match binary.op() {
-            Operator::And => {
-                let exprs = split_conjunction_impl(binary.left(), exprs);
-                split_conjunction_impl(binary.right(), exprs)
-            }
-            _ => {
-                exprs.push(predicate);
-                exprs
-            }
-        },
-        None => {
+        Some(binary) if binary.op() == &operator => {
+            let exprs = split_impl(operator, binary.left(), exprs);
+            split_impl(operator, binary.right(), exprs)
+        }
+        Some(_) | None => {
             exprs.push(predicate);
             exprs
         }
@@ -129,10 +136,11 @@ pub struct ExprTreeNode<T> {
 
 impl<T> ExprTreeNode<T> {
     pub fn new(expr: Arc<dyn PhysicalExpr>) -> Self {
+        let children = expr.children();
         ExprTreeNode {
             expr,
             data: None,
-            child_nodes: vec![],
+            child_nodes: children.into_iter().map(Self::new).collect_vec(),
         }
     }
 
@@ -140,29 +148,14 @@ impl<T> ExprTreeNode<T> {
         &self.expr
     }
 
-    pub fn children(&self) -> Vec<ExprTreeNode<T>> {
-        self.expr
-            .children()
-            .into_iter()
-            .map(ExprTreeNode::new)
-            .collect()
+    pub fn children(&self) -> &[ExprTreeNode<T>] {
+        &self.child_nodes
     }
 }
 
 impl<T: Clone> TreeNode for ExprTreeNode<T> {
-    fn apply_children<F>(&self, op: &mut F) -> Result<VisitRecursion>
-    where
-        F: FnMut(&Self) -> Result<VisitRecursion>,
-    {
-        for child in self.children() {
-            match op(&child)? {
-                VisitRecursion::Continue => {}
-                VisitRecursion::Skip => return Ok(VisitRecursion::Continue),
-                VisitRecursion::Stop => return Ok(VisitRecursion::Stop),
-            }
-        }
-
-        Ok(VisitRecursion::Continue)
+    fn children_nodes(&self) -> Vec<Cow<Self>> {
+        self.children().iter().map(Cow::Borrowed).collect()
     }
 
     fn map_children<F>(mut self, transform: F) -> Result<Self>
@@ -170,7 +163,7 @@ impl<T: Clone> TreeNode for ExprTreeNode<T> {
         F: FnMut(Self) -> Result<Self>,
     {
         self.child_nodes = self
-            .children()
+            .child_nodes
             .into_iter()
             .map(transform)
             .collect::<Result<Vec<_>>>()?;
@@ -183,7 +176,7 @@ impl<T: Clone> TreeNode for ExprTreeNode<T> {
 /// identical expressions in one node. Caller specifies the node type in the
 /// DAEG via the `constructor` argument, which constructs nodes in the DAEG
 /// from the [ExprTreeNode] ancillary object.
-struct PhysicalExprDAEGBuilder<'a, T, F: Fn(&ExprTreeNode<NodeIndex>) -> T> {
+struct PhysicalExprDAEGBuilder<'a, T, F: Fn(&ExprTreeNode<NodeIndex>) -> Result<T>> {
     // The resulting DAEG (expression DAG).
     graph: StableGraph<T, usize>,
     // A vector of visited expression nodes and their corresponding node indices.
@@ -192,7 +185,7 @@ struct PhysicalExprDAEGBuilder<'a, T, F: Fn(&ExprTreeNode<NodeIndex>) -> T> {
     constructor: &'a F,
 }
 
-impl<'a, T, F: Fn(&ExprTreeNode<NodeIndex>) -> T> TreeNodeRewriter
+impl<'a, T, F: Fn(&ExprTreeNode<NodeIndex>) -> Result<T>> TreeNodeRewriter
     for PhysicalExprDAEGBuilder<'a, T, F>
 {
     type N = ExprTreeNode<NodeIndex>;
@@ -213,7 +206,7 @@ impl<'a, T, F: Fn(&ExprTreeNode<NodeIndex>) -> T> TreeNodeRewriter
             // add edges to its child nodes. Add the visited expression to the vector
             // of visited expressions and return the newly created node index.
             None => {
-                let node_idx = self.graph.add_node((self.constructor)(&node));
+                let node_idx = self.graph.add_node((self.constructor)(&node)?);
                 for expr_node in node.child_nodes.iter() {
                     self.graph.add_edge(node_idx, expr_node.data.unwrap(), 0);
                 }
@@ -234,7 +227,7 @@ pub fn build_dag<T, F>(
     constructor: &F,
 ) -> Result<(NodeIndex, StableGraph<T, usize>)>
 where
-    F: Fn(&ExprTreeNode<NodeIndex>) -> T,
+    F: Fn(&ExprTreeNode<NodeIndex>) -> Result<T>,
 {
     // Create a new expression tree node from the input expression.
     let init = ExprTreeNode::new(expr);
@@ -394,7 +387,7 @@ mod tests {
         }
     }
 
-    fn make_dummy_node(node: &ExprTreeNode<NodeIndex>) -> PhysicalExprDummyNode {
+    fn make_dummy_node(node: &ExprTreeNode<NodeIndex>) -> Result<PhysicalExprDummyNode> {
         let expr = node.expression().clone();
         let dummy_property = if expr.as_any().is::<BinaryExpr>() {
             "Binary"
@@ -406,12 +399,12 @@ mod tests {
             "Other"
         }
         .to_owned();
-        PhysicalExprDummyNode {
+        Ok(PhysicalExprDummyNode {
             expr,
             property: DummyProperty {
                 expr_type: dummy_property,
             },
-        }
+        })
     }
 
     #[test]

@@ -48,7 +48,7 @@ futures = { workspace = true }
 half = { version = "2.1", default-features = false }
 hashbrown = { version = "0.14", features = ["raw"] }
 indexmap = { workspace = true }
-itertools = { version = "0.11", features = ["use_std"] }
+itertools = { version = "0.12", features = ["use_std"] }
 log = { workspace = true }
 once_cell = "1.18.0"
 parking_lot = { workspace = true }

@@ -267,6 +267,12 @@ pub(crate) struct GroupedHashAggregateStream {
 
     /// The spill state object
     spill_state: SpillState,
+
+    /// Optional soft limit on the number of `group_values` in a batch
+    /// If the number of `group_values` in a single batch exceeds this value,
+    /// the `GroupedHashAggregateStream` operation immediately switches to
+    /// output mode and emits all groups.
+    group_values_soft_limit: Option<usize>,
 }
 
 impl GroupedHashAggregateStream {
@@ -318,7 +324,9 @@ impl GroupedHashAggregateStream {
             .map(create_group_accumulator)
             .collect::<Result<_>>()?;
 
-        let group_schema = group_schema(&agg_schema, agg_group_by.expr.len());
+        // we need to use original schema so RowConverter in group_values below
+        // will do the proper coversion of dictionaries into value types
+        let group_schema = group_schema(&agg.original_schema, agg_group_by.expr.len());
         let spill_expr = group_schema
             .fields
             .into_iter()
@@ -338,7 +346,7 @@ impl GroupedHashAggregateStream {
             .find_longest_permutation(&agg_group_by.output_exprs());
         let group_ordering = GroupOrdering::try_new(
             &group_schema,
-            &agg.partition_search_mode,
+            &agg.input_order_mode,
             ordering.as_slice(),
         )?;
 
@@ -374,6 +382,7 @@ impl GroupedHashAggregateStream {
             input_done: false,
             runtime: context.runtime_env(),
             spill_state,
+            group_values_soft_limit: agg.limit,
         })
     }
 }
@@ -419,7 +428,7 @@ impl Stream for GroupedHashAggregateStream {
 
         loop {
             match &self.exec_state {
-                ExecutionState::ReadingInput => {
+                ExecutionState::ReadingInput => 'reading_input: {
                     match ready!(self.input.poll_next_unpin(cx)) {
                         // new batch to aggregate
                         Some(Ok(batch)) => {
@@ -434,9 +443,21 @@ impl Stream for GroupedHashAggregateStream {
                             // otherwise keep consuming input
                             assert!(!self.input_done);
 
+                            // If the number of group values equals or exceeds the soft limit,
+                            // emit all groups and switch to producing output
+                            if self.hit_soft_group_limit() {
+                                timer.done();
+                                extract_ok!(self.set_input_done_and_produce_output());
+                                // make sure the exec_state just set is not overwritten below
+                                break 'reading_input;
+                            }
+
                             if let Some(to_emit) = self.group_ordering.emit_to() {
                                 let batch = extract_ok!(self.emit(to_emit, false));
                                 self.exec_state = ExecutionState::ProducingOutput(batch);
+                                timer.done();
+                                // make sure the exec_state just set is not overwritten below
+                                break 'reading_input;
                             }
 
                             extract_ok!(self.emit_early_if_necessary());
@@ -449,18 +470,7 @@ impl Stream for GroupedHashAggregateStream {
                         }
                         None => {
                             // inner is done, emit all rows and switch to producing output
-                            self.input_done = true;
-                            self.group_ordering.input_done();
-                            let timer = elapsed_compute.timer();
-                            self.exec_state = if self.spill_state.spills.is_empty() {
-                                let batch = extract_ok!(self.emit(EmitTo::All, false));
-                                ExecutionState::ProducingOutput(batch)
-                            } else {
-                                // If spill files exist, stream-merge them.
-                                extract_ok!(self.update_merged_stream());
-                                ExecutionState::ReadingInput
-                            };
-                            timer.done();
+                            extract_ok!(self.set_input_done_and_produce_output());
                         }
                     }
                 }
@@ -757,6 +767,33 @@ impl GroupedHashAggregateStream {
         )?;
         self.input_done = false;
         self.group_ordering = GroupOrdering::Full(GroupOrderingFull::new());
+        Ok(())
+    }
+
+    /// returns true if there is a soft groups limit and the number of distinct
+    /// groups we have seen is over that limit
+    fn hit_soft_group_limit(&self) -> bool {
+        let Some(group_values_soft_limit) = self.group_values_soft_limit else {
+            return false;
+        };
+        group_values_soft_limit <= self.group_values.len()
+    }
+
+    /// common function for signalling end of processing of the input stream
+    fn set_input_done_and_produce_output(&mut self) -> Result<()> {
+        self.input_done = true;
+        self.group_ordering.input_done();
+        let elapsed_compute = self.baseline_metrics.elapsed_compute().clone();
+        let timer = elapsed_compute.timer();
+        self.exec_state = if self.spill_state.spills.is_empty() {
+            let batch = self.emit(EmitTo::All, false)?;
+            ExecutionState::ProducingOutput(batch)
+        } else {
+            // If spill files exist, stream-merge them.
+            self.update_merged_stream()?;
+            ExecutionState::ReadingInput
+        };
+        timer.done();
         Ok(())
     }
 }

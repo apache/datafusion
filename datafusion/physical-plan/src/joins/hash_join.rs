@@ -19,7 +19,6 @@
 
 use std::fmt;
 use std::mem::size_of;
-use std::ops::Range;
 use std::sync::Arc;
 use std::task::Poll;
 use std::{any::Any, usize, vec};
@@ -27,25 +26,23 @@ use std::{any::Any, usize, vec};
 use crate::joins::utils::{
     adjust_indices_by_join_type, apply_join_filter_to_indices, build_batch_from_indices,
     calculate_join_output_ordering, get_final_indices_from_bit_map,
-    need_produce_result_in_final,
+    need_produce_result_in_final, JoinHashMap, JoinHashMapType,
 };
-use crate::DisplayAs;
 use crate::{
-    coalesce_batches::concat_batches,
     coalesce_partitions::CoalescePartitionsExec,
     expressions::Column,
     expressions::PhysicalSortExpr,
     hash_utils::create_hashes,
-    joins::hash_join_utils::{JoinHashMap, JoinHashMapType},
     joins::utils::{
         adjust_right_output_partitioning, build_join_schema, check_join_is_valid,
         estimate_join_statistics, partitioned_join_output_partitioning,
-        BuildProbeJoinMetrics, ColumnIndex, JoinFilter, JoinOn,
+        BuildProbeJoinMetrics, ColumnIndex, JoinFilter, JoinOn, StatefulStreamResult,
     },
     metrics::{ExecutionPlanMetricsSet, MetricsSet},
     DisplayFormatType, Distribution, ExecutionPlan, Partitioning, PhysicalExpr,
     RecordBatchStream, SendableRecordBatchStream, Statistics,
 };
+use crate::{handle_state, DisplayAs};
 
 use super::{
     utils::{OnceAsync, OnceFut},
@@ -54,10 +51,10 @@ use super::{
 
 use arrow::array::{
     Array, ArrayRef, BooleanArray, BooleanBufferBuilder, PrimitiveArray, UInt32Array,
-    UInt32BufferBuilder, UInt64Array, UInt64BufferBuilder,
+    UInt64Array,
 };
 use arrow::compute::kernels::cmp::{eq, not_distinct};
-use arrow::compute::{and, take, FilterBuilder};
+use arrow::compute::{and, concat_batches, take, FilterBuilder};
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use arrow::util::bit_util;
@@ -74,7 +71,47 @@ use datafusion_physical_expr::EquivalenceProperties;
 use ahash::RandomState;
 use futures::{ready, Stream, StreamExt, TryStreamExt};
 
-type JoinLeftData = (JoinHashMap, RecordBatch, MemoryReservation);
+/// HashTable and input data for the left (build side) of a join
+struct JoinLeftData {
+    /// The hash table with indices into `batch`
+    hash_map: JoinHashMap,
+    /// The input rows for the build side
+    batch: RecordBatch,
+    /// Memory reservation that tracks memory used by `hash_map` hash table
+    /// `batch`. Cleared on drop.
+    #[allow(dead_code)]
+    reservation: MemoryReservation,
+}
+
+impl JoinLeftData {
+    /// Create a new `JoinLeftData` from its parts
+    fn new(
+        hash_map: JoinHashMap,
+        batch: RecordBatch,
+        reservation: MemoryReservation,
+    ) -> Self {
+        Self {
+            hash_map,
+            batch,
+            reservation,
+        }
+    }
+
+    /// Returns the number of rows in the build side
+    fn num_rows(&self) -> usize {
+        self.batch.num_rows()
+    }
+
+    /// return a reference to the hash map
+    fn hash_map(&self) -> &JoinHashMap {
+        &self.hash_map
+    }
+
+    /// returns a reference to the build side batch
+    fn batch(&self) -> &RecordBatch {
+        &self.batch
+    }
+}
 
 /// Join execution plan: Evaluates eqijoin predicates in parallel on multiple
 /// partitions using a hash table and an optional filter list to apply post
@@ -118,8 +155,48 @@ type JoinLeftData = (JoinHashMap, RecordBatch, MemoryReservation);
 ///
 /// Execution proceeds in 2 stages:
 ///
-/// 1. the **build phase** where a hash table is created from the tuples of the
-/// build side.
+/// 1. the **build phase** creates a hash table from the tuples of the build side,
+/// and single concatenated batch containing data from all fetched record batches.
+/// Resulting hash table stores hashed join-key fields for each row as a key, and
+/// indices of corresponding rows in concatenated batch.
+///
+/// Hash join uses LIFO data structure as a hash table, and in order to retain
+/// original build-side input order while obtaining data during probe phase, hash
+/// table is updated by iterating batch sequence in reverse order -- it allows to
+/// keep rows with smaller indices "on the top" of hash table, and still maintain
+/// correct indexing for concatenated build-side data batch.
+///
+/// Example of build phase for 3 record batches:
+///
+///
+/// ```text
+///
+///  Original build-side data   Inserting build-side values into hashmap    Concatenated build-side batch
+///                                                                         ┌───────────────────────────┐
+///                             hasmap.insert(row-hash, row-idx + offset)   │                      idx  │
+///            ┌───────┐                                                    │          ┌───────┐        │
+///            │ Row 1 │        1) update_hash for batch 3 with offset 0    │          │ Row 6 │    0   │
+///   Batch 1  │       │           - hashmap.insert(Row 7, idx 1)           │ Batch 3  │       │        │
+///            │ Row 2 │           - hashmap.insert(Row 6, idx 0)           │          │ Row 7 │    1   │
+///            └───────┘                                                    │          └───────┘        │
+///                                                                         │                           │
+///            ┌───────┐                                                    │          ┌───────┐        │
+///            │ Row 3 │        2) update_hash for batch 2 with offset 2    │          │ Row 3 │    2   │
+///            │       │           - hashmap.insert(Row 5, idx 4)           │          │       │        │
+///   Batch 2  │ Row 4 │           - hashmap.insert(Row 4, idx 3)           │ Batch 2  │ Row 4 │    3   │
+///            │       │           - hashmap.insert(Row 3, idx 2)           │          │       │        │
+///            │ Row 5 │                                                    │          │ Row 5 │    4   │
+///            └───────┘                                                    │          └───────┘        │
+///                                                                         │                           │
+///            ┌───────┐                                                    │          ┌───────┐        │
+///            │ Row 6 │        3) update_hash for batch 1 with offset 5    │          │ Row 1 │    5   │
+///   Batch 3  │       │           - hashmap.insert(Row 2, idx 5)           │ Batch 1  │       │        │
+///            │ Row 7 │           - hashmap.insert(Row 1, idx 6)           │          │ Row 2 │    6   │
+///            └───────┘                                                    │          └───────┘        │
+///                                                                         │                           │
+///                                                                         └───────────────────────────┘
+///
+/// ```
 ///
 /// 2. the **probe phase** where the tuples of the probe side are streamed
 /// through, checking for matches of the join keys in the hash table.
@@ -582,18 +659,15 @@ impl ExecutionPlan for HashJoinExec {
             on_right,
             filter: self.filter.clone(),
             join_type: self.join_type,
-            left_fut,
-            visited_left_side: None,
             right: right_stream,
             column_indices: self.column_indices.clone(),
             random_state: self.random_state.clone(),
             join_metrics,
             null_equals_null: self.null_equals_null,
-            is_exhausted: false,
             reservation,
+            state: HashJoinStreamState::WaitBuildSide,
+            build_side: BuildSide::Initial(BuildSideInitialState { left_fut }),
             batch_size,
-            probe_batch: None,
-            output_state: HashJoinOutputState::default(),
         }))
     }
 
@@ -615,6 +689,8 @@ impl ExecutionPlan for HashJoinExec {
     }
 }
 
+/// Reads the left (build) side of the input, buffering it in memory, to build a
+/// hash table (`LeftJoinData`)
 async fn collect_left_input(
     partition: Option<usize>,
     random_state: RandomState,
@@ -681,7 +757,10 @@ async fn collect_left_input(
     let mut hashmap = JoinHashMap::with_capacity(num_rows);
     let mut hashes_buffer = Vec::new();
     let mut offset = 0;
-    for batch in batches.iter() {
+
+    // Updating hashmap starting from the last batch
+    let batches_iter = batches.iter().rev();
+    for batch in batches_iter.clone() {
         hashes_buffer.clear();
         hashes_buffer.resize(batch.num_rows(), 0);
         update_hash(
@@ -692,18 +771,25 @@ async fn collect_left_input(
             &random_state,
             &mut hashes_buffer,
             0,
+            true,
         )?;
         offset += batch.num_rows();
     }
     // Merge all batches into a single batch, so we
     // can directly index into the arrays
-    let single_batch = concat_batches(&schema, &batches, num_rows)?;
+    let single_batch = concat_batches(&schema, batches_iter)?;
+    let data = JoinLeftData::new(hashmap, single_batch, reservation);
 
-    Ok((hashmap, single_batch, reservation))
+    Ok(data)
 }
 
-/// Updates `hash` with new entries from [RecordBatch] evaluated against the expressions `on`,
-/// assuming that the [RecordBatch] corresponds to the `index`th
+/// Updates `hash_map` with new entries from `batch` evaluated against the expressions `on`
+/// using `offset` as a start value for `batch` row indices.
+///
+/// `fifo_hashmap` sets the order of iteration over `batch` rows while updating hashmap,
+/// which allows to keep either first (if set to true) or last (if set to false) row index
+/// as a chain head for rows with equal hash values.
+#[allow(clippy::too_many_arguments)]
 pub fn update_hash<T>(
     on: &[Column],
     batch: &RecordBatch,
@@ -712,6 +798,7 @@ pub fn update_hash<T>(
     random_state: &RandomState,
     hashes_buffer: &mut Vec<u64>,
     deleted_offset: usize,
+    fifo_hashmap: bool,
 ) -> Result<()>
 where
     T: JoinHashMapType,
@@ -719,7 +806,7 @@ where
     // evaluate the keys
     let keys_values = on
         .iter()
-        .map(|c| Ok(c.evaluate(batch)?.into_array(batch.num_rows())))
+        .map(|c| c.evaluate(batch)?.into_array(batch.num_rows()))
         .collect::<Result<Vec<_>>>()?;
 
     // calculate the hash values
@@ -728,119 +815,116 @@ where
     // For usual JoinHashmap, the implementation is void.
     hash_map.extend_zero(batch.num_rows());
 
-    // insert hashes to key of the hashmap
-    let (mut_map, mut_list) = hash_map.get_mut();
-    for (row, hash_value) in hash_values.iter().enumerate() {
-        let item = mut_map.get_mut(*hash_value, |(hash, _)| *hash_value == *hash);
-        if let Some((_, index)) = item {
-            // Already exists: add index to next array
-            let prev_index = *index;
-            // Store new value inside hashmap
-            *index = (row + offset + 1) as u64;
-            // Update chained Vec at row + offset with previous value
-            mut_list[row + offset - deleted_offset] = prev_index;
-        } else {
-            mut_map.insert(
-                *hash_value,
-                // store the value + 1 as 0 value reserved for end of list
-                (*hash_value, (row + offset + 1) as u64),
-                |(hash, _)| *hash,
-            );
-            // chained list at (row + offset) is already initialized with 0
-            // meaning end of list
-        }
+    // Updating JoinHashMap from hash values iterator
+    let hash_values_iter = hash_values
+        .iter()
+        .enumerate()
+        .map(|(i, val)| (i + offset, val));
+
+    if fifo_hashmap {
+        hash_map.update_from_iter(hash_values_iter.rev(), deleted_offset);
+    } else {
+        hash_map.update_from_iter(hash_values_iter, deleted_offset);
     }
+
     Ok(())
 }
 
-// State for storing left/right side indices used for partial batch output
-// & producing ranges for adjusting indices
-#[derive(Debug, Default)]
-pub(crate) struct HashJoinOutputState {
-    // total rows in current probe batch
-    probe_rows: usize,
-    // saved probe-build indices to resume matching from
-    last_matched_indices: Option<(usize, usize)>,
-    // current iteration has been updated
-    matched_indices_updated: bool,
-    // last probe side index, joined during current iteration
-    last_joined_probe_index: Option<usize>,
-    // last probe side index, joined during previous iteration
-    prev_joined_probe_index: Option<usize>,
+/// Represents build-side of hash join.
+enum BuildSide {
+    /// Indicates that build-side not collected yet
+    Initial(BuildSideInitialState),
+    /// Indicates that build-side data has been collected
+    Ready(BuildSideReadyState),
 }
 
-impl HashJoinOutputState {
-    // set total probe rows to process
-    pub(crate) fn set_probe_rows(&mut self, probe_rows: usize) {
-        self.probe_rows = probe_rows;
-    }
-    // obtain last_matched_indices -- initial point to resume matching
-    fn start_mathching_iteration(&self) -> (usize, usize) {
-        self.last_matched_indices
-            .map_or_else(|| (0, 0), |pair| pair)
-    }
+/// Container for BuildSide::Initial related data
+struct BuildSideInitialState {
+    /// Future for building hash table from build-side input
+    left_fut: OnceFut<JoinLeftData>,
+}
 
-    // if current probe batch processing is in partial-output state
-    fn partial_output(&self) -> bool {
-        self.last_matched_indices.is_some()
-    }
+/// Container for BuildSide::Ready related data
+struct BuildSideReadyState {
+    /// Collected build-side data
+    left_data: Arc<JoinLeftData>,
+    /// Which build-side rows have been matched while creating output.
+    /// For some OUTER joins, we need to know which rows have not been matched
+    /// to produce the correct output.
+    visited_left_side: BooleanBufferBuilder,
+}
 
-    // if current probe batch processing completed -- all probe rows have been joined to build rows
-    pub(crate) fn is_completed(&self) -> bool {
-        self.last_matched_indices
-            .is_some_and(|(probe, build)| probe + 1 >= self.probe_rows && build == 0)
-    }
-
-    // saving next probe-build indices to start next iteration of matching
-    fn update_matching_iteration(&mut self, probe_idx: usize, build_idx: usize) {
-        self.last_matched_indices = Some((probe_idx, build_idx));
-        self.matched_indices_updated = true;
-    }
-
-    // updating state after matching iteration has been performed
-    fn finalize_matching_iteration(&mut self, joined_right_side: &UInt32Array) {
-        // if there were no intermediate updates of matched inidices, during current iteration,
-        // setting indices like whole current batch has been scanned
-        if !self.matched_indices_updated {
-            self.last_matched_indices = Some((self.probe_rows, 0));
-        }
-        self.matched_indices_updated = false;
-
-        // advancing joined probe-side indices
-        self.prev_joined_probe_index = self.last_joined_probe_index;
-        if !joined_right_side.is_empty() {
-            self.last_joined_probe_index =
-                Some(joined_right_side.value(joined_right_side.len() - 1) as usize);
+impl BuildSide {
+    /// Tries to extract BuildSideInitialState from BuildSide enum.
+    /// Returns an error if state is not Initial.
+    fn try_as_initial_mut(&mut self) -> Result<&mut BuildSideInitialState> {
+        match self {
+            BuildSide::Initial(state) => Ok(state),
+            _ => internal_err!("Expected build side in initial state"),
         }
     }
 
-    pub(crate) fn reset_state(&mut self) {
-        self.probe_rows = 0;
-        self.last_matched_indices = None;
-        self.last_joined_probe_index = None;
-        self.matched_indices_updated = false;
+    /// Tries to extract BuildSideReadyState from BuildSide enum.
+    /// Returns an error if state is not Ready.
+    fn try_as_ready(&self) -> Result<&BuildSideReadyState> {
+        match self {
+            BuildSide::Ready(state) => Ok(state),
+            _ => internal_err!("Expected build side in ready state"),
+        }
     }
 
-    // The goals for different join types are:
-    // 1) Right & FullJoin -- to append all missing probe-side indices between
-    //    previous (excluding) and current joined indices.
-    // 2) SemiJoin -- deduplicate probe indices in range between previous
-    //    (excluding) and current joined indices.
-    // 3) AntiJoin -- return only missing indices in range between
-    //    previous and current joined indices.
-    //    Inclusion/exclusion of the indices themselves don't matter
-    // As a result -- partial adjustment range can be produced based only on
-    // joined (matched with filters applied) probe side indices, excluding starting one
-    // (left from previous iteration)
-    pub(crate) fn adjust_range(&self) -> Range<usize> {
-        let rg_start = self.prev_joined_probe_index.map_or(0, |v| v + 1);
-        let rg_end = if self.is_completed() {
-            self.probe_rows
-        } else {
-            self.last_joined_probe_index.map_or(0, |v| v + 1)
-        };
+    /// Tries to extract BuildSideReadyState from BuildSide enum.
+    /// Returns an error if state is not Ready.
+    fn try_as_ready_mut(&mut self) -> Result<&mut BuildSideReadyState> {
+        match self {
+            BuildSide::Ready(state) => Ok(state),
+            _ => internal_err!("Expected build side in ready state"),
+        }
+    }
+}
 
-        rg_start..rg_end
+/// Represents state of HashJoinStream
+///
+/// Expected state transitions performed by HashJoinStream are:
+///
+/// ```text
+///
+///       WaitBuildSide
+///             │
+///             ▼
+///  ┌─► FetchProbeBatch ───► ExhaustedProbeSide ───► Completed
+///  │          │
+///  │          ▼
+///  └─ ProcessProbeBatch
+///
+/// ```
+enum HashJoinStreamState {
+    /// Initial state for HashJoinStream indicating that build-side data not collected yet
+    WaitBuildSide,
+    /// Indicates that build-side has been collected, and stream is ready for fetching probe-side
+    FetchProbeBatch,
+    /// Indicates that non-empty batch has been fetched from probe-side, and is ready to be processed
+    ProcessProbeBatch(ProcessProbeBatchState),
+    /// Indicates that probe-side has been fully processed
+    ExhaustedProbeSide,
+    /// Indicates that HashJoinStream execution is completed
+    Completed,
+}
+
+/// Container for HashJoinStreamState::ProcessProbeBatch related data
+struct ProcessProbeBatchState {
+    /// Current probe-side batch
+    batch: RecordBatch,
+}
+
+impl HashJoinStreamState {
+    /// Tries to extract ProcessProbeBatchState from HashJoinStreamState enum.
+    /// Returns an error if state is not ProcessProbeBatchState.
+    fn try_as_process_probe_batch(&self) -> Result<&ProcessProbeBatchState> {
+        match self {
+            HashJoinStreamState::ProcessProbeBatch(state) => Ok(state),
+            _ => internal_err!("Expected hash join stream in ProcessProbeBatch state"),
+        }
     }
 }
 
@@ -863,20 +947,10 @@ struct HashJoinStream {
     filter: Option<JoinFilter>,
     /// type of the join (left, right, semi, etc)
     join_type: JoinType,
-    /// future which builds hash table from left side
-    left_fut: OnceFut<JoinLeftData>,
-    /// Which left (probe) side rows have been matches while creating output.
-    /// For some OUTER joins, we need to know which rows have not been matched
-    /// to produce the correct.
-    visited_left_side: Option<BooleanBufferBuilder>,
     /// right (probe) input
     right: SendableRecordBatchStream,
     /// Random state used for hashing initialization
     random_state: RandomState,
-    /// The join output is complete. For outer joins, this is used to
-    /// distinguish when the input stream is exhausted and when any unmatched
-    /// rows are output.
-    is_exhausted: bool,
     /// Metrics
     join_metrics: BuildProbeJoinMetrics,
     /// Information of index and left / right placement of columns
@@ -885,15 +959,12 @@ struct HashJoinStream {
     null_equals_null: bool,
     /// Memory reservation
     reservation: MemoryReservation,
-    /// Batch size
+    /// State of the stream
+    state: HashJoinStreamState,
+    /// Build side
+    build_side: BuildSide,
+    /// Maximum output batch size
     batch_size: usize,
-    /// Current probe batch
-    probe_batch: Option<RecordBatch>,
-    /// In case joining current probe batch with build side may produce more than `batch_size` records
-    /// (cross-join due to key duplication on build side) `HashJoinStream` saves its state
-    /// and emits result batch to upstream operator.
-    /// On next poll these indices are used to skip already matched rows and adjusted probe-side indices.
-    output_state: HashJoinOutputState,
 }
 
 impl RecordBatchStream for HashJoinStream {
@@ -907,7 +978,7 @@ impl RecordBatchStream for HashJoinStream {
 /// # Example
 ///
 /// For `LEFT.b1 = RIGHT.b2`:
-/// LEFT Table:
+/// LEFT (build) Table:
 /// ```text
 ///  a1  b1  c1
 ///  1   1   10
@@ -919,7 +990,7 @@ impl RecordBatchStream for HashJoinStream {
 ///  13   10  130
 /// ```
 ///
-/// RIGHT Table:
+/// RIGHT (probe) Table:
 /// ```text
 ///  a2   b2  c2
 ///  2    2   20
@@ -960,27 +1031,25 @@ pub(crate) fn build_equal_condition_join_indices<T: JoinHashMapType>(
     filter: Option<&JoinFilter>,
     build_side: JoinSide,
     deleted_offset: Option<usize>,
-    output_limit: usize,
-    state: &mut HashJoinOutputState,
+    fifo_hashmap: bool,
 ) -> Result<(UInt64Array, UInt32Array)> {
     let keys_values = probe_on
         .iter()
-        .map(|c| Ok(c.evaluate(probe_batch)?.into_array(probe_batch.num_rows())))
+        .map(|c| c.evaluate(probe_batch)?.into_array(probe_batch.num_rows()))
         .collect::<Result<Vec<_>>>()?;
     let build_join_values = build_on
         .iter()
         .map(|c| {
-            Ok(c.evaluate(build_input_buffer)?
-                .into_array(build_input_buffer.num_rows()))
+            c.evaluate(build_input_buffer)?
+                .into_array(build_input_buffer.num_rows())
         })
         .collect::<Result<Vec<_>>>()?;
     hashes_buffer.clear();
     hashes_buffer.resize(probe_batch.num_rows(), 0);
     let hash_values = create_hashes(&keys_values, random_state, hashes_buffer)?;
-    // Using a buffer builder to avoid slower normal builder
-    let mut build_indices = UInt64BufferBuilder::new(0);
-    let mut probe_indices = UInt32BufferBuilder::new(0);
-    // The chained list algorithm generates build indices for each probe row in a reversed sequence as such:
+
+    // In case build-side input has not been inverted while JoinHashMap creation, the chained list algorithm
+    // will return build indices for each probe row in a reverse order as such:
     // Build Indices: [5, 4, 3]
     // Probe Indices: [1, 1, 1]
     //
@@ -1009,68 +1078,17 @@ pub(crate) fn build_equal_condition_join_indices<T: JoinHashMapType>(
     //     (5,1)
     //
     // With this approach, the lexicographic order on both the probe side and the build side is preserved.
-    let hash_map = build_hashmap.get_map();
-    let next_chain = build_hashmap.get_list();
+    let (mut probe_indices, mut build_indices) = if fifo_hashmap {
+        build_hashmap.get_matched_indices(hash_values.iter().enumerate(), deleted_offset)
+    } else {
+        let (mut matched_probe, mut matched_build) = build_hashmap
+            .get_matched_indices(hash_values.iter().enumerate().rev(), deleted_offset);
 
-    let mut output_tuples = 0_usize;
+        matched_probe.as_slice_mut().reverse();
+        matched_build.as_slice_mut().reverse();
 
-    // Get starting point in case resuming current probe-batch
-    let (initial_probe, initial_build) = state.start_mathching_iteration();
-
-    'probe: for (row, hash_value) in hash_values.iter().enumerate().skip(initial_probe) {
-        let index = if state.partial_output() && row == initial_probe {
-            // using build index from state for the first row
-            // in case of partially skipped input
-            if initial_build == 0 {
-                continue;
-            }
-            Some(initial_build as u64)
-        } else if let Some((_, index)) =
-            hash_map.get(*hash_value, |(hash, _)| *hash_value == *hash)
-        {
-            // otherwise -- checking build hashmap for presence of current hash_value
-            Some(*index)
-        } else {
-            None
-        };
-
-        // For every item on the build and probe we check if it matches
-        // This possibly contains rows with hash collisions,
-        // So we have to check here whether rows are equal or not
-        if let Some(index) = index {
-            let mut i = index - 1;
-
-            loop {
-                let build_row_value = if let Some(offset) = deleted_offset {
-                    // This arguments means that we prune the next index way before here.
-                    if i < offset as u64 {
-                        // End of the list due to pruning
-                        break;
-                    }
-                    i - offset as u64
-                } else {
-                    i
-                };
-                build_indices.append(build_row_value);
-                probe_indices.append(row as u32);
-                output_tuples += 1;
-
-                // Follow the chain to get the next index value
-                let next = next_chain[build_row_value as usize];
-
-                if output_tuples >= output_limit {
-                    state.update_matching_iteration(row, next as usize);
-                    break 'probe;
-                }
-
-                if next == 0 {
-                    // end of list
-                    break;
-                }
-                i = next - 1;
-            }
-        }
-    }
+        (matched_probe, matched_build)
+    };
 
     let left: UInt64Array = PrimitiveArray::new(build_indices.finish().into(), None);
     let right: UInt32Array = PrimitiveArray::new(probe_indices.finish().into(), None);
@@ -1096,9 +1114,6 @@ pub(crate) fn build_equal_condition_join_indices<T: JoinHashMapType>(
         &keys_values,
         null_equals_null,
     )?;
-
-    // try set completed & update with last joined probe-side idx
-    state.finalize_matching_iteration(&matched_indices.1);
 
     Ok((matched_indices.0, matched_indices.1))
 }
@@ -1164,163 +1179,213 @@ impl HashJoinStream {
         &mut self,
         cx: &mut std::task::Context<'_>,
     ) -> Poll<Option<Result<RecordBatch>>> {
+        loop {
+            return match self.state {
+                HashJoinStreamState::WaitBuildSide => {
+                    handle_state!(ready!(self.collect_build_side(cx)))
+                }
+                HashJoinStreamState::FetchProbeBatch => {
+                    handle_state!(ready!(self.fetch_probe_batch(cx)))
+                }
+                HashJoinStreamState::ProcessProbeBatch(_) => {
+                    handle_state!(self.process_probe_batch())
+                }
+                HashJoinStreamState::ExhaustedProbeSide => {
+                    handle_state!(self.process_unmatched_build_batch())
+                }
+                HashJoinStreamState::Completed => Poll::Ready(None),
+            };
+        }
+    }
+
+    /// Collects build-side data by polling `OnceFut` future from initialized build-side
+    ///
+    /// Updates build-side to `Ready`, and state to `FetchProbeSide`
+    fn collect_build_side(
+        &mut self,
+        cx: &mut std::task::Context<'_>,
+    ) -> Poll<Result<StatefulStreamResult<Option<RecordBatch>>>> {
         let build_timer = self.join_metrics.build_time.timer();
         // build hash table from left (build) side, if not yet done
-        let left_data = match ready!(self.left_fut.get(cx)) {
-            Ok(left_data) => left_data,
-            Err(e) => return Poll::Ready(Some(Err(e))),
-        };
+        let left_data = ready!(self
+            .build_side
+            .try_as_initial_mut()?
+            .left_fut
+            .get_shared(cx))?;
         build_timer.done();
 
         // Reserving memory for visited_left_side bitmap in case it hasn't been initialized yet
         // and join_type requires to store it
-        if self.visited_left_side.is_none()
-            && need_produce_result_in_final(self.join_type)
-        {
+        if need_produce_result_in_final(self.join_type) {
             // TODO: Replace `ceil` wrapper with stable `div_cell` after
             // https://github.com/rust-lang/rust/issues/88581
-            let visited_bitmap_size = bit_util::ceil(left_data.1.num_rows(), 8);
+            let visited_bitmap_size = bit_util::ceil(left_data.num_rows(), 8);
             self.reservation.try_grow(visited_bitmap_size)?;
             self.join_metrics.build_mem_used.add(visited_bitmap_size);
         }
 
-        let visited_left_side = self.visited_left_side.get_or_insert_with(|| {
-            let num_rows = left_data.1.num_rows();
-            if need_produce_result_in_final(self.join_type) {
-                // Some join types need to track which row has be matched or unmatched:
-                // `left semi` join:  need to use the bitmap to produce the matched row in the left side
-                // `left` join:       need to use the bitmap to produce the unmatched row in the left side with null
-                // `left anti` join:  need to use the bitmap to produce the unmatched row in the left side
-                // `full` join:       need to use the bitmap to produce the unmatched row in the left side with null
-                let mut buffer = BooleanBufferBuilder::new(num_rows);
-                buffer.append_n(num_rows, false);
-                buffer
-            } else {
-                BooleanBufferBuilder::new(0)
-            }
-        });
-        let mut hashes_buffer = vec![];
-
-        // Fetch next right (probe) input batch if required
-        if self.probe_batch.is_none() {
-            match ready!(self.right.poll_next_unpin(cx)) {
-                Some(Ok(batch)) => {
-                    self.output_state.set_probe_rows(batch.num_rows());
-                    self.probe_batch = Some(batch);
-                }
-                None => {
-                    self.probe_batch = None;
-                }
-                Some(err) => return Poll::Ready(Some(err)),
-            }
-        }
-
-        let output_batch = match &self.probe_batch {
-            // one right batch in the join loop
-            Some(batch) => {
-                self.join_metrics.input_batches.add(1);
-                self.join_metrics.input_rows.add(batch.num_rows());
-                let timer = self.join_metrics.join_time.timer();
-
-                // get the matched two indices for the on condition
-                let left_right_indices = build_equal_condition_join_indices(
-                    &left_data.0,
-                    &left_data.1,
-                    batch,
-                    &self.on_left,
-                    &self.on_right,
-                    &self.random_state,
-                    self.null_equals_null,
-                    &mut hashes_buffer,
-                    self.filter.as_ref(),
-                    JoinSide::Left,
-                    None,
-                    self.batch_size,
-                    &mut self.output_state,
-                );
-
-                let result = match left_right_indices {
-                    Ok((left_side, right_side)) => {
-                        // set the left bitmap
-                        // and only left, full, left semi, left anti need the left bitmap
-                        if need_produce_result_in_final(self.join_type) {
-                            left_side.iter().flatten().for_each(|x| {
-                                visited_left_side.set_bit(x as usize, true);
-                            });
-                        }
-
-                        // adjust the two side indices base on the join type
-
-                        let (left_side, right_side) = adjust_indices_by_join_type(
-                            left_side,
-                            right_side,
-                            self.output_state.adjust_range(),
-                            self.join_type,
-                        );
-
-                        let result = build_batch_from_indices(
-                            &self.schema,
-                            &left_data.1,
-                            batch,
-                            &left_side,
-                            &right_side,
-                            &self.column_indices,
-                            JoinSide::Left,
-                        );
-                        self.join_metrics.output_batches.add(1);
-                        self.join_metrics.output_rows.add(batch.num_rows());
-
-                        if self.output_state.is_completed() {
-                            self.probe_batch = None;
-                            self.output_state.reset_state();
-                        }
-
-                        Some(result)
-                    }
-                    Err(err) => Some(exec_err!(
-                        "Fail to build join indices in HashJoinExec, error:{err}"
-                    )),
-                };
-
-                timer.done();
-                result
-            }
-            None => {
-                let timer = self.join_metrics.join_time.timer();
-                if need_produce_result_in_final(self.join_type) && !self.is_exhausted {
-                    // use the global left bitmap to produce the left indices and right indices
-                    let (left_side, right_side) =
-                        get_final_indices_from_bit_map(visited_left_side, self.join_type);
-                    let empty_right_batch = RecordBatch::new_empty(self.right.schema());
-                    // use the left and right indices to produce the batch result
-                    let result = build_batch_from_indices(
-                        &self.schema,
-                        &left_data.1,
-                        &empty_right_batch,
-                        &left_side,
-                        &right_side,
-                        &self.column_indices,
-                        JoinSide::Left,
-                    );
-
-                    if let Ok(ref batch) = result {
-                        self.join_metrics.input_batches.add(1);
-                        self.join_metrics.input_rows.add(batch.num_rows());
-
-                        self.join_metrics.output_batches.add(1);
-                        self.join_metrics.output_rows.add(batch.num_rows());
-                    }
-                    timer.done();
-                    self.is_exhausted = true;
-                    Some(result)
-                } else {
-                    // end of the join loop
-                    None
-                }
-            }
+        let visited_left_side = if need_produce_result_in_final(self.join_type) {
+            let num_rows = left_data.num_rows();
+            // Some join types need to track which row has be matched or unmatched:
+            // `left semi` join:  need to use the bitmap to produce the matched row in the left side
+            // `left` join:       need to use the bitmap to produce the unmatched row in the left side with null
+            // `left anti` join:  need to use the bitmap to produce the unmatched row in the left side
+            // `full` join:       need to use the bitmap to produce the unmatched row in the left side with null
+            let mut buffer = BooleanBufferBuilder::new(num_rows);
+            buffer.append_n(num_rows, false);
+            buffer
+        } else {
+            BooleanBufferBuilder::new(0)
         };
 
-        Poll::Ready(output_batch)
+        self.state = HashJoinStreamState::FetchProbeBatch;
+        self.build_side = BuildSide::Ready(BuildSideReadyState {
+            left_data,
+            visited_left_side,
+        });
+
+        Poll::Ready(Ok(StatefulStreamResult::Continue))
+    }
+
+    /// Fetches next batch from probe-side
+    ///
+    /// If non-empty batch has been fetched, updates state to `ProcessProbeBatchState`,
+    /// otherwise updates state to `ExhaustedProbeSide`
+    fn fetch_probe_batch(
+        &mut self,
+        cx: &mut std::task::Context<'_>,
+    ) -> Poll<Result<StatefulStreamResult<Option<RecordBatch>>>> {
+        match ready!(self.right.poll_next_unpin(cx)) {
+            None => {
+                self.state = HashJoinStreamState::ExhaustedProbeSide;
+            }
+            Some(Ok(batch)) => {
+                self.state =
+                    HashJoinStreamState::ProcessProbeBatch(ProcessProbeBatchState {
+                        batch,
+                    });
+            }
+            Some(Err(err)) => return Poll::Ready(Err(err)),
+        };
+
+        Poll::Ready(Ok(StatefulStreamResult::Continue))
+    }
+
+    /// Joins current probe batch with build-side data and produces batch with matched output
+    ///
+    /// Updates state to `FetchProbeBatch`
+    fn process_probe_batch(
+        &mut self,
+    ) -> Result<StatefulStreamResult<Option<RecordBatch>>> {
+        let state = self.state.try_as_process_probe_batch()?;
+        let build_side = self.build_side.try_as_ready_mut()?;
+
+        self.join_metrics.input_batches.add(1);
+        self.join_metrics.input_rows.add(state.batch.num_rows());
+        let timer = self.join_metrics.join_time.timer();
+
+        let mut hashes_buffer = vec![];
+        // get the matched two indices for the on condition
+        let left_right_indices = build_equal_condition_join_indices(
+            build_side.left_data.hash_map(),
+            build_side.left_data.batch(),
+            &state.batch,
+            &self.on_left,
+            &self.on_right,
+            &self.random_state,
+            self.null_equals_null,
+            &mut hashes_buffer,
+            self.filter.as_ref(),
+            JoinSide::Left,
+            None,
+            true,
+        );
+
+        let result = match left_right_indices {
+            Ok((left_side, right_side)) => {
+                // set the left bitmap
+                // and only left, full, left semi, left anti need the left bitmap
+                if need_produce_result_in_final(self.join_type) {
+                    left_side.iter().flatten().for_each(|x| {
+                        build_side.visited_left_side.set_bit(x as usize, true);
+                    });
+                }
+
+                // adjust the two side indices base on the join type
+                let (left_side, right_side) = adjust_indices_by_join_type(
+                    left_side,
+                    right_side,
+                    0..state.batch.num_rows(),
+                    self.join_type,
+                );
+
+                let result = build_batch_from_indices(
+                    &self.schema,
+                    build_side.left_data.batch(),
+                    &state.batch,
+                    &left_side,
+                    &right_side,
+                    &self.column_indices,
+                    JoinSide::Left,
+                );
+                self.join_metrics.output_batches.add(1);
+                self.join_metrics.output_rows.add(state.batch.num_rows());
+                result
+            }
+            Err(err) => {
+                exec_err!("Fail to build join indices in HashJoinExec, error:{err}")
+            }
+        };
+        timer.done();
+
+        self.state = HashJoinStreamState::FetchProbeBatch;
+
+        Ok(StatefulStreamResult::Ready(Some(result?)))
+    }
+
+    /// Processes unmatched build-side rows for certain join types and produces output batch
+    ///
+    /// Updates state to `Completed`
+    fn process_unmatched_build_batch(
+        &mut self,
+    ) -> Result<StatefulStreamResult<Option<RecordBatch>>> {
+        let timer = self.join_metrics.join_time.timer();
+
+        if !need_produce_result_in_final(self.join_type) {
+            self.state = HashJoinStreamState::Completed;
+
+            return Ok(StatefulStreamResult::Continue);
+        }
+
+        let build_side = self.build_side.try_as_ready()?;
+
+        // use the global left bitmap to produce the left indices and right indices
+        let (left_side, right_side) =
+            get_final_indices_from_bit_map(&build_side.visited_left_side, self.join_type);
+        let empty_right_batch = RecordBatch::new_empty(self.right.schema());
+        // use the left and right indices to produce the batch result
+        let result = build_batch_from_indices(
+            &self.schema,
+            build_side.left_data.batch(),
+            &empty_right_batch,
+            &left_side,
+            &right_side,
+            &self.column_indices,
+            JoinSide::Left,
+        );
+
+        if let Ok(ref batch) = result {
+            self.join_metrics.input_batches.add(1);
+            self.join_metrics.input_rows.add(batch.num_rows());
+
+            self.join_metrics.output_batches.add(1);
+            self.join_metrics.output_rows.add(batch.num_rows());
+        }
+        timer.done();
+
+        self.state = HashJoinStreamState::Completed;
+
+        Ok(StatefulStreamResult::Ready(Some(result?)))
     }
 }
 
@@ -1531,7 +1596,9 @@ mod tests {
             "| 3  | 5  | 9  | 20 | 5  | 80 |",
             "+----+----+----+----+----+----+",
         ];
-        assert_batches_sorted_eq!(expected, &batches);
+
+        // Inner join output is expected to preserve both inputs order
+        assert_batches_eq!(expected, &batches);
 
         Ok(())
     }
@@ -1614,7 +1681,48 @@ mod tests {
             "+----+----+----+----+----+----+",
         ];
 
-        assert_batches_sorted_eq!(expected, &batches);
+        // Inner join output is expected to preserve both inputs order
+        assert_batches_eq!(expected, &batches);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn join_inner_one_randomly_ordered() -> Result<()> {
+        let task_ctx = Arc::new(TaskContext::default());
+        let left = build_table(
+            ("a1", &vec![0, 3, 2, 1]),
+            ("b1", &vec![4, 5, 5, 4]),
+            ("c1", &vec![6, 9, 8, 7]),
+        );
+        let right = build_table(
+            ("a2", &vec![20, 30, 10]),
+            ("b2", &vec![5, 6, 4]),
+            ("c2", &vec![80, 90, 70]),
+        );
+        let on = vec![(
+            Column::new_with_schema("b1", &left.schema())?,
+            Column::new_with_schema("b2", &right.schema())?,
+        )];
+
+        let (columns, batches) =
+            join_collect(left, right, on, &JoinType::Inner, false, task_ctx).await?;
+
+        assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b2", "c2"]);
+
+        let expected = [
+            "+----+----+----+----+----+----+",
+            "| a1 | b1 | c1 | a2 | b2 | c2 |",
+            "+----+----+----+----+----+----+",
+            "| 3  | 5  | 9  | 20 | 5  | 80 |",
+            "| 2  | 5  | 8  | 20 | 5  | 80 |",
+            "| 0  | 4  | 6  | 10 | 4  | 70 |",
+            "| 1  | 4  | 7  | 10 | 4  | 70 |",
+            "+----+----+----+----+----+----+",
+        ];
+
+        // Inner join output is expected to preserve both inputs order
+        assert_batches_eq!(expected, &batches);
 
         Ok(())
     }
@@ -1667,7 +1775,8 @@ mod tests {
             "+----+----+----+----+----+----+",
         ];
 
-        assert_batches_sorted_eq!(expected, &batches);
+        // Inner join output is expected to preserve both inputs order
+        assert_batches_eq!(expected, &batches);
 
         Ok(())
     }
@@ -1728,7 +1837,58 @@ mod tests {
             "+----+----+----+----+----+----+",
         ];
 
-        assert_batches_sorted_eq!(expected, &batches);
+        // Inner join output is expected to preserve both inputs order
+        assert_batches_eq!(expected, &batches);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn join_inner_one_two_parts_left_randomly_ordered() -> Result<()> {
+        let task_ctx = Arc::new(TaskContext::default());
+        let batch1 = build_table_i32(
+            ("a1", &vec![0, 3]),
+            ("b1", &vec![4, 5]),
+            ("c1", &vec![6, 9]),
+        );
+        let batch2 = build_table_i32(
+            ("a1", &vec![2, 1]),
+            ("b1", &vec![5, 4]),
+            ("c1", &vec![8, 7]),
+        );
+        let schema = batch1.schema();
+
+        let left = Arc::new(
+            MemoryExec::try_new(&[vec![batch1], vec![batch2]], schema, None).unwrap(),
+        );
+        let right = build_table(
+            ("a2", &vec![20, 30, 10]),
+            ("b2", &vec![5, 6, 4]),
+            ("c2", &vec![80, 90, 70]),
+        );
+        let on = vec![(
+            Column::new_with_schema("b1", &left.schema())?,
+            Column::new_with_schema("b2", &right.schema())?,
+        )];
+
+        let (columns, batches) =
+            join_collect(left, right, on, &JoinType::Inner, false, task_ctx).await?;
+
+        assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b2", "c2"]);
+
+        let expected = [
+            "+----+----+----+----+----+----+",
+            "| a1 | b1 | c1 | a2 | b2 | c2 |",
+            "+----+----+----+----+----+----+",
+            "| 3  | 5  | 9  | 20 | 5  | 80 |",
+            "| 2  | 5  | 8  | 20 | 5  | 80 |",
+            "| 0  | 4  | 6  | 10 | 4  | 70 |",
+            "| 1  | 4  | 7  | 10 | 4  | 70 |",
+            "+----+----+----+----+----+----+",
+        ];
+
+        // Inner join output is expected to preserve both inputs order
+        assert_batches_eq!(expected, &batches);
 
         Ok(())
     }
@@ -1785,7 +1945,9 @@ mod tests {
             "| 1  | 4  | 7  | 10 | 4  | 70 |",
             "+----+----+----+----+----+----+",
         ];
-        assert_batches_sorted_eq!(expected, &batches);
+
+        // Inner join output is expected to preserve both inputs order
+        assert_batches_eq!(expected, &batches);
 
         // second part
         let stream = join.execute(1, task_ctx.clone())?;
@@ -1804,7 +1966,8 @@ mod tests {
             "+----+----+----+----+----+----+",
         ];
 
-        assert_batches_sorted_eq!(expected, &batches);
+        // Inner join output is expected to preserve both inputs order
+        assert_batches_eq!(expected, &batches);
 
         Ok(())
     }
@@ -2237,12 +2400,14 @@ mod tests {
             "+----+----+-----+",
             "| a2 | b2 | c2  |",
             "+----+----+-----+",
-            "| 10 | 10 | 100 |",
-            "| 12 | 10 | 40  |",
             "| 8  | 8  | 20  |",
+            "| 12 | 10 | 40  |",
+            "| 10 | 10 | 100 |",
             "+----+----+-----+",
         ];
-        assert_batches_sorted_eq!(expected, &batches);
+
+        // RightSemi join output is expected to preserve right input order
+        assert_batches_eq!(expected, &batches);
 
         Ok(())
     }
@@ -2298,12 +2463,14 @@ mod tests {
             "+----+----+-----+",
             "| a2 | b2 | c2  |",
             "+----+----+-----+",
-            "| 10 | 10 | 100 |",
-            "| 12 | 10 | 40  |",
             "| 8  | 8  | 20  |",
+            "| 12 | 10 | 40  |",
+            "| 10 | 10 | 100 |",
             "+----+----+-----+",
         ];
-        assert_batches_sorted_eq!(expected, &batches);
+
+        // RightSemi join output is expected to preserve right input order
+        assert_batches_eq!(expected, &batches);
 
         // left_table right semi join right_table on left_table.b1 = right_table.b2 on left_table.a1!=9
         let filter_expression = Arc::new(BinaryExpr::new(
@@ -2324,11 +2491,13 @@ mod tests {
             "+----+----+-----+",
             "| a2 | b2 | c2  |",
             "+----+----+-----+",
-            "| 10 | 10 | 100 |",
             "| 12 | 10 | 40  |",
+            "| 10 | 10 | 100 |",
             "+----+----+-----+",
         ];
-        assert_batches_sorted_eq!(expected, &batches);
+
+        // RightSemi join output is expected to preserve right input order
+        assert_batches_eq!(expected, &batches);
 
         Ok(())
     }
@@ -2484,12 +2653,14 @@ mod tests {
             "+----+----+-----+",
             "| a2 | b2 | c2  |",
             "+----+----+-----+",
+            "| 6  | 6  | 60  |",
             "| 2  | 2  | 80  |",
             "| 4  | 4  | 120 |",
-            "| 6  | 6  | 60  |",
             "+----+----+-----+",
         ];
-        assert_batches_sorted_eq!(expected, &batches);
+
+        // RightAnti join output is expected to preserve right input order
+        assert_batches_eq!(expected, &batches);
         Ok(())
     }
 
@@ -2543,14 +2714,16 @@ mod tests {
             "+----+----+-----+",
             "| a2 | b2 | c2  |",
             "+----+----+-----+",
-            "| 10 | 10 | 100 |",
             "| 12 | 10 | 40  |",
-            "| 2  | 2  | 80  |",
-            "| 4  | 4  | 120 |",
             "| 6  | 6  | 60  |",
+            "| 2  | 2  | 80  |",
+            "| 10 | 10 | 100 |",
+            "| 4  | 4  | 120 |",
             "+----+----+-----+",
         ];
-        assert_batches_sorted_eq!(expected, &batches);
+
+        // RightAnti join output is expected to preserve right input order
+        assert_batches_eq!(expected, &batches);
 
         // left_table right anti join right_table on left_table.b1 = right_table.b2 and right_table.b2!=8
         let column_indices = vec![ColumnIndex {
@@ -2579,13 +2752,15 @@ mod tests {
             "+----+----+-----+",
             "| a2 | b2 | c2  |",
             "+----+----+-----+",
+            "| 8  | 8  | 20  |",
+            "| 6  | 6  | 60  |",
             "| 2  | 2  | 80  |",
             "| 4  | 4  | 120 |",
-            "| 6  | 6  | 60  |",
-            "| 8  | 8  | 20  |",
             "+----+----+-----+",
         ];
-        assert_batches_sorted_eq!(expected, &batches);
+
+        // RightAnti join output is expected to preserve right input order
+        assert_batches_eq!(expected, &batches);
 
         Ok(())
     }
@@ -2737,16 +2912,11 @@ mod tests {
             ("c", &vec![30, 40]),
         );
 
-        let left_data = (
-            JoinHashMap {
-                map: hashmap_left,
-                next,
-            },
-            left,
-        );
+        let join_hash_map = JoinHashMap::new(hashmap_left, next);
+
         let (l, r) = build_equal_condition_join_indices(
-            &left_data.0,
-            &left_data.1,
+            &join_hash_map,
+            &left,
             &right,
             &[Column::new("a", 0)],
             &[Column::new("a", 0)],
@@ -2756,8 +2926,7 @@ mod tests {
             None,
             JoinSide::Left,
             None,
-            64,
-            &mut HashJoinOutputState::default(),
+            false,
         )?;
 
         let mut left_ids = UInt64Builder::with_capacity(0);

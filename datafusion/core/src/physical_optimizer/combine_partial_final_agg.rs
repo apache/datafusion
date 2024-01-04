@@ -91,10 +91,12 @@ impl PhysicalOptimizerRule for CombinePartialFinalAggregate {
                                             input_agg_exec.group_by().clone(),
                                             input_agg_exec.aggr_expr().to_vec(),
                                             input_agg_exec.filter_expr().to_vec(),
-                                            input_agg_exec.order_by_expr().to_vec(),
                                             input_agg_exec.input().clone(),
                                             input_agg_exec.input_schema(),
                                         )
+                                        .map(|combined_agg| {
+                                            combined_agg.with_limit(agg_exec.limit())
+                                        })
                                         .ok()
                                         .map(Arc::new)
                                     } else {
@@ -255,7 +257,6 @@ mod tests {
                 limit: None,
                 table_partition_cols: vec![],
                 output_ordering: vec![],
-                infinite_source: false,
             },
             None,
             None,
@@ -273,7 +274,6 @@ mod tests {
                 AggregateMode::Partial,
                 group_by,
                 aggr_expr,
-                vec![],
                 vec![],
                 input,
                 schema,
@@ -293,7 +293,6 @@ mod tests {
                 AggregateMode::Final,
                 group_by,
                 aggr_expr,
-                vec![],
                 vec![],
                 input,
                 schema,
@@ -422,6 +421,50 @@ mod tests {
         // should combine the Partial/Final AggregateExecs to tne Single AggregateExec
         let expected = &[
             "AggregateExec: mode=Single, gby=[c@2 as c], aggr=[Sum(b)]",
+            "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c]",
+        ];
+
+        assert_optimized!(expected, plan);
+        Ok(())
+    }
+
+    #[test]
+    fn aggregations_with_limit_combined() -> Result<()> {
+        let schema = schema();
+        let aggr_expr = vec![];
+
+        let groups: Vec<(Arc<dyn PhysicalExpr>, String)> =
+            vec![(col("c", &schema)?, "c".to_string())];
+
+        let partial_group_by = PhysicalGroupBy::new_single(groups);
+        let partial_agg = partial_aggregate_exec(
+            parquet_exec(&schema),
+            partial_group_by,
+            aggr_expr.clone(),
+        );
+
+        let groups: Vec<(Arc<dyn PhysicalExpr>, String)> =
+            vec![(col("c", &partial_agg.schema())?, "c".to_string())];
+        let final_group_by = PhysicalGroupBy::new_single(groups);
+
+        let schema = partial_agg.schema();
+        let final_agg = Arc::new(
+            AggregateExec::try_new(
+                AggregateMode::Final,
+                final_group_by,
+                aggr_expr,
+                vec![],
+                partial_agg,
+                schema,
+            )
+            .unwrap()
+            .with_limit(Some(5)),
+        );
+        let plan: Arc<dyn ExecutionPlan> = final_agg;
+        // should combine the Partial/Final AggregateExecs to a Single AggregateExec
+        // with the final limit preserved
+        let expected = &[
+            "AggregateExec: mode=Single, gby=[c@2 as c], aggr=[], lim=[5]",
             "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c]",
         ];
 

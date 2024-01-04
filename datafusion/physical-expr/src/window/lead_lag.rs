@@ -23,7 +23,7 @@ use crate::PhysicalExpr;
 use arrow::array::ArrayRef;
 use arrow::compute::cast;
 use arrow::datatypes::{DataType, Field};
-use datafusion_common::ScalarValue;
+use datafusion_common::{arrow_datafusion_err, ScalarValue};
 use datafusion_common::{internal_err, DataFusionError, Result};
 use datafusion_expr::PartitionEvaluator;
 use std::any::Any;
@@ -139,9 +139,10 @@ fn create_empty_array(
     let array = value
         .as_ref()
         .map(|scalar| scalar.to_array_of_size(size))
+        .transpose()?
         .unwrap_or_else(|| new_null_array(data_type, size));
     if array.data_type() != data_type {
-        cast(&array, data_type).map_err(DataFusionError::ArrowError)
+        cast(&array, data_type).map_err(|e| arrow_datafusion_err!(e))
     } else {
         Ok(array)
     }
@@ -171,10 +172,10 @@ fn shift_with_default_value(
         // Concatenate both arrays, add nulls after if shift > 0 else before
         if offset > 0 {
             concat(&[default_values.as_ref(), slice.as_ref()])
-                .map_err(DataFusionError::ArrowError)
+                .map_err(|e| arrow_datafusion_err!(e))
         } else {
             concat(&[slice.as_ref(), default_values.as_ref()])
-                .map_err(DataFusionError::ArrowError)
+                .map_err(|e| arrow_datafusion_err!(e))
         }
     }
 }

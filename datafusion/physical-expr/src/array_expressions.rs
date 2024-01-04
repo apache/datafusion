@@ -18,21 +18,25 @@
 //! Array expressions
 
 use std::any::type_name;
+use std::collections::HashSet;
+use std::fmt::{Display, Formatter};
 use std::sync::Arc;
 
 use arrow::array::*;
 use arrow::buffer::OffsetBuffer;
 use arrow::compute;
 use arrow::datatypes::{DataType, Field, UInt64Type};
+use arrow::row::{RowConverter, SortField};
 use arrow_buffer::NullBuffer;
 
+use arrow_schema::{FieldRef, SortOptions};
 use datafusion_common::cast::{
-    as_generic_string_array, as_int64_array, as_list_array, as_string_array,
+    as_generic_list_array, as_generic_string_array, as_int64_array, as_large_list_array,
+    as_list_array, as_null_array, as_string_array,
 };
-use datafusion_common::utils::array_into_list_array;
+use datafusion_common::utils::{array_into_list_array, list_ndims};
 use datafusion_common::{
-    exec_err, internal_datafusion_err, internal_err, not_impl_err, plan_err,
-    DataFusionError, Result,
+    exec_err, internal_err, not_impl_err, plan_err, DataFusionError, Result,
 };
 
 use itertools::Itertools;
@@ -48,84 +52,105 @@ macro_rules! downcast_arg {
     }};
 }
 
-/// Downcasts multiple arguments into a single concrete type
-/// $ARGS:  &[ArrayRef]
-/// $ARRAY_TYPE: type to downcast to
+/// Computes a BooleanArray indicating equality or inequality between elements in a list array and a specified element array.
 ///
-/// $returns a Vec<$ARRAY_TYPE>
-macro_rules! downcast_vec {
-    ($ARGS:expr, $ARRAY_TYPE:ident) => {{
-        $ARGS
-            .iter()
-            .map(|e| match e.as_any().downcast_ref::<$ARRAY_TYPE>() {
-                Some(array) => Ok(array),
-                _ => internal_err!("failed to downcast"),
-            })
-    }};
-}
-
-macro_rules! new_builder {
-    (BooleanBuilder, $len:expr) => {
-        BooleanBuilder::with_capacity($len)
-    };
-    (StringBuilder, $len:expr) => {
-        StringBuilder::new()
-    };
-    (LargeStringBuilder, $len:expr) => {
-        LargeStringBuilder::new()
-    };
-    ($el:ident, $len:expr) => {{
-        <$el>::with_capacity($len)
-    }};
-}
-
-/// Combines multiple arrays into a single ListArray
+/// # Arguments
 ///
-/// $ARGS: slice of arrays, each with $ARRAY_TYPE
-/// $ARRAY_TYPE: the type of the list elements
-/// $BUILDER_TYPE: the type of ArrayBuilder for the list elements
+/// * `list_array_row` - A reference to a trait object implementing the Arrow `Array` trait. It represents the list array for which the equality or inequality will be compared.
 ///
-/// Returns: a ListArray where the elements each have the same type as
-/// $ARRAY_TYPE and each element have a length of $ARGS.len()
-macro_rules! array {
-    ($ARGS:expr, $ARRAY_TYPE:ident, $BUILDER_TYPE:ident) => {{
-        let builder = new_builder!($BUILDER_TYPE, $ARGS[0].len());
-        let mut builder =
-            ListBuilder::<$BUILDER_TYPE>::with_capacity(builder, $ARGS.len());
-
-        let num_rows = $ARGS[0].len();
-        assert!(
-            $ARGS.iter().all(|a| a.len() == num_rows),
-            "all arguments must have the same number of rows"
+/// * `element_array` - A reference to a trait object implementing the Arrow `Array` trait. It represents the array with which each element in the `list_array_row` will be compared.
+///
+/// * `row_index` - The index of the row in the `element_array` and `list_array` to use for the comparison.
+///
+/// * `eq` - A boolean flag. If `true`, the function computes equality; if `false`, it computes inequality.
+///
+/// # Returns
+///
+/// Returns a `Result<BooleanArray>` representing the comparison results. The result may contain an error if there are issues with the computation.
+///
+/// # Example
+///
+/// ```text
+/// compare_element_to_list(
+///     [1, 2, 3], [1, 2, 3], 0, true => [true, false, false]
+///     [1, 2, 3, 3, 2, 1], [1, 2, 3], 1, true => [false, true, false, false, true, false]
+///
+///     [[1, 2, 3], [2, 3, 4], [3, 4, 5]], [[1, 2, 3], [2, 3, 4], [3, 4, 5]], 0, true => [true, false, false]
+///     [[1, 2, 3], [2, 3, 4], [2, 3, 4]], [[1, 2, 3], [2, 3, 4], [3, 4, 5]], 1, false => [true, false, false]
+/// )
+/// ```
+fn compare_element_to_list(
+    list_array_row: &dyn Array,
+    element_array: &dyn Array,
+    row_index: usize,
+    eq: bool,
+) -> Result<BooleanArray> {
+    if list_array_row.data_type() != element_array.data_type() {
+        return exec_err!(
+            "compare_element_to_list received incompatible types: '{:?}' and '{:?}'.",
+            list_array_row.data_type(),
+            element_array.data_type()
         );
+    }
 
-        // for each entry in the array
-        for index in 0..num_rows {
-            // for each column
-            for arg in $ARGS {
-                match arg.as_any().downcast_ref::<$ARRAY_TYPE>() {
-                    // Copy the source array value into the target ListArray
-                    Some(arr) => {
-                        if arr.is_valid(index) {
-                            builder.values().append_value(arr.value(index));
+    let indices = UInt32Array::from(vec![row_index as u32]);
+    let element_array_row = arrow::compute::take(element_array, &indices, None)?;
+
+    // Compute all positions in list_row_array (that is itself an
+    // array) that are equal to `from_array_row`
+    let res = match element_array_row.data_type() {
+        // arrow_ord::cmp::eq does not support ListArray, so we need to compare it by loop
+        DataType::List(_) => {
+            // compare each element of the from array
+            let element_array_row_inner = as_list_array(&element_array_row)?.value(0);
+            let list_array_row_inner = as_list_array(list_array_row)?;
+
+            list_array_row_inner
+                .iter()
+                // compare element by element the current row of list_array
+                .map(|row| {
+                    row.map(|row| {
+                        if eq {
+                            row.eq(&element_array_row_inner)
                         } else {
-                            builder.values().append_null();
+                            row.ne(&element_array_row_inner)
                         }
-                    }
-                    None => match arg.as_any().downcast_ref::<NullArray>() {
-                        Some(arr) => {
-                            for _ in 0..arr.len() {
-                                builder.values().append_null();
-                            }
-                        }
-                        None => return internal_err!("failed to downcast"),
-                    },
-                }
-            }
-            builder.append(true);
+                    })
+                })
+                .collect::<BooleanArray>()
         }
-        Arc::new(builder.finish())
-    }};
+        DataType::LargeList(_) => {
+            // compare each element of the from array
+            let element_array_row_inner =
+                as_large_list_array(&element_array_row)?.value(0);
+            let list_array_row_inner = as_large_list_array(list_array_row)?;
+
+            list_array_row_inner
+                .iter()
+                // compare element by element the current row of list_array
+                .map(|row| {
+                    row.map(|row| {
+                        if eq {
+                            row.eq(&element_array_row_inner)
+                        } else {
+                            row.ne(&element_array_row_inner)
+                        }
+                    })
+                })
+                .collect::<BooleanArray>()
+        }
+        _ => {
+            let element_arr = Scalar::new(element_array_row);
+            // use not_distinct so we can compare NULL
+            if eq {
+                arrow_ord::cmp::not_distinct(&list_array_row, &element_arr)?
+            } else {
+                arrow_ord::cmp::distinct(&list_array_row, &element_arr)?
+            }
+        }
+    };
+
+    Ok(res)
 }
 
 /// Returns the length of a concrete array dimension
@@ -159,36 +184,11 @@ fn compute_array_length(
                 value = downcast_arg!(value, ListArray).value(0);
                 current_dimension += 1;
             }
-            _ => return Ok(None),
-        }
-    }
-}
-
-/// Returns the dimension of the array
-fn compute_array_ndims(arr: Option<ArrayRef>) -> Result<Option<u64>> {
-    Ok(compute_array_ndims_with_datatype(arr)?.0)
-}
-
-/// Returns the dimension and the datatype of elements of the array
-fn compute_array_ndims_with_datatype(
-    arr: Option<ArrayRef>,
-) -> Result<(Option<u64>, DataType)> {
-    let mut res: u64 = 1;
-    let mut value = match arr {
-        Some(arr) => arr,
-        None => return Ok((None, DataType::Null)),
-    };
-    if value.is_empty() {
-        return Ok((None, DataType::Null));
-    }
-
-    loop {
-        match value.data_type() {
-            DataType::List(..) => {
-                value = downcast_arg!(value, ListArray).value(0);
-                res += 1;
+            DataType::LargeList(..) => {
+                value = downcast_arg!(value, LargeListArray).value(0);
+                current_dimension += 1;
             }
-            data_type => return Ok((Some(res), data_type.clone())),
+            _ => return Ok(None),
         }
     }
 }
@@ -217,10 +217,10 @@ fn compute_array_dims(arr: Option<ArrayRef>) -> Result<Option<Vec<Option<u64>>>>
 
 fn check_datatypes(name: &str, args: &[&ArrayRef]) -> Result<()> {
     let data_type = args[0].data_type();
-    if !args
-        .iter()
-        .all(|arg| arg.data_type().equals_datatype(data_type))
-    {
+    if !args.iter().all(|arg| {
+        arg.data_type().equals_datatype(data_type)
+            || arg.data_type().equals_datatype(&DataType::Null)
+    }) {
         let types = args.iter().map(|arg| arg.data_type()).collect::<Vec<_>>();
         return plan_err!("{name} received incompatible types: '{types:?}'.");
     }
@@ -269,7 +269,7 @@ macro_rules! call_array_function {
 }
 
 /// Convert one or more [`ArrayRef`] of the same type into a
-/// `ListArray`
+/// `ListArray` or 'LargeListArray' depending on the offset size.
 ///
 /// # Example (non nested)
 ///
@@ -308,94 +308,56 @@ macro_rules! call_array_function {
 /// └──────────────┘   └──────────────┘        └─────────────────────────────┘
 ///      col1               col2                         output
 /// ```
-fn array_array(args: &[ArrayRef], data_type: DataType) -> Result<ArrayRef> {
+fn array_array<O: OffsetSizeTrait>(
+    args: &[ArrayRef],
+    data_type: DataType,
+) -> Result<ArrayRef> {
     // do not accept 0 arguments.
     if args.is_empty() {
         return plan_err!("Array requires at least one argument");
     }
 
-    let res = match data_type {
-        DataType::List(..) => {
-            let row_count = args[0].len();
-            let column_count = args.len();
-            let mut list_arrays = vec![];
-            let mut list_array_lengths = vec![];
-            let mut list_valid = BooleanBufferBuilder::new(row_count);
-            // Construct ListArray per row
-            for index in 0..row_count {
-                let mut arrays = vec![];
-                let mut array_lengths = vec![];
-                let mut valid = BooleanBufferBuilder::new(column_count);
-                for arg in args {
-                    if arg.as_any().downcast_ref::<NullArray>().is_some() {
-                        array_lengths.push(0);
-                        valid.append(false);
-                    } else {
-                        let list_arr = as_list_array(arg)?;
-                        let arr = list_arr.value(index);
-                        array_lengths.push(arr.len());
-                        arrays.push(arr);
-                        valid.append(true);
-                    }
-                }
-                if arrays.is_empty() {
-                    list_valid.append(false);
-                    list_array_lengths.push(0);
-                } else {
-                    let buffer = valid.finish();
-                    // Assume all list arrays have the same data type
-                    let data_type = arrays[0].data_type();
-                    let field = Arc::new(Field::new("item", data_type.to_owned(), true));
-                    let elements = arrays.iter().map(|x| x.as_ref()).collect::<Vec<_>>();
-                    let values = arrow::compute::concat(elements.as_slice())?;
-                    let list_arr = ListArray::new(
-                        field,
-                        OffsetBuffer::from_lengths(array_lengths),
-                        values,
-                        Some(NullBuffer::new(buffer)),
-                    );
-                    list_valid.append(true);
-                    list_array_lengths.push(list_arr.len());
-                    list_arrays.push(list_arr);
-                }
-            }
-            // Construct ListArray for all rows
-            let buffer = list_valid.finish();
-            // Assume all list arrays have the same data type
-            let data_type = list_arrays[0].data_type();
-            let field = Arc::new(Field::new("item", data_type.to_owned(), true));
-            let elements = list_arrays
-                .iter()
-                .map(|x| x as &dyn Array)
-                .collect::<Vec<_>>();
-            let values = arrow::compute::concat(elements.as_slice())?;
-            let list_arr = ListArray::new(
-                field,
-                OffsetBuffer::from_lengths(list_array_lengths),
-                values,
-                Some(NullBuffer::new(buffer)),
-            );
-            Arc::new(list_arr)
-        }
-        DataType::Utf8 => array!(args, StringArray, StringBuilder),
-        DataType::LargeUtf8 => array!(args, LargeStringArray, LargeStringBuilder),
-        DataType::Boolean => array!(args, BooleanArray, BooleanBuilder),
-        DataType::Float32 => array!(args, Float32Array, Float32Builder),
-        DataType::Float64 => array!(args, Float64Array, Float64Builder),
-        DataType::Int8 => array!(args, Int8Array, Int8Builder),
-        DataType::Int16 => array!(args, Int16Array, Int16Builder),
-        DataType::Int32 => array!(args, Int32Array, Int32Builder),
-        DataType::Int64 => array!(args, Int64Array, Int64Builder),
-        DataType::UInt8 => array!(args, UInt8Array, UInt8Builder),
-        DataType::UInt16 => array!(args, UInt16Array, UInt16Builder),
-        DataType::UInt32 => array!(args, UInt32Array, UInt32Builder),
-        DataType::UInt64 => array!(args, UInt64Array, UInt64Builder),
-        data_type => {
-            return not_impl_err!("Array is not implemented for type '{data_type:?}'.")
-        }
-    };
+    let mut data = vec![];
+    let mut total_len = 0;
+    for arg in args {
+        let arg_data = if arg.as_any().is::<NullArray>() {
+            ArrayData::new_empty(&data_type)
+        } else {
+            arg.to_data()
+        };
+        total_len += arg_data.len();
+        data.push(arg_data);
+    }
 
-    Ok(res)
+    let mut offsets: Vec<O> = Vec::with_capacity(total_len);
+    offsets.push(O::usize_as(0));
+
+    let capacity = Capacities::Array(total_len);
+    let data_ref = data.iter().collect::<Vec<_>>();
+    let mut mutable = MutableArrayData::with_capacities(data_ref, true, capacity);
+
+    let num_rows = args[0].len();
+    for row_idx in 0..num_rows {
+        for (arr_idx, arg) in args.iter().enumerate() {
+            if !arg.as_any().is::<NullArray>()
+                && !arg.is_null(row_idx)
+                && arg.is_valid(row_idx)
+            {
+                mutable.extend(arr_idx, row_idx, row_idx + 1);
+            } else {
+                mutable.extend_nulls(1);
+            }
+        }
+        offsets.push(O::usize_as(mutable.len()));
+    }
+    let data = mutable.freeze();
+
+    Ok(Arc::new(GenericListArray::<O>::try_new(
+        Arc::new(Field::new("item", data_type, true)),
+        OffsetBuffer::new(offsets.into()),
+        arrow_array::make_array(data),
+        None,
+    )?))
 }
 
 /// `make_array` SQL function
@@ -412,326 +374,709 @@ pub fn make_array(arrays: &[ArrayRef]) -> Result<ArrayRef> {
     match data_type {
         // Either an empty array or all nulls:
         DataType::Null => {
-            let array = new_null_array(&DataType::Null, arrays.len());
+            let array =
+                new_null_array(&DataType::Null, arrays.iter().map(|a| a.len()).sum());
             Ok(Arc::new(array_into_list_array(array)))
         }
-        data_type => array_array(arrays, data_type),
+        DataType::LargeList(..) => array_array::<i64>(arrays, data_type),
+        _ => array_array::<i32>(arrays, data_type),
     }
 }
 
-fn return_empty(return_null: bool, data_type: DataType) -> Arc<dyn Array> {
-    if return_null {
-        new_null_array(&data_type, 1)
-    } else {
-        new_empty_array(&data_type)
+fn general_array_element<O: OffsetSizeTrait>(
+    array: &GenericListArray<O>,
+    indexes: &Int64Array,
+) -> Result<ArrayRef>
+where
+    i64: TryInto<O>,
+{
+    let values = array.values();
+    let original_data = values.to_data();
+    let capacity = Capacities::Array(original_data.len());
+
+    // use_nulls: true, we don't construct List for array_element, so we need explicit nulls.
+    let mut mutable =
+        MutableArrayData::with_capacities(vec![&original_data], true, capacity);
+
+    fn adjusted_array_index<O: OffsetSizeTrait>(index: i64, len: O) -> Result<Option<O>>
+    where
+        i64: TryInto<O>,
+    {
+        let index: O = index.try_into().map_err(|_| {
+            DataFusionError::Execution(format!(
+                "array_element got invalid index: {}",
+                index
+            ))
+        })?;
+        // 0 ~ len - 1
+        let adjusted_zero_index = if index < O::usize_as(0) {
+            index + len
+        } else {
+            index - O::usize_as(1)
+        };
+
+        if O::usize_as(0) <= adjusted_zero_index && adjusted_zero_index < len {
+            Ok(Some(adjusted_zero_index))
+        } else {
+            // Out of bounds
+            Ok(None)
+        }
     }
-}
 
-macro_rules! list_slice {
-    ($ARRAY:expr, $I:expr, $J:expr, $RETURN_ELEMENT:expr, $ARRAY_TYPE:ident) => {{
-        let array = $ARRAY.as_any().downcast_ref::<$ARRAY_TYPE>().unwrap();
-        if $I == 0 && $J == 0 || $ARRAY.is_empty() {
-            return return_empty($RETURN_ELEMENT, $ARRAY.data_type().clone());
+    for (row_index, offset_window) in array.offsets().windows(2).enumerate() {
+        let start = offset_window[0];
+        let end = offset_window[1];
+        let len = end - start;
+
+        // array is null
+        if len == O::usize_as(0) {
+            mutable.extend_nulls(1);
+            continue;
         }
 
-        let i = if $I < 0 {
-            if $I.abs() as usize > array.len() {
-                return return_empty(true, $ARRAY.data_type().clone());
-            }
+        let index = adjusted_array_index::<O>(indexes.value(row_index), len)?;
 
-            (array.len() as i64 + $I + 1) as usize
+        if let Some(index) = index {
+            let start = start.as_usize() + index.as_usize();
+            mutable.extend(0, start, start + 1_usize);
         } else {
-            if $I == 0 {
-                1
-            } else {
-                $I as usize
-            }
-        };
-        let j = if $J < 0 {
-            if $J.abs() as usize > array.len() {
-                return return_empty(true, $ARRAY.data_type().clone());
-            }
-
-            if $RETURN_ELEMENT {
-                (array.len() as i64 + $J + 1) as usize
-            } else {
-                (array.len() as i64 + $J) as usize
-            }
-        } else {
-            if $J == 0 {
-                1
-            } else {
-                if $J as usize > array.len() {
-                    array.len()
-                } else {
-                    $J as usize
-                }
-            }
-        };
-
-        if i > j || i as usize > $ARRAY.len() {
-            return_empty($RETURN_ELEMENT, $ARRAY.data_type().clone())
-        } else {
-            Arc::new(array.slice((i - 1), (j + 1 - i)))
+            // Index out of bounds
+            mutable.extend_nulls(1);
         }
-    }};
-}
-
-macro_rules! slice {
-    ($ARRAY:expr, $KEY:expr, $EXTRA_KEY:expr, $RETURN_ELEMENT:expr, $ARRAY_TYPE:ident) => {{
-        let sliced_array: Vec<Arc<dyn Array>> = $ARRAY
-            .iter()
-            .zip($KEY.iter())
-            .zip($EXTRA_KEY.iter())
-            .map(|((arr, i), j)| match (arr, i, j) {
-                (Some(arr), Some(i), Some(j)) => {
-                    list_slice!(arr, i, j, $RETURN_ELEMENT, $ARRAY_TYPE)
-                }
-                (Some(arr), None, Some(j)) => {
-                    list_slice!(arr, 1i64, j, $RETURN_ELEMENT, $ARRAY_TYPE)
-                }
-                (Some(arr), Some(i), None) => {
-                    list_slice!(arr, i, arr.len() as i64, $RETURN_ELEMENT, $ARRAY_TYPE)
-                }
-                (Some(arr), None, None) if !$RETURN_ELEMENT => arr,
-                _ => return_empty($RETURN_ELEMENT, $ARRAY.value_type().clone()),
-            })
-            .collect();
-
-        // concat requires input of at least one array
-        if sliced_array.is_empty() {
-            Ok(return_empty($RETURN_ELEMENT, $ARRAY.value_type()))
-        } else {
-            let vec = sliced_array
-                .iter()
-                .map(|a| a.as_ref())
-                .collect::<Vec<&dyn Array>>();
-            let mut i: i32 = 0;
-            let mut offsets = vec![i];
-            offsets.extend(
-                vec.iter()
-                    .map(|a| {
-                        i += a.len() as i32;
-                        i
-                    })
-                    .collect::<Vec<_>>(),
-            );
-            let values = compute::concat(vec.as_slice()).unwrap();
-
-            if $RETURN_ELEMENT {
-                Ok(values)
-            } else {
-                let field =
-                    Arc::new(Field::new("item", $ARRAY.value_type().clone(), true));
-                Ok(Arc::new(ListArray::try_new(
-                    field,
-                    OffsetBuffer::new(offsets.into()),
-                    values,
-                    None,
-                )?))
-            }
-        }
-    }};
-}
-
-fn define_array_slice(
-    list_array: &ListArray,
-    key: &Int64Array,
-    extra_key: &Int64Array,
-    return_element: bool,
-) -> Result<ArrayRef> {
-    macro_rules! array_function {
-        ($ARRAY_TYPE:ident) => {
-            slice!(list_array, key, extra_key, return_element, $ARRAY_TYPE)
-        };
     }
-    call_array_function!(list_array.value_type(), true)
+
+    let data = mutable.freeze();
+    Ok(arrow_array::make_array(data))
 }
 
+/// array_element SQL function
+///
+/// There are two arguments for array_element, the first one is the array, the second one is the 1-indexed index.
+/// `array_element(array, index)`
+///
+/// For example:
+/// > array_element(\[1, 2, 3], 2) -> 2
 pub fn array_element(args: &[ArrayRef]) -> Result<ArrayRef> {
-    let list_array = as_list_array(&args[0])?;
-    let key = as_int64_array(&args[1])?;
-    define_array_slice(list_array, key, key, true)
+    if args.len() != 2 {
+        return exec_err!("array_element needs two arguments");
+    }
+
+    match &args[0].data_type() {
+        DataType::List(_) => {
+            let array = as_list_array(&args[0])?;
+            let indexes = as_int64_array(&args[1])?;
+            general_array_element::<i32>(array, indexes)
+        }
+        DataType::LargeList(_) => {
+            let array = as_large_list_array(&args[0])?;
+            let indexes = as_int64_array(&args[1])?;
+            general_array_element::<i64>(array, indexes)
+        }
+        _ => exec_err!(
+            "array_element does not support type: {:?}",
+            args[0].data_type()
+        ),
+    }
 }
 
-pub fn array_slice(args: &[ArrayRef]) -> Result<ArrayRef> {
-    let list_array = as_list_array(&args[0])?;
-    let key = as_int64_array(&args[1])?;
-    let extra_key = as_int64_array(&args[2])?;
-    define_array_slice(list_array, key, extra_key, false)
-}
+fn general_except<OffsetSize: OffsetSizeTrait>(
+    l: &GenericListArray<OffsetSize>,
+    r: &GenericListArray<OffsetSize>,
+    field: &FieldRef,
+) -> Result<GenericListArray<OffsetSize>> {
+    let converter = RowConverter::new(vec![SortField::new(l.value_type())])?;
 
-pub fn array_pop_back(args: &[ArrayRef]) -> Result<ArrayRef> {
-    let list_array = as_list_array(&args[0])?;
-    let key = vec![0; list_array.len()];
-    let extra_key: Vec<_> = list_array
-        .iter()
-        .map(|x| x.map_or(0, |arr| arr.len() as i64 - 1))
-        .collect();
+    let l_values = l.values().to_owned();
+    let r_values = r.values().to_owned();
+    let l_values = converter.convert_columns(&[l_values])?;
+    let r_values = converter.convert_columns(&[r_values])?;
 
-    define_array_slice(
-        list_array,
-        &Int64Array::from(key),
-        &Int64Array::from(extra_key),
-        false,
-    )
-}
+    let mut offsets = Vec::<OffsetSize>::with_capacity(l.len() + 1);
+    offsets.push(OffsetSize::usize_as(0));
 
-macro_rules! append {
-    ($ARRAY:expr, $ELEMENT:expr, $ARRAY_TYPE:ident) => {{
-        let mut offsets: Vec<i32> = vec![0];
-        let mut values =
-            downcast_arg!(new_empty_array($ELEMENT.data_type()), $ARRAY_TYPE).clone();
+    let mut rows = Vec::with_capacity(l_values.num_rows());
+    let mut dedup = HashSet::new();
 
-        let element = downcast_arg!($ELEMENT, $ARRAY_TYPE);
-        for (arr, el) in $ARRAY.iter().zip(element.iter()) {
-            let last_offset: i32 = offsets.last().copied().ok_or_else(|| {
-                DataFusionError::Internal(format!("offsets should not be empty"))
-            })?;
-            match arr {
-                Some(arr) => {
-                    let child_array = downcast_arg!(arr, $ARRAY_TYPE);
-                    values = downcast_arg!(
-                        compute::concat(&[
-                            &values,
-                            child_array,
-                            &$ARRAY_TYPE::from(vec![el])
-                        ])?
-                        .clone(),
-                        $ARRAY_TYPE
-                    )
-                    .clone();
-                    offsets.push(last_offset + child_array.len() as i32 + 1i32);
-                }
-                None => {
-                    values = downcast_arg!(
-                        compute::concat(&[
-                            &values,
-                            &$ARRAY_TYPE::from(vec![el.clone()])
-                        ])?
-                        .clone(),
-                        $ARRAY_TYPE
-                    )
-                    .clone();
-                    offsets.push(last_offset + 1i32);
-                }
+    for (l_w, r_w) in l.offsets().windows(2).zip(r.offsets().windows(2)) {
+        let l_slice = l_w[0].as_usize()..l_w[1].as_usize();
+        let r_slice = r_w[0].as_usize()..r_w[1].as_usize();
+        for i in r_slice {
+            let right_row = r_values.row(i);
+            dedup.insert(right_row);
+        }
+        for i in l_slice {
+            let left_row = l_values.row(i);
+            if dedup.insert(left_row) {
+                rows.push(left_row);
             }
         }
 
-        let field = Arc::new(Field::new("item", $ELEMENT.data_type().clone(), true));
+        offsets.push(OffsetSize::usize_as(rows.len()));
+        dedup.clear();
+    }
 
-        Arc::new(ListArray::try_new(
-            field,
+    if let Some(values) = converter.convert_rows(rows)?.first() {
+        Ok(GenericListArray::<OffsetSize>::new(
+            field.to_owned(),
             OffsetBuffer::new(offsets.into()),
-            Arc::new(values),
+            values.to_owned(),
+            l.nulls().cloned(),
+        ))
+    } else {
+        internal_err!("array_except failed to convert rows")
+    }
+}
+
+pub fn array_except(args: &[ArrayRef]) -> Result<ArrayRef> {
+    if args.len() != 2 {
+        return internal_err!("array_except needs two arguments");
+    }
+
+    let array1 = &args[0];
+    let array2 = &args[1];
+
+    match (array1.data_type(), array2.data_type()) {
+        (DataType::Null, _) | (_, DataType::Null) => Ok(array1.to_owned()),
+        (DataType::List(field), DataType::List(_)) => {
+            check_datatypes("array_except", &[array1, array2])?;
+            let list1 = array1.as_list::<i32>();
+            let list2 = array2.as_list::<i32>();
+            let result = general_except::<i32>(list1, list2, field)?;
+            Ok(Arc::new(result))
+        }
+        (DataType::LargeList(field), DataType::LargeList(_)) => {
+            check_datatypes("array_except", &[array1, array2])?;
+            let list1 = array1.as_list::<i64>();
+            let list2 = array2.as_list::<i64>();
+            let result = general_except::<i64>(list1, list2, field)?;
+            Ok(Arc::new(result))
+        }
+        (dt1, dt2) => {
+            internal_err!("array_except got unexpected types: {dt1:?} and {dt2:?}")
+        }
+    }
+}
+
+/// array_slice SQL function
+///
+/// We follow the behavior of array_slice in DuckDB
+/// Note that array_slice is 1-indexed. And there are two additional arguments `from` and `to` in array_slice.
+///
+/// > array_slice(array, from, to)
+///
+/// Positive index is treated as the index from the start of the array. If the
+/// `from` index is smaller than 1, it is treated as 1. If the `to` index is larger than the
+/// length of the array, it is treated as the length of the array.
+///
+/// Negative index is treated as the index from the end of the array. If the index
+/// is larger than the length of the array, it is NOT VALID, either in `from` or `to`.
+/// The `to` index is exclusive like python slice syntax.
+///
+/// See test cases in `array.slt` for more details.
+pub fn array_slice(args: &[ArrayRef]) -> Result<ArrayRef> {
+    if args.len() != 3 {
+        return exec_err!("array_slice needs three arguments");
+    }
+
+    let array_data_type = args[0].data_type();
+    match array_data_type {
+        DataType::List(_) => {
+            let array = as_list_array(&args[0])?;
+            let from_array = as_int64_array(&args[1])?;
+            let to_array = as_int64_array(&args[2])?;
+            general_array_slice::<i32>(array, from_array, to_array)
+        }
+        DataType::LargeList(_) => {
+            let array = as_large_list_array(&args[0])?;
+            let from_array = as_int64_array(&args[1])?;
+            let to_array = as_int64_array(&args[2])?;
+            general_array_slice::<i64>(array, from_array, to_array)
+        }
+        _ => exec_err!("array_slice does not support type: {:?}", array_data_type),
+    }
+}
+
+fn general_array_slice<O: OffsetSizeTrait>(
+    array: &GenericListArray<O>,
+    from_array: &Int64Array,
+    to_array: &Int64Array,
+) -> Result<ArrayRef>
+where
+    i64: TryInto<O>,
+{
+    let values = array.values();
+    let original_data = values.to_data();
+    let capacity = Capacities::Array(original_data.len());
+
+    // use_nulls: false, we don't need nulls but empty array for array_slice, so we don't need explicit nulls but adjust offset to indicate nulls.
+    let mut mutable =
+        MutableArrayData::with_capacities(vec![&original_data], false, capacity);
+
+    // We have the slice syntax compatible with DuckDB v0.8.1.
+    // The rule `adjusted_from_index` and `adjusted_to_index` follows the rule of array_slice in duckdb.
+
+    fn adjusted_from_index<O: OffsetSizeTrait>(index: i64, len: O) -> Result<Option<O>>
+    where
+        i64: TryInto<O>,
+    {
+        // 0 ~ len - 1
+        let adjusted_zero_index = if index < 0 {
+            if let Ok(index) = index.try_into() {
+                index + len
+            } else {
+                return exec_err!("array_slice got invalid index: {}", index);
+            }
+        } else {
+            // array_slice(arr, 1, to) is the same as array_slice(arr, 0, to)
+            if let Ok(index) = index.try_into() {
+                std::cmp::max(index - O::usize_as(1), O::usize_as(0))
+            } else {
+                return exec_err!("array_slice got invalid index: {}", index);
+            }
+        };
+
+        if O::usize_as(0) <= adjusted_zero_index && adjusted_zero_index < len {
+            Ok(Some(adjusted_zero_index))
+        } else {
+            // Out of bounds
+            Ok(None)
+        }
+    }
+
+    fn adjusted_to_index<O: OffsetSizeTrait>(index: i64, len: O) -> Result<Option<O>>
+    where
+        i64: TryInto<O>,
+    {
+        // 0 ~ len - 1
+        let adjusted_zero_index = if index < 0 {
+            // array_slice in duckdb with negative to_index is python-like, so index itself is exclusive
+            if let Ok(index) = index.try_into() {
+                index + len - O::usize_as(1)
+            } else {
+                return exec_err!("array_slice got invalid index: {}", index);
+            }
+        } else {
+            // array_slice(arr, from, len + 1) is the same as array_slice(arr, from, len)
+            if let Ok(index) = index.try_into() {
+                std::cmp::min(index - O::usize_as(1), len - O::usize_as(1))
+            } else {
+                return exec_err!("array_slice got invalid index: {}", index);
+            }
+        };
+
+        if O::usize_as(0) <= adjusted_zero_index && adjusted_zero_index < len {
+            Ok(Some(adjusted_zero_index))
+        } else {
+            // Out of bounds
+            Ok(None)
+        }
+    }
+
+    let mut offsets = vec![O::usize_as(0)];
+
+    for (row_index, offset_window) in array.offsets().windows(2).enumerate() {
+        let start = offset_window[0];
+        let end = offset_window[1];
+        let len = end - start;
+
+        // len 0 indicate array is null, return empty array in this row.
+        if len == O::usize_as(0) {
+            offsets.push(offsets[row_index]);
+            continue;
+        }
+
+        // If index is null, we consider it as the minimum / maximum index of the array.
+        let from_index = if from_array.is_null(row_index) {
+            Some(O::usize_as(0))
+        } else {
+            adjusted_from_index::<O>(from_array.value(row_index), len)?
+        };
+
+        let to_index = if to_array.is_null(row_index) {
+            Some(len - O::usize_as(1))
+        } else {
+            adjusted_to_index::<O>(to_array.value(row_index), len)?
+        };
+
+        if let (Some(from), Some(to)) = (from_index, to_index) {
+            if from <= to {
+                assert!(start + to <= end);
+                mutable.extend(
+                    0,
+                    (start + from).to_usize().unwrap(),
+                    (start + to + O::usize_as(1)).to_usize().unwrap(),
+                );
+                offsets.push(offsets[row_index] + (to - from + O::usize_as(1)));
+            } else {
+                // invalid range, return empty array
+                offsets.push(offsets[row_index]);
+            }
+        } else {
+            // invalid range, return empty array
+            offsets.push(offsets[row_index]);
+        }
+    }
+
+    let data = mutable.freeze();
+
+    Ok(Arc::new(GenericListArray::<O>::try_new(
+        Arc::new(Field::new("item", array.value_type(), true)),
+        OffsetBuffer::<O>::new(offsets.into()),
+        arrow_array::make_array(data),
+        None,
+    )?))
+}
+
+fn general_pop_front_list<O: OffsetSizeTrait>(
+    array: &GenericListArray<O>,
+) -> Result<ArrayRef>
+where
+    i64: TryInto<O>,
+{
+    let from_array = Int64Array::from(vec![2; array.len()]);
+    let to_array = Int64Array::from(
+        array
+            .iter()
+            .map(|arr| arr.map_or(0, |arr| arr.len() as i64))
+            .collect::<Vec<i64>>(),
+    );
+    general_array_slice::<O>(array, &from_array, &to_array)
+}
+
+fn general_pop_back_list<O: OffsetSizeTrait>(
+    array: &GenericListArray<O>,
+) -> Result<ArrayRef>
+where
+    i64: TryInto<O>,
+{
+    let from_array = Int64Array::from(vec![1; array.len()]);
+    let to_array = Int64Array::from(
+        array
+            .iter()
+            .map(|arr| arr.map_or(0, |arr| arr.len() as i64 - 1))
+            .collect::<Vec<i64>>(),
+    );
+    general_array_slice::<O>(array, &from_array, &to_array)
+}
+
+/// array_pop_front SQL function
+pub fn array_pop_front(args: &[ArrayRef]) -> Result<ArrayRef> {
+    let array_data_type = args[0].data_type();
+    match array_data_type {
+        DataType::List(_) => {
+            let array = as_list_array(&args[0])?;
+            general_pop_front_list::<i32>(array)
+        }
+        DataType::LargeList(_) => {
+            let array = as_large_list_array(&args[0])?;
+            general_pop_front_list::<i64>(array)
+        }
+        _ => exec_err!(
+            "array_pop_front does not support type: {:?}",
+            array_data_type
+        ),
+    }
+}
+
+/// array_pop_back SQL function
+pub fn array_pop_back(args: &[ArrayRef]) -> Result<ArrayRef> {
+    if args.len() != 1 {
+        return exec_err!("array_pop_back needs one argument");
+    }
+
+    let array_data_type = args[0].data_type();
+    match array_data_type {
+        DataType::List(_) => {
+            let array = as_list_array(&args[0])?;
+            general_pop_back_list::<i32>(array)
+        }
+        DataType::LargeList(_) => {
+            let array = as_large_list_array(&args[0])?;
+            general_pop_back_list::<i64>(array)
+        }
+        _ => exec_err!(
+            "array_pop_back does not support type: {:?}",
+            array_data_type
+        ),
+    }
+}
+
+/// Appends or prepends elements to a ListArray.
+///
+/// This function takes a ListArray, an ArrayRef, a FieldRef, and a boolean flag
+/// indicating whether to append or prepend the elements. It returns a `Result<ArrayRef>`
+/// representing the resulting ListArray after the operation.
+///
+/// # Arguments
+///
+/// * `list_array` - A reference to the ListArray to which elements will be appended/prepended.
+/// * `element_array` - A reference to the Array containing elements to be appended/prepended.
+/// * `field` - A reference to the Field describing the data type of the arrays.
+/// * `is_append` - A boolean flag indicating whether to append (`true`) or prepend (`false`) elements.
+///
+/// # Examples
+///
+/// generic_append_and_prepend(
+///     [1, 2, 3], 4, append => [1, 2, 3, 4]
+///     5, [6, 7, 8], prepend => [5, 6, 7, 8]
+/// )
+fn generic_append_and_prepend<O: OffsetSizeTrait>(
+    list_array: &GenericListArray<O>,
+    element_array: &ArrayRef,
+    data_type: &DataType,
+    is_append: bool,
+) -> Result<ArrayRef>
+where
+    i64: TryInto<O>,
+{
+    let mut offsets = vec![O::usize_as(0)];
+    let values = list_array.values();
+    let original_data = values.to_data();
+    let element_data = element_array.to_data();
+    let capacity = Capacities::Array(original_data.len() + element_data.len());
+
+    let mut mutable = MutableArrayData::with_capacities(
+        vec![&original_data, &element_data],
+        false,
+        capacity,
+    );
+
+    let values_index = 0;
+    let element_index = 1;
+
+    for (row_index, offset_window) in list_array.offsets().windows(2).enumerate() {
+        let start = offset_window[0].to_usize().unwrap();
+        let end = offset_window[1].to_usize().unwrap();
+        if is_append {
+            mutable.extend(values_index, start, end);
+            mutable.extend(element_index, row_index, row_index + 1);
+        } else {
+            mutable.extend(element_index, row_index, row_index + 1);
+            mutable.extend(values_index, start, end);
+        }
+        offsets.push(offsets[row_index] + O::usize_as(end - start + 1));
+    }
+
+    let data = mutable.freeze();
+
+    Ok(Arc::new(GenericListArray::<O>::try_new(
+        Arc::new(Field::new("item", data_type.to_owned(), true)),
+        OffsetBuffer::new(offsets.into()),
+        arrow_array::make_array(data),
+        None,
+    )?))
+}
+
+/// Generates an array of integers from start to stop with a given step.
+///
+/// This function takes 1 to 3 ArrayRefs as arguments, representing start, stop, and step values.
+/// It returns a `Result<ArrayRef>` representing the resulting ListArray after the operation.
+///
+/// # Arguments
+///
+/// * `args` - An array of 1 to 3 ArrayRefs representing start, stop, and step(step value can not be zero.) values.
+///
+/// # Examples
+///
+/// gen_range(3) => [0, 1, 2]
+/// gen_range(1, 4) => [1, 2, 3]
+/// gen_range(1, 7, 2) => [1, 3, 5]
+pub fn gen_range(args: &[ArrayRef]) -> Result<ArrayRef> {
+    let (start_array, stop_array, step_array) = match args.len() {
+        1 => (None, as_int64_array(&args[0])?, None),
+        2 => (
+            Some(as_int64_array(&args[0])?),
+            as_int64_array(&args[1])?,
             None,
-        )?)
-    }};
+        ),
+        3 => (
+            Some(as_int64_array(&args[0])?),
+            as_int64_array(&args[1])?,
+            Some(as_int64_array(&args[2])?),
+        ),
+        _ => return internal_err!("gen_range expects 1 to 3 arguments"),
+    };
+
+    let mut values = vec![];
+    let mut offsets = vec![0];
+    for (idx, stop) in stop_array.iter().enumerate() {
+        let stop = stop.unwrap_or(0);
+        let start = start_array.as_ref().map(|arr| arr.value(idx)).unwrap_or(0);
+        let step = step_array.as_ref().map(|arr| arr.value(idx)).unwrap_or(1);
+        if step == 0 {
+            return exec_err!("step can't be 0 for function range(start [, stop, step]");
+        }
+        if step < 0 {
+            // Decreasing range
+            values.extend((stop + 1..start + 1).rev().step_by((-step) as usize));
+        } else {
+            // Increasing range
+            values.extend((start..stop).step_by(step as usize));
+        }
+
+        offsets.push(values.len() as i32);
+    }
+    let arr = Arc::new(ListArray::try_new(
+        Arc::new(Field::new("item", DataType::Int64, true)),
+        OffsetBuffer::new(offsets.into()),
+        Arc::new(Int64Array::from(values)),
+        None,
+    )?);
+    Ok(arr)
+}
+
+/// Array_sort SQL function
+pub fn array_sort(args: &[ArrayRef]) -> Result<ArrayRef> {
+    if args.is_empty() || args.len() > 3 {
+        return exec_err!("array_sort expects one to three arguments");
+    }
+
+    let sort_option = match args.len() {
+        1 => None,
+        2 => {
+            let sort = as_string_array(&args[1])?.value(0);
+            Some(SortOptions {
+                descending: order_desc(sort)?,
+                nulls_first: true,
+            })
+        }
+        3 => {
+            let sort = as_string_array(&args[1])?.value(0);
+            let nulls_first = as_string_array(&args[2])?.value(0);
+            Some(SortOptions {
+                descending: order_desc(sort)?,
+                nulls_first: order_nulls_first(nulls_first)?,
+            })
+        }
+        _ => return internal_err!("array_sort expects 1 to 3 arguments"),
+    };
+
+    let list_array = as_list_array(&args[0])?;
+    let row_count = list_array.len();
+
+    let mut array_lengths = vec![];
+    let mut arrays = vec![];
+    let mut valid = BooleanBufferBuilder::new(row_count);
+    for i in 0..row_count {
+        if list_array.is_null(i) {
+            array_lengths.push(0);
+            valid.append(false);
+        } else {
+            let arr_ref = list_array.value(i);
+            let arr_ref = arr_ref.as_ref();
+
+            let sorted_array = compute::sort(arr_ref, sort_option)?;
+            array_lengths.push(sorted_array.len());
+            arrays.push(sorted_array);
+            valid.append(true);
+        }
+    }
+
+    // Assume all arrays have the same data type
+    let data_type = list_array.value_type();
+    let buffer = valid.finish();
+
+    let elements = arrays
+        .iter()
+        .map(|a| a.as_ref())
+        .collect::<Vec<&dyn Array>>();
+
+    let list_arr = ListArray::new(
+        Arc::new(Field::new("item", data_type, true)),
+        OffsetBuffer::from_lengths(array_lengths),
+        Arc::new(compute::concat(elements.as_slice())?),
+        Some(NullBuffer::new(buffer)),
+    );
+    Ok(Arc::new(list_arr))
+}
+
+fn order_desc(modifier: &str) -> Result<bool> {
+    match modifier.to_uppercase().as_str() {
+        "DESC" => Ok(true),
+        "ASC" => Ok(false),
+        _ => internal_err!("the second parameter of array_sort expects DESC or ASC"),
+    }
+}
+
+fn order_nulls_first(modifier: &str) -> Result<bool> {
+    match modifier.to_uppercase().as_str() {
+        "NULLS FIRST" => Ok(true),
+        "NULLS LAST" => Ok(false),
+        _ => internal_err!(
+            "the third parameter of array_sort expects NULLS FIRST or NULLS LAST"
+        ),
+    }
+}
+
+fn general_append_and_prepend<O: OffsetSizeTrait>(
+    args: &[ArrayRef],
+    is_append: bool,
+) -> Result<ArrayRef>
+where
+    i64: TryInto<O>,
+{
+    let (list_array, element_array) = if is_append {
+        let list_array = as_generic_list_array::<O>(&args[0])?;
+        let element_array = &args[1];
+        check_datatypes("array_append", &[element_array, list_array.values()])?;
+        (list_array, element_array)
+    } else {
+        let list_array = as_generic_list_array::<O>(&args[1])?;
+        let element_array = &args[0];
+        check_datatypes("array_prepend", &[list_array.values(), element_array])?;
+        (list_array, element_array)
+    };
+
+    let res = match list_array.value_type() {
+        DataType::List(_) => concat_internal::<i32>(args)?,
+        DataType::LargeList(_) => concat_internal::<i64>(args)?,
+        DataType::Null => {
+            return make_array(&[
+                list_array.values().to_owned(),
+                element_array.to_owned(),
+            ]);
+        }
+        data_type => {
+            return generic_append_and_prepend::<O>(
+                list_array,
+                element_array,
+                &data_type,
+                is_append,
+            );
+        }
+    };
+
+    Ok(res)
 }
 
 /// Array_append SQL function
 pub fn array_append(args: &[ArrayRef]) -> Result<ArrayRef> {
-    let arr = as_list_array(&args[0])?;
-    let element = &args[1];
+    if args.len() != 2 {
+        return exec_err!("array_append expects two arguments");
+    }
 
-    check_datatypes("array_append", &[arr.values(), element])?;
-    let res = match arr.value_type() {
-        DataType::List(_) => concat_internal(args)?,
-        DataType::Null => return make_array(&[element.to_owned()]),
-        data_type => {
-            macro_rules! array_function {
-                ($ARRAY_TYPE:ident) => {
-                    append!(arr, element, $ARRAY_TYPE)
-                };
-            }
-            call_array_function!(data_type, false)
-        }
-    };
-
-    Ok(res)
-}
-
-macro_rules! prepend {
-    ($ARRAY:expr, $ELEMENT:expr, $ARRAY_TYPE:ident) => {{
-        let mut offsets: Vec<i32> = vec![0];
-        let mut values =
-            downcast_arg!(new_empty_array($ELEMENT.data_type()), $ARRAY_TYPE).clone();
-
-        let element = downcast_arg!($ELEMENT, $ARRAY_TYPE);
-        for (arr, el) in $ARRAY.iter().zip(element.iter()) {
-            let last_offset: i32 = offsets.last().copied().ok_or_else(|| {
-                DataFusionError::Internal(format!("offsets should not be empty"))
-            })?;
-            match arr {
-                Some(arr) => {
-                    let child_array = downcast_arg!(arr, $ARRAY_TYPE);
-                    values = downcast_arg!(
-                        compute::concat(&[
-                            &values,
-                            &$ARRAY_TYPE::from(vec![el]),
-                            child_array
-                        ])?
-                        .clone(),
-                        $ARRAY_TYPE
-                    )
-                    .clone();
-                    offsets.push(last_offset + child_array.len() as i32 + 1i32);
-                }
-                None => {
-                    values = downcast_arg!(
-                        compute::concat(&[
-                            &values,
-                            &$ARRAY_TYPE::from(vec![el.clone()])
-                        ])?
-                        .clone(),
-                        $ARRAY_TYPE
-                    )
-                    .clone();
-                    offsets.push(last_offset + 1i32);
-                }
-            }
-        }
-
-        let field = Arc::new(Field::new("item", $ELEMENT.data_type().clone(), true));
-
-        Arc::new(ListArray::try_new(
-            field,
-            OffsetBuffer::new(offsets.into()),
-            Arc::new(values),
-            None,
-        )?)
-    }};
+    match args[0].data_type() {
+        DataType::LargeList(_) => general_append_and_prepend::<i64>(args, true),
+        _ => general_append_and_prepend::<i32>(args, true),
+    }
 }
 
 /// Array_prepend SQL function
 pub fn array_prepend(args: &[ArrayRef]) -> Result<ArrayRef> {
-    let element = &args[0];
-    let arr = as_list_array(&args[1])?;
+    if args.len() != 2 {
+        return exec_err!("array_prepend expects two arguments");
+    }
 
-    check_datatypes("array_prepend", &[element, arr.values()])?;
-    let res = match arr.value_type() {
-        DataType::List(_) => concat_internal(args)?,
-        DataType::Null => return make_array(&[element.to_owned()]),
-        data_type => {
-            macro_rules! array_function {
-                ($ARRAY_TYPE:ident) => {
-                    prepend!(arr, element, $ARRAY_TYPE)
-                };
-            }
-            call_array_function!(data_type, false)
-        }
-    };
-
-    Ok(res)
+    match args[1].data_type() {
+        DataType::LargeList(_) => general_append_and_prepend::<i64>(args, false),
+        _ => general_append_and_prepend::<i32>(args, false),
+    }
 }
 
 fn align_array_dimensions(args: Vec<ArrayRef>) -> Result<Vec<ArrayRef>> {
     let args_ndim = args
         .iter()
-        .map(|arg| compute_array_ndims(Some(arg.to_owned())))
-        .collect::<Result<Vec<_>>>()?
-        .into_iter()
-        .map(|x| x.unwrap_or(0))
+        .map(|arg| datafusion_common::utils::list_ndims(arg.data_type()))
         .collect::<Vec<_>>();
     let max_ndim = args_ndim.iter().max().unwrap_or(&0);
 
@@ -765,11 +1110,13 @@ fn align_array_dimensions(args: Vec<ArrayRef>) -> Result<Vec<ArrayRef>> {
 }
 
 // Concatenate arrays on the same row.
-fn concat_internal(args: &[ArrayRef]) -> Result<ArrayRef> {
+fn concat_internal<O: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
     let args = align_array_dimensions(args.to_vec())?;
 
-    let list_arrays =
-        downcast_vec!(args, ListArray).collect::<Result<Vec<&ListArray>>>()?;
+    let list_arrays = args
+        .iter()
+        .map(|arg| as_generic_list_array::<O>(arg))
+        .collect::<Result<Vec<_>>>()?;
 
     // Assume number of rows is the same for all arrays
     let row_count = list_arrays[0].len();
@@ -801,7 +1148,7 @@ fn concat_internal(args: &[ArrayRef]) -> Result<ArrayRef> {
                 .collect::<Vec<&dyn Array>>();
 
             // Concatenated array on i-th row
-            let concated_array = arrow::compute::concat(elements.as_slice())?;
+            let concated_array = compute::concat(elements.as_slice())?;
             array_lengths.push(concated_array.len());
             arrays.push(concated_array);
             valid.append(true);
@@ -816,158 +1163,57 @@ fn concat_internal(args: &[ArrayRef]) -> Result<ArrayRef> {
         .map(|a| a.as_ref())
         .collect::<Vec<&dyn Array>>();
 
-    let list_arr = ListArray::new(
+    let list_arr = GenericListArray::<O>::new(
         Arc::new(Field::new("item", data_type, true)),
         OffsetBuffer::from_lengths(array_lengths),
-        Arc::new(arrow::compute::concat(elements.as_slice())?),
+        Arc::new(compute::concat(elements.as_slice())?),
         Some(NullBuffer::new(buffer)),
     );
+
     Ok(Arc::new(list_arr))
 }
 
 /// Array_concat/Array_cat SQL function
 pub fn array_concat(args: &[ArrayRef]) -> Result<ArrayRef> {
+    if args.is_empty() {
+        return exec_err!("array_concat expects at least one arguments");
+    }
+
     let mut new_args = vec![];
     for arg in args {
-        let (ndim, lower_data_type) =
-            compute_array_ndims_with_datatype(Some(arg.clone()))?;
-        if ndim.is_none() || ndim == Some(1) {
-            return not_impl_err!("Array is not type '{lower_data_type:?}'.");
-        } else if !lower_data_type.equals_datatype(&DataType::Null) {
+        let ndim = list_ndims(arg.data_type());
+        let base_type = datafusion_common::utils::base_type(arg.data_type());
+        if ndim == 0 {
+            return not_impl_err!("Array is not type '{base_type:?}'.");
+        } else if !base_type.eq(&DataType::Null) {
             new_args.push(arg.clone());
         }
     }
 
-    concat_internal(new_args.as_slice())
-}
-
-macro_rules! general_repeat {
-    ($ELEMENT:expr, $COUNT:expr, $ARRAY_TYPE:ident) => {{
-        let mut offsets: Vec<i32> = vec![0];
-        let mut values =
-            downcast_arg!(new_empty_array($ELEMENT.data_type()), $ARRAY_TYPE).clone();
-
-        let element_array = downcast_arg!($ELEMENT, $ARRAY_TYPE);
-        for (el, c) in element_array.iter().zip($COUNT.iter()) {
-            let last_offset: i32 = offsets.last().copied().ok_or_else(|| {
-                DataFusionError::Internal(format!("offsets should not be empty"))
-            })?;
-            match el {
-                Some(el) => {
-                    let c = if c < Some(0) { 0 } else { c.unwrap() } as usize;
-                    let repeated_array =
-                        [Some(el.clone())].repeat(c).iter().collect::<$ARRAY_TYPE>();
-
-                    values = downcast_arg!(
-                        compute::concat(&[&values, &repeated_array])?.clone(),
-                        $ARRAY_TYPE
-                    )
-                    .clone();
-                    offsets.push(last_offset + repeated_array.len() as i32);
-                }
-                None => {
-                    offsets.push(last_offset);
-                }
-            }
-        }
-
-        let field = Arc::new(Field::new("item", $ELEMENT.data_type().clone(), true));
-
-        Arc::new(ListArray::try_new(
-            field,
-            OffsetBuffer::new(offsets.into()),
-            Arc::new(values),
-            None,
-        )?)
-    }};
-}
-
-macro_rules! general_repeat_list {
-    ($ELEMENT:expr, $COUNT:expr, $ARRAY_TYPE:ident) => {{
-        let mut offsets: Vec<i32> = vec![0];
-        let mut values =
-            downcast_arg!(new_empty_array($ELEMENT.data_type()), ListArray).clone();
-
-        let element_array = downcast_arg!($ELEMENT, ListArray);
-        for (el, c) in element_array.iter().zip($COUNT.iter()) {
-            let last_offset: i32 = offsets.last().copied().ok_or_else(|| {
-                DataFusionError::Internal(format!("offsets should not be empty"))
-            })?;
-            match el {
-                Some(el) => {
-                    let c = if c < Some(0) { 0 } else { c.unwrap() } as usize;
-                    let repeated_vec = vec![el; c];
-
-                    let mut i: i32 = 0;
-                    let mut repeated_offsets = vec![i];
-                    repeated_offsets.extend(
-                        repeated_vec
-                            .clone()
-                            .into_iter()
-                            .map(|a| {
-                                i += a.len() as i32;
-                                i
-                            })
-                            .collect::<Vec<_>>(),
-                    );
-
-                    let mut repeated_values = downcast_arg!(
-                        new_empty_array(&element_array.value_type()),
-                        $ARRAY_TYPE
-                    )
-                    .clone();
-                    for repeated_list in repeated_vec {
-                        repeated_values = downcast_arg!(
-                            compute::concat(&[&repeated_values, &repeated_list])?,
-                            $ARRAY_TYPE
-                        )
-                        .clone();
-                    }
-
-                    let field = Arc::new(Field::new(
-                        "item",
-                        element_array.value_type().clone(),
-                        true,
-                    ));
-                    let repeated_array = ListArray::try_new(
-                        field,
-                        OffsetBuffer::new(repeated_offsets.clone().into()),
-                        Arc::new(repeated_values),
-                        None,
-                    )?;
-
-                    values = downcast_arg!(
-                        compute::concat(&[&values, &repeated_array,])?.clone(),
-                        ListArray
-                    )
-                    .clone();
-                    offsets.push(last_offset + repeated_array.len() as i32);
-                }
-                None => {
-                    offsets.push(last_offset);
-                }
-            }
-        }
-
-        let field = Arc::new(Field::new("item", $ELEMENT.data_type().clone(), true));
-
-        Arc::new(ListArray::try_new(
-            field,
-            OffsetBuffer::new(offsets.into()),
-            Arc::new(values),
-            None,
-        )?)
-    }};
+    concat_internal::<i32>(new_args.as_slice())
 }
 
 /// Array_empty SQL function
 pub fn array_empty(args: &[ArrayRef]) -> Result<ArrayRef> {
-    if args[0].as_any().downcast_ref::<NullArray>().is_some() {
+    if args.len() != 1 {
+        return exec_err!("array_empty expects one argument");
+    }
+
+    if as_null_array(&args[0]).is_ok() {
         // Make sure to return Boolean type.
         return Ok(Arc::new(BooleanArray::new_null(args[0].len())));
     }
+    let array_type = args[0].data_type();
 
-    let array = as_list_array(&args[0])?;
+    match array_type {
+        DataType::List(_) => array_empty_dispatch::<i32>(&args[0]),
+        DataType::LargeList(_) => array_empty_dispatch::<i64>(&args[0]),
+        _ => internal_err!("array_empty does not support type '{array_type:?}'."),
+    }
+}
+
+fn array_empty_dispatch<O: OffsetSizeTrait>(array: &ArrayRef) -> Result<ArrayRef> {
+    let array = as_generic_list_array::<O>(array)?;
     let builder = array
         .iter()
         .map(|arr| arr.map(|arr| arr.len() == arr.null_count()))
@@ -977,364 +1223,588 @@ pub fn array_empty(args: &[ArrayRef]) -> Result<ArrayRef> {
 
 /// Array_repeat SQL function
 pub fn array_repeat(args: &[ArrayRef]) -> Result<ArrayRef> {
+    if args.len() != 2 {
+        return exec_err!("array_repeat expects two arguments");
+    }
+
     let element = &args[0];
-    let count = as_int64_array(&args[1])?;
+    let count_array = as_int64_array(&args[1])?;
 
-    let res = match element.data_type() {
-        DataType::List(field) => {
-            macro_rules! array_function {
-                ($ARRAY_TYPE:ident) => {
-                    general_repeat_list!(element, count, $ARRAY_TYPE)
-                };
-            }
-            call_array_function!(field.data_type(), true)
+    match element.data_type() {
+        DataType::List(_) => {
+            let list_array = as_list_array(element)?;
+            general_list_repeat::<i32>(list_array, count_array)
         }
-        data_type => {
-            macro_rules! array_function {
-                ($ARRAY_TYPE:ident) => {
-                    general_repeat!(element, count, $ARRAY_TYPE)
-                };
-            }
-            call_array_function!(data_type, false)
+        DataType::LargeList(_) => {
+            let list_array = as_large_list_array(element)?;
+            general_list_repeat::<i64>(list_array, count_array)
         }
-    };
-
-    Ok(res)
+        _ => general_repeat(element, count_array),
+    }
 }
 
-macro_rules! position {
-    ($ARRAY:expr, $ELEMENT:expr, $INDEX:expr, $ARRAY_TYPE:ident) => {{
-        let element = downcast_arg!($ELEMENT, $ARRAY_TYPE);
-        $ARRAY
-            .iter()
-            .zip(element.iter())
-            .zip($INDEX.iter())
-            .map(|((arr, el), i)| {
-                let index = match i {
-                    Some(i) => {
-                        if i <= 0 {
-                            0
-                        } else {
-                            i - 1
-                        }
-                    }
-                    None => return exec_err!("initial position must not be null"),
-                };
+/// For each element of `array[i]` repeat `count_array[i]` times.
+///
+/// Assumption for the input:
+///     1. `count[i] >= 0`
+///     2. `array.len() == count_array.len()`
+///
+/// For example,
+/// ```text
+/// array_repeat(
+///     [1, 2, 3], [2, 0, 1] => [[1, 1], [], [3]]
+/// )
+/// ```
+fn general_repeat(array: &ArrayRef, count_array: &Int64Array) -> Result<ArrayRef> {
+    let data_type = array.data_type();
+    let mut new_values = vec![];
 
-                match arr {
-                    Some(arr) => {
-                        let child_array = downcast_arg!(arr, $ARRAY_TYPE);
+    let count_vec = count_array
+        .values()
+        .to_vec()
+        .iter()
+        .map(|x| *x as usize)
+        .collect::<Vec<_>>();
 
-                        match child_array
-                            .iter()
-                            .skip(index as usize)
-                            .position(|x| x == el)
-                        {
-                            Some(value) => Ok(Some(value as u64 + index as u64 + 1u64)),
-                            None => Ok(None),
-                        }
-                    }
-                    None => Ok(None),
-                }
-            })
-            .collect::<Result<UInt64Array>>()?
-    }};
-}
+    for (row_index, &count) in count_vec.iter().enumerate() {
+        let repeated_array = if array.is_null(row_index) {
+            new_null_array(data_type, count)
+        } else {
+            let original_data = array.to_data();
+            let capacity = Capacities::Array(count);
+            let mut mutable =
+                MutableArrayData::with_capacities(vec![&original_data], false, capacity);
 
-/// Array_position SQL function
-pub fn array_position(args: &[ArrayRef]) -> Result<ArrayRef> {
-    let arr = as_list_array(&args[0])?;
-    let element = &args[1];
+            for _ in 0..count {
+                mutable.extend(0, row_index, row_index + 1);
+            }
 
-    let index = if args.len() == 3 {
-        as_int64_array(&args[2])?.clone()
-    } else {
-        Int64Array::from_value(0, arr.len())
-    };
-
-    check_datatypes("array_position", &[arr.values(), element])?;
-    macro_rules! array_function {
-        ($ARRAY_TYPE:ident) => {
-            position!(arr, element, index, $ARRAY_TYPE)
+            let data = mutable.freeze();
+            arrow_array::make_array(data)
         };
+        new_values.push(repeated_array);
     }
-    let res = call_array_function!(arr.value_type(), true);
 
-    Ok(Arc::new(res))
-}
-
-macro_rules! positions {
-    ($ARRAY:expr, $ELEMENT:expr, $ARRAY_TYPE:ident) => {{
-        let element = downcast_arg!($ELEMENT, $ARRAY_TYPE);
-        let mut offsets: Vec<i32> = vec![0];
-        let mut values =
-            downcast_arg!(new_empty_array(&DataType::UInt64), UInt64Array).clone();
-        for comp in $ARRAY
-            .iter()
-            .zip(element.iter())
-            .map(|(arr, el)| match arr {
-                Some(arr) => {
-                    let child_array = downcast_arg!(arr, $ARRAY_TYPE);
-                    let res = child_array
-                        .iter()
-                        .enumerate()
-                        .filter(|(_, x)| *x == el)
-                        .flat_map(|(i, _)| Some((i + 1) as u64))
-                        .collect::<UInt64Array>();
-
-                    Ok(res)
-                }
-                None => Ok(downcast_arg!(
-                    new_empty_array(&DataType::UInt64),
-                    UInt64Array
-                )
-                .clone()),
-            })
-            .collect::<Result<Vec<UInt64Array>>>()?
-        {
-            let last_offset: i32 = offsets.last().copied().ok_or_else(|| {
-                DataFusionError::Internal(format!("offsets should not be empty",))
-            })?;
-            values =
-                downcast_arg!(compute::concat(&[&values, &comp,])?.clone(), UInt64Array)
-                    .clone();
-            offsets.push(last_offset + comp.len() as i32);
-        }
-
-        let field = Arc::new(Field::new("item", DataType::UInt64, true));
-
-        Arc::new(ListArray::try_new(
-            field,
-            OffsetBuffer::new(offsets.into()),
-            Arc::new(values),
-            None,
-        )?)
-    }};
-}
-
-/// Array_positions SQL function
-pub fn array_positions(args: &[ArrayRef]) -> Result<ArrayRef> {
-    let arr = as_list_array(&args[0])?;
-    let element = &args[1];
-
-    check_datatypes("array_positions", &[arr.values(), element])?;
-    macro_rules! array_function {
-        ($ARRAY_TYPE:ident) => {
-            positions!(arr, element, $ARRAY_TYPE)
-        };
-    }
-    let res = call_array_function!(arr.value_type(), true);
-
-    Ok(res)
-}
-
-macro_rules! general_remove {
-    ($ARRAY:expr, $ELEMENT:expr, $MAX:expr, $ARRAY_TYPE:ident) => {{
-        let mut offsets: Vec<i32> = vec![0];
-        let mut values =
-            downcast_arg!(new_empty_array($ELEMENT.data_type()), $ARRAY_TYPE).clone();
-
-        let element = downcast_arg!($ELEMENT, $ARRAY_TYPE);
-        for ((arr, el), max) in $ARRAY.iter().zip(element.iter()).zip($MAX.iter()) {
-            let last_offset: i32 = offsets.last().copied().ok_or_else(|| {
-                DataFusionError::Internal(format!("offsets should not be empty"))
-            })?;
-            match arr {
-                Some(arr) => {
-                    let child_array = downcast_arg!(arr, $ARRAY_TYPE);
-                    let mut counter = 0;
-                    let max = if max < Some(1) { 1 } else { max.unwrap() };
-
-                    let filter_array = child_array
-                        .iter()
-                        .map(|element| {
-                            if counter != max && element == el {
-                                counter += 1;
-                                Some(false)
-                            } else {
-                                Some(true)
-                            }
-                        })
-                        .collect::<BooleanArray>();
-
-                    let filtered_array = compute::filter(&child_array, &filter_array)?;
-                    values = downcast_arg!(
-                        compute::concat(&[&values, &filtered_array,])?.clone(),
-                        $ARRAY_TYPE
-                    )
-                    .clone();
-                    offsets.push(last_offset + filtered_array.len() as i32);
-                }
-                None => offsets.push(last_offset),
-            }
-        }
-
-        let field = Arc::new(Field::new("item", $ELEMENT.data_type().clone(), true));
-
-        Arc::new(ListArray::try_new(
-            field,
-            OffsetBuffer::new(offsets.into()),
-            Arc::new(values),
-            None,
-        )?)
-    }};
-}
-
-macro_rules! array_removement_function {
-    ($FUNC:ident, $MAX_FUNC:expr, $DOC:expr) => {
-        #[doc = $DOC]
-        pub fn $FUNC(args: &[ArrayRef]) -> Result<ArrayRef> {
-            let arr = as_list_array(&args[0])?;
-            let element = &args[1];
-            let max = $MAX_FUNC(args)?;
-
-            check_datatypes(stringify!($FUNC), &[arr.values(), element])?;
-            macro_rules! array_function {
-                ($ARRAY_TYPE:ident) => {
-                    general_remove!(arr, element, max, $ARRAY_TYPE)
-                };
-            }
-            let res = call_array_function!(arr.value_type(), true);
-
-            Ok(res)
-        }
-    };
-}
-
-fn remove_one(args: &[ArrayRef]) -> Result<Int64Array> {
-    Ok(Int64Array::from_value(1, args[0].len()))
-}
-
-fn remove_n(args: &[ArrayRef]) -> Result<Int64Array> {
-    as_int64_array(&args[2]).cloned()
-}
-
-fn remove_all(args: &[ArrayRef]) -> Result<Int64Array> {
-    Ok(Int64Array::from_value(i64::MAX, args[0].len()))
-}
-
-// array removement functions
-array_removement_function!(array_remove, remove_one, "Array_remove SQL function");
-array_removement_function!(array_remove_n, remove_n, "Array_remove_n SQL function");
-array_removement_function!(
-    array_remove_all,
-    remove_all,
-    "Array_remove_all SQL function"
-);
-
-fn general_replace(args: &[ArrayRef], arr_n: Vec<i64>) -> Result<ArrayRef> {
-    let list_array = as_list_array(&args[0])?;
-    let from_array = &args[1];
-    let to_array = &args[2];
-
-    let mut offsets: Vec<i32> = vec![0];
-    let data_type = list_array.value_type();
-    let mut values = new_empty_array(&data_type);
-
-    for (row_index, (arr, n)) in list_array.iter().zip(arr_n.iter()).enumerate() {
-        let last_offset: i32 = offsets
-            .last()
-            .copied()
-            .ok_or_else(|| internal_datafusion_err!("offsets should not be empty"))?;
-        match arr {
-            Some(arr) => {
-                let indices = UInt32Array::from(vec![row_index as u32]);
-                let from_arr = arrow::compute::take(from_array, &indices, None)?;
-
-                let eq_array = match from_arr.data_type() {
-                    // arrow_ord::cmp_eq does not support ListArray, so we need to compare it by loop
-                    DataType::List(_) => {
-                        let from_a = as_list_array(&from_arr)?.value(0);
-                        let list_arr = as_list_array(&arr)?;
-
-                        let mut bool_values = vec![];
-                        for arr in list_arr.iter() {
-                            if let Some(a) = arr {
-                                bool_values.push(Some(a.eq(&from_a)));
-                            } else {
-                                return internal_err!(
-                                    "Null value is not supported in array_replace"
-                                );
-                            }
-                        }
-                        BooleanArray::from(bool_values)
-                    }
-                    _ => {
-                        let from_arr = Scalar::new(from_arr);
-                        arrow_ord::cmp::eq(&arr, &from_arr)?
-                    }
-                };
-
-                // Use MutableArrayData to build the replaced array
-                // First array is the original array, second array is the element to replace with.
-                let arrays = vec![arr, to_array.clone()];
-                let arrays_data = arrays
-                    .iter()
-                    .map(|a| a.to_data())
-                    .collect::<Vec<ArrayData>>();
-                let arrays_data = arrays_data.iter().collect::<Vec<&ArrayData>>();
-
-                let arrays = arrays
-                    .iter()
-                    .map(|arr| arr.as_ref())
-                    .collect::<Vec<&dyn Array>>();
-                let capacity = Capacities::Array(arrays.iter().map(|a| a.len()).sum());
-
-                let mut mutable =
-                    MutableArrayData::with_capacities(arrays_data, false, capacity);
-
-                let mut counter = 0;
-                for (i, to_replace) in eq_array.iter().enumerate() {
-                    if let Some(to_replace) = to_replace {
-                        if to_replace {
-                            mutable.extend(1, row_index, row_index + 1);
-                            counter += 1;
-                            if counter == *n {
-                                // extend the rest of the array
-                                mutable.extend(0, i + 1, eq_array.len());
-                                break;
-                            }
-                        } else {
-                            mutable.extend(0, i, i + 1);
-                        }
-                    } else {
-                        return internal_err!("eq_array should not contain None");
-                    }
-                }
-
-                let data = mutable.freeze();
-                let replaced_array = arrow_array::make_array(data);
-
-                let v = arrow::compute::concat(&[&values, &replaced_array])?;
-                values = v;
-                offsets.push(last_offset + replaced_array.len() as i32);
-            }
-            None => {
-                offsets.push(last_offset);
-            }
-        }
-    }
+    let new_values: Vec<_> = new_values.iter().map(|a| a.as_ref()).collect();
+    let values = compute::concat(&new_values)?;
 
     Ok(Arc::new(ListArray::try_new(
-        Arc::new(Field::new("item", data_type, true)),
-        OffsetBuffer::new(offsets.into()),
+        Arc::new(Field::new("item", data_type.to_owned(), true)),
+        OffsetBuffer::from_lengths(count_vec),
         values,
         None,
     )?))
 }
 
+/// Handle List version of `general_repeat`
+///
+/// For each element of `list_array[i]` repeat `count_array[i]` times.
+///
+/// For example,
+/// ```text
+/// array_repeat(
+///     [[1, 2, 3], [4, 5], [6]], [2, 0, 1] => [[[1, 2, 3], [1, 2, 3]], [], [[6]]]
+/// )
+/// ```
+fn general_list_repeat<O: OffsetSizeTrait>(
+    list_array: &GenericListArray<O>,
+    count_array: &Int64Array,
+) -> Result<ArrayRef> {
+    let data_type = list_array.data_type();
+    let value_type = list_array.value_type();
+    let mut new_values = vec![];
+
+    let count_vec = count_array
+        .values()
+        .to_vec()
+        .iter()
+        .map(|x| *x as usize)
+        .collect::<Vec<_>>();
+
+    for (list_array_row, &count) in list_array.iter().zip(count_vec.iter()) {
+        let list_arr = match list_array_row {
+            Some(list_array_row) => {
+                let original_data = list_array_row.to_data();
+                let capacity = Capacities::Array(original_data.len() * count);
+                let mut mutable = MutableArrayData::with_capacities(
+                    vec![&original_data],
+                    false,
+                    capacity,
+                );
+
+                for _ in 0..count {
+                    mutable.extend(0, 0, original_data.len());
+                }
+
+                let data = mutable.freeze();
+                let repeated_array = arrow_array::make_array(data);
+
+                let list_arr = GenericListArray::<O>::try_new(
+                    Arc::new(Field::new("item", value_type.clone(), true)),
+                    OffsetBuffer::<O>::from_lengths(vec![original_data.len(); count]),
+                    repeated_array,
+                    None,
+                )?;
+                Arc::new(list_arr) as ArrayRef
+            }
+            None => new_null_array(data_type, count),
+        };
+        new_values.push(list_arr);
+    }
+
+    let lengths = new_values.iter().map(|a| a.len()).collect::<Vec<_>>();
+    let new_values: Vec<_> = new_values.iter().map(|a| a.as_ref()).collect();
+    let values = compute::concat(&new_values)?;
+
+    Ok(Arc::new(ListArray::try_new(
+        Arc::new(Field::new("item", data_type.to_owned(), true)),
+        OffsetBuffer::<i32>::from_lengths(lengths),
+        values,
+        None,
+    )?))
+}
+
+/// Array_position SQL function
+pub fn array_position(args: &[ArrayRef]) -> Result<ArrayRef> {
+    if args.len() < 2 || args.len() > 3 {
+        return exec_err!("array_position expects two or three arguments");
+    }
+    match &args[0].data_type() {
+        DataType::List(_) => general_position_dispatch::<i32>(args),
+        DataType::LargeList(_) => general_position_dispatch::<i64>(args),
+        array_type => exec_err!("array_position does not support type '{array_type:?}'."),
+    }
+}
+fn general_position_dispatch<O: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
+    let list_array = as_generic_list_array::<O>(&args[0])?;
+    let element_array = &args[1];
+
+    check_datatypes("array_position", &[list_array.values(), element_array])?;
+
+    let arr_from = if args.len() == 3 {
+        as_int64_array(&args[2])?
+            .values()
+            .to_vec()
+            .iter()
+            .map(|&x| x - 1)
+            .collect::<Vec<_>>()
+    } else {
+        vec![0; list_array.len()]
+    };
+
+    // if `start_from` index is out of bounds, return error
+    for (arr, &from) in list_array.iter().zip(arr_from.iter()) {
+        if let Some(arr) = arr {
+            if from < 0 || from as usize >= arr.len() {
+                return internal_err!("start_from index out of bounds");
+            }
+        } else {
+            // We will get null if we got null in the array, so we don't need to check
+        }
+    }
+
+    generic_position::<O>(list_array, element_array, arr_from)
+}
+
+fn generic_position<OffsetSize: OffsetSizeTrait>(
+    list_array: &GenericListArray<OffsetSize>,
+    element_array: &ArrayRef,
+    arr_from: Vec<i64>, // 0-indexed
+) -> Result<ArrayRef> {
+    let mut data = Vec::with_capacity(list_array.len());
+
+    for (row_index, (list_array_row, &from)) in
+        list_array.iter().zip(arr_from.iter()).enumerate()
+    {
+        let from = from as usize;
+
+        if let Some(list_array_row) = list_array_row {
+            let eq_array =
+                compare_element_to_list(&list_array_row, element_array, row_index, true)?;
+
+            // Collect `true`s in 1-indexed positions
+            let index = eq_array
+                .iter()
+                .skip(from)
+                .position(|e| e == Some(true))
+                .map(|index| (from + index + 1) as u64);
+
+            data.push(index);
+        } else {
+            data.push(None);
+        }
+    }
+
+    Ok(Arc::new(UInt64Array::from(data)))
+}
+
+/// Array_positions SQL function
+pub fn array_positions(args: &[ArrayRef]) -> Result<ArrayRef> {
+    if args.len() != 2 {
+        return exec_err!("array_positions expects two arguments");
+    }
+
+    let element = &args[1];
+
+    match &args[0].data_type() {
+        DataType::List(_) => {
+            let arr = as_list_array(&args[0])?;
+            check_datatypes("array_positions", &[arr.values(), element])?;
+            general_positions::<i32>(arr, element)
+        }
+        DataType::LargeList(_) => {
+            let arr = as_large_list_array(&args[0])?;
+            check_datatypes("array_positions", &[arr.values(), element])?;
+            general_positions::<i64>(arr, element)
+        }
+        array_type => {
+            exec_err!("array_positions does not support type '{array_type:?}'.")
+        }
+    }
+}
+
+fn general_positions<OffsetSize: OffsetSizeTrait>(
+    list_array: &GenericListArray<OffsetSize>,
+    element_array: &ArrayRef,
+) -> Result<ArrayRef> {
+    let mut data = Vec::with_capacity(list_array.len());
+
+    for (row_index, list_array_row) in list_array.iter().enumerate() {
+        if let Some(list_array_row) = list_array_row {
+            let eq_array =
+                compare_element_to_list(&list_array_row, element_array, row_index, true)?;
+
+            // Collect `true`s in 1-indexed positions
+            let indexes = eq_array
+                .iter()
+                .positions(|e| e == Some(true))
+                .map(|index| Some(index as u64 + 1))
+                .collect::<Vec<_>>();
+
+            data.push(Some(indexes));
+        } else {
+            data.push(None);
+        }
+    }
+
+    Ok(Arc::new(
+        ListArray::from_iter_primitive::<UInt64Type, _, _>(data),
+    ))
+}
+
+/// For each element of `list_array[i]`, removed up to `arr_n[i]`  occurences
+/// of `element_array[i]`.
+///
+/// The type of each **element** in `list_array` must be the same as the type of
+/// `element_array`. This function also handles nested arrays
+/// ([`ListArray`] of [`ListArray`]s)
+///
+/// For example, when called to remove a list array (where each element is a
+/// list of int32s, the second argument are int32 arrays, and the
+/// third argument is the number of occurrences to remove
+///
+/// ```text
+/// general_remove(
+///   [1, 2, 3, 2], 2, 1    ==> [1, 3, 2]   (only the first 2 is removed)
+///   [4, 5, 6, 5], 5, 2    ==> [4, 6]  (both 5s are removed)
+/// )
+/// ```
+fn general_remove<OffsetSize: OffsetSizeTrait>(
+    list_array: &GenericListArray<OffsetSize>,
+    element_array: &ArrayRef,
+    arr_n: Vec<i64>,
+) -> Result<ArrayRef> {
+    let data_type = list_array.value_type();
+    let mut new_values = vec![];
+    // Build up the offsets for the final output array
+    let mut offsets = Vec::<OffsetSize>::with_capacity(arr_n.len() + 1);
+    offsets.push(OffsetSize::zero());
+
+    // n is the number of elements to remove in this row
+    for (row_index, (list_array_row, n)) in
+        list_array.iter().zip(arr_n.iter()).enumerate()
+    {
+        match list_array_row {
+            Some(list_array_row) => {
+                let eq_array = compare_element_to_list(
+                    &list_array_row,
+                    element_array,
+                    row_index,
+                    false,
+                )?;
+
+                // We need to keep at most first n elements as `false`, which represent the elements to remove.
+                let eq_array = if eq_array.false_count() < *n as usize {
+                    eq_array
+                } else {
+                    let mut count = 0;
+                    eq_array
+                        .iter()
+                        .map(|e| {
+                            // Keep first n `false` elements, and reverse other elements to `true`.
+                            if let Some(false) = e {
+                                if count < *n {
+                                    count += 1;
+                                    e
+                                } else {
+                                    Some(true)
+                                }
+                            } else {
+                                e
+                            }
+                        })
+                        .collect::<BooleanArray>()
+                };
+
+                let filtered_array = arrow::compute::filter(&list_array_row, &eq_array)?;
+                offsets.push(
+                    offsets[row_index] + OffsetSize::usize_as(filtered_array.len()),
+                );
+                new_values.push(filtered_array);
+            }
+            None => {
+                // Null element results in a null row (no new offsets)
+                offsets.push(offsets[row_index]);
+            }
+        }
+    }
+
+    let values = if new_values.is_empty() {
+        new_empty_array(&data_type)
+    } else {
+        let new_values = new_values.iter().map(|x| x.as_ref()).collect::<Vec<_>>();
+        arrow::compute::concat(&new_values)?
+    };
+
+    Ok(Arc::new(GenericListArray::<OffsetSize>::try_new(
+        Arc::new(Field::new("item", data_type, true)),
+        OffsetBuffer::new(offsets.into()),
+        values,
+        list_array.nulls().cloned(),
+    )?))
+}
+
+fn array_remove_internal(
+    array: &ArrayRef,
+    element_array: &ArrayRef,
+    arr_n: Vec<i64>,
+) -> Result<ArrayRef> {
+    match array.data_type() {
+        DataType::List(_) => {
+            let list_array = array.as_list::<i32>();
+            general_remove::<i32>(list_array, element_array, arr_n)
+        }
+        DataType::LargeList(_) => {
+            let list_array = array.as_list::<i64>();
+            general_remove::<i64>(list_array, element_array, arr_n)
+        }
+        _ => internal_err!("array_remove_all expects a list array"),
+    }
+}
+
+pub fn array_remove_all(args: &[ArrayRef]) -> Result<ArrayRef> {
+    if args.len() != 2 {
+        return exec_err!("array_remove_all expects two arguments");
+    }
+
+    let arr_n = vec![i64::MAX; args[0].len()];
+    array_remove_internal(&args[0], &args[1], arr_n)
+}
+
+pub fn array_remove(args: &[ArrayRef]) -> Result<ArrayRef> {
+    if args.len() != 2 {
+        return exec_err!("array_remove expects two arguments");
+    }
+
+    let arr_n = vec![1; args[0].len()];
+    array_remove_internal(&args[0], &args[1], arr_n)
+}
+
+pub fn array_remove_n(args: &[ArrayRef]) -> Result<ArrayRef> {
+    if args.len() != 3 {
+        return exec_err!("array_remove_n expects three arguments");
+    }
+
+    let arr_n = as_int64_array(&args[2])?.values().to_vec();
+    array_remove_internal(&args[0], &args[1], arr_n)
+}
+
+/// For each element of `list_array[i]`, replaces up to `arr_n[i]`  occurences
+/// of `from_array[i]`, `to_array[i]`.
+///
+/// The type of each **element** in `list_array` must be the same as the type of
+/// `from_array` and `to_array`. This function also handles nested arrays
+/// ([`ListArray`] of [`ListArray`]s)
+///
+/// For example, when called to replace a list array (where each element is a
+/// list of int32s, the second and third argument are int32 arrays, and the
+/// fourth argument is the number of occurrences to replace
+///
+/// ```text
+/// general_replace(
+///   [1, 2, 3, 2], 2, 10, 1    ==> [1, 10, 3, 2]   (only the first 2 is replaced)
+///   [4, 5, 6, 5], 5, 20, 2    ==> [4, 20, 6, 20]  (both 5s are replaced)
+/// )
+/// ```
+fn general_replace<O: OffsetSizeTrait>(
+    list_array: &GenericListArray<O>,
+    from_array: &ArrayRef,
+    to_array: &ArrayRef,
+    arr_n: Vec<i64>,
+) -> Result<ArrayRef> {
+    // Build up the offsets for the final output array
+    let mut offsets: Vec<O> = vec![O::usize_as(0)];
+    let values = list_array.values();
+    let original_data = values.to_data();
+    let to_data = to_array.to_data();
+    let capacity = Capacities::Array(original_data.len());
+
+    // First array is the original array, second array is the element to replace with.
+    let mut mutable = MutableArrayData::with_capacities(
+        vec![&original_data, &to_data],
+        false,
+        capacity,
+    );
+
+    let mut valid = BooleanBufferBuilder::new(list_array.len());
+
+    for (row_index, offset_window) in list_array.offsets().windows(2).enumerate() {
+        if list_array.is_null(row_index) {
+            offsets.push(offsets[row_index]);
+            valid.append(false);
+            continue;
+        }
+
+        let start = offset_window[0];
+        let end = offset_window[1];
+
+        let list_array_row = list_array.value(row_index);
+
+        // Compute all positions in list_row_array (that is itself an
+        // array) that are equal to `from_array_row`
+        let eq_array =
+            compare_element_to_list(&list_array_row, &from_array, row_index, true)?;
+
+        let original_idx = O::usize_as(0);
+        let replace_idx = O::usize_as(1);
+        let n = arr_n[row_index];
+        let mut counter = 0;
+
+        // All elements are false, no need to replace, just copy original data
+        if eq_array.false_count() == eq_array.len() {
+            mutable.extend(
+                original_idx.to_usize().unwrap(),
+                start.to_usize().unwrap(),
+                end.to_usize().unwrap(),
+            );
+            offsets.push(offsets[row_index] + (end - start));
+            valid.append(true);
+            continue;
+        }
+
+        for (i, to_replace) in eq_array.iter().enumerate() {
+            let i = O::usize_as(i);
+            if let Some(true) = to_replace {
+                mutable.extend(replace_idx.to_usize().unwrap(), row_index, row_index + 1);
+                counter += 1;
+                if counter == n {
+                    // copy original data for any matches past n
+                    mutable.extend(
+                        original_idx.to_usize().unwrap(),
+                        (start + i).to_usize().unwrap() + 1,
+                        end.to_usize().unwrap(),
+                    );
+                    break;
+                }
+            } else {
+                // copy original data for false / null matches
+                mutable.extend(
+                    original_idx.to_usize().unwrap(),
+                    (start + i).to_usize().unwrap(),
+                    (start + i).to_usize().unwrap() + 1,
+                );
+            }
+        }
+
+        offsets.push(offsets[row_index] + (end - start));
+        valid.append(true);
+    }
+
+    let data = mutable.freeze();
+
+    Ok(Arc::new(GenericListArray::<O>::try_new(
+        Arc::new(Field::new("item", list_array.value_type(), true)),
+        OffsetBuffer::<O>::new(offsets.into()),
+        arrow_array::make_array(data),
+        Some(NullBuffer::new(valid.finish())),
+    )?))
+}
+
 pub fn array_replace(args: &[ArrayRef]) -> Result<ArrayRef> {
-    general_replace(args, vec![1; args[0].len()])
+    if args.len() != 3 {
+        return exec_err!("array_replace expects three arguments");
+    }
+
+    // replace at most one occurence for each element
+    let arr_n = vec![1; args[0].len()];
+    let array = &args[0];
+    match array.data_type() {
+        DataType::List(_) => {
+            let list_array = array.as_list::<i32>();
+            general_replace::<i32>(list_array, &args[1], &args[2], arr_n)
+        }
+        DataType::LargeList(_) => {
+            let list_array = array.as_list::<i64>();
+            general_replace::<i64>(list_array, &args[1], &args[2], arr_n)
+        }
+        array_type => exec_err!("array_replace does not support type '{array_type:?}'."),
+    }
 }
 
 pub fn array_replace_n(args: &[ArrayRef]) -> Result<ArrayRef> {
-    let arr = as_int64_array(&args[3])?;
-    let arr_n = arr.values().to_vec();
-    general_replace(args, arr_n)
+    if args.len() != 4 {
+        return exec_err!("array_replace_n expects four arguments");
+    }
+
+    // replace the specified number of occurences
+    let arr_n = as_int64_array(&args[3])?.values().to_vec();
+    let array = &args[0];
+    match array.data_type() {
+        DataType::List(_) => {
+            let list_array = array.as_list::<i32>();
+            general_replace::<i32>(list_array, &args[1], &args[2], arr_n)
+        }
+        DataType::LargeList(_) => {
+            let list_array = array.as_list::<i64>();
+            general_replace::<i64>(list_array, &args[1], &args[2], arr_n)
+        }
+        array_type => {
+            exec_err!("array_replace_n does not support type '{array_type:?}'.")
+        }
+    }
 }
 
 pub fn array_replace_all(args: &[ArrayRef]) -> Result<ArrayRef> {
-    general_replace(args, vec![i64::MAX; args[0].len()])
+    if args.len() != 3 {
+        return exec_err!("array_replace_all expects three arguments");
+    }
+
+    // replace all occurrences (up to "i64::MAX")
+    let arr_n = vec![i64::MAX; args[0].len()];
+    let array = &args[0];
+    match array.data_type() {
+        DataType::List(_) => {
+            let list_array = array.as_list::<i32>();
+            general_replace::<i32>(list_array, &args[1], &args[2], arr_n)
+        }
+        DataType::LargeList(_) => {
+            let list_array = array.as_list::<i64>();
+            general_replace::<i64>(list_array, &args[1], &args[2], arr_n)
+        }
+        array_type => {
+            exec_err!("array_replace_all does not support type '{array_type:?}'.")
+        }
+    }
 }
 
 macro_rules! to_string {
@@ -1358,8 +1828,179 @@ macro_rules! to_string {
     }};
 }
 
+#[derive(Debug, PartialEq)]
+enum SetOp {
+    Union,
+    Intersect,
+}
+
+impl Display for SetOp {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SetOp::Union => write!(f, "array_union"),
+            SetOp::Intersect => write!(f, "array_intersect"),
+        }
+    }
+}
+
+fn generic_set_lists<OffsetSize: OffsetSizeTrait>(
+    l: &GenericListArray<OffsetSize>,
+    r: &GenericListArray<OffsetSize>,
+    field: Arc<Field>,
+    set_op: SetOp,
+) -> Result<ArrayRef> {
+    if matches!(l.value_type(), DataType::Null) {
+        let field = Arc::new(Field::new("item", r.value_type(), true));
+        return general_array_distinct::<OffsetSize>(r, &field);
+    } else if matches!(r.value_type(), DataType::Null) {
+        let field = Arc::new(Field::new("item", l.value_type(), true));
+        return general_array_distinct::<OffsetSize>(l, &field);
+    }
+
+    if l.value_type() != r.value_type() {
+        return internal_err!("{set_op:?} is not implemented for '{l:?}' and '{r:?}'");
+    }
+
+    let dt = l.value_type();
+
+    let mut offsets = vec![OffsetSize::usize_as(0)];
+    let mut new_arrays = vec![];
+
+    let converter = RowConverter::new(vec![SortField::new(dt)])?;
+    for (first_arr, second_arr) in l.iter().zip(r.iter()) {
+        if let (Some(first_arr), Some(second_arr)) = (first_arr, second_arr) {
+            let l_values = converter.convert_columns(&[first_arr])?;
+            let r_values = converter.convert_columns(&[second_arr])?;
+
+            let l_iter = l_values.iter().sorted().dedup();
+            let values_set: HashSet<_> = l_iter.clone().collect();
+            let mut rows = if set_op == SetOp::Union {
+                l_iter.collect::<Vec<_>>()
+            } else {
+                vec![]
+            };
+            for r_val in r_values.iter().sorted().dedup() {
+                match set_op {
+                    SetOp::Union => {
+                        if !values_set.contains(&r_val) {
+                            rows.push(r_val);
+                        }
+                    }
+                    SetOp::Intersect => {
+                        if values_set.contains(&r_val) {
+                            rows.push(r_val);
+                        }
+                    }
+                }
+            }
+
+            let last_offset = match offsets.last().copied() {
+                Some(offset) => offset,
+                None => return internal_err!("offsets should not be empty"),
+            };
+            offsets.push(last_offset + OffsetSize::usize_as(rows.len()));
+            let arrays = converter.convert_rows(rows)?;
+            let array = match arrays.first() {
+                Some(array) => array.clone(),
+                None => {
+                    return internal_err!("{set_op}: failed to get array from rows");
+                }
+            };
+            new_arrays.push(array);
+        }
+    }
+
+    let offsets = OffsetBuffer::new(offsets.into());
+    let new_arrays_ref = new_arrays.iter().map(|v| v.as_ref()).collect::<Vec<_>>();
+    let values = compute::concat(&new_arrays_ref)?;
+    let arr = GenericListArray::<OffsetSize>::try_new(field, offsets, values, None)?;
+    Ok(Arc::new(arr))
+}
+
+fn general_set_op(
+    array1: &ArrayRef,
+    array2: &ArrayRef,
+    set_op: SetOp,
+) -> Result<ArrayRef> {
+    match (array1.data_type(), array2.data_type()) {
+        (DataType::Null, DataType::List(field)) => {
+            if set_op == SetOp::Intersect {
+                return Ok(new_empty_array(&DataType::Null));
+            }
+            let array = as_list_array(&array2)?;
+            general_array_distinct::<i32>(array, field)
+        }
+
+        (DataType::List(field), DataType::Null) => {
+            if set_op == SetOp::Intersect {
+                return make_array(&[]);
+            }
+            let array = as_list_array(&array1)?;
+            general_array_distinct::<i32>(array, field)
+        }
+        (DataType::Null, DataType::LargeList(field)) => {
+            if set_op == SetOp::Intersect {
+                return Ok(new_empty_array(&DataType::Null));
+            }
+            let array = as_large_list_array(&array2)?;
+            general_array_distinct::<i64>(array, field)
+        }
+        (DataType::LargeList(field), DataType::Null) => {
+            if set_op == SetOp::Intersect {
+                return make_array(&[]);
+            }
+            let array = as_large_list_array(&array1)?;
+            general_array_distinct::<i64>(array, field)
+        }
+        (DataType::Null, DataType::Null) => Ok(new_empty_array(&DataType::Null)),
+
+        (DataType::List(field), DataType::List(_)) => {
+            let array1 = as_list_array(&array1)?;
+            let array2 = as_list_array(&array2)?;
+            generic_set_lists::<i32>(array1, array2, field.clone(), set_op)
+        }
+        (DataType::LargeList(field), DataType::LargeList(_)) => {
+            let array1 = as_large_list_array(&array1)?;
+            let array2 = as_large_list_array(&array2)?;
+            generic_set_lists::<i64>(array1, array2, field.clone(), set_op)
+        }
+        (data_type1, data_type2) => {
+            internal_err!(
+                "{set_op} does not support types '{data_type1:?}' and '{data_type2:?}'"
+            )
+        }
+    }
+}
+
+/// Array_union SQL function
+pub fn array_union(args: &[ArrayRef]) -> Result<ArrayRef> {
+    if args.len() != 2 {
+        return exec_err!("array_union needs two arguments");
+    }
+    let array1 = &args[0];
+    let array2 = &args[1];
+
+    general_set_op(array1, array2, SetOp::Union)
+}
+
+/// array_intersect SQL function
+pub fn array_intersect(args: &[ArrayRef]) -> Result<ArrayRef> {
+    if args.len() != 2 {
+        return exec_err!("array_intersect needs two arguments");
+    }
+
+    let array1 = &args[0];
+    let array2 = &args[1];
+
+    general_set_op(array1, array2, SetOp::Intersect)
+}
+
 /// Array_to_string SQL function
 pub fn array_to_string(args: &[ArrayRef]) -> Result<ArrayRef> {
+    if args.len() < 2 || args.len() > 3 {
+        return exec_err!("array_to_string expects two or three arguments");
+    }
+
     let arr = &args[0];
 
     let delimiters = as_string_array(&args[1])?;
@@ -1469,6 +2110,10 @@ pub fn array_to_string(args: &[ArrayRef]) -> Result<ArrayRef> {
 
 /// Cardinality SQL function
 pub fn cardinality(args: &[ArrayRef]) -> Result<ArrayRef> {
+    if args.len() != 1 {
+        return exec_err!("cardinality expects one argument");
+    }
+
     let list_array = as_list_array(&args[0])?.clone();
 
     let result = list_array
@@ -1525,15 +2170,19 @@ fn flatten_internal(
 
 /// Flatten SQL function
 pub fn flatten(args: &[ArrayRef]) -> Result<ArrayRef> {
+    if args.len() != 1 {
+        return exec_err!("flatten expects one argument");
+    }
+
     let flattened_array = flatten_internal(&args[0], None)?;
     Ok(Arc::new(flattened_array) as ArrayRef)
 }
 
-/// Array_length SQL function
-pub fn array_length(args: &[ArrayRef]) -> Result<ArrayRef> {
-    let list_array = as_list_array(&args[0])?;
-    let dimension = if args.len() == 2 {
-        as_int64_array(&args[1])?.clone()
+/// Dispatch array length computation based on the offset type.
+fn array_length_dispatch<O: OffsetSizeTrait>(array: &[ArrayRef]) -> Result<ArrayRef> {
+    let list_array = as_generic_list_array::<O>(&array[0])?;
+    let dimension = if array.len() == 2 {
+        as_int64_array(&array[1])?.clone()
     } else {
         Int64Array::from_value(1, list_array.len())
     };
@@ -1547,14 +2196,51 @@ pub fn array_length(args: &[ArrayRef]) -> Result<ArrayRef> {
     Ok(Arc::new(result) as ArrayRef)
 }
 
+/// Array_length SQL function
+pub fn array_length(args: &[ArrayRef]) -> Result<ArrayRef> {
+    if args.len() != 1 && args.len() != 2 {
+        return exec_err!("array_length expects one or two arguments");
+    }
+
+    match &args[0].data_type() {
+        DataType::List(_) => array_length_dispatch::<i32>(args),
+        DataType::LargeList(_) => array_length_dispatch::<i64>(args),
+        _ => internal_err!(
+            "array_length does not support type '{:?}'",
+            args[0].data_type()
+        ),
+    }
+}
+
 /// Array_dims SQL function
 pub fn array_dims(args: &[ArrayRef]) -> Result<ArrayRef> {
-    let list_array = as_list_array(&args[0])?;
+    if args.len() != 1 {
+        return exec_err!("array_dims needs one argument");
+    }
 
-    let data = list_array
-        .iter()
-        .map(compute_array_dims)
-        .collect::<Result<Vec<_>>>()?;
+    let data = match args[0].data_type() {
+        DataType::List(_) => {
+            let array = as_list_array(&args[0])?;
+            array
+                .iter()
+                .map(compute_array_dims)
+                .collect::<Result<Vec<_>>>()?
+        }
+        DataType::LargeList(_) => {
+            let array = as_large_list_array(&args[0])?;
+            array
+                .iter()
+                .map(compute_array_dims)
+                .collect::<Result<Vec<_>>>()?
+        }
+        _ => {
+            return exec_err!(
+                "array_dims does not support type '{:?}'",
+                args[0].data_type()
+            );
+        }
+    };
+
     let result = ListArray::from_iter_primitive::<UInt64Type, _, _>(data);
 
     Ok(Arc::new(result) as ArrayRef)
@@ -1562,171 +2248,165 @@ pub fn array_dims(args: &[ArrayRef]) -> Result<ArrayRef> {
 
 /// Array_ndims SQL function
 pub fn array_ndims(args: &[ArrayRef]) -> Result<ArrayRef> {
-    let list_array = as_list_array(&args[0])?;
+    if args.len() != 1 {
+        return exec_err!("array_ndims needs one argument");
+    }
 
-    let result = list_array
-        .iter()
-        .map(compute_array_ndims)
-        .collect::<Result<UInt64Array>>()?;
+    fn general_list_ndims<O: OffsetSizeTrait>(
+        array: &GenericListArray<O>,
+    ) -> Result<ArrayRef> {
+        let mut data = Vec::new();
+        let ndims = datafusion_common::utils::list_ndims(array.data_type());
 
-    Ok(Arc::new(result) as ArrayRef)
-}
-
-macro_rules! non_list_contains {
-    ($ARRAY:expr, $SUB_ARRAY:expr, $ARRAY_TYPE:ident) => {{
-        let sub_array = downcast_arg!($SUB_ARRAY, $ARRAY_TYPE);
-        let mut boolean_builder = BooleanArray::builder($ARRAY.len());
-
-        for (arr, elem) in $ARRAY.iter().zip(sub_array.iter()) {
-            if let (Some(arr), Some(elem)) = (arr, elem) {
-                let arr = downcast_arg!(arr, $ARRAY_TYPE);
-                let res = arr.iter().dedup().flatten().any(|x| x == elem);
-                boolean_builder.append_value(res);
+        for arr in array.iter() {
+            if arr.is_some() {
+                data.push(Some(ndims))
+            } else {
+                data.push(None)
             }
         }
-        Ok(Arc::new(boolean_builder.finish()))
-    }};
+
+        Ok(Arc::new(UInt64Array::from(data)) as ArrayRef)
+    }
+
+    match args[0].data_type() {
+        DataType::List(_) => {
+            let array = as_list_array(&args[0])?;
+            general_list_ndims::<i32>(array)
+        }
+        DataType::LargeList(_) => {
+            let array = as_large_list_array(&args[0])?;
+            general_list_ndims::<i64>(array)
+        }
+        _ => Ok(Arc::new(UInt64Array::from(vec![0; args[0].len()])) as ArrayRef),
+    }
+}
+
+/// Represents the type of comparison for array_has.
+#[derive(Debug, PartialEq)]
+enum ComparisonType {
+    // array_has_all
+    All,
+    // array_has_any
+    Any,
+    // array_has
+    Single,
+}
+
+fn general_array_has_dispatch<O: OffsetSizeTrait>(
+    array: &ArrayRef,
+    sub_array: &ArrayRef,
+    comparison_type: ComparisonType,
+) -> Result<ArrayRef> {
+    let array = if comparison_type == ComparisonType::Single {
+        let arr = as_generic_list_array::<O>(array)?;
+        check_datatypes("array_has", &[arr.values(), sub_array])?;
+        arr
+    } else {
+        check_datatypes("array_has", &[array, sub_array])?;
+        as_generic_list_array::<O>(array)?
+    };
+
+    let mut boolean_builder = BooleanArray::builder(array.len());
+
+    let converter = RowConverter::new(vec![SortField::new(array.value_type())])?;
+
+    let element = sub_array.clone();
+    let sub_array = if comparison_type != ComparisonType::Single {
+        as_generic_list_array::<O>(sub_array)?
+    } else {
+        array
+    };
+
+    for (row_idx, (arr, sub_arr)) in array.iter().zip(sub_array.iter()).enumerate() {
+        if let (Some(arr), Some(sub_arr)) = (arr, sub_arr) {
+            let arr_values = converter.convert_columns(&[arr])?;
+            let sub_arr_values = if comparison_type != ComparisonType::Single {
+                converter.convert_columns(&[sub_arr])?
+            } else {
+                converter.convert_columns(&[element.clone()])?
+            };
+
+            let mut res = match comparison_type {
+                ComparisonType::All => sub_arr_values
+                    .iter()
+                    .dedup()
+                    .all(|elem| arr_values.iter().dedup().any(|x| x == elem)),
+                ComparisonType::Any => sub_arr_values
+                    .iter()
+                    .dedup()
+                    .any(|elem| arr_values.iter().dedup().any(|x| x == elem)),
+                ComparisonType::Single => arr_values
+                    .iter()
+                    .dedup()
+                    .any(|x| x == sub_arr_values.row(row_idx)),
+            };
+
+            if comparison_type == ComparisonType::Any {
+                res |= res;
+            }
+
+            boolean_builder.append_value(res);
+        }
+    }
+    Ok(Arc::new(boolean_builder.finish()))
 }
 
 /// Array_has SQL function
 pub fn array_has(args: &[ArrayRef]) -> Result<ArrayRef> {
-    let array = as_list_array(&args[0])?;
-    let element = &args[1];
-
-    check_datatypes("array_has", &[array.values(), element])?;
-    match element.data_type() {
-        DataType::List(_) => {
-            let sub_array = as_list_array(element)?;
-            let mut boolean_builder = BooleanArray::builder(array.len());
-
-            for (arr, elem) in array.iter().zip(sub_array.iter()) {
-                if let (Some(arr), Some(elem)) = (arr, elem) {
-                    let list_arr = as_list_array(&arr)?;
-                    let res = list_arr.iter().dedup().flatten().any(|x| *x == *elem);
-                    boolean_builder.append_value(res);
-                }
-            }
-            Ok(Arc::new(boolean_builder.finish()))
-        }
-        data_type => {
-            macro_rules! array_function {
-                ($ARRAY_TYPE:ident) => {
-                    non_list_contains!(array, element, $ARRAY_TYPE)
-                };
-            }
-            call_array_function!(data_type, false)
-        }
+    if args.len() != 2 {
+        return exec_err!("array_has needs two arguments");
     }
-}
 
-macro_rules! array_has_any_non_list_check {
-    ($ARRAY:expr, $SUB_ARRAY:expr, $ARRAY_TYPE:ident) => {{
-        let arr = downcast_arg!($ARRAY, $ARRAY_TYPE);
-        let sub_arr = downcast_arg!($SUB_ARRAY, $ARRAY_TYPE);
+    let array_type = args[0].data_type();
 
-        let mut res = false;
-        for elem in sub_arr.iter().dedup() {
-            if let Some(elem) = elem {
-                res |= arr.iter().dedup().flatten().any(|x| x == elem);
-            } else {
-                return internal_err!(
-                    "array_has_any does not support Null type for element in sub_array"
-                );
-            }
+    match array_type {
+        DataType::List(_) => {
+            general_array_has_dispatch::<i32>(&args[0], &args[1], ComparisonType::Single)
         }
-        res
-    }};
+        DataType::LargeList(_) => {
+            general_array_has_dispatch::<i64>(&args[0], &args[1], ComparisonType::Single)
+        }
+        _ => exec_err!("array_has does not support type '{array_type:?}'."),
+    }
 }
 
 /// Array_has_any SQL function
 pub fn array_has_any(args: &[ArrayRef]) -> Result<ArrayRef> {
-    check_datatypes("array_has_any", &[&args[0], &args[1]])?;
-
-    let array = as_list_array(&args[0])?;
-    let sub_array = as_list_array(&args[1])?;
-
-    let mut boolean_builder = BooleanArray::builder(array.len());
-    for (arr, sub_arr) in array.iter().zip(sub_array.iter()) {
-        if let (Some(arr), Some(sub_arr)) = (arr, sub_arr) {
-            let res = match arr.data_type() {
-                DataType::List(_) => {
-                    let arr = downcast_arg!(arr, ListArray);
-                    let sub_arr = downcast_arg!(sub_arr, ListArray);
-
-                    let mut res = false;
-                    for elem in sub_arr.iter().dedup().flatten() {
-                        res |= arr.iter().dedup().flatten().any(|x| *x == *elem);
-                    }
-                    res
-                }
-                data_type => {
-                    macro_rules! array_function {
-                        ($ARRAY_TYPE:ident) => {
-                            array_has_any_non_list_check!(arr, sub_arr, $ARRAY_TYPE)
-                        };
-                    }
-                    call_array_function!(data_type, false)
-                }
-            };
-            boolean_builder.append_value(res);
-        }
+    if args.len() != 2 {
+        return exec_err!("array_has_any needs two arguments");
     }
-    Ok(Arc::new(boolean_builder.finish()))
-}
 
-macro_rules! array_has_all_non_list_check {
-    ($ARRAY:expr, $SUB_ARRAY:expr, $ARRAY_TYPE:ident) => {{
-        let arr = downcast_arg!($ARRAY, $ARRAY_TYPE);
-        let sub_arr = downcast_arg!($SUB_ARRAY, $ARRAY_TYPE);
+    let array_type = args[0].data_type();
 
-        let mut res = true;
-        for elem in sub_arr.iter().dedup() {
-            if let Some(elem) = elem {
-                res &= arr.iter().dedup().flatten().any(|x| x == elem);
-            } else {
-                return internal_err!(
-                    "array_has_all does not support Null type for element in sub_array"
-                );
-            }
+    match array_type {
+        DataType::List(_) => {
+            general_array_has_dispatch::<i32>(&args[0], &args[1], ComparisonType::Any)
         }
-        res
-    }};
+        DataType::LargeList(_) => {
+            general_array_has_dispatch::<i64>(&args[0], &args[1], ComparisonType::Any)
+        }
+        _ => internal_err!("array_has_any does not support type '{array_type:?}'."),
+    }
 }
 
 /// Array_has_all SQL function
 pub fn array_has_all(args: &[ArrayRef]) -> Result<ArrayRef> {
-    check_datatypes("array_has_all", &[&args[0], &args[1]])?;
-
-    let array = as_list_array(&args[0])?;
-    let sub_array = as_list_array(&args[1])?;
-
-    let mut boolean_builder = BooleanArray::builder(array.len());
-    for (arr, sub_arr) in array.iter().zip(sub_array.iter()) {
-        if let (Some(arr), Some(sub_arr)) = (arr, sub_arr) {
-            let res = match arr.data_type() {
-                DataType::List(_) => {
-                    let arr = downcast_arg!(arr, ListArray);
-                    let sub_arr = downcast_arg!(sub_arr, ListArray);
-
-                    let mut res = true;
-                    for elem in sub_arr.iter().dedup().flatten() {
-                        res &= arr.iter().dedup().flatten().any(|x| *x == *elem);
-                    }
-                    res
-                }
-                data_type => {
-                    macro_rules! array_function {
-                        ($ARRAY_TYPE:ident) => {
-                            array_has_all_non_list_check!(arr, sub_arr, $ARRAY_TYPE)
-                        };
-                    }
-                    call_array_function!(data_type, false)
-                }
-            };
-            boolean_builder.append_value(res);
-        }
+    if args.len() != 2 {
+        return exec_err!("array_has_all needs two arguments");
     }
-    Ok(Arc::new(boolean_builder.finish()))
+
+    let array_type = args[0].data_type();
+
+    match array_type {
+        DataType::List(_) => {
+            general_array_has_dispatch::<i32>(&args[0], &args[1], ComparisonType::All)
+        }
+        DataType::LargeList(_) => {
+            general_array_has_dispatch::<i64>(&args[0], &args[1], ComparisonType::All)
+        }
+        _ => internal_err!("array_has_all does not support type '{array_type:?}'."),
+    }
 }
 
 /// Splits string at occurrences of delimiter and returns an array of parts
@@ -1818,12 +2498,74 @@ pub fn string_to_array<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef
     Ok(Arc::new(list_array) as ArrayRef)
 }
 
+pub fn general_array_distinct<OffsetSize: OffsetSizeTrait>(
+    array: &GenericListArray<OffsetSize>,
+    field: &FieldRef,
+) -> Result<ArrayRef> {
+    let dt = array.value_type();
+    let mut offsets = Vec::with_capacity(array.len());
+    offsets.push(OffsetSize::usize_as(0));
+    let mut new_arrays = Vec::with_capacity(array.len());
+    let converter = RowConverter::new(vec![SortField::new(dt)])?;
+    // distinct for each list in ListArray
+    for arr in array.iter().flatten() {
+        let values = converter.convert_columns(&[arr])?;
+        // sort elements in list and remove duplicates
+        let rows = values.iter().sorted().dedup().collect::<Vec<_>>();
+        let last_offset: OffsetSize = offsets.last().copied().unwrap();
+        offsets.push(last_offset + OffsetSize::usize_as(rows.len()));
+        let arrays = converter.convert_rows(rows)?;
+        let array = match arrays.first() {
+            Some(array) => array.clone(),
+            None => {
+                return internal_err!("array_distinct: failed to get array from rows")
+            }
+        };
+        new_arrays.push(array);
+    }
+    let offsets = OffsetBuffer::new(offsets.into());
+    let new_arrays_ref = new_arrays.iter().map(|v| v.as_ref()).collect::<Vec<_>>();
+    let values = compute::concat(&new_arrays_ref)?;
+    Ok(Arc::new(GenericListArray::<OffsetSize>::try_new(
+        field.clone(),
+        offsets,
+        values,
+        None,
+    )?))
+}
+
+/// array_distinct SQL function
+/// example: from list [1, 3, 2, 3, 1, 2, 4] to [1, 2, 3, 4]
+pub fn array_distinct(args: &[ArrayRef]) -> Result<ArrayRef> {
+    if args.len() != 1 {
+        return exec_err!("array_distinct needs one argument");
+    }
+
+    // handle null
+    if args[0].data_type() == &DataType::Null {
+        return Ok(args[0].clone());
+    }
+
+    // handle for list & largelist
+    match args[0].data_type() {
+        DataType::List(field) => {
+            let array = as_list_array(&args[0])?;
+            general_array_distinct(array, field)
+        }
+        DataType::LargeList(field) => {
+            let array = as_large_list_array(&args[0])?;
+            general_array_distinct(array, field)
+        }
+        _ => internal_err!("array_distinct only support list array"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use arrow::datatypes::Int64Type;
-    use datafusion_common::cast::as_uint64_array;
 
+    /// Only test internal functions, array-related sql functions will be tested in sqllogictest `array.slt`
     #[test]
     fn test_align_array_dimensions() {
         let array1d_1 =
@@ -1844,10 +2586,10 @@ mod tests {
                 .unwrap();
 
         let expected = as_list_array(&array2d_1).unwrap();
-        let expected_dim = compute_array_ndims(Some(array2d_1.to_owned())).unwrap();
+        let expected_dim = datafusion_common::utils::list_ndims(array2d_1.data_type());
         assert_ne!(as_list_array(&res[0]).unwrap(), expected);
         assert_eq!(
-            compute_array_ndims(Some(res[0].clone())).unwrap(),
+            datafusion_common::utils::list_ndims(res[0].data_type()),
             expected_dim
         );
 
@@ -1857,1475 +2599,11 @@ mod tests {
             align_array_dimensions(vec![array1d_1, Arc::new(array3d_2.clone())]).unwrap();
 
         let expected = as_list_array(&array3d_1).unwrap();
-        let expected_dim = compute_array_ndims(Some(array3d_1.to_owned())).unwrap();
+        let expected_dim = datafusion_common::utils::list_ndims(array3d_1.data_type());
         assert_ne!(as_list_array(&res[0]).unwrap(), expected);
         assert_eq!(
-            compute_array_ndims(Some(res[0].clone())).unwrap(),
+            datafusion_common::utils::list_ndims(res[0].data_type()),
             expected_dim
         );
-    }
-
-    #[test]
-    fn test_array() {
-        // make_array(1, 2, 3) = [1, 2, 3]
-        let args = [
-            Arc::new(Int64Array::from(vec![1])) as ArrayRef,
-            Arc::new(Int64Array::from(vec![2])),
-            Arc::new(Int64Array::from(vec![3])),
-        ];
-        let array = make_array(&args).expect("failed to initialize function array");
-        let result = as_list_array(&array).expect("failed to initialize function array");
-        assert_eq!(result.len(), 1);
-        assert_eq!(
-            &[1, 2, 3],
-            as_int64_array(&result.value(0))
-                .expect("failed to cast to primitive array")
-                .values()
-        )
-    }
-
-    #[test]
-    fn test_nested_array() {
-        // make_array([1, 3, 5], [2, 4, 6]) = [[1, 3, 5], [2, 4, 6]]
-        let args = [
-            Arc::new(Int64Array::from(vec![1, 2])) as ArrayRef,
-            Arc::new(Int64Array::from(vec![3, 4])),
-            Arc::new(Int64Array::from(vec![5, 6])),
-        ];
-        let array = make_array(&args).expect("failed to initialize function array");
-        let result = as_list_array(&array).expect("failed to initialize function array");
-        assert_eq!(result.len(), 2);
-        assert_eq!(
-            &[1, 3, 5],
-            as_int64_array(&result.value(0))
-                .expect("failed to cast to primitive array")
-                .values()
-        );
-        assert_eq!(
-            &[2, 4, 6],
-            as_int64_array(&result.value(1))
-                .expect("failed to cast to primitive array")
-                .values()
-        );
-    }
-
-    #[test]
-    fn test_array_element() {
-        // array_element([1, 2, 3, 4], 1) = 1
-        let list_array = return_array();
-        let arr = array_element(&[list_array, Arc::new(Int64Array::from_value(1, 1))])
-            .expect("failed to initialize function array_element");
-        let result =
-            as_int64_array(&arr).expect("failed to initialize function array_element");
-
-        assert_eq!(result, &Int64Array::from_value(1, 1));
-
-        // array_element([1, 2, 3, 4], 3) = 3
-        let list_array = return_array();
-        let arr = array_element(&[list_array, Arc::new(Int64Array::from_value(3, 1))])
-            .expect("failed to initialize function array_element");
-        let result =
-            as_int64_array(&arr).expect("failed to initialize function array_element");
-
-        assert_eq!(result, &Int64Array::from_value(3, 1));
-
-        // array_element([1, 2, 3, 4], 0) = NULL
-        let list_array = return_array();
-        let arr = array_element(&[list_array, Arc::new(Int64Array::from_value(0, 1))])
-            .expect("failed to initialize function array_element");
-        let result =
-            as_int64_array(&arr).expect("failed to initialize function array_element");
-
-        assert_eq!(result, &Int64Array::from(vec![None]));
-
-        // array_element([1, 2, 3, 4], NULL) = NULL
-        let list_array = return_array();
-        let arr = array_element(&[list_array, Arc::new(Int64Array::from(vec![None]))])
-            .expect("failed to initialize function array_element");
-        let result =
-            as_int64_array(&arr).expect("failed to initialize function array_element");
-
-        assert_eq!(result, &Int64Array::from(vec![None]));
-
-        // array_element([1, 2, 3, 4], -1) = 4
-        let list_array = return_array();
-        let arr = array_element(&[list_array, Arc::new(Int64Array::from_value(-1, 1))])
-            .expect("failed to initialize function array_element");
-        let result =
-            as_int64_array(&arr).expect("failed to initialize function array_element");
-
-        assert_eq!(result, &Int64Array::from_value(4, 1));
-
-        // array_element([1, 2, 3, 4], -3) = 2
-        let list_array = return_array();
-        let arr = array_element(&[list_array, Arc::new(Int64Array::from_value(-3, 1))])
-            .expect("failed to initialize function array_element");
-        let result =
-            as_int64_array(&arr).expect("failed to initialize function array_element");
-
-        assert_eq!(result, &Int64Array::from_value(2, 1));
-
-        // array_element([1, 2, 3, 4], 10) = NULL
-        let list_array = return_array();
-        let arr = array_element(&[list_array, Arc::new(Int64Array::from_value(10, 1))])
-            .expect("failed to initialize function array_element");
-        let result =
-            as_int64_array(&arr).expect("failed to initialize function array_element");
-
-        assert_eq!(result, &Int64Array::from(vec![None]));
-    }
-
-    #[test]
-    fn test_nested_array_element() {
-        // array_element([[1, 2, 3, 4], [5, 6, 7, 8]], 2) = [5, 6, 7, 8]
-        let list_array = return_nested_array();
-        let arr = array_element(&[list_array, Arc::new(Int64Array::from_value(2, 1))])
-            .expect("failed to initialize function array_element");
-        let result =
-            as_list_array(&arr).expect("failed to initialize function array_element");
-
-        assert_eq!(
-            &[5, 6, 7, 8],
-            result
-                .value(0)
-                .as_any()
-                .downcast_ref::<Int64Array>()
-                .unwrap()
-                .values()
-        );
-    }
-
-    #[test]
-    fn test_array_pop_back() {
-        // array_pop_back([1, 2, 3, 4]) = [1, 2, 3]
-        let list_array = return_array();
-        let arr = array_pop_back(&[list_array])
-            .expect("failed to initialize function array_pop_back");
-        let result =
-            as_list_array(&arr).expect("failed to initialize function array_pop_back");
-        assert_eq!(
-            &[1, 2, 3],
-            result
-                .value(0)
-                .as_any()
-                .downcast_ref::<Int64Array>()
-                .unwrap()
-                .values()
-        );
-
-        // array_pop_back([1, 2, 3]) = [1, 2]
-        let list_array = Arc::new(result.clone());
-        let arr = array_pop_back(&[list_array])
-            .expect("failed to initialize function array_pop_back");
-        let result =
-            as_list_array(&arr).expect("failed to initialize function array_pop_back");
-        assert_eq!(
-            &[1, 2],
-            result
-                .value(0)
-                .as_any()
-                .downcast_ref::<Int64Array>()
-                .unwrap()
-                .values()
-        );
-
-        // array_pop_back([1, 2]) = [1]
-        let list_array = Arc::new(result.clone());
-        let arr = array_pop_back(&[list_array])
-            .expect("failed to initialize function array_pop_back");
-        let result =
-            as_list_array(&arr).expect("failed to initialize function array_pop_back");
-        assert_eq!(
-            &[1],
-            result
-                .value(0)
-                .as_any()
-                .downcast_ref::<Int64Array>()
-                .unwrap()
-                .values()
-        );
-
-        // array_pop_back([1]) = []
-        let list_array = Arc::new(result.clone());
-        let arr = array_pop_back(&[list_array])
-            .expect("failed to initialize function array_pop_back");
-        let result =
-            as_list_array(&arr).expect("failed to initialize function array_pop_back");
-        assert_eq!(
-            &[],
-            result
-                .value(0)
-                .as_any()
-                .downcast_ref::<Int64Array>()
-                .unwrap()
-                .values()
-        );
-        // array_pop_back([]) = []
-        let list_array = Arc::new(result.clone());
-        let arr = array_pop_back(&[list_array])
-            .expect("failed to initialize function array_pop_back");
-        let result =
-            as_list_array(&arr).expect("failed to initialize function array_pop_back");
-        assert_eq!(
-            &[],
-            result
-                .value(0)
-                .as_any()
-                .downcast_ref::<Int64Array>()
-                .unwrap()
-                .values()
-        );
-
-        // array_pop_back([1, NULL, 3, NULL]) = [1, NULL, 3]
-        let list_array = return_array_with_nulls();
-        let arr = array_pop_back(&[list_array])
-            .expect("failed to initialize function array_pop_back");
-        let result =
-            as_list_array(&arr).expect("failed to initialize function array_pop_back");
-        assert_eq!(3, result.values().len());
-        assert_eq!(
-            &[false, true, false],
-            &[
-                result.values().is_null(0),
-                result.values().is_null(1),
-                result.values().is_null(2)
-            ]
-        );
-    }
-    #[test]
-    fn test_nested_array_pop_back() {
-        // array_pop_back([[1, 2, 3, 4], [5, 6, 7, 8]]) = [[1, 2, 3, 4]]
-        let list_array = return_nested_array();
-        let arr = array_pop_back(&[list_array])
-            .expect("failed to initialize function array_slice");
-        let result =
-            as_list_array(&arr).expect("failed to initialize function array_slice");
-        assert_eq!(
-            &[1, 2, 3, 4],
-            result
-                .value(0)
-                .as_any()
-                .downcast_ref::<ListArray>()
-                .unwrap()
-                .value(0)
-                .as_any()
-                .downcast_ref::<Int64Array>()
-                .unwrap()
-                .values()
-        );
-
-        // array_pop_back([[1, 2, 3, 4]]) = []
-        let list_array = Arc::new(result.clone());
-        let arr = array_pop_back(&[list_array])
-            .expect("failed to initialize function array_pop_back");
-        let result =
-            as_list_array(&arr).expect("failed to initialize function array_pop_back");
-        assert!(result
-            .value(0)
-            .as_any()
-            .downcast_ref::<ListArray>()
-            .unwrap()
-            .is_empty());
-        // array_pop_back([]) = []
-        let list_array = Arc::new(result.clone());
-        let arr = array_pop_back(&[list_array])
-            .expect("failed to initialize function array_pop_back");
-        let result =
-            as_list_array(&arr).expect("failed to initialize function array_pop_back");
-        assert!(result
-            .value(0)
-            .as_any()
-            .downcast_ref::<ListArray>()
-            .unwrap()
-            .is_empty());
-    }
-
-    #[test]
-    fn test_array_slice() {
-        // array_slice([1, 2, 3, 4], 1, 3) = [1, 2, 3]
-        let list_array = return_array();
-        let arr = array_slice(&[
-            list_array,
-            Arc::new(Int64Array::from_value(1, 1)),
-            Arc::new(Int64Array::from_value(3, 1)),
-        ])
-        .expect("failed to initialize function array_slice");
-        let result =
-            as_list_array(&arr).expect("failed to initialize function array_slice");
-
-        assert_eq!(
-            &[1, 2, 3],
-            result
-                .value(0)
-                .as_any()
-                .downcast_ref::<Int64Array>()
-                .unwrap()
-                .values()
-        );
-
-        // array_slice([1, 2, 3, 4], 2, 2) = [2]
-        let list_array = return_array();
-        let arr = array_slice(&[
-            list_array,
-            Arc::new(Int64Array::from_value(2, 1)),
-            Arc::new(Int64Array::from_value(2, 1)),
-        ])
-        .expect("failed to initialize function array_slice");
-        let result =
-            as_list_array(&arr).expect("failed to initialize function array_slice");
-
-        assert_eq!(
-            &[2],
-            result
-                .value(0)
-                .as_any()
-                .downcast_ref::<Int64Array>()
-                .unwrap()
-                .values()
-        );
-
-        // array_slice([1, 2, 3, 4], 0, 0) = []
-        let list_array = return_array();
-        let arr = array_slice(&[
-            list_array,
-            Arc::new(Int64Array::from_value(0, 1)),
-            Arc::new(Int64Array::from_value(0, 1)),
-        ])
-        .expect("failed to initialize function array_slice");
-        let result =
-            as_list_array(&arr).expect("failed to initialize function array_slice");
-
-        assert!(result
-            .value(0)
-            .as_any()
-            .downcast_ref::<Int64Array>()
-            .unwrap()
-            .is_empty());
-
-        // array_slice([1, 2, 3, 4], 0, 6) = [1, 2, 3, 4]
-        let list_array = return_array();
-        let arr = array_slice(&[
-            list_array,
-            Arc::new(Int64Array::from_value(0, 1)),
-            Arc::new(Int64Array::from_value(6, 1)),
-        ])
-        .expect("failed to initialize function array_slice");
-        let result =
-            as_list_array(&arr).expect("failed to initialize function array_slice");
-
-        assert_eq!(
-            &[1, 2, 3, 4],
-            result
-                .value(0)
-                .as_any()
-                .downcast_ref::<Int64Array>()
-                .unwrap()
-                .values()
-        );
-
-        // array_slice([1, 2, 3, 4], -2, -2) = []
-        let list_array = return_array();
-        let arr = array_slice(&[
-            list_array,
-            Arc::new(Int64Array::from_value(-2, 1)),
-            Arc::new(Int64Array::from_value(-2, 1)),
-        ])
-        .expect("failed to initialize function array_slice");
-        let result =
-            as_list_array(&arr).expect("failed to initialize function array_slice");
-
-        assert!(result
-            .value(0)
-            .as_any()
-            .downcast_ref::<Int64Array>()
-            .unwrap()
-            .is_empty());
-
-        // array_slice([1, 2, 3, 4], -3, -1) = [2, 3]
-        let list_array = return_array();
-        let arr = array_slice(&[
-            list_array,
-            Arc::new(Int64Array::from_value(-3, 1)),
-            Arc::new(Int64Array::from_value(-1, 1)),
-        ])
-        .expect("failed to initialize function array_slice");
-        let result =
-            as_list_array(&arr).expect("failed to initialize function array_slice");
-
-        assert_eq!(
-            &[2, 3],
-            result
-                .value(0)
-                .as_any()
-                .downcast_ref::<Int64Array>()
-                .unwrap()
-                .values()
-        );
-
-        // array_slice([1, 2, 3, 4], -3, 2) = [2]
-        let list_array = return_array();
-        let arr = array_slice(&[
-            list_array,
-            Arc::new(Int64Array::from_value(-3, 1)),
-            Arc::new(Int64Array::from_value(2, 1)),
-        ])
-        .expect("failed to initialize function array_slice");
-        let result =
-            as_list_array(&arr).expect("failed to initialize function array_slice");
-
-        assert_eq!(
-            &[2],
-            result
-                .value(0)
-                .as_any()
-                .downcast_ref::<Int64Array>()
-                .unwrap()
-                .values()
-        );
-
-        // array_slice([1, 2, 3, 4], 2, 11) = [2, 3, 4]
-        let list_array = return_array();
-        let arr = array_slice(&[
-            list_array,
-            Arc::new(Int64Array::from_value(2, 1)),
-            Arc::new(Int64Array::from_value(11, 1)),
-        ])
-        .expect("failed to initialize function array_slice");
-        let result =
-            as_list_array(&arr).expect("failed to initialize function array_slice");
-
-        assert_eq!(
-            &[2, 3, 4],
-            result
-                .value(0)
-                .as_any()
-                .downcast_ref::<Int64Array>()
-                .unwrap()
-                .values()
-        );
-
-        // array_slice([1, 2, 3, 4], 3, 1) = []
-        let list_array = return_array();
-        let arr = array_slice(&[
-            list_array,
-            Arc::new(Int64Array::from_value(3, 1)),
-            Arc::new(Int64Array::from_value(1, 1)),
-        ])
-        .expect("failed to initialize function array_slice");
-        let result =
-            as_list_array(&arr).expect("failed to initialize function array_slice");
-
-        assert!(result
-            .value(0)
-            .as_any()
-            .downcast_ref::<Int64Array>()
-            .unwrap()
-            .is_empty());
-
-        // array_slice([1, 2, 3, 4], -7, -2) = NULL
-        let list_array = return_array();
-        let arr = array_slice(&[
-            list_array,
-            Arc::new(Int64Array::from_value(-7, 1)),
-            Arc::new(Int64Array::from_value(-2, 1)),
-        ])
-        .expect("failed to initialize function array_slice");
-        let result =
-            as_list_array(&arr).expect("failed to initialize function array_slice");
-
-        assert!(result
-            .value(0)
-            .as_any()
-            .downcast_ref::<Int64Array>()
-            .unwrap()
-            .is_null(0));
-    }
-
-    #[test]
-    fn test_nested_array_slice() {
-        // array_slice([[1, 2, 3, 4], [5, 6, 7, 8]], 1, 1) = [[1, 2, 3, 4]]
-        let list_array = return_nested_array();
-        let arr = array_slice(&[
-            list_array,
-            Arc::new(Int64Array::from_value(1, 1)),
-            Arc::new(Int64Array::from_value(1, 1)),
-        ])
-        .expect("failed to initialize function array_slice");
-        let result =
-            as_list_array(&arr).expect("failed to initialize function array_slice");
-
-        assert_eq!(
-            &[1, 2, 3, 4],
-            result
-                .value(0)
-                .as_any()
-                .downcast_ref::<ListArray>()
-                .unwrap()
-                .value(0)
-                .as_any()
-                .downcast_ref::<Int64Array>()
-                .unwrap()
-                .values()
-        );
-
-        // array_slice([[1, 2, 3, 4], [5, 6, 7, 8]], -1, -1) = []
-        let list_array = return_nested_array();
-        let arr = array_slice(&[
-            list_array,
-            Arc::new(Int64Array::from_value(-1, 1)),
-            Arc::new(Int64Array::from_value(-1, 1)),
-        ])
-        .expect("failed to initialize function array_slice");
-        let result =
-            as_list_array(&arr).expect("failed to initialize function array_slice");
-
-        assert!(result
-            .value(0)
-            .as_any()
-            .downcast_ref::<ListArray>()
-            .unwrap()
-            .is_empty());
-
-        // array_slice([[1, 2, 3, 4], [5, 6, 7, 8]], -1, 2) = [[5, 6, 7, 8]]
-        let list_array = return_nested_array();
-        let arr = array_slice(&[
-            list_array,
-            Arc::new(Int64Array::from_value(-1, 1)),
-            Arc::new(Int64Array::from_value(2, 1)),
-        ])
-        .expect("failed to initialize function array_slice");
-        let result =
-            as_list_array(&arr).expect("failed to initialize function array_slice");
-
-        assert_eq!(
-            &[5, 6, 7, 8],
-            result
-                .value(0)
-                .as_any()
-                .downcast_ref::<ListArray>()
-                .unwrap()
-                .value(0)
-                .as_any()
-                .downcast_ref::<Int64Array>()
-                .unwrap()
-                .values()
-        );
-    }
-
-    #[test]
-    fn test_array_append() {
-        // array_append([1, 2, 3], 4) = [1, 2, 3, 4]
-        let data = vec![Some(vec![Some(1), Some(2), Some(3)])];
-        let list_array =
-            Arc::new(ListArray::from_iter_primitive::<Int64Type, _, _>(data)) as ArrayRef;
-        let int64_array = Arc::new(Int64Array::from(vec![Some(4)])) as ArrayRef;
-
-        let args = [list_array, int64_array];
-
-        let array =
-            array_append(&args).expect("failed to initialize function array_append");
-        let result =
-            as_list_array(&array).expect("failed to initialize function array_append");
-
-        assert_eq!(
-            &[1, 2, 3, 4],
-            result
-                .value(0)
-                .as_any()
-                .downcast_ref::<Int64Array>()
-                .unwrap()
-                .values()
-        );
-    }
-
-    #[test]
-    fn test_array_prepend() {
-        // array_prepend(1, [2, 3, 4]) = [1, 2, 3, 4]
-        let data = vec![Some(vec![Some(2), Some(3), Some(4)])];
-        let list_array =
-            Arc::new(ListArray::from_iter_primitive::<Int64Type, _, _>(data)) as ArrayRef;
-        let int64_array = Arc::new(Int64Array::from(vec![Some(1)])) as ArrayRef;
-
-        let args = [int64_array, list_array];
-
-        let array =
-            array_prepend(&args).expect("failed to initialize function array_append");
-        let result =
-            as_list_array(&array).expect("failed to initialize function array_append");
-
-        assert_eq!(
-            &[1, 2, 3, 4],
-            result
-                .value(0)
-                .as_any()
-                .downcast_ref::<Int64Array>()
-                .unwrap()
-                .values()
-        );
-    }
-
-    #[test]
-    fn test_array_concat() {
-        // array_concat([1, 2, 3], [4, 5, 6], [7, 8, 9]) = [1, 2, 3, 4, 5, 6, 7, 8, 9]
-        let data = vec![Some(vec![Some(1), Some(2), Some(3)])];
-        let list_array1 =
-            Arc::new(ListArray::from_iter_primitive::<Int64Type, _, _>(data)) as ArrayRef;
-        let data = vec![Some(vec![Some(4), Some(5), Some(6)])];
-        let list_array2 =
-            Arc::new(ListArray::from_iter_primitive::<Int64Type, _, _>(data)) as ArrayRef;
-        let data = vec![Some(vec![Some(7), Some(8), Some(9)])];
-        let list_array3 =
-            Arc::new(ListArray::from_iter_primitive::<Int64Type, _, _>(data)) as ArrayRef;
-
-        let args = [list_array1, list_array2, list_array3];
-
-        let array =
-            array_concat(&args).expect("failed to initialize function array_concat");
-        let result =
-            as_list_array(&array).expect("failed to initialize function array_concat");
-
-        assert_eq!(
-            &[1, 2, 3, 4, 5, 6, 7, 8, 9],
-            result
-                .value(0)
-                .as_any()
-                .downcast_ref::<Int64Array>()
-                .unwrap()
-                .values()
-        );
-    }
-
-    #[test]
-    fn test_nested_array_concat() {
-        // array_concat([1, 2, 3, 4], [1, 2, 3, 4]) = [1, 2, 3, 4, 1, 2, 3, 4]
-        let list_array = return_array();
-        let arr = array_concat(&[list_array.clone(), list_array.clone()])
-            .expect("failed to initialize function array_concat");
-        let result =
-            as_list_array(&arr).expect("failed to initialize function array_concat");
-
-        assert_eq!(
-            &[1, 2, 3, 4, 1, 2, 3, 4],
-            result
-                .value(0)
-                .as_any()
-                .downcast_ref::<Int64Array>()
-                .unwrap()
-                .values()
-        );
-
-        // array_concat([[1, 2, 3, 4], [5, 6, 7, 8]], [1, 2, 3, 4]) = [[1, 2, 3, 4], [5, 6, 7, 8], [1, 2, 3, 4]]
-        let list_nested_array = return_nested_array();
-        let list_array = return_array();
-        let arr = array_concat(&[list_nested_array, list_array])
-            .expect("failed to initialize function array_concat");
-        let result =
-            as_list_array(&arr).expect("failed to initialize function array_concat");
-
-        assert_eq!(
-            &[1, 2, 3, 4],
-            result
-                .value(0)
-                .as_any()
-                .downcast_ref::<ListArray>()
-                .unwrap()
-                .value(2)
-                .as_any()
-                .downcast_ref::<Int64Array>()
-                .unwrap()
-                .values()
-        );
-    }
-
-    #[test]
-    fn test_array_position() {
-        // array_position([1, 2, 3, 4], 3) = 3
-        let list_array = return_array();
-        let array = array_position(&[list_array, Arc::new(Int64Array::from_value(3, 1))])
-            .expect("failed to initialize function array_position");
-        let result = as_uint64_array(&array)
-            .expect("failed to initialize function array_position");
-
-        assert_eq!(result, &UInt64Array::from(vec![3]));
-    }
-
-    #[test]
-    fn test_array_positions() {
-        // array_positions([1, 2, 3, 4], 3) = [3]
-        let list_array = return_array();
-        let array =
-            array_positions(&[list_array, Arc::new(Int64Array::from_value(3, 1))])
-                .expect("failed to initialize function array_position");
-        let result =
-            as_list_array(&array).expect("failed to initialize function array_position");
-
-        assert_eq!(result.len(), 1);
-        assert_eq!(
-            &[3],
-            result
-                .value(0)
-                .as_any()
-                .downcast_ref::<UInt64Array>()
-                .unwrap()
-                .values()
-        );
-    }
-
-    #[test]
-    fn test_array_remove() {
-        // array_remove([3, 1, 2, 3, 2, 3], 3) = [1, 2, 3, 2, 3]
-        let list_array = return_array_with_repeating_elements();
-        let array = array_remove(&[list_array, Arc::new(Int64Array::from_value(3, 1))])
-            .expect("failed to initialize function array_remove");
-        let result =
-            as_list_array(&array).expect("failed to initialize function array_remove");
-
-        assert_eq!(result.len(), 1);
-        assert_eq!(
-            &[1, 2, 3, 2, 3],
-            result
-                .value(0)
-                .as_any()
-                .downcast_ref::<Int64Array>()
-                .unwrap()
-                .values()
-        );
-    }
-
-    #[test]
-    fn test_nested_array_remove() {
-        // array_remove(
-        //     [[1, 2, 3, 4], [5, 6, 7, 8], [1, 2, 3, 4], [9, 10, 11, 12], [5, 6, 7, 8]],
-        //     [1, 2, 3, 4],
-        // ) = [[5, 6, 7, 8], [1, 2, 3, 4], [9, 10, 11, 12], [5, 6, 7, 8]]
-        let list_array = return_nested_array_with_repeating_elements();
-        let element_array = return_array();
-        let array = array_remove(&[list_array, element_array])
-            .expect("failed to initialize function array_remove");
-        let result =
-            as_list_array(&array).expect("failed to initialize function array_remove");
-
-        assert_eq!(result.len(), 1);
-        let data = vec![
-            Some(vec![Some(5), Some(6), Some(7), Some(8)]),
-            Some(vec![Some(1), Some(2), Some(3), Some(4)]),
-            Some(vec![Some(9), Some(10), Some(11), Some(12)]),
-            Some(vec![Some(5), Some(6), Some(7), Some(8)]),
-        ];
-        let expected = ListArray::from_iter_primitive::<Int64Type, _, _>(data);
-        assert_eq!(
-            expected,
-            result
-                .value(0)
-                .as_any()
-                .downcast_ref::<ListArray>()
-                .unwrap()
-                .clone()
-        );
-    }
-
-    #[test]
-    fn test_array_remove_n() {
-        // array_remove_n([3, 1, 2, 3, 2, 3], 3, 2) = [1, 2, 2, 3]
-        let list_array = return_array_with_repeating_elements();
-        let array = array_remove_n(&[
-            list_array,
-            Arc::new(Int64Array::from_value(3, 1)),
-            Arc::new(Int64Array::from_value(2, 1)),
-        ])
-        .expect("failed to initialize function array_remove_n");
-        let result =
-            as_list_array(&array).expect("failed to initialize function array_remove_n");
-
-        assert_eq!(result.len(), 1);
-        assert_eq!(
-            &[1, 2, 2, 3],
-            result
-                .value(0)
-                .as_any()
-                .downcast_ref::<Int64Array>()
-                .unwrap()
-                .values()
-        );
-    }
-
-    #[test]
-    fn test_nested_array_remove_n() {
-        // array_remove_n(
-        //     [[1, 2, 3, 4], [5, 6, 7, 8], [1, 2, 3, 4], [9, 10, 11, 12], [5, 6, 7, 8]],
-        //     [1, 2, 3, 4],
-        //     3,
-        // ) = [[5, 6, 7, 8], [9, 10, 11, 12], [5, 6, 7, 8]]
-        let list_array = return_nested_array_with_repeating_elements();
-        let element_array = return_array();
-        let array = array_remove_n(&[
-            list_array,
-            element_array,
-            Arc::new(Int64Array::from_value(3, 1)),
-        ])
-        .expect("failed to initialize function array_remove_n");
-        let result =
-            as_list_array(&array).expect("failed to initialize function array_remove_n");
-
-        assert_eq!(result.len(), 1);
-        let data = vec![
-            Some(vec![Some(5), Some(6), Some(7), Some(8)]),
-            Some(vec![Some(9), Some(10), Some(11), Some(12)]),
-            Some(vec![Some(5), Some(6), Some(7), Some(8)]),
-        ];
-        let expected = ListArray::from_iter_primitive::<Int64Type, _, _>(data);
-        assert_eq!(
-            expected,
-            result
-                .value(0)
-                .as_any()
-                .downcast_ref::<ListArray>()
-                .unwrap()
-                .clone()
-        );
-    }
-
-    #[test]
-    fn test_array_remove_all() {
-        // array_remove_all([3, 1, 2, 3, 2, 3], 3) = [1, 2, 2]
-        let list_array = return_array_with_repeating_elements();
-        let array =
-            array_remove_all(&[list_array, Arc::new(Int64Array::from_value(3, 1))])
-                .expect("failed to initialize function array_remove_all");
-        let result = as_list_array(&array)
-            .expect("failed to initialize function array_remove_all");
-
-        assert_eq!(result.len(), 1);
-        assert_eq!(
-            &[1, 2, 2],
-            result
-                .value(0)
-                .as_any()
-                .downcast_ref::<Int64Array>()
-                .unwrap()
-                .values()
-        );
-    }
-
-    #[test]
-    fn test_nested_array_remove_all() {
-        // array_remove_all(
-        //     [[1, 2, 3, 4], [5, 6, 7, 8], [1, 2, 3, 4], [9, 10, 11, 12], [5, 6, 7, 8]],
-        //     [1, 2, 3, 4],
-        // ) = [[5, 6, 7, 8], [9, 10, 11, 12], [5, 6, 7, 8]]
-        let list_array = return_nested_array_with_repeating_elements();
-        let element_array = return_array();
-        let array = array_remove_all(&[list_array, element_array])
-            .expect("failed to initialize function array_remove_all");
-        let result = as_list_array(&array)
-            .expect("failed to initialize function array_remove_all");
-
-        assert_eq!(result.len(), 1);
-        let data = vec![
-            Some(vec![Some(5), Some(6), Some(7), Some(8)]),
-            Some(vec![Some(9), Some(10), Some(11), Some(12)]),
-            Some(vec![Some(5), Some(6), Some(7), Some(8)]),
-        ];
-        let expected = ListArray::from_iter_primitive::<Int64Type, _, _>(data);
-        assert_eq!(
-            expected,
-            result
-                .value(0)
-                .as_any()
-                .downcast_ref::<ListArray>()
-                .unwrap()
-                .clone()
-        );
-    }
-
-    #[test]
-    fn test_array_replace() {
-        // array_replace([3, 1, 2, 3, 2, 3], 3, 4) = [4, 1, 2, 3, 2, 3]
-        let list_array = return_array_with_repeating_elements();
-        let array = array_replace(&[
-            list_array,
-            Arc::new(Int64Array::from_value(3, 1)),
-            Arc::new(Int64Array::from_value(4, 1)),
-        ])
-        .expect("failed to initialize function array_replace");
-        let result =
-            as_list_array(&array).expect("failed to initialize function array_replace");
-
-        assert_eq!(result.len(), 1);
-        assert_eq!(
-            &[4, 1, 2, 3, 2, 3],
-            result
-                .value(0)
-                .as_any()
-                .downcast_ref::<Int64Array>()
-                .unwrap()
-                .values()
-        );
-    }
-
-    #[test]
-    fn test_nested_array_replace() {
-        // array_replace(
-        //     [[1, 2, 3, 4], [5, 6, 7, 8], [1, 2, 3, 4], [9, 10, 11, 12], [5, 6, 7, 8]],
-        //     [1, 2, 3, 4],
-        //     [11, 12, 13, 14],
-        // ) = [[11, 12, 13, 14], [5, 6, 7, 8], [1, 2, 3, 4], [9, 10, 11, 12], [5, 6, 7, 8]]
-        let list_array = return_nested_array_with_repeating_elements();
-        let from_array = return_array();
-        let to_array = return_extra_array();
-        let array = array_replace(&[list_array, from_array, to_array])
-            .expect("failed to initialize function array_replace");
-        let result =
-            as_list_array(&array).expect("failed to initialize function array_replace");
-
-        assert_eq!(result.len(), 1);
-        let data = vec![
-            Some(vec![Some(11), Some(12), Some(13), Some(14)]),
-            Some(vec![Some(5), Some(6), Some(7), Some(8)]),
-            Some(vec![Some(1), Some(2), Some(3), Some(4)]),
-            Some(vec![Some(9), Some(10), Some(11), Some(12)]),
-            Some(vec![Some(5), Some(6), Some(7), Some(8)]),
-        ];
-        let expected = ListArray::from_iter_primitive::<Int64Type, _, _>(data);
-        assert_eq!(
-            expected,
-            result
-                .value(0)
-                .as_any()
-                .downcast_ref::<ListArray>()
-                .unwrap()
-                .clone()
-        );
-    }
-
-    #[test]
-    fn test_array_replace_n() {
-        // array_replace_n([3, 1, 2, 3, 2, 3], 3, 4, 2) = [4, 1, 2, 4, 2, 3]
-        let list_array = return_array_with_repeating_elements();
-        let array = array_replace_n(&[
-            list_array,
-            Arc::new(Int64Array::from_value(3, 1)),
-            Arc::new(Int64Array::from_value(4, 1)),
-            Arc::new(Int64Array::from_value(2, 1)),
-        ])
-        .expect("failed to initialize function array_replace_n");
-        let result =
-            as_list_array(&array).expect("failed to initialize function array_replace_n");
-
-        assert_eq!(result.len(), 1);
-        assert_eq!(
-            &[4, 1, 2, 4, 2, 3],
-            result
-                .value(0)
-                .as_any()
-                .downcast_ref::<Int64Array>()
-                .unwrap()
-                .values()
-        );
-    }
-
-    #[test]
-    fn test_nested_array_replace_n() {
-        // array_replace_n(
-        //     [[1, 2, 3, 4], [5, 6, 7, 8], [1, 2, 3, 4], [9, 10, 11, 12], [5, 6, 7, 8]],
-        //     [1, 2, 3, 4],
-        //     [11, 12, 13, 14],
-        //     2,
-        // ) = [[11, 12, 13, 14], [5, 6, 7, 8], [11, 12, 13, 14], [9, 10, 11, 12], [5, 6, 7, 8]]
-        let list_array = return_nested_array_with_repeating_elements();
-        let from_array = return_array();
-        let to_array = return_extra_array();
-        let array = array_replace_n(&[
-            list_array,
-            from_array,
-            to_array,
-            Arc::new(Int64Array::from_value(2, 1)),
-        ])
-        .expect("failed to initialize function array_replace_n");
-        let result =
-            as_list_array(&array).expect("failed to initialize function array_replace_n");
-
-        assert_eq!(result.len(), 1);
-        let data = vec![
-            Some(vec![Some(11), Some(12), Some(13), Some(14)]),
-            Some(vec![Some(5), Some(6), Some(7), Some(8)]),
-            Some(vec![Some(11), Some(12), Some(13), Some(14)]),
-            Some(vec![Some(9), Some(10), Some(11), Some(12)]),
-            Some(vec![Some(5), Some(6), Some(7), Some(8)]),
-        ];
-        let expected = ListArray::from_iter_primitive::<Int64Type, _, _>(data);
-        assert_eq!(
-            expected,
-            result
-                .value(0)
-                .as_any()
-                .downcast_ref::<ListArray>()
-                .unwrap()
-                .clone()
-        );
-    }
-
-    #[test]
-    fn test_array_replace_all() {
-        // array_replace_all([3, 1, 2, 3, 2, 3], 3, 4) = [4, 1, 2, 4, 2, 4]
-        let list_array = return_array_with_repeating_elements();
-        let array = array_replace_all(&[
-            list_array,
-            Arc::new(Int64Array::from_value(3, 1)),
-            Arc::new(Int64Array::from_value(4, 1)),
-        ])
-        .expect("failed to initialize function array_replace_all");
-        let result = as_list_array(&array)
-            .expect("failed to initialize function array_replace_all");
-
-        assert_eq!(result.len(), 1);
-        assert_eq!(
-            &[4, 1, 2, 4, 2, 4],
-            result
-                .value(0)
-                .as_any()
-                .downcast_ref::<Int64Array>()
-                .unwrap()
-                .values()
-        );
-    }
-
-    #[test]
-    fn test_nested_array_replace_all() {
-        // array_replace_all(
-        //     [[1, 2, 3, 4], [5, 6, 7, 8], [1, 2, 3, 4], [9, 10, 11, 12], [5, 6, 7, 8]],
-        //     [1, 2, 3, 4],
-        //     [11, 12, 13, 14],
-        // ) = [[11, 12, 13, 14], [5, 6, 7, 8], [11, 12, 13, 14], [9, 10, 11, 12], [5, 6, 7, 8]]
-        let list_array = return_nested_array_with_repeating_elements();
-        let from_array = return_array();
-        let to_array = return_extra_array();
-        let array = array_replace_all(&[list_array, from_array, to_array])
-            .expect("failed to initialize function array_replace_all");
-        let result = as_list_array(&array)
-            .expect("failed to initialize function array_replace_all");
-
-        assert_eq!(result.len(), 1);
-        let data = vec![
-            Some(vec![Some(11), Some(12), Some(13), Some(14)]),
-            Some(vec![Some(5), Some(6), Some(7), Some(8)]),
-            Some(vec![Some(11), Some(12), Some(13), Some(14)]),
-            Some(vec![Some(9), Some(10), Some(11), Some(12)]),
-            Some(vec![Some(5), Some(6), Some(7), Some(8)]),
-        ];
-        let expected = ListArray::from_iter_primitive::<Int64Type, _, _>(data);
-        assert_eq!(
-            expected,
-            result
-                .value(0)
-                .as_any()
-                .downcast_ref::<ListArray>()
-                .unwrap()
-                .clone()
-        );
-    }
-
-    #[test]
-    fn test_array_repeat() {
-        // array_repeat(3, 5) = [3, 3, 3, 3, 3]
-        let array = array_repeat(&[
-            Arc::new(Int64Array::from_value(3, 1)),
-            Arc::new(Int64Array::from_value(5, 1)),
-        ])
-        .expect("failed to initialize function array_repeat");
-        let result =
-            as_list_array(&array).expect("failed to initialize function array_repeat");
-
-        assert_eq!(result.len(), 1);
-        assert_eq!(
-            &[3, 3, 3, 3, 3],
-            result
-                .value(0)
-                .as_any()
-                .downcast_ref::<Int64Array>()
-                .unwrap()
-                .values()
-        );
-    }
-
-    #[test]
-    fn test_nested_array_repeat() {
-        // array_repeat([1, 2, 3, 4], 3) = [[1, 2, 3, 4], [1, 2, 3, 4], [1, 2, 3, 4]]
-        let element = return_array();
-        let array = array_repeat(&[element, Arc::new(Int64Array::from_value(3, 1))])
-            .expect("failed to initialize function array_repeat");
-        let result =
-            as_list_array(&array).expect("failed to initialize function array_repeat");
-
-        assert_eq!(result.len(), 1);
-        let data = vec![
-            Some(vec![Some(1), Some(2), Some(3), Some(4)]),
-            Some(vec![Some(1), Some(2), Some(3), Some(4)]),
-            Some(vec![Some(1), Some(2), Some(3), Some(4)]),
-        ];
-        let expected = ListArray::from_iter_primitive::<Int64Type, _, _>(data);
-        assert_eq!(
-            expected,
-            result
-                .value(0)
-                .as_any()
-                .downcast_ref::<ListArray>()
-                .unwrap()
-                .clone()
-        );
-    }
-    #[test]
-    fn test_array_to_string() {
-        // array_to_string([1, 2, 3, 4], ',') = 1,2,3,4
-        let list_array = return_array();
-        let array =
-            array_to_string(&[list_array, Arc::new(StringArray::from(vec![Some(",")]))])
-                .expect("failed to initialize function array_to_string");
-        let result = as_string_array(&array)
-            .expect("failed to initialize function array_to_string");
-
-        assert_eq!(result.len(), 1);
-        assert_eq!("1,2,3,4", result.value(0));
-
-        // array_to_string([1, NULL, 3, NULL], ',', '*') = 1,*,3,*
-        let list_array = return_array_with_nulls();
-        let array = array_to_string(&[
-            list_array,
-            Arc::new(StringArray::from(vec![Some(",")])),
-            Arc::new(StringArray::from(vec![Some("*")])),
-        ])
-        .expect("failed to initialize function array_to_string");
-        let result = as_string_array(&array)
-            .expect("failed to initialize function array_to_string");
-
-        assert_eq!(result.len(), 1);
-        assert_eq!("1,*,3,*", result.value(0));
-    }
-
-    #[test]
-    fn test_nested_array_to_string() {
-        // array_to_string([[1, 2, 3, 4], [5, 6, 7, 8]], '-') = 1-2-3-4-5-6-7-8
-        let list_array = return_nested_array();
-        let array =
-            array_to_string(&[list_array, Arc::new(StringArray::from(vec![Some("-")]))])
-                .expect("failed to initialize function array_to_string");
-        let result = as_string_array(&array)
-            .expect("failed to initialize function array_to_string");
-
-        assert_eq!(result.len(), 1);
-        assert_eq!("1-2-3-4-5-6-7-8", result.value(0));
-
-        // array_to_string([[1, NULL, 3, NULL], [NULL, 6, 7, NULL]], '-', '*') = 1-*-3-*-*-6-7-*
-        let list_array = return_nested_array_with_nulls();
-        let array = array_to_string(&[
-            list_array,
-            Arc::new(StringArray::from(vec![Some("-")])),
-            Arc::new(StringArray::from(vec![Some("*")])),
-        ])
-        .expect("failed to initialize function array_to_string");
-        let result = as_string_array(&array)
-            .expect("failed to initialize function array_to_string");
-
-        assert_eq!(result.len(), 1);
-        assert_eq!("1-*-3-*-*-6-7-*", result.value(0));
-    }
-
-    #[test]
-    fn test_cardinality() {
-        // cardinality([1, 2, 3, 4]) = 4
-        let list_array = return_array();
-        let arr = cardinality(&[list_array])
-            .expect("failed to initialize function cardinality");
-        let result =
-            as_uint64_array(&arr).expect("failed to initialize function cardinality");
-
-        assert_eq!(result, &UInt64Array::from(vec![4]));
-    }
-
-    #[test]
-    fn test_nested_cardinality() {
-        // cardinality([[1, 2, 3, 4], [5, 6, 7, 8]]) = 8
-        let list_array = return_nested_array();
-        let arr = cardinality(&[list_array])
-            .expect("failed to initialize function cardinality");
-        let result =
-            as_uint64_array(&arr).expect("failed to initialize function cardinality");
-
-        assert_eq!(result, &UInt64Array::from(vec![8]));
-    }
-
-    #[test]
-    fn test_array_length() {
-        // array_length([1, 2, 3, 4]) = 4
-        let list_array = return_array();
-        let arr = array_length(&[list_array.clone()])
-            .expect("failed to initialize function array_ndims");
-        let result =
-            as_uint64_array(&arr).expect("failed to initialize function array_ndims");
-
-        assert_eq!(result, &UInt64Array::from_value(4, 1));
-
-        // array_length([1, 2, 3, 4], 1) = 4
-        let array = array_length(&[list_array, Arc::new(Int64Array::from_value(1, 1))])
-            .expect("failed to initialize function array_ndims");
-        let result =
-            as_uint64_array(&array).expect("failed to initialize function array_ndims");
-
-        assert_eq!(result, &UInt64Array::from_value(4, 1));
-    }
-
-    #[test]
-    fn test_nested_array_length() {
-        let list_array = return_nested_array();
-
-        // array_length([[1, 2, 3, 4], [5, 6, 7, 8]]) = 2
-        let arr = array_length(&[list_array.clone()])
-            .expect("failed to initialize function array_length");
-        let result =
-            as_uint64_array(&arr).expect("failed to initialize function array_length");
-
-        assert_eq!(result, &UInt64Array::from_value(2, 1));
-
-        // array_length([[1, 2, 3, 4], [5, 6, 7, 8]], 1) = 2
-        let arr =
-            array_length(&[list_array.clone(), Arc::new(Int64Array::from_value(1, 1))])
-                .expect("failed to initialize function array_length");
-        let result =
-            as_uint64_array(&arr).expect("failed to initialize function array_length");
-
-        assert_eq!(result, &UInt64Array::from_value(2, 1));
-
-        // array_length([[1, 2, 3, 4], [5, 6, 7, 8]], 2) = 4
-        let arr =
-            array_length(&[list_array.clone(), Arc::new(Int64Array::from_value(2, 1))])
-                .expect("failed to initialize function array_length");
-        let result =
-            as_uint64_array(&arr).expect("failed to initialize function array_length");
-
-        assert_eq!(result, &UInt64Array::from_value(4, 1));
-
-        // array_length([[1, 2, 3, 4], [5, 6, 7, 8]], 3) = NULL
-        let arr = array_length(&[list_array, Arc::new(Int64Array::from_value(3, 1))])
-            .expect("failed to initialize function array_length");
-        let result =
-            as_uint64_array(&arr).expect("failed to initialize function array_length");
-
-        assert_eq!(result, &UInt64Array::from(vec![None]));
-    }
-
-    #[test]
-    fn test_array_dims() {
-        // array_dims([1, 2, 3, 4]) = [4]
-        let list_array = return_array();
-
-        let array =
-            array_dims(&[list_array]).expect("failed to initialize function array_dims");
-        let result =
-            as_list_array(&array).expect("failed to initialize function array_dims");
-
-        assert_eq!(
-            &[4],
-            result
-                .value(0)
-                .as_any()
-                .downcast_ref::<UInt64Array>()
-                .unwrap()
-                .values()
-        );
-    }
-
-    #[test]
-    fn test_nested_array_dims() {
-        // array_dims([[1, 2, 3, 4], [5, 6, 7, 8]]) = [2, 4]
-        let list_array = return_nested_array();
-
-        let array =
-            array_dims(&[list_array]).expect("failed to initialize function array_dims");
-        let result =
-            as_list_array(&array).expect("failed to initialize function array_dims");
-
-        assert_eq!(
-            &[2, 4],
-            result
-                .value(0)
-                .as_any()
-                .downcast_ref::<UInt64Array>()
-                .unwrap()
-                .values()
-        );
-    }
-
-    #[test]
-    fn test_array_ndims() {
-        // array_ndims([1, 2, 3, 4]) = 1
-        let list_array = return_array();
-
-        let array = array_ndims(&[list_array])
-            .expect("failed to initialize function array_ndims");
-        let result =
-            as_uint64_array(&array).expect("failed to initialize function array_ndims");
-
-        assert_eq!(result, &UInt64Array::from_value(1, 1));
-    }
-
-    #[test]
-    fn test_nested_array_ndims() {
-        // array_ndims([[1, 2, 3, 4], [5, 6, 7, 8]]) = 2
-        let list_array = return_nested_array();
-
-        let array = array_ndims(&[list_array])
-            .expect("failed to initialize function array_ndims");
-        let result =
-            as_uint64_array(&array).expect("failed to initialize function array_ndims");
-
-        assert_eq!(result, &UInt64Array::from_value(2, 1));
-    }
-
-    #[test]
-    fn test_check_invalid_datatypes() {
-        let data = vec![Some(vec![Some(1), Some(2), Some(3)])];
-        let list_array =
-            Arc::new(ListArray::from_iter_primitive::<Int64Type, _, _>(data)) as ArrayRef;
-        let int64_array = Arc::new(StringArray::from(vec![Some("string")])) as ArrayRef;
-
-        let args = [list_array.clone(), int64_array.clone()];
-
-        let array = array_append(&args);
-
-        assert_eq!(array.unwrap_err().strip_backtrace(), "Error during planning: array_append received incompatible types: '[Int64, Utf8]'.");
-    }
-
-    fn return_array() -> ArrayRef {
-        // Returns: [1, 2, 3, 4]
-        let args = [
-            Arc::new(Int64Array::from(vec![Some(1)])) as ArrayRef,
-            Arc::new(Int64Array::from(vec![Some(2)])) as ArrayRef,
-            Arc::new(Int64Array::from(vec![Some(3)])) as ArrayRef,
-            Arc::new(Int64Array::from(vec![Some(4)])) as ArrayRef,
-        ];
-        make_array(&args).expect("failed to initialize function array")
-    }
-
-    fn return_extra_array() -> ArrayRef {
-        // Returns: [11, 12, 13, 14]
-        let args = [
-            Arc::new(Int64Array::from(vec![Some(11)])) as ArrayRef,
-            Arc::new(Int64Array::from(vec![Some(12)])) as ArrayRef,
-            Arc::new(Int64Array::from(vec![Some(13)])) as ArrayRef,
-            Arc::new(Int64Array::from(vec![Some(14)])) as ArrayRef,
-        ];
-        make_array(&args).expect("failed to initialize function array")
-    }
-
-    fn return_nested_array() -> ArrayRef {
-        // Returns: [[1, 2, 3, 4], [5, 6, 7, 8]]
-        let args = [
-            Arc::new(Int64Array::from(vec![Some(1)])) as ArrayRef,
-            Arc::new(Int64Array::from(vec![Some(2)])) as ArrayRef,
-            Arc::new(Int64Array::from(vec![Some(3)])) as ArrayRef,
-            Arc::new(Int64Array::from(vec![Some(4)])) as ArrayRef,
-        ];
-        let arr1 = make_array(&args).expect("failed to initialize function array");
-
-        let args = [
-            Arc::new(Int64Array::from(vec![Some(5)])) as ArrayRef,
-            Arc::new(Int64Array::from(vec![Some(6)])) as ArrayRef,
-            Arc::new(Int64Array::from(vec![Some(7)])) as ArrayRef,
-            Arc::new(Int64Array::from(vec![Some(8)])) as ArrayRef,
-        ];
-        let arr2 = make_array(&args).expect("failed to initialize function array");
-
-        make_array(&[arr1, arr2]).expect("failed to initialize function array")
-    }
-
-    fn return_array_with_nulls() -> ArrayRef {
-        // Returns: [1, NULL, 3, NULL]
-        let args = [
-            Arc::new(Int64Array::from(vec![Some(1)])) as ArrayRef,
-            Arc::new(Int64Array::from(vec![None])) as ArrayRef,
-            Arc::new(Int64Array::from(vec![Some(3)])) as ArrayRef,
-            Arc::new(Int64Array::from(vec![None])) as ArrayRef,
-        ];
-        make_array(&args).expect("failed to initialize function array")
-    }
-
-    fn return_nested_array_with_nulls() -> ArrayRef {
-        // Returns: [[1, NULL, 3, NULL], [NULL, 6, 7, NULL]]
-        let args = [
-            Arc::new(Int64Array::from(vec![Some(1)])) as ArrayRef,
-            Arc::new(Int64Array::from(vec![None])) as ArrayRef,
-            Arc::new(Int64Array::from(vec![Some(3)])) as ArrayRef,
-            Arc::new(Int64Array::from(vec![None])) as ArrayRef,
-        ];
-        let arr1 = make_array(&args).expect("failed to initialize function array");
-
-        let args = [
-            Arc::new(Int64Array::from(vec![None])) as ArrayRef,
-            Arc::new(Int64Array::from(vec![Some(6)])) as ArrayRef,
-            Arc::new(Int64Array::from(vec![Some(7)])) as ArrayRef,
-            Arc::new(Int64Array::from(vec![None])) as ArrayRef,
-        ];
-        let arr2 = make_array(&args).expect("failed to initialize function array");
-
-        make_array(&[arr1, arr2]).expect("failed to initialize function array")
-    }
-
-    fn return_array_with_repeating_elements() -> ArrayRef {
-        // Returns: [3, 1, 2, 3, 2, 3]
-        let args = [
-            Arc::new(Int64Array::from(vec![Some(3)])) as ArrayRef,
-            Arc::new(Int64Array::from(vec![Some(1)])) as ArrayRef,
-            Arc::new(Int64Array::from(vec![Some(2)])) as ArrayRef,
-            Arc::new(Int64Array::from(vec![Some(3)])) as ArrayRef,
-            Arc::new(Int64Array::from(vec![Some(2)])) as ArrayRef,
-            Arc::new(Int64Array::from(vec![Some(3)])) as ArrayRef,
-        ];
-        make_array(&args).expect("failed to initialize function array")
-    }
-
-    fn return_nested_array_with_repeating_elements() -> ArrayRef {
-        // Returns: [[1, 2, 3, 4], [5, 6, 7, 8], [1, 2, 3, 4], [9, 10, 11, 12], [5, 6, 7, 8]]
-        let args = [
-            Arc::new(Int64Array::from(vec![Some(1)])) as ArrayRef,
-            Arc::new(Int64Array::from(vec![Some(2)])) as ArrayRef,
-            Arc::new(Int64Array::from(vec![Some(3)])) as ArrayRef,
-            Arc::new(Int64Array::from(vec![Some(4)])) as ArrayRef,
-        ];
-        let arr1 = make_array(&args).expect("failed to initialize function array");
-
-        let args = [
-            Arc::new(Int64Array::from(vec![Some(5)])) as ArrayRef,
-            Arc::new(Int64Array::from(vec![Some(6)])) as ArrayRef,
-            Arc::new(Int64Array::from(vec![Some(7)])) as ArrayRef,
-            Arc::new(Int64Array::from(vec![Some(8)])) as ArrayRef,
-        ];
-        let arr2 = make_array(&args).expect("failed to initialize function array");
-
-        let args = [
-            Arc::new(Int64Array::from(vec![Some(1)])) as ArrayRef,
-            Arc::new(Int64Array::from(vec![Some(2)])) as ArrayRef,
-            Arc::new(Int64Array::from(vec![Some(3)])) as ArrayRef,
-            Arc::new(Int64Array::from(vec![Some(4)])) as ArrayRef,
-        ];
-        let arr3 = make_array(&args).expect("failed to initialize function array");
-
-        let args = [
-            Arc::new(Int64Array::from(vec![Some(9)])) as ArrayRef,
-            Arc::new(Int64Array::from(vec![Some(10)])) as ArrayRef,
-            Arc::new(Int64Array::from(vec![Some(11)])) as ArrayRef,
-            Arc::new(Int64Array::from(vec![Some(12)])) as ArrayRef,
-        ];
-        let arr4 = make_array(&args).expect("failed to initialize function array");
-
-        let args = [
-            Arc::new(Int64Array::from(vec![Some(5)])) as ArrayRef,
-            Arc::new(Int64Array::from(vec![Some(6)])) as ArrayRef,
-            Arc::new(Int64Array::from(vec![Some(7)])) as ArrayRef,
-            Arc::new(Int64Array::from(vec![Some(8)])) as ArrayRef,
-        ];
-        let arr5 = make_array(&args).expect("failed to initialize function array");
-
-        make_array(&[arr1, arr2, arr3, arr4, arr5])
-            .expect("failed to initialize function array")
     }
 }

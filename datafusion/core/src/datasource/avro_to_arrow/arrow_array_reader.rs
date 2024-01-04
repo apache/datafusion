@@ -45,6 +45,7 @@ use arrow::array::{BinaryArray, FixedSizeBinaryArray, GenericListArray};
 use arrow::datatypes::{Fields, SchemaRef};
 use arrow::error::ArrowError::SchemaError;
 use arrow::error::Result as ArrowResult;
+use datafusion_common::arrow_err;
 use num_traits::NumCast;
 use std::collections::BTreeMap;
 use std::io::Read;
@@ -86,9 +87,9 @@ impl<'a, R: Read> AvroArrowArrayReader<'a, R> {
                 }
                 Ok(lookup)
             }
-            _ => Err(DataFusionError::ArrowError(SchemaError(
+            _ => arrow_err!(SchemaError(
                 "expected avro schema to be a record".to_string(),
-            ))),
+            )),
         }
     }
 
@@ -1536,12 +1537,10 @@ mod test {
         .unwrap()
         .resolve(&schema)
         .unwrap();
-        let r4 = apache_avro::to_value(serde_json::json!({
-            "col1": null
-        }))
-        .unwrap()
-        .resolve(&schema)
-        .unwrap();
+        let r4 = apache_avro::to_value(serde_json::json!({ "col1": null }))
+            .unwrap()
+            .resolve(&schema)
+            .unwrap();
 
         let mut w = apache_avro::Writer::new(&schema, vec![]);
         w.append(r1).unwrap();
@@ -1600,12 +1599,10 @@ mod test {
             }"#,
         )
         .unwrap();
-        let r1 = apache_avro::to_value(serde_json::json!({
-            "col1": null
-        }))
-        .unwrap()
-        .resolve(&schema)
-        .unwrap();
+        let r1 = apache_avro::to_value(serde_json::json!({ "col1": null }))
+            .unwrap()
+            .resolve(&schema)
+            .unwrap();
         let r2 = apache_avro::to_value(serde_json::json!({
             "col1": {
                 "col2": "hello"

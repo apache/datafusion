@@ -16,23 +16,27 @@
 // under the License.
 
 //! Print format variants
-use crate::print_options::MaxRows;
-use arrow::csv::writer::WriterBuilder;
-use arrow::json::{ArrayWriter, LineDelimitedWriter};
-use arrow::util::pretty::pretty_format_batches_with_options;
-use datafusion::arrow::record_batch::RecordBatch;
-use datafusion::common::format::DEFAULT_FORMAT_OPTIONS;
-use datafusion::error::{DataFusionError, Result};
+
 use std::str::FromStr;
 
+use crate::print_options::MaxRows;
+
+use arrow::csv::writer::WriterBuilder;
+use arrow::json::{ArrayWriter, LineDelimitedWriter};
+use arrow::record_batch::RecordBatch;
+use arrow::util::pretty::pretty_format_batches_with_options;
+use datafusion::common::format::DEFAULT_FORMAT_OPTIONS;
+use datafusion::error::Result;
+
 /// Allow records to be printed in different formats
-#[derive(Debug, PartialEq, Eq, clap::ArgEnum, Clone)]
+#[derive(Debug, PartialEq, Eq, clap::ArgEnum, Clone, Copy)]
 pub enum PrintFormat {
     Csv,
     Tsv,
     Table,
     Json,
     NdJson,
+    Automatic,
 }
 
 impl FromStr for PrintFormat {
@@ -44,31 +48,44 @@ impl FromStr for PrintFormat {
 }
 
 macro_rules! batches_to_json {
-    ($WRITER: ident, $batches: expr) => {{
-        let mut bytes = vec![];
+    ($WRITER: ident, $writer: expr, $batches: expr) => {{
         {
-            let mut writer = $WRITER::new(&mut bytes);
-            $batches.iter().try_for_each(|batch| writer.write(batch))?;
-            writer.finish()?;
+            if !$batches.is_empty() {
+                let mut json_writer = $WRITER::new(&mut *$writer);
+                for batch in $batches {
+                    json_writer.write(batch)?;
+                }
+                json_writer.finish()?;
+                json_finish!($WRITER, $writer);
+            }
         }
-        String::from_utf8(bytes).map_err(|e| DataFusionError::External(Box::new(e)))?
+        Ok(()) as Result<()>
     }};
 }
 
-fn print_batches_with_sep(batches: &[RecordBatch], delimiter: u8) -> Result<String> {
-    let mut bytes = vec![];
-    {
-        let builder = WriterBuilder::new()
-            .with_header(true)
-            .with_delimiter(delimiter);
-        let mut writer = builder.build(&mut bytes);
-        for batch in batches {
-            writer.write(batch)?;
-        }
+macro_rules! json_finish {
+    (ArrayWriter, $writer: expr) => {{
+        writeln!($writer)?;
+    }};
+    (LineDelimitedWriter, $writer: expr) => {{}};
+}
+
+fn print_batches_with_sep<W: std::io::Write>(
+    writer: &mut W,
+    batches: &[RecordBatch],
+    delimiter: u8,
+    with_header: bool,
+) -> Result<()> {
+    let builder = WriterBuilder::new()
+        .with_header(with_header)
+        .with_delimiter(delimiter);
+    let mut csv_writer = builder.build(writer);
+
+    for batch in batches {
+        csv_writer.write(batch)?;
     }
-    let formatted =
-        String::from_utf8(bytes).map_err(|e| DataFusionError::External(Box::new(e)))?;
-    Ok(formatted)
+
+    Ok(())
 }
 
 fn keep_only_maxrows(s: &str, maxrows: usize) -> String {
@@ -88,97 +105,118 @@ fn keep_only_maxrows(s: &str, maxrows: usize) -> String {
     result.join("\n")
 }
 
-fn format_batches_with_maxrows(
+fn format_batches_with_maxrows<W: std::io::Write>(
+    writer: &mut W,
     batches: &[RecordBatch],
     maxrows: MaxRows,
-) -> Result<String> {
+) -> Result<()> {
     match maxrows {
         MaxRows::Limited(maxrows) => {
-            // Only format enough batches for maxrows
+            // Filter batches to meet the maxrows condition
             let mut filtered_batches = Vec::new();
-            let mut batches = batches;
-            let row_count: usize = batches.iter().map(|b| b.num_rows()).sum();
-            if row_count > maxrows {
-                let mut accumulated_rows = 0;
-
-                for batch in batches {
+            let mut row_count: usize = 0;
+            let mut over_limit = false;
+            for batch in batches {
+                if row_count + batch.num_rows() > maxrows {
+                    // If adding this batch exceeds maxrows, slice the batch
+                    let limit = maxrows - row_count;
+                    let sliced_batch = batch.slice(0, limit);
+                    filtered_batches.push(sliced_batch);
+                    over_limit = true;
+                    break;
+                } else {
                     filtered_batches.push(batch.clone());
-                    if accumulated_rows + batch.num_rows() > maxrows {
-                        break;
-                    }
-                    accumulated_rows += batch.num_rows();
+                    row_count += batch.num_rows();
                 }
-
-                batches = &filtered_batches;
             }
 
-            let mut formatted = format!(
-                "{}",
-                pretty_format_batches_with_options(batches, &DEFAULT_FORMAT_OPTIONS)?,
-            );
-
-            if row_count > maxrows {
-                formatted = keep_only_maxrows(&formatted, maxrows);
+            let formatted = pretty_format_batches_with_options(
+                &filtered_batches,
+                &DEFAULT_FORMAT_OPTIONS,
+            )?;
+            if over_limit {
+                let mut formatted_str = format!("{}", formatted);
+                formatted_str = keep_only_maxrows(&formatted_str, maxrows);
+                writeln!(writer, "{}", formatted_str)?;
+            } else {
+                writeln!(writer, "{}", formatted)?;
             }
-
-            Ok(formatted)
         }
         MaxRows::Unlimited => {
-            // maxrows not specified, print all rows
-            Ok(format!(
-                "{}",
-                pretty_format_batches_with_options(batches, &DEFAULT_FORMAT_OPTIONS)?,
-            ))
+            let formatted =
+                pretty_format_batches_with_options(batches, &DEFAULT_FORMAT_OPTIONS)?;
+            writeln!(writer, "{}", formatted)?;
         }
     }
+
+    Ok(())
 }
 
 impl PrintFormat {
-    /// print the batches to stdout using the specified format
-    /// `maxrows` option is only used for `Table` format:
-    ///     If `maxrows` is Some(n), then at most n rows will be displayed
-    ///     If `maxrows` is None, then every row will be displayed
-    pub fn print_batches(&self, batches: &[RecordBatch], maxrows: MaxRows) -> Result<()> {
-        if batches.is_empty() {
+    /// Print the batches to a writer using the specified format
+    pub fn print_batches<W: std::io::Write>(
+        &self,
+        writer: &mut W,
+        batches: &[RecordBatch],
+        maxrows: MaxRows,
+        with_header: bool,
+    ) -> Result<()> {
+        if batches.is_empty() || batches[0].num_rows() == 0 {
             return Ok(());
         }
 
         match self {
-            Self::Csv => println!("{}", print_batches_with_sep(batches, b',')?),
-            Self::Tsv => println!("{}", print_batches_with_sep(batches, b'\t')?),
+            Self::Csv | Self::Automatic => {
+                print_batches_with_sep(writer, batches, b',', with_header)
+            }
+            Self::Tsv => print_batches_with_sep(writer, batches, b'\t', with_header),
             Self::Table => {
                 if maxrows == MaxRows::Limited(0) {
                     return Ok(());
                 }
-                println!("{}", format_batches_with_maxrows(batches, maxrows)?,)
+                format_batches_with_maxrows(writer, batches, maxrows)
             }
-            Self::Json => println!("{}", batches_to_json!(ArrayWriter, batches)),
-            Self::NdJson => {
-                println!("{}", batches_to_json!(LineDelimitedWriter, batches))
-            }
+            Self::Json => batches_to_json!(ArrayWriter, writer, batches),
+            Self::NdJson => batches_to_json!(LineDelimitedWriter, writer, batches),
         }
-        Ok(())
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use arrow::array::Int32Array;
-    use arrow::datatypes::{DataType, Field, Schema};
+    use std::io::{Cursor, Read, Write};
     use std::sync::Arc;
 
+    use super::*;
+
+    use arrow::array::Int32Array;
+    use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion::error::Result;
+
+    fn run_test<F>(batches: &[RecordBatch], test_fn: F) -> Result<String>
+    where
+        F: Fn(&mut Cursor<Vec<u8>>, &[RecordBatch]) -> Result<()>,
+    {
+        let mut buffer = Cursor::new(Vec::new());
+        test_fn(&mut buffer, batches)?;
+        buffer.set_position(0);
+        let mut contents = String::new();
+        buffer.read_to_string(&mut contents)?;
+        Ok(contents)
+    }
+
     #[test]
-    fn test_print_batches_with_sep() {
-        let batches = vec![];
-        assert_eq!("", print_batches_with_sep(&batches, b',').unwrap());
+    fn test_print_batches_with_sep() -> Result<()> {
+        let contents = run_test(&[], |buffer, batches| {
+            print_batches_with_sep(buffer, batches, b',', true)
+        })?;
+        assert_eq!(contents, "");
 
         let schema = Arc::new(Schema::new(vec![
             Field::new("a", DataType::Int32, false),
             Field::new("b", DataType::Int32, false),
             Field::new("c", DataType::Int32, false),
         ]));
-
         let batch = RecordBatch::try_new(
             schema,
             vec![
@@ -186,29 +224,33 @@ mod tests {
                 Arc::new(Int32Array::from(vec![4, 5, 6])),
                 Arc::new(Int32Array::from(vec![7, 8, 9])),
             ],
-        )
-        .unwrap();
+        )?;
 
-        let batches = vec![batch];
-        let r = print_batches_with_sep(&batches, b',').unwrap();
-        assert_eq!("a,b,c\n1,4,7\n2,5,8\n3,6,9\n", r);
+        let contents = run_test(&[batch], |buffer, batches| {
+            print_batches_with_sep(buffer, batches, b',', true)
+        })?;
+        assert_eq!(contents, "a,b,c\n1,4,7\n2,5,8\n3,6,9\n");
+
+        Ok(())
     }
 
     #[test]
     fn test_print_batches_to_json_empty() -> Result<()> {
-        let batches = vec![];
-        let r = batches_to_json!(ArrayWriter, &batches);
-        assert_eq!("", r);
+        let contents = run_test(&[], |buffer, batches| {
+            batches_to_json!(ArrayWriter, buffer, batches)
+        })?;
+        assert_eq!(contents, "");
 
-        let r = batches_to_json!(LineDelimitedWriter, &batches);
-        assert_eq!("", r);
+        let contents = run_test(&[], |buffer, batches| {
+            batches_to_json!(LineDelimitedWriter, buffer, batches)
+        })?;
+        assert_eq!(contents, "");
 
         let schema = Arc::new(Schema::new(vec![
             Field::new("a", DataType::Int32, false),
             Field::new("b", DataType::Int32, false),
             Field::new("c", DataType::Int32, false),
         ]));
-
         let batch = RecordBatch::try_new(
             schema,
             vec![
@@ -216,25 +258,29 @@ mod tests {
                 Arc::new(Int32Array::from(vec![4, 5, 6])),
                 Arc::new(Int32Array::from(vec![7, 8, 9])),
             ],
-        )
-        .unwrap();
-
+        )?;
         let batches = vec![batch];
-        let r = batches_to_json!(ArrayWriter, &batches);
-        assert_eq!("[{\"a\":1,\"b\":4,\"c\":7},{\"a\":2,\"b\":5,\"c\":8},{\"a\":3,\"b\":6,\"c\":9}]", r);
 
-        let r = batches_to_json!(LineDelimitedWriter, &batches);
-        assert_eq!("{\"a\":1,\"b\":4,\"c\":7}\n{\"a\":2,\"b\":5,\"c\":8}\n{\"a\":3,\"b\":6,\"c\":9}\n", r);
+        let contents = run_test(&batches, |buffer, batches| {
+            batches_to_json!(ArrayWriter, buffer, batches)
+        })?;
+        assert_eq!(contents, "[{\"a\":1,\"b\":4,\"c\":7},{\"a\":2,\"b\":5,\"c\":8},{\"a\":3,\"b\":6,\"c\":9}]\n");
+
+        let contents = run_test(&batches, |buffer, batches| {
+            batches_to_json!(LineDelimitedWriter, buffer, batches)
+        })?;
+        assert_eq!(contents, "{\"a\":1,\"b\":4,\"c\":7}\n{\"a\":2,\"b\":5,\"c\":8}\n{\"a\":3,\"b\":6,\"c\":9}\n");
+
         Ok(())
     }
 
     #[test]
     fn test_format_batches_with_maxrows() -> Result<()> {
         let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
-
-        let batch =
-            RecordBatch::try_new(schema, vec![Arc::new(Int32Array::from(vec![1, 2, 3]))])
-                .unwrap();
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![Arc::new(Int32Array::from(vec![1, 2, 3]))],
+        )?;
 
         #[rustfmt::skip]
         let all_rows_expected = [
@@ -244,7 +290,7 @@ mod tests {
             "| 1 |",
             "| 2 |",
             "| 3 |",
-            "+---+",
+            "+---+\n",
         ].join("\n");
 
         #[rustfmt::skip]
@@ -256,7 +302,7 @@ mod tests {
             "| . |",
             "| . |",
             "| . |",
-            "+---+",
+            "+---+\n",
         ].join("\n");
 
         #[rustfmt::skip]
@@ -272,26 +318,36 @@ mod tests {
             "| . |",
             "| . |",
             "| . |",
-            "+---+",
+            "+---+\n",
         ].join("\n");
 
-        let no_limit = format_batches_with_maxrows(&[batch.clone()], MaxRows::Unlimited)?;
-        assert_eq!(all_rows_expected, no_limit);
+        let no_limit = run_test(&[batch.clone()], |buffer, batches| {
+            format_batches_with_maxrows(buffer, batches, MaxRows::Unlimited)
+        })?;
+        assert_eq!(no_limit, all_rows_expected);
 
-        let maxrows_less_than_actual =
-            format_batches_with_maxrows(&[batch.clone()], MaxRows::Limited(1))?;
-        assert_eq!(one_row_expected, maxrows_less_than_actual);
-        let maxrows_more_than_actual =
-            format_batches_with_maxrows(&[batch.clone()], MaxRows::Limited(5))?;
-        assert_eq!(all_rows_expected, maxrows_more_than_actual);
-        let maxrows_equals_actual =
-            format_batches_with_maxrows(&[batch.clone()], MaxRows::Limited(3))?;
-        assert_eq!(all_rows_expected, maxrows_equals_actual);
-        let multi_batches = format_batches_with_maxrows(
+        let maxrows_less_than_actual = run_test(&[batch.clone()], |buffer, batches| {
+            format_batches_with_maxrows(buffer, batches, MaxRows::Limited(1))
+        })?;
+        assert_eq!(maxrows_less_than_actual, one_row_expected);
+
+        let maxrows_more_than_actual = run_test(&[batch.clone()], |buffer, batches| {
+            format_batches_with_maxrows(buffer, batches, MaxRows::Limited(5))
+        })?;
+        assert_eq!(maxrows_more_than_actual, all_rows_expected);
+
+        let maxrows_equals_actual = run_test(&[batch.clone()], |buffer, batches| {
+            format_batches_with_maxrows(buffer, batches, MaxRows::Limited(3))
+        })?;
+        assert_eq!(maxrows_equals_actual, all_rows_expected);
+
+        let multi_batches = run_test(
             &[batch.clone(), batch.clone(), batch.clone()],
-            MaxRows::Limited(5),
+            |buffer, batches| {
+                format_batches_with_maxrows(buffer, batches, MaxRows::Limited(5))
+            },
         )?;
-        assert_eq!(multi_batches_expected, multi_batches);
+        assert_eq!(multi_batches, multi_batches_expected);
 
         Ok(())
     }

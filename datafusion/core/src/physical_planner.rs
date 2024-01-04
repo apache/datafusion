@@ -27,7 +27,6 @@ use crate::datasource::file_format::csv::CsvFormat;
 use crate::datasource::file_format::json::JsonFormat;
 #[cfg(feature = "parquet")]
 use crate::datasource::file_format::parquet::ParquetFormat;
-use crate::datasource::file_format::write::FileWriterMode;
 use crate::datasource::file_format::FileFormat;
 use crate::datasource::listing::ListingTableUrl;
 use crate::datasource::physical_plan::FileSinkConfig;
@@ -64,12 +63,10 @@ use crate::physical_plan::sorts::sort::SortExec;
 use crate::physical_plan::union::UnionExec;
 use crate::physical_plan::unnest::UnnestExec;
 use crate::physical_plan::values::ValuesExec;
-use crate::physical_plan::windows::{
-    BoundedWindowAggExec, PartitionSearchMode, WindowAggExec,
-};
+use crate::physical_plan::windows::{BoundedWindowAggExec, WindowAggExec};
 use crate::physical_plan::{
-    aggregates, displayable, udaf, windows, AggregateExpr, ExecutionPlan, Partitioning,
-    PhysicalExpr, WindowExpr,
+    aggregates, displayable, udaf, windows, AggregateExpr, ExecutionPlan, InputOrderMode,
+    Partitioning, PhysicalExpr, WindowExpr,
 };
 
 use arrow::compute::SortOptions;
@@ -83,16 +80,18 @@ use datafusion_common::{
 };
 use datafusion_expr::dml::{CopyOptions, CopyTo};
 use datafusion_expr::expr::{
-    self, AggregateFunction, AggregateUDF, Alias, Between, BinaryExpr, Cast,
-    GetFieldAccess, GetIndexedField, GroupingSet, InList, Like, ScalarUDF, TryCast,
+    self, AggregateFunction, AggregateFunctionDefinition, Alias, Between, BinaryExpr,
+    Cast, GetFieldAccess, GetIndexedField, GroupingSet, InList, Like, TryCast,
     WindowFunction,
 };
-use datafusion_expr::expr_rewriter::{unalias, unnormalize_cols};
+use datafusion_expr::expr_rewriter::unnormalize_cols;
 use datafusion_expr::logical_plan::builder::wrap_projection_for_join_if_necessary;
 use datafusion_expr::{
-    DescribeTable, DmlStatement, StringifiedPlan, WindowFrame, WindowFrameBound, WriteOp,
+    DescribeTable, DmlStatement, ScalarFunctionDefinition, StringifiedPlan, WindowFrame,
+    WindowFrameBound, WriteOp,
 };
 use datafusion_physical_expr::expressions::Literal;
+use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
 use datafusion_sql::utils::window_expr_common_partition_keys;
 
 use async_trait::async_trait;
@@ -218,40 +217,49 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
 
             Ok(name)
         }
-        Expr::ScalarFunction(func) => {
-            create_function_physical_name(&func.fun.to_string(), false, &func.args)
-        }
-        Expr::ScalarUDF(ScalarUDF { fun, args }) => {
-            create_function_physical_name(&fun.name, false, args)
+        Expr::ScalarFunction(fun) => {
+            // function should be resolved during `AnalyzerRule`s
+            if let ScalarFunctionDefinition::Name(_) = fun.func_def {
+                return internal_err!("Function `Expr` with name should be resolved.");
+            }
+
+            create_function_physical_name(fun.name(), false, &fun.args)
         }
         Expr::WindowFunction(WindowFunction { fun, args, .. }) => {
             create_function_physical_name(&fun.to_string(), false, args)
         }
         Expr::AggregateFunction(AggregateFunction {
-            fun,
+            func_def,
             distinct,
-            args,
-            ..
-        }) => create_function_physical_name(&fun.to_string(), *distinct, args),
-        Expr::AggregateUDF(AggregateUDF {
-            fun,
             args,
             filter,
             order_by,
-        }) => {
-            // TODO: Add support for filter and order by in AggregateUDF
-            if filter.is_some() {
-                return exec_err!("aggregate expression with filter is not supported");
+        }) => match func_def {
+            AggregateFunctionDefinition::BuiltIn(..) => {
+                create_function_physical_name(func_def.name(), *distinct, args)
             }
-            if order_by.is_some() {
-                return exec_err!("aggregate expression with order_by is not supported");
+            AggregateFunctionDefinition::UDF(fun) => {
+                // TODO: Add support for filter and order by in AggregateUDF
+                if filter.is_some() {
+                    return exec_err!(
+                        "aggregate expression with filter is not supported"
+                    );
+                }
+                if order_by.is_some() {
+                    return exec_err!(
+                        "aggregate expression with order_by is not supported"
+                    );
+                }
+                let names = args
+                    .iter()
+                    .map(|e| create_physical_name(e, false))
+                    .collect::<Result<Vec<_>>>()?;
+                Ok(format!("{}({})", fun.name(), names.join(",")))
             }
-            let mut names = Vec::with_capacity(args.len());
-            for e in args {
-                names.push(create_physical_name(e, false)?);
+            AggregateFunctionDefinition::Name(_) => {
+                internal_err!("Aggregate function `Expr` with name should be resolved.")
             }
-            Ok(format!("{}({})", fun.name, names.join(",")))
-        }
+        },
         Expr::GroupingSet(grouping_set) => match grouping_set {
             GroupingSet::Rollup(exprs) => Ok(format!(
                 "ROLLUP ({})",
@@ -364,9 +372,8 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
         Expr::Sort { .. } => {
             internal_err!("Create physical name does not support sort expression")
         }
-        Expr::Wildcard => internal_err!("Create physical name does not support wildcard"),
-        Expr::QualifiedWildcard { .. } => {
-            internal_err!("Create physical name does not support qualified wildcard")
+        Expr::Wildcard { .. } => {
+            internal_err!("Create physical name does not support wildcard")
         }
         Expr::Placeholder(_) => {
             internal_err!("Create physical name does not support placeholder")
@@ -554,8 +561,7 @@ impl DefaultPhysicalPlanner {
                     // doesn't know (nor should care) how the relation was
                     // referred to in the query
                     let filters = unnormalize_cols(filters.iter().cloned());
-                    let unaliased: Vec<Expr> = filters.into_iter().map(unalias).collect();
-                    source.scan(session_state, projection.as_ref(), &unaliased, *fetch).await
+                    source.scan(session_state, projection.as_ref(), &filters, *fetch).await
                 }
                 LogicalPlan::Copy(CopyTo{
                     input,
@@ -565,11 +571,7 @@ impl DefaultPhysicalPlanner {
                     copy_options,
                 }) => {
                     let input_exec = self.create_initial_plan(input, session_state).await?;
-
-                    // TODO: make this behavior configurable via options (should copy to create path/file as needed?)
-                    // TODO: add additional configurable options for if existing files should be overwritten or
-                    // appended to
-                    let parsed_url = ListingTableUrl::parse_create_local_if_not_exists(output_url, !*single_file_output)?;
+                    let parsed_url = ListingTableUrl::parse(output_url)?;
                     let object_store_url = parsed_url.object_store();
 
                     let schema: Schema = (**input.schema()).clone().into();
@@ -591,8 +593,6 @@ impl DefaultPhysicalPlanner {
                         file_groups: vec![],
                         output_schema: Arc::new(schema),
                         table_partition_cols: vec![],
-                        unbounded_input: false,
-                        writer_mode: FileWriterMode::PutMultipart,
                         single_file_output: *single_file_output,
                         overwrite: false,
                         file_type_writer_options
@@ -755,7 +755,7 @@ impl DefaultPhysicalPlanner {
                             window_expr,
                             input_exec,
                             physical_partition_keys,
-                            PartitionSearchMode::Sorted,
+                            InputOrderMode::Sorted,
                         )?)
                     } else {
                         Arc::new(WindowAggExec::try_new(
@@ -794,14 +794,13 @@ impl DefaultPhysicalPlanner {
                         })
                         .collect::<Result<Vec<_>>>()?;
 
-                    let (aggregates, filters, order_bys) : (Vec<_>, Vec<_>, Vec<_>) = multiunzip(agg_filter);
+                    let (aggregates, filters, _order_bys) : (Vec<_>, Vec<_>, Vec<_>) = multiunzip(agg_filter);
 
                     let initial_aggr = Arc::new(AggregateExec::try_new(
                         AggregateMode::Partial,
                         groups.clone(),
                         aggregates.clone(),
                         filters.clone(),
-                        order_bys,
                         input_exec,
                         physical_input_schema.clone(),
                     )?);
@@ -819,18 +818,14 @@ impl DefaultPhysicalPlanner {
                     // To reflect such changes to subsequent stages, use the updated
                     // `AggregateExpr`/`PhysicalSortExpr` objects.
                     let updated_aggregates = initial_aggr.aggr_expr().to_vec();
-                    let updated_order_bys = initial_aggr.order_by_expr().to_vec();
 
-                    let (initial_aggr, next_partition_mode): (
-                        Arc<dyn ExecutionPlan>,
-                        AggregateMode,
-                    ) = if can_repartition {
+                    let next_partition_mode = if can_repartition {
                         // construct a second aggregation with 'AggregateMode::FinalPartitioned'
-                        (initial_aggr, AggregateMode::FinalPartitioned)
+                        AggregateMode::FinalPartitioned
                     } else {
                         // construct a second aggregation, keeping the final column name equal to the
                         // first aggregation and the expressions corresponding to the respective aggregate
-                        (initial_aggr, AggregateMode::Final)
+                        AggregateMode::Final
                     };
 
                     let final_grouping_set = PhysicalGroupBy::new_single(
@@ -846,7 +841,6 @@ impl DefaultPhysicalPlanner {
                         final_grouping_set,
                         updated_aggregates,
                         filters,
-                        updated_order_bys,
                         initial_aggr,
                         physical_input_schema.clone(),
                     )?))
@@ -914,19 +908,14 @@ impl DefaultPhysicalPlanner {
                         &input_schema,
                         session_state,
                     )?;
-                    Ok(Arc::new(FilterExec::try_new(runtime_expr, physical_input)?))
+                    let selectivity = session_state.config().options().optimizer.default_filter_selectivity;
+                    let filter = FilterExec::try_new(runtime_expr, physical_input)?;
+                    Ok(Arc::new(filter.with_default_selectivity(selectivity)?))
                 }
-                LogicalPlan::Union(Union { inputs, schema }) => {
+                LogicalPlan::Union(Union { inputs, .. }) => {
                     let physical_plans = self.create_initial_plan_multi(inputs.iter().map(|lp| lp.as_ref()), session_state).await?;
 
-                    if schema.fields().len() < physical_plans[0].schema().fields().len() {
-                        // `schema` could be a subset of the child schema. For example
-                        // for query "select count(*) from (select a from t union all select a from t)"
-                        // `schema` is empty but child schema contains one field `a`.
-                        Ok(Arc::new(UnionExec::try_new_with_schema(physical_plans, schema.clone())?))
-                    } else {
-                        Ok(Arc::new(UnionExec::new(physical_plans)))
-                    }
+                    Ok(Arc::new(UnionExec::new(physical_plans)))
                 }
                 LogicalPlan::Repartition(Repartition {
                     input,
@@ -1200,10 +1189,15 @@ impl DefaultPhysicalPlanner {
                 }
                 LogicalPlan::Subquery(_) => todo!(),
                 LogicalPlan::EmptyRelation(EmptyRelation {
-                    produce_one_row,
+                    produce_one_row: false,
                     schema,
                 }) => Ok(Arc::new(EmptyExec::new(
-                    *produce_one_row,
+                    SchemaRef::new(schema.as_ref().to_owned().into()),
+                ))),
+                LogicalPlan::EmptyRelation(EmptyRelation {
+                    produce_one_row: true,
+                    schema,
+                }) => Ok(Arc::new(PlaceholderRowExec::new(
                     SchemaRef::new(schema.as_ref().to_owned().into()),
                 ))),
                 LogicalPlan::SubqueryAlias(SubqueryAlias { input, .. }) => {
@@ -1709,7 +1703,7 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
 ) -> Result<AggregateExprWithOptionalArgs> {
     match e {
         Expr::AggregateFunction(AggregateFunction {
-            fun,
+            func_def,
             distinct,
             args,
             filter,
@@ -1750,63 +1744,35 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
                 ),
                 None => None,
             };
-            let ordering_reqs = order_by.clone().unwrap_or(vec![]);
-            let agg_expr = aggregates::create_aggregate_expr(
-                fun,
-                *distinct,
-                &args,
-                &ordering_reqs,
-                physical_input_schema,
-                name,
-            )?;
-            Ok((agg_expr, filter, order_by))
-        }
-        Expr::AggregateUDF(AggregateUDF {
-            fun,
-            args,
-            filter,
-            order_by,
-        }) => {
-            let args = args
-                .iter()
-                .map(|e| {
-                    create_physical_expr(
-                        e,
-                        logical_input_schema,
+            let (agg_expr, filter, order_by) = match func_def {
+                AggregateFunctionDefinition::BuiltIn(fun) => {
+                    let ordering_reqs = order_by.clone().unwrap_or(vec![]);
+                    let agg_expr = aggregates::create_aggregate_expr(
+                        fun,
+                        *distinct,
+                        &args,
+                        &ordering_reqs,
                         physical_input_schema,
-                        execution_props,
+                        name,
+                    )?;
+                    (agg_expr, filter, order_by)
+                }
+                AggregateFunctionDefinition::UDF(fun) => {
+                    let agg_expr = udaf::create_aggregate_expr(
+                        fun,
+                        &args,
+                        physical_input_schema,
+                        name,
+                    );
+                    (agg_expr?, filter, order_by)
+                }
+                AggregateFunctionDefinition::Name(_) => {
+                    return internal_err!(
+                        "Aggregate function name should have been resolved"
                     )
-                })
-                .collect::<Result<Vec<_>>>()?;
-
-            let filter = match filter {
-                Some(e) => Some(create_physical_expr(
-                    e,
-                    logical_input_schema,
-                    physical_input_schema,
-                    execution_props,
-                )?),
-                None => None,
+                }
             };
-            let order_by = match order_by {
-                Some(e) => Some(
-                    e.iter()
-                        .map(|expr| {
-                            create_physical_sort_expr(
-                                expr,
-                                logical_input_schema,
-                                physical_input_schema,
-                                execution_props,
-                            )
-                        })
-                        .collect::<Result<Vec<_>>>()?,
-                ),
-                None => None,
-            };
-
-            let agg_expr =
-                udaf::create_aggregate_expr(fun, &args, physical_input_schema, name);
-            Ok((agg_expr?, filter, order_by))
+            Ok((agg_expr, filter, order_by))
         }
         other => internal_err!("Invalid aggregate expression '{other:?}'"),
     }
@@ -1894,13 +1860,26 @@ impl DefaultPhysicalPlanner {
                     .await
                 {
                     Ok(input) => {
+                        // This plan will includes statistics if show_statistics is on
                         stringified_plans.push(
                             displayable(input.as_ref())
                                 .set_show_statistics(config.show_statistics)
                                 .to_stringified(e.verbose, InitialPhysicalPlan),
                         );
 
-                        match self.optimize_internal(
+                        // If the show_statisitcs is off, add another line to show statsitics in the case of explain verbose
+                        if e.verbose && !config.show_statistics {
+                            stringified_plans.push(
+                                displayable(input.as_ref())
+                                    .set_show_statistics(true)
+                                    .to_stringified(
+                                        e.verbose,
+                                        InitialPhysicalPlanWithStats,
+                                    ),
+                            );
+                        }
+
+                        let optimized_plan = self.optimize_internal(
                             input,
                             session_state,
                             |plan, optimizer| {
@@ -1912,12 +1891,28 @@ impl DefaultPhysicalPlanner {
                                         .to_stringified(e.verbose, plan_type),
                                 );
                             },
-                        ) {
-                            Ok(input) => stringified_plans.push(
-                                displayable(input.as_ref())
-                                    .set_show_statistics(config.show_statistics)
-                                    .to_stringified(e.verbose, FinalPhysicalPlan),
-                            ),
+                        );
+                        match optimized_plan {
+                            Ok(input) => {
+                                // This plan will includes statistics if show_statistics is on
+                                stringified_plans.push(
+                                    displayable(input.as_ref())
+                                        .set_show_statistics(config.show_statistics)
+                                        .to_stringified(e.verbose, FinalPhysicalPlan),
+                                );
+
+                                // If the show_statisitcs is off, add another line to show statsitics in the case of explain verbose
+                                if e.verbose && !config.show_statistics {
+                                    stringified_plans.push(
+                                        displayable(input.as_ref())
+                                            .set_show_statistics(true)
+                                            .to_stringified(
+                                                e.verbose,
+                                                FinalPhysicalPlanWithStats,
+                                            ),
+                                    );
+                                }
+                            }
                             Err(DataFusionError::Context(optimizer_name, e)) => {
                                 let plan_type = OptimizedPhysicalPlan { optimizer_name };
                                 stringified_plans
@@ -2016,7 +2011,7 @@ impl DefaultPhysicalPlanner {
         let mut column_names = StringBuilder::new();
         let mut data_types = StringBuilder::new();
         let mut is_nullables = StringBuilder::new();
-        for (_, field) in table_schema.fields().iter().enumerate() {
+        for field in table_schema.fields() {
             column_names.append_value(field.name());
 
             // "System supplied type" --> Use debug format of the datatype
@@ -2517,6 +2512,27 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn aggregate_with_alias() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("c1", DataType::Utf8, false),
+            Field::new("c2", DataType::UInt32, false),
+        ]));
+
+        let logical_plan = scan_empty(None, schema.as_ref(), None)?
+            .aggregate(vec![col("c1")], vec![sum(col("c2"))])?
+            .project(vec![col("c1"), sum(col("c2")).alias("total_salary")])?
+            .build()?;
+
+        let physical_plan = plan(&logical_plan).await?;
+        assert_eq!("c1", physical_plan.schema().field(0).name().as_str());
+        assert_eq!(
+            "total_salary",
+            physical_plan.schema().field(1).name().as_str()
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn test_explain() {
         let schema = Schema::new(vec![Field::new("id", DataType::Int32, false)]);
 
@@ -2750,7 +2766,7 @@ mod tests {
 
 digraph {
     1[shape=box label="ProjectionExec: expr=[id@0 + 2 as employee.id + Int32(2)]", tooltip=""]
-    2[shape=box label="EmptyExec: produce_one_row=false", tooltip=""]
+    2[shape=box label="EmptyExec", tooltip=""]
     1 -> 2 [arrowhead=none, arrowtail=normal, dir=back]
 }
 // End DataFusion GraphViz Plan

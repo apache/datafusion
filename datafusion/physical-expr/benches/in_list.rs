@@ -57,7 +57,7 @@ fn do_benches(
             .collect();
 
         let in_list: Vec<_> = (0..in_list_length)
-            .map(|_| ScalarValue::Utf8(Some(random_string(&mut rng, string_length))))
+            .map(|_| ScalarValue::from(random_string(&mut rng, string_length)))
             .collect();
 
         do_bench(

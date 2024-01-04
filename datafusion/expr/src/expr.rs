@@ -17,24 +17,27 @@
 
 //! Expr module contains core type definition for `Expr`.
 
-use crate::built_in_function;
 use crate::expr_fn::binary_expr;
 use crate::logical_plan::Subquery;
-use crate::udaf;
 use crate::utils::{expr_to_columns, find_out_reference_exprs};
 use crate::window_frame;
-use crate::window_function;
+
 use crate::Operator;
 use crate::{aggregate_function, ExprSchemable};
+use crate::{built_in_function, BuiltinScalarFunction};
+use crate::{built_in_window_function, udaf};
 use arrow::datatypes::DataType;
 use datafusion_common::tree_node::{Transformed, TreeNode};
-use datafusion_common::{internal_err, DFSchema};
+use datafusion_common::{internal_err, DFSchema, OwnedTableReference};
 use datafusion_common::{plan_err, Column, DataFusionError, Result, ScalarValue};
 use std::collections::HashSet;
 use std::fmt;
 use std::fmt::{Display, Formatter, Write};
 use std::hash::{BuildHasher, Hash, Hasher};
+use std::str::FromStr;
 use std::sync::Arc;
+
+use crate::Signature;
 
 /// `Expr` is a central struct of DataFusion's query API, and
 /// represent logical expressions such as `A + 1`, or `CAST(c1 AS
@@ -148,16 +151,12 @@ pub enum Expr {
     TryCast(TryCast),
     /// A sort expression, that can be used to sort values.
     Sort(Sort),
-    /// Represents the call of a built-in scalar function with a set of arguments.
+    /// Represents the call of a scalar function with a set of arguments.
     ScalarFunction(ScalarFunction),
-    /// Represents the call of a user-defined scalar function with arguments.
-    ScalarUDF(ScalarUDF),
     /// Represents the call of an aggregate built-in function with arguments.
     AggregateFunction(AggregateFunction),
     /// Represents the call of a window function with arguments.
     WindowFunction(WindowFunction),
-    /// aggregate function
-    AggregateUDF(AggregateUDF),
     /// Returns whether the list contains the expr value.
     InList(InList),
     /// EXISTS subquery
@@ -166,16 +165,12 @@ pub enum Expr {
     InSubquery(InSubquery),
     /// Scalar subquery
     ScalarSubquery(Subquery),
-    /// Represents a reference to all available fields.
+    /// Represents a reference to all available fields in a specific schema,
+    /// with an optional (schema) qualifier.
     ///
     /// This expr has to be resolved to a list of columns before translating logical
     /// plan into physical plan.
-    Wildcard,
-    /// Represents a reference to all available fields in a specific schema.
-    ///    
-    /// This expr has to be resolved to a list of columns before translating logical
-    /// plan into physical plan.
-    QualifiedWildcard { qualifier: String },
+    Wildcard { qualifier: Option<String> },
     /// List of grouping set expressions. Only valid in the context of an aggregate
     /// GROUP BY expression list
     GroupingSet(GroupingSet),
@@ -191,13 +186,20 @@ pub enum Expr {
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct Alias {
     pub expr: Box<Expr>,
+    pub relation: Option<OwnedTableReference>,
     pub name: String,
 }
 
 impl Alias {
-    pub fn new(expr: Expr, name: impl Into<String>) -> Self {
+    /// Create an alias with an optional schema/field qualifier.
+    pub fn new(
+        expr: Expr,
+        relation: Option<impl Into<OwnedTableReference>>,
+        name: impl Into<String>,
+    ) -> Self {
         Self {
             expr: Box::new(expr),
+            relation: relation.map(|r| r.into()),
             name: name.into(),
         }
     }
@@ -335,35 +337,80 @@ impl Between {
     }
 }
 
-/// ScalarFunction expression
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+/// Defines which implementation of a function for DataFusion to call.
+pub enum ScalarFunctionDefinition {
+    /// Resolved to a `BuiltinScalarFunction`
+    /// There is plan to migrate `BuiltinScalarFunction` to UDF-based implementation (issue#8045)
+    /// This variant is planned to be removed in long term
+    BuiltIn(BuiltinScalarFunction),
+    /// Resolved to a user defined function
+    UDF(Arc<crate::ScalarUDF>),
+    /// A scalar function constructed with name. This variant can not be executed directly
+    /// and instead must be resolved to one of the other variants prior to physical planning.
+    Name(Arc<str>),
+}
+
+/// ScalarFunction expression invokes a built-in scalar function
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct ScalarFunction {
     /// The function
-    pub fun: built_in_function::BuiltinScalarFunction,
+    pub func_def: ScalarFunctionDefinition,
     /// List of expressions to feed to the functions as arguments
     pub args: Vec<Expr>,
 }
 
 impl ScalarFunction {
-    /// Create a new ScalarFunction expression
-    pub fn new(fun: built_in_function::BuiltinScalarFunction, args: Vec<Expr>) -> Self {
-        Self { fun, args }
+    // return the Function's name
+    pub fn name(&self) -> &str {
+        self.func_def.name()
     }
 }
 
-/// ScalarUDF expression
-#[derive(Clone, PartialEq, Eq, Hash, Debug)]
-pub struct ScalarUDF {
-    /// The function
-    pub fun: Arc<crate::ScalarUDF>,
-    /// List of expressions to feed to the functions as arguments
-    pub args: Vec<Expr>,
+impl ScalarFunctionDefinition {
+    /// Function's name for display
+    pub fn name(&self) -> &str {
+        match self {
+            ScalarFunctionDefinition::BuiltIn(fun) => fun.name(),
+            ScalarFunctionDefinition::UDF(udf) => udf.name(),
+            ScalarFunctionDefinition::Name(func_name) => func_name.as_ref(),
+        }
+    }
+
+    /// Whether this function is volatile, i.e. whether it can return different results
+    /// when evaluated multiple times with the same input.
+    pub fn is_volatile(&self) -> Result<bool> {
+        match self {
+            ScalarFunctionDefinition::BuiltIn(fun) => {
+                Ok(fun.volatility() == crate::Volatility::Volatile)
+            }
+            ScalarFunctionDefinition::UDF(udf) => {
+                Ok(udf.signature().volatility == crate::Volatility::Volatile)
+            }
+            ScalarFunctionDefinition::Name(func) => {
+                internal_err!(
+                    "Cannot determine volatility of unresolved function: {func}"
+                )
+            }
+        }
+    }
 }
 
-impl ScalarUDF {
-    /// Create a new ScalarUDF expression
-    pub fn new(fun: Arc<crate::ScalarUDF>, args: Vec<Expr>) -> Self {
-        Self { fun, args }
+impl ScalarFunction {
+    /// Create a new ScalarFunction expression
+    pub fn new(fun: built_in_function::BuiltinScalarFunction, args: Vec<Expr>) -> Self {
+        Self {
+            func_def: ScalarFunctionDefinition::BuiltIn(fun),
+            args,
+        }
+    }
+
+    /// Create a new ScalarFunction expression with a user-defined function (UDF)
+    pub fn new_udf(udf: Arc<crate::ScalarUDF>, args: Vec<Expr>) -> Self {
+        Self {
+            func_def: ScalarFunctionDefinition::UDF(udf),
+            args,
+        }
     }
 }
 
@@ -450,11 +497,33 @@ impl Sort {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+/// Defines which implementation of an aggregate function DataFusion should call.
+pub enum AggregateFunctionDefinition {
+    BuiltIn(aggregate_function::AggregateFunction),
+    /// Resolved to a user defined aggregate function
+    UDF(Arc<crate::AggregateUDF>),
+    /// A aggregation function constructed with name. This variant can not be executed directly
+    /// and instead must be resolved to one of the other variants prior to physical planning.
+    Name(Arc<str>),
+}
+
+impl AggregateFunctionDefinition {
+    /// Function's name for display
+    pub fn name(&self) -> &str {
+        match self {
+            AggregateFunctionDefinition::BuiltIn(fun) => fun.name(),
+            AggregateFunctionDefinition::UDF(udf) => udf.name(),
+            AggregateFunctionDefinition::Name(func_name) => func_name.as_ref(),
+        }
+    }
+}
+
 /// Aggregate function
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct AggregateFunction {
     /// Name of the function
-    pub fun: aggregate_function::AggregateFunction,
+    pub func_def: AggregateFunctionDefinition,
     /// List of expressions to feed to the functions as arguments
     pub args: Vec<Expr>,
     /// Whether this is a DISTINCT aggregation or not
@@ -474,7 +543,24 @@ impl AggregateFunction {
         order_by: Option<Vec<Expr>>,
     ) -> Self {
         Self {
-            fun,
+            func_def: AggregateFunctionDefinition::BuiltIn(fun),
+            args,
+            distinct,
+            filter,
+            order_by,
+        }
+    }
+
+    /// Create a new AggregateFunction expression with a user-defined function (UDF)
+    pub fn new_udf(
+        udf: Arc<crate::AggregateUDF>,
+        args: Vec<Expr>,
+        distinct: bool,
+        filter: Option<Box<Expr>>,
+        order_by: Option<Vec<Expr>>,
+    ) -> Self {
+        Self {
+            func_def: AggregateFunctionDefinition::UDF(udf),
             args,
             distinct,
             filter,
@@ -483,11 +569,64 @@ impl AggregateFunction {
     }
 }
 
+/// WindowFunction
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+/// Defines which implementation of an aggregate function DataFusion should call.
+pub enum WindowFunctionDefinition {
+    /// A built in aggregate function that leverages an aggregate function
+    AggregateFunction(aggregate_function::AggregateFunction),
+    /// A a built-in window function
+    BuiltInWindowFunction(built_in_window_function::BuiltInWindowFunction),
+    /// A user defined aggregate function
+    AggregateUDF(Arc<crate::AggregateUDF>),
+    /// A user defined aggregate function
+    WindowUDF(Arc<crate::WindowUDF>),
+}
+
+impl WindowFunctionDefinition {
+    /// Returns the datatype of the window function
+    pub fn return_type(&self, input_expr_types: &[DataType]) -> Result<DataType> {
+        match self {
+            WindowFunctionDefinition::AggregateFunction(fun) => {
+                fun.return_type(input_expr_types)
+            }
+            WindowFunctionDefinition::BuiltInWindowFunction(fun) => {
+                fun.return_type(input_expr_types)
+            }
+            WindowFunctionDefinition::AggregateUDF(fun) => {
+                fun.return_type(input_expr_types)
+            }
+            WindowFunctionDefinition::WindowUDF(fun) => fun.return_type(input_expr_types),
+        }
+    }
+
+    /// the signatures supported by the function `fun`.
+    pub fn signature(&self) -> Signature {
+        match self {
+            WindowFunctionDefinition::AggregateFunction(fun) => fun.signature(),
+            WindowFunctionDefinition::BuiltInWindowFunction(fun) => fun.signature(),
+            WindowFunctionDefinition::AggregateUDF(fun) => fun.signature().clone(),
+            WindowFunctionDefinition::WindowUDF(fun) => fun.signature().clone(),
+        }
+    }
+}
+
+impl fmt::Display for WindowFunctionDefinition {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            WindowFunctionDefinition::AggregateFunction(fun) => fun.fmt(f),
+            WindowFunctionDefinition::BuiltInWindowFunction(fun) => fun.fmt(f),
+            WindowFunctionDefinition::AggregateUDF(fun) => std::fmt::Debug::fmt(fun, f),
+            WindowFunctionDefinition::WindowUDF(fun) => fun.fmt(f),
+        }
+    }
+}
+
 /// Window function
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct WindowFunction {
     /// Name of the function
-    pub fun: window_function::WindowFunction,
+    pub fun: WindowFunctionDefinition,
     /// List of expressions to feed to the functions as arguments
     pub args: Vec<Expr>,
     /// List of partition by expressions
@@ -501,7 +640,7 @@ pub struct WindowFunction {
 impl WindowFunction {
     /// Create a new Window expression
     pub fn new(
-        fun: window_function::WindowFunction,
+        fun: WindowFunctionDefinition,
         args: Vec<Expr>,
         partition_by: Vec<Expr>,
         order_by: Vec<Expr>,
@@ -515,6 +654,50 @@ impl WindowFunction {
             window_frame,
         }
     }
+}
+
+/// Find DataFusion's built-in window function by name.
+pub fn find_df_window_func(name: &str) -> Option<WindowFunctionDefinition> {
+    let name = name.to_lowercase();
+    // Code paths for window functions leveraging ordinary aggregators and
+    // built-in window functions are quite different, and the same function
+    // may have different implementations for these cases. If the sought
+    // function is not found among built-in window functions, we search for
+    // it among aggregate functions.
+    if let Ok(built_in_function) =
+        built_in_window_function::BuiltInWindowFunction::from_str(name.as_str())
+    {
+        Some(WindowFunctionDefinition::BuiltInWindowFunction(
+            built_in_function,
+        ))
+    } else if let Ok(aggregate) =
+        aggregate_function::AggregateFunction::from_str(name.as_str())
+    {
+        Some(WindowFunctionDefinition::AggregateFunction(aggregate))
+    } else {
+        None
+    }
+}
+
+/// Returns the datatype of the window function
+#[deprecated(
+    since = "27.0.0",
+    note = "please use `WindowFunction::return_type` instead"
+)]
+pub fn return_type(
+    fun: &WindowFunctionDefinition,
+    input_expr_types: &[DataType],
+) -> Result<DataType> {
+    fun.return_type(input_expr_types)
+}
+
+/// the signatures supported by the function `fun`.
+#[deprecated(
+    since = "27.0.0",
+    note = "please use `WindowFunction::signature` instead"
+)]
+pub fn signature(fun: &WindowFunctionDefinition) -> Signature {
+    fun.signature()
 }
 
 // Exists expression.
@@ -606,7 +789,7 @@ impl InSubquery {
     }
 }
 
-/// Placeholder, representing bind parameter values such as `$1`.
+/// Placeholder, representing bind parameter values such as `$1` or `$name`.
 ///
 /// The type of these parameters is inferred using [`Expr::infer_placeholder_types`]
 /// or can be specified directly using `PREPARE` statements.
@@ -702,7 +885,6 @@ impl Expr {
     pub fn variant_name(&self) -> &str {
         match self {
             Expr::AggregateFunction { .. } => "AggregateFunction",
-            Expr::AggregateUDF { .. } => "AggregateUDF",
             Expr::Alias(..) => "Alias",
             Expr::Between { .. } => "Between",
             Expr::BinaryExpr { .. } => "BinaryExpr",
@@ -729,15 +911,13 @@ impl Expr {
             Expr::Negative(..) => "Negative",
             Expr::Not(..) => "Not",
             Expr::Placeholder(_) => "Placeholder",
-            Expr::QualifiedWildcard { .. } => "QualifiedWildcard",
             Expr::ScalarFunction(..) => "ScalarFunction",
             Expr::ScalarSubquery { .. } => "ScalarSubquery",
-            Expr::ScalarUDF(..) => "ScalarUDF",
             Expr::ScalarVariable(..) => "ScalarVariable",
             Expr::Sort { .. } => "Sort",
             Expr::TryCast { .. } => "TryCast",
             Expr::WindowFunction { .. } => "WindowFunction",
-            Expr::Wildcard => "Wildcard",
+            Expr::Wildcard { .. } => "Wildcard",
         }
     }
 
@@ -849,14 +1029,34 @@ impl Expr {
                 asc,
                 nulls_first,
             }) => Expr::Sort(Sort::new(Box::new(expr.alias(name)), asc, nulls_first)),
-            _ => Expr::Alias(Alias::new(self, name.into())),
+            _ => Expr::Alias(Alias::new(self, None::<&str>, name.into())),
+        }
+    }
+
+    /// Return `self AS name` alias expression with a specific qualifier
+    pub fn alias_qualified(
+        self,
+        relation: Option<impl Into<OwnedTableReference>>,
+        name: impl Into<String>,
+    ) -> Expr {
+        match self {
+            Expr::Sort(Sort {
+                expr,
+                asc,
+                nulls_first,
+            }) => Expr::Sort(Sort::new(
+                Box::new(expr.alias_qualified(relation, name)),
+                asc,
+                nulls_first,
+            )),
+            _ => Expr::Alias(Alias::new(self, relation, name.into())),
         }
     }
 
     /// Remove an alias from an expression if one exists.
     pub fn unalias(self) -> Expr {
         match self {
-            Expr::Alias(alias) => alias.expr.as_ref().clone(),
+            Expr::Alias(alias) => *alias.expr,
             _ => self,
         }
     }
@@ -962,7 +1162,7 @@ impl Expr {
         Expr::GetIndexedField(GetIndexedField {
             expr: Box::new(self),
             field: GetFieldAccess::NamedStructField {
-                name: ScalarValue::Utf8(Some(name.into())),
+                name: ScalarValue::from(name.into()),
             },
         })
     }
@@ -1174,11 +1374,8 @@ impl fmt::Display for Expr {
                     write!(f, " NULLS LAST")
                 }
             }
-            Expr::ScalarFunction(func) => {
-                fmt_function(f, &func.fun.to_string(), false, &func.args, true)
-            }
-            Expr::ScalarUDF(ScalarUDF { fun, args }) => {
-                fmt_function(f, &fun.name, false, args, true)
+            Expr::ScalarFunction(fun) => {
+                fmt_function(f, fun.name(), false, &fun.args, true)
             }
             Expr::WindowFunction(WindowFunction {
                 fun,
@@ -1202,30 +1399,14 @@ impl fmt::Display for Expr {
                 Ok(())
             }
             Expr::AggregateFunction(AggregateFunction {
-                fun,
+                func_def,
                 distinct,
                 ref args,
                 filter,
                 order_by,
                 ..
             }) => {
-                fmt_function(f, &fun.to_string(), *distinct, args, true)?;
-                if let Some(fe) = filter {
-                    write!(f, " FILTER (WHERE {fe})")?;
-                }
-                if let Some(ob) = order_by {
-                    write!(f, " ORDER BY [{}]", expr_vec_fmt!(ob))?;
-                }
-                Ok(())
-            }
-            Expr::AggregateUDF(AggregateUDF {
-                fun,
-                ref args,
-                filter,
-                order_by,
-                ..
-            }) => {
-                fmt_function(f, &fun.name, false, args, true)?;
+                fmt_function(f, func_def.name(), *distinct, args, true)?;
                 if let Some(fe) = filter {
                     write!(f, " FILTER (WHERE {fe})")?;
                 }
@@ -1292,8 +1473,10 @@ impl fmt::Display for Expr {
                     write!(f, "{expr} IN ([{}])", expr_vec_fmt!(list))
                 }
             }
-            Expr::Wildcard => write!(f, "*"),
-            Expr::QualifiedWildcard { qualifier } => write!(f, "{qualifier}.*"),
+            Expr::Wildcard { qualifier } => match qualifier {
+                Some(qualifier) => write!(f, "{qualifier}.*"),
+                None => write!(f, "*"),
+            },
             Expr::GetIndexedField(GetIndexedField { field, expr }) => match field {
                 GetFieldAccess::NamedStructField { name } => {
                     write!(f, "({expr})[{name}]")
@@ -1508,12 +1691,7 @@ fn create_name(e: &Expr) -> Result<String> {
                 }
             }
         }
-        Expr::ScalarFunction(func) => {
-            create_function_name(&func.fun.to_string(), false, &func.args)
-        }
-        Expr::ScalarUDF(ScalarUDF { fun, args }) => {
-            create_function_name(&fun.name, false, args)
-        }
+        Expr::ScalarFunction(fun) => create_function_name(fun.name(), false, &fun.args),
         Expr::WindowFunction(WindowFunction {
             fun,
             args,
@@ -1533,39 +1711,39 @@ fn create_name(e: &Expr) -> Result<String> {
             Ok(parts.join(" "))
         }
         Expr::AggregateFunction(AggregateFunction {
-            fun,
+            func_def,
             distinct,
             args,
             filter,
             order_by,
         }) => {
-            let mut name = create_function_name(&fun.to_string(), *distinct, args)?;
-            if let Some(fe) = filter {
-                name = format!("{name} FILTER (WHERE {fe})");
+            let name = match func_def {
+                AggregateFunctionDefinition::BuiltIn(..)
+                | AggregateFunctionDefinition::Name(..) => {
+                    create_function_name(func_def.name(), *distinct, args)?
+                }
+                AggregateFunctionDefinition::UDF(..) => {
+                    let names: Vec<String> =
+                        args.iter().map(create_name).collect::<Result<_>>()?;
+                    names.join(",")
+                }
             };
-            if let Some(order_by) = order_by {
-                name = format!("{name} ORDER BY [{}]", expr_vec_fmt!(order_by));
-            };
-            Ok(name)
-        }
-        Expr::AggregateUDF(AggregateUDF {
-            fun,
-            args,
-            filter,
-            order_by,
-        }) => {
-            let mut names = Vec::with_capacity(args.len());
-            for e in args {
-                names.push(create_name(e)?);
-            }
             let mut info = String::new();
             if let Some(fe) = filter {
                 info += &format!(" FILTER (WHERE {fe})");
+            };
+            if let Some(order_by) = order_by {
+                info += &format!(" ORDER BY [{}]", expr_vec_fmt!(order_by));
+            };
+            match func_def {
+                AggregateFunctionDefinition::BuiltIn(..)
+                | AggregateFunctionDefinition::Name(..) => {
+                    Ok(format!("{}{}", name, info))
+                }
+                AggregateFunctionDefinition::UDF(fun) => {
+                    Ok(format!("{}({}){}", fun.name(), name, info))
+                }
             }
-            if let Some(ob) = order_by {
-                info += &format!(" ORDER BY ([{}])", expr_vec_fmt!(ob));
-            }
-            Ok(format!("{}({}){}", fun.name, names.join(","), info))
         }
         Expr::GroupingSet(grouping_set) => match grouping_set {
             GroupingSet::Rollup(exprs) => {
@@ -1613,10 +1791,12 @@ fn create_name(e: &Expr) -> Result<String> {
         Expr::Sort { .. } => {
             internal_err!("Create name does not support sort expression")
         }
-        Expr::Wildcard => Ok("*".to_string()),
-        Expr::QualifiedWildcard { .. } => {
-            internal_err!("Create name does not support qualified wildcard")
-        }
+        Expr::Wildcard { qualifier } => match qualifier {
+            Some(qualifier) => internal_err!(
+                "Create name does not support qualified wildcard, got {qualifier}"
+            ),
+            None => Ok("*".to_string()),
+        },
         Expr::Placeholder(Placeholder { id, .. }) => Ok((*id).to_string()),
     }
 }
@@ -1630,14 +1810,28 @@ fn create_names(exprs: &[Expr]) -> Result<String> {
         .join(", "))
 }
 
+/// Whether the given expression is volatile, i.e. whether it can return different results
+/// when evaluated multiple times with the same input.
+pub fn is_volatile(expr: &Expr) -> Result<bool> {
+    match expr {
+        Expr::ScalarFunction(func) => func.func_def.is_volatile(),
+        _ => Ok(false),
+    }
+}
+
 #[cfg(test)]
 mod test {
     use crate::expr::Cast;
     use crate::expr_fn::col;
-    use crate::{case, lit, Expr};
+    use crate::{
+        case, lit, BuiltinScalarFunction, ColumnarValue, Expr, ScalarFunctionDefinition,
+        ScalarUDF, ScalarUDFImpl, Signature, Volatility,
+    };
     use arrow::datatypes::DataType;
     use datafusion_common::Column;
     use datafusion_common::{Result, ScalarValue};
+    use std::any::Any;
+    use std::sync::Arc;
 
     #[test]
     fn format_case_when() -> Result<()> {
@@ -1737,5 +1931,246 @@ mod test {
             format!("{}", lit(1u32).or(lit(2u32))),
             "UInt32(1) OR UInt32(2)"
         );
+    }
+
+    #[test]
+    fn test_is_volatile_scalar_func_definition() {
+        // BuiltIn
+        assert!(
+            ScalarFunctionDefinition::BuiltIn(BuiltinScalarFunction::Random)
+                .is_volatile()
+                .unwrap()
+        );
+        assert!(
+            !ScalarFunctionDefinition::BuiltIn(BuiltinScalarFunction::Abs)
+                .is_volatile()
+                .unwrap()
+        );
+
+        // UDF
+        struct TestScalarUDF {
+            signature: Signature,
+        }
+        impl ScalarUDFImpl for TestScalarUDF {
+            fn as_any(&self) -> &dyn Any {
+                self
+            }
+            fn name(&self) -> &str {
+                "TestScalarUDF"
+            }
+
+            fn signature(&self) -> &Signature {
+                &self.signature
+            }
+
+            fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+                Ok(DataType::Utf8)
+            }
+
+            fn invoke(&self, _args: &[ColumnarValue]) -> Result<ColumnarValue> {
+                Ok(ColumnarValue::Scalar(ScalarValue::from("a")))
+            }
+        }
+        let udf = Arc::new(ScalarUDF::from(TestScalarUDF {
+            signature: Signature::uniform(1, vec![DataType::Float32], Volatility::Stable),
+        }));
+        assert!(!ScalarFunctionDefinition::UDF(udf).is_volatile().unwrap());
+
+        let udf = Arc::new(ScalarUDF::from(TestScalarUDF {
+            signature: Signature::uniform(
+                1,
+                vec![DataType::Float32],
+                Volatility::Volatile,
+            ),
+        }));
+        assert!(ScalarFunctionDefinition::UDF(udf).is_volatile().unwrap());
+
+        // Unresolved function
+        ScalarFunctionDefinition::Name(Arc::from("UnresolvedFunc"))
+            .is_volatile()
+            .expect_err("Shouldn't determine volatility of unresolved function");
+    }
+
+    use super::*;
+
+    #[test]
+    fn test_count_return_type() -> Result<()> {
+        let fun = find_df_window_func("count").unwrap();
+        let observed = fun.return_type(&[DataType::Utf8])?;
+        assert_eq!(DataType::Int64, observed);
+
+        let observed = fun.return_type(&[DataType::UInt64])?;
+        assert_eq!(DataType::Int64, observed);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_first_value_return_type() -> Result<()> {
+        let fun = find_df_window_func("first_value").unwrap();
+        let observed = fun.return_type(&[DataType::Utf8])?;
+        assert_eq!(DataType::Utf8, observed);
+
+        let observed = fun.return_type(&[DataType::UInt64])?;
+        assert_eq!(DataType::UInt64, observed);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_last_value_return_type() -> Result<()> {
+        let fun = find_df_window_func("last_value").unwrap();
+        let observed = fun.return_type(&[DataType::Utf8])?;
+        assert_eq!(DataType::Utf8, observed);
+
+        let observed = fun.return_type(&[DataType::Float64])?;
+        assert_eq!(DataType::Float64, observed);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_lead_return_type() -> Result<()> {
+        let fun = find_df_window_func("lead").unwrap();
+        let observed = fun.return_type(&[DataType::Utf8])?;
+        assert_eq!(DataType::Utf8, observed);
+
+        let observed = fun.return_type(&[DataType::Float64])?;
+        assert_eq!(DataType::Float64, observed);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_lag_return_type() -> Result<()> {
+        let fun = find_df_window_func("lag").unwrap();
+        let observed = fun.return_type(&[DataType::Utf8])?;
+        assert_eq!(DataType::Utf8, observed);
+
+        let observed = fun.return_type(&[DataType::Float64])?;
+        assert_eq!(DataType::Float64, observed);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_nth_value_return_type() -> Result<()> {
+        let fun = find_df_window_func("nth_value").unwrap();
+        let observed = fun.return_type(&[DataType::Utf8, DataType::UInt64])?;
+        assert_eq!(DataType::Utf8, observed);
+
+        let observed = fun.return_type(&[DataType::Float64, DataType::UInt64])?;
+        assert_eq!(DataType::Float64, observed);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_percent_rank_return_type() -> Result<()> {
+        let fun = find_df_window_func("percent_rank").unwrap();
+        let observed = fun.return_type(&[])?;
+        assert_eq!(DataType::Float64, observed);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_cume_dist_return_type() -> Result<()> {
+        let fun = find_df_window_func("cume_dist").unwrap();
+        let observed = fun.return_type(&[])?;
+        assert_eq!(DataType::Float64, observed);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_ntile_return_type() -> Result<()> {
+        let fun = find_df_window_func("ntile").unwrap();
+        let observed = fun.return_type(&[DataType::Int16])?;
+        assert_eq!(DataType::UInt64, observed);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_window_function_case_insensitive() -> Result<()> {
+        let names = vec![
+            "row_number",
+            "rank",
+            "dense_rank",
+            "percent_rank",
+            "cume_dist",
+            "ntile",
+            "lag",
+            "lead",
+            "first_value",
+            "last_value",
+            "nth_value",
+            "min",
+            "max",
+            "count",
+            "avg",
+            "sum",
+        ];
+        for name in names {
+            let fun = find_df_window_func(name).unwrap();
+            let fun2 = find_df_window_func(name.to_uppercase().as_str()).unwrap();
+            assert_eq!(fun, fun2);
+            assert_eq!(fun.to_string(), name.to_uppercase());
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_find_df_window_function() {
+        assert_eq!(
+            find_df_window_func("max"),
+            Some(WindowFunctionDefinition::AggregateFunction(
+                aggregate_function::AggregateFunction::Max
+            ))
+        );
+        assert_eq!(
+            find_df_window_func("min"),
+            Some(WindowFunctionDefinition::AggregateFunction(
+                aggregate_function::AggregateFunction::Min
+            ))
+        );
+        assert_eq!(
+            find_df_window_func("avg"),
+            Some(WindowFunctionDefinition::AggregateFunction(
+                aggregate_function::AggregateFunction::Avg
+            ))
+        );
+        assert_eq!(
+            find_df_window_func("cume_dist"),
+            Some(WindowFunctionDefinition::BuiltInWindowFunction(
+                built_in_window_function::BuiltInWindowFunction::CumeDist
+            ))
+        );
+        assert_eq!(
+            find_df_window_func("first_value"),
+            Some(WindowFunctionDefinition::BuiltInWindowFunction(
+                built_in_window_function::BuiltInWindowFunction::FirstValue
+            ))
+        );
+        assert_eq!(
+            find_df_window_func("LAST_value"),
+            Some(WindowFunctionDefinition::BuiltInWindowFunction(
+                built_in_window_function::BuiltInWindowFunction::LastValue
+            ))
+        );
+        assert_eq!(
+            find_df_window_func("LAG"),
+            Some(WindowFunctionDefinition::BuiltInWindowFunction(
+                built_in_window_function::BuiltInWindowFunction::Lag
+            ))
+        );
+        assert_eq!(
+            find_df_window_func("LEAD"),
+            Some(WindowFunctionDefinition::BuiltInWindowFunction(
+                built_in_window_function::BuiltInWindowFunction::Lead
+            ))
+        );
+        assert_eq!(find_df_window_func("not_exist"), None)
     }
 }

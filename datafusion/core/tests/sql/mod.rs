@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::convert::TryFrom;
 use std::sync::Arc;
 
 use arrow::{
@@ -73,27 +72,19 @@ macro_rules! test_expression {
 }
 
 pub mod aggregates;
-pub mod arrow_files;
 pub mod create_drop;
 pub mod csv_files;
-pub mod describe;
-pub mod displayable;
 pub mod explain_analyze;
 pub mod expr;
 pub mod group_by;
 pub mod joins;
-pub mod limit;
 pub mod order;
-pub mod parquet;
-pub mod parquet_schema;
 pub mod partitioned_csv;
 pub mod predicates;
-pub mod projection;
 pub mod references;
 pub mod repartition;
 pub mod select;
 mod sql_api;
-pub mod subqueries;
 pub mod timestamp;
 
 fn create_join_context(
@@ -458,23 +449,6 @@ async fn register_aggregate_csv_by_sql(ctx: &SessionContext) {
     );
 }
 
-async fn register_aggregate_simple_csv(ctx: &SessionContext) -> Result<()> {
-    // It's not possible to use aggregate_test_100 as it doesn't have enough similar values to test grouping on floats.
-    let schema = Arc::new(Schema::new(vec![
-        Field::new("c1", DataType::Float32, false),
-        Field::new("c2", DataType::Float64, false),
-        Field::new("c3", DataType::Boolean, false),
-    ]));
-
-    ctx.register_csv(
-        "aggregate_simple",
-        "tests/data/aggregate_simple.csv",
-        CsvReadOptions::new().schema(&schema),
-    )
-    .await?;
-    Ok(())
-}
-
 async fn register_aggregate_csv(ctx: &SessionContext) -> Result<()> {
     let testdata = datafusion::test_util::arrow_test_data();
     let schema = test_util::aggr_test_schema();
@@ -566,18 +540,6 @@ fn populate_csv_partitions(
     }
 
     Ok(schema)
-}
-
-/// Return a RecordBatch with a single Int32 array with values (0..sz)
-pub fn make_partition(sz: i32) -> RecordBatch {
-    let seq_start = 0;
-    let seq_end = sz;
-    let values = (seq_start..seq_end).collect::<Vec<_>>();
-    let schema = Arc::new(Schema::new(vec![Field::new("i", DataType::Int32, true)]));
-    let arr = Arc::new(Int32Array::from(values));
-    let arr = arr as ArrayRef;
-
-    RecordBatch::try_new(schema, vec![arr]).unwrap()
 }
 
 /// Specialised String representation

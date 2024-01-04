@@ -17,25 +17,30 @@
 
 use async_recursion::async_recursion;
 use datafusion::arrow::datatypes::{DataType, Field, TimeUnit};
-use datafusion::common::{not_impl_err, DFField, DFSchema, DFSchemaRef};
+use datafusion::common::{
+    not_impl_err, substrait_datafusion_err, substrait_err, DFField, DFSchema, DFSchemaRef,
+};
 
+use datafusion::execution::FunctionRegistry;
 use datafusion::logical_expr::{
-    aggregate_function, window_function::find_df_window_func, BinaryExpr,
-    BuiltinScalarFunction, Case, Expr, LogicalPlan, Operator,
+    aggregate_function, expr::find_df_window_func, BinaryExpr, BuiltinScalarFunction,
+    Case, Expr, LogicalPlan, Operator,
 };
 use datafusion::logical_expr::{
-    expr, Cast, Extension, GroupingSet, Like, LogicalPlanBuilder, WindowFrameBound,
-    WindowFrameUnits,
+    expr, Cast, Extension, GroupingSet, Like, LogicalPlanBuilder, Partitioning,
+    Repartition, Subquery, WindowFrameBound, WindowFrameUnits,
 };
 use datafusion::prelude::JoinType;
 use datafusion::sql::TableReference;
 use datafusion::{
     error::{DataFusionError, Result},
-    optimizer::utils::split_conjunction,
+    logical_expr::utils::split_conjunction,
     prelude::{Column, SessionContext},
     scalar::ScalarValue,
 };
-use substrait::proto::expression::{Literal, ScalarFunction};
+use substrait::proto::exchange_rel::ExchangeKind;
+use substrait::proto::expression::subquery::SubqueryType;
+use substrait::proto::expression::{FieldReference, Literal, ScalarFunction};
 use substrait::proto::{
     aggregate_function::AggregationInvocation,
     expression::{
@@ -57,7 +62,7 @@ use substrait::proto::{
 use substrait::proto::{FunctionArgument, SortField};
 
 use datafusion::common::plan_err;
-use datafusion::logical_expr::expr::{InList, Sort};
+use datafusion::logical_expr::expr::{InList, InSubquery, Sort};
 use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -72,12 +77,7 @@ use crate::variation_const::{
 enum ScalarFunctionType {
     Builtin(BuiltinScalarFunction),
     Op(Operator),
-    /// [Expr::Not]
-    Not,
-    /// [Expr::Like] Used for filtering rows based on the given wildcard pattern. Case sensitive
-    Like,
-    /// [Expr::Like] Case insensitive operator counterpart of `Like`
-    ILike,
+    Expr(BuiltinExprBuilder),
 }
 
 pub fn name_to_op(name: &str) -> Result<Operator> {
@@ -122,12 +122,11 @@ fn scalar_function_type_from_str(name: &str) -> Result<ScalarFunctionType> {
         return Ok(ScalarFunctionType::Builtin(fun));
     }
 
-    match name {
-        "not" => Ok(ScalarFunctionType::Not),
-        "like" => Ok(ScalarFunctionType::Like),
-        "ilike" => Ok(ScalarFunctionType::ILike),
-        others => not_impl_err!("Unsupported function name: {others:?}"),
+    if let Some(builder) = BuiltinExprBuilder::try_from_name(name) {
+        return Ok(ScalarFunctionType::Expr(builder));
     }
+
+    not_impl_err!("Unsupported function name: {name:?}")
 }
 
 fn split_eq_and_noneq_join_predicate_with_nulls_equality(
@@ -232,7 +231,8 @@ pub async fn from_substrait_rel(
                 let mut exprs: Vec<Expr> = vec![];
                 for e in &p.expressions {
                     let x =
-                        from_substrait_rex(e, input.clone().schema(), extensions).await?;
+                        from_substrait_rex(ctx, e, input.clone().schema(), extensions)
+                            .await?;
                     // if the expression is WindowFunction, wrap in a Window relation
                     //   before returning and do not add to list of this Projection's expression list
                     // otherwise, add expression to the Projection's expression list
@@ -258,7 +258,8 @@ pub async fn from_substrait_rel(
                 );
                 if let Some(condition) = filter.condition.as_ref() {
                     let expr =
-                        from_substrait_rex(condition, input.schema(), extensions).await?;
+                        from_substrait_rex(ctx, condition, input.schema(), extensions)
+                            .await?;
                     input.filter(expr.as_ref().clone())?.build()
                 } else {
                     not_impl_err!("Filter without an condition is not valid")
@@ -290,7 +291,8 @@ pub async fn from_substrait_rel(
                     from_substrait_rel(ctx, input, extensions).await?,
                 );
                 let sorts =
-                    from_substrait_sorts(&sort.sorts, input.schema(), extensions).await?;
+                    from_substrait_sorts(ctx, &sort.sorts, input.schema(), extensions)
+                        .await?;
                 input.sort(sorts)?.build()
             } else {
                 not_impl_err!("Sort without an input is not valid")
@@ -308,7 +310,8 @@ pub async fn from_substrait_rel(
                     1 => {
                         for e in &agg.groupings[0].grouping_expressions {
                             let x =
-                                from_substrait_rex(e, input.schema(), extensions).await?;
+                                from_substrait_rex(ctx, e, input.schema(), extensions)
+                                    .await?;
                             group_expr.push(x.as_ref().clone());
                         }
                     }
@@ -317,8 +320,13 @@ pub async fn from_substrait_rel(
                         for grouping in &agg.groupings {
                             let mut grouping_set = vec![];
                             for e in &grouping.grouping_expressions {
-                                let x = from_substrait_rex(e, input.schema(), extensions)
-                                    .await?;
+                                let x = from_substrait_rex(
+                                    ctx,
+                                    e,
+                                    input.schema(),
+                                    extensions,
+                                )
+                                .await?;
                                 grouping_set.push(x.as_ref().clone());
                             }
                             grouping_sets.push(grouping_set);
@@ -336,7 +344,7 @@ pub async fn from_substrait_rel(
                 for m in &agg.measures {
                     let filter = match &m.filter {
                         Some(fil) => Some(Box::new(
-                            from_substrait_rex(fil, input.schema(), extensions)
+                            from_substrait_rex(ctx, fil, input.schema(), extensions)
                                 .await?
                                 .as_ref()
                                 .clone(),
@@ -359,6 +367,7 @@ pub async fn from_substrait_rel(
                                 _ => false,
                             };
                             from_substrait_agg_func(
+                                ctx,
                                 f,
                                 input.schema(),
                                 extensions,
@@ -403,8 +412,8 @@ pub async fn from_substrait_rel(
             // Otherwise, build join with only the filter, without join keys
             match &join.expression.as_ref() {
                 Some(expr) => {
-                    let on =
-                        from_substrait_rex(expr, &in_join_schema, extensions).await?;
+                    let on = from_substrait_rex(ctx, expr, &in_join_schema, extensions)
+                        .await?;
                     // The join expression can contain both equal and non-equal ops.
                     // As of datafusion 31.0.0, the equal and non equal join conditions are in separate fields.
                     // So we extract each part as follows:
@@ -425,6 +434,15 @@ pub async fn from_substrait_rel(
                 }
                 None => plan_err!("JoinRel without join condition is not allowed"),
             }
+        }
+        Some(RelType::Cross(cross)) => {
+            let left: LogicalPlanBuilder = LogicalPlanBuilder::from(
+                from_substrait_rel(ctx, cross.left.as_ref().unwrap(), extensions).await?,
+            );
+            let right =
+                from_substrait_rel(ctx, cross.right.as_ref().unwrap(), extensions)
+                    .await?;
+            left.cross_join(right)?.build()
         }
         Some(RelType::Read(read)) => match &read.as_ref().read_type {
             Some(ReadType::NamedTable(nt)) => {
@@ -502,9 +520,7 @@ pub async fn from_substrait_rel(
         },
         Some(RelType::ExtensionLeaf(extension)) => {
             let Some(ext_detail) = &extension.detail else {
-                return Err(DataFusionError::Substrait(
-                    "Unexpected empty detail in ExtensionLeafRel".to_string(),
-                ));
+                return substrait_err!("Unexpected empty detail in ExtensionLeafRel");
             };
             let plan = ctx
                 .state()
@@ -514,18 +530,16 @@ pub async fn from_substrait_rel(
         }
         Some(RelType::ExtensionSingle(extension)) => {
             let Some(ext_detail) = &extension.detail else {
-                return Err(DataFusionError::Substrait(
-                    "Unexpected empty detail in ExtensionSingleRel".to_string(),
-                ));
+                return substrait_err!("Unexpected empty detail in ExtensionSingleRel");
             };
             let plan = ctx
                 .state()
                 .serializer_registry()
                 .deserialize_logical_plan(&ext_detail.type_url, &ext_detail.value)?;
             let Some(input_rel) = &extension.input else {
-                return Err(DataFusionError::Substrait(
-                    "ExtensionSingleRel doesn't contains input rel. Try use ExtensionLeafRel instead".to_string()
-                ));
+                return substrait_err!(
+                    "ExtensionSingleRel doesn't contains input rel. Try use ExtensionLeafRel instead"
+                );
             };
             let input_plan = from_substrait_rel(ctx, input_rel, extensions).await?;
             let plan = plan.from_template(&plan.expressions(), &[input_plan]);
@@ -533,9 +547,7 @@ pub async fn from_substrait_rel(
         }
         Some(RelType::ExtensionMulti(extension)) => {
             let Some(ext_detail) = &extension.detail else {
-                return Err(DataFusionError::Substrait(
-                    "Unexpected empty detail in ExtensionSingleRel".to_string(),
-                ));
+                return substrait_err!("Unexpected empty detail in ExtensionSingleRel");
             };
             let plan = ctx
                 .state()
@@ -548,6 +560,45 @@ pub async fn from_substrait_rel(
             }
             let plan = plan.from_template(&plan.expressions(), &inputs);
             Ok(LogicalPlan::Extension(Extension { node: plan }))
+        }
+        Some(RelType::Exchange(exchange)) => {
+            let Some(input) = exchange.input.as_ref() else {
+                return substrait_err!("Unexpected empty input in ExchangeRel");
+            };
+            let input = Arc::new(from_substrait_rel(ctx, input, extensions).await?);
+
+            let Some(exchange_kind) = &exchange.exchange_kind else {
+                return substrait_err!("Unexpected empty input in ExchangeRel");
+            };
+
+            // ref: https://substrait.io/relations/physical_relations/#exchange-types
+            let partitioning_scheme = match exchange_kind {
+                ExchangeKind::ScatterByFields(scatter_fields) => {
+                    let mut partition_columns = vec![];
+                    let input_schema = input.schema();
+                    for field_ref in &scatter_fields.fields {
+                        let column =
+                            from_substrait_field_reference(field_ref, input_schema)?;
+                        partition_columns.push(column);
+                    }
+                    Partitioning::Hash(
+                        partition_columns,
+                        exchange.partition_count as usize,
+                    )
+                }
+                ExchangeKind::RoundRobin(_) => {
+                    Partitioning::RoundRobinBatch(exchange.partition_count as usize)
+                }
+                ExchangeKind::SingleTarget(_)
+                | ExchangeKind::MultiTarget(_)
+                | ExchangeKind::Broadcast(_) => {
+                    return not_impl_err!("Unsupported exchange kind: {exchange_kind:?}");
+                }
+            };
+            Ok(LogicalPlan::Repartition(Repartition {
+                input,
+                partitioning_scheme,
+            }))
         }
         _ => not_impl_err!("Unsupported RelType: {:?}", rel.rel_type),
     }
@@ -571,14 +622,16 @@ fn from_substrait_jointype(join_type: i32) -> Result<JoinType> {
 
 /// Convert Substrait Sorts to DataFusion Exprs
 pub async fn from_substrait_sorts(
+    ctx: &SessionContext,
     substrait_sorts: &Vec<SortField>,
     input_schema: &DFSchema,
     extensions: &HashMap<u32, &String>,
 ) -> Result<Vec<Expr>> {
     let mut sorts: Vec<Expr> = vec![];
     for s in substrait_sorts {
-        let expr = from_substrait_rex(s.expr.as_ref().unwrap(), input_schema, extensions)
-            .await?;
+        let expr =
+            from_substrait_rex(ctx, s.expr.as_ref().unwrap(), input_schema, extensions)
+                .await?;
         let asc_nullfirst = match &s.sort_kind {
             Some(k) => match k {
                 Direction(d) => {
@@ -619,13 +672,14 @@ pub async fn from_substrait_sorts(
 
 /// Convert Substrait Expressions to DataFusion Exprs
 pub async fn from_substrait_rex_vec(
+    ctx: &SessionContext,
     exprs: &Vec<Expression>,
     input_schema: &DFSchema,
     extensions: &HashMap<u32, &String>,
 ) -> Result<Vec<Expr>> {
     let mut expressions: Vec<Expr> = vec![];
     for expr in exprs {
-        let expression = from_substrait_rex(expr, input_schema, extensions).await?;
+        let expression = from_substrait_rex(ctx, expr, input_schema, extensions).await?;
         expressions.push(expression.as_ref().clone());
     }
     Ok(expressions)
@@ -633,6 +687,7 @@ pub async fn from_substrait_rex_vec(
 
 /// Convert Substrait FunctionArguments to DataFusion Exprs
 pub async fn from_substriat_func_args(
+    ctx: &SessionContext,
     arguments: &Vec<FunctionArgument>,
     input_schema: &DFSchema,
     extensions: &HashMap<u32, &String>,
@@ -641,7 +696,7 @@ pub async fn from_substriat_func_args(
     for arg in arguments {
         let arg_expr = match &arg.arg_type {
             Some(ArgType::Value(e)) => {
-                from_substrait_rex(e, input_schema, extensions).await
+                from_substrait_rex(ctx, e, input_schema, extensions).await
             }
             _ => {
                 not_impl_err!("Aggregated function argument non-Value type not supported")
@@ -654,6 +709,7 @@ pub async fn from_substriat_func_args(
 
 /// Convert Substrait AggregateFunction to DataFusion Expr
 pub async fn from_substrait_agg_func(
+    ctx: &SessionContext,
     f: &AggregateFunction,
     input_schema: &DFSchema,
     extensions: &HashMap<u32, &String>,
@@ -665,7 +721,7 @@ pub async fn from_substrait_agg_func(
     for arg in &f.arguments {
         let arg_expr = match &arg.arg_type {
             Some(ArgType::Value(e)) => {
-                from_substrait_rex(e, input_schema, extensions).await
+                from_substrait_rex(ctx, e, input_schema, extensions).await
             }
             _ => {
                 not_impl_err!("Aggregated function argument non-Value type not supported")
@@ -674,28 +730,36 @@ pub async fn from_substrait_agg_func(
         args.push(arg_expr?.as_ref().clone());
     }
 
-    let fun = match extensions.get(&f.function_reference) {
-        Some(function_name) => {
-            aggregate_function::AggregateFunction::from_str(function_name)
-        }
-        None => not_impl_err!(
-            "Aggregated function not found: function anchor = {:?}",
+    let Some(function_name) = extensions.get(&f.function_reference) else {
+        return plan_err!(
+            "Aggregate function not registered: function anchor = {:?}",
             f.function_reference
-        ),
+        );
     };
 
-    Ok(Arc::new(Expr::AggregateFunction(expr::AggregateFunction {
-        fun: fun.unwrap(),
-        args,
-        distinct,
-        filter,
-        order_by,
-    })))
+    // try udaf first, then built-in aggr fn.
+    if let Ok(fun) = ctx.udaf(function_name) {
+        Ok(Arc::new(Expr::AggregateFunction(
+            expr::AggregateFunction::new_udf(fun, args, distinct, filter, order_by),
+        )))
+    } else if let Ok(fun) = aggregate_function::AggregateFunction::from_str(function_name)
+    {
+        Ok(Arc::new(Expr::AggregateFunction(
+            expr::AggregateFunction::new(fun, args, distinct, filter, order_by),
+        )))
+    } else {
+        not_impl_err!(
+            "Aggregated function {} is not supported: function anchor = {:?}",
+            function_name,
+            f.function_reference
+        )
+    }
 }
 
 /// Convert Substrait Rex to DataFusion Expr
 #[async_recursion]
 pub async fn from_substrait_rex(
+    ctx: &SessionContext,
     e: &Expression,
     input_schema: &DFSchema,
     extensions: &HashMap<u32, &String>,
@@ -706,37 +770,24 @@ pub async fn from_substrait_rex(
             let substrait_list = s.options.as_ref();
             Ok(Arc::new(Expr::InList(InList {
                 expr: Box::new(
-                    from_substrait_rex(substrait_expr, input_schema, extensions)
+                    from_substrait_rex(ctx, substrait_expr, input_schema, extensions)
                         .await?
                         .as_ref()
                         .clone(),
                 ),
-                list: from_substrait_rex_vec(substrait_list, input_schema, extensions)
-                    .await?,
+                list: from_substrait_rex_vec(
+                    ctx,
+                    substrait_list,
+                    input_schema,
+                    extensions,
+                )
+                .await?,
                 negated: false,
             })))
         }
-        Some(RexType::Selection(field_ref)) => match &field_ref.reference_type {
-            Some(DirectReference(direct)) => match &direct.reference_type.as_ref() {
-                Some(StructField(x)) => match &x.child.as_ref() {
-                    Some(_) => not_impl_err!(
-                        "Direct reference StructField with child is not supported"
-                    ),
-                    None => {
-                        let column =
-                            input_schema.field(x.field as usize).qualified_column();
-                        Ok(Arc::new(Expr::Column(Column {
-                            relation: column.relation,
-                            name: column.name,
-                        })))
-                    }
-                },
-                _ => not_impl_err!(
-                    "Direct reference with types other than StructField is not supported"
-                ),
-            },
-            _ => not_impl_err!("unsupported field ref type"),
-        },
+        Some(RexType::Selection(field_ref)) => Ok(Arc::new(
+            from_substrait_field_reference(field_ref, input_schema)?,
+        )),
         Some(RexType::IfThen(if_then)) => {
             // Parse `ifs`
             // If the first element does not have a `then` part, then we can assume it's a base expression
@@ -748,6 +799,7 @@ pub async fn from_substrait_rex(
                     if if_expr.then.is_none() {
                         expr = Some(Box::new(
                             from_substrait_rex(
+                                ctx,
                                 if_expr.r#if.as_ref().unwrap(),
                                 input_schema,
                                 extensions,
@@ -762,6 +814,7 @@ pub async fn from_substrait_rex(
                 when_then_expr.push((
                     Box::new(
                         from_substrait_rex(
+                            ctx,
                             if_expr.r#if.as_ref().unwrap(),
                             input_schema,
                             extensions,
@@ -772,6 +825,7 @@ pub async fn from_substrait_rex(
                     ),
                     Box::new(
                         from_substrait_rex(
+                            ctx,
                             if_expr.then.as_ref().unwrap(),
                             input_schema,
                             extensions,
@@ -785,7 +839,7 @@ pub async fn from_substrait_rex(
             // Parse `else`
             let else_expr = match &if_then.r#else {
                 Some(e) => Some(Box::new(
-                    from_substrait_rex(e, input_schema, extensions)
+                    from_substrait_rex(ctx, e, input_schema, extensions)
                         .await?
                         .as_ref()
                         .clone(),
@@ -812,7 +866,7 @@ pub async fn from_substrait_rex(
                     for arg in &f.arguments {
                         let arg_expr = match &arg.arg_type {
                             Some(ArgType::Value(e)) => {
-                                from_substrait_rex(e, input_schema, extensions).await
+                                from_substrait_rex(ctx, e, input_schema, extensions).await
                             }
                             _ => not_impl_err!(
                                 "Aggregated function argument non-Value type not supported"
@@ -820,10 +874,9 @@ pub async fn from_substrait_rex(
                         };
                         args.push(arg_expr?.as_ref().clone());
                     }
-                    Ok(Arc::new(Expr::ScalarFunction(expr::ScalarFunction {
-                        fun,
-                        args,
-                    })))
+                    Ok(Arc::new(Expr::ScalarFunction(expr::ScalarFunction::new(
+                        fun, args,
+                    ))))
                 }
                 ScalarFunctionType::Op(op) => {
                     if f.arguments.len() != 2 {
@@ -838,14 +891,14 @@ pub async fn from_substrait_rex(
                         (Some(ArgType::Value(l)), Some(ArgType::Value(r))) => {
                             Ok(Arc::new(Expr::BinaryExpr(BinaryExpr {
                                 left: Box::new(
-                                    from_substrait_rex(l, input_schema, extensions)
+                                    from_substrait_rex(ctx, l, input_schema, extensions)
                                         .await?
                                         .as_ref()
                                         .clone(),
                                 ),
                                 op,
                                 right: Box::new(
-                                    from_substrait_rex(r, input_schema, extensions)
+                                    from_substrait_rex(ctx, r, input_schema, extensions)
                                         .await?
                                         .as_ref()
                                         .clone(),
@@ -857,28 +910,8 @@ pub async fn from_substrait_rex(
                         ),
                     }
                 }
-                ScalarFunctionType::Not => {
-                    let arg = f.arguments.first().ok_or_else(|| {
-                        DataFusionError::Substrait(
-                            "expect one argument for `NOT` expr".to_string(),
-                        )
-                    })?;
-                    match &arg.arg_type {
-                        Some(ArgType::Value(e)) => {
-                            let expr = from_substrait_rex(e, input_schema, extensions)
-                                .await?
-                                .as_ref()
-                                .clone();
-                            Ok(Arc::new(Expr::Not(Box::new(expr))))
-                        }
-                        _ => not_impl_err!("Invalid arguments for Not expression"),
-                    }
-                }
-                ScalarFunctionType::Like => {
-                    make_datafusion_like(false, f, input_schema, extensions).await
-                }
-                ScalarFunctionType::ILike => {
-                    make_datafusion_like(true, f, input_schema, extensions).await
+                ScalarFunctionType::Expr(builder) => {
+                    builder.build(ctx, f, input_schema, extensions).await
                 }
             }
         }
@@ -890,6 +923,7 @@ pub async fn from_substrait_rex(
             Some(output_type) => Ok(Arc::new(Expr::Cast(Cast::new(
                 Box::new(
                     from_substrait_rex(
+                        ctx,
                         cast.as_ref().input.as_ref().unwrap().as_ref(),
                         input_schema,
                         extensions,
@@ -900,9 +934,7 @@ pub async fn from_substrait_rex(
                 ),
                 from_substrait_type(output_type)?,
             )))),
-            None => Err(DataFusionError::Substrait(
-                "Cast experssion without output type is not allowed".to_string(),
-            )),
+            None => substrait_err!("Cast experssion without output type is not allowed"),
         },
         Some(RexType::WindowFunction(window)) => {
             let fun = match extensions.get(&window.function_reference) {
@@ -913,7 +945,8 @@ pub async fn from_substrait_rex(
                 ),
             };
             let order_by =
-                from_substrait_sorts(&window.sorts, input_schema, extensions).await?;
+                from_substrait_sorts(ctx, &window.sorts, input_schema, extensions)
+                    .await?;
             // Substrait does not encode WindowFrameUnits so we're using a simple logic to determine the units
             // If there is no `ORDER BY`, then by default, the frame counts each row from the lower up to upper boundary
             // If there is `ORDER BY`, then by default, each frame is a range starting from unbounded preceding to current row
@@ -926,12 +959,14 @@ pub async fn from_substrait_rex(
             Ok(Arc::new(Expr::WindowFunction(expr::WindowFunction {
                 fun: fun?.unwrap(),
                 args: from_substriat_func_args(
+                    ctx,
                     &window.arguments,
                     input_schema,
                     extensions,
                 )
                 .await?,
                 partition_by: from_substrait_rex_vec(
+                    ctx,
                     &window.partitions,
                     input_schema,
                     extensions,
@@ -945,6 +980,51 @@ pub async fn from_substrait_rex(
                 },
             })))
         }
+        Some(RexType::Subquery(subquery)) => match &subquery.as_ref().subquery_type {
+            Some(subquery_type) => match subquery_type {
+                SubqueryType::InPredicate(in_predicate) => {
+                    if in_predicate.needles.len() != 1 {
+                        Err(DataFusionError::Substrait(
+                            "InPredicate Subquery type must have exactly one Needle expression"
+                                .to_string(),
+                        ))
+                    } else {
+                        let needle_expr = &in_predicate.needles[0];
+                        let haystack_expr = &in_predicate.haystack;
+                        if let Some(haystack_expr) = haystack_expr {
+                            let haystack_expr =
+                                from_substrait_rel(ctx, haystack_expr, extensions)
+                                    .await?;
+                            let outer_refs = haystack_expr.all_out_ref_exprs();
+                            Ok(Arc::new(Expr::InSubquery(InSubquery {
+                                expr: Box::new(
+                                    from_substrait_rex(
+                                        ctx,
+                                        needle_expr,
+                                        input_schema,
+                                        extensions,
+                                    )
+                                    .await?
+                                    .as_ref()
+                                    .clone(),
+                                ),
+                                subquery: Subquery {
+                                    subquery: Arc::new(haystack_expr),
+                                    outer_ref_columns: outer_refs,
+                                },
+                                negated: false,
+                            })))
+                        } else {
+                            substrait_err!("InPredicate Subquery type must have a Haystack expression")
+                        }
+                    }
+                }
+                _ => substrait_err!("Subquery type not implemented"),
+            },
+            None => {
+                substrait_err!("Subquery experssion without SubqueryType is not allowed")
+            }
+        },
         _ => not_impl_err!("unsupported rex_type"),
     }
 }
@@ -1027,9 +1107,7 @@ fn from_substrait_type(dt: &substrait::proto::Type) -> Result<DataType> {
             r#type::Kind::List(list) => {
                 let inner_type =
                     from_substrait_type(list.r#type.as_ref().ok_or_else(|| {
-                        DataFusionError::Substrait(
-                            "List type must have inner type".to_string(),
-                        )
+                        substrait_datafusion_err!("List type must have inner type")
                     })?)?;
                 let field = Arc::new(Field::new("list_item", inner_type, true));
                 match list.type_variation_reference {
@@ -1081,9 +1159,7 @@ fn from_substrait_bound(
                     }
                 }
             },
-            None => Err(DataFusionError::Substrait(
-                "WindowFunction missing Substrait Bound kind".to_string(),
-            )),
+            None => substrait_err!("WindowFunction missing Substrait Bound kind"),
         },
         None => {
             if is_lower {
@@ -1102,36 +1178,28 @@ pub(crate) fn from_substrait_literal(lit: &Literal) -> Result<ScalarValue> {
             DEFAULT_TYPE_REF => ScalarValue::Int8(Some(*n as i8)),
             UNSIGNED_INTEGER_TYPE_REF => ScalarValue::UInt8(Some(*n as u8)),
             others => {
-                return Err(DataFusionError::Substrait(format!(
-                    "Unknown type variation reference {others}",
-                )));
+                return substrait_err!("Unknown type variation reference {others}");
             }
         },
         Some(LiteralType::I16(n)) => match lit.type_variation_reference {
             DEFAULT_TYPE_REF => ScalarValue::Int16(Some(*n as i16)),
             UNSIGNED_INTEGER_TYPE_REF => ScalarValue::UInt16(Some(*n as u16)),
             others => {
-                return Err(DataFusionError::Substrait(format!(
-                    "Unknown type variation reference {others}",
-                )));
+                return substrait_err!("Unknown type variation reference {others}");
             }
         },
         Some(LiteralType::I32(n)) => match lit.type_variation_reference {
             DEFAULT_TYPE_REF => ScalarValue::Int32(Some(*n)),
             UNSIGNED_INTEGER_TYPE_REF => ScalarValue::UInt32(Some(*n as u32)),
             others => {
-                return Err(DataFusionError::Substrait(format!(
-                    "Unknown type variation reference {others}",
-                )));
+                return substrait_err!("Unknown type variation reference {others}");
             }
         },
         Some(LiteralType::I64(n)) => match lit.type_variation_reference {
             DEFAULT_TYPE_REF => ScalarValue::Int64(Some(*n)),
             UNSIGNED_INTEGER_TYPE_REF => ScalarValue::UInt64(Some(*n as u64)),
             others => {
-                return Err(DataFusionError::Substrait(format!(
-                    "Unknown type variation reference {others}",
-                )));
+                return substrait_err!("Unknown type variation reference {others}");
             }
         },
         Some(LiteralType::Fp32(f)) => ScalarValue::Float32(Some(*f)),
@@ -1142,9 +1210,7 @@ pub(crate) fn from_substrait_literal(lit: &Literal) -> Result<ScalarValue> {
             TIMESTAMP_MICRO_TYPE_REF => ScalarValue::TimestampMicrosecond(Some(*t), None),
             TIMESTAMP_NANO_TYPE_REF => ScalarValue::TimestampNanosecond(Some(*t), None),
             others => {
-                return Err(DataFusionError::Substrait(format!(
-                    "Unknown type variation reference {others}",
-                )));
+                return substrait_err!("Unknown type variation reference {others}");
             }
         },
         Some(LiteralType::Date(d)) => ScalarValue::Date32(Some(*d)),
@@ -1152,38 +1218,30 @@ pub(crate) fn from_substrait_literal(lit: &Literal) -> Result<ScalarValue> {
             DEFAULT_CONTAINER_TYPE_REF => ScalarValue::Utf8(Some(s.clone())),
             LARGE_CONTAINER_TYPE_REF => ScalarValue::LargeUtf8(Some(s.clone())),
             others => {
-                return Err(DataFusionError::Substrait(format!(
-                    "Unknown type variation reference {others}",
-                )));
+                return substrait_err!("Unknown type variation reference {others}");
             }
         },
         Some(LiteralType::Binary(b)) => match lit.type_variation_reference {
             DEFAULT_CONTAINER_TYPE_REF => ScalarValue::Binary(Some(b.clone())),
             LARGE_CONTAINER_TYPE_REF => ScalarValue::LargeBinary(Some(b.clone())),
             others => {
-                return Err(DataFusionError::Substrait(format!(
-                    "Unknown type variation reference {others}",
-                )));
+                return substrait_err!("Unknown type variation reference {others}");
             }
         },
         Some(LiteralType::FixedBinary(b)) => {
             ScalarValue::FixedSizeBinary(b.len() as _, Some(b.clone()))
         }
         Some(LiteralType::Decimal(d)) => {
-            let value: [u8; 16] =
-                d.value
-                    .clone()
-                    .try_into()
-                    .or(Err(DataFusionError::Substrait(
-                        "Failed to parse decimal value".to_string(),
-                    )))?;
+            let value: [u8; 16] = d
+                .value
+                .clone()
+                .try_into()
+                .or(substrait_err!("Failed to parse decimal value"))?;
             let p = d.precision.try_into().map_err(|e| {
-                DataFusionError::Substrait(format!(
-                    "Failed to parse decimal precision: {e}"
-                ))
+                substrait_datafusion_err!("Failed to parse decimal precision: {e}")
             })?;
             let s = d.scale.try_into().map_err(|e| {
-                DataFusionError::Substrait(format!("Failed to parse decimal scale: {e}"))
+                substrait_datafusion_err!("Failed to parse decimal scale: {e}")
             })?;
             ScalarValue::Decimal128(
                 Some(std::primitive::i128::from_le_bytes(value)),
@@ -1281,50 +1339,157 @@ fn from_substrait_null(null_type: &Type) -> Result<ScalarValue> {
     }
 }
 
-async fn make_datafusion_like(
-    case_insensitive: bool,
-    f: &ScalarFunction,
+fn from_substrait_field_reference(
+    field_ref: &FieldReference,
     input_schema: &DFSchema,
-    extensions: &HashMap<u32, &String>,
-) -> Result<Arc<Expr>> {
-    let fn_name = if case_insensitive { "ILIKE" } else { "LIKE" };
-    if f.arguments.len() != 3 {
-        return not_impl_err!("Expect three arguments for `{fn_name}` expr");
+) -> Result<Expr> {
+    match &field_ref.reference_type {
+        Some(DirectReference(direct)) => match &direct.reference_type.as_ref() {
+            Some(StructField(x)) => match &x.child.as_ref() {
+                Some(_) => not_impl_err!(
+                    "Direct reference StructField with child is not supported"
+                ),
+                None => {
+                    let column = input_schema.field(x.field as usize).qualified_column();
+                    Ok(Expr::Column(Column {
+                        relation: column.relation,
+                        name: column.name,
+                    }))
+                }
+            },
+            _ => not_impl_err!(
+                "Direct reference with types other than StructField is not supported"
+            ),
+        },
+        _ => not_impl_err!("unsupported field ref type"),
+    }
+}
+
+/// Build [`Expr`] from its name and required inputs.
+struct BuiltinExprBuilder {
+    expr_name: String,
+}
+
+impl BuiltinExprBuilder {
+    pub fn try_from_name(name: &str) -> Option<Self> {
+        match name {
+            "not" | "like" | "ilike" | "is_null" | "is_not_null" | "is_true"
+            | "is_false" | "is_not_true" | "is_not_false" | "is_unknown"
+            | "is_not_unknown" | "negative" => Some(Self {
+                expr_name: name.to_string(),
+            }),
+            _ => None,
+        }
     }
 
-    let Some(ArgType::Value(expr_substrait)) = &f.arguments[0].arg_type else {
-        return not_impl_err!("Invalid arguments type for `{fn_name}` expr");
-    };
-    let expr = from_substrait_rex(expr_substrait, input_schema, extensions)
-        .await?
-        .as_ref()
-        .clone();
-    let Some(ArgType::Value(pattern_substrait)) = &f.arguments[1].arg_type else {
-        return not_impl_err!("Invalid arguments type for `{fn_name}` expr");
-    };
-    let pattern = from_substrait_rex(pattern_substrait, input_schema, extensions)
-        .await?
-        .as_ref()
-        .clone();
-    let Some(ArgType::Value(escape_char_substrait)) = &f.arguments[2].arg_type else {
-        return not_impl_err!("Invalid arguments type for `{fn_name}` expr");
-    };
-    let escape_char_expr =
-        from_substrait_rex(escape_char_substrait, input_schema, extensions)
+    pub async fn build(
+        self,
+        ctx: &SessionContext,
+        f: &ScalarFunction,
+        input_schema: &DFSchema,
+        extensions: &HashMap<u32, &String>,
+    ) -> Result<Arc<Expr>> {
+        match self.expr_name.as_str() {
+            "like" => {
+                Self::build_like_expr(ctx, false, f, input_schema, extensions).await
+            }
+            "ilike" => {
+                Self::build_like_expr(ctx, true, f, input_schema, extensions).await
+            }
+            "not" | "negative" | "is_null" | "is_not_null" | "is_true" | "is_false"
+            | "is_not_true" | "is_not_false" | "is_unknown" | "is_not_unknown" => {
+                Self::build_unary_expr(ctx, &self.expr_name, f, input_schema, extensions)
+                    .await
+            }
+            _ => {
+                not_impl_err!("Unsupported builtin expression: {}", self.expr_name)
+            }
+        }
+    }
+
+    async fn build_unary_expr(
+        ctx: &SessionContext,
+        fn_name: &str,
+        f: &ScalarFunction,
+        input_schema: &DFSchema,
+        extensions: &HashMap<u32, &String>,
+    ) -> Result<Arc<Expr>> {
+        if f.arguments.len() != 1 {
+            return substrait_err!("Expect one argument for {fn_name} expr");
+        }
+        let Some(ArgType::Value(expr_substrait)) = &f.arguments[0].arg_type else {
+            return substrait_err!("Invalid arguments type for {fn_name} expr");
+        };
+        let arg = from_substrait_rex(ctx, expr_substrait, input_schema, extensions)
             .await?
             .as_ref()
             .clone();
-    let Expr::Literal(ScalarValue::Utf8(escape_char)) = escape_char_expr else {
-        return Err(DataFusionError::Substrait(format!(
-            "Expect Utf8 literal for escape char, but found {escape_char_expr:?}",
-        )));
-    };
+        let arg = Box::new(arg);
 
-    Ok(Arc::new(Expr::Like(Like {
-        negated: false,
-        expr: Box::new(expr),
-        pattern: Box::new(pattern),
-        escape_char: escape_char.map(|c| c.chars().next().unwrap()),
-        case_insensitive,
-    })))
+        let expr = match fn_name {
+            "not" => Expr::Not(arg),
+            "negative" => Expr::Negative(arg),
+            "is_null" => Expr::IsNull(arg),
+            "is_not_null" => Expr::IsNotNull(arg),
+            "is_true" => Expr::IsTrue(arg),
+            "is_false" => Expr::IsFalse(arg),
+            "is_not_true" => Expr::IsNotTrue(arg),
+            "is_not_false" => Expr::IsNotFalse(arg),
+            "is_unknown" => Expr::IsUnknown(arg),
+            "is_not_unknown" => Expr::IsNotUnknown(arg),
+            _ => return not_impl_err!("Unsupported builtin expression: {}", fn_name),
+        };
+
+        Ok(Arc::new(expr))
+    }
+
+    async fn build_like_expr(
+        ctx: &SessionContext,
+        case_insensitive: bool,
+        f: &ScalarFunction,
+        input_schema: &DFSchema,
+        extensions: &HashMap<u32, &String>,
+    ) -> Result<Arc<Expr>> {
+        let fn_name = if case_insensitive { "ILIKE" } else { "LIKE" };
+        if f.arguments.len() != 3 {
+            return substrait_err!("Expect three arguments for `{fn_name}` expr");
+        }
+
+        let Some(ArgType::Value(expr_substrait)) = &f.arguments[0].arg_type else {
+            return substrait_err!("Invalid arguments type for `{fn_name}` expr");
+        };
+        let expr = from_substrait_rex(ctx, expr_substrait, input_schema, extensions)
+            .await?
+            .as_ref()
+            .clone();
+        let Some(ArgType::Value(pattern_substrait)) = &f.arguments[1].arg_type else {
+            return substrait_err!("Invalid arguments type for `{fn_name}` expr");
+        };
+        let pattern =
+            from_substrait_rex(ctx, pattern_substrait, input_schema, extensions)
+                .await?
+                .as_ref()
+                .clone();
+        let Some(ArgType::Value(escape_char_substrait)) = &f.arguments[2].arg_type else {
+            return substrait_err!("Invalid arguments type for `{fn_name}` expr");
+        };
+        let escape_char_expr =
+            from_substrait_rex(ctx, escape_char_substrait, input_schema, extensions)
+                .await?
+                .as_ref()
+                .clone();
+        let Expr::Literal(ScalarValue::Utf8(escape_char)) = escape_char_expr else {
+            return substrait_err!(
+                "Expect Utf8 literal for escape char, but found {escape_char_expr:?}"
+            );
+        };
+
+        Ok(Arc::new(Expr::Like(Like {
+            negated: false,
+            expr: Box::new(expr),
+            pattern: Box::new(pattern),
+            escape_char: escape_char.map(|c| c.chars().next().unwrap()),
+            case_insensitive,
+        })))
+    }
 }

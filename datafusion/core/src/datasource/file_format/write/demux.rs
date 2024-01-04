@@ -264,12 +264,9 @@ async fn hive_style_partitions_demuxer(
             // TODO: upstream RecordBatch::take to arrow-rs
             let take_indices = builder.finish();
             let struct_array: StructArray = rb.clone().into();
-            let parted_batch = RecordBatch::try_from(
+            let parted_batch = RecordBatch::from(
                 arrow::compute::take(&struct_array, &take_indices, None)?.as_struct(),
-            )
-            .map_err(|_| {
-                DataFusionError::Internal("Unexpected error partitioning batch!".into())
-            })?;
+            );
 
             // Get or create channel for this batch
             let part_tx = match value_map.get_mut(&part_key) {
@@ -386,7 +383,7 @@ fn compute_take_arrays(
 
 fn remove_partition_by_columns(
     parted_batch: &RecordBatch,
-    partition_by: &Vec<(String, DataType)>,
+    partition_by: &[(String, DataType)],
 ) -> Result<RecordBatch> {
     let end_idx = parted_batch.num_columns() - partition_by.len();
     let non_part_cols = &parted_batch.columns()[..end_idx];
@@ -408,7 +405,7 @@ fn remove_partition_by_columns(
 }
 
 fn compute_hive_style_file_path(
-    part_key: &Vec<String>,
+    part_key: &[String],
     partition_by: &[(String, DataType)],
     write_id: &str,
     file_extension: &str,

@@ -21,34 +21,33 @@ use std::ops::Not;
 
 use super::or_in_list_simplifier::OrInListSimplifier;
 use super::utils::*;
-
 use crate::analyzer::type_coercion::TypeCoercionRewriter;
+use crate::simplify_expressions::guarantees::GuaranteeRewriter;
 use crate::simplify_expressions::regex::simplify_regex_expr;
+use crate::simplify_expressions::SimplifyInfo;
+
 use arrow::{
     array::new_null_array,
     datatypes::{DataType, Field, Schema},
-    error::ArrowError,
     record_batch::RecordBatch,
 };
 use datafusion_common::{
     cast::{as_large_list_array, as_list_array},
+    plan_err,
     tree_node::{RewriteRecursion, TreeNode, TreeNodeRewriter},
 };
 use datafusion_common::{
     exec_err, internal_err, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue,
 };
-use datafusion_expr::expr::{InList, InSubquery, ScalarFunction};
 use datafusion_expr::{
-    and, expr, lit, or, BinaryExpr, BuiltinScalarFunction, Case, ColumnarValue, Expr,
-    Like, Volatility,
+    and, lit, or, BinaryExpr, BuiltinScalarFunction, Case, ColumnarValue, Expr, Like,
+    ScalarFunctionDefinition, Volatility,
 };
-use datafusion_physical_expr::{
-    create_physical_expr, execution_props::ExecutionProps, intervals::NullableInterval,
+use datafusion_expr::{
+    expr::{InList, InSubquery, ScalarFunction},
+    interval_arithmetic::NullableInterval,
 };
-
-use crate::simplify_expressions::SimplifyInfo;
-
-use crate::simplify_expressions::guarantees::GuaranteeRewriter;
+use datafusion_physical_expr::{create_physical_expr, execution_props::ExecutionProps};
 
 /// This structure handles API for expression simplification
 pub struct ExprSimplifier<S> {
@@ -178,9 +177,9 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
     /// ```rust
     /// use arrow::datatypes::{DataType, Field, Schema};
     /// use datafusion_expr::{col, lit, Expr};
+    /// use datafusion_expr::interval_arithmetic::{Interval, NullableInterval};
     /// use datafusion_common::{Result, ScalarValue, ToDFSchema};
     /// use datafusion_physical_expr::execution_props::ExecutionProps;
-    /// use datafusion_physical_expr::intervals::{Interval, NullableInterval};
     /// use datafusion_optimizer::simplify_expressions::{
     ///     ExprSimplifier, SimplifyContext};
     ///
@@ -207,7 +206,7 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
     ///    (
     ///        col("x"),
     ///        NullableInterval::NotNull {
-    ///            values: Interval::make(Some(3_i64), Some(5_i64), (false, false)),
+    ///            values: Interval::make(Some(3_i64), Some(5_i64)).unwrap()
     ///        }
     ///    ),
     ///    // y = 3
@@ -333,7 +332,6 @@ impl<'a> ConstEvaluator<'a> {
             // Has no runtime cost, but needed during planning
             Expr::Alias(..)
             | Expr::AggregateFunction { .. }
-            | Expr::AggregateUDF { .. }
             | Expr::ScalarVariable(_, _)
             | Expr::Column(_)
             | Expr::OuterReferenceColumn(_, _)
@@ -343,15 +341,17 @@ impl<'a> ConstEvaluator<'a> {
             | Expr::WindowFunction { .. }
             | Expr::Sort { .. }
             | Expr::GroupingSet(_)
-            | Expr::Wildcard
-            | Expr::QualifiedWildcard { .. }
+            | Expr::Wildcard { .. }
             | Expr::Placeholder(_) => false,
-            Expr::ScalarFunction(ScalarFunction { fun, .. }) => {
-                Self::volatility_ok(fun.volatility())
-            }
-            Expr::ScalarUDF(expr::ScalarUDF { fun, .. }) => {
-                Self::volatility_ok(fun.signature.volatility)
-            }
+            Expr::ScalarFunction(ScalarFunction { func_def, .. }) => match func_def {
+                ScalarFunctionDefinition::BuiltIn(fun) => {
+                    Self::volatility_ok(fun.volatility())
+                }
+                ScalarFunctionDefinition::UDF(fun) => {
+                    Self::volatility_ok(fun.signature().volatility)
+                }
+                ScalarFunctionDefinition::Name(_) => false,
+            },
             Expr::Literal(_)
             | Expr::BinaryExpr { .. }
             | Expr::Not(_)
@@ -480,6 +480,14 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
             }) if list.is_empty() && *expr != Expr::Literal(ScalarValue::Null) => {
                 lit(negated)
             }
+
+            // null in (x, y, z) --> null
+            // null not in (x, y, z) --> null
+            Expr::InList(InList {
+                expr,
+                list: _,
+                negated: _,
+            }) if is_null(&expr) => lit_bool_null(),
 
             // expr IN ((subquery)) -> expr IN (subquery), see ##5529
             Expr::InList(InList {
@@ -792,7 +800,7 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 op: Divide,
                 right,
             }) if is_null(&right) => *right,
-            // A / 0 -> DivideByZero Error if A is not null and not floating
+            // A / 0 -> Divide by zero error if A is not null and not floating
             // (float / 0 -> inf | -inf | NAN)
             Expr::BinaryExpr(BinaryExpr {
                 left,
@@ -802,7 +810,7 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 && !info.get_data_type(&left)?.is_floating()
                 && is_zero(&right) =>
             {
-                return Err(DataFusionError::ArrowError(ArrowError::DivideByZero));
+                return plan_err!("Divide by zero");
             }
 
             //
@@ -832,7 +840,7 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
             {
                 lit(0)
             }
-            // A % 0 --> DivideByZero Error (if A is not floating and not null)
+            // A % 0 --> Divide by zero Error (if A is not floating and not null)
             // A % 0 --> NAN (if A is floating and not null)
             Expr::BinaryExpr(BinaryExpr {
                 left,
@@ -843,9 +851,7 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                     DataType::Float32 => lit(f32::NAN),
                     DataType::Float64 => lit(f64::NAN),
                     _ => {
-                        return Err(DataFusionError::ArrowError(
-                            ArrowError::DivideByZero,
-                        ));
+                        return plan_err!("Divide by zero");
                     }
                 }
             }
@@ -1202,25 +1208,28 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
 
             // log
             Expr::ScalarFunction(ScalarFunction {
-                fun: BuiltinScalarFunction::Log,
+                func_def: ScalarFunctionDefinition::BuiltIn(BuiltinScalarFunction::Log),
                 args,
             }) => simpl_log(args, <&S>::clone(&info))?,
 
             // power
             Expr::ScalarFunction(ScalarFunction {
-                fun: BuiltinScalarFunction::Power,
+                func_def: ScalarFunctionDefinition::BuiltIn(BuiltinScalarFunction::Power),
                 args,
             }) => simpl_power(args, <&S>::clone(&info))?,
 
             // concat
             Expr::ScalarFunction(ScalarFunction {
-                fun: BuiltinScalarFunction::Concat,
+                func_def: ScalarFunctionDefinition::BuiltIn(BuiltinScalarFunction::Concat),
                 args,
             }) => simpl_concat(args)?,
 
             // concat_ws
             Expr::ScalarFunction(ScalarFunction {
-                fun: BuiltinScalarFunction::ConcatWithSeparator,
+                func_def:
+                    ScalarFunctionDefinition::BuiltIn(
+                        BuiltinScalarFunction::ConcatWithSeparator,
+                    ),
                 args,
             }) => match &args[..] {
                 [delimiter, vals @ ..] => simpl_concat_ws(delimiter, vals)?,
@@ -1301,25 +1310,26 @@ mod tests {
         sync::Arc,
     };
 
+    use super::*;
     use crate::simplify_expressions::{
         utils::for_test::{cast_to_int64_expr, now_expr, to_timestamp_expr},
         SimplifyContext,
     };
-
-    use super::*;
     use crate::test::test_table_scan_with_name;
+
     use arrow::{
         array::{ArrayRef, Int32Array},
         datatypes::{DataType, Field, Schema},
     };
-    use chrono::{DateTime, TimeZone, Utc};
-    use datafusion_common::{assert_contains, cast::as_int32_array, DFField, ToDFSchema};
-    use datafusion_expr::*;
-    use datafusion_physical_expr::{
-        execution_props::ExecutionProps,
-        functions::make_scalar_function,
-        intervals::{Interval, NullableInterval},
+    use datafusion_common::{
+        assert_contains, cast::as_int32_array, plan_datafusion_err, DFField, ToDFSchema,
     };
+    use datafusion_expr::{interval_arithmetic::Interval, *};
+    use datafusion_physical_expr::{
+        execution_props::ExecutionProps, functions::make_scalar_function,
+    };
+
+    use chrono::{DateTime, TimeZone, Utc};
 
     // ------------------------------
     // --- ExprSimplifier tests -----
@@ -1553,7 +1563,7 @@ mod tests {
 
         // immutable UDF should get folded
         // udf_add(1+2, 30+40) --> 73
-        let expr = Expr::ScalarUDF(expr::ScalarUDF::new(
+        let expr = Expr::ScalarFunction(expr::ScalarFunction::new_udf(
             make_udf_add(Volatility::Immutable),
             args.clone(),
         ));
@@ -1562,15 +1572,21 @@ mod tests {
         // stable UDF should be entirely folded
         // udf_add(1+2, 30+40) --> 73
         let fun = make_udf_add(Volatility::Stable);
-        let expr = Expr::ScalarUDF(expr::ScalarUDF::new(Arc::clone(&fun), args.clone()));
+        let expr = Expr::ScalarFunction(expr::ScalarFunction::new_udf(
+            Arc::clone(&fun),
+            args.clone(),
+        ));
         test_evaluate(expr, lit(73));
 
         // volatile UDF should have args folded
         // udf_add(1+2, 30+40) --> udf_add(3, 70)
         let fun = make_udf_add(Volatility::Volatile);
-        let expr = Expr::ScalarUDF(expr::ScalarUDF::new(Arc::clone(&fun), args));
-        let expected_expr =
-            Expr::ScalarUDF(expr::ScalarUDF::new(Arc::clone(&fun), folded_args));
+        let expr =
+            Expr::ScalarFunction(expr::ScalarFunction::new_udf(Arc::clone(&fun), args));
+        let expected_expr = Expr::ScalarFunction(expr::ScalarFunction::new_udf(
+            Arc::clone(&fun),
+            folded_args,
+        ));
         test_evaluate(expr, expected_expr);
     }
 
@@ -1763,25 +1779,23 @@ mod tests {
 
     #[test]
     fn test_simplify_divide_zero_by_zero() {
-        // 0 / 0 -> DivideByZero
+        // 0 / 0 -> Divide by zero
         let expr = lit(0) / lit(0);
         let err = try_simplify(expr).unwrap_err();
 
-        assert!(
-            matches!(err, DataFusionError::ArrowError(ArrowError::DivideByZero)),
-            "{err}"
-        );
+        let _expected = plan_datafusion_err!("Divide by zero");
+
+        assert!(matches!(err, ref _expected), "{err}");
     }
 
     #[test]
-    #[should_panic(
-        expected = "called `Result::unwrap()` on an `Err` value: ArrowError(DivideByZero)"
-    )]
     fn test_simplify_divide_by_zero() {
         // A / 0 -> DivideByZeroError
         let expr = col("c2_non_null") / lit(0);
-
-        simplify(expr);
+        assert_eq!(
+            try_simplify(expr).unwrap_err().strip_backtrace(),
+            "Error during planning: Divide by zero"
+        );
     }
 
     #[test]
@@ -2201,12 +2215,12 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(
-        expected = "called `Result::unwrap()` on an `Err` value: ArrowError(DivideByZero)"
-    )]
     fn test_simplify_modulo_by_zero_non_null() {
         let expr = col("c2_non_null") % lit(0);
-        simplify(expr);
+        assert_eq!(
+            try_simplify(expr).unwrap_err().strip_backtrace(),
+            "Error during planning: Divide by zero"
+        );
     }
 
     #[test]
@@ -3090,6 +3104,18 @@ mod tests {
         assert_eq!(simplify(in_list(col("c1"), vec![], false)), lit(false));
         assert_eq!(simplify(in_list(col("c1"), vec![], true)), lit(true));
 
+        // null in (...)  --> null
+        assert_eq!(
+            simplify(in_list(lit_bool_null(), vec![col("c1"), lit(1)], false)),
+            lit_bool_null()
+        );
+
+        // null not in (...)  --> null
+        assert_eq!(
+            simplify(in_list(lit_bool_null(), vec![col("c1"), lit(1)], true)),
+            lit_bool_null()
+        );
+
         assert_eq!(
             simplify(in_list(col("c1"), vec![lit(1)], false)),
             col("c1").eq(lit(1))
@@ -3282,17 +3308,14 @@ mod tests {
             (
                 col("c3"),
                 NullableInterval::NotNull {
-                    values: Interval::make(Some(0_i64), Some(2_i64), (false, false)),
+                    values: Interval::make(Some(0_i64), Some(2_i64)).unwrap(),
                 },
             ),
             (
                 col("c4"),
                 NullableInterval::from(ScalarValue::UInt32(Some(9))),
             ),
-            (
-                col("c1"),
-                NullableInterval::from(ScalarValue::Utf8(Some("a".to_string()))),
-            ),
+            (col("c1"), NullableInterval::from(ScalarValue::from("a"))),
         ];
         let output = simplify_with_guarantee(expr.clone(), guarantees);
         assert_eq!(output, lit(false));
@@ -3302,19 +3325,23 @@ mod tests {
             (
                 col("c3"),
                 NullableInterval::MaybeNull {
-                    values: Interval::make(Some(0_i64), Some(2_i64), (false, false)),
+                    values: Interval::make(Some(0_i64), Some(2_i64)).unwrap(),
                 },
             ),
             (
                 col("c4"),
                 NullableInterval::MaybeNull {
-                    values: Interval::make(Some(9_u32), Some(9_u32), (false, false)),
+                    values: Interval::make(Some(9_u32), Some(9_u32)).unwrap(),
                 },
             ),
             (
                 col("c1"),
                 NullableInterval::NotNull {
-                    values: Interval::make(Some("d"), Some("f"), (false, false)),
+                    values: Interval::try_new(
+                        ScalarValue::from("d"),
+                        ScalarValue::from("f"),
+                    )
+                    .unwrap(),
                 },
             ),
         ];

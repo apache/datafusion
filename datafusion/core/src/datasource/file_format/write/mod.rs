@@ -18,129 +18,60 @@
 //! Module containing helper methods/traits related to enabling
 //! write support for the various file formats
 
-use std::io::Error;
-use std::mem;
+use std::io::{Error, Write};
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use crate::datasource::file_format::file_compression_type::FileCompressionType;
-
-use crate::datasource::physical_plan::FileMeta;
 use crate::error::Result;
 
 use arrow_array::RecordBatch;
-
-use datafusion_common::{exec_err, DataFusionError};
+use datafusion_common::DataFusionError;
 
 use async_trait::async_trait;
 use bytes::Bytes;
-
 use futures::future::BoxFuture;
-use futures::ready;
-use futures::FutureExt;
 use object_store::path::Path;
-use object_store::{MultipartId, ObjectMeta, ObjectStore};
-
+use object_store::{MultipartId, ObjectStore};
 use tokio::io::AsyncWrite;
 
 pub(crate) mod demux;
 pub(crate) mod orchestration;
 
-/// `AsyncPutWriter` is an object that facilitates asynchronous writing to object stores.
-/// It is specifically designed for the `object_store` crate's `put` method and sends
-/// whole bytes at once when the buffer is flushed.
-pub struct AsyncPutWriter {
-    /// Object metadata
-    object_meta: ObjectMeta,
-    /// A shared reference to the object store
-    store: Arc<dyn ObjectStore>,
-    /// A buffer that stores the bytes to be sent
-    current_buffer: Vec<u8>,
-    /// Used for async handling in flush method
-    inner_state: AsyncPutState,
+/// A buffer with interior mutability shared by the SerializedFileWriter and
+/// ObjectStore writer
+#[derive(Clone)]
+pub(crate) struct SharedBuffer {
+    /// The inner buffer for reading and writing
+    ///
+    /// The lock is used to obtain internal mutability, so no worry about the
+    /// lock contention.
+    pub(crate) buffer: Arc<futures::lock::Mutex<Vec<u8>>>,
 }
 
-impl AsyncPutWriter {
-    /// Constructor for the `AsyncPutWriter` object
-    pub fn new(object_meta: ObjectMeta, store: Arc<dyn ObjectStore>) -> Self {
+impl SharedBuffer {
+    pub fn new(capacity: usize) -> Self {
         Self {
-            object_meta,
-            store,
-            current_buffer: vec![],
-            // The writer starts out in buffering mode
-            inner_state: AsyncPutState::Buffer,
-        }
-    }
-
-    /// Separate implementation function that unpins the [`AsyncPutWriter`] so
-    /// that partial borrows work correctly
-    fn poll_shutdown_inner(
-        &mut self,
-        cx: &mut Context<'_>,
-    ) -> Poll<std::result::Result<(), Error>> {
-        loop {
-            match &mut self.inner_state {
-                AsyncPutState::Buffer => {
-                    // Convert the current buffer to bytes and take ownership of it
-                    let bytes = Bytes::from(mem::take(&mut self.current_buffer));
-                    // Set the inner state to Put variant with the bytes
-                    self.inner_state = AsyncPutState::Put { bytes }
-                }
-                AsyncPutState::Put { bytes } => {
-                    // Send the bytes to the object store's put method
-                    return Poll::Ready(
-                        ready!(self
-                            .store
-                            .put(&self.object_meta.location, bytes.clone())
-                            .poll_unpin(cx))
-                        .map_err(Error::from),
-                    );
-                }
-            }
+            buffer: Arc::new(futures::lock::Mutex::new(Vec::with_capacity(capacity))),
         }
     }
 }
 
-/// An enum that represents the inner state of AsyncPut
-enum AsyncPutState {
-    /// Building Bytes struct in this state
-    Buffer,
-    /// Data in the buffer is being sent to the object store
-    Put { bytes: Bytes },
-}
-
-impl AsyncWrite for AsyncPutWriter {
-    // Define the implementation of the AsyncWrite trait for the `AsyncPutWriter` struct
-    fn poll_write(
-        mut self: Pin<&mut Self>,
-        _: &mut Context<'_>,
-        buf: &[u8],
-    ) -> Poll<std::result::Result<usize, Error>> {
-        // Extend the current buffer with the incoming buffer
-        self.current_buffer.extend_from_slice(buf);
-        // Return a ready poll with the length of the incoming buffer
-        Poll::Ready(Ok(buf.len()))
+impl Write for SharedBuffer {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let mut buffer = self.buffer.try_lock().unwrap();
+        Write::write(&mut *buffer, buf)
     }
 
-    fn poll_flush(
-        self: Pin<&mut Self>,
-        _: &mut Context<'_>,
-    ) -> Poll<std::result::Result<(), Error>> {
-        // Return a ready poll with an empty result
-        Poll::Ready(Ok(()))
-    }
-
-    fn poll_shutdown(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-    ) -> Poll<std::result::Result<(), Error>> {
-        // Call the poll_shutdown_inner method to handle the actual sending of data to the object store
-        self.poll_shutdown_inner(cx)
+    fn flush(&mut self) -> std::io::Result<()> {
+        let mut buffer = self.buffer.try_lock().unwrap();
+        Write::flush(&mut *buffer)
     }
 }
 
 /// Stores data needed during abortion of MultiPart writers
+#[derive(Clone)]
 pub(crate) struct MultiPart {
     /// A shared reference to the object store
     store: Arc<dyn ObjectStore>,
@@ -163,45 +94,28 @@ impl MultiPart {
     }
 }
 
-pub(crate) enum AbortMode {
-    Put,
-    Append,
-    MultiPart(MultiPart),
-}
-
 /// A wrapper struct with abort method and writer
 pub(crate) struct AbortableWrite<W: AsyncWrite + Unpin + Send> {
     writer: W,
-    mode: AbortMode,
+    multipart: MultiPart,
 }
 
 impl<W: AsyncWrite + Unpin + Send> AbortableWrite<W> {
     /// Create a new `AbortableWrite` instance with the given writer, and write mode.
-    pub(crate) fn new(writer: W, mode: AbortMode) -> Self {
-        Self { writer, mode }
+    pub(crate) fn new(writer: W, multipart: MultiPart) -> Self {
+        Self { writer, multipart }
     }
 
     /// handling of abort for different write modes
     pub(crate) fn abort_writer(&self) -> Result<BoxFuture<'static, Result<()>>> {
-        match &self.mode {
-            AbortMode::Put => Ok(async { Ok(()) }.boxed()),
-            AbortMode::Append => exec_err!("Cannot abort in append mode"),
-            AbortMode::MultiPart(MultiPart {
-                store,
-                multipart_id,
-                location,
-            }) => {
-                let location = location.clone();
-                let multipart_id = multipart_id.clone();
-                let store = store.clone();
-                Ok(Box::pin(async move {
-                    store
-                        .abort_multipart(&location, &multipart_id)
-                        .await
-                        .map_err(DataFusionError::ObjectStore)
-                }))
-            }
-        }
+        let multi = self.multipart.clone();
+        Ok(Box::pin(async move {
+            multi
+                .store
+                .abort_multipart(&multi.location, &multi.multipart_id)
+                .await
+                .map_err(DataFusionError::ObjectStore)
+        }))
     }
 }
 
@@ -229,77 +143,28 @@ impl<W: AsyncWrite + Unpin + Send> AsyncWrite for AbortableWrite<W> {
     }
 }
 
-/// An enum that defines different file writer modes.
-#[derive(Debug, Clone, Copy)]
-pub enum FileWriterMode {
-    /// Data is appended to an existing file.
-    Append,
-    /// Data is written to a new file.
-    Put,
-    /// Data is written to a new file in multiple parts.
-    PutMultipart,
-}
 /// A trait that defines the methods required for a RecordBatch serializer.
 #[async_trait]
-pub trait BatchSerializer: Unpin + Send {
+pub trait BatchSerializer: Sync + Send {
     /// Asynchronously serializes a `RecordBatch` and returns the serialized bytes.
-    async fn serialize(&mut self, batch: RecordBatch) -> Result<Bytes>;
-    /// Duplicates self to support serializing multiple batches in parallel on multiple cores
-    fn duplicate(&mut self) -> Result<Box<dyn BatchSerializer>> {
-        Err(DataFusionError::NotImplemented(
-            "Parallel serialization is not implemented for this file type".into(),
-        ))
-    }
+    /// Parameter `initial` signals whether the given batch is the first batch.
+    /// This distinction is important for certain serializers (like CSV).
+    async fn serialize(&self, batch: RecordBatch, initial: bool) -> Result<Bytes>;
 }
 
 /// Returns an [`AbortableWrite`] which writes to the given object store location
 /// with the specified compression
 pub(crate) async fn create_writer(
-    writer_mode: FileWriterMode,
     file_compression_type: FileCompressionType,
-    file_meta: FileMeta,
+    location: &Path,
     object_store: Arc<dyn ObjectStore>,
 ) -> Result<AbortableWrite<Box<dyn AsyncWrite + Send + Unpin>>> {
-    let object = &file_meta.object_meta;
-    match writer_mode {
-        // If the mode is append, call the store's append method and return wrapped in
-        // a boxed trait object.
-        FileWriterMode::Append => {
-            let writer = object_store
-                .append(&object.location)
-                .await
-                .map_err(DataFusionError::ObjectStore)?;
-            let writer = AbortableWrite::new(
-                file_compression_type.convert_async_writer(writer)?,
-                AbortMode::Append,
-            );
-            Ok(writer)
-        }
-        // If the mode is put, create a new AsyncPut writer and return it wrapped in
-        // a boxed trait object
-        FileWriterMode::Put => {
-            let writer = Box::new(AsyncPutWriter::new(object.clone(), object_store));
-            let writer = AbortableWrite::new(
-                file_compression_type.convert_async_writer(writer)?,
-                AbortMode::Put,
-            );
-            Ok(writer)
-        }
-        // If the mode is put multipart, call the store's put_multipart method and
-        // return the writer wrapped in a boxed trait object.
-        FileWriterMode::PutMultipart => {
-            let (multipart_id, writer) = object_store
-                .put_multipart(&object.location)
-                .await
-                .map_err(DataFusionError::ObjectStore)?;
-            Ok(AbortableWrite::new(
-                file_compression_type.convert_async_writer(writer)?,
-                AbortMode::MultiPart(MultiPart::new(
-                    object_store,
-                    multipart_id,
-                    object.location.clone(),
-                )),
-            ))
-        }
-    }
+    let (multipart_id, writer) = object_store
+        .put_multipart(location)
+        .await
+        .map_err(DataFusionError::ObjectStore)?;
+    Ok(AbortableWrite::new(
+        file_compression_type.convert_async_writer(writer)?,
+        MultiPart::new(object_store, multipart_id, location.clone()),
+    ))
 }

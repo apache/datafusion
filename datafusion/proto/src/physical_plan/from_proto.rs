@@ -18,17 +18,20 @@
 //! Serde code to convert from protocol buffers to Rust data structures.
 
 use std::convert::{TryFrom, TryInto};
-use std::ops::Deref;
 use std::sync::Arc;
 
 use arrow::compute::SortOptions;
 use datafusion::arrow::datatypes::Schema;
-use datafusion::datasource::listing::{FileRange, PartitionedFile};
+use datafusion::datasource::file_format::csv::CsvSink;
+use datafusion::datasource::file_format::json::JsonSink;
+#[cfg(feature = "parquet")]
+use datafusion::datasource::file_format::parquet::ParquetSink;
+use datafusion::datasource::listing::{FileRange, ListingTableUrl, PartitionedFile};
 use datafusion::datasource::object_store::ObjectStoreUrl;
-use datafusion::datasource::physical_plan::FileScanConfig;
+use datafusion::datasource::physical_plan::{FileScanConfig, FileSinkConfig};
 use datafusion::execution::context::ExecutionProps;
 use datafusion::execution::FunctionRegistry;
-use datafusion::logical_expr::window_function::WindowFunction;
+use datafusion::logical_expr::WindowFunctionDefinition;
 use datafusion::physical_expr::{PhysicalSortExpr, ScalarFunctionExpr};
 use datafusion::physical_plan::expressions::{
     in_list, BinaryExpr, CaseExpr, CastExpr, Column, IsNotNullExpr, IsNullExpr, LikeExpr,
@@ -39,8 +42,14 @@ use datafusion::physical_plan::windows::create_window_expr;
 use datafusion::physical_plan::{
     functions, ColumnStatistics, Partitioning, PhysicalExpr, Statistics, WindowExpr,
 };
+use datafusion_common::file_options::csv_writer::CsvWriterOptions;
+use datafusion_common::file_options::json_writer::JsonWriterOptions;
+use datafusion_common::file_options::parquet_writer::ParquetWriterOptions;
+use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::stats::Precision;
-use datafusion_common::{not_impl_err, DataFusionError, JoinSide, Result, ScalarValue};
+use datafusion_common::{
+    not_impl_err, DataFusionError, FileTypeWriterOptions, JoinSide, Result, ScalarValue,
+};
 
 use crate::common::proto_error;
 use crate::convert_required;
@@ -48,6 +57,7 @@ use crate::logical_plan;
 use crate::protobuf;
 use crate::protobuf::physical_expr_node::ExprType;
 
+use crate::logical_plan::{csv_writer_options_from_proto, writer_properties_from_proto};
 use chrono::{TimeZone, Utc};
 use object_store::path::Path;
 use object_store::ObjectMeta;
@@ -308,12 +318,12 @@ pub fn parse_physical_expr(
                 &e.name,
                 fun_expr,
                 args,
-                &convert_required!(e.return_type)?,
+                convert_required!(e.return_type)?,
                 None,
             ))
         }
         ExprType::ScalarUdf(e) => {
-            let scalar_fun = registry.udf(e.name.as_str())?.deref().clone().fun;
+            let scalar_fun = registry.udf(e.name.as_str())?.fun().clone();
 
             let args = e
                 .args
@@ -325,7 +335,7 @@ pub fn parse_physical_expr(
                 e.name.as_str(),
                 scalar_fun,
                 args,
-                &convert_required!(e.return_type)?,
+                convert_required!(e.return_type)?,
                 None,
             ))
         }
@@ -404,7 +414,9 @@ fn parse_required_physical_expr(
         })
 }
 
-impl TryFrom<&protobuf::physical_window_expr_node::WindowFunction> for WindowFunction {
+impl TryFrom<&protobuf::physical_window_expr_node::WindowFunction>
+    for WindowFunctionDefinition
+{
     type Error = DataFusionError;
 
     fn try_from(
@@ -418,7 +430,7 @@ impl TryFrom<&protobuf::physical_window_expr_node::WindowFunction> for WindowFun
                     ))
                 })?;
 
-                Ok(WindowFunction::AggregateFunction(f.into()))
+                Ok(WindowFunctionDefinition::AggregateFunction(f.into()))
             }
             protobuf::physical_window_expr_node::WindowFunction::BuiltInFunction(n) => {
                 let f = protobuf::BuiltInWindowFunction::try_from(*n).map_err(|_| {
@@ -427,7 +439,7 @@ impl TryFrom<&protobuf::physical_window_expr_node::WindowFunction> for WindowFun
                     ))
                 })?;
 
-                Ok(WindowFunction::BuiltInWindowFunction(f.into()))
+                Ok(WindowFunctionDefinition::BuiltInWindowFunction(f.into()))
             }
         }
     }
@@ -522,7 +534,6 @@ pub fn parse_protobuf_file_scan_config(
         limit: proto.limit.as_ref().map(|sl| sl.limit as usize),
         table_partition_cols,
         output_ordering,
-        infinite_source: false,
     })
 }
 
@@ -536,6 +547,7 @@ impl TryFrom<&protobuf::PartitionedFile> for PartitionedFile {
                 last_modified: Utc.timestamp_nanos(val.last_modified_ns as i64),
                 size: val.size as usize,
                 e_tag: None,
+                version: None,
             },
             partition_values: val
                 .partition_values
@@ -695,5 +707,105 @@ impl TryFrom<&protobuf::Statistics> for Statistics {
             // No column statistic (None) is encoded with empty array
             column_statistics: s.column_stats.iter().map(|s| s.into()).collect(),
         })
+    }
+}
+
+impl TryFrom<&protobuf::JsonSink> for JsonSink {
+    type Error = DataFusionError;
+
+    fn try_from(value: &protobuf::JsonSink) -> Result<Self, Self::Error> {
+        Ok(Self::new(convert_required!(value.config)?))
+    }
+}
+
+#[cfg(feature = "parquet")]
+impl TryFrom<&protobuf::ParquetSink> for ParquetSink {
+    type Error = DataFusionError;
+
+    fn try_from(value: &protobuf::ParquetSink) -> Result<Self, Self::Error> {
+        Ok(Self::new(convert_required!(value.config)?))
+    }
+}
+
+impl TryFrom<&protobuf::CsvSink> for CsvSink {
+    type Error = DataFusionError;
+
+    fn try_from(value: &protobuf::CsvSink) -> Result<Self, Self::Error> {
+        Ok(Self::new(convert_required!(value.config)?))
+    }
+}
+
+impl TryFrom<&protobuf::FileSinkConfig> for FileSinkConfig {
+    type Error = DataFusionError;
+
+    fn try_from(conf: &protobuf::FileSinkConfig) -> Result<Self, Self::Error> {
+        let file_groups = conf
+            .file_groups
+            .iter()
+            .map(TryInto::try_into)
+            .collect::<Result<Vec<_>>>()?;
+        let table_paths = conf
+            .table_paths
+            .iter()
+            .map(ListingTableUrl::parse)
+            .collect::<Result<Vec<_>>>()?;
+        let table_partition_cols = conf
+            .table_partition_cols
+            .iter()
+            .map(|protobuf::PartitionColumn { name, arrow_type }| {
+                let data_type = convert_required!(arrow_type)?;
+                Ok((name.clone(), data_type))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Ok(Self {
+            object_store_url: ObjectStoreUrl::parse(&conf.object_store_url)?,
+            file_groups,
+            table_paths,
+            output_schema: Arc::new(convert_required!(conf.output_schema)?),
+            table_partition_cols,
+            single_file_output: conf.single_file_output,
+            overwrite: conf.overwrite,
+            file_type_writer_options: convert_required!(conf.file_type_writer_options)?,
+        })
+    }
+}
+
+impl From<protobuf::CompressionTypeVariant> for CompressionTypeVariant {
+    fn from(value: protobuf::CompressionTypeVariant) -> Self {
+        match value {
+            protobuf::CompressionTypeVariant::Gzip => Self::GZIP,
+            protobuf::CompressionTypeVariant::Bzip2 => Self::BZIP2,
+            protobuf::CompressionTypeVariant::Xz => Self::XZ,
+            protobuf::CompressionTypeVariant::Zstd => Self::ZSTD,
+            protobuf::CompressionTypeVariant::Uncompressed => Self::UNCOMPRESSED,
+        }
+    }
+}
+
+impl TryFrom<&protobuf::FileTypeWriterOptions> for FileTypeWriterOptions {
+    type Error = DataFusionError;
+
+    fn try_from(value: &protobuf::FileTypeWriterOptions) -> Result<Self, Self::Error> {
+        let file_type = value
+            .file_type
+            .as_ref()
+            .ok_or_else(|| proto_error("Missing required file_type field in protobuf"))?;
+
+        match file_type {
+            protobuf::file_type_writer_options::FileType::JsonOptions(opts) => {
+                let compression: CompressionTypeVariant = opts.compression().into();
+                Ok(Self::JSON(JsonWriterOptions::new(compression)))
+            }
+            protobuf::file_type_writer_options::FileType::CsvOptions(opts) => {
+                let write_options = csv_writer_options_from_proto(opts)?;
+                let compression: CompressionTypeVariant = opts.compression().into();
+                Ok(Self::CSV(CsvWriterOptions::new(write_options, compression)))
+            }
+            protobuf::file_type_writer_options::FileType::ParquetOptions(opt) => {
+                let props = opt.writer_properties.clone().unwrap_or_default();
+                let writer_properties = writer_properties_from_proto(&props)?;
+                Ok(Self::Parquet(ParquetWriterOptions::new(writer_properties)))
+            }
+        }
     }
 }

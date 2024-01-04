@@ -110,7 +110,7 @@ impl GetIndexedFieldExpr {
         Self::new(
             arg,
             GetFieldAccessExpr::NamedStructField {
-                name: ScalarValue::Utf8(Some(name.into())),
+                name: ScalarValue::from(name.into()),
             },
         )
     }
@@ -183,7 +183,7 @@ impl PhysicalExpr for GetIndexedFieldExpr {
     }
 
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
-        let array = self.arg.evaluate(batch)?.into_array(batch.num_rows());
+        let array = self.arg.evaluate(batch)?.into_array(batch.num_rows())?;
         match &self.field {
             GetFieldAccessExpr::NamedStructField{name} => match (array.data_type(), name) {
                 (DataType::Map(_, _), ScalarValue::Utf8(Some(k))) => {
@@ -210,7 +210,7 @@ impl PhysicalExpr for GetIndexedFieldExpr {
                                          with utf8 indexes. Tried {dt:?} with {name:?} index"),
             },
             GetFieldAccessExpr::ListIndex{key} => {
-            let key = key.evaluate(batch)?.into_array(batch.num_rows());
+            let key = key.evaluate(batch)?.into_array(batch.num_rows())?;
             match (array.data_type(), key.data_type()) {
                 (DataType::List(_), DataType::Int64) => Ok(ColumnarValue::Array(array_element(&[
                     array, key
@@ -224,8 +224,8 @@ impl PhysicalExpr for GetIndexedFieldExpr {
                         }
                 },
             GetFieldAccessExpr::ListRange{start, stop} => {
-                let start = start.evaluate(batch)?.into_array(batch.num_rows());
-                let stop = stop.evaluate(batch)?.into_array(batch.num_rows());
+                let start = start.evaluate(batch)?.into_array(batch.num_rows())?;
+                let stop = stop.evaluate(batch)?.into_array(batch.num_rows())?;
                 match (array.data_type(), start.data_type(), stop.data_type()) {
                     (DataType::List(_), DataType::Int64, DataType::Int64) => Ok(ColumnarValue::Array(array_slice(&[
                         array, start, stop
@@ -326,7 +326,10 @@ mod tests {
         // only one row should be processed
         let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(struct_array)])?;
         let expr = Arc::new(GetIndexedFieldExpr::new_field(expr, "a"));
-        let result = expr.evaluate(&batch)?.into_array(1);
+        let result = expr
+            .evaluate(&batch)?
+            .into_array(1)
+            .expect("Failed to convert to array");
         let result =
             as_boolean_array(&result).expect("failed to downcast to BooleanArray");
         assert_eq!(boolean, result.clone());
@@ -383,7 +386,10 @@ mod tests {
             vec![Arc::new(list_col), Arc::new(key_col)],
         )?;
         let expr = Arc::new(GetIndexedFieldExpr::new_index(expr, key));
-        let result = expr.evaluate(&batch)?.into_array(1);
+        let result = expr
+            .evaluate(&batch)?
+            .into_array(1)
+            .expect("Failed to convert to array");
         let result = as_string_array(&result).expect("failed to downcast to ListArray");
         let expected = StringArray::from(expected_list);
         assert_eq!(expected, result.clone());
@@ -419,7 +425,10 @@ mod tests {
             vec![Arc::new(list_col), Arc::new(start_col), Arc::new(stop_col)],
         )?;
         let expr = Arc::new(GetIndexedFieldExpr::new_range(expr, start, stop));
-        let result = expr.evaluate(&batch)?.into_array(1);
+        let result = expr
+            .evaluate(&batch)?
+            .into_array(1)
+            .expect("Failed to convert to array");
         let result = as_list_array(&result).expect("failed to downcast to ListArray");
         let (expected, _, _) =
             build_list_arguments(expected_list, vec![None], vec![None]);
@@ -440,8 +449,11 @@ mod tests {
             vec![Arc::new(list_builder.finish()), key_array],
         )?;
         let expr = Arc::new(GetIndexedFieldExpr::new_index(expr, key));
-        let result = expr.evaluate(&batch)?.into_array(batch.num_rows());
-        assert!(result.is_null(0));
+        let result = expr
+            .evaluate(&batch)?
+            .into_array(batch.num_rows())
+            .expect("Failed to convert to array");
+        assert!(result.is_empty());
         Ok(())
     }
 
@@ -461,7 +473,10 @@ mod tests {
             vec![Arc::new(list_builder.finish()), Arc::new(key_array)],
         )?;
         let expr = Arc::new(GetIndexedFieldExpr::new_index(expr, key));
-        let result = expr.evaluate(&batch)?.into_array(1);
+        let result = expr
+            .evaluate(&batch)?
+            .into_array(1)
+            .expect("Failed to convert to array");
         assert!(result.is_null(0));
         Ok(())
     }

@@ -19,6 +19,7 @@
 
 use std::sync::Arc;
 
+use super::projection_pushdown::ProjectionPushdown;
 use crate::config::ConfigOptions;
 use crate::physical_optimizer::aggregate_statistics::AggregateStatistics;
 use crate::physical_optimizer::coalesce_batches::CoalesceBatches;
@@ -26,6 +27,7 @@ use crate::physical_optimizer::combine_partial_final_agg::CombinePartialFinalAgg
 use crate::physical_optimizer::enforce_distribution::EnforceDistribution;
 use crate::physical_optimizer::enforce_sorting::EnforceSorting;
 use crate::physical_optimizer::join_selection::JoinSelection;
+use crate::physical_optimizer::limited_distinct_aggregation::LimitedDistinctAggregation;
 use crate::physical_optimizer::output_requirements::OutputRequirements;
 use crate::physical_optimizer::pipeline_checker::PipelineChecker;
 use crate::physical_optimizer::topk_aggregation::TopKAggregation;
@@ -79,6 +81,10 @@ impl PhysicalOptimizer {
             // repartitioning and local sorting steps to meet distribution and ordering requirements.
             // Therefore, it should run before EnforceDistribution and EnforceSorting.
             Arc::new(JoinSelection::new()),
+            // The LimitedDistinctAggregation rule should be applied before the EnforceDistribution rule,
+            // as that rule may inject other operations in between the different AggregateExecs.
+            // Applying the rule early means only directly-connected AggregateExecs must be examined.
+            Arc::new(LimitedDistinctAggregation::new()),
             // The EnforceDistribution rule is for adding essential repartitioning to satisfy distribution
             // requirements. Please make sure that the whole plan tree is determined before this rule.
             // This rule increases parallelism if doing so is beneficial to the physical plan; i.e. at
@@ -107,6 +113,13 @@ impl PhysicalOptimizer {
             // into an `order by max(x) limit y`. In this case it will copy the limit value down
             // to the aggregation, allowing it to use only y number of accumulators.
             Arc::new(TopKAggregation::new()),
+            // The ProjectionPushdown rule tries to push projections towards
+            // the sources in the execution plan. As a result of this process,
+            // a projection can disappear if it reaches the source providers, and
+            // sequential projections can merge into one. Even if these two cases
+            // are not present, the load of executors such as join or union will be
+            // reduced by narrowing their input tables.
+            Arc::new(ProjectionPushdown::new()),
         ];
 
         Self::with_rules(rules)

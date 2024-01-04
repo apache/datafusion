@@ -18,6 +18,7 @@
 //! This module provides common traits for visiting or rewriting tree
 //! data structures easily.
 
+use std::borrow::Cow;
 use std::sync::Arc;
 
 use crate::Result;
@@ -32,7 +33,10 @@ use crate::Result;
 /// [`PhysicalExpr`]: https://docs.rs/datafusion/latest/datafusion/physical_plan/trait.PhysicalExpr.html
 /// [`LogicalPlan`]: https://docs.rs/datafusion-expr/latest/datafusion_expr/logical_plan/enum.LogicalPlan.html
 /// [`Expr`]: https://docs.rs/datafusion-expr/latest/datafusion_expr/expr/enum.Expr.html
-pub trait TreeNode: Sized {
+pub trait TreeNode: Sized + Clone {
+    /// Returns all children of the TreeNode
+    fn children_nodes(&self) -> Vec<Cow<Self>>;
+
     /// Use preorder to iterate the node on the tree so that we can
     /// stop fast for some cases.
     ///
@@ -125,6 +129,17 @@ pub trait TreeNode: Sized {
         after_op.map_children(|node| node.transform_down(op))
     }
 
+    /// Convenience utils for writing optimizers rule: recursively apply the given 'op' to the node and all of its
+    /// children(Preorder Traversal) using a mutable function, `F`.
+    /// When the `op` does not apply to a given node, it is left unchanged.
+    fn transform_down_mut<F>(self, op: &mut F) -> Result<Self>
+    where
+        F: FnMut(Self) -> Result<Transformed<Self>>,
+    {
+        let after_op = op(self)?.into();
+        after_op.map_children(|node| node.transform_down_mut(op))
+    }
+
     /// Convenience utils for writing optimizers rule: recursively apply the given 'op' first to all of its
     /// children and then itself(Postorder Traversal).
     /// When the `op` does not apply to a given node, it is left unchanged.
@@ -133,6 +148,19 @@ pub trait TreeNode: Sized {
         F: Fn(Self) -> Result<Transformed<Self>>,
     {
         let after_op_children = self.map_children(|node| node.transform_up(op))?;
+
+        let new_node = op(after_op_children)?.into();
+        Ok(new_node)
+    }
+
+    /// Convenience utils for writing optimizers rule: recursively apply the given 'op' first to all of its
+    /// children and then itself(Postorder Traversal) using a mutable function, `F`.
+    /// When the `op` does not apply to a given node, it is left unchanged.
+    fn transform_up_mut<F>(self, op: &mut F) -> Result<Self>
+    where
+        F: FnMut(Self) -> Result<Transformed<Self>>,
+    {
+        let after_op_children = self.map_children(|node| node.transform_up_mut(op))?;
 
         let new_node = op(after_op_children)?.into();
         Ok(new_node)
@@ -187,7 +215,17 @@ pub trait TreeNode: Sized {
     /// Apply the closure `F` to the node's children
     fn apply_children<F>(&self, op: &mut F) -> Result<VisitRecursion>
     where
-        F: FnMut(&Self) -> Result<VisitRecursion>;
+        F: FnMut(&Self) -> Result<VisitRecursion>,
+    {
+        for child in self.children_nodes() {
+            match op(&child)? {
+                VisitRecursion::Continue => {}
+                VisitRecursion::Skip => return Ok(VisitRecursion::Continue),
+                VisitRecursion::Stop => return Ok(VisitRecursion::Stop),
+            }
+        }
+        Ok(VisitRecursion::Continue)
+    }
 
     /// Apply transform `F` to the node's children, the transform `F` might have a direction(Preorder or Postorder)
     fn map_children<F>(self, transform: F) -> Result<Self>
@@ -318,19 +356,8 @@ pub trait DynTreeNode {
 /// Blanket implementation for Arc for any tye that implements
 /// [`DynTreeNode`] (such as [`Arc<dyn PhysicalExpr>`])
 impl<T: DynTreeNode + ?Sized> TreeNode for Arc<T> {
-    fn apply_children<F>(&self, op: &mut F) -> Result<VisitRecursion>
-    where
-        F: FnMut(&Self) -> Result<VisitRecursion>,
-    {
-        for child in self.arc_children() {
-            match op(&child)? {
-                VisitRecursion::Continue => {}
-                VisitRecursion::Skip => return Ok(VisitRecursion::Continue),
-                VisitRecursion::Stop => return Ok(VisitRecursion::Stop),
-            }
-        }
-
-        Ok(VisitRecursion::Continue)
+    fn children_nodes(&self) -> Vec<Cow<Self>> {
+        self.arc_children().into_iter().map(Cow::Owned).collect()
     }
 
     fn map_children<F>(self, transform: F) -> Result<Self>
