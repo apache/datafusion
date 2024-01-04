@@ -2120,10 +2120,10 @@ pub fn cardinality(args: &[ArrayRef]) -> Result<ArrayRef> {
             generic_list_cardinality::<i64>(list_array)
         }
         _ => {
-            return exec_err!(
+            exec_err!(
                 "cardinality does not support type '{:?}'",
                 args[0].data_type()
-            );
+            )
         }
     }
 }
