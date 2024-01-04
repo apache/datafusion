@@ -2110,30 +2110,14 @@ pub fn cardinality(args: &[ArrayRef]) -> Result<ArrayRef> {
         return exec_err!("cardinality expects one argument");
     }
 
-    let result = match &args[0].data_type() {
+    match &args[0].data_type() {
         DataType::List(_) => {
-            let array = as_list_array(&args[0])?;
-            array
-                .iter()
-                .map(|arr| match compute_array_dims(arr)? {
-                    Some(vector) => {
-                        Ok(Some(vector.iter().map(|x| x.unwrap()).product::<u64>()))
-                    }
-                    None => Ok(None),
-                })
-                .collect::<Result<UInt64Array>>()?
+            let list_array = as_list_array(&args[0])?;
+            generic_list_cardinality::<i32>(list_array)
         }
         DataType::LargeList(_) => {
-            let array = as_large_list_array(&args[0])?;
-            array
-                .iter()
-                .map(|arr| match compute_array_dims(arr)? {
-                    Some(vector) => {
-                        Ok(Some(vector.iter().map(|x| x.unwrap()).product::<u64>()))
-                    }
-                    None => Ok(None),
-                })
-                .collect::<Result<UInt64Array>>()?
+            let list_array = as_large_list_array(&args[0])?;
+            generic_list_cardinality::<i64>(list_array)
         }
         _ => {
             return exec_err!(
@@ -2141,7 +2125,19 @@ pub fn cardinality(args: &[ArrayRef]) -> Result<ArrayRef> {
                 args[0].data_type()
             );
         }
-    };
+    }
+}
+
+fn generic_list_cardinality<O: OffsetSizeTrait>(
+    array: &GenericListArray<O>,
+) -> Result<ArrayRef> {
+    let result = array
+        .iter()
+        .map(|arr| match compute_array_dims(arr)? {
+            Some(vector) => Ok(Some(vector.iter().map(|x| x.unwrap()).product::<u64>())),
+            None => Ok(None),
+        })
+        .collect::<Result<UInt64Array>>()?;
     Ok(Arc::new(result) as ArrayRef)
 }
 
