@@ -102,6 +102,20 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 // Numeric literals in window function ORDER BY are treated as constants
                 false,
             )?;
+
+            let func_deps = schema.functional_dependencies();
+            let is_ordering_deterministic = order_by.iter().any(|orderby_expr| {
+                if let Expr::Sort(sort_expr) = orderby_expr {
+                    if let Expr::Column(col) = sort_expr.expr.as_ref() {
+                        let idx = schema.index_of_column(col).unwrap();
+                        return func_deps
+                            .iter()
+                            .any(|dep| dep.source_indices == vec![idx]);
+                    }
+                }
+                false
+            });
+
             let window_frame = window
                 .window_frame
                 .as_ref()
@@ -115,6 +129,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             let window_frame = if let Some(window_frame) = window_frame {
                 regularize_window_order_by(&window_frame, &mut order_by)?;
                 window_frame
+            } else if is_ordering_deterministic {
+                WindowFrame::new_with_primary_key_ordering()
             } else {
                 WindowFrame::new(!order_by.is_empty())
             };

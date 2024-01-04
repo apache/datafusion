@@ -114,6 +114,21 @@ impl WindowFrame {
         }
     }
 
+    /// Creates a new window frame for OVER(ORDER BY <expr, ..>) cases.
+    pub fn new_with_primary_key_ordering() -> Self {
+        // This window frame covers the table (or partition if `PARTITION BY` is used)
+        // from beginning to the `CURRENT ROW`. It is used
+        // when the `OVER` clause
+        // - contains an `ORDER BY` clause
+        // - doesn't contain a window frame.
+        // - ordering expression contains a PRIMARY KEY (e.g one of the expressions is unique)
+        WindowFrame {
+            units: WindowFrameUnits::Rows,
+            start_bound: WindowFrameBound::Preceding(ScalarValue::Null),
+            end_bound: WindowFrameBound::CurrentRow,
+        }
+    }
+
     /// Get reversed window frame. For example
     /// `3 ROWS PRECEDING AND 2 ROWS FOLLOWING` -->
     /// `2 ROWS PRECEDING AND 3 ROWS FOLLOWING`
