@@ -45,6 +45,7 @@ use datafusion::sql::{parser::DFParser, sqlparser::dialect::dialect_from_str};
 use object_store::ObjectStore;
 use rustyline::error::ReadlineError;
 use rustyline::Editor;
+use tokio::signal;
 use url::Url;
 
 /// run and execute SQL statements and commands, against a context with the given print options
@@ -165,9 +166,15 @@ pub async fn exec_from_repl(
             }
             Ok(line) => {
                 rl.add_history_entry(line.trim_end())?;
-                match exec_and_print(ctx, print_options, line).await {
-                    Ok(_) => {}
-                    Err(err) => eprintln!("{err}"),
+                tokio::select! {
+                    res = exec_and_print(ctx, print_options, line) => match res {
+                        Ok(_) => {}
+                        Err(err) => eprintln!("{err}"),
+                    },
+                    _ = signal::ctrl_c() => {
+                        println!("^C");
+                        continue
+                    },
                 }
                 // dialect might have changed
                 rl.helper_mut().unwrap().set_dialect(
