@@ -186,6 +186,7 @@ where
 /// # use datafusion_common::{DataFusionError, plan_err, Result};
 /// # use datafusion_expr::{col, Signature, Volatility, PartitionEvaluator, WindowFrame};
 /// # use datafusion_expr::{WindowUDFImpl, WindowUDF};
+/// #[derive(Debug, Clone)]
 /// struct SmoothIt {
 ///   signature: Signature
 /// };
