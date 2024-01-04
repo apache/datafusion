@@ -2617,12 +2617,7 @@ pub fn array_resize(arg: &[ArrayRef]) -> Result<ArrayRef> {
         return exec_err!("array_resize needs two or three arguments");
     }
 
-    let array = as_list_array(&arg[0])?;
     let new_len = as_int64_array(&arg[1])?;
-    // if new_len < 0 {
-    //     return exec_err!("array_resize: new length must be non-negative");
-    // }
-
     let new_element = if arg.len() == 3 {
         Some(arg[2].clone())
     } else {
@@ -2631,7 +2626,12 @@ pub fn array_resize(arg: &[ArrayRef]) -> Result<ArrayRef> {
 
     match &arg[0].data_type() {
         DataType::List(field) => {
+            let array = as_list_array(&arg[0])?;
             general_list_resize::<i32>(array, new_len, field, new_element)
+        }
+        DataType::LargeList(field) => {
+            let array = as_large_list_array(&arg[0])?;
+            general_list_resize::<i64>(array, new_len, field, new_element)
         }
         _ => internal_err!("array_resize only support list array"),
     }
@@ -2643,7 +2643,7 @@ fn general_list_resize<O: OffsetSizeTrait>(
     field: &FieldRef,
     new_element: Option<ArrayRef>,
 ) -> Result<ArrayRef> {
-    let mut offsets = vec![0];
+    let mut offsets = vec![O::usize_as(0)];
     let mut new_arrays = vec![];
 
     let dt = array.value_type();
@@ -2677,7 +2677,7 @@ fn general_list_resize<O: OffsetSizeTrait>(
                 rows.extend(new_row);
 
                 let last_offset = offsets.last().copied().unwrap();
-                offsets.push(last_offset + rows.len() as i32);
+                offsets.push(last_offset + O::usize_as(rows.len()));
                 let arrays = converter.convert_rows(rows)?;
                 let array = match arrays.first() {
                     Some(array) => array.clone(),
@@ -2701,7 +2701,7 @@ fn general_list_resize<O: OffsetSizeTrait>(
     let new_arrays_ref = new_arrays.iter().map(|v| v.as_ref()).collect::<Vec<_>>();
     let values = compute::concat(&new_arrays_ref)?;
 
-    Ok(Arc::new(ListArray::try_new(
+    Ok(Arc::new(GenericListArray::<O>::try_new(
         field.clone(),
         offsets,
         values,
