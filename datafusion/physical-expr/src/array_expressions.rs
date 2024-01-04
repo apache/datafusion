@@ -18,6 +18,7 @@
 //! Array expressions
 
 use std::any::type_name;
+use std::cmp::min;
 use std::collections::HashSet;
 use std::fmt::{Display, Formatter};
 use std::sync::Arc;
@@ -26,7 +27,7 @@ use arrow::array::*;
 use arrow::buffer::OffsetBuffer;
 use arrow::compute;
 use arrow::datatypes::{DataType, Field, UInt64Type};
-use arrow::row::{RowConverter, SortField};
+use arrow::row::{Row, RowConverter, SortField};
 use arrow_buffer::NullBuffer;
 
 use arrow_schema::{FieldRef, SortOptions};
@@ -34,7 +35,7 @@ use datafusion_common::cast::{
     as_generic_list_array, as_generic_string_array, as_int64_array, as_large_list_array,
     as_list_array, as_null_array, as_string_array,
 };
-use datafusion_common::utils::{array_into_list_array, list_ndims};
+use datafusion_common::utils::{array_into_list_array, empty_list, list_ndims};
 use datafusion_common::{
     exec_err, internal_err, not_impl_err, plan_err, DataFusionError, Result,
 };
@@ -2609,6 +2610,95 @@ pub fn array_distinct(args: &[ArrayRef]) -> Result<ArrayRef> {
         }
         array_type => exec_err!("array_distinct does not support type '{array_type:?}'"),
     }
+}
+
+pub fn array_resize(arg: &[ArrayRef]) -> Result<ArrayRef> {
+    if arg.len() < 2 || arg.len() > 3 {
+        return exec_err!("array_resize needs two or three arguments");
+    }
+
+    let array = as_list_array(&arg[0])?;
+    let new_len = as_int64_array(&arg[1])?.value(0);
+    if new_len < 0 {
+        return exec_err!("array_resize: new length must be non-negative");
+    }
+
+    let new_element = if arg.len() == 3 {
+        Some(arg[2].clone())
+    } else {
+        None
+    };
+
+    match &arg[0].data_type() {
+        DataType::List(field) => {
+            general_list_resize::<i32>(array, new_len, field, new_element)
+        }
+        _ => internal_err!("array_resize only support list array"),
+    }
+}
+
+fn general_list_resize<O: OffsetSizeTrait>(
+    array: &GenericListArray<O>,
+    count_array: i64,
+    field: &FieldRef,
+    new_element: Option<ArrayRef>,
+) -> Result<ArrayRef> {
+    let mut offsets = vec![0];
+    let mut new_arrays = vec![];
+
+    let dt = array.value_type();
+    let converter = RowConverter::new(vec![SortField::new(dt.clone())])?;
+    let new_element = if let Some(new_element) = new_element {
+        new_element
+    } else {
+        empty_list(&dt)?
+    };
+    let binding = converter.convert_columns(&[new_element.clone()])?;
+    let row = binding.row(0);
+    let count = count_array as usize;
+
+    for arr in array.iter() {
+        match arr {
+            Some(arr) => {
+                let values = converter.convert_columns(&[arr])?;
+                let rows = values.iter().collect::<Vec<_>>();
+
+                let remain_count = min(rows.len(), count);
+                let mut rows = rows[..remain_count].to_vec();
+                let new_row = vec![&row; count - remain_count];
+                rows.extend(new_row);
+
+                let last_offset = offsets.last().copied().unwrap();
+                offsets.push(last_offset + rows.len() as i32);
+                let arrays = converter.convert_rows(rows)?;
+                let array = match arrays.first() {
+                    Some(array) => array.clone(),
+                    None => {
+                        return internal_err!(
+                            "array_distinct: failed to get array from rows"
+                        )
+                    }
+                };
+                new_arrays.push(array);
+            }
+            None => {
+                let last_offset = offsets.last().copied().unwrap();
+                offsets.push(last_offset + count as i32);
+                new_arrays.push(new_element.clone());
+            }
+        }
+    }
+
+    let offsets = OffsetBuffer::new(offsets.into());
+    let new_arrays_ref = new_arrays.iter().map(|v| v.as_ref()).collect::<Vec<_>>();
+    let values = compute::concat(&new_arrays_ref)?;
+
+    Ok(Arc::new(ListArray::try_new(
+        field.clone(),
+        OffsetBuffer::from(offsets.into()),
+        values,
+        None,
+    )?))
 }
 
 #[cfg(test)]

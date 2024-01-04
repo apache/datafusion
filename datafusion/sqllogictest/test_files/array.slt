@@ -4894,6 +4894,30 @@ select string_to_list(e, 'm') from values;
 [adipiscing]
 NULL
 
+# array_resize scalar function #1
+query ?
+select array_resize(make_array(1, 2, 3), 1);
+----
+[1]
+
+# array_resize scalar function #2
+query ?
+select array_resize(make_array(1, 2, 3), 5);
+----
+[1, 2, 3, , ]
+
+# array_resize scalar function #3
+query ?
+select array_resize(make_array(1, 2, 3), 5, 4);
+----
+[1, 2, 3, 4, 4]
+
+# TODO: support column later
+# # array_resize scalar function #4
+# query ?
+# select array_resize(column1, column2, column3) from arrays_values;
+# --
+
 ### Delete tables
 
 statement ok
