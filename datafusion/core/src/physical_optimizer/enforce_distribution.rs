@@ -925,7 +925,6 @@ fn add_hash_on_top(
     mut input: DistributionContext,
     hash_exprs: Vec<Arc<dyn PhysicalExpr>>,
     n_target: usize,
-    repartition_beneficial_stats: bool,
 ) -> Result<DistributionContext> {
     let partition_count = input.plan.output_partitioning().partition_count();
     // Early return if hash repartition is unnecessary
@@ -951,12 +950,6 @@ fn add_hash_on_top(
         //   requirements.
         // - Usage of order preserving variants is not desirable (per the flag
         //   `config.optimizer.prefer_existing_sort`).
-        if repartition_beneficial_stats {
-            // Since hashing benefits from partitioning, add a round-robin repartition
-            // before it:
-            input = add_roundrobin_on_top(input, n_target)?;
-        }
-
         let partitioning = Partitioning::Hash(hash_exprs, n_target);
         let repartition = RepartitionExec::try_new(input.plan.clone(), partitioning)?
             .with_preserve_order();
@@ -1209,6 +1202,12 @@ fn ensure_distribution(
                 true
             };
 
+            let add_roundrobin = enable_round_robin
+                // Operator benefits from partitioning (e.g. filter):
+                && (would_benefit && repartition_beneficial_stats)
+                // Unless partitioning doesn't increase the partition count, it is not beneficial:
+                && child.plan.output_partitioning().partition_count() < target_partitions;
+
             if enable_round_robin
                 // Operator benefits from partitioning (e.g. filter):
                 && (would_benefit && repartition_beneficial_stats)
@@ -1237,14 +1236,20 @@ fn ensure_distribution(
                     child = add_spm_on_top(child);
                 }
                 Distribution::HashPartitioned(exprs) => {
-                    child = add_hash_on_top(
-                        child,
-                        exprs.to_vec(),
-                        target_partitions,
-                        repartition_beneficial_stats,
-                    )?;
+                    if add_roundrobin {
+                        // Add round-robin repartitioning on top of the operator
+                        // to increase parallelism.
+                        child = add_roundrobin_on_top(child, target_partitions)?;
+                    }
+                    child = add_hash_on_top(child, exprs.to_vec(), target_partitions)?;
                 }
-                Distribution::UnspecifiedDistribution => {}
+                Distribution::UnspecifiedDistribution => {
+                    if add_roundrobin {
+                        // Add round-robin repartitioning on top of the operator
+                        // to increase parallelism.
+                        child = add_roundrobin_on_top(child, target_partitions)?;
+                    }
+                }
             };
 
             // There is an ordering requirement of the operator:
