@@ -106,7 +106,7 @@ jobs:
           RUSTFLAGS: "-C debuginfo=0 -C opt-level=0 -C incremental=false -C codegen-units=256"
           RUST_BACKTRACE: "1"
           # avoid rust stack overflows on tpc-ds tests
-          RUST_MINSTACK: "3000000"
+          RUST_MIN_STACK: "3000000"
       - name: Verify Working Directory Clean
         run: git diff --exit-code
 
@@ -316,7 +316,7 @@ jobs:
           RUSTFLAGS: "-C debuginfo=line-tables-only"
           RUST_BACKTRACE: "1"
           # avoid rust stack overflows on tpc-ds tests
-          RUST_MINSTACK: "3000000"
+          RUST_MIN_STACK: "3000000"
   macos:
     name: cargo test (mac)
     runs-on: macos-latest
@@ -356,7 +356,7 @@ jobs:
           RUSTFLAGS: "-C debuginfo=0 -C opt-level=0 -C incremental=false -C codegen-units=256"
           RUST_BACKTRACE: "1"
           # avoid rust stack overflows on tpc-ds tests
-          RUST_MINSTACK: "3000000"
+          RUST_MIN_STACK: "3000000"
 
   test-datafusion-pyarrow:
     name: cargo test pyarrow (amd64)
