@@ -43,6 +43,7 @@ use datafusion::prelude::SessionContext;
 use datafusion::sql::{parser::DFParser, sqlparser::dialect::dialect_from_str};
 
 use object_store::ObjectStore;
+use object_store::http::HttpBuilder;
 use rustyline::error::ReadlineError;
 use rustyline::Editor;
 use tokio::signal;
@@ -277,6 +278,9 @@ async fn create_external_table(
         "gs" | "gcs" => {
             let builder = get_gcs_object_store_builder(url, cmd)?;
             Arc::new(builder.build()?) as Arc<dyn ObjectStore>
+        }
+        "http" | "https" => {
+            Arc::new(HttpBuilder::new().with_url(url.origin().ascii_serialization()).build()?) as Arc<dyn ObjectStore>
         }
         _ => {
             // for other types, try to get from the object_store_registry
