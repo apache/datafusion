@@ -741,6 +741,7 @@ async fn test_extract_date_part() -> Result<()> {
 
 #[tokio::test]
 async fn test_extract_epoch() -> Result<()> {
+    // timestamp
     test_expression!(
         "extract(epoch from '1870-01-01T07:29:10.256'::timestamp)",
         "-3155646649.744"
@@ -754,6 +755,39 @@ async fn test_extract_epoch() -> Result<()> {
         "946684800.0"
     );
     test_expression!("extract(epoch from NULL::timestamp)", "NULL");
+    // date
+    test_expression!(
+        "extract(epoch from arrow_cast('1970-01-01', 'Date32'))",
+        "0.0"
+    );
+    test_expression!(
+        "extract(epoch from arrow_cast('1970-01-02', 'Date32'))",
+        "86400.0"
+    );
+    test_expression!(
+        "extract(epoch from arrow_cast('1970-01-11', 'Date32'))",
+        "864000.0"
+    );
+    test_expression!(
+        "extract(epoch from arrow_cast('1969-12-31', 'Date32'))",
+        "-86400.0"
+    );
+    test_expression!(
+        "extract(epoch from arrow_cast('1970-01-01', 'Date64'))",
+        "0.0"
+    );
+    test_expression!(
+        "extract(epoch from arrow_cast('1970-01-02', 'Date64'))",
+        "86400.0"
+    );
+    test_expression!(
+        "extract(epoch from arrow_cast('1970-01-11', 'Date64'))",
+        "864000.0"
+    );
+    test_expression!(
+        "extract(epoch from arrow_cast('1969-12-31', 'Date64'))",
+        "-86400.0"
+    );
     Ok(())
 }
 

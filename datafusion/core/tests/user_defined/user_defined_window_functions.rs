@@ -19,6 +19,7 @@
 //! user defined window functions
 
 use std::{
+    any::Any,
     ops::Range,
     sync::{
         atomic::{AtomicUsize, Ordering},
@@ -32,8 +33,7 @@ use arrow_schema::DataType;
 use datafusion::{assert_batches_eq, prelude::SessionContext};
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::{
-    function::PartitionEvaluatorFactory, PartitionEvaluator, ReturnTypeFunction,
-    Signature, Volatility, WindowUDF,
+    PartitionEvaluator, Signature, Volatility, WindowUDF, WindowUDFImpl,
 };
 
 /// A query with a window function evaluated over the entire partition
@@ -471,24 +471,48 @@ impl OddCounter {
     }
 
     fn register(ctx: &mut SessionContext, test_state: Arc<TestState>) {
-        let name = "odd_counter";
-        let volatility = Volatility::Immutable;
+        struct SimpleWindowUDF {
+            signature: Signature,
+            return_type: DataType,
+            test_state: Arc<TestState>,
+        }
 
-        let signature = Signature::exact(vec![DataType::Int64], volatility);
+        impl SimpleWindowUDF {
+            fn new(test_state: Arc<TestState>) -> Self {
+                let signature =
+                    Signature::exact(vec![DataType::Float64], Volatility::Immutable);
+                let return_type = DataType::Int64;
+                Self {
+                    signature,
+                    return_type,
+                    test_state,
+                }
+            }
+        }
 
-        let return_type = Arc::new(DataType::Int64);
-        let return_type: ReturnTypeFunction =
-            Arc::new(move |_| Ok(Arc::clone(&return_type)));
+        impl WindowUDFImpl for SimpleWindowUDF {
+            fn as_any(&self) -> &dyn Any {
+                self
+            }
 
-        let partition_evaluator_factory: PartitionEvaluatorFactory =
-            Arc::new(move || Ok(Box::new(OddCounter::new(Arc::clone(&test_state)))));
+            fn name(&self) -> &str {
+                "odd_counter"
+            }
 
-        ctx.register_udwf(WindowUDF::new(
-            name,
-            &signature,
-            &return_type,
-            &partition_evaluator_factory,
-        ))
+            fn signature(&self) -> &Signature {
+                &self.signature
+            }
+
+            fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+                Ok(self.return_type.clone())
+            }
+
+            fn partition_evaluator(&self) -> Result<Box<dyn PartitionEvaluator>> {
+                Ok(Box::new(OddCounter::new(Arc::clone(&self.test_state))))
+            }
+        }
+
+        ctx.register_udwf(WindowUDF::from(SimpleWindowUDF::new(test_state)))
     }
 }
 

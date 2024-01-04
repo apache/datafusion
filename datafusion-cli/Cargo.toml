@@ -45,7 +45,7 @@ parking_lot = { version = "0.12" }
 parquet = { version = "49.0.0", default-features = false }
 regex = "1.8"
 rustyline = "11.0"
-tokio = { version = "1.24", features = ["macros", "rt", "rt-multi-thread", "sync", "parking_lot"] }
+tokio = { version = "1.24", features = ["macros", "rt", "rt-multi-thread", "sync", "parking_lot", "signal"] }
 url = "2.2"
 
 [dev-dependencies]

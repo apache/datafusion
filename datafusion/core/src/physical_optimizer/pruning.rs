@@ -295,9 +295,12 @@ impl PruningPredicate {
         &self.predicate_expr
     }
 
-    /// Returns true if this pruning predicate is "always true" (aka will not prune anything)
+    /// Returns true if this pruning predicate can not prune anything.
+    ///
+    /// This happens if the predicate is a literal `true`  and
+    /// literal_guarantees is empty.
     pub fn allways_true(&self) -> bool {
-        is_always_true(&self.predicate_expr)
+        is_always_true(&self.predicate_expr) && self.literal_guarantees.is_empty()
     }
 
     pub(crate) fn required_columns(&self) -> &RequiredColumns {

@@ -52,22 +52,6 @@ macro_rules! downcast_arg {
     }};
 }
 
-/// Downcasts multiple arguments into a single concrete type
-/// $ARGS:  &[ArrayRef]
-/// $ARRAY_TYPE: type to downcast to
-///
-/// $returns a Vec<$ARRAY_TYPE>
-macro_rules! downcast_vec {
-    ($ARGS:expr, $ARRAY_TYPE:ident) => {{
-        $ARGS
-            .iter()
-            .map(|e| match e.as_any().downcast_ref::<$ARRAY_TYPE>() {
-                Some(array) => Ok(array),
-                _ => internal_err!("failed to downcast"),
-            })
-    }};
-}
-
 /// Computes a BooleanArray indicating equality or inequality between elements in a list array and a specified element array.
 ///
 /// # Arguments
@@ -832,17 +816,20 @@ pub fn array_pop_back(args: &[ArrayRef]) -> Result<ArrayRef> {
 ///
 /// # Examples
 ///
-/// general_append_and_prepend(
+/// generic_append_and_prepend(
 ///     [1, 2, 3], 4, append => [1, 2, 3, 4]
 ///     5, [6, 7, 8], prepend => [5, 6, 7, 8]
 /// )
-fn general_append_and_prepend(
-    list_array: &ListArray,
+fn generic_append_and_prepend<O: OffsetSizeTrait>(
+    list_array: &GenericListArray<O>,
     element_array: &ArrayRef,
     data_type: &DataType,
     is_append: bool,
-) -> Result<ArrayRef> {
-    let mut offsets = vec![0];
+) -> Result<ArrayRef>
+where
+    i64: TryInto<O>,
+{
+    let mut offsets = vec![O::usize_as(0)];
     let values = list_array.values();
     let original_data = values.to_data();
     let element_data = element_array.to_data();
@@ -858,8 +845,8 @@ fn general_append_and_prepend(
     let element_index = 1;
 
     for (row_index, offset_window) in list_array.offsets().windows(2).enumerate() {
-        let start = offset_window[0] as usize;
-        let end = offset_window[1] as usize;
+        let start = offset_window[0].to_usize().unwrap();
+        let end = offset_window[1].to_usize().unwrap();
         if is_append {
             mutable.extend(values_index, start, end);
             mutable.extend(element_index, row_index, row_index + 1);
@@ -867,12 +854,12 @@ fn general_append_and_prepend(
             mutable.extend(element_index, row_index, row_index + 1);
             mutable.extend(values_index, start, end);
         }
-        offsets.push(offsets[row_index] + (end - start + 1) as i32);
+        offsets.push(offsets[row_index] + O::usize_as(end - start + 1));
     }
 
     let data = mutable.freeze();
 
-    Ok(Arc::new(ListArray::try_new(
+    Ok(Arc::new(GenericListArray::<O>::try_new(
         Arc::new(Field::new("item", data_type.to_owned(), true)),
         OffsetBuffer::new(offsets.into()),
         arrow_array::make_array(data),
@@ -936,36 +923,6 @@ pub fn gen_range(args: &[ArrayRef]) -> Result<ArrayRef> {
         None,
     )?);
     Ok(arr)
-}
-
-/// Array_append SQL function
-pub fn array_append(args: &[ArrayRef]) -> Result<ArrayRef> {
-    if args.len() != 2 {
-        return exec_err!("array_append expects two arguments");
-    }
-
-    let list_array = as_list_array(&args[0])?;
-    let element_array = &args[1];
-
-    let res = match list_array.value_type() {
-        DataType::List(_) => concat_internal(args)?,
-        DataType::Null => {
-            return make_array(&[
-                list_array.values().to_owned(),
-                element_array.to_owned(),
-            ]);
-        }
-        data_type => {
-            return general_append_and_prepend(
-                list_array,
-                element_array,
-                &data_type,
-                true,
-            );
-        }
-    };
-
-    Ok(res)
 }
 
 /// Array_sort SQL function
@@ -1051,30 +1008,69 @@ fn order_nulls_first(modifier: &str) -> Result<bool> {
     }
 }
 
+fn general_append_and_prepend<O: OffsetSizeTrait>(
+    args: &[ArrayRef],
+    is_append: bool,
+) -> Result<ArrayRef>
+where
+    i64: TryInto<O>,
+{
+    let (list_array, element_array) = if is_append {
+        let list_array = as_generic_list_array::<O>(&args[0])?;
+        let element_array = &args[1];
+        check_datatypes("array_append", &[element_array, list_array.values()])?;
+        (list_array, element_array)
+    } else {
+        let list_array = as_generic_list_array::<O>(&args[1])?;
+        let element_array = &args[0];
+        check_datatypes("array_prepend", &[list_array.values(), element_array])?;
+        (list_array, element_array)
+    };
+
+    let res = match list_array.value_type() {
+        DataType::List(_) => concat_internal::<i32>(args)?,
+        DataType::LargeList(_) => concat_internal::<i64>(args)?,
+        DataType::Null => {
+            return make_array(&[
+                list_array.values().to_owned(),
+                element_array.to_owned(),
+            ]);
+        }
+        data_type => {
+            return generic_append_and_prepend::<O>(
+                list_array,
+                element_array,
+                &data_type,
+                is_append,
+            );
+        }
+    };
+
+    Ok(res)
+}
+
+/// Array_append SQL function
+pub fn array_append(args: &[ArrayRef]) -> Result<ArrayRef> {
+    if args.len() != 2 {
+        return exec_err!("array_append expects two arguments");
+    }
+
+    match args[0].data_type() {
+        DataType::LargeList(_) => general_append_and_prepend::<i64>(args, true),
+        _ => general_append_and_prepend::<i32>(args, true),
+    }
+}
+
 /// Array_prepend SQL function
 pub fn array_prepend(args: &[ArrayRef]) -> Result<ArrayRef> {
     if args.len() != 2 {
         return exec_err!("array_prepend expects two arguments");
     }
 
-    let list_array = as_list_array(&args[1])?;
-    let element_array = &args[0];
-
-    check_datatypes("array_prepend", &[element_array, list_array.values()])?;
-    let res = match list_array.value_type() {
-        DataType::List(_) => concat_internal(args)?,
-        DataType::Null => return make_array(&[element_array.to_owned()]),
-        data_type => {
-            return general_append_and_prepend(
-                list_array,
-                element_array,
-                &data_type,
-                false,
-            );
-        }
-    };
-
-    Ok(res)
+    match args[1].data_type() {
+        DataType::LargeList(_) => general_append_and_prepend::<i64>(args, false),
+        _ => general_append_and_prepend::<i32>(args, false),
+    }
 }
 
 fn align_array_dimensions(args: Vec<ArrayRef>) -> Result<Vec<ArrayRef>> {
@@ -1114,11 +1110,13 @@ fn align_array_dimensions(args: Vec<ArrayRef>) -> Result<Vec<ArrayRef>> {
 }
 
 // Concatenate arrays on the same row.
-fn concat_internal(args: &[ArrayRef]) -> Result<ArrayRef> {
+fn concat_internal<O: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
     let args = align_array_dimensions(args.to_vec())?;
 
-    let list_arrays =
-        downcast_vec!(args, ListArray).collect::<Result<Vec<&ListArray>>>()?;
+    let list_arrays = args
+        .iter()
+        .map(|arg| as_generic_list_array::<O>(arg))
+        .collect::<Result<Vec<_>>>()?;
 
     // Assume number of rows is the same for all arrays
     let row_count = list_arrays[0].len();
@@ -1165,7 +1163,7 @@ fn concat_internal(args: &[ArrayRef]) -> Result<ArrayRef> {
         .map(|a| a.as_ref())
         .collect::<Vec<&dyn Array>>();
 
-    let list_arr = ListArray::new(
+    let list_arr = GenericListArray::<O>::new(
         Arc::new(Field::new("item", data_type, true)),
         OffsetBuffer::from_lengths(array_lengths),
         Arc::new(compute::concat(elements.as_slice())?),
@@ -1192,7 +1190,7 @@ pub fn array_concat(args: &[ArrayRef]) -> Result<ArrayRef> {
         }
     }
 
-    concat_internal(new_args.as_slice())
+    concat_internal::<i32>(new_args.as_slice())
 }
 
 /// Array_empty SQL function
@@ -1235,7 +1233,11 @@ pub fn array_repeat(args: &[ArrayRef]) -> Result<ArrayRef> {
     match element.data_type() {
         DataType::List(_) => {
             let list_array = as_list_array(element)?;
-            general_list_repeat(list_array, count_array)
+            general_list_repeat::<i32>(list_array, count_array)
+        }
+        DataType::LargeList(_) => {
+            let list_array = as_large_list_array(element)?;
+            general_list_repeat::<i64>(list_array, count_array)
         }
         _ => general_repeat(element, count_array),
     }
@@ -1304,8 +1306,8 @@ fn general_repeat(array: &ArrayRef, count_array: &Int64Array) -> Result<ArrayRef
 ///     [[1, 2, 3], [4, 5], [6]], [2, 0, 1] => [[[1, 2, 3], [1, 2, 3]], [], [[6]]]
 /// )
 /// ```
-fn general_list_repeat(
-    list_array: &ListArray,
+fn general_list_repeat<O: OffsetSizeTrait>(
+    list_array: &GenericListArray<O>,
     count_array: &Int64Array,
 ) -> Result<ArrayRef> {
     let data_type = list_array.data_type();
@@ -1337,9 +1339,9 @@ fn general_list_repeat(
                 let data = mutable.freeze();
                 let repeated_array = arrow_array::make_array(data);
 
-                let list_arr = ListArray::try_new(
+                let list_arr = GenericListArray::<O>::try_new(
                     Arc::new(Field::new("item", value_type.clone(), true)),
-                    OffsetBuffer::from_lengths(vec![original_data.len(); count]),
+                    OffsetBuffer::<O>::from_lengths(vec![original_data.len(); count]),
                     repeated_array,
                     None,
                 )?;
@@ -1356,7 +1358,7 @@ fn general_list_repeat(
 
     Ok(Arc::new(ListArray::try_new(
         Arc::new(Field::new("item", data_type.to_owned(), true)),
-        OffsetBuffer::from_lengths(lengths),
+        OffsetBuffer::<i32>::from_lengths(lengths),
         values,
         None,
     )?))
