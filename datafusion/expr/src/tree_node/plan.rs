@@ -113,7 +113,7 @@ impl TreeNode for LogicalPlan {
             .zip(new_children.iter())
             .any(|(c1, c2)| c1 != &c2)
         {
-            self.with_new_inputs(new_children.as_slice())
+            self.with_new_exprs(self.expressions(), new_children.as_slice())
         } else {
             Ok(self)
         }

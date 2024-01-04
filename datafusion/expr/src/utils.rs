@@ -575,14 +575,14 @@ pub fn compare_sort_expr(
 
 /// group a slice of window expression expr by their order by expressions
 pub fn group_window_expr_by_sort_keys(
-    window_expr: &[Expr],
-) -> Result<Vec<(WindowSortKey, Vec<&Expr>)>> {
+    window_expr: Vec<Expr>,
+) -> Result<Vec<(WindowSortKey, Vec<Expr>)>> {
     let mut result = vec![];
-    window_expr.iter().try_for_each(|expr| match expr {
-        Expr::WindowFunction(WindowFunction{ partition_by, order_by, .. }) => {
+    window_expr.into_iter().try_for_each(|expr| match &expr {
+        Expr::WindowFunction( WindowFunction{ partition_by, order_by, .. }) => {
             let sort_key = generate_sort_key(partition_by, order_by)?;
             if let Some((_, values)) = result.iter_mut().find(
-                |group: &&mut (WindowSortKey, Vec<&Expr>)| matches!(group, (key, _) if *key == sort_key),
+                |group: &&mut (WindowSortKey, Vec<Expr>)| matches!(group, (key, _) if *key == sort_key),
             ) {
                 values.push(expr);
             } else {
@@ -1234,13 +1234,13 @@ mod tests {
     use super::*;
     use crate::{
         col, cube, expr, expr_vec_fmt, grouping_set, lit, rollup, AggregateFunction,
-        WindowFrame, WindowFunction,
+        WindowFrame, WindowFunctionDefinition,
     };
 
     #[test]
     fn test_group_window_expr_by_sort_keys_empty_case() -> Result<()> {
-        let result = group_window_expr_by_sort_keys(&[])?;
-        let expected: Vec<(WindowSortKey, Vec<&Expr>)> = vec![];
+        let result = group_window_expr_by_sort_keys(vec![])?;
+        let expected: Vec<(WindowSortKey, Vec<Expr>)> = vec![];
         assert_eq!(expected, result);
         Ok(())
     }
@@ -1248,38 +1248,38 @@ mod tests {
     #[test]
     fn test_group_window_expr_by_sort_keys_empty_window() -> Result<()> {
         let max1 = Expr::WindowFunction(expr::WindowFunction::new(
-            WindowFunction::AggregateFunction(AggregateFunction::Max),
+            WindowFunctionDefinition::AggregateFunction(AggregateFunction::Max),
             vec![col("name")],
             vec![],
             vec![],
             WindowFrame::new(false),
         ));
         let max2 = Expr::WindowFunction(expr::WindowFunction::new(
-            WindowFunction::AggregateFunction(AggregateFunction::Max),
+            WindowFunctionDefinition::AggregateFunction(AggregateFunction::Max),
             vec![col("name")],
             vec![],
             vec![],
             WindowFrame::new(false),
         ));
         let min3 = Expr::WindowFunction(expr::WindowFunction::new(
-            WindowFunction::AggregateFunction(AggregateFunction::Min),
+            WindowFunctionDefinition::AggregateFunction(AggregateFunction::Min),
             vec![col("name")],
             vec![],
             vec![],
             WindowFrame::new(false),
         ));
         let sum4 = Expr::WindowFunction(expr::WindowFunction::new(
-            WindowFunction::AggregateFunction(AggregateFunction::Sum),
+            WindowFunctionDefinition::AggregateFunction(AggregateFunction::Sum),
             vec![col("age")],
             vec![],
             vec![],
             WindowFrame::new(false),
         ));
         let exprs = &[max1.clone(), max2.clone(), min3.clone(), sum4.clone()];
-        let result = group_window_expr_by_sort_keys(exprs)?;
+        let result = group_window_expr_by_sort_keys(exprs.to_vec())?;
         let key = vec![];
-        let expected: Vec<(WindowSortKey, Vec<&Expr>)> =
-            vec![(key, vec![&max1, &max2, &min3, &sum4])];
+        let expected: Vec<(WindowSortKey, Vec<Expr>)> =
+            vec![(key, vec![max1, max2, min3, sum4])];
         assert_eq!(expected, result);
         Ok(())
     }
@@ -1291,28 +1291,28 @@ mod tests {
         let created_at_desc =
             Expr::Sort(expr::Sort::new(Box::new(col("created_at")), false, true));
         let max1 = Expr::WindowFunction(expr::WindowFunction::new(
-            WindowFunction::AggregateFunction(AggregateFunction::Max),
+            WindowFunctionDefinition::AggregateFunction(AggregateFunction::Max),
             vec![col("name")],
             vec![],
             vec![age_asc.clone(), name_desc.clone()],
             WindowFrame::new(true),
         ));
         let max2 = Expr::WindowFunction(expr::WindowFunction::new(
-            WindowFunction::AggregateFunction(AggregateFunction::Max),
+            WindowFunctionDefinition::AggregateFunction(AggregateFunction::Max),
             vec![col("name")],
             vec![],
             vec![],
             WindowFrame::new(false),
         ));
         let min3 = Expr::WindowFunction(expr::WindowFunction::new(
-            WindowFunction::AggregateFunction(AggregateFunction::Min),
+            WindowFunctionDefinition::AggregateFunction(AggregateFunction::Min),
             vec![col("name")],
             vec![],
             vec![age_asc.clone(), name_desc.clone()],
             WindowFrame::new(true),
         ));
         let sum4 = Expr::WindowFunction(expr::WindowFunction::new(
-            WindowFunction::AggregateFunction(AggregateFunction::Sum),
+            WindowFunctionDefinition::AggregateFunction(AggregateFunction::Sum),
             vec![col("age")],
             vec![],
             vec![name_desc.clone(), age_asc.clone(), created_at_desc.clone()],
@@ -1320,7 +1320,7 @@ mod tests {
         ));
         // FIXME use as_ref
         let exprs = &[max1.clone(), max2.clone(), min3.clone(), sum4.clone()];
-        let result = group_window_expr_by_sort_keys(exprs)?;
+        let result = group_window_expr_by_sort_keys(exprs.to_vec())?;
 
         let key1 = vec![(age_asc.clone(), false), (name_desc.clone(), false)];
         let key2 = vec![];
@@ -1330,10 +1330,10 @@ mod tests {
             (created_at_desc, false),
         ];
 
-        let expected: Vec<(WindowSortKey, Vec<&Expr>)> = vec![
-            (key1, vec![&max1, &min3]),
-            (key2, vec![&max2]),
-            (key3, vec![&sum4]),
+        let expected: Vec<(WindowSortKey, Vec<Expr>)> = vec![
+            (key1, vec![max1, min3]),
+            (key2, vec![max2]),
+            (key3, vec![sum4]),
         ];
         assert_eq!(expected, result);
         Ok(())
@@ -1343,7 +1343,7 @@ mod tests {
     fn test_find_sort_exprs() -> Result<()> {
         let exprs = &[
             Expr::WindowFunction(expr::WindowFunction::new(
-                WindowFunction::AggregateFunction(AggregateFunction::Max),
+                WindowFunctionDefinition::AggregateFunction(AggregateFunction::Max),
                 vec![col("name")],
                 vec![],
                 vec![
@@ -1353,7 +1353,7 @@ mod tests {
                 WindowFrame::new(true),
             )),
             Expr::WindowFunction(expr::WindowFunction::new(
-                WindowFunction::AggregateFunction(AggregateFunction::Sum),
+                WindowFunctionDefinition::AggregateFunction(AggregateFunction::Sum),
                 vec![col("age")],
                 vec![],
                 vec![

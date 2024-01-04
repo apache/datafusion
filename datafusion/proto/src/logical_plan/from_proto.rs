@@ -1112,7 +1112,7 @@ pub fn parse_expr(
                     let aggr_function = parse_i32_to_aggregate_function(i)?;
 
                     Ok(Expr::WindowFunction(WindowFunction::new(
-                        datafusion_expr::window_function::WindowFunction::AggregateFunction(
+                        datafusion_expr::expr::WindowFunctionDefinition::AggregateFunction(
                             aggr_function,
                         ),
                         vec![parse_required_expr(expr.expr.as_deref(), registry, "expr")?],
@@ -1131,7 +1131,7 @@ pub fn parse_expr(
                         .unwrap_or_else(Vec::new);
 
                     Ok(Expr::WindowFunction(WindowFunction::new(
-                        datafusion_expr::window_function::WindowFunction::BuiltInWindowFunction(
+                        datafusion_expr::expr::WindowFunctionDefinition::BuiltInWindowFunction(
                             built_in_function,
                         ),
                         args,
@@ -1146,7 +1146,7 @@ pub fn parse_expr(
                         .map(|e| vec![e])
                         .unwrap_or_else(Vec::new);
                     Ok(Expr::WindowFunction(WindowFunction::new(
-                        datafusion_expr::window_function::WindowFunction::AggregateUDF(
+                        datafusion_expr::expr::WindowFunctionDefinition::AggregateUDF(
                             udaf_function,
                         ),
                         args,
@@ -1161,7 +1161,7 @@ pub fn parse_expr(
                         .map(|e| vec![e])
                         .unwrap_or_else(Vec::new);
                     Ok(Expr::WindowFunction(WindowFunction::new(
-                        datafusion_expr::window_function::WindowFunction::WindowUDF(
+                        datafusion_expr::expr::WindowFunctionDefinition::WindowUDF(
                             udwf_function,
                         ),
                         args,

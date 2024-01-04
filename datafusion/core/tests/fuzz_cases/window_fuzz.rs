@@ -33,7 +33,7 @@ use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::type_coercion::aggregates::coerce_types;
 use datafusion_expr::{
     AggregateFunction, BuiltInWindowFunction, WindowFrame, WindowFrameBound,
-    WindowFrameUnits, WindowFunction,
+    WindowFrameUnits, WindowFunctionDefinition,
 };
 use datafusion_physical_expr::expressions::{cast, col, lit};
 use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
@@ -143,7 +143,7 @@ fn get_random_function(
     schema: &SchemaRef,
     rng: &mut StdRng,
     is_linear: bool,
-) -> (WindowFunction, Vec<Arc<dyn PhysicalExpr>>, String) {
+) -> (WindowFunctionDefinition, Vec<Arc<dyn PhysicalExpr>>, String) {
     let mut args = if is_linear {
         // In linear test for the test version with WindowAggExec we use insert SortExecs to the plan to be able to generate
         // same result with BoundedWindowAggExec which doesn't use any SortExec. To make result
@@ -159,28 +159,28 @@ fn get_random_function(
     window_fn_map.insert(
         "sum",
         (
-            WindowFunction::AggregateFunction(AggregateFunction::Sum),
+            WindowFunctionDefinition::AggregateFunction(AggregateFunction::Sum),
             vec![],
         ),
     );
     window_fn_map.insert(
         "count",
         (
-            WindowFunction::AggregateFunction(AggregateFunction::Count),
+            WindowFunctionDefinition::AggregateFunction(AggregateFunction::Count),
             vec![],
         ),
     );
     window_fn_map.insert(
         "min",
         (
-            WindowFunction::AggregateFunction(AggregateFunction::Min),
+            WindowFunctionDefinition::AggregateFunction(AggregateFunction::Min),
             vec![],
         ),
     );
     window_fn_map.insert(
         "max",
         (
-            WindowFunction::AggregateFunction(AggregateFunction::Max),
+            WindowFunctionDefinition::AggregateFunction(AggregateFunction::Max),
             vec![],
         ),
     );
@@ -191,28 +191,36 @@ fn get_random_function(
         window_fn_map.insert(
             "row_number",
             (
-                WindowFunction::BuiltInWindowFunction(BuiltInWindowFunction::RowNumber),
+                WindowFunctionDefinition::BuiltInWindowFunction(
+                    BuiltInWindowFunction::RowNumber,
+                ),
                 vec![],
             ),
         );
         window_fn_map.insert(
             "rank",
             (
-                WindowFunction::BuiltInWindowFunction(BuiltInWindowFunction::Rank),
+                WindowFunctionDefinition::BuiltInWindowFunction(
+                    BuiltInWindowFunction::Rank,
+                ),
                 vec![],
             ),
         );
         window_fn_map.insert(
             "dense_rank",
             (
-                WindowFunction::BuiltInWindowFunction(BuiltInWindowFunction::DenseRank),
+                WindowFunctionDefinition::BuiltInWindowFunction(
+                    BuiltInWindowFunction::DenseRank,
+                ),
                 vec![],
             ),
         );
         window_fn_map.insert(
             "lead",
             (
-                WindowFunction::BuiltInWindowFunction(BuiltInWindowFunction::Lead),
+                WindowFunctionDefinition::BuiltInWindowFunction(
+                    BuiltInWindowFunction::Lead,
+                ),
                 vec![
                     lit(ScalarValue::Int64(Some(rng.gen_range(1..10)))),
                     lit(ScalarValue::Int64(Some(rng.gen_range(1..1000)))),
@@ -222,7 +230,9 @@ fn get_random_function(
         window_fn_map.insert(
             "lag",
             (
-                WindowFunction::BuiltInWindowFunction(BuiltInWindowFunction::Lag),
+                WindowFunctionDefinition::BuiltInWindowFunction(
+                    BuiltInWindowFunction::Lag,
+                ),
                 vec![
                     lit(ScalarValue::Int64(Some(rng.gen_range(1..10)))),
                     lit(ScalarValue::Int64(Some(rng.gen_range(1..1000)))),
@@ -233,21 +243,27 @@ fn get_random_function(
     window_fn_map.insert(
         "first_value",
         (
-            WindowFunction::BuiltInWindowFunction(BuiltInWindowFunction::FirstValue),
+            WindowFunctionDefinition::BuiltInWindowFunction(
+                BuiltInWindowFunction::FirstValue,
+            ),
             vec![],
         ),
     );
     window_fn_map.insert(
         "last_value",
         (
-            WindowFunction::BuiltInWindowFunction(BuiltInWindowFunction::LastValue),
+            WindowFunctionDefinition::BuiltInWindowFunction(
+                BuiltInWindowFunction::LastValue,
+            ),
             vec![],
         ),
     );
     window_fn_map.insert(
         "nth_value",
         (
-            WindowFunction::BuiltInWindowFunction(BuiltInWindowFunction::NthValue),
+            WindowFunctionDefinition::BuiltInWindowFunction(
+                BuiltInWindowFunction::NthValue,
+            ),
             vec![lit(ScalarValue::Int64(Some(rng.gen_range(1..10))))],
         ),
     );
@@ -255,7 +271,7 @@ fn get_random_function(
     let rand_fn_idx = rng.gen_range(0..window_fn_map.len());
     let fn_name = window_fn_map.keys().collect::<Vec<_>>()[rand_fn_idx];
     let (window_fn, new_args) = window_fn_map.values().collect::<Vec<_>>()[rand_fn_idx];
-    if let WindowFunction::AggregateFunction(f) = window_fn {
+    if let WindowFunctionDefinition::AggregateFunction(f) = window_fn {
         let a = args[0].clone();
         let dt = a.data_type(schema.as_ref()).unwrap();
         let sig = f.signature();

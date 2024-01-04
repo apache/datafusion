@@ -116,18 +116,18 @@ fn get_valid_types(
             &new_base_type,
         );
 
-        if let DataType::List(ref field) = array_type {
-            let elem_type = field.data_type();
-            if is_append {
-                Ok(vec![vec![array_type.clone(), elem_type.to_owned()]])
-            } else {
-                Ok(vec![vec![elem_type.to_owned(), array_type.clone()]])
+        match array_type {
+            DataType::List(ref field) | DataType::LargeList(ref field) => {
+                let elem_type = field.data_type();
+                if is_append {
+                    Ok(vec![vec![array_type.clone(), elem_type.to_owned()]])
+                } else {
+                    Ok(vec![vec![elem_type.to_owned(), array_type.clone()]])
+                }
             }
-        } else {
-            Ok(vec![vec![]])
+            _ => Ok(vec![vec![]]),
         }
     }
-
     let valid_types = match signature {
         TypeSignature::Variadic(valid_types) => valid_types
             .iter()
@@ -311,9 +311,9 @@ fn coerced_from<'a>(
         Utf8 | LargeUtf8 => Some(type_into.clone()),
         Null if can_cast_types(type_from, type_into) => Some(type_into.clone()),
 
-        // Only accept list with the same number of dimensions unless the type is Null.
-        // List with different dimensions should be handled in TypeSignature or other places before this.
-        List(_)
+        // Only accept list and largelist with the same number of dimensions unless the type is Null.
+        // List or LargeList with different dimensions should be handled in TypeSignature or other places before this.
+        List(_) | LargeList(_)
             if datafusion_common::utils::base_type(type_from).eq(&Null)
                 || list_ndims(type_from) == list_ndims(type_into) =>
         {

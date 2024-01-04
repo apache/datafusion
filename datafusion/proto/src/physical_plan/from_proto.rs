@@ -31,7 +31,7 @@ use datafusion::datasource::object_store::ObjectStoreUrl;
 use datafusion::datasource::physical_plan::{FileScanConfig, FileSinkConfig};
 use datafusion::execution::context::ExecutionProps;
 use datafusion::execution::FunctionRegistry;
-use datafusion::logical_expr::window_function::WindowFunction;
+use datafusion::logical_expr::WindowFunctionDefinition;
 use datafusion::physical_expr::{PhysicalSortExpr, ScalarFunctionExpr};
 use datafusion::physical_plan::expressions::{
     in_list, BinaryExpr, CaseExpr, CastExpr, Column, IsNotNullExpr, IsNullExpr, LikeExpr,
@@ -414,7 +414,9 @@ fn parse_required_physical_expr(
         })
 }
 
-impl TryFrom<&protobuf::physical_window_expr_node::WindowFunction> for WindowFunction {
+impl TryFrom<&protobuf::physical_window_expr_node::WindowFunction>
+    for WindowFunctionDefinition
+{
     type Error = DataFusionError;
 
     fn try_from(
@@ -428,7 +430,7 @@ impl TryFrom<&protobuf::physical_window_expr_node::WindowFunction> for WindowFun
                     ))
                 })?;
 
-                Ok(WindowFunction::AggregateFunction(f.into()))
+                Ok(WindowFunctionDefinition::AggregateFunction(f.into()))
             }
             protobuf::physical_window_expr_node::WindowFunction::BuiltInFunction(n) => {
                 let f = protobuf::BuiltInWindowFunction::try_from(*n).map_err(|_| {
@@ -437,7 +439,7 @@ impl TryFrom<&protobuf::physical_window_expr_node::WindowFunction> for WindowFun
                     ))
                 })?;
 
-                Ok(WindowFunction::BuiltInWindowFunction(f.into()))
+                Ok(WindowFunctionDefinition::BuiltInWindowFunction(f.into()))
             }
         }
     }

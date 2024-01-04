@@ -1360,7 +1360,7 @@ mod tests {
     use datafusion_expr::{
         avg, cast, count, count_distinct, create_udf, expr, lit, max, min, sum,
         BuiltInWindowFunction, ScalarFunctionImplementation, Volatility, WindowFrame,
-        WindowFunction,
+        WindowFunctionDefinition,
     };
     use datafusion_physical_expr::expressions::Column;
     use datafusion_physical_plan::get_plan_string;
@@ -1525,7 +1525,9 @@ mod tests {
         // build plan using Table API
         let t = test_table().await?;
         let first_row = Expr::WindowFunction(expr::WindowFunction::new(
-            WindowFunction::BuiltInWindowFunction(BuiltInWindowFunction::FirstValue),
+            WindowFunctionDefinition::BuiltInWindowFunction(
+                BuiltInWindowFunction::FirstValue,
+            ),
             vec![col("aggregate_test_100.c1")],
             vec![col("aggregate_test_100.c2")],
             vec![],

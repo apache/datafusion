@@ -23,8 +23,8 @@ use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::function::suggest_valid_function;
 use datafusion_expr::window_frame::{check_window_frame, regularize_window_order_by};
 use datafusion_expr::{
-    expr, window_function, AggregateFunction, BuiltinScalarFunction, Expr, WindowFrame,
-    WindowFunction,
+    expr, AggregateFunction, BuiltinScalarFunction, Expr, WindowFrame,
+    WindowFunctionDefinition,
 };
 use sqlparser::ast::{
     Expr as SQLExpr, Function as SQLFunction, FunctionArg, FunctionArgExpr, WindowType,
@@ -121,12 +121,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
             if let Ok(fun) = self.find_window_func(&name) {
                 let expr = match fun {
-                    WindowFunction::AggregateFunction(aggregate_fun) => {
+                    WindowFunctionDefinition::AggregateFunction(aggregate_fun) => {
                         let args =
                             self.function_args_to_expr(args, schema, planner_context)?;
 
                         Expr::WindowFunction(expr::WindowFunction::new(
-                            WindowFunction::AggregateFunction(aggregate_fun),
+                            WindowFunctionDefinition::AggregateFunction(aggregate_fun),
                             args,
                             partition_by,
                             order_by,
@@ -191,19 +191,22 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         Ok(Expr::ScalarFunction(ScalarFunction::new(fun, args)))
     }
 
-    pub(super) fn find_window_func(&self, name: &str) -> Result<WindowFunction> {
-        window_function::find_df_window_func(name)
+    pub(super) fn find_window_func(
+        &self,
+        name: &str,
+    ) -> Result<WindowFunctionDefinition> {
+        expr::find_df_window_func(name)
             // next check user defined aggregates
             .or_else(|| {
                 self.context_provider
                     .get_aggregate_meta(name)
-                    .map(WindowFunction::AggregateUDF)
+                    .map(WindowFunctionDefinition::AggregateUDF)
             })
             // next check user defined window functions
             .or_else(|| {
                 self.context_provider
                     .get_window_meta(name)
-                    .map(WindowFunction::WindowUDF)
+                    .map(WindowFunctionDefinition::WindowUDF)
             })
             .ok_or_else(|| {
                 plan_datafusion_err!("There is no window function named {name}")

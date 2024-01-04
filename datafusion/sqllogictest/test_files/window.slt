@@ -3833,3 +3833,41 @@ from (select 1 a union all select 2 a) x;
 ----
 1 1 1 1 1 1
 2 1 1 2 2 1
+
+# when partition by expression is empty row number result will be unique.
+query TII
+SELECT *
+FROM (SELECT c1, c2, ROW_NUMBER() OVER() as rn
+    FROM aggregate_test_100
+    LIMIT 5)
+GROUP BY rn
+ORDER BY rn;
+----
+c 2 1
+d 5 2
+b 1 3
+a 1 4
+b 5 5
+
+# when partition by expression is constant row number result will be unique.
+query TII
+SELECT *
+FROM (SELECT c1, c2, ROW_NUMBER() OVER(PARTITION BY 3) as rn
+    FROM aggregate_test_100
+    LIMIT 5)
+GROUP BY rn
+ORDER BY rn;
+----
+c 2 1
+d 5 2
+b 1 3
+a 1 4
+b 5 5
+
+statement error DataFusion error: Error during planning: Projection references non-aggregate values: Expression aggregate_test_100.c1 could not be resolved from available columns: rn
+SELECT *
+FROM (SELECT c1, c2, ROW_NUMBER() OVER(PARTITION BY c1) as rn
+    FROM aggregate_test_100
+    LIMIT 5)
+GROUP BY rn
+ORDER BY rn;
