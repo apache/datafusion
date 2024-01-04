@@ -34,6 +34,7 @@ use datafusion_expr::{
 /// a function `partition_evaluator` that returns the `MyPartitionEvaluator` instance.
 ///
 /// To do so, we must implement the `WindowUDFImpl` trait.
+#[derive(Debug, Clone)]
 struct SmoothItUdf {
     signature: Signature,
 }

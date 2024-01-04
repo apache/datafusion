@@ -32,6 +32,7 @@ use crate::{ColumnarValue, ScalarUDFImpl, WindowUDF, WindowUDFImpl};
 use arrow::datatypes::DataType;
 use datafusion_common::{Column, Result};
 use std::any::Any;
+use std::fmt::Debug;
 use std::ops::Not;
 use std::sync::Arc;
 
@@ -1076,6 +1077,17 @@ pub struct SimpleWindowUDF {
     signature: Signature,
     return_type: DataType,
     partition_evaluator_factory: PartitionEvaluatorFactory,
+}
+
+impl Debug for SimpleWindowUDF {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.debug_struct("WindowUDF")
+            .field("name", &self.name)
+            .field("signature", &self.signature)
+            .field("return_type", &"<func>")
+            .field("partition_evaluator_factory", &"<FUNC>")
+            .finish()
+    }
 }
 
 impl SimpleWindowUDF {
