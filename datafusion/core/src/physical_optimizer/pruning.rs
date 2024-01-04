@@ -2017,54 +2017,52 @@ mod tests {
             DataType::Decimal128(9, 2),
             true,
         )]));
-        // s1 > 5
-        let expr = col("s1").gt(lit(ScalarValue::Decimal128(Some(500), 9, 2)));
-        let expr = logical2physical(&expr, &schema);
-        // If the data is written by spark, the physical data type is INT32 in the parquet
-        // So we use the INT32 type of statistic.
-        let statistics = TestStatistics::new().with(
-            "s1",
-            ContainerStats::new_i32(
-                vec![Some(0), Some(4), None, Some(3)], // min
-                vec![Some(5), Some(6), Some(4), None], // max
-            ),
-        );
-        let p = PruningPredicate::try_new(expr, schema.clone()).unwrap();
-        let result = p.prune(&statistics).unwrap();
-        let expected = vec![false, true, false, true];
-        assert_eq!(result, expected);
 
-        // with cast column to other type
-        let expr = cast(col("s1"), DataType::Decimal128(14, 3))
-            .gt(lit(ScalarValue::Decimal128(Some(5000), 14, 3)));
-        let expr = logical2physical(&expr, &schema);
-        let statistics = TestStatistics::new().with(
-            "s1",
-            ContainerStats::new_i32(
-                vec![Some(0), Some(4), None, Some(3)], // min
-                vec![Some(5), Some(6), Some(4), None], // max
+        prune_with_expr(
+            // s1 > 5
+            col("s1").gt(lit(ScalarValue::Decimal128(Some(500), 9, 2))),
+            &schema,
+            // If the data is written by spark, the physical data type is INT32 in the parquet
+            // So we use the INT32 type of statistic.
+            &TestStatistics::new().with(
+                "s1",
+                ContainerStats::new_i32(
+                    vec![Some(0), Some(4), None, Some(3)], // min
+                    vec![Some(5), Some(6), Some(4), None], // max
+                ),
             ),
+            &[false, true, false, true],
         );
-        let p = PruningPredicate::try_new(expr, schema.clone()).unwrap();
-        let result = p.prune(&statistics).unwrap();
-        let expected = vec![false, true, false, true];
-        assert_eq!(result, expected);
 
-        // with try cast column to other type
-        let expr = try_cast(col("s1"), DataType::Decimal128(14, 3))
-            .gt(lit(ScalarValue::Decimal128(Some(5000), 14, 3)));
-        let expr = logical2physical(&expr, &schema);
-        let statistics = TestStatistics::new().with(
-            "s1",
-            ContainerStats::new_i32(
-                vec![Some(0), Some(4), None, Some(3)], // min
-                vec![Some(5), Some(6), Some(4), None], // max
+        prune_with_expr(
+            // with cast column to other type
+            cast(col("s1"), DataType::Decimal128(14, 3))
+                .gt(lit(ScalarValue::Decimal128(Some(5000), 14, 3))),
+            &schema,
+            &TestStatistics::new().with(
+                "s1",
+                ContainerStats::new_i32(
+                    vec![Some(0), Some(4), None, Some(3)], // min
+                    vec![Some(5), Some(6), Some(4), None], // max
+                ),
             ),
+            &[false, true, false, true],
         );
-        let p = PruningPredicate::try_new(expr, schema).unwrap();
-        let result = p.prune(&statistics).unwrap();
-        let expected = vec![false, true, false, true];
-        assert_eq!(result, expected);
+
+        prune_with_expr(
+            // with try cast column to other type
+            try_cast(col("s1"), DataType::Decimal128(14, 3))
+                .gt(lit(ScalarValue::Decimal128(Some(5000), 14, 3))),
+            &schema,
+            &TestStatistics::new().with(
+                "s1",
+                ContainerStats::new_i32(
+                    vec![Some(0), Some(4), None, Some(3)], // min
+                    vec![Some(5), Some(6), Some(4), None], // max
+                ),
+            ),
+            &[false, true, false, true],
+        );
 
         // decimal(18,2)
         let schema = Arc::new(Schema::new(vec![Field::new(
@@ -2072,22 +2070,21 @@ mod tests {
             DataType::Decimal128(18, 2),
             true,
         )]));
-        // s1 > 5
-        let expr = col("s1").gt(lit(ScalarValue::Decimal128(Some(500), 18, 2)));
-        let expr = logical2physical(&expr, &schema);
-        // If the data is written by spark, the physical data type is INT64 in the parquet
-        // So we use the INT32 type of statistic.
-        let statistics = TestStatistics::new().with(
-            "s1",
-            ContainerStats::new_i64(
-                vec![Some(0), Some(4), None, Some(3)], // min
-                vec![Some(5), Some(6), Some(4), None], // max
+        prune_with_expr(
+            // s1 > 5
+            col("s1").gt(lit(ScalarValue::Decimal128(Some(500), 18, 2))),
+            &schema,
+            // If the data is written by spark, the physical data type is INT64 in the parquet
+            // So we use the INT32 type of statistic.
+            &TestStatistics::new().with(
+                "s1",
+                ContainerStats::new_i64(
+                    vec![Some(0), Some(4), None, Some(3)], // min
+                    vec![Some(5), Some(6), Some(4), None], // max
+                ),
             ),
+            &[false, true, false, true],
         );
-        let p = PruningPredicate::try_new(expr, schema).unwrap();
-        let result = p.prune(&statistics).unwrap();
-        let expected = vec![false, true, false, true];
-        assert_eq!(result, expected);
 
         // decimal(23,2)
         let schema = Arc::new(Schema::new(vec![Field::new(
@@ -2095,22 +2092,22 @@ mod tests {
             DataType::Decimal128(23, 2),
             true,
         )]));
-        // s1 > 5
-        let expr = col("s1").gt(lit(ScalarValue::Decimal128(Some(500), 23, 2)));
-        let expr = logical2physical(&expr, &schema);
-        let statistics = TestStatistics::new().with(
-            "s1",
-            ContainerStats::new_decimal128(
-                vec![Some(0), Some(400), None, Some(300)], // min
-                vec![Some(500), Some(600), Some(400), None], // max
-                23,
-                2,
+
+        prune_with_expr(
+            // s1 > 5
+            col("s1").gt(lit(ScalarValue::Decimal128(Some(500), 23, 2))),
+            &schema,
+            &TestStatistics::new().with(
+                "s1",
+                ContainerStats::new_decimal128(
+                    vec![Some(0), Some(400), None, Some(300)], // min
+                    vec![Some(500), Some(600), Some(400), None], // max
+                    23,
+                    2,
+                ),
             ),
+            &[false, true, false, true],
         );
-        let p = PruningPredicate::try_new(expr, schema).unwrap();
-        let result = p.prune(&statistics).unwrap();
-        let expected = vec![false, true, false, true];
-        assert_eq!(result, expected);
     }
 
     #[test]
@@ -2120,10 +2117,6 @@ mod tests {
             Field::new("s2", DataType::Int32, true),
         ]));
 
-        // Prune using s2 > 5
-        let expr = col("s2").gt(lit(5));
-        let expr = logical2physical(&expr, &schema);
-
         let statistics = TestStatistics::new().with(
             "s2",
             ContainerStats::new_i32(
@@ -2131,53 +2124,50 @@ mod tests {
                 vec![Some(5), Some(6), None, None],    // max
             ),
         );
+        prune_with_expr(
+            // Prune using s2 > 5
+            col("s2").gt(lit(5)),
+            &schema,
+            &statistics,
+            // s2 [0, 5] ==> no rows should pass
+            // s2 [4, 6] ==> some rows could pass
+            // No stats for s2 ==> some rows could pass
+            // s2 [3, None] (null max) ==> some rows could pass
+            &[false, true, true, true],
+        );
 
-        // s2 [0, 5] ==> no rows should pass
-        // s2 [4, 6] ==> some rows could pass
-        // No stats for s2 ==> some rows could pass
-        // s2 [3, None] (null max) ==> some rows could pass
-
-        let p = PruningPredicate::try_new(expr, schema.clone()).unwrap();
-        let result = p.prune(&statistics).unwrap();
-        let expected = vec![false, true, true, true];
-        assert_eq!(result, expected);
-
-        // filter with cast
-        let expr = cast(col("s2"), DataType::Int64).gt(lit(ScalarValue::Int64(Some(5))));
-        let expr = logical2physical(&expr, &schema);
-        let p = PruningPredicate::try_new(expr, schema).unwrap();
-        let result = p.prune(&statistics).unwrap();
-        let expected = vec![false, true, true, true];
-        assert_eq!(result, expected);
+        prune_with_expr(
+            // filter with cast
+            cast(col("s2"), DataType::Int64).gt(lit(ScalarValue::Int64(Some(5)))),
+            &schema,
+            &statistics,
+            &[false, true, true, true],
+        );
     }
 
     #[test]
     fn prune_not_eq_data() {
         let schema = Arc::new(Schema::new(vec![Field::new("s1", DataType::Utf8, true)]));
 
-        // Prune using s2 != 'M'
-        let expr = col("s1").not_eq(lit("M"));
-        let expr = logical2physical(&expr, &schema);
-
-        let statistics = TestStatistics::new().with(
-            "s1",
-            ContainerStats::new_utf8(
-                vec![Some("A"), Some("A"), Some("N"), Some("M"), None, Some("A")], // min
-                vec![Some("Z"), Some("L"), Some("Z"), Some("M"), None, None],      // max
+        prune_with_expr(
+            // Prune using s2 != 'M'
+            col("s1").not_eq(lit("M")),
+            &schema,
+            &TestStatistics::new().with(
+                "s1",
+                ContainerStats::new_utf8(
+                    vec![Some("A"), Some("A"), Some("N"), Some("M"), None, Some("A")], // min
+                    vec![Some("Z"), Some("L"), Some("Z"), Some("M"), None, None], // max
+                ),
             ),
+            // s1 [A, Z] ==> might have values that pass predicate
+            // s1 [A, L] ==> all rows pass the predicate
+            // s1 [N, Z] ==> all rows pass the predicate
+            // s1 [M, M] ==> all rows do not pass the predicate
+            // No stats for s2 ==> some rows could pass
+            // s2 [3, None] (null max) ==> some rows could pass
+            &[true, true, true, false, true, true],
         );
-
-        // s1 [A, Z] ==> might have values that pass predicate
-        // s1 [A, L] ==> all rows pass the predicate
-        // s1 [N, Z] ==> all rows pass the predicate
-        // s1 [M, M] ==> all rows do not pass the predicate
-        // No stats for s2 ==> some rows could pass
-        // s2 [3, None] (null max) ==> some rows could pass
-
-        let p = PruningPredicate::try_new(expr, schema).unwrap();
-        let result = p.prune(&statistics).unwrap();
-        let expected = vec![true, true, true, false, true, true];
-        assert_eq!(result, expected);
     }
 
     /// Creates setup for boolean chunk pruning
@@ -2216,69 +2206,75 @@ mod tests {
     fn prune_bool_const_expr() {
         let (schema, statistics, _, _) = bool_setup();
 
-        // true
-        let expr = lit(true);
-        let expr = logical2physical(&expr, &schema);
-        let p = PruningPredicate::try_new(expr, schema.clone()).unwrap();
-        let result = p.prune(&statistics).unwrap();
-        assert_eq!(result, vec![true, true, true, true, true]);
+        prune_with_expr(
+            // true
+            lit(true),
+            &schema,
+            &statistics,
+            &[true, true, true, true, true],
+        );
 
-        // false
-        // constant literals that do NOT refer to any columns are currently not evaluated at all, hence the result is
-        // "all true"
-        let expr = lit(false);
-        let expr = logical2physical(&expr, &schema);
-        let p = PruningPredicate::try_new(expr, schema).unwrap();
-        let result = p.prune(&statistics).unwrap();
-        assert_eq!(result, vec![true, true, true, true, true]);
+        prune_with_expr(
+            // false
+            // constant literals that do NOT refer to any columns are currently not evaluated at all, hence the result is
+            // "all true"
+            lit(false),
+            &schema,
+            &statistics,
+            &[true, true, true, true, true],
+        );
     }
 
     #[test]
     fn prune_bool_column() {
         let (schema, statistics, expected_true, _) = bool_setup();
 
-        // b1
-        let expr = col("b1");
-        let expr = logical2physical(&expr, &schema);
-        let p = PruningPredicate::try_new(expr, schema).unwrap();
-        let result = p.prune(&statistics).unwrap();
-        assert_eq!(result, expected_true);
+        prune_with_expr(
+            // b1
+            col("b1"),
+            &schema,
+            &statistics,
+            &expected_true,
+        );
     }
 
     #[test]
     fn prune_bool_not_column() {
         let (schema, statistics, _, expected_false) = bool_setup();
 
-        // !b1
-        let expr = col("b1").not();
-        let expr = logical2physical(&expr, &schema);
-        let p = PruningPredicate::try_new(expr, schema).unwrap();
-        let result = p.prune(&statistics).unwrap();
-        assert_eq!(result, expected_false);
+        prune_with_expr(
+            // !b1
+            col("b1").not(),
+            &schema,
+            &statistics,
+            &expected_false,
+        );
     }
 
     #[test]
     fn prune_bool_column_eq_true() {
         let (schema, statistics, expected_true, _) = bool_setup();
 
-        // b1 = true
-        let expr = col("b1").eq(lit(true));
-        let expr = logical2physical(&expr, &schema);
-        let p = PruningPredicate::try_new(expr, schema).unwrap();
-        let result = p.prune(&statistics).unwrap();
-        assert_eq!(result, expected_true);
+        prune_with_expr(
+            // b1 = true
+            col("b1").eq(lit(true)),
+            &schema,
+            &statistics,
+            &expected_true,
+        );
     }
 
     #[test]
     fn prune_bool_not_column_eq_true() {
         let (schema, statistics, _, expected_false) = bool_setup();
 
-        // !b1 = true
-        let expr = col("b1").not().eq(lit(true));
-        let expr = logical2physical(&expr, &schema);
-        let p = PruningPredicate::try_new(expr, schema).unwrap();
-        let result = p.prune(&statistics).unwrap();
-        assert_eq!(result, expected_false);
+        prune_with_expr(
+            // !b1 = true
+            col("b1").not().eq(lit(true)),
+            &schema,
+            &statistics,
+            &expected_false,
+        );
     }
 
     /// Creates a setup for chunk pruning, modeling a int32 column "i"
@@ -2313,21 +2309,18 @@ mod tests {
         // i [-11, -1] ==>  no rows can pass (not keep)
         // i [NULL, NULL]  ==> unknown (must keep)
         // i [1, NULL]  ==> unknown (must keep)
-        let expected_ret = vec![true, true, false, true, true];
+        let expected_ret = &[true, true, false, true, true];
 
         // i > 0
-        let expr = col("i").gt(lit(0));
-        let expr = logical2physical(&expr, &schema);
-        let p = PruningPredicate::try_new(expr, schema.clone()).unwrap();
-        let result = p.prune(&statistics).unwrap();
-        assert_eq!(result, expected_ret);
+        prune_with_expr(col("i").gt(lit(0)), &schema, &statistics, expected_ret);
 
         // -i < 0
-        let expr = Expr::Negative(Box::new(col("i"))).lt(lit(0));
-        let expr = logical2physical(&expr, &schema);
-        let p = PruningPredicate::try_new(expr, schema).unwrap();
-        let result = p.prune(&statistics).unwrap();
-        assert_eq!(result, expected_ret);
+        prune_with_expr(
+            Expr::Negative(Box::new(col("i"))).lt(lit(0)),
+            &schema,
+            &statistics,
+            expected_ret,
+        );
     }
 
     #[test]
@@ -2340,21 +2333,23 @@ mod tests {
         // i [-11, -1] ==>  all rows must pass (must keep)
         // i [NULL, NULL]  ==> unknown (must keep)
         // i [1, NULL]  ==> no rows can pass (not keep)
-        let expected_ret = vec![true, false, true, true, false];
+        let expected_ret = &[true, false, true, true, false];
 
-        // i <= 0
-        let expr = col("i").lt_eq(lit(0));
-        let expr = logical2physical(&expr, &schema);
-        let p = PruningPredicate::try_new(expr, schema.clone()).unwrap();
-        let result = p.prune(&statistics).unwrap();
-        assert_eq!(result, expected_ret);
+        prune_with_expr(
+            // i <= 0
+            col("i").lt_eq(lit(0)),
+            &schema,
+            &statistics,
+            expected_ret,
+        );
 
-        // -i >= 0
-        let expr = Expr::Negative(Box::new(col("i"))).gt_eq(lit(0));
-        let expr = logical2physical(&expr, &schema);
-        let p = PruningPredicate::try_new(expr, schema).unwrap();
-        let result = p.prune(&statistics).unwrap();
-        assert_eq!(result, expected_ret);
+        prune_with_expr(
+            // -i >= 0
+            Expr::Negative(Box::new(col("i"))).gt_eq(lit(0)),
+            &schema,
+            &statistics,
+            expected_ret,
+        );
     }
 
     #[test]
@@ -2367,37 +2362,39 @@ mod tests {
         // i [-11, -1] ==>  no rows could pass in theory (conservatively keep)
         // i [NULL, NULL]  ==> unknown (must keep)
         // i [1, NULL]  ==> no rows can pass (conservatively keep)
-        let expected_ret = vec![true, true, true, true, true];
+        let expected_ret = &[true, true, true, true, true];
 
-        // cast(i as utf8) <= 0
-        let expr = cast(col("i"), DataType::Utf8).lt_eq(lit("0"));
-        let expr = logical2physical(&expr, &schema);
-        let p = PruningPredicate::try_new(expr, schema.clone()).unwrap();
-        let result = p.prune(&statistics).unwrap();
-        assert_eq!(result, expected_ret);
+        prune_with_expr(
+            // cast(i as utf8) <= 0
+            cast(col("i"), DataType::Utf8).lt_eq(lit("0")),
+            &schema,
+            &statistics,
+            expected_ret,
+        );
 
-        // try_cast(i as utf8) <= 0
-        let expr = try_cast(col("i"), DataType::Utf8).lt_eq(lit("0"));
-        let expr = logical2physical(&expr, &schema);
-        let p = PruningPredicate::try_new(expr, schema.clone()).unwrap();
-        let result = p.prune(&statistics).unwrap();
-        assert_eq!(result, expected_ret);
+        prune_with_expr(
+            // try_cast(i as utf8) <= 0
+            try_cast(col("i"), DataType::Utf8).lt_eq(lit("0")),
+            &schema,
+            &statistics,
+            expected_ret,
+        );
 
-        // cast(-i as utf8) >= 0
-        let expr =
-            cast(Expr::Negative(Box::new(col("i"))), DataType::Utf8).gt_eq(lit("0"));
-        let expr = logical2physical(&expr, &schema);
-        let p = PruningPredicate::try_new(expr, schema.clone()).unwrap();
-        let result = p.prune(&statistics).unwrap();
-        assert_eq!(result, expected_ret);
+        prune_with_expr(
+            // cast(-i as utf8) >= 0
+            cast(Expr::Negative(Box::new(col("i"))), DataType::Utf8).gt_eq(lit("0")),
+            &schema,
+            &statistics,
+            expected_ret,
+        );
 
-        // try_cast(-i as utf8) >= 0
-        let expr =
-            try_cast(Expr::Negative(Box::new(col("i"))), DataType::Utf8).gt_eq(lit("0"));
-        let expr = logical2physical(&expr, &schema);
-        let p = PruningPredicate::try_new(expr, schema).unwrap();
-        let result = p.prune(&statistics).unwrap();
-        assert_eq!(result, expected_ret);
+        prune_with_expr(
+            // try_cast(-i as utf8) >= 0
+            try_cast(Expr::Negative(Box::new(col("i"))), DataType::Utf8).gt_eq(lit("0")),
+            &schema,
+            &statistics,
+            expected_ret,
+        );
     }
 
     #[test]
@@ -2410,14 +2407,15 @@ mod tests {
         // i [-11, -1] ==>  no rows can pass (not keep)
         // i [NULL, NULL]  ==> unknown (must keep)
         // i [1, NULL]  ==> no rows can pass (not keep)
-        let expected_ret = vec![true, false, false, true, false];
+        let expected_ret = &[true, false, false, true, false];
 
-        // i = 0
-        let expr = col("i").eq(lit(0));
-        let expr = logical2physical(&expr, &schema);
-        let p = PruningPredicate::try_new(expr, schema).unwrap();
-        let result = p.prune(&statistics).unwrap();
-        assert_eq!(result, expected_ret);
+        prune_with_expr(
+            // i = 0
+            col("i").eq(lit(0)),
+            &schema,
+            &statistics,
+            expected_ret,
+        );
     }
 
     #[test]
@@ -2430,19 +2428,21 @@ mod tests {
         // i [-11, -1] ==>  no rows can pass (not keep)
         // i [NULL, NULL]  ==> unknown (must keep)
         // i [1, NULL]  ==> no rows can pass (not keep)
-        let expected_ret = vec![true, false, false, true, false];
+        let expected_ret = &[true, false, false, true, false];
 
-        let expr = cast(col("i"), DataType::Int64).eq(lit(0i64));
-        let expr = logical2physical(&expr, &schema);
-        let p = PruningPredicate::try_new(expr, schema.clone()).unwrap();
-        let result = p.prune(&statistics).unwrap();
-        assert_eq!(result, expected_ret);
+        prune_with_expr(
+            cast(col("i"), DataType::Int64).eq(lit(0i64)),
+            &schema,
+            &statistics,
+            expected_ret,
+        );
 
-        let expr = try_cast(col("i"), DataType::Int64).eq(lit(0i64));
-        let expr = logical2physical(&expr, &schema);
-        let p = PruningPredicate::try_new(expr, schema).unwrap();
-        let result = p.prune(&statistics).unwrap();
-        assert_eq!(result, expected_ret);
+        prune_with_expr(
+            try_cast(col("i"), DataType::Int64).eq(lit(0i64)),
+            &schema,
+            &statistics,
+            expected_ret,
+        );
     }
 
     #[test]
@@ -2458,13 +2458,14 @@ mod tests {
         // i [-11, -1] ==>  no rows can pass (could keep)
         // i [NULL, NULL]  ==> unknown (keep)
         // i [1, NULL]  ==> no rows can pass (could keep)
-        let expected_ret = vec![true, true, true, true, true];
+        let expected_ret = &[true, true, true, true, true];
 
-        let expr = cast(col("i"), DataType::Utf8).eq(lit("0"));
-        let expr = logical2physical(&expr, &schema);
-        let p = PruningPredicate::try_new(expr, schema).unwrap();
-        let result = p.prune(&statistics).unwrap();
-        assert_eq!(result, expected_ret);
+        prune_with_expr(
+            cast(col("i"), DataType::Utf8).eq(lit("0")),
+            &schema,
+            &statistics,
+            expected_ret,
+        );
     }
 
     #[test]
@@ -2477,21 +2478,23 @@ mod tests {
         // i [-11, -1] ==>  no rows can pass (not keep)
         // i [NULL, NULL]  ==> unknown (must keep)
         // i [1, NULL]  ==> all rows must pass (must keep)
-        let expected_ret = vec![true, true, false, true, true];
+        let expected_ret = &[true, true, false, true, true];
 
-        // i > -1
-        let expr = col("i").gt(lit(-1));
-        let expr = logical2physical(&expr, &schema);
-        let p = PruningPredicate::try_new(expr, schema.clone()).unwrap();
-        let result = p.prune(&statistics).unwrap();
-        assert_eq!(result, expected_ret);
+        prune_with_expr(
+            // i > -1
+            col("i").gt(lit(-1)),
+            &schema,
+            &statistics,
+            expected_ret,
+        );
 
-        // -i < 1
-        let expr = Expr::Negative(Box::new(col("i"))).lt(lit(1));
-        let expr = logical2physical(&expr, &schema);
-        let p = PruningPredicate::try_new(expr, schema).unwrap();
-        let result = p.prune(&statistics).unwrap();
-        assert_eq!(result, expected_ret);
+        prune_with_expr(
+            // -i < 1
+            Expr::Negative(Box::new(col("i"))).lt(lit(1)),
+            &schema,
+            &statistics,
+            expected_ret,
+        );
     }
 
     #[test]
@@ -2500,14 +2503,15 @@ mod tests {
 
         // Expression "i IS NULL" when there are no null statistics,
         // should all be kept
-        let expected_ret = vec![true, true, true, true, true];
+        let expected_ret = &[true, true, true, true, true];
 
-        // i IS NULL, no null statistics
-        let expr = col("i").is_null();
-        let expr = logical2physical(&expr, &schema);
-        let p = PruningPredicate::try_new(expr, schema.clone()).unwrap();
-        let result = p.prune(&statistics).unwrap();
-        assert_eq!(result, expected_ret);
+        prune_with_expr(
+            // i IS NULL, no null statistics
+            col("i").is_null(),
+            &schema,
+            &statistics,
+            expected_ret,
+        );
 
         // provide null counts for each column
         let statistics = statistics.with_null_counts(
@@ -2521,51 +2525,55 @@ mod tests {
             ],
         );
 
-        let expected_ret = vec![false, true, true, true, false];
+        let expected_ret = &[false, true, true, true, false];
 
-        // i IS NULL, with actual null statistcs
-        let expr = col("i").is_null();
-        let expr = logical2physical(&expr, &schema);
-        let p = PruningPredicate::try_new(expr, schema).unwrap();
-        let result = p.prune(&statistics).unwrap();
-        assert_eq!(result, expected_ret);
+        prune_with_expr(
+            // i IS NULL, with actual null statistcs
+            col("i").is_null(),
+            &schema,
+            &statistics,
+            expected_ret,
+        );
     }
 
     #[test]
     fn prune_cast_column_scalar() {
         // The data type of column i is INT32
         let (schema, statistics) = int32_setup();
-        let expected_ret = vec![true, true, false, true, true];
+        let expected_ret = &[true, true, false, true, true];
 
-        // i > int64(0)
-        let expr = col("i").gt(cast(lit(ScalarValue::Int64(Some(0))), DataType::Int32));
-        let expr = logical2physical(&expr, &schema);
-        let p = PruningPredicate::try_new(expr, schema.clone()).unwrap();
-        let result = p.prune(&statistics).unwrap();
-        assert_eq!(result, expected_ret);
+        prune_with_expr(
+            // i > int64(0)
+            col("i").gt(cast(lit(ScalarValue::Int64(Some(0))), DataType::Int32)),
+            &schema,
+            &statistics,
+            expected_ret,
+        );
 
-        // cast(i as int64) > int64(0)
-        let expr = cast(col("i"), DataType::Int64).gt(lit(ScalarValue::Int64(Some(0))));
-        let expr = logical2physical(&expr, &schema);
-        let p = PruningPredicate::try_new(expr, schema.clone()).unwrap();
-        let result = p.prune(&statistics).unwrap();
-        assert_eq!(result, expected_ret);
+        prune_with_expr(
+            // cast(i as int64) > int64(0)
+            cast(col("i"), DataType::Int64).gt(lit(ScalarValue::Int64(Some(0)))),
+            &schema,
+            &statistics,
+            expected_ret,
+        );
 
-        // try_cast(i as int64) > int64(0)
-        let expr =
-            try_cast(col("i"), DataType::Int64).gt(lit(ScalarValue::Int64(Some(0))));
-        let expr = logical2physical(&expr, &schema);
-        let p = PruningPredicate::try_new(expr, schema.clone()).unwrap();
-        let result = p.prune(&statistics).unwrap();
-        assert_eq!(result, expected_ret);
+        prune_with_expr(
+            // try_cast(i as int64) > int64(0)
+            try_cast(col("i"), DataType::Int64).gt(lit(ScalarValue::Int64(Some(0)))),
+            &schema,
+            &statistics,
+            expected_ret,
+        );
 
-        // `-cast(i as int64) < 0` convert to `cast(i as int64) > -0`
-        let expr = Expr::Negative(Box::new(cast(col("i"), DataType::Int64)))
-            .lt(lit(ScalarValue::Int64(Some(0))));
-        let expr = logical2physical(&expr, &schema);
-        let p = PruningPredicate::try_new(expr, schema).unwrap();
-        let result = p.prune(&statistics).unwrap();
-        assert_eq!(result, expected_ret);
+        prune_with_expr(
+            // `-cast(i as int64) < 0` convert to `cast(i as int64) > -0`
+            Expr::Negative(Box::new(cast(col("i"), DataType::Int64)))
+                .lt(lit(ScalarValue::Int64(Some(0)))),
+            &schema,
+            &statistics,
+            expected_ret,
+        );
     }
 
     #[test]
@@ -2721,7 +2729,7 @@ mod tests {
             &schema,
             &statistics,
             // rule out containers ('false) where we know foo is not present
-            vec![true, false, true, true, false, true, true, false, true],
+            &[true, false, true, true, false, true, true, false, true],
         );
 
         // s1 = 'bar'
@@ -2730,7 +2738,7 @@ mod tests {
             &schema,
             &statistics,
             // rule out containers where we know bar is not present
-            vec![true, true, true, false, false, false, true, true, true],
+            &[true, true, true, false, false, false, true, true, true],
         );
 
         // s1 = 'baz' (unknown value)
@@ -2739,7 +2747,7 @@ mod tests {
             &schema,
             &statistics,
             // can't rule out anything
-            vec![true, true, true, true, true, true, true, true, true],
+            &[true, true, true, true, true, true, true, true, true],
         );
 
         // s1 = 'foo' AND s1 = 'bar'
@@ -2750,7 +2758,7 @@ mod tests {
             // logically this predicate can't possibly be true (the column can't
             // take on both values) but we could rule it out if the stats tell
             // us that both values are not present
-            vec![true, true, true, true, true, true, true, true, true],
+            &[true, true, true, true, true, true, true, true, true],
         );
 
         // s1 = 'foo' OR s1 = 'bar'
@@ -2759,7 +2767,7 @@ mod tests {
             &schema,
             &statistics,
             // can rule out containers that we know contain neither foo nor bar
-            vec![true, true, true, true, true, true, false, false, false],
+            &[true, true, true, true, true, true, false, false, false],
         );
 
         // s1 = 'foo' OR s1 = 'baz'
@@ -2768,7 +2776,7 @@ mod tests {
             &schema,
             &statistics,
             // can't rule out anything container
-            vec![true, true, true, true, true, true, true, true, true],
+            &[true, true, true, true, true, true, true, true, true],
         );
 
         // s1 = 'foo' OR s1 = 'bar' OR s1 = 'baz'
@@ -2781,7 +2789,7 @@ mod tests {
             &statistics,
             // can rule out any containers based on knowledge of s1 and `foo`,
             // `bar` and (`foo`, `bar`)
-            vec![true, true, true, true, true, true, true, true, true],
+            &[true, true, true, true, true, true, true, true, true],
         );
 
         // s1 != foo
@@ -2790,7 +2798,7 @@ mod tests {
             &schema,
             &statistics,
             // rule out containers we know for sure only contain foo
-            vec![false, true, true, false, true, true, false, true, true],
+            &[false, true, true, false, true, true, false, true, true],
         );
 
         // s1 != bar
@@ -2799,7 +2807,7 @@ mod tests {
             &schema,
             &statistics,
             // rule out when we know for sure s1 has the value bar
-            vec![false, false, false, true, true, true, true, true, true],
+            &[false, false, false, true, true, true, true, true, true],
         );
 
         // s1 != foo AND s1 != bar
@@ -2810,7 +2818,7 @@ mod tests {
             &schema,
             &statistics,
             // can rule out any container where we know s1 does not have either 'foo' or 'bar'
-            vec![true, true, true, false, false, false, true, true, true],
+            &[true, true, true, false, false, false, true, true, true],
         );
 
         // s1 != foo AND s1 != bar AND s1 != baz
@@ -2822,7 +2830,7 @@ mod tests {
             &schema,
             &statistics,
             // can't rule out any container based on  knowledge of s1,s2
-            vec![true, true, true, true, true, true, true, true, true],
+            &[true, true, true, true, true, true, true, true, true],
         );
 
         // s1 != foo OR s1 != bar
@@ -2833,7 +2841,7 @@ mod tests {
             &schema,
             &statistics,
             // cant' rule out anything based on contains information
-            vec![true, true, true, true, true, true, true, true, true],
+            &[true, true, true, true, true, true, true, true, true],
         );
 
         // s1 != foo OR s1 != bar OR s1 != baz
@@ -2845,7 +2853,7 @@ mod tests {
             &schema,
             &statistics,
             // cant' rule out anything based on contains information
-            vec![true, true, true, true, true, true, true, true, true],
+            &[true, true, true, true, true, true, true, true, true],
         );
     }
 
@@ -2907,7 +2915,7 @@ mod tests {
             &schema,
             &statistics,
             // rule out containers where we know s1 is not present
-            vec![true, false, true, true, false, true, true, false, true],
+            &[true, false, true, true, false, true, true, false, true],
         );
 
         // s1 = 'foo' OR s2 = 'bar'
@@ -2917,7 +2925,7 @@ mod tests {
             &schema,
             &statistics,
             //  can't rule out any container (would need to prove that s1 != foo AND s2 != bar)
-            vec![true, true, true, true, true, true, true, true, true],
+            &[true, true, true, true, true, true, true, true, true],
         );
 
         // s1 = 'foo' AND s2 != 'bar'
@@ -2928,7 +2936,7 @@ mod tests {
             // can only rule out container where we know either:
             // 1. s1 doesn't have the value 'foo` or
             // 2. s2 has only the value of 'bar'
-            vec![false, false, false, true, false, true, true, false, true],
+            &[false, false, false, true, false, true, true, false, true],
         );
 
         // s1 != 'foo' AND s2 != 'bar'
@@ -2941,7 +2949,7 @@ mod tests {
             // Can  rule out any container where we know either
             // 1. s1 has only the value 'foo'
             // 2. s2 has only the value 'bar'
-            vec![false, false, false, false, true, true, false, true, true],
+            &[false, false, false, false, true, true, false, true, true],
         );
 
         // s1 != 'foo' AND (s2 = 'bar' OR s2 = 'baz')
@@ -2953,7 +2961,7 @@ mod tests {
             &statistics,
             // Can rule out any container where we know s1 has only the value
             // 'foo'. Can't use knowledge of s2 and bar to rule out anything
-            vec![false, true, true, false, true, true, false, true, true],
+            &[false, true, true, false, true, true, false, true, true],
         );
 
         // s1 like '%foo%bar%'
@@ -2962,7 +2970,7 @@ mod tests {
             &schema,
             &statistics,
             // cant rule out anything with information we know
-            vec![true, true, true, true, true, true, true, true, true],
+            &[true, true, true, true, true, true, true, true, true],
         );
 
         // s1 like '%foo%bar%' AND s2 = 'bar'
@@ -2973,7 +2981,7 @@ mod tests {
             &schema,
             &statistics,
             // can rule out any container where we know s2 does not have the value 'bar'
-            vec![true, true, true, false, false, false, true, true, true],
+            &[true, true, true, false, false, false, true, true, true],
         );
 
         // s1 like '%foo%bar%' OR s2 = 'bar'
@@ -2983,7 +2991,7 @@ mod tests {
             &statistics,
             // can't rule out anything (we would have to prove that both the
             // like and the equality must be false)
-            vec![true, true, true, true, true, true, true, true, true],
+            &[true, true, true, true, true, true, true, true, true],
         );
     }
 
@@ -3055,7 +3063,7 @@ mod tests {
             // 1. 0 is outside the min/max range of i
             // 1. s does not contain foo
             // (range is false, and contained  is false)
-            vec![true, false, true, false, false, false, true, false, true],
+            &[true, false, true, false, false, false, true, false, true],
         );
 
         // i = 0 and s != 'foo'
@@ -3066,7 +3074,7 @@ mod tests {
             // Can rule out containers where either:
             // 1. 0 is outside the min/max range of i
             // 2. s only contains foo
-            vec![false, false, false, true, false, true, true, false, true],
+            &[false, false, false, true, false, true, true, false, true],
         );
 
         // i = 0 OR s = 'foo'
@@ -3076,7 +3084,7 @@ mod tests {
             &statistics,
             // in theory could rule out containers if we had min/max values for
             // s as well. But in this case we don't so we can't rule out anything
-            vec![true, true, true, true, true, true, true, true, true],
+            &[true, true, true, true, true, true, true, true, true],
         );
     }
 
@@ -3091,7 +3099,7 @@ mod tests {
         expr: Expr,
         schema: &SchemaRef,
         statistics: &TestStatistics,
-        expected: Vec<bool>,
+        expected: &[bool],
     ) {
         println!("Pruning with expr: {}", expr);
         let expr = logical2physical(&expr, schema);
