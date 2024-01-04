@@ -336,9 +336,18 @@ where
     }
 
     fn size(&self) -> usize {
+        let estimated_buckets = (self.values.len().checked_mul(8).unwrap_or(usize::MAX)
+            / 7)
+        .next_power_of_two();
+
+        // Size of accumulator
+        // + size of entry * number of buckets
+        // + 1 byte for each bucket
+        // + fixed size of HashSet
         std::mem::size_of_val(self)
+            + std::mem::size_of::<T::Native>() * estimated_buckets
+            + estimated_buckets
             + std::mem::size_of_val(&self.values)
-            + (std::mem::size_of::<T::Native>() * self.values.capacity())
     }
 }
 
@@ -414,9 +423,18 @@ where
     }
 
     fn size(&self) -> usize {
+        let estimated_buckets = (self.values.len().checked_mul(8).unwrap_or(usize::MAX)
+            / 7)
+        .next_power_of_two();
+
+        // Size of accumulator
+        // + size of entry * number of buckets
+        // + 1 byte for each bucket
+        // + fixed size of HashSet
         std::mem::size_of_val(self)
+            + std::mem::size_of::<T::Native>() * estimated_buckets
+            + estimated_buckets
             + std::mem::size_of_val(&self.values)
-            + (std::mem::size_of::<T::Native>() * self.values.capacity())
     }
 }
 
