@@ -103,7 +103,7 @@ The following options are available when writing parquet files. If any unsupport
 | Option                       | Can be Column Specific? | Description                                                                                                   |
 | ---------------------------- | ----------------------- | ------------------------------------------------------------------------------------------------------------- |
 | COMPRESSION                  | Yes                     | Sets the compression codec and if applicable compression level to use                                         |
-| MAX_ROW_GROUP_SIZE           | No                      | Sets the maximum number of rows that can be encoded in a single row group                                     |
+| MAX_ROW_GROUP_SIZE           | No                      | Sets the maximum number of rows that can be encoded in a single row group. Larger row groups require more memory to write and read.                                     |
 | DATA_PAGESIZE_LIMIT          | No                      | Sets the best effort maximum page size in bytes                                                               |
 | WRITE_BATCH_SIZE             | No                      | Maximum number of rows written for each column in a single batch                                              |
 | WRITER_VERSION               | No                      | Parquet writer version (1.0 or 2.0)                                                                           |

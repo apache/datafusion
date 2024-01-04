@@ -351,6 +351,7 @@ config_namespace! {
         pub max_statistics_size: Option<usize>, default = None
 
         /// Sets maximum number of rows in a row group
+        /// Larger row groups require more memory to write and read.
         pub max_row_group_size: usize, default = 1024 * 1024
 
         /// Sets "created by" property
