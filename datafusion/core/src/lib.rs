@@ -295,7 +295,7 @@
 //! [`expr_api`.rs] example
 //!
 //! [`TreeNode`]: datafusion_common::tree_node::TreeNode
-//! [`ExprSimplifier`]: datafusion::optimizer::simplify_expressions::ExprSimplifier
+//! [`ExprSimplifier`]: crate::optimizer::simplify_expressions::ExprSimplifier
 //! [`expr_api`.rs]: https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/expr_api.rs
 //!
 //! ### Physical Plans
