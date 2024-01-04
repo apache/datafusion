@@ -27,8 +27,8 @@ use arrow::array::*;
 use arrow::buffer::OffsetBuffer;
 use arrow::compute;
 use arrow::datatypes::{DataType, Field, UInt64Type};
-use arrow::row::{Row, RowConverter, SortField};
-use arrow_buffer::NullBuffer;
+use arrow::row::{RowConverter, SortField};
+use arrow_buffer::{ArrowNativeType, NullBuffer};
 
 use arrow_schema::{FieldRef, SortOptions};
 use datafusion_common::cast::{
@@ -2618,10 +2618,10 @@ pub fn array_resize(arg: &[ArrayRef]) -> Result<ArrayRef> {
     }
 
     let array = as_list_array(&arg[0])?;
-    let new_len = as_int64_array(&arg[1])?.value(0);
-    if new_len < 0 {
-        return exec_err!("array_resize: new length must be non-negative");
-    }
+    let new_len = as_int64_array(&arg[1])?;
+    // if new_len < 0 {
+    //     return exec_err!("array_resize: new length must be non-negative");
+    // }
 
     let new_element = if arg.len() == 3 {
         Some(arg[2].clone())
@@ -2639,7 +2639,7 @@ pub fn array_resize(arg: &[ArrayRef]) -> Result<ArrayRef> {
 
 fn general_list_resize<O: OffsetSizeTrait>(
     array: &GenericListArray<O>,
-    count_array: i64,
+    count_array: &Int64Array,
     field: &FieldRef,
     new_element: Option<ArrayRef>,
 ) -> Result<ArrayRef> {
@@ -2653,11 +2653,19 @@ fn general_list_resize<O: OffsetSizeTrait>(
     } else {
         empty_list(&dt)?
     };
-    let binding = converter.convert_columns(&[new_element.clone()])?;
-    let row = binding.row(0);
-    let count = count_array as usize;
+    let rows = converter.convert_columns(&[new_element.clone()])?;
 
-    for arr in array.iter() {
+    for (index, arr) in array.iter().enumerate() {
+        let count = count_array.value(index).to_usize().ok_or_else(|| {
+            DataFusionError::Execution(
+                "array_resize: failed to convert size to usize".to_string(),
+            )
+        })?;
+        let row = if rows.size() > 0 {
+            rows.row(index)
+        } else {
+            rows.row(0)
+        };
         match arr {
             Some(arr) => {
                 let values = converter.convert_columns(&[arr])?;
@@ -2675,7 +2683,7 @@ fn general_list_resize<O: OffsetSizeTrait>(
                     Some(array) => array.clone(),
                     None => {
                         return internal_err!(
-                            "array_distinct: failed to get array from rows"
+                            "array_resize: failed to get array from rows"
                         )
                     }
                 };
@@ -2683,7 +2691,7 @@ fn general_list_resize<O: OffsetSizeTrait>(
             }
             None => {
                 let last_offset = offsets.last().copied().unwrap();
-                offsets.push(last_offset + count as i32);
+                offsets.push(last_offset);
                 new_arrays.push(new_element.clone());
             }
         }
@@ -2695,7 +2703,7 @@ fn general_list_resize<O: OffsetSizeTrait>(
 
     Ok(Arc::new(ListArray::try_new(
         field.clone(),
-        OffsetBuffer::from(offsets.into()),
+        offsets,
         values,
         None,
     )?))
