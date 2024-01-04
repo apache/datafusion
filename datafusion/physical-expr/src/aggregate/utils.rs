@@ -212,8 +212,8 @@ pub fn get_sort_options(ordering_req: &[PhysicalSortExpr]) -> Vec<SortOptions> {
     ordering_req.iter().map(|item| item.options).collect()
 }
 
-/// A wrapper around a type to provide hash for primitive arrow types
-#[derive(Copy, Clone)]
+/// A wrapper around a type to provide hash for floats
+#[derive(Copy, Clone, Debug)]
 pub(crate) struct Hashable<T>(pub T);
 
 impl<T: ToByteSlice> std::hash::Hash for Hashable<T> {
