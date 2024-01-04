@@ -33,7 +33,7 @@ use std::sync::Arc;
 
 use ahash::RandomState;
 use arrow::array::{Array, ArrayRef};
-use hashbrown::HashSet;
+use std::collections::HashSet;
 
 use crate::aggregate::utils::{down_cast_any_ref, Hashable};
 use crate::expressions::format_state_name;
