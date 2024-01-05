@@ -552,7 +552,12 @@ impl AsLogicalPlan for LogicalPlanNode {
                         .clone(),
                     order_exprs,
                     if_not_exists: create_extern_table.if_not_exists,
-                    file_compression_type: CompressionTypeVariant::try_from(&create_extern_table.file_compression_type).map_err(|_| DataFusionError::NotImplemented(format!("Unsupported file compression type {}", create_extern_table.file_compression_type)))?,
+                    file_compression_type: protobuf::CompressionTypeVariant::try_from(create_extern_table.file_compression_type).map_err(|_| {
+                        proto_error(format!(
+                            "Unsupported file compression type {}",
+                            create_extern_table.file_compression_type
+                        ))
+                    })?,
                     definition,
                     unbounded: create_extern_table.unbounded,
                     options: create_extern_table.options.clone(),
