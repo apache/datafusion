@@ -230,9 +230,9 @@ impl DFSchema {
         for field in other_schema.fields() {
             // skip duplicate columns
             let duplicated_field = match field.qualifier() {
-                Some(q) => self.field_with_name(Some(q), field.name()).is_ok(),
+                Some(q) => self.has_column_with_qualified_name(q, field.name()),
                 // for unqualified columns, check as unqualified name
-                None => self.field_with_unqualified_name(field.name()).is_ok(),
+                None => self.has_column_with_unqualified_name(field.name()),
             };
             if !duplicated_field {
                 self.fields.push(field.clone());
