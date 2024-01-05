@@ -169,7 +169,7 @@ order by date_bin('30 minutes', time) DESC
 
 # Reproducer for https://github.com/apache/arrow-datafusion/issues/8738
 # This query should work correctly
-query error DataFusion error: External error: Arrow error: Invalid argument error: RowConverter column schema mismatch, expected Utf8 got Dictionary\(Int32, Utf8\)
+query P?TT
 SELECT
   "data"."timestamp" as "time",
   "data"."tag_id",
@@ -201,3 +201,24 @@ ORDER BY
   "time",
   "data"."tag_id"
 ;
+----
+2023-12-20T00:00:00 1000 f1 32.0
+2023-12-20T00:00:00 1000 f2 foo
+2023-12-20T00:10:00 1000 f2 foo
+2023-12-20T00:10:00 1000 f1 32.0
+2023-12-20T00:20:00 1000 f1 32.0
+2023-12-20T00:20:00 1000 f2 foo
+2023-12-20T00:30:00 1000 f1 32.0
+2023-12-20T00:30:00 1000 f2 foo
+2023-12-20T00:40:00 1000 f2 foo
+2023-12-20T00:40:00 1000 f1 32.0
+2023-12-20T00:50:00 1000 f1 32.0
+2023-12-20T00:50:00 1000 f2 foo
+2023-12-20T01:00:00 1000 f1 32.0
+2023-12-20T01:00:00 1000 f2 foo
+2023-12-20T01:10:00 1000 f2 foo
+2023-12-20T01:10:00 1000 f1 32.0
+2023-12-20T01:20:00 1000 f2 foo
+2023-12-20T01:20:00 1000 f1 32.0
+2023-12-20T01:30:00 1000 f2 foo
+2023-12-20T01:30:00 1000 f1 32.0

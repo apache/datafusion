@@ -2466,6 +2466,15 @@ select max(x_dict) from value_dict group by x_dict % 2 order by max(x_dict);
 4
 5
 
+query T
+select arrow_typeof(x_dict) from value_dict group by x_dict;
+----
+Dictionary(Int64, Int32)
+Dictionary(Int64, Int32)
+Dictionary(Int64, Int32)
+Dictionary(Int64, Int32)
+Dictionary(Int64, Int32)
+
 statement ok
 drop table value
 
@@ -2560,7 +2569,7 @@ select trace_id, other, MIN(timestamp) from traces group by trace_id, other orde
 a -1 -1
 b 0 0
 NULL 0 0
-c 1 1
+a 1 1
 
 query TII
 select trace_id, MIN(other), MIN(timestamp) from traces group by trace_id order by MIN(timestamp), MIN(other) limit 4;
@@ -2685,7 +2694,7 @@ select trace_id, other, MIN(timestamp) from traces group by trace_id, other orde
 a -1 -1
 b 0 0
 NULL 0 0
-c 1 1
+a 1 1
 
 query TII
 select trace_id, MIN(other), MIN(timestamp) from traces group by trace_id order by MIN(timestamp), MIN(other) limit 4;
