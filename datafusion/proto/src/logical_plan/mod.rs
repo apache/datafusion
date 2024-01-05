@@ -1423,7 +1423,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                             delimiter: String::from(*delimiter),
                             order_exprs: converted_order_exprs,
                             definition: definition.clone().unwrap_or_default(),
-                            file_compression_type: file_compression_type,
+                            file_compression_type: file_compression_type.clone() as i32,
                             unbounded: *unbounded,
                             options: options.clone(),
                             constraints: Some(constraints.clone().into()),
