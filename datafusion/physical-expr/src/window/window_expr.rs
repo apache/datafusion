@@ -237,7 +237,7 @@ pub trait AggregateWindowExpr: WindowExpr {
             let cur_range =
                 window_frame_ctx.calculate_range(&order_bys, last_range, length, idx)?;
             // Exit if the range extends all the way and end point is not exact:
-            if (cur_range.end == length && !is_end_exact) && not_end {
+            if cur_range.end == length && !is_end_exact && not_end {
                 break;
             }
             let value = self.get_aggregate_result_inside_range(

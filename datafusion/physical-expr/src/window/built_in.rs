@@ -230,7 +230,8 @@ impl WindowExpr for BuiltInWindowExpr {
                 }?;
 
                 // Exit if the range extends all the way and not exact:
-                if (frame_range.end == num_rows && !is_end_exact)
+                if frame_range.end == num_rows
+                    && !is_end_exact
                     && !partition_batch_state.is_end
                 {
                     break;
