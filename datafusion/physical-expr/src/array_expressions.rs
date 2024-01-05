@@ -37,7 +37,8 @@ use datafusion_common::cast::{
 };
 use datafusion_common::utils::{array_into_list_array, empty_list, list_ndims};
 use datafusion_common::{
-    exec_err, internal_err, not_impl_err, plan_err, DataFusionError, Result,
+    exec_datafusion_err, exec_err, internal_err, not_impl_err, plan_err, DataFusionError,
+    Result,
 };
 
 use itertools::Itertools;
@@ -2633,7 +2634,7 @@ pub fn array_resize(arg: &[ArrayRef]) -> Result<ArrayRef> {
             let array = as_large_list_array(&arg[0])?;
             general_list_resize::<i64>(array, new_len, field, new_element)
         }
-        _ => internal_err!("array_resize only support list array"),
+        _ => exec_err!("array_resize only support list array"),
     }
 }
 
@@ -2641,25 +2642,23 @@ fn general_list_resize<O: OffsetSizeTrait>(
     array: &GenericListArray<O>,
     count_array: &Int64Array,
     field: &FieldRef,
-    new_element: Option<ArrayRef>,
+    default_element: Option<ArrayRef>,
 ) -> Result<ArrayRef> {
     let mut offsets = vec![O::usize_as(0)];
     let mut new_arrays = vec![];
 
     let dt = array.value_type();
     let converter = RowConverter::new(vec![SortField::new(dt.clone())])?;
-    let new_element = if let Some(new_element) = new_element {
-        new_element
+    let default_element = if let Some(default_element) = default_element {
+        default_element
     } else {
         empty_list(&dt)?
     };
-    let rows = converter.convert_columns(&[new_element.clone()])?;
+    let rows = converter.convert_columns(&[default_element.clone()])?;
 
     for (index, arr) in array.iter().enumerate() {
         let count = count_array.value(index).to_usize().ok_or_else(|| {
-            DataFusionError::Execution(
-                "array_resize: failed to convert size to usize".to_string(),
-            )
+            exec_datafusion_err!("array_resize: failed to convert size to usize")
         })?;
         let row = if rows.size() > 0 {
             rows.row(index)
@@ -2692,7 +2691,7 @@ fn general_list_resize<O: OffsetSizeTrait>(
             None => {
                 let last_offset = offsets.last().copied().unwrap();
                 offsets.push(last_offset);
-                new_arrays.push(new_element.clone());
+                new_arrays.push(default_element.clone());
             }
         }
     }
