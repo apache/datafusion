@@ -2660,7 +2660,7 @@ fn general_list_resize<O: OffsetSizeTrait>(
         let count = count_array.value(index).to_usize().ok_or_else(|| {
             exec_datafusion_err!("array_resize: failed to convert size to usize")
         })?;
-        let row = if rows.size() > 0 {
+        let default_value = if rows.size() > 0 {
             rows.row(index)
         } else {
             rows.row(0)
@@ -2672,8 +2672,8 @@ fn general_list_resize<O: OffsetSizeTrait>(
 
                 let remain_count = min(rows.len(), count);
                 let mut rows = rows[..remain_count].to_vec();
-                let new_row = vec![&row; count - remain_count];
-                rows.extend(new_row);
+                let new_rows = vec![&default_value; count - remain_count];
+                rows.extend(new_rows);
 
                 let last_offset = offsets.last().copied().unwrap();
                 offsets.push(last_offset + O::usize_as(rows.len()));
