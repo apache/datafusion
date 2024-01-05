@@ -471,6 +471,7 @@ impl OddCounter {
     }
 
     fn register(ctx: &mut SessionContext, test_state: Arc<TestState>) {
+        #[derive(Debug, Clone)]
         struct SimpleWindowUDF {
             signature: Signature,
             return_type: DataType,
