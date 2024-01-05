@@ -20,7 +20,7 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use super::{displayable, DisplayAs};
+use super::DisplayAs;
 use crate::aggregates::{
     no_grouping::AggregateStream, row_hash::GroupedHashAggregateStream,
     topk_stream::GroupedTopKAggregateStream,
@@ -238,12 +238,6 @@ impl From<StreamType> for SendableRecordBatchStream {
         }
     }
 }
-
-static NEXT_ID: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-fn next_id() -> usize {
-    NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-}
-
 /// Hash aggregate execution plan
 #[derive(Debug)]
 pub struct AggregateExec {
@@ -277,8 +271,6 @@ pub struct AggregateExec {
     input_order_mode: InputOrderMode,
     /// Describe how the output is ordered
     output_ordering: Option<LexOrdering>,
-
-    id: String,
 }
 
 impl AggregateExec {
@@ -391,7 +383,6 @@ impl AggregateExec {
             limit: None,
             input_order_mode,
             output_ordering,
-            id: format!("AggregateExec: {}", next_id()),
         })
     }
 
@@ -431,13 +422,6 @@ impl AggregateExec {
                 contains_null_expr || expr.nullable(&input_schema)?,
             ))
         }
-        println!(
-            "{} input schema: {:?}\n\ninput:\n{}\n\n",
-            self.id,
-            input_schema,
-            displayable(self.input.as_ref()).indent(false)
-        );
-        println!("{} group schema: {:?}", self.id, fields);
         Ok(Arc::new(Schema::new(fields)))
     }
 

@@ -272,8 +272,6 @@ pub(crate) struct GroupedHashAggregateStream {
     /// the `GroupedHashAggregateStream` operation immediately switches to
     /// output mode and emits all groups.
     group_values_soft_limit: Option<usize>,
-
-    id: String,
 }
 
 impl GroupedHashAggregateStream {
@@ -385,7 +383,6 @@ impl GroupedHashAggregateStream {
             runtime: context.runtime_env(),
             spill_state,
             group_values_soft_limit: agg.limit,
-            id: agg.id.clone(),
         })
     }
 }
