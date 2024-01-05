@@ -231,12 +231,13 @@ pub trait AggregateWindowExpr: WindowExpr {
         // We iterate on each row to perform a running calculation.
         let length = values[0].len();
         let mut row_wise_results: Vec<ScalarValue> = vec![];
+        let is_end_exact = self.get_window_frame().is_frame_end_exact();
         while idx < length {
             // Start search from the last_range. This squeezes searched range.
             let cur_range =
                 window_frame_ctx.calculate_range(&order_bys, last_range, length, idx)?;
-            // Exit if the range extends all the way:
-            if cur_range.end == length && not_end {
+            // Exit if the range extends all the way and end point is not exact:
+            if (cur_range.end == length && !is_end_exact) && not_end {
                 break;
             }
             let value = self.get_aggregate_result_inside_range(

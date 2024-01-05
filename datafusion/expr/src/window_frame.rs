@@ -157,6 +157,19 @@ impl WindowFrame {
             end_bound,
         }
     }
+
+    /// Check whether frame end is exact or can change with new data.
+    pub fn is_frame_end_exact(&self) -> bool {
+        match &self.units {
+            WindowFrameUnits::Rows => {
+                matches!(
+                    self.end_bound,
+                    WindowFrameBound::Preceding(_) | WindowFrameBound::CurrentRow
+                )
+            }
+            WindowFrameUnits::Range | WindowFrameUnits::Groups => false,
+        }
+    }
 }
 
 /// Regularizes ORDER BY clause for window definition for implicit corner cases.
