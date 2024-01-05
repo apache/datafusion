@@ -2119,11 +2119,8 @@ pub fn cardinality(args: &[ArrayRef]) -> Result<ArrayRef> {
             let list_array = as_large_list_array(&args[0])?;
             generic_list_cardinality::<i64>(list_array)
         }
-        _ => {
-            exec_err!(
-                "cardinality does not support type '{:?}'",
-                args[0].data_type()
-            )
+        other => {
+            exec_err!("cardinality does not support type '{:?}'", other)
         }
     }
 }
