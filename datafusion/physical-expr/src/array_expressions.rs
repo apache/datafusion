@@ -1233,7 +1233,11 @@ pub fn array_repeat(args: &[ArrayRef]) -> Result<ArrayRef> {
     match element.data_type() {
         DataType::List(_) => {
             let list_array = as_list_array(element)?;
-            general_list_repeat(list_array, count_array)
+            general_list_repeat::<i32>(list_array, count_array)
+        }
+        DataType::LargeList(_) => {
+            let list_array = as_large_list_array(element)?;
+            general_list_repeat::<i64>(list_array, count_array)
         }
         _ => general_repeat(element, count_array),
     }
@@ -1302,8 +1306,8 @@ fn general_repeat(array: &ArrayRef, count_array: &Int64Array) -> Result<ArrayRef
 ///     [[1, 2, 3], [4, 5], [6]], [2, 0, 1] => [[[1, 2, 3], [1, 2, 3]], [], [[6]]]
 /// )
 /// ```
-fn general_list_repeat(
-    list_array: &ListArray,
+fn general_list_repeat<O: OffsetSizeTrait>(
+    list_array: &GenericListArray<O>,
     count_array: &Int64Array,
 ) -> Result<ArrayRef> {
     let data_type = list_array.data_type();
@@ -1335,9 +1339,9 @@ fn general_list_repeat(
                 let data = mutable.freeze();
                 let repeated_array = arrow_array::make_array(data);
 
-                let list_arr = ListArray::try_new(
+                let list_arr = GenericListArray::<O>::try_new(
                     Arc::new(Field::new("item", value_type.clone(), true)),
-                    OffsetBuffer::from_lengths(vec![original_data.len(); count]),
+                    OffsetBuffer::<O>::from_lengths(vec![original_data.len(); count]),
                     repeated_array,
                     None,
                 )?;
@@ -1354,7 +1358,7 @@ fn general_list_repeat(
 
     Ok(Arc::new(ListArray::try_new(
         Arc::new(Field::new("item", data_type.to_owned(), true)),
-        OffsetBuffer::from_lengths(lengths),
+        OffsetBuffer::<i32>::from_lengths(lengths),
         values,
         None,
     )?))
@@ -2110,16 +2114,31 @@ pub fn cardinality(args: &[ArrayRef]) -> Result<ArrayRef> {
         return exec_err!("cardinality expects one argument");
     }
 
-    let list_array = as_list_array(&args[0])?.clone();
+    match &args[0].data_type() {
+        DataType::List(_) => {
+            let list_array = as_list_array(&args[0])?;
+            generic_list_cardinality::<i32>(list_array)
+        }
+        DataType::LargeList(_) => {
+            let list_array = as_large_list_array(&args[0])?;
+            generic_list_cardinality::<i64>(list_array)
+        }
+        other => {
+            exec_err!("cardinality does not support type '{:?}'", other)
+        }
+    }
+}
 
-    let result = list_array
+fn generic_list_cardinality<O: OffsetSizeTrait>(
+    array: &GenericListArray<O>,
+) -> Result<ArrayRef> {
+    let result = array
         .iter()
         .map(|arr| match compute_array_dims(arr)? {
             Some(vector) => Ok(Some(vector.iter().map(|x| x.unwrap()).product::<u64>())),
             None => Ok(None),
         })
         .collect::<Result<UInt64Array>>()?;
-
     Ok(Arc::new(result) as ArrayRef)
 }
 

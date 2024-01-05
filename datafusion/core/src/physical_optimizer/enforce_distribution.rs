@@ -927,9 +927,8 @@ fn add_hash_on_top(
     n_target: usize,
     repartition_beneficial_stats: bool,
 ) -> Result<DistributionContext> {
-    let partition_count = input.plan.output_partitioning().partition_count();
     // Early return if hash repartition is unnecessary
-    if n_target == partition_count && n_target == 1 {
+    if n_target == 1 {
         return Ok(input);
     }
 
