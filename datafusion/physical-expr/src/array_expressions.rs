@@ -2114,16 +2114,31 @@ pub fn cardinality(args: &[ArrayRef]) -> Result<ArrayRef> {
         return exec_err!("cardinality expects one argument");
     }
 
-    let list_array = as_list_array(&args[0])?.clone();
+    match &args[0].data_type() {
+        DataType::List(_) => {
+            let list_array = as_list_array(&args[0])?;
+            generic_list_cardinality::<i32>(list_array)
+        }
+        DataType::LargeList(_) => {
+            let list_array = as_large_list_array(&args[0])?;
+            generic_list_cardinality::<i64>(list_array)
+        }
+        other => {
+            exec_err!("cardinality does not support type '{:?}'", other)
+        }
+    }
+}
 
-    let result = list_array
+fn generic_list_cardinality<O: OffsetSizeTrait>(
+    array: &GenericListArray<O>,
+) -> Result<ArrayRef> {
+    let result = array
         .iter()
         .map(|arr| match compute_array_dims(arr)? {
             Some(vector) => Ok(Some(vector.iter().map(|x| x.unwrap()).product::<u64>())),
             None => Ok(None),
         })
         .collect::<Result<UInt64Array>>()?;
-
     Ok(Arc::new(result) as ArrayRef)
 }
 
