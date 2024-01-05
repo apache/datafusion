@@ -534,20 +534,6 @@ pub fn empty_list(data_type: &DataType) -> Result<ArrayRef> {
     }
 }
 
-// DataType::Boolean,
-// DataType::UInt8,
-// DataType::UInt16,
-// DataType::UInt32,
-// DataType::UInt64,
-// DataType::Int8,
-// DataType::Int16,
-// DataType::Int32,
-// DataType::Int64,
-// DataType::Float32,
-// DataType::Float64,
-// DataType::Utf8,
-// DataType::LargeUtf8,
-
 /// An extension trait for smart pointers. Provides an interface to get a
 /// raw pointer to the data (with metadata stripped away).
 ///
