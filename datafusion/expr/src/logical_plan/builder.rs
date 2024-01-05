@@ -551,16 +551,16 @@ impl LogicalPlanBuilder {
         let left_plan: LogicalPlan = self.plan;
         let right_plan: LogicalPlan = plan;
 
-        Ok(Self::from(LogicalPlan::Distinct(Distinct::All(Arc::new(
-            union(left_plan, right_plan)?,
-        )))))
+        Ok(Self::from(LogicalPlan::Distinct(Distinct::new_all(
+            Arc::new(union(left_plan, right_plan)?),
+        ))))
     }
 
     /// Apply deduplication: Only distinct (different) values are returned)
     pub fn distinct(self) -> Result<Self> {
-        Ok(Self::from(LogicalPlan::Distinct(Distinct::All(Arc::new(
-            self.plan,
-        )))))
+        Ok(Self::from(LogicalPlan::Distinct(Distinct::new_all(
+            Arc::new(self.plan),
+        ))))
     }
 
     /// Project first values of the specified expression list according to the provided

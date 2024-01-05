@@ -24,8 +24,7 @@ use std::vec;
 use crate::aggregates::group_values::{new_group_values, GroupValues};
 use crate::aggregates::order::GroupOrderingFull;
 use crate::aggregates::{
-    evaluate_group_by, evaluate_many, evaluate_optional, group_schema, AggregateMode,
-    PhysicalGroupBy,
+    evaluate_group_by, evaluate_many, evaluate_optional, AggregateMode, PhysicalGroupBy,
 };
 use crate::common::IPCWriter;
 use crate::metrics::{BaselineMetrics, RecordOutput};
@@ -273,6 +272,8 @@ pub(crate) struct GroupedHashAggregateStream {
     /// the `GroupedHashAggregateStream` operation immediately switches to
     /// output mode and emits all groups.
     group_values_soft_limit: Option<usize>,
+
+    id: String,
 }
 
 impl GroupedHashAggregateStream {
@@ -326,7 +327,8 @@ impl GroupedHashAggregateStream {
 
         // we need to use original schema so RowConverter in group_values below
         // will do the proper coversion of dictionaries into value types
-        let group_schema = group_schema(&agg.original_schema, agg_group_by.expr.len());
+        //let group_schema = group_schema(&agg.original_schema, agg_group_by.expr.len());
+        let group_schema = agg.group_schema()?;
         let spill_expr = group_schema
             .fields
             .into_iter()
@@ -383,6 +385,7 @@ impl GroupedHashAggregateStream {
             runtime: context.runtime_env(),
             spill_state,
             group_values_soft_limit: agg.limit,
+            id: agg.id.clone(),
         })
     }
 }

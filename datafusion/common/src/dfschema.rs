@@ -211,6 +211,38 @@ impl DFSchema {
         }
     }
 
+    /// materialize all dictionay columns in this schema. Returns a new schema
+    /// with no dictionaries, or None if there are no dictionaries to
+    /// materialize.
+    pub fn materialize_dictionaries(&self) -> Option<Self> {
+        if self
+            .fields
+            .iter()
+            .all(|f| matches!(f.data_type(), DataType::Dictionary(_, _)))
+        {
+            return None;
+        }
+        let new_fields = self
+            .fields
+            .iter()
+            .map(|field| field.clone().materialize_dictionaries())
+            .collect::<Vec<_>>();
+        Some(Self {
+            fields: new_fields,
+            metadata: self.metadata.clone(),
+            functional_dependencies: self.functional_dependencies.clone(),
+        })
+    }
+
+    pub fn without_dictionaries(mut self) -> Self {
+        self.fields = self
+            .fields
+            .into_iter()
+            .map(|field| field.materialize_dictionaries())
+            .collect::<Vec<_>>();
+        self
+    }
+
     /// Create a new schema that contains the fields from this schema followed by the fields
     /// from the supplied schema. An error will be returned if there are duplicate field names.
     pub fn join(&self, schema: &DFSchema) -> Result<Self> {
@@ -815,6 +847,18 @@ pub struct DFField {
 }
 
 impl DFField {
+    pub fn materialize_dictionaries(mut self) -> DFField {
+        if let DataType::Dictionary(_, value_type) = self.field.data_type() {
+            let new_field = self
+                .field
+                .as_ref()
+                .clone()
+                .with_data_type(value_type.as_ref().clone());
+            self.field = Arc::new(new_field);
+        }
+        self
+    }
+
     /// Creates a new `DFField`
     pub fn new<R: Into<OwnedTableReference>>(
         qualifier: Option<R>,

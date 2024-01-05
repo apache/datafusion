@@ -20,7 +20,7 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use super::DisplayAs;
+use super::{displayable, DisplayAs};
 use crate::aggregates::{
     no_grouping::AggregateStream, row_hash::GroupedHashAggregateStream,
     topk_stream::GroupedTopKAggregateStream,
@@ -239,6 +239,11 @@ impl From<StreamType> for SendableRecordBatchStream {
     }
 }
 
+static NEXT_ID: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+fn next_id() -> usize {
+    NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
+
 /// Hash aggregate execution plan
 #[derive(Debug)]
 pub struct AggregateExec {
@@ -254,9 +259,6 @@ pub struct AggregateExec {
     limit: Option<usize>,
     /// Input plan, could be a partial aggregate or the input to the aggregate
     pub input: Arc<dyn ExecutionPlan>,
-    /// Original aggregation schema, could be different from `schema` before dictionary group
-    /// keys get materialized
-    original_schema: SchemaRef,
     /// Schema after the aggregate is applied
     schema: SchemaRef,
     /// Input schema before any aggregation is applied. For partial aggregate this will be the
@@ -275,6 +277,8 @@ pub struct AggregateExec {
     input_order_mode: InputOrderMode,
     /// Describe how the output is ordered
     output_ordering: Option<LexOrdering>,
+
+    id: String,
 }
 
 impl AggregateExec {
@@ -299,7 +303,6 @@ impl AggregateExec {
             &original_schema,
             group_by.expr.len(),
         ));
-        let original_schema = Arc::new(original_schema);
         AggregateExec::try_new_with_schema(
             mode,
             group_by,
@@ -308,7 +311,6 @@ impl AggregateExec {
             input,
             input_schema,
             schema,
-            original_schema,
         )
     }
 
@@ -329,7 +331,6 @@ impl AggregateExec {
         input: Arc<dyn ExecutionPlan>,
         input_schema: SchemaRef,
         schema: SchemaRef,
-        original_schema: SchemaRef,
     ) -> Result<Self> {
         let input_eq_properties = input.equivalence_properties();
         // Get GROUP BY expressions:
@@ -382,7 +383,6 @@ impl AggregateExec {
             aggr_expr,
             filter_expr,
             input,
-            original_schema,
             schema,
             input_schema,
             projection_mapping,
@@ -391,6 +391,7 @@ impl AggregateExec {
             limit: None,
             input_order_mode,
             output_ordering,
+            id: format!("AggregateExec: {}", next_id()),
         })
     }
 
@@ -412,6 +413,32 @@ impl AggregateExec {
     /// Grouping expressions as they occur in the output schema
     pub fn output_group_expr(&self) -> Vec<Arc<dyn PhysicalExpr>> {
         self.group_by.output_exprs()
+    }
+
+    /// The schema of the grouping expressions, as fed to [`GroupValues`]
+    pub fn group_schema(&self) -> Result<SchemaRef> {
+        let input_schema = self.input.schema();
+        let contains_null_expr = self.group_by.contains_null();
+
+        let mut fields = vec![];
+        for (expr, name) in &self.group_by.expr {
+            fields.push(Field::new(
+                name,
+                expr.data_type(&input_schema)?,
+                // In cases where we have multiple grouping sets, we will use NULL expressions in
+                // order to align the grouping sets. So the field must be nullable even if the underlying
+                // schema field is not.
+                contains_null_expr || expr.nullable(&input_schema)?,
+            ))
+        }
+        println!(
+            "{} input schema: {:?}\n\ninput:\n{}\n\n",
+            self.id,
+            input_schema,
+            displayable(self.input.as_ref()).indent(false)
+        );
+        println!("{} group schema: {:?}", self.id, fields);
+        Ok(Arc::new(Schema::new(fields)))
     }
 
     /// Aggregate expressions
@@ -693,7 +720,6 @@ impl ExecutionPlan for AggregateExec {
             children[0].clone(),
             self.input_schema.clone(),
             self.schema.clone(),
-            self.original_schema.clone(),
         )?;
         me.limit = self.limit;
         Ok(Arc::new(me))
@@ -816,11 +842,6 @@ fn materialize_dict_group_keys(schema: &Schema, group_count: usize) -> Schema {
         })
         .collect::<Vec<_>>();
     Schema::new(fields)
-}
-
-fn group_schema(schema: &Schema, group_count: usize) -> SchemaRef {
-    let group_fields = schema.fields()[0..group_count].to_vec();
-    Arc::new(Schema::new(group_fields))
 }
 
 /// Determines the lexical ordering requirement for an aggregate expression.

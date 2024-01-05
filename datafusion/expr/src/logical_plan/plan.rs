@@ -167,7 +167,7 @@ impl LogicalPlan {
             }) => projected_schema,
             LogicalPlan::Projection(Projection { schema, .. }) => schema,
             LogicalPlan::Filter(Filter { input, .. }) => input.schema(),
-            LogicalPlan::Distinct(Distinct::All(input)) => input.schema(),
+            LogicalPlan::Distinct(Distinct::All { schema, .. }) => schema,
             LogicalPlan::Distinct(Distinct::On(DistinctOn { schema, .. })) => schema,
             LogicalPlan::Window(Window { schema, .. }) => schema,
             LogicalPlan::Aggregate(Aggregate { schema, .. }) => schema,
@@ -392,7 +392,7 @@ impl LogicalPlan {
             | LogicalPlan::Analyze(_)
             | LogicalPlan::Explain(_)
             | LogicalPlan::Union(_)
-            | LogicalPlan::Distinct(Distinct::All(_))
+            | LogicalPlan::Distinct(Distinct::All { .. })
             | LogicalPlan::Dml(_)
             | LogicalPlan::Ddl(_)
             | LogicalPlan::Copy(_)
@@ -421,7 +421,7 @@ impl LogicalPlan {
                 inputs.iter().map(|arc| arc.as_ref()).collect()
             }
             LogicalPlan::Distinct(
-                Distinct::All(input) | Distinct::On(DistinctOn { input, .. }),
+                Distinct::All { input, .. } | Distinct::On(DistinctOn { input, .. }),
             ) => vec![input],
             LogicalPlan::Explain(explain) => vec![&explain.plan],
             LogicalPlan::Analyze(analyze) => vec![&analyze.input],
@@ -482,7 +482,7 @@ impl LogicalPlan {
                 Ok(Some(select_expr[0].clone()))
             }
             LogicalPlan::Filter(Filter { input, .. })
-            | LogicalPlan::Distinct(Distinct::All(input))
+            | LogicalPlan::Distinct(Distinct::All { input, .. })
             | LogicalPlan::Sort(Sort { input, .. })
             | LogicalPlan::Limit(Limit { input, .. })
             | LogicalPlan::Repartition(Repartition { input, .. })
@@ -813,7 +813,9 @@ impl LogicalPlan {
             }
             LogicalPlan::Distinct(distinct) => {
                 let distinct = match distinct {
-                    Distinct::All(_) => Distinct::All(Arc::new(inputs[0].clone())),
+                    Distinct::All { .. } => {
+                        Distinct::new_all(Arc::new(inputs[0].clone()))
+                    }
                     Distinct::On(DistinctOn {
                         on_expr,
                         select_expr,
@@ -1077,7 +1079,7 @@ impl LogicalPlan {
             LogicalPlan::SubqueryAlias(SubqueryAlias { input, .. }) => input.max_rows(),
             LogicalPlan::Limit(Limit { fetch, .. }) => *fetch,
             LogicalPlan::Distinct(
-                Distinct::All(input) | Distinct::On(DistinctOn { input, .. }),
+                Distinct::All { input, .. } | Distinct::On(DistinctOn { input, .. }),
             ) => input.max_rows(),
             LogicalPlan::Values(v) => Some(v.values.len()),
             LogicalPlan::Unnest(_) => None,
@@ -1661,7 +1663,7 @@ impl LogicalPlan {
                         write!(f, "{}", statement.display())
                     }
                     LogicalPlan::Distinct(distinct) => match distinct {
-                        Distinct::All(_) => write!(f, "Distinct:"),
+                        Distinct::All{..} => write!(f, "Distinct:"),
                         Distinct::On(DistinctOn {
                             on_expr,
                             select_expr,
@@ -2261,9 +2263,24 @@ pub struct Limit {
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub enum Distinct {
     /// Plain `DISTINCT` referencing all selection expressions
-    All(Arc<LogicalPlan>),
+    All {
+        input: Arc<LogicalPlan>,
+        schema: DFSchemaRef,
+    },
     /// The `Postgres` addition, allowing separate control over DISTINCT'd and selected columns
     On(DistinctOn),
+}
+
+impl Distinct {
+    pub fn new_all(input: Arc<LogicalPlan>) -> Self {
+        // distinct plans materialize dictionaries
+        let schema = input
+            .schema()
+            .materialize_dictionaries()
+            .map(Arc::new)
+            .unwrap_or_else(|| input.schema().clone());
+        Self::All { input, schema }
+    }
 }
 
 /// Removes duplicate rows from the input
@@ -2300,7 +2317,8 @@ impl DistinctOn {
         let schema = DFSchema::new_with_metadata(
             exprlist_to_fields(&select_expr, &input)?,
             input.schema().metadata().clone(),
-        )?;
+        )?
+        .without_dictionaries();
 
         let mut distinct_on = DistinctOn {
             on_expr,
@@ -2378,6 +2396,11 @@ impl Aggregate {
         let grouping_expr: Vec<Expr> = grouping_set_to_exprlist(group_expr.as_slice())?;
 
         let mut fields = exprlist_to_fields(grouping_expr.iter(), &input)?;
+        // Agregates do not preserve dictionary encoding for grouping columns.
+        fields = fields
+            .into_iter()
+            .map(|field| field.materialize_dictionaries())
+            .collect::<Vec<_>>();
 
         // Even columns that cannot be null will become nullable when used in a grouping set.
         if is_grouping_set {

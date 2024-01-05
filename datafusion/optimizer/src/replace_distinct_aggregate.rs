@@ -71,7 +71,7 @@ impl OptimizerRule for ReplaceDistinctWithAggregate {
         _config: &dyn OptimizerConfig,
     ) -> Result<Option<LogicalPlan>> {
         match plan {
-            LogicalPlan::Distinct(Distinct::All(input)) => {
+            LogicalPlan::Distinct(Distinct::All { input, .. }) => {
                 let group_expr = expand_wildcard(input.schema(), input, None)?;
                 let aggregate = LogicalPlan::Aggregate(Aggregate::try_new(
                     input.clone(),

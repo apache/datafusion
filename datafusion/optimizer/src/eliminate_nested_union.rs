@@ -52,7 +52,7 @@ impl OptimizerRule for EliminateNestedUnion {
                     schema: schema.clone(),
                 })))
             }
-            LogicalPlan::Distinct(Distinct::All(plan)) => match plan.as_ref() {
+            LogicalPlan::Distinct(Distinct::All { input, .. }) => match input.as_ref() {
                 LogicalPlan::Union(Union { inputs, schema }) => {
                     let inputs = inputs
                         .iter()
@@ -60,7 +60,7 @@ impl OptimizerRule for EliminateNestedUnion {
                         .flat_map(extract_plans_from_union)
                         .collect::<Vec<_>>();
 
-                    Ok(Some(LogicalPlan::Distinct(Distinct::All(Arc::new(
+                    Ok(Some(LogicalPlan::Distinct(Distinct::new_all(Arc::new(
                         LogicalPlan::Union(Union {
                             inputs,
                             schema: schema.clone(),
@@ -94,7 +94,7 @@ fn extract_plans_from_union(plan: &Arc<LogicalPlan>) -> Vec<Arc<LogicalPlan>> {
 
 fn extract_plan_from_distinct(plan: &Arc<LogicalPlan>) -> &Arc<LogicalPlan> {
     match plan.as_ref() {
-        LogicalPlan::Distinct(Distinct::All(plan)) => plan,
+        LogicalPlan::Distinct(Distinct::All { input, .. }) => input,
         _ => plan,
     }
 }

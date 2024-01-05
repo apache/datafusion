@@ -490,6 +490,8 @@ pub fn can_interleave<T: Borrow<Arc<dyn ExecutionPlan>>>(
 }
 
 fn union_schema(inputs: &[Arc<dyn ExecutionPlan>]) -> SchemaRef {
+    // all inputs should have the same schema
+
     let fields: Vec<Field> = (0..inputs[0].schema().fields().len())
         .map(|i| {
             inputs
