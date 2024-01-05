@@ -627,6 +627,38 @@ Alice 50 Alice 2
 Alice 100 Alice 2
 
 statement ok
+set datafusion.execution.target_partitions = 1;
+
+statement ok
+set datafusion.optimizer.repartition_joins = true;
+
+# make sure when target partition is 1, hash repartition is not added
+# to the final plan.
+query TT
+EXPLAIN SELECT *
+FROM t1,
+t1 as t2
+WHERE t1.a=t2.a;
+----
+logical_plan
+Inner Join: t1.a = t2.a
+--TableScan: t1 projection=[a, b]
+--SubqueryAlias: t2
+----TableScan: t1 projection=[a, b]
+physical_plan
+CoalesceBatchesExec: target_batch_size=8192
+--HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(a@0, a@0)]
+----MemoryExec: partitions=1, partition_sizes=[1]
+----MemoryExec: partitions=1, partition_sizes=[1]
+
+# Reset the configs to old values
+statement ok
+set datafusion.execution.target_partitions = 4;
+
+statement ok
+set datafusion.optimizer.repartition_joins = false;
+
+statement ok
 DROP TABLE t1;
 
 statement ok
