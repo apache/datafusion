@@ -964,14 +964,9 @@ impl SessionContext {
         sql_definition: Option<String>,
     ) -> Result<()> {
         let table_path = ListingTableUrl::parse(table_path)?;
-        let resolved_schema = match (provided_schema, options.infinite_source) {
-            (Some(s), _) => s,
-            (None, false) => options.infer_schema(&self.state(), &table_path).await?,
-            (None, true) => {
-                return plan_err!(
-                    "Schema inference for infinite data sources is not supported."
-                )
-            }
+        let resolved_schema = match provided_schema {
+            Some(s) => s,
+            None => options.infer_schema(&self.state(), &table_path).await?,
         };
         let config = ListingTableConfig::new(table_path)
             .with_listing_options(options)
@@ -1626,9 +1621,6 @@ impl SessionState {
                         .0
                         .insert(ObjectName(vec![Ident::from(table.name.as_str())]));
                 }
-                DFStatement::DescribeTableStmt(table) => {
-                    visitor.insert(&table.table_name)
-                }
                 DFStatement::CopyTo(CopyToStatement {
                     source,
                     target: _,
@@ -1727,7 +1719,7 @@ impl SessionState {
             let mut stringified_plans = e.stringified_plans.clone();
 
             // analyze & capture output of each rule
-            let analyzed_plan = match self.analyzer.execute_and_check(
+            let analyzer_result = self.analyzer.execute_and_check(
                 e.plan.as_ref(),
                 self.options(),
                 |analyzed_plan, analyzer| {
@@ -1735,7 +1727,8 @@ impl SessionState {
                     let plan_type = PlanType::AnalyzedLogicalPlan { analyzer_name };
                     stringified_plans.push(analyzed_plan.to_stringified(plan_type));
                 },
-            ) {
+            );
+            let analyzed_plan = match analyzer_result {
                 Ok(plan) => plan,
                 Err(DataFusionError::Context(analyzer_name, err)) => {
                     let plan_type = PlanType::AnalyzedLogicalPlan { analyzer_name };
@@ -1758,7 +1751,7 @@ impl SessionState {
                 .push(analyzed_plan.to_stringified(PlanType::FinalAnalyzedLogicalPlan));
 
             // optimize the child plan, capturing the output of each optimizer
-            let (plan, logical_optimization_succeeded) = match self.optimizer.optimize(
+            let optimized_plan = self.optimizer.optimize(
                 &analyzed_plan,
                 self,
                 |optimized_plan, optimizer| {
@@ -1766,7 +1759,8 @@ impl SessionState {
                     let plan_type = PlanType::OptimizedLogicalPlan { optimizer_name };
                     stringified_plans.push(optimized_plan.to_stringified(plan_type));
                 },
-            ) {
+            );
+            let (plan, logical_optimization_succeeded) = match optimized_plan {
                 Ok(plan) => (Arc::new(plan), true),
                 Err(DataFusionError::Context(optimizer_name, err)) => {
                     let plan_type = PlanType::OptimizedLogicalPlan { optimizer_name };

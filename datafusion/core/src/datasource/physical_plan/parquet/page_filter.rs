@@ -23,7 +23,7 @@ use arrow::array::{
 };
 use arrow::datatypes::DataType;
 use arrow::{array::ArrayRef, datatypes::SchemaRef, error::ArrowError};
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::{DataFusionError, Result, ScalarValue};
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::{split_conjunction, PhysicalExpr};
 use log::{debug, trace};
@@ -37,6 +37,7 @@ use parquet::{
     },
     format::PageLocation,
 };
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use crate::datasource::physical_plan::parquet::parquet_to_arrow_decimal_type;
@@ -371,7 +372,7 @@ fn prune_pages_in_one_row_group(
 }
 
 fn create_row_count_in_each_page(
-    location: &Vec<PageLocation>,
+    location: &[PageLocation],
     num_rows: usize,
 ) -> Vec<usize> {
     let mut vec = Vec::with_capacity(location.len());
@@ -553,5 +554,13 @@ impl<'a> PruningStatistics for PagesPruningStatistics<'a> {
                 index.indexes.iter().map(|x| x.null_count),
             ))),
         }
+    }
+
+    fn contained(
+        &self,
+        _column: &datafusion_common::Column,
+        _values: &HashSet<ScalarValue>,
+    ) -> Option<BooleanArray> {
+        None
     }
 }

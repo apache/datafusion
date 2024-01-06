@@ -3794,8 +3794,80 @@ select a,
 1 1
 2 1
 
+# support scalar value in ORDER BY
 query I
 select rank() over (order by 1) rnk from (select 1 a union all select 2 a) x
 ----
 1
 1
+
+# support scalar value in ORDER BY
+query I
+select dense_rank() over () rnk from (select 1 a union all select 2 a) x
+----
+1
+1
+
+# support scalar value in both ORDER BY and PARTITION BY, RANK function
+query IIIIII
+select rank() over (partition by 1 order by 1) rnk,
+       rank() over (partition by a, 1 order by 1) rnk1,
+       rank() over (partition by a, 1 order by a, 1) rnk2,
+       rank() over (partition by 1) rnk3,
+       rank() over (partition by null) rnk4,
+       rank() over (partition by 1, null, a) rnk5
+from (select 1 a union all select 2 a) x
+----
+1 1 1 1 1 1
+1 1 1 1 1 1
+
+# support scalar value in both ORDER BY and PARTITION BY, ROW_NUMBER function
+query IIIIII
+select row_number() over (partition by 1 order by 1) rn,
+       row_number() over (partition by a, 1 order by 1) rn1,
+       row_number() over (partition by a, 1 order by a, 1) rn2,
+       row_number() over (partition by 1) rn3,
+       row_number() over (partition by null) rn4,
+       row_number() over (partition by 1, null, a) rn5
+from (select 1 a union all select 2 a) x;
+----
+1 1 1 1 1 1
+2 1 1 2 2 1
+
+# when partition by expression is empty row number result will be unique.
+query TII
+SELECT *
+FROM (SELECT c1, c2, ROW_NUMBER() OVER() as rn
+    FROM aggregate_test_100
+    LIMIT 5)
+GROUP BY rn
+ORDER BY rn;
+----
+c 2 1
+d 5 2
+b 1 3
+a 1 4
+b 5 5
+
+# when partition by expression is constant row number result will be unique.
+query TII
+SELECT *
+FROM (SELECT c1, c2, ROW_NUMBER() OVER(PARTITION BY 3) as rn
+    FROM aggregate_test_100
+    LIMIT 5)
+GROUP BY rn
+ORDER BY rn;
+----
+c 2 1
+d 5 2
+b 1 3
+a 1 4
+b 5 5
+
+statement error DataFusion error: Error during planning: Projection references non-aggregate values: Expression aggregate_test_100.c1 could not be resolved from available columns: rn
+SELECT *
+FROM (SELECT c1, c2, ROW_NUMBER() OVER(PARTITION BY c1) as rn
+    FROM aggregate_test_100
+    LIMIT 5)
+GROUP BY rn
+ORDER BY rn;

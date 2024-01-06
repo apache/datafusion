@@ -34,8 +34,8 @@ use arrow::datatypes::Schema;
 use arrow_schema::{DataType, Field, SchemaRef};
 use datafusion_common::{exec_err, DataFusionError, Result, ScalarValue};
 use datafusion_expr::{
-    window_function::{BuiltInWindowFunction, WindowFunction},
-    PartitionEvaluator, WindowFrame, WindowUDF,
+    BuiltInWindowFunction, PartitionEvaluator, WindowFrame, WindowFunctionDefinition,
+    WindowUDF,
 };
 use datafusion_physical_expr::equivalence::collapse_lex_req;
 use datafusion_physical_expr::{
@@ -56,7 +56,7 @@ pub use datafusion_physical_expr::window::{
 
 /// Create a physical expression for window function
 pub fn create_window_expr(
-    fun: &WindowFunction,
+    fun: &WindowFunctionDefinition,
     name: String,
     args: &[Arc<dyn PhysicalExpr>],
     partition_by: &[Arc<dyn PhysicalExpr>],
@@ -65,7 +65,7 @@ pub fn create_window_expr(
     input_schema: &Schema,
 ) -> Result<Arc<dyn WindowExpr>> {
     Ok(match fun {
-        WindowFunction::AggregateFunction(fun) => {
+        WindowFunctionDefinition::AggregateFunction(fun) => {
             let aggregate = aggregates::create_aggregate_expr(
                 fun,
                 false,
@@ -81,13 +81,15 @@ pub fn create_window_expr(
                 aggregate,
             )
         }
-        WindowFunction::BuiltInWindowFunction(fun) => Arc::new(BuiltInWindowExpr::new(
-            create_built_in_window_expr(fun, args, input_schema, name)?,
-            partition_by,
-            order_by,
-            window_frame,
-        )),
-        WindowFunction::AggregateUDF(fun) => {
+        WindowFunctionDefinition::BuiltInWindowFunction(fun) => {
+            Arc::new(BuiltInWindowExpr::new(
+                create_built_in_window_expr(fun, args, input_schema, name)?,
+                partition_by,
+                order_by,
+                window_frame,
+            ))
+        }
+        WindowFunctionDefinition::AggregateUDF(fun) => {
             let aggregate =
                 udaf::create_aggregate_expr(fun.as_ref(), args, input_schema, name)?;
             window_expr_from_aggregate_expr(
@@ -97,7 +99,7 @@ pub fn create_window_expr(
                 aggregate,
             )
         }
-        WindowFunction::WindowUDF(fun) => Arc::new(BuiltInWindowExpr::new(
+        WindowFunctionDefinition::WindowUDF(fun) => Arc::new(BuiltInWindowExpr::new(
             create_udwf_window_expr(fun, args, input_schema, name)?,
             partition_by,
             order_by,
@@ -647,7 +649,7 @@ mod tests {
         let refs = blocking_exec.refs();
         let window_agg_exec = Arc::new(WindowAggExec::try_new(
             vec![create_window_expr(
-                &WindowFunction::AggregateFunction(AggregateFunction::Count),
+                &WindowFunctionDefinition::AggregateFunction(AggregateFunction::Count),
                 "count".to_owned(),
                 &[col("a", &schema)?],
                 &[],

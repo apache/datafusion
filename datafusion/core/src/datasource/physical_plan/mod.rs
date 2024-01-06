@@ -20,11 +20,14 @@
 mod arrow_file;
 mod avro;
 mod csv;
+mod file_groups;
 mod file_scan_config;
 mod file_stream;
 mod json;
 #[cfg(feature = "parquet")]
 pub mod parquet;
+pub use file_groups::FileGroupPartitioner;
+use futures::StreamExt;
 
 pub(crate) use self::csv::plan_to_csv;
 pub use self::csv::{CsvConfig, CsvExec, CsvOpener};
@@ -43,6 +46,7 @@ pub use json::{JsonOpener, NdJsonExec};
 
 use std::{
     fmt::{Debug, Formatter, Result as FmtResult},
+    ops::Range,
     sync::Arc,
     vec,
 };
@@ -70,8 +74,8 @@ use datafusion_physical_expr::PhysicalSortExpr;
 use datafusion_physical_plan::ExecutionPlan;
 
 use log::debug;
-use object_store::path::Path;
 use object_store::ObjectMeta;
+use object_store::{path::Path, GetOptions, ObjectStore};
 
 /// The base configurations to provide when creating a physical plan for
 /// writing to any given file format.
@@ -91,8 +95,6 @@ pub struct FileSinkConfig {
     /// regardless of input partitioning. Otherwise, each table path is assumed to be a directory
     /// to which each output partition is written to its own output file.
     pub single_file_output: bool,
-    /// If input is unbounded, tokio tasks need to yield to not block execution forever
-    pub unbounded_input: bool,
     /// Controls whether existing data should be overwritten by this sink
     pub overwrite: bool,
     /// Contains settings specific to writing a given FileType, e.g. parquet max_row_group_size
@@ -129,10 +131,6 @@ impl DisplayAs for FileScanConfig {
 
         if let Some(limit) = self.limit {
             write!(f, ", limit={limit}")?;
-        }
-
-        if self.infinite_source {
-            write!(f, ", infinite_source=true")?;
         }
 
         if let Some(ordering) = orderings.first() {
@@ -512,9 +510,9 @@ fn get_projected_output_ordering(
     all_orderings
 }
 
-// Get output (un)boundedness information for the given `plan`.
-pub(crate) fn is_plan_streaming(plan: &Arc<dyn ExecutionPlan>) -> Result<bool> {
-    let result = if plan.children().is_empty() {
+/// Get output (un)boundedness information for the given `plan`.
+pub fn is_plan_streaming(plan: &Arc<dyn ExecutionPlan>) -> Result<bool> {
+    if plan.children().is_empty() {
         plan.unbounded_output(&[])
     } else {
         let children_unbounded_output = plan
@@ -523,8 +521,110 @@ pub(crate) fn is_plan_streaming(plan: &Arc<dyn ExecutionPlan>) -> Result<bool> {
             .map(is_plan_streaming)
             .collect::<Result<Vec<_>>>();
         plan.unbounded_output(&children_unbounded_output?)
+    }
+}
+
+/// Represents the possible outcomes of a range calculation.
+///
+/// This enum is used to encapsulate the result of calculating the range of
+/// bytes to read from an object (like a file) in an object store.
+///
+/// Variants:
+/// - `Range(Option<Range<usize>>)`:
+///   Represents a range of bytes to be read. It contains an `Option` wrapping a
+///   `Range<usize>`. `None` signifies that the entire object should be read,
+///   while `Some(range)` specifies the exact byte range to read.
+/// - `TerminateEarly`:
+///   Indicates that the range calculation determined no further action is
+///   necessary, possibly because the calculated range is empty or invalid.
+enum RangeCalculation {
+    Range(Option<Range<usize>>),
+    TerminateEarly,
+}
+
+/// Calculates an appropriate byte range for reading from an object based on the
+/// provided metadata.
+///
+/// This asynchronous function examines the `FileMeta` of an object in an object store
+/// and determines the range of bytes to be read. The range calculation may adjust
+/// the start and end points to align with meaningful data boundaries (like newlines).
+///
+/// Returns a `Result` wrapping a `RangeCalculation`, which is either a calculated byte range or an indication to terminate early.
+///
+/// Returns an `Error` if any part of the range calculation fails, such as issues in reading from the object store or invalid range boundaries.
+async fn calculate_range(
+    file_meta: &FileMeta,
+    store: &Arc<dyn ObjectStore>,
+) -> Result<RangeCalculation> {
+    let location = file_meta.location();
+    let file_size = file_meta.object_meta.size;
+
+    match file_meta.range {
+        None => Ok(RangeCalculation::Range(None)),
+        Some(FileRange { start, end }) => {
+            let (start, end) = (start as usize, end as usize);
+
+            let start_delta = if start != 0 {
+                find_first_newline(store, location, start - 1, file_size).await?
+            } else {
+                0
+            };
+
+            let end_delta = if end != file_size {
+                find_first_newline(store, location, end - 1, file_size).await?
+            } else {
+                0
+            };
+
+            let range = start + start_delta..end + end_delta;
+
+            if range.start == range.end {
+                return Ok(RangeCalculation::TerminateEarly);
+            }
+
+            Ok(RangeCalculation::Range(Some(range)))
+        }
+    }
+}
+
+/// Asynchronously finds the position of the first newline character in a specified byte range
+/// within an object, such as a file, in an object store.
+///
+/// This function scans the contents of the object starting from the specified `start` position
+/// up to the `end` position, looking for the first occurrence of a newline (`'\n'`) character.
+/// It returns the position of the first newline relative to the start of the range.
+///
+/// Returns a `Result` wrapping a `usize` that represents the position of the first newline character found within the specified range. If no newline is found, it returns the length of the scanned data, effectively indicating the end of the range.
+///
+/// The function returns an `Error` if any issues arise while reading from the object store or processing the data stream.
+///
+async fn find_first_newline(
+    object_store: &Arc<dyn ObjectStore>,
+    location: &Path,
+    start: usize,
+    end: usize,
+) -> Result<usize> {
+    let range = Some(Range { start, end });
+
+    let options = GetOptions {
+        range,
+        ..Default::default()
     };
-    result
+
+    let result = object_store.get_opts(location, options).await?;
+    let mut result_stream = result.into_stream();
+
+    let mut index = 0;
+
+    while let Some(chunk) = result_stream.next().await.transpose()? {
+        if let Some(position) = chunk.iter().position(|&byte| byte == b'\n') {
+            return Ok(index + position);
+        }
+
+        index += chunk.len();
+    }
+
+    Ok(index)
 }
 
 #[cfg(test)]
@@ -537,7 +637,6 @@ mod tests {
     };
     use arrow_schema::Field;
     use chrono::Utc;
-    use datafusion_common::config::ConfigOptions;
 
     use crate::physical_plan::{DefaultDisplay, VerboseDisplay};
 
@@ -807,347 +906,6 @@ mod tests {
             partition_values: vec![],
             range: None,
             extensions: None,
-        }
-    }
-
-    /// Unit tests for `repartition_file_groups()`
-    #[cfg(feature = "parquet")]
-    mod repartition_file_groups_test {
-        use datafusion_common::Statistics;
-        use itertools::Itertools;
-
-        use super::*;
-
-        /// Empty file won't get partitioned
-        #[tokio::test]
-        async fn repartition_empty_file_only() {
-            let partitioned_file_empty = PartitionedFile::new("empty".to_string(), 0);
-            let file_group = vec![vec![partitioned_file_empty]];
-
-            let parquet_exec = ParquetExec::new(
-                FileScanConfig {
-                    object_store_url: ObjectStoreUrl::local_filesystem(),
-                    file_groups: file_group,
-                    file_schema: Arc::new(Schema::empty()),
-                    statistics: Statistics::new_unknown(&Schema::empty()),
-                    projection: None,
-                    limit: None,
-                    table_partition_cols: vec![],
-                    output_ordering: vec![],
-                    infinite_source: false,
-                },
-                None,
-                None,
-            );
-
-            let partitioned_file = repartition_with_size(&parquet_exec, 4, 0);
-
-            assert!(partitioned_file[0][0].range.is_none());
-        }
-
-        // Repartition when there is a empty file in file groups
-        #[tokio::test]
-        async fn repartition_empty_files() {
-            let partitioned_file_a = PartitionedFile::new("a".to_string(), 10);
-            let partitioned_file_b = PartitionedFile::new("b".to_string(), 10);
-            let partitioned_file_empty = PartitionedFile::new("empty".to_string(), 0);
-
-            let empty_first = vec![
-                vec![partitioned_file_empty.clone()],
-                vec![partitioned_file_a.clone()],
-                vec![partitioned_file_b.clone()],
-            ];
-            let empty_middle = vec![
-                vec![partitioned_file_a.clone()],
-                vec![partitioned_file_empty.clone()],
-                vec![partitioned_file_b.clone()],
-            ];
-            let empty_last = vec![
-                vec![partitioned_file_a],
-                vec![partitioned_file_b],
-                vec![partitioned_file_empty],
-            ];
-
-            // Repartition file groups into x partitions
-            let expected_2 =
-                vec![(0, "a".to_string(), 0, 10), (1, "b".to_string(), 0, 10)];
-            let expected_3 = vec![
-                (0, "a".to_string(), 0, 7),
-                (1, "a".to_string(), 7, 10),
-                (1, "b".to_string(), 0, 4),
-                (2, "b".to_string(), 4, 10),
-            ];
-
-            //let file_groups_testset = [empty_first, empty_middle, empty_last];
-            let file_groups_testset = [empty_first, empty_middle, empty_last];
-
-            for fg in file_groups_testset {
-                for (n_partition, expected) in [(2, &expected_2), (3, &expected_3)] {
-                    let parquet_exec = ParquetExec::new(
-                        FileScanConfig {
-                            object_store_url: ObjectStoreUrl::local_filesystem(),
-                            file_groups: fg.clone(),
-                            file_schema: Arc::new(Schema::empty()),
-                            statistics: Statistics::new_unknown(&Arc::new(
-                                Schema::empty(),
-                            )),
-                            projection: None,
-                            limit: None,
-                            table_partition_cols: vec![],
-                            output_ordering: vec![],
-                            infinite_source: false,
-                        },
-                        None,
-                        None,
-                    );
-
-                    let actual =
-                        repartition_with_size_to_vec(&parquet_exec, n_partition, 10);
-
-                    assert_eq!(expected, &actual);
-                }
-            }
-        }
-
-        #[tokio::test]
-        async fn repartition_single_file() {
-            // Single file, single partition into multiple partitions
-            let partitioned_file = PartitionedFile::new("a".to_string(), 123);
-            let single_partition = vec![vec![partitioned_file]];
-            let parquet_exec = ParquetExec::new(
-                FileScanConfig {
-                    object_store_url: ObjectStoreUrl::local_filesystem(),
-                    file_groups: single_partition,
-                    file_schema: Arc::new(Schema::empty()),
-                    statistics: Statistics::new_unknown(&Schema::empty()),
-                    projection: None,
-                    limit: None,
-                    table_partition_cols: vec![],
-                    output_ordering: vec![],
-                    infinite_source: false,
-                },
-                None,
-                None,
-            );
-
-            let actual = repartition_with_size_to_vec(&parquet_exec, 4, 10);
-            let expected = vec![
-                (0, "a".to_string(), 0, 31),
-                (1, "a".to_string(), 31, 62),
-                (2, "a".to_string(), 62, 93),
-                (3, "a".to_string(), 93, 123),
-            ];
-            assert_eq!(expected, actual);
-        }
-
-        #[tokio::test]
-        async fn repartition_too_much_partitions() {
-            // Single file, single parittion into 96 partitions
-            let partitioned_file = PartitionedFile::new("a".to_string(), 8);
-            let single_partition = vec![vec![partitioned_file]];
-            let parquet_exec = ParquetExec::new(
-                FileScanConfig {
-                    object_store_url: ObjectStoreUrl::local_filesystem(),
-                    file_groups: single_partition,
-                    file_schema: Arc::new(Schema::empty()),
-                    statistics: Statistics::new_unknown(&Schema::empty()),
-                    projection: None,
-                    limit: None,
-                    table_partition_cols: vec![],
-                    output_ordering: vec![],
-                    infinite_source: false,
-                },
-                None,
-                None,
-            );
-
-            let actual = repartition_with_size_to_vec(&parquet_exec, 96, 5);
-            let expected = vec![
-                (0, "a".to_string(), 0, 1),
-                (1, "a".to_string(), 1, 2),
-                (2, "a".to_string(), 2, 3),
-                (3, "a".to_string(), 3, 4),
-                (4, "a".to_string(), 4, 5),
-                (5, "a".to_string(), 5, 6),
-                (6, "a".to_string(), 6, 7),
-                (7, "a".to_string(), 7, 8),
-            ];
-            assert_eq!(expected, actual);
-        }
-
-        #[tokio::test]
-        async fn repartition_multiple_partitions() {
-            // Multiple files in single partition after redistribution
-            let partitioned_file_1 = PartitionedFile::new("a".to_string(), 40);
-            let partitioned_file_2 = PartitionedFile::new("b".to_string(), 60);
-            let source_partitions =
-                vec![vec![partitioned_file_1], vec![partitioned_file_2]];
-            let parquet_exec = ParquetExec::new(
-                FileScanConfig {
-                    object_store_url: ObjectStoreUrl::local_filesystem(),
-                    file_groups: source_partitions,
-                    file_schema: Arc::new(Schema::empty()),
-                    statistics: Statistics::new_unknown(&Schema::empty()),
-                    projection: None,
-                    limit: None,
-                    table_partition_cols: vec![],
-                    output_ordering: vec![],
-                    infinite_source: false,
-                },
-                None,
-                None,
-            );
-
-            let actual = repartition_with_size_to_vec(&parquet_exec, 3, 10);
-            let expected = vec![
-                (0, "a".to_string(), 0, 34),
-                (1, "a".to_string(), 34, 40),
-                (1, "b".to_string(), 0, 28),
-                (2, "b".to_string(), 28, 60),
-            ];
-            assert_eq!(expected, actual);
-        }
-
-        #[tokio::test]
-        async fn repartition_same_num_partitions() {
-            // "Rebalance" files across partitions
-            let partitioned_file_1 = PartitionedFile::new("a".to_string(), 40);
-            let partitioned_file_2 = PartitionedFile::new("b".to_string(), 60);
-            let source_partitions =
-                vec![vec![partitioned_file_1], vec![partitioned_file_2]];
-            let parquet_exec = ParquetExec::new(
-                FileScanConfig {
-                    object_store_url: ObjectStoreUrl::local_filesystem(),
-                    file_groups: source_partitions,
-                    file_schema: Arc::new(Schema::empty()),
-                    statistics: Statistics::new_unknown(&Schema::empty()),
-                    projection: None,
-                    limit: None,
-                    table_partition_cols: vec![],
-                    output_ordering: vec![],
-                    infinite_source: false,
-                },
-                None,
-                None,
-            );
-
-            let actual = repartition_with_size_to_vec(&parquet_exec, 2, 10);
-            let expected = vec![
-                (0, "a".to_string(), 0, 40),
-                (0, "b".to_string(), 0, 10),
-                (1, "b".to_string(), 10, 60),
-            ];
-            assert_eq!(expected, actual);
-        }
-
-        #[tokio::test]
-        async fn repartition_no_action_ranges() {
-            // No action due to Some(range) in second file
-            let partitioned_file_1 = PartitionedFile::new("a".to_string(), 123);
-            let mut partitioned_file_2 = PartitionedFile::new("b".to_string(), 144);
-            partitioned_file_2.range = Some(FileRange { start: 1, end: 50 });
-
-            let source_partitions =
-                vec![vec![partitioned_file_1], vec![partitioned_file_2]];
-            let parquet_exec = ParquetExec::new(
-                FileScanConfig {
-                    object_store_url: ObjectStoreUrl::local_filesystem(),
-                    file_groups: source_partitions,
-                    file_schema: Arc::new(Schema::empty()),
-                    statistics: Statistics::new_unknown(&Schema::empty()),
-                    projection: None,
-                    limit: None,
-                    table_partition_cols: vec![],
-                    output_ordering: vec![],
-                    infinite_source: false,
-                },
-                None,
-                None,
-            );
-
-            let actual = repartition_with_size(&parquet_exec, 65, 10);
-            assert_eq!(2, actual.len());
-        }
-
-        #[tokio::test]
-        async fn repartition_no_action_min_size() {
-            // No action due to target_partition_size
-            let partitioned_file = PartitionedFile::new("a".to_string(), 123);
-            let single_partition = vec![vec![partitioned_file]];
-            let parquet_exec = ParquetExec::new(
-                FileScanConfig {
-                    object_store_url: ObjectStoreUrl::local_filesystem(),
-                    file_groups: single_partition,
-                    file_schema: Arc::new(Schema::empty()),
-                    statistics: Statistics::new_unknown(&Schema::empty()),
-                    projection: None,
-                    limit: None,
-                    table_partition_cols: vec![],
-                    output_ordering: vec![],
-                    infinite_source: false,
-                },
-                None,
-                None,
-            );
-
-            let actual = repartition_with_size(&parquet_exec, 65, 500);
-            assert_eq!(1, actual.len());
-        }
-
-        /// Calls `ParquetExec.repartitioned` with the  specified
-        /// `target_partitions` and `repartition_file_min_size`, returning the
-        /// resulting `PartitionedFile`s
-        fn repartition_with_size(
-            parquet_exec: &ParquetExec,
-            target_partitions: usize,
-            repartition_file_min_size: usize,
-        ) -> Vec<Vec<PartitionedFile>> {
-            let mut config = ConfigOptions::new();
-            config.optimizer.repartition_file_min_size = repartition_file_min_size;
-
-            parquet_exec
-                .repartitioned(target_partitions, &config)
-                .unwrap() // unwrap Result
-                .unwrap() // unwrap Option
-                .as_any()
-                .downcast_ref::<ParquetExec>()
-                .unwrap()
-                .base_config()
-                .file_groups
-                .clone()
-        }
-
-        /// Calls `repartition_with_size` and returns a tuple for each output `PartitionedFile`:
-        ///
-        /// `(partition index, file path, start, end)`
-        fn repartition_with_size_to_vec(
-            parquet_exec: &ParquetExec,
-            target_partitions: usize,
-            repartition_file_min_size: usize,
-        ) -> Vec<(usize, String, i64, i64)> {
-            let file_groups = repartition_with_size(
-                parquet_exec,
-                target_partitions,
-                repartition_file_min_size,
-            );
-
-            file_groups
-                .iter()
-                .enumerate()
-                .flat_map(|(part_idx, files)| {
-                    files
-                        .iter()
-                        .map(|f| {
-                            (
-                                part_idx,
-                                f.object_meta.location.to_string(),
-                                f.range.as_ref().unwrap().start,
-                                f.range.as_ref().unwrap().end,
-                            )
-                        })
-                        .collect_vec()
-                })
-                .collect_vec()
         }
     }
 }

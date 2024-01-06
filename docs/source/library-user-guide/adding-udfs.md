@@ -76,7 +76,9 @@ The challenge however is that DataFusion doesn't know about this function. We ne
 
 ### Registering a Scalar UDF
 
-To register a Scalar UDF, you need to wrap the function implementation in a `ScalarUDF` struct and then register it with the `SessionContext`. DataFusion provides the `create_udf` and `make_scalar_function` helper functions to make this easier.
+To register a Scalar UDF, you need to wrap the function implementation in a [`ScalarUDF`] struct and then register it with the `SessionContext`.
+DataFusion provides the [`create_udf`] and helper functions to make this easier.
+There is a lower level API with more functionality but is more complex, that is documented in [`advanced_udf.rs`].
 
 ```rust
 use datafusion::logical_expr::{Volatility, create_udf};
@@ -92,6 +94,11 @@ let udf = create_udf(
     make_scalar_function(add_one),
 );
 ```
+
+[`scalarudf`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/struct.ScalarUDF.html
+[`create_udf`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/fn.create_udf.html
+[`make_scalar_function`]: https://docs.rs/datafusion/latest/datafusion/physical_expr/functions/fn.make_scalar_function.html
+[`advanced_udf.rs`]: https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/advanced_udf.rs
 
 A few things to note:
 
@@ -194,7 +201,8 @@ fn make_partition_evaluator() -> Result<Box<dyn PartitionEvaluator>> {
 
 ### Registering a Window UDF
 
-To register a Window UDF, you need to wrap the function implementation in a `WindowUDF` struct and then register it with the `SessionContext`. DataFusion provides the `create_udwf` helper functions to make this easier.
+To register a Window UDF, you need to wrap the function implementation in a [`WindowUDF`] struct and then register it with the `SessionContext`. DataFusion provides the [`create_udwf`] helper functions to make this easier.
+There is a lower level API with more functionality but is more complex, that is documented in [`advanced_udwf.rs`].
 
 ```rust
 use datafusion::logical_expr::{Volatility, create_udwf};
@@ -210,6 +218,10 @@ let smooth_it = create_udwf(
     Arc::new(make_partition_evaluator),
 );
 ```
+
+[`windowudf`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/struct.WindowUDF.html
+[`create_udwf`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/fn.create_udwf.html
+[`advanced_udwf.rs`]: https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/advanced_udwf.rs
 
 The `create_udwf` has five arguments to check:
 

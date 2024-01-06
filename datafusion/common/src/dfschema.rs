@@ -230,9 +230,9 @@ impl DFSchema {
         for field in other_schema.fields() {
             // skip duplicate columns
             let duplicated_field = match field.qualifier() {
-                Some(q) => self.field_with_name(Some(q), field.name()).is_ok(),
+                Some(q) => self.has_column_with_qualified_name(q, field.name()),
                 // for unqualified columns, check as unqualified name
-                None => self.field_with_unqualified_name(field.name()).is_ok(),
+                None => self.has_column_with_unqualified_name(field.name()),
             };
             if !duplicated_field {
                 self.fields.push(field.clone());
@@ -344,6 +344,22 @@ impl DFSchema {
         self.fields
             .iter()
             .filter(|field| field.qualifier().map(|q| q.eq(qualifier)).unwrap_or(false))
+            .collect()
+    }
+
+    /// Find all fields indices having the given qualifier
+    pub fn fields_indices_with_qualified(
+        &self,
+        qualifier: &TableReference,
+    ) -> Vec<usize> {
+        self.fields
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, field)| {
+                field
+                    .qualifier()
+                    .and_then(|q| q.eq(qualifier).then_some(idx))
+            })
             .collect()
     }
 

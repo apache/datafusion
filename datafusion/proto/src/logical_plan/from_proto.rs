@@ -37,8 +37,9 @@ use arrow::{
 };
 use datafusion::execution::registry::FunctionRegistry;
 use datafusion_common::{
-    internal_err, plan_datafusion_err, Column, Constraint, Constraints, DFField,
-    DFSchema, DFSchemaRef, DataFusionError, OwnedTableReference, Result, ScalarValue,
+    arrow_datafusion_err, internal_err, plan_datafusion_err, Column, Constraint,
+    Constraints, DFField, DFSchema, DFSchemaRef, DataFusionError, OwnedTableReference,
+    Result, ScalarValue,
 };
 use datafusion_expr::window_frame::{check_window_frame, regularize_window_order_by};
 use datafusion_expr::{
@@ -718,7 +719,7 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
                     None,
                     &message.version(),
                 )
-                .map_err(DataFusionError::ArrowError)
+                .map_err(|e| arrow_datafusion_err!(e))
                 .map_err(|e| e.context("Decoding ScalarValue::List Value"))?;
                 let arr = record_batch.column(0);
                 match value {
@@ -1118,7 +1119,7 @@ pub fn parse_expr(
                     let aggr_function = parse_i32_to_aggregate_function(i)?;
 
                     Ok(Expr::WindowFunction(WindowFunction::new(
-                        datafusion_expr::window_function::WindowFunction::AggregateFunction(
+                        datafusion_expr::expr::WindowFunctionDefinition::AggregateFunction(
                             aggr_function,
                         ),
                         vec![parse_required_expr(expr.expr.as_deref(), registry, "expr")?],
@@ -1137,7 +1138,7 @@ pub fn parse_expr(
                         .unwrap_or_else(Vec::new);
 
                     Ok(Expr::WindowFunction(WindowFunction::new(
-                        datafusion_expr::window_function::WindowFunction::BuiltInWindowFunction(
+                        datafusion_expr::expr::WindowFunctionDefinition::BuiltInWindowFunction(
                             built_in_function,
                         ),
                         args,
@@ -1152,7 +1153,7 @@ pub fn parse_expr(
                         .map(|e| vec![e])
                         .unwrap_or_else(Vec::new);
                     Ok(Expr::WindowFunction(WindowFunction::new(
-                        datafusion_expr::window_function::WindowFunction::AggregateUDF(
+                        datafusion_expr::expr::WindowFunctionDefinition::AggregateUDF(
                             udaf_function,
                         ),
                         args,
@@ -1167,7 +1168,7 @@ pub fn parse_expr(
                         .map(|e| vec![e])
                         .unwrap_or_else(Vec::new);
                     Ok(Expr::WindowFunction(WindowFunction::new(
-                        datafusion_expr::window_function::WindowFunction::WindowUDF(
+                        datafusion_expr::expr::WindowFunctionDefinition::WindowUDF(
                             udwf_function,
                         ),
                         args,
@@ -1345,7 +1346,11 @@ pub fn parse_expr(
             in_list.negated,
         ))),
         ExprType::Wildcard(protobuf::Wildcard { qualifier }) => Ok(Expr::Wildcard {
-            qualifier: qualifier.clone(),
+            qualifier: if qualifier.is_empty() {
+                None
+            } else {
+                Some(qualifier.clone())
+            },
         }),
         ExprType::ScalarFunction(expr) => {
             let scalar_function = protobuf::ScalarFunction::try_from(expr.fun)

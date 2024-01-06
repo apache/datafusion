@@ -593,7 +593,6 @@ impl DefaultPhysicalPlanner {
                         file_groups: vec![],
                         output_schema: Arc::new(schema),
                         table_partition_cols: vec![],
-                        unbounded_input: false,
                         single_file_output: *single_file_output,
                         overwrite: false,
                         file_type_writer_options
@@ -1880,7 +1879,7 @@ impl DefaultPhysicalPlanner {
                             );
                         }
 
-                        match self.optimize_internal(
+                        let optimized_plan = self.optimize_internal(
                             input,
                             session_state,
                             |plan, optimizer| {
@@ -1892,7 +1891,8 @@ impl DefaultPhysicalPlanner {
                                         .to_stringified(e.verbose, plan_type),
                                 );
                             },
-                        ) {
+                        );
+                        match optimized_plan {
                             Ok(input) => {
                                 // This plan will includes statistics if show_statistics is on
                                 stringified_plans.push(

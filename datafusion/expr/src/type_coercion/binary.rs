@@ -667,8 +667,6 @@ fn string_concat_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<Da
         (LargeUtf8, from_type) | (from_type, LargeUtf8) => {
             string_concat_internal_coercion(from_type, &LargeUtf8)
         }
-        // TODO: cast between array elements (#6558)
-        (List(_), from_type) | (from_type, List(_)) => Some(from_type.to_owned()),
         _ => None,
     })
 }
@@ -785,6 +783,12 @@ fn temporal_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataTyp
     match (lhs_type, rhs_type) {
         (Interval(_), Interval(_)) => Some(Interval(MonthDayNano)),
         (Date64, Date32) | (Date32, Date64) => Some(Date64),
+        (Timestamp(_, None), Date64) | (Date64, Timestamp(_, None)) => {
+            Some(Timestamp(Nanosecond, None))
+        }
+        (Timestamp(_, _tz), Date64) | (Date64, Timestamp(_, _tz)) => {
+            Some(Timestamp(Nanosecond, None))
+        }
         (Timestamp(_, None), Date32) | (Date32, Timestamp(_, None)) => {
             Some(Timestamp(Nanosecond, None))
         }

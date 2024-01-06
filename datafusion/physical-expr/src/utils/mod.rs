@@ -15,7 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::borrow::Borrow;
+mod guarantee;
+pub use guarantee::{Guarantee, LiteralGuarantee};
+
+use std::borrow::{Borrow, Cow};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -41,25 +44,29 @@ use petgraph::stable_graph::StableGraph;
 pub fn split_conjunction(
     predicate: &Arc<dyn PhysicalExpr>,
 ) -> Vec<&Arc<dyn PhysicalExpr>> {
-    split_conjunction_impl(predicate, vec![])
+    split_impl(Operator::And, predicate, vec![])
 }
 
-fn split_conjunction_impl<'a>(
+/// Assume the predicate is in the form of DNF, split the predicate to a Vec of PhysicalExprs.
+///
+/// For example, split "a1 = a2 OR b1 <= b2 OR c1 != c2" into ["a1 = a2", "b1 <= b2", "c1 != c2"]
+pub fn split_disjunction(
+    predicate: &Arc<dyn PhysicalExpr>,
+) -> Vec<&Arc<dyn PhysicalExpr>> {
+    split_impl(Operator::Or, predicate, vec![])
+}
+
+fn split_impl<'a>(
+    operator: Operator,
     predicate: &'a Arc<dyn PhysicalExpr>,
     mut exprs: Vec<&'a Arc<dyn PhysicalExpr>>,
 ) -> Vec<&'a Arc<dyn PhysicalExpr>> {
     match predicate.as_any().downcast_ref::<BinaryExpr>() {
-        Some(binary) => match binary.op() {
-            Operator::And => {
-                let exprs = split_conjunction_impl(binary.left(), exprs);
-                split_conjunction_impl(binary.right(), exprs)
-            }
-            _ => {
-                exprs.push(predicate);
-                exprs
-            }
-        },
-        None => {
+        Some(binary) if binary.op() == &operator => {
+            let exprs = split_impl(operator, binary.left(), exprs);
+            split_impl(operator, binary.right(), exprs)
+        }
+        Some(_) | None => {
             exprs.push(predicate);
             exprs
         }
@@ -147,19 +154,8 @@ impl<T> ExprTreeNode<T> {
 }
 
 impl<T: Clone> TreeNode for ExprTreeNode<T> {
-    fn apply_children<F>(&self, op: &mut F) -> Result<VisitRecursion>
-    where
-        F: FnMut(&Self) -> Result<VisitRecursion>,
-    {
-        for child in self.children() {
-            match op(child)? {
-                VisitRecursion::Continue => {}
-                VisitRecursion::Skip => return Ok(VisitRecursion::Continue),
-                VisitRecursion::Stop => return Ok(VisitRecursion::Stop),
-            }
-        }
-
-        Ok(VisitRecursion::Continue)
+    fn children_nodes(&self) -> Vec<Cow<Self>> {
+        self.children().iter().map(Cow::Borrowed).collect()
     }
 
     fn map_children<F>(mut self, transform: F) -> Result<Self>

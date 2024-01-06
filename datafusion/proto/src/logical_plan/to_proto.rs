@@ -52,7 +52,7 @@ use datafusion_expr::expr::{
 use datafusion_expr::{
     logical_plan::PlanType, logical_plan::StringifiedPlan, AggregateFunction,
     BuiltInWindowFunction, BuiltinScalarFunction, Expr, JoinConstraint, JoinType,
-    TryCast, WindowFrame, WindowFrameBound, WindowFrameUnits, WindowFunction,
+    TryCast, WindowFrame, WindowFrameBound, WindowFrameUnits, WindowFunctionDefinition,
 };
 
 #[derive(Debug)]
@@ -606,22 +606,22 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                 ref window_frame,
             }) => {
                 let window_function = match fun {
-                    WindowFunction::AggregateFunction(fun) => {
+                    WindowFunctionDefinition::AggregateFunction(fun) => {
                         protobuf::window_expr_node::WindowFunction::AggrFunction(
                             protobuf::AggregateFunction::from(fun).into(),
                         )
                     }
-                    WindowFunction::BuiltInWindowFunction(fun) => {
+                    WindowFunctionDefinition::BuiltInWindowFunction(fun) => {
                         protobuf::window_expr_node::WindowFunction::BuiltInFunction(
                             protobuf::BuiltInWindowFunction::from(fun).into(),
                         )
                     }
-                    WindowFunction::AggregateUDF(aggr_udf) => {
+                    WindowFunctionDefinition::AggregateUDF(aggr_udf) => {
                         protobuf::window_expr_node::WindowFunction::Udaf(
                             aggr_udf.name().to_string(),
                         )
                     }
-                    WindowFunction::WindowUDF(window_udf) => {
+                    WindowFunctionDefinition::WindowUDF(window_udf) => {
                         protobuf::window_expr_node::WindowFunction::Udwf(
                             window_udf.name().to_string(),
                         )
@@ -1001,7 +1001,7 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
             }
             Expr::Wildcard { qualifier } => Self {
                 expr_type: Some(ExprType::Wildcard(protobuf::Wildcard {
-                    qualifier: qualifier.clone(),
+                    qualifier: qualifier.clone().unwrap_or("".to_string()),
                 })),
             },
             Expr::ScalarSubquery(_)

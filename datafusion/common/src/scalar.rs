@@ -25,6 +25,7 @@ use std::hash::Hash;
 use std::str::FromStr;
 use std::{convert::TryFrom, fmt, iter::repeat, sync::Arc};
 
+use crate::arrow_datafusion_err;
 use crate::cast::{
     as_decimal128_array, as_decimal256_array, as_dictionary_array,
     as_fixed_size_binary_array, as_fixed_size_list_array, as_struct_array,
@@ -1712,11 +1713,11 @@ impl ScalarValue {
         match value {
             Some(val) => Decimal128Array::from(vec![val; size])
                 .with_precision_and_scale(precision, scale)
-                .map_err(DataFusionError::ArrowError),
+                .map_err(|e| arrow_datafusion_err!(e)),
             None => {
                 let mut builder = Decimal128Array::builder(size)
                     .with_precision_and_scale(precision, scale)
-                    .map_err(DataFusionError::ArrowError)?;
+                    .map_err(|e| arrow_datafusion_err!(e))?;
                 builder.append_nulls(size);
                 Ok(builder.finish())
             }
@@ -1733,7 +1734,7 @@ impl ScalarValue {
             .take(size)
             .collect::<Decimal256Array>()
             .with_precision_and_scale(precision, scale)
-            .map_err(DataFusionError::ArrowError)
+            .map_err(|e| arrow_datafusion_err!(e))
     }
 
     /// Converts `Vec<ScalarValue>` where each element has type corresponding to
@@ -2100,7 +2101,7 @@ impl ScalarValue {
 
     fn list_to_array_of_size(arr: &dyn Array, size: usize) -> Result<ArrayRef> {
         let arrays = std::iter::repeat(arr).take(size).collect::<Vec<_>>();
-        arrow::compute::concat(arrays.as_slice()).map_err(DataFusionError::ArrowError)
+        arrow::compute::concat(arrays.as_slice()).map_err(arrow_datafusion_error!(e))
     }
 
     /// Retrieve ScalarValue for each row in `array`

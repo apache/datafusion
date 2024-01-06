@@ -2019,8 +2019,8 @@ SortPreservingMergeExec: [col0@0 ASC NULLS LAST]
 ------AggregateExec: mode=FinalPartitioned, gby=[col0@0 as col0, col1@1 as col1, col2@2 as col2], aggr=[LAST_VALUE(r.col1)]
 --------CoalesceBatchesExec: target_batch_size=8192
 ----------RepartitionExec: partitioning=Hash([col0@0, col1@1, col2@2], 4), input_partitions=4
-------------AggregateExec: mode=Partial, gby=[col0@0 as col0, col1@1 as col1, col2@2 as col2], aggr=[LAST_VALUE(r.col1)], ordering_mode=PartiallySorted([0])
---------------SortExec: expr=[col0@3 ASC NULLS LAST]
+------------AggregateExec: mode=Partial, gby=[col0@0 as col0, col1@1 as col1, col2@2 as col2], aggr=[LAST_VALUE(r.col1)]
+--------------ProjectionExec: expr=[col0@2 as col0, col1@3 as col1, col2@4 as col2, col0@0 as col0, col1@1 as col1]
 ----------------CoalesceBatchesExec: target_batch_size=8192
 ------------------HashJoinExec: mode=Partitioned, join_type=Inner, on=[(col0@0, col0@0)]
 --------------------CoalesceBatchesExec: target_batch_size=8192
@@ -2208,7 +2208,7 @@ ProjectionExec: expr=[a@0 as a, b@1 as b, LAST_VALUE(annotated_data_infinite2.c)
 ----StreamingTableExec: partition_sizes=1, projection=[a, b, c], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST, c@2 ASC NULLS LAST]
 
 query III
-SELECT a, b, LAST_VALUE(c ORDER BY a DESC) as last_c
+SELECT a, b, LAST_VALUE(c ORDER BY a DESC, c ASC) as last_c
   FROM annotated_data_infinite2
   GROUP BY a, b
 ----
@@ -2637,8 +2637,7 @@ Projection: sales_global.country, FIRST_VALUE(sales_global.amount) ORDER BY [sal
 physical_plan
 ProjectionExec: expr=[country@0 as country, FIRST_VALUE(sales_global.amount) ORDER BY [sales_global.ts DESC NULLS FIRST]@1 as fv1, LAST_VALUE(sales_global.amount) ORDER BY [sales_global.ts DESC NULLS FIRST]@2 as lv1, SUM(sales_global.amount) ORDER BY [sales_global.ts DESC NULLS FIRST]@3 as sum1]
 --AggregateExec: mode=Single, gby=[country@0 as country], aggr=[LAST_VALUE(sales_global.amount), FIRST_VALUE(sales_global.amount), SUM(sales_global.amount)]
-----SortExec: expr=[ts@1 ASC NULLS LAST]
-------MemoryExec: partitions=1, partition_sizes=[1]
+----MemoryExec: partitions=1, partition_sizes=[1]
 
 query TRRR rowsort
 SELECT country, FIRST_VALUE(amount ORDER BY ts DESC) as fv1,
@@ -2671,8 +2670,7 @@ Projection: sales_global.country, FIRST_VALUE(sales_global.amount) ORDER BY [sal
 physical_plan
 ProjectionExec: expr=[country@0 as country, FIRST_VALUE(sales_global.amount) ORDER BY [sales_global.ts DESC NULLS FIRST]@1 as fv1, LAST_VALUE(sales_global.amount) ORDER BY [sales_global.ts DESC NULLS FIRST]@2 as lv1, SUM(sales_global.amount) ORDER BY [sales_global.ts DESC NULLS FIRST]@3 as sum1]
 --AggregateExec: mode=Single, gby=[country@0 as country], aggr=[FIRST_VALUE(sales_global.amount), LAST_VALUE(sales_global.amount), SUM(sales_global.amount)]
-----SortExec: expr=[ts@1 DESC]
-------MemoryExec: partitions=1, partition_sizes=[1]
+----MemoryExec: partitions=1, partition_sizes=[1]
 
 query TRRR rowsort
 SELECT country, FIRST_VALUE(amount ORDER BY ts DESC) as fv1,
@@ -2708,12 +2706,11 @@ physical_plan
 SortExec: expr=[sn@2 ASC NULLS LAST]
 --ProjectionExec: expr=[zip_code@1 as zip_code, country@2 as country, sn@0 as sn, ts@3 as ts, currency@4 as currency, LAST_VALUE(e.amount) ORDER BY [e.sn ASC NULLS LAST]@5 as last_rate]
 ----AggregateExec: mode=Single, gby=[sn@2 as sn, zip_code@0 as zip_code, country@1 as country, ts@3 as ts, currency@4 as currency], aggr=[LAST_VALUE(e.amount)]
-------SortExec: expr=[sn@5 ASC NULLS LAST]
---------ProjectionExec: expr=[zip_code@0 as zip_code, country@1 as country, sn@2 as sn, ts@3 as ts, currency@4 as currency, sn@5 as sn, amount@8 as amount]
-----------CoalesceBatchesExec: target_batch_size=8192
-------------HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(currency@4, currency@2)], filter=ts@0 >= ts@1
---------------MemoryExec: partitions=1, partition_sizes=[1]
---------------MemoryExec: partitions=1, partition_sizes=[1]
+------ProjectionExec: expr=[zip_code@4 as zip_code, country@5 as country, sn@6 as sn, ts@7 as ts, currency@8 as currency, sn@0 as sn, amount@3 as amount]
+--------CoalesceBatchesExec: target_batch_size=8192
+----------HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(currency@2, currency@4)], filter=ts@0 >= ts@1
+------------MemoryExec: partitions=1, partition_sizes=[1]
+------------MemoryExec: partitions=1, partition_sizes=[1]
 
 query ITIPTR rowsort
 SELECT s.zip_code, s.country, s.sn, s.ts, s.currency, LAST_VALUE(e.amount ORDER BY e.sn) AS last_rate
@@ -2758,8 +2755,7 @@ SortPreservingMergeExec: [country@0 ASC NULLS LAST]
 ----------RepartitionExec: partitioning=Hash([country@0], 8), input_partitions=8
 ------------RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
 --------------AggregateExec: mode=Partial, gby=[country@0 as country], aggr=[FIRST_VALUE(sales_global.amount), LAST_VALUE(sales_global.amount)]
-----------------SortExec: expr=[ts@1 ASC NULLS LAST]
-------------------MemoryExec: partitions=1, partition_sizes=[1]
+----------------MemoryExec: partitions=1, partition_sizes=[1]
 
 query TRR
 SELECT country, FIRST_VALUE(amount ORDER BY ts ASC) AS fv1,
@@ -2790,13 +2786,12 @@ physical_plan
 SortPreservingMergeExec: [country@0 ASC NULLS LAST]
 --SortExec: expr=[country@0 ASC NULLS LAST]
 ----ProjectionExec: expr=[country@0 as country, FIRST_VALUE(sales_global.amount) ORDER BY [sales_global.ts ASC NULLS LAST]@1 as fv1, LAST_VALUE(sales_global.amount) ORDER BY [sales_global.ts DESC NULLS FIRST]@2 as fv2]
-------AggregateExec: mode=FinalPartitioned, gby=[country@0 as country], aggr=[FIRST_VALUE(sales_global.amount), FIRST_VALUE(sales_global.amount)]
+------AggregateExec: mode=FinalPartitioned, gby=[country@0 as country], aggr=[FIRST_VALUE(sales_global.amount), LAST_VALUE(sales_global.amount)]
 --------CoalesceBatchesExec: target_batch_size=8192
 ----------RepartitionExec: partitioning=Hash([country@0], 8), input_partitions=8
 ------------RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
---------------AggregateExec: mode=Partial, gby=[country@0 as country], aggr=[FIRST_VALUE(sales_global.amount), FIRST_VALUE(sales_global.amount)]
-----------------SortExec: expr=[ts@1 ASC NULLS LAST]
-------------------MemoryExec: partitions=1, partition_sizes=[1]
+--------------AggregateExec: mode=Partial, gby=[country@0 as country], aggr=[FIRST_VALUE(sales_global.amount), LAST_VALUE(sales_global.amount)]
+----------------MemoryExec: partitions=1, partition_sizes=[1]
 
 query TRR
 SELECT country, FIRST_VALUE(amount ORDER BY ts ASC) AS fv1,
@@ -2830,16 +2825,15 @@ ProjectionExec: expr=[FIRST_VALUE(sales_global.amount) ORDER BY [sales_global.ts
 --AggregateExec: mode=Final, gby=[], aggr=[FIRST_VALUE(sales_global.amount), LAST_VALUE(sales_global.amount)]
 ----CoalescePartitionsExec
 ------AggregateExec: mode=Partial, gby=[], aggr=[FIRST_VALUE(sales_global.amount), LAST_VALUE(sales_global.amount)]
---------SortExec: expr=[ts@0 ASC NULLS LAST]
-----------RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
-------------MemoryExec: partitions=1, partition_sizes=[1]
+--------RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+----------MemoryExec: partitions=1, partition_sizes=[1]
 
 query RR
 SELECT FIRST_VALUE(amount ORDER BY ts ASC) AS fv1,
   LAST_VALUE(amount ORDER BY ts ASC) AS fv2
   FROM sales_global
 ----
-30 80
+30 100
 
 # Conversion in between FIRST_VALUE and LAST_VALUE to resolve
 # contradictory requirements should work in multi partitions.
@@ -2854,12 +2848,11 @@ Projection: FIRST_VALUE(sales_global.amount) ORDER BY [sales_global.ts ASC NULLS
 ----TableScan: sales_global projection=[ts, amount]
 physical_plan
 ProjectionExec: expr=[FIRST_VALUE(sales_global.amount) ORDER BY [sales_global.ts ASC NULLS LAST]@0 as fv1, LAST_VALUE(sales_global.amount) ORDER BY [sales_global.ts DESC NULLS FIRST]@1 as fv2]
---AggregateExec: mode=Final, gby=[], aggr=[FIRST_VALUE(sales_global.amount), FIRST_VALUE(sales_global.amount)]
+--AggregateExec: mode=Final, gby=[], aggr=[FIRST_VALUE(sales_global.amount), LAST_VALUE(sales_global.amount)]
 ----CoalescePartitionsExec
-------AggregateExec: mode=Partial, gby=[], aggr=[FIRST_VALUE(sales_global.amount), FIRST_VALUE(sales_global.amount)]
---------SortExec: expr=[ts@0 ASC NULLS LAST]
-----------RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
-------------MemoryExec: partitions=1, partition_sizes=[1]
+------AggregateExec: mode=Partial, gby=[], aggr=[FIRST_VALUE(sales_global.amount), LAST_VALUE(sales_global.amount)]
+--------RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+----------MemoryExec: partitions=1, partition_sizes=[1]
 
 query RR
 SELECT FIRST_VALUE(amount ORDER BY ts ASC) AS fv1,
@@ -2992,7 +2985,7 @@ physical_plan
 SortPreservingMergeExec: [country@0 ASC NULLS LAST]
 --SortExec: expr=[country@0 ASC NULLS LAST]
 ----ProjectionExec: expr=[country@0 as country, ARRAY_AGG(sales_global.amount) ORDER BY [sales_global.amount DESC NULLS FIRST]@1 as amounts, FIRST_VALUE(sales_global.amount) ORDER BY [sales_global.amount ASC NULLS LAST]@2 as fv1, LAST_VALUE(sales_global.amount) ORDER BY [sales_global.amount DESC NULLS FIRST]@3 as fv2]
-------AggregateExec: mode=FinalPartitioned, gby=[country@0 as country], aggr=[ARRAY_AGG(sales_global.amount), LAST_VALUE(sales_global.amount), LAST_VALUE(sales_global.amount)]
+------AggregateExec: mode=FinalPartitioned, gby=[country@0 as country], aggr=[ARRAY_AGG(sales_global.amount), FIRST_VALUE(sales_global.amount), LAST_VALUE(sales_global.amount)]
 --------CoalesceBatchesExec: target_batch_size=4
 ----------RepartitionExec: partitioning=Hash([country@0], 8), input_partitions=8
 ------------AggregateExec: mode=Partial, gby=[country@0 as country], aggr=[ARRAY_AGG(sales_global.amount), LAST_VALUE(sales_global.amount), LAST_VALUE(sales_global.amount)]
@@ -4279,3 +4272,15 @@ LIMIT 5
 2 0 0
 3 0 0
 4 0 1
+
+
+query ITIPTR rowsort
+SELECT r.*
+FROM sales_global_with_pk as l, sales_global_with_pk as r
+LIMIT 5
+----
+0 GRC 0 2022-01-01T06:00:00 EUR 30
+1 FRA 1 2022-01-01T08:00:00 EUR 50
+1 FRA 3 2022-01-02T12:00:00 EUR 200
+1 TUR 2 2022-01-01T11:30:00 TRY 75
+1 TUR 4 2022-01-03T10:00:00 TRY 100

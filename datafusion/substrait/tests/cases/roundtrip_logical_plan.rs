@@ -32,7 +32,7 @@ use datafusion::execution::context::SessionState;
 use datafusion::execution::registry::SerializerRegistry;
 use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::logical_expr::{
-    Extension, LogicalPlan, UserDefinedLogicalNode, Volatility,
+    Extension, LogicalPlan, Repartition, UserDefinedLogicalNode, Volatility,
 };
 use datafusion::optimizer::simplify_expressions::expr_simplifier::THRESHOLD_INLINE_INLIST;
 use datafusion::prelude::*;
@@ -395,6 +395,24 @@ async fn roundtrip_inlist_4() -> Result<()> {
 }
 
 #[tokio::test]
+async fn roundtrip_inlist_5() -> Result<()> {
+    // on roundtrip there is an additional projection during TableScan which includes all column of the table,
+    // using assert_expected_plan here as a workaround
+    assert_expected_plan(
+    "SELECT a, f FROM data WHERE (f IN ('a', 'b', 'c') OR a in (SELECT data2.a FROM data2 WHERE f IN ('b', 'c', 'd')))",
+    "Filter: data.f = Utf8(\"a\") OR data.f = Utf8(\"b\") OR data.f = Utf8(\"c\") OR data.a IN (<subquery>)\
+    \n  Subquery:\
+    \n    Projection: data2.a\
+    \n      Filter: data2.f IN ([Utf8(\"b\"), Utf8(\"c\"), Utf8(\"d\")])\
+    \n        TableScan: data2 projection=[a, b, c, d, e, f]\
+    \n  TableScan: data projection=[a, f], partial_filters=[data.f = Utf8(\"a\") OR data.f = Utf8(\"b\") OR data.f = Utf8(\"c\") OR data.a IN (<subquery>)]\
+    \n    Subquery:\
+    \n      Projection: data2.a\
+    \n        Filter: data2.f IN ([Utf8(\"b\"), Utf8(\"c\"), Utf8(\"d\")])\
+    \n          TableScan: data2 projection=[a, b, c, d, e, f]").await
+}
+
+#[tokio::test]
 async fn roundtrip_cross_join() -> Result<()> {
     roundtrip("SELECT * FROM data CROSS JOIN data2").await
 }
@@ -736,6 +754,40 @@ async fn roundtrip_aggregate_udf() -> Result<()> {
     ctx.register_udaf(dummy_agg);
 
     roundtrip_with_ctx("select dummy_agg(a) from data", ctx).await
+}
+
+#[tokio::test]
+async fn roundtrip_repartition_roundrobin() -> Result<()> {
+    let ctx = create_context().await?;
+    let scan_plan = ctx.sql("SELECT * FROM data").await?.into_optimized_plan()?;
+    let plan = LogicalPlan::Repartition(Repartition {
+        input: Arc::new(scan_plan),
+        partitioning_scheme: Partitioning::RoundRobinBatch(8),
+    });
+
+    let proto = to_substrait_plan(&plan, &ctx)?;
+    let plan2 = from_substrait_plan(&ctx, &proto).await?;
+    let plan2 = ctx.state().optimize(&plan2)?;
+
+    assert_eq!(format!("{plan:?}"), format!("{plan2:?}"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn roundtrip_repartition_hash() -> Result<()> {
+    let ctx = create_context().await?;
+    let scan_plan = ctx.sql("SELECT * FROM data").await?.into_optimized_plan()?;
+    let plan = LogicalPlan::Repartition(Repartition {
+        input: Arc::new(scan_plan),
+        partitioning_scheme: Partitioning::Hash(vec![col("data.a")], 8),
+    });
+
+    let proto = to_substrait_plan(&plan, &ctx)?;
+    let plan2 = from_substrait_plan(&ctx, &proto).await?;
+    let plan2 = ctx.state().optimize(&plan2)?;
+
+    assert_eq!(format!("{plan:?}"), format!("{plan2:?}"));
+    Ok(())
 }
 
 fn check_post_join_filters(rel: &Rel) -> Result<()> {
