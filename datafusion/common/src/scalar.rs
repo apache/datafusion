@@ -2970,36 +2970,9 @@ impl fmt::Display for ScalarValue {
                 )?,
                 None => write!(f, "NULL")?,
             },
-            ScalarValue::List(arr) => {
-                // ScalarValue List should always have a single element
-                assert_eq!(arr.len(), 1);
-                let options = FormatOptions::default().with_display_error(true);
-                let formatter =
-                    ArrayFormatter::try_new(arr.as_ref() as &dyn Array, &options)
-                        .unwrap();
-                let value_formatter = formatter.value(0);
-                write!(f, "{value_formatter}")?
-            }
-            ScalarValue::LargeList(arr) => {
-                // ScalarValue LargeList should always have a single element
-                assert_eq!(arr.len(), 1);
-                let options = FormatOptions::default().with_display_error(true);
-                let formatter =
-                    ArrayFormatter::try_new(arr.as_ref() as &dyn Array, &options)
-                        .unwrap();
-                let value_formatter = formatter.value(0);
-                write!(f, "{value_formatter}")?
-            }
-            ScalarValue::FixedSizeList(arr) => {
-                // ScalarValue FixedSizeList should always have a single element
-                assert_eq!(arr.len(), 1);
-                let options = FormatOptions::default().with_display_error(true);
-                let formatter =
-                    ArrayFormatter::try_new(arr.as_ref() as &dyn Array, &options)
-                        .unwrap();
-                let value_formatter = formatter.value(0);
-                write!(f, "{value_formatter}")?
-            }
+            ScalarValue::List(arr) => fmt_list(arr.to_owned() as ArrayRef, f)?,
+            ScalarValue::LargeList(arr) => fmt_list(arr.to_owned() as ArrayRef, f)?,
+            ScalarValue::FixedSizeList(arr) => fmt_list(arr.to_owned() as ArrayRef, f)?,
             ScalarValue::Date32(e) => format_option!(f, e)?,
             ScalarValue::Date64(e) => format_option!(f, e)?,
             ScalarValue::Time32Second(e) => format_option!(f, e)?,
@@ -3030,6 +3003,16 @@ impl fmt::Display for ScalarValue {
         };
         Ok(())
     }
+}
+
+fn fmt_list(arr: ArrayRef, f: &mut fmt::Formatter) -> fmt::Result {
+    // ScalarValue List, LargeList, FixedSizeList should always have a single element
+    assert_eq!(arr.len(), 1);
+    let options = FormatOptions::default().with_display_error(true);
+    let formatter =
+        ArrayFormatter::try_new(arr.as_ref() as &dyn Array, &options).unwrap();
+    let value_formatter = formatter.value(0);
+    write!(f, "{value_formatter}")
 }
 
 impl fmt::Debug for ScalarValue {
