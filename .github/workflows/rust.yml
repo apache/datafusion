@@ -297,7 +297,9 @@ jobs:
         shell: bash
         run: |
           export PATH=$PATH:$HOME/d/protoc/bin
-          cargo test -p datafusion --test tpcds_planning tpcds_physical_q44 --features backtrace
+          cargo test --lib --tests --bins --features avro,json,backtrace
+          cd datafusion-cli
+          cargo test --lib --tests --bins --all-features
         env:
           # do not produce debug symbols to keep memory usage down
           RUSTFLAGS: "-C debuginfo=line-tables-only"
