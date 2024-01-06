@@ -667,8 +667,6 @@ fn string_concat_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<Da
         (LargeUtf8, from_type) | (from_type, LargeUtf8) => {
             string_concat_internal_coercion(from_type, &LargeUtf8)
         }
-        // TODO: cast between array elements (#6558)
-        (List(_), from_type) | (from_type, List(_)) => Some(from_type.to_owned()),
         _ => None,
     })
 }

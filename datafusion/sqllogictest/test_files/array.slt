@@ -3238,9 +3238,19 @@ select list_to_string(['h', 'e', 'l', 'l', 'o'], ','), list_to_string([1, 2, 3, 
 ----
 h,e,l,l,o 1-2-3-4-5 1|2|3
 
+query TTT
+select list_to_string(arrow_cast(['h', 'e', 'l', 'l', 'o'], 'LargeList(Utf8)'), ','), list_to_string(arrow_cast([1, 2, 3, 4, 5], 'LargeList(Int64)'), '-'), list_to_string(arrow_cast([1.0, 2.0, 3.0], 'LargeList(Float64)'), '|');
+----
+h,e,l,l,o 1-2-3-4-5 1|2|3
+
 # array_join scalar function #5 (function alias `array_to_string`)
 query TTT
 select array_join(['h', 'e', 'l', 'l', 'o'], ','), array_join([1, 2, 3, 4, 5], '-'), array_join([1.0, 2.0, 3.0], '|');
+----
+h,e,l,l,o 1-2-3-4-5 1|2|3
+
+query TTT
+select array_join(arrow_cast(['h', 'e', 'l', 'l', 'o'], 'LargeList(Utf8)'), ','), array_join(arrow_cast([1, 2, 3, 4, 5], 'LargeList(Int64)'), '-'), array_join(arrow_cast([1.0, 2.0, 3.0], 'LargeList(Float64)'), '|');
 ----
 h,e,l,l,o 1-2-3-4-5 1|2|3
 
@@ -3250,15 +3260,30 @@ select list_join(['h', 'e', 'l', 'l', 'o'], ','), list_join([1, 2, 3, 4, 5], '-'
 ----
 h,e,l,l,o 1-2-3-4-5 1|2|3
 
+query TTT
+select list_join(arrow_cast(['h', 'e', 'l', 'l', 'o'], 'LargeList(Utf8)'), ','), list_join(arrow_cast([1, 2, 3, 4, 5], 'LargeList(Int64)'), '-'), list_join(arrow_cast([1.0, 2.0, 3.0], 'LargeList(Float64)'), '|');
+----
+h,e,l,l,o 1-2-3-4-5 1|2|3
+
 # array_to_string scalar function with nulls #1
 query TTT
 select array_to_string(make_array('h', NULL, 'l', NULL, 'o'), ','), array_to_string(make_array(1, NULL, 3, NULL, 5), '-'), array_to_string(make_array(NULL, 2.0, 3.0), '|');
 ----
 h,l,o 1-3-5 2|3
 
+query TTT
+select array_to_string(arrow_cast(['h', 'e', 'l', 'l', 'o'], 'LargeList(Utf8)'), ','), array_to_string(arrow_cast([1, 2, 3, 4, 5], 'LargeList(Int64)'), '-'), array_to_string(arrow_cast([1.0, 2.0, 3.0], 'LargeList(Float64)'), '|');
+----
+h,e,l,l,o 1-2-3-4-5 1|2|3
+
 # array_to_string scalar function with nulls #2
 query TTT
 select array_to_string(make_array('h', NULL, NULL, NULL, 'o'), ',', '-'), array_to_string(make_array(NULL, 2, NULL, 4, 5), '-', 'nil'), array_to_string(make_array(1.0, NULL, 3.0), '|', '0');
+----
+h,-,-,-,o nil-2-nil-4-5 1|0|3
+
+query TTT
+select array_to_string(arrow_cast(make_array('h', NULL, NULL, NULL, 'o'), 'LargeList(Utf8)'), ',', '-'), array_to_string(arrow_cast(make_array(NULL, 2, NULL, 4, 5), 'LargeList(Int64)'), '-', 'nil'), array_to_string(arrow_cast(make_array(1.0, NULL, 3.0), 'LargeList(Float64)'), '|', '0');
 ----
 h,-,-,-,o nil-2-nil-4-5 1|0|3
 
@@ -3288,8 +3313,32 @@ NULL
 51^52^54^55^56^57^58^59^60
 NULL
 
+query T
+select array_to_string(column1, column4) from large_arrays_values;
+----
+2,3,4,5,6,7,8,9,10
+11.12.13.14.15.16.17.18.20
+21-22-23-25-26-27-28-29-30
+31ok32ok33ok34ok35ok37ok38ok39ok40
+NULL
+41$42$43$44$45$46$47$48$49$50
+51^52^54^55^56^57^58^59^60
+NULL
+
 query TT
 select array_to_string(column1, '_'), array_to_string(make_array(1,2,3), '/') from arrays_values;
+----
+2_3_4_5_6_7_8_9_10 1/2/3
+11_12_13_14_15_16_17_18_20 1/2/3
+21_22_23_25_26_27_28_29_30 1/2/3
+31_32_33_34_35_37_38_39_40 1/2/3
+NULL 1/2/3
+41_42_43_44_45_46_47_48_49_50 1/2/3
+51_52_54_55_56_57_58_59_60 1/2/3
+61_62_63_64_65_66_67_68_69_70 1/2/3
+
+query TT
+select array_to_string(column1, '_'), array_to_string(make_array(1,2,3), '/') from large_arrays_values;
 ----
 2_3_4_5_6_7_8_9_10 1/2/3
 11_12_13_14_15_16_17_18_20 1/2/3
@@ -3312,11 +3361,28 @@ NULL 1.2.3
 51_52_*_54_55_56_57_58_59_60 1.2.3
 61_62_63_64_65_66_67_68_69_70 1.2.3
 
+query TT
+select array_to_string(column1, '_', '*'), array_to_string(make_array(make_array(1,2,3)), '.') from large_arrays_values;
+----
+*_2_3_4_5_6_7_8_9_10 1.2.3
+11_12_13_14_15_16_17_18_*_20 1.2.3
+21_22_23_*_25_26_27_28_29_30 1.2.3
+31_32_33_34_35_*_37_38_39_40 1.2.3
+NULL 1.2.3
+41_42_43_44_45_46_47_48_49_50 1.2.3
+51_52_*_54_55_56_57_58_59_60 1.2.3
+61_62_63_64_65_66_67_68_69_70 1.2.3
+
 ## cardinality
 
 # cardinality scalar function
 query III
 select cardinality(make_array(1, 2, 3, 4, 5)), cardinality([1, 3, 5]), cardinality(make_array('h', 'e', 'l', 'l', 'o'));
+----
+5 3 5
+
+query III
+select cardinality(arrow_cast(make_array(1, 2, 3, 4, 5), 'LargeList(Int64)')), cardinality(arrow_cast([1, 3, 5], 'LargeList(Int64)')), cardinality(arrow_cast(make_array('h', 'e', 'l', 'l', 'o'), 'LargeList(Utf8)'));
 ----
 5 3 5
 
@@ -3326,15 +3392,36 @@ select cardinality(make_array([1, 2], [3, 4], [5, 6])), cardinality(array_repeat
 ----
 6 18
 
+query I
+select cardinality(arrow_cast(make_array([1, 2], [3, 4], [5, 6]), 'LargeList(List(Int64))'));
+----
+6
+
 # cardinality scalar function #3
 query II
 select cardinality(make_array()), cardinality(make_array(make_array()))
 ----
 NULL 0
 
+query II
+select cardinality(arrow_cast(make_array(), 'LargeList(Null)')), cardinality(arrow_cast(make_array(make_array()), 'LargeList(List(Null))'))
+----
+NULL 0
+
 # cardinality with columns
 query III
 select cardinality(column1), cardinality(column2), cardinality(column3) from arrays;
+----
+4 3 5
+4 3 5
+4 3 5
+4 3 3
+NULL 3 4
+4 NULL 1
+4 3 NULL
+
+query III
+select cardinality(column1), cardinality(column2), cardinality(column3) from large_arrays;
 ----
 4 3 5
 4 3 5
@@ -4529,6 +4616,45 @@ query ???
 select 1 || make_array(2, 3, 4), 1.0 || make_array(2.0, 3.0, 4.0), 'h' || make_array('e', 'l', 'l', 'o');
 ----
 [1, 2, 3, 4] [1.0, 2.0, 3.0, 4.0] [h, e, l, l, o]
+
+# array concatenate operator with scalars #4 (mixed)
+query ?
+select 0 || [1,2,3] || 4 || [5] || [6,7];
+----
+[0, 1, 2, 3, 4, 5, 6, 7]
+
+# array concatenate operator with nd-list #5 (mixed)
+query ?
+select 0 || [1,2,3] || [[4,5]] || [[6,7,8]] || [9,10];
+----
+[[0, 1, 2, 3], [4, 5], [6, 7, 8], [9, 10]]
+
+# array concatenate operator non-valid cases
+## concat 2D with scalar is not valid
+query error
+select 0 || [1,2,3] || [[4,5]] || [[6,7,8]] || [9,10] || 11;
+
+## concat scalar with 2D is not valid
+query error
+select 0 || [[1,2,3]];
+
+# array concatenate operator with column
+
+statement ok
+CREATE TABLE array_concat_operator_table
+AS VALUES
+  (0, [1, 2, 2, 3], 4, [5, 6, 5]),
+  (-1, [4, 5, 6], 7, [8, 1, 1])
+;
+
+query ?
+select column1 || column2 || column3 || column4 from array_concat_operator_table;
+----
+[0, 1, 2, 2, 3, 4, 5, 6, 5]
+[-1, 4, 5, 6, 7, 8, 1, 1]
+
+statement ok
+drop table array_concat_operator_table;
 
 ## array containment operator
 
