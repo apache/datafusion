@@ -722,7 +722,7 @@ mod test {
         );
         // b IN (1,2,3,4...24)
         test_analyze(
-            col("b").in_list((1..25).into_iter().map(|i| lit(i)).collect_vec(), false),
+            col("b").in_list((1..25).map(lit).collect_vec(), false),
             vec![in_guarantee("b", 1..25)],
         );
     }
