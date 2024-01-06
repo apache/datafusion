@@ -25,8 +25,8 @@ use crate::function::PartitionEvaluatorFactory;
 use crate::{
     aggregate_function, built_in_function, conditional_expressions::CaseBuilder,
     logical_plan::Subquery, AccumulatorFactoryFunction, AggregateUDF,
-    BuiltinScalarFunction, Expr, LogicalPlan, Operator, ReturnTypeFunction,
-    ScalarFunctionImplementation, ScalarUDF, Signature, Volatility,
+    BuiltinScalarFunction, Expr, LogicalPlan, Operator, ScalarFunctionImplementation,
+    ScalarUDF, Signature, Volatility,
 };
 use crate::{AggregateUDFImpl, ColumnarValue, ScalarUDFImpl, WindowUDF, WindowUDFImpl};
 use arrow::datatypes::DataType;
@@ -1057,6 +1057,16 @@ pub struct SimpleAggregateUDF {
     return_type: DataType,
     accumulator: AccumulatorFactoryFunction,
     state_type: Vec<DataType>,
+}
+
+impl Debug for SimpleAggregateUDF {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.debug_struct("AggregateUDF")
+            .field("name", &self.name)
+            .field("signature", &self.signature)
+            .field("fun", &"<FUNC>")
+            .finish()
+    }
 }
 
 impl SimpleAggregateUDF {

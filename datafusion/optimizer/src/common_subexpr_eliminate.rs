@@ -898,6 +898,7 @@ mod test {
 
     #[test]
     fn aggregate() -> Result<()> {
+        #[derive(Debug, Clone)]
         struct InnerAggregateUDF {
             signature: Signature,
         }

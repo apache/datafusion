@@ -32,6 +32,7 @@ use datafusion_expr::{Accumulator, AggregateUDF, AggregateUDFImpl, Signature};
 /// a function `accumulator` that returns the `Accumulator` instance.
 ///
 /// To do so, we must implement the `AggregateUDFImpl` trait.
+#[derive(Debug, Clone)]
 struct GeoMeanUdf {
     signature: Signature,
 }

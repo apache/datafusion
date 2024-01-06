@@ -421,6 +421,7 @@ let geometric_mean = create_udaf(
     Arc::new(vec![DataType::Float64, DataType::UInt32]),
 );
 ```
+
 [`aggregateudf`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/struct.AggregateUDF.html
 [`create_udaf`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/fn.create_udaf.html
 [`advanced_udaf.rs`]: https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/advanced_udaf.rs
