@@ -149,7 +149,7 @@ select count(*) from m1 where tag_id = '1000' and time < '2024-01-03T14:46:35+01
 10
 
 query RRR
-select min(f5), max(f5), avg(f5) from m2 where tag_id = '1000' and time < '2024-01-03T14:46:35+01:00' group by type;
+select min(f5), max(f5), avg(f5) from m2 where tag_id = '1000' and time < '2024-01-03T14:46:35+01:00' group by type order by min(f5);
 ----
 100 600 350
 700 1000 850

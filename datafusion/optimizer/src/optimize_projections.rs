@@ -624,7 +624,6 @@ fn outer_columns_helper(expr: &Expr, columns: &mut HashSet<Column>) -> bool {
             let exprs = insubquery.subquery.outer_ref_columns.iter();
             outer_columns_helper_multi(exprs, columns)
         }
-        Expr::IsNotNull(expr) | Expr::IsNull(expr) => outer_columns_helper(expr, columns),
         Expr::Cast(cast) => outer_columns_helper(&cast.expr, columns),
         Expr::Sort(sort) => outer_columns_helper(&sort.expr, columns),
         Expr::AggregateFunction(aggregate_fn) => {
@@ -677,6 +676,22 @@ fn outer_columns_helper(expr: &Expr, columns: &mut HashSet<Column>) -> bool {
                     .as_ref()
                     .map_or(true, |expr| outer_columns_helper(expr, columns))
         }
+        Expr::SimilarTo(similar_to) => {
+            outer_columns_helper(&similar_to.expr, columns)
+                && outer_columns_helper(&similar_to.pattern, columns)
+        }
+        Expr::TryCast(try_cast) => outer_columns_helper(&try_cast.expr, columns),
+        Expr::GetIndexedField(index) => outer_columns_helper(&index.expr, columns),
+        Expr::Not(expr)
+        | Expr::IsNotFalse(expr)
+        | Expr::IsFalse(expr)
+        | Expr::IsTrue(expr)
+        | Expr::IsNotTrue(expr)
+        | Expr::IsUnknown(expr)
+        | Expr::IsNotUnknown(expr)
+        | Expr::IsNotNull(expr)
+        | Expr::IsNull(expr)
+        | Expr::Negative(expr) => outer_columns_helper(expr, columns),
         Expr::Column(_) | Expr::Literal(_) | Expr::Wildcard { .. } => true,
         _ => false,
     }
@@ -978,8 +993,8 @@ mod tests {
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::{Result, TableReference};
     use datafusion_expr::{
-        binary_expr, col, count, lit, logical_plan::builder::LogicalPlanBuilder,
-        table_scan, Expr, LogicalPlan, Operator,
+        binary_expr, col, count, lit, logical_plan::builder::LogicalPlanBuilder, not,
+        table_scan, try_cast, Expr, LogicalPlan, Operator,
     };
 
     fn assert_optimized_plan_equal(plan: &LogicalPlan, expected: &str) -> Result<()> {
@@ -1058,6 +1073,161 @@ mod tests {
         \n  Projection: \
         \n    Aggregate: groupBy=[[]], aggr=[[COUNT(Int32(1))]]\
         \n      TableScan: ?table? projection=[]";
+        assert_optimized_plan_equal(&plan, expected)
+    }
+
+    #[test]
+    fn test_struct_field_push_down() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int64, false),
+            Field::new_struct(
+                "s",
+                vec![
+                    Field::new("x", DataType::Int64, false),
+                    Field::new("y", DataType::Int64, false),
+                ],
+                false,
+            ),
+        ]));
+
+        let table_scan = table_scan(TableReference::none(), &schema, None)?.build()?;
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .project(vec![col("s").field("x")])?
+            .build()?;
+        let expected = "Projection: (?table?.s)[x]\
+        \n  TableScan: ?table? projection=[s]";
+        assert_optimized_plan_equal(&plan, expected)
+    }
+
+    #[test]
+    fn test_neg_push_down() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .project(vec![-col("a")])?
+            .build()?;
+
+        let expected = "Projection: (- test.a)\
+        \n  TableScan: test projection=[a]";
+        assert_optimized_plan_equal(&plan, expected)
+    }
+
+    #[test]
+    fn test_is_null() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .project(vec![col("a").is_null()])?
+            .build()?;
+
+        let expected = "Projection: test.a IS NULL\
+        \n  TableScan: test projection=[a]";
+        assert_optimized_plan_equal(&plan, expected)
+    }
+
+    #[test]
+    fn test_is_not_null() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .project(vec![col("a").is_not_null()])?
+            .build()?;
+
+        let expected = "Projection: test.a IS NOT NULL\
+        \n  TableScan: test projection=[a]";
+        assert_optimized_plan_equal(&plan, expected)
+    }
+
+    #[test]
+    fn test_is_true() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .project(vec![col("a").is_true()])?
+            .build()?;
+
+        let expected = "Projection: test.a IS TRUE\
+        \n  TableScan: test projection=[a]";
+        assert_optimized_plan_equal(&plan, expected)
+    }
+
+    #[test]
+    fn test_is_not_true() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .project(vec![col("a").is_not_true()])?
+            .build()?;
+
+        let expected = "Projection: test.a IS NOT TRUE\
+        \n  TableScan: test projection=[a]";
+        assert_optimized_plan_equal(&plan, expected)
+    }
+
+    #[test]
+    fn test_is_false() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .project(vec![col("a").is_false()])?
+            .build()?;
+
+        let expected = "Projection: test.a IS FALSE\
+        \n  TableScan: test projection=[a]";
+        assert_optimized_plan_equal(&plan, expected)
+    }
+
+    #[test]
+    fn test_is_not_false() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .project(vec![col("a").is_not_false()])?
+            .build()?;
+
+        let expected = "Projection: test.a IS NOT FALSE\
+        \n  TableScan: test projection=[a]";
+        assert_optimized_plan_equal(&plan, expected)
+    }
+
+    #[test]
+    fn test_is_unknown() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .project(vec![col("a").is_unknown()])?
+            .build()?;
+
+        let expected = "Projection: test.a IS UNKNOWN\
+        \n  TableScan: test projection=[a]";
+        assert_optimized_plan_equal(&plan, expected)
+    }
+
+    #[test]
+    fn test_is_not_unknown() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .project(vec![col("a").is_not_unknown()])?
+            .build()?;
+
+        let expected = "Projection: test.a IS NOT UNKNOWN\
+        \n  TableScan: test projection=[a]";
+        assert_optimized_plan_equal(&plan, expected)
+    }
+
+    #[test]
+    fn test_not() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .project(vec![not(col("a"))])?
+            .build()?;
+
+        let expected = "Projection: NOT test.a\
+        \n  TableScan: test projection=[a]";
+        assert_optimized_plan_equal(&plan, expected)
+    }
+
+    #[test]
+    fn test_try_cast() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .project(vec![try_cast(col("a"), DataType::Float64)])?
+            .build()?;
+
+        let expected = "Projection: TRY_CAST(test.a AS Float64)\
+        \n  TableScan: test projection=[a]";
         assert_optimized_plan_equal(&plan, expected)
     }
 }
