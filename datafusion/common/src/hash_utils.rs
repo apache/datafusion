@@ -602,28 +602,24 @@ mod tests {
     // Tests actual values of hashes, which are different if forcing collisions
     #[cfg(not(feature = "force_hash_collisions"))]
     fn create_hashes_for_struct_arrays_more_column_than_row() {
-        let struct_array = StructArray::from(
-            vec![
-                (
-                    Arc::new(Field::new("bool", DataType::Boolean, false)),
-                    Arc::new(BooleanArray::from(vec![
-                        false, false
-                    ])) as ArrayRef,
-                ),
-                (
-                    Arc::new(Field::new("i32-1", DataType::Int32, false)),
-                    Arc::new(Int32Array::from(vec![10, 10])) as ArrayRef,
-                ),
-                (
-                    Arc::new(Field::new("i32-2", DataType::Int32, false)),
-                    Arc::new(Int32Array::from(vec![10, 10])) as ArrayRef,
-                ),
-                (
-                    Arc::new(Field::new("i32-3", DataType::Int32, false)),
-                    Arc::new(Int32Array::from(vec![10, 10])) as ArrayRef,
-                ),
-            ],
-        );
+        let struct_array = StructArray::from(vec![
+            (
+                Arc::new(Field::new("bool", DataType::Boolean, false)),
+                Arc::new(BooleanArray::from(vec![false, false])) as ArrayRef,
+            ),
+            (
+                Arc::new(Field::new("i32-1", DataType::Int32, false)),
+                Arc::new(Int32Array::from(vec![10, 10])) as ArrayRef,
+            ),
+            (
+                Arc::new(Field::new("i32-2", DataType::Int32, false)),
+                Arc::new(Int32Array::from(vec![10, 10])) as ArrayRef,
+            ),
+            (
+                Arc::new(Field::new("i32-3", DataType::Int32, false)),
+                Arc::new(Int32Array::from(vec![10, 10])) as ArrayRef,
+            ),
+        ]);
 
         assert!(struct_array.is_valid(0));
         assert!(struct_array.is_valid(1));
@@ -634,7 +630,6 @@ mod tests {
         create_hashes(&[array], &random_state, &mut hashes).unwrap();
         assert_eq!(hashes[0], hashes[1]);
     }
-
 
     #[test]
     // Tests actual values of hashes, which are different if forcing collisions
