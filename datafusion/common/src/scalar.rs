@@ -2541,8 +2541,8 @@ impl ScalarValue {
     }
 
     fn eq_array_list(arr1: &ArrayRef, arr2: &ArrayRef, index: usize) -> bool {
-        let right = arr1.slice(index, 1);
-        arr2.as_ref() as &dyn Array == &right
+        let right = arr2.slice(index, 1);
+        arr1 == &right
     }
 
     /// Estimate size if bytes including `Self`. For values with internal containers such as `String`
