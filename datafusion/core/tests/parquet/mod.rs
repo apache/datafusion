@@ -377,7 +377,7 @@ fn make_int32_batch(start: i32, end: i32) -> RecordBatch {
     RecordBatch::try_new(schema, vec![array.clone()]).unwrap()
 }
 
-fn make_int32_batch_range(start: i32, end: i32) -> RecordBatch {
+fn make_int32_range(start: i32, end: i32) -> RecordBatch {
     let schema = Arc::new(Schema::new(vec![Field::new("i", DataType::Int32, true)]));
     let v = vec![start, end];
     let array = Arc::new(Int32Array::from(v)) as ArrayRef;
@@ -533,10 +533,7 @@ fn create_data_batch(scenario: Scenario) -> Vec<RecordBatch> {
             ]
         }
         Scenario::Int32Range => {
-            vec![
-                make_int32_batch_range(0, 10),
-                make_int32_batch_range(200000, 300000),
-            ]
+            vec![make_int32_range(0, 10), make_int32_range(200000, 300000)]
         }
         Scenario::Float64 => {
             vec![
