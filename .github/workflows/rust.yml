@@ -310,10 +310,7 @@ jobs:
           cd datafusion-cli
           cargo test --lib --tests --bins --all-features
         env:
-          # do not produce debug symbols to keep memory usage down
-          # use higher optimization level to overcome Windows rust slowness for tpc-ds
-          # and speed builds: https://github.com/apache/arrow-datafusion/issues/8696
-          # Cargo profile docs https://doc.rust-lang.org/cargo/reference/profiles.html?profile-settings#profile-settings
+          # Minimize producing debug symbols to keep memory usage down
           # Set debuginfo=line-tables-only as debuginfo=0 causes immensely slow build
           # See for more details: https://github.com/rust-lang/rust/issues/119560
           RUSTFLAGS: "-C debuginfo=line-tables-only"
