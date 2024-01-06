@@ -117,28 +117,26 @@ impl Constraints {
                     referred_columns,
                 } => {
                     let get_indices = |c: &[Ident]| {
-                        Result::<_>::Ok(
-                            c.iter()
-                                .map(|pk| {
-                                    let idx = df_schema
-                                        .fields()
-                                        .iter()
-                                        .position(|item| {
-                                            item.qualified_name() == pk.value.clone()
-                                        })
-                                        .ok_or_else(|| {
-                                            DataFusionError::Execution(
-                                                "Column doesn't exist".to_string(),
-                                            )
-                                        })?;
-                                    Ok(idx)
-                                })
-                                .collect::<Result<Vec<_>>>()?,
-                        )
+                        c.iter()
+                            .map(|pk| {
+                                let idx = df_schema
+                                    .fields()
+                                    .iter()
+                                    .position(|item| {
+                                        item.qualified_name() == pk.value.clone()
+                                    })
+                                    .ok_or_else(|| {
+                                        DataFusionError::Execution(
+                                            "Column doesn't exist".to_string(),
+                                        )
+                                    })?;
+                                Ok(idx)
+                            })
+                            .collect::<Result<Vec<_>>>()
                     };
                     Ok(Constraint::ForeignKey {
                         indices: get_indices(columns)?,
-                        referenced_indices: get_indices(&referred_columns)?,
+                        referenced_indices: get_indices(referred_columns)?,
                         referenced_table: TableReference::from(foreign_table.to_string()),
                     })
                 }
