@@ -35,7 +35,7 @@ use crate::datasource::TableProvider;
 use crate::execution::context::SessionState;
 
 use arrow::datatypes::{DataType, SchemaRef};
-use datafusion_common::file_options::{FileTypeWriterOptions, StatementOptions};
+use datafusion_common::file_options::{StatementOptions};
 use datafusion_common::{arrow_datafusion_err, plan_err, DataFusionError, FileType};
 use datafusion_expr::CreateExternalTable;
 

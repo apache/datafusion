@@ -188,10 +188,6 @@ impl FileFormat for JsonFormat {
             order_requirements,
         )) as _)
     }
-
-    fn file_type(&self) -> FileType {
-        FileType::JSON
-    }
 }
 
 impl Default for JsonSerializer {

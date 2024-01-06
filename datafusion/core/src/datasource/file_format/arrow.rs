@@ -140,10 +140,6 @@ impl FileFormat for ArrowFormat {
             order_requirements,
         )) as _)
     }
-
-    fn file_type(&self) -> FileType {
-        FileType::ARROW
-    }
 }
 
 /// Implements [`DataSink`] for writing to arrow_ipc files

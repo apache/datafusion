@@ -66,7 +66,7 @@ use arrow::{
     datatypes::{DataType, Schema, SchemaRef},
     record_batch::{RecordBatch, RecordBatchOptions},
 };
-use datafusion_common::{file_options::FileTypeWriterOptions, plan_err};
+use datafusion_common::{plan_err};
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::PhysicalSortExpr;
 use datafusion_physical_plan::ExecutionPlan;
@@ -96,9 +96,7 @@ pub struct FileSinkConfig {
     /// Controls whether existing data should be overwritten by this sink
     pub overwrite: bool,
     /// Contains settings specific to writing a given FileType, e.g. parquet max_row_group_size.
-    /// Note that for externally defined FileTypes, FileTypeWriterOptions contains arbitrary
-    /// config tuples that must be handled within the physical plan.
-    pub file_type_writer_options: FileTypeWriterOptions,
+    pub file_type_writer_options: StatementOptions,
 }
 
 impl FileSinkConfig {

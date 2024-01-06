@@ -24,7 +24,7 @@ use std::convert::TryFrom;
 use std::iter::zip;
 use std::sync::Arc;
 
-use crate::dml::{CopyOptions, CopyTo};
+use crate::dml::{CopyTo};
 use crate::expr::Alias;
 use crate::expr_rewriter::{
     coerce_plan_expr_for_schema, normalize_col,
@@ -49,6 +49,7 @@ use crate::{
 
 use arrow::datatypes::{DataType, Schema, SchemaRef};
 use datafusion_common::display::ToStringifiedPlan;
+use datafusion_common::file_options::StatementOptions;
 use datafusion_common::{
     get_target_functional_dependencies, plan_datafusion_err, plan_err, Column, DFField,
     DFSchema, DFSchemaRef, DataFusionError, FileType, OwnedTableReference, Result,
@@ -238,14 +239,12 @@ impl LogicalPlanBuilder {
     pub fn copy_to(
         input: LogicalPlan,
         output_url: String,
-        file_format: FileType,
         single_file_output: bool,
-        copy_options: CopyOptions,
+        copy_options: StatementOptions,
     ) -> Result<Self> {
         Ok(Self::from(LogicalPlan::Copy(CopyTo {
             input: Arc::new(input),
             output_url,
-            file_format,
             single_file_output,
             copy_options,
         })))

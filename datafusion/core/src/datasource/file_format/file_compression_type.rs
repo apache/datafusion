@@ -231,30 +231,6 @@ pub trait FileTypeExt {
     fn get_ext_with_compression(&self, c: FileCompressionType) -> Result<String>;
 }
 
-impl FileTypeExt for FileType {
-    fn get_ext_with_compression(&self, c: FileCompressionType) -> Result<String> {
-        let ext = self.get_ext();
-
-        match self {
-            FileType::JSON | FileType::CSV => Ok(format!("{}{}", ext, c.get_ext())),
-            FileType::AVRO | FileType::ARROW => match c.variant {
-                UNCOMPRESSED => Ok(ext),
-                _ => Err(DataFusionError::Internal(
-                    "FileCompressionType can be specified for CSV/JSON FileType.".into(),
-                )),
-            },
-            #[cfg(feature = "parquet")]
-            FileType::PARQUET => match c.variant {
-                UNCOMPRESSED => Ok(ext),
-                _ => Err(DataFusionError::Internal(
-                    "FileCompressionType can be specified for CSV/JSON FileType.".into(),
-                )),
-            },
-            FileType::Extension(ext) => ext.extension_with_compression(c.variant),
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use crate::datasource::file_format::file_compression_type::{

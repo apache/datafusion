@@ -90,9 +90,6 @@ impl FileFormat for AvroFormat {
         Ok(Arc::new(exec))
     }
 
-    fn file_type(&self) -> FileType {
-        FileType::AVRO
-    }
 }
 
 #[cfg(test)]

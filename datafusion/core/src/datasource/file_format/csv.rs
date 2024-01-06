@@ -285,9 +285,6 @@ impl FileFormat for CsvFormat {
         )) as _)
     }
 
-    fn file_type(&self) -> FileType {
-        FileType::CSV
-    }
 }
 
 impl CsvFormat {

@@ -42,28 +42,10 @@ pub trait GetExt {
     fn get_ext(&self) -> String;
 }
 
-/// Readable file type
-#[allow(clippy::derived_hash_with_manual_eq)]
-#[derive(Debug, Clone, Hash)]
-pub enum FileType {
-    /// Apache Arrow file
-    ARROW,
-    /// Apache Avro file
-    AVRO,
-    /// Apache Parquet file
-    #[cfg(feature = "parquet")]
-    PARQUET,
-    /// CSV file
-    CSV,
-    /// JSON file
-    JSON,
-    /// FileType Implemented Outside of DataFusion
-    Extension(Box<dyn ExtensionFileType>),
-}
-
-/// A trait to enable externally implementing the functionality of a [FileType].
-pub trait ExtensionFileType:
-    std::fmt::Debug + ExtensionFileTypeClone + Send + Sync
+/// A trait which provides information during planning time about a type of file which may be defined
+/// externally. Use SessionContext::register_file_type to add new implementations.
+pub trait FileType:
+    std::fmt::Debug + FileTypeClone + Send + Sync
 {
     /// Returns the default file extension for this type, e.g. CSV would return ".csv".to_owned()
     /// The default_extension is also used to uniquely identify a specific FileType::Extension variant,
@@ -78,117 +60,21 @@ pub trait ExtensionFileType:
     ) -> Result<String>;
 }
 
-pub trait ExtensionFileTypeClone {
-    fn clone_box(&self) -> Box<dyn ExtensionFileType>;
+pub trait FileTypeClone {
+    fn clone_box(&self) -> Box<dyn FileType>;
 }
 
-impl Clone for Box<dyn ExtensionFileType> {
-    fn clone(&self) -> Box<dyn ExtensionFileType> {
+impl Clone for Box<dyn FileType> {
+    fn clone(&self) -> Box<dyn FileType> {
         self.clone_box()
     }
 }
 
-impl std::hash::Hash for Box<dyn ExtensionFileType> {
+impl std::hash::Hash for Box<dyn FileType> {
     fn hash<H>(&self, state: &mut H)
     where
         H: Hasher,
     {
         self.default_extension().hash(state)
-    }
-}
-
-impl PartialEq for FileType {
-    fn eq(&self, other: &Self) -> bool {
-        match (self, other) {
-            (FileType::ARROW, FileType::ARROW) => true,
-            (FileType::AVRO, FileType::AVRO) => true,
-            #[cfg(feature = "parquet")]
-            (FileType::PARQUET, FileType::PARQUET) => true,
-            (FileType::CSV, FileType::CSV) => true,
-            (FileType::JSON, FileType::JSON) => true,
-            (FileType::Extension(ext_self), FileType::Extension(ext_other)) => {
-                ext_self.default_extension() == ext_other.default_extension()
-            }
-            _ => false,
-        }
-    }
-}
-
-impl Eq for FileType {}
-
-impl GetExt for FileType {
-    fn get_ext(&self) -> String {
-        match self {
-            FileType::ARROW => DEFAULT_ARROW_EXTENSION.to_owned(),
-            FileType::AVRO => DEFAULT_AVRO_EXTENSION.to_owned(),
-            #[cfg(feature = "parquet")]
-            FileType::PARQUET => DEFAULT_PARQUET_EXTENSION.to_owned(),
-            FileType::CSV => DEFAULT_CSV_EXTENSION.to_owned(),
-            FileType::JSON => DEFAULT_JSON_EXTENSION.to_owned(),
-            FileType::Extension(ext) => ext.default_extension(),
-        }
-    }
-}
-
-impl Display for FileType {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let out = match self {
-            FileType::CSV => "csv",
-            FileType::JSON => "json",
-            #[cfg(feature = "parquet")]
-            FileType::PARQUET => "parquet",
-            FileType::AVRO => "avro",
-            FileType::ARROW => "arrow",
-            FileType::Extension(ext) => return ext.fmt(f),
-        };
-        write!(f, "{}", out)
-    }
-}
-
-impl FromStr for FileType {
-    type Err = DataFusionError;
-
-    fn from_str(s: &str) -> Result<Self> {
-        let s = s.to_uppercase();
-        match s.as_str() {
-            "ARROW" => Ok(FileType::ARROW),
-            "AVRO" => Ok(FileType::AVRO),
-            #[cfg(feature = "parquet")]
-            "PARQUET" => Ok(FileType::PARQUET),
-            "CSV" => Ok(FileType::CSV),
-            "JSON" | "NDJSON" => Ok(FileType::JSON),
-            _ => Err(DataFusionError::NotImplemented(format!(
-                "Unknown FileType: {s}"
-            ))),
-        }
-    }
-}
-
-#[cfg(test)]
-#[cfg(feature = "parquet")]
-mod tests {
-    use crate::error::DataFusionError;
-    use crate::file_options::FileType;
-    use std::str::FromStr;
-
-    #[test]
-    fn from_str() {
-        for (ext, file_type) in [
-            ("csv", FileType::CSV),
-            ("CSV", FileType::CSV),
-            ("json", FileType::JSON),
-            ("JSON", FileType::JSON),
-            ("avro", FileType::AVRO),
-            ("AVRO", FileType::AVRO),
-            ("parquet", FileType::PARQUET),
-            ("PARQUET", FileType::PARQUET),
-        ] {
-            assert_eq!(FileType::from_str(ext).unwrap(), file_type);
-        }
-
-        assert!(matches!(
-            FileType::from_str("Unknown"),
-            Err(DataFusionError::NotImplemented(_))
-        ));
     }
 }

@@ -291,9 +291,6 @@ impl FileFormat for ParquetFormat {
         )) as _)
     }
 
-    fn file_type(&self) -> FileType {
-        FileType::PARQUET
-    }
 }
 
 fn summarize_min_max(

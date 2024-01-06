@@ -35,7 +35,7 @@ use datafusion_common::{
     Constraints, DFField, DFSchema, DFSchemaRef, DataFusionError, OwnedTableReference,
     Result, ScalarValue, SchemaReference, TableReference, ToDFSchema,
 };
-use datafusion_expr::dml::{CopyOptions, CopyTo};
+use datafusion_expr::dml::{CopyTo};
 use datafusion_expr::expr_rewriter::normalize_col_with_schemas_and_ambiguity_check;
 use datafusion_expr::logical_plan::builder::project;
 use datafusion_expr::logical_plan::DdlStatement;
@@ -675,20 +675,17 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             .map(|(s, v)| (s.to_owned(), v.to_string()))
             .collect::<Vec<(String, String)>>();
 
-        let mut statement_options = StatementOptions::new(options);
-        let file_format = statement_options.try_infer_file_type(&statement.target)?;
+        let mut copy_options = StatementOptions::new(options);
         let single_file_output =
-            statement_options.take_bool_option("single_file_output")?;
+            copy_options.take_bool_option("single_file_output")?;
 
         // COPY defaults to outputting a single file if not otherwise specified
         let single_file_output = single_file_output.unwrap_or(true);
 
-        let copy_options = CopyOptions::SQLOptions(statement_options);
 
         Ok(LogicalPlan::Copy(CopyTo {
             input: Arc::new(input),
             output_url: statement.target,
-            file_format,
             single_file_output,
             copy_options,
         }))

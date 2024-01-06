@@ -105,8 +105,6 @@ pub trait FileFormat: Send + Sync + fmt::Debug {
         not_impl_err!("Writer not implemented for this format")
     }
 
-    /// Returns the FileType corresponding to this FileFormat
-    fn file_type(&self) -> FileType;
 }
 
 #[cfg(test)]
