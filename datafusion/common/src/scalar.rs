@@ -2100,11 +2100,8 @@ impl ScalarValue {
     }
 
     fn list_to_array_of_size(arr: &dyn Array, size: usize) -> Result<ArrayRef> {
-        let arrays = std::iter::repeat(arr)
-                    .take(size)
-                    .collect::<Vec<_>>();
-                arrow::compute::concat(arrays.as_slice())
-                    .map_err(|e| arrow_datafusion_err!(e))
+        let arrays = std::iter::repeat(arr).take(size).collect::<Vec<_>>();
+        arrow::compute::concat(arrays.as_slice()).map_err(|e| arrow_datafusion_err!(e))
     }
 
     /// Retrieve ScalarValue for each row in `array`
