@@ -1049,12 +1049,10 @@ mod tests {
         let schema = Schema::new(vec![Field::new("String", DataType::Utf8, false)]);
 
         let expr = col(r#""String""#).in_list(
-            vec![
-                lit("Hello_Not_Exists"),
-                lit("Hello_Not_Exists2"),
-                lit("Hello_Not_Exists3"),
-                lit("Hello_Not_Exist4"),
-            ],
+            (1..25)
+                .into_iter()
+                .map(|i| lit(format!("Hello_Not_Exists{}", i)))
+                .collect::<Vec<_>>(),
             false,
         );
         let expr = logical2physical(&expr, &schema);

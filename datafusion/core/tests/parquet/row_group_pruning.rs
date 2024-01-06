@@ -20,6 +20,7 @@
 //! expected.
 use datafusion::prelude::SessionConfig;
 use datafusion_common::ScalarValue;
+use itertools::Itertools;
 
 use crate::parquet::Unit::RowGroup;
 use crate::parquet::{ContextWithParquet, Scenario};
@@ -40,6 +41,37 @@ async fn test_prune(
     println!("{}", output.description());
     assert_eq!(output.predicate_evaluation_errors(), expected_errors);
     assert_eq!(output.row_groups_pruned(), expected_row_group_pruned);
+    assert_eq!(
+        output.result_rows,
+        expected_results,
+        "{}",
+        output.description()
+    );
+}
+
+async fn test_prune_verbose(
+    case_data_type: Scenario,
+    sql: &str,
+    expected_errors: Option<usize>,
+    expected_row_group_pruned_sbbf: Option<usize>,
+    expected_row_group_pruned_statistics: Option<usize>,
+    expected_results: usize,
+) {
+    let output = ContextWithParquet::new(case_data_type, RowGroup)
+        .await
+        .query(sql)
+        .await;
+
+    println!("{}", output.description());
+    assert_eq!(output.predicate_evaluation_errors(), expected_errors);
+    assert_eq!(
+        output.row_groups_pruned_sbbf(),
+        expected_row_group_pruned_sbbf
+    );
+    assert_eq!(
+        output.row_groups_pruned_statistics(),
+        expected_row_group_pruned_statistics
+    );
     assert_eq!(
         output.result_rows,
         expected_results,
@@ -336,11 +368,33 @@ async fn prune_int32_eq_in_list() {
 #[tokio::test]
 async fn prune_int32_eq_in_list_2() {
     // result of sql "SELECT * FROM t where in (1000)", prune all
-    test_prune(
+    // test whether statistics works
+    test_prune_verbose(
         Scenario::Int32,
         "SELECT * FROM t where i in (1000)",
         Some(0),
+        Some(0),
         Some(4),
+        0,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn prune_int32_eq_large_in_list() {
+    // result of sql "SELECT * FROM t where i in (2050...2582)", prune all
+    // test whether sbbf works
+    test_prune_verbose(
+        Scenario::Int32Range,
+        format!(
+            "SELECT * FROM t where i in ({})",
+            (200050..200082).join(",")
+        )
+        .as_str(),
+        Some(0),
+        Some(1),
+        // we don't support pruning by statistics for in_list with more than 20 elements currently
+        Some(0),
         0,
     )
     .await;

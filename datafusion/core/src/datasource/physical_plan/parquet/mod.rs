@@ -51,6 +51,7 @@ use datafusion_physical_expr::{
 use bytes::Bytes;
 use futures::future::BoxFuture;
 use futures::{StreamExt, TryStreamExt};
+use itertools::Itertools;
 use log::debug;
 use object_store::path::Path;
 use object_store::ObjectStore;
@@ -278,8 +279,18 @@ impl DisplayAs for ParquetExec {
                 let pruning_predicate_string = self
                     .pruning_predicate
                     .as_ref()
-                    .map(|pre| format!(", pruning_predicate={}", pre.predicate_expr()))
-                    .unwrap_or_default();
+                    .map(|pre| {
+                        format!(
+                            ", pruning_predicate={} [{}]",
+                            pre.predicate_expr(),
+                            pre.literal_guarantees()
+                                .iter()
+                                .map(|item| format!("{}", item))
+                                .collect_vec()
+                                .join(", ")
+                        )
+                    })
+                    .unwrap_or("pruning_predicate=None".to_string());
 
                 write!(f, "ParquetExec: ")?;
                 self.base_config.fmt_as(t, f)?;

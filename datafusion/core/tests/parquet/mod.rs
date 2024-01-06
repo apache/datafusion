@@ -63,6 +63,7 @@ enum Scenario {
     Timestamps,
     Dates,
     Int32,
+    Int32Range,
     Float64,
     Decimal,
     DecimalLargePrecision,
@@ -113,14 +114,24 @@ impl TestOutput {
         self.metric_value("predicate_evaluation_errors")
     }
 
-    /// The number of times the pruning predicate evaluation errors
-    fn row_groups_pruned(&self) -> Option<usize> {
+    /// The number of row_groups pruned by bloom filter
+    fn row_groups_pruned_sbbf(&self) -> Option<usize> {
         self.metric_value("row_groups_pruned_sbbf")
-            .zip(self.metric_value("row_groups_pruned_statistics"))
+    }
+
+    /// The number of row_groups pruned by statistics
+    fn row_groups_pruned_statistics(&self) -> Option<usize> {
+        self.metric_value("row_groups_pruned_statistics")
+    }
+
+    /// The number of row_groups pruned
+    fn row_groups_pruned(&self) -> Option<usize> {
+        self.row_groups_pruned_sbbf()
+            .zip(self.row_groups_pruned_statistics())
             .map(|(a, b)| a + b)
     }
 
-    /// The number of times the pruning predicate evaluation errors
+    /// The number of row pages pruned
     fn row_pages_pruned(&self) -> Option<usize> {
         self.metric_value("page_index_rows_filtered")
     }
@@ -147,7 +158,11 @@ impl ContextWithParquet {
         mut config: SessionConfig,
     ) -> Self {
         let file = match unit {
-            Unit::RowGroup => make_test_file_rg(scenario).await,
+            Unit::RowGroup => {
+                let config = config.options_mut();
+                config.execution.parquet.bloom_filter_enabled = true;
+                make_test_file_rg(scenario).await
+            }
             Unit::Page => {
                 let config = config.options_mut();
                 config.execution.parquet.enable_page_index = true;
@@ -362,6 +377,13 @@ fn make_int32_batch(start: i32, end: i32) -> RecordBatch {
     RecordBatch::try_new(schema, vec![array.clone()]).unwrap()
 }
 
+fn make_int32_batch_range(start: i32, end: i32) -> RecordBatch {
+    let schema = Arc::new(Schema::new(vec![Field::new("i", DataType::Int32, true)]));
+    let v = vec![start, end];
+    let array = Arc::new(Int32Array::from(v)) as ArrayRef;
+    RecordBatch::try_new(schema, vec![array.clone()]).unwrap()
+}
+
 /// Return record batch with f64 vector
 ///
 /// Columns are named
@@ -510,6 +532,12 @@ fn create_data_batch(scenario: Scenario) -> Vec<RecordBatch> {
                 make_int32_batch(5, 10),
             ]
         }
+        Scenario::Int32Range => {
+            vec![
+                make_int32_batch_range(0, 10),
+                make_int32_batch_range(200000, 300000),
+            ]
+        }
         Scenario::Float64 => {
             vec![
                 make_f64_batch(vec![-5.0, -4.0, -3.0, -2.0, -1.0]),
@@ -567,6 +595,7 @@ async fn make_test_file_rg(scenario: Scenario) -> NamedTempFile {
 
     let props = WriterProperties::builder()
         .set_max_row_group_size(5)
+        .set_bloom_filter_enabled(true)
         .build();
 
     let batches = create_data_batch(scenario);

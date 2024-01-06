@@ -29,9 +29,9 @@ use crate::physical_plan::metrics::{
 pub struct ParquetFileMetrics {
     /// Number of times the predicate could not be evaluated
     pub predicate_evaluation_errors: Count,
-    /// Number of row groups pruned using by statistics
+    /// Number of row groups pruned by statistics
     pub row_groups_pruned_sbbf: Count,
-    /// Number of row groups pruned using by bloom filters
+    /// Number of row groups pruned by bloom filters
     pub row_groups_pruned_statistics: Count,
     /// Total number of bytes scanned
     pub bytes_scanned: Count,
