@@ -994,7 +994,7 @@ mod tests {
     use datafusion_common::{Result, TableReference};
     use datafusion_expr::{
         binary_expr, col, count, lit, logical_plan::builder::LogicalPlanBuilder, not,
-        table_scan, try_cast, Expr, LogicalPlan, Operator,
+        table_scan, try_cast, Expr, Like, LogicalPlan, Operator,
     };
 
     fn assert_optimized_plan_equal(plan: &LogicalPlan, expected: &str) -> Result<()> {
@@ -1227,6 +1227,22 @@ mod tests {
             .build()?;
 
         let expected = "Projection: TRY_CAST(test.a AS Float64)\
+        \n  TableScan: test projection=[a]";
+        assert_optimized_plan_equal(&plan, expected)
+    }
+
+    #[test]
+    fn test_similar_to() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let expr = Box::new(col("a"));
+        let pattern = Box::new(lit("[0-9]"));
+        let similar_to_expr =
+            Expr::SimilarTo(Like::new(false, expr, pattern, None, false));
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .project(vec![similar_to_expr])?
+            .build()?;
+
+        let expected = "Projection: test.a SIMILAR TO Utf8(\"[0-9]\")\
         \n  TableScan: test projection=[a]";
         assert_optimized_plan_equal(&plan, expected)
     }
