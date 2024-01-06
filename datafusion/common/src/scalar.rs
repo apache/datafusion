@@ -21,6 +21,7 @@ use std::borrow::Borrow;
 use std::cmp::Ordering;
 use std::collections::HashSet;
 use std::convert::{Infallible, TryInto};
+use std::hash::Hash;
 use std::str::FromStr;
 use std::{convert::TryFrom, fmt, iter::repeat, sync::Arc};
 
@@ -565,31 +566,13 @@ impl std::hash::Hash for ScalarValue {
             FixedSizeBinary(_, v) => v.hash(state),
             LargeBinary(v) => v.hash(state),
             List(arr) => {
-                let arrays = vec![arr.to_owned() as ArrayRef];
-                let hashes_buffer = &mut vec![0; arr.len()];
-                let random_state = ahash::RandomState::with_seeds(0, 0, 0, 0);
-                let hashes =
-                    create_hashes(&arrays, &random_state, hashes_buffer).unwrap();
-                // Hash back to std::hash::Hasher
-                hashes.hash(state);
+                hash_list(arr.to_owned() as ArrayRef, state);
             }
             LargeList(arr) => {
-                let arrays = vec![arr.to_owned() as ArrayRef];
-                let hashes_buffer = &mut vec![0; arr.len()];
-                let random_state = ahash::RandomState::with_seeds(0, 0, 0, 0);
-                let hashes =
-                    create_hashes(&arrays, &random_state, hashes_buffer).unwrap();
-                // Hash back to std::hash::Hasher
-                hashes.hash(state);
+                hash_list(arr.to_owned() as ArrayRef, state);
             }
             FixedSizeList(arr) => {
-                let arrays = vec![arr.to_owned() as ArrayRef];
-                let hashes_buffer = &mut vec![0; arr.len()];
-                let random_state = ahash::RandomState::with_seeds(0, 0, 0, 0);
-                let hashes =
-                    create_hashes(&arrays, &random_state, hashes_buffer).unwrap();
-                // Hash back to std::hash::Hasher
-                hashes.hash(state);
+                hash_list(arr.to_owned() as ArrayRef, state);
             }
             Date32(v) => v.hash(state),
             Date64(v) => v.hash(state),
@@ -620,6 +603,15 @@ impl std::hash::Hash for ScalarValue {
             Null => 1.hash(state),
         }
     }
+}
+
+fn hash_list<H: std::hash::Hasher>(arr: ArrayRef, state: &mut H) {
+    let arrays = vec![arr.to_owned()];
+    let hashes_buffer = &mut vec![0; arr.len()];
+    let random_state = ahash::RandomState::with_seeds(0, 0, 0, 0);
+    let hashes = create_hashes(&arrays, &random_state, hashes_buffer).unwrap();
+    // Hash back to std::hash::Hasher
+    hashes.hash(state);
 }
 
 /// Return a reference to the values array and the index into it for a
@@ -1943,25 +1935,13 @@ impl ScalarValue {
                 ),
             },
             ScalarValue::List(arr) => {
-                let arrays = std::iter::repeat(arr.as_ref() as &dyn Array)
-                    .take(size)
-                    .collect::<Vec<_>>();
-                arrow::compute::concat(arrays.as_slice())
-                    .map_err(DataFusionError::ArrowError)?
+                Self::list_to_array_of_size(arr.as_ref() as &dyn Array, size)?
             }
             ScalarValue::LargeList(arr) => {
-                let arrays = std::iter::repeat(arr.as_ref() as &dyn Array)
-                    .take(size)
-                    .collect::<Vec<_>>();
-                arrow::compute::concat(arrays.as_slice())
-                    .map_err(DataFusionError::ArrowError)?
+                Self::list_to_array_of_size(arr.as_ref() as &dyn Array, size)?
             }
             ScalarValue::FixedSizeList(arr) => {
-                let arrays = std::iter::repeat(arr.as_ref() as &dyn Array)
-                    .take(size)
-                    .collect::<Vec<_>>();
-                arrow::compute::concat(arrays.as_slice())
-                    .map_err(DataFusionError::ArrowError)?
+                Self::list_to_array_of_size(arr.as_ref() as &dyn Array, size)?
             }
             ScalarValue::Date32(e) => {
                 build_array_from_option!(Date32, Date32Array, e, size)
@@ -2116,6 +2096,11 @@ impl ScalarValue {
             }
             _ => _internal_err!("Unsupported decimal type"),
         }
+    }
+
+    fn list_to_array_of_size(arr: &dyn Array, size: usize) -> Result<ArrayRef> {
+        let arrays = std::iter::repeat(arr).take(size).collect::<Vec<_>>();
+        arrow::compute::concat(arrays.as_slice()).map_err(DataFusionError::ArrowError)
     }
 
     /// Retrieve ScalarValue for each row in `array`
@@ -3037,7 +3022,7 @@ impl fmt::Display for ScalarValue {
                 write!(f, "{value_formatter}")?
             }
             ScalarValue::LargeList(arr) => {
-                // ScalarValue List should always have a single element
+                // ScalarValue LargeList should always have a single element
                 assert_eq!(arr.len(), 1);
                 let options = FormatOptions::default().with_display_error(true);
                 let formatter =
@@ -3047,7 +3032,7 @@ impl fmt::Display for ScalarValue {
                 write!(f, "{value_formatter}")?
             }
             ScalarValue::FixedSizeList(arr) => {
-                // ScalarValue List should always have a single element
+                // ScalarValue FixedSizeList should always have a single element
                 assert_eq!(arr.len(), 1);
                 let options = FormatOptions::default().with_display_error(true);
                 let formatter =
