@@ -2456,16 +2456,13 @@ impl ScalarValue {
                 eq_array_primitive!(array, index, LargeBinaryArray, val)?
             }
             ScalarValue::List(arr) => {
-                let right = array.slice(index, 1);
-                arr.as_ref() as &dyn Array == &right
+                Self::eq_array_list(&(arr.to_owned() as ArrayRef), array, index)
             }
             ScalarValue::LargeList(arr) => {
-                let right = array.slice(index, 1);
-                arr.as_ref() as &dyn Array == &right
+                Self::eq_array_list(&(arr.to_owned() as ArrayRef), array, index)
             }
             ScalarValue::FixedSizeList(arr) => {
-                let right = array.slice(index, 1);
-                arr.as_ref() as &dyn Array == &right
+                Self::eq_array_list(&(arr.to_owned() as ArrayRef), array, index)
             }
             ScalarValue::Date32(val) => {
                 eq_array_primitive!(array, index, Date32Array, val)?
@@ -2541,6 +2538,11 @@ impl ScalarValue {
             }
             ScalarValue::Null => array.is_null(index),
         })
+    }
+
+    fn eq_array_list(arr1: &ArrayRef, arr2: &ArrayRef, index: usize) -> bool {
+        let right = arr1.slice(index, 1);
+        arr2.as_ref() as &dyn Array == &right
     }
 
     /// Estimate size if bytes including `Self`. For values with internal containers such as `String`
