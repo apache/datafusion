@@ -49,6 +49,7 @@ async fn test_prune(
     );
 }
 
+/// check row group pruning by bloom filter and statistics independently
 async fn test_prune_verbose(
     case_data_type: Scenario,
     sql: &str,
