@@ -24,7 +24,66 @@ use std::{
 
 use datafusion_common::{config::ConfigOptions, Result, ScalarValue};
 
-/// Configuration options for Execution context
+/// Configuration options for [`SessionContext`].
+///
+/// Can be passed to `SessionContext::with_config` to customize the configuration of DataFusion.
+///
+/// Options can be set using namespaces keys with `.` as the separator, where the
+/// namespace determines which configuration struct the value to routed to. All
+/// built-in options are under the `datafusion` namespace.
+///
+/// For example, the key `datafusion.execution.batch_size` will set [ExecutionOptions::batch_size][datafusion_common::config::ExecutionOptions::batch_size],
+/// because [ConfigOptions::execution] is [ExecutionOptions][datafusion_common::config::ExecutionOptions]. Similarly, the key
+/// `datafusion.execution.parquet.pushdown_filters` will set [ParquetOptions::pushdown_filters][datafusion_common::config::ParquetOptions::pushdown_filters],
+/// since [ExecutionOptions::parquet][datafusion_common::config::ExecutionOptions::parquet] is [ParquetOptions][datafusion_common::config::ParquetOptions].
+///
+/// Some options have convenience methods. For example [SessionConfig::with_batch_size] is
+/// shorthand for setting `datafusion.execution.batch_size`.
+///
+/// ```
+/// use datafusion_execution::config::SessionConfig;
+/// use datafusion_common::ScalarValue;
+///
+/// let config = SessionConfig::new()
+///    .set("datafusion.execution.batch_size", ScalarValue::UInt64(Some(1234)))
+///    .set_bool("datafusion.execution.parquet.pushdown_filters", true);
+///
+/// assert_eq!(config.batch_size(), 1234);
+/// assert_eq!(config.options().execution.batch_size, 1234);
+/// assert_eq!(config.options().execution.parquet.pushdown_filters, true);
+/// ```
+///
+/// You can also directly mutate the options via [SessionConfig::options_mut].
+/// So the following is equivalent to the above:
+///
+/// ```
+/// # use datafusion_execution::config::SessionConfig;
+/// # use datafusion_common::ScalarValue;
+/// #
+/// let mut config = SessionConfig::new();
+/// config.options_mut().execution.batch_size = 1234;
+/// config.options_mut().execution.parquet.pushdown_filters = true;
+/// #
+/// # assert_eq!(config.batch_size(), 1234);
+/// # assert_eq!(config.options().execution.batch_size, 1234);
+/// # assert_eq!(config.options().execution.parquet.pushdown_filters, true);
+/// ```
+///
+/// ## Built-in options
+///
+/// | Namespace | Config struct |
+/// | --------- | ------------- |
+/// | `datafusion.catalog` | [CatalogOptions][datafusion_common::config::CatalogOptions] |
+/// | `datafusion.execution` | [ExecutionOptions][datafusion_common::config::ExecutionOptions] |
+/// | `datafusion.optimizer` | [OptimizerOptions][datafusion_common::config::OptimizerOptions] |
+/// | `datafusion.sql_parser` | [SqlParserOptions][datafusion_common::config::SqlParserOptions] |
+/// | `datafusion.explain` | [ExplainOptions][datafusion_common::config::ExplainOptions] |
+///
+/// ## Custom configuration
+///
+/// Configuration options can be extended. See [SessionConfig::with_extension] for details.
+///
+/// [`SessionContext`]: https://docs.rs/datafusion/latest/datafusion/execution/context/struct.SessionContext.html
 #[derive(Clone, Debug)]
 pub struct SessionConfig {
     /// Configuration options
@@ -60,6 +119,35 @@ impl SessionConfig {
     /// Create new ConfigOptions struct, taking values from a string hash map.
     pub fn from_string_hash_map(settings: HashMap<String, String>) -> Result<Self> {
         Ok(ConfigOptions::from_string_hash_map(settings)?.into())
+    }
+
+    /// Return a handle to the configuration options.
+    ///
+    /// Can be used to read the current configuration.
+    ///
+    /// ```
+    /// use datafusion_execution::config::SessionConfig;
+    ///
+    /// let config = SessionConfig::new();
+    /// assert!(config.options().execution.batch_size > 0);
+    /// ```
+    pub fn options(&self) -> &ConfigOptions {
+        &self.options
+    }
+
+    /// Return a mutable handle to the configuration options.
+    ///
+    /// Can be used to set configuration options.
+    ///
+    /// ```
+    /// use datafusion_execution::config::SessionConfig;
+    ///
+    /// let mut config = SessionConfig::new();
+    /// config.options_mut().execution.batch_size = 1024;
+    /// assert_eq!(config.options().execution.batch_size, 1024);
+    /// ```
+    pub fn options_mut(&mut self) -> &mut ConfigOptions {
+        &mut self.options
     }
 
     /// Set a configuration option
@@ -343,16 +431,6 @@ impl SessionConfig {
     /// Return a mutable handle to the configuration options.
     #[deprecated(since = "21.0.0", note = "use options_mut() instead")]
     pub fn config_options_mut(&mut self) -> &mut ConfigOptions {
-        &mut self.options
-    }
-
-    /// Return a handle to the configuration options.
-    pub fn options(&self) -> &ConfigOptions {
-        &self.options
-    }
-
-    /// Return a mutable handle to the configuration options.
-    pub fn options_mut(&mut self) -> &mut ConfigOptions {
         &mut self.options
     }
 
