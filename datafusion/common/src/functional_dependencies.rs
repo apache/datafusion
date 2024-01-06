@@ -30,7 +30,7 @@ use crate::{
     TableReference,
 };
 
-use sqlparser::ast::{Ident, TableConstraint};
+use sqlparser::ast::TableConstraint;
 
 /// This object defines a constraint on a table.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -41,11 +41,11 @@ pub enum Constraint {
     /// Columns with the given indices form a composite unique key:
     Unique(Vec<usize>),
     ForeignKey {
-        /// Colummn indices of the referencing table (the table containing the foreign key)
+        /// Column indices of the table containing the foreign key constraint
         indices: Vec<usize>,
-        /// Colummn indices of the referenced table (the table referenced by the foreign key)
-        referenced_indices: Vec<usize>,
-        /// The table that the foreign key points to
+        /// Column names of the foreign table
+        referred_columns: Vec<String>,
+        /// The foreign table
         referenced_table: OwnedTableReference,
     },
 }
@@ -116,27 +116,28 @@ impl Constraints {
                     on_update: _,
                     referred_columns,
                 } => {
-                    let get_indices = |c: &[Ident]| {
-                        c.iter()
-                            .map(|pk| {
-                                let idx = df_schema
-                                    .fields()
-                                    .iter()
-                                    .position(|item| {
-                                        item.qualified_name() == pk.value.clone()
-                                    })
-                                    .ok_or_else(|| {
-                                        DataFusionError::Execution(
-                                            "Column doesn't exist".to_string(),
-                                        )
-                                    })?;
-                                Ok(idx)
-                            })
-                            .collect::<Result<Vec<_>>>()
-                    };
+                    let column_indices = columns
+                        .iter()
+                        .map(|pk| {
+                            let idx = df_schema
+                                .fields()
+                                .iter()
+                                .position(|item| item.name() == &pk.value)
+                                .ok_or_else(|| {
+                                    DataFusionError::Plan(
+                                        "Column doesn't exist".to_string(),
+                                    )
+                                })?;
+                            Ok(idx)
+                        })
+                        .collect::<Result<Vec<_>>>()?;
+                    let referred_columns = referred_columns
+                        .iter()
+                        .map(|pk| pk.value.clone())
+                        .collect::<Vec<_>>();
                     Ok(Constraint::ForeignKey {
-                        indices: get_indices(columns)?,
-                        referenced_indices: get_indices(referred_columns)?,
+                        indices: column_indices,
+                        referred_columns,
                         referenced_table: TableReference::from(foreign_table.to_string()),
                     })
                 }

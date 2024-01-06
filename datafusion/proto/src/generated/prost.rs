@@ -308,8 +308,8 @@ pub struct UniqueConstraint {
 pub struct ForeignKeyConstraint {
     #[prost(uint64, repeated, tag = "1")]
     pub indices: ::prost::alloc::vec::Vec<u64>,
-    #[prost(uint64, repeated, tag = "2")]
-    pub referenced_indices: ::prost::alloc::vec::Vec<u64>,
+    #[prost(string, repeated, tag = "2")]
+    pub referred_columns: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
     #[prost(string, tag = "3")]
     pub referenced_table: ::prost::alloc::string::String,
 }

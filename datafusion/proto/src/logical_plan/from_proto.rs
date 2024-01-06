@@ -972,11 +972,7 @@ impl From<protobuf::Constraint> for Constraint {
             protobuf::constraint::ConstraintMode::ForeignKey(elem) => {
                 Constraint::ForeignKey {
                     indices: elem.indices.into_iter().map(|item| item as usize).collect(),
-                    referenced_indices: elem
-                        .referenced_indices
-                        .into_iter()
-                        .map(|item| item as usize)
-                        .collect(),
+                    referred_columns: elem.referred_columns,
                     referenced_table: elem.referenced_table.into(),
                 }
             }

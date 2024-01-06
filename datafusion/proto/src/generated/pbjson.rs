@@ -8164,7 +8164,7 @@ impl serde::Serialize for ForeignKeyConstraint {
         if !self.indices.is_empty() {
             len += 1;
         }
-        if !self.referenced_indices.is_empty() {
+        if !self.referred_columns.is_empty() {
             len += 1;
         }
         if !self.referenced_table.is_empty() {
@@ -8174,8 +8174,8 @@ impl serde::Serialize for ForeignKeyConstraint {
         if !self.indices.is_empty() {
             struct_ser.serialize_field("indices", &self.indices.iter().map(ToString::to_string).collect::<Vec<_>>())?;
         }
-        if !self.referenced_indices.is_empty() {
-            struct_ser.serialize_field("referencedIndices", &self.referenced_indices.iter().map(ToString::to_string).collect::<Vec<_>>())?;
+        if !self.referred_columns.is_empty() {
+            struct_ser.serialize_field("referredColumns", &self.referred_columns)?;
         }
         if !self.referenced_table.is_empty() {
             struct_ser.serialize_field("referencedTable", &self.referenced_table)?;
@@ -8191,8 +8191,8 @@ impl<'de> serde::Deserialize<'de> for ForeignKeyConstraint {
     {
         const FIELDS: &[&str] = &[
             "indices",
-            "referenced_indices",
-            "referencedIndices",
+            "referred_columns",
+            "referredColumns",
             "referenced_table",
             "referencedTable",
         ];
@@ -8200,7 +8200,7 @@ impl<'de> serde::Deserialize<'de> for ForeignKeyConstraint {
         #[allow(clippy::enum_variant_names)]
         enum GeneratedField {
             Indices,
-            ReferencedIndices,
+            ReferredColumns,
             ReferencedTable,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
@@ -8224,7 +8224,7 @@ impl<'de> serde::Deserialize<'de> for ForeignKeyConstraint {
                     {
                         match value {
                             "indices" => Ok(GeneratedField::Indices),
-                            "referencedIndices" | "referenced_indices" => Ok(GeneratedField::ReferencedIndices),
+                            "referredColumns" | "referred_columns" => Ok(GeneratedField::ReferredColumns),
                             "referencedTable" | "referenced_table" => Ok(GeneratedField::ReferencedTable),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
@@ -8246,7 +8246,7 @@ impl<'de> serde::Deserialize<'de> for ForeignKeyConstraint {
                     V: serde::de::MapAccess<'de>,
             {
                 let mut indices__ = None;
-                let mut referenced_indices__ = None;
+                let mut referred_columns__ = None;
                 let mut referenced_table__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
@@ -8259,14 +8259,11 @@ impl<'de> serde::Deserialize<'de> for ForeignKeyConstraint {
                                     .into_iter().map(|x| x.0).collect())
                             ;
                         }
-                        GeneratedField::ReferencedIndices => {
-                            if referenced_indices__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("referencedIndices"));
+                        GeneratedField::ReferredColumns => {
+                            if referred_columns__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("referredColumns"));
                             }
-                            referenced_indices__ = 
-                                Some(map_.next_value::<Vec<::pbjson::private::NumberDeserialize<_>>>()?
-                                    .into_iter().map(|x| x.0).collect())
-                            ;
+                            referred_columns__ = Some(map_.next_value()?);
                         }
                         GeneratedField::ReferencedTable => {
                             if referenced_table__.is_some() {
@@ -8278,7 +8275,7 @@ impl<'de> serde::Deserialize<'de> for ForeignKeyConstraint {
                 }
                 Ok(ForeignKeyConstraint {
                     indices: indices__.unwrap_or_default(),
-                    referenced_indices: referenced_indices__.unwrap_or_default(),
+                    referred_columns: referred_columns__.unwrap_or_default(),
                     referenced_table: referenced_table__.unwrap_or_default(),
                 })
             }

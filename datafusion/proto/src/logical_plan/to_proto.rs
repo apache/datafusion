@@ -1703,15 +1703,12 @@ impl From<Constraint> for protobuf::Constraint {
             }
             Constraint::ForeignKey {
                 indices,
-                referenced_indices,
+                referred_columns,
                 referenced_table,
             } => protobuf::constraint::ConstraintMode::ForeignKey(
                 protobuf::ForeignKeyConstraint {
                     indices: indices.into_iter().map(|item| item as u64).collect(),
-                    referenced_indices: referenced_indices
-                        .into_iter()
-                        .map(|item| item as u64)
-                        .collect(),
+                    referred_columns,
                     referenced_table: referenced_table.to_string(),
                 },
             ),
