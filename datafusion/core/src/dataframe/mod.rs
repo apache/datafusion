@@ -1186,7 +1186,7 @@ impl DataFrame {
         let field_to_rename = match self.plan.schema().field_from_column(&old_column) {
             Ok(field) => field,
             // no-op if field not found
-            Err(DataFusionError::SchemaError(SchemaError::FieldNotFound { .. })) => {
+            Err(DataFusionError::SchemaError(SchemaError::FieldNotFound { .. }, _)) => {
                 return Ok(self)
             }
             Err(err) => return Err(err),

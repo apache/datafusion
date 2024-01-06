@@ -82,7 +82,9 @@ pub enum DataFusionError {
     Configuration(String),
     /// This error happens with schema-related errors, such as schema inference not possible
     /// and non-unique column names.
-    SchemaError(SchemaError),
+    /// 2nd argument is for optional backtrace    
+    /// Boxing the optional backtrace to prevent <https://rust-lang.github.io/rust-clippy/master/index.html#/result_large_err>
+    SchemaError(SchemaError, Box<Option<String>>),
     /// Error returned during execution of the query.
     /// Examples include files not found, errors in parsing certain types.
     Execution(String),
@@ -123,34 +125,6 @@ pub enum SchemaError {
         field: Box<Column>,
         valid_fields: Vec<Column>,
     },
-}
-
-/// Create a "field not found" DataFusion::SchemaError
-pub fn field_not_found<R: Into<OwnedTableReference>>(
-    qualifier: Option<R>,
-    name: &str,
-    schema: &DFSchema,
-) -> DataFusionError {
-    DataFusionError::SchemaError(SchemaError::FieldNotFound {
-        field: Box::new(Column::new(qualifier, name)),
-        valid_fields: schema
-            .fields()
-            .iter()
-            .map(|f| f.qualified_column())
-            .collect(),
-    })
-}
-
-/// Convenience wrapper over [`field_not_found`] for when there is no qualifier
-pub fn unqualified_field_not_found(name: &str, schema: &DFSchema) -> DataFusionError {
-    DataFusionError::SchemaError(SchemaError::FieldNotFound {
-        field: Box::new(Column::new_unqualified(name)),
-        valid_fields: schema
-            .fields()
-            .iter()
-            .map(|f| f.qualified_column())
-            .collect(),
-    })
 }
 
 impl Display for SchemaError {
@@ -298,7 +272,7 @@ impl Display for DataFusionError {
                 write!(f, "IO error: {desc}")
             }
             DataFusionError::SQL(ref desc, ref backtrace) => {
-                let backtrace = backtrace.clone().unwrap_or("".to_owned());
+                let backtrace: String = backtrace.clone().unwrap_or("".to_owned());
                 write!(f, "SQL error: {desc:?}{backtrace}")
             }
             DataFusionError::Configuration(ref desc) => {
@@ -314,8 +288,10 @@ impl Display for DataFusionError {
             DataFusionError::Plan(ref desc) => {
                 write!(f, "Error during planning: {desc}")
             }
-            DataFusionError::SchemaError(ref desc) => {
-                write!(f, "Schema error: {desc}")
+            DataFusionError::SchemaError(ref desc, ref backtrace) => {
+                let backtrace: &str =
+                    &backtrace.as_ref().clone().unwrap_or("".to_owned());
+                write!(f, "Schema error: {desc}{backtrace}")
             }
             DataFusionError::Execution(ref desc) => {
                 write!(f, "Execution error: {desc}")
@@ -356,7 +332,7 @@ impl Error for DataFusionError {
             DataFusionError::Internal(_) => None,
             DataFusionError::Configuration(_) => None,
             DataFusionError::Plan(_) => None,
-            DataFusionError::SchemaError(e) => Some(e),
+            DataFusionError::SchemaError(e, _) => Some(e),
             DataFusionError::Execution(_) => None,
             DataFusionError::ResourcesExhausted(_) => None,
             DataFusionError::External(e) => Some(e.as_ref()),
@@ -556,12 +532,63 @@ macro_rules! arrow_err {
     };
 }
 
+// Exposes a macro to create `DataFusionError::SchemaError` with optional backtrace
+#[macro_export]
+macro_rules! schema_datafusion_err {
+    ($ERR:expr) => {
+        DataFusionError::SchemaError(
+            $ERR,
+            Box::new(Some(DataFusionError::get_back_trace())),
+        )
+    };
+}
+
+// Exposes a macro to create `Err(DataFusionError::SchemaError)` with optional backtrace
+#[macro_export]
+macro_rules! schema_err {
+    ($ERR:expr) => {
+        Err(DataFusionError::SchemaError(
+            $ERR,
+            Box::new(Some(DataFusionError::get_back_trace())),
+        ))
+    };
+}
+
 // To avoid compiler error when using macro in the same crate:
 // macros from the current crate cannot be referred to by absolute paths
 pub use internal_datafusion_err as _internal_datafusion_err;
 pub use internal_err as _internal_err;
 pub use not_impl_err as _not_impl_err;
 pub use plan_err as _plan_err;
+pub use schema_err as _schema_err;
+
+/// Create a "field not found" DataFusion::SchemaError
+pub fn field_not_found<R: Into<OwnedTableReference>>(
+    qualifier: Option<R>,
+    name: &str,
+    schema: &DFSchema,
+) -> DataFusionError {
+    schema_datafusion_err!(SchemaError::FieldNotFound {
+        field: Box::new(Column::new(qualifier, name)),
+        valid_fields: schema
+            .fields()
+            .iter()
+            .map(|f| f.qualified_column())
+            .collect(),
+    })
+}
+
+/// Convenience wrapper over [`field_not_found`] for when there is no qualifier
+pub fn unqualified_field_not_found(name: &str, schema: &DFSchema) -> DataFusionError {
+    schema_datafusion_err!(SchemaError::FieldNotFound {
+        field: Box::new(Column::new_unqualified(name)),
+        valid_fields: schema
+            .fields()
+            .iter()
+            .map(|f| f.qualified_column())
+            .collect(),
+    })
+}
 
 #[cfg(test)]
 mod test {
