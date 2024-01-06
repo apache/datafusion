@@ -1,0 +1,1249 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# test_boolean_expressions
+query BBBB
+SELECT true, false, false = false, true = false
+----
+true false true false
+
+# test_mathematical_expressions_with_null
+query RRRRRRRRRRRRRRRRRR?RRRRRRRIRRRRRRBB
+SELECT
+    sqrt(NULL),
+    cbrt(NULL),
+    sin(NULL),
+    cos(NULL),
+    tan(NULL),
+    asin(NULL),
+    acos(NULL),
+    atan(NULL),
+    sinh(NULL),
+    cosh(NULL),
+    tanh(NULL),
+    asinh(NULL),
+    acosh(NULL),
+    atanh(NULL),
+    floor(NULL),
+    ceil(NULL),
+    round(NULL),
+    trunc(NULL),
+    abs(NULL),
+    signum(NULL),
+    exp(NULL),
+    ln(NULL),
+    log2(NULL),
+    log10(NULL),
+    power(NULL, 2),
+    power(NULL, NULL),
+    power(2, NULL),
+    atan2(NULL, NULL),
+    atan2(1, NULL),
+    atan2(NULL, 1),
+    nanvl(NULL, NULL),
+    nanvl(1, NULL),
+    nanvl(NULL, 1),
+    isnan(NULL),
+    iszero(NULL)
+----
+NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL
+
+# test_array_cast_invalid_timezone_will_panic
+statement error Parser error: Invalid timezone "Foo": 'Foo' is not a valid timezone 
+SELECT arrow_cast('2021-01-02T03:04:00', 'Timestamp(Nanosecond, Some("Foo"))')
+
+# test_array_index
+query III??IIIIII
+SELECT
+    ([5,4,3,2,1])[1],
+    ([5,4,3,2,1])[2],
+    ([5,4,3,2,1])[5],
+    ([[1, 2], [2, 3], [3,4]])[1],
+    ([[1, 2], [2, 3], [3,4]])[3],
+    ([[1, 2], [2, 3], [3,4]])[1][1],
+    ([[1, 2], [2, 3], [3,4]])[2][2],
+    ([[1, 2], [2, 3], [3,4]])[3][2],
+    -- out of bounds
+    ([5,4,3,2,1])[0],
+    ([5,4,3,2,1])[6],
+    -- ([5,4,3,2,1])[-1], -- TODO: wrong answer
+    -- ([5,4,3,2,1])[null], -- TODO: not supported
+    ([5,4,3,2,1])[100]
+----
+5 4 1 [1, 2] [3, 4] 1 3 4 NULL NULL NULL
+
+# test_array_literals
+query ?????
+SELECT
+    [1,2,3,4,5],
+    [true, false],
+    ['str1', 'str2'],
+    [[1,2], [3,4]],
+    []
+----
+[1, 2, 3, 4, 5] [true, false] [str1, str2] [[1, 2], [3, 4]] []
+
+# test_struct_literals
+query ??????
+SELECT
+    STRUCT(1,2,3,4,5),
+    STRUCT(Null),
+    STRUCT(2),
+    STRUCT('1',Null),
+    STRUCT(true, false),
+    STRUCT('str1', 'str2')
+----
+{c0: 1, c1: 2, c2: 3, c3: 4, c4: 5} {c0: } {c0: 2} {c0: 1, c1: } {c0: true, c1: false} {c0: str1, c1: str2}
+
+# test binary_bitwise_shift
+query IIII
+SELECT
+    2 << 10,
+    2048 >> 10,
+    2048 << NULL,
+    2048 >> NULL
+----
+2048 2 NULL NULL
+
+query ?
+SELECT interval '1'
+----
+0 years 0 mons 0 days 0 hours 0 mins 1.000000000 secs
+
+query ?
+SELECT interval '1 second'
+----
+0 years 0 mons 0 days 0 hours 0 mins 1.000000000 secs
+
+query ?
+SELECT interval '500 milliseconds'
+----
+0 years 0 mons 0 days 0 hours 0 mins 0.500000000 secs
+
+query ?
+SELECT interval '5 second'
+----
+0 years 0 mons 0 days 0 hours 0 mins 5.000000000 secs
+
+query ?
+SELECT interval '0.5 minute'
+----
+0 years 0 mons 0 days 0 hours 0 mins 30.000000000 secs
+
+query ?
+SELECT interval '.5 minute'
+----
+0 years 0 mons 0 days 0 hours 0 mins 30.000000000 secs
+
+query ?
+SELECT interval '5 minute'
+----
+0 years 0 mons 0 days 0 hours 5 mins 0.000000000 secs
+
+query ?
+SELECT interval '5 minute 1 second'
+----
+0 years 0 mons 0 days 0 hours 5 mins 1.000000000 secs
+
+query ?
+SELECT interval '1 hour'
+----
+0 years 0 mons 0 days 1 hours 0 mins 0.000000000 secs
+
+query ?
+SELECT interval '5 hour'
+----
+0 years 0 mons 0 days 5 hours 0 mins 0.000000000 secs
+
+query ?
+SELECT interval '1 day'
+----
+0 years 0 mons 1 days 0 hours 0 mins 0.000000000 secs
+
+query ?
+SELECT interval '1 week'
+----
+0 years 0 mons 7 days 0 hours 0 mins 0.000000000 secs
+
+query ?
+SELECT interval '2 weeks'
+----
+0 years 0 mons 14 days 0 hours 0 mins 0.000000000 secs
+
+query ?
+SELECT interval '1 day 1'
+----
+0 years 0 mons 1 days 0 hours 0 mins 1.000000000 secs
+
+query ?
+SELECT interval '0.5'
+----
+0 years 0 mons 0 days 0 hours 0 mins 0.500000000 secs
+
+query ?
+SELECT interval '0.5 day 1'
+----
+0 years 0 mons 0 days 12 hours 0 mins 1.000000000 secs
+
+query ?
+SELECT interval '0.49 day'
+----
+0 years 0 mons 0 days 11 hours 45 mins 36.000000000 secs
+
+query ?
+SELECT interval '0.499 day'
+----
+0 years 0 mons 0 days 11 hours 58 mins 33.600000000 secs
+
+query ?
+SELECT interval '0.4999 day'
+----
+0 years 0 mons 0 days 11 hours 59 mins 51.360000000 secs
+
+query ?
+SELECT interval '0.49999 day'
+----
+0 years 0 mons 0 days 11 hours 59 mins 59.136000000 secs
+
+query ?
+SELECT interval '0.49999999999 day'
+----
+0 years 0 mons 0 days 11 hours 59 mins 59.999999136 secs
+
+query ?
+SELECT interval '5 day'
+----
+0 years 0 mons 5 days 0 hours 0 mins 0.000000000 secs
+
+query ?
+SELECT interval '5 day' hour
+----
+0 years 0 mons 5 days 0 hours 0 mins 0.000000000 secs
+
+query ?
+SELECT interval '5 day 4 hours 3 minutes 2 seconds 100 milliseconds'
+----
+0 years 0 mons 5 days 4 hours 3 mins 2.100000000 secs
+
+query ?
+SELECT interval '0.5 month'
+----
+0 years 0 mons 15 days 0 hours 0 mins 0.000000000 secs
+
+query ?
+SELECT interval '0.5' month
+----
+0 years 0 mons 15 days 0 hours 0 mins 0.000000000 secs
+
+query ?
+SELECT interval '1 month'
+----
+0 years 1 mons 0 days 0 hours 0 mins 0.000000000 secs
+
+query ?
+SELECT interval '1' MONTH
+----
+0 years 1 mons 0 days 0 hours 0 mins 0.000000000 secs
+
+query ?
+SELECT interval '5 month'
+----
+0 years 5 mons 0 days 0 hours 0 mins 0.000000000 secs
+
+query ?
+SELECT interval '13 month'
+----
+0 years 13 mons 0 days 0 hours 0 mins 0.000000000 secs
+
+query ?
+SELECT interval '0.5 year'
+----
+0 years 6 mons 0 days 0 hours 0 mins 0.000000000 secs
+
+query ?
+SELECT interval '1 year'
+----
+0 years 12 mons 0 days 0 hours 0 mins 0.000000000 secs
+
+query ?
+SELECT interval '1 decade'
+----
+0 years 120 mons 0 days 0 hours 0 mins 0.000000000 secs
+
+query ?
+SELECT interval '2 decades'
+----
+0 years 240 mons 0 days 0 hours 0 mins 0.000000000 secs
+
+query ?
+SELECT interval '1 century'
+----
+0 years 1200 mons 0 days 0 hours 0 mins 0.000000000 secs
+
+query ?
+SELECT interval '2 year'
+----
+0 years 24 mons 0 days 0 hours 0 mins 0.000000000 secs
+
+query ?
+SELECT interval '1 year 1 day'
+----
+0 years 12 mons 1 days 0 hours 0 mins 0.000000000 secs
+
+query ?
+SELECT interval '1 year 1 day 1 hour'
+----
+0 years 12 mons 1 days 1 hours 0 mins 0.000000000 secs
+
+query ?
+SELECT interval '1 year 1 day 1 hour 1 minute'
+----
+0 years 12 mons 1 days 1 hours 1 mins 0.000000000 secs
+
+query ?
+SELECT interval '1 year 1 day 1 hour 1 minute 1 second'
+----
+0 years 12 mons 1 days 1 hours 1 mins 1.000000000 secs
+
+query I
+SELECT ascii('')
+----
+0
+
+query I
+SELECT ascii('x')
+----
+120
+
+query I
+SELECT ascii(NULL)
+----
+NULL
+
+query I
+SELECT bit_length('')
+----
+0
+
+query I
+SELECT bit_length('chars')
+----
+40
+
+query I
+SELECT bit_length('josé')
+----
+40
+
+query ?
+SELECT bit_length(NULL)
+----
+NULL
+
+query T
+SELECT btrim(' xyxtrimyyx ', NULL)
+----
+NULL
+
+query T
+SELECT btrim(' xyxtrimyyx ')
+----
+xyxtrimyyx
+
+query T
+SELECT btrim('\n xyxtrimyyx \n')
+----
+\n xyxtrimyyx \n
+
+query T
+SELECT btrim('xyxtrimyyx', 'xyz')
+----
+trim
+
+query T
+SELECT btrim('\nxyxtrimyyx\n', 'xyz\n')
+----
+trim
+
+query ?
+SELECT btrim(NULL, 'xyz')
+----
+NULL
+
+query T
+SELECT chr(CAST(120 AS int))
+----
+x
+
+query T
+SELECT chr(CAST(128175 AS int))
+----
+💯
+
+query T
+SELECT chr(CAST(NULL AS int))
+----
+NULL
+
+query T
+SELECT concat('a','b','c')
+----
+abc
+
+query T
+SELECT concat('abcde', 2, NULL, 22)
+----
+abcde222
+
+query T
+SELECT concat(NULL)
+----
+(empty)
+
+query T
+SELECT concat_ws(',', 'abcde', 2, NULL, 22)
+----
+abcde,2,22
+
+query T
+SELECT concat_ws('|','a','b','c')
+----
+a|b|c
+
+query T
+SELECT concat_ws('|',NULL)
+----
+(empty)
+
+query T
+SELECT concat_ws(NULL,'a',NULL,'b','c')
+----
+NULL
+
+query T
+SELECT concat_ws('|','a',NULL)
+----
+a
+
+query T
+SELECT concat_ws('|','a',NULL,NULL)
+----
+a
+
+query T
+SELECT initcap('')
+----
+(empty)
+
+query T
+SELECT initcap('hi THOMAS')
+----
+Hi Thomas
+
+query ?
+SELECT initcap(NULL)
+----
+NULL
+
+query T
+SELECT lower('')
+----
+(empty)
+
+query T
+SELECT lower('TOM')
+----
+tom
+
+query ?
+SELECT lower(NULL)
+----
+NULL
+
+query T
+SELECT ltrim(' zzzytest ', NULL)
+----
+NULL
+
+query T
+SELECT ltrim(' zzzytest ')
+----
+zzzytest 
+
+query T
+SELECT ltrim('zzzytest', 'xyz')
+----
+test
+
+query ?
+SELECT ltrim(NULL, 'xyz')
+----
+NULL
+
+query I
+SELECT octet_length('')
+----
+0
+
+query I
+SELECT octet_length('chars')
+----
+5
+
+query I
+SELECT octet_length('josé')
+----
+5
+
+query ?
+SELECT octet_length(NULL)
+----
+NULL
+
+query T
+SELECT repeat('Pg', 4)
+----
+PgPgPgPg
+
+query T
+SELECT repeat('Pg', CAST(NULL AS INT))
+----
+NULL
+
+query ?
+SELECT repeat(NULL, 4)
+----
+NULL
+
+query T
+SELECT replace('abcdefabcdef', 'cd', 'XX')
+----
+abXXefabXXef
+
+query T
+SELECT replace('abcdefabcdef', 'cd', NULL)
+----
+NULL
+
+query T
+SELECT replace('abcdefabcdef', 'notmatch', 'XX')
+----
+abcdefabcdef
+
+query T
+SELECT replace('abcdefabcdef', NULL, 'XX')
+----
+NULL
+
+query ?
+SELECT replace(NULL, 'cd', 'XX')
+----
+NULL
+
+query T
+SELECT rtrim(' testxxzx ')
+----
+ testxxzx
+
+query T
+SELECT rtrim(' zzzytest ', NULL)
+----
+NULL
+
+query T
+SELECT rtrim('testxxzx', 'xyz')
+----
+test
+
+query ?
+SELECT rtrim(NULL, 'xyz')
+----
+NULL
+
+query T
+SELECT split_part('abc~@~def~@~ghi', '~@~', 2)
+----
+def
+
+query T
+SELECT split_part('abc~@~def~@~ghi', '~@~', 20)
+----
+(empty)
+
+query ?
+SELECT split_part(NULL, '~@~', 20)
+----
+NULL
+
+query T
+SELECT split_part('abc~@~def~@~ghi', NULL, 20)
+----
+NULL
+
+query T
+SELECT split_part('abc~@~def~@~ghi', '~@~', CAST(NULL AS INT))
+----
+NULL
+
+query B
+SELECT starts_with('alphabet', 'alph')
+----
+true
+
+query B
+SELECT starts_with('alphabet', 'blph')
+----
+false
+
+query B
+SELECT starts_with(NULL, 'blph')
+----
+NULL
+
+query B
+SELECT starts_with('alphabet', NULL)
+----
+NULL
+
+query T
+SELECT to_hex(2147483647)
+----
+7fffffff
+
+query T
+SELECT to_hex(9223372036854775807)
+----
+7fffffffffffffff
+
+query T
+SELECT to_hex(CAST(NULL AS int))
+----
+NULL
+
+query T
+SELECT trim(' tom ')
+----
+tom
+
+query T
+SELECT trim(LEADING ' tom ')
+----
+tom 
+
+query T
+SELECT trim(TRAILING ' tom ')
+----
+ tom
+
+query T
+SELECT trim(BOTH ' tom ')
+----
+tom
+
+query T
+SELECT trim(LEADING ' ' FROM ' tom ')
+----
+tom 
+
+query T
+SELECT trim(TRAILING ' ' FROM ' tom ')
+----
+ tom
+
+query T
+SELECT trim(BOTH ' ' FROM ' tom ')
+----
+tom
+
+query T
+SELECT trim(' ' FROM ' tom ')
+----
+tom
+
+query T
+SELECT trim(LEADING 'x' FROM 'xxxtomxxx')
+----
+tomxxx
+
+query T
+SELECT trim(TRAILING 'x' FROM 'xxxtomxxx')
+----
+xxxtom
+
+query T
+SELECT trim(BOTH 'x' FROM 'xxxtomxx')
+----
+tom
+
+query T
+SELECT trim('x' FROM 'xxxtomxx')
+----
+tom
+
+
+query T
+SELECT trim(LEADING 'xy' FROM 'xyxabcxyzdefxyx')
+----
+abcxyzdefxyx
+
+query T
+SELECT trim(TRAILING 'xy' FROM 'xyxabcxyzdefxyx')
+----
+xyxabcxyzdef
+
+query T
+SELECT trim(BOTH 'xy' FROM 'xyxabcxyzdefxyx')
+----
+abcxyzdef
+
+query T
+SELECT trim('xy' FROM 'xyxabcxyzdefxyx')
+----
+abcxyzdef
+
+query T
+SELECT trim(' tom')
+----
+tom
+
+query T
+SELECT trim('')
+----
+(empty)
+
+query T
+SELECT trim('tom ')
+----
+tom
+
+query T
+SELECT upper('')
+----
+(empty)
+
+query T
+SELECT upper('tom')
+----
+TOM
+
+query ?
+SELECT upper(NULL)
+----
+NULL
+
+# TODO issue: https://github.com/apache/arrow-datafusion/issues/6596
+# query ??
+#SELECT
+#    CAST([1,2,3,4] AS INT[]) as a,
+#    CAST([1,2,3,4] AS NUMERIC(10,4)[]) as b
+#----
+#[1, 2, 3, 4] [1.0000, 2.0000, 3.0000, 4.0000]
+
+# test_random_expression
+query BB
+SELECT 
+    random() BETWEEN 0.0 AND 1.0,
+    random() = random()
+----
+true false
+
+# test_uuid_expression
+query II
+SELECT octet_length(uuid()), length(uuid())
+----
+36 36
+
+# test_cast_expressions
+query IIII
+SELECT
+    CAST('0' AS INT) as a,
+    CAST(NULL AS INT) as b,
+    TRY_CAST('0' AS INT) as c,
+    TRY_CAST('x' AS INT) as d
+----
+0 NULL 0 NULL
+
+# test_extract_date_part
+
+query R
+SELECT date_part('YEAR', CAST('2000-01-01' AS DATE))
+----
+2000
+
+query R
+SELECT EXTRACT(year FROM  timestamp '2020-09-08T12:00:00+00:00')
+----
+2020
+
+query R
+SELECT date_part('QUARTER', CAST('2000-01-01' AS DATE))
+----
+1
+
+query R
+SELECT EXTRACT(quarter FROM to_timestamp('2020-09-08T12:00:00+00:00'))
+----
+3
+
+query R
+SELECT date_part('MONTH', CAST('2000-01-01' AS DATE))
+----
+1
+
+query R
+SELECT EXTRACT(month FROM to_timestamp('2020-09-08T12:00:00+00:00'))
+----
+9
+
+query R
+SELECT date_part('WEEK', CAST('2003-01-01' AS DATE))
+----
+1
+
+query R
+SELECT EXTRACT(WEEK FROM to_timestamp('2020-09-08T12:00:00+00:00'))
+----
+37
+
+query R
+SELECT date_part('DAY', CAST('2000-01-01' AS DATE))
+----
+1
+
+query R
+SELECT EXTRACT(day FROM to_timestamp('2020-09-08T12:00:00+00:00'))
+----
+8
+
+query R
+SELECT date_part('DOY', CAST('2000-01-01' AS DATE))
+----
+1
+
+query R
+SELECT EXTRACT(doy FROM to_timestamp('2020-09-08T12:00:00+00:00'))
+----
+252
+
+query R
+SELECT date_part('DOW', CAST('2000-01-01' AS DATE))
+----
+6
+
+query R
+SELECT EXTRACT(dow FROM to_timestamp('2020-09-08T12:00:00+00:00'))
+----
+2
+
+query R
+SELECT date_part('HOUR', CAST('2000-01-01' AS DATE))
+----
+0
+
+query R
+SELECT EXTRACT(hour FROM to_timestamp('2020-09-08T12:03:03+00:00'))
+----
+12
+
+query R
+SELECT EXTRACT(minute FROM to_timestamp('2020-09-08T12:12:00+00:00'))
+----
+12
+
+query R
+SELECT date_part('minute', to_timestamp('2020-09-08T12:12:00+00:00'))
+----
+12
+
+query R
+SELECT EXTRACT(second FROM timestamp '2020-09-08T12:00:12.12345678+00:00')
+----
+12.12345678
+
+query R
+SELECT EXTRACT(millisecond FROM timestamp '2020-09-08T12:00:12.12345678+00:00')
+----
+12123.45678
+
+query R
+SELECT EXTRACT(microsecond FROM timestamp '2020-09-08T12:00:12.12345678+00:00')
+----
+12123456.78
+
+query R
+SELECT EXTRACT(nanosecond FROM timestamp '2020-09-08T12:00:12.12345678+00:00')
+----
+12123456780
+
+query R
+SELECT date_part('second', timestamp '2020-09-08T12:00:12.12345678+00:00')
+----
+12.12345678
+
+query R
+SELECT date_part('millisecond', timestamp '2020-09-08T12:00:12.12345678+00:00')
+----
+12123.45678
+
+query R
+SELECT date_part('microsecond', timestamp '2020-09-08T12:00:12.12345678+00:00')
+----
+12123456.78
+
+query R
+SELECT date_part('nanosecond', timestamp '2020-09-08T12:00:12.12345678+00:00')
+----
+12123456780
+
+query R
+SELECT date_part('second', '2020-09-08T12:00:12.12345678+00:00')
+----
+12.12345678
+
+query R
+SELECT date_part('millisecond', '2020-09-08T12:00:12.12345678+00:00')
+----
+12123.45678
+
+query R
+SELECT date_part('microsecond', '2020-09-08T12:00:12.12345678+00:00')
+----
+12123456.78
+
+query R
+SELECT date_part('nanosecond', '2020-09-08T12:00:12.12345678+00:00')
+----
+12123456780
+
+# test_extract_epoch
+
+query R
+SELECT extract(epoch from '1870-01-01T07:29:10.256'::timestamp)
+----
+-3155646649.744
+
+query R
+SELECT extract(epoch from '2000-01-01T00:00:00.000'::timestamp)
+----
+946684800
+
+query R
+SELECT extract(epoch from to_timestamp('2000-01-01T00:00:00+00:00'))
+----
+946684800
+
+query R
+SELECT extract(epoch from NULL::timestamp)
+----
+NULL
+
+query R
+SELECT extract(epoch from arrow_cast('1970-01-01', 'Date32'))
+----
+0
+
+query R
+SELECT extract(epoch from arrow_cast('1970-01-02', 'Date32'))
+----
+86400
+
+query R
+SELECT extract(epoch from arrow_cast('1970-01-11', 'Date32'))
+----
+864000
+
+query R
+SELECT extract(epoch from arrow_cast('1969-12-31', 'Date32'))
+----
+-86400
+
+query R
+SELECT extract(epoch from arrow_cast('1970-01-01', 'Date64'))
+----
+0
+
+query R
+SELECT extract(epoch from arrow_cast('1970-01-02', 'Date64'))
+----
+86400
+
+query R
+SELECT extract(epoch from arrow_cast('1970-01-11', 'Date64'))
+----
+864000
+
+query R
+SELECT extract(epoch from arrow_cast('1969-12-31', 'Date64'))
+----
+-86400
+
+# test_extract_date_part_func
+
+query B
+SELECT (date_part('year', now()) = EXTRACT(year FROM now()))
+----
+true
+
+query B
+SELECT (date_part('quarter', now()) = EXTRACT(quarter FROM now()))
+----
+true
+
+query B
+SELECT (date_part('month', now()) = EXTRACT(month FROM now()))
+----
+true
+
+query B
+SELECT (date_part('week', now()) = EXTRACT(week FROM now()))
+----
+true
+
+query B
+SELECT (date_part('day', now()) = EXTRACT(day FROM now()))
+----
+true
+
+query B
+SELECT (date_part('hour', now()) = EXTRACT(hour FROM now()))
+----
+true
+
+query B
+SELECT (date_part('minute', now()) = EXTRACT(minute FROM now()))
+----
+true
+
+query B
+SELECT (date_part('second', now()) = EXTRACT(second FROM now()))
+----
+true
+
+query B
+SELECT (date_part('millisecond', now()) = EXTRACT(millisecond FROM now()))
+----
+true
+
+query B
+SELECT (date_part('microsecond', now()) = EXTRACT(microsecond FROM now()))
+----
+true
+
+query B
+SELECT (date_part('nanosecond', now()) = EXTRACT(nanosecond FROM now()))
+----
+true
+
+query B
+SELECT 'a' IN ('a','b')
+----
+true
+
+query B
+SELECT 'c' IN ('a','b')
+----
+false
+
+query B
+SELECT 'c' NOT IN ('a','b')
+----
+true
+
+query B
+SELECT 'a' NOT IN ('a','b')
+----
+false
+
+query B
+SELECT NULL IN ('a','b')
+----
+NULL
+
+query B
+SELECT NULL NOT IN ('a','b')
+----
+NULL
+
+query B
+SELECT 'a' IN ('a','b',NULL)
+----
+true
+
+query B
+SELECT 'c' IN ('a','b',NULL)
+----
+NULL
+
+query B
+SELECT 'a' NOT IN ('a','b',NULL)
+----
+false
+
+query B
+SELECT 'c' NOT IN ('a','b',NULL)
+----
+NULL
+
+query B
+SELECT 0 IN (0,1,2)
+----
+true
+
+query B
+SELECT 3 IN (0,1,2)
+----
+false
+
+query B
+SELECT 3 NOT IN (0,1,2)
+----
+true
+
+query B
+SELECT 0 NOT IN (0,1,2)
+----
+false
+
+query B
+SELECT NULL IN (0,1,2)
+----
+NULL
+
+query B
+SELECT NULL NOT IN (0,1,2)
+----
+NULL
+
+query B
+SELECT 0 IN (0,1,2,NULL)
+----
+true
+
+query B
+SELECT 3 IN (0,1,2,NULL)
+----
+NULL
+
+query B
+SELECT 0 NOT IN (0,1,2,NULL)
+----
+false
+
+query B
+SELECT 3 NOT IN (0,1,2,NULL)
+----
+NULL
+
+query B
+SELECT 0.0 IN (0.0,0.1,0.2)
+----
+true
+
+query B
+SELECT 0.3 IN (0.0,0.1,0.2)
+----
+false
+
+query B
+SELECT 0.3 NOT IN (0.0,0.1,0.2)
+----
+true
+
+query B
+SELECT 0.0 NOT IN (0.0,0.1,0.2)
+----
+false
+
+query B
+SELECT NULL IN (0.0,0.1,0.2)
+----
+NULL
+
+query B
+SELECT NULL NOT IN (0.0,0.1,0.2)
+----
+NULL
+
+query B
+SELECT 0.0 IN (0.0,0.1,0.2,NULL)
+----
+true
+
+query B
+SELECT 0.3 IN (0.0,0.1,0.2,NULL)
+----
+NULL
+
+query B
+SELECT 0.0 NOT IN (0.0,0.1,0.2,NULL)
+----
+false
+
+query B
+SELECT 0.3 NOT IN (0.0,0.1,0.2,NULL)
+----
+NULL
+
+query B
+SELECT '1' IN ('a','b',1)
+----
+true
+
+query B
+SELECT '2' IN ('a','b',1)
+----
+false
+
+query B
+SELECT '2' NOT IN ('a','b',1)
+----
+true
+
+query B
+SELECT '1' NOT IN ('a','b',1)
+----
+false
+
+query B
+SELECT NULL IN ('a','b',1)
+----
+NULL
+
+query B
+SELECT NULL NOT IN ('a','b',1)
+----
+NULL
+
+query B
+SELECT '1' IN ('a','b',NULL,1)
+----
+true
+
+query B
+SELECT '2' IN ('a','b',NULL,1)
+----
+NULL
+
+query B
+SELECT '1' NOT IN ('a','b',NULL,1)
+----
+false
+
+query B
+SELECT '2' NOT IN ('a','b',NULL,1)
+----
+NULL
