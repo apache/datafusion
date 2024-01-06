@@ -290,17 +290,17 @@ jobs:
       # with a OS-dependent path.
       - name: Setup Rust toolchain
         run: |
-          rustup toolchain install nightly-2023-10-30
-          rustup default nightly-2023-10-30
+          rustup toolchain install stable
+          rustup default stable
           rustup component add rustfmt
       - name: Run tests (excluding doctests)
         shell: bash
         run: |
           export PATH=$PATH:$HOME/d/protoc/bin
-          cargo test -p datafusion --test tpcds_planning tpcds_physical_q44 --features backtrace -- --nocapture --exact
+          cargo test -p datafusion --test tpcds_planning tpcds_physical_q44 --features backtrace
         env:
           # do not produce debug symbols to keep memory usage down
-          RUSTFLAGS: "-C debuginfo=0"
+          RUSTFLAGS: "-C debuginfo=line-tables-only"
           RUST_BACKTRACE: "1"
 
   # macos:
