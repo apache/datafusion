@@ -290,7 +290,7 @@ impl DisplayAs for ParquetExec {
                                 .join(", ")
                         )
                     })
-                    .unwrap_or("pruning_predicate=None".to_string());
+                    .unwrap_or_default();
 
                 write!(f, "ParquetExec: ")?;
                 self.base_config.fmt_as(t, f)?;

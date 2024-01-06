@@ -1050,7 +1050,6 @@ mod tests {
 
         let expr = col(r#""String""#).in_list(
             (1..25)
-                .into_iter()
                 .map(|i| lit(format!("Hello_Not_Exists{}", i)))
                 .collect::<Vec<_>>(),
             false,
