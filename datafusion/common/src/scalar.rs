@@ -433,27 +433,26 @@ impl PartialOrd for ScalarValue {
     }
 }
 
-/// Compares two List/LargeList/FixedSizeList scalars for equality
-fn partial_cmp_list(arr1: &dyn Array, arr2: &dyn Array) -> Option<Ordering> {
-    assert_eq!(arr1.len(), 1);
-    assert_eq!(arr2.len(), 1);
+/// List/LargeList/FixedSizeList scalars always have a single element
+/// array. This function returns that array
+fn first_array_for_list(arr: &dyn Array) -> ArrayRef {
+    assert_eq!(arr.len(), 1);
+    if let Some(arr) = arr.as_list_opt::<i32>() {
+        arr.value(0)
+    } else if let Some(arr) = arr.as_list_opt::<i64>() {
+        arr.value(0)
+    } else if let Some(arr) = arr.as_fixed_size_list_opt() {
+        arr.value(0)
+    } else {
+        unreachable!("Since only List / LargeList / FixedSizeList are supported, this should never happen")
+    }
+}
 
+/// Compares two List/LargeList/FixedSizeList scalars
+fn partial_cmp_list(arr1: &dyn Array, arr2: &dyn Array) -> Option<Ordering> {
     if arr1.data_type() != arr2.data_type() {
         return None;
     }
-
-    fn first_array_for_list(arr: &dyn Array) -> ArrayRef {
-        if let Some(arr) = arr.as_list_opt::<i32>() {
-            arr.value(0)
-        } else if let Some(arr) = arr.as_list_opt::<i64>() {
-            arr.value(0)
-        } else if let Some(arr) = arr.as_fixed_size_list_opt() {
-            arr.value(0)
-        } else {
-            unreachable!("Since only List / LargeList / FixedSizeList are supported, this should never happen")
-        }
-    }
-
     let arr1 = first_array_for_list(arr1);
     let arr2 = first_array_for_list(arr2);
 
