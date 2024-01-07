@@ -41,7 +41,7 @@ use datafusion_common::{
 };
 use datafusion_expr::{
     and, lit, or, BinaryExpr, BuiltinScalarFunction, Case, ColumnarValue, Expr, Like,
-    ScalarFunctionDefinition, Volatility,
+    Operator, ScalarFunctionDefinition, Volatility,
 };
 use datafusion_expr::{
     expr::{InList, InSubquery, ScalarFunction},
@@ -131,6 +131,7 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
     /// ```
     pub fn simplify(&self, expr: Expr) -> Result<Expr> {
         let mut simplifier = Simplifier::new(&self.info);
+        let mut canonicalizer = Canonicalizer::new();
         let mut const_evaluator = ConstEvaluator::try_new(self.info.execution_props())?;
         let mut or_in_list_simplifier = OrInListSimplifier::new();
         let mut guarantee_rewriter = GuaranteeRewriter::new(&self.guarantees);
@@ -140,6 +141,7 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
         // simplifications can enable new constant evaluation)
         // https://github.com/apache/arrow-datafusion/issues/1160
         expr.rewrite(&mut const_evaluator)?
+            .rewrite(&mut canonicalizer)?
             .rewrite(&mut simplifier)?
             .rewrite(&mut or_in_list_simplifier)?
             .rewrite(&mut guarantee_rewriter)?
@@ -221,6 +223,63 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
     pub fn with_guarantees(mut self, guarantees: Vec<(Expr, NullableInterval)>) -> Self {
         self.guarantees = guarantees;
         self
+    }
+}
+
+#[allow(rustdoc::private_intra_doc_links)]
+/// Canonicalize any BinaryExprs that are not in canonical form
+/// <literal> <op> <col> is rewritten to <col> <op> <literal> (remember to switch the operator)
+/// <col> <op> <literal> is canonical
+/// <col1> <op> <col2> is rewritten so that the name of col1 sorts higher than col2 (b > a would be canonicalized to a < b)
+struct Canonicalizer {}
+
+impl Canonicalizer {
+    fn new() -> Self {
+        Self {}
+    }
+}
+
+impl TreeNodeRewriter for Canonicalizer {
+    type N = Expr;
+
+    fn mutate(&mut self, expr: Expr) -> Result<Expr> {
+        if let Expr::BinaryExpr(BinaryExpr { left, op, right }) = expr {
+            // Case 1, <col1> <op> <col2>
+            let mut new_expr = BinaryExpr {
+                left: left.clone(),
+                op: op.clone(),
+                right: right.clone(),
+            };
+            let mut switch_op: Operator = op.clone();
+            if left.try_into_col().is_ok() && right.try_into_col().is_ok() {
+                let left_name = left.canonical_name();
+                let right_name = right.canonical_name();
+                if left_name < right_name {
+                    if let Some(negate_op) = op.negate() {
+                        switch_op = negate_op;
+                    }
+                    new_expr = BinaryExpr {
+                        left: right,
+                        op: switch_op,
+                        right: left,
+                    };
+                }
+            }
+            // Case 2, <literal> <op> <col>
+            else if left.try_into_col().is_err() && right.try_into_col().is_ok() {
+                if let Some(negate_op) = op.negate() {
+                    switch_op = negate_op;
+                }
+                new_expr = BinaryExpr {
+                    left: right,
+                    op: switch_op,
+                    right: left,
+                };
+            }
+            return Ok(Expr::BinaryExpr(new_expr));
+        } else {
+            Ok(expr)
+        }
     }
 }
 
@@ -1593,6 +1652,20 @@ mod tests {
     // ------------------------------
     // --- Simplifier tests -----
     // ------------------------------
+
+    #[test]
+    fn test_simplify_canonicalize() {
+        {
+            let expr = lit(1).lt(col("c2")).and(col("c2").gt_eq(lit(1)));
+            let expected = col("c2").gt_eq(lit(1));
+            assert_eq!(simplify(expr), expected);
+        }
+        {
+            let expr = col("c1").lt(col("c2")).and(col("c2").gt_eq(col("c1")));
+            let expected = col("c2").gt_eq(col("c1"));
+            assert_eq!(simplify(expr), expected);
+        }
+    }
 
     #[test]
     fn test_simplify_or_true() {
