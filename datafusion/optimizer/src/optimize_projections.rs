@@ -583,7 +583,7 @@ fn rewrite_expr(expr: &Expr, input: &Projection) -> Result<Option<Expr>> {
 ///
 /// # Returns
 ///
-/// returns a `HashSet<Column>` containing all outer-referenced columns. 
+/// returns a `HashSet<Column>` containing all outer-referenced columns.
 fn outer_columns(expr: &Expr) -> HashSet<Column> {
     let mut columns = HashSet::new();
     outer_columns_helper(expr, &mut columns);
@@ -624,14 +624,12 @@ fn outer_columns_helper(expr: &Expr, columns: &mut HashSet<Column>) {
         Expr::Sort(sort) => outer_columns_helper(&sort.expr, columns),
         Expr::AggregateFunction(aggregate_fn) => {
             outer_columns_helper_multi(aggregate_fn.args.iter(), columns);
-            aggregate_fn
-                .order_by
-                .as_ref()
-                .map(|obs| outer_columns_helper_multi(obs.iter(), columns));
-            aggregate_fn
-                .filter
-                .as_ref()
-                .map(|filter| outer_columns_helper(filter, columns));
+            if let Some(filter) = aggregate_fn.filter.as_ref() {
+                outer_columns_helper(filter, columns);
+            }
+            if let Some(obs) = aggregate_fn.order_by.as_ref() {
+                outer_columns_helper_multi(obs.iter(), columns);
+            }
         }
         Expr::WindowFunction(window_fn) => {
             outer_columns_helper_multi(window_fn.args.iter(), columns);
@@ -665,12 +663,12 @@ fn outer_columns_helper(expr: &Expr, columns: &mut HashSet<Column>) {
                 .iter()
                 .flat_map(|(first, second)| [first.as_ref(), second.as_ref()]);
             outer_columns_helper_multi(when_then_exprs, columns);
-            case.expr
-                .as_ref()
-                .map(|expr| outer_columns_helper(expr, columns));
-            case.else_expr
-                .as_ref()
-                .map(|expr| outer_columns_helper(expr, columns));
+            if let Some(expr) = case.expr.as_ref() {
+                outer_columns_helper(expr, columns);
+            }
+            if let Some(expr) = case.else_expr.as_ref() {
+                outer_columns_helper(expr, columns);
+            }
         }
         Expr::SimilarTo(similar_to) => {
             outer_columns_helper(&similar_to.expr, columns);
