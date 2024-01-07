@@ -583,11 +583,11 @@ fn rewrite_expr(expr: &Expr, input: &Projection) -> Result<Option<Expr>> {
 ///
 /// # Returns
 ///
-/// If the function can safely infer all outer-referenced columns, returns a
-/// `Some(HashSet<Column>)` containing these columns. Otherwise, returns `None`.
-fn outer_columns(expr: &Expr) -> Option<HashSet<Column>> {
+/// returns a `HashSet<Column>` containing all outer-referenced columns. 
+fn outer_columns(expr: &Expr) -> HashSet<Column> {
     let mut columns = HashSet::new();
-    outer_columns_helper(expr, &mut columns).then_some(columns)
+    outer_columns_helper(expr, &mut columns);
+    columns
 }
 
 /// A recursive subroutine that accumulates outer-referenced columns by the
@@ -598,94 +598,90 @@ fn outer_columns(expr: &Expr) -> Option<HashSet<Column>> {
 /// * `expr` - The expression to analyze for outer-referenced columns.
 /// * `columns` - A mutable reference to a `HashSet<Column>` where detected
 ///   columns are collected.
-///
-/// Returns `true` if it can safely collect all outer-referenced columns.
-/// Otherwise, returns `false`.
-fn outer_columns_helper(expr: &Expr, columns: &mut HashSet<Column>) -> bool {
+fn outer_columns_helper(expr: &Expr, columns: &mut HashSet<Column>) {
     match expr {
         Expr::OuterReferenceColumn(_, col) => {
             columns.insert(col.clone());
-            true
         }
         Expr::BinaryExpr(binary_expr) => {
-            outer_columns_helper(&binary_expr.left, columns)
-                && outer_columns_helper(&binary_expr.right, columns)
+            outer_columns_helper(&binary_expr.left, columns);
+            outer_columns_helper(&binary_expr.right, columns);
         }
         Expr::ScalarSubquery(subquery) => {
             let exprs = subquery.outer_ref_columns.iter();
-            outer_columns_helper_multi(exprs, columns)
+            outer_columns_helper_multi(exprs, columns);
         }
         Expr::Exists(exists) => {
             let exprs = exists.subquery.outer_ref_columns.iter();
-            outer_columns_helper_multi(exprs, columns)
+            outer_columns_helper_multi(exprs, columns);
         }
         Expr::Alias(alias) => outer_columns_helper(&alias.expr, columns),
         Expr::InSubquery(insubquery) => {
             let exprs = insubquery.subquery.outer_ref_columns.iter();
-            outer_columns_helper_multi(exprs, columns)
+            outer_columns_helper_multi(exprs, columns);
         }
         Expr::Cast(cast) => outer_columns_helper(&cast.expr, columns),
         Expr::Sort(sort) => outer_columns_helper(&sort.expr, columns),
         Expr::AggregateFunction(aggregate_fn) => {
-            outer_columns_helper_multi(aggregate_fn.args.iter(), columns)
-                && aggregate_fn
-                    .order_by
-                    .as_ref()
-                    .map_or(true, |obs| outer_columns_helper_multi(obs.iter(), columns))
-                && aggregate_fn
-                    .filter
-                    .as_ref()
-                    .map_or(true, |filter| outer_columns_helper(filter, columns))
+            outer_columns_helper_multi(aggregate_fn.args.iter(), columns);
+            aggregate_fn
+                .order_by
+                .as_ref()
+                .map(|obs| outer_columns_helper_multi(obs.iter(), columns));
+            aggregate_fn
+                .filter
+                .as_ref()
+                .map(|filter| outer_columns_helper(filter, columns));
         }
         Expr::WindowFunction(window_fn) => {
-            outer_columns_helper_multi(window_fn.args.iter(), columns)
-                && outer_columns_helper_multi(window_fn.order_by.iter(), columns)
-                && outer_columns_helper_multi(window_fn.partition_by.iter(), columns)
+            outer_columns_helper_multi(window_fn.args.iter(), columns);
+            outer_columns_helper_multi(window_fn.order_by.iter(), columns);
+            outer_columns_helper_multi(window_fn.partition_by.iter(), columns);
         }
         Expr::GroupingSet(groupingset) => match groupingset {
-            GroupingSet::GroupingSets(multi_exprs) => multi_exprs
-                .iter()
-                .all(|e| outer_columns_helper_multi(e.iter(), columns)),
+            GroupingSet::GroupingSets(multi_exprs) => {
+                multi_exprs
+                    .iter()
+                    .for_each(|e| outer_columns_helper_multi(e.iter(), columns));
+            }
             GroupingSet::Cube(exprs) | GroupingSet::Rollup(exprs) => {
-                outer_columns_helper_multi(exprs.iter(), columns)
+                outer_columns_helper_multi(exprs.iter(), columns);
             }
         },
         Expr::ScalarFunction(scalar_fn) => {
-            outer_columns_helper_multi(scalar_fn.args.iter(), columns)
+            outer_columns_helper_multi(scalar_fn.args.iter(), columns);
         }
         Expr::Like(like) => {
-            outer_columns_helper(&like.expr, columns)
-                && outer_columns_helper(&like.pattern, columns)
+            outer_columns_helper(&like.expr, columns);
+            outer_columns_helper(&like.pattern, columns);
         }
         Expr::InList(in_list) => {
-            outer_columns_helper(&in_list.expr, columns)
-                && outer_columns_helper_multi(in_list.list.iter(), columns)
+            outer_columns_helper(&in_list.expr, columns);
+            outer_columns_helper_multi(in_list.list.iter(), columns);
         }
         Expr::Case(case) => {
             let when_then_exprs = case
                 .when_then_expr
                 .iter()
                 .flat_map(|(first, second)| [first.as_ref(), second.as_ref()]);
-            outer_columns_helper_multi(when_then_exprs, columns)
-                && case
-                    .expr
-                    .as_ref()
-                    .map_or(true, |expr| outer_columns_helper(expr, columns))
-                && case
-                    .else_expr
-                    .as_ref()
-                    .map_or(true, |expr| outer_columns_helper(expr, columns))
+            outer_columns_helper_multi(when_then_exprs, columns);
+            case.expr
+                .as_ref()
+                .map(|expr| outer_columns_helper(expr, columns));
+            case.else_expr
+                .as_ref()
+                .map(|expr| outer_columns_helper(expr, columns));
         }
         Expr::SimilarTo(similar_to) => {
-            outer_columns_helper(&similar_to.expr, columns)
-                && outer_columns_helper(&similar_to.pattern, columns)
+            outer_columns_helper(&similar_to.expr, columns);
+            outer_columns_helper(&similar_to.pattern, columns);
         }
         Expr::TryCast(try_cast) => outer_columns_helper(&try_cast.expr, columns),
         Expr::GetIndexedField(index) => outer_columns_helper(&index.expr, columns),
         Expr::Between(between) => {
-            outer_columns_helper(&between.expr, columns)
-                && outer_columns_helper(&between.low, columns)
-                && outer_columns_helper(&between.high, columns)
+            outer_columns_helper(&between.expr, columns);
+            outer_columns_helper(&between.low, columns);
+            outer_columns_helper(&between.high, columns);
         }
         Expr::Not(expr)
         | Expr::IsNotFalse(expr)
@@ -701,7 +697,7 @@ fn outer_columns_helper(expr: &Expr, columns: &mut HashSet<Column>) -> bool {
         | Expr::Literal(_)
         | Expr::Wildcard { .. }
         | Expr::ScalarVariable { .. }
-        | Expr::Placeholder(_) => true,
+        | Expr::Placeholder(_) => (),
     }
 }
 
@@ -713,14 +709,11 @@ fn outer_columns_helper(expr: &Expr, columns: &mut HashSet<Column>) -> bool {
 /// * `exprs` - The expressions to analyze for outer-referenced columns.
 /// * `columns` - A mutable reference to a `HashSet<Column>` where detected
 ///   columns are collected.
-///
-/// Returns `true` if it can safely collect all outer-referenced columns.
-/// Otherwise, returns `false`.
 fn outer_columns_helper_multi<'a>(
-    mut exprs: impl Iterator<Item = &'a Expr>,
+    exprs: impl Iterator<Item = &'a Expr>,
     columns: &mut HashSet<Column>,
-) -> bool {
-    exprs.all(|e| outer_columns_helper(e, columns))
+) {
+    exprs.for_each(|e| outer_columns_helper(e, columns));
 }
 
 /// Generates the required expressions (columns) that reside at `indices` of
@@ -789,13 +782,7 @@ fn indices_referred_by_expr(
 ) -> Result<Vec<usize>> {
     let mut cols = expr.to_columns()?;
     // Get outer-referenced columns:
-    if let Some(outer_cols) = outer_columns(expr) {
-        cols.extend(outer_cols);
-    } else {
-        // Expression is not known to contain outer columns or not. Hence, do
-        // not assume anything and require all the schema indices at the input:
-        return Ok((0..input_schema.fields().len()).collect());
-    }
+    cols.extend(outer_columns(expr));
     Ok(cols
         .iter()
         .flat_map(|col| input_schema.index_of_column(col))
