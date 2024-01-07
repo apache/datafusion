@@ -682,6 +682,11 @@ fn outer_columns_helper(expr: &Expr, columns: &mut HashSet<Column>) -> bool {
         }
         Expr::TryCast(try_cast) => outer_columns_helper(&try_cast.expr, columns),
         Expr::GetIndexedField(index) => outer_columns_helper(&index.expr, columns),
+        Expr::Between(between) => {
+            outer_columns_helper(&between.expr, columns)
+                && outer_columns_helper(&between.low, columns)
+                && outer_columns_helper(&between.high, columns)
+        }
         Expr::Not(expr)
         | Expr::IsNotFalse(expr)
         | Expr::IsFalse(expr)
@@ -692,8 +697,11 @@ fn outer_columns_helper(expr: &Expr, columns: &mut HashSet<Column>) -> bool {
         | Expr::IsNotNull(expr)
         | Expr::IsNull(expr)
         | Expr::Negative(expr) => outer_columns_helper(expr, columns),
-        Expr::Column(_) | Expr::Literal(_) | Expr::Wildcard { .. } => true,
-        _ => false,
+        Expr::Column(_)
+        | Expr::Literal(_)
+        | Expr::Wildcard { .. }
+        | Expr::ScalarVariable { .. }
+        | Expr::Placeholder(_) => true,
     }
 }
 
@@ -1243,6 +1251,18 @@ mod tests {
             .build()?;
 
         let expected = "Projection: test.a SIMILAR TO Utf8(\"[0-9]\")\
+        \n  TableScan: test projection=[a]";
+        assert_optimized_plan_equal(&plan, expected)
+    }
+
+    #[test]
+    fn test_between() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .project(vec![col("a").between(lit(1), lit(3))])?
+            .build()?;
+
+        let expected = "Projection: test.a BETWEEN Int32(1) AND Int32(3)\
         \n  TableScan: test projection=[a]";
         assert_optimized_plan_equal(&plan, expected)
     }
