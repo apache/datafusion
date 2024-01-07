@@ -248,6 +248,9 @@ mod tests {
             DataType::UInt32,
             false,
         )]));
-        let _ = ValuesExec::try_new(schema, vec![vec![lit(1u32)]]).unwrap();
+        let _ = ValuesExec::try_new(schema.clone(), vec![vec![lit(1u32)]]).unwrap();
+        // Test that a null value is rejected
+        let _ = ValuesExec::try_new(schema, vec![vec![lit(ScalarValue::UInt32(None))]])
+            .unwrap_err();
     }
 }
