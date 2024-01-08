@@ -255,8 +255,8 @@ impl TreeNodeRewriter for Canonicalizer {
                 let left_name = left.canonical_name();
                 let right_name = right.canonical_name();
                 if left_name < right_name {
-                    if let Some(negate_op) = op.negate() {
-                        switch_op = negate_op;
+                    if let Some(swap_op) = op.swap() {
+                        switch_op = swap_op;
                     }
                     new_expr = BinaryExpr {
                         left: right,
@@ -267,8 +267,8 @@ impl TreeNodeRewriter for Canonicalizer {
             }
             // Case 2, <literal> <op> <col>
             else if left.try_into_col().is_err() && right.try_into_col().is_ok() {
-                if let Some(negate_op) = op.negate() {
-                    switch_op = negate_op;
+                if let Some(swap_op) = op.swap() {
+                    switch_op = swap_op;
                 }
                 new_expr = BinaryExpr {
                     left: right,
@@ -1656,13 +1656,13 @@ mod tests {
     #[test]
     fn test_simplify_canonicalize() {
         {
-            let expr = lit(1).lt(col("c2")).and(col("c2").gt_eq(lit(1)));
-            let expected = col("c2").gt_eq(lit(1));
+            let expr = lit(1).lt(col("c2")).and(col("c2").gt(lit(1)));
+            let expected = col("c2").gt(lit(1));
             assert_eq!(simplify(expr), expected);
         }
         {
-            let expr = col("c1").lt(col("c2")).and(col("c2").gt_eq(col("c1")));
-            let expected = col("c2").gt_eq(col("c1"));
+            let expr = col("c1").lt(col("c2")).and(col("c2").gt(col("c1")));
+            let expected = col("c2").gt(col("c1"));
             assert_eq!(simplify(expr), expected);
         }
     }
