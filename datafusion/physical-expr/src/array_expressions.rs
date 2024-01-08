@@ -24,7 +24,7 @@ use std::sync::Arc;
 
 use arrow::array::*;
 use arrow::buffer::OffsetBuffer;
-use arrow::compute;
+use arrow::compute::{self};
 use arrow::datatypes::{DataType, Field, UInt64Type};
 use arrow::row::{RowConverter, SortField};
 use arrow_buffer::{ArrowNativeType, NullBuffer};
@@ -575,25 +575,51 @@ pub fn array_except(args: &[ArrayRef]) -> Result<ArrayRef> {
 ///
 /// See test cases in `array.slt` for more details.
 pub fn array_slice(args: &[ArrayRef]) -> Result<ArrayRef> {
-    if args.len() != 3 {
-        return exec_err!("array_slice needs three arguments");
+    let args_len = args.len();
+    if args_len != 3 && args_len != 4 {
+        return exec_err!("array_slice needs three or four arguments");
     }
 
+    let stride = if args_len == 4 {
+        Some(as_int64_array(&args[3])?)
+    } else {
+        None
+    };
+
+    let from_array = as_int64_array(&args[1])?;
+    let to_array = as_int64_array(&args[2])?;
+
     let array_data_type = args[0].data_type();
-    match array_data_type {
-        DataType::List(_) => {
-            let array = as_list_array(&args[0])?;
-            let from_array = as_int64_array(&args[1])?;
-            let to_array = as_int64_array(&args[2])?;
-            general_array_slice::<i32>(array, from_array, to_array)
-        }
-        DataType::LargeList(_) => {
-            let array = as_large_list_array(&args[0])?;
-            let from_array = as_int64_array(&args[1])?;
-            let to_array = as_int64_array(&args[2])?;
-            general_array_slice::<i64>(array, from_array, to_array)
-        }
-        _ => exec_err!("array_slice does not support type: {:?}", array_data_type),
+    match args_len {
+        3 => match array_data_type {
+            DataType::List(_) => {
+                let array = as_list_array(&args[0])?;
+                general_array_slice::<i32>(array, from_array, to_array, stride)
+            }
+            DataType::LargeList(_) => {
+                let array = as_large_list_array(&args[0])?;
+                let from_array = as_int64_array(&args[1])?;
+                let to_array = as_int64_array(&args[2])?;
+                general_array_slice::<i64>(array, from_array, to_array, stride)
+            }
+            _ => exec_err!("array_slice does not support type: {:?}", array_data_type),
+        },
+        4 => match array_data_type {
+            DataType::List(_) => {
+                let array = as_list_array(&args[0])?;
+                let from_array = as_int64_array(&args[1])?;
+                let to_array = as_int64_array(&args[2])?;
+                general_array_slice::<i32>(array, from_array, to_array, stride)
+            }
+            DataType::LargeList(_) => {
+                let array = as_large_list_array(&args[0])?;
+                let from_array = as_int64_array(&args[1])?;
+                let to_array = as_int64_array(&args[2])?;
+                general_array_slice::<i64>(array, from_array, to_array, stride)
+            }
+            _ => exec_err!("array_slice does not support type: {:?}", array_data_type),
+        },
+        _ => unreachable!(),
     }
 }
 
@@ -601,6 +627,7 @@ fn general_array_slice<O: OffsetSizeTrait>(
     array: &GenericListArray<O>,
     from_array: &Int64Array,
     to_array: &Int64Array,
+    stride: Option<&Int64Array>,
 ) -> Result<ArrayRef>
 where
     i64: TryInto<O>,
@@ -680,6 +707,16 @@ where
         let end = offset_window[1];
         let len = end - start;
 
+        let strde = if let Some(stride) = stride {
+            if stride.is_null(row_index) {
+                None
+            } else {
+                Some(stride.value(row_index))
+            }
+        } else {
+            None
+        };
+
         // len 0 indicate array is null, return empty array in this row.
         if len == O::usize_as(0) {
             offsets.push(offsets[row_index]);
@@ -702,12 +739,45 @@ where
         if let (Some(from), Some(to)) = (from_index, to_index) {
             if from <= to {
                 assert!(start + to <= end);
-                mutable.extend(
-                    0,
-                    (start + from).to_usize().unwrap(),
-                    (start + to + O::usize_as(1)).to_usize().unwrap(),
-                );
-                offsets.push(offsets[row_index] + (to - from + O::usize_as(1)));
+                if let Some(strde) = strde {
+                    if strde.is_zero() {
+                        return exec_err!(
+                            "array_slice got invalid stride: {}, it cannot be 0",
+                            strde
+                        );
+                    } else if strde.is_negative() {
+                        // return empty array
+                        offsets.push(offsets[row_index]);
+                        break;
+                    }
+                    let mut index = start;
+                    let mut cnt = 0;
+                    let strde: O = strde.try_into().map_err(|_| {
+                        internal_datafusion_err!(
+                            "array_slice got invalid stride: {}",
+                            strde
+                        )
+                    })?;
+                    while index <= to {
+                        let start = (start + index).to_usize().ok_or_else(|| {
+                            internal_datafusion_err!(
+                                "array_slice got invalid index: {:?}",
+                                start + index
+                            )
+                        })?;
+                        mutable.extend(0, start, start + 1);
+                        index += strde;
+                        cnt += 1;
+                    }
+                    offsets.push(offsets[row_index] + O::usize_as(cnt));
+                } else {
+                    mutable.extend(
+                        0,
+                        (start + from).to_usize().unwrap(),
+                        (start + to + O::usize_as(1)).to_usize().unwrap(),
+                    );
+                    offsets.push(offsets[row_index] + (to - from + O::usize_as(1)));
+                }
             } else {
                 // invalid range, return empty array
                 offsets.push(offsets[row_index]);
@@ -741,7 +811,7 @@ where
             .map(|arr| arr.map_or(0, |arr| arr.len() as i64))
             .collect::<Vec<i64>>(),
     );
-    general_array_slice::<O>(array, &from_array, &to_array)
+    general_array_slice::<O>(array, &from_array, &to_array, None)
 }
 
 fn general_pop_back_list<O: OffsetSizeTrait>(
@@ -757,7 +827,7 @@ where
             .map(|arr| arr.map_or(0, |arr| arr.len() as i64 - 1))
             .collect::<Vec<i64>>(),
     );
-    general_array_slice::<O>(array, &from_array, &to_array)
+    general_array_slice::<O>(array, &from_array, &to_array, None)
 }
 
 /// array_pop_front SQL function

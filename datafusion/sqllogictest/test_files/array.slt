@@ -1215,6 +1215,19 @@ select array_slice(make_array(1, 2, 3, 4, 5), 2, 4), array_slice(make_array('h',
 [2, 3, 4] [h, e]
 
 query ??
+select array_slice(make_array(1, 2, 3, 4, 5), 1, 5, 2), array_slice(make_array('h', 'e', 'l', 'l', 'o'), 1, 5, 2);
+----
+[1, 3, 5] [h, l, o]
+
+query ??
+select array_slice(make_array(1, 2, 3, 4, 5), 1, 5, -1), array_slice(make_array('h', 'e', 'l', 'l', 'o'), 1, 5, -1);
+----
+[] []
+
+query error Execution error: array_slice got invalid stride: 0, it cannot be 0
+select array_slice(make_array(1, 2, 3, 4, 5), 1, 5, 0), array_slice(make_array('h', 'e', 'l', 'l', 'o'), 1, 5, 0);
+
+query ??
 select array_slice(arrow_cast(make_array(1, 2, 3, 4, 5), 'LargeList(Int64)'), 2, 4), array_slice(arrow_cast(make_array('h', 'e', 'l', 'l', 'o'), 'LargeList(Utf8)'), 1, 2);
 ----
 [2, 3, 4] [h, e]

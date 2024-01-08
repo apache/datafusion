@@ -731,7 +731,7 @@ scalar_expr!(
 scalar_expr!(
     ArraySlice,
     array_slice,
-    array offset length,
+    array offset length stride,
     "returns a slice of the array."
 );
 scalar_expr!(
