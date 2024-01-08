@@ -557,7 +557,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                             "Unsupported file compression type {}",
                             create_extern_table.file_compression_type
                         ))
-                    })?,
+                    })?.into(),
                     definition,
                     unbounded: create_extern_table.unbounded,
                     options: create_extern_table.options.clone(),
