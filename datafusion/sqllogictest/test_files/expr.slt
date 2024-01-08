@@ -889,6 +889,7 @@ SELECT EXTRACT(nanosecond FROM timestamp '2020-09-08T12:00:12.12345678+00:00')
 ----
 12123456780
 
+# Keep precision when coercing Utf8 to Timestamp
 query R
 SELECT date_part('second', timestamp '2020-09-08T12:00:12.12345678+00:00')
 ----
