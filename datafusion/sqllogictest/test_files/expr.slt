@@ -229,6 +229,7 @@ SELECT interval '5 day'
 ----
 0 years 0 mons 5 days 0 hours 0 mins 0.000000000 secs
 
+# Hour is ignored, this matches PostgreSQL
 query ?
 SELECT interval '5 day' hour
 ----
