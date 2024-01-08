@@ -172,7 +172,7 @@ impl ExecutionPlan for ValuesExec {
         partition: usize,
         _context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        // GlobalLimitExec has a single output partition
+        // ValuesExec has a single output partition
         if 0 != partition {
             return internal_err!(
                 "ValuesExec invalid partition {partition} (expected 0)"
