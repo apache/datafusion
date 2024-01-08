@@ -138,6 +138,8 @@ impl JoinHashMap {
     }
 }
 
+pub(crate) type JoinHashMapOffset = (usize, Option<u64>);
+
 // Trait defining methods that must be implemented by a hash map type to be used for joins.
 pub trait JoinHashMapType {
     /// The type of list used to store the next list
@@ -225,6 +227,85 @@ pub trait JoinHashMapType {
         }
 
         (input_indices, match_indices)
+    }
+
+    /// Matches hashes with taking limit and offset into account.
+    /// Returns pairs of matched indices along with the starting point for next
+    /// matching iteration (`None` if limit has not been reached).
+    ///
+    /// This method only compares hashes, so additional further check for actual values
+    /// equality may be required.
+    fn get_matched_indices_with_limit_offset<'a>(
+        &self,
+        iter: impl Iterator<Item = (usize, &'a u64)>,
+        deleted_offset: Option<usize>,
+        limit: usize,
+        offset: JoinHashMapOffset,
+    ) -> (
+        UInt32BufferBuilder,
+        UInt64BufferBuilder,
+        Option<JoinHashMapOffset>,
+    ) {
+        let mut input_indices = UInt32BufferBuilder::new(0);
+        let mut match_indices = UInt64BufferBuilder::new(0);
+
+        let mut output_tuples = 0_usize;
+        let mut next_offset = None;
+
+        let hash_map: &RawTable<(u64, u64)> = self.get_map();
+        let next_chain = self.get_list();
+
+        let (initial_idx, initial_next_idx) = offset;
+        'probe: for (row_idx, hash_value) in iter.skip(initial_idx) {
+            let index = if initial_next_idx.is_some() && row_idx == initial_idx {
+                // If `initial_next_idx` is zero, then input index has been processed
+                // during previous iteration, and it can be skipped now
+                if let Some(0) = initial_next_idx {
+                    continue;
+                }
+                // Otherwise, use `initial_next_idx` as-is
+                initial_next_idx
+            } else if let Some((_, index)) =
+                hash_map.get(*hash_value, |(hash, _)| *hash_value == *hash)
+            {
+                Some(*index)
+            } else {
+                None
+            };
+
+            if let Some(index) = index {
+                let mut i = index - 1;
+                loop {
+                    let match_row_idx = if let Some(offset) = deleted_offset {
+                        // This arguments means that we prune the next index way before here.
+                        if i < offset as u64 {
+                            // End of the list due to pruning
+                            break;
+                        }
+                        i - offset as u64
+                    } else {
+                        i
+                    };
+                    match_indices.append(match_row_idx);
+                    input_indices.append(row_idx as u32);
+                    output_tuples += 1;
+                    // Follow the chain to get the next index value
+                    let next = next_chain[match_row_idx as usize];
+
+                    if output_tuples >= limit {
+                        next_offset = Some((row_idx, Some(next)));
+                        break 'probe;
+                    }
+                    if next == 0 {
+                        // end of list
+                        break;
+                    }
+                    i = next - 1;
+                }
+            }
+        }
+
+        (input_indices, match_indices, next_offset)
     }
 }
 

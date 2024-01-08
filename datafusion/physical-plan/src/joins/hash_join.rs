@@ -26,7 +26,7 @@ use std::{any::Any, usize, vec};
 use crate::joins::utils::{
     adjust_indices_by_join_type, apply_join_filter_to_indices, build_batch_from_indices,
     calculate_join_output_ordering, get_final_indices_from_bit_map,
-    need_produce_result_in_final, JoinHashMap, JoinHashMapType,
+    need_produce_result_in_final, JoinHashMap, JoinHashMapOffset, JoinHashMapType,
 };
 use crate::{
     coalesce_partitions::CoalescePartitionsExec,
@@ -61,7 +61,8 @@ use arrow::util::bit_util;
 use arrow_array::cast::downcast_array;
 use arrow_schema::ArrowError;
 use datafusion_common::{
-    exec_err, internal_err, plan_err, DataFusionError, JoinSide, JoinType, Result,
+    internal_datafusion_err, internal_err, plan_err, DataFusionError, JoinSide, JoinType,
+    Result,
 };
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::TaskContext;
@@ -911,19 +912,32 @@ enum HashJoinStreamState {
     Completed,
 }
 
+impl HashJoinStreamState {
+    /// Tries to extract ProcessProbeBatchState from HashJoinStreamState enum.
+    /// Returns an error if state is not ProcessProbeBatchState.
+    fn try_as_process_probe_batch_mut(&mut self) -> Result<&mut ProcessProbeBatchState> {
+        match self {
+            HashJoinStreamState::ProcessProbeBatch(state) => Ok(state),
+            _ => internal_err!("Expected hash join stream in ProcessProbeBatch state"),
+        }
+    }
+}
+
 /// Container for HashJoinStreamState::ProcessProbeBatch related data
 struct ProcessProbeBatchState {
     /// Current probe-side batch
     batch: RecordBatch,
+    /// Matching offset
+    offset: JoinHashMapOffset,
+    /// Max joined probe-side index from current batch
+    joined_probe_idx: Option<usize>,
 }
 
-impl HashJoinStreamState {
-    /// Tries to extract ProcessProbeBatchState from HashJoinStreamState enum.
-    /// Returns an error if state is not ProcessProbeBatchState.
-    fn try_as_process_probe_batch(&self) -> Result<&ProcessProbeBatchState> {
-        match self {
-            HashJoinStreamState::ProcessProbeBatch(state) => Ok(state),
-            _ => internal_err!("Expected hash join stream in ProcessProbeBatch state"),
+impl ProcessProbeBatchState {
+    fn advance(&mut self, offset: JoinHashMapOffset, joined_probe_idx: Option<usize>) {
+        self.offset = offset;
+        if joined_probe_idx.is_some() {
+            self.joined_probe_idx = joined_probe_idx;
         }
     }
 }
@@ -973,7 +987,9 @@ impl RecordBatchStream for HashJoinStream {
     }
 }
 
-/// Returns build/probe indices satisfying the equality condition.
+/// Lookups by hash agaist JoinHashMap and resolves potential hash collisions.
+/// Returns build/probe indices satisfying the equality condition, along with
+/// starting point for next iteration.
 ///
 /// # Example
 ///
@@ -1019,7 +1035,7 @@ impl RecordBatchStream for HashJoinStream {
 /// Probe indices: 3, 3, 4, 5
 /// ```
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn build_equal_condition_join_indices<T: JoinHashMapType>(
+fn lookup_join_hashmap<T: JoinHashMapType>(
     build_hashmap: &T,
     build_input_buffer: &RecordBatch,
     probe_batch: &RecordBatch,
@@ -1027,12 +1043,9 @@ pub(crate) fn build_equal_condition_join_indices<T: JoinHashMapType>(
     probe_on: &[Column],
     random_state: &RandomState,
     null_equals_null: bool,
-    hashes_buffer: &mut Vec<u64>,
-    filter: Option<&JoinFilter>,
-    build_side: JoinSide,
-    deleted_offset: Option<usize>,
-    fifo_hashmap: bool,
-) -> Result<(UInt64Array, UInt32Array)> {
+    limit: usize,
+    offset: JoinHashMapOffset,
+) -> Result<(UInt64Array, UInt32Array, Option<JoinHashMapOffset>)> {
     let keys_values = probe_on
         .iter()
         .map(|c| c.evaluate(probe_batch)?.into_array(probe_batch.num_rows()))
@@ -1044,78 +1057,32 @@ pub(crate) fn build_equal_condition_join_indices<T: JoinHashMapType>(
                 .into_array(build_input_buffer.num_rows())
         })
         .collect::<Result<Vec<_>>>()?;
-    hashes_buffer.clear();
-    hashes_buffer.resize(probe_batch.num_rows(), 0);
-    let hash_values = create_hashes(&keys_values, random_state, hashes_buffer)?;
 
-    // In case build-side input has not been inverted while JoinHashMap creation, the chained list algorithm
-    // will return build indices for each probe row in a reverse order as such:
-    // Build Indices: [5, 4, 3]
-    // Probe Indices: [1, 1, 1]
-    //
-    // This affects the output sequence. Hypothetically, it's possible to preserve the lexicographic order on the build side.
-    // Let's consider probe rows [0,1] as an example:
-    //
-    // When the probe iteration sequence is reversed, the following pairings can be derived:
-    //
-    // For probe row 1:
-    //     (5, 1)
-    //     (4, 1)
-    //     (3, 1)
-    //
-    // For probe row 0:
-    //     (5, 0)
-    //     (4, 0)
-    //     (3, 0)
-    //
-    // After reversing both sets of indices, we obtain reversed indices:
-    //
-    //     (3,0)
-    //     (4,0)
-    //     (5,0)
-    //     (3,1)
-    //     (4,1)
-    //     (5,1)
-    //
-    // With this approach, the lexicographic order on both the probe side and the build side is preserved.
-    let (mut probe_indices, mut build_indices) = if fifo_hashmap {
-        build_hashmap.get_matched_indices(hash_values.iter().enumerate(), deleted_offset)
-    } else {
-        let (mut matched_probe, mut matched_build) = build_hashmap
-            .get_matched_indices(hash_values.iter().enumerate().rev(), deleted_offset);
+    let mut hashes_buffer = vec![0; probe_batch.num_rows()];
+    let hash_values = create_hashes(&keys_values, random_state, &mut hashes_buffer)?;
 
-        matched_probe.as_slice_mut().reverse();
-        matched_build.as_slice_mut().reverse();
+    let (mut probe_builder, mut build_builder, next_offset) = build_hashmap
+        .get_matched_indices_with_limit_offset(
+            hash_values.iter().enumerate(),
+            None,
+            limit,
+            offset,
+        );
 
-        (matched_probe, matched_build)
-    };
+    let build_indices: UInt64Array =
+        PrimitiveArray::new(build_builder.finish().into(), None);
+    let probe_indices: UInt32Array =
+        PrimitiveArray::new(probe_builder.finish().into(), None);
 
-    let left: UInt64Array = PrimitiveArray::new(build_indices.finish().into(), None);
-    let right: UInt32Array = PrimitiveArray::new(probe_indices.finish().into(), None);
-
-    let (left, right) = if let Some(filter) = filter {
-        // Filter the indices which satisfy the non-equal join condition, like `left.b1 = 10`
-        apply_join_filter_to_indices(
-            build_input_buffer,
-            probe_batch,
-            left,
-            right,
-            filter,
-            build_side,
-        )?
-    } else {
-        (left, right)
-    };
-
-    let matched_indices = equal_rows_arr(
-        &left,
-        &right,
+    let (build_indices, probe_indices) = equal_rows_arr(
+        &build_indices,
+        &probe_indices,
         &build_join_values,
         &keys_values,
         null_equals_null,
     )?;
 
-    Ok((matched_indices.0, matched_indices.1))
+    Ok((build_indices, probe_indices, next_offset))
 }
 
 // version of eq_dyn supporting equality on null arrays
@@ -1263,6 +1230,8 @@ impl HashJoinStream {
                 self.state =
                     HashJoinStreamState::ProcessProbeBatch(ProcessProbeBatchState {
                         batch,
+                        offset: (0, None),
+                        joined_probe_idx: None,
                     });
             }
             Some(Err(err)) => return Poll::Ready(Err(err)),
@@ -1277,16 +1246,15 @@ impl HashJoinStream {
     fn process_probe_batch(
         &mut self,
     ) -> Result<StatefulStreamResult<Option<RecordBatch>>> {
-        let state = self.state.try_as_process_probe_batch()?;
+        let state = self.state.try_as_process_probe_batch_mut()?;
         let build_side = self.build_side.try_as_ready_mut()?;
 
         self.join_metrics.input_batches.add(1);
         self.join_metrics.input_rows.add(state.batch.num_rows());
         let timer = self.join_metrics.join_time.timer();
 
-        let mut hashes_buffer = vec![];
-        // get the matched two indices for the on condition
-        let left_right_indices = build_equal_condition_join_indices(
+        // get the matched by join keys indices
+        let (left_indices, right_indices, next_offset) = lookup_join_hashmap(
             build_side.left_data.hash_map(),
             build_side.left_data.batch(),
             &state.batch,
@@ -1294,53 +1262,102 @@ impl HashJoinStream {
             &self.on_right,
             &self.random_state,
             self.null_equals_null,
-            &mut hashes_buffer,
-            self.filter.as_ref(),
-            JoinSide::Left,
-            None,
-            true,
+            self.batch_size,
+            state.offset,
+        )?;
+
+        // apply join filters if exists
+        let (left_indices, right_indices) = if let Some(filter) = &self.filter {
+            // Filter the indices which satisfy the non-equal join condition, like `left.b1 = 10`
+            apply_join_filter_to_indices(
+                build_side.left_data.batch(),
+                &state.batch,
+                left_indices,
+                right_indices,
+                filter,
+                JoinSide::Left,
+            )?
+        } else {
+            (left_indices, right_indices)
+        };
+
+        // mark joined left-side indices as visited, if required by join type
+        if need_produce_result_in_final(self.join_type) {
+            left_indices.iter().flatten().for_each(|x| {
+                build_side.visited_left_side.set_bit(x as usize, true);
+            });
+        }
+
+        // check if probe batch scanned based on `next_offset` returned from lookup function
+        let probe_batch_scanned = next_offset.is_none()
+            || next_offset.is_some_and(|(probe_idx, build_idx)| {
+                probe_idx + 1 >= state.batch.num_rows()
+                    && build_idx.is_some_and(|v| v == 0)
+            });
+
+        // The goals of index alignment for different join types are:
+        //
+        // 1) Right & FullJoin -- to append all missing probe-side indices between
+        //    previous (excluding) and current joined indices.
+        // 2) SemiJoin -- deduplicate probe indices in range between previous
+        //    (excluding) and current joined indices.
+        // 3) AntiJoin -- return only missing indices in range between
+        //    previous and current joined indices.
+        //    Inclusion/exclusion of the indices themselves don't matter
+        //
+        // As a summary -- alignment range can be produced based only on
+        // joined (matched with filters applied) probe side indices, excluding starting one
+        // (left from previous iteration).
+
+        // if any rows have been joined -- get last joined probe-side (right) row
+        // it's important that index counts as "joined" after hash collisions checks
+        // and join filters applied.
+        let last_joined_right_idx = match right_indices.len() {
+            0 => None,
+            n => Some(right_indices.value(n - 1) as usize),
+        };
+
+        // Calculate range and perform alignment.
+        // In case probe batch has been processed -- align all remaining rows.
+        let index_alignment_range_start = state.joined_probe_idx.map_or(0, |v| v + 1);
+        let index_alignment_range_end = if probe_batch_scanned {
+            state.batch.num_rows()
+        } else {
+            last_joined_right_idx.map_or(0, |v| v + 1)
+        };
+
+        let (left_indices, right_indices) = adjust_indices_by_join_type(
+            left_indices,
+            right_indices,
+            index_alignment_range_start..index_alignment_range_end,
+            self.join_type,
         );
 
-        let result = match left_right_indices {
-            Ok((left_side, right_side)) => {
-                // set the left bitmap
-                // and only left, full, left semi, left anti need the left bitmap
-                if need_produce_result_in_final(self.join_type) {
-                    left_side.iter().flatten().for_each(|x| {
-                        build_side.visited_left_side.set_bit(x as usize, true);
-                    });
-                }
+        let result = build_batch_from_indices(
+            &self.schema,
+            build_side.left_data.batch(),
+            &state.batch,
+            &left_indices,
+            &right_indices,
+            &self.column_indices,
+            JoinSide::Left,
+        )?;
 
-                // adjust the two side indices base on the join type
-                let (left_side, right_side) = adjust_indices_by_join_type(
-                    left_side,
-                    right_side,
-                    0..state.batch.num_rows(),
-                    self.join_type,
-                );
-
-                let result = build_batch_from_indices(
-                    &self.schema,
-                    build_side.left_data.batch(),
-                    &state.batch,
-                    &left_side,
-                    &right_side,
-                    &self.column_indices,
-                    JoinSide::Left,
-                );
-                self.join_metrics.output_batches.add(1);
-                self.join_metrics.output_rows.add(state.batch.num_rows());
-                result
-            }
-            Err(err) => {
-                exec_err!("Fail to build join indices in HashJoinExec, error:{err}")
-            }
-        };
+        self.join_metrics.output_batches.add(1);
+        self.join_metrics.output_rows.add(state.batch.num_rows());
         timer.done();
 
-        self.state = HashJoinStreamState::FetchProbeBatch;
+        if probe_batch_scanned {
+            self.state = HashJoinStreamState::FetchProbeBatch;
+        } else {
+            state.advance(
+                next_offset
+                    .ok_or_else(|| internal_datafusion_err!("unexpected None offset"))?,
+                last_joined_right_idx,
+            )
+        };
 
-        Ok(StatefulStreamResult::Ready(Some(result?)))
+        Ok(StatefulStreamResult::Ready(Some(result)))
     }
 
     /// Processes unmatched build-side rows for certain join types and produces output batch
@@ -1406,15 +1423,15 @@ mod tests {
 
     use super::*;
     use crate::{
-        common, expressions::Column, hash_utils::create_hashes,
-        joins::hash_join::build_equal_condition_join_indices, memory::MemoryExec,
+        common, expressions::Column, hash_utils::create_hashes, memory::MemoryExec,
         repartition::RepartitionExec, test::build_table_i32, test::exec::MockExec,
     };
 
     use arrow::array::{ArrayRef, Date32Array, Int32Array, UInt32Builder, UInt64Builder};
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::{
-        assert_batches_eq, assert_batches_sorted_eq, assert_contains, ScalarValue,
+        assert_batches_eq, assert_batches_sorted_eq, assert_contains, exec_err,
+        ScalarValue,
     };
     use datafusion_execution::config::SessionConfig;
     use datafusion_execution::runtime_env::{RuntimeConfig, RuntimeEnv};
@@ -2914,7 +2931,7 @@ mod tests {
 
         let join_hash_map = JoinHashMap::new(hashmap_left, next);
 
-        let (l, r) = build_equal_condition_join_indices(
+        let (l, r, _) = lookup_join_hashmap(
             &join_hash_map,
             &left,
             &right,
@@ -2922,11 +2939,8 @@ mod tests {
             &[Column::new("a", 0)],
             &random_state,
             false,
-            &mut vec![0; right.num_rows()],
-            None,
-            JoinSide::Left,
-            None,
-            false,
+            8192,
+            (0, None),
         )?;
 
         let mut left_ids = UInt64Builder::with_capacity(0);
@@ -3314,26 +3328,26 @@ mod tests {
             "+----+----+----+----+----+----+",
             "| a1 | b1 | c1 | a2 | b2 | c2 |",
             "+----+----+----+----+----+----+",
-            "| 4  | 1  | 0  | 10 | 1  | 0  |",
-            "| 3  | 1  | 0  | 10 | 1  | 0  |",
-            "| 2  | 1  | 0  | 10 | 1  | 0  |",
             "| 1  | 1  | 0  | 10 | 1  | 0  |",
-            "| 4  | 1  | 0  | 20 | 1  | 0  |",
-            "| 3  | 1  | 0  | 20 | 1  | 0  |",
-            "| 2  | 1  | 0  | 20 | 1  | 0  |",
+            "| 2  | 1  | 0  | 10 | 1  | 0  |",
+            "| 3  | 1  | 0  | 10 | 1  | 0  |",
+            "| 4  | 1  | 0  | 10 | 1  | 0  |",
             "| 1  | 1  | 0  | 20 | 1  | 0  |",
-            "| 4  | 1  | 0  | 30 | 1  | 0  |",
-            "| 3  | 1  | 0  | 30 | 1  | 0  |",
-            "| 2  | 1  | 0  | 30 | 1  | 0  |",
+            "| 2  | 1  | 0  | 20 | 1  | 0  |",
+            "| 3  | 1  | 0  | 20 | 1  | 0  |",
+            "| 4  | 1  | 0  | 20 | 1  | 0  |",
             "| 1  | 1  | 0  | 30 | 1  | 0  |",
-            "| 4  | 1  | 0  | 40 | 1  | 0  |",
-            "| 3  | 1  | 0  | 40 | 1  | 0  |",
-            "| 2  | 1  | 0  | 40 | 1  | 0  |",
+            "| 2  | 1  | 0  | 30 | 1  | 0  |",
+            "| 3  | 1  | 0  | 30 | 1  | 0  |",
+            "| 4  | 1  | 0  | 30 | 1  | 0  |",
             "| 1  | 1  | 0  | 40 | 1  | 0  |",
-            "| 4  | 1  | 0  | 50 | 1  | 0  |",
-            "| 3  | 1  | 0  | 50 | 1  | 0  |",
-            "| 2  | 1  | 0  | 50 | 1  | 0  |",
+            "| 2  | 1  | 0  | 40 | 1  | 0  |",
+            "| 3  | 1  | 0  | 40 | 1  | 0  |",
+            "| 4  | 1  | 0  | 40 | 1  | 0  |",
             "| 1  | 1  | 0  | 50 | 1  | 0  |",
+            "| 2  | 1  | 0  | 50 | 1  | 0  |",
+            "| 3  | 1  | 0  | 50 | 1  | 0  |",
+            "| 4  | 1  | 0  | 50 | 1  | 0  |",
             "+----+----+----+----+----+----+",
         ];
         let left_batch = [
