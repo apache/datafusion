@@ -85,9 +85,7 @@ macro_rules! float_distinct_count_accumulator {
 
 /// Returns the estimated number of hashbrown hashtables is likely to come up again
 fn estimated_buckets<T>(hashset: &HashSet<T, RandomState>) -> usize {
-    let estimated_buckets =
-        (hashset.len().checked_mul(8).unwrap_or(usize::MAX) / 7).next_power_of_two();
-    estimated_buckets
+    (hashset.len().checked_mul(8).unwrap_or(usize::MAX) / 7).next_power_of_two()
 }
 
 impl AggregateExpr for DistinctCount {
