@@ -36,7 +36,6 @@ use crate::{
 use arrow::array::ArrayRef;
 use arrow::datatypes::{Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
-use arrow_schema::DataType;
 use datafusion_common::stats::Precision;
 use datafusion_common::{not_impl_err, plan_err, DataFusionError, Result};
 use datafusion_execution::TaskContext;
@@ -285,9 +284,6 @@ pub struct AggregateExec {
     limit: Option<usize>,
     /// Input plan, could be a partial aggregate or the input to the aggregate
     pub input: Arc<dyn ExecutionPlan>,
-    /// Original aggregation schema, could be different from `schema` before dictionary group
-    /// keys get materialized
-    original_schema: SchemaRef,
     /// Schema after the aggregate is applied
     schema: SchemaRef,
     /// Input schema before any aggregation is applied. For partial aggregate this will be the
@@ -473,7 +469,7 @@ impl AggregateExec {
         input: Arc<dyn ExecutionPlan>,
         input_schema: SchemaRef,
     ) -> Result<Self> {
-        let original_schema = create_schema(
+        let schema = create_schema(
             &input.schema(),
             &group_by.expr,
             &aggr_expr,
@@ -481,11 +477,8 @@ impl AggregateExec {
             mode,
         )?;
 
-        let schema = Arc::new(materialize_dict_group_keys(
-            &original_schema,
-            group_by.expr.len(),
-        ));
-        let original_schema = Arc::new(original_schema);
+        let schema = Arc::new(schema);
+
         // Reset ordering requirement to `None` if aggregator is not order-sensitive
         order_by_expr = aggr_expr
             .iter()
@@ -560,7 +553,6 @@ impl AggregateExec {
             filter_expr,
             order_by_expr,
             input,
-            original_schema,
             schema,
             input_schema,
             projection_mapping,
@@ -980,24 +972,6 @@ fn create_schema(
     }
 
     Ok(Schema::new(fields))
-}
-
-/// returns schema with dictionary group keys materialized as their value types
-/// The actual convertion happens in `RowConverter` and we don't do unnecessary
-/// conversion back into dictionaries
-fn materialize_dict_group_keys(schema: &Schema, group_count: usize) -> Schema {
-    let fields = schema
-        .fields
-        .iter()
-        .enumerate()
-        .map(|(i, field)| match field.data_type() {
-            DataType::Dictionary(_, value_data_type) if i < group_count => {
-                Field::new(field.name(), *value_data_type.clone(), field.is_nullable())
-            }
-            _ => Field::clone(field),
-        })
-        .collect::<Vec<_>>();
-    Schema::new(fields)
 }
 
 fn group_schema(schema: &Schema, group_count: usize) -> SchemaRef {
