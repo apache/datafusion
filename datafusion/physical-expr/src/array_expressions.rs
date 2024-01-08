@@ -529,7 +529,7 @@ fn general_except<OffsetSize: OffsetSizeTrait>(
 
 pub fn array_except(args: &[ArrayRef]) -> Result<ArrayRef> {
     if args.len() != 2 {
-        return internal_err!("array_except needs two arguments");
+        return exec_err!("array_except needs two arguments");
     }
 
     let array1 = &args[0];
@@ -894,7 +894,7 @@ pub fn gen_range(args: &[ArrayRef]) -> Result<ArrayRef> {
             as_int64_array(&args[1])?,
             Some(as_int64_array(&args[2])?),
         ),
-        _ => return internal_err!("gen_range expects 1 to 3 arguments"),
+        _ => return exec_err!("gen_range expects 1 to 3 arguments"),
     };
 
     let mut values = vec![];
@@ -948,7 +948,7 @@ pub fn array_sort(args: &[ArrayRef]) -> Result<ArrayRef> {
                 nulls_first: order_nulls_first(nulls_first)?,
             })
         }
-        _ => return internal_err!("array_sort expects 1 to 3 arguments"),
+        _ => return exec_err!("array_sort expects 1 to 3 arguments"),
     };
 
     let list_array = as_list_array(&args[0])?;
@@ -994,7 +994,7 @@ fn order_desc(modifier: &str) -> Result<bool> {
     match modifier.to_uppercase().as_str() {
         "DESC" => Ok(true),
         "ASC" => Ok(false),
-        _ => internal_err!("the second parameter of array_sort expects DESC or ASC"),
+        _ => exec_err!("the second parameter of array_sort expects DESC or ASC"),
     }
 }
 
@@ -1002,7 +1002,7 @@ fn order_nulls_first(modifier: &str) -> Result<bool> {
     match modifier.to_uppercase().as_str() {
         "NULLS FIRST" => Ok(true),
         "NULLS LAST" => Ok(false),
-        _ => internal_err!(
+        _ => exec_err!(
             "the third parameter of array_sort expects NULLS FIRST or NULLS LAST"
         ),
     }
@@ -1208,7 +1208,7 @@ pub fn array_empty(args: &[ArrayRef]) -> Result<ArrayRef> {
     match array_type {
         DataType::List(_) => array_empty_dispatch::<i32>(&args[0]),
         DataType::LargeList(_) => array_empty_dispatch::<i64>(&args[0]),
-        _ => internal_err!("array_empty does not support type '{array_type:?}'."),
+        _ => exec_err!("array_empty does not support type '{array_type:?}'."),
     }
 }
 
@@ -1598,7 +1598,7 @@ fn array_remove_internal(
             let list_array = array.as_list::<i64>();
             general_remove::<i64>(list_array, element_array, arr_n)
         }
-        _ => internal_err!("array_remove_all expects a list array"),
+        array_type => exec_err!("array_remove_all does not support type '{array_type:?}'."),
     }
 }
 
@@ -2260,10 +2260,7 @@ pub fn array_length(args: &[ArrayRef]) -> Result<ArrayRef> {
     match &args[0].data_type() {
         DataType::List(_) => array_length_dispatch::<i32>(args),
         DataType::LargeList(_) => array_length_dispatch::<i64>(args),
-        _ => internal_err!(
-            "array_length does not support type '{:?}'",
-            args[0].data_type()
-        ),
+        array_type => exec_err!("array_length does not support type '{array_type:?}'"),
     }
 }
 
@@ -2288,11 +2285,8 @@ pub fn array_dims(args: &[ArrayRef]) -> Result<ArrayRef> {
                 .map(compute_array_dims)
                 .collect::<Result<Vec<_>>>()?
         }
-        _ => {
-            return exec_err!(
-                "array_dims does not support type '{:?}'",
-                args[0].data_type()
-            );
+        array_type => {
+            return exec_err!("array_dims does not support type '{array_type:?}'");
         }
     };
 
@@ -2441,7 +2435,7 @@ pub fn array_has_any(args: &[ArrayRef]) -> Result<ArrayRef> {
         DataType::LargeList(_) => {
             general_array_has_dispatch::<i64>(&args[0], &args[1], ComparisonType::Any)
         }
-        _ => internal_err!("array_has_any does not support type '{array_type:?}'."),
+        _ => exec_err!("array_has_any does not support type '{array_type:?}'."),
     }
 }
 
@@ -2460,7 +2454,7 @@ pub fn array_has_all(args: &[ArrayRef]) -> Result<ArrayRef> {
         DataType::LargeList(_) => {
             general_array_has_dispatch::<i64>(&args[0], &args[1], ComparisonType::All)
         }
-        _ => internal_err!("array_has_all does not support type '{array_type:?}'."),
+        _ => exec_err!("array_has_all does not support type '{array_type:?}'."),
     }
 }
 
@@ -2543,7 +2537,7 @@ pub fn string_to_array<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef
                 });
         }
         _ => {
-            return internal_err!(
+            return exec_err!(
                 "Expect string_to_array function to take two or three parameters"
             )
         }
@@ -2611,7 +2605,7 @@ pub fn array_distinct(args: &[ArrayRef]) -> Result<ArrayRef> {
             let array = as_large_list_array(&args[0])?;
             general_array_distinct(array, field)
         }
-        _ => internal_err!("array_distinct only support list array"),
+        array_type => exec_err!("array_distinct does not support type '{array_type:?}'"),
     }
 }
 
