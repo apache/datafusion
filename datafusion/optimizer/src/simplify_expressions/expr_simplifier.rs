@@ -228,8 +228,7 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
 
 #[allow(rustdoc::private_intra_doc_links)]
 /// Canonicalize any BinaryExprs that are not in canonical form
-/// <literal> <op> <col> is rewritten to <col> <op> <literal> (remember to switch the operator)
-/// <col> <op> <literal> is canonical
+/// <literal> <op> <col> is rewritten to <col> <op> <literal>
 /// <col1> <op> <col2> is rewritten so that the name of col1 sorts higher than col2 (b > a would be canonicalized to a < b)
 struct Canonicalizer {}
 
@@ -244,38 +243,28 @@ impl TreeNodeRewriter for Canonicalizer {
 
     fn mutate(&mut self, expr: Expr) -> Result<Expr> {
         if let Expr::BinaryExpr(BinaryExpr { left, op, right }) = expr {
-            // Case 1, <col1> <op> <col2>
-            let mut new_expr = BinaryExpr {
-                left: left.clone(),
-                op: op.clone(),
-                right: right.clone(),
-            };
-            match (left.as_ref(), right.as_ref()) {
-                (Expr::Column(_a), Expr::Column(_b)) => {
-                    let left_name = left.canonical_name();
-                    let right_name = right.canonical_name();
-                    if left_name < right_name {
-                        if let Some(swap_op) = op.swap() {
-                            new_expr = BinaryExpr {
-                                left: right,
-                                op: swap_op,
-                                right: left,
-                            };
-                        }
+            match (left.as_ref(), right.as_ref(), op.swap()) {
+                // <col1> <op> <col2>
+                (Expr::Column(_), Expr::Column(_), Some(swapped_op)) => {
+                    if right.canonical_name() > left.canonical_name() {
+                        return Ok(Expr::BinaryExpr(BinaryExpr {
+                            left: right,
+                            op: swapped_op,
+                            right: left,
+                        }));
                     }
                 }
-                (Expr::Literal(_a), Expr::Column(_b)) => {
-                    if let Some(swap_op) = op.swap() {
-                        new_expr = BinaryExpr {
-                            left: right,
-                            op: swap_op,
-                            right: left,
-                        }
-                    }
+                // <col> <op> <literal>
+                (Expr::Literal(_a), Expr::Column(_b), Some(swapped_op)) => {
+                    return Ok(Expr::BinaryExpr(BinaryExpr {
+                        left: right,
+                        op: swapped_op,
+                        right: left,
+                    }));
                 }
                 _ => {}
             }
-            Ok(Expr::BinaryExpr(new_expr))
+            Ok(Expr::BinaryExpr(BinaryExpr { left, op, right }))
         } else {
             Ok(expr)
         }
