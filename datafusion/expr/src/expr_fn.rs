@@ -984,6 +984,16 @@ pub struct SimpleScalarUDF {
     fun: ScalarFunctionImplementation,
 }
 
+impl Debug for SimpleScalarUDF {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.debug_struct("ScalarUDF")
+            .field("name", &self.name)
+            .field("signature", &self.signature)
+            .field("fun", &"<FUNC>")
+            .finish()
+    }
+}
+
 impl SimpleScalarUDF {
     /// Create a new `SimpleScalarUDF` from a name, input types, return type and
     /// implementation. Implementing [`ScalarUDFImpl`] allows more flexibility
