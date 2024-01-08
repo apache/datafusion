@@ -28,7 +28,7 @@ use crate::{
     BuiltinScalarFunction, Expr, LogicalPlan, Operator, ReturnTypeFunction,
     ScalarFunctionImplementation, ScalarUDF, Signature, StateTypeFunction, Volatility,
 };
-use crate::{ColumnarValue, ScalarUDFImpl, WindowUDF};
+use crate::{ColumnarValue, ScalarUDFImpl, WindowUDF, WindowUDFImpl};
 use arrow::datatypes::DataType;
 use datafusion_common::{Column, Result};
 use std::any::Any;
@@ -1070,13 +1070,77 @@ pub fn create_udwf(
     volatility: Volatility,
     partition_evaluator_factory: PartitionEvaluatorFactory,
 ) -> WindowUDF {
-    let return_type: ReturnTypeFunction = Arc::new(move |_| Ok(return_type.clone()));
-    WindowUDF::new(
+    let return_type = Arc::try_unwrap(return_type).unwrap_or_else(|t| t.as_ref().clone());
+    WindowUDF::from(SimpleWindowUDF::new(
         name,
-        &Signature::exact(vec![input_type], volatility),
-        &return_type,
-        &partition_evaluator_factory,
-    )
+        input_type,
+        return_type,
+        volatility,
+        partition_evaluator_factory,
+    ))
+}
+
+/// Implements [`WindowUDFImpl`] for functions that have a single signature and
+/// return type.
+pub struct SimpleWindowUDF {
+    name: String,
+    signature: Signature,
+    return_type: DataType,
+    partition_evaluator_factory: PartitionEvaluatorFactory,
+}
+
+impl Debug for SimpleWindowUDF {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.debug_struct("WindowUDF")
+            .field("name", &self.name)
+            .field("signature", &self.signature)
+            .field("return_type", &"<func>")
+            .field("partition_evaluator_factory", &"<FUNC>")
+            .finish()
+    }
+}
+
+impl SimpleWindowUDF {
+    /// Create a new `SimpleWindowUDF` from a name, input types, return type and
+    /// implementation. Implementing [`WindowUDFImpl`] allows more flexibility
+    pub fn new(
+        name: impl Into<String>,
+        input_type: DataType,
+        return_type: DataType,
+        volatility: Volatility,
+        partition_evaluator_factory: PartitionEvaluatorFactory,
+    ) -> Self {
+        let name = name.into();
+        let signature = Signature::exact([input_type].to_vec(), volatility);
+        Self {
+            name,
+            signature,
+            return_type,
+            partition_evaluator_factory,
+        }
+    }
+}
+
+impl WindowUDFImpl for SimpleWindowUDF {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        Ok(self.return_type.clone())
+    }
+
+    fn partition_evaluator(&self) -> Result<Box<dyn crate::PartitionEvaluator>> {
+        (self.partition_evaluator_factory)()
+    }
 }
 
 /// Calls a named built in function

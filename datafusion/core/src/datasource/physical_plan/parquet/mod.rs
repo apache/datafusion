@@ -1768,8 +1768,9 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn parquet_exec_metrics() {
+    /// Returns a string array with contents:
+    /// "[Foo, null, bar, bar, bar, bar, zzz]"
+    fn string_batch() -> RecordBatch {
         let c1: ArrayRef = Arc::new(StringArray::from(vec![
             Some("Foo"),
             None,
@@ -1781,9 +1782,15 @@ mod tests {
         ]));
 
         // batch1: c1(string)
-        let batch1 = create_batch(vec![("c1", c1.clone())]);
+        create_batch(vec![("c1", c1.clone())])
+    }
 
-        // on
+    #[tokio::test]
+    async fn parquet_exec_metrics() {
+        // batch1: c1(string)
+        let batch1 = string_batch();
+
+        // c1 != 'bar'
         let filter = col("c1").not_eq(lit("bar"));
 
         // read/write them files:
@@ -1812,20 +1819,10 @@ mod tests {
 
     #[tokio::test]
     async fn parquet_exec_display() {
-        let c1: ArrayRef = Arc::new(StringArray::from(vec![
-            Some("Foo"),
-            None,
-            Some("bar"),
-            Some("bar"),
-            Some("bar"),
-            Some("bar"),
-            Some("zzz"),
-        ]));
-
         // batch1: c1(string)
-        let batch1 = create_batch(vec![("c1", c1.clone())]);
+        let batch1 = string_batch();
 
-        // on
+        // c1 != 'bar'
         let filter = col("c1").not_eq(lit("bar"));
 
         let rt = RoundTrip::new()
@@ -1854,21 +1851,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn parquet_exec_skip_empty_pruning() {
-        let c1: ArrayRef = Arc::new(StringArray::from(vec![
-            Some("Foo"),
-            None,
-            Some("bar"),
-            Some("bar"),
-            Some("bar"),
-            Some("bar"),
-            Some("zzz"),
-        ]));
-
+    async fn parquet_exec_has_no_pruning_predicate_if_can_not_prune() {
         // batch1: c1(string)
-        let batch1 = create_batch(vec![("c1", c1.clone())]);
+        let batch1 = string_batch();
 
-        // filter is too complicated for pruning
+        // filter is too complicated for pruning (PruningPredicate code does not
+        // handle case expressions), so the pruning predicate will always be
+        // "true"
+
+        // WHEN c1 != bar THEN true ELSE false END
         let filter = when(col("c1").not_eq(lit("bar")), lit(true))
             .otherwise(lit(false))
             .unwrap();
@@ -1879,7 +1870,7 @@ mod tests {
             .round_trip(vec![batch1])
             .await;
 
-        // Should not contain a pruning predicate
+        // Should not contain a pruning predicate (since nothing can be pruned)
         let pruning_predicate = &rt.parquet_exec.pruning_predicate;
         assert!(
             pruning_predicate.is_none(),
@@ -1890,6 +1881,33 @@ mod tests {
         let predicate = rt.parquet_exec.predicate.as_ref();
         let filter_phys = logical2physical(&filter, rt.parquet_exec.schema().as_ref());
         assert_eq!(predicate.unwrap().to_string(), filter_phys.to_string());
+    }
+
+    #[tokio::test]
+    async fn parquet_exec_has_pruning_predicate_for_guarantees() {
+        // batch1: c1(string)
+        let batch1 = string_batch();
+
+        // part of the filter is too complicated for pruning (PruningPredicate code does not
+        // handle case expressions), but part (c1 = 'foo') can be used for bloom filtering, so
+        // should still have the pruning predicate.
+
+        // c1 = 'foo' AND (WHEN c1 != bar THEN true ELSE false END)
+        let filter = col("c1").eq(lit("foo")).and(
+            when(col("c1").not_eq(lit("bar")), lit(true))
+                .otherwise(lit(false))
+                .unwrap(),
+        );
+
+        let rt = RoundTrip::new()
+            .with_predicate(filter.clone())
+            .with_pushdown_predicate()
+            .round_trip(vec![batch1])
+            .await;
+
+        // Should have a pruning predicate
+        let pruning_predicate = &rt.parquet_exec.pruning_predicate;
+        assert!(pruning_predicate.is_some());
     }
 
     /// returns the sum of all the metrics with the specified name

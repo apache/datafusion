@@ -17,6 +17,7 @@
 
 //! Column
 
+use crate::error::_schema_err;
 use crate::utils::{parse_identifiers_normalized, quote_identifier};
 use crate::{DFSchema, DataFusionError, OwnedTableReference, Result, SchemaError};
 use std::collections::HashSet;
@@ -211,13 +212,13 @@ impl Column {
             }
         }
 
-        Err(DataFusionError::SchemaError(SchemaError::FieldNotFound {
+        _schema_err!(SchemaError::FieldNotFound {
             field: Box::new(Column::new(self.relation.clone(), self.name)),
             valid_fields: schemas
                 .iter()
                 .flat_map(|s| s.fields().iter().map(|f| f.qualified_column()))
                 .collect(),
-        }))
+        })
     }
 
     /// Qualify column if not done yet.
@@ -299,23 +300,21 @@ impl Column {
                     }
 
                     // If not due to USING columns then due to ambiguous column name
-                    return Err(DataFusionError::SchemaError(
-                        SchemaError::AmbiguousReference {
-                            field: Column::new_unqualified(self.name),
-                        },
-                    ));
+                    return _schema_err!(SchemaError::AmbiguousReference {
+                        field: Column::new_unqualified(self.name),
+                    });
                 }
             }
         }
 
-        Err(DataFusionError::SchemaError(SchemaError::FieldNotFound {
+        _schema_err!(SchemaError::FieldNotFound {
             field: Box::new(self),
             valid_fields: schemas
                 .iter()
                 .flat_map(|s| s.iter())
                 .flat_map(|s| s.fields().iter().map(|f| f.qualified_column()))
                 .collect(),
-        }))
+        })
     }
 }
 
