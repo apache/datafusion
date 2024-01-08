@@ -1217,19 +1217,6 @@ fn ensure_distribution(
                 }
             }
 
-            if enable_round_robin
-                // Operator benefits from partitioning (e.g. filter):
-                && (would_benefit && repartition_beneficial_stats)
-                // Unless partitioning doesn't increase the partition count, it is not beneficial:
-                && child.plan.output_partitioning().partition_count() < target_partitions
-            {
-                // Increase parallelism by adding round-robin repartitioning
-                // on top of the operator. Note that we only do this if the
-                // partition count is not already equal to the desired partition
-                // count.
-                child = add_roundrobin_on_top(child, target_partitions)?;
-            }
-
             // Satisfy the distribution requirement if it is unmet.
             match requirement {
                 Distribution::SinglePartition => {
