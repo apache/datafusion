@@ -478,7 +478,6 @@ impl AggregateExec {
         )?;
 
         let schema = Arc::new(schema);
-
         // Reset ordering requirement to `None` if aggregator is not order-sensitive
         order_by_expr = aggr_expr
             .iter()
