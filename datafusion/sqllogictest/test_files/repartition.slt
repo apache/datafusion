@@ -71,6 +71,3 @@ AggregateExec: mode=FinalPartitioned, gby=[column1@0 as column1], aggr=[SUM(parq
 # Cleanup
 statement ok
 DROP TABLE parquet_table;
-
-statement error DataFusion error: Execution error: Table 'parquet_table_with_order' doesn't exist\.
-DROP TABLE parquet_table_with_order;
