@@ -50,13 +50,13 @@ pub enum DataFusionError {
     ///
     /// 2nd argument is for optional backtrace
     ArrowError(ArrowError, Option<String>),
-    /// Error when reading Parquet data.
+    /// Error when reading / writing Parquet data.
     #[cfg(feature = "parquet")]
     ParquetError(ParquetError),
     /// Error when reading Avro data.
     #[cfg(feature = "avro")]
     AvroError(AvroError),
-    /// Error when reading from an object_store (e.g. S3 or LocalFile)
+    /// Error when reading / writing to / from an object_store (e.g. S3 or LocalFile)
     #[cfg(feature = "object_store")]
     ObjectStore(object_store::Error),
     /// Error when an I/O operation fails
@@ -65,7 +65,7 @@ pub enum DataFusionError {
     ///
     /// 2nd argument is for optional backtrace    
     SQL(ParserError, Option<String>),
-    /// Error when a features is not yet implemented.
+    /// Error when a feature is not yet implemented.
     ///
     /// These errors are sometimes returned for features that are still in
     /// development and are not entirely complete. Often, these errors are
