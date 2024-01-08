@@ -926,9 +926,8 @@ fn add_hash_on_top(
     hash_exprs: Vec<Arc<dyn PhysicalExpr>>,
     n_target: usize,
 ) -> Result<DistributionContext> {
-    let partition_count = input.plan.output_partitioning().partition_count();
     // Early return if hash repartition is unnecessary
-    if n_target == partition_count && n_target == 1 {
+    if n_target == 1 {
         return Ok(input);
     }
 
@@ -1191,13 +1190,13 @@ fn ensure_distribution(
     )
     .map(
         |(mut child, requirement, required_input_ordering, would_benefit, maintains)| {
-            // Don't need to apply when the returned row count is not greater than 1:
+            // Don't need to apply when the returned row count is not greater than batch size
             let num_rows = child.plan.statistics()?.num_rows;
             let repartition_beneficial_stats = if num_rows.is_exact().unwrap_or(false) {
                 num_rows
                     .get_value()
                     .map(|value| value > &batch_size)
-                    .unwrap_or(true)
+                    .unwrap() // safe to unwrap since is_exact() is true
             } else {
                 true
             };
@@ -1208,21 +1207,22 @@ fn ensure_distribution(
                 // Unless partitioning doesn't increase the partition count, it is not beneficial:
                 && child.plan.output_partitioning().partition_count() < target_partitions;
 
+            // When `repartition_file_scans` is set, attempt to increase
+            // parallelism at the source.
+            if repartition_file_scans && repartition_beneficial_stats {
+                if let Some(new_child) =
+                    child.plan.repartitioned(target_partitions, config)?
+                {
+                    child.plan = new_child;
+                }
+            }
+
             if enable_round_robin
                 // Operator benefits from partitioning (e.g. filter):
                 && (would_benefit && repartition_beneficial_stats)
                 // Unless partitioning doesn't increase the partition count, it is not beneficial:
                 && child.plan.output_partitioning().partition_count() < target_partitions
             {
-                // When `repartition_file_scans` is set, attempt to increase
-                // parallelism at the source.
-                if repartition_file_scans {
-                    if let Some(new_child) =
-                        child.plan.repartitioned(target_partitions, config)?
-                    {
-                        child.plan = new_child;
-                    }
-                }
                 // Increase parallelism by adding round-robin repartitioning
                 // on top of the operator. Note that we only do this if the
                 // partition count is not already equal to the desired partition
@@ -1367,17 +1367,10 @@ impl DistributionContext {
 
     fn update_children(mut self) -> Result<Self> {
         for child_context in self.children_nodes.iter_mut() {
-            child_context.distribution_connection = match child_context.plan.as_any() {
-                plan_any if plan_any.is::<RepartitionExec>() => matches!(
-                    plan_any
-                        .downcast_ref::<RepartitionExec>()
-                        .unwrap()
-                        .partitioning(),
-                    Partitioning::RoundRobinBatch(_) | Partitioning::Hash(_, _)
-                ),
-                plan_any
-                    if plan_any.is::<SortPreservingMergeExec>()
-                        || plan_any.is::<CoalescePartitionsExec>() =>
+            child_context.distribution_connection = match &child_context.plan {
+                plan if is_repartition(plan)
+                    || is_coalesce_partitions(plan)
+                    || is_sort_preserving_merge(plan) =>
                 {
                     true
                 }
@@ -3876,14 +3869,14 @@ pub(crate) mod tests {
             "RepartitionExec: partitioning=Hash([a@0], 2), input_partitions=2",
             "AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[]",
             // Plan already has two partitions
-            "ParquetExec: file_groups={2 groups: [[x], [y]]}, projection=[a, b, c, d, e]",
+            "ParquetExec: file_groups={2 groups: [[x:0..100], [y:0..100]]}, projection=[a, b, c, d, e]",
         ];
         let expected_csv = [
             "AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[]",
             "RepartitionExec: partitioning=Hash([a@0], 2), input_partitions=2",
             "AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[]",
             // Plan already has two partitions
-            "CsvExec: file_groups={2 groups: [[x], [y]]}, projection=[a, b, c, d, e], has_header=false",
+            "CsvExec: file_groups={2 groups: [[x:0..100], [y:0..100]]}, projection=[a, b, c, d, e], has_header=false",
         ];
 
         assert_optimized!(expected_parquet, plan_parquet, true, false, 2, true, 10);

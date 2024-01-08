@@ -31,9 +31,10 @@ use arrow_schema::DataType;
 use datafusion_common::file_options::StatementOptions;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{
-    not_impl_err, plan_datafusion_err, plan_err, unqualified_field_not_found, Column,
-    Constraints, DFField, DFSchema, DFSchemaRef, DataFusionError, OwnedTableReference,
-    Result, ScalarValue, SchemaReference, TableReference, ToDFSchema,
+    not_impl_err, plan_datafusion_err, plan_err, schema_err, unqualified_field_not_found,
+    Column, Constraints, DFField, DFSchema, DFSchemaRef, DataFusionError,
+    OwnedTableReference, Result, ScalarValue, SchemaError, SchemaReference,
+    TableReference, ToDFSchema,
 };
 use datafusion_expr::dml::{CopyOptions, CopyTo};
 use datafusion_expr::expr_rewriter::normalize_col_with_schemas_and_ambiguity_check;
@@ -1138,11 +1139,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         .index_of_column_by_name(None, &c)?
                         .ok_or_else(|| unqualified_field_not_found(&c, &table_schema))?;
                     if value_indices[column_index].is_some() {
-                        return Err(DataFusionError::SchemaError(
-                            datafusion_common::SchemaError::DuplicateUnqualifiedField {
-                                name: c,
-                            },
-                        ));
+                        return schema_err!(SchemaError::DuplicateUnqualifiedField {
+                            name: c,
+                        });
                     } else {
                         value_indices[column_index] = Some(i);
                     }

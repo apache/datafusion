@@ -214,22 +214,19 @@ fn hash_struct_array(
     hashes_buffer: &mut [u64],
 ) -> Result<()> {
     let nulls = array.nulls();
-    let num_columns = array.num_columns();
+    let row_len = array.len();
 
-    // Skip null columns
-    let valid_indices: Vec<usize> = if let Some(nulls) = nulls {
+    let valid_row_indices: Vec<usize> = if let Some(nulls) = nulls {
         nulls.valid_indices().collect()
     } else {
-        (0..num_columns).collect()
+        (0..row_len).collect()
     };
 
     // Create hashes for each row that combines the hashes over all the column at that row.
-    // array.len() is the number of rows.
-    let mut values_hashes = vec![0u64; array.len()];
+    let mut values_hashes = vec![0u64; row_len];
     create_hashes(array.columns(), random_state, &mut values_hashes)?;
 
-    // Skip the null columns, nulls should get hash value 0.
-    for i in valid_indices {
+    for i in valid_row_indices {
         let hash = &mut hashes_buffer[i];
         *hash = combine_hashes(*hash, values_hashes[i]);
     }
@@ -599,6 +596,39 @@ mod tests {
         assert_ne!(hashes[2], hashes[3]);
         // different values but both are null
         assert_eq!(hashes[4], hashes[5]);
+    }
+
+    #[test]
+    // Tests actual values of hashes, which are different if forcing collisions
+    #[cfg(not(feature = "force_hash_collisions"))]
+    fn create_hashes_for_struct_arrays_more_column_than_row() {
+        let struct_array = StructArray::from(vec![
+            (
+                Arc::new(Field::new("bool", DataType::Boolean, false)),
+                Arc::new(BooleanArray::from(vec![false, false])) as ArrayRef,
+            ),
+            (
+                Arc::new(Field::new("i32-1", DataType::Int32, false)),
+                Arc::new(Int32Array::from(vec![10, 10])) as ArrayRef,
+            ),
+            (
+                Arc::new(Field::new("i32-2", DataType::Int32, false)),
+                Arc::new(Int32Array::from(vec![10, 10])) as ArrayRef,
+            ),
+            (
+                Arc::new(Field::new("i32-3", DataType::Int32, false)),
+                Arc::new(Int32Array::from(vec![10, 10])) as ArrayRef,
+            ),
+        ]);
+
+        assert!(struct_array.is_valid(0));
+        assert!(struct_array.is_valid(1));
+
+        let array = Arc::new(struct_array) as ArrayRef;
+        let random_state = RandomState::with_seeds(0, 0, 0, 0);
+        let mut hashes = vec![0; array.len()];
+        create_hashes(&[array], &random_state, &mut hashes).unwrap();
+        assert_eq!(hashes[0], hashes[1]);
     }
 
     #[test]

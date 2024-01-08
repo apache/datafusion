@@ -28,7 +28,7 @@ use arrow_array::types::{
     Decimal128Type, DecimalType, TimestampMicrosecondType, TimestampMillisecondType,
     TimestampNanosecondType, TimestampSecondType,
 };
-use arrow_buffer::ArrowNativeType;
+use arrow_buffer::{ArrowNativeType, ToByteSlice};
 use arrow_schema::{DataType, Field, SortOptions};
 use datafusion_common::{exec_err, DataFusionError, Result};
 use datafusion_expr::Accumulator;
@@ -211,3 +211,21 @@ pub(crate) fn ordering_fields(
 pub fn get_sort_options(ordering_req: &[PhysicalSortExpr]) -> Vec<SortOptions> {
     ordering_req.iter().map(|item| item.options).collect()
 }
+
+/// A wrapper around a type to provide hash for floats
+#[derive(Copy, Clone, Debug)]
+pub(crate) struct Hashable<T>(pub T);
+
+impl<T: ToByteSlice> std::hash::Hash for Hashable<T> {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.0.to_byte_slice().hash(state)
+    }
+}
+
+impl<T: ArrowNativeTypeOp> PartialEq for Hashable<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.is_eq(other.0)
+    }
+}
+
+impl<T: ArrowNativeTypeOp> Eq for Hashable<T> {}
