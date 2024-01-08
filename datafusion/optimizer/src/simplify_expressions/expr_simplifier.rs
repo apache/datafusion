@@ -250,33 +250,32 @@ impl TreeNodeRewriter for Canonicalizer {
                 op: op.clone(),
                 right: right.clone(),
             };
-            let mut switch_op: Operator = op.clone();
-            if left.try_into_col().is_ok() && right.try_into_col().is_ok() {
-                let left_name = left.canonical_name();
-                let right_name = right.canonical_name();
-                if left_name < right_name {
-                    if let Some(swap_op) = op.swap() {
-                        switch_op = swap_op;
+            match (left.as_ref(), right.as_ref()) {
+                (Expr::Column(_a), Expr::Column(_b)) => {
+                    let left_name = left.canonical_name();
+                    let right_name = right.canonical_name();
+                    if left_name < right_name {
+                        if let Some(swap_op) = op.swap() {
+                            new_expr = BinaryExpr {
+                                left: right,
+                                op: swap_op,
+                                right: left,
+                            };
+                        }
                     }
-                    new_expr = BinaryExpr {
-                        left: right,
-                        op: switch_op,
-                        right: left,
-                    };
                 }
-            }
-            // Case 2, <literal> <op> <col>
-            else if left.try_into_col().is_err() && right.try_into_col().is_ok() {
-                if let Some(swap_op) = op.swap() {
-                    switch_op = swap_op;
+                (Expr::Literal(_a), Expr::Column(_b)) => {
+                    if let Some(swap_op) = op.swap() {
+                        new_expr = BinaryExpr {
+                            left: right,
+                            op: swap_op,
+                            right: left,
+                        }
+                    }
                 }
-                new_expr = BinaryExpr {
-                    left: right,
-                    op: switch_op,
-                    right: left,
-                };
+                _ => {}
             }
-            return Ok(Expr::BinaryExpr(new_expr));
+            Ok(Expr::BinaryExpr(new_expr))
         } else {
             Ok(expr)
         }
