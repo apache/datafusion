@@ -29,11 +29,11 @@ use crate::{LexOrdering, PhysicalExpr, PhysicalSortExpr};
 /// |a|b|c|d|
 /// |1|4|3|1|
 /// |2|3|3|2|
-/// |3|1|2|2|
-/// |3|2|1|3|
+/// |3|2|2|2|
+/// |3|1|1|3|
 /// ```
 ///
-/// Here, both `vec![a ASC, b ASC]` and `vec![c DESC, d ASC]` describe the table
+/// Here, both `vec![a ASC, b DESC]` and `vec![c DESC, d ASC]` describe the table
 /// ordering. In this case, we say that these orderings are equivalent.
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub struct OrderingEquivalenceClass {
