@@ -38,11 +38,12 @@ use crate::physical_plan::projection::ProjectionExec;
 use crate::physical_plan::ExecutionPlan;
 
 use arrow_schema::Schema;
-use datafusion_common::internal_err;
 use datafusion_common::tree_node::{Transformed, TreeNode};
+use datafusion_common::{internal_err, JoinSide};
 use datafusion_common::{DataFusionError, JoinType};
 use datafusion_physical_expr::expressions::Column;
-use datafusion_physical_expr::PhysicalExpr;
+use datafusion_physical_expr::sort_properties::SortProperties;
+use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
 
 /// The [`JoinSelection`] rule tries to modify a given plan so that it can
 /// accommodate infinite sources and optimize joins in the plan according to
@@ -425,24 +426,97 @@ pub type PipelineFixerSubrule = dyn Fn(
     &ConfigOptions,
 ) -> Option<Result<PipelineStatePropagator>>;
 
-/// This subrule checks if we can replace a hash join with a symmetric hash
-/// join when we are dealing with infinite inputs on both sides. This change
-/// avoids pipeline breaking and preserves query runnability. If possible,
-/// this subrule makes this replacement; otherwise, it has no effect.
+/// Converts a hash join to a symmetric hash join in the case of infinite inputs on both sides.
+///
+/// This subrule checks if a hash join can be replaced with a symmetric hash join when dealing
+/// with unbounded (infinite) inputs on both sides. This replacement avoids pipeline breaking and
+/// preserves query runnability. If the replacement is applicable, this subrule makes this change;
+/// otherwise, it leaves the input unchanged.
+///
+/// # Arguments
+/// * `input` - The current state of the pipeline, including the execution plan.
+/// * `config_options` - Configuration options that might affect the transformation logic.
+///
+/// # Returns
+/// An `Option` that contains the `Result` of the transformation. If the transformation is not applicable,
+/// it returns `None`. If applicable, it returns `Some(Ok(...))` with the modified pipeline state,
+/// or `Some(Err(...))` if an error occurs during the transformation.
 fn hash_join_convert_symmetric_subrule(
     mut input: PipelineStatePropagator,
     config_options: &ConfigOptions,
 ) -> Option<Result<PipelineStatePropagator>> {
+    // Check if the current plan node is a HashJoinExec.
     if let Some(hash_join) = input.plan.as_any().downcast_ref::<HashJoinExec>() {
+        // Determine if left and right children are unbounded.
         let ub_flags = input.children_unbounded();
         let (left_unbounded, right_unbounded) = (ub_flags[0], ub_flags[1]);
+        // Update the unbounded flag of the input.
         input.unbounded = left_unbounded || right_unbounded;
+        // Process only if both left and right sides are unbounded.
         let result = if left_unbounded && right_unbounded {
+            // Determine the partition mode based on configuration.
             let mode = if config_options.optimizer.repartition_joins {
                 StreamJoinPartitionMode::Partitioned
             } else {
                 StreamJoinPartitionMode::SinglePartition
             };
+            // A closure to determine the required sort order for each side of the join in the SymmetricHashJoinExec.
+            // This function checks if the columns involved in the filter have any specific ordering requirements.
+            // If the child nodes (left or right side of the join) already have a defined order, or if the columns used in the
+            // filter predicate are ordered, this function captures that ordering requirement. The identified order is then
+            // used in the SymmetricHashJoinExec to maintain bounded memory during join operations.
+            // However, if the child nodes do not have an inherent order, or if the filter columns are unordered,
+            // the function concludes that no specific order is required for the SymmetricHashJoinExec. This approach
+            // ensures that the symmetric hash join operation only imposes ordering constraints when necessary,
+            // based on the properties of the child nodes and the filter condition.
+            let determine_order = |side: JoinSide| -> Option<Vec<PhysicalSortExpr>> {
+                hash_join
+                    .filter()
+                    .map(|filter| {
+                        filter.column_indices().iter().any(
+                            |ColumnIndex {
+                                 index,
+                                 side: column_side,
+                             }| {
+                                // Skip if column side does not match the join side.
+                                if *column_side != side {
+                                    return false;
+                                }
+                                // Retrieve equivalence properties and schema based on the side.
+                                let (equivalence, schema) = match side {
+                                    JoinSide::Left => (
+                                        hash_join.left().equivalence_properties(),
+                                        hash_join.left().schema(),
+                                    ),
+                                    JoinSide::Right => (
+                                        hash_join.right().equivalence_properties(),
+                                        hash_join.right().schema(),
+                                    ),
+                                };
+
+                                let name = schema.field(*index).name();
+                                let col = Arc::new(Column::new(name, *index)) as _;
+                                // Check if the column is ordered.
+                                equivalence.get_expr_ordering(col).state
+                                    != SortProperties::Unordered
+                            },
+                        )
+                    })
+                    .unwrap_or(false)
+                    .then(|| {
+                        match side {
+                            JoinSide::Left => hash_join.left().output_ordering(),
+                            JoinSide::Right => hash_join.right().output_ordering(),
+                        }
+                        .map(|p| p.to_vec())
+                    })
+                    .flatten()
+            };
+
+            // Determine the sort order for both left and right sides.
+            let left_order = determine_order(JoinSide::Left);
+            let right_order = determine_order(JoinSide::Right);
+
             SymmetricHashJoinExec::try_new(
                 hash_join.left().clone(),
                 hash_join.right().clone(),
@@ -450,6 +524,8 @@ fn hash_join_convert_symmetric_subrule(
                 hash_join.filter().cloned(),
                 hash_join.join_type(),
                 hash_join.null_equals_null(),
+                left_order,
+                right_order,
                 mode,
             )
             .map(|exec| {

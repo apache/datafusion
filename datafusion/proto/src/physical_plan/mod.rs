@@ -646,6 +646,86 @@ impl AsExecutionPlan for PhysicalPlanNode {
                     })
                     .map_or(Ok(None), |v: Result<JoinFilter>| v.map(Some))?;
 
+                let left_sort_exprs: Vec<PhysicalSortExpr> = sym_join
+                    .left_sort_exprs
+                    .iter()
+                    .map(|expr| {
+                        let expr = expr.expr_type.as_ref().ok_or_else(|| {
+                            proto_error(format!(
+                                "physical_plan::from_proto() Unexpected expr {self:?}"
+                            ))
+                        })?;
+                        if let protobuf::physical_expr_node::ExprType::Sort(sort_expr) = expr {
+                            let expr = sort_expr
+                                .expr
+                                .as_ref()
+                                .ok_or_else(|| {
+                                    proto_error(format!(
+                                        "physical_plan::from_proto() Unexpected sort expr {self:?}"
+                                    ))
+                                })?
+                                .as_ref();
+                            Ok(PhysicalSortExpr {
+                                expr: parse_physical_expr(expr,registry, left.schema().as_ref())?,
+                                options: SortOptions {
+                                    descending: !sort_expr.asc,
+                                    nulls_first: sort_expr.nulls_first,
+                                },
+                            })
+                        } else {
+                            internal_err!(
+                                "physical_plan::from_proto() {self:?}"
+                            )
+                        }
+                    })
+                    .collect::<Result<_>>()?;
+
+                let left_sort_exprs = if left_sort_exprs.is_empty() {
+                    None
+                } else {
+                    Some(left_sort_exprs)
+                };
+
+                let right_sort_exprs: Vec<PhysicalSortExpr> = sym_join
+                    .right_sort_exprs
+                    .iter()
+                    .map(|expr| {
+                        let expr = expr.expr_type.as_ref().ok_or_else(|| {
+                            proto_error(format!(
+                                "physical_plan::from_proto() Unexpected expr {self:?}"
+                            ))
+                        })?;
+                        if let protobuf::physical_expr_node::ExprType::Sort(sort_expr) = expr {
+                            let expr = sort_expr
+                                .expr
+                                .as_ref()
+                                .ok_or_else(|| {
+                                    proto_error(format!(
+                                        "physical_plan::from_proto() Unexpected sort expr {self:?}"
+                                    ))
+                                })?
+                                .as_ref();
+                            Ok(PhysicalSortExpr {
+                                expr: parse_physical_expr(expr,registry, right.schema().as_ref())?,
+                                options: SortOptions {
+                                    descending: !sort_expr.asc,
+                                    nulls_first: sort_expr.nulls_first,
+                                },
+                            })
+                        } else {
+                            internal_err!(
+                                "physical_plan::from_proto() {self:?}"
+                            )
+                        }
+                    })
+                    .collect::<Result<_>>()?;
+
+                let right_sort_exprs = if right_sort_exprs.is_empty() {
+                    None
+                } else {
+                    Some(right_sort_exprs)
+                };
+
                 let partition_mode =
                     protobuf::StreamPartitionMode::try_from(sym_join.partition_mode).map_err(|_| {
                         proto_error(format!(
@@ -668,6 +748,8 @@ impl AsExecutionPlan for PhysicalPlanNode {
                     filter,
                     &join_type.into(),
                     sym_join.null_equals_null,
+                    left_sort_exprs,
+                    right_sort_exprs,
                     partition_mode,
                 )
                 .map(|e| Arc::new(e) as _)
@@ -1233,6 +1315,46 @@ impl AsExecutionPlan for PhysicalPlanNode {
                 }
             };
 
+            let left_sort_exprs = exec
+                .left_sort_exprs()
+                .map(|exprs| {
+                    exprs
+                        .iter()
+                        .map(|expr| {
+                            let sort_expr = Box::new(protobuf::PhysicalSortExprNode {
+                                expr: Some(Box::new(expr.expr.to_owned().try_into()?)),
+                                asc: !expr.options.descending,
+                                nulls_first: expr.options.nulls_first,
+                            });
+                            Ok(protobuf::PhysicalExprNode {
+                                expr_type: Some(ExprType::Sort(sort_expr)),
+                            })
+                        })
+                        .collect::<Result<Vec<_>>>()
+                })
+                .transpose()?
+                .unwrap_or(vec![]);
+
+            let right_sort_exprs = exec
+                .right_sort_exprs()
+                .map(|exprs| {
+                    exprs
+                        .iter()
+                        .map(|expr| {
+                            let sort_expr = Box::new(protobuf::PhysicalSortExprNode {
+                                expr: Some(Box::new(expr.expr.to_owned().try_into()?)),
+                                asc: !expr.options.descending,
+                                nulls_first: expr.options.nulls_first,
+                            });
+                            Ok(protobuf::PhysicalExprNode {
+                                expr_type: Some(ExprType::Sort(sort_expr)),
+                            })
+                        })
+                        .collect::<Result<Vec<_>>>()
+                })
+                .transpose()?
+                .unwrap_or(vec![]);
+
             return Ok(protobuf::PhysicalPlanNode {
                 physical_plan_type: Some(PhysicalPlanType::SymmetricHashJoin(Box::new(
                     protobuf::SymmetricHashJoinExecNode {
@@ -1242,6 +1364,8 @@ impl AsExecutionPlan for PhysicalPlanNode {
                         join_type: join_type.into(),
                         partition_mode: partition_mode.into(),
                         null_equals_null: exec.null_equals_null(),
+                        left_sort_exprs,
+                        right_sort_exprs,
                         filter,
                     },
                 ))),

@@ -1536,6 +1536,8 @@ message SymmetricHashJoinExecNode {
   StreamPartitionMode partition_mode = 6;
   bool null_equals_null = 7;
   JoinFilter filter = 8;
+  repeated PhysicalExprNode left_sort_exprs = 9;
+  repeated PhysicalExprNode right_sort_exprs = 10;
 }
 
 message InterleaveExecNode {
