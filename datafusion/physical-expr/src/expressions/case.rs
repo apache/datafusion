@@ -29,7 +29,7 @@ use arrow::compute::kernels::zip::zip;
 use arrow::compute::{and, is_null, not, or, prep_null_mask_filter};
 use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
-use datafusion_common::exec_err;
+use datafusion_common::{exec_err, ScalarValue};
 use datafusion_common::{cast::as_boolean_array, internal_err, DataFusionError, Result};
 use datafusion_expr::ColumnarValue;
 
@@ -153,6 +153,9 @@ impl CaseExpr {
                 .evaluate_selection(batch, &when_match)?;
 
             current_value = match then_value {
+                ColumnarValue::Scalar(ScalarValue::Null) => {
+                    new_null_array(&return_type, batch.num_rows())
+                }
                 ColumnarValue::Scalar(then_value) => {
                     zip(&when_match, &then_value.to_scalar()?, &current_value)?
                 }
@@ -216,6 +219,9 @@ impl CaseExpr {
                 .evaluate_selection(batch, &when_value)?;
 
             current_value = match then_value {
+                ColumnarValue::Scalar(ScalarValue::Null) => {
+                    new_null_array(&return_type, batch.num_rows())
+                }
                 ColumnarValue::Scalar(then_value) => {
                     zip(&when_value, &then_value.to_scalar()?, &current_value)?
                 }
