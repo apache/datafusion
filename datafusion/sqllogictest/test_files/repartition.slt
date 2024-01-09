@@ -34,7 +34,7 @@ COPY  (VALUES (1, 2), (2, 5), (3, 2), (4, 5), (5, 0)) TO 'test_files/scratch/rep
 statement ok
 CREATE EXTERNAL TABLE parquet_table(column1 int, column2 int)
 STORED AS PARQUET
-LOCATION 'test_files/scratch/repartition_scan/parquet_table/';
+LOCATION 'test_files/scratch/repartition/parquet_table/';
 
 # enable round robin repartitioning
 statement ok
