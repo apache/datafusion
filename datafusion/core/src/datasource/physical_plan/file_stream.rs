@@ -989,9 +989,8 @@ mod tests {
         bytes: Bytes,
     }
 
-    #[async_trait]
     impl BatchSerializer for TestSerializer {
-        async fn serialize(&self, _batch: RecordBatch, _initial: bool) -> Result<Bytes> {
+        fn serialize(&self, _batch: RecordBatch, _initial: bool) -> Result<Bytes> {
             Ok(self.bytes.clone())
         }
     }

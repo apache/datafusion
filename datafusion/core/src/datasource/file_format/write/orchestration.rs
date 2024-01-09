@@ -58,9 +58,9 @@ pub(crate) async fn serialize_rb_stream_to_object_store(
         let mut initial = true;
         while let Some(batch) = data_rx.recv().await {
             let serializer_clone = serializer.clone();
-            let handle = tokio::spawn(async move {
+            let handle = tokio::task::spawn_blocking(move ||{
                 let num_rows = batch.num_rows();
-                let bytes = serializer_clone.serialize(batch, initial).await?;
+                let bytes = serializer_clone.serialize(batch, initial)?;
                 Ok((num_rows, bytes))
             });
             if initial {
