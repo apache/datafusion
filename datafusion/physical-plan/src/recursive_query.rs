@@ -296,6 +296,7 @@ impl RecursiveQueryStream {
                 Err(e) => {
                     return Poll::Ready(Some(Err(DataFusionError::ArrowError(
                         ArrowError::from_external_error(Box::new(e)),
+                        None,
                     ))));
                 }
             }

@@ -162,6 +162,8 @@ fn optimize_projections(
                 .collect::<Vec<_>>()
         }
         LogicalPlan::EmptyRelation(_)
+        | LogicalPlan::NamedRelation(_)
+        | LogicalPlan::RecursiveQuery(_)
         | LogicalPlan::Statement(_)
         | LogicalPlan::Values(_)
         | LogicalPlan::Extension(_)
