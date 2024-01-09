@@ -28,7 +28,7 @@ statement ok
 set datafusion.optimizer.repartition_file_min_size = 1;
 
 statement ok
-COPY  (VALUES (1, 2), (2, 5), (3, 2), (4, 5), (5, 0)) TO 'test_files/scratch/repartition_scan/parquet_table/2.parquet'
+COPY  (VALUES (1, 2), (2, 5), (3, 2), (4, 5), (5, 0)) TO 'test_files/scratch/repartition/parquet_table/2.parquet'
 (FORMAT PARQUET, SINGLE_FILE_OUTPUT true);
 
 statement ok
