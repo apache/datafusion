@@ -17,6 +17,7 @@
 
 pub mod count_wildcard_rule;
 pub mod inline_table_scan;
+pub mod rewrite_expr;
 pub mod subquery;
 pub mod type_coercion;
 
@@ -36,6 +37,8 @@ use datafusion_expr::{Expr, LogicalPlan};
 use log::debug;
 use std::sync::Arc;
 use std::time::Instant;
+
+use self::rewrite_expr::OperatorToFunction;
 
 /// [`AnalyzerRule`]s transform [`LogicalPlan`]s in some way to make
 /// the plan valid prior to the rest of the DataFusion optimization process.
@@ -72,6 +75,9 @@ impl Analyzer {
     pub fn new() -> Self {
         let rules: Vec<Arc<dyn AnalyzerRule + Send + Sync>> = vec![
             Arc::new(InlineTableScan::new()),
+            // OperatorToFunction should be run before TypeCoercion, since it rewrite based on the argument types (List or Scalar),
+            // and TypeCoercion may cast the argument types from Scalar to List.
+            Arc::new(OperatorToFunction::new()),
             Arc::new(TypeCoercion::new()),
             Arc::new(CountWildcardRule::new()),
         ];

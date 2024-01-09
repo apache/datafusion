@@ -811,6 +811,7 @@ mod test {
 
     static TEST_SIGNATURE: OnceLock<Signature> = OnceLock::new();
 
+    #[derive(Debug, Clone, Default)]
     struct TestScalarUDF {}
     impl ScalarUDFImpl for TestScalarUDF {
         fn as_any(&self) -> &dyn Any {
