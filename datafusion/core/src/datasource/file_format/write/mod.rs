@@ -29,7 +29,6 @@ use crate::error::Result;
 use arrow_array::RecordBatch;
 use datafusion_common::DataFusionError;
 
-use async_trait::async_trait;
 use bytes::Bytes;
 use futures::future::BoxFuture;
 use object_store::path::Path;
