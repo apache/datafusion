@@ -350,8 +350,9 @@ config_namespace! {
         /// default parquet writer setting
         pub max_statistics_size: Option<usize>, default = None
 
-        /// Sets maximum number of rows in a row group
-        /// Larger row groups require more memory to write and read.
+        /// Target maximum number of rows in each row group (defaults to 1M
+        /// rows). Writing larger row groups requires more memory to write, but
+        /// can get better compression and be faster to read.
         pub max_row_group_size: usize, default = 1024 * 1024
 
         /// Sets "created by" property
