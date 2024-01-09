@@ -73,8 +73,8 @@ use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::stats::Precision;
 use datafusion_common::{FileTypeWriterOptions, Result};
 use datafusion_expr::{
-    Accumulator, AccumulatorFactoryFunction, AggregateUDF, ReturnTypeFunction, Signature,
-    StateTypeFunction, WindowFrame, WindowFrameBound,
+    Accumulator, AccumulatorFactoryFunction, AggregateUDF, Signature, SimpleAggregateUDF,
+    WindowFrame, WindowFrameBound,
 };
 use datafusion_proto::physical_plan::{AsExecutionPlan, DefaultPhysicalExtensionCodec};
 use datafusion_proto::protobuf;
@@ -374,18 +374,17 @@ fn roundtrip_aggregate_udaf() -> Result<()> {
         }
     }
 
-    let rt_func: ReturnTypeFunction = Arc::new(move |_| Ok(Arc::new(DataType::Int64)));
+    let return_type = DataType::Int64;
     let accumulator: AccumulatorFactoryFunction = Arc::new(|_| Ok(Box::new(Example)));
-    let st_func: StateTypeFunction =
-        Arc::new(move |_| Ok(Arc::new(vec![DataType::Int64])));
+    let state_type = vec![DataType::Int64];
 
-    let udaf = AggregateUDF::new(
+    let udaf = AggregateUDF::from(SimpleAggregateUDF::new_with_signature(
         "example",
-        &Signature::exact(vec![DataType::Int64], Volatility::Immutable),
-        &rt_func,
-        &accumulator,
-        &st_func,
-    );
+        Signature::exact(vec![DataType::Int64], Volatility::Immutable),
+        return_type,
+        accumulator,
+        state_type,
+    ));
 
     let ctx = SessionContext::new();
     ctx.register_udaf(udaf.clone());
