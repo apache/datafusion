@@ -780,8 +780,8 @@ mod test {
         avg, col, lit, logical_plan::builder::LogicalPlanBuilder, sum,
     };
     use datafusion_expr::{
-        grouping_set, AccumulatorFactoryFunction, AggregateUDF, ReturnTypeFunction,
-        Signature, StateTypeFunction, Volatility,
+        grouping_set, AccumulatorFactoryFunction, AggregateUDF, Signature,
+        SimpleAggregateUDF, Volatility,
     };
 
     use crate::optimizer::OptimizerContext;
@@ -901,21 +901,18 @@ mod test {
     fn aggregate() -> Result<()> {
         let table_scan = test_table_scan()?;
 
-        let return_type: ReturnTypeFunction = Arc::new(|inputs| {
-            assert_eq!(inputs, &[DataType::UInt32]);
-            Ok(Arc::new(DataType::UInt32))
-        });
+        let return_type = DataType::UInt32;
         let accumulator: AccumulatorFactoryFunction = Arc::new(|_| unimplemented!());
-        let state_type: StateTypeFunction = Arc::new(|_| unimplemented!());
+        let state_type = vec![DataType::UInt32];
         let udf_agg = |inner: Expr| {
             Expr::AggregateFunction(datafusion_expr::expr::AggregateFunction::new_udf(
-                Arc::new(AggregateUDF::new(
+                Arc::new(AggregateUDF::from(SimpleAggregateUDF::new_with_signature(
                     "my_agg",
-                    &Signature::exact(vec![DataType::UInt32], Volatility::Stable),
-                    &return_type,
-                    &accumulator,
-                    &state_type,
-                )),
+                    Signature::exact(vec![DataType::UInt32], Volatility::Stable),
+                    return_type.clone(),
+                    accumulator.clone(),
+                    state_type.clone(),
+                ))),
                 vec![inner],
                 false,
                 None,

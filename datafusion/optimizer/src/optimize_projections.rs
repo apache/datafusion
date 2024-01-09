@@ -36,9 +36,10 @@ use datafusion_common::{
 use datafusion_expr::expr::{Alias, ScalarFunction, ScalarFunctionDefinition};
 use datafusion_expr::{
     logical_plan::LogicalPlan, projection_schema, Aggregate, BinaryExpr, Cast, Distinct,
-    Expr, GroupingSet, Projection, TableScan, Window,
+    Expr, Projection, TableScan, Window,
 };
 
+use datafusion_expr::utils::inspect_expr_pre;
 use hashbrown::HashMap;
 use itertools::{izip, Itertools};
 
@@ -531,7 +532,7 @@ macro_rules! rewrite_expr_with_check {
 ///
 /// - `Ok(Some(Expr))`: Rewrite was successful. Contains the rewritten result.
 /// - `Ok(None)`: Signals that `expr` can not be rewritten.
-/// - `Err(error)`: An error occured during the function call.
+/// - `Err(error)`: An error occurred during the function call.
 fn rewrite_expr(expr: &Expr, input: &Projection) -> Result<Option<Expr>> {
     let result = match expr {
         Expr::Column(col) => {
@@ -574,23 +575,7 @@ fn rewrite_expr(expr: &Expr, input: &Projection) -> Result<Option<Expr>> {
     Ok(Some(result))
 }
 
-/// Retrieves a set of outer-referenced columns by the given expression, `expr`.
-/// Note that the `Expr::to_columns()` function doesn't return these columns.
-///
-/// # Parameters
-///
-/// * `expr` - The expression to analyze for outer-referenced columns.
-///
-/// # Returns
-///
-/// If the function can safely infer all outer-referenced columns, returns a
-/// `Some(HashSet<Column>)` containing these columns. Otherwise, returns `None`.
-fn outer_columns(expr: &Expr) -> Option<HashSet<Column>> {
-    let mut columns = HashSet::new();
-    outer_columns_helper(expr, &mut columns).then_some(columns)
-}
-
-/// A recursive subroutine that accumulates outer-referenced columns by the
+/// Accumulates outer-referenced columns by the
 /// given expression, `expr`.
 ///
 /// # Parameters
@@ -598,88 +583,31 @@ fn outer_columns(expr: &Expr) -> Option<HashSet<Column>> {
 /// * `expr` - The expression to analyze for outer-referenced columns.
 /// * `columns` - A mutable reference to a `HashSet<Column>` where detected
 ///   columns are collected.
-///
-/// Returns `true` if it can safely collect all outer-referenced columns.
-/// Otherwise, returns `false`.
-fn outer_columns_helper(expr: &Expr, columns: &mut HashSet<Column>) -> bool {
-    match expr {
-        Expr::OuterReferenceColumn(_, col) => {
-            columns.insert(col.clone());
-            true
-        }
-        Expr::BinaryExpr(binary_expr) => {
-            outer_columns_helper(&binary_expr.left, columns)
-                && outer_columns_helper(&binary_expr.right, columns)
-        }
-        Expr::ScalarSubquery(subquery) => {
-            let exprs = subquery.outer_ref_columns.iter();
-            outer_columns_helper_multi(exprs, columns)
-        }
-        Expr::Exists(exists) => {
-            let exprs = exists.subquery.outer_ref_columns.iter();
-            outer_columns_helper_multi(exprs, columns)
-        }
-        Expr::Alias(alias) => outer_columns_helper(&alias.expr, columns),
-        Expr::InSubquery(insubquery) => {
-            let exprs = insubquery.subquery.outer_ref_columns.iter();
-            outer_columns_helper_multi(exprs, columns)
-        }
-        Expr::IsNotNull(expr) | Expr::IsNull(expr) => outer_columns_helper(expr, columns),
-        Expr::Cast(cast) => outer_columns_helper(&cast.expr, columns),
-        Expr::Sort(sort) => outer_columns_helper(&sort.expr, columns),
-        Expr::AggregateFunction(aggregate_fn) => {
-            outer_columns_helper_multi(aggregate_fn.args.iter(), columns)
-                && aggregate_fn
-                    .order_by
-                    .as_ref()
-                    .map_or(true, |obs| outer_columns_helper_multi(obs.iter(), columns))
-                && aggregate_fn
-                    .filter
-                    .as_ref()
-                    .map_or(true, |filter| outer_columns_helper(filter, columns))
-        }
-        Expr::WindowFunction(window_fn) => {
-            outer_columns_helper_multi(window_fn.args.iter(), columns)
-                && outer_columns_helper_multi(window_fn.order_by.iter(), columns)
-                && outer_columns_helper_multi(window_fn.partition_by.iter(), columns)
-        }
-        Expr::GroupingSet(groupingset) => match groupingset {
-            GroupingSet::GroupingSets(multi_exprs) => multi_exprs
-                .iter()
-                .all(|e| outer_columns_helper_multi(e.iter(), columns)),
-            GroupingSet::Cube(exprs) | GroupingSet::Rollup(exprs) => {
-                outer_columns_helper_multi(exprs.iter(), columns)
+fn outer_columns(expr: &Expr, columns: &mut HashSet<Column>) {
+    // inspect_expr_pre doesn't handle subquery references, so find them explicitly
+    inspect_expr_pre(expr, |expr| {
+        match expr {
+            Expr::OuterReferenceColumn(_, col) => {
+                columns.insert(col.clone());
             }
-        },
-        Expr::ScalarFunction(scalar_fn) => {
-            outer_columns_helper_multi(scalar_fn.args.iter(), columns)
-        }
-        Expr::Like(like) => {
-            outer_columns_helper(&like.expr, columns)
-                && outer_columns_helper(&like.pattern, columns)
-        }
-        Expr::InList(in_list) => {
-            outer_columns_helper(&in_list.expr, columns)
-                && outer_columns_helper_multi(in_list.list.iter(), columns)
-        }
-        Expr::Case(case) => {
-            let when_then_exprs = case
-                .when_then_expr
-                .iter()
-                .flat_map(|(first, second)| [first.as_ref(), second.as_ref()]);
-            outer_columns_helper_multi(when_then_exprs, columns)
-                && case
-                    .expr
-                    .as_ref()
-                    .map_or(true, |expr| outer_columns_helper(expr, columns))
-                && case
-                    .else_expr
-                    .as_ref()
-                    .map_or(true, |expr| outer_columns_helper(expr, columns))
-        }
-        Expr::Column(_) | Expr::Literal(_) | Expr::Wildcard { .. } => true,
-        _ => false,
-    }
+            Expr::ScalarSubquery(subquery) => {
+                outer_columns_helper_multi(&subquery.outer_ref_columns, columns);
+            }
+            Expr::Exists(exists) => {
+                outer_columns_helper_multi(&exists.subquery.outer_ref_columns, columns);
+            }
+            Expr::InSubquery(insubquery) => {
+                outer_columns_helper_multi(
+                    &insubquery.subquery.outer_ref_columns,
+                    columns,
+                );
+            }
+            _ => {}
+        };
+        Ok(()) as Result<()>
+    })
+    // unwrap: closure above never returns Err, so can not be Err here
+    .unwrap();
 }
 
 /// A recursive subroutine that accumulates outer-referenced columns by the
@@ -690,14 +618,11 @@ fn outer_columns_helper(expr: &Expr, columns: &mut HashSet<Column>) -> bool {
 /// * `exprs` - The expressions to analyze for outer-referenced columns.
 /// * `columns` - A mutable reference to a `HashSet<Column>` where detected
 ///   columns are collected.
-///
-/// Returns `true` if it can safely collect all outer-referenced columns.
-/// Otherwise, returns `false`.
 fn outer_columns_helper_multi<'a>(
-    mut exprs: impl Iterator<Item = &'a Expr>,
+    exprs: impl IntoIterator<Item = &'a Expr>,
     columns: &mut HashSet<Column>,
-) -> bool {
-    exprs.all(|e| outer_columns_helper(e, columns))
+) {
+    exprs.into_iter().for_each(|e| outer_columns(e, columns));
 }
 
 /// Generates the required expressions (columns) that reside at `indices` of
@@ -765,14 +690,8 @@ fn indices_referred_by_expr(
     expr: &Expr,
 ) -> Result<Vec<usize>> {
     let mut cols = expr.to_columns()?;
-    // Get outer-referenced columns:
-    if let Some(outer_cols) = outer_columns(expr) {
-        cols.extend(outer_cols);
-    } else {
-        // Expression is not known to contain outer columns or not. Hence, do
-        // not assume anything and require all the schema indices at the input:
-        return Ok((0..input_schema.fields().len()).collect());
-    }
+    // Get outer-referenced (subquery) columns:
+    outer_columns(expr, &mut cols);
     Ok(cols
         .iter()
         .flat_map(|col| input_schema.index_of_column(col))
@@ -978,8 +897,8 @@ mod tests {
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::{Result, TableReference};
     use datafusion_expr::{
-        binary_expr, col, count, lit, logical_plan::builder::LogicalPlanBuilder,
-        table_scan, Expr, LogicalPlan, Operator,
+        binary_expr, col, count, lit, logical_plan::builder::LogicalPlanBuilder, not,
+        table_scan, try_cast, Expr, Like, LogicalPlan, Operator,
     };
 
     fn assert_optimized_plan_equal(plan: &LogicalPlan, expected: &str) -> Result<()> {
@@ -1058,6 +977,189 @@ mod tests {
         \n  Projection: \
         \n    Aggregate: groupBy=[[]], aggr=[[COUNT(Int32(1))]]\
         \n      TableScan: ?table? projection=[]";
+        assert_optimized_plan_equal(&plan, expected)
+    }
+
+    #[test]
+    fn test_struct_field_push_down() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int64, false),
+            Field::new_struct(
+                "s",
+                vec![
+                    Field::new("x", DataType::Int64, false),
+                    Field::new("y", DataType::Int64, false),
+                ],
+                false,
+            ),
+        ]));
+
+        let table_scan = table_scan(TableReference::none(), &schema, None)?.build()?;
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .project(vec![col("s").field("x")])?
+            .build()?;
+        let expected = "Projection: (?table?.s)[x]\
+        \n  TableScan: ?table? projection=[s]";
+        assert_optimized_plan_equal(&plan, expected)
+    }
+
+    #[test]
+    fn test_neg_push_down() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .project(vec![-col("a")])?
+            .build()?;
+
+        let expected = "Projection: (- test.a)\
+        \n  TableScan: test projection=[a]";
+        assert_optimized_plan_equal(&plan, expected)
+    }
+
+    #[test]
+    fn test_is_null() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .project(vec![col("a").is_null()])?
+            .build()?;
+
+        let expected = "Projection: test.a IS NULL\
+        \n  TableScan: test projection=[a]";
+        assert_optimized_plan_equal(&plan, expected)
+    }
+
+    #[test]
+    fn test_is_not_null() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .project(vec![col("a").is_not_null()])?
+            .build()?;
+
+        let expected = "Projection: test.a IS NOT NULL\
+        \n  TableScan: test projection=[a]";
+        assert_optimized_plan_equal(&plan, expected)
+    }
+
+    #[test]
+    fn test_is_true() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .project(vec![col("a").is_true()])?
+            .build()?;
+
+        let expected = "Projection: test.a IS TRUE\
+        \n  TableScan: test projection=[a]";
+        assert_optimized_plan_equal(&plan, expected)
+    }
+
+    #[test]
+    fn test_is_not_true() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .project(vec![col("a").is_not_true()])?
+            .build()?;
+
+        let expected = "Projection: test.a IS NOT TRUE\
+        \n  TableScan: test projection=[a]";
+        assert_optimized_plan_equal(&plan, expected)
+    }
+
+    #[test]
+    fn test_is_false() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .project(vec![col("a").is_false()])?
+            .build()?;
+
+        let expected = "Projection: test.a IS FALSE\
+        \n  TableScan: test projection=[a]";
+        assert_optimized_plan_equal(&plan, expected)
+    }
+
+    #[test]
+    fn test_is_not_false() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .project(vec![col("a").is_not_false()])?
+            .build()?;
+
+        let expected = "Projection: test.a IS NOT FALSE\
+        \n  TableScan: test projection=[a]";
+        assert_optimized_plan_equal(&plan, expected)
+    }
+
+    #[test]
+    fn test_is_unknown() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .project(vec![col("a").is_unknown()])?
+            .build()?;
+
+        let expected = "Projection: test.a IS UNKNOWN\
+        \n  TableScan: test projection=[a]";
+        assert_optimized_plan_equal(&plan, expected)
+    }
+
+    #[test]
+    fn test_is_not_unknown() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .project(vec![col("a").is_not_unknown()])?
+            .build()?;
+
+        let expected = "Projection: test.a IS NOT UNKNOWN\
+        \n  TableScan: test projection=[a]";
+        assert_optimized_plan_equal(&plan, expected)
+    }
+
+    #[test]
+    fn test_not() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .project(vec![not(col("a"))])?
+            .build()?;
+
+        let expected = "Projection: NOT test.a\
+        \n  TableScan: test projection=[a]";
+        assert_optimized_plan_equal(&plan, expected)
+    }
+
+    #[test]
+    fn test_try_cast() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .project(vec![try_cast(col("a"), DataType::Float64)])?
+            .build()?;
+
+        let expected = "Projection: TRY_CAST(test.a AS Float64)\
+        \n  TableScan: test projection=[a]";
+        assert_optimized_plan_equal(&plan, expected)
+    }
+
+    #[test]
+    fn test_similar_to() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let expr = Box::new(col("a"));
+        let pattern = Box::new(lit("[0-9]"));
+        let similar_to_expr =
+            Expr::SimilarTo(Like::new(false, expr, pattern, None, false));
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .project(vec![similar_to_expr])?
+            .build()?;
+
+        let expected = "Projection: test.a SIMILAR TO Utf8(\"[0-9]\")\
+        \n  TableScan: test projection=[a]";
+        assert_optimized_plan_equal(&plan, expected)
+    }
+
+    #[test]
+    fn test_between() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .project(vec![col("a").between(lit(1), lit(3))])?
+            .build()?;
+
+        let expected = "Projection: test.a BETWEEN Int32(1) AND Int32(3)\
+        \n  TableScan: test projection=[a]";
         assert_optimized_plan_equal(&plan, expected)
     }
 }

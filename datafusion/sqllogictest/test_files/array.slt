@@ -4617,6 +4617,45 @@ select 1 || make_array(2, 3, 4), 1.0 || make_array(2.0, 3.0, 4.0), 'h' || make_a
 ----
 [1, 2, 3, 4] [1.0, 2.0, 3.0, 4.0] [h, e, l, l, o]
 
+# array concatenate operator with scalars #4 (mixed)
+query ?
+select 0 || [1,2,3] || 4 || [5] || [6,7];
+----
+[0, 1, 2, 3, 4, 5, 6, 7]
+
+# array concatenate operator with nd-list #5 (mixed)
+query ?
+select 0 || [1,2,3] || [[4,5]] || [[6,7,8]] || [9,10];
+----
+[[0, 1, 2, 3], [4, 5], [6, 7, 8], [9, 10]]
+
+# array concatenate operator non-valid cases
+## concat 2D with scalar is not valid
+query error
+select 0 || [1,2,3] || [[4,5]] || [[6,7,8]] || [9,10] || 11;
+
+## concat scalar with 2D is not valid
+query error
+select 0 || [[1,2,3]];
+
+# array concatenate operator with column
+
+statement ok
+CREATE TABLE array_concat_operator_table
+AS VALUES
+  (0, [1, 2, 2, 3], 4, [5, 6, 5]),
+  (-1, [4, 5, 6], 7, [8, 1, 1])
+;
+
+query ?
+select column1 || column2 || column3 || column4 from array_concat_operator_table;
+----
+[0, 1, 2, 2, 3, 4, 5, 6, 5]
+[-1, 4, 5, 6, 7, 8, 1, 1]
+
+statement ok
+drop table array_concat_operator_table;
+
 ## array containment operator
 
 # array containment operator with scalars #1 (at arrow)

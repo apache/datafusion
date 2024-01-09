@@ -180,6 +180,7 @@ initial_logical_plan
 Projection: simple_explain_test.a, simple_explain_test.b, simple_explain_test.c
 --TableScan: simple_explain_test
 logical_plan after inline_table_scan SAME TEXT AS ABOVE
+logical_plan after operator_to_function SAME TEXT AS ABOVE
 logical_plan after type_coercion SAME TEXT AS ABOVE
 logical_plan after count_wildcard_rule SAME TEXT AS ABOVE
 analyzed_logical_plan SAME TEXT AS ABOVE

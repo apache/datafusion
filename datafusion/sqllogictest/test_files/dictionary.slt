@@ -148,7 +148,7 @@ select count(*) from m1 where tag_id = '1000' and time < '2024-01-03T14:46:35+01
 ----
 10
 
-query RRR
+query RRR rowsort
 select min(f5), max(f5), avg(f5) from m2 where tag_id = '1000' and time < '2024-01-03T14:46:35+01:00' group by type;
 ----
 100 600 350
@@ -169,7 +169,7 @@ order by date_bin('30 minutes', time) DESC
 
 # Reproducer for https://github.com/apache/arrow-datafusion/issues/8738
 # This query should work correctly
-query error DataFusion error: External error: Arrow error: Invalid argument error: RowConverter column schema mismatch, expected Utf8 got Dictionary\(Int32, Utf8\)
+query P?TT rowsort
 SELECT
   "data"."timestamp" as "time",
   "data"."tag_id",
@@ -201,3 +201,82 @@ ORDER BY
   "time",
   "data"."tag_id"
 ;
+----
+2023-12-20T00:00:00 1000 f1 32.0
+2023-12-20T00:00:00 1000 f2 foo
+2023-12-20T00:10:00 1000 f1 32.0
+2023-12-20T00:10:00 1000 f2 foo
+2023-12-20T00:20:00 1000 f1 32.0
+2023-12-20T00:20:00 1000 f2 foo
+2023-12-20T00:30:00 1000 f1 32.0
+2023-12-20T00:30:00 1000 f2 foo
+2023-12-20T00:40:00 1000 f1 32.0
+2023-12-20T00:40:00 1000 f2 foo
+2023-12-20T00:50:00 1000 f1 32.0
+2023-12-20T00:50:00 1000 f2 foo
+2023-12-20T01:00:00 1000 f1 32.0
+2023-12-20T01:00:00 1000 f2 foo
+2023-12-20T01:10:00 1000 f1 32.0
+2023-12-20T01:10:00 1000 f2 foo
+2023-12-20T01:20:00 1000 f1 32.0
+2023-12-20T01:20:00 1000 f2 foo
+2023-12-20T01:30:00 1000 f1 32.0
+2023-12-20T01:30:00 1000 f2 foo
+
+
+# deterministic sort (so we can avoid rowsort)
+query P?TT
+SELECT
+  "data"."timestamp" as "time",
+  "data"."tag_id",
+  "data"."field",
+  "data"."value"
+FROM (
+  (
+      SELECT "m2"."time" as "timestamp", "m2"."tag_id", 'active_power' as "field", "m2"."f5" as "value"
+        FROM "m2"
+       WHERE "m2"."time" >= '2023-12-05T14:46:35+01:00' AND "m2"."time" < '2024-01-03T14:46:35+01:00'
+         AND "m2"."f5" IS NOT NULL
+         AND "m2"."type" IN ('active')
+         AND "m2"."tag_id" IN ('1000')
+  ) UNION (
+      SELECT "m1"."time" as "timestamp", "m1"."tag_id", 'f1' as "field", "m1"."f1" as "value"
+        FROM "m1"
+       WHERE "m1"."time" >= '2023-12-05T14:46:35+01:00' AND "m1"."time" < '2024-01-03T14:46:35+01:00'
+         AND "m1"."f1" IS NOT NULL
+         AND "m1"."tag_id" IN ('1000')
+  ) UNION (
+      SELECT "m1"."time" as "timestamp", "m1"."tag_id", 'f2' as "field", "m1"."f2" as "value"
+        FROM "m1"
+       WHERE "m1"."time" >= '2023-12-05T14:46:35+01:00' AND "m1"."time" < '2024-01-03T14:46:35+01:00'
+         AND "m1"."f2" IS NOT NULL
+         AND "m1"."tag_id" IN ('1000')
+  )
+) as "data"
+ORDER BY
+  "time",
+  "data"."tag_id",
+  "data"."field",
+  "data"."value"
+;
+----
+2023-12-20T00:00:00 1000 f1 32.0
+2023-12-20T00:00:00 1000 f2 foo
+2023-12-20T00:10:00 1000 f1 32.0
+2023-12-20T00:10:00 1000 f2 foo
+2023-12-20T00:20:00 1000 f1 32.0
+2023-12-20T00:20:00 1000 f2 foo
+2023-12-20T00:30:00 1000 f1 32.0
+2023-12-20T00:30:00 1000 f2 foo
+2023-12-20T00:40:00 1000 f1 32.0
+2023-12-20T00:40:00 1000 f2 foo
+2023-12-20T00:50:00 1000 f1 32.0
+2023-12-20T00:50:00 1000 f2 foo
+2023-12-20T01:00:00 1000 f1 32.0
+2023-12-20T01:00:00 1000 f2 foo
+2023-12-20T01:10:00 1000 f1 32.0
+2023-12-20T01:10:00 1000 f2 foo
+2023-12-20T01:20:00 1000 f1 32.0
+2023-12-20T01:20:00 1000 f2 foo
+2023-12-20T01:30:00 1000 f1 32.0
+2023-12-20T01:30:00 1000 f2 foo

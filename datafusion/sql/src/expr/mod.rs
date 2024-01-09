@@ -98,11 +98,13 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 StackEntry::Operator(op) => {
                     let right = eval_stack.pop().unwrap();
                     let left = eval_stack.pop().unwrap();
+
                     let expr = Expr::BinaryExpr(BinaryExpr::new(
                         Box::new(left),
                         op,
                         Box::new(right),
                     ));
+
                     eval_stack.push(expr);
                 }
             }
