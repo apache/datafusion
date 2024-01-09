@@ -462,7 +462,7 @@ fn hash_join_convert_symmetric_subrule(
             };
             // A closure to determine the required sort order for each side of the join in the SymmetricHashJoinExec.
             // This function checks if the columns involved in the filter have any specific ordering requirements.
-            // If the child nodes (left or right side of the join) already have a defined order, or if the columns used in the
+            // If the child nodes (left or right side of the join) already have a defined order and the columns used in the
             // filter predicate are ordered, this function captures that ordering requirement. The identified order is then
             // used in the SymmetricHashJoinExec to maintain bounded memory during join operations.
             // However, if the child nodes do not have an inherent order, or if the filter columns are unordered,
