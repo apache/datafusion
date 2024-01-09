@@ -292,7 +292,7 @@ where
         let arr = Arc::new(PrimitiveArray::<T>::from_iter_values(
             self.values.iter().cloned(),
         )) as ArrayRef;
-        let list = Arc::new(array_into_list_array(arr)) as ArrayRef;
+        let list = Arc::new(array_into_list_array(arr));
         Ok(vec![ScalarValue::List(list)])
     }
 
@@ -378,7 +378,7 @@ where
         let arr = Arc::new(PrimitiveArray::<T>::from_iter_values(
             self.values.iter().map(|v| v.0),
         )) as ArrayRef;
-        let list = Arc::new(array_into_list_array(arr)) as ArrayRef;
+        let list = Arc::new(array_into_list_array(arr));
         Ok(vec![ScalarValue::List(list)])
     }
 
