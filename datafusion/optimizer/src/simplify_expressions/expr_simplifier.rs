@@ -226,10 +226,12 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
     }
 }
 
-#[allow(rustdoc::private_intra_doc_links)]
 /// Canonicalize any BinaryExprs that are not in canonical form
-/// <literal> <op> <col> is rewritten to <col> <op> <literal>
-/// <col1> <op> <col2> is rewritten so that the name of col1 sorts higher than col2 (b > a would be canonicalized to a < b)
+/// 
+/// `<literal> <op> <col>` is rewritten to `<col> <op> <literal>`
+/// 
+/// `<col1> <op> <col2>` is rewritten so that the name of `col1` sorts higher
+/// than `col2` (`b > a` would be canonicalized to `a < b`)
 struct Canonicalizer {}
 
 impl Canonicalizer {
