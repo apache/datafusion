@@ -26,7 +26,7 @@ use crate::PhysicalExpr;
 use arrow::array::*;
 use arrow::compute::kernels::cmp::eq;
 use arrow::compute::kernels::zip::zip;
-use arrow::compute::{and, is_null, not, or, prep_null_mask_filter};
+use arrow::compute::{and, is_null, not, nullif, or, prep_null_mask_filter};
 use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{cast::as_boolean_array, internal_err, DataFusionError, Result};
@@ -154,7 +154,7 @@ impl CaseExpr {
 
             current_value = match then_value {
                 ColumnarValue::Scalar(ScalarValue::Null) => {
-                    new_null_array(&return_type, batch.num_rows())
+                    nullif(current_value.as_ref(), &when_match)?
                 }
                 ColumnarValue::Scalar(then_value) => {
                     zip(&when_match, &then_value.to_scalar()?, &current_value)?
@@ -220,7 +220,7 @@ impl CaseExpr {
 
             current_value = match then_value {
                 ColumnarValue::Scalar(ScalarValue::Null) => {
-                    new_null_array(&return_type, batch.num_rows())
+                    nullif(current_value.as_ref(), &when_value)?
                 }
                 ColumnarValue::Scalar(then_value) => {
                     zip(&when_value, &then_value.to_scalar()?, &current_value)?
