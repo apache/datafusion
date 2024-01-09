@@ -349,7 +349,7 @@ pub struct CreateExternalTableNode {
     pub delimiter: ::prost::alloc::string::String,
     #[prost(string, tag = "9")]
     pub definition: ::prost::alloc::string::String,
-    #[prost(enumeration = "CompressionTypeVariant", tag = "10")]
+    #[prost(enumeration = "CompressionTypeVariant", tag = "17")]
     pub file_compression_type: i32,
     #[prost(message, repeated, tag = "13")]
     pub order_exprs: ::prost::alloc::vec::Vec<LogicalExprNodeCollection>,

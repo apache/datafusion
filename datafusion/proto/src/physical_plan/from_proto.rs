@@ -782,6 +782,18 @@ impl From<protobuf::CompressionTypeVariant> for CompressionTypeVariant {
     }
 }
 
+impl From<CompressionTypeVariant> for protobuf::CompressionTypeVariant {
+    fn from(value: CompressionTypeVariant) -> Self {
+        match value {
+            CompressionTypeVariant::GZIP => Self::Gzip,
+            CompressionTypeVariant::BZIP2 => Self::Bzip2,
+            CompressionTypeVariant::XZ => Self::Xz,
+            CompressionTypeVariant::ZSTD => Self::Zstd,
+            CompressionTypeVariant::UNCOMPRESSED => Self::Uncompressed,
+        }
+    }
+}
+
 impl TryFrom<&protobuf::FileTypeWriterOptions> for FileTypeWriterOptions {
     type Error = DataFusionError;
 
