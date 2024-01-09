@@ -25,13 +25,14 @@ use crate::function::PartitionEvaluatorFactory;
 use crate::{
     aggregate_function, built_in_function, conditional_expressions::CaseBuilder,
     logical_plan::Subquery, AccumulatorFactoryFunction, AggregateUDF,
-    BuiltinScalarFunction, Expr, LogicalPlan, Operator, ReturnTypeFunction,
-    ScalarFunctionImplementation, ScalarUDF, Signature, StateTypeFunction, Volatility,
+    BuiltinScalarFunction, Expr, LogicalPlan, Operator, ScalarFunctionImplementation,
+    ScalarUDF, Signature, Volatility,
 };
-use crate::{ColumnarValue, ScalarUDFImpl, WindowUDF};
+use crate::{AggregateUDFImpl, ColumnarValue, ScalarUDFImpl, WindowUDF, WindowUDFImpl};
 use arrow::datatypes::DataType;
 use datafusion_common::{Column, Result};
 use std::any::Any;
+use std::fmt::Debug;
 use std::ops::Not;
 use std::sync::Arc;
 
@@ -983,6 +984,16 @@ pub struct SimpleScalarUDF {
     fun: ScalarFunctionImplementation,
 }
 
+impl Debug for SimpleScalarUDF {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.debug_struct("ScalarUDF")
+            .field("name", &self.name)
+            .field("signature", &self.signature)
+            .field("fun", &"<FUNC>")
+            .finish()
+    }
+}
+
 impl SimpleScalarUDF {
     /// Create a new `SimpleScalarUDF` from a name, input types, return type and
     /// implementation. Implementing [`ScalarUDFImpl`] allows more flexibility
@@ -1036,15 +1047,102 @@ pub fn create_udaf(
     accumulator: AccumulatorFactoryFunction,
     state_type: Arc<Vec<DataType>>,
 ) -> AggregateUDF {
-    let return_type: ReturnTypeFunction = Arc::new(move |_| Ok(return_type.clone()));
-    let state_type: StateTypeFunction = Arc::new(move |_| Ok(state_type.clone()));
-    AggregateUDF::new(
+    let return_type = Arc::try_unwrap(return_type).unwrap_or_else(|t| t.as_ref().clone());
+    let state_type = Arc::try_unwrap(state_type).unwrap_or_else(|t| t.as_ref().clone());
+    AggregateUDF::from(SimpleAggregateUDF::new(
         name,
-        &Signature::exact(input_type, volatility),
-        &return_type,
-        &accumulator,
-        &state_type,
-    )
+        input_type,
+        return_type,
+        volatility,
+        accumulator,
+        state_type,
+    ))
+}
+
+/// Implements [`AggregateUDFImpl`] for functions that have a single signature and
+/// return type.
+pub struct SimpleAggregateUDF {
+    name: String,
+    signature: Signature,
+    return_type: DataType,
+    accumulator: AccumulatorFactoryFunction,
+    state_type: Vec<DataType>,
+}
+
+impl Debug for SimpleAggregateUDF {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.debug_struct("AggregateUDF")
+            .field("name", &self.name)
+            .field("signature", &self.signature)
+            .field("fun", &"<FUNC>")
+            .finish()
+    }
+}
+
+impl SimpleAggregateUDF {
+    /// Create a new `AggregateUDFImpl` from a name, input types, return type, state type and
+    /// implementation. Implementing [`AggregateUDFImpl`] allows more flexibility
+    pub fn new(
+        name: impl Into<String>,
+        input_type: Vec<DataType>,
+        return_type: DataType,
+        volatility: Volatility,
+        accumulator: AccumulatorFactoryFunction,
+        state_type: Vec<DataType>,
+    ) -> Self {
+        let name = name.into();
+        let signature = Signature::exact(input_type, volatility);
+        Self {
+            name,
+            signature,
+            return_type,
+            accumulator,
+            state_type,
+        }
+    }
+
+    pub fn new_with_signature(
+        name: impl Into<String>,
+        signature: Signature,
+        return_type: DataType,
+        accumulator: AccumulatorFactoryFunction,
+        state_type: Vec<DataType>,
+    ) -> Self {
+        let name = name.into();
+        Self {
+            name,
+            signature,
+            return_type,
+            accumulator,
+            state_type,
+        }
+    }
+}
+
+impl AggregateUDFImpl for SimpleAggregateUDF {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        Ok(self.return_type.clone())
+    }
+
+    fn accumulator(&self, arg: &DataType) -> Result<Box<dyn crate::Accumulator>> {
+        (self.accumulator)(arg)
+    }
+
+    fn state_type(&self, _return_type: &DataType) -> Result<Vec<DataType>> {
+        Ok(self.state_type.clone())
+    }
 }
 
 /// Creates a new UDWF with a specific signature, state type and return type.
@@ -1059,13 +1157,77 @@ pub fn create_udwf(
     volatility: Volatility,
     partition_evaluator_factory: PartitionEvaluatorFactory,
 ) -> WindowUDF {
-    let return_type: ReturnTypeFunction = Arc::new(move |_| Ok(return_type.clone()));
-    WindowUDF::new(
+    let return_type = Arc::try_unwrap(return_type).unwrap_or_else(|t| t.as_ref().clone());
+    WindowUDF::from(SimpleWindowUDF::new(
         name,
-        &Signature::exact(vec![input_type], volatility),
-        &return_type,
-        &partition_evaluator_factory,
-    )
+        input_type,
+        return_type,
+        volatility,
+        partition_evaluator_factory,
+    ))
+}
+
+/// Implements [`WindowUDFImpl`] for functions that have a single signature and
+/// return type.
+pub struct SimpleWindowUDF {
+    name: String,
+    signature: Signature,
+    return_type: DataType,
+    partition_evaluator_factory: PartitionEvaluatorFactory,
+}
+
+impl Debug for SimpleWindowUDF {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.debug_struct("WindowUDF")
+            .field("name", &self.name)
+            .field("signature", &self.signature)
+            .field("return_type", &"<func>")
+            .field("partition_evaluator_factory", &"<FUNC>")
+            .finish()
+    }
+}
+
+impl SimpleWindowUDF {
+    /// Create a new `SimpleWindowUDF` from a name, input types, return type and
+    /// implementation. Implementing [`WindowUDFImpl`] allows more flexibility
+    pub fn new(
+        name: impl Into<String>,
+        input_type: DataType,
+        return_type: DataType,
+        volatility: Volatility,
+        partition_evaluator_factory: PartitionEvaluatorFactory,
+    ) -> Self {
+        let name = name.into();
+        let signature = Signature::exact([input_type].to_vec(), volatility);
+        Self {
+            name,
+            signature,
+            return_type,
+            partition_evaluator_factory,
+        }
+    }
+}
+
+impl WindowUDFImpl for SimpleWindowUDF {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        Ok(self.return_type.clone())
+    }
+
+    fn partition_evaluator(&self) -> Result<Box<dyn crate::PartitionEvaluator>> {
+        (self.partition_evaluator_factory)()
+    }
 }
 
 /// Calls a named built in function

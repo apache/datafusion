@@ -201,7 +201,8 @@ fn make_partition_evaluator() -> Result<Box<dyn PartitionEvaluator>> {
 
 ### Registering a Window UDF
 
-To register a Window UDF, you need to wrap the function implementation in a `WindowUDF` struct and then register it with the `SessionContext`. DataFusion provides the `create_udwf` helper functions to make this easier.
+To register a Window UDF, you need to wrap the function implementation in a [`WindowUDF`] struct and then register it with the `SessionContext`. DataFusion provides the [`create_udwf`] helper functions to make this easier.
+There is a lower level API with more functionality but is more complex, that is documented in [`advanced_udwf.rs`].
 
 ```rust
 use datafusion::logical_expr::{Volatility, create_udwf};
@@ -217,6 +218,10 @@ let smooth_it = create_udwf(
     Arc::new(make_partition_evaluator),
 );
 ```
+
+[`windowudf`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/struct.WindowUDF.html
+[`create_udwf`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/fn.create_udwf.html
+[`advanced_udwf.rs`]: https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/advanced_udwf.rs
 
 The `create_udwf` has five arguments to check:
 
@@ -393,7 +398,8 @@ impl Accumulator for GeometricMean {
 
 ### registering an Aggregate UDF
 
-To register a Aggreate UDF, you need to wrap the function implementation in a `AggregateUDF` struct and then register it with the `SessionContext`. DataFusion provides the `create_udaf` helper functions to make this easier.
+To register a Aggreate UDF, you need to wrap the function implementation in a [`AggregateUDF`] struct and then register it with the `SessionContext`. DataFusion provides the [`create_udaf`] helper functions to make this easier.
+There is a lower level API with more functionality but is more complex, that is documented in [`advanced_udaf.rs`].
 
 ```rust
 use datafusion::logical_expr::{Volatility, create_udaf};
@@ -415,6 +421,10 @@ let geometric_mean = create_udaf(
     Arc::new(vec![DataType::Float64, DataType::UInt32]),
 );
 ```
+
+[`aggregateudf`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/struct.AggregateUDF.html
+[`create_udaf`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/fn.create_udaf.html
+[`advanced_udaf.rs`]: https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/advanced_udaf.rs
 
 The `create_udaf` has six arguments to check:
 

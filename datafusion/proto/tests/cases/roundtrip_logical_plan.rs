@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::any::Any;
 use std::collections::HashMap;
 use std::fmt::{self, Debug, Formatter};
 use std::sync::Arc;
@@ -54,6 +55,7 @@ use datafusion_expr::{
     BuiltinScalarFunction::{Sqrt, Substr},
     Expr, LogicalPlan, Operator, PartitionEvaluator, Signature, TryCast, Volatility,
     WindowFrame, WindowFrameBound, WindowFrameUnits, WindowFunctionDefinition, WindowUDF,
+    WindowUDFImpl,
 };
 use datafusion_proto::bytes::{
     logical_plan_from_bytes, logical_plan_from_bytes_with_extension_codec,
@@ -1785,27 +1787,53 @@ fn roundtrip_window() {
         }
     }
 
-    fn return_type(arg_types: &[DataType]) -> Result<Arc<DataType>> {
-        if arg_types.len() != 1 {
-            return plan_err!(
-                "dummy_udwf expects 1 argument, got {}: {:?}",
-                arg_types.len(),
-                arg_types
-            );
+    #[derive(Debug, Clone)]
+    struct SimpleWindowUDF {
+        signature: Signature,
+    }
+
+    impl SimpleWindowUDF {
+        fn new() -> Self {
+            let signature =
+                Signature::exact(vec![DataType::Float64], Volatility::Immutable);
+            Self { signature }
         }
-        Ok(Arc::new(arg_types[0].clone()))
+    }
+
+    impl WindowUDFImpl for SimpleWindowUDF {
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+
+        fn name(&self) -> &str {
+            "dummy_udwf"
+        }
+
+        fn signature(&self) -> &Signature {
+            &self.signature
+        }
+
+        fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+            if arg_types.len() != 1 {
+                return plan_err!(
+                    "dummy_udwf expects 1 argument, got {}: {:?}",
+                    arg_types.len(),
+                    arg_types
+                );
+            }
+            Ok(arg_types[0].clone())
+        }
+
+        fn partition_evaluator(&self) -> Result<Box<dyn PartitionEvaluator>> {
+            make_partition_evaluator()
+        }
     }
 
     fn make_partition_evaluator() -> Result<Box<dyn PartitionEvaluator>> {
         Ok(Box::new(DummyWindow {}))
     }
 
-    let dummy_window_udf = WindowUDF::new(
-        "dummy_udwf",
-        &Signature::exact(vec![DataType::Float64], Volatility::Immutable),
-        &(Arc::new(return_type) as _),
-        &(Arc::new(make_partition_evaluator) as _),
-    );
+    let dummy_window_udf = WindowUDF::from(SimpleWindowUDF::new());
 
     let test_expr6 = Expr::WindowFunction(expr::WindowFunction::new(
         WindowFunctionDefinition::WindowUDF(Arc::new(dummy_window_udf.clone())),

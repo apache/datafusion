@@ -40,6 +40,7 @@ use std::sync::Arc;
 /// the power of the second argument `a^b`.
 ///
 /// To do so, we must implement the `ScalarUDFImpl` trait.
+#[derive(Debug, Clone)]
 struct PowUdf {
     signature: Signature,
     aliases: Vec<String>,
