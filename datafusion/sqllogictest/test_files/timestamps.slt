@@ -1894,3 +1894,15 @@ query B
 select arrow_cast(now(), 'Date64') < arrow_cast('2022-02-02 02:02:02', 'Timestamp(Nanosecond, None)');
 ----
 false
+
+##########
+## Test query MAX Timestamp and MiN Timestamp
+##########
+
+statement ok
+create table table_a (val int, ts timestamp) as values (1, '2020-09-08T11:42:29.190'::timestamp)
+
+query I
+SELECT MIN(table_a.ts) FROM table_a;
+----
+2020-09-08T11:42:29.190
