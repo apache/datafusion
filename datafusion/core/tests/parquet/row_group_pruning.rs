@@ -66,7 +66,7 @@ async fn test_prune_verbose(
     println!("{}", output.description());
     assert_eq!(output.predicate_evaluation_errors(), expected_errors);
     assert_eq!(
-        output.row_groups_pruned_sbbf(),
+        output.row_groups_pruned_bloom_filter(),
         expected_row_group_pruned_sbbf
     );
     assert_eq!(

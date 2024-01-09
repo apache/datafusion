@@ -281,7 +281,7 @@ impl DisplayAs for ParquetExec {
                     .as_ref()
                     .map(|pre| {
                         format!(
-                            ", pruning_predicate={} [{}]",
+                            ", pruning_predicate={}, required_guarantees=[{}]",
                             pre.predicate_expr(),
                             pre.literal_guarantees()
                                 .iter()
