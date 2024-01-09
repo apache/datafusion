@@ -36,7 +36,7 @@ pub fn create_physical_expr(
 
     Ok(Arc::new(ScalarFunctionExpr::new(
         fun.name(),
-        fun.fun().clone(),
+        fun.fun(),
         input_phy_exprs.to_vec(),
         fun.return_type(&input_exprs_types)?,
         None,

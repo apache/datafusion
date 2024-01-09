@@ -114,6 +114,14 @@ VALUES (1,2,3,4,5,6,7,8,9,10,11,12,13,NULL,'F',3.5)
 ----
 1 2 3 4 5 6 7 8 9 10 11 12 13 NULL F 3.5
 
+# Test non-literal expressions in VALUES
+query II
+VALUES (1, CASE WHEN RANDOM() > 0.5 THEN 1 ELSE 1 END), 
+       (2, CASE WHEN RANDOM() > 0.5 THEN 2 ELSE 2 END);
+----
+1 1
+2 2
+
 query IT
 SELECT * FROM (VALUES (1,'a'),(2,NULL)) AS t(c1, c2)
 ----

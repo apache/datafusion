@@ -47,56 +47,82 @@ pub type GenericError = Box<dyn Error + Send + Sync>;
 #[derive(Debug)]
 pub enum DataFusionError {
     /// Error returned by arrow.
+    ///
     /// 2nd argument is for optional backtrace
     ArrowError(ArrowError, Option<String>),
-    /// Wraps an error from the Parquet crate
+    /// Error when reading / writing Parquet data.
     #[cfg(feature = "parquet")]
     ParquetError(ParquetError),
-    /// Wraps an error from the Avro crate
+    /// Error when reading Avro data.
     #[cfg(feature = "avro")]
     AvroError(AvroError),
-    /// Wraps an error from the object_store crate
+    /// Error when reading / writing to / from an object_store (e.g. S3 or LocalFile)
     #[cfg(feature = "object_store")]
     ObjectStore(object_store::Error),
-    /// Error associated to I/O operations and associated traits.
+    /// Error when an I/O operation fails
     IoError(io::Error),
-    /// Error returned when SQL is syntactically incorrect.
+    /// Error when SQL is syntactically incorrect.
+    ///
     /// 2nd argument is for optional backtrace    
     SQL(ParserError, Option<String>),
-    /// Error returned on a branch that we know it is possible
-    /// but to which we still have no implementation for.
-    /// Often, these errors are tracked in our issue tracker.
-    NotImplemented(String),
-    /// Error returned as a consequence of an error in DataFusion.
-    /// This error should not happen in normal usage of DataFusion.
+    /// Error when a feature is not yet implemented.
     ///
-    /// DataFusions has internal invariants that the compiler is not
-    /// always able to check.  This error is raised when one of those
-    /// invariants is not verified during execution.
+    /// These errors are sometimes returned for features that are still in
+    /// development and are not entirely complete. Often, these errors are
+    /// tracked in our issue tracker.
+    NotImplemented(String),
+    /// Error due to bugs in DataFusion
+    ///
+    /// This error should not happen in normal usage of DataFusion. It results
+    /// from something that wasn't expected/anticipated by the implementation
+    /// and that is most likely a bug (the error message even encourages users
+    /// to open a bug report). A user should not be able to trigger internal
+    /// errors under normal circumstances by feeding in malformed queries, bad
+    /// data, etc.
+    ///
+    /// Note that I/O errors (or any error that happens due to external systems)
+    /// do NOT fall under this category. See other variants such as
+    /// [`Self::IoError`] and [`Self::External`].
+    ///
+    /// DataFusions has internal invariants that the compiler is not always able
+    /// to check. This error is raised when one of those invariants does not
+    /// hold for some reason.
     Internal(String),
-    /// This error happens whenever a plan is not valid. Examples include
-    /// impossible casts.
+    /// Error during planning of the query.
+    ///
+    /// This error happens when the user provides a bad query or plan, for
+    /// example the user attempts to call a function that doesn't exist, or if
+    /// the types of a function call are not supported.
     Plan(String),
-    /// This error happens when an invalid or unsupported option is passed
-    /// in a SQL statement
+    /// Error for invalid or unsupported configuration options.
     Configuration(String),
-    /// This error happens with schema-related errors, such as schema inference not possible
-    /// and non-unique column names.
+    /// Error when there is a problem with the query related to schema.
+    ///
+    /// This error can be returned in cases such as when schema inference is not
+    /// possible and when column names are not unique.
+    ///
     /// 2nd argument is for optional backtrace    
     /// Boxing the optional backtrace to prevent <https://rust-lang.github.io/rust-clippy/master/index.html#/result_large_err>
     SchemaError(SchemaError, Box<Option<String>>),
-    /// Error returned during execution of the query.
-    /// Examples include files not found, errors in parsing certain types.
+    /// Error during execution of the query.
+    ///
+    /// This error is returned when an error happens during execution due to a
+    /// malformed input. For example, the user passed malformed arguments to a
+    /// SQL method, opened a CSV file that is broken, or tried to divide an
+    /// integer by zero.
     Execution(String),
-    /// This error is thrown when a consumer cannot acquire memory from the Memory Manager
-    /// we can just cancel the execution of the partition.
+    /// Error when resources (such as memory of scratch disk space) are exhausted.
+    ///
+    /// This error is thrown when a consumer cannot acquire additional memory
+    /// or other resources needed to execute the query from the Memory Manager.
     ResourcesExhausted(String),
     /// Errors originating from outside DataFusion's core codebase.
+    ///
     /// For example, a custom S3Error from the crate datafusion-objectstore-s3
     External(GenericError),
     /// Error with additional context
     Context(String, Box<DataFusionError>),
-    /// Errors originating from either mapping LogicalPlans to/from Substrait plans
+    /// Errors from either mapping LogicalPlans to/from Substrait plans
     /// or serializing/deserializing protobytes to Substrait plans
     Substrait(String),
 }

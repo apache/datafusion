@@ -27,10 +27,8 @@ use crate::{
     PhysicalExpr,
 };
 
-use arrow::array::new_null_array;
-use arrow::datatypes::SchemaRef;
-use arrow::record_batch::RecordBatch;
-use arrow_array::cast::AsArray;
+use arrow::datatypes::{Schema, SchemaRef};
+use arrow::record_batch::{RecordBatch, RecordBatchOptions};
 use datafusion_common::{internal_err, plan_err, DataFusionError, Result, ScalarValue};
 use datafusion_execution::TaskContext;
 
@@ -54,15 +52,14 @@ impl ValuesExec {
         }
         let n_row = data.len();
         let n_col = schema.fields().len();
-        // we have this single row, null, typed batch as a placeholder to satisfy evaluation argument
-        let batch = RecordBatch::try_new(
-            schema.clone(),
-            schema
-                .fields()
-                .iter()
-                .map(|field| new_null_array(field.data_type(), 1))
-                .collect::<Vec<_>>(),
+        // we have this single row batch as a placeholder to satisfy evaluation argument
+        // and generate a single output row
+        let batch = RecordBatch::try_new_with_options(
+            Arc::new(Schema::empty()),
+            vec![],
+            &RecordBatchOptions::new().with_row_count(Some(1)),
         )?;
+
         let arr = (0..n_col)
             .map(|j| {
                 (0..n_row)
@@ -72,7 +69,7 @@ impl ValuesExec {
                         match r {
                             Ok(ColumnarValue::Scalar(scalar)) => Ok(scalar),
                             Ok(ColumnarValue::Array(a)) if a.len() == 1 => {
-                                Ok(ScalarValue::List(a.as_list().to_owned().into()))
+                                ScalarValue::try_from_array(&a, 0)
                             }
                             Ok(ColumnarValue::Array(a)) => {
                                 plan_err!(
@@ -175,7 +172,7 @@ impl ExecutionPlan for ValuesExec {
         partition: usize,
         _context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        // GlobalLimitExec has a single output partition
+        // ValuesExec has a single output partition
         if 0 != partition {
             return internal_err!(
                 "ValuesExec invalid partition {partition} (expected 0)"
@@ -202,6 +199,7 @@ impl ExecutionPlan for ValuesExec {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::expressions::lit;
     use crate::test::{self, make_partition};
 
     use arrow_schema::{DataType, Field, Schema};
@@ -240,5 +238,19 @@ mod tests {
             Field::new("col1", DataType::Utf8, false),
         ]));
         let _ = ValuesExec::try_new_from_batches(invalid_schema, batches).unwrap_err();
+    }
+
+    // Test issue: https://github.com/apache/arrow-datafusion/issues/8763
+    #[test]
+    fn new_exec_with_non_nullable_schema() {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "col0",
+            DataType::UInt32,
+            false,
+        )]));
+        let _ = ValuesExec::try_new(schema.clone(), vec![vec![lit(1u32)]]).unwrap();
+        // Test that a null value is rejected
+        let _ = ValuesExec::try_new(schema, vec![vec![lit(ScalarValue::UInt32(None))]])
+            .unwrap_err();
     }
 }
