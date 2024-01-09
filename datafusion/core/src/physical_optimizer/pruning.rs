@@ -314,6 +314,11 @@ impl PruningPredicate {
         &self.predicate_expr
     }
 
+    /// Returns a reference to the literal guarantees
+    pub fn literal_guarantees(&self) -> &[LiteralGuarantee] {
+        &self.literal_guarantees
+    }
+
     /// Returns true if this pruning predicate can not prune anything.
     ///
     /// This happens if the predicate is a literal `true`  and
