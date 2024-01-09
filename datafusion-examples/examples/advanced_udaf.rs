@@ -139,8 +139,8 @@ impl Accumulator for GeometricMean {
         })
     }
 
-    // Optimization hint: this trait also supports `update_batch` and `merge_batch`,
-    // that can be used to perform these operations on arrays instead of single values.
+    // Merge the output of `Self::state()` from other instances of this accumulator
+    // into this accumulator's state
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
         if states.is_empty() {
             return Ok(());

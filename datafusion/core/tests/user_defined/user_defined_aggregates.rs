@@ -524,7 +524,7 @@ impl FirstSelector {
         let name = "first";
 
         let first = AggregateUDF::from(SimpleAggregateUDF::new_with_signature(
-            name.to_string(),
+            name,
             Signature::one_of(signatures, volatility),
             return_type,
             accumulator,

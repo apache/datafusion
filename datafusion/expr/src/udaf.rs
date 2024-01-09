@@ -243,12 +243,12 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
     /// the arguments
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType>;
 
-    /// This is the accumulator factory [`AccumulatorFactoryFunction`];
-    /// DataFusion uses it to create new accumulators.
+    /// Return a new [`Accumulator`] that aggregates values for a specific
+    /// group during query execution.
     fn accumulator(&self, arg: &DataType) -> Result<Box<dyn Accumulator>>;
 
-    /// This is the description of the state.
-    /// accumulator's state() must match the types here.
+    /// Return the type used to serialize the  [`Accumulator`]'s intermediate state.
+    /// See [`Accumulator::state()`] for more details
     fn state_type(&self, return_type: &DataType) -> Result<Vec<DataType>>;
 }
 

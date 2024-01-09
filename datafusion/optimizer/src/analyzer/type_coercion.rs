@@ -907,7 +907,7 @@ mod test {
         let accumulator: AccumulatorFactoryFunction =
             Arc::new(|_| Ok(Box::<AvgAccumulator>::default()));
         let my_avg = AggregateUDF::from(SimpleAggregateUDF::new_with_signature(
-            "MY_AVG".to_string(),
+            "MY_AVG",
             Signature::uniform(1, vec![DataType::Float64], Volatility::Immutable),
             return_type,
             accumulator,
