@@ -5198,7 +5198,7 @@ Can be a constant, column, or function, and any combination of array operators.<
 <section id="array-pop-front">
 <h3><code class="docutils literal notranslate"><span class="pre">array_pop_front</span></code><a class="headerlink" href="#array-pop-front" title="Link to this heading">¶</a></h3>
 <p>Returns the array without the first element.</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">array_pop_first</span><span class="p">(</span><span class="n">array</span><span class="p">)</span>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">array_pop_front</span><span class="p">(</span><span class="n">array</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id113">
@@ -5210,9 +5210,9 @@ Can be a constant, column, or function, and any combination of array operators.<
 </section>
 <section id="id114">
 <h4>Example<a class="headerlink" href="#id114" title="Link to this heading">¶</a></h4>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>❯ select array_pop_first([1, 2, 3]);
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>❯ select array_pop_front([1, 2, 3]);
 +-------------------------------+
-| array_pop_first(List([1,2,3])) |
+| array_pop_front(List([1,2,3])) |
 +-------------------------------+
 | [2, 3]                        |
 +-------------------------------+
