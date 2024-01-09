@@ -29,8 +29,8 @@ use arrow::compute::kernels::zip::zip;
 use arrow::compute::{and, is_null, not, or, prep_null_mask_filter};
 use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
-use datafusion_common::{exec_err, ScalarValue};
 use datafusion_common::{cast::as_boolean_array, internal_err, DataFusionError, Result};
+use datafusion_common::{exec_err, ScalarValue};
 use datafusion_expr::ColumnarValue;
 
 use itertools::Itertools;
