@@ -409,6 +409,7 @@ impl From<&AggregateFunction> for protobuf::AggregateFunction {
             AggregateFunction::Median => Self::Median,
             AggregateFunction::FirstValue => Self::FirstValueAgg,
             AggregateFunction::LastValue => Self::LastValueAgg,
+            AggregateFunction::NthValue => Self::NthValueAgg,
             AggregateFunction::StringAgg => Self::StringAgg,
         }
     }
@@ -727,6 +728,9 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                             }
                             AggregateFunction::LastValue => {
                                 protobuf::AggregateFunction::LastValueAgg
+                            }
+                            AggregateFunction::NthValue => {
+                                protobuf::AggregateFunction::NthValueAgg
                             }
                             AggregateFunction::StringAgg => {
                                 protobuf::AggregateFunction::StringAgg
