@@ -17,8 +17,8 @@
 
 //! Aggregate function module contains all built-in aggregate functions definitions
 
+use crate::utils;
 use crate::{type_coercion::aggregates::*, Signature, TypeSignature, Volatility};
-use crate::{utils, BuiltInWindowFunction};
 use arrow::datatypes::{DataType, Field};
 use datafusion_common::{plan_datafusion_err, plan_err, DataFusionError, Result};
 use std::sync::Arc;
