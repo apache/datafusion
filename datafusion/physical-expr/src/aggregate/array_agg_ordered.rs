@@ -36,7 +36,7 @@ use arrow_array::cast::AsArray;
 use arrow_array::Array;
 use arrow_schema::{Fields, SortOptions};
 use datafusion_common::utils::{compare_rows, get_row_at_idx};
-use datafusion_common::{exec_err, DataFusionError, Result, ScalarValue};
+use datafusion_common::{exec_err, internal_err, DataFusionError, Result, ScalarValue};
 use datafusion_expr::Accumulator;
 
 use itertools::izip;
@@ -591,24 +591,28 @@ impl Accumulator for NthValueAccumulator {
     }
 
     fn evaluate(&self) -> Result<ScalarValue> {
-        if self.n > 0 {
-            let forward_idx = self.n as usize - 1;
-            if let Some(nth_value) = self.values.get(forward_idx) {
-                Ok(nth_value.clone())
-            } else {
-                ScalarValue::try_from(self.datatypes[0].clone())
+        match self.n.cmp(&0) {
+            Ordering::Greater => {
+                let forward_idx = self.n as usize - 1;
+                if let Some(nth_value) = self.values.get(forward_idx) {
+                    Ok(nth_value.clone())
+                } else {
+                    ScalarValue::try_from(self.datatypes[0].clone())
+                }
             }
-        } else if self.n < 0 {
-            let backward_idx = (-self.n) as usize;
-            if self.values.len() >= backward_idx {
-                let idx = self.values.len() - backward_idx;
-                Ok(self.values[idx].clone())
-            } else {
-                ScalarValue::try_from(self.datatypes[0].clone())
+            Ordering::Less => {
+                let backward_idx = (-self.n) as usize;
+                if self.values.len() >= backward_idx {
+                    let idx = self.values.len() - backward_idx;
+                    Ok(self.values[idx].clone())
+                } else {
+                    ScalarValue::try_from(self.datatypes[0].clone())
+                }
             }
-        } else {
-            // n cannot be 0
-            unreachable!();
+            Ordering::Equal => {
+                // n cannot be 0
+                internal_err!("Nth value indices are 1 based. 0 is invalid index")
+            }
         }
     }
 

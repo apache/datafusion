@@ -30,7 +30,7 @@ use crate::aggregate::regr::RegrType;
 use crate::expressions::Literal;
 use crate::{expressions, AggregateExpr, PhysicalExpr, PhysicalSortExpr};
 use arrow::datatypes::Schema;
-use datafusion_common::{not_impl_err, plan_datafusion_err, DataFusionError, Result};
+use datafusion_common::{not_impl_err, DataFusionError, Result};
 pub use datafusion_expr::AggregateFunction;
 use std::sync::Arc;
 
