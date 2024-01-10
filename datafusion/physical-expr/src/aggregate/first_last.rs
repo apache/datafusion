@@ -674,6 +674,7 @@ pub struct NthValueAgg {
     input_data_type: DataType,
     order_by_data_types: Vec<DataType>,
     expr: Arc<dyn PhysicalExpr>,
+    n: i64,
     ordering_req: LexOrdering,
     requirement_satisfied: bool,
 }
@@ -682,6 +683,7 @@ impl NthValueAgg {
     /// Creates a new LAST_VALUE aggregation function.
     pub fn new(
         expr: Arc<dyn PhysicalExpr>,
+        n: i64,
         name: impl Into<String>,
         input_data_type: DataType,
         ordering_req: LexOrdering,
@@ -693,6 +695,7 @@ impl NthValueAgg {
             input_data_type,
             order_by_data_types,
             expr,
+            n,
             ordering_req,
             requirement_satisfied,
         }
