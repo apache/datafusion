@@ -18,7 +18,6 @@
 //! Array expressions
 
 use std::any::type_name;
-use std::cmp::min;
 use std::collections::HashSet;
 use std::fmt::{Display, Formatter};
 use std::sync::Arc;
@@ -35,10 +34,10 @@ use datafusion_common::cast::{
     as_generic_list_array, as_generic_string_array, as_int64_array, as_large_list_array,
     as_list_array, as_null_array, as_string_array,
 };
-use datafusion_common::utils::{array_into_list_array, empty_list, list_ndims};
+use datafusion_common::utils::{array_into_list_array, list_ndims};
 use datafusion_common::{
     exec_datafusion_err, exec_err, internal_err, not_impl_err, plan_err, DataFusionError,
-    Result,
+    Result, ScalarValue,
 };
 
 use itertools::Itertools;
@@ -1192,7 +1191,10 @@ pub fn array_concat(args: &[ArrayRef]) -> Result<ArrayRef> {
         }
     }
 
-    concat_internal::<i32>(new_args.as_slice())
+    match &args[0].data_type() {
+        DataType::LargeList(_) => concat_internal::<i64>(new_args.as_slice()),
+        _ => concat_internal::<i32>(new_args.as_slice()),
+    }
 }
 
 /// Array_empty SQL function
@@ -1241,7 +1243,7 @@ pub fn array_repeat(args: &[ArrayRef]) -> Result<ArrayRef> {
             let list_array = as_large_list_array(element)?;
             general_list_repeat::<i64>(list_array, count_array)
         }
-        _ => general_repeat(element, count_array),
+        _ => general_repeat::<i32>(element, count_array),
     }
 }
 
@@ -1257,7 +1259,10 @@ pub fn array_repeat(args: &[ArrayRef]) -> Result<ArrayRef> {
 ///     [1, 2, 3], [2, 0, 1] => [[1, 1], [], [3]]
 /// )
 /// ```
-fn general_repeat(array: &ArrayRef, count_array: &Int64Array) -> Result<ArrayRef> {
+fn general_repeat<O: OffsetSizeTrait>(
+    array: &ArrayRef,
+    count_array: &Int64Array,
+) -> Result<ArrayRef> {
     let data_type = array.data_type();
     let mut new_values = vec![];
 
@@ -1290,7 +1295,7 @@ fn general_repeat(array: &ArrayRef, count_array: &Int64Array) -> Result<ArrayRef
     let new_values: Vec<_> = new_values.iter().map(|a| a.as_ref()).collect();
     let values = compute::concat(&new_values)?;
 
-    Ok(Arc::new(ListArray::try_new(
+    Ok(Arc::new(GenericListArray::<O>::try_new(
         Arc::new(Field::new("item", data_type.to_owned(), true)),
         OffsetBuffer::from_lengths(count_vec),
         values,
@@ -2613,6 +2618,7 @@ pub fn array_distinct(args: &[ArrayRef]) -> Result<ArrayRef> {
     }
 }
 
+/// array_resize SQL function
 pub fn array_resize(arg: &[ArrayRef]) -> Result<ArrayRef> {
     if arg.len() < 2 || arg.len() > 3 {
         return exec_err!("array_resize needs two or three arguments");
@@ -2638,74 +2644,67 @@ pub fn array_resize(arg: &[ArrayRef]) -> Result<ArrayRef> {
     }
 }
 
+/// array_resize keep the original array and append the default element to the end
 fn general_list_resize<O: OffsetSizeTrait>(
     array: &GenericListArray<O>,
     count_array: &Int64Array,
     field: &FieldRef,
     default_element: Option<ArrayRef>,
-) -> Result<ArrayRef> {
-    let mut offsets = vec![O::usize_as(0)];
-    let mut new_arrays = vec![];
+) -> Result<ArrayRef>
+where
+    O: TryInto<i64>,
+{
+    let mut default_element_array = vec![];
 
-    let dt = array.value_type();
-    let converter = RowConverter::new(vec![SortField::new(dt.clone())])?;
+    let data_type = array.value_type();
     let default_element = if let Some(default_element) = default_element {
         default_element
     } else {
-        empty_list(&dt)?
+        let null_scalar = ScalarValue::try_from(&data_type)?;
+        null_scalar.to_array_of_size(1)?
     };
-    let rows = converter.convert_columns(&[default_element.clone()])?;
 
-    for (index, arr) in array.iter().enumerate() {
-        let count = count_array.value(index).to_usize().ok_or_else(|| {
+    // create a mutable array to store the original data
+    let values = array.values();
+    let original_data = values.to_data();
+    let capacity = Capacities::Array(original_data.len());
+    let mut offsets = vec![O::usize_as(0)];
+    let mut mutable =
+        MutableArrayData::with_capacities(vec![&original_data], false, capacity);
+
+    for (row_index, offset_window) in array.offsets().windows(2).enumerate() {
+        let count = count_array.value(row_index).to_usize().ok_or_else(|| {
             exec_datafusion_err!("array_resize: failed to convert size to usize")
         })?;
-        let default_value = if rows.size() > 0 {
-            rows.row(index)
+        let count = O::usize_as(count);
+        let start = offset_window[0];
+        let end = if start + count > offset_window[1] {
+            let value = (start + count - offset_window[1]).try_into().map_err(|_| {
+                exec_datafusion_err!("array_resize: failed to convert size to i64")
+            })?;
+            default_element_array.push(Some(value));
+            offset_window[1]
         } else {
-            rows.row(0)
+            default_element_array.push(None);
+            start + count
         };
-        match arr {
-            Some(arr) => {
-                let values = converter.convert_columns(&[arr])?;
-                let rows = values.iter().collect::<Vec<_>>();
-
-                let remain_count = min(rows.len(), count);
-                let mut rows = rows[..remain_count].to_vec();
-                let new_rows = vec![&default_value; count - remain_count];
-                rows.extend(new_rows);
-
-                let last_offset = offsets.last().copied().unwrap();
-                offsets.push(last_offset + O::usize_as(rows.len()));
-                let arrays = converter.convert_rows(rows)?;
-                let array = match arrays.first() {
-                    Some(array) => array.clone(),
-                    None => {
-                        return internal_err!(
-                            "array_resize: failed to get array from rows"
-                        )
-                    }
-                };
-                new_arrays.push(array);
-            }
-            None => {
-                let last_offset = offsets.last().copied().unwrap();
-                offsets.push(last_offset);
-                new_arrays.push(default_element.clone());
-            }
-        }
+        mutable.extend(0, (start).to_usize().unwrap(), (end).to_usize().unwrap());
+        offsets.push(offsets[row_index] + end - start);
     }
 
-    let offsets = OffsetBuffer::new(offsets.into());
-    let new_arrays_ref = new_arrays.iter().map(|v| v.as_ref()).collect::<Vec<_>>();
-    let values = compute::concat(&new_arrays_ref)?;
+    let default_element_array = Arc::new(Int64Array::from(default_element_array));
+    let default_element_array =
+        general_repeat::<O>(&default_element, &default_element_array)?;
 
-    Ok(Arc::new(GenericListArray::<O>::try_new(
+    let data = mutable.freeze();
+    let original_part = Arc::new(GenericListArray::<O>::try_new(
         field.clone(),
-        offsets,
-        values,
+        OffsetBuffer::<O>::new(offsets.into()),
+        arrow_array::make_array(data),
         None,
-    )?))
+    )?);
+
+    array_concat(&[original_part, default_element_array])
 }
 
 #[cfg(test)]

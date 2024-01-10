@@ -25,11 +25,7 @@ use arrow::compute;
 use arrow::compute::{partition, SortColumn, SortOptions};
 use arrow::datatypes::{Field, SchemaRef, UInt32Type};
 use arrow::record_batch::RecordBatch;
-use arrow_array::{
-    Array, BooleanArray, Float32Array, Float64Array, Int16Array, Int32Array, Int64Array,
-    Int8Array, LargeListArray, ListArray, NullArray, RecordBatchOptions, UInt16Array,
-    UInt32Array, UInt64Array, UInt8Array,
-};
+use arrow_array::{Array, LargeListArray, ListArray, RecordBatchOptions};
 use arrow_schema::DataType;
 use sqlparser::ast::Ident;
 use sqlparser::dialect::GenericDialect;
@@ -493,44 +489,6 @@ pub fn list_ndims(data_type: &DataType) -> u64 {
             1 + list_ndims(field.data_type())
         }
         _ => 0,
-    }
-}
-
-/// Create an new empty array based on the given data type.
-pub fn empty_list(data_type: &DataType) -> Result<ArrayRef> {
-    match data_type {
-        DataType::Boolean => Ok(Arc::new(BooleanArray::from(vec![None]))),
-        DataType::UInt8 => Ok(Arc::new(UInt8Array::from(vec![None]))),
-        DataType::UInt16 => Ok(Arc::new(UInt16Array::from(vec![None]))),
-        DataType::UInt32 => Ok(Arc::new(UInt32Array::from(vec![None]))),
-        DataType::UInt64 => Ok(Arc::new(UInt64Array::from(vec![None]))),
-        DataType::Int8 => Ok(Arc::new(Int8Array::from(vec![None]))),
-        DataType::Int16 => Ok(Arc::new(Int16Array::from(vec![None]))),
-        DataType::Int32 => Ok(Arc::new(Int32Array::from(vec![None]))),
-        DataType::Int64 => Ok(Arc::new(Int64Array::from(vec![None]))),
-        DataType::Float32 => Ok(Arc::new(Float32Array::from(vec![None]))),
-        DataType::Float64 => Ok(Arc::new(Float64Array::from(vec![None]))),
-        DataType::List(field) => {
-            let value = empty_list(field.data_type())?;
-            Ok(Arc::new(ListArray::try_new(
-                field.clone(),
-                OffsetBuffer::new(vec![0, 0].into()),
-                value,
-                None,
-            )?))
-        }
-        DataType::LargeList(field) => {
-            let value = empty_list(field.data_type())?;
-
-            Ok(Arc::new(LargeListArray::try_new(
-                field.clone(),
-                OffsetBuffer::new(vec![0, 0].into()),
-                value,
-                None,
-            )?))
-        }
-        DataType::Null => Ok(Arc::new(NullArray::new(1))),
-        _ => _internal_err!("Unsupported data type for empty list: {:?}", data_type),
     }
 }
 
