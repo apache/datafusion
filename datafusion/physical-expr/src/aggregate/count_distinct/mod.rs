@@ -15,8 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+mod bytes;
 mod native;
-mod strings;
 
 use std::any::Any;
 use std::collections::HashSet;
@@ -37,11 +37,12 @@ use arrow_array::types::{
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::Accumulator;
 
+use crate::aggregate::count_distinct::bytes::BytesDistinctCountAccumulator;
 use crate::aggregate::count_distinct::native::{
     FloatDistinctCountAccumulator, PrimitiveDistinctCountAccumulator,
 };
-use crate::aggregate::count_distinct::strings::StringDistinctCountAccumulator;
 use crate::aggregate::utils::down_cast_any_ref;
+use crate::binary_map::OutputType;
 use crate::expressions::format_state_name;
 use crate::{AggregateExpr, PhysicalExpr};
 
@@ -144,8 +145,16 @@ impl AggregateExpr for DistinctCount {
             Float32 => Box::new(FloatDistinctCountAccumulator::<Float32Type>::new()),
             Float64 => Box::new(FloatDistinctCountAccumulator::<Float64Type>::new()),
 
-            Utf8 => Box::new(StringDistinctCountAccumulator::<i32>::new()),
-            LargeUtf8 => Box::new(StringDistinctCountAccumulator::<i64>::new()),
+            Utf8 => Box::new(BytesDistinctCountAccumulator::<i32>::new(OutputType::Utf8)),
+            LargeUtf8 => {
+                Box::new(BytesDistinctCountAccumulator::<i64>::new(OutputType::Utf8))
+            }
+            Binary => Box::new(BytesDistinctCountAccumulator::<i32>::new(
+                OutputType::Binary,
+            )),
+            LargeBinary => Box::new(BytesDistinctCountAccumulator::<i64>::new(
+                OutputType::Binary,
+            )),
 
             _ => Box::new(DistinctCountAccumulator {
                 values: HashSet::default(),
@@ -175,7 +184,7 @@ impl PartialEq<dyn Any> for DistinctCount {
 /// General purpose distinct accumulator that works for any DataType by using
 /// [`ScalarValue`]. Some types have specialized accumulators that are (much)
 /// more efficient such as [`PrimitiveDistinctCountAccumulator`] and
-/// [`StringDistinctCountAccumulator`]
+/// [`BytesDistinctCountAccumulator`]
 #[derive(Debug)]
 struct DistinctCountAccumulator {
     values: HashSet<ScalarValue, RandomState>,
