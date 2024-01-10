@@ -4175,7 +4175,7 @@ impl serde::Serialize for CreateExternalTableNode {
         if !self.definition.is_empty() {
             len += 1;
         }
-        if !self.file_compression_type.is_empty() {
+        if self.file_compression_type != 0 {
             len += 1;
         }
         if !self.order_exprs.is_empty() {
@@ -4221,8 +4221,10 @@ impl serde::Serialize for CreateExternalTableNode {
         if !self.definition.is_empty() {
             struct_ser.serialize_field("definition", &self.definition)?;
         }
-        if !self.file_compression_type.is_empty() {
-            struct_ser.serialize_field("fileCompressionType", &self.file_compression_type)?;
+        if self.file_compression_type != 0 {
+            let v = CompressionTypeVariant::try_from(self.file_compression_type)
+                .map_err(|_| serde::ser::Error::custom(format!("Invalid variant {}", self.file_compression_type)))?;
+            struct_ser.serialize_field("fileCompressionType", &v)?;
         }
         if !self.order_exprs.is_empty() {
             struct_ser.serialize_field("orderExprs", &self.order_exprs)?;
@@ -4420,7 +4422,7 @@ impl<'de> serde::Deserialize<'de> for CreateExternalTableNode {
                             if file_compression_type__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("fileCompressionType"));
                             }
-                            file_compression_type__ = Some(map_.next_value()?);
+                            file_compression_type__ = Some(map_.next_value::<CompressionTypeVariant>()? as i32);
                         }
                         GeneratedField::OrderExprs => {
                             if order_exprs__.is_some() {
