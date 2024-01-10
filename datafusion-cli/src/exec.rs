@@ -52,8 +52,8 @@ use url::Url;
 /// run and execute SQL statements and commands, against a context with the given print options
 pub async fn exec_from_commands(
     ctx: &mut SessionContext,
-    print_options: &PrintOptions,
     commands: Vec<String>,
+    print_options: &PrintOptions,
 ) {
     for sql in commands {
         match exec_and_print(ctx, print_options, sql).await {
@@ -106,8 +106,8 @@ pub async fn exec_from_lines(
 }
 
 pub async fn exec_from_files(
-    files: Vec<String>,
     ctx: &mut SessionContext,
+    files: Vec<String>,
     print_options: &PrintOptions,
 ) {
     let files = files

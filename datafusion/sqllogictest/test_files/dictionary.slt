@@ -1,0 +1,282 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# Tests for querying on dictionary encoded data
+
+# Note: These tables model data as is common for timeseries, such as in InfluxDB IOx
+# There are three types of columns:
+# 1. tag columns, which are string dictionaries, often with low cardinality
+# 2. field columns, which are typed,
+# 3. a `time` columns, which is a nanosecond timestamp
+
+# It is common to group and filter on the "tag" columns (and thus on dictionary
+# encoded values)
+
+# Table m1 with a tag column `tag_id` 4 fields `f1` - `f4`, and `time`
+
+statement ok
+CREATE VIEW m1 AS
+SELECT
+    arrow_cast(column1, 'Dictionary(Int32, Utf8)') as tag_id,
+    arrow_cast(column2, 'Float64') as f1,
+    arrow_cast(column3, 'Utf8') as f2,
+    arrow_cast(column4, 'Utf8') as f3,
+    arrow_cast(column5, 'Float64') as f4,
+    arrow_cast(column6, 'Timestamp(Nanosecond, None)') as time
+FROM (
+    VALUES
+    -- equivalent to the following line protocol data
+    -- m1,tag_id=1000 f1=32,f2="foo",f3="True",f4=1.0 1703030400000000000
+    -- m1,tag_id=1000 f1=32,f2="foo",f3="True",f4=2.0 1703031000000000000
+    -- m1,tag_id=1000 f1=32,f2="foo",f3="True",f4=3.0 1703031600000000000
+    -- m1,tag_id=1000 f1=32,f2="foo",f3="True",f4=4.0 1703032200000000000
+    -- m1,tag_id=1000 f1=32,f2="foo",f3="True",f4=5.0 1703032800000000000
+    -- m1,tag_id=1000 f1=32,f2="foo",f3="True",f4=6.0 1703033400000000000
+    -- m1,tag_id=1000 f1=32,f2="foo",f3="True",f4=7.0 1703034000000000000
+    -- m1,tag_id=1000 f1=32,f2="foo",f3="True",f4=8.0 1703034600000000000
+    -- m1,tag_id=1000 f1=32,f2="foo",f3="True",f4=9.0 1703035200000000000
+    -- m1,tag_id=1000 f1=32,f2="foo",f3="True",f4=10.0 1703035800000000000
+    ('1000', 32, 'foo', 'True', 1.0, 1703030400000000000),
+    ('1000', 32, 'foo', 'True', 2.0, 1703031000000000000),
+    ('1000', 32, 'foo', 'True', 3.0, 1703031600000000000),
+    ('1000', 32, 'foo', 'True', 4.0, 1703032200000000000),
+    ('1000', 32, 'foo', 'True', 5.0, 1703032800000000000),
+    ('1000', 32, 'foo', 'True', 6.0, 1703033400000000000),
+    ('1000', 32, 'foo', 'True', 7.0, 1703034000000000000),
+    ('1000', 32, 'foo', 'True', 8.0, 1703034600000000000),
+    ('1000', 32, 'foo', 'True', 9.0, 1703035200000000000),
+    ('1000', 32, 'foo', 'True', 10.0, 1703035800000000000)
+);
+
+query ?RTTRP
+SELECT * FROM m1;
+----
+1000 32 foo True 1 2023-12-20T00:00:00
+1000 32 foo True 2 2023-12-20T00:10:00
+1000 32 foo True 3 2023-12-20T00:20:00
+1000 32 foo True 4 2023-12-20T00:30:00
+1000 32 foo True 5 2023-12-20T00:40:00
+1000 32 foo True 6 2023-12-20T00:50:00
+1000 32 foo True 7 2023-12-20T01:00:00
+1000 32 foo True 8 2023-12-20T01:10:00
+1000 32 foo True 9 2023-12-20T01:20:00
+1000 32 foo True 10 2023-12-20T01:30:00
+
+# Note that te type of the tag column is `Dictionary(Int32, Utf8)`
+query TTT
+DESCRIBE m1;
+----
+tag_id Dictionary(Int32, Utf8) YES
+f1 Float64 YES
+f2 Utf8 YES
+f3 Utf8 YES
+f4 Float64 YES
+time Timestamp(Nanosecond, None) YES
+
+
+# Table m2 with a tag columns `tag_id` and `type`, a field column `f5`, and `time`
+statement ok
+CREATE VIEW m2 AS
+SELECT
+    arrow_cast(column1, 'Dictionary(Int32, Utf8)') as type,
+    arrow_cast(column2, 'Dictionary(Int32, Utf8)') as tag_id,
+    arrow_cast(column3, 'Float64') as f5,
+    arrow_cast(column4, 'Timestamp(Nanosecond, None)') as time
+FROM (
+    VALUES
+    -- equivalent to the following line protocol data
+    -- m2,type=active,tag_id=1000 f5=100 1701648000000000000
+    -- m2,type=active,tag_id=1000 f5=200 1701648600000000000
+    -- m2,type=active,tag_id=1000 f5=300 1701649200000000000
+    -- m2,type=active,tag_id=1000 f5=400 1701649800000000000
+    -- m2,type=active,tag_id=1000 f5=500 1701650400000000000
+    -- m2,type=active,tag_id=1000 f5=600 1701651000000000000
+    -- m2,type=passive,tag_id=2000 f5=700 1701651600000000000
+    -- m2,type=passive,tag_id=1000 f5=800 1701652200000000000
+    -- m2,type=passive,tag_id=1000 f5=900 1701652800000000000
+    -- m2,type=passive,tag_id=1000 f5=1000 1701653400000000000
+    ('active', '1000', 100, 1701648000000000000),
+    ('active', '1000', 200, 1701648600000000000),
+    ('active', '1000', 300, 1701649200000000000),
+    ('active', '1000', 400, 1701649800000000000),
+    ('active', '1000', 500, 1701650400000000000),
+    ('active', '1000', 600, 1701651000000000000),
+    ('passive', '1000', 700, 1701651600000000000),
+    ('passive', '1000', 800, 1701652200000000000),
+    ('passive', '1000', 900, 1701652800000000000),
+    ('passive', '1000', 1000, 1701653400000000000)
+);
+
+query ??RP
+SELECT * FROM m2;
+----
+active 1000 100 2023-12-04T00:00:00
+active 1000 200 2023-12-04T00:10:00
+active 1000 300 2023-12-04T00:20:00
+active 1000 400 2023-12-04T00:30:00
+active 1000 500 2023-12-04T00:40:00
+active 1000 600 2023-12-04T00:50:00
+passive 1000 700 2023-12-04T01:00:00
+passive 1000 800 2023-12-04T01:10:00
+passive 1000 900 2023-12-04T01:20:00
+passive 1000 1000 2023-12-04T01:30:00
+
+query TTT
+DESCRIBE m2;
+----
+type Dictionary(Int32, Utf8) YES
+tag_id Dictionary(Int32, Utf8) YES
+f5 Float64 YES
+time Timestamp(Nanosecond, None) YES
+
+query I
+select count(*) from m1 where tag_id = '1000' and time < '2024-01-03T14:46:35+01:00';
+----
+10
+
+query RRR rowsort
+select min(f5), max(f5), avg(f5) from m2 where tag_id = '1000' and time < '2024-01-03T14:46:35+01:00' group by type;
+----
+100 600 350
+700 1000 850
+
+query IRRRP
+select count(*), min(f5), max(f5), avg(f5), date_bin('30 minutes', time) as "time"
+from m2 where tag_id = '1000' and time < '2024-01-03T14:46:35+01:00'
+group by date_bin('30 minutes', time)
+order by date_bin('30 minutes', time) DESC
+----
+1 1000 1000 1000 2023-12-04T01:30:00
+3 700 900 800 2023-12-04T01:00:00
+3 400 600 500 2023-12-04T00:30:00
+3 100 300 200 2023-12-04T00:00:00
+
+
+
+# Reproducer for https://github.com/apache/arrow-datafusion/issues/8738
+# This query should work correctly
+query P?TT rowsort
+SELECT
+  "data"."timestamp" as "time",
+  "data"."tag_id",
+  "data"."field",
+  "data"."value"
+FROM (
+  (
+      SELECT "m2"."time" as "timestamp", "m2"."tag_id", 'active_power' as "field", "m2"."f5" as "value"
+        FROM "m2"
+       WHERE "m2"."time" >= '2023-12-05T14:46:35+01:00' AND "m2"."time" < '2024-01-03T14:46:35+01:00'
+         AND "m2"."f5" IS NOT NULL
+         AND "m2"."type" IN ('active')
+         AND "m2"."tag_id" IN ('1000')
+  ) UNION (
+      SELECT "m1"."time" as "timestamp", "m1"."tag_id", 'f1' as "field", "m1"."f1" as "value"
+        FROM "m1"
+       WHERE "m1"."time" >= '2023-12-05T14:46:35+01:00' AND "m1"."time" < '2024-01-03T14:46:35+01:00'
+         AND "m1"."f1" IS NOT NULL
+         AND "m1"."tag_id" IN ('1000')
+  ) UNION (
+      SELECT "m1"."time" as "timestamp", "m1"."tag_id", 'f2' as "field", "m1"."f2" as "value"
+        FROM "m1"
+       WHERE "m1"."time" >= '2023-12-05T14:46:35+01:00' AND "m1"."time" < '2024-01-03T14:46:35+01:00'
+         AND "m1"."f2" IS NOT NULL
+         AND "m1"."tag_id" IN ('1000')
+  )
+) as "data"
+ORDER BY
+  "time",
+  "data"."tag_id"
+;
+----
+2023-12-20T00:00:00 1000 f1 32.0
+2023-12-20T00:00:00 1000 f2 foo
+2023-12-20T00:10:00 1000 f1 32.0
+2023-12-20T00:10:00 1000 f2 foo
+2023-12-20T00:20:00 1000 f1 32.0
+2023-12-20T00:20:00 1000 f2 foo
+2023-12-20T00:30:00 1000 f1 32.0
+2023-12-20T00:30:00 1000 f2 foo
+2023-12-20T00:40:00 1000 f1 32.0
+2023-12-20T00:40:00 1000 f2 foo
+2023-12-20T00:50:00 1000 f1 32.0
+2023-12-20T00:50:00 1000 f2 foo
+2023-12-20T01:00:00 1000 f1 32.0
+2023-12-20T01:00:00 1000 f2 foo
+2023-12-20T01:10:00 1000 f1 32.0
+2023-12-20T01:10:00 1000 f2 foo
+2023-12-20T01:20:00 1000 f1 32.0
+2023-12-20T01:20:00 1000 f2 foo
+2023-12-20T01:30:00 1000 f1 32.0
+2023-12-20T01:30:00 1000 f2 foo
+
+
+# deterministic sort (so we can avoid rowsort)
+query P?TT
+SELECT
+  "data"."timestamp" as "time",
+  "data"."tag_id",
+  "data"."field",
+  "data"."value"
+FROM (
+  (
+      SELECT "m2"."time" as "timestamp", "m2"."tag_id", 'active_power' as "field", "m2"."f5" as "value"
+        FROM "m2"
+       WHERE "m2"."time" >= '2023-12-05T14:46:35+01:00' AND "m2"."time" < '2024-01-03T14:46:35+01:00'
+         AND "m2"."f5" IS NOT NULL
+         AND "m2"."type" IN ('active')
+         AND "m2"."tag_id" IN ('1000')
+  ) UNION (
+      SELECT "m1"."time" as "timestamp", "m1"."tag_id", 'f1' as "field", "m1"."f1" as "value"
+        FROM "m1"
+       WHERE "m1"."time" >= '2023-12-05T14:46:35+01:00' AND "m1"."time" < '2024-01-03T14:46:35+01:00'
+         AND "m1"."f1" IS NOT NULL
+         AND "m1"."tag_id" IN ('1000')
+  ) UNION (
+      SELECT "m1"."time" as "timestamp", "m1"."tag_id", 'f2' as "field", "m1"."f2" as "value"
+        FROM "m1"
+       WHERE "m1"."time" >= '2023-12-05T14:46:35+01:00' AND "m1"."time" < '2024-01-03T14:46:35+01:00'
+         AND "m1"."f2" IS NOT NULL
+         AND "m1"."tag_id" IN ('1000')
+  )
+) as "data"
+ORDER BY
+  "time",
+  "data"."tag_id",
+  "data"."field",
+  "data"."value"
+;
+----
+2023-12-20T00:00:00 1000 f1 32.0
+2023-12-20T00:00:00 1000 f2 foo
+2023-12-20T00:10:00 1000 f1 32.0
+2023-12-20T00:10:00 1000 f2 foo
+2023-12-20T00:20:00 1000 f1 32.0
+2023-12-20T00:20:00 1000 f2 foo
+2023-12-20T00:30:00 1000 f1 32.0
+2023-12-20T00:30:00 1000 f2 foo
+2023-12-20T00:40:00 1000 f1 32.0
+2023-12-20T00:40:00 1000 f2 foo
+2023-12-20T00:50:00 1000 f1 32.0
+2023-12-20T00:50:00 1000 f2 foo
+2023-12-20T01:00:00 1000 f1 32.0
+2023-12-20T01:00:00 1000 f2 foo
+2023-12-20T01:10:00 1000 f1 32.0
+2023-12-20T01:10:00 1000 f2 foo
+2023-12-20T01:20:00 1000 f1 32.0
+2023-12-20T01:20:00 1000 f2 foo
+2023-12-20T01:30:00 1000 f1 32.0
+2023-12-20T01:30:00 1000 f2 foo
