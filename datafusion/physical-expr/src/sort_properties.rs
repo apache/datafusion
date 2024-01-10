@@ -21,7 +21,7 @@ use crate::tree_node::ExprContext;
 
 use arrow_schema::SortOptions;
 
-/// To propagate [`SortOptions`] across the [`PhysicalExpr`], it is insufficient
+/// To propagate [`SortOptions`] across the `PhysicalExpr`, it is insufficient
 /// to simply use `Option<SortOptions>`: There must be a differentiation between
 /// unordered columns and literal values, since literals may not break the ordering
 /// when they are used as a child of some binary expression when the other child has
@@ -136,12 +136,12 @@ impl Neg for SortProperties {
 }
 
 /// The `ExprOrdering` struct is designed to aid in the determination of ordering (represented
-/// by [`SortProperties`]) for a given [`PhysicalExpr`]. When analyzing the orderings
-/// of a [`PhysicalExpr`], the process begins by assigning the ordering of its leaf nodes.
+/// by [`SortProperties`]) for a given `PhysicalExpr`. When analyzing the orderings
+/// of a `PhysicalExpr`, the process begins by assigning the ordering of its leaf nodes.
 /// By propagating these leaf node orderings upwards in the expression tree, the overall
-/// ordering of the entire [`PhysicalExpr`] can be derived.
+/// ordering of the entire `PhysicalExpr` can be derived.
 ///
-/// This struct holds the necessary state information for each expression in the [`PhysicalExpr`].
+/// This struct holds the necessary state information for each expression in the `PhysicalExpr`.
 /// It encapsulates the orderings (`data`) associated with the expression (`expr`), and
 /// orderings of the children expressions (`children`). The [`ExprOrdering`] of a parent
 /// expression is determined based on the [`ExprOrdering`] states of its children expressions.
