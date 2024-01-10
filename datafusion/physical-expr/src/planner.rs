@@ -48,11 +48,7 @@ pub fn create_physical_expr(
     input_dfschema: &DFSchema,
     execution_props: &ExecutionProps,
 ) -> Result<Arc<dyn PhysicalExpr>> {
-    // dbg!(&input_dfschema);
-    // dbg!(&input_schema);
     let input_schema: &Schema = &input_dfschema.into();
-    //let input_dfschema: &DFSchema = &DFSchema::try_from(input_schema.clone())?;
-    //let input_dfschema: &DFSchema = &DFSchema::try_from_qualified_schema(input_schema.clone())?;
 
     if input_schema.fields.len() != input_dfschema.fields().len() {
         return internal_err!(
