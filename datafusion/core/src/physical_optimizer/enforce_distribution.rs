@@ -21,9 +21,6 @@
 //! according to the configuration), this rule increases partition counts in
 //! the physical plan.
 
-use std::borrow::Cow;
-use std::fmt;
-use std::fmt::Formatter;
 use std::sync::Arc;
 
 use super::output_requirements::OutputRequirementExec;
@@ -41,11 +38,10 @@ use crate::physical_plan::joins::{
 use crate::physical_plan::projection::ProjectionExec;
 use crate::physical_plan::repartition::RepartitionExec;
 use crate::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
+use crate::physical_plan::tree_node::PlanContext;
 use crate::physical_plan::union::{can_interleave, InterleaveExec, UnionExec};
 use crate::physical_plan::windows::WindowAggExec;
-use crate::physical_plan::{
-    with_new_children_if_necessary, Distribution, ExecutionPlan, Partitioning,
-};
+use crate::physical_plan::{Distribution, ExecutionPlan, Partitioning};
 
 use arrow::compute::SortOptions;
 use datafusion_common::tree_node::{Transformed, TreeNode};
@@ -57,8 +53,8 @@ use datafusion_physical_expr::{
     PhysicalSortRequirement,
 };
 use datafusion_physical_plan::sorts::sort::SortExec;
+use datafusion_physical_plan::unbounded_output;
 use datafusion_physical_plan::windows::{get_best_fitting_window, BoundedWindowAggExec};
-use datafusion_physical_plan::{get_plan_string, unbounded_output};
 
 use itertools::izip;
 
@@ -199,7 +195,7 @@ impl PhysicalOptimizerRule for EnforceDistribution {
 
         let adjusted = if top_down_join_key_reordering {
             // Run a top-down process to adjust input key ordering recursively
-            let plan_requirements = PlanWithKeyRequirements::new(plan);
+            let plan_requirements = PlanWithKeyRequirements::new_default(plan);
             let adjusted =
                 plan_requirements.transform_down(&adjust_input_keys_ordering)?;
             adjusted.plan
@@ -210,7 +206,7 @@ impl PhysicalOptimizerRule for EnforceDistribution {
             })?
         };
 
-        let distribution_context = DistributionContext::new(adjusted);
+        let distribution_context = DistributionContext::new_default(adjusted);
         // Distribution enforcement needs to be applied bottom-up.
         let distribution_context =
             distribution_context.transform_up(&|distribution_context| {
@@ -273,7 +269,7 @@ impl PhysicalOptimizerRule for EnforceDistribution {
 fn adjust_input_keys_ordering(
     mut requirements: PlanWithKeyRequirements,
 ) -> Result<Transformed<PlanWithKeyRequirements>> {
-    let parent_required = requirements.required_key_ordering.clone();
+    let parent_required = &requirements.data;
     let plan_any = requirements.plan.as_any();
 
     if let Some(HashJoinExec {
@@ -304,7 +300,7 @@ fn adjust_input_keys_ordering(
                     };
                 reorder_partitioned_join_keys(
                     requirements.plan.clone(),
-                    &parent_required,
+                    parent_required,
                     on,
                     vec![],
                     &join_constructor,
@@ -314,7 +310,7 @@ fn adjust_input_keys_ordering(
             PartitionMode::CollectLeft => {
                 let new_right_request = match join_type {
                     JoinType::Inner | JoinType::Right => shift_right_required(
-                        &parent_required,
+                        parent_required,
                         left.schema().fields().len(),
                     ),
                     JoinType::RightSemi | JoinType::RightAnti => {
@@ -327,15 +323,13 @@ fn adjust_input_keys_ordering(
                 };
 
                 // Push down requirements to the right side
-                requirements.children[1].required_key_ordering =
-                    new_right_request.unwrap_or(vec![]);
+                requirements.children[1].data = new_right_request.unwrap_or(vec![]);
                 Ok(Transformed::Yes(requirements))
             }
             PartitionMode::Auto => {
                 // Can not satisfy, clear the current requirements and generate new empty requirements
-                Ok(Transformed::Yes(PlanWithKeyRequirements::new(
-                    requirements.plan,
-                )))
+                requirements.data.clear();
+                Ok(Transformed::Yes(requirements))
             }
         }
     } else if let Some(CrossJoinExec { left, .. }) =
@@ -343,8 +337,8 @@ fn adjust_input_keys_ordering(
     {
         let left_columns_len = left.schema().fields().len();
         // Push down requirements to the right side
-        requirements.children[1].required_key_ordering =
-            shift_right_required(&parent_required, left_columns_len).unwrap_or_default();
+        requirements.children[1].data =
+            shift_right_required(parent_required, left_columns_len).unwrap_or_default();
         Ok(Transformed::Yes(requirements))
     } else if let Some(SortMergeJoinExec {
         left,
@@ -370,7 +364,7 @@ fn adjust_input_keys_ordering(
             };
         reorder_partitioned_join_keys(
             requirements.plan.clone(),
-            &parent_required,
+            parent_required,
             on,
             sort_options.clone(),
             &join_constructor,
@@ -381,13 +375,14 @@ fn adjust_input_keys_ordering(
             match aggregate_exec.mode() {
                 AggregateMode::FinalPartitioned => reorder_aggregate_keys(
                     requirements.plan.clone(),
-                    &parent_required,
+                    parent_required,
                     aggregate_exec,
                 )
                 .map(Transformed::Yes),
-                _ => Ok(Transformed::Yes(PlanWithKeyRequirements::new(
-                    requirements.plan,
-                ))),
+                _ => {
+                    requirements.data.clear();
+                    Ok(Transformed::Yes(requirements))
+                }
             }
         } else {
             // Keep everything unchanged
@@ -398,34 +393,32 @@ fn adjust_input_keys_ordering(
         // For Projection, we need to transform the requirements to the columns before the Projection
         // And then to push down the requirements
         // Construct a mapping from new name to the the orginal Column
-        let new_required = map_columns_before_projection(&parent_required, expr);
+        let new_required = map_columns_before_projection(parent_required, expr);
         if new_required.len() == parent_required.len() {
-            requirements.children[0].required_key_ordering = new_required;
+            requirements.children[0].data = new_required;
             Ok(Transformed::Yes(requirements))
         } else {
             // Can not satisfy, clear the current requirements and generate new empty requirements
-            Ok(Transformed::Yes(PlanWithKeyRequirements::new(
-                requirements.plan,
-            )))
+            requirements.data.clear();
+            Ok(Transformed::Yes(requirements))
         }
     } else if plan_any.downcast_ref::<RepartitionExec>().is_some()
         || plan_any.downcast_ref::<CoalescePartitionsExec>().is_some()
         || plan_any.downcast_ref::<WindowAggExec>().is_some()
     {
-        Ok(Transformed::Yes(PlanWithKeyRequirements::new(
-            requirements.plan,
-        )))
+        requirements.data.clear();
+        Ok(Transformed::Yes(requirements))
     } else {
         // By default, push down the parent requirements to children
-        requirements.children.iter_mut().for_each(|child| {
-            child.required_key_ordering = parent_required.clone();
-        });
+        for child in requirements.children.iter_mut() {
+            child.data = parent_required.clone();
+        }
         Ok(Transformed::Yes(requirements))
     }
 }
 
 fn reorder_partitioned_join_keys<F>(
-    join_plan: Arc<dyn ExecutionPlan>,
+    mut join_plan: Arc<dyn ExecutionPlan>,
     parent_required: &[Arc<dyn PhysicalExpr>],
     on: &[(Column, Column)],
     sort_options: Vec<SortOptions>,
@@ -448,28 +441,20 @@ where
     ) {
         if !new_positions.is_empty() {
             let new_join_on = new_join_conditions(&left_keys, &right_keys);
-            let mut new_sort_options: Vec<SortOptions> = vec![];
-            for idx in 0..sort_options.len() {
-                new_sort_options.push(sort_options[new_positions[idx]])
-            }
-            let mut requirement_tree = PlanWithKeyRequirements::new(join_constructor((
-                new_join_on,
-                new_sort_options,
-            ))?);
-            requirement_tree.children[0].required_key_ordering = left_keys;
-            requirement_tree.children[1].required_key_ordering = right_keys;
-            Ok(requirement_tree)
-        } else {
-            let mut requirement_tree = PlanWithKeyRequirements::new(join_plan);
-            requirement_tree.children[0].required_key_ordering = left_keys;
-            requirement_tree.children[1].required_key_ordering = right_keys;
-            Ok(requirement_tree)
+            let new_sort_options = (0..sort_options.len())
+                .map(|idx| sort_options[new_positions[idx]])
+                .collect();
+            join_plan = join_constructor((new_join_on, new_sort_options))?;
         }
+        let mut requirements = PlanWithKeyRequirements::new_default(join_plan);
+        requirements.children[0].data = left_keys;
+        requirements.children[1].data = right_keys;
+        Ok(requirements)
     } else {
-        let mut requirement_tree = PlanWithKeyRequirements::new(join_plan);
-        requirement_tree.children[0].required_key_ordering = join_key_pairs.left_keys;
-        requirement_tree.children[1].required_key_ordering = join_key_pairs.right_keys;
-        Ok(requirement_tree)
+        let mut requirements = PlanWithKeyRequirements::new_default(join_plan);
+        requirements.children[0].data = join_key_pairs.left_keys;
+        requirements.children[1].data = join_key_pairs.right_keys;
+        Ok(requirements)
     }
 }
 
@@ -483,7 +468,7 @@ fn reorder_aggregate_keys(
         .expr()
         .iter()
         .enumerate()
-        .map(|(index, (_col, name))| Column::new(name, index))
+        .map(|(index, (_, name))| Column::new(name, index))
         .collect::<Vec<_>>();
 
     let output_exprs = output_columns
@@ -495,11 +480,11 @@ fn reorder_aggregate_keys(
         || !agg_exec.group_by().null_expr().is_empty()
         || physical_exprs_equal(&output_exprs, parent_required)
     {
-        Ok(PlanWithKeyRequirements::new(agg_plan))
+        Ok(PlanWithKeyRequirements::new_default(agg_plan))
     } else {
         let new_positions = expected_expr_positions(&output_exprs, parent_required);
         match new_positions {
-            None => Ok(PlanWithKeyRequirements::new(agg_plan)),
+            None => Ok(PlanWithKeyRequirements::new_default(agg_plan)),
             Some(positions) => {
                 let new_partial_agg = if let Some(agg_exec) =
                     agg_exec.input().as_any().downcast_ref::<AggregateExec>()
@@ -571,11 +556,10 @@ fn reorder_aggregate_keys(
                             .push((Arc::new(Column::new(name, idx)) as _, name.clone()))
                     }
                     // TODO merge adjacent Projections if there are
-                    Ok(PlanWithKeyRequirements::new(Arc::new(
-                        ProjectionExec::try_new(proj_exprs, new_final_agg)?,
-                    )))
+                    ProjectionExec::try_new(proj_exprs, new_final_agg)
+                        .map(|proj| PlanWithKeyRequirements::new_default(Arc::new(proj)))
                 } else {
-                    Ok(PlanWithKeyRequirements::new(agg_plan))
+                    Ok(PlanWithKeyRequirements::new_default(agg_plan))
                 }
             }
         }
@@ -700,14 +684,15 @@ pub(crate) fn reorder_join_keys_to_inputs(
                 let new_sort_options = (0..sort_options.len())
                     .map(|idx| sort_options[new_positions[idx]])
                     .collect();
-                return Ok(Arc::new(SortMergeJoinExec::try_new(
+                return SortMergeJoinExec::try_new(
                     left.clone(),
                     right.clone(),
                     new_join_on,
                     *join_type,
                     new_sort_options,
                     *null_equals_null,
-                )?));
+                )
+                .map(|smj| Arc::new(smj) as _);
             }
         }
     }
@@ -762,21 +747,21 @@ fn try_reorder(
         normalized_expected = expected
             .iter()
             .map(|e| eq_groups.normalize_expr(e.clone()))
-            .collect::<Vec<_>>();
+            .collect();
         assert_eq!(normalized_expected.len(), expected.len());
 
         normalized_left_keys = join_keys
             .left_keys
             .iter()
             .map(|e| eq_groups.normalize_expr(e.clone()))
-            .collect::<Vec<_>>();
+            .collect();
         assert_eq!(join_keys.left_keys.len(), normalized_left_keys.len());
 
         normalized_right_keys = join_keys
             .right_keys
             .iter()
             .map(|e| eq_groups.normalize_expr(e.clone()))
-            .collect::<Vec<_>>();
+            .collect();
         assert_eq!(join_keys.right_keys.len(), normalized_right_keys.len());
 
         if physical_exprs_equal(&normalized_expected, &normalized_left_keys)
@@ -793,23 +778,19 @@ fn try_reorder(
             expected_expr_positions(&normalized_right_keys, &normalized_expected)
         });
 
-    if let Some(positions) = new_positions {
+    new_positions.map(|positions| {
         let mut new_left_keys = vec![];
         let mut new_right_keys = vec![];
         for pos in positions.iter() {
             new_left_keys.push(join_keys.left_keys[*pos].clone());
             new_right_keys.push(join_keys.right_keys[*pos].clone());
         }
-        Some((
-            JoinKeyPairs {
-                left_keys: new_left_keys,
-                right_keys: new_right_keys,
-            },
-            positions,
-        ))
-    } else {
-        None
-    }
+        let pairs = JoinKeyPairs {
+            left_keys: new_left_keys,
+            right_keys: new_right_keys,
+        };
+        (pairs, positions)
+    })
 }
 
 /// Return the expected expressions positions.
@@ -894,11 +875,7 @@ fn add_roundrobin_on_top(
 
         let new_plan = Arc::new(repartition) as _;
 
-        Ok(DistributionContext {
-            plan: new_plan,
-            distribution_connection: true,
-            children_nodes: vec![input],
-        })
+        Ok(DistributionContext::new(new_plan, true, vec![input]))
     } else {
         // Partition is not helpful, we already have desired number of partitions.
         Ok(input)
@@ -961,8 +938,8 @@ fn add_hash_on_top(
         let repartition = RepartitionExec::try_new(input.plan.clone(), partitioning)?
             .with_preserve_order();
 
-        input.children_nodes = vec![input.clone()];
-        input.distribution_connection = true;
+        input.children = vec![input.clone()];
+        input.data = true;
         input.plan = Arc::new(repartition) as _;
     }
 
@@ -1000,11 +977,7 @@ fn add_spm_on_top(input: DistributionContext) -> DistributionContext {
             Arc::new(CoalescePartitionsExec::new(input.plan.clone())) as _
         };
 
-        DistributionContext {
-            plan: new_plan,
-            distribution_connection: true,
-            children_nodes: vec![input],
-        }
+        DistributionContext::new(new_plan, true, vec![input])
     } else {
         input
     }
@@ -1035,10 +1008,9 @@ fn remove_dist_changing_operators(
         || is_sort_preserving_merge(&distribution_context.plan)
     {
         // All of above operators have a single child. First child is only child.
-        let child = distribution_context.children_nodes.swap_remove(0);
         // Remove any distribution changing operators at the beginning:
+        distribution_context = distribution_context.children.swap_remove(0);
         // Note that they will be re-inserted later on if necessary or helpful.
-        distribution_context = child;
     }
 
     Ok(distribution_context)
@@ -1066,10 +1038,10 @@ fn replace_order_preserving_variants(
     mut context: DistributionContext,
 ) -> Result<DistributionContext> {
     let mut updated_children = context
-        .children_nodes
+        .children
         .iter()
         .map(|child| {
-            if child.distribution_connection {
+            if child.data {
                 replace_order_preserving_variants(child.clone())
             } else {
                 Ok(child.clone())
@@ -1080,7 +1052,7 @@ fn replace_order_preserving_variants(
     if is_sort_preserving_merge(&context.plan) {
         let child = updated_children.swap_remove(0);
         context.plan = Arc::new(CoalescePartitionsExec::new(child.plan.clone()));
-        context.children_nodes = vec![child];
+        context.children = vec![child];
         return Ok(context);
     } else if let Some(repartition) =
         context.plan.as_any().downcast_ref::<RepartitionExec>()
@@ -1091,16 +1063,13 @@ fn replace_order_preserving_variants(
                 child.plan.clone(),
                 repartition.partitioning().clone(),
             )?);
-            context.children_nodes = vec![child];
+            context.children = vec![child];
             return Ok(context);
         }
     }
 
-    context.plan = context
-        .plan
-        .clone()
-        .with_new_children(updated_children.into_iter().map(|c| c.plan).collect())?;
-    Ok(context)
+    context.children = updated_children;
+    context.update_plan_from_children()
 }
 
 /// This utility function adds a [`SortExec`] above an operator according to the
@@ -1117,17 +1086,11 @@ fn add_sort_preserving_partitions(
         .ordering_satisfy_requirement(sort_requirement)
     {
         let sort_expr = PhysicalSortRequirement::to_sort_exprs(sort_requirement.to_vec());
-        let new_sort = SortExec::new(sort_expr, node.plan.clone()).with_fetch(fetch);
-
-        DistributionContext {
-            plan: Arc::new(if node.plan.output_partitioning().partition_count() > 1 {
-                new_sort.with_preserve_partitioning(true)
-            } else {
-                new_sort
-            }),
-            distribution_connection: false,
-            children_nodes: vec![node],
+        let mut new_sort = SortExec::new(sort_expr, node.plan.clone()).with_fetch(fetch);
+        if node.plan.output_partitioning().partition_count() > 1 {
+            new_sort = new_sort.with_preserve_partitioning(true);
         }
+        DistributionContext::new(Arc::new(new_sort), false, vec![node])
     } else {
         node
     }
@@ -1141,7 +1104,7 @@ fn ensure_distribution(
     dist_context: DistributionContext,
     config: &ConfigOptions,
 ) -> Result<Transformed<DistributionContext>> {
-    let dist_context = dist_context.update_children()?;
+    let dist_context = update_children(dist_context)?;
 
     if dist_context.plan.children().is_empty() {
         return Ok(Transformed::No(dist_context));
@@ -1162,8 +1125,8 @@ fn ensure_distribution(
     // Remove unnecessary repartition from the physical plan if any
     let DistributionContext {
         mut plan,
-        distribution_connection,
-        children_nodes,
+        data,
+        children,
     } = remove_dist_changing_operators(dist_context)?;
 
     if let Some(exec) = plan.as_any().downcast_ref::<WindowAggExec>() {
@@ -1189,8 +1152,8 @@ fn ensure_distribution(
     // - Satisfy the distribution requirements of every child, if it is not
     //   already satisfied.
     // We store the updated children in `new_children`.
-    let children_nodes = izip!(
-        children_nodes.into_iter(),
+    let children = izip!(
+        children.into_iter(),
         plan.required_input_distribution().iter(),
         plan.required_input_ordering().iter(),
         plan.benefits_from_input_partitioning(),
@@ -1257,7 +1220,7 @@ fn ensure_distribution(
                     .equivalence_properties()
                     .ordering_satisfy_requirement(required_input_ordering);
                 if (!ordering_satisfied || !order_preserving_variants_desirable)
-                    && child.distribution_connection
+                    && child.data
                 {
                     child = replace_order_preserving_variants(child)?;
                     // If ordering requirements were satisfied before repartitioning,
@@ -1272,7 +1235,7 @@ fn ensure_distribution(
                     }
                 }
                 // Stop tracking distribution changing operators
-                child.distribution_connection = false;
+                child.data = false;
             } else {
                 // no ordering requirement
                 match requirement {
@@ -1294,158 +1257,78 @@ fn ensure_distribution(
     )
     .collect::<Result<Vec<_>>>()?;
 
-    let new_distribution_context = DistributionContext {
-        plan: if plan.as_any().is::<UnionExec>()
-            && can_interleave(children_nodes.iter().map(|c| c.plan.clone()))
-        {
-            // Add a special case for [`UnionExec`] since we want to "bubble up"
-            // hash-partitioned data. So instead of
-            //
-            // Agg:
-            //   Repartition (hash):
-            //     Union:
-            //       - Agg:
-            //           Repartition (hash):
-            //             Data
-            //       - Agg:
-            //           Repartition (hash):
-            //             Data
-            //
-            // we can use:
-            //
-            // Agg:
-            //   Interleave:
-            //     - Agg:
-            //         Repartition (hash):
-            //           Data
-            //     - Agg:
-            //         Repartition (hash):
-            //           Data
-            Arc::new(InterleaveExec::try_new(
-                children_nodes.iter().map(|c| c.plan.clone()).collect(),
-            )?)
-        } else {
-            plan.with_new_children(
-                children_nodes.iter().map(|c| c.plan.clone()).collect(),
-            )?
-        },
-        distribution_connection,
-        children_nodes,
+    let children_plans = children.iter().map(|c| c.plan.clone()).collect::<Vec<_>>();
+    plan = if plan.as_any().is::<UnionExec>() && can_interleave(children_plans.iter()) {
+        // Add a special case for [`UnionExec`] since we want to "bubble up"
+        // hash-partitioned data. So instead of
+        //
+        // Agg:
+        //   Repartition (hash):
+        //     Union:
+        //       - Agg:
+        //           Repartition (hash):
+        //             Data
+        //       - Agg:
+        //           Repartition (hash):
+        //             Data
+        //
+        // we can use:
+        //
+        // Agg:
+        //   Interleave:
+        //     - Agg:
+        //         Repartition (hash):
+        //           Data
+        //     - Agg:
+        //         Repartition (hash):
+        //           Data
+        Arc::new(InterleaveExec::try_new(children_plans)?)
+    } else {
+        plan.with_new_children(children_plans)?
     };
 
-    Ok(Transformed::Yes(new_distribution_context))
+    Ok(Transformed::Yes(DistributionContext::new(
+        plan, data, children,
+    )))
 }
 
-/// A struct to keep track of distribution changing operators
-/// (`RepartitionExec`, `SortPreservingMergeExec`, `CoalescePartitionsExec`),
-/// and their associated parents inside `plan`. Using this information,
-/// we can optimize distribution of the plan if/when necessary.
-#[derive(Debug, Clone)]
-struct DistributionContext {
-    plan: Arc<dyn ExecutionPlan>,
-    /// Indicates whether this plan is connected to a distribution-changing
-    /// operator.
-    distribution_connection: bool,
-    children_nodes: Vec<Self>,
-}
+/// Keeps track of distribution changing operators (like `RepartitionExec`,
+/// `SortPreservingMergeExec`, `CoalescePartitionsExec`) and their ancestors.
+/// Using this information, we can optimize distribution of the plan if/when
+/// necessary.
+type DistributionContext = PlanContext<bool>;
 
-impl DistributionContext {
-    /// Creates a tree according to the plan with empty states.
-    fn new(plan: Arc<dyn ExecutionPlan>) -> Self {
-        let children = plan.children();
-        Self {
-            plan,
-            distribution_connection: false,
-            children_nodes: children.into_iter().map(Self::new).collect(),
-        }
+fn update_children(mut dist_context: DistributionContext) -> Result<DistributionContext> {
+    for child_context in dist_context.children.iter_mut() {
+        let child_plan_any = child_context.plan.as_any();
+        child_context.data =
+            if let Some(repartition) = child_plan_any.downcast_ref::<RepartitionExec>() {
+                !matches!(
+                    repartition.partitioning(),
+                    Partitioning::UnknownPartitioning(_)
+                )
+            } else {
+                child_plan_any.is::<SortPreservingMergeExec>()
+                    || child_plan_any.is::<CoalescePartitionsExec>()
+                    || child_context.plan.children().is_empty()
+                    || child_context.children[0].data
+                    || child_context
+                        .plan
+                        .required_input_distribution()
+                        .iter()
+                        .zip(child_context.children.iter())
+                        .any(|(required_dist, child_context)| {
+                            child_context.data
+                                && matches!(
+                                    required_dist,
+                                    Distribution::UnspecifiedDistribution
+                                )
+                        })
+            }
     }
 
-    fn update_children(mut self) -> Result<Self> {
-        for child_context in self.children_nodes.iter_mut() {
-            child_context.distribution_connection = match child_context.plan.as_any() {
-                plan_any if plan_any.is::<RepartitionExec>() => matches!(
-                    plan_any
-                        .downcast_ref::<RepartitionExec>()
-                        .unwrap()
-                        .partitioning(),
-                    Partitioning::RoundRobinBatch(_) | Partitioning::Hash(_, _)
-                ),
-                plan_any
-                    if plan_any.is::<SortPreservingMergeExec>()
-                        || plan_any.is::<CoalescePartitionsExec>() =>
-                {
-                    true
-                }
-                _ => {
-                    child_context.plan.children().is_empty()
-                        || child_context.children_nodes[0].distribution_connection
-                        || child_context
-                            .plan
-                            .required_input_distribution()
-                            .iter()
-                            .zip(child_context.children_nodes.iter())
-                            .any(|(required_dist, child_context)| {
-                                child_context.distribution_connection
-                                    && matches!(
-                                        required_dist,
-                                        Distribution::UnspecifiedDistribution
-                                    )
-                            })
-                }
-            };
-        }
-
-        let children_plans = self
-            .children_nodes
-            .iter()
-            .map(|context| context.plan.clone())
-            .collect::<Vec<_>>();
-
-        Ok(Self {
-            plan: with_new_children_if_necessary(self.plan, children_plans)?.into(),
-            distribution_connection: false,
-            children_nodes: self.children_nodes,
-        })
-    }
-}
-
-impl TreeNode for DistributionContext {
-    fn children_nodes(&self) -> Vec<Cow<Self>> {
-        self.children_nodes.iter().map(Cow::Borrowed).collect()
-    }
-
-    fn map_children<F>(mut self, transform: F) -> Result<Self>
-    where
-        F: FnMut(Self) -> Result<Self>,
-    {
-        if !self.children_nodes.is_empty() {
-            self.children_nodes = self
-                .children_nodes
-                .into_iter()
-                .map(transform)
-                .collect::<Result<_>>()?;
-            self.plan = with_new_children_if_necessary(
-                self.plan,
-                self.children_nodes.iter().map(|c| c.plan.clone()).collect(),
-            )?
-            .into();
-        }
-        Ok(self)
-    }
-}
-
-/// implement Display method for `DistributionContext` struct.
-impl fmt::Display for DistributionContext {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        let plan_string = get_plan_string(&self.plan);
-        write!(f, "plan: {:?}", plan_string)?;
-        write!(
-            f,
-            "distribution_connection:{}",
-            self.distribution_connection,
-        )?;
-        write!(f, "")
-    }
+    dist_context.data = false;
+    Ok(dist_context)
 }
 
 #[derive(Debug, Clone)]
@@ -1454,49 +1337,8 @@ struct JoinKeyPairs {
     right_keys: Vec<Arc<dyn PhysicalExpr>>,
 }
 
-#[derive(Debug, Clone)]
-struct PlanWithKeyRequirements {
-    plan: Arc<dyn ExecutionPlan>,
-    /// Parent required key ordering
-    required_key_ordering: Vec<Arc<dyn PhysicalExpr>>,
-    children: Vec<Self>,
-}
-
-impl PlanWithKeyRequirements {
-    fn new(plan: Arc<dyn ExecutionPlan>) -> Self {
-        let children = plan.children();
-        Self {
-            plan,
-            required_key_ordering: vec![],
-            children: children.into_iter().map(Self::new).collect(),
-        }
-    }
-}
-
-impl TreeNode for PlanWithKeyRequirements {
-    fn children_nodes(&self) -> Vec<Cow<Self>> {
-        self.children.iter().map(Cow::Borrowed).collect()
-    }
-
-    fn map_children<F>(mut self, transform: F) -> Result<Self>
-    where
-        F: FnMut(Self) -> Result<Self>,
-    {
-        if !self.children.is_empty() {
-            self.children = self
-                .children
-                .into_iter()
-                .map(transform)
-                .collect::<Result<_>>()?;
-            self.plan = with_new_children_if_necessary(
-                self.plan,
-                self.children.iter().map(|c| c.plan.clone()).collect(),
-            )?
-            .into();
-        }
-        Ok(self)
-    }
-}
+/// Keeps track of parent required key orderings.
+type PlanWithKeyRequirements = PlanContext<Vec<Arc<dyn PhysicalExpr>>>;
 
 /// Since almost all of these tests explicitly use `ParquetExec` they only run with the parquet  feature flag on
 #[cfg(feature = "parquet")]
@@ -1912,7 +1754,7 @@ pub(crate) mod tests {
         target_partitions: usize,
         prefer_existing_sort: bool,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let distribution_context = DistributionContext::new(plan);
+        let distribution_context = DistributionContext::new_default(plan);
         let mut config = ConfigOptions::new();
         config.execution.target_partitions = target_partitions;
         config.optimizer.enable_round_robin_repartition = false;

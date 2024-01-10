@@ -18,7 +18,6 @@
 //! This module provides common traits for visiting or rewriting tree
 //! data structures easily.
 
-use std::borrow::Cow;
 use std::sync::Arc;
 
 use crate::Result;
@@ -34,9 +33,6 @@ use crate::Result;
 /// [`LogicalPlan`]: https://docs.rs/datafusion-expr/latest/datafusion_expr/logical_plan/enum.LogicalPlan.html
 /// [`Expr`]: https://docs.rs/datafusion-expr/latest/datafusion_expr/expr/enum.Expr.html
 pub trait TreeNode: Sized + Clone {
-    /// Returns all children of the TreeNode
-    fn children_nodes(&self) -> Vec<Cow<Self>>;
-
     /// Use preorder to iterate the node on the tree so that we can
     /// stop fast for some cases.
     ///
@@ -215,17 +211,7 @@ pub trait TreeNode: Sized + Clone {
     /// Apply the closure `F` to the node's children
     fn apply_children<F>(&self, op: &mut F) -> Result<VisitRecursion>
     where
-        F: FnMut(&Self) -> Result<VisitRecursion>,
-    {
-        for child in self.children_nodes() {
-            match op(&child)? {
-                VisitRecursion::Continue => {}
-                VisitRecursion::Skip => return Ok(VisitRecursion::Continue),
-                VisitRecursion::Stop => return Ok(VisitRecursion::Stop),
-            }
-        }
-        Ok(VisitRecursion::Continue)
-    }
+        F: FnMut(&Self) -> Result<VisitRecursion>;
 
     /// Apply transform `F` to the node's children, the transform `F` might have a direction(Preorder or Postorder)
     fn map_children<F>(self, transform: F) -> Result<Self>
@@ -356,8 +342,19 @@ pub trait DynTreeNode {
 /// Blanket implementation for Arc for any tye that implements
 /// [`DynTreeNode`] (such as [`Arc<dyn PhysicalExpr>`])
 impl<T: DynTreeNode + ?Sized> TreeNode for Arc<T> {
-    fn children_nodes(&self) -> Vec<Cow<Self>> {
-        self.arc_children().into_iter().map(Cow::Owned).collect()
+    /// Apply the closure `F` to the node's children
+    fn apply_children<F>(&self, op: &mut F) -> Result<VisitRecursion>
+    where
+        F: FnMut(&Self) -> Result<VisitRecursion>,
+    {
+        for child in self.arc_children() {
+            match op(&child)? {
+                VisitRecursion::Continue => {}
+                VisitRecursion::Skip => return Ok(VisitRecursion::Continue),
+                VisitRecursion::Stop => return Ok(VisitRecursion::Stop),
+            }
+        }
+        Ok(VisitRecursion::Continue)
     }
 
     fn map_children<F>(self, transform: F) -> Result<Self>
@@ -366,12 +363,51 @@ impl<T: DynTreeNode + ?Sized> TreeNode for Arc<T> {
     {
         let children = self.arc_children();
         if !children.is_empty() {
-            let new_children: Result<Vec<_>> =
-                children.into_iter().map(transform).collect();
+            let new_children =
+                children.into_iter().map(transform).collect::<Result<_>>()?;
             let arc_self = Arc::clone(&self);
-            self.with_new_arc_children(arc_self, new_children?)
+            self.with_new_arc_children(arc_self, new_children)
         } else {
             Ok(self)
+        }
+    }
+}
+
+pub trait ConcreteTreeNode: Sized {
+    fn children(&self) -> Vec<&Self>;
+
+    fn take_children(self) -> (Self, Vec<Self>);
+
+    fn with_new_children(self, children: Vec<Self>) -> Result<Self>;
+}
+
+impl<T: ConcreteTreeNode + Clone> TreeNode for T {
+    /// Apply the closure `F` to the node's children
+    fn apply_children<F>(&self, op: &mut F) -> Result<VisitRecursion>
+    where
+        F: FnMut(&Self) -> Result<VisitRecursion>,
+    {
+        for child in self.children() {
+            match op(child)? {
+                VisitRecursion::Continue => {}
+                VisitRecursion::Skip => return Ok(VisitRecursion::Continue),
+                VisitRecursion::Stop => return Ok(VisitRecursion::Stop),
+            }
+        }
+        Ok(VisitRecursion::Continue)
+    }
+
+    fn map_children<F>(self, transform: F) -> Result<Self>
+    where
+        F: FnMut(Self) -> Result<Self>,
+    {
+        let (new_self, children) = self.take_children();
+        if !children.is_empty() {
+            let new_children =
+                children.into_iter().map(transform).collect::<Result<_>>()?;
+            new_self.with_new_children(new_children)
+        } else {
+            Ok(new_self)
         }
     }
 }

@@ -17,10 +17,13 @@
 
 //! This module provides common traits for visiting or rewriting tree nodes easily.
 
-use crate::{with_new_children_if_necessary, ExecutionPlan};
-use datafusion_common::tree_node::{DynTreeNode, Transformed};
-use datafusion_common::Result;
+use std::fmt::{self, Display, Formatter};
 use std::sync::Arc;
+
+use crate::{get_plan_string, with_new_children_if_necessary, ExecutionPlan};
+
+use datafusion_common::tree_node::{ConcreteTreeNode, DynTreeNode, Transformed};
+use datafusion_common::Result;
 
 impl DynTreeNode for dyn ExecutionPlan {
     fn arc_children(&self) -> Vec<Arc<Self>> {
@@ -33,5 +36,62 @@ impl DynTreeNode for dyn ExecutionPlan {
         new_children: Vec<Arc<Self>>,
     ) -> Result<Arc<Self>> {
         with_new_children_if_necessary(arc_self, new_children).map(Transformed::into)
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct PlanContext<T: Sized> {
+    pub plan: Arc<dyn ExecutionPlan>,
+    pub data: T,
+    pub children: Vec<Self>,
+}
+
+impl<T> PlanContext<T> {
+    pub fn new(plan: Arc<dyn ExecutionPlan>, data: T, children: Vec<Self>) -> Self {
+        Self {
+            plan,
+            data,
+            children,
+        }
+    }
+
+    pub fn update_plan_from_children(mut self) -> Result<Self> {
+        let children_plans = self.children.iter().map(|c| c.plan.clone()).collect();
+        self.plan = self.plan.with_new_children(children_plans)?;
+        Ok(self)
+    }
+}
+
+impl<T: Default> PlanContext<T> {
+    pub fn new_default(plan: Arc<dyn ExecutionPlan>) -> Self {
+        let children = plan.children().into_iter().map(Self::new_default).collect();
+        Self::new(plan, Default::default(), children)
+    }
+}
+
+impl<T: Display> Display for PlanContext<T> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        let plan_string = get_plan_string(&self.plan);
+        write!(f, "plan: {:?}", plan_string)?;
+        write!(f, "data:{}", self.data)?;
+        write!(f, "")
+    }
+}
+
+impl<T> ConcreteTreeNode for PlanContext<T> {
+    fn children(&self) -> Vec<&Self> {
+        self.children.iter().collect()
+    }
+
+    fn take_children(mut self) -> (Self, Vec<Self>) {
+        let children = std::mem::take(&mut self.children);
+        (self, children)
+    }
+
+    fn with_new_children(mut self, children: Vec<Self>) -> Result<Self> {
+        let children_plans = children.iter().map(|c| c.plan.clone()).collect::<Vec<_>>();
+        self.plan = with_new_children_if_necessary(self.plan, children_plans)?.into();
+        self.children = children;
+        Ok(self)
     }
 }

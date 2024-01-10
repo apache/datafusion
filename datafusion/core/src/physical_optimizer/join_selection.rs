@@ -27,7 +27,9 @@ use std::sync::Arc;
 
 use crate::config::ConfigOptions;
 use crate::error::Result;
-use crate::physical_optimizer::pipeline_checker::PipelineStatePropagator;
+use crate::physical_optimizer::pipeline_checker::{
+    children_unbounded, PipelineStatePropagator,
+};
 use crate::physical_optimizer::PhysicalOptimizerRule;
 use crate::physical_plan::joins::utils::{ColumnIndex, JoinFilter};
 use crate::physical_plan::joins::{
@@ -227,7 +229,7 @@ impl PhysicalOptimizerRule for JoinSelection {
         plan: Arc<dyn ExecutionPlan>,
         config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let pipeline = PipelineStatePropagator::new(plan);
+        let pipeline = PipelineStatePropagator::new_default(plan);
         // First, we make pipeline-fixing modifications to joins so as to accommodate
         // unbounded inputs. Each pipeline-fixing subrule, which is a function
         // of type `PipelineFixerSubrule`, takes a single [`PipelineStatePropagator`]
@@ -420,10 +422,8 @@ fn statistical_join_selection_subrule(
 }
 
 /// Pipeline-fixing join selection subrule.
-pub type PipelineFixerSubrule = dyn Fn(
-    PipelineStatePropagator,
-    &ConfigOptions,
-) -> Option<Result<PipelineStatePropagator>>;
+pub type PipelineFixerSubrule =
+    dyn Fn(PipelineStatePropagator, &ConfigOptions) -> Result<PipelineStatePropagator>;
 
 /// This subrule checks if we can replace a hash join with a symmetric hash
 /// join when we are dealing with infinite inputs on both sides. This change
@@ -432,18 +432,18 @@ pub type PipelineFixerSubrule = dyn Fn(
 fn hash_join_convert_symmetric_subrule(
     mut input: PipelineStatePropagator,
     config_options: &ConfigOptions,
-) -> Option<Result<PipelineStatePropagator>> {
+) -> Result<PipelineStatePropagator> {
     if let Some(hash_join) = input.plan.as_any().downcast_ref::<HashJoinExec>() {
-        let ub_flags = input.children_unbounded();
+        let ub_flags = children_unbounded(&input);
         let (left_unbounded, right_unbounded) = (ub_flags[0], ub_flags[1]);
-        input.unbounded = left_unbounded || right_unbounded;
-        let result = if left_unbounded && right_unbounded {
+        input.data = left_unbounded || right_unbounded;
+        if left_unbounded && right_unbounded {
             let mode = if config_options.optimizer.repartition_joins {
                 StreamJoinPartitionMode::Partitioned
             } else {
                 StreamJoinPartitionMode::SinglePartition
             };
-            SymmetricHashJoinExec::try_new(
+            let shj = SymmetricHashJoinExec::try_new(
                 hash_join.left().clone(),
                 hash_join.right().clone(),
                 hash_join.on().to_vec(),
@@ -451,18 +451,11 @@ fn hash_join_convert_symmetric_subrule(
                 hash_join.join_type(),
                 hash_join.null_equals_null(),
                 mode,
-            )
-            .map(|exec| {
-                input.plan = Arc::new(exec) as _;
-                input
-            })
-        } else {
-            Ok(input)
-        };
-        Some(result)
-    } else {
-        None
+            )?;
+            input.plan = Arc::new(shj);
+        }
     }
+    Ok(input)
 }
 
 /// This subrule will swap build/probe sides of a hash join depending on whether
@@ -509,12 +502,12 @@ fn hash_join_convert_symmetric_subrule(
 fn hash_join_swap_subrule(
     mut input: PipelineStatePropagator,
     _config_options: &ConfigOptions,
-) -> Option<Result<PipelineStatePropagator>> {
+) -> Result<PipelineStatePropagator> {
     if let Some(hash_join) = input.plan.as_any().downcast_ref::<HashJoinExec>() {
-        let ub_flags = input.children_unbounded();
+        let ub_flags = children_unbounded(&input);
         let (left_unbounded, right_unbounded) = (ub_flags[0], ub_flags[1]);
-        input.unbounded = left_unbounded || right_unbounded;
-        let result = if left_unbounded
+        input.data = left_unbounded || right_unbounded;
+        if left_unbounded
             && !right_unbounded
             && matches!(
                 *hash_join.join_type(),
@@ -522,18 +515,12 @@ fn hash_join_swap_subrule(
                     | JoinType::Left
                     | JoinType::LeftSemi
                     | JoinType::LeftAnti
-            ) {
-            swap_join_according_to_unboundedness(hash_join).map(|plan| {
-                input.plan = plan;
-                input
-            })
-        } else {
-            Ok(input)
-        };
-        Some(result)
-    } else {
-        None
+            )
+        {
+            input.plan = swap_join_according_to_unboundedness(hash_join)?;
+        }
     }
+    Ok(input)
 }
 
 /// This function swaps sides of a hash join to make it runnable even if one of
@@ -571,13 +558,11 @@ fn apply_subrules(
     config_options: &ConfigOptions,
 ) -> Result<Transformed<PipelineStatePropagator>> {
     for subrule in subrules {
-        if let Some(value) = subrule(input.clone(), config_options).transpose()? {
-            input = value;
-        }
+        input = subrule(input, config_options)?;
     }
     let is_unbounded = input
         .plan
-        .unbounded_output(&input.children_unbounded())
+        .unbounded_output(&children_unbounded(&input))
         // Treat the case where an operator can not run on unbounded data as
         // if it can and it outputs unbounded data. Do not raise an error yet.
         // Such operators may be fixed, adjusted or replaced later on during
@@ -585,7 +570,7 @@ fn apply_subrules(
         // etc. If this doesn't happen, the final `PipelineChecker` rule will
         // catch this and raise an error anyway.
         .unwrap_or(true);
-    input.unbounded = is_unbounded;
+    input.data = is_unbounded;
     Ok(Transformed::Yes(input))
 }
 
@@ -1621,27 +1606,17 @@ mod hash_join_tests {
             false,
         )?;
 
+        let left_child = Arc::new(EmptyExec::new(Arc::new(Schema::empty())));
+        let right_child = Arc::new(EmptyExec::new(Arc::new(Schema::empty())));
         let children = vec![
-            PipelineStatePropagator {
-                plan: Arc::new(EmptyExec::new(Arc::new(Schema::empty()))),
-                unbounded: left_unbounded,
-                children: vec![],
-            },
-            PipelineStatePropagator {
-                plan: Arc::new(EmptyExec::new(Arc::new(Schema::empty()))),
-                unbounded: right_unbounded,
-                children: vec![],
-            },
+            PipelineStatePropagator::new(left_child, left_unbounded, vec![]),
+            PipelineStatePropagator::new(right_child, right_unbounded, vec![]),
         ];
-        let initial_hash_join_state = PipelineStatePropagator {
-            plan: Arc::new(join),
-            unbounded: false,
-            children,
-        };
+        let initial_hash_join_state =
+            PipelineStatePropagator::new(Arc::new(join), false, children);
 
         let optimized_hash_join =
-            hash_join_swap_subrule(initial_hash_join_state, &ConfigOptions::new())
-                .unwrap()?;
+            hash_join_swap_subrule(initial_hash_join_state, &ConfigOptions::new())?;
         let optimized_join_plan = optimized_hash_join.plan;
 
         // If swap did happen

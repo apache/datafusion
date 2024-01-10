@@ -37,20 +37,12 @@ pub fn add_sort_above(
     sort_requirement: LexRequirementRef,
     fetch: Option<usize>,
 ) {
-    // If the ordering requirement is already satisfied, do not add a sort.
-    if !node
-        .equivalence_properties()
-        .ordering_satisfy_requirement(sort_requirement)
-    {
-        let sort_expr = PhysicalSortRequirement::to_sort_exprs(sort_requirement.to_vec());
-        let new_sort = SortExec::new(sort_expr, node.clone()).with_fetch(fetch);
-
-        *node = Arc::new(if node.output_partitioning().partition_count() > 1 {
-            new_sort.with_preserve_partitioning(true)
-        } else {
-            new_sort
-        }) as _
+    let sort_expr = PhysicalSortRequirement::to_sort_exprs(sort_requirement.to_vec());
+    let mut new_sort = SortExec::new(sort_expr, node.clone()).with_fetch(fetch);
+    if node.output_partitioning().partition_count() > 1 {
+        new_sort = new_sort.with_preserve_partitioning(true);
     }
+    *node = Arc::new(new_sort);
 }
 
 /// Checks whether the given operator is a limit;
