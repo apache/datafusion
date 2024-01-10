@@ -26,7 +26,9 @@ use std::sync::Arc;
 
 use crate::aggregate::utils::{down_cast_any_ref, ordering_fields};
 use crate::expressions::format_state_name;
-use crate::{AggregateExpr, LexOrdering, PhysicalExpr, PhysicalSortExpr};
+use crate::{
+    reverse_order_bys, AggregateExpr, LexOrdering, PhysicalExpr, PhysicalSortExpr,
+};
 
 use arrow::array::ArrayRef;
 use arrow::datatypes::{DataType, Field};
@@ -420,6 +422,18 @@ impl AggregateExpr for NthValueAgg {
     fn name(&self) -> &str {
         &self.name
     }
+
+    fn reverse_expr(&self) -> Option<Arc<dyn AggregateExpr>> {
+        Some(Arc::new(Self {
+            name: self.name.to_string(),
+            input_data_type: self.input_data_type.clone(),
+            expr: self.expr.clone(),
+            n: -self.n,
+            nullable: self.nullable,
+            order_by_data_types: self.order_by_data_types.clone(),
+            ordering_req: reverse_order_bys(&self.ordering_req),
+        }) as _)
+    }
 }
 
 impl PartialEq<dyn Any> for NthValueAgg {
@@ -570,9 +584,10 @@ impl Accumulator for NthValueAccumulator {
                 ScalarValue::try_from(self.datatypes[0].clone())
             }
         } else if self.n < 0 {
-            let backward_idx = (-self.n) as usize - 1;
-            if let Some(nth_value) = self.values.get(backward_idx) {
-                Ok(nth_value.clone())
+            let backward_idx = (-self.n) as usize;
+            if self.values.len() >= backward_idx {
+                let idx = self.values.len() - backward_idx;
+                Ok(self.values[idx].clone())
             } else {
                 ScalarValue::try_from(self.datatypes[0].clone())
             }
