@@ -2178,6 +2178,10 @@ pub struct SymmetricHashJoinExecNode {
     pub null_equals_null: bool,
     #[prost(message, optional, tag = "8")]
     pub filter: ::core::option::Option<JoinFilter>,
+    #[prost(message, repeated, tag = "9")]
+    pub left_sort_exprs: ::prost::alloc::vec::Vec<PhysicalSortExprNode>,
+    #[prost(message, repeated, tag = "10")]
+    pub right_sort_exprs: ::prost::alloc::vec::Vec<PhysicalSortExprNode>,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]

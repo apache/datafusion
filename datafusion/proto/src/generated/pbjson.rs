@@ -25673,6 +25673,12 @@ impl serde::Serialize for SymmetricHashJoinExecNode {
         if self.filter.is_some() {
             len += 1;
         }
+        if !self.left_sort_exprs.is_empty() {
+            len += 1;
+        }
+        if !self.right_sort_exprs.is_empty() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion.SymmetricHashJoinExecNode", len)?;
         if let Some(v) = self.left.as_ref() {
             struct_ser.serialize_field("left", v)?;
@@ -25699,6 +25705,12 @@ impl serde::Serialize for SymmetricHashJoinExecNode {
         if let Some(v) = self.filter.as_ref() {
             struct_ser.serialize_field("filter", v)?;
         }
+        if !self.left_sort_exprs.is_empty() {
+            struct_ser.serialize_field("leftSortExprs", &self.left_sort_exprs)?;
+        }
+        if !self.right_sort_exprs.is_empty() {
+            struct_ser.serialize_field("rightSortExprs", &self.right_sort_exprs)?;
+        }
         struct_ser.end()
     }
 }
@@ -25719,6 +25731,10 @@ impl<'de> serde::Deserialize<'de> for SymmetricHashJoinExecNode {
             "null_equals_null",
             "nullEqualsNull",
             "filter",
+            "left_sort_exprs",
+            "leftSortExprs",
+            "right_sort_exprs",
+            "rightSortExprs",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -25730,6 +25746,8 @@ impl<'de> serde::Deserialize<'de> for SymmetricHashJoinExecNode {
             PartitionMode,
             NullEqualsNull,
             Filter,
+            LeftSortExprs,
+            RightSortExprs,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -25758,6 +25776,8 @@ impl<'de> serde::Deserialize<'de> for SymmetricHashJoinExecNode {
                             "partitionMode" | "partition_mode" => Ok(GeneratedField::PartitionMode),
                             "nullEqualsNull" | "null_equals_null" => Ok(GeneratedField::NullEqualsNull),
                             "filter" => Ok(GeneratedField::Filter),
+                            "leftSortExprs" | "left_sort_exprs" => Ok(GeneratedField::LeftSortExprs),
+                            "rightSortExprs" | "right_sort_exprs" => Ok(GeneratedField::RightSortExprs),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -25784,6 +25804,8 @@ impl<'de> serde::Deserialize<'de> for SymmetricHashJoinExecNode {
                 let mut partition_mode__ = None;
                 let mut null_equals_null__ = None;
                 let mut filter__ = None;
+                let mut left_sort_exprs__ = None;
+                let mut right_sort_exprs__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Left => {
@@ -25828,6 +25850,18 @@ impl<'de> serde::Deserialize<'de> for SymmetricHashJoinExecNode {
                             }
                             filter__ = map_.next_value()?;
                         }
+                        GeneratedField::LeftSortExprs => {
+                            if left_sort_exprs__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("leftSortExprs"));
+                            }
+                            left_sort_exprs__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::RightSortExprs => {
+                            if right_sort_exprs__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("rightSortExprs"));
+                            }
+                            right_sort_exprs__ = Some(map_.next_value()?);
+                        }
                     }
                 }
                 Ok(SymmetricHashJoinExecNode {
@@ -25838,6 +25872,8 @@ impl<'de> serde::Deserialize<'de> for SymmetricHashJoinExecNode {
                     partition_mode: partition_mode__.unwrap_or_default(),
                     null_equals_null: null_equals_null__.unwrap_or_default(),
                     filter: filter__,
+                    left_sort_exprs: left_sort_exprs__.unwrap_or_default(),
+                    right_sort_exprs: right_sort_exprs__.unwrap_or_default(),
                 })
             }
         }
