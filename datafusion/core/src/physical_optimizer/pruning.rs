@@ -926,11 +926,15 @@ fn build_is_null_column_expr(
     }
 }
 
+const MAX_LIST_VALUE_SIZE_REWRITE: usize = 20;
+
 /// Translate logical filter expression into pruning predicate
 /// expression that will evaluate to FALSE if it can be determined no
 /// rows between the min/max values could pass the predicates.
 ///
 /// Returns the pruning predicate as an [`PhysicalExpr`]
+///
+/// Notice: For [`InListExpr`] if in list values more than 20, it will be rewritten to TRUE
 fn build_predicate_expression(
     expr: &Arc<dyn PhysicalExpr>,
     schema: &Schema,
@@ -960,7 +964,9 @@ fn build_predicate_expression(
         }
     }
     if let Some(in_list) = expr_any.downcast_ref::<phys_expr::InListExpr>() {
-        if !in_list.list().is_empty() && in_list.list().len() < 20 {
+        if !in_list.list().is_empty()
+            && in_list.list().len() <= MAX_LIST_VALUE_SIZE_REWRITE
+        {
             let eq_op = if in_list.negated() {
                 Operator::NotEq
             } else {
@@ -1137,7 +1143,7 @@ mod tests {
     };
     use datafusion_common::{ScalarValue, ToDFSchema};
     use datafusion_expr::expr::InList;
-    use datafusion_expr::{cast, is_null, try_cast, Expr};
+    use datafusion_expr::{cast, is_null, try_cast, Between, BinaryExpr, Expr};
     use datafusion_physical_expr::create_physical_expr;
     use datafusion_physical_expr::execution_props::ExecutionProps;
     use std::collections::HashMap;
@@ -1951,6 +1957,89 @@ mod tests {
         let expected_expr = "(c1_min@0 != 1 OR 1 != c1_max@1) \
         AND (c1_min@0 != 2 OR 2 != c1_max@1) \
         AND (c1_min@0 != 3 OR 3 != c1_max@1)";
+        let predicate_expr =
+            test_build_predicate_expression(&expr, &schema, &mut RequiredColumns::new());
+        assert_eq!(predicate_expr.to_string(), expected_expr);
+
+        Ok(())
+    }
+
+    #[test]
+    fn row_group_predicate_between() -> Result<()> {
+        let schema = Schema::new(vec![
+            Field::new("c1", DataType::Int32, false),
+            Field::new("c2", DataType::Int32, false),
+        ]);
+
+        // test c1 BETWEEN 1 AND 5
+        let expr1 = Expr::Between(Between {
+            expr: Box::new(col("c1")),
+            negated: false,
+            low: Box::new(lit(1)),
+            high: Box::new(lit(5)),
+        });
+
+        let expr2 = col("c1").gt_eq(lit(1)).and(col("c1").lt_eq(lit(5)));
+
+        let predicate_expr1 =
+            test_build_predicate_expression(&expr1, &schema, &mut RequiredColumns::new());
+
+        let predicate_expr2 =
+            test_build_predicate_expression(&expr2, &schema, &mut RequiredColumns::new());
+        assert_eq!(predicate_expr1.to_string(), predicate_expr2.to_string());
+
+        Ok(())
+    }
+
+    #[test]
+    fn row_group_predicate_between_with_in_list() -> Result<()> {
+        let schema = Schema::new(vec![
+            Field::new("c1", DataType::Int32, false),
+            Field::new("c2", DataType::Int32, false),
+        ]);
+        // test c1 in(1, 2)
+        let expr1 = Expr::InList(InList::new(
+            Box::new(col("c1")),
+            vec![lit(1), lit(2)],
+            false,
+        ));
+
+        // test c2 BETWEEN 4 AND 5
+        let expr2 = Expr::Between(Between {
+            expr: Box::new(col("c2")),
+            negated: false,
+            low: Box::new(lit(4)),
+            high: Box::new(lit(5)),
+        });
+
+        // test c1 in(1, 2) and c2 BETWEEN 4 AND 5
+        let expr3 = Expr::BinaryExpr(BinaryExpr {
+            left: Box::new(expr1),
+            op: Operator::And,
+            right: Box::new(expr2),
+        });
+
+        let expected_expr = "(c1_min@0 <= 1 AND 1 <= c1_max@1 OR c1_min@0 <= 2 AND 2 <= c1_max@1) AND c2_max@2 >= 4 AND c2_min@3 <= 5";
+        let predicate_expr =
+            test_build_predicate_expression(&expr3, &schema, &mut RequiredColumns::new());
+        assert_eq!(predicate_expr.to_string(), expected_expr);
+
+        Ok(())
+    }
+
+    #[test]
+    fn row_group_predicate_in_list_to_many_values() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("c1", DataType::Int32, false)]);
+        // test c1 in(1..21)
+        // in pruning.rs has MAX_LIST_VALUE_SIZE_REWRITE = 20, more than this value will be rewrite
+        // always true
+        let expr = Expr::InList(InList::new(
+            Box::new(col("c1")),
+            (1..=21).map(|i| lit(i)).collect(),
+            false,
+        ));
+
+        let expected_expr = "true";
         let predicate_expr =
             test_build_predicate_expression(&expr, &schema, &mut RequiredColumns::new());
         assert_eq!(predicate_expr.to_string(), expected_expr);
