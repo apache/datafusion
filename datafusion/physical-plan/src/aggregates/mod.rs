@@ -953,7 +953,6 @@ fn get_aggregate_exprs_requirement(
         {
             requirement = finer_ordering;
         } else if let Some(reverse_aggr_expr) = aggr_expr.reverse_expr() {
-            println!("reverse_aggr_expr:{:?}", reverse_aggr_expr);
             if let Some(finer_ordering) = finer_ordering(
                 &requirement,
                 &reverse_aggr_expr,

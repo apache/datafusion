@@ -394,16 +394,19 @@ impl AggregateExpr for NthValueAgg {
 
     fn state_fields(&self) -> Result<Vec<Field>> {
         let mut fields = vec![Field::new_list(
-            format_state_name(&self.name, "array_agg"),
+            format_state_name(&self.name, "nth_value"),
             Field::new("item", self.input_data_type.clone(), true),
             self.nullable, // This should be the same as field()
         )];
-        let orderings = ordering_fields(&self.ordering_req, &self.order_by_data_types);
-        fields.push(Field::new_list(
-            format_state_name(&self.name, "array_agg_orderings"),
-            Field::new("item", DataType::Struct(Fields::from(orderings)), true),
-            self.nullable,
-        ));
+        if !self.ordering_req.is_empty() {
+            let orderings =
+                ordering_fields(&self.ordering_req, &self.order_by_data_types);
+            fields.push(Field::new_list(
+                format_state_name(&self.name, "nth_value_orderings"),
+                Field::new("item", DataType::Struct(Fields::from(orderings)), true),
+                self.nullable,
+            ));
+        }
         Ok(fields)
     }
 
@@ -511,12 +514,22 @@ impl Accumulator for NthValueAccumulator {
         }
         // First entry in the state is the aggregation result.
         let array_agg_values = &states[0];
-        // 2nd entry stores values received for ordering requirement columns, for each aggregation value inside ARRAY_AGG list.
-        // For each `StructArray` inside ARRAY_AGG list, we will receive an `Array` that stores
-        // values received from its ordering requirement expression. (This information is necessary for during merging).
-        let agg_orderings = &states[1];
+        if self.ordering_req.is_empty() {
+            let array_agg_res =
+                ScalarValue::convert_array_to_scalar_vec(array_agg_values)?;
+            // Stores ARRAY_AGG results coming from each partition
+            let mut partition_values = vec![];
+            // Existing values should be merged also.
+            partition_values.extend(self.values.clone());
+            for v in array_agg_res.into_iter() {
+                partition_values.extend(v);
+            }
+            self.values = partition_values;
+        } else if let Some(agg_orderings) = states[1].as_list_opt::<i32>() {
+            // 2nd entry stores values received for ordering requirement columns, for each aggregation value inside ARRAY_AGG list.
+            // For each `StructArray` inside ARRAY_AGG list, we will receive an `Array` that stores
+            // values received from its ordering requirement expression. (This information is necessary for during merging).
 
-        if let Some(agg_orderings) = agg_orderings.as_list_opt::<i32>() {
             // Stores ARRAY_AGG results coming from each partition
             let mut partition_values = vec![];
             // Stores ordering requirement expression results coming from each partition
@@ -570,8 +583,10 @@ impl Accumulator for NthValueAccumulator {
     }
 
     fn state(&self) -> Result<Vec<ScalarValue>> {
-        let mut result = vec![self.evaluate()?];
-        result.push(self.evaluate_orderings()?);
+        let mut result = vec![self.evaluate_values()?];
+        if !self.ordering_req.is_empty() {
+            result.push(self.evaluate_orderings()?);
+        }
         Ok(result)
     }
 
@@ -638,6 +653,11 @@ impl NthValueAccumulator {
 
         // Wrap in List, so we have the same data structure ListArray(StructArray..) for group by cases
         let arr = ScalarValue::new_list(&orderings, &struct_type);
+        Ok(ScalarValue::List(arr))
+    }
+
+    fn evaluate_values(&self) -> Result<ScalarValue> {
+        let arr = ScalarValue::new_list(&self.values, &self.datatypes[0]);
         Ok(ScalarValue::List(arr))
     }
 }

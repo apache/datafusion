@@ -2351,6 +2351,15 @@ mod tmp_tests {
         FROM multiple_ordered_table
         GROUP BY a, b";
 
+    const QUERY4: &str = "SELECT a, b, NTH_VALUE(c, 2)
+        FROM multiple_ordered_table
+        GROUP BY a, b";
+
+    // const QUERY4: &str =
+    //     "SELECT a, b, ARRAY_AGG(c)
+    //     FROM multiple_ordered_table
+    //     GROUP BY a, b";
+
     #[tokio::test]
     async fn test_query1() -> Result<()> {
         let config = SessionConfig::new().with_target_partitions(1);
@@ -2466,6 +2475,91 @@ mod tmp_tests {
             "| 1 | 2 | [50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74] | 73                                           |",
             "| 1 | 3 | [75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99] | 98                                           |",
             "+---+---+------------------------------------------------------------------------------------------------------+----------------------------------------------+",
+        ];
+        assert_batches_eq!(expected, &batches);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_query1_multi_partition() -> Result<()> {
+        let config = SessionConfig::new().with_target_partitions(2);
+        let ctx = SessionContext::new_with_config(config);
+        let query = QUERY1;
+
+        ctx.sql(MULTIPLE_ORDERED_TABLE).await?;
+
+        let msg = format!("Creating logical plan for '{query}'");
+        let dataframe = ctx.sql(query).await.expect(&msg);
+        let physical_plan = dataframe.create_physical_plan().await?;
+        print_plan(&physical_plan)?;
+        let batches = collect(physical_plan.clone(), ctx.task_ctx()).await?;
+        print_batches(&batches)?;
+
+        let expected = vec![
+            "AggregateExec: mode=Single, gby=[a@0 as a, b@1 as b], aggr=[ARRAY_AGG(multiple_ordered_table.c), NTH_VALUE(multiple_ordered_table.c,Int64(2))], ordering_mode=Sorted",
+            "  CsvExec: file_groups={1 group: [[Users/akurmustafa/projects/synnada/arrow-datafusion-synnada/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b, c], output_orderings=[[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST], [c@2 ASC NULLS LAST]], has_header=true",
+        ];
+        // Get string representation of the plan
+        let actual = get_plan_string(&physical_plan);
+        assert_eq!(
+            expected, actual,
+            "\n**Optimized Plan Mismatch\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+        );
+
+        let expected = [
+            "+---+---+------------------------------------------------------------------------------------------------------+----------------------------------------------+",
+            "| a | b | ARRAY_AGG(multiple_ordered_table.c)                                                                  | NTH_VALUE(multiple_ordered_table.c,Int64(2)) |",
+            "+---+---+------------------------------------------------------------------------------------------------------+----------------------------------------------+",
+            "| 0 | 0 | [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24]           | 23                                           |",
+            "| 0 | 1 | [25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49] | 48                                           |",
+            "| 1 | 2 | [50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74] | 73                                           |",
+            "| 1 | 3 | [75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99] | 98                                           |",
+            "+---+---+------------------------------------------------------------------------------------------------------+----------------------------------------------+",
+        ];
+        assert_batches_eq!(expected, &batches);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_query4_multi_partition() -> Result<()> {
+        let config = SessionConfig::new().with_target_partitions(2);
+        let ctx = SessionContext::new_with_config(config);
+        let query = QUERY4;
+
+        ctx.sql(MULTIPLE_ORDERED_TABLE).await?;
+
+        let msg = format!("Creating logical plan for '{query}'");
+        let dataframe = ctx.sql(query).await.expect(&msg);
+        let physical_plan = dataframe.create_physical_plan().await?;
+        print_plan(&physical_plan)?;
+        let batches = collect(physical_plan.clone(), ctx.task_ctx()).await?;
+        print_batches(&batches)?;
+
+        let expected = vec![
+            "AggregateExec: mode=FinalPartitioned, gby=[a@0 as a, b@1 as b], aggr=[NTH_VALUE(multiple_ordered_table.c,Int64(2))], ordering_mode=Sorted",
+            "  SortExec: expr=[a@0 ASC NULLS LAST,b@1 ASC NULLS LAST]",
+            "    CoalesceBatchesExec: target_batch_size=8192",
+            "      RepartitionExec: partitioning=Hash([a@0, b@1], 2), input_partitions=2",
+            "        AggregateExec: mode=Partial, gby=[a@0 as a, b@1 as b], aggr=[NTH_VALUE(multiple_ordered_table.c,Int64(2))], ordering_mode=Sorted",
+            "          RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
+            "            CsvExec: file_groups={1 group: [[Users/akurmustafa/projects/synnada/arrow-datafusion-synnada/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b, c], output_orderings=[[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST], [c@2 ASC NULLS LAST]], has_header=true",
+        ];
+        // Get string representation of the plan
+        let actual = get_plan_string(&physical_plan);
+        assert_eq!(
+            expected, actual,
+            "\n**Optimized Plan Mismatch\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+        );
+
+        let expected = [
+            "+---+---+----------------------------------------------+",
+            "| a | b | NTH_VALUE(multiple_ordered_table.c,Int64(2)) |",
+            "+---+---+----------------------------------------------+",
+            "| 0 | 0 | 1                                            |",
+            "| 0 | 1 | 26                                           |",
+            "| 1 | 2 | 51                                           |",
+            "| 1 | 3 | 76                                           |",
+            "+---+---+----------------------------------------------+",
         ];
         assert_batches_eq!(expected, &batches);
         Ok(())
