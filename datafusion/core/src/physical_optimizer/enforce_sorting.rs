@@ -2305,3 +2305,85 @@ mod tests {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tmp_tests {
+    use crate::assert_batches_eq;
+    use crate::physical_plan::{collect, displayable, ExecutionPlan};
+    use crate::prelude::SessionContext;
+    use arrow::util::pretty::print_batches;
+    use datafusion_common::Result;
+    use datafusion_execution::config::SessionConfig;
+    use datafusion_physical_plan::get_plan_string;
+    use std::sync::Arc;
+
+    fn print_plan(plan: &Arc<dyn ExecutionPlan>) -> Result<()> {
+        let formatted = displayable(plan.as_ref()).indent(true).to_string();
+        let actual: Vec<&str> = formatted.trim().lines().collect();
+        println!("{:#?}", actual);
+        Ok(())
+    }
+
+    const MULTIPLE_ORDERED_TABLE: &str = "CREATE EXTERNAL TABLE multiple_ordered_table (
+          a0 INTEGER,
+          a INTEGER,
+          b INTEGER,
+          c INTEGER,
+          d INTEGER
+        )
+        STORED AS CSV
+        WITH HEADER ROW
+        WITH ORDER (a ASC, b ASC)
+        WITH ORDER (c ASC)
+        LOCATION '../core/tests/data/window_2.csv'";
+
+    #[tokio::test]
+    async fn test_query() -> Result<()> {
+        let config = SessionConfig::new().with_target_partitions(1);
+        let ctx = SessionContext::new_with_config(config);
+
+        ctx.sql(MULTIPLE_ORDERED_TABLE).await?;
+
+        // let sql = "SELECT a, FIRST_VALUE(c)
+        // FROM multiple_ordered_table
+        // GROUP BY a";
+
+        let sql = "SELECT a, NTH_VALUE(c, 2)
+        FROM multiple_ordered_table
+        GROUP BY a";
+
+        let msg = format!("Creating logical plan for '{sql}'");
+        let dataframe = ctx.sql(sql).await.expect(&msg);
+        let physical_plan = dataframe.create_physical_plan().await?;
+        print_plan(&physical_plan)?;
+        let batches = collect(physical_plan.clone(), ctx.task_ctx()).await?;
+        print_batches(&batches)?;
+
+        let expected = vec![
+            "ProjectionExec: expr=[NTH_VALUE(annotated_data_finite2.d,Int64(2)) ORDER BY [annotated_data_finite2.a ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@2 as nth_value1]",
+            "  GlobalLimitExec: skip=0, fetch=5",
+            "    BoundedWindowAggExec: wdw=[NTH_VALUE(annotated_data_finite2.d,Int64(2)) ORDER BY [annotated_data_finite2.a ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Ok(Field { name: \"NTH_VALUE(annotated_data_finite2.d,Int64(2)) ORDER BY [annotated_data_finite2.a ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW\", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(Int32(NULL)), end_bound: CurrentRow }], mode=[Sorted]",
+            "      CsvExec: file_groups={1 group: [[Users/akurmustafa/projects/synnada/arrow-datafusion-synnada/datafusion/core/tests/data/window_2.csv]]}, projection=[a, d], output_ordering=[a@0 ASC NULLS LAST], has_header=true",
+        ];
+        // Get string representation of the plan
+        let actual = get_plan_string(&physical_plan);
+        assert_eq!(
+            expected, actual,
+            "\n**Optimized Plan Mismatch\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+        );
+
+        let expected = [
+            "+------------+",
+            "| nth_value1 |",
+            "+------------+",
+            "| 2          |",
+            "| 2          |",
+            "| 2          |",
+            "| 2          |",
+            "| 2          |",
+            "+------------+",
+        ];
+        assert_batches_eq!(expected, &batches);
+        Ok(())
+    }
+}

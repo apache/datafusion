@@ -17,7 +17,7 @@
 
 //! Aggregate function module contains all built-in aggregate functions definitions
 
-use crate::utils;
+use crate::{BuiltInWindowFunction, utils};
 use crate::{type_coercion::aggregates::*, Signature, TypeSignature, Volatility};
 use arrow::datatypes::{DataType, Field};
 use datafusion_common::{plan_datafusion_err, plan_err, DataFusionError, Result};
@@ -50,6 +50,8 @@ pub enum AggregateFunction {
     FirstValue,
     /// last_value
     LastValue,
+    /// nth_value
+    NthValue,
     /// Variance (Sample)
     Variance,
     /// Variance (Population)
@@ -118,6 +120,7 @@ impl AggregateFunction {
             ArrayAgg => "ARRAY_AGG",
             FirstValue => "FIRST_VALUE",
             LastValue => "LAST_VALUE",
+            NthValue => "NTH_VALUE",
             Variance => "VAR",
             VariancePop => "VAR_POP",
             Stddev => "STDDEV",
@@ -174,6 +177,7 @@ impl FromStr for AggregateFunction {
             "array_agg" => AggregateFunction::ArrayAgg,
             "first_value" => AggregateFunction::FirstValue,
             "last_value" => AggregateFunction::LastValue,
+            "nth_value" => AggregateFunction::NthValue,
             "string_agg" => AggregateFunction::StringAgg,
             // statistical
             "corr" => AggregateFunction::Correlation,
@@ -300,7 +304,7 @@ impl AggregateFunction {
                 Ok(coerced_data_types[0].clone())
             }
             AggregateFunction::Grouping => Ok(DataType::Int32),
-            AggregateFunction::FirstValue | AggregateFunction::LastValue => {
+            AggregateFunction::FirstValue | AggregateFunction::LastValue | AggregateFunction::NthValue => {
                 Ok(coerced_data_types[0].clone())
             }
             AggregateFunction::StringAgg => Ok(DataType::LargeUtf8),
@@ -371,6 +375,7 @@ impl AggregateFunction {
             | AggregateFunction::LastValue => {
                 Signature::uniform(1, NUMERICS.to_vec(), Volatility::Immutable)
             }
+            AggregateFunction::NthValue => Signature::any(2, Volatility::Immutable),
             AggregateFunction::Covariance
             | AggregateFunction::CovariancePop
             | AggregateFunction::Correlation

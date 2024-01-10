@@ -369,6 +369,13 @@ pub fn create_aggregate_expr(
             ordering_req.to_vec(),
             ordering_types,
         )),
+        (AggregateFunction::NthValue, _) => Arc::new(expressions::NthValueAgg::new(
+            input_phy_exprs[0].clone(),
+            name,
+            input_phy_types[0].clone(),
+            ordering_req.to_vec(),
+            ordering_types,
+        )),
         (AggregateFunction::StringAgg, false) => {
             if !ordering_req.is_empty() {
                 return not_impl_err!(
