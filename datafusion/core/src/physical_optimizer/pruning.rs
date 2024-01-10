@@ -2036,7 +2036,7 @@ mod tests {
         // always true
         let expr = Expr::InList(InList::new(
             Box::new(col("c1")),
-            (1..=21).map(|i| lit(i)).collect(),
+            (1..=21).map(lit).collect(),
             false,
         ));
 
