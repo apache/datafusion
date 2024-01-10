@@ -36,8 +36,8 @@ use datafusion_common::cast::{
 };
 use datafusion_common::utils::{array_into_list_array, list_ndims};
 use datafusion_common::{
-    exec_datafusion_err, exec_err, internal_err, not_impl_err, plan_err, DataFusionError,
-    Result, ScalarValue,
+    exec_err, internal_datafusion_err, internal_err, not_impl_err, plan_err,
+    DataFusionError, Result, ScalarValue,
 };
 
 use itertools::Itertools;
@@ -2679,14 +2679,16 @@ where
 
     for (row_index, offset_window) in array.offsets().windows(2).enumerate() {
         let count = count_array.value(row_index).to_usize().ok_or_else(|| {
-            exec_datafusion_err!("array_resize: failed to convert size to usize")
+            internal_datafusion_err!("array_resize: failed to convert size to usize")
         })?;
         let count = O::usize_as(count);
         let start = offset_window[0];
         if start + count > offset_window[1] {
             let extra_count =
                 (start + count - offset_window[1]).try_into().map_err(|_| {
-                    exec_datafusion_err!("array_resize: failed to convert size to i64")
+                    internal_datafusion_err!(
+                        "array_resize: failed to convert size to i64"
+                    )
                 })?;
             let end = offset_window[1];
             mutable.extend(0, (start).to_usize().unwrap(), (end).to_usize().unwrap());
