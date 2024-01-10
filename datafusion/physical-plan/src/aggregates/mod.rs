@@ -1800,11 +1800,12 @@ mod tests {
             (1, groups_some.clone(), aggregates_v1),
             (2, groups_some, aggregates_v2),
         ] {
+            let n_aggr = aggregates.len();
             let partial_aggregate = Arc::new(AggregateExec::try_new(
                 AggregateMode::Partial,
                 groups,
                 aggregates,
-                vec![None; 3],
+                vec![None; n_aggr],
                 input.clone(),
                 input_schema.clone(),
             )?);
