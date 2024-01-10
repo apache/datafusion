@@ -2654,23 +2654,28 @@ fn general_list_resize<O: OffsetSizeTrait>(
 where
     O: TryInto<i64>,
 {
-    let mut default_element_array = vec![];
-
     let data_type = array.value_type();
+
+    let values = array.values();
+    let original_data = values.to_data();
+
+    // create default element array
     let default_element = if let Some(default_element) = default_element {
         default_element
     } else {
         let null_scalar = ScalarValue::try_from(&data_type)?;
-        null_scalar.to_array_of_size(1)?
+        null_scalar.to_array_of_size(original_data.len())?
     };
+    let default_value_data = default_element.to_data();
 
     // create a mutable array to store the original data
-    let values = array.values();
-    let original_data = values.to_data();
-    let capacity = Capacities::Array(original_data.len());
+    let capacity = Capacities::Array(original_data.len() + default_value_data.len());
     let mut offsets = vec![O::usize_as(0)];
-    let mut mutable =
-        MutableArrayData::with_capacities(vec![&original_data], false, capacity);
+    let mut mutable = MutableArrayData::with_capacities(
+        vec![&original_data, &default_value_data],
+        false,
+        capacity,
+    );
 
     for (row_index, offset_window) in array.offsets().windows(2).enumerate() {
         let count = count_array.value(row_index).to_usize().ok_or_else(|| {
@@ -2678,33 +2683,31 @@ where
         })?;
         let count = O::usize_as(count);
         let start = offset_window[0];
-        let end = if start + count > offset_window[1] {
-            let value = (start + count - offset_window[1]).try_into().map_err(|_| {
-                exec_datafusion_err!("array_resize: failed to convert size to i64")
-            })?;
-            default_element_array.push(Some(value));
-            offset_window[1]
+        if start + count > offset_window[1] {
+            let extra_count =
+                (start + count - offset_window[1]).try_into().map_err(|_| {
+                    exec_datafusion_err!("array_resize: failed to convert size to i64")
+                })?;
+            let end = offset_window[1];
+            mutable.extend(0, (start).to_usize().unwrap(), (end).to_usize().unwrap());
+            // append default element
+            for _ in 0..extra_count {
+                mutable.extend(1, row_index, row_index + 1);
+            }
         } else {
-            default_element_array.push(None);
-            start + count
+            let end = start + count;
+            mutable.extend(0, (start).to_usize().unwrap(), (end).to_usize().unwrap());
         };
-        mutable.extend(0, (start).to_usize().unwrap(), (end).to_usize().unwrap());
-        offsets.push(offsets[row_index] + end - start);
+        offsets.push(offsets[row_index] + count);
     }
 
-    let default_element_array = Arc::new(Int64Array::from(default_element_array));
-    let default_element_array =
-        general_repeat::<O>(&default_element, &default_element_array)?;
-
     let data = mutable.freeze();
-    let original_part = Arc::new(GenericListArray::<O>::try_new(
+    Ok(Arc::new(GenericListArray::<O>::try_new(
         field.clone(),
         OffsetBuffer::<O>::new(offsets.into()),
         arrow_array::make_array(data),
         None,
-    )?);
-
-    array_concat(&[original_part, default_element_array])
+    )?))
 }
 
 #[cfg(test)]
