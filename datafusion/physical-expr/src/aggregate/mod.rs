@@ -20,7 +20,7 @@ use std::fmt::Debug;
 use std::sync::Arc;
 
 use self::groups_accumulator::GroupsAccumulator;
-use crate::expressions::OrderSensitiveArrayAgg;
+use crate::expressions::{NthValueAgg, OrderSensitiveArrayAgg};
 use crate::{PhysicalExpr, PhysicalSortExpr};
 
 use arrow::datatypes::Field;
@@ -140,4 +140,5 @@ pub trait AggregateExpr: Send + Sync + Debug + PartialEq<dyn Any> {
 /// However, an `ARRAY_AGG` with `ORDER BY` depends on the input ordering.
 pub fn is_order_sensitive(aggr_expr: &Arc<dyn AggregateExpr>) -> bool {
     aggr_expr.as_any().is::<OrderSensitiveArrayAgg>()
+        || aggr_expr.as_any().is::<NthValueAgg>()
 }

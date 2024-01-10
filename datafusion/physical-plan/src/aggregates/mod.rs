@@ -952,6 +952,21 @@ fn get_aggregate_exprs_requirement(
             finer_ordering(&requirement, aggr_expr, group_by, eq_properties, agg_mode)
         {
             requirement = finer_ordering;
+        } else if let Some(reverse_aggr_expr) = aggr_expr.reverse_expr() {
+            if let Some(finer_ordering) = finer_ordering(
+                &requirement,
+                &reverse_aggr_expr,
+                group_by,
+                eq_properties,
+                agg_mode,
+            ) {
+                *aggr_expr = reverse_aggr_expr;
+                requirement = finer_ordering;
+            } else {
+                return not_impl_err!(
+                "Conflicting ordering requirements in aggregate functions is not supported"
+                );
+            }
         } else {
             // If neither of the requirements satisfy the other, this means
             // requirements are conflicting. Currently, we do not support
