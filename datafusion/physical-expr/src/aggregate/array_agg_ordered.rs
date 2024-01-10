@@ -376,20 +376,18 @@ impl AggregateExpr for NthValueAgg {
     }
 
     fn field(&self) -> Result<Field> {
-        Ok(Field::new_list(
-            &self.name,
-            // This should be the same as return type of AggregateFunction::ArrayAgg
-            Field::new("item", self.input_data_type.clone(), true),
-            self.nullable,
-        ))
+        Ok(Field::new(&self.name, self.input_data_type.clone(), true))
     }
 
     fn create_accumulator(&self) -> Result<Box<dyn Accumulator>> {
-        Ok(Box::new(crate::aggregate::array_agg_ordered::NthValueAccumulator::try_new(
-            &self.input_data_type,
-            &self.order_by_data_types,
-            self.ordering_req.clone(),
-        )?))
+        Ok(Box::new(
+            crate::aggregate::array_agg_ordered::NthValueAccumulator::try_new(
+                self.n,
+                &self.input_data_type,
+                &self.order_by_data_types,
+                self.ordering_req.clone(),
+            )?,
+        ))
     }
 
     fn state_fields(&self) -> Result<Vec<Field>> {
@@ -440,6 +438,7 @@ impl PartialEq<dyn Any> for NthValueAgg {
 
 #[derive(Debug)]
 pub(crate) struct NthValueAccumulator {
+    n: i64,
     // `values` stores entries in the ARRAY_AGG result.
     values: Vec<ScalarValue>,
     // `ordering_values` stores values of ordering requirement expression
@@ -459,6 +458,7 @@ impl NthValueAccumulator {
     /// Create a new order-sensitive ARRAY_AGG accumulator based on the given
     /// item data type.
     pub fn try_new(
+        n: i64,
         datatype: &DataType,
         ordering_dtypes: &[DataType],
         ordering_req: LexOrdering,
@@ -466,6 +466,7 @@ impl NthValueAccumulator {
         let mut datatypes = vec![datatype.clone()];
         datatypes.extend(ordering_dtypes.iter().cloned());
         Ok(Self {
+            n,
             values: vec![],
             ordering_values: vec![],
             datatypes,
@@ -561,8 +562,24 @@ impl Accumulator for NthValueAccumulator {
     }
 
     fn evaluate(&self) -> Result<ScalarValue> {
-        let arr = ScalarValue::new_list(&self.values, &self.datatypes[0]);
-        Ok(ScalarValue::List(arr))
+        if self.n > 0 {
+            let forward_idx = self.n as usize - 1;
+            if let Some(nth_value) = self.values.get(forward_idx) {
+                Ok(nth_value.clone())
+            } else {
+                ScalarValue::try_from(self.datatypes[0].clone())
+            }
+        } else if self.n < 0 {
+            let backward_idx = (-self.n) as usize - 1;
+            if let Some(nth_value) = self.values.get(backward_idx) {
+                Ok(nth_value.clone())
+            } else {
+                ScalarValue::try_from(self.datatypes[0].clone())
+            }
+        } else {
+            // n cannot be 0
+            unreachable!();
+        }
     }
 
     fn size(&self) -> usize {

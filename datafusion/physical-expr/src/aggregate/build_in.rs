@@ -27,12 +27,12 @@
 //! * Return type: a function `(arg_types) -> return_type`. E.g. for min, ([f32]) -> f32, ([f64]) -> f64.
 
 use crate::aggregate::regr::RegrType;
+use crate::expressions::Literal;
 use crate::{expressions, AggregateExpr, PhysicalExpr, PhysicalSortExpr};
 use arrow::datatypes::Schema;
-use datafusion_common::{not_impl_err, DataFusionError, Result, plan_datafusion_err};
+use datafusion_common::{not_impl_err, plan_datafusion_err, DataFusionError, Result};
 pub use datafusion_expr::AggregateFunction;
 use std::sync::Arc;
-use crate::expressions::Literal;
 
 /// Create a physical aggregation expression.
 /// This function errors when `input_phy_exprs`' can't be coerced to a valid argument type of the aggregation function.
@@ -372,10 +372,12 @@ pub fn create_aggregate_expr(
         )),
         (AggregateFunction::NthValue, _) => {
             let expr = &input_phy_exprs[0];
-            let n = input_phy_exprs[1].as_any().downcast_ref::<Literal>().unwrap().value();
-            let n: i64 = n
-                .clone()
-                .try_into()?;
+            let n = input_phy_exprs[1]
+                .as_any()
+                .downcast_ref::<Literal>()
+                .unwrap()
+                .value();
+            let n: i64 = n.clone().try_into()?;
             let nullable = expr.nullable(input_schema)?;
             Arc::new(expressions::NthValueAgg::new(
                 expr.clone(),
@@ -386,7 +388,7 @@ pub fn create_aggregate_expr(
                 ordering_types,
                 ordering_req.to_vec(),
             ))
-        },
+        }
         (AggregateFunction::StringAgg, false) => {
             if !ordering_req.is_empty() {
                 return not_impl_err!(

@@ -46,7 +46,7 @@ pub use crate::aggregate::approx_percentile_cont::ApproxPercentileCont;
 pub use crate::aggregate::approx_percentile_cont_with_weight::ApproxPercentileContWithWeight;
 pub use crate::aggregate::array_agg::ArrayAgg;
 pub use crate::aggregate::array_agg_distinct::DistinctArrayAgg;
-pub use crate::aggregate::array_agg_ordered::{OrderSensitiveArrayAgg, NthValueAgg};
+pub use crate::aggregate::array_agg_ordered::{NthValueAgg, OrderSensitiveArrayAgg};
 pub use crate::aggregate::average::{Avg, AvgAccumulator};
 pub use crate::aggregate::bit_and_or_xor::{BitAnd, BitOr, BitXor, DistinctBitXor};
 pub use crate::aggregate::bool_and_or::{BoolAnd, BoolOr};

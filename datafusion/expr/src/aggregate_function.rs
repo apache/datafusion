@@ -17,8 +17,8 @@
 
 //! Aggregate function module contains all built-in aggregate functions definitions
 
-use crate::{BuiltInWindowFunction, utils};
 use crate::{type_coercion::aggregates::*, Signature, TypeSignature, Volatility};
+use crate::{utils, BuiltInWindowFunction};
 use arrow::datatypes::{DataType, Field};
 use datafusion_common::{plan_datafusion_err, plan_err, DataFusionError, Result};
 use std::sync::Arc;
@@ -304,9 +304,9 @@ impl AggregateFunction {
                 Ok(coerced_data_types[0].clone())
             }
             AggregateFunction::Grouping => Ok(DataType::Int32),
-            AggregateFunction::FirstValue | AggregateFunction::LastValue | AggregateFunction::NthValue => {
-                Ok(coerced_data_types[0].clone())
-            }
+            AggregateFunction::FirstValue
+            | AggregateFunction::LastValue
+            | AggregateFunction::NthValue => Ok(coerced_data_types[0].clone()),
             AggregateFunction::StringAgg => Ok(DataType::LargeUtf8),
         }
     }
