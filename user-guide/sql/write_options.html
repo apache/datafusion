@@ -473,10 +473,24 @@
 <section id="copy-specific-options">
 <h3>COPY Specific Options<a class="headerlink" href="#copy-specific-options" title="Link to this heading">¶</a></h3>
 <p>The following special options are specific to the <code class="docutils literal notranslate"><span class="pre">COPY</span></code> command.</p>
-<p>| Option             | Description                                                                                                                                                                  | Default Value |
-| —————— | —————————————————————————————————————————————————————————- | ————- | — |
-| SINGLE_FILE_OUTPUT | If true, COPY query will write output to a single file. Otherwise, multiple files will be written to a directory in parallel.                                                | true          |
-| FORMAT             | Specifies the file format COPY query will write out. If single_file_output is false or the format cannot be inferred from the file extension, then FORMAT must be specified. | N/A           |     |</p>
+<table class="table">
+<thead>
+<tr class="row-odd"><th class="head"><p>Option</p></th>
+<th class="head"><p>Description</p></th>
+<th class="head"><p>Default Value</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>SINGLE_FILE_OUTPUT</p></td>
+<td><p>If true, COPY query will write output to a single file. Otherwise, multiple files will be written to a directory in parallel.</p></td>
+<td><p>true</p></td>
+</tr>
+<tr class="row-odd"><td><p>FORMAT</p></td>
+<td><p>Specifies the file format COPY query will write out. If single_file_output is false or the format cannot be inferred from the file extension, then FORMAT must be specified.</p></td>
+<td><p>N/A</p></td>
+</tr>
+</tbody>
+</table>
 </section>
 <section id="json-format-specific-options">
 <h3>JSON Format Specific Options<a class="headerlink" href="#json-format-specific-options" title="Link to this heading">¶</a></h3>
