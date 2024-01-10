@@ -1979,6 +1979,7 @@ mod tests {
             high: Box::new(lit(5)),
         });
 
+        // test 1 <= c1 <= 5
         let expr2 = col("c1").gt_eq(lit(1)).and(col("c1").lt_eq(lit(5)));
 
         let predicate_expr1 =
