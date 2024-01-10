@@ -2360,10 +2360,8 @@ mod tmp_tests {
         print_batches(&batches)?;
 
         let expected = vec![
-            "ProjectionExec: expr=[NTH_VALUE(annotated_data_finite2.d,Int64(2)) ORDER BY [annotated_data_finite2.a ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@2 as nth_value1]",
-            "  GlobalLimitExec: skip=0, fetch=5",
-            "    BoundedWindowAggExec: wdw=[NTH_VALUE(annotated_data_finite2.d,Int64(2)) ORDER BY [annotated_data_finite2.a ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Ok(Field { name: \"NTH_VALUE(annotated_data_finite2.d,Int64(2)) ORDER BY [annotated_data_finite2.a ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW\", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(Int32(NULL)), end_bound: CurrentRow }], mode=[Sorted]",
-            "      CsvExec: file_groups={1 group: [[Users/akurmustafa/projects/synnada/arrow-datafusion-synnada/datafusion/core/tests/data/window_2.csv]]}, projection=[a, d], output_ordering=[a@0 ASC NULLS LAST], has_header=true",
+            "AggregateExec: mode=Single, gby=[a@0 as a], aggr=[NTH_VALUE(multiple_ordered_table.c,Int64(2))], ordering_mode=Sorted",
+            "  CsvExec: file_groups={1 group: [[Users/akurmustafa/projects/synnada/arrow-datafusion-synnada/datafusion/core/tests/data/window_2.csv]]}, projection=[a, c], output_orderings=[[a@0 ASC NULLS LAST], [c@1 ASC NULLS LAST]], has_header=true",
         ];
         // Get string representation of the plan
         let actual = get_plan_string(&physical_plan);
