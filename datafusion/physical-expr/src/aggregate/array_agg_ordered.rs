@@ -323,6 +323,293 @@ impl OrderSensitiveArrayAggAccumulator {
     }
 }
 
+/// Expression for a ARRAY_AGG(ORDER BY) aggregation.
+/// When aggregation works in multiple partitions
+/// aggregations are split into multiple partitions,
+/// then their results are merged. This aggregator
+/// is a version of ARRAY_AGG that can support producing
+/// intermediate aggregation (with necessary side information)
+/// and that can merge aggregations from multiple partitions.
+#[derive(Debug)]
+pub struct NthValueAgg {
+    /// Column name
+    name: String,
+    /// The DataType for the input expression
+    input_data_type: DataType,
+    /// The input expression
+    expr: Arc<dyn PhysicalExpr>,
+    n: i64,
+    /// If the input expression can have NULLs
+    nullable: bool,
+    /// Ordering data types
+    order_by_data_types: Vec<DataType>,
+    /// Ordering requirement
+    ordering_req: LexOrdering,
+}
+
+impl NthValueAgg {
+    /// Create a new `OrderSensitiveArrayAgg` aggregate function
+    pub fn new(
+        expr: Arc<dyn PhysicalExpr>,
+        n: i64,
+        name: impl Into<String>,
+        input_data_type: DataType,
+        nullable: bool,
+        order_by_data_types: Vec<DataType>,
+        ordering_req: LexOrdering,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            input_data_type,
+            expr,
+            n,
+            nullable,
+            order_by_data_types,
+            ordering_req,
+        }
+    }
+}
+
+impl AggregateExpr for NthValueAgg {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn field(&self) -> Result<Field> {
+        Ok(Field::new_list(
+            &self.name,
+            // This should be the same as return type of AggregateFunction::ArrayAgg
+            Field::new("item", self.input_data_type.clone(), true),
+            self.nullable,
+        ))
+    }
+
+    fn create_accumulator(&self) -> Result<Box<dyn Accumulator>> {
+        Ok(Box::new(crate::aggregate::array_agg_ordered::NthValueAccumulator::try_new(
+            &self.input_data_type,
+            &self.order_by_data_types,
+            self.ordering_req.clone(),
+        )?))
+    }
+
+    fn state_fields(&self) -> Result<Vec<Field>> {
+        let mut fields = vec![Field::new_list(
+            format_state_name(&self.name, "array_agg"),
+            Field::new("item", self.input_data_type.clone(), true),
+            self.nullable, // This should be the same as field()
+        )];
+        let orderings = ordering_fields(&self.ordering_req, &self.order_by_data_types);
+        fields.push(Field::new_list(
+            format_state_name(&self.name, "array_agg_orderings"),
+            Field::new("item", DataType::Struct(Fields::from(orderings)), true),
+            self.nullable,
+        ));
+        Ok(fields)
+    }
+
+    fn expressions(&self) -> Vec<Arc<dyn PhysicalExpr>> {
+        vec![self.expr.clone()]
+    }
+
+    fn order_bys(&self) -> Option<&[PhysicalSortExpr]> {
+        if self.ordering_req.is_empty() {
+            None
+        } else {
+            Some(&self.ordering_req)
+        }
+    }
+
+    fn name(&self) -> &str {
+        &self.name
+    }
+}
+
+impl PartialEq<dyn Any> for NthValueAgg {
+    fn eq(&self, other: &dyn Any) -> bool {
+        down_cast_any_ref(other)
+            .downcast_ref::<Self>()
+            .map(|x| {
+                self.name == x.name
+                    && self.input_data_type == x.input_data_type
+                    && self.order_by_data_types == x.order_by_data_types
+                    && self.expr.eq(&x.expr)
+            })
+            .unwrap_or(false)
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct NthValueAccumulator {
+    // `values` stores entries in the ARRAY_AGG result.
+    values: Vec<ScalarValue>,
+    // `ordering_values` stores values of ordering requirement expression
+    // corresponding to each value in the ARRAY_AGG.
+    // For each `ScalarValue` inside `values`, there will be a corresponding
+    // `Vec<ScalarValue>` inside `ordering_values` which stores it ordering.
+    // This information is used during merging results of the different partitions.
+    // For detailed information how merging is done see [`merge_ordered_arrays`]
+    ordering_values: Vec<Vec<ScalarValue>>,
+    // `datatypes` stores, datatype of expression inside ARRAY_AGG and ordering requirement expressions.
+    datatypes: Vec<DataType>,
+    // Stores ordering requirement of the Accumulator
+    ordering_req: LexOrdering,
+}
+
+impl NthValueAccumulator {
+    /// Create a new order-sensitive ARRAY_AGG accumulator based on the given
+    /// item data type.
+    pub fn try_new(
+        datatype: &DataType,
+        ordering_dtypes: &[DataType],
+        ordering_req: LexOrdering,
+    ) -> Result<Self> {
+        let mut datatypes = vec![datatype.clone()];
+        datatypes.extend(ordering_dtypes.iter().cloned());
+        Ok(Self {
+            values: vec![],
+            ordering_values: vec![],
+            datatypes,
+            ordering_req,
+        })
+    }
+}
+
+impl Accumulator for NthValueAccumulator {
+    fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        if values.is_empty() {
+            return Ok(());
+        }
+
+        let n_row = values[0].len();
+        for index in 0..n_row {
+            let row = get_row_at_idx(values, index)?;
+            self.values.push(row[0].clone());
+            self.ordering_values.push(row[1..].to_vec());
+        }
+
+        Ok(())
+    }
+
+    fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
+        if states.is_empty() {
+            return Ok(());
+        }
+        // First entry in the state is the aggregation result.
+        let array_agg_values = &states[0];
+        // 2nd entry stores values received for ordering requirement columns, for each aggregation value inside ARRAY_AGG list.
+        // For each `StructArray` inside ARRAY_AGG list, we will receive an `Array` that stores
+        // values received from its ordering requirement expression. (This information is necessary for during merging).
+        let agg_orderings = &states[1];
+
+        if let Some(agg_orderings) = agg_orderings.as_list_opt::<i32>() {
+            // Stores ARRAY_AGG results coming from each partition
+            let mut partition_values = vec![];
+            // Stores ordering requirement expression results coming from each partition
+            let mut partition_ordering_values = vec![];
+
+            // Existing values should be merged also.
+            partition_values.push(self.values.clone());
+            partition_ordering_values.push(self.ordering_values.clone());
+
+            let array_agg_res =
+                ScalarValue::convert_array_to_scalar_vec(array_agg_values)?;
+
+            for v in array_agg_res.into_iter() {
+                partition_values.push(v);
+            }
+
+            let orderings = ScalarValue::convert_array_to_scalar_vec(agg_orderings)?;
+
+            for partition_ordering_rows in orderings.into_iter() {
+                // Extract value from struct to ordering_rows for each group/partition
+                let ordering_value = partition_ordering_rows.into_iter().map(|ordering_row| {
+                    if let ScalarValue::Struct(Some(ordering_columns_per_row), _) = ordering_row {
+                        Ok(ordering_columns_per_row)
+                    } else {
+                        exec_err!(
+                                "Expects to receive ScalarValue::Struct(Some(..), _) but got:{:?}",
+                                ordering_row.data_type()
+                            )
+                    }
+                }).collect::<Result<Vec<_>>>()?;
+
+                partition_ordering_values.push(ordering_value);
+            }
+
+            let sort_options = self
+                .ordering_req
+                .iter()
+                .map(|sort_expr| sort_expr.options)
+                .collect::<Vec<_>>();
+            let (new_values, new_orderings) = merge_ordered_arrays(
+                &partition_values,
+                &partition_ordering_values,
+                &sort_options,
+            )?;
+            self.values = new_values;
+            self.ordering_values = new_orderings;
+        } else {
+            return exec_err!("Expects to receive a list array");
+        }
+        Ok(())
+    }
+
+    fn state(&self) -> Result<Vec<ScalarValue>> {
+        let mut result = vec![self.evaluate()?];
+        result.push(self.evaluate_orderings()?);
+        Ok(result)
+    }
+
+    fn evaluate(&self) -> Result<ScalarValue> {
+        let arr = ScalarValue::new_list(&self.values, &self.datatypes[0]);
+        Ok(ScalarValue::List(arr))
+    }
+
+    fn size(&self) -> usize {
+        let mut total = std::mem::size_of_val(self)
+            + ScalarValue::size_of_vec(&self.values)
+            - std::mem::size_of_val(&self.values);
+
+        // Add size of the `self.ordering_values`
+        total +=
+            std::mem::size_of::<Vec<ScalarValue>>() * self.ordering_values.capacity();
+        for row in &self.ordering_values {
+            total += ScalarValue::size_of_vec(row) - std::mem::size_of_val(row);
+        }
+
+        // Add size of the `self.datatypes`
+        total += std::mem::size_of::<DataType>() * self.datatypes.capacity();
+        for dtype in &self.datatypes {
+            total += dtype.size() - std::mem::size_of_val(dtype);
+        }
+
+        // Add size of the `self.ordering_req`
+        total += std::mem::size_of::<PhysicalSortExpr>() * self.ordering_req.capacity();
+        // TODO: Calculate size of each `PhysicalSortExpr` more accurately.
+        total
+    }
+}
+
+impl NthValueAccumulator {
+    fn evaluate_orderings(&self) -> Result<ScalarValue> {
+        let fields = ordering_fields(&self.ordering_req, &self.datatypes[1..]);
+        let struct_field = Fields::from(fields.clone());
+
+        let orderings: Vec<ScalarValue> = self
+            .ordering_values
+            .iter()
+            .map(|ordering| {
+                ScalarValue::Struct(Some(ordering.clone()), struct_field.clone())
+            })
+            .collect();
+        let struct_type = DataType::Struct(Fields::from(fields));
+
+        // Wrap in List, so we have the same data structure ListArray(StructArray..) for group by cases
+        let arr = ScalarValue::new_list(&orderings, &struct_type);
+        Ok(ScalarValue::List(arr))
+    }
+}
+
 /// This is a wrapper struct to be able to correctly merge ARRAY_AGG
 /// data from multiple partitions using `BinaryHeap`.
 /// When used inside `BinaryHeap` this struct returns smallest `CustomElement`,

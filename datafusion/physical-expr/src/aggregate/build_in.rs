@@ -371,17 +371,20 @@ pub fn create_aggregate_expr(
             ordering_types,
         )),
         (AggregateFunction::NthValue, _) => {
+            let expr = &input_phy_exprs[0];
             let n = input_phy_exprs[1].as_any().downcast_ref::<Literal>().unwrap().value();
             let n: i64 = n
                 .clone()
                 .try_into()?;
+            let nullable = expr.nullable(input_schema)?;
             Arc::new(expressions::NthValueAgg::new(
-                input_phy_exprs[0].clone(),
+                expr.clone(),
                 n,
                 name,
                 input_phy_types[0].clone(),
-                ordering_req.to_vec(),
+                nullable,
                 ordering_types,
+                ordering_req.to_vec(),
             ))
         },
         (AggregateFunction::StringAgg, false) => {
