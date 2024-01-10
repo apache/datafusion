@@ -45,12 +45,23 @@ use datafusion_physical_expr::utils::{collect_columns, Guarantee, LiteralGuarant
 use datafusion_physical_expr::{expressions as phys_expr, PhysicalExprRef};
 use log::trace;
 
-/// Interface to pass statistics (min/max/nulls) information to [`PruningPredicate`].
+/// A source of runtime statistical information to [`PruningPredicate`]s.
 ///
-/// Returns statistics for containers / files as Arrow [`ArrayRef`], so the
-/// evaluation happens once on a single `RecordBatch`, amortizing the overhead
-/// of evaluating of the predicate. This is important when pruning 1000s of
-/// containers which often happens in analytic systems.
+/// # Supported Information
+///
+/// 1. Minimum and maximum values for columns
+///
+/// 2. Null counts for columns
+///
+/// 3. Whether the values in a column are contained in a set of literals
+///
+/// # Vectorized Interface
+///
+/// Information for containers / files are returned as Arrow [`ArrayRef`], so
+/// the evaluation happens once on a single `RecordBatch`, which amortizes the
+/// overhead of evaluating the predicate. This is important when pruning 1000s
+/// of containers which often happens in analytic systems that have 1000s of
+/// potential files to consider.
 ///
 /// For example, for the following three files with a single column `a`:
 /// ```text
@@ -83,8 +94,11 @@ pub trait PruningStatistics {
     /// Note: the returned array must contain [`Self::num_containers`] rows
     fn max_values(&self, column: &Column) -> Option<ArrayRef>;
 
-    /// Return the number of containers (e.g. row groups) being
-    /// pruned with these statistics (the number of rows in each returned array)
+    /// Return the number of containers (e.g. Row Groups) being pruned with
+    /// these statistics.
+    ///
+    /// This value corresponds to the size of the [`ArrayRef`] returned by
+    /// [`Self::min_values`], [`Self::max_values`], and [`Self::null_counts`].
     fn num_containers(&self) -> usize;
 
     /// Return the number of null values for the named column as an
@@ -95,13 +109,11 @@ pub trait PruningStatistics {
     /// Note: the returned array must contain [`Self::num_containers`] rows
     fn null_counts(&self, column: &Column) -> Option<ArrayRef>;
 
-    /// Returns an array where each row represents information known about
-    /// the `values` contained in a column.
+    /// Returns [`BooleanArray`] where each row represents information known
+    /// about specific literal `values` in a column.
     ///
-    /// This API is designed to be used along with [`LiteralGuarantee`] to prove
-    /// that predicates can not possibly evaluate to `true` and thus prune
-    /// containers. For example, Parquet Bloom Filters can prove that values are
-    /// not present.
+    /// For example, Parquet Bloom Filters implement this API to communicate
+    /// that `values` are known not to be present in a Row Group.
     ///
     /// The returned array has one row for each container, with the following
     /// meanings:
@@ -120,28 +132,34 @@ pub trait PruningStatistics {
     ) -> Option<BooleanArray>;
 }
 
-/// Evaluates filter expressions on statistics such as min/max values and null
-/// counts, attempting to prove a "container" (e.g. Parquet Row Group) can be
-/// skipped without reading the actual data, potentially leading to significant
-/// performance improvements.
+/// Used to prove that arbitrary predicates (boolean expression) can not
+/// possibly evaluate to `true` given information about a column provided by
+/// [`PruningStatistics`].
 ///
-/// For example, [`PruningPredicate`]s are used to prune Parquet Row Groups
-/// based on the min/max values found in the Parquet metadata. If the
-/// `PruningPredicate` can guarantee that no rows in the Row Group match the
-/// filter, the entire Row Group is skipped during query execution.
+/// `PruningPredicate` analyzes filter expressions using statistics such as
+/// min/max values and null counts, attempting to prove a "container" (e.g.
+/// Parquet Row Group) can be skipped without reading the actual data,
+/// potentially leading to significant performance improvements.
 ///
-/// The `PruningPredicate` API is general, allowing it to be used for pruning
-/// other types of containers (e.g. files) based on statistics that may be
-/// known from external catalogs (e.g. Delta Lake) or other sources. Thus it
-/// supports:
+/// For example, `PruningPredicate`s are used to prune Parquet Row Groups based
+/// on the min/max values found in the Parquet metadata. If the
+/// `PruningPredicate` can prove that the filter can never evaluate to `true`
+/// for any row in the Row Group, the entire Row Group is skipped during query
+/// execution.
 ///
-/// 1. Arbitrary expressions expressions (including user defined functions)
+/// The `PruningPredicate` API is designed to be general, so it can used for
+/// pruning other types of containers (e.g. files) based on statistics that may
+/// be known from external catalogs (e.g. Delta Lake) or other sources.
+///
+/// It currently supports:
+///
+/// 1. Arbitrary expressions (including user defined functions)
 ///
 /// 2. Vectorized evaluation (provide more than one set of statistics at a time)
 /// so it is suitable for pruning 1000s of containers.
 ///
-/// 3. Anything that implements the [`PruningStatistics`] trait, not just
-/// Parquet metadata.
+/// 3. Any source of information that implements the [`PruningStatistics`] trait
+/// (not just Parquet metadata).
 ///
 /// # Example
 ///
@@ -154,7 +172,8 @@ pub trait PruningStatistics {
 ///   C: {x_min = 5, x_max = 8}
 /// ```
 ///
-/// Applying the `PruningPredicate` will concludes that `A` can be pruned:
+/// `PruningPredicate` will conclude that the rows in container `A` can never
+/// be true (as the maximum value is only `4`), so it can be pruned:
 ///
 /// ```text
 /// A: false (no rows could possibly match x = 5)
@@ -293,6 +312,11 @@ impl PruningPredicate {
     /// Returns a reference to the predicate expr
     pub fn predicate_expr(&self) -> &Arc<dyn PhysicalExpr> {
         &self.predicate_expr
+    }
+
+    /// Returns a reference to the literal guarantees
+    pub fn literal_guarantees(&self) -> &[LiteralGuarantee] {
+        &self.literal_guarantees
     }
 
     /// Returns true if this pruning predicate can not prune anything.

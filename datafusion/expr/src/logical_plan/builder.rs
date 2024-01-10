@@ -1845,13 +1845,16 @@ mod tests {
         .project(vec![col("id"), col("first_name").alias("id")]);
 
         match plan {
-            Err(DataFusionError::SchemaError(SchemaError::AmbiguousReference {
-                field:
-                    Column {
-                        relation: Some(OwnedTableReference::Bare { table }),
-                        name,
-                    },
-            })) => {
+            Err(DataFusionError::SchemaError(
+                SchemaError::AmbiguousReference {
+                    field:
+                        Column {
+                            relation: Some(OwnedTableReference::Bare { table }),
+                            name,
+                        },
+                },
+                _,
+            )) => {
                 assert_eq!("employee_csv", table);
                 assert_eq!("id", &name);
                 Ok(())
@@ -1872,13 +1875,16 @@ mod tests {
         .aggregate(vec![col("state")], vec![sum(col("salary")).alias("state")]);
 
         match plan {
-            Err(DataFusionError::SchemaError(SchemaError::AmbiguousReference {
-                field:
-                    Column {
-                        relation: Some(OwnedTableReference::Bare { table }),
-                        name,
-                    },
-            })) => {
+            Err(DataFusionError::SchemaError(
+                SchemaError::AmbiguousReference {
+                    field:
+                        Column {
+                            relation: Some(OwnedTableReference::Bare { table }),
+                            name,
+                        },
+                },
+                _,
+            )) => {
                 assert_eq!("employee_csv", table);
                 assert_eq!("state", &name);
                 Ok(())

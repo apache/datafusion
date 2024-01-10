@@ -3794,7 +3794,7 @@ select a,
 1 1
 2 1
 
-# support scalar value in ORDER BY 
+# support scalar value in ORDER BY
 query I
 select rank() over (order by 1) rnk from (select 1 a union all select 2 a) x
 ----

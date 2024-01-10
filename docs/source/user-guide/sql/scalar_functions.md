@@ -1970,7 +1970,7 @@ array_prepend(element, array)
 Returns the array without the first element.
 
 ```
-array_pop_first(array)
+array_pop_front(array)
 ```
 
 #### Arguments
@@ -1981,9 +1981,9 @@ array_pop_first(array)
 #### Example
 
 ```
-❯ select array_pop_first([1, 2, 3]);
+❯ select array_pop_front([1, 2, 3]);
 +-------------------------------+
-| array_pop_first(List([1,2,3])) |
+| array_pop_front(List([1,2,3])) |
 +-------------------------------+
 | [2, 3]                        |
 +-------------------------------+

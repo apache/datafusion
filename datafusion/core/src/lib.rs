@@ -285,37 +285,38 @@
 //!
 //! ### Logical Plans
 //! Logical planning yields [`LogicalPlan`] nodes and [`Expr`]
-//! expressions which are [`Schema`] aware and represent statements
+//! representing expressions which are [`Schema`] aware and represent statements
 //! independent of how they are physically executed.
 //! A [`LogicalPlan`] is a Directed Acyclic Graph (DAG) of other
 //! [`LogicalPlan`]s, each potentially containing embedded [`Expr`]s.
 //!
-//! Examples of working with and executing `Expr`s can be found in the
+//! [`Expr`]s can be rewritten using the  [`TreeNode`] API and simplified using
+//! [`ExprSimplifier`]. Examples of working with and executing `Expr`s can be found in the
 //! [`expr_api`.rs] example
 //!
+//! [`TreeNode`]: datafusion_common::tree_node::TreeNode
+//! [`ExprSimplifier`]: crate::optimizer::simplify_expressions::ExprSimplifier
 //! [`expr_api`.rs]: https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/expr_api.rs
 //!
 //! ### Physical Plans
 //!
 //! An [`ExecutionPlan`] (sometimes referred to as a "physical plan")
 //! is a plan that can be executed against data. It a DAG of other
-//! [`ExecutionPlan`]s each potentially containing expressions of the
-//! following types:
+//! [`ExecutionPlan`]s each potentially containing expressions that implement the
+//! [`PhysicalExpr`] trait.
 //!
-//! 1. [`PhysicalExpr`]: Scalar functions
-//!
-//! 2. [`AggregateExpr`]: Aggregate functions
-//!
-//! 2. [`WindowExpr`]: Window functions
-//!
-//! Compared to a [`LogicalPlan`], an [`ExecutionPlan`] has concrete
+//! Compared to a [`LogicalPlan`], an [`ExecutionPlan`] has additional concrete
 //! information about how to perform calculations (e.g. hash vs merge
 //! join), and how data flows during execution (e.g. partitioning and
 //! sortedness).
 //!
+//! [cp_solver] performs range propagation analysis on [`PhysicalExpr`]s and
+//! [`PruningPredicate`] can prove certain boolean [`PhysicalExpr`]s used for
+//! filtering can never be `true` using additional statistical information.
+//!
+//! [cp_solver]: crate::physical_expr::intervals::cp_solver
+//! [`PruningPredicate`]: crate::physical_optimizer::pruning::PruningPredicate
 //! [`PhysicalExpr`]: crate::physical_plan::PhysicalExpr
-//! [`AggregateExpr`]: crate::physical_plan::AggregateExpr
-//! [`WindowExpr`]: crate::physical_plan::WindowExpr
 //!
 //! ## Execution
 //!

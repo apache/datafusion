@@ -26,6 +26,7 @@ use std::sync::Arc;
 
 use crate::error::{
     unqualified_field_not_found, DataFusionError, Result, SchemaError, _plan_err,
+    _schema_err,
 };
 use crate::{
     field_not_found, Column, FunctionalDependencies, OwnedTableReference, TableReference,
@@ -141,11 +142,9 @@ impl DFSchema {
             if let Some(qualifier) = field.qualifier() {
                 qualified_names.insert((qualifier, field.name()));
             } else if !unqualified_names.insert(field.name()) {
-                return Err(DataFusionError::SchemaError(
-                    SchemaError::DuplicateUnqualifiedField {
-                        name: field.name().to_string(),
-                    },
-                ));
+                return _schema_err!(SchemaError::DuplicateUnqualifiedField {
+                    name: field.name().to_string(),
+                });
             }
         }
 
@@ -159,14 +158,12 @@ impl DFSchema {
         qualified_names.sort();
         for (qualifier, name) in &qualified_names {
             if unqualified_names.contains(name) {
-                return Err(DataFusionError::SchemaError(
-                    SchemaError::AmbiguousReference {
-                        field: Column {
-                            relation: Some((*qualifier).clone()),
-                            name: name.to_string(),
-                        },
-                    },
-                ));
+                return _schema_err!(SchemaError::AmbiguousReference {
+                    field: Column {
+                        relation: Some((*qualifier).clone()),
+                        name: name.to_string(),
+                    }
+                });
             }
         }
         Ok(Self {
@@ -230,9 +227,9 @@ impl DFSchema {
         for field in other_schema.fields() {
             // skip duplicate columns
             let duplicated_field = match field.qualifier() {
-                Some(q) => self.field_with_name(Some(q), field.name()).is_ok(),
+                Some(q) => self.has_column_with_qualified_name(q, field.name()),
                 // for unqualified columns, check as unqualified name
-                None => self.field_with_unqualified_name(field.name()).is_ok(),
+                None => self.has_column_with_unqualified_name(field.name()),
             };
             if !duplicated_field {
                 self.fields.push(field.clone());
@@ -392,14 +389,12 @@ impl DFSchema {
                 if fields_without_qualifier.len() == 1 {
                     Ok(fields_without_qualifier[0])
                 } else {
-                    Err(DataFusionError::SchemaError(
-                        SchemaError::AmbiguousReference {
-                            field: Column {
-                                relation: None,
-                                name: name.to_string(),
-                            },
+                    _schema_err!(SchemaError::AmbiguousReference {
+                        field: Column {
+                            relation: None,
+                            name: name.to_string(),
                         },
-                    ))
+                    })
                 }
             }
         }
