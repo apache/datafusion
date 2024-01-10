@@ -288,27 +288,8 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: true
-      - name: Install protobuf compiler
-        shell: bash
-        run: |
-          mkdir -p $HOME/d/protoc
-          cd $HOME/d/protoc
-          export PROTO_ZIP="protoc-21.4-win64.zip"
-          curl -LO https://github.com/protocolbuffers/protobuf/releases/download/v21.4/$PROTO_ZIP
-          unzip $PROTO_ZIP
-          export PATH=$PATH:$HOME/d/protoc/bin
-          protoc.exe --version
-
-      # TODO: this won't cache anything, which is expensive. Setup this action
-      # with a OS-dependent path.
       - name: Setup Rust toolchain
-        run: |
-          rustup update stable
-          rustup toolchain install stable
-          rustup default stable
-          rustup component add rustfmt
-      - name: Run sccache-cache
-        uses: mozilla-actions/sccache-action@v0.0.3          
+        uses: ./.github/actions/setup-windows-builder
       - name: Run tests (excluding doctests)
         shell: bash
         run: |
@@ -333,12 +314,9 @@ jobs:
         with:
           submodules: true
       - name: Setup Rust toolchain
-        uses: ./.github/actions/setup-builder
-        with:
-          rust-version: stable
+        uses: ./.github/actions/setup-rust-builder
       - name: Run tests (excluding doctests)
         run: |
-          export PATH=$PATH:$HOME/d/protoc/bin
           cd datafusion-cli
           cargo test --lib --tests --bins --all-features
         env:
@@ -353,31 +331,14 @@ jobs:
         run: git diff --exit-code
 
   macos:
-    name: cargo test (mac)
+    name: cargo test (macos)
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
         with:
           submodules: true      
-      - name: Install protobuf compiler
-        shell: bash
-        run: |
-          mkdir -p $HOME/d/protoc
-          cd $HOME/d/protoc
-          export PROTO_ZIP="protoc-21.4-osx-x86_64.zip"
-          curl -LO https://github.com/protocolbuffers/protobuf/releases/download/v21.4/$PROTO_ZIP
-          unzip $PROTO_ZIP
-          echo "$HOME/d/protoc/bin" >> $GITHUB_PATH
-          export PATH=$PATH:$HOME/d/protoc/bin
-          protoc --version
-      # TODO: this won't cache anything, which is expensive. Setup this action
-      # with a OS-dependent path.
       - name: Setup Rust toolchain
-        run: |
-          rustup update stable
-          rustup toolchain install stable
-          rustup default stable
-          rustup component add rustfmt
+        uses: ./.github/actions/setup-rust-builder
       - name: Run sccache-cache
         uses: mozilla-actions/sccache-action@v0.0.3          
       - name: Run tests (excluding doctests)
@@ -403,9 +364,7 @@ jobs:
         with:
           submodules: true
       - name: Setup Rust toolchain
-        uses: ./.github/actions/setup-builder
-        with:
-          rust-version: stable
+        uses: ./.github/actions/setup-rust-builder
       - name: Run tests (excluding doctests)
         run: |
           cd datafusion-cli
