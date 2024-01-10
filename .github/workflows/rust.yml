@@ -97,6 +97,8 @@ jobs:
         uses: ./.github/actions/setup-builder
         with:
           rust-version: stable
+      - name: Run sccache-cache
+        uses: mozilla-actions/sccache-action@v0.0.3          
       - name: Run tests (excluding doctests)
         run: cargo test --lib --tests --bins --features avro,json,backtrace
         env:
@@ -107,6 +109,8 @@ jobs:
           RUST_BACKTRACE: "1"
           # avoid rust stack overflows on tpc-ds tests
           RUST_MIN_STACK: "3000000"
+          SCCACHE_GHA_ENABLED: "true"
+          RUSTC_WRAPPER: "sccache"
       - name: Verify Working Directory Clean
         run: git diff --exit-code
 
@@ -294,6 +298,7 @@ jobs:
           unzip $PROTO_ZIP
           export PATH=$PATH:$HOME/d/protoc/bin
           protoc.exe --version
+
       # TODO: this won't cache anything, which is expensive. Setup this action
       # with a OS-dependent path.
       - name: Setup Rust toolchain
@@ -302,6 +307,8 @@ jobs:
           rustup toolchain install stable
           rustup default stable
           rustup component add rustfmt
+      - name: Run sccache-cache
+        uses: mozilla-actions/sccache-action@v0.0.3          
       - name: Run tests (excluding doctests)
         shell: bash
         run: |
@@ -317,13 +324,15 @@ jobs:
           RUST_BACKTRACE: "1"
           # avoid rust stack overflows on tpc-ds tests
           RUST_MIN_STACK: "3000000"
+          SCCACHE_GHA_ENABLED: "true"
+          RUSTC_WRAPPER: "sccache"
   macos:
     name: cargo test (mac)
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
         with:
-          submodules: true
+          submodules: true      
       - name: Install protobuf compiler
         shell: bash
         run: |
@@ -343,6 +352,8 @@ jobs:
           rustup toolchain install stable
           rustup default stable
           rustup component add rustfmt
+      - name: Run sccache-cache
+        uses: mozilla-actions/sccache-action@v0.0.3          
       - name: Run tests (excluding doctests)
         shell: bash
         run: |
@@ -357,6 +368,8 @@ jobs:
           RUST_BACKTRACE: "1"
           # avoid rust stack overflows on tpc-ds tests
           RUST_MIN_STACK: "3000000"
+          SCCACHE_GHA_ENABLED: "true"
+          RUSTC_WRAPPER: "sccache"
 
   test-datafusion-pyarrow:
     name: cargo test pyarrow (amd64)
