@@ -314,8 +314,6 @@ jobs:
         run: |
           export PATH=$PATH:$HOME/d/protoc/bin
           cargo test --lib --tests --bins --features avro,json,backtrace
-          cd datafusion-cli
-          cargo test --lib --tests --bins --all-features
         env:
           # Minimize producing debug symbols to keep memory usage down
           # Set debuginfo=line-tables-only as debuginfo=0 causes immensely slow build
@@ -326,6 +324,34 @@ jobs:
           RUST_MIN_STACK: "3000000"
           SCCACHE_GHA_ENABLED: "true"
           RUSTC_WRAPPER: "sccache"
+  
+  windows-test-datafusion-cli:
+    name: cargo test datafusion-cli (windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - name: Setup Rust toolchain
+        uses: ./.github/actions/setup-builder
+        with:
+          rust-version: stable
+      - name: Run tests (excluding doctests)
+        run: |
+          export PATH=$PATH:$HOME/d/protoc/bin
+          cd datafusion-cli
+          cargo test --lib --tests --bins --all-features
+        env:
+          # Minimize producing debug symbols to keep memory usage down
+          # Set debuginfo=line-tables-only as debuginfo=0 causes immensely slow build
+          # See for more details: https://github.com/rust-lang/rust/issues/119560
+          RUSTFLAGS: "-C debuginfo=line-tables-only"
+          RUST_BACKTRACE: "1"
+          SCCACHE_GHA_ENABLED: "true"
+          RUSTC_WRAPPER: "sccache"    
+      - name: Verify Working Directory Clean
+        run: git diff --exit-code
+
   macos:
     name: cargo test (mac)
     runs-on: macos-latest
@@ -358,8 +384,6 @@ jobs:
         shell: bash
         run: |
           cargo test --lib --tests --bins --features avro,json,backtrace
-          cd datafusion-cli
-          cargo test --lib --tests --bins --all-features
         env:
           # do not produce debug symbols to keep memory usage down
           # hardcoding other profile params to avoid profile override values
@@ -370,6 +394,32 @@ jobs:
           RUST_MIN_STACK: "3000000"
           SCCACHE_GHA_ENABLED: "true"
           RUSTC_WRAPPER: "sccache"
+
+  macos-test-datafusion-cli:
+    name: cargo test datafusion-cli (macos)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - name: Setup Rust toolchain
+        uses: ./.github/actions/setup-builder
+        with:
+          rust-version: stable
+      - name: Run tests (excluding doctests)
+        run: |
+          cd datafusion-cli
+          cargo test --lib --tests --bins --all-features
+        env:
+          # Minimize producing debug symbols to keep memory usage down
+          # Set debuginfo=line-tables-only as debuginfo=0 causes immensely slow build
+          # See for more details: https://github.com/rust-lang/rust/issues/119560
+          RUSTFLAGS: "-C debuginfo=line-tables-only"
+          RUST_BACKTRACE: "1"
+          SCCACHE_GHA_ENABLED: "true"
+          RUSTC_WRAPPER: "sccache"    
+      - name: Verify Working Directory Clean
+        run: git diff --exit-code        
 
   test-datafusion-pyarrow:
     name: cargo test pyarrow (amd64)
