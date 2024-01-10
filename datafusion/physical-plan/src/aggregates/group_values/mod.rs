@@ -17,7 +17,7 @@
 
 use arrow::record_batch::RecordBatch;
 use arrow_array::{downcast_primitive, ArrayRef};
-use arrow_schema::SchemaRef;
+use arrow_schema::{DataType, SchemaRef};
 use datafusion_common::Result;
 
 pub(crate) mod primitive;
@@ -26,6 +26,9 @@ use primitive::GroupValuesPrimitive;
 
 mod row;
 use row::GroupValuesRows;
+
+mod binary;
+use binary::GroupValuesBinary;
 
 /// An interning store for group keys
 pub trait GroupValues: Send {
@@ -61,6 +64,13 @@ pub fn new_group_values(schema: SchemaRef) -> Result<Box<dyn GroupValues>> {
         downcast_primitive! {
             d => (downcast_helper, d),
             _ => {}
+        }
+
+        if let DataType::Utf8 = d {
+            return Ok(Box::new(GroupValuesBinary::<i32>::new()));
+        }
+        if let DataType::LargeUtf8 = d {
+            return Ok(Box::new(GroupValuesBinary::<i64>::new()));
         }
     }
 
