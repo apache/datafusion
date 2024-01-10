@@ -24,7 +24,10 @@ use arrow_array::types::{
     TimestampSecondType, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
 };
 use arrow_array::PrimitiveArray;
+use arrow_buffer::BufferBuilder;
+use hashbrown::hash_map::DefaultHashBuilder;
 
+use core::slice::SlicePattern;
 use std::any::Any;
 use std::cmp::Eq;
 use std::fmt::Debug;
@@ -33,7 +36,7 @@ use std::sync::Arc;
 
 use ahash::RandomState;
 use arrow::array::{Array, ArrayRef};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use crate::aggregate::utils::{down_cast_any_ref, Hashable};
 use crate::expressions::format_state_name;
@@ -215,10 +218,12 @@ impl Accumulator for DistinctCountAccumulator {
     fn state(&self) -> Result<Vec<ScalarValue>> {
         let scalars = self.values.iter().cloned().collect::<Vec<_>>();
         let arr = ScalarValue::new_list(scalars.as_slice(), &self.state_data_type);
+        println!("state: {:?}", arr);
         Ok(vec![ScalarValue::List(arr)])
     }
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        println!("ub values: {:?}", values);
         if values.is_empty() {
             return Ok(());
         }
@@ -233,18 +238,21 @@ impl Accumulator for DistinctCountAccumulator {
                 let scalar = ScalarValue::try_from_array(arr, index)?;
                 self.values.insert(scalar);
             }
+            // println!("self.values: {:?}", self.values);
             Ok(())
         })
     }
 
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
+        println!("mb values: {:?}", states);
         if states.is_empty() {
             return Ok(());
         }
         assert_eq!(states.len(), 1, "array_agg states must be singleton!");
         let scalar_vec = ScalarValue::convert_array_to_scalar_vec(&states[0])?;
         for scalars in scalar_vec.into_iter() {
-            self.values.extend(scalars)
+            self.values.extend(scalars);
+            // println!("self.values: {:?}", self.values);
         }
         Ok(())
     }
@@ -436,6 +444,94 @@ where
             + estimated_buckets
             + std::mem::size_of_val(&self.values)
     }
+}
+
+// #[derive(Debug)]
+// struct StringDistinctCountAccumulator<T>
+// where
+//     T: ArrowPrimitiveType + Send,
+//     T::Native: Eq + Hash,
+// {
+//     values: HashSet<T::Native, RandomState>,
+// }
+
+// impl<T> NativeDistinctCountAccumulator<T>
+// where
+//     T: ArrowPrimitiveType + Send,
+//     T::Native: Eq + Hash,
+// {
+//     fn new() -> Self {
+//         Self {
+//             values: HashSet::default(),
+//         }
+//     }
+// }
+
+// Short String Optimizated HashSet for String
+// Equivalent to HashSet<String> but with better memory usage (Speed unsure)
+struct SSOStringHashSet {
+    // header: u128
+    // short string: length(4bytes) + data(12bytes)
+    // long string:  length(4bytes) + prefix(4bytes) + offset(8bytes)
+    header_set: HashSet<u128, RandomState>,
+    // map<hash of long string w/o 4 bytes prefix, offset in buffer>
+    long_string_map: HashMap<u64, u64, RandomState>,
+    buffer: BufferBuilder<u8>,
+}
+
+impl SSOStringHashSet {
+    fn insert(&mut self, value: &str) {
+        let value_len = value.len();
+        if value_len <= 12 {
+            let mut short_string_header = 0u128;
+            short_string_header |= (value_len << 96) as u128;
+            short_string_header |= value
+                .as_bytes()
+                .iter()
+                .fold(0u128, |acc, &x| acc << 8 | x as u128);
+            self.header_set.insert(short_string_header);
+        } else {
+            // 1) hash the string w/o 4 bytes prefix
+            // 2) check if the hash exists in the map
+            // 3) if exists, insert the offset into the header
+            // 4) if not exists, insert the hash and offset into the map
+
+            let mut long_string_header = 0u128;
+            long_string_header |= (value_len << 96) as u128;
+            long_string_header |= (value
+                .as_bytes()
+                .iter()
+                .take(4)
+                .fold(0u128, |acc, &x| acc << 8 | x as u128)
+                << 64) as u128;
+
+            let suffix = value
+                .as_bytes()
+                .iter()
+                .skip(4)
+                .collect::<Vec<_>>();
+
+            // NYI hash_bytes: hash &[u8] to u64, similar to hashbrown `make_hash` for &[u8]            
+            let hashed_suffix = hash_bytes(suffix);
+            if let Some(offset) = self.long_string_map.get(&hashed_suffix) {
+                long_string_header |= *offset as u128;
+            } else {
+                let offset = self.buffer.len();
+                self.long_string_map.insert(hashed_suffix, offset as u64);
+                long_string_header |= offset as u128;
+                // convert suffix: Vec<&u8> to &[u8]
+                self.buffer.append_slice(suffix);
+            }
+
+            self.header_set.insert(long_string_header);
+
+        }
+    }
+}
+
+struct HashSetSSOString {
+    // values: HashSet<SSOString, RandomState>,
+    short_string_set: HashSet<u128, RandomState>,
 }
 
 #[cfg(test)]
