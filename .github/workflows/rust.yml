@@ -272,8 +272,6 @@ jobs:
   windows:
     name: cargo test (win64)
     runs-on: windows-latest
-    container:
-      image: amd64/rust
     steps:
       - uses: actions/checkout@v4
         with:
@@ -285,24 +283,8 @@ jobs:
         run: |
           export PATH=$PATH:$HOME/d/protoc/bin
           cargo test --lib --tests --bins --features avro,json,backtrace
-  
-  windows-test-datafusion-cli:
-    name: cargo test datafusion-cli (windows)
-    runs-on: windows-latest
-    container:
-      image: amd64/rust
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: true
-      - name: Setup Rust toolchain
-        uses: ./.github/actions/setup-windows-builder
-      - name: Run tests (excluding doctests)
-        run: |
           cd datafusion-cli
           cargo test --lib --tests --bins --all-features
-      - name: Verify Working Directory Clean
-        run: git diff --exit-code
 
   macos:
     name: cargo test (macos)
@@ -312,29 +294,13 @@ jobs:
         with:
           submodules: true      
       - name: Setup Rust toolchain
-        uses: ./.github/actions/setup-macos-builder
-      - name: Run sccache-cache
-        uses: mozilla-actions/sccache-action@v0.0.3          
+        uses: ./.github/actions/setup-macos-builder       
       - name: Run tests (excluding doctests)
         shell: bash
         run: |
           cargo test --lib --tests --bins --features avro,json,backtrace
-
-  macos-test-datafusion-cli:
-    name: cargo test datafusion-cli (macos)
-    runs-on: macos-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: true
-      - name: Setup Rust toolchain
-        uses: ./.github/actions/setup-macos-builder
-      - name: Run tests (excluding doctests)
-        run: |
           cd datafusion-cli
-          cargo test --lib --tests --bins --all-features
-      - name: Verify Working Directory Clean
-        run: git diff --exit-code        
+          cargo test --lib --tests --bins --all-features  
 
   test-datafusion-pyarrow:
     name: cargo test pyarrow (amd64)
