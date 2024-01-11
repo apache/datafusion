@@ -858,6 +858,15 @@ impl AsLogicalPlan for LogicalPlanNode {
                     Some(copy_to_node::CopyOptions::WriterOptions(opt)) => {
                         match &opt.file_type {
                             Some(ft) => match ft {
+                                file_type_writer_options::FileType::ArrowOptions(
+                                    writer_options,
+                                ) => {
+                                    let writer_builder =
+                                        arrow_writer_options_from_proto(writer_options)?;
+                                    CopyOptions::WriterOptions(Box::new(
+                                        FileTypeWriterOptions::Arrow(writer_builder),
+                                    ))
+                                }
                                 file_type_writer_options::FileType::CsvOptions(
                                     writer_options,
                                 ) => {
