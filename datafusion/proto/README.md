@@ -22,25 +22,30 @@
 Apache Arrow [DataFusion][df] is an extensible query execution framework,
 written in Rust, that uses Apache Arrow as its in-memory format.
 
-This crate provides a [protocol buffers] format for serializing
+This crate provides support format for serializing and deserializing the
+following structures to and from bytes:
 
-1. DataFusion [`LogicalPlan`]'s (including [`Expr`]),
-2. DataFusion [`ExecutionPlan`]s (including [`PhysiscalExpr`])
+1. [`LogicalPlan`]'s (including [`Expr`]),
+2. [`ExecutionPlan`]s (including [`PhysiscalExpr`])
 
-Such a format is useful for sending plans over the network, for example when
+This format can be useful for sending plans over the network, for example when
 building a distributed query engine.
+
+Internally, this crate is implemented by converting the plans to [protocol
+buffers] using [prost].
 
 [protocol buffers]: https://developers.google.com/protocol-buffers
 [`logicalplan`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/enum.LogicalPlan.html
 [`expr`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/expr/enum.Expr.html
 [`executionplan`]: https://docs.rs/datafusion/latest/datafusion/physical_plan/trait.ExecutionPlan.html
 [`physiscalexpr`]: https://docs.rs/datafusion/latest/datafusion/physical_expr/trait.PhysicalExpr.html
+[prost]: https://docs.rs/prost/latest/prost/
 
 ## See Also
 
-The `datafusion-proto` handles the full range of DataFusion plans, but is
-DataFusion specific. See [datafusion-substrait] which can encode many DataFusion
-plans using the [substrait.io] standard.
+The binary format created by this crate supports the full range of DataFusion
+plans, but is DataFusion specific. See [datafusion-substrait] which can encode
+many DataFusion plans using the [substrait.io] standard.
 
 [datafusion-substrait]: https://docs.rs/datafusion-substrait/latest/datafusion_substrait
 [substrait.io]: https://substrait.io
