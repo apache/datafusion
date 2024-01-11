@@ -29,20 +29,25 @@ use crate::physical_plan::ExecutionPlan;
 
 use datafusion_physical_expr::{LexRequirementRef, PhysicalSortRequirement};
 use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
+use datafusion_physical_plan::tree_node::PlanContext;
 
 /// This utility function adds a `SortExec` above an operator according to the
 /// given ordering requirements while preserving the original partitioning.
-pub fn add_sort_above(
-    node: &mut Arc<dyn ExecutionPlan>,
+pub fn add_sort_above<T: Clone + Sized + Default>(
+    node: &mut PlanContext<T>,
     sort_requirement: LexRequirementRef,
     fetch: Option<usize>,
 ) {
     let sort_expr = PhysicalSortRequirement::to_sort_exprs(sort_requirement.to_vec());
-    let mut new_sort = SortExec::new(sort_expr, node.clone()).with_fetch(fetch);
-    if node.output_partitioning().partition_count() > 1 {
+    let mut new_sort = SortExec::new(sort_expr, node.plan.clone()).with_fetch(fetch);
+    if node.plan.output_partitioning().partition_count() > 1 {
         new_sort = new_sort.with_preserve_partitioning(true);
     }
-    *node = Arc::new(new_sort);
+    *node = PlanContext {
+        plan: Arc::new(new_sort) as _,
+        data: T::default(),
+        children: vec![node.clone()],
+    };
 }
 
 /// Checks whether the given operator is a limit;

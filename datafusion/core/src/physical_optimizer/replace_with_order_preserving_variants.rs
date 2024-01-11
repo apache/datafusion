@@ -355,6 +355,7 @@ mod tests {
             let config = SessionConfig::new().with_prefer_existing_sort($PREFER_EXISTING_SORT);
             let plan_with_pipeline_fixer = OrderPreservationContext::new_default(physical_plan);
             let parallel = plan_with_pipeline_fixer.transform_up(&|plan_with_pipeline_fixer| replace_with_order_preserving_variants(plan_with_pipeline_fixer, false, false, config.options()))?;
+            let _ = crosscheck_helper(parallel.clone()).unwrap();
             let optimized_physical_plan = parallel.plan;
 
             // Get string representation of the plan
@@ -364,6 +365,28 @@ mod tests {
                 "\n**Optimized Plan Mismatch\n\nexpected:\n\n{expected_optimized_lines:#?}\nactual:\n\n{actual:#?}\n\n"
             );
         };
+    }
+
+    fn crosscheck_helper<T>(context: PlanContext<T>) -> Result<()>
+    where
+        PlanContext<T>: TreeNode,
+    {
+        let empty_node = context.transform_up(&|mut node| {
+            assert_eq!(node.children.len(), node.plan.children().len());
+            if !node.children.is_empty() {
+                assert_eq!(
+                    get_plan_string(&node.plan),
+                    get_plan_string(&node.plan.clone().with_new_children(
+                        node.children.iter().map(|c| c.plan.clone()).collect()
+                    )?)
+                );
+                node.children = vec![];
+            }
+            Ok(Transformed::No(node))
+        })?;
+
+        assert!(empty_node.children.is_empty());
+        Ok(())
     }
 
     #[rstest]

@@ -590,6 +590,7 @@ mod tests_statistical {
     use datafusion_common::{stats::Precision, JoinType, ScalarValue};
     use datafusion_physical_expr::expressions::Column;
     use datafusion_physical_expr::PhysicalExpr;
+    use datafusion_physical_plan::{get_plan_string, tree_node::PlanContext};
 
     fn create_big_and_small() -> (Arc<dyn ExecutionPlan>, Arc<dyn ExecutionPlan>) {
         let big = Arc::new(StatisticsExec::new(
@@ -687,26 +688,68 @@ mod tests_statistical {
         (big, medium, small)
     }
 
+    fn crosscheck_helper<T>(context: PlanContext<T>) -> Result<()>
+    where
+        PlanContext<T>: TreeNode,
+    {
+        let empty_node = context.transform_up(&|mut node| {
+            assert_eq!(node.children.len(), node.plan.children().len());
+            if !node.children.is_empty() {
+                assert_eq!(
+                    get_plan_string(&node.plan),
+                    get_plan_string(&node.plan.clone().with_new_children(
+                        node.children.iter().map(|c| c.plan.clone()).collect()
+                    )?)
+                );
+                node.children = vec![];
+            }
+            Ok(Transformed::No(node))
+        })?;
+
+        assert!(empty_node.children.is_empty());
+        Ok(())
+    }
+
+    pub(crate) fn crosscheck_plans(plan: Arc<dyn ExecutionPlan>) -> Result<()> {
+        let pipeline = PipelineStatePropagator::new_default(plan);
+        let subrules: Vec<Box<PipelineFixerSubrule>> = vec![
+            Box::new(hash_join_convert_symmetric_subrule),
+            Box::new(hash_join_swap_subrule),
+        ];
+        let state = pipeline
+            .transform_up(&|p| apply_subrules(p, &subrules, &ConfigOptions::new()))?;
+        crosscheck_helper(state.clone())?;
+        // TODO: End state payloads will be checked here.
+        let config = ConfigOptions::new().optimizer;
+        let collect_left_threshold = config.hash_join_single_partition_threshold;
+        let _ = state.plan.transform_up(&|plan| {
+            statistical_join_selection_subrule(plan, collect_left_threshold)
+        })?;
+        Ok(())
+    }
+
     #[tokio::test]
     async fn test_join_with_swap() {
         let (big, small) = create_big_and_small();
 
-        let join = HashJoinExec::try_new(
-            Arc::clone(&big),
-            Arc::clone(&small),
-            vec![(
-                Column::new_with_schema("big_col", &big.schema()).unwrap(),
-                Column::new_with_schema("small_col", &small.schema()).unwrap(),
-            )],
-            None,
-            &JoinType::Left,
-            PartitionMode::CollectLeft,
-            false,
-        )
-        .unwrap();
+        let join = Arc::new(
+            HashJoinExec::try_new(
+                Arc::clone(&big),
+                Arc::clone(&small),
+                vec![(
+                    Column::new_with_schema("big_col", &big.schema()).unwrap(),
+                    Column::new_with_schema("small_col", &small.schema()).unwrap(),
+                )],
+                None,
+                &JoinType::Left,
+                PartitionMode::CollectLeft,
+                false,
+            )
+            .unwrap(),
+        );
 
         let optimized_join = JoinSelection::new()
-            .optimize(Arc::new(join), &ConfigOptions::new())
+            .optimize(join.clone(), &ConfigOptions::new())
             .unwrap();
 
         let swapping_projection = optimized_join
@@ -736,28 +779,31 @@ mod tests_statistical {
             swapped_join.right().statistics().unwrap().total_byte_size,
             Precision::Inexact(100000)
         );
+        crosscheck_plans(join.clone()).unwrap();
     }
 
     #[tokio::test]
     async fn test_left_join_with_swap() {
         let (big, small) = create_big_and_small();
         // Left out join should alway swap when the mode is PartitionMode::CollectLeft, even left side is small and right side is large
-        let join = HashJoinExec::try_new(
-            Arc::clone(&small),
-            Arc::clone(&big),
-            vec![(
-                Column::new_with_schema("small_col", &small.schema()).unwrap(),
-                Column::new_with_schema("big_col", &big.schema()).unwrap(),
-            )],
-            None,
-            &JoinType::Left,
-            PartitionMode::CollectLeft,
-            false,
-        )
-        .unwrap();
+        let join = Arc::new(
+            HashJoinExec::try_new(
+                Arc::clone(&small),
+                Arc::clone(&big),
+                vec![(
+                    Column::new_with_schema("small_col", &small.schema()).unwrap(),
+                    Column::new_with_schema("big_col", &big.schema()).unwrap(),
+                )],
+                None,
+                &JoinType::Left,
+                PartitionMode::CollectLeft,
+                false,
+            )
+            .unwrap(),
+        );
 
         let optimized_join = JoinSelection::new()
-            .optimize(Arc::new(join), &ConfigOptions::new())
+            .optimize(join.clone(), &ConfigOptions::new())
             .unwrap();
 
         let swapping_projection = optimized_join
@@ -787,6 +833,7 @@ mod tests_statistical {
             swapped_join.right().statistics().unwrap().total_byte_size,
             Precision::Inexact(10)
         );
+        crosscheck_plans(join.clone()).unwrap();
     }
 
     #[tokio::test]
@@ -795,24 +842,26 @@ mod tests_statistical {
         for join_type in join_types {
             let (big, small) = create_big_and_small();
 
-            let join = HashJoinExec::try_new(
-                Arc::clone(&big),
-                Arc::clone(&small),
-                vec![(
-                    Column::new_with_schema("big_col", &big.schema()).unwrap(),
-                    Column::new_with_schema("small_col", &small.schema()).unwrap(),
-                )],
-                None,
-                &join_type,
-                PartitionMode::Partitioned,
-                false,
-            )
-            .unwrap();
+            let join = Arc::new(
+                HashJoinExec::try_new(
+                    Arc::clone(&big),
+                    Arc::clone(&small),
+                    vec![(
+                        Column::new_with_schema("big_col", &big.schema()).unwrap(),
+                        Column::new_with_schema("small_col", &small.schema()).unwrap(),
+                    )],
+                    None,
+                    &join_type,
+                    PartitionMode::Partitioned,
+                    false,
+                )
+                .unwrap(),
+            );
 
             let original_schema = join.schema();
 
             let optimized_join = JoinSelection::new()
-                .optimize(Arc::new(join), &ConfigOptions::new())
+                .optimize(join.clone(), &ConfigOptions::new())
                 .unwrap();
 
             let swapped_join = optimized_join
@@ -834,6 +883,7 @@ mod tests_statistical {
             );
 
             assert_eq!(original_schema, swapped_join.schema());
+            crosscheck_plans(join).unwrap();
         }
     }
 
@@ -843,18 +893,20 @@ mod tests_statistical {
             let expected_lines =
                 $EXPECTED_LINES.iter().map(|s| *s).collect::<Vec<&str>>();
 
+            let plan = Arc::new($PLAN);
             let optimized = JoinSelection::new()
-                .optimize(Arc::new($PLAN), &ConfigOptions::new())
+                .optimize(plan.clone(), &ConfigOptions::new())
                 .unwrap();
 
-            let plan = displayable(optimized.as_ref()).indent(true).to_string();
-            let actual_lines = plan.split("\n").collect::<Vec<&str>>();
+            let plan_string = displayable(optimized.as_ref()).indent(true).to_string();
+            let actual_lines = plan_string.split("\n").collect::<Vec<&str>>();
 
             assert_eq!(
                 &expected_lines, &actual_lines,
                 "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
                 expected_lines, actual_lines
             );
+            crosscheck_plans(plan).unwrap();
         };
     }
 
@@ -916,22 +968,24 @@ mod tests_statistical {
     #[tokio::test]
     async fn test_join_no_swap() {
         let (big, small) = create_big_and_small();
-        let join = HashJoinExec::try_new(
-            Arc::clone(&small),
-            Arc::clone(&big),
-            vec![(
-                Column::new_with_schema("small_col", &small.schema()).unwrap(),
-                Column::new_with_schema("big_col", &big.schema()).unwrap(),
-            )],
-            None,
-            &JoinType::Inner,
-            PartitionMode::CollectLeft,
-            false,
-        )
-        .unwrap();
+        let join = Arc::new(
+            HashJoinExec::try_new(
+                Arc::clone(&small),
+                Arc::clone(&big),
+                vec![(
+                    Column::new_with_schema("small_col", &small.schema()).unwrap(),
+                    Column::new_with_schema("big_col", &big.schema()).unwrap(),
+                )],
+                None,
+                &JoinType::Inner,
+                PartitionMode::CollectLeft,
+                false,
+            )
+            .unwrap(),
+        );
 
         let optimized_join = JoinSelection::new()
-            .optimize(Arc::new(join), &ConfigOptions::new())
+            .optimize(join.clone(), &ConfigOptions::new())
             .unwrap();
 
         let swapped_join = optimized_join
@@ -947,6 +1001,7 @@ mod tests_statistical {
             swapped_join.right().statistics().unwrap().total_byte_size,
             Precision::Inexact(100000)
         );
+        crosscheck_plans(join).unwrap();
     }
 
     #[tokio::test]
@@ -1147,19 +1202,21 @@ mod tests_statistical {
         is_swapped: bool,
         expected_mode: PartitionMode,
     ) {
-        let join = HashJoinExec::try_new(
-            left,
-            right,
-            on,
-            None,
-            &JoinType::Inner,
-            PartitionMode::Auto,
-            false,
-        )
-        .unwrap();
+        let join = Arc::new(
+            HashJoinExec::try_new(
+                left,
+                right,
+                on,
+                None,
+                &JoinType::Inner,
+                PartitionMode::Auto,
+                false,
+            )
+            .unwrap(),
+        );
 
         let optimized_join = JoinSelection::new()
-            .optimize(Arc::new(join), &ConfigOptions::new())
+            .optimize(join.clone(), &ConfigOptions::new())
             .unwrap();
 
         if !is_swapped {
@@ -1183,6 +1240,7 @@ mod tests_statistical {
 
             assert_eq!(*swapped_join.partition_mode(), expected_mode);
         }
+        crosscheck_plans(join).unwrap();
     }
 }
 
@@ -1227,6 +1285,8 @@ mod util_tests {
 
 #[cfg(test)]
 mod hash_join_tests {
+    use self::tests_statistical::crosscheck_plans;
+
     use super::*;
     use crate::physical_optimizer::join_selection::swap_join_type;
     use crate::physical_optimizer::test_utils::SourceType;
@@ -1593,7 +1653,7 @@ mod hash_join_tests {
             2,
         )) as Arc<dyn ExecutionPlan>;
 
-        let join = HashJoinExec::try_new(
+        let join = Arc::new(HashJoinExec::try_new(
             Arc::clone(&left_exec),
             Arc::clone(&right_exec),
             vec![(
@@ -1604,7 +1664,7 @@ mod hash_join_tests {
             &t.initial_join_type,
             t.initial_mode,
             false,
-        )?;
+        )?);
 
         let left_child = Arc::new(EmptyExec::new(Arc::new(Schema::empty())));
         let right_child = Arc::new(EmptyExec::new(Arc::new(Schema::empty())));
@@ -1613,7 +1673,7 @@ mod hash_join_tests {
             PipelineStatePropagator::new(right_child, right_unbounded, vec![]),
         ];
         let initial_hash_join_state =
-            PipelineStatePropagator::new(Arc::new(join), false, children);
+            PipelineStatePropagator::new(join.clone(), false, children);
 
         let optimized_hash_join =
             hash_join_swap_subrule(initial_hash_join_state, &ConfigOptions::new())?;
@@ -1672,6 +1732,7 @@ mod hash_join_tests {
                 )
             );
         };
+        crosscheck_plans(plan).unwrap();
         Ok(())
     }
 }
