@@ -314,7 +314,7 @@ jobs:
         with:
           submodules: true
       - name: Setup Rust toolchain
-        uses: ./.github/actions/setup-rust-builder
+        uses: ./.github/actions/setup-windows-builder
       - name: Run tests (excluding doctests)
         run: |
           cd datafusion-cli
@@ -338,7 +338,7 @@ jobs:
         with:
           submodules: true      
       - name: Setup Rust toolchain
-        uses: ./.github/actions/setup-rust-builder
+        uses: ./.github/actions/setup-macos-builder
       - name: Run sccache-cache
         uses: mozilla-actions/sccache-action@v0.0.3          
       - name: Run tests (excluding doctests)
@@ -364,7 +364,7 @@ jobs:
         with:
           submodules: true
       - name: Setup Rust toolchain
-        uses: ./.github/actions/setup-rust-builder
+        uses: ./.github/actions/setup-macos-builder
       - name: Run tests (excluding doctests)
         run: |
           cd datafusion-cli
