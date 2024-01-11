@@ -33,6 +33,7 @@ runs:
         export PROTO_ZIP="protoc-21.4-osx-x86_64.zip"        
         curl -LO https://github.com/protocolbuffers/protobuf/releases/download/v21.4/$PROTO_ZIP
         unzip $PROTO_ZIP
+        echo "$HOME/d/protoc/bin" >> $GITHUB_PATH
         export PATH=$PATH:$HOME/d/protoc/bin
         protoc --version
 
