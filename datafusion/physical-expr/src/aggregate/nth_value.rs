@@ -136,9 +136,11 @@ impl AggregateExpr for NthValueAgg {
             name: self.name.to_string(),
             input_data_type: self.input_data_type.clone(),
             expr: self.expr.clone(),
+            // index should be from the opposite side
             n: -self.n,
             nullable: self.nullable,
             order_by_data_types: self.order_by_data_types.clone(),
+            // reverse requirement
             ordering_req: reverse_order_bys(&self.ordering_req),
         }) as _)
     }
@@ -208,21 +210,14 @@ impl Accumulator for NthValueAccumulator {
         }
 
         let n_required = self.n.unsigned_abs() as usize;
-        if self.n > 0 {
+        let from_start = self.n > 0;
+        if from_start {
+            // direction is from start
             let n_remaining = n_required.saturating_sub(self.values.len());
-            let n_remaining = std::cmp::min(n_remaining, values[0].len());
-            for index in 0..n_remaining {
-                let row = get_row_at_idx(values, index)?;
-                self.values.push(row[0].clone());
-                self.ordering_values.push(row[1..].to_vec());
-            }
+            self.append_new_data(values, Some(n_remaining))?;
         } else {
-            let n_row = values[0].len();
-            for index in 0..n_row {
-                let row = get_row_at_idx(values, index)?;
-                self.values.push(row[0].clone());
-                self.ordering_values.push(row[1..].to_vec());
-            }
+            // direction is from end
+            self.append_new_data(values, None)?;
             let start_offset = self.values.len().saturating_sub(n_required);
             if start_offset > 0 {
                 self.values = self.values[start_offset..].to_vec();
@@ -386,5 +381,24 @@ impl NthValueAccumulator {
     fn evaluate_values(&self) -> Result<ScalarValue> {
         let arr = ScalarValue::new_list(&self.values, &self.datatypes[0]);
         Ok(ScalarValue::List(arr))
+    }
+
+    fn append_new_data(
+        &mut self,
+        values: &[ArrayRef],
+        fetch: Option<usize>,
+    ) -> Result<()> {
+        let n_row = values[0].len();
+        let n_to_add = if let Some(fetch) = fetch {
+            std::cmp::min(fetch, n_row)
+        } else {
+            n_row
+        };
+        for index in 0..n_to_add {
+            let row = get_row_at_idx(values, index)?;
+            self.values.push(row[0].clone());
+            self.ordering_values.push(row[1..].to_vec());
+        }
+        Ok(())
     }
 }
