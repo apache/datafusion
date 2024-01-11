@@ -38,8 +38,6 @@ runs:
         rustup toolchain install ${{ inputs.rust-version }}
         rustup default ${{ inputs.rust-version }}
         rustup component add rustfmt
-    - name: Run sccache-cache
-      uses: mozilla-actions/sccache-action@v0.0.3
     - name: Configure rust runtime env
       uses: ./.github/actions/setup-rust-runtime
     - name: Fixup git permissions

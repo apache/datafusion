@@ -20,6 +20,8 @@ description: 'Setup Rust Runtime Environment'
 runs:
   using: "composite"
   steps:
+    - name: Run sccache-cache
+      uses: mozilla-actions/sccache-action@v0.0.3   
     - name: Configure runtime env
       shell: bash
       # do not produce debug symbols to keep memory usage down
