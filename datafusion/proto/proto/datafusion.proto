@@ -668,6 +668,7 @@ enum ScalarFunction {
   FindInSet = 127;
   ArraySort = 128;
   ArrayDistinct = 129;
+  ArrayResize = 130;
 }
 
 message ScalarFunctionNode {
@@ -1537,6 +1538,8 @@ message SymmetricHashJoinExecNode {
   StreamPartitionMode partition_mode = 6;
   bool null_equals_null = 7;
   JoinFilter filter = 8;
+  repeated PhysicalSortExprNode left_sort_exprs = 9;
+  repeated PhysicalSortExprNode right_sort_exprs = 10;
 }
 
 message InterleaveExecNode {
