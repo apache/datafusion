@@ -272,6 +272,8 @@ jobs:
   windows:
     name: cargo test (win64)
     runs-on: windows-latest
+    container:
+      image: mcr.microsoft.com/windows
     steps:
       - uses: actions/checkout@v4
         with:
@@ -287,6 +289,8 @@ jobs:
   windows-test-datafusion-cli:
     name: cargo test datafusion-cli (windows)
     runs-on: windows-latest
+    container:
+      image: mcr.microsoft.com/windows
     steps:
       - uses: actions/checkout@v4
         with:
