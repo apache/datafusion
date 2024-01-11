@@ -290,6 +290,11 @@ config_namespace! {
         /// Hive. Note that this setting does not affect reading partitioned
         /// tables (e.g. `/table/year=2021/month=01/data.parquet`).
         pub listing_table_ignore_subdirectory: bool, default = true
+
+        /// Should DataFusion support recursive CTEs
+        /// Defaults to false since this feature is a work in progress and may not
+        /// behave as expected
+        pub enable_recursive_ctes: bool, default = false
     }
 }
 
