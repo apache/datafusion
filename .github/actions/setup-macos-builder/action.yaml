@@ -36,7 +36,6 @@ runs:
         echo "$HOME/d/protoc/bin" >> $GITHUB_PATH
         export PATH=$PATH:$HOME/d/protoc/bin
         protoc --version
-
     - name: Setup Rust toolchain
       shell: bash
       run: |
@@ -44,6 +43,7 @@ runs:
         rustup toolchain install stable
         rustup default stable
         rustup component add rustfmt
-
     - name: Run sccache-cache
-      uses: mozilla-actions/sccache-action@v0.0.3     
+      uses: mozilla-actions/sccache-action@v0.0.3   
+    - name: Configure rust runtime env
+      uses: ./.github/actions/setup-rust-runtime        
