@@ -249,26 +249,23 @@ impl TreeNodeRewriter for Canonicalizer {
         };
         match (left.as_ref(), right.as_ref(), op.swap()) {
             // <col1> <op> <col2>
-            (Expr::Column(left_col), Expr::Column(right_col), Some(swapped_op)) => {
-                if right_col > left_col {
-                    return Ok(Expr::BinaryExpr(BinaryExpr {
-                        left: right,
-                        op: swapped_op,
-                        right: left,
-                    }));
-                }
-            }
-            // <literal> <op> <col>
-            (Expr::Literal(_a), Expr::Column(_b), Some(swapped_op)) => {
-                return Ok(Expr::BinaryExpr(BinaryExpr {
+            (Expr::Column(left_col), Expr::Column(right_col), Some(swapped_op)) if right_col > left_col => {
+                Ok(Expr::BinaryExpr(BinaryExpr {
                     left: right,
                     op: swapped_op,
                     right: left,
-                }));
+                }))
             }
-            _ => {}
+            // <literal> <op> <col>
+            (Expr::Literal(_a), Expr::Column(_b), Some(swapped_op)) => {
+                Ok(Expr::BinaryExpr(BinaryExpr {
+                    left: right,
+                    op: swapped_op,
+                    right: left,
+                }))
+            }
+            _ => Ok(Expr::BinaryExpr(BinaryExpr { left, op, right })),
         }
-        Ok(Expr::BinaryExpr(BinaryExpr { left, op, right }))
     }
 }
 
