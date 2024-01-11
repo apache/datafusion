@@ -1996,21 +1996,13 @@ mod tests {
             Field::new("c2", DataType::Int32, false),
         ]);
         // test c1 in(1, 2)
-        let expr1 = Expr::InList(InList::new(
-            Box::new(col("c1")),
-            vec![lit(1), lit(2)],
-            false,
-        ));
+        let expr1 = col("cl").in_list(vec![lit(1), lit(2)], false);
 
         // test c2 BETWEEN 4 AND 5
-        let expr1 = col("c2").between(lit(4), lit(5));
+        let expr2 = col("c2").between(lit(4), lit(5));
 
         // test c1 in(1, 2) and c2 BETWEEN 4 AND 5
-        let expr3 = Expr::BinaryExpr(BinaryExpr {
-            left: Box::new(expr1),
-            op: Operator::And,
-            right: Box::new(expr2),
-        });
+        let expr3 = expr1.and(expr2);
 
         let expected_expr = "(c1_min@0 <= 1 AND 1 <= c1_max@1 OR c1_min@0 <= 2 AND 2 <= c1_max@1) AND c2_max@2 >= 4 AND c2_min@3 <= 5";
         let predicate_expr =
@@ -2026,11 +2018,7 @@ mod tests {
         // test c1 in(1..21)
         // in pruning.rs has MAX_LIST_VALUE_SIZE_REWRITE = 20, more than this value will be rewrite
         // always true
-        let expr = Expr::InList(InList::new(
-            Box::new(col("c1")),
-            (1..=21).map(lit).collect(),
-            false,
-        ));
+        let expr = col("cl").in_list((1..=21).map(lit).collect(), false);
 
         let expected_expr = "true";
         let predicate_expr =
