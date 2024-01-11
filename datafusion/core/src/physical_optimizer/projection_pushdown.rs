@@ -43,7 +43,7 @@ use crate::physical_plan::{Distribution, ExecutionPlan};
 
 use arrow_schema::SchemaRef;
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::tree_node::{Transformed, TreeNode, VisitRecursion};
+use datafusion_common::tree_node::{TreeNode, VisitRecursion};
 use datafusion_common::JoinSide;
 use datafusion_physical_expr::expressions::{Column, Literal};
 use datafusion_physical_expr::{
@@ -90,14 +90,14 @@ impl PhysicalOptimizerRule for ProjectionPushdown {
 /// by leveraging source providers with built-in projection capabilities.
 pub fn remove_unnecessary_projections(
     plan: Arc<dyn ExecutionPlan>,
-) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
+) -> Result<Arc<dyn ExecutionPlan>> {
     let maybe_modified = if let Some(projection) =
         plan.as_any().downcast_ref::<ProjectionExec>()
     {
         // If the projection does not cause any change on the input, we can
         // safely remove it:
         if is_projection_removable(projection) {
-            return Ok(Transformed::Yes(projection.input().clone()));
+            return Ok(projection.input().clone());
         }
         // If it does, check if we can push it under its child(ren):
         let input = projection.input().as_any();
@@ -111,7 +111,7 @@ pub fn remove_unnecessary_projections(
                 // To unify 3 or more sequential projections:
                 remove_unnecessary_projections(new_plan)
             } else {
-                Ok(Transformed::No(plan))
+                Ok(plan)
             };
         } else if let Some(output_req) = input.downcast_ref::<OutputRequirementExec>() {
             try_swapping_with_output_req(projection, output_req)?
@@ -147,10 +147,10 @@ pub fn remove_unnecessary_projections(
             None
         }
     } else {
-        return Ok(Transformed::No(plan));
+        return Ok(plan);
     };
 
-    Ok(maybe_modified.map_or(Transformed::No(plan), Transformed::Yes))
+    Ok(maybe_modified.unwrap_or(plan))
 }
 
 /// Tries to embed `projection` to its input (`csv`). If possible, returns
@@ -885,21 +885,21 @@ fn update_expr(
         .clone()
         .transform_up_mut(&mut |expr: Arc<dyn PhysicalExpr>| {
             if state == RewriteState::RewrittenInvalid {
-                return Ok(Transformed::No(expr));
+                return Ok(expr);
             }
 
             let Some(column) = expr.as_any().downcast_ref::<Column>() else {
-                return Ok(Transformed::No(expr));
+                return Ok(expr);
             };
             if sync_with_child {
                 state = RewriteState::RewrittenValid;
                 // Update the index of `column`:
-                Ok(Transformed::Yes(projected_exprs[column.index()].0.clone()))
+                Ok(projected_exprs[column.index()].0.clone())
             } else {
                 // default to invalid, in case we can't find the relevant column
                 state = RewriteState::RewrittenInvalid;
                 // Determine how to update `column` to accommodate `projected_exprs`
-                projected_exprs
+                Ok(projected_exprs
                     .iter()
                     .enumerate()
                     .find_map(|(index, (projected_expr, alias))| {
@@ -912,10 +912,7 @@ fn update_expr(
                             },
                         )
                     })
-                    .map_or_else(
-                        || Ok(Transformed::No(expr)),
-                        |c| Ok(Transformed::Yes(c)),
-                    )
+                    .unwrap_or(expr))
             }
         });
 

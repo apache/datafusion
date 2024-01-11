@@ -34,7 +34,7 @@ use crate::{
     physical_exprs_contains, LexOrdering, LexOrderingRef, LexRequirement,
     LexRequirementRef, PhysicalExpr, PhysicalSortExpr, PhysicalSortRequirement,
 };
-use datafusion_common::tree_node::{Transformed, TreeNode};
+use datafusion_common::tree_node::TreeNode;
 
 use super::ordering::collapse_lex_ordering;
 
@@ -798,7 +798,7 @@ impl EquivalenceProperties {
 fn update_ordering(
     mut node: ExprOrdering,
     eq_properties: &EquivalenceProperties,
-) -> Transformed<ExprOrdering> {
+) -> ExprOrdering {
     // We have a Column, which is one of the two possible leaf node types:
     let normalized_expr = eq_properties.eq_group.normalize_expr(node.expr.clone());
     if eq_properties.is_expr_constant(&normalized_expr) {
@@ -815,9 +815,9 @@ fn update_ordering(
         // We have a Literal, which is the other possible leaf node type:
         node.state = node.expr.get_ordering(&[]);
     } else {
-        return Transformed::No(node);
+        return node;
     }
-    Transformed::Yes(node)
+    node
 }
 
 /// This function determines whether the provided expression is constant

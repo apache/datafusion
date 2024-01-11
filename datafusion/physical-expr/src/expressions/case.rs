@@ -407,7 +407,7 @@ mod tests {
     use arrow::datatypes::*;
     use datafusion_common::cast::{as_float64_array, as_int32_array};
     use datafusion_common::plan_err;
-    use datafusion_common::tree_node::{Transformed, TreeNode};
+    use datafusion_common::tree_node::TreeNode;
     use datafusion_common::ScalarValue;
     use datafusion_expr::type_coercion::binary::comparison_coercion;
     use datafusion_expr::Operator;
@@ -956,9 +956,9 @@ mod tests {
                         _ => None,
                     };
                 Ok(if let Some(transformed) = transformed {
-                    Transformed::Yes(transformed)
+                    transformed
                 } else {
-                    Transformed::No(e)
+                    e
                 })
             })
             .unwrap();
@@ -977,9 +977,9 @@ mod tests {
                         _ => None,
                     };
                 Ok(if let Some(transformed) = transformed {
-                    Transformed::Yes(transformed)
+                    transformed
                 } else {
-                    Transformed::No(e)
+                    e
                 })
             })
             .unwrap();

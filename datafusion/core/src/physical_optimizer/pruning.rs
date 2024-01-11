@@ -36,10 +36,7 @@ use arrow::{
     record_batch::RecordBatch,
 };
 use arrow_array::cast::AsArray;
-use datafusion_common::{
-    internal_err, plan_err,
-    tree_node::{Transformed, TreeNode},
-};
+use datafusion_common::{internal_err, plan_err, tree_node::TreeNode};
 use datafusion_common::{plan_datafusion_err, ScalarValue};
 use datafusion_physical_expr::utils::{collect_columns, Guarantee, LiteralGuarantee};
 use datafusion_physical_expr::{expressions as phys_expr, PhysicalExprRef};
@@ -840,11 +837,11 @@ fn rewrite_column_expr(
     e.transform(&|expr| {
         if let Some(column) = expr.as_any().downcast_ref::<phys_expr::Column>() {
             if column == column_old {
-                return Ok(Transformed::Yes(Arc::new(column_new.clone())));
+                return Ok(Arc::new(column_new.clone()));
             }
         }
 
-        Ok(Transformed::No(expr))
+        Ok(expr)
     })
 }
 

@@ -27,7 +27,7 @@ use crate::{
         repartition::RepartitionExec, Partitioning,
     },
 };
-use datafusion_common::tree_node::{Transformed, TreeNode};
+use datafusion_common::tree_node::TreeNode;
 use std::sync::Arc;
 
 /// Optimizer rule that introduces CoalesceBatchesExec to avoid overhead with small batches that
@@ -71,12 +71,9 @@ impl PhysicalOptimizerRule for CoalesceBatches {
                     })
                     .unwrap_or(false);
             if wrap_in_coalesce {
-                Ok(Transformed::Yes(Arc::new(CoalesceBatchesExec::new(
-                    plan,
-                    target_batch_size,
-                ))))
+                Ok(Arc::new(CoalesceBatchesExec::new(plan, target_batch_size)))
             } else {
-                Ok(Transformed::No(plan))
+                Ok(plan)
             }
         })
     }

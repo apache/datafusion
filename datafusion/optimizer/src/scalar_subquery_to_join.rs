@@ -20,9 +20,7 @@ use crate::optimizer::ApplyOrder;
 use crate::utils::replace_qualified_name;
 use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_common::alias::AliasGenerator;
-use datafusion_common::tree_node::{
-    RewriteRecursion, Transformed, TreeNode, TreeNodeRewriter,
-};
+use datafusion_common::tree_node::{RewriteRecursion, TreeNode, TreeNodeRewriter};
 use datafusion_common::{plan_err, Column, DataFusionError, Result, ScalarValue};
 use datafusion_expr::expr_rewriter::create_col_from_scalar_expr;
 use datafusion_expr::logical_plan::{JoinType, Subquery};
@@ -92,12 +90,12 @@ impl OptimizerRule for ScalarSubqueryToJoin {
                                         if let Some(map_expr) =
                                             expr_check_map.get(&col.name)
                                         {
-                                            Ok(Transformed::Yes(map_expr.clone()))
+                                            Ok(map_expr.clone())
                                         } else {
-                                            Ok(Transformed::No(expr))
+                                            Ok(expr)
                                         }
                                     } else {
-                                        Ok(Transformed::No(expr))
+                                        Ok(expr)
                                     }
                                 })?;
                         }
@@ -147,12 +145,12 @@ impl OptimizerRule for ScalarSubqueryToJoin {
                                                 if let Some(map_expr) =
                                                     expr_check_map.get(&col.name)
                                                 {
-                                                    Ok(Transformed::Yes(map_expr.clone()))
+                                                    Ok(map_expr.clone())
                                                 } else {
-                                                    Ok(Transformed::No(expr))
+                                                    Ok(expr)
                                                 }
                                             } else {
-                                                Ok(Transformed::No(expr))
+                                                Ok(expr)
                                             }
                                         })?;
                                     expr_to_rewrite_expr_map.insert(expr, new_expr);

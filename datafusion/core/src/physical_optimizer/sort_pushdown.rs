@@ -29,7 +29,7 @@ use crate::physical_plan::repartition::RepartitionExec;
 use crate::physical_plan::sorts::sort::SortExec;
 use crate::physical_plan::{with_new_children_if_necessary, ExecutionPlan};
 
-use datafusion_common::tree_node::{Transformed, TreeNode};
+use datafusion_common::tree_node::TreeNode;
 use datafusion_common::{plan_err, DataFusionError, JoinSide, Result};
 use datafusion_expr::JoinType;
 use datafusion_physical_expr::expressions::Column;
@@ -89,16 +89,13 @@ impl TreeNode for SortPushDown {
             self.plan = with_new_children_if_necessary(
                 self.plan,
                 self.children_nodes.iter().map(|c| c.plan.clone()).collect(),
-            )?
-            .into();
+            )?;
         }
         Ok(self)
     }
 }
 
-pub(crate) fn pushdown_sorts(
-    mut requirements: SortPushDown,
-) -> Result<Transformed<SortPushDown>> {
+pub(crate) fn pushdown_sorts(mut requirements: SortPushDown) -> Result<SortPushDown> {
     let plan = &requirements.plan;
     let parent_required = requirements.required_ordering.as_deref().unwrap_or(&[]);
 
@@ -128,12 +125,12 @@ pub(crate) fn pushdown_sorts(
             }
             // Can push down requirements
             child.required_ordering = None;
-            Ok(Transformed::Yes(child))
+            Ok(child)
         } else {
             // Can not push down requirements
             let mut empty_node = SortPushDown::new(requirements.plan);
             empty_node.assign_initial_requirements();
-            Ok(Transformed::Yes(empty_node))
+            Ok(empty_node)
         }
     } else {
         // Executors other than SortExec
@@ -146,7 +143,7 @@ pub(crate) fn pushdown_sorts(
             for (child, order) in requirements.children_nodes.iter_mut().zip(reqs) {
                 child.required_ordering = order;
             }
-            return Ok(Transformed::Yes(requirements));
+            return Ok(requirements);
         }
         // Can not satisfy the parent requirements, check whether the requirements can be pushed down:
         if let Some(adjusted) = pushdown_requirement_to_children(plan, parent_required)? {
@@ -154,7 +151,7 @@ pub(crate) fn pushdown_sorts(
                 c.required_ordering = o;
             }
             requirements.required_ordering = None;
-            Ok(Transformed::Yes(requirements))
+            Ok(requirements)
         } else {
             // Can not push down requirements, add new SortExec:
             let mut new_plan = requirements.plan;
@@ -162,7 +159,7 @@ pub(crate) fn pushdown_sorts(
             let mut new_empty = SortPushDown::new(new_plan);
             new_empty.assign_initial_requirements();
             // Can not push down requirements
-            Ok(Transformed::Yes(new_empty))
+            Ok(new_empty)
         }
     }
 }

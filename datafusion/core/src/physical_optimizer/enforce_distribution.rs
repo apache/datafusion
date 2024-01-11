@@ -48,7 +48,7 @@ use crate::physical_plan::{
 };
 
 use arrow::compute::SortOptions;
-use datafusion_common::tree_node::{Transformed, TreeNode};
+use datafusion_common::tree_node::TreeNode;
 use datafusion_expr::logical_plan::JoinType;
 use datafusion_physical_expr::expressions::{Column, NoOp};
 use datafusion_physical_expr::utils::map_columns_before_projection;
@@ -205,9 +205,7 @@ impl PhysicalOptimizerRule for EnforceDistribution {
             adjusted.plan
         } else {
             // Run a bottom-up process
-            plan.transform_up(&|plan| {
-                Ok(Transformed::Yes(reorder_join_keys_to_inputs(plan)?))
-            })?
+            plan.transform_up(&reorder_join_keys_to_inputs)?
         };
 
         let distribution_context = DistributionContext::new(adjusted);
@@ -272,7 +270,7 @@ impl PhysicalOptimizerRule for EnforceDistribution {
 ///
 fn adjust_input_keys_ordering(
     mut requirements: PlanWithKeyRequirements,
-) -> Result<Transformed<PlanWithKeyRequirements>> {
+) -> Result<PlanWithKeyRequirements> {
     let parent_required = requirements.required_key_ordering.clone();
     let plan_any = requirements.plan.as_any();
 
@@ -309,7 +307,6 @@ fn adjust_input_keys_ordering(
                     vec![],
                     &join_constructor,
                 )
-                .map(Transformed::Yes)
             }
             PartitionMode::CollectLeft => {
                 let new_right_request = match join_type {
@@ -329,13 +326,11 @@ fn adjust_input_keys_ordering(
                 // Push down requirements to the right side
                 requirements.children[1].required_key_ordering =
                     new_right_request.unwrap_or(vec![]);
-                Ok(Transformed::Yes(requirements))
+                Ok(requirements)
             }
             PartitionMode::Auto => {
                 // Can not satisfy, clear the current requirements and generate new empty requirements
-                Ok(Transformed::Yes(PlanWithKeyRequirements::new(
-                    requirements.plan,
-                )))
+                Ok(PlanWithKeyRequirements::new(requirements.plan))
             }
         }
     } else if let Some(CrossJoinExec { left, .. }) =
@@ -345,7 +340,7 @@ fn adjust_input_keys_ordering(
         // Push down requirements to the right side
         requirements.children[1].required_key_ordering =
             shift_right_required(&parent_required, left_columns_len).unwrap_or_default();
-        Ok(Transformed::Yes(requirements))
+        Ok(requirements)
     } else if let Some(SortMergeJoinExec {
         left,
         right,
@@ -375,7 +370,6 @@ fn adjust_input_keys_ordering(
             sort_options.clone(),
             &join_constructor,
         )
-        .map(Transformed::Yes)
     } else if let Some(aggregate_exec) = plan_any.downcast_ref::<AggregateExec>() {
         if !parent_required.is_empty() {
             match aggregate_exec.mode() {
@@ -383,15 +377,12 @@ fn adjust_input_keys_ordering(
                     requirements.plan.clone(),
                     &parent_required,
                     aggregate_exec,
-                )
-                .map(Transformed::Yes),
-                _ => Ok(Transformed::Yes(PlanWithKeyRequirements::new(
-                    requirements.plan,
-                ))),
+                ),
+                _ => Ok(PlanWithKeyRequirements::new(requirements.plan)),
             }
         } else {
             // Keep everything unchanged
-            Ok(Transformed::No(requirements))
+            Ok(requirements)
         }
     } else if let Some(proj) = plan_any.downcast_ref::<ProjectionExec>() {
         let expr = proj.expr();
@@ -401,26 +392,22 @@ fn adjust_input_keys_ordering(
         let new_required = map_columns_before_projection(&parent_required, expr);
         if new_required.len() == parent_required.len() {
             requirements.children[0].required_key_ordering = new_required;
-            Ok(Transformed::Yes(requirements))
+            Ok(requirements)
         } else {
             // Can not satisfy, clear the current requirements and generate new empty requirements
-            Ok(Transformed::Yes(PlanWithKeyRequirements::new(
-                requirements.plan,
-            )))
+            Ok(PlanWithKeyRequirements::new(requirements.plan))
         }
     } else if plan_any.downcast_ref::<RepartitionExec>().is_some()
         || plan_any.downcast_ref::<CoalescePartitionsExec>().is_some()
         || plan_any.downcast_ref::<WindowAggExec>().is_some()
     {
-        Ok(Transformed::Yes(PlanWithKeyRequirements::new(
-            requirements.plan,
-        )))
+        Ok(PlanWithKeyRequirements::new(requirements.plan))
     } else {
         // By default, push down the parent requirements to children
         requirements.children.iter_mut().for_each(|child| {
             child.required_key_ordering = parent_required.clone();
         });
-        Ok(Transformed::Yes(requirements))
+        Ok(requirements)
     }
 }
 
@@ -1139,11 +1126,11 @@ fn add_sort_preserving_partitions(
 fn ensure_distribution(
     dist_context: DistributionContext,
     config: &ConfigOptions,
-) -> Result<Transformed<DistributionContext>> {
+) -> Result<DistributionContext> {
     let dist_context = dist_context.update_children()?;
 
     if dist_context.plan.children().is_empty() {
-        return Ok(Transformed::No(dist_context));
+        return Ok(dist_context);
     }
 
     let target_partitions = config.execution.target_partitions;
@@ -1333,7 +1320,7 @@ fn ensure_distribution(
         children_nodes,
     };
 
-    Ok(Transformed::Yes(new_distribution_context))
+    Ok(new_distribution_context)
 }
 
 /// A struct to keep track of distribution changing operators
@@ -1395,7 +1382,7 @@ impl DistributionContext {
             .collect::<Vec<_>>();
 
         Ok(Self {
-            plan: with_new_children_if_necessary(self.plan, children_plans)?.into(),
+            plan: with_new_children_if_necessary(self.plan, children_plans)?,
             distribution_connection: false,
             children_nodes: self.children_nodes,
         })
@@ -1420,8 +1407,7 @@ impl TreeNode for DistributionContext {
             self.plan = with_new_children_if_necessary(
                 self.plan,
                 self.children_nodes.iter().map(|c| c.plan.clone()).collect(),
-            )?
-            .into();
+            )?;
         }
         Ok(self)
     }
@@ -1484,8 +1470,7 @@ impl TreeNode for PlanWithKeyRequirements {
             self.plan = with_new_children_if_necessary(
                 self.plan,
                 self.children.iter().map(|c| c.plan.clone()).collect(),
-            )?
-            .into();
+            )?;
         }
         Ok(self)
     }
@@ -1912,7 +1897,7 @@ pub(crate) mod tests {
         config.optimizer.repartition_file_scans = false;
         config.optimizer.repartition_file_min_size = 1024;
         config.optimizer.prefer_existing_sort = prefer_existing_sort;
-        ensure_distribution(distribution_context, &config).map(|item| item.into().plan)
+        ensure_distribution(distribution_context, &config).map(|item| item.plan)
     }
 
     /// Test whether plan matches with expected plan

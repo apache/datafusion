@@ -26,7 +26,7 @@ use crate::physical_plan::aggregates::{AggregateExec, AggregateMode, PhysicalGro
 use crate::physical_plan::ExecutionPlan;
 
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::tree_node::{Transformed, TreeNode};
+use datafusion_common::tree_node::TreeNode;
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::{AggregateExpr, PhysicalExpr};
 
@@ -109,9 +109,9 @@ impl PhysicalOptimizerRule for CombinePartialFinalAggregate {
                     });
 
             Ok(if let Some(transformed) = transformed {
-                Transformed::Yes(transformed)
+                transformed
             } else {
-                Transformed::No(plan)
+                plan
             })
         })
     }
@@ -185,9 +185,9 @@ fn discard_column_index(group_expr: Arc<dyn PhysicalExpr>) -> Arc<dyn PhysicalEx
                     None => None,
                 };
             Ok(if let Some(normalized_form) = normalized_form {
-                Transformed::Yes(normalized_form)
+                normalized_form
             } else {
-                Transformed::No(expr)
+                expr
             })
         })
         .unwrap_or(group_expr)

@@ -17,9 +17,7 @@
 
 use crate::simplify_expressions::{ExprSimplifier, SimplifyContext};
 use crate::utils::collect_subquery_cols;
-use datafusion_common::tree_node::{
-    RewriteRecursion, Transformed, TreeNode, TreeNodeRewriter,
-};
+use datafusion_common::tree_node::{RewriteRecursion, TreeNode, TreeNodeRewriter};
 use datafusion_common::{plan_err, Result};
 use datafusion_common::{Column, DFSchemaRef, DataFusionError, ScalarValue};
 use datafusion_expr::expr::{AggregateFunctionDefinition, Alias};
@@ -376,22 +374,20 @@ fn agg_exprs_evaluation_result_on_empty_batch(
                     match func_def {
                         AggregateFunctionDefinition::BuiltIn(fun) => {
                             if matches!(fun, datafusion_expr::AggregateFunction::Count) {
-                                Transformed::Yes(Expr::Literal(ScalarValue::Int64(Some(
-                                    0,
-                                ))))
+                                Expr::Literal(ScalarValue::Int64(Some(0)))
                             } else {
-                                Transformed::Yes(Expr::Literal(ScalarValue::Null))
+                                Expr::Literal(ScalarValue::Null)
                             }
                         }
                         AggregateFunctionDefinition::UDF { .. } => {
-                            Transformed::Yes(Expr::Literal(ScalarValue::Null))
+                            Expr::Literal(ScalarValue::Null)
                         }
                         AggregateFunctionDefinition::Name(_) => {
-                            Transformed::Yes(Expr::Literal(ScalarValue::Null))
+                            Expr::Literal(ScalarValue::Null)
                         }
                     }
                 }
-                _ => Transformed::No(expr),
+                _ => expr,
             };
             Ok(new_expr)
         })?;
@@ -418,12 +414,12 @@ fn proj_exprs_evaluation_result_on_empty_batch(
         let result_expr = expr.clone().transform_up(&|expr| {
             if let Expr::Column(Column { name, .. }) = &expr {
                 if let Some(result_expr) = input_expr_result_map_for_count_bug.get(name) {
-                    Ok(Transformed::Yes(result_expr.clone()))
+                    Ok(result_expr.clone())
                 } else {
-                    Ok(Transformed::No(expr))
+                    Ok(expr)
                 }
             } else {
-                Ok(Transformed::No(expr))
+                Ok(expr)
             }
         })?;
         if result_expr.ne(expr) {
@@ -451,12 +447,12 @@ fn filter_exprs_evaluation_result_on_empty_batch(
     let result_expr = filter_expr.clone().transform_up(&|expr| {
         if let Expr::Column(Column { name, .. }) = &expr {
             if let Some(result_expr) = input_expr_result_map_for_count_bug.get(name) {
-                Ok(Transformed::Yes(result_expr.clone()))
+                Ok(result_expr.clone())
             } else {
-                Ok(Transformed::No(expr))
+                Ok(expr)
             }
         } else {
-            Ok(Transformed::No(expr))
+            Ok(expr)
         }
     })?;
     let pull_up_expr = if result_expr.ne(filter_expr) {

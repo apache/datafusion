@@ -30,7 +30,7 @@ use crate::physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan};
 
 use arrow_schema::SchemaRef;
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::tree_node::{Transformed, TreeNode};
+use datafusion_common::tree_node::TreeNode;
 use datafusion_common::{Result, Statistics};
 use datafusion_physical_expr::{
     Distribution, LexRequirement, PhysicalSortExpr, PhysicalSortRequirement,
@@ -200,9 +200,9 @@ impl PhysicalOptimizerRule for OutputRequirements {
                 if let Some(sort_req) =
                     plan.as_any().downcast_ref::<OutputRequirementExec>()
                 {
-                    Ok(Transformed::Yes(sort_req.input()))
+                    Ok(sort_req.input())
                 } else {
-                    Ok(Transformed::No(plan))
+                    Ok(plan)
                 }
             }),
         }

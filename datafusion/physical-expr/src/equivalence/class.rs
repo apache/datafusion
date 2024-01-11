@@ -23,7 +23,7 @@ use crate::{
     PhysicalSortRequirement,
 };
 use datafusion_common::tree_node::TreeNode;
-use datafusion_common::{tree_node::Transformed, JoinType};
+use datafusion_common::JoinType;
 use std::sync::Arc;
 
 /// An `EquivalenceClass` is a set of [`Arc<dyn PhysicalExpr>`]s that are known
@@ -263,10 +263,10 @@ impl EquivalenceGroup {
             .transform(&|expr| {
                 for cls in self.iter() {
                     if cls.contains(&expr) {
-                        return Ok(Transformed::Yes(cls.canonical_expr().unwrap()));
+                        return Ok(cls.canonical_expr().unwrap());
                     }
                 }
-                Ok(Transformed::No(expr))
+                Ok(expr)
             })
             .unwrap_or(expr)
     }

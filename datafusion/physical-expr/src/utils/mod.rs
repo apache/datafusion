@@ -28,9 +28,7 @@ use crate::{PhysicalExpr, PhysicalSortExpr};
 use arrow::array::{make_array, Array, ArrayRef, BooleanArray, MutableArrayData};
 use arrow::compute::{and_kleene, is_not_null, SlicesIterator};
 use arrow::datatypes::SchemaRef;
-use datafusion_common::tree_node::{
-    Transformed, TreeNode, TreeNodeRewriter, VisitRecursion,
-};
+use datafusion_common::tree_node::{TreeNode, TreeNodeRewriter, VisitRecursion};
 use datafusion_common::Result;
 use datafusion_expr::Operator;
 
@@ -275,12 +273,9 @@ pub fn reassign_predicate_columns(
                 Err(_) if ignore_not_found => usize::MAX,
                 Err(e) => return Err(e.into()),
             };
-            return Ok(Transformed::Yes(Arc::new(Column::new(
-                column.name(),
-                index,
-            ))));
+            return Ok(Arc::new(Column::new(column.name(), index)));
         }
-        Ok(Transformed::No(expr))
+        Ok(expr)
     })
 }
 

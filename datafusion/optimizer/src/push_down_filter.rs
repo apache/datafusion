@@ -21,7 +21,7 @@ use std::sync::Arc;
 use crate::optimizer::ApplyOrder;
 use crate::{OptimizerConfig, OptimizerRule};
 
-use datafusion_common::tree_node::{Transformed, TreeNode, VisitRecursion};
+use datafusion_common::tree_node::{TreeNode, VisitRecursion};
 use datafusion_common::{
     internal_err, plan_datafusion_err, Column, DFSchema, DFSchemaRef, DataFusionError,
     JoinConstraint, Result,
@@ -1019,11 +1019,11 @@ pub fn replace_cols_by_name(
     e.transform_up(&|expr| {
         Ok(if let Expr::Column(c) = &expr {
             match replace_map.get(&c.flat_name()) {
-                Some(new_c) => Transformed::Yes(new_c.clone()),
-                None => Transformed::No(expr),
+                Some(new_c) => new_c.clone(),
+                None => expr,
             }
         } else {
-            Transformed::No(expr)
+            expr
         })
     })
 }

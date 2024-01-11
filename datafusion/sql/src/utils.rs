@@ -20,7 +20,7 @@
 use arrow_schema::{
     DataType, DECIMAL128_MAX_PRECISION, DECIMAL256_MAX_PRECISION, DECIMAL_DEFAULT_SCALE,
 };
-use datafusion_common::tree_node::{Transformed, TreeNode};
+use datafusion_common::tree_node::TreeNode;
 use sqlparser::ast::Ident;
 
 use datafusion_common::{exec_err, internal_err, plan_err};
@@ -37,11 +37,11 @@ pub(crate) fn resolve_columns(expr: &Expr, plan: &LogicalPlan) -> Result<Expr> {
         match nested_expr {
             Expr::Column(col) => {
                 let field = plan.schema().field_from_column(&col)?;
-                Ok(Transformed::Yes(Expr::Column(field.qualified_column())))
+                Ok(Expr::Column(field.qualified_column()))
             }
             _ => {
                 // keep recursing
-                Ok(Transformed::No(nested_expr))
+                Ok(nested_expr)
             }
         }
     })
@@ -68,9 +68,9 @@ pub(crate) fn rebase_expr(
 ) -> Result<Expr> {
     expr.clone().transform_up(&|nested_expr| {
         if base_exprs.contains(&nested_expr) {
-            Ok(Transformed::Yes(expr_as_column_expr(&nested_expr, plan)?))
+            Ok(expr_as_column_expr(&nested_expr, plan)?)
         } else {
-            Ok(Transformed::No(nested_expr))
+            Ok(nested_expr)
         }
     })
 }
@@ -173,12 +173,12 @@ pub(crate) fn resolve_aliases_to_exprs(
     expr.clone().transform_up(&|nested_expr| match nested_expr {
         Expr::Column(c) if c.relation.is_none() => {
             if let Some(aliased_expr) = aliases.get(&c.name) {
-                Ok(Transformed::Yes(aliased_expr.clone()))
+                Ok(aliased_expr.clone())
             } else {
-                Ok(Transformed::No(Expr::Column(c)))
+                Ok(Expr::Column(c))
             }
         }
-        _ => Ok(Transformed::No(nested_expr)),
+        _ => Ok(nested_expr),
     })
 }
 

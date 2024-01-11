@@ -30,7 +30,7 @@ use crate::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use crate::physical_plan::{with_new_children_if_necessary, ExecutionPlan};
 
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::tree_node::{Transformed, TreeNode};
+use datafusion_common::tree_node::TreeNode;
 use datafusion_physical_plan::unbounded_output;
 
 /// For a given `plan`, this object carries the information one needs from its
@@ -97,8 +97,7 @@ impl OrderPreservationContext {
         self.plan = with_new_children_if_necessary(
             self.plan,
             self.children_nodes.iter().map(|c| c.plan.clone()).collect(),
-        )?
-        .into();
+        )?;
         self.ordering_connection = false;
         Ok(self)
     }
@@ -122,8 +121,7 @@ impl TreeNode for OrderPreservationContext {
             self.plan = with_new_children_if_necessary(
                 self.plan,
                 self.children_nodes.iter().map(|c| c.plan.clone()).collect(),
-            )?
-            .into();
+            )?;
         }
         Ok(self)
     }
@@ -235,12 +233,12 @@ pub(crate) fn replace_with_order_preserving_variants(
     // should only be made to fix the pipeline (streaming).
     is_spm_better: bool,
     config: &ConfigOptions,
-) -> Result<Transformed<OrderPreservationContext>> {
+) -> Result<OrderPreservationContext> {
     let mut requirements = requirements.update_children()?;
     if !(is_sort(&requirements.plan)
         && requirements.children_nodes[0].ordering_connection)
     {
-        return Ok(Transformed::No(requirements));
+        return Ok(requirements);
     }
 
     // For unbounded cases, replace with the order-preserving variant in
@@ -264,12 +262,12 @@ pub(crate) fn replace_with_order_preserving_variants(
         for child in updated_sort_input.children_nodes.iter_mut() {
             child.ordering_connection = false;
         }
-        Ok(Transformed::Yes(updated_sort_input))
+        Ok(updated_sort_input)
     } else {
         for child in requirements.children_nodes.iter_mut() {
             child.ordering_connection = false;
         }
-        Ok(Transformed::Yes(requirements))
+        Ok(requirements)
     }
 }
 

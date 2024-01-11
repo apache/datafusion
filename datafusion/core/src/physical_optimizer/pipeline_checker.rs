@@ -28,7 +28,7 @@ use crate::physical_optimizer::PhysicalOptimizerRule;
 use crate::physical_plan::{with_new_children_if_necessary, ExecutionPlan};
 
 use datafusion_common::config::OptimizerOptions;
-use datafusion_common::tree_node::{Transformed, TreeNode};
+use datafusion_common::tree_node::TreeNode;
 use datafusion_common::{plan_err, DataFusionError};
 use datafusion_physical_expr::intervals::utils::{check_support, is_datatype_supported};
 use datafusion_physical_plan::joins::SymmetricHashJoinExec;
@@ -109,8 +109,7 @@ impl TreeNode for PipelineStatePropagator {
             self.plan = with_new_children_if_necessary(
                 self.plan,
                 self.children.iter().map(|c| c.plan.clone()).collect(),
-            )?
-            .into();
+            )?;
         }
         Ok(self)
     }
@@ -121,7 +120,7 @@ impl TreeNode for PipelineStatePropagator {
 pub fn check_finiteness_requirements(
     mut input: PipelineStatePropagator,
     optimizer_options: &OptimizerOptions,
-) -> Result<Transformed<PipelineStatePropagator>> {
+) -> Result<PipelineStatePropagator> {
     if let Some(exec) = input.plan.as_any().downcast_ref::<SymmetricHashJoinExec>() {
         if !(optimizer_options.allow_symmetric_joins_without_pruning
             || (exec.check_if_order_information_available()? && is_prunable(exec)))
@@ -136,7 +135,7 @@ pub fn check_finiteness_requirements(
         .unbounded_output(&input.children_unbounded())
         .map(|value| {
             input.unbounded = value;
-            Transformed::Yes(input)
+            input
         })
 }
 

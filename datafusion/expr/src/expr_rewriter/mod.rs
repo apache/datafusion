@@ -20,7 +20,7 @@
 use crate::expr::Alias;
 use crate::logical_plan::Projection;
 use crate::{Expr, ExprSchemable, LogicalPlan, LogicalPlanBuilder};
-use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRewriter};
+use datafusion_common::tree_node::{TreeNode, TreeNodeRewriter};
 use datafusion_common::Result;
 use datafusion_common::{Column, DFSchema};
 use std::collections::HashMap;
@@ -37,9 +37,9 @@ pub fn normalize_col(expr: Expr, plan: &LogicalPlan) -> Result<Expr> {
         Ok({
             if let Expr::Column(c) = expr {
                 let col = LogicalPlanBuilder::normalize(plan, c)?;
-                Transformed::Yes(Expr::Column(col))
+                Expr::Column(col)
             } else {
-                Transformed::No(expr)
+                expr
             }
         })
     })
@@ -61,9 +61,9 @@ pub fn normalize_col_with_schemas(
         Ok({
             if let Expr::Column(c) = expr {
                 let col = c.normalize_with_schemas(schemas, using_columns)?;
-                Transformed::Yes(Expr::Column(col))
+                Expr::Column(col)
             } else {
-                Transformed::No(expr)
+                expr
             }
         })
     })
@@ -80,9 +80,9 @@ pub fn normalize_col_with_schemas_and_ambiguity_check(
             if let Expr::Column(c) = expr {
                 let col =
                     c.normalize_with_schemas_and_ambiguity_check(schemas, using_columns)?;
-                Transformed::Yes(Expr::Column(col))
+                Expr::Column(col)
             } else {
-                Transformed::No(expr)
+                expr
             }
         })
     })
@@ -106,11 +106,11 @@ pub fn replace_col(expr: Expr, replace_map: &HashMap<&Column, &Column>) -> Resul
         Ok({
             if let Expr::Column(c) = &expr {
                 match replace_map.get(c) {
-                    Some(new_c) => Transformed::Yes(Expr::Column((*new_c).to_owned())),
-                    None => Transformed::No(expr),
+                    Some(new_c) => Expr::Column((*new_c).to_owned()),
+                    None => expr,
                 }
             } else {
-                Transformed::No(expr)
+                expr
             }
         })
     })
@@ -129,9 +129,9 @@ pub fn unnormalize_col(expr: Expr) -> Expr {
                     relation: None,
                     name: c.name,
                 };
-                Transformed::Yes(Expr::Column(col))
+                Expr::Column(col)
             } else {
-                Transformed::No(expr)
+                expr
             }
         })
     })
@@ -167,9 +167,9 @@ pub fn strip_outer_reference(expr: Expr) -> Expr {
     expr.transform(&|expr| {
         Ok({
             if let Expr::OuterReferenceColumn(_, col) = expr {
-                Transformed::Yes(Expr::Column(col))
+                Expr::Column(col)
             } else {
-                Transformed::No(expr)
+                expr
             }
         })
     })
@@ -289,7 +289,7 @@ mod test {
     #[test]
     fn rewriter_rewrite() {
         // rewrites all "foo" string literals to "bar"
-        let transformer = |expr: Expr| -> Result<Transformed<Expr>> {
+        let transformer = |expr: Expr| -> Result<Expr> {
             match expr {
                 Expr::Literal(ScalarValue::Utf8(Some(utf8_val))) => {
                     let utf8_val = if utf8_val == "foo" {
@@ -297,10 +297,10 @@ mod test {
                     } else {
                         utf8_val
                     };
-                    Ok(Transformed::Yes(lit(utf8_val)))
+                    Ok(lit(utf8_val))
                 }
                 // otherwise, return None
-                _ => Ok(Transformed::No(expr)),
+                _ => Ok(expr),
             }
         };
 

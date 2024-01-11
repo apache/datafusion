@@ -45,8 +45,7 @@ use crate::{
 
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion_common::tree_node::{
-    RewriteRecursion, Transformed, TreeNode, TreeNodeRewriter, TreeNodeVisitor,
-    VisitRecursion,
+    RewriteRecursion, TreeNode, TreeNodeRewriter, TreeNodeVisitor, VisitRecursion,
 };
 use datafusion_common::{
     aggregate_functional_dependencies, internal_err, plan_err, Column, Constraints,
@@ -1219,17 +1218,17 @@ impl LogicalPlan {
                     let value = param_values
                         .get_placeholders_with_values(id, data_type.as_ref())?;
                     // Replace the placeholder with the value
-                    Ok(Transformed::Yes(Expr::Literal(value)))
+                    Ok(Expr::Literal(value))
                 }
                 Expr::ScalarSubquery(qry) => {
                     let subquery =
                         Arc::new(qry.subquery.replace_params_with_values(param_values)?);
-                    Ok(Transformed::Yes(Expr::ScalarSubquery(Subquery {
+                    Ok(Expr::ScalarSubquery(Subquery {
                         subquery,
                         outer_ref_columns: qry.outer_ref_columns.clone(),
-                    })))
+                    }))
                 }
-                _ => Ok(Transformed::No(expr)),
+                _ => Ok(expr),
             }
         })
     }
@@ -3245,9 +3244,9 @@ digraph {
                         Arc::new(LogicalPlan::TableScan(table)),
                     )
                     .unwrap();
-                    Ok(Transformed::Yes(LogicalPlan::Filter(filter)))
+                    Ok(LogicalPlan::Filter(filter))
                 }
-                x => Ok(Transformed::No(x)),
+                x => Ok(x),
             })
             .unwrap();
 

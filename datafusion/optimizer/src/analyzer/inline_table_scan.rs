@@ -21,7 +21,7 @@ use std::sync::Arc;
 
 use crate::analyzer::AnalyzerRule;
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::tree_node::{Transformed, TreeNode};
+use datafusion_common::tree_node::TreeNode;
 use datafusion_common::Result;
 use datafusion_expr::expr::Exists;
 use datafusion_expr::expr::InSubquery;
@@ -50,7 +50,7 @@ impl AnalyzerRule for InlineTableScan {
     }
 }
 
-fn analyze_internal(plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
+fn analyze_internal(plan: LogicalPlan) -> Result<LogicalPlan> {
     Ok(match plan {
         // Match only on scans without filter / projection / fetch
         // Views and DataFrames won't have those added
@@ -64,33 +64,29 @@ fn analyze_internal(plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
         }) if filters.is_empty() && source.get_logical_plan().is_some() => {
             let sub_plan = source.get_logical_plan().unwrap();
             let projection_exprs = generate_projection_expr(&projection, sub_plan)?;
-            let plan = LogicalPlanBuilder::from(sub_plan.clone())
+            LogicalPlanBuilder::from(sub_plan.clone())
                 .project(projection_exprs)?
                 // Ensures that the reference to the inlined table remains the
                 // same, meaning we don't have to change any of the parent nodes
                 // that reference this table.
                 .alias(table_name)?
-                .build()?;
-            Transformed::Yes(plan)
+                .build()?
         }
         LogicalPlan::Filter(filter) => {
             let new_expr = filter.predicate.transform(&rewrite_subquery)?;
-            Transformed::Yes(LogicalPlan::Filter(Filter::try_new(
-                new_expr,
-                filter.input,
-            )?))
+            LogicalPlan::Filter(Filter::try_new(new_expr, filter.input)?)
         }
-        _ => Transformed::No(plan),
+        _ => plan,
     })
 }
 
-fn rewrite_subquery(expr: Expr) -> Result<Transformed<Expr>> {
+fn rewrite_subquery(expr: Expr) -> Result<Expr> {
     match expr {
         Expr::Exists(Exists { subquery, negated }) => {
             let plan = subquery.subquery.as_ref().clone();
             let new_plan = plan.transform_up(&analyze_internal)?;
             let subquery = subquery.with_plan(Arc::new(new_plan));
-            Ok(Transformed::Yes(Expr::Exists(Exists { subquery, negated })))
+            Ok(Expr::Exists(Exists { subquery, negated }))
         }
         Expr::InSubquery(InSubquery {
             expr,
@@ -100,17 +96,15 @@ fn rewrite_subquery(expr: Expr) -> Result<Transformed<Expr>> {
             let plan = subquery.subquery.as_ref().clone();
             let new_plan = plan.transform_up(&analyze_internal)?;
             let subquery = subquery.with_plan(Arc::new(new_plan));
-            Ok(Transformed::Yes(Expr::InSubquery(InSubquery::new(
-                expr, subquery, negated,
-            ))))
+            Ok(Expr::InSubquery(InSubquery::new(expr, subquery, negated)))
         }
         Expr::ScalarSubquery(subquery) => {
             let plan = subquery.subquery.as_ref().clone();
             let new_plan = plan.transform_up(&analyze_internal)?;
             let subquery = subquery.with_plan(Arc::new(new_plan));
-            Ok(Transformed::Yes(Expr::ScalarSubquery(subquery)))
+            Ok(Expr::ScalarSubquery(subquery))
         }
-        _ => Ok(Transformed::No(expr)),
+        _ => Ok(expr),
     }
 }
 

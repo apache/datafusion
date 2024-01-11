@@ -17,7 +17,7 @@
 
 use crate::analyzer::AnalyzerRule;
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRewriter};
+use datafusion_common::tree_node::{TreeNode, TreeNodeRewriter};
 use datafusion_common::Result;
 use datafusion_expr::expr::{AggregateFunction, AggregateFunctionDefinition, InSubquery};
 use datafusion_expr::expr_rewriter::rewrite_preserving_name;
@@ -51,7 +51,7 @@ impl AnalyzerRule for CountWildcardRule {
     }
 }
 
-fn analyze_internal(plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
+fn analyze_internal(plan: LogicalPlan) -> Result<LogicalPlan> {
     let mut rewriter = CountWildcardRewriter {};
     match plan {
         LogicalPlan::Window(window) => {
@@ -61,11 +61,9 @@ fn analyze_internal(plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
                 .map(|expr| rewrite_preserving_name(expr.clone(), &mut rewriter))
                 .collect::<Result<Vec<_>>>()?;
 
-            Ok(Transformed::Yes(
-                LogicalPlanBuilder::from((*window.input).clone())
-                    .window(window_expr)?
-                    .build()?,
-            ))
+            Ok(LogicalPlanBuilder::from((*window.input).clone())
+                .window(window_expr)?
+                .build()?)
         }
         LogicalPlan::Aggregate(agg) => {
             let aggr_expr = agg
@@ -74,20 +72,22 @@ fn analyze_internal(plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
                 .map(|expr| rewrite_preserving_name(expr.clone(), &mut rewriter))
                 .collect::<Result<Vec<_>>>()?;
 
-            Ok(Transformed::Yes(LogicalPlan::Aggregate(
-                Aggregate::try_new(agg.input.clone(), agg.group_expr, aggr_expr)?,
-            )))
+            Ok(LogicalPlan::Aggregate(Aggregate::try_new(
+                agg.input.clone(),
+                agg.group_expr,
+                aggr_expr,
+            )?))
         }
         LogicalPlan::Sort(Sort { expr, input, fetch }) => {
             let sort_expr = expr
                 .iter()
                 .map(|expr| rewrite_preserving_name(expr.clone(), &mut rewriter))
                 .collect::<Result<Vec<_>>>()?;
-            Ok(Transformed::Yes(LogicalPlan::Sort(Sort {
+            Ok(LogicalPlan::Sort(Sort {
                 expr: sort_expr,
                 input,
                 fetch,
-            })))
+            }))
         }
         LogicalPlan::Projection(projection) => {
             let projection_expr = projection
@@ -95,20 +95,19 @@ fn analyze_internal(plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
                 .iter()
                 .map(|expr| rewrite_preserving_name(expr.clone(), &mut rewriter))
                 .collect::<Result<Vec<_>>>()?;
-            Ok(Transformed::Yes(LogicalPlan::Projection(
-                Projection::try_new(projection_expr, projection.input)?,
-            )))
+            Ok(LogicalPlan::Projection(Projection::try_new(
+                projection_expr,
+                projection.input,
+            )?))
         }
         LogicalPlan::Filter(Filter {
             predicate, input, ..
         }) => {
             let predicate = rewrite_preserving_name(predicate, &mut rewriter)?;
-            Ok(Transformed::Yes(LogicalPlan::Filter(Filter::try_new(
-                predicate, input,
-            )?)))
+            Ok(LogicalPlan::Filter(Filter::try_new(predicate, input)?))
         }
 
-        _ => Ok(Transformed::No(plan)),
+        _ => Ok(plan),
     }
 }
 

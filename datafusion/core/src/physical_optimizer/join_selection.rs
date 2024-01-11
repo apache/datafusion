@@ -38,7 +38,7 @@ use crate::physical_plan::projection::ProjectionExec;
 use crate::physical_plan::ExecutionPlan;
 
 use arrow_schema::Schema;
-use datafusion_common::tree_node::{Transformed, TreeNode};
+use datafusion_common::tree_node::TreeNode;
 use datafusion_common::{internal_err, JoinSide};
 use datafusion_common::{DataFusionError, JoinType};
 use datafusion_physical_expr::expressions::Column;
@@ -367,7 +367,7 @@ fn partitioned_hash_join(hash_join: &HashJoinExec) -> Result<Arc<dyn ExecutionPl
 fn statistical_join_selection_subrule(
     plan: Arc<dyn ExecutionPlan>,
     collect_left_threshold: usize,
-) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
+) -> Result<Arc<dyn ExecutionPlan>> {
     let transformed = if let Some(hash_join) =
         plan.as_any().downcast_ref::<HashJoinExec>()
     {
@@ -414,9 +414,9 @@ fn statistical_join_selection_subrule(
     };
 
     Ok(if let Some(transformed) = transformed {
-        Transformed::Yes(transformed)
+        transformed
     } else {
-        Transformed::No(plan)
+        plan
     })
 }
 
@@ -645,7 +645,7 @@ fn apply_subrules(
     mut input: PipelineStatePropagator,
     subrules: &Vec<Box<PipelineFixerSubrule>>,
     config_options: &ConfigOptions,
-) -> Result<Transformed<PipelineStatePropagator>> {
+) -> Result<PipelineStatePropagator> {
     for subrule in subrules {
         if let Some(value) = subrule(input.clone(), config_options).transpose()? {
             input = value;
@@ -662,7 +662,7 @@ fn apply_subrules(
         // catch this and raise an error anyway.
         .unwrap_or(true);
     input.unbounded = is_unbounded;
-    Ok(Transformed::Yes(input))
+    Ok(input)
 }
 
 #[cfg(test)]

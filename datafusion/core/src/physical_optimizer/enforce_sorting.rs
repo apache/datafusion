@@ -58,7 +58,7 @@ use crate::physical_plan::{
     with_new_children_if_necessary, Distribution, ExecutionPlan, InputOrderMode,
 };
 
-use datafusion_common::tree_node::{Transformed, TreeNode};
+use datafusion_common::tree_node::TreeNode;
 use datafusion_common::{plan_err, DataFusionError};
 use datafusion_physical_expr::{PhysicalSortExpr, PhysicalSortRequirement};
 use datafusion_physical_plan::repartition::RepartitionExec;
@@ -135,7 +135,7 @@ impl PlanWithCorrespondingSort {
             .iter()
             .map(|item| item.plan.clone())
             .collect::<Vec<_>>();
-        let plan = with_new_children_if_necessary(parent_plan, children_plans)?.into();
+        let plan = with_new_children_if_necessary(parent_plan, children_plans)?;
 
         Ok(Self {
             plan,
@@ -163,8 +163,7 @@ impl TreeNode for PlanWithCorrespondingSort {
             self.plan = with_new_children_if_necessary(
                 self.plan,
                 self.children_nodes.iter().map(|c| c.plan.clone()).collect(),
-            )?
-            .into();
+            )?;
         }
         Ok(self)
     }
@@ -221,7 +220,7 @@ impl PlanWithCorrespondingCoalescePartitions {
             .iter()
             .map(|item| item.plan.clone())
             .collect();
-        self.plan = with_new_children_if_necessary(self.plan, children_plans)?.into();
+        self.plan = with_new_children_if_necessary(self.plan, children_plans)?;
         Ok(self)
     }
 }
@@ -244,8 +243,7 @@ impl TreeNode for PlanWithCorrespondingCoalescePartitions {
             self.plan = with_new_children_if_necessary(
                 self.plan,
                 self.children_nodes.iter().map(|c| c.plan.clone()).collect(),
-            )?
-            .into();
+            )?;
         }
         Ok(self)
     }
@@ -319,7 +317,7 @@ impl PhysicalOptimizerRule for EnforceSorting {
 /// By performing sorting in parallel, we can increase performance in some scenarios.
 fn parallelize_sorts(
     requirements: PlanWithCorrespondingCoalescePartitions,
-) -> Result<Transformed<PlanWithCorrespondingCoalescePartitions>> {
+) -> Result<PlanWithCorrespondingCoalescePartitions> {
     let PlanWithCorrespondingCoalescePartitions {
         mut plan,
         coalesce_connection,
@@ -331,11 +329,11 @@ fn parallelize_sorts(
         // SortPreservingMergeExec or a CoalescePartitionsExec, and they
         // all have a single child. Therefore, if the first child is `None`,
         // we can return immediately.
-        return Ok(Transformed::No(PlanWithCorrespondingCoalescePartitions {
+        return Ok(PlanWithCorrespondingCoalescePartitions {
             plan,
             coalesce_connection,
             children_nodes,
-        }));
+        });
     } else if (is_sort(&plan) || is_sort_preserving_merge(&plan))
         && plan.output_partitioning().partition_count() <= 1
     {
@@ -351,31 +349,27 @@ fn parallelize_sorts(
         add_sort_above(&mut plan, &sort_reqs, fetch);
         let spm = SortPreservingMergeExec::new(sort_exprs, plan).with_fetch(fetch);
 
-        return Ok(Transformed::Yes(
-            PlanWithCorrespondingCoalescePartitions::new(Arc::new(spm)),
-        ));
+        return Ok(PlanWithCorrespondingCoalescePartitions::new(Arc::new(spm)));
     } else if is_coalesce_partitions(&plan) {
         // There is an unnecessary `CoalescePartitionsExec` in the plan.
         update_child_to_remove_coalesce(&mut plan, &mut children_nodes[0])?;
 
         let new_plan = Arc::new(CoalescePartitionsExec::new(plan)) as _;
-        return Ok(Transformed::Yes(
-            PlanWithCorrespondingCoalescePartitions::new(new_plan),
-        ));
+        return Ok(PlanWithCorrespondingCoalescePartitions::new(new_plan));
     }
 
-    Ok(Transformed::Yes(PlanWithCorrespondingCoalescePartitions {
+    Ok(PlanWithCorrespondingCoalescePartitions {
         plan,
         coalesce_connection,
         children_nodes,
-    }))
+    })
 }
 
 /// This function enforces sorting requirements and makes optimizations without
 /// violating these requirements whenever possible.
 fn ensure_sorting(
     requirements: PlanWithCorrespondingSort,
-) -> Result<Transformed<PlanWithCorrespondingSort>> {
+) -> Result<PlanWithCorrespondingSort> {
     let requirements = PlanWithCorrespondingSort::update_children(
         requirements.plan,
         requirements.children_nodes,
@@ -383,10 +377,10 @@ fn ensure_sorting(
 
     // Perform naive analysis at the beginning -- remove already-satisfied sorts:
     if requirements.plan.children().is_empty() {
-        return Ok(Transformed::No(requirements));
+        return Ok(requirements);
     }
     if let Some(result) = analyze_immediate_sort_removal(&requirements) {
-        return Ok(Transformed::Yes(result));
+        return Ok(result);
     }
 
     let plan = requirements.plan;
@@ -441,7 +435,7 @@ fn ensure_sorting(
     if is_window(&plan) && children_nodes[0].sort_connection {
         if let Some(result) = analyze_window_sort_removal(&mut children_nodes[0], &plan)?
         {
-            return Ok(Transformed::Yes(result));
+            return Ok(result);
         }
     } else if is_sort_preserving_merge(&plan)
         && children_nodes[0]
@@ -453,11 +447,9 @@ fn ensure_sorting(
         // This SortPreservingMergeExec is unnecessary, input already has a
         // single partition.
         let child_node = children_nodes.swap_remove(0);
-        return Ok(Transformed::Yes(child_node));
+        return Ok(child_node);
     }
-    Ok(Transformed::Yes(
-        PlanWithCorrespondingSort::update_children(plan, children_nodes)?,
-    ))
+    PlanWithCorrespondingSort::update_children(plan, children_nodes)
 }
 
 /// Analyzes a given [`SortExec`] (`plan`) to determine whether its input

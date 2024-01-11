@@ -165,7 +165,7 @@ mod tests {
         let schema = test::aggr_test_schema();
         let empty = Arc::new(EmptyExec::new(schema.clone()));
 
-        let empty2 = with_new_children_if_necessary(empty.clone(), vec![])?.into();
+        let empty2 = with_new_children_if_necessary(empty.clone(), vec![])?;
         assert_eq!(empty.schema(), empty2.schema());
 
         let too_many_kids = vec![empty2];

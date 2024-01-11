@@ -26,7 +26,7 @@ use crate::physical_plan::sorts::sort::SortExec;
 use crate::physical_plan::ExecutionPlan;
 use arrow_schema::DataType;
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::tree_node::{Transformed, TreeNode};
+use datafusion_common::tree_node::TreeNode;
 use datafusion_common::Result;
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::PhysicalSortExpr;
@@ -101,13 +101,13 @@ impl TopKAggregation {
         let mut cardinality_preserved = true;
         let mut closure = |plan: Arc<dyn ExecutionPlan>| {
             if !cardinality_preserved {
-                return Ok(Transformed::No(plan));
+                return Ok(plan);
             }
             if let Some(aggr) = plan.as_any().downcast_ref::<AggregateExec>() {
                 // either we run into an Aggregate and transform it
                 match Self::transform_agg(aggr, order, limit) {
                     None => cardinality_preserved = false,
-                    Some(plan) => return Ok(Transformed::Yes(plan)),
+                    Some(plan) => return Ok(plan),
                 }
             } else {
                 // or we continue down whitelisted nodes of other types
@@ -115,7 +115,7 @@ impl TopKAggregation {
                     cardinality_preserved = false;
                 }
             }
-            Ok(Transformed::No(plan))
+            Ok(plan)
         };
         let child = child.clone().transform_down_mut(&mut closure).ok()?;
         let sort = SortExec::new(sort.expr().to_vec(), child)
@@ -141,9 +141,9 @@ impl PhysicalOptimizerRule for TopKAggregation {
             plan.transform_down(&|plan| {
                 Ok(
                     if let Some(plan) = TopKAggregation::transform_sort(plan.clone()) {
-                        Transformed::Yes(plan)
+                        plan
                     } else {
-                        Transformed::No(plan)
+                        plan
                     },
                 )
             })?

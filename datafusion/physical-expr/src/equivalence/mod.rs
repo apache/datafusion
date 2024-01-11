@@ -22,7 +22,7 @@ mod properties;
 use crate::expressions::Column;
 use crate::{LexRequirement, PhysicalExpr, PhysicalSortRequirement};
 pub use class::{EquivalenceClass, EquivalenceGroup};
-use datafusion_common::tree_node::{Transformed, TreeNode};
+use datafusion_common::tree_node::TreeNode;
 pub use ordering::OrderingEquivalenceClass;
 pub use projection::ProjectionMapping;
 pub use properties::{join_equivalence_properties, EquivalenceProperties};
@@ -48,11 +48,8 @@ pub fn add_offset_to_expr(
     offset: usize,
 ) -> Arc<dyn PhysicalExpr> {
     expr.transform_down(&|e| match e.as_any().downcast_ref::<Column>() {
-        Some(col) => Ok(Transformed::Yes(Arc::new(Column::new(
-            col.name(),
-            offset + col.index(),
-        )))),
-        None => Ok(Transformed::No(e)),
+        Some(col) => Ok(Arc::new(Column::new(col.name(), offset + col.index()))),
+        None => Ok(e),
     })
     .unwrap()
     // Note that we can safely unwrap here since our transform always returns

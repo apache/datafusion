@@ -31,7 +31,7 @@ use arrow::compute::concat_batches;
 use arrow_array::{ArrowPrimitiveType, NativeAdapter, PrimitiveArray, RecordBatch};
 use arrow_buffer::{ArrowNativeType, BooleanBufferBuilder};
 use arrow_schema::{Schema, SchemaRef};
-use datafusion_common::tree_node::{Transformed, TreeNode};
+use datafusion_common::tree_node::TreeNode;
 use datafusion_common::{
     arrow_datafusion_err, plan_datafusion_err, DataFusionError, JoinSide, Result,
     ScalarValue,
@@ -287,8 +287,8 @@ pub fn convert_sort_expr_with_filter_schema(
         let converted_filter_expr = expr.transform_up(&|p| {
             convert_filter_columns(p.as_ref(), &column_map).map(|transformed| {
                 match transformed {
-                    Some(transformed) => Transformed::Yes(transformed),
-                    None => Transformed::No(p),
+                    Some(transformed) => transformed,
+                    None => p,
                 }
             })
         })?;

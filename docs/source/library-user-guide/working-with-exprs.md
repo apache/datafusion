@@ -92,7 +92,7 @@ In our example, we'll use rewriting to update our `add_one` UDF, to be rewritten
 
 ### Rewriting with `transform`
 
-To implement the inlining, we'll need to write a function that takes an `Expr` and returns a `Result<Expr>`. If the expression is _not_ to be rewritten `Transformed::No` is used to wrap the original `Expr`. If the expression _is_ to be rewritten, `Transformed::Yes` is used to wrap the new `Expr`.
+To implement the inlining, we'll need to write a function that takes an `Expr` and returns a `Result<Expr>`.
 
 ```rust
 fn rewrite_add_one(expr: Expr) -> Result<Expr> {
@@ -102,9 +102,9 @@ fn rewrite_add_one(expr: Expr) -> Result<Expr> {
                 let input_arg = scalar_fun.args[0].clone();
                 let new_expression = input_arg + lit(1i64);
 
-                Transformed::Yes(new_expression)
+                new_expression
             }
-            _ => Transformed::No(expr),
+            _ => expr,
         })
     })
 }

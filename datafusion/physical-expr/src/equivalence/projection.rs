@@ -21,7 +21,7 @@ use crate::expressions::Column;
 use crate::PhysicalExpr;
 
 use arrow::datatypes::SchemaRef;
-use datafusion_common::tree_node::{Transformed, TreeNode};
+use datafusion_common::tree_node::TreeNode;
 use datafusion_common::Result;
 
 /// Stores the mapping between source expressions and target expressions for a
@@ -68,9 +68,9 @@ impl ProjectionMapping {
                             let matching_input_field = input_schema.field(idx);
                             let matching_input_column =
                                 Column::new(matching_input_field.name(), idx);
-                            Ok(Transformed::Yes(Arc::new(matching_input_column)))
+                            Ok(Arc::new(matching_input_column))
                         }
-                        None => Ok(Transformed::No(e)),
+                        None => Ok(e),
                     })
                     .map(|source_expr| (source_expr, target_expr))
             })

@@ -18,7 +18,7 @@
 //! This module provides common traits for visiting or rewriting tree nodes easily.
 
 use crate::{with_new_children_if_necessary, ExecutionPlan};
-use datafusion_common::tree_node::{DynTreeNode, Transformed};
+use datafusion_common::tree_node::DynTreeNode;
 use datafusion_common::Result;
 use std::sync::Arc;
 
@@ -32,6 +32,6 @@ impl DynTreeNode for dyn ExecutionPlan {
         arc_self: Arc<Self>,
         new_children: Vec<Arc<Self>>,
     ) -> Result<Arc<Self>> {
-        with_new_children_if_necessary(arc_self, new_children).map(Transformed::into)
+        with_new_children_if_necessary(arc_self, new_children)
     }
 }

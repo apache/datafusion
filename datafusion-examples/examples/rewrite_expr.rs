@@ -17,7 +17,7 @@
 
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::tree_node::{Transformed, TreeNode};
+use datafusion_common::tree_node::TreeNode;
 use datafusion_common::{plan_err, DataFusionError, Result, ScalarValue};
 use datafusion_expr::{
     AggregateUDF, Between, Expr, Filter, LogicalPlan, ScalarUDF, TableSource, WindowUDF,
@@ -95,12 +95,9 @@ impl MyAnalyzerRule {
             Ok(match plan {
                 LogicalPlan::Filter(filter) => {
                     let predicate = Self::analyze_expr(filter.predicate.clone())?;
-                    Transformed::Yes(LogicalPlan::Filter(Filter::try_new(
-                        predicate,
-                        filter.input,
-                    )?))
+                    LogicalPlan::Filter(Filter::try_new(predicate, filter.input)?)
                 }
-                _ => Transformed::No(plan),
+                _ => plan,
             })
         })
     }
@@ -111,11 +108,9 @@ impl MyAnalyzerRule {
             Ok(match expr {
                 Expr::Literal(ScalarValue::Int64(i)) => {
                     // transform to UInt64
-                    Transformed::Yes(Expr::Literal(ScalarValue::UInt64(
-                        i.map(|i| i as u64),
-                    )))
+                    Expr::Literal(ScalarValue::UInt64(i.map(|i| i as u64)))
                 }
-                _ => Transformed::No(expr),
+                _ => expr,
             })
         })
     }
@@ -175,12 +170,12 @@ fn my_rewrite(expr: Expr) -> Result<Expr> {
                 let low: Expr = *low;
                 let high: Expr = *high;
                 if negated {
-                    Transformed::Yes(expr.clone().lt(low).or(expr.gt(high)))
+                    expr.clone().lt(low).or(expr.gt(high))
                 } else {
-                    Transformed::Yes(expr.clone().gt_eq(low).and(expr.lt_eq(high)))
+                    expr.clone().gt_eq(low).and(expr.lt_eq(high))
                 }
             }
-            _ => Transformed::No(expr),
+            _ => expr,
         })
     })
 }
