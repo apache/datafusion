@@ -926,6 +926,8 @@ fn build_is_null_column_expr(
     }
 }
 
+/// The maximum number of entries in an `InList` that might be rewritten into
+/// an OR chain
 const MAX_LIST_VALUE_SIZE_REWRITE: usize = 20;
 
 /// Translate logical filter expression into pruning predicate
