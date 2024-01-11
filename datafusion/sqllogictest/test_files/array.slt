@@ -953,7 +953,7 @@ select array_element(arrow_cast(make_array(make_array(1, 2, 3, 4, 5), make_array
 ----
 [1, 2, 3, 4, 5]
 
-# array_extract scalar function #8 (function alias `array_slice`)
+# array_extract scalar function #8 (function alias `array_element`)
 query IT
 select array_extract(make_array(1, 2, 3, 4, 5), 2), array_extract(make_array('h', 'e', 'l', 'l', 'o'), 3);
 ----
@@ -964,7 +964,7 @@ select array_extract(arrow_cast(make_array(1, 2, 3, 4, 5), 'LargeList(Int64)'), 
 ----
 2 l
 
-# list_element scalar function #9 (function alias `array_slice`)
+# list_element scalar function #9 (function alias `array_element`)
 query IT
 select list_element(make_array(1, 2, 3, 4, 5), 2), list_element(make_array('h', 'e', 'l', 'l', 'o'), 3);
 ----
@@ -975,7 +975,7 @@ select list_element(arrow_cast(make_array(1, 2, 3, 4, 5), 'LargeList(Int64)'), 2
 ----
 2 l
 
-# list_extract scalar function #10 (function alias `array_slice`)
+# list_extract scalar function #10 (function alias `array_element`)
 query IT
 select list_extract(make_array(1, 2, 3, 4, 5), 2), list_extract(make_array('h', 'e', 'l', 'l', 'o'), 3);
 ----
