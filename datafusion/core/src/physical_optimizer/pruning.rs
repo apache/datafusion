@@ -1974,12 +1974,7 @@ mod tests {
         ]);
 
         // test c1 BETWEEN 1 AND 5
-        let expr1 = Expr::Between(Between {
-            expr: Box::new(col("c1")),
-            negated: false,
-            low: Box::new(lit(1)),
-            high: Box::new(lit(5)),
-        });
+        let expr1 = col("c1").between(lit(1), lit(5));
 
         // test 1 <= c1 <= 5
         let expr2 = col("c1").gt_eq(lit(1)).and(col("c1").lt_eq(lit(5)));
@@ -2008,12 +2003,7 @@ mod tests {
         ));
 
         // test c2 BETWEEN 4 AND 5
-        let expr2 = Expr::Between(Between {
-            expr: Box::new(col("c2")),
-            negated: false,
-            low: Box::new(lit(4)),
-            high: Box::new(lit(5)),
-        });
+        let expr1 = col("c2").between(lit(4), lit(5));
 
         // test c1 in(1, 2) and c2 BETWEEN 4 AND 5
         let expr3 = Expr::BinaryExpr(BinaryExpr {
