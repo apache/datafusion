@@ -689,7 +689,7 @@ where
         let end = offset_window[1];
         let len = end - start;
 
-        let strde = if let Some(stride) = stride {
+        let stride = if let Some(stride) = stride {
             if stride.is_null(row_index) {
                 None
             } else {
@@ -721,23 +721,23 @@ where
         if let (Some(from), Some(to)) = (from_index, to_index) {
             if from <= to {
                 assert!(start + to <= end);
-                if let Some(strde) = strde {
-                    if strde.is_zero() {
+                if let Some(stride) = stride {
+                    if stride.is_zero() {
                         return exec_err!(
                             "array_slice got invalid stride: {}, it cannot be 0",
-                            strde
+                            stride
                         );
-                    } else if strde.is_negative() {
+                    } else if stride.is_negative() {
                         // return empty array
                         offsets.push(offsets[row_index]);
                         break;
                     }
                     let mut index = start;
                     let mut cnt = 0;
-                    let strde: O = strde.try_into().map_err(|_| {
+                    let stride: O = stride.try_into().map_err(|_| {
                         internal_datafusion_err!(
                             "array_slice got invalid stride: {}",
-                            strde
+                            stride
                         )
                     })?;
                     while index <= to {
@@ -748,7 +748,7 @@ where
                             )
                         })?;
                         mutable.extend(0, start, start + 1);
-                        index += strde;
+                        index += stride;
                         cnt += 1;
                     }
                     offsets.push(offsets[row_index] + O::usize_as(cnt));
