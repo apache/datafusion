@@ -435,7 +435,7 @@ impl DataFusionError {
     /// Example:
     /// cargo build --features 'backtrace'
     /// RUST_BACKTRACE=1 ./app
-    #[inline(always)]
+    #[inline(never)]
     pub fn get_back_trace() -> String {
         #[cfg(feature = "backtrace")]
         {
