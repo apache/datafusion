@@ -748,6 +748,14 @@ scalar_expr!(
     array,
     "returns the total number of elements in the array."
 );
+
+scalar_expr!(
+    ArrayResize,
+    array_resize,
+    array size value,
+    "returns an array with the specified size filled with the given value."
+);
+
 nary_scalar_expr!(
     MakeArray,
     array,
