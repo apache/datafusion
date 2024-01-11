@@ -498,11 +498,28 @@ impl Accumulator for NthValueAccumulator {
             return Ok(());
         }
 
-        let n_row = values[0].len();
-        for index in 0..n_row {
-            let row = get_row_at_idx(values, index)?;
-            self.values.push(row[0].clone());
-            self.ordering_values.push(row[1..].to_vec());
+        if self.n > 0 {
+            let n_required_from_start = self.n as usize;
+            let n_remaining = n_required_from_start.saturating_sub(self.values.len());
+            let n_remaining = std::cmp::min(n_remaining, values[0].len());
+            for index in 0..n_remaining {
+                let row = get_row_at_idx(values, index)?;
+                self.values.push(row[0].clone());
+                self.ordering_values.push(row[1..].to_vec());
+            }
+        } else {
+            let n_row = values[0].len();
+            let n_required_from_end = (-self.n) as usize;
+            for index in 0..n_row {
+                let row = get_row_at_idx(values, index)?;
+                self.values.push(row[0].clone());
+                self.ordering_values.push(row[1..].to_vec());
+            }
+            let start_offset = self.values.len().saturating_sub(n_required_from_end);
+            if start_offset > 0 {
+                self.values = self.values[start_offset..].to_vec();
+                self.ordering_values = self.ordering_values[start_offset..].to_vec();
+            }
         }
 
         Ok(())
