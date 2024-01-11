@@ -482,7 +482,7 @@ Environment variables are read during <code class="docutils literal notranslate"
 </tr>
 <tr class="row-even"><td><p>datafusion.execution.parquet.pushdown_filters</p></td>
 <td><p>false</p></td>
-<td><p>If true, filter expressions are be applied during the parquet decoding operation to reduce the number of rows decoded</p></td>
+<td><p>If true, filter expressions are be applied during the parquet decoding operation to reduce the number of rows decoded. This optimization is sometimes called “late materialization”.</p></td>
 </tr>
 <tr class="row-odd"><td><p>datafusion.execution.parquet.reorder_filters</p></td>
 <td><p>false</p></td>
