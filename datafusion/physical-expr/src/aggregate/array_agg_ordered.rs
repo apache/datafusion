@@ -480,6 +480,10 @@ impl NthValueAccumulator {
         ordering_dtypes: &[DataType],
         ordering_req: LexOrdering,
     ) -> Result<Self> {
+        if n == 0 {
+            // n cannot be 0
+            return internal_err!("Nth value indices are 1 based. 0 is invalid index");
+        }
         let mut datatypes = vec![datatype.clone()];
         datatypes.extend(ordering_dtypes.iter().cloned());
         Ok(Self {
@@ -498,9 +502,9 @@ impl Accumulator for NthValueAccumulator {
             return Ok(());
         }
 
+        let n_required = self.n.unsigned_abs() as usize;
         if self.n > 0 {
-            let n_required_from_start = self.n as usize;
-            let n_remaining = n_required_from_start.saturating_sub(self.values.len());
+            let n_remaining = n_required.saturating_sub(self.values.len());
             let n_remaining = std::cmp::min(n_remaining, values[0].len());
             for index in 0..n_remaining {
                 let row = get_row_at_idx(values, index)?;
@@ -509,13 +513,12 @@ impl Accumulator for NthValueAccumulator {
             }
         } else {
             let n_row = values[0].len();
-            let n_required_from_end = (-self.n) as usize;
             for index in 0..n_row {
                 let row = get_row_at_idx(values, index)?;
                 self.values.push(row[0].clone());
                 self.ordering_values.push(row[1..].to_vec());
             }
-            let start_offset = self.values.len().saturating_sub(n_required_from_end);
+            let start_offset = self.values.len().saturating_sub(n_required);
             if start_offset > 0 {
                 self.values = self.values[start_offset..].to_vec();
                 self.ordering_values = self.ordering_values[start_offset..].to_vec();
@@ -531,6 +534,7 @@ impl Accumulator for NthValueAccumulator {
         }
         // First entry in the state is the aggregation result.
         let array_agg_values = &states[0];
+        let n_required = self.n.unsigned_abs() as usize;
         if self.ordering_req.is_empty() {
             let array_agg_res =
                 ScalarValue::convert_array_to_scalar_vec(array_agg_values)?;
@@ -540,6 +544,10 @@ impl Accumulator for NthValueAccumulator {
             partition_values.extend(self.values.clone());
             for v in array_agg_res.into_iter() {
                 partition_values.extend(v);
+                if partition_values.len() > n_required {
+                    // There is enough data collected can stop merging
+                    break;
+                }
             }
             self.values = partition_values;
         } else if let Some(agg_orderings) = states[1].as_list_opt::<i32>() {
@@ -608,28 +616,21 @@ impl Accumulator for NthValueAccumulator {
     }
 
     fn evaluate(&self) -> Result<ScalarValue> {
-        match self.n.cmp(&0) {
-            Ordering::Greater => {
-                let forward_idx = self.n as usize - 1;
-                if let Some(nth_value) = self.values.get(forward_idx) {
-                    Ok(nth_value.clone())
-                } else {
-                    ScalarValue::try_from(self.datatypes[0].clone())
-                }
-            }
-            Ordering::Less => {
-                let backward_idx = (-self.n) as usize;
-                if self.values.len() >= backward_idx {
-                    let idx = self.values.len() - backward_idx;
-                    Ok(self.values[idx].clone())
-                } else {
-                    ScalarValue::try_from(self.datatypes[0].clone())
-                }
-            }
-            Ordering::Equal => {
-                // n cannot be 0
-                internal_err!("Nth value indices are 1 based. 0 is invalid index")
-            }
+        let n_required = self.n.unsigned_abs() as usize;
+        let from_start = self.n > 0;
+        let nth_value_idx = if from_start {
+            // index is from start
+            let forward_idx = n_required - 1;
+            (forward_idx < self.values.len()).then_some(forward_idx)
+        } else {
+            // index is from end
+            self.values.len().checked_sub(n_required)
+        };
+        if let Some(idx) = nth_value_idx {
+            let nth_value = self.values[idx].clone();
+            Ok(nth_value.clone())
+        } else {
+            ScalarValue::try_from(self.datatypes[0].clone())
         }
     }
 
