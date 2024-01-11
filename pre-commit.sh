@@ -61,6 +61,9 @@ echo -e "$(GREEN INFO): cargo clippy ..."
 # Cargo clippy always return exit code 0, and `tee` doesn't work.
 # So let's just run cargo clippy.
 cargo clippy --all-targets --workspace --features avro,pyarrow -- -D warnings
+pushd datafusion-cli
+cargo clippy --all-targets --all-features -- -D warnings
+popd
 echo -e "$(GREEN INFO): cargo clippy done"
 
 # 2. cargo fmt: format with nightly and stable.
