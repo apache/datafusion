@@ -18,8 +18,10 @@
 //! Collection of utility functions that are leveraged by the query optimizer rules
 
 use crate::{OptimizerConfig, OptimizerRule};
+use datafusion_common::tree_node::{TreeNode, VisitRecursion};
 use datafusion_common::{Column, DFSchemaRef};
 use datafusion_common::{DFSchema, Result};
+use datafusion_expr::expr::is_volatile;
 use datafusion_expr::expr_rewriter::replace_col;
 use datafusion_expr::utils as expr_utils;
 use datafusion_expr::{logical_plan::LogicalPlan, Expr, Operator};
@@ -90,6 +92,21 @@ pub(crate) fn replace_qualified_name(
 pub fn log_plan(description: &str, plan: &LogicalPlan) {
     debug!("{description}:\n{}\n", plan.display_indent());
     trace!("{description}::\n{}\n", plan.display_indent_schema());
+}
+
+/// check whether the expression is volatile predicates
+pub(crate) fn is_volatile_expression(e: &Expr) -> Result<bool> {
+    let mut is_volatile_expr = false;
+    e.apply(&mut |expr| {
+        Ok(if is_volatile(expr)? {
+            is_volatile_expr = true;
+            VisitRecursion::Stop
+        } else {
+            VisitRecursion::Continue
+        })
+    })
+    .unwrap();
+    Ok(is_volatile_expr)
 }
 
 /// Splits a conjunctive [`Expr`] such as `A AND B AND C` => `[A, B, C]`
