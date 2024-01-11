@@ -936,7 +936,7 @@ const MAX_LIST_VALUE_SIZE_REWRITE: usize = 20;
 ///
 /// Returns the pruning predicate as an [`PhysicalExpr`]
 ///
-/// Notice: For [`phys_expr::InListExpr`] if in list values more than 20, it will be rewritten to TRUE
+/// Notice: Does not handle [`phys_expr::InListExpr`] greater than 20, which will be rewritten to TRUE
 fn build_predicate_expression(
     expr: &Arc<dyn PhysicalExpr>,
     schema: &Schema,
