@@ -47,6 +47,7 @@ pub(crate) mod covariance;
 pub(crate) mod first_last;
 pub(crate) mod grouping;
 pub(crate) mod median;
+pub(crate) mod nth_value;
 pub(crate) mod string_agg;
 #[macro_use]
 pub(crate) mod min_max;
