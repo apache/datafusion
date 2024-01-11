@@ -16,6 +16,7 @@
 // under the License.
 
 use arrow::csv::WriterBuilder;
+use datafusion_common::file_options::arrow_writer::ArrowWriterOptions;
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::str::FromStr;
@@ -860,13 +861,9 @@ impl AsLogicalPlan for LogicalPlanNode {
                             Some(ft) => match ft {
                                 file_type_writer_options::FileType::ArrowOptions(
                                     writer_options,
-                                ) => {
-                                    let writer_builder =
-                                        arrow_writer_options_from_proto(writer_options)?;
-                                    CopyOptions::WriterOptions(Box::new(
-                                        FileTypeWriterOptions::Arrow(writer_builder),
-                                    ))
-                                }
+                                ) => CopyOptions::WriterOptions(Box::new(
+                                    FileTypeWriterOptions::Arrow(ArrowWriterOptions {}),
+                                )),
                                 file_type_writer_options::FileType::CsvOptions(
                                     writer_options,
                                 ) => {
