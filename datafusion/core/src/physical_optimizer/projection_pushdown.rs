@@ -159,6 +159,7 @@ fn try_swapping_with_csv(
     projection: &ProjectionExec,
     csv: &CsvExec,
 ) -> Option<Arc<dyn ExecutionPlan>> {
+    // info!("csv exec: {}", csv);
     // If there is any non-column or alias-carrier expression, Projection should not be removed.
     // This process can be moved into CsvExec, but it would be an overlap of their responsibility.
     all_alias_free_columns(projection.expr()).then(|| {
@@ -201,7 +202,7 @@ fn try_swapping_with_memory(
             MemoryExec::try_new(
                 memory.partitions(),
                 memory.original_schema(),
-                Some(new_projections),
+                new_projections,
             )
             .map(|e| Arc::new(e) as _)
         })
@@ -248,7 +249,7 @@ fn try_swapping_with_streaming_table(
     StreamingTableExec::try_new(
         streaming_table.partition_schema().clone(),
         streaming_table.partitions().clone(),
-        Some(&new_projections),
+        new_projections.as_ref(),
         lex_orderings,
         streaming_table.is_infinite(),
     )
