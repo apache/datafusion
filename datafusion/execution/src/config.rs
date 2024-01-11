@@ -26,7 +26,7 @@ use datafusion_common::{config::ConfigOptions, Result, ScalarValue};
 
 /// Configuration options for [`SessionContext`].
 ///
-/// Can be passed to `SessionContext::with_config` to customize the configuration of DataFusion.
+/// Can be passed to [`SessionContext::new_with_config`] to customize the configuration of DataFusion.
 ///
 /// Options can be set using namespaces keys with `.` as the separator, where the
 /// namespace determines which configuration struct the value to routed to. All
@@ -75,6 +75,8 @@ use datafusion_common::{config::ConfigOptions, Result, ScalarValue};
 /// | --------- | ------------- |
 /// | `datafusion.catalog` | [CatalogOptions][datafusion_common::config::CatalogOptions] |
 /// | `datafusion.execution` | [ExecutionOptions][datafusion_common::config::ExecutionOptions] |
+/// | `datafusion.execution.aggregate` | [AggregateOptions][datafusion_common::config::AggregateOptions] |
+/// | `datafusion.execution.parquet` | [ParquetOptions][datafusion_common::config::ParquetOptions] |
 /// | `datafusion.optimizer` | [OptimizerOptions][datafusion_common::config::OptimizerOptions] |
 /// | `datafusion.sql_parser` | [SqlParserOptions][datafusion_common::config::SqlParserOptions] |
 /// | `datafusion.explain` | [ExplainOptions][datafusion_common::config::ExplainOptions] |
@@ -84,6 +86,7 @@ use datafusion_common::{config::ConfigOptions, Result, ScalarValue};
 /// Configuration options can be extended. See [SessionConfig::with_extension] for details.
 ///
 /// [`SessionContext`]: https://docs.rs/datafusion/latest/datafusion/execution/context/struct.SessionContext.html
+/// [`SessionContext::new_with_config`]: https://docs.rs/datafusion/latest/datafusion/execution/context/struct.SessionContext.html#method.new_with_config
 #[derive(Clone, Debug)]
 pub struct SessionConfig {
     /// Configuration options
