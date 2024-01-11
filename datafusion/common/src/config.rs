@@ -153,6 +153,10 @@ macro_rules! config_namespace {
 
 config_namespace! {
     /// Options related to catalog and directory scanning
+    ///
+    /// See also: [`SessionConfig`]
+    ///
+    /// [`SessionConfig`]: https://docs.rs/datafusion/latest/datafusion/prelude/struct.SessionConfig.html
     pub struct CatalogOptions {
         /// Whether the default catalog and schema should be created automatically.
         pub create_default_catalog_and_schema: bool, default = true
@@ -180,6 +184,10 @@ config_namespace! {
 
 config_namespace! {
     /// Options related to SQL parser
+    ///
+    /// See also: [`SessionConfig`]
+    ///
+    /// [`SessionConfig`]: https://docs.rs/datafusion/latest/datafusion/prelude/struct.SessionConfig.html
     pub struct SqlParserOptions {
         /// When set to true, SQL parser will parse float as decimal type
         pub parse_float_as_decimal: bool, default = false
@@ -196,6 +204,10 @@ config_namespace! {
 
 config_namespace! {
     /// Options related to query execution
+    ///
+    /// See also: [`SessionConfig`]
+    ///
+    /// [`SessionConfig`]: https://docs.rs/datafusion/latest/datafusion/prelude/struct.SessionConfig.html
     pub struct ExecutionOptions {
         /// Default batch size while creating new batches, it's especially useful for
         /// buffer-in-memory batches since creating tiny batches would result in too much
@@ -283,6 +295,10 @@ config_namespace! {
 
 config_namespace! {
     /// Options related to parquet files
+    ///
+    /// See also: [`SessionConfig`]
+    ///
+    /// [`SessionConfig`]: https://docs.rs/datafusion/latest/datafusion/prelude/struct.SessionConfig.html
     pub struct ParquetOptions {
         /// If true, reads the Parquet data page level metadata (the
         /// Page Index), if present, to reduce the I/O and number of
@@ -306,7 +322,7 @@ config_namespace! {
         pub metadata_size_hint: Option<usize>, default = None
 
         /// If true, filter expressions are be applied during the parquet decoding operation to
-        /// reduce the number of rows decoded
+        /// reduce the number of rows decoded. This optimization is sometimes called "late materialization".
         pub pushdown_filters: bool, default = false
 
         /// If true, filter expressions evaluated during the parquet decoding operation
@@ -416,6 +432,10 @@ config_namespace! {
 
 config_namespace! {
     /// Options related to aggregate execution
+    ///
+    /// See also: [`SessionConfig`]
+    ///
+    /// [`SessionConfig`]: https://docs.rs/datafusion/latest/datafusion/prelude/struct.SessionConfig.html
     pub struct AggregateOptions {
         /// Specifies the threshold for using `ScalarValue`s to update
         /// accumulators during high-cardinality aggregations for each input batch.
@@ -433,6 +453,10 @@ config_namespace! {
 
 config_namespace! {
     /// Options related to query optimization
+    ///
+    /// See also: [`SessionConfig`]
+    ///
+    /// [`SessionConfig`]: https://docs.rs/datafusion/latest/datafusion/prelude/struct.SessionConfig.html
     pub struct OptimizerOptions {
         /// When set to true, the optimizer will push a limit operation into
         /// grouped aggregations which have no aggregate expressions, as a soft limit,
@@ -541,6 +565,10 @@ config_namespace! {
 
 config_namespace! {
     /// Options controlling explain output
+    ///
+    /// See also: [`SessionConfig`]
+    ///
+    /// [`SessionConfig`]: https://docs.rs/datafusion/latest/datafusion/prelude/struct.SessionConfig.html
     pub struct ExplainOptions {
         /// When set to true, the explain statement will only print logical plans
         pub logical_plan_only: bool, default = false
