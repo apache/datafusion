@@ -4284,3 +4284,113 @@ LIMIT 5
 1 FRA 3 2022-01-02T12:00:00 EUR 200
 1 TUR 2 2022-01-01T11:30:00 TRY 75
 1 TUR 4 2022-01-03T10:00:00 TRY 100
+
+# Create a table with timestamp data
+statement ok
+CREATE TABLE src_table (
+	t1 TIMESTAMP,
+	c2 INT,
+) AS VALUES
+('2020-12-10T00:00:00.00Z', 0),
+('2020-12-11T00:00:00.00Z', 1),
+('2020-12-12T00:00:00.00Z', 2),
+('2020-12-13T00:00:00.00Z', 3),
+('2020-12-14T00:00:00.00Z', 4),
+('2020-12-15T00:00:00.00Z', 5),
+('2020-12-16T00:00:00.00Z', 6),
+('2020-12-17T00:00:00.00Z', 7),
+('2020-12-18T00:00:00.00Z', 8),
+('2020-12-19T00:00:00.00Z', 9);
+
+# Use timestamp_table to create a partitioned file
+query PI
+COPY (SELECT * FROM src_table)
+TO 'test_files/scratch/groupby/timestamp_table/0.csv'
+(FORMAT CSV, SINGLE_FILE_OUTPUT true);
+----
+10
+
+query PI
+COPY (SELECT * FROM src_table)
+TO 'test_files/scratch/groupby/timestamp_table/1.csv'
+(FORMAT CSV, SINGLE_FILE_OUTPUT true);
+----
+10
+
+query PI
+COPY (SELECT * FROM src_table)
+TO 'test_files/scratch/groupby/timestamp_table/2.csv'
+(FORMAT CSV, SINGLE_FILE_OUTPUT true);
+----
+10
+
+query PI
+COPY (SELECT * FROM src_table)
+TO 'test_files/scratch/groupby/timestamp_table/3.csv'
+(FORMAT CSV, SINGLE_FILE_OUTPUT true);
+----
+10
+
+# Create a table from the generated CSV files:
+statement ok
+CREATE EXTERNAL TABLE timestamp_table (
+	t1 TIMESTAMP,
+	c2 INT,
+)
+STORED AS CSV
+WITH HEADER ROW
+LOCATION 'test_files/scratch/groupby/timestamp_table';
+
+# Group By using date_trunc
+query PI rowsort
+SELECT date_trunc('week', t1) as week, sum(c2)
+FROM timestamp_table
+GROUP BY date_trunc('week', t1)
+----
+2020-12-07T00:00:00 24
+2020-12-14T00:00:00 156
+
+# GROUP BY using LIMIT
+query IP
+SELECT c2, MAX(t1)
+FROM timestamp_table
+GROUP BY c2
+ORDER BY MAX(t1) DESC
+LIMIT 4;
+----
+9 2020-12-19T00:00:00
+8 2020-12-18T00:00:00
+7 2020-12-17T00:00:00
+6 2020-12-16T00:00:00
+
+# Explain the GROUP BY with LIMIT to ensure the plan contains `lim=[4]`
+query TT
+EXPLAIN
+SELECT c2, MAX(t1)
+FROM timestamp_table
+GROUP BY c2
+ORDER BY MAX(t1) DESC
+LIMIT 4;
+----
+logical_plan
+Limit: skip=0, fetch=4
+--Sort: MAX(timestamp_table.t1) DESC NULLS FIRST, fetch=4
+----Aggregate: groupBy=[[timestamp_table.c2]], aggr=[[MAX(timestamp_table.t1)]]
+------TableScan: timestamp_table projection=[t1, c2]
+physical_plan
+GlobalLimitExec: skip=0, fetch=4
+--SortPreservingMergeExec: [MAX(timestamp_table.t1)@1 DESC], fetch=4
+----SortExec: TopK(fetch=4), expr=[MAX(timestamp_table.t1)@1 DESC]
+------AggregateExec: mode=FinalPartitioned, gby=[c2@0 as c2], aggr=[MAX(timestamp_table.t1)], lim=[4]
+--------CoalesceBatchesExec: target_batch_size=2
+----------RepartitionExec: partitioning=Hash([c2@0], 8), input_partitions=8
+------------AggregateExec: mode=Partial, gby=[c2@1 as c2], aggr=[MAX(timestamp_table.t1)], lim=[4]
+--------------RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=4
+----------------CsvExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/groupby/timestamp_table/0.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/groupby/timestamp_table/1.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/groupby/timestamp_table/2.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/groupby/timestamp_table/3.csv]]}, projection=[t1, c2], has_header=true
+
+# Clean up
+statement ok
+DROP TABLE src_table;
+
+statement ok
+DROP TABLE timestamp_table;
