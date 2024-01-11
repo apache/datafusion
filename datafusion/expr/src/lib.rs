@@ -40,7 +40,6 @@ mod udf;
 mod udwf;
 
 pub mod aggregate_function;
-pub mod array_expressions;
 pub mod conditional_expressions;
 pub mod expr;
 pub mod expr_fn;
