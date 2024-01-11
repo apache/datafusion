@@ -590,36 +590,18 @@ pub fn array_slice(args: &[ArrayRef]) -> Result<ArrayRef> {
     let to_array = as_int64_array(&args[2])?;
 
     let array_data_type = args[0].data_type();
-    match args_len {
-        3 => match array_data_type {
-            DataType::List(_) => {
-                let array = as_list_array(&args[0])?;
-                general_array_slice::<i32>(array, from_array, to_array, stride)
-            }
-            DataType::LargeList(_) => {
-                let array = as_large_list_array(&args[0])?;
-                let from_array = as_int64_array(&args[1])?;
-                let to_array = as_int64_array(&args[2])?;
-                general_array_slice::<i64>(array, from_array, to_array, stride)
-            }
-            _ => exec_err!("array_slice does not support type: {:?}", array_data_type),
-        },
-        4 => match array_data_type {
-            DataType::List(_) => {
-                let array = as_list_array(&args[0])?;
-                let from_array = as_int64_array(&args[1])?;
-                let to_array = as_int64_array(&args[2])?;
-                general_array_slice::<i32>(array, from_array, to_array, stride)
-            }
-            DataType::LargeList(_) => {
-                let array = as_large_list_array(&args[0])?;
-                let from_array = as_int64_array(&args[1])?;
-                let to_array = as_int64_array(&args[2])?;
-                general_array_slice::<i64>(array, from_array, to_array, stride)
-            }
-            _ => exec_err!("array_slice does not support type: {:?}", array_data_type),
-        },
-        _ => unreachable!(),
+    match array_data_type {
+        DataType::List(_) => {
+            let array = as_list_array(&args[0])?;
+            general_array_slice::<i32>(array, from_array, to_array, stride)
+        }
+        DataType::LargeList(_) => {
+            let array = as_large_list_array(&args[0])?;
+            let from_array = as_int64_array(&args[1])?;
+            let to_array = as_int64_array(&args[2])?;
+            general_array_slice::<i64>(array, from_array, to_array, stride)
+        }
+        _ => exec_err!("array_slice does not support type: {:?}", array_data_type),
     }
 }
 
