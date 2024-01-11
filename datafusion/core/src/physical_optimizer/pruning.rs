@@ -1145,7 +1145,7 @@ mod tests {
     };
     use datafusion_common::{ScalarValue, ToDFSchema};
     use datafusion_expr::expr::InList;
-    use datafusion_expr::{cast, is_null, try_cast, Between, BinaryExpr, Expr};
+    use datafusion_expr::{cast, is_null, try_cast, Expr};
     use datafusion_physical_expr::create_physical_expr;
     use datafusion_physical_expr::execution_props::ExecutionProps;
     use std::collections::HashMap;
@@ -1996,7 +1996,7 @@ mod tests {
             Field::new("c2", DataType::Int32, false),
         ]);
         // test c1 in(1, 2)
-        let expr1 = col("cl").in_list(vec![lit(1), lit(2)], false);
+        let expr1 = col("c1").in_list(vec![lit(1), lit(2)], false);
 
         // test c2 BETWEEN 4 AND 5
         let expr2 = col("c2").between(lit(4), lit(5));
@@ -2018,7 +2018,7 @@ mod tests {
         // test c1 in(1..21)
         // in pruning.rs has MAX_LIST_VALUE_SIZE_REWRITE = 20, more than this value will be rewrite
         // always true
-        let expr = col("cl").in_list((1..=21).map(lit).collect(), false);
+        let expr = col("c1").in_list((1..=21).map(lit).collect(), false);
 
         let expected_expr = "true";
         let predicate_expr =
