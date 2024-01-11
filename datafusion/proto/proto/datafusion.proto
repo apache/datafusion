@@ -1211,6 +1211,7 @@ message FileTypeWriterOptions {
     JsonWriterOptions json_options = 1;
     ParquetWriterOptions parquet_options = 2;
     CsvWriterOptions csv_options = 3;
+    ArrowWriterOptions arrow_options = 4;
   }
 }
 
@@ -1240,6 +1241,8 @@ message CsvWriterOptions {
   // Optional value to represent null
   string null_value = 8;
 }
+
+message ArrowWriterOptions {}
 
 message WriterProperties {
   uint64 data_page_size_limit = 1;
