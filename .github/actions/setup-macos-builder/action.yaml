@@ -15,8 +15,8 @@
 # specific language governing permissions and limitations
 # under the License.
 
-name: Prepare Rust Builder
-description: 'Prepare Rust Build Environment'
+name: Prepare Rust Builder for MacOS
+description: 'Prepare Rust Build Environment for MacOS'
 inputs:
   rust-version:
     description: 'version of rust to install (e.g. stable)'
