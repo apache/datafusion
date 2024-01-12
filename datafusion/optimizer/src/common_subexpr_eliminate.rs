@@ -635,7 +635,9 @@ impl TreeNodeVisitor for ExprIdentifierVisitor<'_> {
 
         let (idx, sub_expr_desc) = self.pop_enter_mark();
         // skip exprs should not be recognize.
-        if self.expr_mask.ignores(expr) {
+        if self.expr_mask.ignores(expr) || Self::desc_expr(expr).contains("now()")
+        // Obviously horrendous
+        {
             self.id_array[idx].0 = self.series_number;
             let desc = Self::desc_expr(expr);
             self.visit_stack.push(VisitRecord::ExprItem(desc));
