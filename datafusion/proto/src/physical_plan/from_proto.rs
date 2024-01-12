@@ -42,6 +42,7 @@ use datafusion::physical_plan::windows::create_window_expr;
 use datafusion::physical_plan::{
     functions, ColumnStatistics, Partitioning, PhysicalExpr, Statistics, WindowExpr,
 };
+use datafusion_common::file_options::arrow_writer::ArrowWriterOptions;
 use datafusion_common::file_options::csv_writer::CsvWriterOptions;
 use datafusion_common::file_options::json_writer::JsonWriterOptions;
 use datafusion_common::file_options::parquet_writer::ParquetWriterOptions;
@@ -834,6 +835,10 @@ impl TryFrom<&protobuf::FileTypeWriterOptions> for FileTypeWriterOptions {
             .ok_or_else(|| proto_error("Missing required file_type field in protobuf"))?;
 
         match file_type {
+            protobuf::file_type_writer_options::FileType::ArrowOptions(_) => {
+                Ok(Self::Arrow(ArrowWriterOptions::new()))
+            }
+
             protobuf::file_type_writer_options::FileType::JsonOptions(opts) => {
                 let compression: CompressionTypeVariant = opts.compression().into();
                 Ok(Self::JSON(JsonWriterOptions::new(compression)))

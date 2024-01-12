@@ -859,11 +859,13 @@ impl AsLogicalPlan for LogicalPlanNode {
                     Some(copy_to_node::CopyOptions::WriterOptions(opt)) => {
                         match &opt.file_type {
                             Some(ft) => match ft {
-                                file_type_writer_options::FileType::ArrowOptions(
-                                    writer_options,
-                                ) => CopyOptions::WriterOptions(Box::new(
-                                    FileTypeWriterOptions::Arrow(ArrowWriterOptions {}),
-                                )),
+                                file_type_writer_options::FileType::ArrowOptions(_) => {
+                                    CopyOptions::WriterOptions(Box::new(
+                                        FileTypeWriterOptions::Arrow(
+                                            ArrowWriterOptions::new(),
+                                        ),
+                                    ))
+                                }
                                 file_type_writer_options::FileType::CsvOptions(
                                     writer_options,
                                 ) => {
