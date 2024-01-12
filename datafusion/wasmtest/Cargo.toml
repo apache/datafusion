@@ -37,15 +37,15 @@ crate-type = ["cdylib", "rlib"]
 # all the `std::fmt` and `std::panicking` infrastructure, so isn't great for
 # code size when deploying.
 console_error_panic_hook = { version = "0.1.1", optional = true }
+datafusion = { path = "../core", default-features = false }
 
 datafusion-common = { workspace = true }
+datafusion-execution = { workspace = true }
 datafusion-expr = { workspace = true }
 datafusion-optimizer = { workspace = true }
 datafusion-physical-expr = { workspace = true }
-datafusion-sql = { workspace = true }
-datafusion-execution = { workspace = true }
 datafusion-physical-plan = { workspace = true }
-datafusion = { path = "../core", default-features = false }
+datafusion-sql = { workspace = true }
 
 # getrandom must be compiled with js feature
 getrandom = { version = "0.2.8", features = ["js"] }
