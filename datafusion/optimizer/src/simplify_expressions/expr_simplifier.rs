@@ -381,12 +381,8 @@ impl<'a> ConstEvaluator<'a> {
             return Ok(s);
         }
 
-        let phys_expr = create_physical_expr(
-            &expr,
-            &self.input_schema,
-            &self.input_batch.schema(),
-            self.execution_props,
-        )?;
+        let phys_expr =
+            create_physical_expr(&expr, &self.input_schema, self.execution_props)?;
         let col_val = phys_expr.evaluate(&self.input_batch)?;
         match col_val {
             ColumnarValue::Array(a) => {
