@@ -41,7 +41,7 @@ use datafusion_common::{
 };
 use datafusion_expr::{
     and, lit, or, BinaryExpr, BuiltinScalarFunction, Case, ColumnarValue, Expr, Like,
-    Operator, ScalarFunctionDefinition, Volatility,
+    ScalarFunctionDefinition, Volatility,
 };
 use datafusion_expr::{
     expr::{InList, InSubquery, ScalarFunction},
@@ -249,7 +249,9 @@ impl TreeNodeRewriter for Canonicalizer {
         };
         match (left.as_ref(), right.as_ref(), op.swap()) {
             // <col1> <op> <col2>
-            (Expr::Column(left_col), Expr::Column(right_col), Some(swapped_op)) if right_col > left_col => {
+            (Expr::Column(left_col), Expr::Column(right_col), Some(swapped_op))
+                if right_col > left_col =>
+            {
                 Ok(Expr::BinaryExpr(BinaryExpr {
                     left: right,
                     op: swapped_op,

@@ -1057,10 +1057,22 @@ impl DefaultPhysicalPlanner {
                         .map(|(l, r)| {
                             let l = l.try_into_col()?;
                             let r = r.try_into_col()?;
-                            Ok((
-                                Column::new(&l.name, left_df_schema.index_of_column(&l)?),
-                                Column::new(&r.name, right_df_schema.index_of_column(&r)?),
-                            ))
+                            let cols = match left_df_schema.index_of_column(&l) {
+                                Ok(index) => {
+                                    (
+                                        Column::new(&l.name, index),
+                                        Column::new(&r.name, right_df_schema.index_of_column(&r)?),
+                                    )
+                                }
+                                Err(_) => {
+                                    // If left_df_schema.index_of_column returns an error, match l.name with right_df_schema.index_of_column
+                                    (
+                                        Column::new(&l.name, right_df_schema.index_of_column(&l)?),
+                                        Column::new(&r.name, left_df_schema.index_of_column(&r)?),
+                                    )
+                                }
+                            };
+                            Ok(cols)
                         })
                         .collect::<Result<join_utils::JoinOn>>()?;
 
