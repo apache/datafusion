@@ -26,13 +26,15 @@
 //! * Signature: see `Signature`
 //! * Return type: a function `(arg_types) -> return_type`. E.g. for min, ([f32]) -> f32, ([f64]) -> f64.
 
-use crate::aggregate::regr::RegrType;
-use crate::expressions::Literal;
-use crate::{expressions, AggregateExpr, PhysicalExpr, PhysicalSortExpr};
-use arrow::datatypes::Schema;
-use datafusion_common::{not_impl_err, DataFusionError, Result};
-pub use datafusion_expr::AggregateFunction;
 use std::sync::Arc;
+
+use crate::aggregate::regr::RegrType;
+use crate::expressions::{self, Literal};
+use crate::{AggregateExpr, PhysicalExpr, PhysicalSortExpr};
+
+use arrow::datatypes::Schema;
+use datafusion_common::{internal_err, not_impl_err, DataFusionError, Result};
+use datafusion_expr::AggregateFunction;
 
 /// Create a physical aggregation expression.
 /// This function errors when `input_phy_exprs`' can't be coerced to a valid argument type of the aggregation function.
@@ -372,16 +374,19 @@ pub fn create_aggregate_expr(
         )),
         (AggregateFunction::NthValue, _) => {
             let expr = &input_phy_exprs[0];
-            let n = input_phy_exprs[1]
+            let Some(n) = input_phy_exprs[1]
                 .as_any()
                 .downcast_ref::<Literal>()
-                .unwrap()
-                .value();
-            let n: i64 = n.clone().try_into()?;
+                .map(|literal| literal.value())
+            else {
+                return internal_err!(
+                    "Second argument of NTH_VALUE needs to be a literal"
+                );
+            };
             let nullable = expr.nullable(input_schema)?;
             Arc::new(expressions::NthValueAgg::new(
                 expr.clone(),
-                n,
+                n.clone().try_into()?,
                 name,
                 input_phy_types[0].clone(),
                 nullable,
@@ -416,9 +421,9 @@ mod tests {
         BitAnd, BitOr, BitXor, BoolAnd, BoolOr, Correlation, Count, Covariance,
         DistinctArrayAgg, DistinctCount, Max, Min, Stddev, Sum, Variance,
     };
+
     use arrow::datatypes::{DataType, Field};
-    use datafusion_common::plan_err;
-    use datafusion_common::ScalarValue;
+    use datafusion_common::{plan_err, ScalarValue};
     use datafusion_expr::type_coercion::aggregates::NUMERICS;
     use datafusion_expr::{type_coercion, Signature};
 

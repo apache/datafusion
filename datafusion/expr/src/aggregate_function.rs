@@ -17,12 +17,15 @@
 
 //! Aggregate function module contains all built-in aggregate functions definitions
 
-use crate::utils;
-use crate::{type_coercion::aggregates::*, Signature, TypeSignature, Volatility};
-use arrow::datatypes::{DataType, Field};
-use datafusion_common::{plan_datafusion_err, plan_err, DataFusionError, Result};
 use std::sync::Arc;
 use std::{fmt, str::FromStr};
+
+use crate::utils;
+use crate::{type_coercion::aggregates::*, Signature, TypeSignature, Volatility};
+
+use arrow::datatypes::{DataType, Field};
+use datafusion_common::{plan_datafusion_err, plan_err, DataFusionError, Result};
+
 use strum_macros::EnumIter;
 
 /// Enum of all built-in aggregate functions
@@ -30,27 +33,27 @@ use strum_macros::EnumIter;
 // https://arrow.apache.org/datafusion/contributor-guide/index.html#how-to-add-a-new-aggregate-function
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash, EnumIter)]
 pub enum AggregateFunction {
-    /// count
+    /// Count
     Count,
-    /// sum
+    /// Sum
     Sum,
-    /// min
+    /// Minimum
     Min,
-    /// max
+    /// Maximum
     Max,
-    /// avg
+    /// Average
     Avg,
-    /// median
+    /// Median
     Median,
-    /// Approximate aggregate function
+    /// Approximate distinct function
     ApproxDistinct,
-    /// array_agg
+    /// Aggregation into an array
     ArrayAgg,
-    /// first_value
+    /// First value in a group according to some ordering
     FirstValue,
-    /// last_value
+    /// Last value in a group according to some ordering
     LastValue,
-    /// nth_value
+    /// N'th value in a group according to some ordering
     NthValue,
     /// Variance (Sample)
     Variance,
@@ -102,7 +105,7 @@ pub enum AggregateFunction {
     BoolAnd,
     /// Bool Or
     BoolOr,
-    /// string_agg
+    /// String aggregation
     StringAgg,
 }
 
@@ -428,6 +431,7 @@ impl AggregateFunction {
 #[cfg(test)]
 mod tests {
     use super::*;
+
     use strum::IntoEnumIterator;
 
     #[test]

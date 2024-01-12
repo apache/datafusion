@@ -28,10 +28,9 @@ use crate::aggregate::utils::{down_cast_any_ref, ordering_fields};
 use crate::expressions::format_state_name;
 use crate::{AggregateExpr, LexOrdering, PhysicalExpr, PhysicalSortExpr};
 
-use arrow::array::ArrayRef;
+use arrow::array::{Array, ArrayRef};
 use arrow::datatypes::{DataType, Field};
 use arrow_array::cast::AsArray;
-use arrow_array::Array;
 use arrow_schema::{Fields, SortOptions};
 use datafusion_common::utils::{compare_rows, get_row_at_idx};
 use datafusion_common::{exec_err, DataFusionError, Result, ScalarValue};
@@ -500,12 +499,14 @@ pub(crate) fn merge_ordered_arrays(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use crate::aggregate::array_agg_ordered::merge_ordered_arrays;
+
     use arrow_array::{Array, ArrayRef, Int64Array};
     use arrow_schema::SortOptions;
     use datafusion_common::utils::get_row_at_idx;
     use datafusion_common::{Result, ScalarValue};
-    use std::sync::Arc;
 
     #[test]
     fn test_merge_asc() -> Result<()> {

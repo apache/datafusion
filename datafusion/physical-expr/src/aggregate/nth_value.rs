@@ -24,31 +24,28 @@ use crate::expressions::format_state_name;
 use crate::{
     reverse_order_bys, AggregateExpr, LexOrdering, PhysicalExpr, PhysicalSortExpr,
 };
+
 use arrow_array::cast::AsArray;
 use arrow_array::ArrayRef;
 use arrow_schema::{DataType, Field, Fields};
 use datafusion_common::utils::get_row_at_idx;
-use datafusion_common::DataFusionError;
-use datafusion_common::{exec_err, internal_err, Result, ScalarValue};
+use datafusion_common::{exec_err, internal_err, DataFusionError, Result, ScalarValue};
 use datafusion_expr::Accumulator;
 
-/// Expression for a ARRAY_AGG(ORDER BY) aggregation.
-/// When aggregation works in multiple partitions
-/// aggregations are split into multiple partitions,
-/// then their results are merged. This aggregator
-/// is a version of ARRAY_AGG that can support producing
-/// intermediate aggregation (with necessary side information)
-/// and that can merge aggregations from multiple partitions.
+/// Expression for a `NTH_VALUE(... ORDER BY ..., ...)` aggregation. In a multi
+/// partition setting, partial aggregations are computed for every partition,
+/// and then their results are merged.
 #[derive(Debug)]
 pub struct NthValueAgg {
     /// Column name
     name: String,
-    /// The DataType for the input expression
+    /// The `DataType` for the input expression
     input_data_type: DataType,
     /// The input expression
     expr: Arc<dyn PhysicalExpr>,
+    /// The `N` value.
     n: i64,
-    /// If the input expression can have NULLs
+    /// If the input expression can have `NULL`s
     nullable: bool,
     /// Ordering data types
     order_by_data_types: Vec<DataType>,
@@ -57,7 +54,7 @@ pub struct NthValueAgg {
 }
 
 impl NthValueAgg {
-    /// Create a new `OrderSensitiveArrayAgg` aggregate function
+    /// Create a new `NthValueAgg` aggregate function
     pub fn new(
         expr: Arc<dyn PhysicalExpr>,
         n: i64,
@@ -120,11 +117,7 @@ impl AggregateExpr for NthValueAgg {
     }
 
     fn order_bys(&self) -> Option<&[PhysicalSortExpr]> {
-        if self.ordering_req.is_empty() {
-            None
-        } else {
-            Some(&self.ordering_req)
-        }
+        (!self.ordering_req.is_empty()).then_some(&self.ordering_req)
     }
 
     fn name(&self) -> &str {
@@ -163,23 +156,23 @@ impl PartialEq<dyn Any> for NthValueAgg {
 #[derive(Debug)]
 pub(crate) struct NthValueAccumulator {
     n: i64,
-    // `values` stores entries in the ARRAY_AGG result.
+    // `values` stores entries in the NTH_VALUE result.
     values: Vec<ScalarValue>,
     // `ordering_values` stores values of ordering requirement expression
-    // corresponding to each value in the ARRAY_AGG.
+    // corresponding to each value in the NTH_VALUE.
     // For each `ScalarValue` inside `values`, there will be a corresponding
     // `Vec<ScalarValue>` inside `ordering_values` which stores it ordering.
     // This information is used during merging results of the different partitions.
     // For detailed information how merging is done see [`merge_ordered_arrays`]
     ordering_values: Vec<Vec<ScalarValue>>,
-    // `datatypes` stores, datatype of expression inside ARRAY_AGG and ordering requirement expressions.
+    // Stores datatype of the expression inside NTH_VALUE and ordering requirement expressions.
     datatypes: Vec<DataType>,
     // Stores ordering requirement of the Accumulator
     ordering_req: LexOrdering,
 }
 
 impl NthValueAccumulator {
-    /// Create a new order-sensitive ARRAY_AGG accumulator based on the given
+    /// Create a new order-sensitive NTH_VALUE accumulator based on the given
     /// item data type.
     pub fn try_new(
         n: i64,
@@ -238,7 +231,7 @@ impl Accumulator for NthValueAccumulator {
         if self.ordering_req.is_empty() {
             let array_agg_res =
                 ScalarValue::convert_array_to_scalar_vec(array_agg_values)?;
-            // Stores ARRAY_AGG results coming from each partition
+            // Stores NTH_VALUE results coming from each partition
             let mut partition_values = vec![];
             // Existing values should be merged also.
             partition_values.extend(self.values.clone());
@@ -251,11 +244,11 @@ impl Accumulator for NthValueAccumulator {
             }
             self.values = partition_values;
         } else if let Some(agg_orderings) = states[1].as_list_opt::<i32>() {
-            // 2nd entry stores values received for ordering requirement columns, for each aggregation value inside ARRAY_AGG list.
-            // For each `StructArray` inside ARRAY_AGG list, we will receive an `Array` that stores
+            // 2nd entry stores values received for ordering requirement columns, for each aggregation value inside NTH_VALUE list.
+            // For each `StructArray` inside NTH_VALUE list, we will receive an `Array` that stores
             // values received from its ordering requirement expression. (This information is necessary for during merging).
 
-            // Stores ARRAY_AGG results coming from each partition
+            // Stores NTH_VALUE results coming from each partition
             let mut partition_values = vec![];
             // Stores ordering requirement expression results coming from each partition
             let mut partition_ordering_values = vec![];
@@ -308,9 +301,9 @@ impl Accumulator for NthValueAccumulator {
     }
 
     fn state(&self) -> Result<Vec<ScalarValue>> {
-        let mut result = vec![self.evaluate_values()?];
+        let mut result = vec![self.evaluate_values()];
         if !self.ordering_req.is_empty() {
-            result.push(self.evaluate_orderings()?);
+            result.push(self.evaluate_orderings());
         }
         Ok(result)
     }
@@ -327,8 +320,7 @@ impl Accumulator for NthValueAccumulator {
             self.values.len().checked_sub(n_required)
         };
         if let Some(idx) = nth_value_idx {
-            let nth_value = self.values[idx].clone();
-            Ok(nth_value.clone())
+            Ok(self.values[idx].clone())
         } else {
             ScalarValue::try_from(self.datatypes[0].clone())
         }
@@ -360,27 +352,25 @@ impl Accumulator for NthValueAccumulator {
 }
 
 impl NthValueAccumulator {
-    fn evaluate_orderings(&self) -> Result<ScalarValue> {
+    fn evaluate_orderings(&self) -> ScalarValue {
         let fields = ordering_fields(&self.ordering_req, &self.datatypes[1..]);
         let struct_field = Fields::from(fields.clone());
 
-        let orderings: Vec<ScalarValue> = self
+        let orderings = self
             .ordering_values
             .iter()
             .map(|ordering| {
                 ScalarValue::Struct(Some(ordering.clone()), struct_field.clone())
             })
-            .collect();
+            .collect::<Vec<_>>();
         let struct_type = DataType::Struct(Fields::from(fields));
 
         // Wrap in List, so we have the same data structure ListArray(StructArray..) for group by cases
-        let arr = ScalarValue::new_list(&orderings, &struct_type);
-        Ok(ScalarValue::List(arr))
+        ScalarValue::List(ScalarValue::new_list(&orderings, &struct_type))
     }
 
-    fn evaluate_values(&self) -> Result<ScalarValue> {
-        let arr = ScalarValue::new_list(&self.values, &self.datatypes[0]);
-        Ok(ScalarValue::List(arr))
+    fn evaluate_values(&self) -> ScalarValue {
+        ScalarValue::List(ScalarValue::new_list(&self.values, &self.datatypes[0]))
     }
 
     fn append_new_data(

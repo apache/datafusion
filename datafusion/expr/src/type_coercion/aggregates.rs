@@ -15,17 +15,16 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::ops::Deref;
+
+use super::functions::can_coerce_from;
+use crate::{AggregateFunction, Signature, TypeSignature};
+
 use arrow::datatypes::{
     DataType, TimeUnit, DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE,
     DECIMAL256_MAX_PRECISION, DECIMAL256_MAX_SCALE,
 };
-
 use datafusion_common::{internal_err, plan_err, DataFusionError, Result};
-use std::ops::Deref;
-
-use crate::{AggregateFunction, Signature, TypeSignature};
-
-use super::functions::can_coerce_from;
 
 pub static STRINGS: &[DataType] = &[DataType::Utf8, DataType::LargeUtf8];
 
@@ -595,6 +594,7 @@ pub fn is_string_agg_supported_arg_type(arg_type: &DataType) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
     use arrow::datatypes::DataType;
 
     #[test]
