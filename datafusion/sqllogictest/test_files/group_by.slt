@@ -4302,7 +4302,7 @@ CREATE TABLE src_table (
 ('2020-12-18T00:00:00.00Z', 8),
 ('2020-12-19T00:00:00.00Z', 9);
 
-# Use timestamp_table to create a partitioned file
+# Use src_table to create a partitioned file
 query PI
 COPY (SELECT * FROM src_table)
 TO 'test_files/scratch/group_by/timestamp_table/0.csv'
