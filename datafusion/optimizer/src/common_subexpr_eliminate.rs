@@ -534,7 +534,11 @@ impl ExprMask {
             Expr::AggregateFunction(..) | Expr::AggregateUDF { .. }
         );
 
-        let is_udf = matches!(expr, Expr::ScalarUDF(..));
+        let mut is_udf = matches!(expr, Expr::ScalarUDF(..));
+
+        if let Expr::Cast(c) = expr {
+            is_udf |= matches!(c.expr.as_ref(), Expr::ScalarUDF(_));
+        }
 
         match self {
             Self::Normal => is_normal_minus_aggregates || is_aggr || is_udf,
