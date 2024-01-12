@@ -4305,28 +4305,28 @@ CREATE TABLE src_table (
 # Use timestamp_table to create a partitioned file
 query PI
 COPY (SELECT * FROM src_table)
-TO 'test_files/scratch/groupby/timestamp_table/0.csv'
+TO 'test_files/scratch/group_by/timestamp_table/0.csv'
 (FORMAT CSV, SINGLE_FILE_OUTPUT true);
 ----
 10
 
 query PI
 COPY (SELECT * FROM src_table)
-TO 'test_files/scratch/groupby/timestamp_table/1.csv'
+TO 'test_files/scratch/group_by/timestamp_table/1.csv'
 (FORMAT CSV, SINGLE_FILE_OUTPUT true);
 ----
 10
 
 query PI
 COPY (SELECT * FROM src_table)
-TO 'test_files/scratch/groupby/timestamp_table/2.csv'
+TO 'test_files/scratch/group_by/timestamp_table/2.csv'
 (FORMAT CSV, SINGLE_FILE_OUTPUT true);
 ----
 10
 
 query PI
 COPY (SELECT * FROM src_table)
-TO 'test_files/scratch/groupby/timestamp_table/3.csv'
+TO 'test_files/scratch/group_by/timestamp_table/3.csv'
 (FORMAT CSV, SINGLE_FILE_OUTPUT true);
 ----
 10
@@ -4339,7 +4339,7 @@ CREATE EXTERNAL TABLE timestamp_table (
 )
 STORED AS CSV
 WITH HEADER ROW
-LOCATION 'test_files/scratch/groupby/timestamp_table';
+LOCATION 'test_files/scratch/group_by/timestamp_table';
 
 # Group By using date_trunc
 query PI rowsort
@@ -4386,7 +4386,7 @@ GlobalLimitExec: skip=0, fetch=4
 ----------RepartitionExec: partitioning=Hash([c2@0], 8), input_partitions=8
 ------------AggregateExec: mode=Partial, gby=[c2@1 as c2], aggr=[MAX(timestamp_table.t1)], lim=[4]
 --------------RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=4
-----------------CsvExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/groupby/timestamp_table/0.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/groupby/timestamp_table/1.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/groupby/timestamp_table/2.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/groupby/timestamp_table/3.csv]]}, projection=[t1, c2], has_header=true
+----------------CsvExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/group_by/timestamp_table/0.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/group_by/timestamp_table/1.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/group_by/timestamp_table/2.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/group_by/timestamp_table/3.csv]]}, projection=[t1, c2], has_header=true
 
 # Clean up
 statement ok
