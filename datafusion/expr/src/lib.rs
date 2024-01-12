@@ -40,7 +40,6 @@ mod udf;
 mod udwf;
 
 pub mod aggregate_function;
-pub mod array_expressions;
 pub mod conditional_expressions;
 pub mod expr;
 pub mod expr_fn;
@@ -80,7 +79,7 @@ pub use signature::{
     FuncMonotonicity, Signature, TypeSignature, Volatility, TIMEZONE_WILDCARD,
 };
 pub use table_source::{TableProviderFilterPushDown, TableSource, TableType};
-pub use udaf::AggregateUDF;
+pub use udaf::{AggregateUDF, AggregateUDFImpl};
 pub use udf::{ScalarUDF, ScalarUDFImpl};
 pub use udwf::{WindowUDF, WindowUDFImpl};
 pub use window_frame::{WindowFrame, WindowFrameBound, WindowFrameUnits};

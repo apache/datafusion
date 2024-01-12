@@ -90,17 +90,19 @@ pub async fn partitioned_sym_join_with_filter(
 
     let join = SymmetricHashJoinExec::try_new(
         Arc::new(RepartitionExec::try_new(
-            left,
+            left.clone(),
             Partitioning::Hash(left_expr, partition_count),
         )?),
         Arc::new(RepartitionExec::try_new(
-            right,
+            right.clone(),
             Partitioning::Hash(right_expr, partition_count),
         )?),
         on,
         filter,
         join_type,
         null_equals_null,
+        left.output_ordering().map(|p| p.to_vec()),
+        right.output_ordering().map(|p| p.to_vec()),
         StreamJoinPartitionMode::Partitioned,
     )?;
 

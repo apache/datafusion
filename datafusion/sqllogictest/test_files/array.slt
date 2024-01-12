@@ -953,7 +953,7 @@ select array_element(arrow_cast(make_array(make_array(1, 2, 3, 4, 5), make_array
 ----
 [1, 2, 3, 4, 5]
 
-# array_extract scalar function #8 (function alias `array_slice`)
+# array_extract scalar function #8 (function alias `array_element`)
 query IT
 select array_extract(make_array(1, 2, 3, 4, 5), 2), array_extract(make_array('h', 'e', 'l', 'l', 'o'), 3);
 ----
@@ -964,7 +964,7 @@ select array_extract(arrow_cast(make_array(1, 2, 3, 4, 5), 'LargeList(Int64)'), 
 ----
 2 l
 
-# list_element scalar function #9 (function alias `array_slice`)
+# list_element scalar function #9 (function alias `array_element`)
 query IT
 select list_element(make_array(1, 2, 3, 4, 5), 2), list_element(make_array('h', 'e', 'l', 'l', 'o'), 3);
 ----
@@ -975,7 +975,7 @@ select list_element(arrow_cast(make_array(1, 2, 3, 4, 5), 'LargeList(Int64)'), 2
 ----
 2 l
 
-# list_extract scalar function #10 (function alias `array_slice`)
+# list_extract scalar function #10 (function alias `array_element`)
 query IT
 select list_extract(make_array(1, 2, 3, 4, 5), 2), list_extract(make_array('h', 'e', 'l', 'l', 'o'), 3);
 ----
@@ -4893,6 +4893,90 @@ select string_to_list(e, 'm') from values;
 [consectetur]
 [adipiscing]
 NULL
+
+# array_resize scalar function #1
+query ?
+select array_resize(make_array(1, 2, 3), 1);
+----
+[1]
+
+query ?
+select array_resize(arrow_cast(make_array(1, 2, 3), 'LargeList(Int64)'), 1);
+----
+[1]
+
+# array_resize scalar function #2
+query ?
+select array_resize(make_array(1, 2, 3), 5);
+----
+[1, 2, 3, , ]
+
+query ?
+select array_resize(arrow_cast(make_array(1, 2, 3), 'LargeList(Int64)'), 5);
+----
+[1, 2, 3, , ]
+
+# array_resize scalar function #3
+query ?
+select array_resize(make_array(1, 2, 3), 5, 4);
+----
+[1, 2, 3, 4, 4]
+
+query ?
+select array_resize(arrow_cast(make_array(1, 2, 3), 'LargeList(Int64)'), 5, 4);
+----
+[1, 2, 3, 4, 4]
+
+# array_resize scalar function #4
+query error
+select array_resize(make_array(1, 2, 3), -5, 2);
+
+# array_resize scalar function #5
+query ?
+select array_resize(make_array(1.1, 2.2, 3.3), 10, 9.9);
+----
+[1.1, 2.2, 3.3, 9.9, 9.9, 9.9, 9.9, 9.9, 9.9, 9.9]
+
+query ?
+select array_resize(arrow_cast(make_array(1.1, 2.2, 3.3), 'LargeList(Float64)'), 10, 9.9);
+----
+[1.1, 2.2, 3.3, 9.9, 9.9, 9.9, 9.9, 9.9, 9.9, 9.9]
+
+# array_resize scalar function #5
+query ?
+select array_resize(column1, column2, column3) from arrays_values;
+----
+[]
+[11, 12, 13, 14, 15, 16, 17, 18, , 20, 2, 2]
+[21, 22, 23, , 25, 26, 27, 28, 29, 30, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3]
+[31, 32, 33, 34, 35, , 37, 38, 39, 40, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4]
+[5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5]
+[]
+[51, 52, , 54, 55, 56, 57, 58, 59, 60, , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , ]
+[61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7]
+
+query ?
+select array_resize(arrow_cast(column1, 'LargeList(Int64)'), column2, column3) from arrays_values;
+----
+[]
+[11, 12, 13, 14, 15, 16, 17, 18, , 20, 2, 2]
+[21, 22, 23, , 25, 26, 27, 28, 29, 30, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3]
+[31, 32, 33, 34, 35, , 37, 38, 39, 40, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4]
+[5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5]
+[]
+[51, 52, , 54, 55, 56, 57, 58, 59, 60, , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , ]
+[61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7]
+
+# array_resize scalar function #5
+query ?
+select array_resize([[1], [2], [3]], 10, [5]);
+----
+[[1], [2], [3], [5], [5], [5], [5], [5], [5], [5]]
+
+query ?
+select array_resize(arrow_cast([[1], [2], [3]], 'LargeList(List(Int64))'), 10, [5]);
+----
+[[1], [2], [3], [5], [5], [5], [5], [5], [5], [5]]
 
 ### Delete tables
 
