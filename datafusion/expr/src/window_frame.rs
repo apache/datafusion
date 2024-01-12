@@ -90,42 +90,33 @@ impl TryFrom<ast::WindowFrame> for WindowFrame {
 }
 
 impl WindowFrame {
-    /// Creates a new, default window frame (with the meaning of default depending on whether the
-    /// frame contains an `ORDER BY` clause.
-    pub fn new(has_order_by: bool) -> Self {
-        if has_order_by {
-            // This window frame covers the table (or partition if `PARTITION BY` is used)
-            // from beginning to the `CURRENT ROW` (with same rank). It is used when the `OVER`
-            // clause contains an `ORDER BY` clause but no frame.
+    /// Creates a new, default window frame (with the meaning of default
+    /// depending on whether the frame contains an `ORDER BY` clause and this
+    /// ordering is strict (i.e. no ties).
+    pub fn new(order_by: Option<bool>) -> Self {
+        if let Some(strict) = order_by {
+            // This window frame covers the table (or partition if `PARTITION BY`
+            // is used) from beginning to the `CURRENT ROW` (with same rank). It
+            // is used when the `OVER` clause contains an `ORDER BY` clause but
+            // no frame.
             WindowFrame {
-                units: WindowFrameUnits::Range,
+                units: if strict {
+                    WindowFrameUnits::Rows
+                } else {
+                    WindowFrameUnits::Range
+                },
                 start_bound: WindowFrameBound::Preceding(ScalarValue::Null),
                 end_bound: WindowFrameBound::CurrentRow,
             }
         } else {
-            // This window frame covers the whole table (or partition if `PARTITION BY` is used).
-            // It is used when the `OVER` clause does not contain an `ORDER BY` clause and there is
-            // no frame.
+            // This window frame covers the whole table (or partition if `PARTITION BY`
+            // is used). It is used when the `OVER` clause does not contain an
+            // `ORDER BY` clause and there is no frame.
             WindowFrame {
                 units: WindowFrameUnits::Rows,
                 start_bound: WindowFrameBound::Preceding(ScalarValue::UInt64(None)),
                 end_bound: WindowFrameBound::Following(ScalarValue::UInt64(None)),
             }
-        }
-    }
-
-    /// Creates a new window frame for OVER(ORDER BY <expr, ..>) cases.
-    pub fn new_with_primary_key_ordering() -> Self {
-        // This window frame covers the table (or partition if `PARTITION BY` is used)
-        // from beginning to the `CURRENT ROW`. It is used
-        // when the `OVER` clause
-        // - contains an `ORDER BY` clause
-        // - doesn't contain a window frame.
-        // - ordering expression contains a PRIMARY KEY (e.g one of the expressions is unique)
-        WindowFrame {
-            units: WindowFrameUnits::Rows,
-            start_bound: WindowFrameBound::Preceding(ScalarValue::Null),
-            end_bound: WindowFrameBound::CurrentRow,
         }
     }
 
@@ -161,12 +152,10 @@ impl WindowFrame {
     /// Check whether frame end is exact or can change with new data.
     pub fn is_frame_end_exact(&self) -> bool {
         match &self.units {
-            WindowFrameUnits::Rows => {
-                matches!(
-                    self.end_bound,
-                    WindowFrameBound::Preceding(_) | WindowFrameBound::CurrentRow
-                )
-            }
+            WindowFrameUnits::Rows => matches!(
+                self.end_bound,
+                WindowFrameBound::Preceding(_) | WindowFrameBound::CurrentRow
+            ),
             WindowFrameUnits::Range | WindowFrameUnits::Groups => false,
         }
     }

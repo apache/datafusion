@@ -1531,7 +1531,7 @@ mod tests {
             vec![col("aggregate_test_100.c1")],
             vec![col("aggregate_test_100.c2")],
             vec![],
-            WindowFrame::new(false),
+            WindowFrame::new(None),
         ));
         let t2 = t.select(vec![col("c1"), first_row])?;
         let plan = t2.plan.clone();

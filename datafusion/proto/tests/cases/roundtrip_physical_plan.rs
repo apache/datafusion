@@ -286,7 +286,7 @@ fn roundtrip_window() -> Result<()> {
         )),
         &[],
         &[],
-        Arc::new(WindowFrame::new(false)),
+        Arc::new(WindowFrame::new(None)),
     ));
 
     let window_frame = WindowFrame {

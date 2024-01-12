@@ -1671,7 +1671,7 @@ fn roundtrip_window() {
         vec![],
         vec![col("col1")],
         vec![col("col2")],
-        WindowFrame::new(true),
+        WindowFrame::new(Some(false)),
     ));
 
     // 2. with default window_frame
@@ -1682,7 +1682,7 @@ fn roundtrip_window() {
         vec![],
         vec![col("col1")],
         vec![col("col2")],
-        WindowFrame::new(true),
+        WindowFrame::new(Some(false)),
     ));
 
     // 3. with window_frame with row numbers

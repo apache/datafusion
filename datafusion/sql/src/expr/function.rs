@@ -132,9 +132,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 regularize_window_order_by(&window_frame, &mut order_by)?;
                 window_frame
             } else if is_ordering_stable {
-                WindowFrame::new_with_primary_key_ordering()
+                WindowFrame::new(Some(true))
             } else {
-                WindowFrame::new(!order_by.is_empty())
+                WindowFrame::new((!order_by.is_empty()).then_some(false))
             };
 
             if let Ok(fun) = self.find_window_func(&name) {
