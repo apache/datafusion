@@ -205,8 +205,14 @@ fn is_frame_causal(
         ),
         WindowFrameUnits::Range | WindowFrameUnits::Groups => match end_bound {
             WindowFrameBound::Preceding(val) => {
-                let zero = ScalarValue::new_zero(&val.data_type())?;
-                val.gt(&zero)
+                // val can be either numeric type or Utf8 type (which is initial type after parsing)
+                // In subsequent stages, Utf8 type converted to the appropriate types.
+                if let ScalarValue::Utf8(Some(val)) = val {
+                    val != "0"
+                } else {
+                    let zero = ScalarValue::new_zero(&val.data_type())?;
+                    val.gt(&zero)
+                }
             }
             _ => false,
         },
