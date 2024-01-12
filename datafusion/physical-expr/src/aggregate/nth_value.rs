@@ -15,6 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! Defines NTH_VALUE aggregate expression which may specify ordering requirement
+//! that can evaluated at runtime during query execution
+
 use std::any::Any;
 use std::sync::Arc;
 
@@ -161,7 +164,7 @@ pub(crate) struct NthValueAccumulator {
     // `ordering_values` stores values of ordering requirement expression
     // corresponding to each value in the NTH_VALUE.
     // For each `ScalarValue` inside `values`, there will be a corresponding
-    // `Vec<ScalarValue>` inside `ordering_values` which stores it ordering.
+    // `Vec<ScalarValue>` inside `ordering_values` which stores its ordering.
     // This information is used during merging results of the different partitions.
     // For detailed information how merging is done see [`merge_ordered_arrays`]
     ordering_values: Vec<Vec<ScalarValue>>,
@@ -197,6 +200,8 @@ impl NthValueAccumulator {
 }
 
 impl Accumulator for NthValueAccumulator {
+    /// Updates its state with the `values`. Assumes data in the `values` satisfies the required
+    /// ordering for the accumulator (across consecutive batches, not just batch-wise).
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         if values.is_empty() {
             return Ok(());
@@ -373,6 +378,8 @@ impl NthValueAccumulator {
         ScalarValue::List(ScalarValue::new_list(&self.values, &self.datatypes[0]))
     }
 
+    /// Updates state, with the `values`. Fetch contains missing number of entries for state to be complete
+    /// None represents all of the new `values` need to be added to the state.
     fn append_new_data(
         &mut self,
         values: &[ArrayRef],
