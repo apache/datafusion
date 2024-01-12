@@ -28,7 +28,7 @@ authors = { workspace = true }
 rust-version = "1.70"
 
 [lib]
-crate-type = ["cdylib", "rlib",]
+crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 
@@ -43,6 +43,7 @@ datafusion-expr = { workspace = true }
 datafusion-optimizer = { workspace = true }
 datafusion-physical-expr = { workspace = true }
 datafusion-sql = { workspace = true }
+datafusion-physical-plan = { workspace = true }
 
 # getrandom must be compiled with js feature
 getrandom = { version = "0.2.8", features = ["js"] }
