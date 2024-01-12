@@ -218,8 +218,8 @@ impl Accumulator for NthValueAccumulator {
             self.append_new_data(values, None)?;
             let start_offset = self.values.len().saturating_sub(n_required);
             if start_offset > 0 {
-                self.values = self.values[start_offset..].to_vec();
-                self.ordering_values = self.ordering_values[start_offset..].to_vec();
+                self.values.drain(0..start_offset);
+                self.ordering_values.drain(0..start_offset);
             }
         }
 
