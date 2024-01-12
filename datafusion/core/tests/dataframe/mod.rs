@@ -174,11 +174,11 @@ async fn test_count_wildcard_on_window() -> Result<()> {
             vec![wildcard()],
             vec![],
             vec![Expr::Sort(Sort::new(Box::new(col("a")), false, true))],
-            WindowFrame {
-                units: WindowFrameUnits::Range,
-                start_bound: WindowFrameBound::Preceding(ScalarValue::UInt32(Some(6))),
-                end_bound: WindowFrameBound::Following(ScalarValue::UInt32(Some(2))),
-            },
+            WindowFrame::try_new(
+                WindowFrameUnits::Range,
+                WindowFrameBound::Preceding(ScalarValue::UInt32(Some(6))),
+                WindowFrameBound::Following(ScalarValue::UInt32(Some(2))),
+            )?,
         ))])?
         .explain(false, false)?
         .collect()

@@ -30,6 +30,7 @@ use sqlparser::ast;
 use sqlparser::parser::ParserError::ParserError;
 use std::convert::{From, TryFrom};
 use std::fmt;
+use std::fmt::Formatter;
 use std::hash::Hash;
 
 /// The frame-spec determines which output rows are read by an aggregate window function.
@@ -37,7 +38,7 @@ use std::hash::Hash;
 /// The ending frame boundary can be omitted (if the BETWEEN and AND keywords that surround the
 /// starting frame boundary are also omitted), in which case the ending frame boundary defaults to
 /// CURRENT ROW.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 pub struct WindowFrame {
     /// A frame type - either ROWS, RANGE or GROUPS
     pub units: WindowFrameUnits,
@@ -45,6 +46,8 @@ pub struct WindowFrame {
     pub start_bound: WindowFrameBound,
     /// An ending frame boundary
     pub end_bound: WindowFrameBound,
+    /// Flag indicates whether window frame is causal.
+    is_causal: bool,
 }
 
 impl fmt::Display for WindowFrame {
@@ -52,6 +55,17 @@ impl fmt::Display for WindowFrame {
         write!(
             f,
             "{} BETWEEN {} AND {}",
+            self.units, self.start_bound, self.end_bound
+        )?;
+        Ok(())
+    }
+}
+
+impl fmt::Debug for WindowFrame {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "WindowFrame {{ units: {:?}, start_bound: {:?}, end_bound: {:?} }}",
             self.units, self.start_bound, self.end_bound
         )?;
         Ok(())
@@ -81,10 +95,13 @@ impl TryFrom<ast::WindowFrame> for WindowFrame {
                 )?
             }
         };
+        let units = value.units.into();
+        let is_causal = is_frame_causal(&units, &end_bound)?;
         Ok(Self {
-            units: value.units.into(),
+            units,
             start_bound,
             end_bound,
+            is_causal,
         })
     }
 }
@@ -107,6 +124,8 @@ impl WindowFrame {
                 },
                 start_bound: WindowFrameBound::Preceding(ScalarValue::Null),
                 end_bound: WindowFrameBound::CurrentRow,
+                // When mode is Rows, it is causal when mode is Range it is not
+                is_causal: strict,
             }
         } else {
             // This window frame covers the whole table (or partition if `PARTITION BY`
@@ -116,6 +135,7 @@ impl WindowFrame {
                 units: WindowFrameUnits::Rows,
                 start_bound: WindowFrameBound::Preceding(ScalarValue::UInt64(None)),
                 end_bound: WindowFrameBound::Following(ScalarValue::UInt64(None)),
+                is_causal: false,
             }
         }
     }
@@ -142,23 +162,55 @@ impl WindowFrame {
             }
             WindowFrameBound::CurrentRow => WindowFrameBound::CurrentRow,
         };
+        // Units and end bound types do not change, cannot produce error.
+        let is_causal = is_frame_causal(&self.units, &end_bound).unwrap();
         WindowFrame {
             units: self.units,
             start_bound,
             end_bound,
+            is_causal,
         }
     }
 
-    /// Check whether frame end is exact or can change with new data.
-    pub fn is_frame_end_exact(&self) -> bool {
-        match &self.units {
-            WindowFrameUnits::Rows => matches!(
-                self.end_bound,
-                WindowFrameBound::Preceding(_) | WindowFrameBound::CurrentRow
-            ),
-            WindowFrameUnits::Range | WindowFrameUnits::Groups => false,
-        }
+    /// Get whether window frame is causal
+    pub fn is_causal(&self) -> bool {
+        self.is_causal
     }
+
+    /// Initializes window frame from units (window bound type), start bound and end bound
+    pub fn try_new(
+        units: WindowFrameUnits,
+        start_bound: WindowFrameBound,
+        end_bound: WindowFrameBound,
+    ) -> Result<Self> {
+        let is_causal = is_frame_causal(&units, &end_bound)?;
+        Ok(WindowFrame {
+            units,
+            start_bound,
+            end_bound,
+            is_causal,
+        })
+    }
+}
+
+/// Calculate whether window frame is causal or not.
+fn is_frame_causal(
+    frame_units: &WindowFrameUnits,
+    end_bound: &WindowFrameBound,
+) -> Result<bool> {
+    Ok(match frame_units {
+        WindowFrameUnits::Rows => matches!(
+            end_bound,
+            WindowFrameBound::Preceding(_) | WindowFrameBound::CurrentRow
+        ),
+        WindowFrameUnits::Range | WindowFrameUnits::Groups => match end_bound {
+            WindowFrameBound::Preceding(val) => {
+                let zero = ScalarValue::new_zero(&val.data_type())?;
+                val.gt(&zero)
+            }
+            _ => false,
+        },
+    })
 }
 
 /// Regularizes ORDER BY clause for window definition for implicit corner cases.

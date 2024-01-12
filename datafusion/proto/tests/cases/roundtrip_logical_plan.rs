@@ -1686,11 +1686,12 @@ fn roundtrip_window() {
     ));
 
     // 3. with window_frame with row numbers
-    let range_number_frame = WindowFrame {
-        units: WindowFrameUnits::Range,
-        start_bound: WindowFrameBound::Preceding(ScalarValue::UInt64(Some(2))),
-        end_bound: WindowFrameBound::Following(ScalarValue::UInt64(Some(2))),
-    };
+    let range_number_frame = WindowFrame::try_new(
+        WindowFrameUnits::Range,
+        WindowFrameBound::Preceding(ScalarValue::UInt64(Some(2))),
+        WindowFrameBound::Following(ScalarValue::UInt64(Some(2))),
+    )
+    .unwrap();
 
     let test_expr3 = Expr::WindowFunction(expr::WindowFunction::new(
         WindowFunctionDefinition::BuiltInWindowFunction(
@@ -1703,11 +1704,12 @@ fn roundtrip_window() {
     ));
 
     // 4. test with AggregateFunction
-    let row_number_frame = WindowFrame {
-        units: WindowFrameUnits::Rows,
-        start_bound: WindowFrameBound::Preceding(ScalarValue::UInt64(Some(2))),
-        end_bound: WindowFrameBound::Following(ScalarValue::UInt64(Some(2))),
-    };
+    let row_number_frame = WindowFrame::try_new(
+        WindowFrameUnits::Rows,
+        WindowFrameBound::Preceding(ScalarValue::UInt64(Some(2))),
+        WindowFrameBound::Following(ScalarValue::UInt64(Some(2))),
+    )
+    .unwrap();
 
     let test_expr4 = Expr::WindowFunction(expr::WindowFunction::new(
         WindowFunctionDefinition::AggregateFunction(AggregateFunction::Max),

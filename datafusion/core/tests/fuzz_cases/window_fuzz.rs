@@ -343,11 +343,8 @@ fn get_random_window_frame(rng: &mut StdRng, is_linear: bool) -> WindowFrame {
             } else {
                 WindowFrameBound::Following(ScalarValue::Int32(Some(end_bound.val)))
             };
-            let mut window_frame = WindowFrame {
-                units,
-                start_bound,
-                end_bound,
-            };
+            let mut window_frame =
+                WindowFrame::try_new(units, start_bound, end_bound).unwrap();
             // with 10% use unbounded preceding in tests
             if rng.gen_range(0..10) == 0 {
                 window_frame.start_bound =
@@ -375,11 +372,8 @@ fn get_random_window_frame(rng: &mut StdRng, is_linear: bool) -> WindowFrame {
                     end_bound.val as u64,
                 )))
             };
-            let mut window_frame = WindowFrame {
-                units,
-                start_bound,
-                end_bound,
-            };
+            let mut window_frame =
+                WindowFrame::try_new(units, start_bound, end_bound).unwrap();
             // with 10% use unbounded preceding in tests
             if rng.gen_range(0..10) == 0 {
                 window_frame.start_bound =
