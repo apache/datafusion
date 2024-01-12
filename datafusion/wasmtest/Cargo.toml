@@ -45,6 +45,7 @@ datafusion-physical-expr = { workspace = true }
 datafusion-sql = { workspace = true }
 datafusion-execution = { workspace = true }
 datafusion-physical-plan = { workspace = true }
+datafusion = { path = "../core", default-features = false }
 
 # getrandom must be compiled with js feature
 getrandom = { version = "0.2.8", features = ["js"] }

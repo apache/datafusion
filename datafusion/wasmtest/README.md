@@ -59,6 +59,7 @@ Then open http://localhost:8080/ in a web browser and check the console to see t
 
 The following DataFusion crates are verified to work in a wasm-pack environment using the default `wasm32-unknown-unknown` target:
 
+- `datafusion` (datafusion-core) with default-features disabled to remove `bzip2-sys` from `async-compression`
 - `datafusion-common` with default-features disabled to remove the `parquet` dependency (see below)
 - `datafusion-expr`
 - `datafusion-execution`
