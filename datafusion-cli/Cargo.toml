@@ -53,12 +53,3 @@ assert_cmd = "2.0"
 ctor = "0.2.0"
 predicates = "3.0"
 rstest = "0.17"
-
-[patch.crates-io]
-arrow = { git = "https://github.com/tustvold/arrow-rs.git", rev = "06490e8ab2b986784d2998cfcf74cbf9c025ef10" }
-arrow-array = { git = "https://github.com/tustvold/arrow-rs.git", rev = "06490e8ab2b986784d2998cfcf74cbf9c025ef10" }
-arrow-buffer = { git = "https://github.com/tustvold/arrow-rs.git", rev = "06490e8ab2b986784d2998cfcf74cbf9c025ef10" }
-arrow-ipc = { git = "https://github.com/tustvold/arrow-rs.git", rev = "06490e8ab2b986784d2998cfcf74cbf9c025ef10" }
-arrow-ord = { git = "https://github.com/tustvold/arrow-rs.git", rev = "06490e8ab2b986784d2998cfcf74cbf9c025ef10" }
-arrow-schema = { git = "https://github.com/tustvold/arrow-rs.git", rev = "06490e8ab2b986784d2998cfcf74cbf9c025ef10" }
-parquet = { git = "https://github.com/tustvold/arrow-rs.git", rev = "06490e8ab2b986784d2998cfcf74cbf9c025ef10" }
