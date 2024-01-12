@@ -61,6 +61,7 @@ The following DataFusion crates are verified to work in a wasm-pack environment 
 
 - `datafusion-common` with default-features disabled to remove the `parquet` dependency (see below)
 - `datafusion-expr`
+- `datafusion-execution`
 - `datafusion-optimizer`
 - `datafusion-physical-expr`
 - `datafusion-physical-plan`

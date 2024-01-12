@@ -43,6 +43,7 @@ datafusion-expr = { workspace = true }
 datafusion-optimizer = { workspace = true }
 datafusion-physical-expr = { workspace = true }
 datafusion-sql = { workspace = true }
+datafusion-execution = { workspace = true }
 datafusion-physical-plan = { workspace = true }
 
 # getrandom must be compiled with js feature
