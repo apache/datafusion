@@ -661,7 +661,7 @@ where
         let adjusted_zero_index = if index < 0 {
             // array_slice in duckdb with negative to_index is python-like, so index itself is exclusive
             if let Ok(index) = index.try_into() {
-                index + len - O::usize_as(1)
+                index + len
             } else {
                 return exec_err!("array_slice got invalid index: {}", index);
             }
@@ -730,9 +730,9 @@ where
                     } else if stride.is_negative() {
                         // return empty array
                         offsets.push(offsets[row_index]);
-                        break;
+                        continue;
                     }
-                    let mut index = start;
+                    let mut index = start + from;
                     let mut cnt = 0;
                     let stride: O = stride.try_into().map_err(|_| {
                         internal_datafusion_err!(
@@ -740,19 +740,18 @@ where
                             stride
                         )
                     })?;
-                    while index <= to {
-                        let start = (start + index).to_usize().ok_or_else(|| {
-                            internal_datafusion_err!(
-                                "array_slice got invalid index: {:?}",
-                                start + index
-                            )
-                        })?;
-                        mutable.extend(0, start, start + 1);
+                    while index <= start + to {
+                        mutable.extend(
+                            0,
+                            index.to_usize().unwrap(),
+                            index.to_usize().unwrap() + 1,
+                        );
                         index += stride;
                         cnt += 1;
                     }
                     offsets.push(offsets[row_index] + O::usize_as(cnt));
                 } else {
+                    // stride is default to 1
                     mutable.extend(
                         0,
                         (start + from).to_usize().unwrap(),
@@ -761,8 +760,36 @@ where
                     offsets.push(offsets[row_index] + (to - from + O::usize_as(1)));
                 }
             } else {
+                let stride = if let Some(stride) = stride {
+                    if !stride.is_negative() {
+                        return exec_err!(
+                            "array_slice got invalid stride: {}, because start index < end index",
+                            stride
+                        );
+                    }
+                    stride
+                } else {
+                    // return empty array
+                    offsets.push(offsets[row_index]);
+                    continue;
+                };
+                let stride: O = stride.try_into().map_err(|_| {
+                    internal_datafusion_err!("array_slice got invalid stride: {}", stride)
+                })?;
+
+                let mut index = start + from;
+                let mut cnt = 0;
+                while index >= start + to {
+                    mutable.extend(
+                        0,
+                        index.to_usize().unwrap(),
+                        index.to_usize().unwrap() + 1,
+                    );
+                    index += stride;
+                    cnt += 1;
+                }
                 // invalid range, return empty array
-                offsets.push(offsets[row_index]);
+                offsets.push(offsets[row_index] + O::usize_as(cnt));
             }
         } else {
             // invalid range, return empty array
