@@ -3265,23 +3265,27 @@ select count(*) from (select count(*) a, count(*) b from (select 1));
 
 statement ok
 create table distinct_count_string_table as values 
-    (1, 'a'),
-    (2, 'b'),
-    (2, 'c')
+    (1, 'a', 'longstringtest_a'),
+    (2, 'b', 'longstringtest_b1'),
+    (2, 'b', 'longstringtest_b2'),
+    (3, 'c', 'longstringtest_c1'),
+    (3, 'c', 'longstringtest_c2'),
+    (3, 'c', 'longstringtest_c3')
 ;
 
 # run through update_batch
-query II
-select count(distinct column1), count(distinct column2) from distinct_count_string_table;
+query III
+select count(distinct column1), count(distinct column2), count(distinct column3) from distinct_count_string_table;
 ----
-2 3
+3 3 6
 
 # run through merge_batch
-query II rowsort
-select count(distinct column1), count(distinct column2) from distinct_count_string_table group by column1;
+query III rowsort
+select count(distinct column1), count(distinct column2), count(distinct column3) from distinct_count_string_table group by column1;
 ----
-1 1
-1 2
+1 1 1
+1 1 2
+1 1 3
 
 statement ok
 drop table distinct_count_string_table;

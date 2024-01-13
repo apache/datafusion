@@ -59,14 +59,11 @@ pub fn create_aggregate_expr(
         (AggregateFunction::Count, false) => Arc::new(
             expressions::Count::new_with_multiple_exprs(input_phy_exprs, name, data_type),
         ),
-        (AggregateFunction::Count, true) => {
-            println!("go to distinct count");
-            Arc::new(expressions::DistinctCount::new(
-                data_type,
-                input_phy_exprs[0].clone(),
-                name,
-            ))
-        }
+        (AggregateFunction::Count, true) => Arc::new(expressions::DistinctCount::new(
+            data_type,
+            input_phy_exprs[0].clone(),
+            name,
+        )),
         (AggregateFunction::Grouping, _) => Arc::new(expressions::Grouping::new(
             input_phy_exprs[0].clone(),
             name,
