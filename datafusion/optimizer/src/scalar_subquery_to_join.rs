@@ -343,9 +343,10 @@ fn build_join(
                     expr: None,
                     when_then_expr: vec![
                         (
-                            Box::new(Expr::IsNull(Box::new(Expr::Column(
-                                Column::new_unqualified(UN_MATCHED_ROW_INDICATOR),
-                            )))),
+                            Box::new(Expr::IsNull(Box::new(Expr::Column(Column::new(
+                                Some(subquery_alias.to_string()),
+                                UN_MATCHED_ROW_INDICATOR,
+                            ))))),
                             Box::new(result),
                         ),
                         (
@@ -353,7 +354,8 @@ fn build_join(
                             Box::new(Expr::Literal(ScalarValue::Null)),
                         ),
                     ],
-                    else_expr: Some(Box::new(Expr::Column(Column::new_unqualified(
+                    else_expr: Some(Box::new(Expr::Column(Column::new(
+                        Some(subquery_alias.to_string()),
                         name.clone(),
                     )))),
                 })
@@ -361,12 +363,14 @@ fn build_join(
                 Expr::Case(expr::Case {
                     expr: None,
                     when_then_expr: vec![(
-                        Box::new(Expr::IsNull(Box::new(Expr::Column(
-                            Column::new_unqualified(UN_MATCHED_ROW_INDICATOR),
-                        )))),
+                        Box::new(Expr::IsNull(Box::new(Expr::Column(Column::new(
+                            Some(subquery_alias.to_string()),
+                            UN_MATCHED_ROW_INDICATOR,
+                        ))))),
                         Box::new(result),
                     )],
-                    else_expr: Some(Box::new(Expr::Column(Column::new_unqualified(
+                    else_expr: Some(Box::new(Expr::Column(Column::new(
+                        Some(subquery_alias.to_string()),
                         name.clone(),
                     )))),
                 })
