@@ -598,15 +598,7 @@ impl SSOStringHashSet {
         self.header_set.iter().map(|header| {
             let (is_short, offset_or_inline) = header.evaluate();
             if is_short {
-                let mut inline = offset_or_inline;
-                // Convert usize to String
-                let mut bytes = [0u8; SHORT_STRING_LEN];
-                for i in (0..SHORT_STRING_LEN).rev() {
-                    bytes[i] = (inline & 0xFF) as u8;
-                    inline >>= 8;
-                }
-                // SAFETY: StringDistinctCountAccumulator only inserts valid utf8 strings
-                unsafe { std::str::from_utf8_unchecked(&bytes) }.to_string()
+                offset_or_inline.to_string()
             } else {
                 let offset = offset_or_inline;
                 let len = header.len;
