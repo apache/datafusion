@@ -19,6 +19,9 @@
 statement ok
 create table source_table(col1 integer, col2 varchar) as values (1, 'Foo'), (2, 'Bar');
 
+statement ok
+create table source_table_nested as values (struct ('foo', 1)), (struct('bar', 2));
+
 # Copy to directory as multiple files
 query IT
 COPY source_table TO 'test_files/scratch/copy/table' (format parquet, single_file_output false, compression 'zstd(10)');
@@ -63,6 +66,22 @@ select * from validate_parquet;
 2 Bar
 1 Foo
 2 Bar
+
+query ?
+COPY (select * from source_table_nested) to 'test_files/scratch/copy/table_nested' (format parquet, single_file_output false);
+----
+2
+
+# validate multiple parquet file output
+statement ok
+CREATE EXTERNAL TABLE validate_parquet_nested STORED AS PARQUET LOCATION 'test_files/scratch/copy/table_nested/';
+
+query ?
+select * from validate_parquet_nested;
+----
+{c0: foo, c1: 1}
+{c0: bar, c1: 2}
+
 
 # Copy parquet with all supported statment overrides
 query IT

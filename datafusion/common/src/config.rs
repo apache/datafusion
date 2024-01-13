@@ -385,7 +385,7 @@ config_namespace! {
         /// parquet files by serializing them in parallel. Each column
         /// in each row group in each output file are serialized in parallel
         /// leveraging a maximum possible core count of n_files*n_row_groups*n_columns.
-        pub allow_single_file_parallelism: bool, default = true
+        pub allow_single_file_parallelism: bool, default = false
 
         /// By default parallel parquet writer is tuned for minimum
         /// memory usage in a streaming execution plan. You may see
