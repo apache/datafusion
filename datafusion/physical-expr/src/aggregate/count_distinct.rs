@@ -521,11 +521,18 @@ struct SSOStringHeader {
 }
 
 impl SSOStringHeader {
-    fn evaluate(&self) -> (bool, usize) {
+    fn evaluate(&self, buffer: &[u8]) -> String {
         if self.len <= SHORT_STRING_LEN {
-            (true, self.offset_or_inline)
+            self.offset_or_inline.to_string()
         } else {
-            (false, self.offset_or_inline)
+            let offset = self.offset_or_inline;
+            // SAFETY: buffer is only appended to, and we correctly inserted values
+            unsafe {
+                std::str::from_utf8_unchecked(
+                    buffer.get_unchecked(offset..offset + self.len),
+                )
+            }
+            .to_string()
         }
     }
 }
@@ -595,22 +602,9 @@ impl SSOStringHashSet {
     }
 
     fn iter(&self) -> impl Iterator<Item = String> + '_ {
-        self.header_set.iter().map(|header| {
-            let (is_short, offset_or_inline) = header.evaluate();
-            if is_short {
-                offset_or_inline.to_string()
-            } else {
-                let offset = offset_or_inline;
-                let len = header.len;
-                // SAFETY: buffer is only appended to, and we correctly inserted values
-                unsafe {
-                    std::str::from_utf8_unchecked(
-                        self.buffer.as_slice().get_unchecked(offset..offset + len),
-                    )
-                }
-                .to_string()
-            }
-        })
+        self.header_set
+            .iter()
+            .map(|header| header.evaluate(self.buffer.as_slice()))
     }
 
     fn len(&self) -> usize {
