@@ -429,7 +429,7 @@ WITH ORDER (c ASC)
 LOCATION '../core/tests/data/window_2.csv';
 
 query TT
-EXPLAIN SELECT (b+a+c) AS result 
+EXPLAIN SELECT (b+a+c) AS result
 FROM multiple_ordered_table
 ORDER BY result;
 ----
@@ -578,3 +578,192 @@ SortPreservingMergeExec: [log_c12_base_c11@0 DESC]
 
 statement ok
 drop table aggregate_test_100;
+
+
+# Sort with lots of repetition values
+# Test sorting a parquet file with 2 million records that has lots of values that are repeated
+statement ok
+CREATE EXTERNAL TABLE repeat_much STORED AS PARQUET LOCATION '../../parquet-testing/data/repeat_much.snappy.parquet';
+
+query I
+SELECT a FROM repeat_much ORDER BY a LIMIT 20;
+----
+2450962
+2450962
+2450962
+2450962
+2450962
+2450962
+2450962
+2450962
+2450962
+2450962
+2450962
+2450962
+2450962
+2450962
+2450962
+2450962
+2450962
+2450962
+2450962
+2450962
+
+
+# Create external table with optional pre-known sort order
+# DataFusion may take advantage of this ordering to omit sorts or use more efficient algorithms.
+statement ok
+set datafusion.catalog.information_schema = true;
+
+statement ok
+CREATE EXTERNAL TABLE dt (a_id integer, a_str string, a_bool boolean) STORED AS CSV WITH ORDER (a_id ASC) LOCATION 'file://path/to/table';
+
+#TODO: How to check for order in sqllogictest?
+
+
+# Create external table with DDL ordered columns that are missing
+# When columns are missing the query is expected to fail
+query error DataFusion error: Error during planning: Column a is not in schema
+CREATE EXTERNAL TABLE dt (a_id integer, a_str string, a_bool boolean) STORED AS CSV WITH ORDER (a ASC) LOCATION 'file://path/to/table';
+
+
+# Create external table with DDL ordered columns without schema
+# When schema is missing the query is expected to fail
+query error DataFusion error: Error during planning: Provide a schema before specifying the order while creating a table\.
+CREATE EXTERNAL TABLE dt STORED AS CSV WITH ORDER (a ASC) LOCATION 'file://path/to/table';
+
+
+# Sort with duplicate sort expressions
+# Table is sorted multiple times on the same column name and should not fail
+statement ok
+CREATE TABLE t1 (
+  id INT,
+  name TEXT
+) AS VALUES
+(2, 'a'),
+(4, 'b'),
+(9, 'c'),
+(3, 'd'),
+(4, 'e');
+
+
+query IT
+SELECT * FROM t1 ORDER BY id DESC, id, name, id ASC;
+----
+9 c
+4 b
+4 e
+3 d
+2 a
+
+query TT
+EXPLAIN SELECT * FROM t1 ORDER BY id DESC, id, name, id ASC;
+----
+logical_plan
+Sort: t1.id DESC NULLS FIRST, t1.name ASC NULLS LAST
+--TableScan: t1 projection=[id, name]
+physical_plan
+SortExec: expr=[id@0 DESC,name@1 ASC NULLS LAST]
+--MemoryExec: partitions=1, partition_sizes=[1]
+
+query IT
+SELECT * FROM t1 ORDER BY id ASC, id, name, id DESC;
+----
+2 a
+3 d
+4 b
+4 e
+9 c
+
+query TT
+EXPLAIN SELECT * FROM t1 ORDER BY id ASC, id, name, id DESC;
+----
+logical_plan
+Sort: t1.id ASC NULLS LAST, t1.name ASC NULLS LAST
+--TableScan: t1 projection=[id, name]
+physical_plan
+SortExec: expr=[id@0 ASC NULLS LAST,name@1 ASC NULLS LAST]
+--MemoryExec: partitions=1, partition_sizes=[1]
+
+
+# Minimal reproduction of issue 5970
+# https://github.com/apache/arrow-datafusion/issues/5970
+statement ok
+set datafusion.execution.target_partitions = 2;
+
+statement ok
+set datafusion.optimizer.repartition_sorts = true;
+
+
+query II
+WITH
+    m0(t) AS (
+        VALUES (0), (1), (2)),
+    m1(t) AS (
+        VALUES (0), (1)),
+    u AS (
+        SELECT 0 as m, t FROM m0 GROUP BY 1, 2),
+    v AS (
+        SELECT 1 as m, t FROM m1 GROUP BY 1, 2)
+SELECT * FROM u
+UNION ALL
+SELECT * FROM v
+ORDER BY 1, 2;
+----
+0 0
+0 1
+0 2
+1 0
+1 1
+
+query TT
+EXPLAIN
+WITH
+    m0(t) AS (
+        VALUES (0), (1), (2)),
+    m1(t) AS (
+        VALUES (0), (1)),
+    u AS (
+        SELECT 0 as m, t FROM m0 GROUP BY 1, 2),
+    v AS (
+        SELECT 1 as m, t FROM m1 GROUP BY 1, 2)
+SELECT * FROM u
+UNION ALL
+SELECT * FROM v
+ORDER BY 1, 2;
+----
+logical_plan
+Sort: u.m ASC NULLS LAST, u.t ASC NULLS LAST
+--Union
+----SubqueryAlias: u
+------Projection: Int64(0) AS m, m0.t
+--------Aggregate: groupBy=[[Int64(0), m0.t]], aggr=[[]]
+----------SubqueryAlias: m0
+------------Projection: column1 AS t
+--------------Values: (Int64(0)), (Int64(1)), (Int64(2))
+----SubqueryAlias: v
+------Projection: Int64(1) AS m, m1.t
+--------Aggregate: groupBy=[[Int64(1), m1.t]], aggr=[[]]
+----------SubqueryAlias: m1
+------------Projection: column1 AS t
+--------------Values: (Int64(0)), (Int64(1))
+physical_plan
+SortPreservingMergeExec: [m@0 ASC NULLS LAST,t@1 ASC NULLS LAST]
+--SortExec: expr=[m@0 ASC NULLS LAST,t@1 ASC NULLS LAST]
+----InterleaveExec
+------ProjectionExec: expr=[Int64(0)@0 as m, t@1 as t]
+--------AggregateExec: mode=FinalPartitioned, gby=[Int64(0)@0 as Int64(0), t@1 as t], aggr=[]
+----------CoalesceBatchesExec: target_batch_size=8192
+------------RepartitionExec: partitioning=Hash([Int64(0)@0, t@1], 2), input_partitions=2
+--------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+----------------AggregateExec: mode=Partial, gby=[0 as Int64(0), t@0 as t], aggr=[]
+------------------ProjectionExec: expr=[column1@0 as t]
+--------------------ValuesExec
+------ProjectionExec: expr=[Int64(1)@0 as m, t@1 as t]
+--------AggregateExec: mode=FinalPartitioned, gby=[Int64(1)@0 as Int64(1), t@1 as t], aggr=[]
+----------CoalesceBatchesExec: target_batch_size=8192
+------------RepartitionExec: partitioning=Hash([Int64(1)@0, t@1], 2), input_partitions=2
+--------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+----------------AggregateExec: mode=Partial, gby=[1 as Int64(1), t@0 as t], aggr=[]
+------------------ProjectionExec: expr=[column1@0 as t]
+--------------------ValuesExec

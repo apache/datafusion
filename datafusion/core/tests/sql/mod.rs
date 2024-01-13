@@ -77,7 +77,6 @@ pub mod csv_files;
 pub mod explain_analyze;
 pub mod expr;
 pub mod joins;
-pub mod order;
 pub mod partitioned_csv;
 pub mod predicates;
 pub mod references;
