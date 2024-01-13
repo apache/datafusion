@@ -24,7 +24,7 @@ use arrow::datatypes::{
     DataType, TimeUnit, MAX_DECIMAL_FOR_EACH_PRECISION, MIN_DECIMAL_FOR_EACH_PRECISION,
 };
 use arrow::temporal_conversions::{MICROSECONDS, MILLISECONDS, NANOSECONDS};
-use datafusion_common::tree_node::{RewriteRecursion, TreeNodeRewriter};
+use datafusion_common::tree_node::TreeNodeRewriter;
 use datafusion_common::{
     internal_err, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue,
 };
@@ -127,13 +127,9 @@ struct UnwrapCastExprRewriter {
 }
 
 impl TreeNodeRewriter for UnwrapCastExprRewriter {
-    type N = Expr;
+    type Node = Expr;
 
-    fn pre_visit(&mut self, _expr: &Expr) -> Result<RewriteRecursion> {
-        Ok(RewriteRecursion::Continue)
-    }
-
-    fn mutate(&mut self, expr: Expr) -> Result<Expr> {
+    fn f_up(&mut self, expr: Expr) -> Result<Expr> {
         match &expr {
             // For case:
             // try_cast/cast(expr as data_type) op literal

@@ -21,7 +21,7 @@ use crate::utils::replace_qualified_name;
 use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_common::alias::AliasGenerator;
 use datafusion_common::tree_node::{
-    RewriteRecursion, Transformed, TreeNode, TreeNodeRewriter,
+    Transformed, TreeNode, TreeNodeRecursion, TreeNodeRewriter,
 };
 use datafusion_common::{plan_err, Column, DataFusionError, Result, ScalarValue};
 use datafusion_expr::expr_rewriter::create_col_from_scalar_expr;
@@ -201,16 +201,9 @@ struct ExtractScalarSubQuery {
 }
 
 impl TreeNodeRewriter for ExtractScalarSubQuery {
-    type N = Expr;
+    type Node = Expr;
 
-    fn pre_visit(&mut self, expr: &Expr) -> Result<RewriteRecursion> {
-        match expr {
-            Expr::ScalarSubquery(_) => Ok(RewriteRecursion::Mutate),
-            _ => Ok(RewriteRecursion::Continue),
-        }
-    }
-
-    fn mutate(&mut self, expr: Expr) -> Result<Expr> {
+    fn f_down(&mut self, expr: Expr) -> Result<(Expr, TreeNodeRecursion)> {
         match expr {
             Expr::ScalarSubquery(subquery) => {
                 let subqry_alias = self.alias_gen.next("__scalar_sq");
@@ -220,12 +213,15 @@ impl TreeNodeRewriter for ExtractScalarSubQuery {
                     .subquery
                     .head_output_expr()?
                     .map_or(plan_err!("single expression required."), Ok)?;
-                Ok(Expr::Column(create_col_from_scalar_expr(
-                    &scalar_expr,
-                    subqry_alias,
-                )?))
+                Ok((
+                    Expr::Column(create_col_from_scalar_expr(
+                        &scalar_expr,
+                        subqry_alias,
+                    )?),
+                    TreeNodeRecursion::Skip,
+                ))
             }
-            _ => Ok(expr),
+            _ => Ok((expr, TreeNodeRecursion::Continue)),
         }
     }
 }

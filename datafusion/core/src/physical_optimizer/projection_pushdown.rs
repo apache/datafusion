@@ -43,7 +43,7 @@ use crate::physical_plan::{Distribution, ExecutionPlan};
 
 use arrow_schema::SchemaRef;
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::tree_node::{Transformed, TreeNode, VisitRecursion};
+use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
 use datafusion_common::JoinSide;
 use datafusion_physical_expr::expressions::{Column, Literal};
 use datafusion_physical_expr::{
@@ -270,7 +270,7 @@ fn try_unifying_projections(
                 if let Some(column) = expr.as_any().downcast_ref::<Column>() {
                     *column_ref_map.entry(column.clone()).or_default() += 1;
                 }
-                VisitRecursion::Continue
+                TreeNodeRecursion::Continue
             })
         })
         .unwrap();

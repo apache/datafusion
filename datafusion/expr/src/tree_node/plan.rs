@@ -19,14 +19,14 @@
 
 use crate::LogicalPlan;
 
-use datafusion_common::tree_node::{TreeNode, TreeNodeVisitor, VisitRecursion};
+use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion, TreeNodeVisitor};
 use datafusion_common::{handle_tree_recursion, Result};
 
 impl TreeNode for LogicalPlan {
-    fn apply<F: FnMut(&Self) -> Result<VisitRecursion>>(
+    fn apply<F: FnMut(&Self) -> Result<TreeNodeRecursion>>(
         &self,
         op: &mut F,
-    ) -> Result<VisitRecursion> {
+    ) -> Result<TreeNodeRecursion> {
         // Compared to the default implementation, we need to invoke
         // [`Self::apply_subqueries`] before visiting its children
         handle_tree_recursion!(op(self)?);
@@ -57,7 +57,7 @@ impl TreeNode for LogicalPlan {
     fn visit<V: TreeNodeVisitor<N = Self>>(
         &self,
         visitor: &mut V,
-    ) -> Result<VisitRecursion> {
+    ) -> Result<TreeNodeRecursion> {
         // Compared to the default implementation, we need to invoke
         // [`Self::visit_subqueries`] before visiting its children
         handle_tree_recursion!(visitor.pre_visit(self)?);
@@ -66,14 +66,14 @@ impl TreeNode for LogicalPlan {
         visitor.post_visit(self)
     }
 
-    fn apply_children<F: FnMut(&Self) -> Result<VisitRecursion>>(
+    fn apply_children<F: FnMut(&Self) -> Result<TreeNodeRecursion>>(
         &self,
         op: &mut F,
-    ) -> Result<VisitRecursion> {
+    ) -> Result<TreeNodeRecursion> {
         for child in self.inputs() {
             handle_tree_recursion!(op(child)?)
         }
-        Ok(VisitRecursion::Continue)
+        Ok(TreeNodeRecursion::Continue)
     }
 
     fn map_children<F>(self, transform: F) -> Result<Self>

@@ -18,7 +18,7 @@
 use crate::simplify_expressions::{ExprSimplifier, SimplifyContext};
 use crate::utils::collect_subquery_cols;
 use datafusion_common::tree_node::{
-    RewriteRecursion, Transformed, TreeNode, TreeNodeRewriter,
+    Transformed, TreeNode, TreeNodeRecursion, TreeNodeRewriter,
 };
 use datafusion_common::{plan_err, Result};
 use datafusion_common::{Column, DFSchemaRef, DataFusionError, ScalarValue};
@@ -56,19 +56,19 @@ pub const UN_MATCHED_ROW_INDICATOR: &str = "__always_true";
 pub type ExprResultMap = HashMap<String, Expr>;
 
 impl TreeNodeRewriter for PullUpCorrelatedExpr {
-    type N = LogicalPlan;
+    type Node = LogicalPlan;
 
-    fn pre_visit(&mut self, plan: &LogicalPlan) -> Result<RewriteRecursion> {
+    fn f_down(&mut self, plan: LogicalPlan) -> Result<(LogicalPlan, TreeNodeRecursion)> {
         match plan {
-            LogicalPlan::Filter(_) => Ok(RewriteRecursion::Continue),
+            LogicalPlan::Filter(_) => Ok((plan, TreeNodeRecursion::Continue)),
             LogicalPlan::Union(_) | LogicalPlan::Sort(_) | LogicalPlan::Extension(_) => {
                 let plan_hold_outer = !plan.all_out_ref_exprs().is_empty();
                 if plan_hold_outer {
                     // the unsupported case
                     self.can_pull_up = false;
-                    Ok(RewriteRecursion::Stop)
+                    Ok((plan, TreeNodeRecursion::Skip))
                 } else {
-                    Ok(RewriteRecursion::Continue)
+                    Ok((plan, TreeNodeRecursion::Continue))
                 }
             }
             LogicalPlan::Limit(_) => {
@@ -77,21 +77,21 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                     (false, true) => {
                         // the unsupported case
                         self.can_pull_up = false;
-                        Ok(RewriteRecursion::Stop)
+                        Ok((plan, TreeNodeRecursion::Skip))
                     }
-                    _ => Ok(RewriteRecursion::Continue),
+                    _ => Ok((plan, TreeNodeRecursion::Continue)),
                 }
             }
             _ if plan.expressions().iter().any(|expr| expr.contains_outer()) => {
                 // the unsupported cases, the plan expressions contain out reference columns(like window expressions)
                 self.can_pull_up = false;
-                Ok(RewriteRecursion::Stop)
+                Ok((plan, TreeNodeRecursion::Skip))
             }
-            _ => Ok(RewriteRecursion::Continue),
+            _ => Ok((plan, TreeNodeRecursion::Continue)),
         }
     }
 
-    fn mutate(&mut self, plan: LogicalPlan) -> Result<LogicalPlan> {
+    fn f_up(&mut self, plan: LogicalPlan) -> Result<LogicalPlan> {
         let subquery_schema = plan.schema().clone();
         match &plan {
             LogicalPlan::Filter(plan_filter) => {

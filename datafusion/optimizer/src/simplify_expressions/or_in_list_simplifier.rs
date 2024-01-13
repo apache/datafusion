@@ -37,9 +37,9 @@ impl OrInListSimplifier {
 }
 
 impl TreeNodeRewriter for OrInListSimplifier {
-    type N = Expr;
+    type Node = Expr;
 
-    fn mutate(&mut self, expr: Expr) -> Result<Expr> {
+    fn f_up(&mut self, expr: Expr) -> Result<Expr> {
         if let Expr::BinaryExpr(BinaryExpr { left, op, right }) = &expr {
             if *op == Operator::Or {
                 let left = as_inlist(left);

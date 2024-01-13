@@ -49,9 +49,9 @@ impl InListSimplifier {
 }
 
 impl TreeNodeRewriter for InListSimplifier {
-    type N = Expr;
+    type Node = Expr;
 
-    fn mutate(&mut self, expr: Expr) -> Result<Expr> {
+    fn f_up(&mut self, expr: Expr) -> Result<Expr> {
         if let Expr::BinaryExpr(BinaryExpr { left, op, right }) = &expr {
             if let (Expr::InList(l1), Operator::And, Expr::InList(l2)) =
                 (left.as_ref(), op, right.as_ref())

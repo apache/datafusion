@@ -94,9 +94,9 @@ pub(crate) struct OperatorToFunctionRewriter {
 }
 
 impl TreeNodeRewriter for OperatorToFunctionRewriter {
-    type N = Expr;
+    type Node = Expr;
 
-    fn mutate(&mut self, expr: Expr) -> Result<Expr> {
+    fn f_up(&mut self, expr: Expr) -> Result<Expr> {
         match expr {
             Expr::BinaryExpr(BinaryExpr {
                 ref left,

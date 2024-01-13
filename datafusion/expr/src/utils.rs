@@ -31,7 +31,7 @@ use crate::{
 };
 
 use arrow::datatypes::{DataType, TimeUnit};
-use datafusion_common::tree_node::{TreeNode, VisitRecursion};
+use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion_common::utils::get_at_indices;
 use datafusion_common::{
     internal_err, plan_datafusion_err, plan_err, Column, DFField, DFSchema, DFSchemaRef,
@@ -662,10 +662,10 @@ where
                 exprs.push(expr.clone())
             }
             // stop recursing down this expr once we find a match
-            return Ok(VisitRecursion::Skip);
+            return Ok(TreeNodeRecursion::Skip);
         }
 
-        Ok(VisitRecursion::Continue)
+        Ok(TreeNodeRecursion::Continue)
     })
     // pre_visit always returns OK, so this will always too
     .expect("no way to return error during recursion");
@@ -682,10 +682,10 @@ where
         if let Err(e) = f(expr) {
             // save the error for later (it may not be a DataFusionError
             err = Err(e);
-            Ok(VisitRecursion::Stop)
+            Ok(TreeNodeRecursion::Stop)
         } else {
             // keep going
-            Ok(VisitRecursion::Continue)
+            Ok(TreeNodeRecursion::Continue)
         }
     })
     // The closure always returns OK, so this will always too

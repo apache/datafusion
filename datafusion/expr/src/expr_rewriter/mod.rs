@@ -33,7 +33,7 @@ pub use order_by::rewrite_sort_cols_by_aggs;
 /// Recursively call [`Column::normalize_with_schemas`] on all [`Column`] expressions
 /// in the `expr` expression tree.
 pub fn normalize_col(expr: Expr, plan: &LogicalPlan) -> Result<Expr> {
-    expr.transform(&|expr| {
+    expr.transform_up(&|expr| {
         Ok({
             if let Expr::Column(c) = expr {
                 let col = LogicalPlanBuilder::normalize(plan, c)?;
@@ -57,7 +57,7 @@ pub fn normalize_col_with_schemas(
     schemas: &[&Arc<DFSchema>],
     using_columns: &[HashSet<Column>],
 ) -> Result<Expr> {
-    expr.transform(&|expr| {
+    expr.transform_up(&|expr| {
         Ok({
             if let Expr::Column(c) = expr {
                 let col = c.normalize_with_schemas(schemas, using_columns)?;
@@ -75,7 +75,7 @@ pub fn normalize_col_with_schemas_and_ambiguity_check(
     schemas: &[&[&DFSchema]],
     using_columns: &[HashSet<Column>],
 ) -> Result<Expr> {
-    expr.transform(&|expr| {
+    expr.transform_up(&|expr| {
         Ok({
             if let Expr::Column(c) = expr {
                 let col =
@@ -102,7 +102,7 @@ pub fn normalize_cols(
 /// Recursively replace all [`Column`] expressions in a given expression tree with
 /// `Column` expressions provided by the hash map argument.
 pub fn replace_col(expr: Expr, replace_map: &HashMap<&Column, &Column>) -> Result<Expr> {
-    expr.transform(&|expr| {
+    expr.transform_up(&|expr| {
         Ok({
             if let Expr::Column(c) = &expr {
                 match replace_map.get(c) {
@@ -122,7 +122,7 @@ pub fn replace_col(expr: Expr, replace_map: &HashMap<&Column, &Column>) -> Resul
 /// For example, if there were expressions like `foo.bar` this would
 /// rewrite it to just `bar`.
 pub fn unnormalize_col(expr: Expr) -> Expr {
-    expr.transform(&|expr| {
+    expr.transform_up(&|expr| {
         Ok({
             if let Expr::Column(c) = expr {
                 let col = Column {
@@ -164,7 +164,7 @@ pub fn unnormalize_cols(exprs: impl IntoIterator<Item = Expr>) -> Vec<Expr> {
 /// Recursively remove all the ['OuterReferenceColumn'] and return the inside Column
 /// in the expression tree.
 pub fn strip_outer_reference(expr: Expr) -> Expr {
-    expr.transform(&|expr| {
+    expr.transform_up(&|expr| {
         Ok({
             if let Expr::OuterReferenceColumn(_, col) = expr {
                 Transformed::Yes(Expr::Column(col))
@@ -250,7 +250,7 @@ pub fn unalias(expr: Expr) -> Expr {
 /// schema of plan nodes don't change after optimization
 pub fn rewrite_preserving_name<R>(expr: Expr, rewriter: &mut R) -> Result<Expr>
 where
-    R: TreeNodeRewriter<N = Expr>,
+    R: TreeNodeRewriter<Node = Expr>,
 {
     let original_name = expr.name_for_alias()?;
     let expr = expr.rewrite(rewriter)?;
@@ -263,7 +263,7 @@ mod test {
     use crate::expr::Sort;
     use crate::{col, lit, Cast};
     use arrow::datatypes::DataType;
-    use datafusion_common::tree_node::{RewriteRecursion, TreeNode, TreeNodeRewriter};
+    use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion, TreeNodeRewriter};
     use datafusion_common::{DFField, DFSchema, ScalarValue};
     use std::ops::Add;
 
@@ -273,14 +273,14 @@ mod test {
     }
 
     impl TreeNodeRewriter for RecordingRewriter {
-        type N = Expr;
+        type Node = Expr;
 
-        fn pre_visit(&mut self, expr: &Expr) -> Result<RewriteRecursion> {
+        fn f_down(&mut self, expr: Expr) -> Result<(Expr, TreeNodeRecursion)> {
             self.v.push(format!("Previsited {expr}"));
-            Ok(RewriteRecursion::Continue)
+            Ok((expr, TreeNodeRecursion::Continue))
         }
 
-        fn mutate(&mut self, expr: Expr) -> Result<Expr> {
+        fn f_up(&mut self, expr: Expr) -> Result<Expr> {
             self.v.push(format!("Mutated {expr}"));
             Ok(expr)
         }
@@ -305,11 +305,17 @@ mod test {
         };
 
         // rewrites "foo" --> "bar"
-        let rewritten = col("state").eq(lit("foo")).transform(&transformer).unwrap();
+        let rewritten = col("state")
+            .eq(lit("foo"))
+            .transform_up(&transformer)
+            .unwrap();
         assert_eq!(rewritten, col("state").eq(lit("bar")));
 
         // doesn't rewrite
-        let rewritten = col("state").eq(lit("baz")).transform(&transformer).unwrap();
+        let rewritten = col("state")
+            .eq(lit("baz"))
+            .transform_up(&transformer)
+            .unwrap();
         assert_eq!(rewritten, col("state").eq(lit("baz")));
     }
 
@@ -444,9 +450,9 @@ mod test {
         }
 
         impl TreeNodeRewriter for TestRewriter {
-            type N = Expr;
+            type Node = Expr;
 
-            fn mutate(&mut self, _: Expr) -> Result<Expr> {
+            fn f_up(&mut self, _: Expr) -> Result<Expr> {
                 Ok(self.rewrite_to.clone())
             }
         }

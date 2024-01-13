@@ -29,9 +29,7 @@ use crate::{PhysicalExpr, PhysicalSortExpr};
 use arrow::array::{make_array, Array, ArrayRef, BooleanArray, MutableArrayData};
 use arrow::compute::{and_kleene, is_not_null, SlicesIterator};
 use arrow::datatypes::SchemaRef;
-use datafusion_common::tree_node::{
-    Transformed, TreeNode, TreeNodeRewriter, VisitRecursion,
-};
+use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
 use datafusion_common::Result;
 use datafusion_expr::Operator;
 
@@ -130,11 +128,10 @@ pub fn get_indices_of_exprs_strict<T: Borrow<Arc<dyn PhysicalExpr>>>(
 
 pub type ExprTreeNode<T> = ExprContext<Option<T>>;
 
-/// This struct facilitates the [TreeNodeRewriter] mechanism to convert a
-/// [PhysicalExpr] tree into a DAEG (i.e. an expression DAG) by collecting
-/// identical expressions in one node. Caller specifies the node type in the
-/// DAEG via the `constructor` argument, which constructs nodes in the DAEG
-/// from the [ExprTreeNode] ancillary object.
+/// This struct is used to convert a [PhysicalExpr] tree into a DAEG (i.e. an expression
+/// DAG) by collecting identical expressions in one node. Caller specifies the node type
+/// in the DAEG via the `constructor` argument, which constructs nodes in the DAEG from
+/// the [ExprTreeNode] ancillary object.
 struct PhysicalExprDAEGBuilder<'a, T, F: Fn(&ExprTreeNode<NodeIndex>) -> Result<T>> {
     // The resulting DAEG (expression DAG).
     graph: StableGraph<T, usize>,
@@ -144,16 +141,15 @@ struct PhysicalExprDAEGBuilder<'a, T, F: Fn(&ExprTreeNode<NodeIndex>) -> Result<
     constructor: &'a F,
 }
 
-impl<'a, T, F: Fn(&ExprTreeNode<NodeIndex>) -> Result<T>> TreeNodeRewriter
-    for PhysicalExprDAEGBuilder<'a, T, F>
+impl<'a, T, F: Fn(&ExprTreeNode<NodeIndex>) -> Result<T>>
+    PhysicalExprDAEGBuilder<'a, T, F>
 {
-    type N = ExprTreeNode<NodeIndex>;
     // This method mutates an expression node by transforming it to a physical expression
     // and adding it to the graph. The method returns the mutated expression node.
     fn mutate(
         &mut self,
         mut node: ExprTreeNode<NodeIndex>,
-    ) -> Result<ExprTreeNode<NodeIndex>> {
+    ) -> Result<Transformed<ExprTreeNode<NodeIndex>>> {
         // Get the expression associated with the input expression node.
         let expr = &node.expr;
 
@@ -176,7 +172,7 @@ impl<'a, T, F: Fn(&ExprTreeNode<NodeIndex>) -> Result<T>> TreeNodeRewriter
         // Set the data field of the input expression node to the corresponding node index.
         node.data = Some(node_idx);
         // Return the mutated expression node.
-        Ok(node)
+        Ok(Transformed::Yes(node))
     }
 }
 
@@ -197,7 +193,7 @@ where
         constructor,
     };
     // Use the builder to transform the expression tree node into a DAG.
-    let root = init.rewrite(&mut builder)?;
+    let root = init.transform_up_mut(&mut |node| builder.mutate(node))?;
     // Return a tuple containing the root node index and the DAG.
     Ok((root.data.unwrap(), builder.graph))
 }
@@ -211,7 +207,7 @@ pub fn collect_columns(expr: &Arc<dyn PhysicalExpr>) -> HashSet<Column> {
                 columns.insert(column.clone());
             }
         }
-        Ok(VisitRecursion::Continue)
+        Ok(TreeNodeRecursion::Continue)
     })
     // pre_visit always returns OK, so this will always too
     .expect("no way to return error during recursion");

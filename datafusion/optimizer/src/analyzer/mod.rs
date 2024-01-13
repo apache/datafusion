@@ -28,7 +28,7 @@ use crate::analyzer::subquery::check_subquery_expr;
 use crate::analyzer::type_coercion::TypeCoercion;
 use crate::utils::log_plan;
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::tree_node::{TreeNode, VisitRecursion};
+use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::expr::Exists;
 use datafusion_expr::expr::InSubquery;
@@ -136,7 +136,7 @@ fn check_plan(plan: &LogicalPlan) -> Result<()> {
             })?;
         }
 
-        Ok(VisitRecursion::Continue)
+        Ok(TreeNodeRecursion::Continue)
     })?;
 
     Ok(())

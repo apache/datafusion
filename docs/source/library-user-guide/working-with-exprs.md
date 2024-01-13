@@ -96,7 +96,7 @@ To implement the inlining, we'll need to write a function that takes an `Expr` a
 
 ```rust
 fn rewrite_add_one(expr: Expr) -> Result<Expr> {
-    expr.transform(&|expr| {
+    expr.transform_up(&|expr| {
         Ok(match expr {
             Expr::ScalarUDF(scalar_fun) if scalar_fun.fun.name == "add_one" => {
                 let input_arg = scalar_fun.args[0].clone();

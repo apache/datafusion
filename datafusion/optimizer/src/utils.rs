@@ -18,7 +18,7 @@
 //! Collection of utility functions that are leveraged by the query optimizer rules
 
 use crate::{OptimizerConfig, OptimizerRule};
-use datafusion_common::tree_node::{TreeNode, VisitRecursion};
+use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion_common::{Column, DFSchemaRef};
 use datafusion_common::{DFSchema, Result};
 use datafusion_expr::expr::is_volatile;
@@ -100,9 +100,9 @@ pub(crate) fn is_volatile_expression(e: &Expr) -> Result<bool> {
     e.apply(&mut |expr| {
         Ok(if is_volatile(expr)? {
             is_volatile_expr = true;
-            VisitRecursion::Stop
+            TreeNodeRecursion::Stop
         } else {
-            VisitRecursion::Continue
+            TreeNodeRecursion::Continue
         })
     })?;
     Ok(is_volatile_expr)

@@ -25,7 +25,7 @@ use crate::{utils, OptimizerConfig, OptimizerRule};
 
 use arrow::datatypes::DataType;
 use datafusion_common::tree_node::{
-    RewriteRecursion, TreeNode, TreeNodeRewriter, TreeNodeVisitor, VisitRecursion,
+    TreeNode, TreeNodeRecursion, TreeNodeRewriter, TreeNodeVisitor,
 };
 use datafusion_common::{
     internal_err, Column, DFField, DFSchema, DFSchemaRef, DataFusionError, Result,
@@ -614,21 +614,21 @@ impl ExprIdentifierVisitor<'_> {
 impl TreeNodeVisitor for ExprIdentifierVisitor<'_> {
     type N = Expr;
 
-    fn pre_visit(&mut self, expr: &Expr) -> Result<VisitRecursion> {
+    fn pre_visit(&mut self, expr: &Expr) -> Result<TreeNodeRecursion> {
         // related to https://github.com/apache/arrow-datafusion/issues/8814
         // If the expr contain volatile expression or is a short-circuit expression, skip it.
         if expr.short_circuits() || is_volatile_expression(expr)? {
-            return Ok(VisitRecursion::Skip);
+            return Ok(TreeNodeRecursion::Skip);
         }
         self.visit_stack
             .push(VisitRecord::EnterMark(self.node_count));
         self.node_count += 1;
         // put placeholder
         self.id_array.push((0, "".to_string()));
-        Ok(VisitRecursion::Continue)
+        Ok(TreeNodeRecursion::Continue)
     }
 
-    fn post_visit(&mut self, expr: &Expr) -> Result<VisitRecursion> {
+    fn post_visit(&mut self, expr: &Expr) -> Result<TreeNodeRecursion> {
         self.series_number += 1;
 
         let (idx, sub_expr_desc) = self.pop_enter_mark();
@@ -637,7 +637,7 @@ impl TreeNodeVisitor for ExprIdentifierVisitor<'_> {
             self.id_array[idx].0 = self.series_number;
             let desc = Self::desc_expr(expr);
             self.visit_stack.push(VisitRecord::ExprItem(desc));
-            return Ok(VisitRecursion::Continue);
+            return Ok(TreeNodeRecursion::Continue);
         }
         let mut desc = Self::desc_expr(expr);
         desc.push_str(&sub_expr_desc);
@@ -651,7 +651,7 @@ impl TreeNodeVisitor for ExprIdentifierVisitor<'_> {
             .entry(desc)
             .or_insert_with(|| (expr.clone(), 0, data_type))
             .1 += 1;
-        Ok(VisitRecursion::Continue)
+        Ok(TreeNodeRecursion::Continue)
     }
 }
 
@@ -694,73 +694,70 @@ struct CommonSubexprRewriter<'a> {
 }
 
 impl TreeNodeRewriter for CommonSubexprRewriter<'_> {
-    type N = Expr;
+    type Node = Expr;
 
-    fn pre_visit(&mut self, expr: &Expr) -> Result<RewriteRecursion> {
+    fn f_down(&mut self, expr: Expr) -> Result<(Expr, TreeNodeRecursion)> {
         // The `CommonSubexprRewriter` relies on `ExprIdentifierVisitor` to generate
         // the `id_array`, which records the expr's identifier used to rewrite expr. So if we
         // skip an expr in `ExprIdentifierVisitor`, we should skip it here, too.
-        if expr.short_circuits() || is_volatile_expression(expr)? {
-            return Ok(RewriteRecursion::Stop);
+        if expr.short_circuits() || is_volatile_expression(&expr)? {
+            return Ok((expr, TreeNodeRecursion::Skip));
         }
         if self.curr_index >= self.id_array.len()
             || self.max_series_number > self.id_array[self.curr_index].0
         {
-            return Ok(RewriteRecursion::Stop);
+            return Ok((expr, TreeNodeRecursion::Skip));
         }
 
         let curr_id = &self.id_array[self.curr_index].1;
         // skip `Expr`s without identifier (empty identifier).
         if curr_id.is_empty() {
             self.curr_index += 1;
-            return Ok(RewriteRecursion::Skip);
+            return Ok((expr, TreeNodeRecursion::Continue));
         }
         match self.expr_set.get(curr_id) {
             Some((_, counter, _)) => {
                 if *counter > 1 {
                     self.affected_id.insert(curr_id.clone());
-                    Ok(RewriteRecursion::Mutate)
+
+                    // This expr tree is finished.
+                    if self.curr_index >= self.id_array.len() {
+                        return Ok((expr, TreeNodeRecursion::Skip));
+                    }
+
+                    let (series_number, id) = &self.id_array[self.curr_index];
+                    self.curr_index += 1;
+                    // Skip sub-node of a replaced tree, or without identifier, or is not repeated expr.
+                    let expr_set_item = self.expr_set.get(id).ok_or_else(|| {
+                        DataFusionError::Internal("expr_set invalid state".to_string())
+                    })?;
+                    if *series_number < self.max_series_number
+                        || id.is_empty()
+                        || expr_set_item.1 <= 1
+                    {
+                        return Ok((expr, TreeNodeRecursion::Skip));
+                    }
+
+                    self.max_series_number = *series_number;
+                    // step index to skip all sub-node (which has smaller series number).
+                    while self.curr_index < self.id_array.len()
+                        && *series_number > self.id_array[self.curr_index].0
+                    {
+                        self.curr_index += 1;
+                    }
+
+                    let expr_name = expr.display_name()?;
+                    // Alias this `Column` expr to it original "expr name",
+                    // `projection_push_down` optimizer use "expr name" to eliminate useless
+                    // projections.
+                    Ok((col(id).alias(expr_name), TreeNodeRecursion::Skip))
                 } else {
                     self.curr_index += 1;
-                    Ok(RewriteRecursion::Skip)
+                    Ok((expr, TreeNodeRecursion::Continue))
                 }
             }
             _ => internal_err!("expr_set invalid state"),
         }
-    }
-
-    fn mutate(&mut self, expr: Expr) -> Result<Expr> {
-        // This expr tree is finished.
-        if self.curr_index >= self.id_array.len() {
-            return Ok(expr);
-        }
-
-        let (series_number, id) = &self.id_array[self.curr_index];
-        self.curr_index += 1;
-        // Skip sub-node of a replaced tree, or without identifier, or is not repeated expr.
-        let expr_set_item = self.expr_set.get(id).ok_or_else(|| {
-            DataFusionError::Internal("expr_set invalid state".to_string())
-        })?;
-        if *series_number < self.max_series_number
-            || id.is_empty()
-            || expr_set_item.1 <= 1
-        {
-            return Ok(expr);
-        }
-
-        self.max_series_number = *series_number;
-        // step index to skip all sub-node (which has smaller series number).
-        while self.curr_index < self.id_array.len()
-            && *series_number > self.id_array[self.curr_index].0
-        {
-            self.curr_index += 1;
-        }
-
-        let expr_name = expr.display_name()?;
-        // Alias this `Column` expr to it original "expr name",
-        // `projection_push_down` optimizer use "expr name" to eliminate useless
-        // projections.
-        Ok(col(id).alias(expr_name))
     }
 }
 

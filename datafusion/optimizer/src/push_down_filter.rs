@@ -22,7 +22,7 @@ use crate::optimizer::ApplyOrder;
 use crate::utils::is_volatile_expression;
 use crate::{OptimizerConfig, OptimizerRule};
 
-use datafusion_common::tree_node::{Transformed, TreeNode, VisitRecursion};
+use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
 use datafusion_common::{
     internal_err, plan_datafusion_err, Column, DFSchema, DFSchemaRef, DataFusionError,
     JoinConstraint, Result,
@@ -222,7 +222,7 @@ fn can_evaluate_as_join_condition(predicate: &Expr) -> Result<bool> {
         Expr::Column(_)
         | Expr::Literal(_)
         | Expr::Placeholder(_)
-        | Expr::ScalarVariable(_, _) => Ok(VisitRecursion::Skip),
+        | Expr::ScalarVariable(_, _) => Ok(TreeNodeRecursion::Skip),
         Expr::Exists { .. }
         | Expr::InSubquery(_)
         | Expr::ScalarSubquery(_)
@@ -232,7 +232,7 @@ fn can_evaluate_as_join_condition(predicate: &Expr) -> Result<bool> {
             ..
         }) => {
             is_evaluate = false;
-            Ok(VisitRecursion::Stop)
+            Ok(TreeNodeRecursion::Stop)
         }
         Expr::Alias(_)
         | Expr::BinaryExpr(_)
@@ -254,7 +254,7 @@ fn can_evaluate_as_join_condition(predicate: &Expr) -> Result<bool> {
         | Expr::Cast(_)
         | Expr::TryCast(_)
         | Expr::ScalarFunction(..)
-        | Expr::InList { .. } => Ok(VisitRecursion::Continue),
+        | Expr::InList { .. } => Ok(TreeNodeRecursion::Continue),
         Expr::Sort(_)
         | Expr::AggregateFunction(_)
         | Expr::WindowFunction(_)
@@ -1039,12 +1039,12 @@ fn contain(e: &Expr, check_map: &HashMap<String, Expr>) -> bool {
             match check_map.get(&c.flat_name()) {
                 Some(_) => {
                     is_contain = true;
-                    VisitRecursion::Stop
+                    TreeNodeRecursion::Stop
                 }
-                None => VisitRecursion::Continue,
+                None => TreeNodeRecursion::Continue,
             }
         } else {
-            VisitRecursion::Continue
+            TreeNodeRecursion::Continue
         })
     })
     .unwrap();

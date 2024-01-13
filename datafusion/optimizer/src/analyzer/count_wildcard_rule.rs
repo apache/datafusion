@@ -115,9 +115,9 @@ fn analyze_internal(plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
 struct CountWildcardRewriter {}
 
 impl TreeNodeRewriter for CountWildcardRewriter {
-    type N = Expr;
+    type Node = Expr;
 
-    fn mutate(&mut self, old_expr: Expr) -> Result<Expr> {
+    fn f_up(&mut self, old_expr: Expr) -> Result<Expr> {
         let new_expr = match old_expr.clone() {
             Expr::WindowFunction(expr::WindowFunction {
                 fun:

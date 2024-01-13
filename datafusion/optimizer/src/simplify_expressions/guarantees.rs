@@ -57,9 +57,9 @@ impl<'a> GuaranteeRewriter<'a> {
 }
 
 impl<'a> TreeNodeRewriter for GuaranteeRewriter<'a> {
-    type N = Expr;
+    type Node = Expr;
 
-    fn mutate(&mut self, expr: Expr) -> Result<Expr> {
+    fn f_up(&mut self, expr: Expr) -> Result<Expr> {
         if self.guarantees.is_empty() {
             return Ok(expr);
         }
