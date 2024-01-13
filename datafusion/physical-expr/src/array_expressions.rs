@@ -716,7 +716,7 @@ where
                 offsets.push(offsets[row_index]);
                 continue;
             }
-            let stride = stride.unwrap_or_else(|| 1);
+            let stride = stride.unwrap_or(1);
             if stride.is_zero() {
                 return exec_err!(
                     "array_slice got invalid stride: {:?}, it cannot be 0",
