@@ -601,10 +601,10 @@ impl SSOStringHashSet {
         }
     }
 
-    fn iter(&self) -> impl Iterator<Item = String> + '_ {
+    fn iter(&self) -> Vec<String> {
         self.header_set
             .iter()
-            .map(|header| header.evaluate(self.buffer.as_slice()))
+            .map(|header| header.evaluate(self.buffer.as_slice())).collect()
     }
 
     fn len(&self) -> usize {
