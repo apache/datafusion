@@ -106,10 +106,11 @@ pub type DFSchemaRef = Arc<DFSchema>;
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DFSchema {
-    /// Fields
-    fields: Vec<DFField>,
-    /// Additional metadata in form of key value pairs
-    metadata: HashMap<String, String>,
+    /// Inner Arrow schema reference.
+    inner: SchemaRef,
+    /// Optional qualifiers for each column in this schema. In the same order as
+    /// the `self.inner.fields()`
+    field_qualifiers: Vec<Option<OwnedTableReference>>,
     /// Stores functional dependencies in the schema.
     functional_dependencies: FunctionalDependencies,
 }
@@ -118,60 +119,95 @@ impl DFSchema {
     /// Creates an empty `DFSchema`
     pub fn empty() -> Self {
         Self {
-            fields: vec![],
-            metadata: HashMap::new(),
+            inner: Arc::new(Schema::new([])),
+            field_qualifiers: vec![],
             functional_dependencies: FunctionalDependencies::empty(),
         }
     }
 
-    #[deprecated(since = "7.0.0", note = "please use `new_with_metadata` instead")]
-    /// Create a new `DFSchema`
-    pub fn new(fields: Vec<DFField>) -> Result<Self> {
-        Self::new_with_metadata(fields, HashMap::new())
-    }
-
-    /// Create a new `DFSchema`
-    pub fn new_with_metadata(
-        fields: Vec<DFField>,
-        metadata: HashMap<String, String>,
+    /// Create a `DFSchema` from an Arrow schema where all the fields have a given qualifier
+    pub fn from_qualified_schema<'a>(
+        qualifier: impl Into<TableReference<'a>>,
+        schema: &SchemaRef,
     ) -> Result<Self> {
-        let mut qualified_names = HashSet::new();
-        let mut unqualified_names = HashSet::new();
-
-        for field in &fields {
-            if let Some(qualifier) = field.qualifier() {
-                qualified_names.insert((qualifier, field.name()));
-            } else if !unqualified_names.insert(field.name()) {
-                return _schema_err!(SchemaError::DuplicateUnqualifiedField {
-                    name: field.name().to_string(),
-                });
-            }
-        }
-
-        // check for mix of qualified and unqualified field with same unqualified name
-        // note that we need to sort the contents of the HashSet first so that errors are
-        // deterministic
-        let mut qualified_names = qualified_names
-            .iter()
-            .map(|(l, r)| (l.to_owned(), r.to_owned()))
-            .collect::<Vec<(&OwnedTableReference, &String)>>();
-        qualified_names.sort();
-        for (qualifier, name) in &qualified_names {
-            if unqualified_names.contains(name) {
-                return _schema_err!(SchemaError::AmbiguousReference {
-                    field: Column {
-                        relation: Some((*qualifier).clone()),
-                        name: name.to_string(),
-                    }
-                });
-            }
-        }
-        Ok(Self {
-            fields,
-            metadata,
+        let qualifier = qualifier.into();
+        let new_self = Self {
+            inner: schema.clone(),
+            field_qualifiers: vec![Some(qualifier.clone()); schema.fields().len()],
             functional_dependencies: FunctionalDependencies::empty(),
-        })
+        };
+        // new_self.check_names()?;
+        Ok(new_self)
     }
+
+    /// Create a `DFSchema` from an Arrow where all fields have no qualifier.
+    pub fn from_unqualified_schema<'a>(schema: &SchemaRef) -> Result<Self> {
+        let new_self = Self {
+            inner: schema.clone(),
+            field_qualifiers: vec![None; schema.fields.len()],
+            functional_dependencies: FunctionalDependencies::empty(),
+        };
+        // new_self.check_names()?;
+        Ok(new_self)
+    }
+
+    // fn check_names(&self) -> Result<()> {
+    //     let mut qualified_names = HashSet::new();
+    //     let mut unqualified_names = HashSet::new();
+    //
+    //     for (field, qualifier) in self.inner.fields().iter().zip(&self.field_qualifiers) {
+    //
+    //     }
+    // }
+
+    // #[deprecated(since = "7.0.0", note = "please use `new_with_metadata` instead")]
+    /// Create a new `DFSchema`
+    // pub fn new(fields: Vec<DFField>) -> Result<Self> {
+    //     Self::new_with_metadata(fields, HashMap::new())
+    // }
+
+    /// Create a new `DFSchema`
+    // pub fn new_with_metadata(
+    //     fields: Vec<DFField>,
+    //     metadata: HashMap<String, String>,
+    // ) -> Result<Self> {
+    //     let mut qualified_names = HashSet::new();
+    //     let mut unqualified_names = HashSet::new();
+    //
+    //     for field in &fields {
+    //         if let Some(qualifier) = field.qualifier() {
+    //             qualified_names.insert((qualifier, field.name()));
+    //         } else if !unqualified_names.insert(field.name()) {
+    //             return _schema_err!(SchemaError::DuplicateUnqualifiedField {
+    //                 name: field.name().to_string(),
+    //             });
+    //         }
+    //     }
+    //
+    //     // check for mix of qualified and unqualified field with same unqualified name
+    //     // note that we need to sort the contents of the HashSet first so that errors are
+    //     // deterministic
+    //     let mut qualified_names = qualified_names
+    //         .iter()
+    //         .map(|(l, r)| (l.to_owned(), r.to_owned()))
+    //         .collect::<Vec<(&OwnedTableReference, &String)>>();
+    //     qualified_names.sort();
+    //     for (qualifier, name) in &qualified_names {
+    //         if unqualified_names.contains(name) {
+    //             return _schema_err!(SchemaError::AmbiguousReference {
+    //                 field: Column {
+    //                     relation: Some((*qualifier).clone()),
+    //                     name: name.to_string(),
+    //                 }
+    //             });
+    //         }
+    //     }
+    //     Ok(Self {
+    //         fields,
+    //         metadata,
+    //         functional_dependencies: FunctionalDependencies::empty(),
+    //     })
+    // }
 
     /// Create a `DFSchema` from an Arrow schema and a given qualifier
     ///
@@ -197,7 +233,7 @@ impl DFSchema {
         mut self,
         functional_dependencies: FunctionalDependencies,
     ) -> Result<Self> {
-        if functional_dependencies.is_valid(self.fields.len()) {
+        if functional_dependencies.is_valid(self.inner.fields.len()) {
             self.functional_dependencies = functional_dependencies;
             Ok(self)
         } else {
@@ -211,11 +247,11 @@ impl DFSchema {
     /// Create a new schema that contains the fields from this schema followed by the fields
     /// from the supplied schema. An error will be returned if there are duplicate field names.
     pub fn join(&self, schema: &DFSchema) -> Result<Self> {
-        let mut fields = self.fields.clone();
-        let mut metadata = self.metadata.clone();
-        fields.extend_from_slice(schema.fields().as_slice());
-        metadata.extend(schema.metadata.clone());
-        Self::new_with_metadata(fields, metadata)
+        // let mut fields = self.fields.clone();
+        // let mut metadata = self.metadata.clone();
+        // fields.extend_from_slice(schema.fields().as_slice());
+        // metadata.extend(schema.metadata.clone());
+        // Self::new_with_metadata(fields, metadata)
     }
 
     /// Modify this schema by appending the fields from the supplied schema, ignoring any
