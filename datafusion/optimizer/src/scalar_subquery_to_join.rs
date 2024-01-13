@@ -118,8 +118,8 @@ impl OptimizerRule for ScalarSubqueryToJoin {
                 for expr in projection.expr.iter() {
                     let (subqueries, rewrite_exprs) =
                         self.extract_subquery_exprs(expr, config.alias_generator())?;
-                    for (subquery, _) in &subqueries {
-                        subquery_to_expr_map.insert(subquery.clone(), expr.clone());
+                    for subquery_and_alias in &subqueries {
+                        subquery_to_expr_map.insert(subquery_and_alias.clone(), expr.clone());
                     }
                     all_subqueryies.extend(subqueries);
                     expr_to_rewrite_expr_map.insert(expr, rewrite_exprs);
@@ -136,16 +136,11 @@ impl OptimizerRule for ScalarSubqueryToJoin {
                     {
                         cur_input = optimized_subquery;
                         if !expr_check_map.is_empty() {
-                            if let Some(expr) = subquery_to_expr_map.get(&subquery) {
-                                if let Some(rewrite_expr) =
-                                    expr_to_rewrite_expr_map.get(expr)
-                                {
-                                    let new_expr =
-                                        rewrite_expr.clone().transform_up(&|expr| {
+                            if let Some(expr) = subquery_to_expr_map.get(&(subquery, alias)) {
+                                if let Some(rewrite_expr) = expr_to_rewrite_expr_map.get(expr) {
+                                    let new_expr = rewrite_expr.clone().transform_up(&|expr| {
                                             if let Expr::Column(col) = &expr {
-                                                if let Some(map_expr) =
-                                                    expr_check_map.get(&col.name)
-                                                {
+                                            if let Some(map_expr) = expr_check_map.get(&col.name) {
                                                     Ok(Transformed::Yes(map_expr.clone()))
                                                 } else {
                                                     Ok(Transformed::No(expr))
