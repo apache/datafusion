@@ -1159,7 +1159,7 @@ impl DataFrame {
     /// The method supports case sensitive rename with wrapping column name into one of following symbols (  "  or  '  or  `  )
     /// 
     /// Alternatively setting Datafusion param `datafusion.sql_parser.enable_ident_normalization` to `false` will enable  
-    /// case sensitive rename without need of wrap column name into special symbols 
+    /// case sensitive rename without need to wrap column name into special symbols 
     /// 
     /// ```
     /// # use datafusion::prelude::*;
