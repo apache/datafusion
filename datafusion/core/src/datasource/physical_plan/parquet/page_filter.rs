@@ -280,7 +280,7 @@ fn find_column_index(
         .columns()
         .iter()
         .enumerate()
-        .find(|(_idx, c)| c.column_descr().name() == column.name())
+        .find(|(_idx, c)| c.column_descr().name() == column.name() && c.column_descr().path().parts().len() == 0)
         .map(|(idx, _c)| idx);
 
     if col_idx.is_none() {
