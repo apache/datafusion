@@ -25,13 +25,14 @@ use arrow_array::types::{
 };
 use arrow_array::PrimitiveArray;
 use arrow_buffer::BufferBuilder;
-use hashbrown::hash_map::DefaultHashBuilder;
+use hashbrown::HashMap;
 
 use core::slice::SlicePattern;
 use std::any::Any;
 use std::cmp::Eq;
 use std::fmt::Debug;
 use std::hash::Hash;
+use std::mem;
 use std::sync::Arc;
 
 use ahash::RandomState;
@@ -467,34 +468,54 @@ where
 //     }
 // }
 
+const LEN: usize = mem::size_of::<usize>();
+
+
+#[derive(Debug, PartialEq, Eq, Hash)]
+struct SSOStringHeader {
+    len: usize,
+    offset_or_inline: usize,
+}
+
+impl SSOStringHeader {
+    fn evaluate(&self) -> (bool, usize) {
+        // short string
+        if self.len <= LEN {
+            (true, self.offset_or_inline)
+        } else {
+            (false, self.offset_or_inline)
+        }
+    }
+}
+
+/// The size, in number of groups, of the initial hash table
+const INITIAL_CAPACITY: usize = 128;
+/// The size, in bytes, of the string data
+const INITIAL_BUFFER_CAPACITY: usize = 8 * 1024;
+
 // Short String Optimizated HashSet for String
 // Equivalent to HashSet<String> but with better memory usage (Speed unsure)
 struct SSOStringHashSet {
-    // header: u128
-    // short string: length(4bytes) + data(12bytes)
-    // long string:  length(4bytes) + prefix(4bytes) + offset(8bytes)
-    header_set: HashSet<u128, RandomState>,
-    // map<hash of long string w/o 4 bytes prefix, offset in buffer>
-    long_string_map: HashMap<u64, u64, RandomState>,
+    header_set: HashSet<SSOStringHeader, RandomState>,
+    long_string_map: hashbrown::HashMap<usize, (), RandomState>,
     buffer: BufferBuilder<u8>,
+    state: RandomState,
 }
 
 impl SSOStringHashSet {
     fn insert(&mut self, value: &str) {
         let value_len = value.len();
-        if value_len <= 12 {
-            let mut short_string_header = 0u128;
-            short_string_header |= (value_len << 96) as u128;
-            short_string_header |= value
-                .as_bytes()
-                .iter()
-                .fold(0u128, |acc, &x| acc << 8 | x as u128);
+        if value_len <= LEN {
+            let inline = value.as_bytes().iter().fold(0usize, |acc, &x| acc << 8 | x as usize);
+            let short_string_header = SSOStringHeader {
+                len: value_len,
+                offset_or_inline: inline,
+            };
             self.header_set.insert(short_string_header);
         } else {
-            // 1) hash the string w/o 4 bytes prefix
-            // 2) check if the hash exists in the map
-            // 3) if exists, insert the offset into the header
-            // 4) if not exists, insert the hash and offset into the map
+            let hash = s
+            let value_bytes = value.as_bytes();
+            self.long_string_map.raw_entry_mut()
 
             let mut long_string_header = 0u128;
             long_string_header |= (value_len << 96) as u128;
