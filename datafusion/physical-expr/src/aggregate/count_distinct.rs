@@ -25,9 +25,7 @@ use arrow_array::types::{
 };
 use arrow_array::PrimitiveArray;
 use arrow_buffer::BufferBuilder;
-use hashbrown::HashMap;
 
-use core::slice::SlicePattern;
 use std::any::Any;
 use std::cmp::Eq;
 use std::fmt::Debug;
@@ -37,7 +35,7 @@ use std::sync::Arc;
 
 use ahash::RandomState;
 use arrow::array::{Array, ArrayRef};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 use crate::aggregate::utils::{down_cast_any_ref, Hashable};
 use crate::expressions::format_state_name;
@@ -46,6 +44,7 @@ use datafusion_common::cast::{as_list_array, as_primitive_array};
 use datafusion_common::utils::array_into_list_array;
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::Accumulator;
+use datafusion_execution::memory_pool::proxy::RawTableAllocExt;
 
 type DistinctScalarValues = ScalarValue;
 
@@ -447,114 +446,125 @@ where
     }
 }
 
-// #[derive(Debug)]
-// struct StringDistinctCountAccumulator<T>
-// where
-//     T: ArrowPrimitiveType + Send,
-//     T::Native: Eq + Hash,
-// {
-//     values: HashSet<T::Native, RandomState>,
-// }
+#[derive(Debug)]
+struct StringDistinctCountAccumulator(SSOStringHashSet);
+impl StringDistinctCountAccumulator {
+    fn new() -> Self {
+        Self(SSOStringHashSet::new())
+    }
+}
 
-// impl<T> NativeDistinctCountAccumulator<T>
-// where
-//     T: ArrowPrimitiveType + Send,
-//     T::Native: Eq + Hash,
-// {
-//     fn new() -> Self {
-//         Self {
-//             values: HashSet::default(),
-//         }
-//     }
-// }
+impl Accumulator for StringDistinctCountAccumulator {
+    fn state(&self) -> Result<Vec<ScalarValue>> {
+        // let arr = Arc::new(PrimitiveArray::<T>::from_iter_values(
+        //     self.values.iter().map(|v| v.0),
+        // )) as ArrayRef;
+        // let list = Arc::new(array_into_list_array(arr)) as ArrayRef;
+        // Ok(vec![ScalarValue::List(list)])
+        todo!()
+    }
 
-const LEN: usize = mem::size_of::<usize>();
+    fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        todo!()
+    }
 
+    fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
+        todo!()
+    }
 
-#[derive(Debug, PartialEq, Eq, Hash)]
+    fn evaluate(&self) -> Result<ScalarValue> {
+        todo!()
+    }
+
+    fn size(&self) -> usize {
+        todo!()
+    }
+}
+
+const SHORT_STRING_LEN: usize = mem::size_of::<usize>();
+
+#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
 struct SSOStringHeader {
+    /// hash of the string value (used when resizing table)
+    hash: u64,
+
     len: usize,
     offset_or_inline: usize,
 }
 
-impl SSOStringHeader {
-    fn evaluate(&self) -> (bool, usize) {
-        // short string
-        if self.len <= LEN {
-            (true, self.offset_or_inline)
-        } else {
-            (false, self.offset_or_inline)
-        }
-    }
-}
-
-/// The size, in number of groups, of the initial hash table
-const INITIAL_CAPACITY: usize = 128;
-/// The size, in bytes, of the string data
-const INITIAL_BUFFER_CAPACITY: usize = 8 * 1024;
-
 // Short String Optimizated HashSet for String
-// Equivalent to HashSet<String> but with better memory usage (Speed unsure)
+// Equivalent to HashSet<String> but with better memory usage
+#[derive(Default)]
 struct SSOStringHashSet {
-    header_set: HashSet<SSOStringHeader, RandomState>,
-    long_string_map: hashbrown::HashMap<usize, (), RandomState>,
+    header_set: HashSet<SSOStringHeader>,
+    long_string_map: hashbrown::raw::RawTable<SSOStringHeader>,
+    map_size: usize,
     buffer: BufferBuilder<u8>,
     state: RandomState,
 }
 
 impl SSOStringHashSet {
+    fn new() -> Self {
+        Self::default()
+    }
+
+    fn with_capacities() -> Self {
+        todo!("with_capacities")
+    }
+
     fn insert(&mut self, value: &str) {
         let value_len = value.len();
-        if value_len <= LEN {
-            let inline = value.as_bytes().iter().fold(0usize, |acc, &x| acc << 8 | x as usize);
+        let value_bytes = value.as_bytes();
+
+        if value_len <= SHORT_STRING_LEN {
+            let inline = value_bytes.iter().fold(0usize, |acc, &x| acc << 8 | x as usize);
             let short_string_header = SSOStringHeader {
+                // no need for short string cases
+                hash: 0,
                 len: value_len,
                 offset_or_inline: inline,
             };
             self.header_set.insert(short_string_header);
         } else {
-            let hash = s
-            let value_bytes = value.as_bytes();
-            self.long_string_map.raw_entry_mut()
+            let hash = self.state.hash_one(value_bytes);
 
-            let mut long_string_header = 0u128;
-            long_string_header |= (value_len << 96) as u128;
-            long_string_header |= (value
-                .as_bytes()
-                .iter()
-                .take(4)
-                .fold(0u128, |acc, &x| acc << 8 | x as u128)
-                << 64) as u128;
+            let entry = self.long_string_map.get_mut(hash, |header| {
+                // if hash matches, check if the bytes match
+                let offset = header.offset_or_inline;
+                let len = header.len;
+                
+                // SAFETY: buffer is only appended to, and we correctly inserted values
+                let existing_value = unsafe { self.buffer.as_slice().get_unchecked(offset..offset + len) };
 
-            let suffix = value
-                .as_bytes()
-                .iter()
-                .skip(4)
-                .collect::<Vec<_>>();
+                value_bytes == existing_value
+            });
 
-            // NYI hash_bytes: hash &[u8] to u64, similar to hashbrown `make_hash` for &[u8]            
-            let hashed_suffix = hash_bytes(suffix);
-            if let Some(offset) = self.long_string_map.get(&hashed_suffix) {
-                long_string_header |= *offset as u128;
-            } else {
+            if entry.is_none() {
                 let offset = self.buffer.len();
-                self.long_string_map.insert(hashed_suffix, offset as u64);
-                long_string_header |= offset as u128;
-                // convert suffix: Vec<&u8> to &[u8]
-                self.buffer.append_slice(suffix);
+                self.buffer.append_slice(value_bytes);
+                let header = SSOStringHeader {
+                    hash,
+                    len: value_len,
+                    offset_or_inline: offset,
+                };
+                self.long_string_map.insert_accounted(header, |header| header.hash, &mut self.map_size);
+                self.header_set.insert(header);
             }
-
-            self.header_set.insert(long_string_header);
-
         }
     }
 }
 
-struct HashSetSSOString {
-    // values: HashSet<SSOString, RandomState>,
-    short_string_set: HashSet<u128, RandomState>,
+impl Debug for SSOStringHashSet {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SSOStringHashSet")
+            .field("header_set", &self.header_set)
+            // TODO: Print long_string_map
+            .field("map_size", &self.map_size)
+            .field("buffer", &self.buffer)
+            .field("state", &self.state)
+            .finish()
+    }
 }
-
 #[cfg(test)]
 mod tests {
     use crate::expressions::NoOp;
