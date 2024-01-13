@@ -33,6 +33,12 @@ impl ArrowWriterOptions {
     }
 }
 
+impl Default for ArrowWriterOptions {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TryFrom<(&ConfigOptions, &StatementOptions)> for ArrowWriterOptions {
     type Error = DataFusionError;
 
