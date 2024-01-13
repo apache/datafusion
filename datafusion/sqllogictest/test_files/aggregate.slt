@@ -3260,3 +3260,28 @@ query I
 select count(*) from (select count(*) a, count(*) b from (select 1));
 ----
 1
+
+# Distinct Count for string
+
+statement ok
+create table distinct_count_string_table as values 
+    (1, 'a'),
+    (2, 'b'),
+    (2, 'c')
+;
+
+# run through update_batch
+query II
+select count(distinct column1), count(distinct column2) from distinct_count_string_table;
+----
+2 3
+
+# run through merge_batch
+query II rowsort
+select count(distinct column1), count(distinct column2) from distinct_count_string_table group by column1;
+----
+1 1
+1 2
+
+statement ok
+drop table distinct_count_string_table;

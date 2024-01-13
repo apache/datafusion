@@ -43,8 +43,8 @@ use crate::{AggregateExpr, PhysicalExpr};
 use datafusion_common::cast::{as_list_array, as_primitive_array, as_string_array};
 use datafusion_common::utils::array_into_list_array;
 use datafusion_common::{Result, ScalarValue};
-use datafusion_expr::Accumulator;
 use datafusion_execution::memory_pool::proxy::RawTableAllocExt;
+use datafusion_expr::Accumulator;
 
 type DistinctScalarValues = ScalarValue;
 
@@ -155,6 +155,8 @@ impl AggregateExpr for DistinctCount {
             Float32 => float_distinct_count_accumulator!(Float32Type),
             Float64 => float_distinct_count_accumulator!(Float64Type),
 
+            Utf8 => Ok(Box::new(StringDistinctCountAccumulator::new())),
+
             _ => Ok(Box::new(DistinctCountAccumulator {
                 values: HashSet::default(),
                 state_data_type: self.state_data_type.clone(),
@@ -218,12 +220,10 @@ impl Accumulator for DistinctCountAccumulator {
     fn state(&self) -> Result<Vec<ScalarValue>> {
         let scalars = self.values.iter().cloned().collect::<Vec<_>>();
         let arr = ScalarValue::new_list(scalars.as_slice(), &self.state_data_type);
-        println!("state: {:?}", arr);
         Ok(vec![ScalarValue::List(arr)])
     }
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
-        println!("ub values: {:?}", values);
         if values.is_empty() {
             return Ok(());
         }
@@ -238,13 +238,11 @@ impl Accumulator for DistinctCountAccumulator {
                 let scalar = ScalarValue::try_from_array(arr, index)?;
                 self.values.insert(scalar);
             }
-            // println!("self.values: {:?}", self.values);
             Ok(())
         })
     }
 
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
-        println!("mb values: {:?}", states);
         if states.is_empty() {
             return Ok(());
         }
@@ -252,7 +250,6 @@ impl Accumulator for DistinctCountAccumulator {
         let scalar_vec = ScalarValue::convert_array_to_scalar_vec(&states[0])?;
         for scalars in scalar_vec.into_iter() {
             self.values.extend(scalars);
-            // println!("self.values: {:?}", self.values);
         }
         Ok(())
     }
@@ -490,7 +487,7 @@ impl Accumulator for StringDistinctCountAccumulator {
         arr.iter().try_for_each(|maybe_list| {
             if let Some(list) = maybe_list {
                 let list = as_string_array(&list)?;
-                
+
                 list.iter().for_each(|value| {
                     if let Some(value) = value {
                         self.0.insert(value);
@@ -506,7 +503,9 @@ impl Accumulator for StringDistinctCountAccumulator {
     }
 
     fn size(&self) -> usize {
-        todo!()
+        // Size of accumulator
+        // + SSOStringHashSet size
+        std::mem::size_of_val(self) + self.0.size()
     }
 }
 
@@ -547,16 +546,14 @@ impl SSOStringHashSet {
         Self::default()
     }
 
-    fn with_capacities() -> Self {
-        todo!("with_capacities")
-    }
-
     fn insert(&mut self, value: &str) {
         let value_len = value.len();
         let value_bytes = value.as_bytes();
 
         if value_len <= SHORT_STRING_LEN {
-            let inline = value_bytes.iter().fold(0usize, |acc, &x| acc << 8 | x as usize);
+            let inline = value_bytes
+                .iter()
+                .fold(0usize, |acc, &x| acc << 8 | x as usize);
             let short_string_header = SSOStringHeader {
                 // no need for short string cases
                 hash: 0,
@@ -571,9 +568,10 @@ impl SSOStringHashSet {
                 // if hash matches, check if the bytes match
                 let offset = header.offset_or_inline;
                 let len = header.len;
-                
+
                 // SAFETY: buffer is only appended to, and we correctly inserted values
-                let existing_value = unsafe { self.buffer.as_slice().get_unchecked(offset..offset + len) };
+                let existing_value =
+                    unsafe { self.buffer.as_slice().get_unchecked(offset..offset + len) };
 
                 value_bytes == existing_value
             });
@@ -586,7 +584,11 @@ impl SSOStringHashSet {
                     len: value_len,
                     offset_or_inline: offset,
                 };
-                self.long_string_map.insert_accounted(header, |header| header.hash, &mut self.map_size);
+                self.long_string_map.insert_accounted(
+                    header,
+                    |header| header.hash,
+                    &mut self.map_size,
+                );
                 self.header_set.insert(header);
             }
         }
@@ -609,13 +611,25 @@ impl SSOStringHashSet {
                 let offset = offset_or_inline;
                 let len = header.len;
                 // SAFETY: buffer is only appended to, and we correctly inserted values
-                unsafe { std::str::from_utf8_unchecked(self.buffer.as_slice().get_unchecked(offset..offset + len)) }.to_string()
+                unsafe {
+                    std::str::from_utf8_unchecked(
+                        self.buffer.as_slice().get_unchecked(offset..offset + len),
+                    )
+                }
+                .to_string()
             }
         })
     }
 
     fn len(&self) -> usize {
         self.header_set.len()
+    }
+
+    // NEED HELPED
+    fn size(&self) -> usize {
+        self.header_set.len() * mem::size_of::<SSOStringHeader>()
+            + self.map_size
+            + self.buffer.len()
     }
 }
 
