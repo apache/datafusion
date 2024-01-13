@@ -604,7 +604,8 @@ impl SSOStringHashSet {
     fn iter(&self) -> Vec<String> {
         self.header_set
             .iter()
-            .map(|header| header.evaluate(self.buffer.as_slice())).collect()
+            .map(|header| header.evaluate(self.buffer.as_slice()))
+            .collect()
     }
 
     fn len(&self) -> usize {
