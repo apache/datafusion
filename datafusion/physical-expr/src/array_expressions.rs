@@ -689,16 +689,6 @@ where
         let end = offset_window[1];
         let len = end - start;
 
-        let stride = if let Some(stride) = stride {
-            if stride.is_null(row_index) {
-                None
-            } else {
-                Some(stride.value(row_index))
-            }
-        } else {
-            None
-        };
-
         // len 0 indicate array is null, return empty array in this row.
         if len == O::usize_as(0) {
             offsets.push(offsets[row_index]);
@@ -719,38 +709,32 @@ where
         };
 
         if let (Some(from), Some(to)) = (from_index, to_index) {
+            let stride = stride.map(|s| s.value(row_index));
+            // array_slice with stride in duckdb, return empty array if stride is not supported and from > to.
+            if stride.is_none() && from > to {
+                // return empty array
+                offsets.push(offsets[row_index]);
+                continue;
+            }
+            let stride = stride.unwrap_or_else(|| 1);
+            if stride.is_zero() {
+                return exec_err!(
+                    "array_slice got invalid stride: {:?}, it cannot be 0",
+                    stride
+                );
+            } else if from <= to && stride.is_negative() {
+                // return empty array
+                offsets.push(offsets[row_index]);
+                continue;
+            }
+
+            let stride: O = stride.try_into().map_err(|_| {
+                internal_datafusion_err!("array_slice got invalid stride: {}", stride)
+            })?;
+
             if from <= to {
                 assert!(start + to <= end);
-                if let Some(stride) = stride {
-                    if stride.is_zero() {
-                        return exec_err!(
-                            "array_slice got invalid stride: {}, it cannot be 0",
-                            stride
-                        );
-                    } else if stride.is_negative() {
-                        // return empty array
-                        offsets.push(offsets[row_index]);
-                        continue;
-                    }
-                    let mut index = start + from;
-                    let mut cnt = 0;
-                    let stride: O = stride.try_into().map_err(|_| {
-                        internal_datafusion_err!(
-                            "array_slice got invalid stride: {}",
-                            stride
-                        )
-                    })?;
-                    while index <= start + to {
-                        mutable.extend(
-                            0,
-                            index.to_usize().unwrap(),
-                            index.to_usize().unwrap() + 1,
-                        );
-                        index += stride;
-                        cnt += 1;
-                    }
-                    offsets.push(offsets[row_index] + O::usize_as(cnt));
-                } else {
+                if stride.eq(&O::one()) {
                     // stride is default to 1
                     mutable.extend(
                         0,
@@ -758,25 +742,21 @@ where
                         (start + to + O::usize_as(1)).to_usize().unwrap(),
                     );
                     offsets.push(offsets[row_index] + (to - from + O::usize_as(1)));
-                }
-            } else {
-                let stride = if let Some(stride) = stride {
-                    if !stride.is_negative() {
-                        return exec_err!(
-                            "array_slice got invalid stride: {}, because start index < end index",
-                            stride
-                        );
-                    }
-                    stride
-                } else {
-                    // return empty array
-                    offsets.push(offsets[row_index]);
                     continue;
-                };
-                let stride: O = stride.try_into().map_err(|_| {
-                    internal_datafusion_err!("array_slice got invalid stride: {}", stride)
-                })?;
-
+                }
+                let mut index = start + from;
+                let mut cnt = 0;
+                while index <= start + to {
+                    mutable.extend(
+                        0,
+                        index.to_usize().unwrap(),
+                        index.to_usize().unwrap() + 1,
+                    );
+                    index += stride;
+                    cnt += 1;
+                }
+                offsets.push(offsets[row_index] + O::usize_as(cnt));
+            } else {
                 let mut index = start + from;
                 let mut cnt = 0;
                 while index >= start + to {
