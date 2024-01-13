@@ -23,7 +23,7 @@ use arrow_array::types::{
     TimestampMicrosecondType, TimestampMillisecondType, TimestampNanosecondType,
     TimestampSecondType, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
 };
-use arrow_array::PrimitiveArray;
+use arrow_array::{PrimitiveArray, StringArray};
 use arrow_buffer::BufferBuilder;
 
 use std::any::Any;
@@ -40,7 +40,7 @@ use std::collections::HashSet;
 use crate::aggregate::utils::{down_cast_any_ref, Hashable};
 use crate::expressions::format_state_name;
 use crate::{AggregateExpr, PhysicalExpr};
-use datafusion_common::cast::{as_list_array, as_primitive_array};
+use datafusion_common::cast::{as_list_array, as_primitive_array, as_string_array};
 use datafusion_common::utils::array_into_list_array;
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::Accumulator;
@@ -456,24 +456,53 @@ impl StringDistinctCountAccumulator {
 
 impl Accumulator for StringDistinctCountAccumulator {
     fn state(&self) -> Result<Vec<ScalarValue>> {
-        // let arr = Arc::new(PrimitiveArray::<T>::from_iter_values(
-        //     self.values.iter().map(|v| v.0),
-        // )) as ArrayRef;
-        // let list = Arc::new(array_into_list_array(arr)) as ArrayRef;
-        // Ok(vec![ScalarValue::List(list)])
-        todo!()
+        let arr = StringArray::from_iter_values(self.0.iter());
+        let list = Arc::new(array_into_list_array(Arc::new(arr)));
+        Ok(vec![ScalarValue::List(list)])
     }
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
-        todo!()
+        if values.is_empty() {
+            return Ok(());
+        }
+
+        let arr = as_string_array(&values[0])?;
+        arr.iter().for_each(|value| {
+            if let Some(value) = value {
+                self.0.insert(value);
+            }
+        });
+
+        Ok(())
     }
 
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
-        todo!()
+        if states.is_empty() {
+            return Ok(());
+        }
+        assert_eq!(
+            states.len(),
+            1,
+            "count_distinct states must be single array"
+        );
+
+        let arr = as_list_array(&states[0])?;
+        arr.iter().try_for_each(|maybe_list| {
+            if let Some(list) = maybe_list {
+                let list = as_string_array(&list)?;
+                
+                list.iter().for_each(|value| {
+                    if let Some(value) = value {
+                        self.0.insert(value);
+                    }
+                })
+            };
+            Ok(())
+        })
     }
 
     fn evaluate(&self) -> Result<ScalarValue> {
-        todo!()
+        Ok(ScalarValue::Int64(Some(self.0.len() as i64)))
     }
 
     fn size(&self) -> usize {
@@ -490,6 +519,16 @@ struct SSOStringHeader {
 
     len: usize,
     offset_or_inline: usize,
+}
+
+impl SSOStringHeader {
+    fn evaluate(&self) -> (bool, usize) {
+        if self.len <= SHORT_STRING_LEN {
+            (true, self.offset_or_inline)
+        } else {
+            (false, self.offset_or_inline)
+        }
+    }
 }
 
 // Short String Optimizated HashSet for String
@@ -551,6 +590,32 @@ impl SSOStringHashSet {
                 self.header_set.insert(header);
             }
         }
+    }
+
+    fn iter(&self) -> impl Iterator<Item = String> + '_ {
+        self.header_set.iter().map(|header| {
+            let (is_short, offset_or_inline) = header.evaluate();
+            if is_short {
+                let mut inline = offset_or_inline;
+                // Convert usize to String
+                let mut bytes = [0u8; SHORT_STRING_LEN];
+                for i in (0..SHORT_STRING_LEN).rev() {
+                    bytes[i] = (inline & 0xFF) as u8;
+                    inline >>= 8;
+                }
+                // SAFETY: StringDistinctCountAccumulator only inserts valid utf8 strings
+                unsafe { std::str::from_utf8_unchecked(&bytes) }.to_string()
+            } else {
+                let offset = offset_or_inline;
+                let len = header.len;
+                // SAFETY: buffer is only appended to, and we correctly inserted values
+                unsafe { std::str::from_utf8_unchecked(self.buffer.as_slice().get_unchecked(offset..offset + len)) }.to_string()
+            }
+        })
+    }
+
+    fn len(&self) -> usize {
+        self.header_set.len()
     }
 }
 
