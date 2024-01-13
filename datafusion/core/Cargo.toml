@@ -37,7 +37,7 @@ path = "src/lib.rs"
 # Used to enable the avro format
 avro = ["apache-avro", "num-traits", "datafusion-common/avro"]
 backtrace = ["datafusion-common/backtrace"]
-compression = ["xz2", "bzip2", "flate2", "zstd", "async-compression"]
+compression = ["xz2", "bzip2", "flate2", "zstd", "async-compression", "tokio-util"]
 crypto_expressions = ["datafusion-physical-expr/crypto_expressions", "datafusion-optimizer/crypto_expressions"]
 default = ["crypto_expressions", "encoding_expressions", "regex_expressions", "unicode_expressions", "compression", "parquet"]
 encoding_expressions = ["datafusion-physical-expr/encoding_expressions"]
@@ -87,8 +87,8 @@ pin-project-lite = "^0.2.7"
 rand = { workspace = true }
 sqlparser = { workspace = true }
 tempfile = { workspace = true }
-tokio = { version = "1.28", features = ["macros", "rt", "rt-multi-thread", "sync", "fs", "parking_lot"] }
-tokio-util = { version = "0.7.4", features = ["io"] }
+tokio = { version = "1.28", features = ["macros", "rt",  "sync"] }
+tokio-util = { version = "0.7.4", features = ["io"], optional = true }
 url = { workspace = true }
 uuid = { version = "1.0", features = ["v4"] }
 xz2 = { version = "0.1", optional = true }
@@ -113,6 +113,7 @@ rust_decimal = { version = "1.27.0", features = ["tokio-pg"] }
 serde_json = { workspace = true }
 test-utils = { path = "../../test-utils" }
 thiserror = { workspace = true }
+tokio = { version = "1.28", features = ["macros", "rt", "rt-multi-thread", "sync", "fs", "parking_lot"] }
 tokio-postgres = "0.7.7"
 [target.'cfg(not(target_os = "windows"))'.dev-dependencies]
 nix = { version = "0.27.1", features = ["fs"] }
