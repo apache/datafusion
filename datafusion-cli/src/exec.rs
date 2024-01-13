@@ -125,7 +125,6 @@ pub async fn exec_from_repl(
     ctx: &mut SessionContext,
     print_options: &mut PrintOptions,
 ) -> rustyline::Result<()> {
-    eprintln!("DataFusion Interactive Shell");
     let mut rl = Editor::new()?;
     rl.set_helper(Some(CliHelper::new(
         &ctx.task_ctx().session_config().options().sql_parser.dialect,
@@ -135,7 +134,6 @@ pub async fn exec_from_repl(
     loop {
         match rl.readline("❯ ") {
             Ok(line) if line.starts_with('\\') => {
-                eprintln!("command: {}", line);
                 rl.add_history_entry(line.trim_end())?;
                 let command = line.split_whitespace().collect::<Vec<_>>().join(" ");
                 if let Ok(cmd) = &command[1..].parse::<Command>() {
@@ -145,7 +143,7 @@ pub async fn exec_from_repl(
                             if let Some(subcommand) = subcommand {
                                 if let Ok(command) = subcommand.parse::<OutputFormat>() {
                                     if let Err(e) = command.execute(print_options).await {
-                                        eprintln!("format {e}")
+                                        eprintln!("{e}")
                                     }
                                 } else {
                                     eprintln!(
@@ -159,7 +157,7 @@ pub async fn exec_from_repl(
                         }
                         _ => {
                             if let Err(e) = cmd.execute(ctx, print_options).await {
-                                eprintln!("invalid {e}")
+                                eprintln!("{e}")
                             }
                         }
                     }
@@ -172,9 +170,7 @@ pub async fn exec_from_repl(
                 tokio::select! {
                     res = exec_and_print(ctx, print_options, line) => match res {
                         Ok(_) => {}
-                        Err(err) => {
-                            eprintln!("{err}");
-                        }
+                        Err(err) => eprintln!("{err}"),
                     },
                     _ = signal::ctrl_c() => {
                         println!("^C");
@@ -191,7 +187,6 @@ pub async fn exec_from_repl(
                 continue;
             }
             Err(ReadlineError::Eof) => {
-                eprintln!("^D");
                 println!("\\q");
                 break;
             }
