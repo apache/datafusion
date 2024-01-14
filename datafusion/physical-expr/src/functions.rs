@@ -543,6 +543,15 @@ pub fn create_physical_fun(
                 internal_err!("Unsupported data type {other:?} for function initcap")
             }
         }),
+        BuiltinScalarFunction::InStr => Arc::new(|args| match args[0].data_type() {
+            DataType::Utf8 => {
+                make_scalar_function(string_expressions::instr::<i32>)(args)
+            }
+            DataType::LargeUtf8 => {
+                make_scalar_function(string_expressions::instr::<i64>)(args)
+            }
+            other => internal_err!("Unsupported data type {other:?} for function instr"),
+        }),
         BuiltinScalarFunction::Left => Arc::new(|args| match args[0].data_type() {
             DataType::Utf8 => {
                 let func = invoke_if_unicode_expressions_feature_flag!(left, i32, "left");
@@ -763,6 +772,17 @@ pub fn create_physical_fun(
             }
             other => {
                 internal_err!("Unsupported data type {other:?} for function starts_with")
+            }
+        }),
+        BuiltinScalarFunction::EndsWith => Arc::new(|args| match args[0].data_type() {
+            DataType::Utf8 => {
+                make_scalar_function(string_expressions::ends_with::<i32>)(args)
+            }
+            DataType::LargeUtf8 => {
+                make_scalar_function(string_expressions::ends_with::<i64>)(args)
+            }
+            other => {
+                internal_err!("Unsupported data type {other:?} for function ends_with")
             }
         }),
         BuiltinScalarFunction::Strpos => Arc::new(|args| match args[0].data_type() {
@@ -1378,6 +1398,46 @@ mod tests {
             &str,
             Utf8,
             StringArray
+        );
+        test_function!(
+            InStr,
+            &[lit("abc"), lit("b")],
+            Ok(Some(2)),
+            i32,
+            Int32,
+            Int32Array
+        );
+        test_function!(
+            InStr,
+            &[lit("abc"), lit("c")],
+            Ok(Some(3)),
+            i32,
+            Int32,
+            Int32Array
+        );
+        test_function!(
+            InStr,
+            &[lit("abc"), lit("d")],
+            Ok(Some(0)),
+            i32,
+            Int32,
+            Int32Array
+        );
+        test_function!(
+            InStr,
+            &[lit("abc"), lit("")],
+            Ok(Some(1)),
+            i32,
+            Int32,
+            Int32Array
+        );
+        test_function!(
+            InStr,
+            &[lit("Helloworld"), lit("world")],
+            Ok(Some(6)),
+            i32,
+            Int32,
+            Int32Array
         );
         #[cfg(feature = "unicode_expressions")]
         test_function!(
@@ -2491,6 +2551,38 @@ mod tests {
         );
         test_function!(
             StartsWith,
+            &[lit("alphabet"), lit(ScalarValue::Utf8(None)),],
+            Ok(None),
+            bool,
+            Boolean,
+            BooleanArray
+        );
+        test_function!(
+            EndsWith,
+            &[lit("alphabet"), lit("alph"),],
+            Ok(Some(false)),
+            bool,
+            Boolean,
+            BooleanArray
+        );
+        test_function!(
+            EndsWith,
+            &[lit("alphabet"), lit("bet"),],
+            Ok(Some(true)),
+            bool,
+            Boolean,
+            BooleanArray
+        );
+        test_function!(
+            EndsWith,
+            &[lit(ScalarValue::Utf8(None)), lit("alph"),],
+            Ok(None),
+            bool,
+            Boolean,
+            BooleanArray
+        );
+        test_function!(
+            EndsWith,
             &[lit("alphabet"), lit(ScalarValue::Utf8(None)),],
             Ok(None),
             bool,

@@ -296,6 +296,50 @@ pub fn initcap<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
     Ok(Arc::new(result) as ArrayRef)
 }
 
+/// Returns the position of the first occurrence of substring in string.
+/// The position is counted from 1. If the substring is not found, returns 0.
+/// For example, instr('Helloworld', 'world') = 6.
+pub fn instr<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
+    let string_array = as_generic_string_array::<T>(&args[0])?;
+    let substr_array = as_generic_string_array::<T>(&args[1])?;
+
+    match args[0].data_type() {
+        DataType::Utf8 => {
+            let result = string_array
+                .iter()
+                .zip(substr_array.iter())
+                .map(|(string, substr)| match (string, substr) {
+                    (Some(string), Some(substr)) => {
+                        string.find(substr).map_or(0, |index| (index + 1) as i32)
+                    }
+                    _ => 0,
+                })
+                .collect::<Int32Array>();
+
+            Ok(Arc::new(result) as ArrayRef)
+        }
+        DataType::LargeUtf8 => {
+            let result = string_array
+                .iter()
+                .zip(substr_array.iter())
+                .map(|(string, substr)| match (string, substr) {
+                    (Some(string), Some(substr)) => {
+                        string.find(substr).map_or(0, |index| (index + 1) as i64)
+                    }
+                    _ => 0,
+                })
+                .collect::<Int64Array>();
+
+            Ok(Arc::new(result) as ArrayRef)
+        }
+        other => {
+            internal_err!(
+                "instr was called with {other} datatype arguments. It requires Utf8 or LargeUtf8."
+            )
+        }
+    }
+}
+
 /// Converts the string to all lower case.
 /// lower('TOM') = 'tom'
 pub fn lower(args: &[ColumnarValue]) -> Result<ColumnarValue> {
@@ -469,6 +513,24 @@ pub fn starts_with<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
         .zip(prefix_array.iter())
         .map(|(string, prefix)| match (string, prefix) {
             (Some(string), Some(prefix)) => Some(string.starts_with(prefix)),
+            _ => None,
+        })
+        .collect::<BooleanArray>();
+
+    Ok(Arc::new(result) as ArrayRef)
+}
+
+/// Returns true if string ends with suffix.
+/// ends_with('alphabet', 'abet') = 't'
+pub fn ends_with<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
+    let string_array = as_generic_string_array::<T>(&args[0])?;
+    let suffix_array = as_generic_string_array::<T>(&args[1])?;
+
+    let result = string_array
+        .iter()
+        .zip(suffix_array.iter())
+        .map(|(string, suffix)| match (string, suffix) {
+            (Some(string), Some(suffix)) => Some(string.ends_with(suffix)),
             _ => None,
         })
         .collect::<BooleanArray>();
