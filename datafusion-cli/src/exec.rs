@@ -340,13 +340,10 @@ mod tests {
         let session_token = "fake_session_token";
         let location = "s3://bucket/path/file.parquet";
 
-        // Missing region
+        // Missing region, use object_store defaults
         let sql = format!("CREATE EXTERNAL TABLE test STORED AS PARQUET
             OPTIONS('access_key_id' '{access_key_id}', 'secret_access_key' '{secret_access_key}') LOCATION '{location}'");
-        let err = create_external_table_test(location, &sql)
-            .await
-            .unwrap_err();
-        assert!(err.to_string().contains("Missing region"));
+        create_external_table_test(location, &sql).await?;
 
         // Should be OK
         let sql = format!("CREATE EXTERNAL TABLE test STORED AS PARQUET
