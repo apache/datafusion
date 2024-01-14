@@ -963,7 +963,7 @@ mod test {
     }
 
     #[test]
-    fn agg_function_invalid_input() -> Result<()> {
+    fn agg_function_invalid_input_avg() -> Result<()> {
         let empty = empty();
         let fun: AggregateFunction = AggregateFunction::Avg;
         let agg_expr = Expr::AggregateFunction(expr::AggregateFunction::new(
@@ -982,6 +982,30 @@ mod test {
             err
         );
         Ok(())
+    }
+
+    #[test]
+    fn agg_function_invalid_input_percentile() {
+        let empty = empty();
+        let fun: AggregateFunction = AggregateFunction::ApproxPercentileCont;
+        let agg_expr = Expr::AggregateFunction(expr::AggregateFunction::new(
+            fun,
+            vec![lit(0.95), lit(42.0), lit(100.0)],
+            false,
+            None,
+            None,
+        ));
+
+        let err = Projection::try_new(vec![agg_expr], empty)
+            .err()
+            .unwrap()
+            .strip_backtrace();
+
+        let prefix = "Error during planning: No function matches the given name and argument types 'APPROX_PERCENTILE_CONT(Float64, Float64, Float64)'. You might need to add explicit type casts.\n\tCandidate functions:";
+        assert!(!err
+            .strip_prefix(prefix)
+            .unwrap()
+            .contains("APPROX_PERCENTILE_CONT(Float64, Float64, Float64)"));
     }
 
     #[test]
