@@ -20,9 +20,7 @@ use crate::optimizer::ApplyOrder;
 use crate::utils::{conjunction, replace_qualified_name};
 use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_common::alias::AliasGenerator;
-use datafusion_common::tree_node::{
-    RewriteRecursion, Transformed, TreeNode, TreeNodeRewriter,
-};
+use datafusion_common::tree_node::{RewriteRecursion, Transformed, TreeNode, TreeNodeRewriter};
 use datafusion_common::{plan_err, Column, DataFusionError, Result, ScalarValue};
 use datafusion_expr::expr_rewriter::create_col_from_scalar_expr;
 use datafusion_expr::logical_plan::{JoinType, Subquery};
@@ -68,10 +66,8 @@ impl OptimizerRule for ScalarSubqueryToJoin {
     ) -> Result<Option<LogicalPlan>> {
         match plan {
             LogicalPlan::Filter(filter) => {
-                let (subqueries, mut rewrite_expr) = self.extract_subquery_exprs(
-                    &filter.predicate,
-                    config.alias_generator(),
-                )?;
+                let (subqueries, mut rewrite_expr) =
+                    self.extract_subquery_exprs(&filter.predicate, config.alias_generator())?;
 
                 if subqueries.is_empty() {
                     // regular filter, no subquery exists clause here
@@ -85,20 +81,17 @@ impl OptimizerRule for ScalarSubqueryToJoin {
                         build_join(&subquery, &cur_input, &alias)?
                     {
                         if !expr_check_map.is_empty() {
-                            rewrite_expr =
-                                rewrite_expr.clone().transform_up(&|expr| {
-                                    if let Expr::Column(col) = &expr {
-                                        if let Some(map_expr) =
-                                            expr_check_map.get(&col.name)
-                                        {
-                                            Ok(Transformed::Yes(map_expr.clone()))
-                                        } else {
-                                            Ok(Transformed::No(expr))
-                                        }
+                            rewrite_expr = rewrite_expr.clone().transform_up(&|expr| {
+                                if let Expr::Column(col) = &expr {
+                                    if let Some(map_expr) = expr_check_map.get(&col) {
+                                        Ok(Transformed::Yes(map_expr.clone()))
                                     } else {
                                         Ok(Transformed::No(expr))
                                     }
-                                })?;
+                                } else {
+                                    Ok(Transformed::No(expr))
+                                }
+                            })?;
                         }
                         cur_input = optimized_subquery;
                     } else {
@@ -128,6 +121,7 @@ impl OptimizerRule for ScalarSubqueryToJoin {
                     // regular projection, no subquery exists clause here
                     return Ok(None);
                 }
+
                 // iterate through all subqueries in predicate, turning each into a left join
                 let mut cur_input = projection.input.as_ref().clone();
                 for (subquery, alias) in all_subqueryies {
@@ -139,16 +133,16 @@ impl OptimizerRule for ScalarSubqueryToJoin {
                             if let Some(expr) = subquery_to_expr_map.get(&(subquery, alias)) {
                                 if let Some(rewrite_expr) = expr_to_rewrite_expr_map.get(expr) {
                                     let new_expr = rewrite_expr.clone().transform_up(&|expr| {
-                                            if let Expr::Column(col) = &expr {
-                                            if let Some(map_expr) = expr_check_map.get(&col.name) {
-                                                    Ok(Transformed::Yes(map_expr.clone()))
-                                                } else {
-                                                    Ok(Transformed::No(expr))
-                                                }
+                                        if let Expr::Column(col) = &expr {
+                                            if let Some(map_expr) = expr_check_map.get(&col) {
+                                                Ok(Transformed::Yes(map_expr.clone()))
                                             } else {
                                                 Ok(Transformed::No(expr))
                                             }
-                                        })?;
+                                        } else {
+                                            Ok(Transformed::No(expr))
+                                        }
+                                    })?;
                                     expr_to_rewrite_expr_map.insert(expr, new_expr);
                                 }
                             }
@@ -264,7 +258,7 @@ fn build_join(
     subquery: &Subquery,
     filter_input: &LogicalPlan,
     subquery_alias: &str,
-) -> Result<Option<(LogicalPlan, HashMap<String, Expr>)>> {
+) -> Result<Option<(LogicalPlan, HashMap<Column, Expr>)>> {
     let subquery_plan = subquery.subquery.as_ref();
     let mut pull_up = PullUpCorrelatedExpr {
         join_filters: vec![],
@@ -281,8 +275,7 @@ fn build_join(
         return Ok(None);
     }
 
-    let collected_count_expr_map =
-        pull_up.collected_count_expr_map.get(&new_plan).cloned();
+    let collected_count_expr_map = pull_up.collected_count_expr_map.get(&new_plan).cloned();
     let sub_query_alias = LogicalPlanBuilder::from(new_plan)
         .alias(subquery_alias.to_string())?
         .build()?;
@@ -294,11 +287,9 @@ fn build_join(
         .for_each(|cols| all_correlated_cols.extend(cols.clone()));
 
     // alias the join filter
-    let join_filter_opt =
-        conjunction(pull_up.join_filters).map_or(Ok(None), |filter| {
-            replace_qualified_name(filter, &all_correlated_cols, subquery_alias)
-                .map(Option::Some)
-        })?;
+    let join_filter_opt = conjunction(pull_up.join_filters).map_or(Ok(None), |filter| {
+        replace_qualified_name(filter, &all_correlated_cols, subquery_alias).map(Option::Some)
+    })?;
 
     // join our sub query into the main plan
     let new_plan = if join_filter_opt.is_none() {
@@ -333,6 +324,7 @@ fn build_join(
     let mut computation_project_expr = HashMap::new();
     if let Some(expr_map) = collected_count_expr_map {
         for (name, result) in expr_map {
+            let column = Column::new(Some(subquery_alias.to_string()), name.clone());
             let computer_expr = if let Some(filter) = &pull_up.pull_up_having_expr {
                 Expr::Case(expr::Case {
                     expr: None,
@@ -349,10 +341,7 @@ fn build_join(
                             Box::new(Expr::Literal(ScalarValue::Null)),
                         ),
                     ],
-                    else_expr: Some(Box::new(Expr::Column(Column::new(
-                        Some(subquery_alias.to_string()),
-                        name.clone(),
-                    )))),
+                    else_expr: Some(Box::new(Expr::Column(column.clone()))),
                 })
             } else {
                 Expr::Case(expr::Case {
@@ -364,13 +353,10 @@ fn build_join(
                         ))))),
                         Box::new(result),
                     )],
-                    else_expr: Some(Box::new(Expr::Column(Column::new(
-                        Some(subquery_alias.to_string()),
-                        name.clone(),
-                    )))),
+                    else_expr: Some(Box::new(Expr::Column(column.clone()))),
                 })
             };
-            computation_project_expr.insert(name, computer_expr);
+            computation_project_expr.insert(column, computer_expr);
         }
     }
 
@@ -384,8 +370,8 @@ mod tests {
     use arrow::datatypes::DataType;
     use datafusion_common::Result;
     use datafusion_expr::{
-        col, lit, logical_plan::LogicalPlanBuilder, max, min, out_ref_col,
-        scalar_subquery, sum, Between,
+        col, lit, logical_plan::LogicalPlanBuilder, max, min, out_ref_col, scalar_subquery, sum,
+        Between,
     };
     use std::ops::Add;
 
@@ -395,8 +381,7 @@ mod tests {
         let orders = Arc::new(
             LogicalPlanBuilder::from(scan_tpch_table("orders"))
                 .filter(
-                    col("orders.o_custkey")
-                        .eq(out_ref_col(DataType::Int64, "customer.c_custkey")),
+                    col("orders.o_custkey").eq(out_ref_col(DataType::Int64, "customer.c_custkey")),
                 )?
                 .aggregate(Vec::<Expr>::new(), vec![max(col("orders.o_custkey"))])?
                 .project(vec![max(col("orders.o_custkey"))])?
@@ -630,8 +615,7 @@ mod tests {
         let sq = Arc::new(
             LogicalPlanBuilder::from(scan_tpch_table("orders"))
                 .filter(
-                    out_ref_col(DataType::Int64, "customer.c_custkey")
-                        .lt(col("orders.o_custkey")),
+                    out_ref_col(DataType::Int64, "customer.c_custkey").lt(col("orders.o_custkey")),
                 )?
                 .aggregate(Vec::<Expr>::new(), vec![max(col("orders.o_custkey"))])?
                 .project(vec![max(col("orders.o_custkey"))])?
@@ -706,8 +690,7 @@ mod tests {
         let sq = Arc::new(
             LogicalPlanBuilder::from(scan_tpch_table("orders"))
                 .filter(
-                    out_ref_col(DataType::Int64, "customer.c_custkey")
-                        .eq(col("orders.o_custkey")),
+                    out_ref_col(DataType::Int64, "customer.c_custkey").eq(col("orders.o_custkey")),
                 )?
                 .aggregate(Vec::<Expr>::new(), vec![max(col("orders.o_custkey"))])?
                 .project(vec![col("MAX(orders.o_custkey)").add(lit(1))])?
@@ -768,8 +751,7 @@ mod tests {
         let sq = Arc::new(
             LogicalPlanBuilder::from(scan_tpch_table("orders"))
                 .filter(
-                    out_ref_col(DataType::Int64, "customer.c_custkey")
-                        .eq(col("orders.o_custkey")),
+                    out_ref_col(DataType::Int64, "customer.c_custkey").eq(col("orders.o_custkey")),
                 )?
                 .aggregate(Vec::<Expr>::new(), vec![max(col("orders.o_custkey"))])?
                 .project(vec![max(col("orders.o_custkey"))])?
@@ -807,8 +789,7 @@ mod tests {
         let sq = Arc::new(
             LogicalPlanBuilder::from(scan_tpch_table("orders"))
                 .filter(
-                    out_ref_col(DataType::Int64, "customer.c_custkey")
-                        .eq(col("orders.o_custkey")),
+                    out_ref_col(DataType::Int64, "customer.c_custkey").eq(col("orders.o_custkey")),
                 )?
                 .aggregate(Vec::<Expr>::new(), vec![max(col("orders.o_custkey"))])?
                 .project(vec![max(col("orders.o_custkey"))])?
@@ -847,8 +828,7 @@ mod tests {
         let sq = Arc::new(
             LogicalPlanBuilder::from(scan_tpch_table("orders"))
                 .filter(
-                    out_ref_col(DataType::Int64, "customer.c_custkey")
-                        .eq(col("orders.o_custkey")),
+                    out_ref_col(DataType::Int64, "customer.c_custkey").eq(col("orders.o_custkey")),
                 )?
                 .aggregate(Vec::<Expr>::new(), vec![max(col("orders.o_custkey"))])?
                 .project(vec![max(col("orders.o_custkey"))])?
@@ -982,8 +962,7 @@ mod tests {
         let sq1 = Arc::new(
             LogicalPlanBuilder::from(scan_tpch_table("orders"))
                 .filter(
-                    out_ref_col(DataType::Int64, "customer.c_custkey")
-                        .eq(col("orders.o_custkey")),
+                    out_ref_col(DataType::Int64, "customer.c_custkey").eq(col("orders.o_custkey")),
                 )?
                 .aggregate(Vec::<Expr>::new(), vec![min(col("orders.o_custkey"))])?
                 .project(vec![min(col("orders.o_custkey"))])?
@@ -992,8 +971,7 @@ mod tests {
         let sq2 = Arc::new(
             LogicalPlanBuilder::from(scan_tpch_table("orders"))
                 .filter(
-                    out_ref_col(DataType::Int64, "customer.c_custkey")
-                        .eq(col("orders.o_custkey")),
+                    out_ref_col(DataType::Int64, "customer.c_custkey").eq(col("orders.o_custkey")),
                 )?
                 .aggregate(Vec::<Expr>::new(), vec![max(col("orders.o_custkey"))])?
                 .project(vec![max(col("orders.o_custkey"))])?
