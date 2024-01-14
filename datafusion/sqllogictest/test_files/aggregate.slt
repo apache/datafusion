@@ -95,6 +95,9 @@ SELECT approx_percentile_cont(c3, 0.95, c1) FROM aggregate_test_100
 statement error DataFusion error: Error during planning: No function matches the given name and argument types 'APPROX_PERCENTILE_CONT\(Int16, Float64, Float64\)'\. You might need to add explicit type casts\.
 SELECT approx_percentile_cont(c3, 0.95, 111.1) FROM aggregate_test_100
 
+statement error DataFusion error: Error during planning: No function matches the given name and argument types 'APPROX_PERCENTILE_CONT\(Float64, Float64, Float64\)'\. You might need to add explicit type casts\.
+SELECT approx_percentile_cont(c12, 0.95, 111.1) FROM aggregate_test_100
+
 # array agg can use order by
 query ?
 SELECT array_agg(c13 ORDER BY c13)
