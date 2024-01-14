@@ -20,9 +20,7 @@ mod kernels;
 use std::hash::{Hash, Hasher};
 use std::{any::Any, sync::Arc};
 
-use crate::array_expressions::{
-    array_append, array_concat, array_has_all, array_prepend,
-};
+use crate::array_expressions::array_has_all;
 use crate::expressions::datum::{apply, apply_cmp};
 use crate::intervals::cp_solver::{propagate_arithmetic, propagate_comparison};
 use crate::physical_expr::down_cast_any_ref;
@@ -598,12 +596,7 @@ impl BinaryExpr {
             BitwiseXor => bitwise_xor_dyn(left, right),
             BitwiseShiftRight => bitwise_shift_right_dyn(left, right),
             BitwiseShiftLeft => bitwise_shift_left_dyn(left, right),
-            StringConcat => match (left_data_type, right_data_type) {
-                (DataType::List(_), DataType::List(_)) => array_concat(&[left, right]),
-                (DataType::List(_), _) => array_append(&[left, right]),
-                (_, DataType::List(_)) => array_prepend(&[left, right]),
-                _ => binary_string_array_op!(left, right, concat_elements),
-            },
+            StringConcat => binary_string_array_op!(left, right, concat_elements),
             AtArrow => array_has_all(&[left, right]),
             ArrowAt => array_has_all(&[right, left]),
         }

@@ -141,7 +141,8 @@ impl PrintOptions {
         let mut row_count = 0_usize;
         let mut with_header = true;
 
-        while let Some(Ok(batch)) = stream.next().await {
+        while let Some(maybe_batch) = stream.next().await {
+            let batch = maybe_batch?;
             row_count += batch.num_rows();
             self.format.print_batches(
                 &mut writer,

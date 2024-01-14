@@ -1862,7 +1862,7 @@ SELECT to_timestamp(null) is null as c1,
 ----
 true true true true true true true true true true true true true
 
-# verify timestamp output types 
+# verify timestamp output types
 query TTT
 SELECT arrow_typeof(to_timestamp(1)), arrow_typeof(to_timestamp(null)), arrow_typeof(to_timestamp('2023-01-10 12:34:56.000'))
 ----
@@ -1880,7 +1880,7 @@ SELECT arrow_typeof(to_timestamp(1)) = arrow_typeof(1::timestamp) as c1,
 true true true true true true
 
 # known issues. currently overflows (expects default precision to be microsecond instead of nanoseconds. Work pending)
-#verify extreme values 
+#verify extreme values
 #query PPPPPPPP
 #SELECT to_timestamp(-62125747200), to_timestamp(1926632005177), -62125747200::timestamp, 1926632005177::timestamp, cast(-62125747200 as timestamp), cast(1926632005177 as timestamp)
 #----
@@ -1894,3 +1894,56 @@ query B
 select arrow_cast(now(), 'Date64') < arrow_cast('2022-02-02 02:02:02', 'Timestamp(Nanosecond, None)');
 ----
 false
+
+##########
+## Test query MAX Timestamp and MiN Timestamp
+##########
+
+statement ok
+create table table_a (val int, ts timestamp) as values (1, '2020-09-08T11:42:29.190'::timestamp), (2, '2000-02-01T00:00:00'::timestamp)
+
+query P
+SELECT MIN(table_a.ts) FROM table_a;
+----
+2000-02-01T00:00:00
+
+query P
+SELECT MAX(table_a.ts) FROM table_a;
+----
+2020-09-08T11:42:29.190
+
+statement ok
+drop table table_a
+
+##########
+## Test query MAX Timestamp and MiN Timestamp
+##########
+
+statement ok
+create table table_a (ts timestamp) as values 
+    ('2020-09-08T11:42:29Z'::timestamp), 
+    ('2020-09-08T12:42:29Z'::timestamp),
+    ('2020-09-08T13:42:29Z'::timestamp)
+
+statement ok
+create table table_b (ts timestamp) as values 
+    ('2020-09-08T11:42:29.190Z'::timestamp),
+    ('2020-09-08T13:42:29.190Z'::timestamp),
+    ('2020-09-08T12:42:29.190Z'::timestamp)
+
+query PPB
+SELECT table_a.ts, table_b.ts, table_a.ts = table_b.ts FROM table_a, table_b order by table_a.ts desc, table_b.ts desc
+----
+2020-09-08T13:42:29 2020-09-08T13:42:29.190 false
+2020-09-08T13:42:29 2020-09-08T12:42:29.190 false
+2020-09-08T13:42:29 2020-09-08T11:42:29.190 false
+2020-09-08T12:42:29 2020-09-08T13:42:29.190 false
+2020-09-08T12:42:29 2020-09-08T12:42:29.190 false
+2020-09-08T12:42:29 2020-09-08T11:42:29.190 false
+2020-09-08T11:42:29 2020-09-08T13:42:29.190 false
+2020-09-08T11:42:29 2020-09-08T12:42:29.190 false
+2020-09-08T11:42:29 2020-09-08T11:42:29.190 false
+
+
+
+

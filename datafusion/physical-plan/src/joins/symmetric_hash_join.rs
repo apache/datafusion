@@ -72,6 +72,7 @@ use datafusion_physical_expr::equivalence::join_equivalence_properties;
 use datafusion_physical_expr::intervals::cp_solver::ExprIntervalGraph;
 
 use ahash::RandomState;
+use datafusion_physical_expr::PhysicalSortRequirement;
 use futures::Stream;
 use hashbrown::HashSet;
 use parking_lot::Mutex;
@@ -185,6 +186,10 @@ pub struct SymmetricHashJoinExec {
     column_indices: Vec<ColumnIndex>,
     /// If null_equals_null is true, null == null else null != null
     pub(crate) null_equals_null: bool,
+    /// Left side sort expression(s)
+    pub(crate) left_sort_exprs: Option<Vec<PhysicalSortExpr>>,
+    /// Right side sort expression(s)
+    pub(crate) right_sort_exprs: Option<Vec<PhysicalSortExpr>>,
     /// Partition Mode
     mode: StreamJoinPartitionMode,
 }
@@ -196,6 +201,7 @@ impl SymmetricHashJoinExec {
     /// - It is not possible to join the left and right sides on keys `on`, or
     /// - It fails to construct `SortedFilterExpr`s, or
     /// - It fails to create the [ExprIntervalGraph].
+    #[allow(clippy::too_many_arguments)]
     pub fn try_new(
         left: Arc<dyn ExecutionPlan>,
         right: Arc<dyn ExecutionPlan>,
@@ -203,6 +209,8 @@ impl SymmetricHashJoinExec {
         filter: Option<JoinFilter>,
         join_type: &JoinType,
         null_equals_null: bool,
+        left_sort_exprs: Option<Vec<PhysicalSortExpr>>,
+        right_sort_exprs: Option<Vec<PhysicalSortExpr>>,
         mode: StreamJoinPartitionMode,
     ) -> Result<Self> {
         let left_schema = left.schema();
@@ -236,6 +244,8 @@ impl SymmetricHashJoinExec {
             metrics: ExecutionPlanMetricsSet::new(),
             column_indices,
             null_equals_null,
+            left_sort_exprs,
+            right_sort_exprs,
             mode,
         })
     }
@@ -273,6 +283,16 @@ impl SymmetricHashJoinExec {
     /// Get partition mode
     pub fn partition_mode(&self) -> StreamJoinPartitionMode {
         self.mode
+    }
+
+    /// Get left_sort_exprs
+    pub fn left_sort_exprs(&self) -> Option<&[PhysicalSortExpr]> {
+        self.left_sort_exprs.as_deref()
+    }
+
+    /// Get right_sort_exprs
+    pub fn right_sort_exprs(&self) -> Option<&[PhysicalSortExpr]> {
+        self.right_sort_exprs.as_deref()
     }
 
     /// Check if order information covers every column in the filter expression.
@@ -341,10 +361,6 @@ impl ExecutionPlan for SymmetricHashJoinExec {
         Ok(children.iter().any(|u| *u))
     }
 
-    fn benefits_from_input_partitioning(&self) -> Vec<bool> {
-        vec![false, false]
-    }
-
     fn required_input_distribution(&self) -> Vec<Distribution> {
         match self.mode {
             StreamJoinPartitionMode::Partitioned => {
@@ -362,6 +378,17 @@ impl ExecutionPlan for SymmetricHashJoinExec {
                 vec![Distribution::SinglePartition, Distribution::SinglePartition]
             }
         }
+    }
+
+    fn required_input_ordering(&self) -> Vec<Option<Vec<PhysicalSortRequirement>>> {
+        vec![
+            self.left_sort_exprs
+                .as_ref()
+                .map(PhysicalSortRequirement::from_sort_exprs),
+            self.right_sort_exprs
+                .as_ref()
+                .map(PhysicalSortRequirement::from_sort_exprs),
+        ]
     }
 
     fn output_partitioning(&self) -> Partitioning {
@@ -407,6 +434,8 @@ impl ExecutionPlan for SymmetricHashJoinExec {
             self.filter.clone(),
             &self.join_type,
             self.null_equals_null,
+            self.left_sort_exprs.clone(),
+            self.right_sort_exprs.clone(),
             self.mode,
         )?))
     }
@@ -435,24 +464,21 @@ impl ExecutionPlan for SymmetricHashJoinExec {
         }
         // If `filter_state` and `filter` are both present, then calculate sorted filter expressions
         // for both sides, and build an expression graph.
-        let (left_sorted_filter_expr, right_sorted_filter_expr, graph) = match (
-            self.left.output_ordering(),
-            self.right.output_ordering(),
-            &self.filter,
-        ) {
-            (Some(left_sort_exprs), Some(right_sort_exprs), Some(filter)) => {
-                let (left, right, graph) = prepare_sorted_exprs(
-                    filter,
-                    &self.left,
-                    &self.right,
-                    left_sort_exprs,
-                    right_sort_exprs,
-                )?;
-                (Some(left), Some(right), Some(graph))
-            }
-            // If `filter_state` or `filter` is not present, then return None for all three values:
-            _ => (None, None, None),
-        };
+        let (left_sorted_filter_expr, right_sorted_filter_expr, graph) =
+            match (&self.left_sort_exprs, &self.right_sort_exprs, &self.filter) {
+                (Some(left_sort_exprs), Some(right_sort_exprs), Some(filter)) => {
+                    let (left, right, graph) = prepare_sorted_exprs(
+                        filter,
+                        &self.left,
+                        &self.right,
+                        left_sort_exprs,
+                        right_sort_exprs,
+                    )?;
+                    (Some(left), Some(right), Some(graph))
+                }
+                // If `filter_state` or `filter` is not present, then return None for all three values:
+                _ => (None, None, None),
+            };
 
         let (on_left, on_right) = self.on.iter().cloned().unzip();
 

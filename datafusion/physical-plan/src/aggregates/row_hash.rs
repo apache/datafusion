@@ -324,9 +324,7 @@ impl GroupedHashAggregateStream {
             .map(create_group_accumulator)
             .collect::<Result<_>>()?;
 
-        // we need to use original schema so RowConverter in group_values below
-        // will do the proper coversion of dictionaries into value types
-        let group_schema = group_schema(&agg.original_schema, agg_group_by.expr.len());
+        let group_schema = group_schema(&agg_schema, agg_group_by.expr.len());
         let spill_expr = group_schema
             .fields
             .into_iter()

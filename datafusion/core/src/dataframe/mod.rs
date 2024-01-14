@@ -802,6 +802,7 @@ impl DataFrame {
 
     /// Executes this DataFrame and returns a stream over a single partition
     ///
+    /// # Example
     /// ```
     /// # use datafusion::prelude::*;
     /// # use datafusion::error::Result;
@@ -813,6 +814,11 @@ impl DataFrame {
     /// # Ok(())
     /// # }
     /// ```
+    ///
+    /// # Aborting Execution
+    ///
+    /// Dropping the stream will abort the execution of the query, and free up
+    /// any allocated resources
     pub async fn execute_stream(self) -> Result<SendableRecordBatchStream> {
         let task_ctx = Arc::new(self.task_ctx());
         let plan = self.create_physical_plan().await?;
@@ -841,6 +847,7 @@ impl DataFrame {
 
     /// Executes this DataFrame and returns one stream per partition.
     ///
+    /// # Example
     /// ```
     /// # use datafusion::prelude::*;
     /// # use datafusion::error::Result;
@@ -852,6 +859,10 @@ impl DataFrame {
     /// # Ok(())
     /// # }
     /// ```
+    /// # Aborting Execution
+    ///
+    /// Dropping the stream will abort the execution of the query, and free up
+    /// any allocated resources
     pub async fn execute_stream_partitioned(
         self,
     ) -> Result<Vec<SendableRecordBatchStream>> {
@@ -1175,7 +1186,7 @@ impl DataFrame {
         let field_to_rename = match self.plan.schema().field_from_column(&old_column) {
             Ok(field) => field,
             // no-op if field not found
-            Err(DataFusionError::SchemaError(SchemaError::FieldNotFound { .. })) => {
+            Err(DataFusionError::SchemaError(SchemaError::FieldNotFound { .. }, _)) => {
                 return Ok(self)
             }
             Err(err) => return Err(err),

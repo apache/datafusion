@@ -76,7 +76,6 @@ pub mod create_drop;
 pub mod csv_files;
 pub mod explain_analyze;
 pub mod expr;
-pub mod group_by;
 pub mod joins;
 pub mod order;
 pub mod partitioned_csv;
