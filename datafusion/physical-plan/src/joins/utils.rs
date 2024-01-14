@@ -138,6 +138,7 @@ impl JoinHashMap {
     }
 }
 
+// Type of offsets for obtaining indices from JoinHashMap.
 pub(crate) type JoinHashMapOffset = (usize, Option<u64>);
 
 // Trait defining methods that must be implemented by a hash map type to be used for joins.

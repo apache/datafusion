@@ -987,7 +987,8 @@ impl RecordBatchStream for HashJoinStream {
     }
 }
 
-/// Lookups by hash agaist JoinHashMap and resolves potential hash collisions.
+/// Executes lookups by hash against JoinHashMap and resolves potential
+/// hash collisions.
 /// Returns build/probe indices satisfying the equality condition, along with
 /// starting point for next iteration.
 ///
@@ -1266,9 +1267,8 @@ impl HashJoinStream {
             state.offset,
         )?;
 
-        // apply join filters if exists
+        // apply join filter if exists
         let (left_indices, right_indices) = if let Some(filter) = &self.filter {
-            // Filter the indices which satisfy the non-equal join condition, like `left.b1 = 10`
             apply_join_filter_to_indices(
                 build_side.left_data.batch(),
                 &state.batch,

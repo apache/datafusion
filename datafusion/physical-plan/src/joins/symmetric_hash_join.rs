@@ -891,6 +891,7 @@ fn lookup_join_hashmap(
         .iter()
         .map(|c| c.evaluate(build_batch)?.into_array(build_batch.num_rows()))
         .collect::<Result<Vec<_>>>()?;
+
     hashes_buffer.clear();
     hashes_buffer.resize(probe_batch.num_rows(), 0);
     let hash_values = create_hashes(&keys_values, random_state, hashes_buffer)?;
