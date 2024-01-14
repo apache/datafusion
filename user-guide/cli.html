@@ -396,7 +396,7 @@
  </li>
  <li class="toc-h2 nav-item toc-entry">
   <a class="reference internal nav-link" href="#creating-external-tables">
-   Creating external tables
+   Creating External Tables
   </a>
  </li>
  <li class="toc-h2 nav-item toc-entry">
@@ -427,6 +427,11 @@
  <li class="toc-h2 nav-item toc-entry">
   <a class="reference internal nav-link" href="#commands">
    Commands
+  </a>
+ </li>
+ <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#supported-sql">
+   Supported SQL
   </a>
  </li>
  <li class="toc-h2 nav-item toc-entry">
@@ -642,7 +647,7 @@ DataFusion<span class="w"> </span>CLI<span class="w"> </span>v16.0.0
 </div>
 </section>
 <section id="creating-external-tables">
-<h2>Creating external tables<a class="headerlink" href="#creating-external-tables" title="Link to this heading">¶</a></h2>
+<h2>Creating External Tables<a class="headerlink" href="#creating-external-tables" title="Link to this heading">¶</a></h2>
 <p>It is also possible to create a table backed by files by explicitly
 via <code class="docutils literal notranslate"><span class="pre">CREATE</span> <span class="pre">EXTERNAL</span> <span class="pre">TABLE</span></code> as shown below. Filemask wildcards supported</p>
 </section>
@@ -857,6 +862,11 @@ DataFusion<span class="w"> </span>CLI<span class="w"> </span>v21.0.0
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>&gt;<span class="w"> </span><span class="se">\h</span><span class="w"> </span><span class="k">function</span>
 </pre></div>
 </div>
+</section>
+<section id="supported-sql">
+<h2>Supported SQL<a class="headerlink" href="#supported-sql" title="Link to this heading">¶</a></h2>
+<p>In addition to the normal <a class="reference internal" href="sql/index.html"><span class="std std-doc">SQL supported in DataFusion</span></a>, <code class="docutils literal notranslate"><span class="pre">datafusion-cli</span></code> also
+supports additional statements and commands:</p>
 <ul class="simple">
 <li><p>Show configuration options</p></li>
 </ul>
@@ -895,6 +905,134 @@ DataFusion<span class="w"> </span>CLI<span class="w"> </span>v21.0.0
 <div class="highlight-SQL notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">SET</span><span class="w"> </span><span class="n">datafusion</span><span class="p">.</span><span class="n">execution</span><span class="p">.</span><span class="n">batch_size</span><span class="w"> </span><span class="k">to</span><span class="w"> </span><span class="mi">1024</span><span class="p">;</span>
 </pre></div>
 </div>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">parquet_metadata</span></code> table function</p></li>
+</ul>
+<p>The <code class="docutils literal notranslate"><span class="pre">parquet_metadata</span></code> table function can be used to inspect detailed metadata
+about a parquet file such as statistics, sizes, and other information. This can
+be helpful to understand how parquet files are structured.</p>
+<p>For example, to see information about the <code class="docutils literal notranslate"><span class="pre">&quot;WatchID&quot;</span></code> column in the
+<code class="docutils literal notranslate"><span class="pre">hits.parquet</span></code> file, you can use:</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="n">path_in_schema</span><span class="p">,</span><span class="w"> </span><span class="n">row_group_id</span><span class="p">,</span><span class="w"> </span><span class="n">row_group_num_rows</span><span class="p">,</span><span class="w"> </span><span class="n">stats_min</span><span class="p">,</span><span class="w"> </span><span class="n">stats_max</span><span class="p">,</span><span class="w"> </span><span class="n">total_compressed_size</span>
+<span class="k">FROM</span><span class="w"> </span><span class="n">parquet_metadata</span><span class="p">(</span><span class="s1">&#39;hits.parquet&#39;</span><span class="p">)</span>
+<span class="k">WHERE</span><span class="w"> </span><span class="n">path_in_schema</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s1">&#39;&quot;WatchID&quot;&#39;</span>
+<span class="k">LIMIT</span><span class="w"> </span><span class="mi">3</span><span class="p">;</span>
+
+<span class="o">+</span><span class="c1">----------------+--------------+--------------------+---------------------+---------------------+-----------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">path_in_schema</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">row_group_id</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">row_group_num_rows</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">stats_min</span><span class="w">           </span><span class="o">|</span><span class="w"> </span><span class="n">stats_max</span><span class="w">           </span><span class="o">|</span><span class="w"> </span><span class="n">total_compressed_size</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">----------------+--------------+--------------------+---------------------+---------------------+-----------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="ss">&quot;WatchID&quot;</span><span class="w">      </span><span class="o">|</span><span class="w"> </span><span class="mi">0</span><span class="w">            </span><span class="o">|</span><span class="w"> </span><span class="mi">450560</span><span class="w">             </span><span class="o">|</span><span class="w"> </span><span class="mi">4611687214012840539</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="mi">9223369186199968220</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="mi">3883759</span><span class="w">               </span><span class="o">|</span>
+<span class="o">|</span><span class="w"> </span><span class="ss">&quot;WatchID&quot;</span><span class="w">      </span><span class="o">|</span><span class="w"> </span><span class="mi">1</span><span class="w">            </span><span class="o">|</span><span class="w"> </span><span class="mi">612174</span><span class="w">             </span><span class="o">|</span><span class="w"> </span><span class="mi">4611689135232456464</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="mi">9223371478009085789</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="mi">5176803</span><span class="w">               </span><span class="o">|</span>
+<span class="o">|</span><span class="w"> </span><span class="ss">&quot;WatchID&quot;</span><span class="w">      </span><span class="o">|</span><span class="w"> </span><span class="mi">2</span><span class="w">            </span><span class="o">|</span><span class="w"> </span><span class="mi">344064</span><span class="w">             </span><span class="o">|</span><span class="w"> </span><span class="mi">4611692774829951781</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="mi">9223363791697310021</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="mi">3031680</span><span class="w">               </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">----------------+--------------+--------------------+---------------------+---------------------+-----------------------+</span>
+<span class="mi">3</span><span class="w"> </span><span class="k">rows</span><span class="w"> </span><span class="k">in</span><span class="w"> </span><span class="k">set</span><span class="p">.</span><span class="w"> </span><span class="n">Query</span><span class="w"> </span><span class="n">took</span><span class="w"> </span><span class="mi">0</span><span class="p">.</span><span class="mi">053</span><span class="w"> </span><span class="n">seconds</span><span class="p">.</span>
+</pre></div>
+</div>
+<p>The returned table has the following columns for each row for each column chunk
+in the file. Please refer to the <a class="reference external" href="https://parquet.apache.org/">Parquet Documentation</a> for more information.</p>
+<table class="table">
+<thead>
+<tr class="row-odd"><th class="head"><p>column_name</p></th>
+<th class="head"><p>data_type</p></th>
+<th class="head"><p>Description</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>filename</p></td>
+<td><p>Utf8</p></td>
+<td><p>Name of the file</p></td>
+</tr>
+<tr class="row-odd"><td><p>row_group_id</p></td>
+<td><p>Int64</p></td>
+<td><p>Row group index the column chunk belongs to</p></td>
+</tr>
+<tr class="row-even"><td><p>row_group_num_rows</p></td>
+<td><p>Int64</p></td>
+<td><p>Count of rows stored in the row group</p></td>
+</tr>
+<tr class="row-odd"><td><p>row_group_num_columns</p></td>
+<td><p>Int64</p></td>
+<td><p>Total number of columns in the row group (same for all row groups)</p></td>
+</tr>
+<tr class="row-even"><td><p>row_group_bytes</p></td>
+<td><p>Int64</p></td>
+<td><p>Number of bytes used to store the row group (not including metadata)</p></td>
+</tr>
+<tr class="row-odd"><td><p>column_id</p></td>
+<td><p>Int64</p></td>
+<td><p>ID of the column</p></td>
+</tr>
+<tr class="row-even"><td><p>file_offset</p></td>
+<td><p>Int64</p></td>
+<td><p>Offset within the file that this column chunk’s data begins</p></td>
+</tr>
+<tr class="row-odd"><td><p>num_values</p></td>
+<td><p>Int64</p></td>
+<td><p>Total number of values in this column chunk</p></td>
+</tr>
+<tr class="row-even"><td><p>path_in_schema</p></td>
+<td><p>Utf8</p></td>
+<td><p>“Path” (column name) of the column chunk in the schema</p></td>
+</tr>
+<tr class="row-odd"><td><p>type</p></td>
+<td><p>Utf8</p></td>
+<td><p>Parquet data type of the column chunk</p></td>
+</tr>
+<tr class="row-even"><td><p>stats_min</p></td>
+<td><p>Utf8</p></td>
+<td><p>The minimum value for this column chunk, if stored in the statistics, cast to a string</p></td>
+</tr>
+<tr class="row-odd"><td><p>stats_max</p></td>
+<td><p>Utf8</p></td>
+<td><p>The maximum value for this column chunk, if stored in the statistics, cast to a string</p></td>
+</tr>
+<tr class="row-even"><td><p>stats_null_count</p></td>
+<td><p>Int64</p></td>
+<td><p>Number of null values in this column chunk, if stored in the statistics</p></td>
+</tr>
+<tr class="row-odd"><td><p>stats_distinct_count</p></td>
+<td><p>Int64</p></td>
+<td><p>Number of distinct values in this column chunk, if stored in the statistics</p></td>
+</tr>
+<tr class="row-even"><td><p>stats_min_value</p></td>
+<td><p>Utf8</p></td>
+<td><p>Same as <code class="docutils literal notranslate"><span class="pre">stats_min</span></code></p></td>
+</tr>
+<tr class="row-odd"><td><p>stats_max_value</p></td>
+<td><p>Utf8</p></td>
+<td><p>Same as <code class="docutils literal notranslate"><span class="pre">stats_max</span></code></p></td>
+</tr>
+<tr class="row-even"><td><p>compression</p></td>
+<td><p>Utf8</p></td>
+<td><p>Block level compression (e.g. <code class="docutils literal notranslate"><span class="pre">SNAPPY</span></code>) used for this column chunk</p></td>
+</tr>
+<tr class="row-odd"><td><p>encodings</p></td>
+<td><p>Utf8</p></td>
+<td><p>All block level encodings (e.g. <code class="docutils literal notranslate"><span class="pre">[PLAIN_DICTIONARY,</span> <span class="pre">PLAIN,</span> <span class="pre">RLE]</span></code>) used for this column chunk</p></td>
+</tr>
+<tr class="row-even"><td><p>index_page_offset</p></td>
+<td><p>Int64</p></td>
+<td><p>Offset in the file of the <a class="reference external" href="https://github.com/apache/parquet-format/blob/master/PageIndex.md"><code class="docutils literal notranslate"><span class="pre">page</span> <span class="pre">index</span></code></a>, if any</p></td>
+</tr>
+<tr class="row-odd"><td><p>dictionary_page_offset</p></td>
+<td><p>Int64</p></td>
+<td><p>Offset in the file of the dictionary page, if any</p></td>
+</tr>
+<tr class="row-even"><td><p>data_page_offset</p></td>
+<td><p>Int64</p></td>
+<td><p>Offset in the file of the first data page, if any</p></td>
+</tr>
+<tr class="row-odd"><td><p>total_compressed_size</p></td>
+<td><p>Int64</p></td>
+<td><p>Number of bytes the column chunk’s data after encoding and compression (what is stored in the file)</p></td>
+</tr>
+<tr class="row-even"><td><p>total_uncompressed_size</p></td>
+<td><p>Int64</p></td>
+<td><p>Number of bytes the column chunk’s data after encoding</p></td>
+</tr>
+</tbody>
+</table>
+<p>+————————-+———–+————-+</p>
 </section>
 <section id="changing-configuration-options">
 <h2>Changing Configuration Options<a class="headerlink" href="#changing-configuration-options" title="Link to this heading">¶</a></h2>
