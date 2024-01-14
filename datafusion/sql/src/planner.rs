@@ -61,6 +61,15 @@ pub trait ContextProvider {
         not_impl_err!("Table Functions are not supported")
     }
 
+    /// TODO: add doc
+    fn create_cte_work_table(
+        &self,
+        _name: &str,
+        _schema: SchemaRef,
+    ) -> Result<Arc<dyn TableSource>> {
+        not_impl_err!("Recursive CTE is not implemented")
+    }
+
     /// Getter for a UDF description
     fn get_function_meta(&self, name: &str) -> Option<Arc<ScalarUDF>>;
     /// Getter for a UDAF description

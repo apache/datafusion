@@ -20,6 +20,7 @@
 //! [`ListingTable`]: crate::datasource::listing::ListingTable
 
 pub mod avro_to_arrow;
+pub mod cte;
 pub mod default_table_source;
 pub mod empty;
 pub mod file_format;
