@@ -427,7 +427,7 @@ Available commands inside DataFusion CLI are:
 
 ## Supported SQL
 
-In addition to the normal [SQL supported in DataFusion], `datatfusion-cli` also
+In addition to the normal [SQL supported in DataFusion], `datafusion-cli` also
 supports additional statements and commands:
 
 [sql supported in datafusion]: sql/index.rst
@@ -517,7 +517,7 @@ in the file. Please refer to the [Parquet Documentation] for more information.
 | path_in_schema          | Utf8      | "Path" (column name) of the column chunk in the schema                                              |
 | type                    | Utf8      | Parquet data type of the column chunk                                                               |
 | stats_min               | Utf8      | The minimum value for this column chunk, if stored in the statistics, cast to a string              |
-| stats_max               | Utf8      | The minimum value for this column chunk, if stored in the statistics, cast to a string              |
+| stats_max               | Utf8      | The maximum value for this column chunk, if stored in the statistics, cast to a string              |
 | stats_null_count        | Int64     | Number of null values in this column chunk, if stored in the statistics                             |
 | stats_distinct_count    | Int64     | Number of distinct values in this column chunk, if stored in the statistics                         |
 | stats_min_value         | Utf8      | Same as `stats_min`                                                                                 |
