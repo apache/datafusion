@@ -75,7 +75,7 @@ use datafusion_physical_plan::ExecutionPlan;
 
 use log::debug;
 use object_store::ObjectMeta;
-use object_store::{path::Path, GetOptions, ObjectStore};
+use object_store::{path::Path, GetOptions, GetRange, ObjectStore};
 
 /// The base configurations to provide when creating a physical plan for
 /// writing to any given file format.
@@ -604,10 +604,8 @@ async fn find_first_newline(
     start: usize,
     end: usize,
 ) -> Result<usize> {
-    let range = Some(Range { start, end });
-
     let options = GetOptions {
-        range,
+        range: Some(GetRange::Bounded(start..end)),
         ..Default::default()
     };
 
