@@ -22,7 +22,6 @@ use arrow::{
     util::display::array_value_to_string,
 };
 use chrono::prelude::*;
-use chrono::Duration;
 
 use datafusion::datasource::TableProvider;
 use datafusion::error::{DataFusionError, Result};
@@ -84,7 +83,6 @@ pub mod references;
 pub mod repartition;
 pub mod select;
 mod sql_api;
-pub mod timestamp;
 
 fn create_join_context(
     column_left: &str,
