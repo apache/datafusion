@@ -247,11 +247,20 @@ impl DFSchema {
     /// Create a new schema that contains the fields from this schema followed by the fields
     /// from the supplied schema. An error will be returned if there are duplicate field names.
     pub fn join(&self, schema: &DFSchema) -> Result<Self> {
-        // let mut fields = self.fields.clone();
-        // let mut metadata = self.metadata.clone();
-        // fields.extend_from_slice(schema.fields().as_slice());
-        // metadata.extend(schema.metadata.clone());
-        // Self::new_with_metadata(fields, metadata)
+        let (new_field_qualifiers, new_fields) = self
+            .iter()
+            .chain(schema.iter())
+            .map(|(qualifier, field)| (qualifier.as_ref().clone(), field.clone()))
+            .unzip();
+
+        let mut new_metadata = self.inner.metadata.clone();
+        new_metadata.extend(schema.inner.metadata.clone());
+
+        let new_self = Self {
+            inner: Arc::new(Schema::new_with_metadata(new_fields, new_metadata)),
+            field_qualifiers: new_field_qualifiers,
+        };
+        Ok(new_self)
     }
 
     /// Modify this schema by appending the fields from the supplied schema, ignoring any
@@ -275,14 +284,14 @@ impl DFSchema {
     }
 
     /// Get a list of fields
-    pub fn fields(&self) -> &Vec<DFField> {
-        &self.fields
+    pub fn fields(&self) -> &Fields {
+        &self.inner.fields
     }
 
     /// Returns an immutable reference of a specific `Field` instance selected using an
     /// offset within the internal `fields` vector
-    pub fn field(&self, i: usize) -> &DFField {
-        &self.fields[i]
+    pub fn field(&self, i: usize) -> &Field {
+        &self.inner.fields[i]
     }
 
     #[deprecated(since = "8.0.0", note = "please use `index_of_column_by_name` instead")]
@@ -385,15 +394,16 @@ impl DFSchema {
         &self,
         qualifier: &TableReference,
     ) -> Vec<usize> {
-        self.fields
-            .iter()
-            .enumerate()
-            .filter_map(|(idx, field)| {
-                field
-                    .qualifier()
-                    .and_then(|q| q.eq(qualifier).then_some(idx))
-            })
-            .collect()
+        // self.inner
+        //     .fields
+        //     .iter()
+        //     .enumerate()
+        //     .filter_map(|(idx, field)| {
+        //         field
+        //             .qualifier()
+        //             .and_then(|q| q.eq(qualifier).then_some(idx))
+        //     })
+        //     .collect()
     }
 
     /// Find all fields match the given name
@@ -450,7 +460,7 @@ impl DFSchema {
     }
 
     /// Find the field with the given qualified column
-    pub fn field_from_column(&self, column: &Column) -> Result<&DFField> {
+    pub fn field_from_column(&self, column: &Column) -> Result<&Field> {
         match &column.relation {
             Some(r) => self.field_with_qualified_name(r, &column.name),
             None => self.field_with_unqualified_name(&column.name),
@@ -484,7 +494,8 @@ impl DFSchema {
 
     /// Check to see if unqualified field names matches field names in Arrow schema
     pub fn matches_arrow_schema(&self, arrow_schema: &Schema) -> bool {
-        self.fields
+        self.inner
+            .fields
             .iter()
             .zip(arrow_schema.fields().iter())
             .all(|(dffield, arrowfield)| dffield.name() == arrowfield.name())
@@ -677,20 +688,28 @@ impl DFSchema {
 
     /// Get list of fully-qualified field names in this schema
     pub fn field_names(&self) -> Vec<String> {
-        self.fields
-            .iter()
-            .map(|f| f.qualified_name())
+        self.iter()
+            .map(|qualifier, field| qualified_name(qualifier, field))
             .collect::<Vec<_>>()
     }
 
     /// Get metadata of this schema
     pub fn metadata(&self) -> &HashMap<String, String> {
-        &self.metadata
+        &self.inner.metadata
     }
 
     /// Get functional dependencies
     pub fn functional_dependencies(&self) -> &FunctionalDependencies {
         &self.functional_dependencies
+    }
+
+    pub fn iter<'a>(
+        &'a self,
+    ) -> impl Iterator<Item = (Option<&OwnedTableReference>, &'a FieldRef)> {
+        self.field_qualifiers
+            .iter()
+            .zip(self.inner.fields().iter())
+            .map(|(qualifier, field)| (qualifier.as_ref(), field))
     }
 }
 
@@ -836,138 +855,6 @@ impl ExprSchema for DFSchema {
     }
 }
 
-/// DFField wraps an Arrow field and adds an optional qualifier
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct DFField {
-    /// Optional qualifier (usually a table or relation name)
-    qualifier: Option<OwnedTableReference>,
-    /// Arrow field definition
-    field: FieldRef,
-}
-
-impl DFField {
-    /// Creates a new `DFField`
-    pub fn new<R: Into<OwnedTableReference>>(
-        qualifier: Option<R>,
-        name: &str,
-        data_type: DataType,
-        nullable: bool,
-    ) -> Self {
-        DFField {
-            qualifier: qualifier.map(|s| s.into()),
-            field: Arc::new(Field::new(name, data_type, nullable)),
-        }
-    }
-
-    /// Convenience method for creating new `DFField` without a qualifier
-    pub fn new_unqualified(name: &str, data_type: DataType, nullable: bool) -> Self {
-        DFField {
-            qualifier: None,
-            field: Arc::new(Field::new(name, data_type, nullable)),
-        }
-    }
-
-    /// Create a qualified field from an existing Arrow field
-    pub fn from_qualified<'a>(
-        qualifier: impl Into<TableReference<'a>>,
-        field: impl Into<FieldRef>,
-    ) -> Self {
-        Self {
-            qualifier: Some(qualifier.into().to_owned_reference()),
-            field: field.into(),
-        }
-    }
-
-    /// Returns an immutable reference to the `DFField`'s unqualified name
-    pub fn name(&self) -> &String {
-        self.field.name()
-    }
-
-    /// Returns an immutable reference to the `DFField`'s data-type
-    pub fn data_type(&self) -> &DataType {
-        self.field.data_type()
-    }
-
-    /// Indicates whether this `DFField` supports null values
-    pub fn is_nullable(&self) -> bool {
-        self.field.is_nullable()
-    }
-
-    pub fn metadata(&self) -> &HashMap<String, String> {
-        self.field.metadata()
-    }
-
-    /// Returns a string to the `DFField`'s qualified name
-    pub fn qualified_name(&self) -> String {
-        if let Some(qualifier) = &self.qualifier {
-            format!("{}.{}", qualifier, self.field.name())
-        } else {
-            self.field.name().to_owned()
-        }
-    }
-
-    /// Builds a qualified column based on self
-    pub fn qualified_column(&self) -> Column {
-        Column {
-            relation: self.qualifier.clone(),
-            name: self.field.name().to_string(),
-        }
-    }
-
-    /// Builds an unqualified column based on self
-    pub fn unqualified_column(&self) -> Column {
-        Column {
-            relation: None,
-            name: self.field.name().to_string(),
-        }
-    }
-
-    /// Get the optional qualifier
-    pub fn qualifier(&self) -> Option<&OwnedTableReference> {
-        self.qualifier.as_ref()
-    }
-
-    /// Get the arrow field
-    pub fn field(&self) -> &FieldRef {
-        &self.field
-    }
-
-    /// Return field with qualifier stripped
-    pub fn strip_qualifier(mut self) -> Self {
-        self.qualifier = None;
-        self
-    }
-
-    /// Return field with nullable specified
-    pub fn with_nullable(mut self, nullable: bool) -> Self {
-        let f = self.field().as_ref().clone().with_nullable(nullable);
-        self.field = f.into();
-        self
-    }
-
-    /// Return field with new metadata
-    pub fn with_metadata(mut self, metadata: HashMap<String, String>) -> Self {
-        let f = self.field().as_ref().clone().with_metadata(metadata);
-        self.field = f.into();
-        self
-    }
-}
-
-impl From<FieldRef> for DFField {
-    fn from(value: FieldRef) -> Self {
-        Self {
-            qualifier: None,
-            field: value,
-        }
-    }
-}
-
-impl From<Field> for DFField {
-    fn from(value: Field) -> Self {
-        Self::from(Arc::new(value))
-    }
-}
-
 /// DataFusion-specific extensions to [`Schema`].
 pub trait SchemaExt {
     /// This is a specialized version of Eq that ignores differences
@@ -1017,6 +904,13 @@ impl SchemaExt for Schema {
                         f2.data_type(),
                     )
             })
+    }
+}
+
+fn qualified_name(qualifier: &Option<OwnedTableReference>, name: &str) -> String {
+    match qualifier {
+        Some(q) => format!("{}.{}", q, name),
+        None => name.to_string(),
     }
 }
 
