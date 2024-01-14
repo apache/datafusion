@@ -16,7 +16,7 @@
 # under the License.
 
 ##########
-## Limit Tests
+## Predicates Tests
 ##########
 
 statement ok
@@ -521,3 +521,207 @@ set datafusion.execution.parquet.bloom_filter_enabled=false;
 ########
 statement ok
 DROP TABLE data_index_bloom_encoding_stats;
+
+
+########
+# String coercion
+########
+
+statement error DataFusion error: SQL error: ParserError\("Expected a data type name, found: ,"\)
+CREATE TABLE t(vendor_id_utf8, vendor_id_dict)
+AS VALUES
+(arrow_cast('124', 'Utf8'), arrow_cast('124', 'Dictionary(Int16, Utf8)')),
+(arrow_cast('345', 'Utf8'), arrow_cast('345', 'Dictionary(Int16, Utf8)'));
+
+query error DataFusion error: Error during planning: table 'datafusion\.public\.t' not found
+SELECT * FROM t WHERE vendor_id_utf8 = 124;
+
+query error DataFusion error: Error during planning: table 'datafusion\.public\.t' not found
+SELECT * FROM t WHERE vendor_id_dict = 124
+
+query error DataFusion error: Error during planning: table 'datafusion\.public\.t' not found
+SELECT * FROM t WHERE cast(vendor_id_utf8 as varchar) = 124
+
+########
+# Multiple OR predicates
+########
+
+statement ok
+CREATE EXTERNAL TABLE IF NOT EXISTS lineitem (
+        l_orderkey BIGINT,
+        l_partkey BIGINT,
+        l_suppkey BIGINT,
+        l_linenumber INTEGER,
+        l_quantity DECIMAL(15, 2),
+        l_extendedprice DECIMAL(15, 2),
+        l_discount DECIMAL(15, 2),
+        l_tax DECIMAL(15, 2),
+        l_returnflag VARCHAR,
+        l_linestatus VARCHAR,
+        l_shipdate DATE,
+        l_commitdate DATE,
+        l_receiptdate DATE,
+        l_shipinstruct VARCHAR,
+        l_shipmode VARCHAR,
+        l_comment VARCHAR,
+) STORED AS CSV DELIMITER ',' WITH HEADER ROW LOCATION '../core/tests/tpch-csv/lineitem.csv';
+
+statement ok
+CREATE EXTERNAL TABLE IF NOT EXISTS part (
+        p_partkey BIGINT,
+        p_name VARCHAR,
+        p_mfgr VARCHAR,
+        p_brand VARCHAR,
+        p_type VARCHAR,
+        p_size INT,
+        p_container VARCHAR,
+        p_retailprice DECIMAL(15, 2),
+        p_comment VARCHAR,
+) STORED AS CSV DELIMITER ',' WITH HEADER ROW LOCATION '../core/tests/tpch-csv/part.csv';
+
+query TT
+EXPLAIN SELECT l_partkey FROM
+lineitem, part WHERE
+(
+        p_partkey = l_partkey
+    AND p_brand = 'Brand#12'
+    AND l_quantity >= 1 AND l_quantity <= 1 + 10
+    AND p_size BETWEEN 1 AND 5
+)
+OR
+(
+        p_partkey = l_partkey
+    AND p_brand = 'Brand#23'
+    AND l_quantity >= 10 AND l_quantity <= 10 + 10
+    AND p_size BETWEEN 1 AND 10
+)
+OR
+(
+        p_partkey = l_partkey
+    AND p_brand = 'Brand#34'
+    AND l_quantity >= 20 AND l_quantity <= 20 + 10
+    AND p_size BETWEEN 1 AND 15
+)
+----
+logical_plan
+Projection: lineitem.l_partkey
+--Inner Join: lineitem.l_partkey = part.p_partkey Filter: part.p_brand = Utf8("Brand#12") AND lineitem.l_quantity >= Decimal128(Some(100),15,2) AND lineitem.l_quantity <= Decimal128(Some(1100),15,2) AND part.p_size <= Int32(5) OR part.p_brand = Utf8("Brand#23") AND lineitem.l_quantity >= Decimal128(Some(1000),15,2) AND lineitem.l_quantity <= Decimal128(Some(2000),15,2) AND part.p_size <= Int32(10) OR part.p_brand = Utf8("Brand#34") AND lineitem.l_quantity >= Decimal128(Some(2000),15,2) AND lineitem.l_quantity <= Decimal128(Some(3000),15,2) AND part.p_size <= Int32(15)
+----Filter: lineitem.l_quantity >= Decimal128(Some(100),15,2) AND lineitem.l_quantity <= Decimal128(Some(1100),15,2) OR lineitem.l_quantity >= Decimal128(Some(1000),15,2) AND lineitem.l_quantity <= Decimal128(Some(2000),15,2) OR lineitem.l_quantity >= Decimal128(Some(2000),15,2) AND lineitem.l_quantity <= Decimal128(Some(3000),15,2)
+------TableScan: lineitem projection=[l_partkey, l_quantity], partial_filters=[lineitem.l_quantity >= Decimal128(Some(100),15,2) AND lineitem.l_quantity <= Decimal128(Some(1100),15,2) OR lineitem.l_quantity >= Decimal128(Some(1000),15,2) AND lineitem.l_quantity <= Decimal128(Some(2000),15,2) OR lineitem.l_quantity >= Decimal128(Some(2000),15,2) AND lineitem.l_quantity <= Decimal128(Some(3000),15,2)]
+----Filter: (part.p_brand = Utf8("Brand#12") AND part.p_size <= Int32(5) OR part.p_brand = Utf8("Brand#23") AND part.p_size <= Int32(10) OR part.p_brand = Utf8("Brand#34") AND part.p_size <= Int32(15)) AND part.p_size >= Int32(1)
+------TableScan: part projection=[p_partkey, p_brand, p_size], partial_filters=[part.p_size >= Int32(1), part.p_brand = Utf8("Brand#12") AND part.p_size <= Int32(5) OR part.p_brand = Utf8("Brand#23") AND part.p_size <= Int32(10) OR part.p_brand = Utf8("Brand#34") AND part.p_size <= Int32(15)]
+physical_plan
+ProjectionExec: expr=[l_partkey@0 as l_partkey]
+--CoalesceBatchesExec: target_batch_size=8192
+----HashJoinExec: mode=Partitioned, join_type=Inner, on=[(l_partkey@0, p_partkey@0)], filter=p_brand@1 = Brand#12 AND l_quantity@0 >= Some(100),15,2 AND l_quantity@0 <= Some(1100),15,2 AND p_size@2 <= 5 OR p_brand@1 = Brand#23 AND l_quantity@0 >= Some(1000),15,2 AND l_quantity@0 <= Some(2000),15,2 AND p_size@2 <= 10 OR p_brand@1 = Brand#34 AND l_quantity@0 >= Some(2000),15,2 AND l_quantity@0 <= Some(3000),15,2 AND p_size@2 <= 15
+------CoalesceBatchesExec: target_batch_size=8192
+--------RepartitionExec: partitioning=Hash([l_partkey@0], 4), input_partitions=4
+----------CoalesceBatchesExec: target_batch_size=8192
+------------FilterExec: l_quantity@1 >= Some(100),15,2 AND l_quantity@1 <= Some(1100),15,2 OR l_quantity@1 >= Some(1000),15,2 AND l_quantity@1 <= Some(2000),15,2 OR l_quantity@1 >= Some(2000),15,2 AND l_quantity@1 <= Some(3000),15,2
+--------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+----------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/tpch-csv/lineitem.csv]]}, projection=[l_partkey, l_quantity], has_header=true
+------CoalesceBatchesExec: target_batch_size=8192
+--------RepartitionExec: partitioning=Hash([p_partkey@0], 4), input_partitions=4
+----------CoalesceBatchesExec: target_batch_size=8192
+------------FilterExec: (p_brand@1 = Brand#12 AND p_size@2 <= 5 OR p_brand@1 = Brand#23 AND p_size@2 <= 10 OR p_brand@1 = Brand#34 AND p_size@2 <= 15) AND p_size@2 >= 1
+--------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+----------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/tpch-csv/part.csv]]}, projection=[p_partkey, p_brand, p_size], has_header=true
+
+
+########
+# TPCH Q19 - Pull predicates to inner join (simplified)
+########
+statement ok
+CREATE TABLE IF NOT EXISTS partsupp (
+    ps_partkey BIGINT,
+    ps_suppkey BIGINT,
+    ps_availqty INTEGER,
+    ps_supplycost DECIMAL(15, 2),
+    ps_comment VARCHAR,
+) AS VALUES
+(63700, 7311, 100, 993.49, 'ven ideas. quickly even packages print. pending multipliers must have to are fluff');
+
+query IRRI
+SELECT
+    p_partkey,
+    sum(l_extendedprice),
+    avg(l_discount),
+    count(distinct ps_suppkey)
+FROM
+    lineitem,
+    part,
+    partsupp
+WHERE
+(
+        p_partkey = l_partkey
+    AND p_brand = 'Brand#12'
+    AND p_partkey = ps_partkey
+)
+OR
+(
+        p_partkey = l_partkey
+    AND p_brand = 'Brand#23'
+    AND ps_partkey = p_partkey
+)
+GROUP BY p_partkey;
+----
+63700 13309.6 0.1 1
+
+
+query TT
+EXPLAIN SELECT
+    p_partkey,
+    sum(l_extendedprice),
+    avg(l_discount),
+    count(distinct ps_suppkey)
+FROM
+    lineitem,
+    part,
+    partsupp
+WHERE
+(
+        p_partkey = l_partkey
+    AND p_brand = 'Brand#12'
+    AND p_partkey = ps_partkey
+)
+OR
+(
+        p_partkey = l_partkey
+    AND p_brand = 'Brand#23'
+    AND ps_partkey = p_partkey
+)
+GROUP BY p_partkey;
+----
+logical_plan
+Aggregate: groupBy=[[part.p_partkey]], aggr=[[SUM(lineitem.l_extendedprice), AVG(lineitem.l_discount), COUNT(DISTINCT partsupp.ps_suppkey)]]
+--Projection: lineitem.l_extendedprice, lineitem.l_discount, part.p_partkey, partsupp.ps_suppkey
+----Inner Join: part.p_partkey = partsupp.ps_partkey
+------Projection: lineitem.l_extendedprice, lineitem.l_discount, part.p_partkey
+--------Inner Join: lineitem.l_partkey = part.p_partkey
+----------TableScan: lineitem projection=[l_partkey, l_extendedprice, l_discount]
+----------Projection: part.p_partkey
+------------Filter: part.p_brand = Utf8("Brand#12") OR part.p_brand = Utf8("Brand#23")
+--------------TableScan: part projection=[p_partkey, p_brand], partial_filters=[part.p_brand = Utf8("Brand#12") OR part.p_brand = Utf8("Brand#23")]
+------TableScan: partsupp projection=[ps_partkey, ps_suppkey]
+physical_plan
+AggregateExec: mode=SinglePartitioned, gby=[p_partkey@2 as p_partkey], aggr=[SUM(lineitem.l_extendedprice), AVG(lineitem.l_discount), COUNT(DISTINCT partsupp.ps_suppkey)]
+--ProjectionExec: expr=[l_extendedprice@0 as l_extendedprice, l_discount@1 as l_discount, p_partkey@2 as p_partkey, ps_suppkey@4 as ps_suppkey]
+----CoalesceBatchesExec: target_batch_size=8192
+------HashJoinExec: mode=Partitioned, join_type=Inner, on=[(p_partkey@2, ps_partkey@0)]
+--------ProjectionExec: expr=[l_extendedprice@1 as l_extendedprice, l_discount@2 as l_discount, p_partkey@3 as p_partkey]
+----------CoalesceBatchesExec: target_batch_size=8192
+------------HashJoinExec: mode=Partitioned, join_type=Inner, on=[(l_partkey@0, p_partkey@0)]
+--------------CoalesceBatchesExec: target_batch_size=8192
+----------------RepartitionExec: partitioning=Hash([l_partkey@0], 4), input_partitions=4
+------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+--------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/tpch-csv/lineitem.csv]]}, projection=[l_partkey, l_extendedprice, l_discount], has_header=true
+--------------CoalesceBatchesExec: target_batch_size=8192
+----------------RepartitionExec: partitioning=Hash([p_partkey@0], 4), input_partitions=4
+------------------ProjectionExec: expr=[p_partkey@0 as p_partkey]
+--------------------CoalesceBatchesExec: target_batch_size=8192
+----------------------FilterExec: p_brand@1 = Brand#12 OR p_brand@1 = Brand#23
+------------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+--------------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/tpch-csv/part.csv]]}, projection=[p_partkey, p_brand], has_header=true
+--------CoalesceBatchesExec: target_batch_size=8192
+----------RepartitionExec: partitioning=Hash([ps_partkey@0], 4), input_partitions=1
+------------MemoryExec: partitions=1, partition_sizes=[1]

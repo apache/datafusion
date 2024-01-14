@@ -77,7 +77,6 @@ pub mod explain_analyze;
 pub mod expr;
 pub mod joins;
 pub mod partitioned_csv;
-pub mod predicates;
 pub mod references;
 pub mod repartition;
 pub mod select;
