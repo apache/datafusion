@@ -97,7 +97,7 @@ impl TryFrom<ast::WindowFrame> for WindowFrame {
             }
         };
         let units = value.units.into();
-        let is_causal = is_frame_causal(&units, &end_bound)?;
+        let is_causal = is_frame_causal(&units, &end_bound);
         Ok(Self {
             units,
             start_bound,
@@ -163,8 +163,7 @@ impl WindowFrame {
             }
             WindowFrameBound::CurrentRow => WindowFrameBound::CurrentRow,
         };
-        // Units and end bound types do not change, cannot produce error.
-        let is_causal = is_frame_causal(&self.units, &end_bound).unwrap();
+        let is_causal = is_frame_causal(&self.units, &end_bound);
         WindowFrame {
             units: self.units,
             start_bound,
@@ -179,18 +178,18 @@ impl WindowFrame {
     }
 
     /// Initializes window frame from units (window bound type), start bound and end bound
-    pub fn try_new(
+    pub fn new_frame(
         units: WindowFrameUnits,
         start_bound: WindowFrameBound,
         end_bound: WindowFrameBound,
-    ) -> Result<Self> {
-        let is_causal = is_frame_causal(&units, &end_bound)?;
-        Ok(WindowFrame {
+    ) -> Self {
+        let is_causal = is_frame_causal(&units, &end_bound);
+        WindowFrame {
             units,
             start_bound,
             end_bound,
             is_causal,
-        })
+        }
     }
 }
 
@@ -242,21 +241,17 @@ impl WindowFrame {
 ///                |              |
 ///                |              |
 ///                +--------------+
-fn is_frame_causal(
-    frame_units: &WindowFrameUnits,
-    end_bound: &WindowFrameBound,
-) -> Result<bool> {
-    Ok(match frame_units {
+fn is_frame_causal(frame_units: &WindowFrameUnits, end_bound: &WindowFrameBound) -> bool {
+    match frame_units {
         WindowFrameUnits::Rows => match end_bound {
             WindowFrameBound::Following(val) => {
                 if val.is_null() {
                     // unbounded following
                     false
-                } else if let ScalarValue::Utf8(Some(val)) = val {
-                    val == "0"
                 } else {
-                    let zero = ScalarValue::new_zero(&val.data_type())?;
-                    val.eq(&zero)
+                    ScalarValue::new_zero(&val.data_type())
+                        .map(|zero| val.eq(&zero))
+                        .unwrap_or(false)
                 }
             }
             _ => true,
@@ -268,16 +263,15 @@ fn is_frame_causal(
                 if val.is_null() {
                     // unbounded preceding
                     true
-                } else if let ScalarValue::Utf8(Some(val)) = val {
-                    val != "0"
                 } else {
-                    let zero = ScalarValue::new_zero(&val.data_type())?;
-                    val.gt(&zero)
+                    ScalarValue::new_zero(&val.data_type())
+                        .map(|zero| val.gt(&zero))
+                        .unwrap_or(false)
                 }
             }
             _ => false,
         },
-    })
+    }
 }
 
 /// Regularizes ORDER BY clause for window definition for implicit corner cases.

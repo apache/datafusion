@@ -346,11 +346,11 @@ mod tests {
                 vec![wildcard()],
                 vec![],
                 vec![Expr::Sort(Sort::new(Box::new(col("a")), false, true))],
-                WindowFrame::try_new(
+                WindowFrame::new_frame(
                     WindowFrameUnits::Range,
                     WindowFrameBound::Preceding(ScalarValue::UInt32(Some(6))),
                     WindowFrameBound::Following(ScalarValue::UInt32(Some(2))),
-                )?,
+                ),
             ))])?
             .project(vec![count(wildcard())])?
             .build()?;

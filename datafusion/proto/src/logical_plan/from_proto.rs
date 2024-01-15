@@ -871,7 +871,7 @@ impl TryFrom<protobuf::WindowFrame> for WindowFrame {
             })
             .transpose()?
             .unwrap_or(WindowFrameBound::CurrentRow);
-        Ok(WindowFrame::try_new(units, start_bound, end_bound)?)
+        Ok(WindowFrame::new_frame(units, start_bound, end_bound))
     }
 }
 

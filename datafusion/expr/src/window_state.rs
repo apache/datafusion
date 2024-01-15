@@ -682,11 +682,11 @@ mod tests {
 
     #[test]
     fn test_window_frame_group_boundaries() -> Result<()> {
-        let window_frame = Arc::new(WindowFrame::try_new(
+        let window_frame = Arc::new(WindowFrame::new_frame(
             WindowFrameUnits::Groups,
             WindowFrameBound::Preceding(ScalarValue::UInt64(Some(1))),
             WindowFrameBound::Following(ScalarValue::UInt64(Some(1))),
-        )?);
+        ));
         let expected_results = vec![
             (Range { start: 0, end: 2 }, 0),
             (Range { start: 0, end: 4 }, 1),
@@ -703,11 +703,11 @@ mod tests {
 
     #[test]
     fn test_window_frame_group_boundaries_both_following() -> Result<()> {
-        let window_frame = Arc::new(WindowFrame::try_new(
+        let window_frame = Arc::new(WindowFrame::new_frame(
             WindowFrameUnits::Groups,
             WindowFrameBound::Following(ScalarValue::UInt64(Some(1))),
             WindowFrameBound::Following(ScalarValue::UInt64(Some(2))),
-        )?);
+        ));
         let expected_results = vec![
             (Range::<usize> { start: 1, end: 4 }, 0),
             (Range::<usize> { start: 2, end: 5 }, 1),
@@ -724,11 +724,11 @@ mod tests {
 
     #[test]
     fn test_window_frame_group_boundaries_both_preceding() -> Result<()> {
-        let window_frame = Arc::new(WindowFrame::try_new(
+        let window_frame = Arc::new(WindowFrame::new_frame(
             WindowFrameUnits::Groups,
             WindowFrameBound::Preceding(ScalarValue::UInt64(Some(2))),
             WindowFrameBound::Preceding(ScalarValue::UInt64(Some(1))),
-        )?);
+        ));
         let expected_results = vec![
             (Range::<usize> { start: 0, end: 0 }, 0),
             (Range::<usize> { start: 0, end: 1 }, 1),

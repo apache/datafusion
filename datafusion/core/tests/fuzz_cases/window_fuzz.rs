@@ -170,11 +170,11 @@ async fn bounded_window_causal_non_causal() -> Result<()> {
                 // end_bound FOLLOWING
                 WindowFrameBound::Following(ScalarValue::UInt64(Some(end_bound)))
             };
-            let window_frame = WindowFrame::try_new(
+            let window_frame = WindowFrame::new_frame(
                 WindowFrameUnits::Rows,
                 start_bound.clone(),
                 end_bound,
-            )?;
+            );
 
             let search_mode = InputOrderMode::Linear;
             // BoundedWindowAggExec(Count(x) OVER(ROW BETWEEN UNBOUNDED PRECEDING AND <end bound> PRECEDING/FOLLOWING))
@@ -428,8 +428,7 @@ fn get_random_window_frame(rng: &mut StdRng, is_linear: bool) -> WindowFrame {
             } else {
                 WindowFrameBound::Following(ScalarValue::Int32(Some(end_bound.val)))
             };
-            let mut window_frame =
-                WindowFrame::try_new(units, start_bound, end_bound).unwrap();
+            let mut window_frame = WindowFrame::new_frame(units, start_bound, end_bound);
             // with 10% use unbounded preceding in tests
             if rng.gen_range(0..10) == 0 {
                 window_frame.start_bound =
@@ -457,8 +456,7 @@ fn get_random_window_frame(rng: &mut StdRng, is_linear: bool) -> WindowFrame {
                     end_bound.val as u64,
                 )))
             };
-            let mut window_frame =
-                WindowFrame::try_new(units, start_bound, end_bound).unwrap();
+            let mut window_frame = WindowFrame::new_frame(units, start_bound, end_bound);
             // with 10% use unbounded preceding in tests
             if rng.gen_range(0..10) == 0 {
                 window_frame.start_bound =

@@ -973,11 +973,11 @@ pub async fn from_substrait_rex(
                 )
                 .await?,
                 order_by,
-                window_frame: datafusion::logical_expr::WindowFrame::try_new(
+                window_frame: datafusion::logical_expr::WindowFrame::new_frame(
                     units,
                     from_substrait_bound(&window.lower_bound, true)?,
                     from_substrait_bound(&window.upper_bound, false)?,
-                )?,
+                ),
             })))
         }
         Some(RexType::Subquery(subquery)) => match &subquery.as_ref().subquery_type {

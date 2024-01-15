@@ -792,7 +792,6 @@ impl ScalarValue {
 
     /// Create a zero value in the given type.
     pub fn new_zero(datatype: &DataType) -> Result<ScalarValue> {
-        assert!(datatype.is_primitive());
         Ok(match datatype {
             DataType::Boolean => ScalarValue::Boolean(Some(false)),
             DataType::Int8 => ScalarValue::Int8(Some(0)),

@@ -1170,33 +1170,33 @@ mod tests {
                 last_value_func,
                 &[],
                 &[],
-                Arc::new(WindowFrame::try_new(
+                Arc::new(WindowFrame::new_frame(
                     WindowFrameUnits::Rows,
                     WindowFrameBound::Preceding(ScalarValue::UInt64(None)),
                     WindowFrameBound::CurrentRow,
-                )?),
+                )),
             )) as _,
             // NTH_VALUE(a, -1)
             Arc::new(BuiltInWindowExpr::new(
                 nth_value_func1,
                 &[],
                 &[],
-                Arc::new(WindowFrame::try_new(
+                Arc::new(WindowFrame::new_frame(
                     WindowFrameUnits::Rows,
                     WindowFrameBound::Preceding(ScalarValue::UInt64(None)),
                     WindowFrameBound::CurrentRow,
-                )?),
+                )),
             )) as _,
             // NTH_VALUE(a, -2)
             Arc::new(BuiltInWindowExpr::new(
                 nth_value_func2,
                 &[],
                 &[],
-                Arc::new(WindowFrame::try_new(
+                Arc::new(WindowFrame::new_frame(
                     WindowFrameUnits::Rows,
                     WindowFrameBound::Preceding(ScalarValue::UInt64(None)),
                     WindowFrameBound::CurrentRow,
-                )?),
+                )),
             )) as _,
         ];
         let physical_plan = BoundedWindowAggExec::try_new(
