@@ -35,14 +35,19 @@ use datafusion_common::DataFusionError;
 use crate::datasource::{TableProvider, TableType};
 use crate::execution::context::SessionState;
 
-/// TODO: add docs
+/// The temporary working table where the previous iteration of a recursive query is stored
+/// Naming is based on PostgreSQL's implementation.
+/// See here for more details: www.postgresql.org/docs/11/queries-with.html#id-1.5.6.12.5.4
 pub struct CteWorkTable {
     name: String,
+    /// This schema must be shared across both the static and recursive terms of a recursive query
     table_schema: SchemaRef,
 }
 
 impl CteWorkTable {
-    /// TODO: add doc
+    /// construct a new CteWorkTable with the given name and schema
+    /// This schema must match the schema of the recursive term of the query
+    /// Since the scan method will contain an physical plan that assumes this schema
     pub fn new(name: &str, table_schema: SchemaRef) -> Self {
         Self {
             name: name.to_owned(),
