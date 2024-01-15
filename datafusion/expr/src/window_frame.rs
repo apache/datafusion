@@ -249,7 +249,10 @@ fn is_frame_causal(
     Ok(match frame_units {
         WindowFrameUnits::Rows => match end_bound {
             WindowFrameBound::Following(val) => {
-                if let ScalarValue::Utf8(Some(val)) = val {
+                if val.is_null() {
+                    // unbounded following
+                    false
+                } else if let ScalarValue::Utf8(Some(val)) = val {
                     val == "0"
                 } else {
                     let zero = ScalarValue::new_zero(&val.data_type())?;
@@ -262,7 +265,10 @@ fn is_frame_causal(
             WindowFrameBound::Preceding(val) => {
                 // val can be either numeric type or Utf8 type (which is initial type after parsing)
                 // In subsequent stages, Utf8 type converted to the appropriate types.
-                if let ScalarValue::Utf8(Some(val)) = val {
+                if val.is_null() {
+                    // unbounded preceding
+                    true
+                } else if let ScalarValue::Utf8(Some(val)) = val {
                     val != "0"
                 } else {
                     let zero = ScalarValue::new_zero(&val.data_type())?;
