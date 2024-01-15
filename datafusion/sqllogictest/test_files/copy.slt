@@ -66,8 +66,8 @@ select * from validate_parquet;
 
 query ??
 COPY 
-(values (struct ('foo', (struct ('foo', make_array(1,2,3)))), make_array(timestamp '2023-01-01 01:00:01',timestamp '2023-01-01 01:00:01')), 
-(struct('bar', (struct ('foo', make_array(1,2,3)))), make_array(timestamp '2023-01-01 01:00:01', timestamp '2023-01-01 01:00:01'))) 
+(values (struct ('foo', (struct ('foo', make_array(struct('a',1), struct('b',2))))), make_array(timestamp '2023-01-01 01:00:01',timestamp '2023-01-01 01:00:01')), 
+(struct('bar', (struct ('foo', make_array(struct('aa',10), struct('bb',20))))), make_array(timestamp '2024-01-01 01:00:01', timestamp '2024-01-01 01:00:01'))) 
 to 'test_files/scratch/copy/table_nested' (format parquet, single_file_output false);
 ----
 2
@@ -79,8 +79,8 @@ CREATE EXTERNAL TABLE validate_parquet_nested STORED AS PARQUET LOCATION 'test_f
 query ??
 select * from validate_parquet_nested;
 ----
-{c0: foo, c1: {c0: foo, c1: [1, 2, 3]}} [2023-01-01T01:00:01, 2023-01-01T01:00:01]
-{c0: bar, c1: {c0: foo, c1: [1, 2, 3]}} [2023-01-01T01:00:01, 2023-01-01T01:00:01]
+{c0: foo, c1: {c0: foo, c1: [{c0: a, c1: 1}, {c0: b, c1: 2}]}} [2023-01-01T01:00:01, 2023-01-01T01:00:01]
+{c0: bar, c1: {c0: foo, c1: [{c0: aa, c1: 10}, {c0: bb, c1: 20}]}} [2024-01-01T01:00:01, 2024-01-01T01:00:01]
 
 
 # Copy parquet with all supported statment overrides
