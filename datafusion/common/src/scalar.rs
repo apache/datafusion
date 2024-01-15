@@ -34,8 +34,9 @@ use crate::cast::{
 };
 use crate::error::{DataFusionError, Result, _internal_err, _not_impl_err};
 use crate::hash_utils::create_hashes;
-use crate::utils::{array_into_large_list_array, array_into_list_array};
-
+use crate::utils::{
+    array_into_fixed_size_list_array, array_into_large_list_array, array_into_list_array,
+};
 use arrow::compute::kernels::numeric::*;
 use arrow::util::display::{ArrayFormatter, FormatOptions};
 use arrow::{
@@ -2223,9 +2224,12 @@ impl ScalarValue {
                 let list_array = as_fixed_size_list_array(array)?;
                 let nested_array = list_array.value(index);
                 // Produces a single element `ListArray` with the value at `index`.
-                let arr = Arc::new(array_into_list_array(nested_array));
+                let list_size = nested_array.len();
+                let arr =
+                    Arc::new(array_into_fixed_size_list_array(nested_array, list_size));
 
-                ScalarValue::List(arr)
+                // ScalarValue::List(arr)
+                ScalarValue::FixedSizeList(arr)
             }
             DataType::Date32 => typed_cast!(array, index, Date32Array, Date32)?,
             DataType::Date64 => typed_cast!(array, index, Date64Array, Date64)?,

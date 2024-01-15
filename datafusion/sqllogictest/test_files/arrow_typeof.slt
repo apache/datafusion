@@ -388,22 +388,20 @@ LargeList(Field { name: "item", data_type: LargeList(Field { name: "item", data_
 
 ## FixedSizeList
 
+query error DataFusion error: Optimizer rule 'simplify_expressions' failed
+select arrow_cast(make_array(1, 2, 3), 'FixedSizeList(4, Int64)');
 
 query ?
-select arrow_cast('1', 'FixedSizeList(1, Int64)');
+select arrow_cast(make_array(1, 2, 3), 'FixedSizeList(3, Int64)');
 ----
-[1]
+[1, 2, 3]
 
-query ?
-select arrow_cast('1', 'FixedSizeList(2, Int64)');
+query T
+select arrow_typeof(arrow_cast(arrow_cast(make_array(1, 2, 3), 'LargeList(Int64)'), 'FixedSizeList(3, Int64)'));
 ----
-[1]
+FixedSizeList(Field { name: "item", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, 3)
 
 query ?
-select arrow_cast(make_array(1, 2, 3), 'FixedSizeList(5, Int64)');
+select arrow_cast([1, 2, 3], 'FixedSizeList(3, Int64)');
 ----
-[1]
-
-# LargeList to FixedSizeList
-query ?
-select arrow_typeof(arrow_cast(arrow_cast(make_array(1, 2, 3), 'LargeList(Int64)')), 'FixedSizeList(5, Int64)');
+[1, 2, 3]
