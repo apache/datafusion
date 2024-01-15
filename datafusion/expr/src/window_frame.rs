@@ -247,10 +247,17 @@ fn is_frame_causal(
     end_bound: &WindowFrameBound,
 ) -> Result<bool> {
     Ok(match frame_units {
-        WindowFrameUnits::Rows => matches!(
-            end_bound,
-            WindowFrameBound::Preceding(_) | WindowFrameBound::CurrentRow
-        ),
+        WindowFrameUnits::Rows => match end_bound {
+            WindowFrameBound::Following(val) => {
+                if let ScalarValue::Utf8(Some(val)) = val {
+                    val == "0"
+                } else {
+                    let zero = ScalarValue::new_zero(&val.data_type())?;
+                    val.eq(&zero)
+                }
+            }
+            _ => true,
+        },
         WindowFrameUnits::Range | WindowFrameUnits::Groups => match end_bound {
             WindowFrameBound::Preceding(val) => {
                 // val can be either numeric type or Utf8 type (which is initial type after parsing)
