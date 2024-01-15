@@ -990,7 +990,7 @@ impl RecordBatchStream for HashJoinStream {
 /// Executes lookups by hash against JoinHashMap and resolves potential
 /// hash collisions.
 /// Returns build/probe indices satisfying the equality condition, along with
-/// starting point for next iteration.
+/// (optional) starting point for next iteration.
 ///
 /// # Example
 ///

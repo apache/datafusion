@@ -863,8 +863,6 @@ pub(crate) fn join_with_probe_batch(
 /// * `random_state` - The random state for the join.
 /// * `null_equals_null` - A boolean indicating whether NULL values should be treated as equal when joining.
 /// * `hashes_buffer` - Buffer used for probe side keys hash calculation.
-/// * `probe_batch` - The second record batch to be joined.
-/// * `column_indices` - An array of columns to be selected for the result of the join.
 /// * `deleted_offset` - deleted offset for build side data.
 ///
 /// # Returns
