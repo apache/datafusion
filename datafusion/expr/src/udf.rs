@@ -18,7 +18,8 @@
 //! [`ScalarUDF`]: Scalar User Defined Functions
 
 use crate::{
-    ColumnarValue, Expr, ReturnTypeFunction, ScalarFunctionImplementation, Signature,
+    ColumnarValue, Expr, FuncMonotonicity, ReturnTypeFunction,
+    ScalarFunctionImplementation, Signature,
 };
 use arrow::datatypes::DataType;
 use datafusion_common::Result;
@@ -164,6 +165,13 @@ impl ScalarUDF {
         let captured = self.inner.clone();
         Arc::new(move |args| captured.invoke(args))
     }
+
+    /// This function specifies monotonicity behaviors for User defined scalar functions.
+    ///
+    /// See [`ScalarUDFImpl::monotonicity`] for more details.
+    pub fn monotonicity(&self) -> Result<Option<FuncMonotonicity>> {
+        self.inner.monotonicity()
+    }
 }
 
 impl<F> From<F> for ScalarUDF
@@ -270,6 +278,11 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
     /// Defaults to `[]` (no aliases)
     fn aliases(&self) -> &[String] {
         &[]
+    }
+
+    /// This function specifies monotonicity behaviors for User defined scalar functions.
+    fn monotonicity(&self) -> Result<Option<FuncMonotonicity>> {
+        Ok(None)
     }
 }
 

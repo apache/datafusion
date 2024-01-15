@@ -254,5 +254,5 @@ pub fn physical_expr(schema: &Schema, expr: Expr) -> Result<Arc<dyn PhysicalExpr
     // apply type coercion here to ensure types match
     let expr = simplifier.coerce(expr, df_schema.clone())?;
 
-    create_physical_expr(&expr, df_schema.as_ref(), schema, &props)
+    create_physical_expr(&expr, df_schema.as_ref(), &props)
 }

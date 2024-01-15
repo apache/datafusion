@@ -394,18 +394,23 @@ impl AggregateFunction {
                 Signature::uniform(2, NUMERICS.to_vec(), Volatility::Immutable)
             }
             AggregateFunction::ApproxPercentileCont => {
+                let mut variants =
+                    Vec::with_capacity(NUMERICS.len() * (INTEGERS.len() + 1));
                 // Accept any numeric value paired with a float64 percentile
-                let with_tdigest_size = NUMERICS.iter().map(|t| {
-                    TypeSignature::Exact(vec![t.clone(), DataType::Float64, t.clone()])
-                });
-                Signature::one_of(
-                    NUMERICS
-                        .iter()
-                        .map(|t| TypeSignature::Exact(vec![t.clone(), DataType::Float64]))
-                        .chain(with_tdigest_size)
-                        .collect(),
-                    Volatility::Immutable,
-                )
+                for num in NUMERICS {
+                    variants
+                        .push(TypeSignature::Exact(vec![num.clone(), DataType::Float64]));
+                    // Additionally accept an integer number of centroids for T-Digest
+                    for int in INTEGERS {
+                        variants.push(TypeSignature::Exact(vec![
+                            num.clone(),
+                            DataType::Float64,
+                            int.clone(),
+                        ]))
+                    }
+                }
+
+                Signature::one_of(variants, Volatility::Immutable)
             }
             AggregateFunction::ApproxPercentileContWithWeight => Signature::one_of(
                 // Accept any numeric value paired with a float64 percentile

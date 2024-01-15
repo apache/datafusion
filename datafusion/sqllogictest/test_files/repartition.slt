@@ -1,0 +1,73 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+##########
+# Tests for repartitioning
+##########
+
+# Set 4 partitions for deterministic output plans
+statement ok
+set datafusion.execution.target_partitions = 4;
+
+statement ok
+COPY  (VALUES (1, 2), (2, 5), (3, 2), (4, 5), (5, 0)) TO 'test_files/scratch/repartition/parquet_table/2.parquet'
+(FORMAT PARQUET, SINGLE_FILE_OUTPUT true);
+
+statement ok
+CREATE EXTERNAL TABLE parquet_table(column1 int, column2 int)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/repartition/parquet_table/';
+
+# enable round robin repartitioning
+statement ok
+set datafusion.optimizer.enable_round_robin_repartition = true;
+
+query TT
+EXPLAIN SELECT column1, SUM(column2) FROM parquet_table GROUP BY column1;
+----
+logical_plan
+Aggregate: groupBy=[[parquet_table.column1]], aggr=[[SUM(CAST(parquet_table.column2 AS Int64))]]
+--TableScan: parquet_table projection=[column1, column2]
+physical_plan
+AggregateExec: mode=FinalPartitioned, gby=[column1@0 as column1], aggr=[SUM(parquet_table.column2)]
+--CoalesceBatchesExec: target_batch_size=8192
+----RepartitionExec: partitioning=Hash([column1@0], 4), input_partitions=4
+------AggregateExec: mode=Partial, gby=[column1@0 as column1], aggr=[SUM(parquet_table.column2)]
+--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+----------ParquetExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/repartition/parquet_table/2.parquet]]}, projection=[column1, column2]
+
+# disable round robin repartitioning
+statement ok
+set datafusion.optimizer.enable_round_robin_repartition = false;
+
+query TT
+EXPLAIN SELECT column1, SUM(column2) FROM parquet_table GROUP BY column1;
+----
+logical_plan
+Aggregate: groupBy=[[parquet_table.column1]], aggr=[[SUM(CAST(parquet_table.column2 AS Int64))]]
+--TableScan: parquet_table projection=[column1, column2]
+physical_plan
+AggregateExec: mode=FinalPartitioned, gby=[column1@0 as column1], aggr=[SUM(parquet_table.column2)]
+--CoalesceBatchesExec: target_batch_size=8192
+----RepartitionExec: partitioning=Hash([column1@0], 4), input_partitions=1
+------AggregateExec: mode=Partial, gby=[column1@0 as column1], aggr=[SUM(parquet_table.column2)]
+--------ParquetExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/repartition/parquet_table/2.parquet]]}, projection=[column1, column2]
+
+
+# Cleanup
+statement ok
+DROP TABLE parquet_table;

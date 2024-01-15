@@ -212,7 +212,8 @@ message CreateExternalTableNode {
   bool if_not_exists = 7;
   string delimiter = 8;
   string definition = 9;
-  string file_compression_type = 10;
+  reserved 10; // was string file_compression_type
+  CompressionTypeVariant file_compression_type = 17;
   repeated LogicalExprNodeCollection order_exprs = 13;
   bool unbounded = 14;
   map<string, string> options = 11;
@@ -667,6 +668,7 @@ enum ScalarFunction {
   FindInSet = 127;
   ArraySort = 128;
   ArrayDistinct = 129;
+  ArrayResize = 130;
 }
 
 message ScalarFunctionNode {
@@ -1537,6 +1539,8 @@ message SymmetricHashJoinExecNode {
   StreamPartitionMode partition_mode = 6;
   bool null_equals_null = 7;
   JoinFilter filter = 8;
+  repeated PhysicalSortExprNode left_sort_exprs = 9;
+  repeated PhysicalSortExprNode right_sort_exprs = 10;
 }
 
 message InterleaveExecNode {

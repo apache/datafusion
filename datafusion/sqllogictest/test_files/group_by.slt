@@ -4285,6 +4285,436 @@ LIMIT 5
 1 TUR 2 2022-01-01T11:30:00 TRY 75
 1 TUR 4 2022-01-03T10:00:00 TRY 100
 
+# Create a table with timestamp data
+statement ok
+CREATE TABLE src_table (
+	t1 TIMESTAMP,
+	c2 INT,
+) AS VALUES
+('2020-12-10T00:00:00.00Z', 0),
+('2020-12-11T00:00:00.00Z', 1),
+('2020-12-12T00:00:00.00Z', 2),
+('2020-12-13T00:00:00.00Z', 3),
+('2020-12-14T00:00:00.00Z', 4),
+('2020-12-15T00:00:00.00Z', 5),
+('2020-12-16T00:00:00.00Z', 6),
+('2020-12-17T00:00:00.00Z', 7),
+('2020-12-18T00:00:00.00Z', 8),
+('2020-12-19T00:00:00.00Z', 9);
+
+# Use src_table to create a partitioned file
+query PI
+COPY (SELECT * FROM src_table)
+TO 'test_files/scratch/group_by/timestamp_table/0.csv'
+(FORMAT CSV, SINGLE_FILE_OUTPUT true);
+----
+10
+
+query PI
+COPY (SELECT * FROM src_table)
+TO 'test_files/scratch/group_by/timestamp_table/1.csv'
+(FORMAT CSV, SINGLE_FILE_OUTPUT true);
+----
+10
+
+query PI
+COPY (SELECT * FROM src_table)
+TO 'test_files/scratch/group_by/timestamp_table/2.csv'
+(FORMAT CSV, SINGLE_FILE_OUTPUT true);
+----
+10
+
+query PI
+COPY (SELECT * FROM src_table)
+TO 'test_files/scratch/group_by/timestamp_table/3.csv'
+(FORMAT CSV, SINGLE_FILE_OUTPUT true);
+----
+10
+
+# Create a table from the generated CSV files:
+statement ok
+CREATE EXTERNAL TABLE timestamp_table (
+	t1 TIMESTAMP,
+	c2 INT,
+)
+STORED AS CSV
+WITH HEADER ROW
+LOCATION 'test_files/scratch/group_by/timestamp_table';
+
+# Group By using date_trunc
+query PI rowsort
+SELECT date_trunc('week', t1) as week, sum(c2)
+FROM timestamp_table
+GROUP BY date_trunc('week', t1)
+----
+2020-12-07T00:00:00 24
+2020-12-14T00:00:00 156
+
+# GROUP BY using LIMIT
+query IP
+SELECT c2, MAX(t1)
+FROM timestamp_table
+GROUP BY c2
+ORDER BY MAX(t1) DESC
+LIMIT 4;
+----
+9 2020-12-19T00:00:00
+8 2020-12-18T00:00:00
+7 2020-12-17T00:00:00
+6 2020-12-16T00:00:00
+
+# Explain the GROUP BY with LIMIT to ensure the plan contains `lim=[4]`
+query TT
+EXPLAIN
+SELECT c2, MAX(t1)
+FROM timestamp_table
+GROUP BY c2
+ORDER BY MAX(t1) DESC
+LIMIT 4;
+----
+logical_plan
+Limit: skip=0, fetch=4
+--Sort: MAX(timestamp_table.t1) DESC NULLS FIRST, fetch=4
+----Aggregate: groupBy=[[timestamp_table.c2]], aggr=[[MAX(timestamp_table.t1)]]
+------TableScan: timestamp_table projection=[t1, c2]
+physical_plan
+GlobalLimitExec: skip=0, fetch=4
+--SortPreservingMergeExec: [MAX(timestamp_table.t1)@1 DESC], fetch=4
+----SortExec: TopK(fetch=4), expr=[MAX(timestamp_table.t1)@1 DESC]
+------AggregateExec: mode=FinalPartitioned, gby=[c2@0 as c2], aggr=[MAX(timestamp_table.t1)], lim=[4]
+--------CoalesceBatchesExec: target_batch_size=2
+----------RepartitionExec: partitioning=Hash([c2@0], 8), input_partitions=8
+------------AggregateExec: mode=Partial, gby=[c2@1 as c2], aggr=[MAX(timestamp_table.t1)], lim=[4]
+--------------RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=4
+----------------CsvExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/group_by/timestamp_table/0.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/group_by/timestamp_table/1.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/group_by/timestamp_table/2.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/group_by/timestamp_table/3.csv]]}, projection=[t1, c2], has_header=true
+
+# Clean up
+statement ok
+DROP TABLE src_table;
+
+statement ok
+DROP TABLE timestamp_table;
+
+### BEGIN Group By with Dictionary Variants ###
+#
+# The following tests use GROUP BY on tables with dictionary columns.
+# The same test is repeated using dictionaries with the key types:
+#
+# - Int8
+# - Int16
+# - Int32
+# - Int64
+# - UInt8
+# - UInt16
+# - UInt32
+# - UInt64
+
+# Table with an int column and Dict<Int8> column:
+statement ok
+CREATE TABLE int8_dict AS VALUES 
+(1, arrow_cast('A', 'Dictionary(Int8, Utf8)')),
+(2, arrow_cast('B', 'Dictionary(Int8, Utf8)')),
+(2, arrow_cast('A', 'Dictionary(Int8, Utf8)')),
+(4, arrow_cast('A', 'Dictionary(Int8, Utf8)')),
+(1, arrow_cast('C', 'Dictionary(Int8, Utf8)')),
+(1, arrow_cast('A', 'Dictionary(Int8, Utf8)'));
+
+# Group by the non-dict column
+query ?I rowsort
+SELECT column2, count(column1) FROM int8_dict GROUP BY column2;
+----
+A 4
+B 1
+C 1
+
+# Group by the value column with dict as aggregate
+query II rowsort
+SELECT column1, count(column2) FROM int8_dict GROUP BY column1;
+----
+1 3
+2 2
+4 1
+
+# Group by with dict as aggregate using distinct
+query II rowsort
+SELECT column1, count(distinct column2) FROM int8_dict GROUP BY column1;
+----
+1 2
+2 2
+4 1
+
+# Clean up
+statement ok
+DROP TABLE int8_dict;
+
+# Table with an int column and Dict<Int16> column:
+statement ok
+CREATE TABLE int16_dict AS VALUES 
+(1, arrow_cast('A', 'Dictionary(Int16, Utf8)')),
+(2, arrow_cast('B', 'Dictionary(Int16, Utf8)')),
+(2, arrow_cast('A', 'Dictionary(Int16, Utf8)')),
+(4, arrow_cast('A', 'Dictionary(Int16, Utf8)')),
+(1, arrow_cast('C', 'Dictionary(Int16, Utf8)')),
+(1, arrow_cast('A', 'Dictionary(Int16, Utf8)'));
+
+# Group by the non-dict column
+query ?I rowsort
+SELECT column2, count(column1) FROM int16_dict GROUP BY column2;
+----
+A 4
+B 1
+C 1
+
+# Group by the value column with dict as aggregate
+query II rowsort
+SELECT column1, count(column2) FROM int16_dict GROUP BY column1;
+----
+1 3
+2 2
+4 1
+
+# Group by with dict as aggregate using distinct
+query II rowsort
+SELECT column1, count(distinct column2) FROM int16_dict GROUP BY column1;
+----
+1 2
+2 2
+4 1
+
+# Clean up
+statement ok
+DROP TABLE int16_dict;
+
+# Table with an int column and Dict<Int32> column:
+statement ok
+CREATE TABLE int32_dict AS VALUES 
+(1, arrow_cast('A', 'Dictionary(Int32, Utf8)')),
+(2, arrow_cast('B', 'Dictionary(Int32, Utf8)')),
+(2, arrow_cast('A', 'Dictionary(Int32, Utf8)')),
+(4, arrow_cast('A', 'Dictionary(Int32, Utf8)')),
+(1, arrow_cast('C', 'Dictionary(Int32, Utf8)')),
+(1, arrow_cast('A', 'Dictionary(Int32, Utf8)'));
+
+# Group by the non-dict column
+query ?I rowsort
+SELECT column2, count(column1) FROM int32_dict GROUP BY column2;
+----
+A 4
+B 1
+C 1
+
+# Group by the value column with dict as aggregate
+query II rowsort
+SELECT column1, count(column2) FROM int32_dict GROUP BY column1;
+----
+1 3
+2 2
+4 1
+
+# Group by with dict as aggregate using distinct
+query II rowsort
+SELECT column1, count(distinct column2) FROM int32_dict GROUP BY column1;
+----
+1 2
+2 2
+4 1
+
+# Clean up
+statement ok
+DROP TABLE int32_dict;
+
+# Table with an int column and Dict<Int64> column:
+statement ok
+CREATE TABLE int64_dict AS VALUES 
+(1, arrow_cast('A', 'Dictionary(Int64, Utf8)')),
+(2, arrow_cast('B', 'Dictionary(Int64, Utf8)')),
+(2, arrow_cast('A', 'Dictionary(Int64, Utf8)')),
+(4, arrow_cast('A', 'Dictionary(Int64, Utf8)')),
+(1, arrow_cast('C', 'Dictionary(Int64, Utf8)')),
+(1, arrow_cast('A', 'Dictionary(Int64, Utf8)'));
+
+# Group by the non-dict column
+query ?I rowsort
+SELECT column2, count(column1) FROM int64_dict GROUP BY column2;
+----
+A 4
+B 1
+C 1
+
+# Group by the value column with dict as aggregate
+query II rowsort
+SELECT column1, count(column2) FROM int64_dict GROUP BY column1;
+----
+1 3
+2 2
+4 1
+
+# Group by with dict as aggregate using distinct
+query II rowsort
+SELECT column1, count(distinct column2) FROM int64_dict GROUP BY column1;
+----
+1 2
+2 2
+4 1
+
+# Clean up
+statement ok
+DROP TABLE int64_dict;
+
+# Table with an int column and Dict<UInt8> column:
+statement ok
+CREATE TABLE uint8_dict AS VALUES 
+(1, arrow_cast('A', 'Dictionary(UInt8, Utf8)')),
+(2, arrow_cast('B', 'Dictionary(UInt8, Utf8)')),
+(2, arrow_cast('A', 'Dictionary(UInt8, Utf8)')),
+(4, arrow_cast('A', 'Dictionary(UInt8, Utf8)')),
+(1, arrow_cast('C', 'Dictionary(UInt8, Utf8)')),
+(1, arrow_cast('A', 'Dictionary(UInt8, Utf8)'));
+
+# Group by the non-dict column
+query ?I rowsort
+SELECT column2, count(column1) FROM uint8_dict GROUP BY column2;
+----
+A 4
+B 1
+C 1
+
+# Group by the value column with dict as aggregate
+query II rowsort
+SELECT column1, count(column2) FROM uint8_dict GROUP BY column1;
+----
+1 3
+2 2
+4 1
+
+# Group by with dict as aggregate using distinct
+query II rowsort
+SELECT column1, count(distinct column2) FROM uint8_dict GROUP BY column1;
+----
+1 2
+2 2
+4 1
+
+# Clean up
+statement ok
+DROP TABLE uint8_dict;
+
+# Table with an int column and Dict<UInt16> column:
+statement ok
+CREATE TABLE uint16_dict AS VALUES 
+(1, arrow_cast('A', 'Dictionary(UInt16, Utf8)')),
+(2, arrow_cast('B', 'Dictionary(UInt16, Utf8)')),
+(2, arrow_cast('A', 'Dictionary(UInt16, Utf8)')),
+(4, arrow_cast('A', 'Dictionary(UInt16, Utf8)')),
+(1, arrow_cast('C', 'Dictionary(UInt16, Utf8)')),
+(1, arrow_cast('A', 'Dictionary(UInt16, Utf8)'));
+
+# Group by the non-dict column
+query ?I rowsort
+SELECT column2, count(column1) FROM uint16_dict GROUP BY column2;
+----
+A 4
+B 1
+C 1
+
+# Group by the value column with dict as aggregate
+query II rowsort
+SELECT column1, count(column2) FROM uint16_dict GROUP BY column1;
+----
+1 3
+2 2
+4 1
+
+# Group by with dict as aggregate using distinct
+query II rowsort
+SELECT column1, count(distinct column2) FROM uint16_dict GROUP BY column1;
+----
+1 2
+2 2
+4 1
+
+# Clean up
+statement ok
+DROP TABLE uint16_dict;
+
+# Table with an int column and Dict<UInt32> column:
+statement ok
+CREATE TABLE uint32_dict AS VALUES 
+(1, arrow_cast('A', 'Dictionary(UInt32, Utf8)')),
+(2, arrow_cast('B', 'Dictionary(UInt32, Utf8)')),
+(2, arrow_cast('A', 'Dictionary(UInt32, Utf8)')),
+(4, arrow_cast('A', 'Dictionary(UInt32, Utf8)')),
+(1, arrow_cast('C', 'Dictionary(UInt32, Utf8)')),
+(1, arrow_cast('A', 'Dictionary(UInt32, Utf8)'));
+
+# Group by the non-dict column
+query ?I rowsort
+SELECT column2, count(column1) FROM uint32_dict GROUP BY column2;
+----
+A 4
+B 1
+C 1
+
+# Group by the value column with dict as aggregate
+query II rowsort
+SELECT column1, count(column2) FROM uint32_dict GROUP BY column1;
+----
+1 3
+2 2
+4 1
+
+# Group by with dict as aggregate using distinct
+query II rowsort
+SELECT column1, count(distinct column2) FROM uint32_dict GROUP BY column1;
+----
+1 2
+2 2
+4 1
+
+# Clean up
+statement ok
+DROP TABLE uint32_dict;
+
+# Table with an int column and Dict<UInt64> column:
+statement ok
+CREATE TABLE uint64_dict AS VALUES 
+(1, arrow_cast('A', 'Dictionary(UInt64, Utf8)')),
+(2, arrow_cast('B', 'Dictionary(UInt64, Utf8)')),
+(2, arrow_cast('A', 'Dictionary(UInt64, Utf8)')),
+(4, arrow_cast('A', 'Dictionary(UInt64, Utf8)')),
+(1, arrow_cast('C', 'Dictionary(UInt64, Utf8)')),
+(1, arrow_cast('A', 'Dictionary(UInt64, Utf8)'));
+
+# Group by the non-dict column
+query ?I rowsort
+SELECT column2, count(column1) FROM uint64_dict GROUP BY column2;
+----
+A 4
+B 1
+C 1
+
+# Group by the value column with dict as aggregate
+query II rowsort
+SELECT column1, count(column2) FROM uint64_dict GROUP BY column1;
+----
+1 3
+2 2
+4 1
+
+# Group by with dict as aggregate using distinct
+query II rowsort
+SELECT column1, count(distinct column2) FROM uint64_dict GROUP BY column1;
+----
+1 2
+2 2
+4 1
+
+# Clean up
+statement ok
+DROP TABLE uint64_dict;
+
+### END Group By with Dictionary Variants ###
+
 statement ok
 set datafusion.execution.target_partitions = 1;
 

@@ -36,7 +36,7 @@ use arrow::array::ArrayRef;
 use arrow::datatypes::{Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::stats::Precision;
-use datafusion_common::{not_impl_err, plan_err, DataFusionError, Result};
+use datafusion_common::{internal_err, not_impl_err, plan_err, DataFusionError, Result};
 use datafusion_execution::TaskContext;
 use datafusion_expr::Accumulator;
 use datafusion_physical_expr::{
@@ -320,6 +320,11 @@ impl AggregateExec {
         input_schema: SchemaRef,
         schema: SchemaRef,
     ) -> Result<Self> {
+        // Make sure arguments are consistent in size
+        if aggr_expr.len() != filter_expr.len() {
+            return internal_err!("Inconsistent aggregate expr: {:?} and filter expr: {:?} for AggregateExec, their size should match", aggr_expr, filter_expr);
+        }
+
         let input_eq_properties = input.equivalence_properties();
         // Get GROUP BY expressions:
         let groupby_exprs = group_by.input_exprs();
@@ -1524,7 +1529,7 @@ mod tests {
         ))];
 
         let task_ctx = if spill {
-            new_spill_ctx(2, 1500)
+            new_spill_ctx(2, 1600)
         } else {
             Arc::new(TaskContext::default())
         };
@@ -1780,7 +1785,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore]
     async fn aggregate_source_with_yielding_with_spill() -> Result<()> {
         let input: Arc<dyn ExecutionPlan> =
             Arc::new(TestYieldingExec { yield_first: true });
@@ -1842,11 +1846,12 @@ mod tests {
             (1, groups_some.clone(), aggregates_v1),
             (2, groups_some, aggregates_v2),
         ] {
+            let n_aggr = aggregates.len();
             let partial_aggregate = Arc::new(AggregateExec::try_new(
                 AggregateMode::Partial,
                 groups,
                 aggregates,
-                vec![None; 3],
+                vec![None; n_aggr],
                 input.clone(),
                 input_schema.clone(),
             )?);
@@ -1990,7 +1995,7 @@ mod tests {
         spill: bool,
     ) -> Result<()> {
         let task_ctx = if spill {
-            new_spill_ctx(2, 2886)
+            new_spill_ctx(2, 3200)
         } else {
             Arc::new(TaskContext::default())
         };

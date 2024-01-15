@@ -903,17 +903,35 @@ fn roundtrip_sym_hash_join() -> Result<()> {
             StreamJoinPartitionMode::Partitioned,
             StreamJoinPartitionMode::SinglePartition,
         ] {
-            roundtrip_test(Arc::new(
-                datafusion::physical_plan::joins::SymmetricHashJoinExec::try_new(
-                    Arc::new(EmptyExec::new(schema_left.clone())),
-                    Arc::new(EmptyExec::new(schema_right.clone())),
-                    on.clone(),
+            for left_order in &[
+                None,
+                Some(vec![PhysicalSortExpr {
+                    expr: Arc::new(Column::new("col", schema_left.index_of("col")?)),
+                    options: Default::default(),
+                }]),
+            ] {
+                for right_order in &[
                     None,
-                    join_type,
-                    false,
-                    *partition_mode,
-                )?,
-            ))?;
+                    Some(vec![PhysicalSortExpr {
+                        expr: Arc::new(Column::new("col", schema_right.index_of("col")?)),
+                        options: Default::default(),
+                    }]),
+                ] {
+                    roundtrip_test(Arc::new(
+                        datafusion::physical_plan::joins::SymmetricHashJoinExec::try_new(
+                            Arc::new(EmptyExec::new(schema_left.clone())),
+                            Arc::new(EmptyExec::new(schema_right.clone())),
+                            on.clone(),
+                            None,
+                            join_type,
+                            false,
+                            left_order.clone(),
+                            right_order.clone(),
+                            *partition_mode,
+                        )?,
+                    ))?;
+                }
+            }
         }
     }
     Ok(())

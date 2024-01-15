@@ -69,7 +69,6 @@ Optional features:
 - `backtrace`: include backtrace information in error messages
 - `pyarrow`: conversions between PyArrow and DataFusion types
 - `serde`: enable arrow-schema's `serde` feature
-- `simd`: enable arrow-rs's manual `SIMD` kernels (requires Rust `nightly`)
 
 [apache avro]: https://avro.apache.org/
 [apache parquet]: https://parquet.apache.org/
