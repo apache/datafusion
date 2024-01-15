@@ -21,7 +21,6 @@ use std::path::Path;
 use std::str::FromStr;
 use std::sync::{Arc, OnceLock};
 
-use datafusion::error::DataFusionError;
 use datafusion::execution::context::SessionConfig;
 use datafusion::execution::memory_pool::{FairSpillPool, GreedyMemoryPool};
 use datafusion::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
@@ -37,6 +36,7 @@ use datafusion_cli::{
 };
 
 use clap::Parser;
+use datafusion_common::DataFusionError;
 use mimalloc::MiMalloc;
 
 #[global_allocator]
@@ -334,6 +334,7 @@ fn extract_memory_pool_size(size: &str) -> Result<usize, String> {
 mod tests {
     use super::*;
     use datafusion::assert_batches_eq;
+    use datafusion_common::DataFusionError;
 
     fn assert_conversion(input: &str, expected: Result<usize, String>) {
         let result = extract_memory_pool_size(input);
