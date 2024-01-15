@@ -583,7 +583,7 @@ drop table aggregate_test_100;
 # Sort with lots of repetition values
 # Test sorting a parquet file with 2 million records that has lots of values that are repeated
 statement ok
-CREATE EXTERNAL TABLE repeat_much STORED AS PARQUET LOCATION '../../parquet-testing/data/repeat_much.snappy.parquet';
+CREATE EXTERNAL TABLE repeat_much STORED AS PARQUET LOCATION 'data/repeat_much.snappy.parquet';
 
 query I
 SELECT a FROM repeat_much ORDER BY a LIMIT 20;
