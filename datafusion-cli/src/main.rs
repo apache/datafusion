@@ -18,6 +18,7 @@
 use std::collections::HashMap;
 use std::env;
 use std::path::Path;
+use std::process::ExitCode;
 use std::str::FromStr;
 use std::sync::{Arc, OnceLock};
 
@@ -138,7 +139,18 @@ struct Args {
 }
 
 #[tokio::main]
-pub async fn main() -> Result<()> {
+/// Calls [`main_inner`], then handles printing errors and returning the correct exit code
+pub async fn main() -> ExitCode {
+    if let Err(e) = main_inner().await {
+        println!("Error: {e}");
+        return ExitCode::FAILURE;
+    }
+
+    ExitCode::SUCCESS
+}
+
+/// Main CLI entrypoint
+async fn main_inner() -> Result<()> {
     env_logger::init();
     let args = Args::parse();
 
