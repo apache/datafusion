@@ -185,9 +185,10 @@ impl<'a> Parser<'a> {
         self.expect_token(Token::Comma)?;
         let data_type = self.parse_next_type()?;
         self.expect_token(Token::RParen)?;
-        Ok(DataType::FixedSizeList(Arc::new(Field::new(
-            "item", data_type, true,
-        )), length))
+        Ok(DataType::FixedSizeList(
+            Arc::new(Field::new("item", data_type, true)),
+            length,
+        ))
     }
 
     /// Parses the next timeunit
