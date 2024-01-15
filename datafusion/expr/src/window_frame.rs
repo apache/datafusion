@@ -201,7 +201,6 @@ impl WindowFrame {
 ///
 /// As an example following window frame is causal where window frame
 /// range refers to past and current values.
-///
 ///                +--------------+
 ///      Future    |              |
 ///         |      |              |
@@ -217,7 +216,6 @@ impl WindowFrame {
 ///
 /// Similarly, following window frame is causal also
 /// where window frame refers past values
-///
 ///                +--------------+
 ///      Future    |              |
 ///         |      |              |
@@ -232,7 +230,6 @@ impl WindowFrame {
 ///                +--------------+
 ///
 /// However, following is not where window frame refers values from future.
-///
 ///                +--------------+
 ///      Future    |              |
 ///         |      |              |
