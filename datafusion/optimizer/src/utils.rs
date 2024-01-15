@@ -104,8 +104,7 @@ pub(crate) fn is_volatile_expression(e: &Expr) -> Result<bool> {
         } else {
             VisitRecursion::Continue
         })
-    })
-    .unwrap();
+    })?;
     Ok(is_volatile_expr)
 }
 
