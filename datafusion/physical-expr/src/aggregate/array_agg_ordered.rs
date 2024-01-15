@@ -40,29 +40,25 @@ use datafusion_expr::Accumulator;
 
 use itertools::izip;
 
-/// Expression for a ARRAY_AGG(ORDER BY) aggregation.
-/// When aggregation works in multiple partitions
-/// aggregations are split into multiple partitions,
-/// then their results are merged. This aggregator
-/// is a version of ARRAY_AGG that can support producing
-/// intermediate aggregation (with necessary side information)
-/// and that can merge aggregations from multiple partitions.
+/// Expression for a `ARRAY_AGG(... ORDER BY ..., ...)` aggregation. In a multi
+/// partition setting, partial aggregations are computed for every partition,
+/// and then their results are merged.
 #[derive(Debug)]
 pub struct OrderSensitiveArrayAgg {
     /// Column name
     name: String,
-    /// The DataType for the input expression
+    /// The `DataType` for the input expression
     input_data_type: DataType,
     /// The input expression
     expr: Arc<dyn PhysicalExpr>,
-    /// If the input expression can have NULLs
+    /// If the input expression can have `NULL`s
     nullable: bool,
     /// Ordering data types
     order_by_data_types: Vec<DataType>,
     /// Ordering requirement
     ordering_req: LexOrdering,
-    /// direction
-    from_start: bool,
+    /// Whether the aggregation is running in reverse
+    reverse: bool,
 }
 
 impl OrderSensitiveArrayAgg {
@@ -82,7 +78,7 @@ impl OrderSensitiveArrayAgg {
             nullable,
             order_by_data_types,
             ordering_req,
-            from_start: true,
+            reverse: false,
         }
     }
 }
@@ -102,12 +98,13 @@ impl AggregateExpr for OrderSensitiveArrayAgg {
     }
 
     fn create_accumulator(&self) -> Result<Box<dyn Accumulator>> {
-        Ok(Box::new(OrderSensitiveArrayAggAccumulator::try_new(
+        OrderSensitiveArrayAggAccumulator::try_new(
             &self.input_data_type,
             &self.order_by_data_types,
             self.ordering_req.clone(),
-            self.from_start,
-        )?))
+            self.reverse,
+        )
+        .map(|acc| Box::new(acc) as _)
     }
 
     fn state_fields(&self) -> Result<Vec<Field>> {
@@ -130,11 +127,7 @@ impl AggregateExpr for OrderSensitiveArrayAgg {
     }
 
     fn order_bys(&self) -> Option<&[PhysicalSortExpr]> {
-        if self.ordering_req.is_empty() {
-            None
-        } else {
-            Some(&self.ordering_req)
-        }
+        (!self.ordering_req.is_empty()).then_some(&self.ordering_req)
     }
 
     fn name(&self) -> &str {
@@ -148,10 +141,10 @@ impl AggregateExpr for OrderSensitiveArrayAgg {
             expr: self.expr.clone(),
             nullable: self.nullable,
             order_by_data_types: self.order_by_data_types.clone(),
-            // reverse requirement
+            // Reverse requirement:
             ordering_req: reverse_order_bys(&self.ordering_req),
-            from_start: !self.from_start,
-        }) as _)
+            reverse: !self.reverse,
+        }))
     }
 }
 
@@ -171,21 +164,20 @@ impl PartialEq<dyn Any> for OrderSensitiveArrayAgg {
 
 #[derive(Debug)]
 pub(crate) struct OrderSensitiveArrayAggAccumulator {
-    // `values` stores entries in the ARRAY_AGG result.
+    /// Stores entries in the `ARRAY_AGG` result.
     values: Vec<ScalarValue>,
-    // `ordering_values` stores values of ordering requirement expression
-    // corresponding to each value in the ARRAY_AGG.
-    // For each `ScalarValue` inside `values`, there will be a corresponding
-    // `Vec<ScalarValue>` inside `ordering_values` which stores it ordering.
-    // This information is used during merging results of the different partitions.
-    // For detailed information how merging is done see [`merge_ordered_arrays`]
+    /// Stores values of ordering requirement expressions corresponding to each
+    /// entry in `values`. This information is used when merging results from
+    /// different partitions. For detailed information how merging is done, see
+    /// [`merge_ordered_arrays`].
     ordering_values: Vec<Vec<ScalarValue>>,
-    // `datatypes` stores, datatype of expression inside ARRAY_AGG and ordering requirement expressions.
+    /// Stores datatypes of expressions inside values and ordering requirement
+    /// expressions.
     datatypes: Vec<DataType>,
-    // Stores ordering requirement of the Accumulator
+    /// Stores the ordering requirement of the `Accumulator`.
     ordering_req: LexOrdering,
-    // Whether array direction is from start or not.
-    from_start: bool,
+    /// Whether the aggregation is running in reverse.
+    reverse: bool,
 }
 
 impl OrderSensitiveArrayAggAccumulator {
@@ -195,7 +187,7 @@ impl OrderSensitiveArrayAggAccumulator {
         datatype: &DataType,
         ordering_dtypes: &[DataType],
         ordering_req: LexOrdering,
-        from_start: bool,
+        reverse: bool,
     ) -> Result<Self> {
         let mut datatypes = vec![datatype.clone()];
         datatypes.extend(ordering_dtypes.iter().cloned());
@@ -204,7 +196,7 @@ impl OrderSensitiveArrayAggAccumulator {
             ordering_values: vec![],
             datatypes,
             ordering_req,
-            from_start,
+            reverse,
         })
     }
 }
@@ -229,65 +221,63 @@ impl Accumulator for OrderSensitiveArrayAggAccumulator {
         if states.is_empty() {
             return Ok(());
         }
-        // First entry in the state is the aggregation result.
-        let array_agg_values = &states[0];
-        // 2nd entry stores values received for ordering requirement columns, for each aggregation value inside ARRAY_AGG list.
-        // For each `StructArray` inside ARRAY_AGG list, we will receive an `Array` that stores
-        // values received from its ordering requirement expression. (This information is necessary for during merging).
-        let agg_orderings = &states[1];
-
-        if let Some(agg_orderings) = agg_orderings.as_list_opt::<i32>() {
-            // Stores ARRAY_AGG results coming from each partition
-            let mut partition_values: Vec<&[ScalarValue]> = vec![];
-            // Stores ordering requirement expression results coming from each partition
-            let mut partition_ordering_values: Vec<&[Vec<ScalarValue>]> = vec![];
-
-            // Existing values should be merged also.
-            partition_values.push(&self.values);
-            partition_ordering_values.push(&self.ordering_values);
-
-            let array_agg_res =
-                ScalarValue::convert_array_to_scalar_vec(array_agg_values)?;
-
-            for v in array_agg_res.iter() {
-                partition_values.push(v);
-            }
-
-            let orderings = ScalarValue::convert_array_to_scalar_vec(agg_orderings)?;
-
-            let ordering_values = orderings.into_iter().map(|partition_ordering_rows| {
-                // Extract value from struct to ordering_rows for each group/partition
-                let ordering_value = partition_ordering_rows.into_iter().map(|ordering_row| {
-                    if let ScalarValue::Struct(Some(ordering_columns_per_row), _) = ordering_row {
-                        Ok(ordering_columns_per_row)
-                    } else {
-                        exec_err!(
-                                "Expects to receive ScalarValue::Struct(Some(..), _) but got:{:?}",
-                                ordering_row.data_type()
-                            )
-                    }
-                }).collect::<Result<Vec<_>>>()?;
-                Ok(ordering_value)
-            }).collect::<Result<Vec<_>>>()?;
-            for ordering_values in ordering_values.iter() {
-                partition_ordering_values.push(ordering_values);
-            }
-
-            let sort_options = self
-                .ordering_req
-                .iter()
-                .map(|sort_expr| sort_expr.options)
-                .collect::<Vec<_>>();
-            let (new_values, new_orderings) = merge_ordered_arrays(
-                &partition_values,
-                &partition_ordering_values,
-                &sort_options,
-            )?;
-            self.values = new_values;
-            self.ordering_values = new_orderings;
-        } else {
+        // First entry in the state is the aggregation result. Second entry
+        // stores values received for ordering requirement columns for each
+        // aggregation value inside `ARRAY_AGG` list. For each `StructArray`
+        // inside `ARRAY_AGG` list, we will receive an `Array` that stores values
+        // received from its ordering requirement expression. (This information
+        // is necessary for during merging).
+        let [array_agg_values, agg_orderings, ..] = &states else {
+            return exec_err!("State should have two elements");
+        };
+        let Some(agg_orderings) = agg_orderings.as_list_opt::<i32>() else {
             return exec_err!("Expects to receive a list array");
+        };
+
+        // Stores ARRAY_AGG results coming from each partition
+        let mut partition_values = vec![];
+        // Stores ordering requirement expression results coming from each partition
+        let mut partition_ordering_values = vec![];
+
+        // Existing values should be merged also.
+        partition_values.push(self.values.as_slice());
+        partition_ordering_values.push(self.ordering_values.as_slice());
+
+        let array_agg_res = ScalarValue::convert_array_to_scalar_vec(array_agg_values)?;
+
+        for v in array_agg_res.iter() {
+            partition_values.push(v);
         }
+
+        let orderings = ScalarValue::convert_array_to_scalar_vec(agg_orderings)?;
+
+        let ordering_values = orderings.into_iter().map(|partition_ordering_rows| {
+            // Extract value from struct to ordering_rows for each group/partition
+            partition_ordering_rows.into_iter().map(|ordering_row| {
+                if let ScalarValue::Struct(Some(ordering_columns_per_row), _) = ordering_row {
+                    Ok(ordering_columns_per_row)
+                } else {
+                    exec_err!(
+                        "Expects to receive ScalarValue::Struct(Some(..), _) but got: {:?}",
+                        ordering_row.data_type()
+                    )
+                }
+            }).collect::<Result<Vec<_>>>()
+        }).collect::<Result<Vec<_>>>()?;
+        for ordering_values in ordering_values.iter() {
+            partition_ordering_values.push(ordering_values);
+        }
+
+        let sort_options = self
+            .ordering_req
+            .iter()
+            .map(|sort_expr| sort_expr.options)
+            .collect::<Vec<_>>();
+        (self.values, self.ordering_values) = merge_ordered_arrays(
+            &partition_values,
+            &partition_ordering_values,
+            &sort_options,
+        )?;
         Ok(())
     }
 
@@ -298,15 +288,14 @@ impl Accumulator for OrderSensitiveArrayAggAccumulator {
     }
 
     fn evaluate(&self) -> Result<ScalarValue> {
-        if self.from_start {
-            let arr = ScalarValue::new_list(&self.values, &self.datatypes[0]);
-            Ok(ScalarValue::List(arr))
-        } else {
+        let array = if self.reverse {
             let mut reverse_values = self.values.clone();
             reverse_values.reverse();
-            let arr = ScalarValue::new_list(&reverse_values, &self.datatypes[0]);
-            Ok(ScalarValue::List(arr))
-        }
+            ScalarValue::new_list(&reverse_values, &self.datatypes[0])
+        } else {
+            ScalarValue::new_list(&self.values, &self.datatypes[0])
+        };
+        Ok(ScalarValue::List(array))
     }
 
     fn size(&self) -> usize {
@@ -337,7 +326,7 @@ impl Accumulator for OrderSensitiveArrayAggAccumulator {
 impl OrderSensitiveArrayAggAccumulator {
     fn evaluate_orderings(&self) -> Result<ScalarValue> {
         let fields = ordering_fields(&self.ordering_req, &self.datatypes[1..]);
-        let struct_field = Fields::from(fields.clone());
+        let struct_field = Fields::from(fields);
 
         let orderings: Vec<ScalarValue> = self
             .ordering_values
@@ -346,7 +335,7 @@ impl OrderSensitiveArrayAggAccumulator {
                 ScalarValue::Struct(Some(ordering.clone()), struct_field.clone())
             })
             .collect();
-        let struct_type = DataType::Struct(Fields::from(fields));
+        let struct_type = DataType::Struct(struct_field);
 
         // Wrap in List, so we have the same data structure ListArray(StructArray..) for group by cases
         let arr = ScalarValue::new_list(&orderings, &struct_type);
@@ -354,20 +343,19 @@ impl OrderSensitiveArrayAggAccumulator {
     }
 }
 
-/// This is a wrapper struct to be able to correctly merge ARRAY_AGG
-/// data from multiple partitions using `BinaryHeap`.
-/// When used inside `BinaryHeap` this struct returns smallest `CustomElement`,
-/// where smallest is determined by `ordering` values (`Vec<ScalarValue>`)
-/// according to `sort_options`
+/// This is a wrapper struct to be able to correctly merge `ARRAY_AGG` data from
+/// multiple partitions using `BinaryHeap`. When used inside `BinaryHeap`, this
+/// struct returns smallest `CustomElement`, where smallest is determined by
+/// `ordering` values (`Vec<ScalarValue>`) according to `sort_options`.
 #[derive(Debug, PartialEq, Eq)]
 struct CustomElement<'a> {
-    // Stores from which partition entry is received
+    /// Stores the partition this entry came from
     branch_idx: usize,
-    // values to be merged
+    /// Values to merge
     value: ScalarValue,
-    // according to `ordering` values, comparisons will be done.
+    // Comparison "key"
     ordering: Vec<ScalarValue>,
-    // `sort_options` defines, desired ordering by the user
+    /// Options defining the ordering semantics
     sort_options: &'a [SortOptions],
 }
 
@@ -453,13 +441,13 @@ pub(crate) fn merge_ordered_arrays(
     sort_options: &[SortOptions],
 ) -> Result<(Vec<ScalarValue>, Vec<Vec<ScalarValue>>)> {
     // Keep track the most recent data of each branch, in binary heap data structure.
-    let mut heap: BinaryHeap<CustomElement> = BinaryHeap::new();
+    let mut heap = BinaryHeap::<CustomElement>::new();
 
-    if !(values.len() == ordering_values.len()
-        && values
+    if values.len() != ordering_values.len()
+        || values
             .iter()
-            .zip(ordering_values.iter())
-            .all(|(vals, ordering_vals)| vals.len() == ordering_vals.len()))
+            .zip(ordering_values)
+            .any(|(vals, ordering_vals)| vals.len() != ordering_vals.len())
     {
         return exec_err!(
             "Expects values arguments and/or ordering_values arguments to have same size"
@@ -476,8 +464,8 @@ pub(crate) fn merge_ordered_arrays(
     let mut merged_orderings = vec![];
     // Continue iterating the loop until consuming data of all branches.
     loop {
-        let min_elem = if let Some(min_elem) = heap.pop() {
-            min_elem
+        let minimum = if let Some(minimum) = heap.pop() {
+            minimum
         } else {
             // Heap is empty, fill it with the next entries from each branch.
             for (idx, end_idx, ordering, branch_index) in izip!(
@@ -486,43 +474,45 @@ pub(crate) fn merge_ordered_arrays(
                 ordering_values.iter(),
                 0..n_branch
             ) {
-                // We consumed this branch, skip it
-                if idx == end_idx {
-                    continue;
+                // If we consumed this branch, skip it.
+                if idx != end_idx {
+                    // Push the next element to the heap:
+                    heap.push(CustomElement::new(
+                        branch_index,
+                        values[branch_index][*idx].clone(),
+                        ordering[*idx].to_vec(),
+                        sort_options,
+                    ));
                 }
-
-                // Push the next element to the heap.
-                let elem = CustomElement::new(
-                    branch_index,
-                    values[branch_index][*idx].clone(),
-                    ordering[*idx].to_vec(),
-                    sort_options,
-                );
-                heap.push(elem);
             }
-            // Now we have filled the heap, get the largest entry (this will be the next element in merge)
-            if let Some(min_elem) = heap.pop() {
-                min_elem
+            // Now we have filled the heap, get the largest entry (this will be
+            // the next element in merge).
+            if let Some(minimum) = heap.pop() {
+                minimum
             } else {
-                // Heap is empty, this means that all indices are same with end_indices. e.g
-                // We have consumed all of the branches. Merging is completed
-                // Exit from the loop
+                // Heap is empty, this means that all indices are same with
+                // `end_indices`. We have consumed all of the branches, merge
+                // is completed, exit from the loop:
                 break;
             }
         };
-        let branch_idx = min_elem.branch_idx;
+        let branch_idx = minimum.branch_idx;
         // Increment the index of merged branch,
         indices[branch_idx] += 1;
         let row_idx = indices[branch_idx];
-        merged_values.push(min_elem.value.clone());
-        merged_orderings.push(min_elem.ordering.clone());
+        merged_values.push(minimum.value);
+        merged_orderings.push(minimum.ordering);
         if row_idx < end_indices[branch_idx] {
-            // Push next entry in the most recently consumed branch to the heap
-            // If there is an available entry
+            // If there is an available entry, push next entry in the most
+            // recently consumed branch to the heap.
             let value = values[branch_idx][row_idx].clone();
             let ordering_row = ordering_values[branch_idx][row_idx].to_vec();
-            let elem = CustomElement::new(branch_idx, value, ordering_row, sort_options);
-            heap.push(elem);
+            heap.push(CustomElement::new(
+                branch_idx,
+                value,
+                ordering_row,
+                sort_options,
+            ));
         }
     }
 

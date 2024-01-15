@@ -160,18 +160,17 @@ impl PartialEq<dyn Any> for NthValueAgg {
 #[derive(Debug)]
 pub(crate) struct NthValueAccumulator {
     n: i64,
-    // `values` stores entries in the NTH_VALUE result.
+    /// Stores entries in the `NTH_VALUE` result.
     values: VecDeque<ScalarValue>,
-    // `ordering_values` stores values of ordering requirement expression
-    // corresponding to each value in the NTH_VALUE.
-    // For each `ScalarValue` inside `values`, there will be a corresponding
-    // `Vec<ScalarValue>` inside `ordering_values` which stores its ordering.
-    // This information is used during merging results of the different partitions.
-    // For detailed information how merging is done see [`merge_ordered_arrays`]
+    /// Stores values of ordering requirement expressions corresponding to each
+    /// entry in `values`. This information is used when merging results from
+    /// different partitions. For detailed information how merging is done, see
+    /// [`merge_ordered_arrays`].
     ordering_values: VecDeque<Vec<ScalarValue>>,
-    // Stores datatype of the expression inside NTH_VALUE and ordering requirement expressions.
+    /// Stores datatypes of expressions inside values and ordering requirement
+    /// expressions.
     datatypes: Vec<DataType>,
-    // Stores ordering requirement of the Accumulator
+    /// Stores the ordering requirement of the `Accumulator`.
     ordering_req: LexOrdering,
 }
 
