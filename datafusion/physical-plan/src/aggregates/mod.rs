@@ -904,9 +904,6 @@ fn get_aggregate_exprs_requirement(
         let reverse_aggr_req =
             PhysicalSortRequirement::from_sort_exprs(&reverse_aggr_req);
 
-        // Get absolutely necessary requirement for the aggregator.
-        let aggr_hard_req = get_aggregate_expr_req(aggr_expr, group_by, agg_mode);
-        let reverse_aggr_hard_req = reverse_order_bys(&aggr_hard_req);
         if let Some(first_value) = aggr_expr.as_any().downcast_ref::<FirstValue>() {
             let mut first_value = first_value.clone();
             if eq_properties.ordering_satisfy_requirement(&concat_slices(
@@ -955,26 +952,26 @@ fn get_aggregate_exprs_requirement(
             }
             continue;
         }
-        if aggr_hard_req.is_empty() {
-            continue;
-        }
-        if eq_properties.ordering_satisfy(&aggr_hard_req) {
-            if let Some(finer_ordering) =
-                finer_ordering(&requirement, aggr_expr, group_by, eq_properties, agg_mode)
-            {
+        if let Some(finer_ordering) =
+            finer_ordering(&requirement, aggr_expr, group_by, eq_properties, agg_mode)
+        {
+            if eq_properties.ordering_satisfy(&finer_ordering) {
+                // Requirement is satisfied by existing ordering
                 requirement = finer_ordering;
                 continue;
             }
         }
         if let Some(reverse_aggr_expr) = aggr_expr.reverse_expr() {
-            if eq_properties.ordering_satisfy(&reverse_aggr_hard_req) {
-                if let Some(finer_ordering) = finer_ordering(
-                    &requirement,
-                    &reverse_aggr_expr,
-                    group_by,
-                    eq_properties,
-                    agg_mode,
-                ) {
+            if let Some(finer_ordering) = finer_ordering(
+                &requirement,
+                &reverse_aggr_expr,
+                group_by,
+                eq_properties,
+                agg_mode,
+            ) {
+                if eq_properties.ordering_satisfy(&finer_ordering) {
+                    // Reverse requirement is satisfied by exiting ordering.
+                    // Hence reverse the aggregator
                     requirement = finer_ordering;
                     *aggr_expr = reverse_aggr_expr;
                     continue;
@@ -984,6 +981,8 @@ fn get_aggregate_exprs_requirement(
         if let Some(finer_ordering) =
             finer_ordering(&requirement, aggr_expr, group_by, eq_properties, agg_mode)
         {
+            // There is a requirement that both satisfies existing requirement and current
+            // aggregate requirement. Use updated requirement
             requirement = finer_ordering;
             continue;
         }
@@ -995,12 +994,14 @@ fn get_aggregate_exprs_requirement(
                 eq_properties,
                 agg_mode,
             ) {
+                // There is a requirement that both satisfies existing requirement and reverse
+                // aggregate requirement. Use updated requirement
                 requirement = finer_ordering;
                 *aggr_expr = reverse_aggr_expr;
                 continue;
             }
         }
-        // If neither of the requirements satisfy the other, this means
+        // Neither the existing requirement and current aggregate requirement satisfy the other, this means
         // requirements are conflicting. Currently, we do not support
         // conflicting requirements.
         return not_impl_err!(
