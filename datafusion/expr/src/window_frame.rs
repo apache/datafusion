@@ -46,7 +46,8 @@ pub struct WindowFrame {
     pub start_bound: WindowFrameBound,
     /// An ending frame boundary
     pub end_bound: WindowFrameBound,
-    /// Flag indicates whether window frame is causal.
+    /// Flag indicates whether window frame is causal
+    /// See documentation for [is_frame_causal] for what causal means in this context and how it is calculated.
     is_causal: bool,
 }
 
@@ -193,7 +194,57 @@ impl WindowFrame {
     }
 }
 
-/// Calculate whether window frame is causal or not.
+/// Calculates whether window frame is causal or not given window frame unit, and end bound of the
+/// window frame.
+///
+/// Causal window frames refer to data only from past or present.
+///
+/// As an example following window frame is causal where window frame
+/// range refers to past and current values.
+///
+///                +--------------+
+///      Future    |              |
+///         |      |              |
+///         |      |              |
+///    Current Row |+------------+|  ---
+///         |      |              |   |
+///         |      |              |   |
+///         |      |              |   |  Window Frame Range
+///       Past     |              |   |
+///                |              |   |
+///                |              |  ---
+///                +--------------+
+///
+/// Similarly, following window frame is causal also
+/// where window frame refers past values
+///
+///                +--------------+
+///      Future    |              |
+///         |      |              |
+///         |      |              |
+///    Current Row |+------------+|
+///         |      |              |
+///         |      |              | ---
+///         |      |              |  |
+///       Past     |              |  |  Window Frame Range
+///                |              |  |
+///                |              | ---
+///                +--------------+
+///
+/// However, following is not where window frame refers values from future.
+///
+///                +--------------+
+///      Future    |              |
+///         |      |              |
+///         |      |              | ---
+///    Current Row |+------------+|  |
+///         |      |              |  |  Window Frame Range
+///         |      |              |  |
+///         |      |              | ---
+///       Past     |              |
+///                |              |
+///                |              |
+///                +--------------+
 fn is_frame_causal(
     frame_units: &WindowFrameUnits,
     end_bound: &WindowFrameBound,

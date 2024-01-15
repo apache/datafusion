@@ -3886,6 +3886,14 @@ CREATE TABLE table_with_pk (
           (3, '2022-01-02 12:00:00'::timestamp, 'EUR', 200.0),
           (4, '2022-01-03 10:00:00'::timestamp, 'TRY', 100.0)
 
+# Over clauses in the form `OVER(ORDER BY <expr>)` gets treated as
+# `OVER(ORDER BY <expr> RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)`
+# However, if we know that <expr> contains a unique column (such as PRIMARY KEY)
+# it can be treated as `OVER(ORDER BY <expr> ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)`
+# where window frame units change from `RANGE` to `ROWS`.
+# At the same time this conversion means conversion from "non-causal" window frame to "causal" one.
+# (See window frame documentation what "causal" means in this context.)
+# Query below should have `ROWS` in its window frame.
 query TT
 EXPLAIN SELECT *, SUM(amount) OVER(ORDER BY sn) as sum1
 FROM table_with_pk;

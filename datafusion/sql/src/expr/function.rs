@@ -105,7 +105,24 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             )?;
 
             let func_deps = schema.functional_dependencies();
-            let is_ordering_stable = order_by.iter().any(|orderby_expr| {
+            // Strict ordering means that there is no tie among ordering expressions.
+            // e.g after sorting final indices of all rows are determined by ordering expression.
+            // As an example for the following table:
+            // | a | b |
+            // | 0 | 0 |
+            // | 1 | 1 |
+            // | 4 | 4 |
+            // | 3 | 3 |
+            // | 2 | 3 |
+            // ordering `a ASC` determines a strict ordering after sorting original rows will be mapped as following
+            // (where first index is original index second index is index after sorting.)
+            // [0->0, 1->1, 2->4, 3->3, 4->2], and there is no other possibility.
+            //
+            // However, ordering `b ASC` doesn't determine a strict ordering; because after sorting original rows will be mapped as either
+            // [0->0, 1->1, 2->4, 3->2, 4->3] or
+            // [0->0, 1->1, 2->4, 3->3, 4->2]
+            // where both mappings are valid for the ordering `b ASC`.
+            let is_ordering_strict = order_by.iter().any(|orderby_expr| {
                 if let Expr::Sort(sort_expr) = orderby_expr {
                     if let Expr::Column(col) = sort_expr.expr.as_ref() {
                         let idx = schema.index_of_column(col).unwrap();
@@ -131,7 +148,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             let window_frame = if let Some(window_frame) = window_frame {
                 regularize_window_order_by(&window_frame, &mut order_by)?;
                 window_frame
-            } else if is_ordering_stable {
+            } else if is_ordering_strict {
                 WindowFrame::new(Some(true))
             } else {
                 WindowFrame::new((!order_by.is_empty()).then_some(false))
