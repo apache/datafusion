@@ -78,61 +78,6 @@ pub mod repartition;
 pub mod select;
 mod sql_api;
 
-fn create_join_context(
-    column_left: &str,
-    column_right: &str,
-    repartition_joins: bool,
-) -> Result<SessionContext> {
-    let ctx = SessionContext::new_with_config(
-        SessionConfig::new()
-            .with_repartition_joins(repartition_joins)
-            .with_target_partitions(2)
-            .with_batch_size(4096),
-    );
-
-    let t1_schema = Arc::new(Schema::new(vec![
-        Field::new(column_left, DataType::UInt32, true),
-        Field::new("t1_name", DataType::Utf8, true),
-        Field::new("t1_int", DataType::UInt32, true),
-    ]));
-    let t1_data = RecordBatch::try_new(
-        t1_schema,
-        vec![
-            Arc::new(UInt32Array::from(vec![11, 22, 33, 44])),
-            Arc::new(StringArray::from(vec![
-                Some("a"),
-                Some("b"),
-                Some("c"),
-                Some("d"),
-            ])),
-            Arc::new(UInt32Array::from(vec![1, 2, 3, 4])),
-        ],
-    )?;
-    ctx.register_batch("t1", t1_data)?;
-
-    let t2_schema = Arc::new(Schema::new(vec![
-        Field::new(column_right, DataType::UInt32, true),
-        Field::new("t2_name", DataType::Utf8, true),
-        Field::new("t2_int", DataType::UInt32, true),
-    ]));
-    let t2_data = RecordBatch::try_new(
-        t2_schema,
-        vec![
-            Arc::new(UInt32Array::from(vec![11, 22, 44, 55])),
-            Arc::new(StringArray::from(vec![
-                Some("z"),
-                Some("y"),
-                Some("x"),
-                Some("w"),
-            ])),
-            Arc::new(UInt32Array::from(vec![3, 1, 3, 3])),
-        ],
-    )?;
-    ctx.register_batch("t2", t2_data)?;
-
-    Ok(ctx)
-}
-
 fn create_left_semi_anti_join_context_with_null_ids(
     column_left: &str,
     column_right: &str,
