@@ -139,7 +139,7 @@ async fn window_bounded_window_random_comparison() -> Result<()> {
     Ok(())
 }
 
-// This tests whether we cna generate bounded window results for each input batch immediately for causal window frames.
+// This tests whether we can generate bounded window results for each input batch immediately for causal window frames.
 #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
 async fn bounded_window_causal_non_causal() -> Result<()> {
     let session_config = SessionConfig::new();
