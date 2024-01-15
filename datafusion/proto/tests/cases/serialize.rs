@@ -23,12 +23,9 @@ use arrow::datatypes::DataType;
 use datafusion::execution::FunctionRegistry;
 use datafusion::physical_plan::functions::make_scalar_function;
 use datafusion::prelude::SessionContext;
-use datafusion_common::DataFusionError;
 use datafusion_expr::{col, create_udf, lit};
 use datafusion_expr::{Expr, Volatility};
 use datafusion_proto::bytes::Serializeable;
-
-use crate::cases::serialize;
 
 #[test]
 #[should_panic(
@@ -267,10 +264,10 @@ fn test_expression_serialization_roundtrip() {
         let desirilize = parse_expr(&proto, &ctx).unwrap();
 
         let serialize_name = expr.display_name().unwrap();
-        let serialize_name = serialize_name.split("(").collect::<Vec<&str>>()[0];
+        let serialize_name = serialize_name.split('(').collect::<Vec<&str>>()[0];
 
         let deserialize_name = desirilize.display_name().unwrap();
-        let deserialize_name = deserialize_name.split("(").collect::<Vec<&str>>()[0];
+        let deserialize_name = deserialize_name.split('(').collect::<Vec<&str>>()[0];
         assert_eq!(serialize_name, deserialize_name);
     }
 }
