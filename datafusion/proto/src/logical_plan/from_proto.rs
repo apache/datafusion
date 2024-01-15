@@ -27,6 +27,7 @@ use crate::protobuf::{
     OptimizedPhysicalPlanType, PlaceholderNode, RollupNode,
 };
 use arrow::{
+    array::AsArray,
     buffer::Buffer,
     datatypes::{
         i256, DataType, Field, IntervalMonthDayNanoType, IntervalUnit, Schema, TimeUnit,
@@ -506,6 +507,7 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::ArrayToString => Self::ArrayToString,
             ScalarFunction::ArrayIntersect => Self::ArrayIntersect,
             ScalarFunction::ArrayUnion => Self::ArrayUnion,
+            ScalarFunction::ArrayResize => Self::ArrayResize,
             ScalarFunction::Range => Self::Range,
             ScalarFunction::Cardinality => Self::Cardinality,
             ScalarFunction::Array => Self::MakeArray,
@@ -722,9 +724,15 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
                 .map_err(|e| e.context("Decoding ScalarValue::List Value"))?;
                 let arr = record_batch.column(0);
                 match value {
-                    Value::ListValue(_) => Self::List(arr.to_owned()),
-                    Value::LargeListValue(_) => Self::LargeList(arr.to_owned()),
-                    Value::FixedSizeListValue(_) => Self::FixedSizeList(arr.to_owned()),
+                    Value::ListValue(_) => {
+                        Self::List(arr.as_list::<i32>().to_owned().into())
+                    }
+                    Value::LargeListValue(_) => {
+                        Self::LargeList(arr.as_list::<i64>().to_owned().into())
+                    }
+                    Value::FixedSizeListValue(_) => {
+                        Self::FixedSizeList(arr.as_fixed_size_list().to_owned().into())
+                    }
                     _ => unreachable!(),
                 }
             }
@@ -1112,7 +1120,7 @@ pub fn parse_expr(
                     let aggr_function = parse_i32_to_aggregate_function(i)?;
 
                     Ok(Expr::WindowFunction(WindowFunction::new(
-                        datafusion_expr::window_function::WindowFunction::AggregateFunction(
+                        datafusion_expr::expr::WindowFunctionDefinition::AggregateFunction(
                             aggr_function,
                         ),
                         vec![parse_required_expr(expr.expr.as_deref(), registry, "expr")?],
@@ -1131,7 +1139,7 @@ pub fn parse_expr(
                         .unwrap_or_else(Vec::new);
 
                     Ok(Expr::WindowFunction(WindowFunction::new(
-                        datafusion_expr::window_function::WindowFunction::BuiltInWindowFunction(
+                        datafusion_expr::expr::WindowFunctionDefinition::BuiltInWindowFunction(
                             built_in_function,
                         ),
                         args,
@@ -1146,7 +1154,7 @@ pub fn parse_expr(
                         .map(|e| vec![e])
                         .unwrap_or_else(Vec::new);
                     Ok(Expr::WindowFunction(WindowFunction::new(
-                        datafusion_expr::window_function::WindowFunction::AggregateUDF(
+                        datafusion_expr::expr::WindowFunctionDefinition::AggregateUDF(
                             udaf_function,
                         ),
                         args,
@@ -1161,7 +1169,7 @@ pub fn parse_expr(
                         .map(|e| vec![e])
                         .unwrap_or_else(Vec::new);
                     Ok(Expr::WindowFunction(WindowFunction::new(
-                        datafusion_expr::window_function::WindowFunction::WindowUDF(
+                        datafusion_expr::expr::WindowFunctionDefinition::WindowUDF(
                             udwf_function,
                         ),
                         args,
@@ -1491,6 +1499,11 @@ pub fn parse_expr(
                         .iter()
                         .map(|expr| parse_expr(expr, registry))
                         .collect::<Result<Vec<_>, _>>()?,
+                )),
+                ScalarFunction::ArrayResize => Ok(array_slice(
+                    parse_expr(&args[0], registry)?,
+                    parse_expr(&args[1], registry)?,
+                    parse_expr(&args[2], registry)?,
                 )),
                 ScalarFunction::Sqrt => Ok(sqrt(parse_expr(&args[0], registry)?)),
                 ScalarFunction::Cbrt => Ok(cbrt(parse_expr(&args[0], registry)?)),

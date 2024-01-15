@@ -69,9 +69,9 @@ In this example, we write the entirety of `source_table` out to a folder of parq
 The following special options are specific to the `COPY` command.
 
 | Option             | Description                                                                                                                                                                  | Default Value |
-| ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------- | --- |
+| ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------- |
 | SINGLE_FILE_OUTPUT | If true, COPY query will write output to a single file. Otherwise, multiple files will be written to a directory in parallel.                                                | true          |
-| FORMAT             | Specifies the file format COPY query will write out. If single_file_output is false or the format cannot be inferred from the file extension, then FORMAT must be specified. | N/A           |     |
+| FORMAT             | Specifies the file format COPY query will write out. If single_file_output is false or the format cannot be inferred from the file extension, then FORMAT must be specified. | N/A           |
 
 ### JSON Format Specific Options
 
@@ -100,21 +100,21 @@ The following options are available when writing CSV files. Note: if any unsuppo
 
 The following options are available when writing parquet files. If any unsupported option is specified an error will be raised and the query will fail. If a column specific option is specified for a column which does not exist, the option will be ignored without error. For default values, see: [Configuration Settings](https://arrow.apache.org/datafusion/user-guide/configs.html).
 
-| Option                       | Can be Column Specific? | Description                                                                                                   |
-| ---------------------------- | ----------------------- | ------------------------------------------------------------------------------------------------------------- |
-| COMPRESSION                  | Yes                     | Sets the compression codec and if applicable compression level to use                                         |
-| MAX_ROW_GROUP_SIZE           | No                      | Sets the maximum number of rows that can be encoded in a single row group                                     |
-| DATA_PAGESIZE_LIMIT          | No                      | Sets the best effort maximum page size in bytes                                                               |
-| WRITE_BATCH_SIZE             | No                      | Maximum number of rows written for each column in a single batch                                              |
-| WRITER_VERSION               | No                      | Parquet writer version (1.0 or 2.0)                                                                           |
-| DICTIONARY_PAGE_SIZE_LIMIT   | No                      | Sets best effort maximum dictionary page size in bytes                                                        |
-| CREATED_BY                   | No                      | Sets the "created by" property in the parquet file                                                            |
-| COLUMN_INDEX_TRUNCATE_LENGTH | No                      | Sets the max length of min/max value fields in the column index.                                              |
-| DATA_PAGE_ROW_COUNT_LIMIT    | No                      | Sets best effort maximum number of rows in a data page.                                                       |
-| BLOOM_FILTER_ENABLED         | Yes                     | Sets whether a bloom filter should be written into the file.                                                  |
-| ENCODING                     | Yes                     | Sets the encoding that should be used (e.g. PLAIN or RLE)                                                     |
-| DICTIONARY_ENABLED           | Yes                     | Sets if dictionary encoding is enabled. Use this instead of ENCODING to set dictionary encoding.              |
-| STATISTICS_ENABLED           | Yes                     | Sets if statistics are enabled at PAGE or ROW_GROUP level.                                                    |
-| MAX_STATISTICS_SIZE          | Yes                     | Sets the maximum size in bytes that statistics can take up.                                                   |
-| BLOOM_FILTER_FPP             | Yes                     | Sets the false positive probability (fpp) for the bloom filter. Implicitly sets BLOOM_FILTER_ENABLED to true. |
-| BLOOM_FILTER_NDV             | Yes                     | Sets the number of distinct values (ndv) for the bloom filter. Implicitly sets bloom_filter_enabled to true.  |
+| Option                       | Can be Column Specific? | Description                                                                                                                         |
+| ---------------------------- | ----------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| COMPRESSION                  | Yes                     | Sets the compression codec and if applicable compression level to use                                                               |
+| MAX_ROW_GROUP_SIZE           | No                      | Sets the maximum number of rows that can be encoded in a single row group. Larger row groups require more memory to write and read. |
+| DATA_PAGESIZE_LIMIT          | No                      | Sets the best effort maximum page size in bytes                                                                                     |
+| WRITE_BATCH_SIZE             | No                      | Maximum number of rows written for each column in a single batch                                                                    |
+| WRITER_VERSION               | No                      | Parquet writer version (1.0 or 2.0)                                                                                                 |
+| DICTIONARY_PAGE_SIZE_LIMIT   | No                      | Sets best effort maximum dictionary page size in bytes                                                                              |
+| CREATED_BY                   | No                      | Sets the "created by" property in the parquet file                                                                                  |
+| COLUMN_INDEX_TRUNCATE_LENGTH | No                      | Sets the max length of min/max value fields in the column index.                                                                    |
+| DATA_PAGE_ROW_COUNT_LIMIT    | No                      | Sets best effort maximum number of rows in a data page.                                                                             |
+| BLOOM_FILTER_ENABLED         | Yes                     | Sets whether a bloom filter should be written into the file.                                                                        |
+| ENCODING                     | Yes                     | Sets the encoding that should be used (e.g. PLAIN or RLE)                                                                           |
+| DICTIONARY_ENABLED           | Yes                     | Sets if dictionary encoding is enabled. Use this instead of ENCODING to set dictionary encoding.                                    |
+| STATISTICS_ENABLED           | Yes                     | Sets if statistics are enabled at PAGE or ROW_GROUP level.                                                                          |
+| MAX_STATISTICS_SIZE          | Yes                     | Sets the maximum size in bytes that statistics can take up.                                                                         |
+| BLOOM_FILTER_FPP             | Yes                     | Sets the false positive probability (fpp) for the bloom filter. Implicitly sets BLOOM_FILTER_ENABLED to true.                       |
+| BLOOM_FILTER_NDV             | Yes                     | Sets the number of distinct values (ndv) for the bloom filter. Implicitly sets bloom_filter_enabled to true.                        |

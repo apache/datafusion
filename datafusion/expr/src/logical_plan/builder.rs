@@ -292,7 +292,7 @@ impl LogicalPlanBuilder {
         window_exprs: Vec<Expr>,
     ) -> Result<LogicalPlan> {
         let mut plan = input;
-        let mut groups = group_window_expr_by_sort_keys(&window_exprs)?;
+        let mut groups = group_window_expr_by_sort_keys(window_exprs)?;
         // To align with the behavior of PostgreSQL, we want the sort_keys sorted as same rule as PostgreSQL that first
         // we compare the sort key themselves and if one window's sort keys are a prefix of another
         // put the window with more sort keys first. so more deeply sorted plans gets nested further down as children.
@@ -314,7 +314,7 @@ impl LogicalPlanBuilder {
             key_b.len().cmp(&key_a.len())
         });
         for (_, exprs) in groups {
-            let window_exprs = exprs.into_iter().cloned().collect::<Vec<_>>();
+            let window_exprs = exprs.into_iter().collect::<Vec<_>>();
             // Partition and sorting is done at physical level, see the EnforceDistribution
             // and EnforceSorting rules.
             plan = LogicalPlanBuilder::from(plan)
@@ -445,7 +445,7 @@ impl LogicalPlanBuilder {
                         )
                     })
                     .collect::<Result<Vec<_>>>()?;
-                curr_plan.with_new_inputs(&new_inputs)
+                curr_plan.with_new_exprs(curr_plan.expressions(), &new_inputs)
             }
         }
     }
@@ -1845,13 +1845,16 @@ mod tests {
         .project(vec![col("id"), col("first_name").alias("id")]);
 
         match plan {
-            Err(DataFusionError::SchemaError(SchemaError::AmbiguousReference {
-                field:
-                    Column {
-                        relation: Some(OwnedTableReference::Bare { table }),
-                        name,
-                    },
-            })) => {
+            Err(DataFusionError::SchemaError(
+                SchemaError::AmbiguousReference {
+                    field:
+                        Column {
+                            relation: Some(OwnedTableReference::Bare { table }),
+                            name,
+                        },
+                },
+                _,
+            )) => {
                 assert_eq!("employee_csv", table);
                 assert_eq!("id", &name);
                 Ok(())
@@ -1872,13 +1875,16 @@ mod tests {
         .aggregate(vec![col("state")], vec![sum(col("salary")).alias("state")]);
 
         match plan {
-            Err(DataFusionError::SchemaError(SchemaError::AmbiguousReference {
-                field:
-                    Column {
-                        relation: Some(OwnedTableReference::Bare { table }),
-                        name,
-                    },
-            })) => {
+            Err(DataFusionError::SchemaError(
+                SchemaError::AmbiguousReference {
+                    field:
+                        Column {
+                            relation: Some(OwnedTableReference::Bare { table }),
+                            name,
+                        },
+                },
+                _,
+            )) => {
                 assert_eq!("employee_csv", table);
                 assert_eq!("state", &name);
                 Ok(())

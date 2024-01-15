@@ -19,8 +19,8 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
 use crate::parser::{
-    CopyToSource, CopyToStatement, CreateExternalTable, DFParser, DescribeTableStmt,
-    ExplainStatement, LexOrdering, Statement as DFStatement,
+    CopyToSource, CopyToStatement, CreateExternalTable, DFParser, ExplainStatement,
+    LexOrdering, Statement as DFStatement,
 };
 use crate::planner::{
     object_name_to_qualifier, ContextProvider, PlannerContext, SqlToRel,
@@ -31,9 +31,10 @@ use arrow_schema::DataType;
 use datafusion_common::file_options::StatementOptions;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{
-    not_impl_err, plan_datafusion_err, plan_err, unqualified_field_not_found, Column,
-    Constraints, DFField, DFSchema, DFSchemaRef, DataFusionError, OwnedTableReference,
-    Result, ScalarValue, SchemaReference, TableReference, ToDFSchema,
+    not_impl_err, plan_datafusion_err, plan_err, schema_err, unqualified_field_not_found,
+    Column, Constraints, DFField, DFSchema, DFSchemaRef, DataFusionError,
+    OwnedTableReference, Result, ScalarValue, SchemaError, SchemaReference,
+    TableReference, ToDFSchema,
 };
 use datafusion_expr::dml::{CopyOptions, CopyTo};
 use datafusion_expr::expr_rewriter::normalize_col_with_schemas_and_ambiguity_check;
@@ -136,7 +137,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         match statement {
             DFStatement::CreateExternalTable(s) => self.external_table_to_plan(s),
             DFStatement::Statement(s) => self.sql_statement_to_plan(*s),
-            DFStatement::DescribeTableStmt(s) => self.describe_table_to_plan(s),
             DFStatement::CopyTo(s) => self.copy_to_plan(s),
             DFStatement::Explain(ExplainStatement {
                 verbose,
@@ -170,6 +170,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     ) -> Result<LogicalPlan> {
         let sql = Some(statement.to_string());
         match statement {
+            Statement::ExplainTable {
+                describe_alias: true, // only parse 'DESCRIBE table_name' and not 'EXPLAIN table_name'
+                table_name,
+            } => self.describe_table_to_plan(table_name),
             Statement::Explain {
                 verbose,
                 statement,
@@ -513,7 +517,13 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             Statement::StartTransaction {
                 modes,
                 begin: false,
+                modifier,
             } => {
+                if let Some(modifier) = modifier {
+                    return not_impl_err!(
+                        "Transaction modifier not supported: {modifier}"
+                    );
+                }
                 let isolation_level: ast::TransactionIsolationLevel = modes
                     .iter()
                     .filter_map(|m: &ast::TransactionMode| match m {
@@ -629,11 +639,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         }
     }
 
-    fn describe_table_to_plan(
-        &self,
-        statement: DescribeTableStmt,
-    ) -> Result<LogicalPlan> {
-        let DescribeTableStmt { table_name } = statement;
+    fn describe_table_to_plan(&self, table_name: ObjectName) -> Result<LogicalPlan> {
         let table_ref = self.object_name_to_table_reference(table_name)?;
 
         let table_source = self.context_provider.get_table_source(table_ref)?;
@@ -1133,11 +1139,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         .index_of_column_by_name(None, &c)?
                         .ok_or_else(|| unqualified_field_not_found(&c, &table_schema))?;
                     if value_indices[column_index].is_some() {
-                        return Err(DataFusionError::SchemaError(
-                            datafusion_common::SchemaError::DuplicateUnqualifiedField {
-                                name: c,
-                            },
-                        ));
+                        return schema_err!(SchemaError::DuplicateUnqualifiedField {
+                            name: c,
+                        });
                     } else {
                         value_indices[column_index] = Some(i);
                     }

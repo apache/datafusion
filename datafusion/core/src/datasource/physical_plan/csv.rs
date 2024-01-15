@@ -19,11 +19,10 @@
 
 use std::any::Any;
 use std::io::{Read, Seek, SeekFrom};
-use std::ops::Range;
 use std::sync::Arc;
 use std::task::Poll;
 
-use super::{FileGroupPartitioner, FileScanConfig};
+use super::{calculate_range, FileGroupPartitioner, FileScanConfig, RangeCalculation};
 use crate::datasource::file_format::file_compression_type::FileCompressionType;
 use crate::datasource::listing::{FileRange, ListingTableUrl};
 use crate::datasource::physical_plan::file_stream::{
@@ -318,47 +317,6 @@ impl CsvOpener {
     }
 }
 
-/// Returns the offset of the first newline in the object store range [start, end), or the end offset if no newline is found.
-async fn find_first_newline(
-    object_store: &Arc<dyn ObjectStore>,
-    location: &object_store::path::Path,
-    start_byte: usize,
-    end_byte: usize,
-) -> Result<usize> {
-    let options = GetOptions {
-        range: Some(Range {
-            start: start_byte,
-            end: end_byte,
-        }),
-        ..Default::default()
-    };
-
-    let r = object_store.get_opts(location, options).await?;
-    let mut input = r.into_stream();
-
-    let mut buffered = Bytes::new();
-    let mut index = 0;
-
-    loop {
-        if buffered.is_empty() {
-            match input.next().await {
-                Some(Ok(b)) => buffered = b,
-                Some(Err(e)) => return Err(e.into()),
-                None => return Ok(index),
-            };
-        }
-
-        for byte in &buffered {
-            if *byte == b'\n' {
-                return Ok(index);
-            }
-            index += 1;
-        }
-
-        buffered.advance(buffered.len());
-    }
-}
-
 impl FileOpener for CsvOpener {
     /// Open a partitioned CSV file.
     ///
@@ -408,44 +366,20 @@ impl FileOpener for CsvOpener {
             );
         }
 
+        let store = self.config.object_store.clone();
+
         Ok(Box::pin(async move {
-            let file_size = file_meta.object_meta.size;
             // Current partition contains bytes [start_byte, end_byte) (might contain incomplete lines at boundaries)
-            let range = match file_meta.range {
-                None => None,
-                Some(FileRange { start, end }) => {
-                    let (start, end) = (start as usize, end as usize);
-                    // Partition byte range is [start, end), the boundary might be in the middle of
-                    // some line. Need to find out the exact line boundaries.
-                    let start_delta = if start != 0 {
-                        find_first_newline(
-                            &config.object_store,
-                            file_meta.location(),
-                            start - 1,
-                            file_size,
-                        )
-                        .await?
-                    } else {
-                        0
-                    };
-                    let end_delta = if end != file_size {
-                        find_first_newline(
-                            &config.object_store,
-                            file_meta.location(),
-                            end - 1,
-                            file_size,
-                        )
-                        .await?
-                    } else {
-                        0
-                    };
-                    let range = start + start_delta..end + end_delta;
-                    if range.start == range.end {
-                        return Ok(
-                            futures::stream::poll_fn(move |_| Poll::Ready(None)).boxed()
-                        );
-                    }
-                    Some(range)
+
+            let calculated_range = calculate_range(&file_meta, &store).await?;
+
+            let range = match calculated_range {
+                RangeCalculation::Range(None) => None,
+                RangeCalculation::Range(Some(range)) => Some(range.into()),
+                RangeCalculation::TerminateEarly => {
+                    return Ok(
+                        futures::stream::poll_fn(move |_| Poll::Ready(None)).boxed()
+                    )
                 }
             };
 
@@ -453,10 +387,8 @@ impl FileOpener for CsvOpener {
                 range,
                 ..Default::default()
             };
-            let result = config
-                .object_store
-                .get_opts(file_meta.location(), options)
-                .await?;
+
+            let result = store.get_opts(file_meta.location(), options).await?;
 
             match result.payload {
                 GetResultPayload::File(mut file, _) => {

@@ -25,7 +25,9 @@ use std::sync::Arc;
 use super::dml::CopyTo;
 use super::DdlStatement;
 use crate::dml::CopyOptions;
-use crate::expr::{Alias, Exists, InSubquery, Placeholder, Sort as SortExpr};
+use crate::expr::{
+    Alias, Exists, InSubquery, Placeholder, Sort as SortExpr, WindowFunction,
+};
 use crate::expr_rewriter::{create_col_from_scalar_expr, normalize_cols};
 use crate::logical_plan::display::{GraphvizVisitor, IndentVisitor};
 use crate::logical_plan::extension::UserDefinedLogicalNode;
@@ -36,9 +38,9 @@ use crate::utils::{
     split_conjunction,
 };
 use crate::{
-    build_join_schema, expr_vec_fmt, BinaryExpr, CreateMemoryTable, CreateView, Expr,
-    ExprSchemable, LogicalPlanBuilder, Operator, TableProviderFilterPushDown,
-    TableSource,
+    build_join_schema, expr_vec_fmt, BinaryExpr, BuiltInWindowFunction,
+    CreateMemoryTable, CreateView, Expr, ExprSchemable, LogicalPlanBuilder, Operator,
+    TableProviderFilterPushDown, TableSource, WindowFunctionDefinition,
 };
 
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
@@ -48,9 +50,10 @@ use datafusion_common::tree_node::{
 };
 use datafusion_common::{
     aggregate_functional_dependencies, internal_err, plan_err, Column, Constraints,
-    DFField, DFSchema, DFSchemaRef, DataFusionError, Dependency, FunctionalDependencies,
-    OwnedTableReference, ParamValues, Result, UnnestOptions,
+    DFField, DFSchema, DFSchemaRef, DataFusionError, Dependency, FunctionalDependence,
+    FunctionalDependencies, OwnedTableReference, ParamValues, Result, UnnestOptions,
 };
+
 // backwards compatibility
 pub use datafusion_common::display::{PlanType, StringifiedPlan, ToStringifiedPlan};
 pub use datafusion_common::{JoinConstraint, JoinType};
@@ -541,35 +544,9 @@ impl LogicalPlan {
     }
 
     /// Returns a copy of this `LogicalPlan` with the new inputs
+    #[deprecated(since = "35.0.0", note = "please use `with_new_exprs` instead")]
     pub fn with_new_inputs(&self, inputs: &[LogicalPlan]) -> Result<LogicalPlan> {
-        // with_new_inputs use original expression,
-        // so we don't need to recompute Schema.
-        match &self {
-            LogicalPlan::Projection(projection) => {
-                // Schema of the projection may change
-                // when its input changes. Hence we should use
-                // `try_new` method instead of `try_new_with_schema`.
-                Projection::try_new(projection.expr.to_vec(), Arc::new(inputs[0].clone()))
-                    .map(LogicalPlan::Projection)
-            }
-            LogicalPlan::Window(Window { window_expr, .. }) => Ok(LogicalPlan::Window(
-                Window::try_new(window_expr.to_vec(), Arc::new(inputs[0].clone()))?,
-            )),
-            LogicalPlan::Aggregate(Aggregate {
-                group_expr,
-                aggr_expr,
-                ..
-            }) => Aggregate::try_new(
-                // Schema of the aggregate may change
-                // when its input changes. Hence we should use
-                // `try_new` method instead of `try_new_with_schema`.
-                Arc::new(inputs[0].clone()),
-                group_expr.to_vec(),
-                aggr_expr.to_vec(),
-            )
-            .map(LogicalPlan::Aggregate),
-            _ => self.with_new_exprs(self.expressions(), inputs),
-        }
+        self.with_new_exprs(self.expressions(), inputs)
     }
 
     /// Returns a new `LogicalPlan` based on `self` with inputs and
@@ -591,10 +568,6 @@ impl LogicalPlan {
     /// // create new plan using rewritten_exprs in same position
     /// let new_plan = plan.new_with_exprs(rewritten_exprs, new_inputs);
     /// ```
-    ///
-    /// Note: sometimes [`Self::with_new_exprs`] will use schema of
-    /// original plan, it will not change the scheam.  Such as
-    /// `Projection/Aggregate/Window`
     pub fn with_new_exprs(
         &self,
         mut expr: Vec<Expr>,
@@ -706,17 +679,10 @@ impl LogicalPlan {
                     }))
                 }
             },
-            LogicalPlan::Window(Window {
-                window_expr,
-                schema,
-                ..
-            }) => {
+            LogicalPlan::Window(Window { window_expr, .. }) => {
                 assert_eq!(window_expr.len(), expr.len());
-                Ok(LogicalPlan::Window(Window {
-                    input: Arc::new(inputs[0].clone()),
-                    window_expr: expr,
-                    schema: schema.clone(),
-                }))
+                Window::try_new(expr, Arc::new(inputs[0].clone()))
+                    .map(LogicalPlan::Window)
             }
             LogicalPlan::Aggregate(Aggregate { group_expr, .. }) => {
                 // group exprs are the first expressions
@@ -2004,7 +1970,9 @@ pub struct Window {
 impl Window {
     /// Create a new window operator.
     pub fn try_new(window_expr: Vec<Expr>, input: Arc<LogicalPlan>) -> Result<Self> {
-        let mut window_fields: Vec<DFField> = input.schema().fields().clone();
+        let fields = input.schema().fields();
+        let input_len = fields.len();
+        let mut window_fields = fields.clone();
         window_fields.extend_from_slice(&exprlist_to_fields(window_expr.iter(), &input)?);
         let metadata = input.schema().metadata().clone();
 
@@ -2012,6 +1980,46 @@ impl Window {
         let mut window_func_dependencies =
             input.schema().functional_dependencies().clone();
         window_func_dependencies.extend_target_indices(window_fields.len());
+
+        // Since we know that ROW_NUMBER outputs will be unique (i.e. it consists
+        // of consecutive numbers per partition), we can represent this fact with
+        // functional dependencies.
+        let mut new_dependencies = window_expr
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, expr)| {
+                if let Expr::WindowFunction(WindowFunction {
+                    // Function is ROW_NUMBER
+                    fun:
+                        WindowFunctionDefinition::BuiltInWindowFunction(
+                            BuiltInWindowFunction::RowNumber,
+                        ),
+                    partition_by,
+                    ..
+                }) = expr
+                {
+                    // When there is no PARTITION BY, row number will be unique
+                    // across the entire table.
+                    if partition_by.is_empty() {
+                        return Some(idx + input_len);
+                    }
+                }
+                None
+            })
+            .map(|idx| {
+                FunctionalDependence::new(vec![idx], vec![], false)
+                    .with_mode(Dependency::Single)
+            })
+            .collect::<Vec<_>>();
+
+        if !new_dependencies.is_empty() {
+            for dependence in new_dependencies.iter_mut() {
+                dependence.target_indices = (0..window_fields.len()).collect();
+            }
+            // Add the dependency introduced because of ROW_NUMBER window function to the functional dependency
+            let new_deps = FunctionalDependencies::new(new_dependencies);
+            window_func_dependencies.extend(new_deps);
+        }
 
         Ok(Window {
             input,

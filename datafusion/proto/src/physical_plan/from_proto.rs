@@ -31,7 +31,7 @@ use datafusion::datasource::object_store::ObjectStoreUrl;
 use datafusion::datasource::physical_plan::{FileScanConfig, FileSinkConfig};
 use datafusion::execution::context::ExecutionProps;
 use datafusion::execution::FunctionRegistry;
-use datafusion::logical_expr::window_function::WindowFunction;
+use datafusion::logical_expr::WindowFunctionDefinition;
 use datafusion::physical_expr::{PhysicalSortExpr, ScalarFunctionExpr};
 use datafusion::physical_plan::expressions::{
     in_list, BinaryExpr, CaseExpr, CastExpr, Column, IsNotNullExpr, IsNullExpr, LikeExpr,
@@ -91,6 +91,36 @@ pub fn parse_physical_sort_expr(
     } else {
         Err(proto_error("Unexpected empty physical expression"))
     }
+}
+
+/// Parses a physical sort expressions from a protobuf.
+///
+/// # Arguments
+///
+/// * `proto` - Input proto with vector of physical sort expression node
+/// * `registry` - A registry knows how to build logical expressions out of user-defined function' names
+/// * `input_schema` - The Arrow schema for the input, used for determining expression data types
+///                    when performing type coercion.
+pub fn parse_physical_sort_exprs(
+    proto: &[protobuf::PhysicalSortExprNode],
+    registry: &dyn FunctionRegistry,
+    input_schema: &Schema,
+) -> Result<Vec<PhysicalSortExpr>> {
+    proto
+        .iter()
+        .map(|sort_expr| {
+            if let Some(expr) = &sort_expr.expr {
+                let expr = parse_physical_expr(expr.as_ref(), registry, input_schema)?;
+                let options = SortOptions {
+                    descending: !sort_expr.asc,
+                    nulls_first: sort_expr.nulls_first,
+                };
+                Ok(PhysicalSortExpr { expr, options })
+            } else {
+                Err(proto_error("Unexpected empty physical expression"))
+            }
+        })
+        .collect::<Result<Vec<_>>>()
 }
 
 /// Parses a physical window expr from a protobuf.
@@ -414,7 +444,9 @@ fn parse_required_physical_expr(
         })
 }
 
-impl TryFrom<&protobuf::physical_window_expr_node::WindowFunction> for WindowFunction {
+impl TryFrom<&protobuf::physical_window_expr_node::WindowFunction>
+    for WindowFunctionDefinition
+{
     type Error = DataFusionError;
 
     fn try_from(
@@ -428,7 +460,7 @@ impl TryFrom<&protobuf::physical_window_expr_node::WindowFunction> for WindowFun
                     ))
                 })?;
 
-                Ok(WindowFunction::AggregateFunction(f.into()))
+                Ok(WindowFunctionDefinition::AggregateFunction(f.into()))
             }
             protobuf::physical_window_expr_node::WindowFunction::BuiltInFunction(n) => {
                 let f = protobuf::BuiltInWindowFunction::try_from(*n).map_err(|_| {
@@ -437,7 +469,7 @@ impl TryFrom<&protobuf::physical_window_expr_node::WindowFunction> for WindowFun
                     ))
                 })?;
 
-                Ok(WindowFunction::BuiltInWindowFunction(f.into()))
+                Ok(WindowFunctionDefinition::BuiltInWindowFunction(f.into()))
             }
         }
     }
@@ -776,6 +808,18 @@ impl From<protobuf::CompressionTypeVariant> for CompressionTypeVariant {
             protobuf::CompressionTypeVariant::Xz => Self::XZ,
             protobuf::CompressionTypeVariant::Zstd => Self::ZSTD,
             protobuf::CompressionTypeVariant::Uncompressed => Self::UNCOMPRESSED,
+        }
+    }
+}
+
+impl From<CompressionTypeVariant> for protobuf::CompressionTypeVariant {
+    fn from(value: CompressionTypeVariant) -> Self {
+        match value {
+            CompressionTypeVariant::GZIP => Self::Gzip,
+            CompressionTypeVariant::BZIP2 => Self::Bzip2,
+            CompressionTypeVariant::XZ => Self::Xz,
+            CompressionTypeVariant::ZSTD => Self::Zstd,
+            CompressionTypeVariant::UNCOMPRESSED => Self::Uncompressed,
         }
     }
 }

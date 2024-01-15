@@ -27,7 +27,7 @@ use crate::simplify_expressions::regex::simplify_regex_expr;
 use crate::simplify_expressions::SimplifyInfo;
 
 use arrow::{
-    array::new_null_array,
+    array::{new_null_array, AsArray},
     datatypes::{DataType, Field, Schema},
     record_batch::RecordBatch,
 };
@@ -381,12 +381,8 @@ impl<'a> ConstEvaluator<'a> {
             return Ok(s);
         }
 
-        let phys_expr = create_physical_expr(
-            &expr,
-            &self.input_schema,
-            &self.input_batch.schema(),
-            self.execution_props,
-        )?;
+        let phys_expr =
+            create_physical_expr(&expr, &self.input_schema, self.execution_props)?;
         let col_val = phys_expr.evaluate(&self.input_batch)?;
         match col_val {
             ColumnarValue::Array(a) => {
@@ -396,7 +392,7 @@ impl<'a> ConstEvaluator<'a> {
                         a.len()
                     )
                 } else if as_list_array(&a).is_ok() || as_large_list_array(&a).is_ok() {
-                    Ok(ScalarValue::List(a))
+                    Ok(ScalarValue::List(a.as_list().to_owned().into()))
                 } else {
                     // Non-ListArray
                     ScalarValue::try_from_array(&a, 0)
@@ -480,6 +476,14 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
             }) if list.is_empty() && *expr != Expr::Literal(ScalarValue::Null) => {
                 lit(negated)
             }
+
+            // null in (x, y, z) --> null
+            // null not in (x, y, z) --> null
+            Expr::InList(InList {
+                expr,
+                list: _,
+                negated: _,
+            }) if is_null(&expr) => lit_bool_null(),
 
             // expr IN ((subquery)) -> expr IN (subquery), see ##5529
             Expr::InList(InList {
@@ -3095,6 +3099,18 @@ mod tests {
     fn simplify_inlist() {
         assert_eq!(simplify(in_list(col("c1"), vec![], false)), lit(false));
         assert_eq!(simplify(in_list(col("c1"), vec![], true)), lit(true));
+
+        // null in (...)  --> null
+        assert_eq!(
+            simplify(in_list(lit_bool_null(), vec![col("c1"), lit(1)], false)),
+            lit_bool_null()
+        );
+
+        // null not in (...)  --> null
+        assert_eq!(
+            simplify(in_list(lit_bool_null(), vec![col("c1"), lit(1)], true)),
+            lit_bool_null()
+        );
 
         assert_eq!(
             simplify(in_list(col("c1"), vec![lit(1)], false)),

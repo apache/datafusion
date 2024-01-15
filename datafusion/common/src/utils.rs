@@ -424,10 +424,11 @@ pub fn arrays_into_list_array(
 /// assert_eq!(base_type(&data_type), DataType::Int32);
 /// ```
 pub fn base_type(data_type: &DataType) -> DataType {
-    if let DataType::List(field) = data_type {
-        base_type(field.data_type())
-    } else {
-        data_type.to_owned()
+    match data_type {
+        DataType::List(field) | DataType::LargeList(field) => {
+            base_type(field.data_type())
+        }
+        _ => data_type.to_owned(),
     }
 }
 
@@ -462,6 +463,20 @@ pub fn coerced_type_with_base_type_only(
                 field.is_nullable(),
             )))
         }
+        DataType::LargeList(field) => {
+            let data_type = match field.data_type() {
+                DataType::LargeList(_) => {
+                    coerced_type_with_base_type_only(field.data_type(), base_type)
+                }
+                _ => base_type.to_owned(),
+            };
+
+            DataType::LargeList(Arc::new(Field::new(
+                field.name(),
+                data_type,
+                field.is_nullable(),
+            )))
+        }
 
         _ => base_type.clone(),
     }
@@ -469,10 +484,11 @@ pub fn coerced_type_with_base_type_only(
 
 /// Compute the number of dimensions in a list data type.
 pub fn list_ndims(data_type: &DataType) -> u64 {
-    if let DataType::List(field) = data_type {
-        1 + list_ndims(field.data_type())
-    } else {
-        0
+    match data_type {
+        DataType::List(field) | DataType::LargeList(field) => {
+            1 + list_ndims(field.data_type())
+        }
+        _ => 0,
     }
 }
 

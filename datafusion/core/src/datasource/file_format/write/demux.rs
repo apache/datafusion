@@ -383,7 +383,7 @@ fn compute_take_arrays(
 
 fn remove_partition_by_columns(
     parted_batch: &RecordBatch,
-    partition_by: &Vec<(String, DataType)>,
+    partition_by: &[(String, DataType)],
 ) -> Result<RecordBatch> {
     let end_idx = parted_batch.num_columns() - partition_by.len();
     let non_part_cols = &parted_batch.columns()[..end_idx];
@@ -405,7 +405,7 @@ fn remove_partition_by_columns(
 }
 
 fn compute_hive_style_file_path(
-    part_key: &Vec<String>,
+    part_key: &[String],
     partition_by: &[(String, DataType)],
     write_id: &str,
     file_extension: &str,

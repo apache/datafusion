@@ -1410,6 +1410,7 @@ date_part(part, expression)
   The following date parts are supported:
 
   - year
+  - quarter _(emits value in inclusive range [1, 4] based on which quartile of the year the date is in)_
   - month
   - week _(week of the year)_
   - day _(day of the month)_
@@ -1421,6 +1422,7 @@ date_part(part, expression)
   - nanosecond
   - dow _(day of the week)_
   - doy _(day of the year)_
+  - epoch _(seconds since Unix epoch)_
 
 - **expression**: Time expression to operate on.
   Can be a constant, column, or function.
@@ -1448,6 +1450,7 @@ extract(field FROM source)
   The following date fields are supported:
 
   - year
+  - quarter _(emits value in inclusive range [1, 4] based on which quartile of the year the date is in)_
   - month
   - week _(week of the year)_
   - day _(day of the month)_
@@ -1459,6 +1462,7 @@ extract(field FROM source)
   - nanosecond
   - dow _(day of the week)_
   - doy _(day of the year)_
+  - epoch _(seconds since Unix epoch)_
 
 - **source**: Source time expression to operate on.
   Can be a constant, column, or function.
@@ -1966,7 +1970,7 @@ array_prepend(element, array)
 Returns the array without the first element.
 
 ```
-array_pop_first(array)
+array_pop_front(array)
 ```
 
 #### Arguments
@@ -1977,9 +1981,9 @@ array_pop_first(array)
 #### Example
 
 ```
-❯ select array_pop_first([1, 2, 3]);
+❯ select array_pop_front([1, 2, 3]);
 +-------------------------------+
-| array_pop_first(List([1,2,3])) |
+| array_pop_front(List([1,2,3])) |
 +-------------------------------+
 | [2, 3]                        |
 +-------------------------------+

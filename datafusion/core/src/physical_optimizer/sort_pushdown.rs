@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::borrow::Cow;
 use std::sync::Arc;
 
 use crate::physical_optimizer::utils::{
@@ -28,7 +29,7 @@ use crate::physical_plan::repartition::RepartitionExec;
 use crate::physical_plan::sorts::sort::SortExec;
 use crate::physical_plan::{with_new_children_if_necessary, ExecutionPlan};
 
-use datafusion_common::tree_node::{Transformed, TreeNode, VisitRecursion};
+use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{plan_err, DataFusionError, JoinSide, Result};
 use datafusion_expr::JoinType;
 use datafusion_physical_expr::expressions::Column;
@@ -71,20 +72,10 @@ impl SortPushDown {
 }
 
 impl TreeNode for SortPushDown {
-    fn apply_children<F>(&self, op: &mut F) -> Result<VisitRecursion>
-    where
-        F: FnMut(&Self) -> Result<VisitRecursion>,
-    {
-        for child in &self.children_nodes {
-            match op(child)? {
-                VisitRecursion::Continue => {}
-                VisitRecursion::Skip => return Ok(VisitRecursion::Continue),
-                VisitRecursion::Stop => return Ok(VisitRecursion::Stop),
-            }
-        }
-
-        Ok(VisitRecursion::Continue)
+    fn children_nodes(&self) -> Vec<Cow<Self>> {
+        self.children_nodes.iter().map(Cow::Borrowed).collect()
     }
+
     fn map_children<F>(mut self, transform: F) -> Result<Self>
     where
         F: FnMut(Self) -> Result<Self>,
@@ -414,9 +405,7 @@ fn shift_right_required(
     let new_right_required: Vec<PhysicalSortRequirement> = parent_required
         .iter()
         .filter_map(|r| {
-            let Some(col) = r.expr.as_any().downcast_ref::<Column>() else {
-                return None;
-            };
+            let col = r.expr.as_any().downcast_ref::<Column>()?;
 
             if col.index() < left_columns_len {
                 return None;

@@ -65,7 +65,8 @@ use prost::Message;
 use crate::common::str_to_byte;
 use crate::common::{byte_to_string, proto_error};
 use crate::physical_plan::from_proto::{
-    parse_physical_expr, parse_physical_sort_expr, parse_protobuf_file_scan_config,
+    parse_physical_expr, parse_physical_sort_expr, parse_physical_sort_exprs,
+    parse_protobuf_file_scan_config,
 };
 use crate::protobuf::physical_aggregate_expr_node::AggregateFunction;
 use crate::protobuf::physical_expr_node::ExprType;
@@ -646,6 +647,30 @@ impl AsExecutionPlan for PhysicalPlanNode {
                     })
                     .map_or(Ok(None), |v: Result<JoinFilter>| v.map(Some))?;
 
+                let left_schema = left.schema();
+                let left_sort_exprs = parse_physical_sort_exprs(
+                    &sym_join.left_sort_exprs,
+                    registry,
+                    &left_schema,
+                )?;
+                let left_sort_exprs = if left_sort_exprs.is_empty() {
+                    None
+                } else {
+                    Some(left_sort_exprs)
+                };
+
+                let right_schema = right.schema();
+                let right_sort_exprs = parse_physical_sort_exprs(
+                    &sym_join.right_sort_exprs,
+                    registry,
+                    &right_schema,
+                )?;
+                let right_sort_exprs = if right_sort_exprs.is_empty() {
+                    None
+                } else {
+                    Some(right_sort_exprs)
+                };
+
                 let partition_mode =
                     protobuf::StreamPartitionMode::try_from(sym_join.partition_mode).map_err(|_| {
                         proto_error(format!(
@@ -668,6 +693,8 @@ impl AsExecutionPlan for PhysicalPlanNode {
                     filter,
                     &join_type.into(),
                     sym_join.null_equals_null,
+                    left_sort_exprs,
+                    right_sort_exprs,
                     partition_mode,
                 )
                 .map(|e| Arc::new(e) as _)
@@ -1233,6 +1260,40 @@ impl AsExecutionPlan for PhysicalPlanNode {
                 }
             };
 
+            let left_sort_exprs = exec
+                .left_sort_exprs()
+                .map(|exprs| {
+                    exprs
+                        .iter()
+                        .map(|expr| {
+                            Ok(protobuf::PhysicalSortExprNode {
+                                expr: Some(Box::new(expr.expr.to_owned().try_into()?)),
+                                asc: !expr.options.descending,
+                                nulls_first: expr.options.nulls_first,
+                            })
+                        })
+                        .collect::<Result<Vec<_>>>()
+                })
+                .transpose()?
+                .unwrap_or(vec![]);
+
+            let right_sort_exprs = exec
+                .right_sort_exprs()
+                .map(|exprs| {
+                    exprs
+                        .iter()
+                        .map(|expr| {
+                            Ok(protobuf::PhysicalSortExprNode {
+                                expr: Some(Box::new(expr.expr.to_owned().try_into()?)),
+                                asc: !expr.options.descending,
+                                nulls_first: expr.options.nulls_first,
+                            })
+                        })
+                        .collect::<Result<Vec<_>>>()
+                })
+                .transpose()?
+                .unwrap_or(vec![]);
+
             return Ok(protobuf::PhysicalPlanNode {
                 physical_plan_type: Some(PhysicalPlanType::SymmetricHashJoin(Box::new(
                     protobuf::SymmetricHashJoinExecNode {
@@ -1242,6 +1303,8 @@ impl AsExecutionPlan for PhysicalPlanNode {
                         join_type: join_type.into(),
                         partition_mode: partition_mode.into(),
                         null_equals_null: exec.null_equals_null(),
+                        left_sort_exprs,
+                        right_sort_exprs,
                         filter,
                     },
                 ))),

@@ -20,8 +20,13 @@
 use crate::LogicalPlan;
 use datafusion_common::tree_node::{TreeNodeVisitor, VisitRecursion};
 use datafusion_common::{tree_node::TreeNode, Result};
+use std::borrow::Cow;
 
 impl TreeNode for LogicalPlan {
+    fn children_nodes(&self) -> Vec<Cow<Self>> {
+        self.inputs().into_iter().map(Cow::Borrowed).collect()
+    }
+
     fn apply<F>(&self, op: &mut F) -> Result<VisitRecursion>
     where
         F: FnMut(&Self) -> Result<VisitRecursion>,
@@ -91,21 +96,6 @@ impl TreeNode for LogicalPlan {
         visitor.post_visit(self)
     }
 
-    fn apply_children<F>(&self, op: &mut F) -> Result<VisitRecursion>
-    where
-        F: FnMut(&Self) -> Result<VisitRecursion>,
-    {
-        for child in self.inputs() {
-            match op(child)? {
-                VisitRecursion::Continue => {}
-                VisitRecursion::Skip => return Ok(VisitRecursion::Continue),
-                VisitRecursion::Stop => return Ok(VisitRecursion::Stop),
-            }
-        }
-
-        Ok(VisitRecursion::Continue)
-    }
-
     fn map_children<F>(self, transform: F) -> Result<Self>
     where
         F: FnMut(Self) -> Result<Self>,
@@ -123,7 +113,7 @@ impl TreeNode for LogicalPlan {
             .zip(new_children.iter())
             .any(|(c1, c2)| c1 != &c2)
         {
-            self.with_new_inputs(new_children.as_slice())
+            self.with_new_exprs(self.expressions(), new_children.as_slice())
         } else {
             Ok(self)
         }

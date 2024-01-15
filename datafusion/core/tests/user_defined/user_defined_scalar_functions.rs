@@ -43,7 +43,7 @@ async fn csv_query_custom_udf_with_cast() -> Result<()> {
         "+------------------------------------------+",
         "| AVG(custom_sqrt(aggregate_test_100.c11)) |",
         "+------------------------------------------+",
-        "| 0.6584408483418833                       |",
+        "| 0.6584408483418835                       |",
         "+------------------------------------------+",
     ];
     assert_batches_eq!(&expected, &actual);
@@ -61,7 +61,7 @@ async fn csv_query_avg_sqrt() -> Result<()> {
         "+------------------------------------------+",
         "| AVG(custom_sqrt(aggregate_test_100.c12)) |",
         "+------------------------------------------+",
-        "| 0.6706002946036462                       |",
+        "| 0.6706002946036459                       |",
         "+------------------------------------------+",
     ];
     assert_batches_eq!(&expected, &actual);
@@ -291,8 +291,8 @@ async fn udaf_as_window_func() -> Result<()> {
     context.register_udaf(my_acc);
 
     let sql = "SELECT a, MY_ACC(b) OVER(PARTITION BY a) FROM my_table";
-    let expected = r#"Projection: my_table.a, AggregateUDF { name: "my_acc", signature: Signature { type_signature: Exact([Int32]), volatility: Immutable }, fun: "<FUNC>" }(my_table.b) PARTITION BY [my_table.a] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
-  WindowAggr: windowExpr=[[AggregateUDF { name: "my_acc", signature: Signature { type_signature: Exact([Int32]), volatility: Immutable }, fun: "<FUNC>" }(my_table.b) PARTITION BY [my_table.a] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
+    let expected = r#"Projection: my_table.a, AggregateUDF { inner: AggregateUDF { name: "my_acc", signature: Signature { type_signature: Exact([Int32]), volatility: Immutable }, fun: "<FUNC>" } }(my_table.b) PARTITION BY [my_table.a] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
+  WindowAggr: windowExpr=[[AggregateUDF { inner: AggregateUDF { name: "my_acc", signature: Signature { type_signature: Exact([Int32]), volatility: Immutable }, fun: "<FUNC>" } }(my_table.b) PARTITION BY [my_table.a] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
     TableScan: my_table"#;
 
     let dataframe = context.sql(sql).await.unwrap();
