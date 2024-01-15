@@ -1170,7 +1170,7 @@ mod tests {
                 last_value_func,
                 &[],
                 &[],
-                Arc::new(WindowFrame::new_frame(
+                Arc::new(WindowFrame::new_bounds(
                     WindowFrameUnits::Rows,
                     WindowFrameBound::Preceding(ScalarValue::UInt64(None)),
                     WindowFrameBound::CurrentRow,
@@ -1181,7 +1181,7 @@ mod tests {
                 nth_value_func1,
                 &[],
                 &[],
-                Arc::new(WindowFrame::new_frame(
+                Arc::new(WindowFrame::new_bounds(
                     WindowFrameUnits::Rows,
                     WindowFrameBound::Preceding(ScalarValue::UInt64(None)),
                     WindowFrameBound::CurrentRow,
@@ -1192,7 +1192,7 @@ mod tests {
                 nth_value_func2,
                 &[],
                 &[],
-                Arc::new(WindowFrame::new_frame(
+                Arc::new(WindowFrame::new_bounds(
                     WindowFrameUnits::Rows,
                     WindowFrameBound::Preceding(ScalarValue::UInt64(None)),
                     WindowFrameBound::CurrentRow,

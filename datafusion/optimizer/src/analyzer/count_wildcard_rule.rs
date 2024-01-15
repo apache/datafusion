@@ -346,7 +346,7 @@ mod tests {
                 vec![wildcard()],
                 vec![],
                 vec![Expr::Sort(Sort::new(Box::new(col("a")), false, true))],
-                WindowFrame::new_frame(
+                WindowFrame::new_bounds(
                     WindowFrameUnits::Range,
                     WindowFrameBound::Preceding(ScalarValue::UInt32(Some(6))),
                     WindowFrameBound::Following(ScalarValue::UInt32(Some(2))),

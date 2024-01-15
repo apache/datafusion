@@ -1686,7 +1686,7 @@ fn roundtrip_window() {
     ));
 
     // 3. with window_frame with row numbers
-    let range_number_frame = WindowFrame::new_frame(
+    let range_number_frame = WindowFrame::new_bounds(
         WindowFrameUnits::Range,
         WindowFrameBound::Preceding(ScalarValue::UInt64(Some(2))),
         WindowFrameBound::Following(ScalarValue::UInt64(Some(2))),
@@ -1703,7 +1703,7 @@ fn roundtrip_window() {
     ));
 
     // 4. test with AggregateFunction
-    let row_number_frame = WindowFrame::new_frame(
+    let row_number_frame = WindowFrame::new_bounds(
         WindowFrameUnits::Rows,
         WindowFrameBound::Preceding(ScalarValue::UInt64(Some(2))),
         WindowFrameBound::Following(ScalarValue::UInt64(Some(2))),

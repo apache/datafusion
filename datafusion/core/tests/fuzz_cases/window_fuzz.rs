@@ -139,67 +139,64 @@ async fn window_bounded_window_random_comparison() -> Result<()> {
     Ok(())
 }
 
-// This tests whether we can generate bounded window results for each input batch immediately for causal window frames.
+// This tests whether we can generate bounded window results for each input
+// batch immediately for causal window frames.
 #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
 async fn bounded_window_causal_non_causal() -> Result<()> {
     let session_config = SessionConfig::new();
     let ctx = SessionContext::new_with_config(session_config);
     let mut batches = make_staggered_batches::<true>(1000, 10, 23_u64);
-    // Remove empty batches
+    // Remove empty batches:
     batches.retain(|batch| batch.num_rows() > 0);
     let schema = batches[0].schema();
     let memory_exec = Arc::new(MemoryExec::try_new(
         &[batches.clone()],
         schema.clone(),
         None,
-    )?) as Arc<dyn ExecutionPlan>;
+    )?);
     let window_fn = WindowFunctionDefinition::AggregateFunction(AggregateFunction::Count);
-    let fn_name = "count".to_string();
+    let fn_name = "COUNT".to_string();
     let args = vec![col("x", &schema)?];
     let partitionby_exprs = vec![];
     let orderby_exprs = vec![];
-    // unbounded preceding
+    // Window frame starts with "UNBOUNDED PRECEDING":
     let start_bound = WindowFrameBound::Preceding(ScalarValue::UInt64(None));
 
+    // Simulate cases of the following form:
+    // COUNT(x) OVER (
+    //     ROWS BETWEEN UNBOUNDED PRECEDING AND <end_bound> PRECEDING/FOLLOWING
+    // )
     for is_preceding in [false, true] {
         for end_bound in [0, 1, 2, 3] {
             let end_bound = if is_preceding {
-                // end_bound PRECEDING
                 WindowFrameBound::Preceding(ScalarValue::UInt64(Some(end_bound)))
             } else {
-                // end_bound FOLLOWING
                 WindowFrameBound::Following(ScalarValue::UInt64(Some(end_bound)))
             };
-            let window_frame = WindowFrame::new_frame(
+            let window_frame = WindowFrame::new_bounds(
                 WindowFrameUnits::Rows,
                 start_bound.clone(),
                 end_bound,
             );
+            let causal = window_frame.is_causal();
 
-            let search_mode = InputOrderMode::Linear;
-            // BoundedWindowAggExec(Count(x) OVER(ROW BETWEEN UNBOUNDED PRECEDING AND <end bound> PRECEDING/FOLLOWING))
-            let running_window_exec = Arc::new(
-                BoundedWindowAggExec::try_new(
-                    vec![create_window_expr(
-                        &window_fn,
-                        fn_name.clone(),
-                        &args,
-                        &partitionby_exprs,
-                        &orderby_exprs,
-                        Arc::new(window_frame.clone()),
-                        schema.as_ref(),
-                    )
-                    .unwrap()],
-                    memory_exec.clone(),
-                    vec![],
-                    search_mode,
-                )
-                .unwrap(),
-            ) as Arc<dyn ExecutionPlan>;
+            let window_expr = create_window_expr(
+                &window_fn,
+                fn_name.clone(),
+                &args,
+                &partitionby_exprs,
+                &orderby_exprs,
+                Arc::new(window_frame),
+                schema.as_ref(),
+            )?;
+            let running_window_exec = Arc::new(BoundedWindowAggExec::try_new(
+                vec![window_expr],
+                memory_exec.clone(),
+                vec![],
+                InputOrderMode::Linear,
+            )?);
             let task_ctx = ctx.task_ctx();
-            let mut collected_results = collect(running_window_exec, task_ctx.clone())
-                .await
-                .unwrap();
+            let mut collected_results = collect(running_window_exec, task_ctx).await?;
             collected_results.retain(|batch| batch.num_rows() > 0);
             let input_batch_sizes = batches
                 .iter()
@@ -209,13 +206,14 @@ async fn bounded_window_causal_non_causal() -> Result<()> {
                 .iter()
                 .map(|batch| batch.num_rows())
                 .collect::<Vec<_>>();
-            if window_frame.is_causal() {
-                // For causal window frames, for each input batch we can generate result immediately
-                // Hence batch sizes should match
+            if causal {
+                // For causal window frames, we can generate results immediately
+                // for each input batch. Hence, batch sizes should match.
                 assert_eq!(input_batch_sizes, result_batch_sizes);
             } else {
-                // For non-causal window frames, for each input batch we cannot generate result immediately
-                // Hence batch sizes shouldn't match
+                // For non-causal window frames, we cannot generate results
+                // immediately for each input batch. Hence, batch sizes shouldn't
+                // match.
                 assert_ne!(input_batch_sizes, result_batch_sizes);
             }
         }
@@ -428,7 +426,7 @@ fn get_random_window_frame(rng: &mut StdRng, is_linear: bool) -> WindowFrame {
             } else {
                 WindowFrameBound::Following(ScalarValue::Int32(Some(end_bound.val)))
             };
-            let mut window_frame = WindowFrame::new_frame(units, start_bound, end_bound);
+            let mut window_frame = WindowFrame::new_bounds(units, start_bound, end_bound);
             // with 10% use unbounded preceding in tests
             if rng.gen_range(0..10) == 0 {
                 window_frame.start_bound =
@@ -456,7 +454,7 @@ fn get_random_window_frame(rng: &mut StdRng, is_linear: bool) -> WindowFrame {
                     end_bound.val as u64,
                 )))
             };
-            let mut window_frame = WindowFrame::new_frame(units, start_bound, end_bound);
+            let mut window_frame = WindowFrame::new_bounds(units, start_bound, end_bound);
             // with 10% use unbounded preceding in tests
             if rng.gen_range(0..10) == 0 {
                 window_frame.start_bound =

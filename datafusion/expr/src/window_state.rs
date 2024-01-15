@@ -682,7 +682,7 @@ mod tests {
 
     #[test]
     fn test_window_frame_group_boundaries() -> Result<()> {
-        let window_frame = Arc::new(WindowFrame::new_frame(
+        let window_frame = Arc::new(WindowFrame::new_bounds(
             WindowFrameUnits::Groups,
             WindowFrameBound::Preceding(ScalarValue::UInt64(Some(1))),
             WindowFrameBound::Following(ScalarValue::UInt64(Some(1))),
@@ -703,7 +703,7 @@ mod tests {
 
     #[test]
     fn test_window_frame_group_boundaries_both_following() -> Result<()> {
-        let window_frame = Arc::new(WindowFrame::new_frame(
+        let window_frame = Arc::new(WindowFrame::new_bounds(
             WindowFrameUnits::Groups,
             WindowFrameBound::Following(ScalarValue::UInt64(Some(1))),
             WindowFrameBound::Following(ScalarValue::UInt64(Some(2))),
@@ -724,7 +724,7 @@ mod tests {
 
     #[test]
     fn test_window_frame_group_boundaries_both_preceding() -> Result<()> {
-        let window_frame = Arc::new(WindowFrame::new_frame(
+        let window_frame = Arc::new(WindowFrame::new_bounds(
             WindowFrameUnits::Groups,
             WindowFrameBound::Preceding(ScalarValue::UInt64(Some(2))),
             WindowFrameBound::Preceding(ScalarValue::UInt64(Some(1))),

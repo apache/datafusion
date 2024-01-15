@@ -973,7 +973,7 @@ pub async fn from_substrait_rex(
                 )
                 .await?,
                 order_by,
-                window_frame: datafusion::logical_expr::WindowFrame::new_frame(
+                window_frame: datafusion::logical_expr::WindowFrame::new_bounds(
                     units,
                     from_substrait_bound(&window.lower_bound, true)?,
                     from_substrait_bound(&window.upper_bound, false)?,

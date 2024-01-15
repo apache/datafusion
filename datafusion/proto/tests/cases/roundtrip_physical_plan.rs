@@ -255,7 +255,7 @@ fn roundtrip_window() -> Result<()> {
     let field_b = Field::new("b", DataType::Int64, false);
     let schema = Arc::new(Schema::new(vec![field_a, field_b]));
 
-    let window_frame = WindowFrame::new_frame(
+    let window_frame = WindowFrame::new_bounds(
         datafusion_expr::WindowFrameUnits::Range,
         WindowFrameBound::Preceding(ScalarValue::Int64(None)),
         WindowFrameBound::CurrentRow,
@@ -289,7 +289,7 @@ fn roundtrip_window() -> Result<()> {
         Arc::new(WindowFrame::new(None)),
     ));
 
-    let window_frame = WindowFrame::new_frame(
+    let window_frame = WindowFrame::new_bounds(
         datafusion_expr::WindowFrameUnits::Range,
         WindowFrameBound::CurrentRow,
         WindowFrameBound::Preceding(ScalarValue::Int64(None)),

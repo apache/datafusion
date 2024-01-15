@@ -23,32 +23,76 @@
 //! - An ending frame boundary,
 //! - An EXCLUDE clause.
 
+use std::convert::{From, TryFrom};
+use std::fmt::{self, Formatter};
+use std::hash::Hash;
+
 use crate::expr::Sort;
 use crate::Expr;
+
 use datafusion_common::{plan_err, sql_err, DataFusionError, Result, ScalarValue};
 use sqlparser::ast;
 use sqlparser::parser::ParserError::ParserError;
-use std::convert::{From, TryFrom};
-use std::fmt;
-use std::fmt::Formatter;
-use std::hash::Hash;
 
-/// The frame-spec determines which output rows are read by an aggregate window function.
-///
-/// The ending frame boundary can be omitted (if the BETWEEN and AND keywords that surround the
-/// starting frame boundary are also omitted), in which case the ending frame boundary defaults to
-/// CURRENT ROW.
+/// The frame specification determines which output rows are read by an aggregate
+/// window function. The ending frame boundary can be omitted if the `BETWEEN`
+/// and `AND` keywords that surround the starting frame boundary are also omitted,
+/// in which case the ending frame boundary defaults to `CURRENT ROW`.
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct WindowFrame {
-    /// A frame type - either ROWS, RANGE or GROUPS
+    /// Frame type - either `ROWS`, `RANGE` or `GROUPS`
     pub units: WindowFrameUnits,
-    /// A starting frame boundary
+    /// Starting frame boundary
     pub start_bound: WindowFrameBound,
-    /// An ending frame boundary
+    /// Ending frame boundary
     pub end_bound: WindowFrameBound,
-    /// Flag indicates whether window frame is causal
-    /// See documentation for [is_frame_causal] for what causal means in this context and how it is calculated.
-    is_causal: bool,
+    /// Flag indicating whether the frame is causal (i.e. computing the result
+    /// for the current row doesn't depend on any subsequent rows).
+    ///
+    /// Example causal window frames:
+    /// ```text
+    ///                +--------------+
+    ///      Future    |              |
+    ///         |      |              |
+    ///         |      |              |
+    ///    Current Row |+------------+|  ---
+    ///         |      |              |   |
+    ///         |      |              |   |
+    ///         |      |              |   |  Window Frame 1
+    ///       Past     |              |   |
+    ///                |              |   |
+    ///                |              |  ---
+    ///                +--------------+
+    ///
+    ///                +--------------+
+    ///      Future    |              |
+    ///         |      |              |
+    ///         |      |              |
+    ///    Current Row |+------------+|
+    ///         |      |              |
+    ///         |      |              | ---
+    ///         |      |              |  |
+    ///       Past     |              |  |  Window Frame 2
+    ///                |              |  |
+    ///                |              | ---
+    ///                +--------------+
+    /// ```
+    /// Example non-causal window frame:
+    /// ```text
+    ///                +--------------+
+    ///      Future    |              |
+    ///         |      |              |
+    ///         |      |              | ---
+    ///    Current Row |+------------+|  |
+    ///         |      |              |  |  Window Frame 3
+    ///         |      |              |  |
+    ///         |      |              | ---
+    ///       Past     |              |
+    ///                |              |
+    ///                |              |
+    ///                +--------------+
+    /// ```
+    causal: bool,
 }
 
 impl fmt::Display for WindowFrame {
@@ -97,13 +141,7 @@ impl TryFrom<ast::WindowFrame> for WindowFrame {
             }
         };
         let units = value.units.into();
-        let is_causal = is_frame_causal(&units, &end_bound);
-        Ok(Self {
-            units,
-            start_bound,
-            end_bound,
-            is_causal,
-        })
+        Ok(Self::new_bounds(units, start_bound, end_bound))
     }
 }
 
@@ -117,7 +155,7 @@ impl WindowFrame {
             // is used) from beginning to the `CURRENT ROW` (with same rank). It
             // is used when the `OVER` clause contains an `ORDER BY` clause but
             // no frame.
-            WindowFrame {
+            Self {
                 units: if strict {
                     WindowFrameUnits::Rows
                 } else {
@@ -125,18 +163,17 @@ impl WindowFrame {
                 },
                 start_bound: WindowFrameBound::Preceding(ScalarValue::Null),
                 end_bound: WindowFrameBound::CurrentRow,
-                // When mode is Rows, it is causal when mode is Range it is not
-                is_causal: strict,
+                causal: strict,
             }
         } else {
             // This window frame covers the whole table (or partition if `PARTITION BY`
             // is used). It is used when the `OVER` clause does not contain an
             // `ORDER BY` clause and there is no frame.
-            WindowFrame {
+            Self {
                 units: WindowFrameUnits::Rows,
                 start_bound: WindowFrameBound::Preceding(ScalarValue::UInt64(None)),
                 end_bound: WindowFrameBound::Following(ScalarValue::UInt64(None)),
-                is_causal: false,
+                causal: false,
             }
         }
     }
@@ -146,131 +183,69 @@ impl WindowFrame {
     /// `2 ROWS PRECEDING AND 3 ROWS FOLLOWING`
     pub fn reverse(&self) -> Self {
         let start_bound = match &self.end_bound {
-            WindowFrameBound::Preceding(elem) => {
-                WindowFrameBound::Following(elem.clone())
+            WindowFrameBound::Preceding(value) => {
+                WindowFrameBound::Following(value.clone())
             }
-            WindowFrameBound::Following(elem) => {
-                WindowFrameBound::Preceding(elem.clone())
+            WindowFrameBound::Following(value) => {
+                WindowFrameBound::Preceding(value.clone())
             }
             WindowFrameBound::CurrentRow => WindowFrameBound::CurrentRow,
         };
         let end_bound = match &self.start_bound {
-            WindowFrameBound::Preceding(elem) => {
-                WindowFrameBound::Following(elem.clone())
+            WindowFrameBound::Preceding(value) => {
+                WindowFrameBound::Following(value.clone())
             }
-            WindowFrameBound::Following(elem) => {
-                WindowFrameBound::Preceding(elem.clone())
+            WindowFrameBound::Following(value) => {
+                WindowFrameBound::Preceding(value.clone())
             }
             WindowFrameBound::CurrentRow => WindowFrameBound::CurrentRow,
         };
-        let is_causal = is_frame_causal(&self.units, &end_bound);
-        WindowFrame {
-            units: self.units,
-            start_bound,
-            end_bound,
-            is_causal,
-        }
+        Self::new_bounds(self.units, start_bound, end_bound)
     }
 
     /// Get whether window frame is causal
     pub fn is_causal(&self) -> bool {
-        self.is_causal
+        self.causal
     }
 
-    /// Initializes window frame from units (window bound type), start bound and end bound
-    pub fn new_frame(
+    /// Initializes window frame from units (type), start bound and end bound.
+    pub fn new_bounds(
         units: WindowFrameUnits,
         start_bound: WindowFrameBound,
         end_bound: WindowFrameBound,
     ) -> Self {
-        let is_causal = is_frame_causal(&units, &end_bound);
-        WindowFrame {
+        let causal = match units {
+            WindowFrameUnits::Rows => match &end_bound {
+                WindowFrameBound::Following(value) => {
+                    if value.is_null() {
+                        // Unbounded following
+                        false
+                    } else {
+                        let zero = ScalarValue::new_zero(&value.data_type());
+                        zero.map(|zero| value.eq(&zero)).unwrap_or(false)
+                    }
+                }
+                _ => true,
+            },
+            WindowFrameUnits::Range | WindowFrameUnits::Groups => match &end_bound {
+                WindowFrameBound::Preceding(value) => {
+                    if value.is_null() {
+                        // Unbounded preceding
+                        true
+                    } else {
+                        let zero = ScalarValue::new_zero(&value.data_type());
+                        zero.map(|zero| value.gt(&zero)).unwrap_or(false)
+                    }
+                }
+                _ => false,
+            },
+        };
+        Self {
             units,
             start_bound,
             end_bound,
-            is_causal,
+            causal,
         }
-    }
-}
-
-/// Calculates whether window frame is causal or not given window frame unit, and end bound of the
-/// window frame.
-///
-/// Causal window frames refer to data only from past or present.
-///
-/// As an example following window frame is causal where window frame
-/// range refers to past and current values.
-///                +--------------+
-///      Future    |              |
-///         |      |              |
-///         |      |              |
-///    Current Row |+------------+|  ---
-///         |      |              |   |
-///         |      |              |   |
-///         |      |              |   |  Window Frame Range
-///       Past     |              |   |
-///                |              |   |
-///                |              |  ---
-///                +--------------+
-///
-/// Similarly, following window frame is causal also
-/// where window frame refers past values
-///                +--------------+
-///      Future    |              |
-///         |      |              |
-///         |      |              |
-///    Current Row |+------------+|
-///         |      |              |
-///         |      |              | ---
-///         |      |              |  |
-///       Past     |              |  |  Window Frame Range
-///                |              |  |
-///                |              | ---
-///                +--------------+
-///
-/// However, following is not where window frame refers values from future.
-///                +--------------+
-///      Future    |              |
-///         |      |              |
-///         |      |              | ---
-///    Current Row |+------------+|  |
-///         |      |              |  |  Window Frame Range
-///         |      |              |  |
-///         |      |              | ---
-///       Past     |              |
-///                |              |
-///                |              |
-///                +--------------+
-fn is_frame_causal(frame_units: &WindowFrameUnits, end_bound: &WindowFrameBound) -> bool {
-    match frame_units {
-        WindowFrameUnits::Rows => match end_bound {
-            WindowFrameBound::Following(val) => {
-                if val.is_null() {
-                    // unbounded following
-                    false
-                } else {
-                    ScalarValue::new_zero(&val.data_type())
-                        .map(|zero| val.eq(&zero))
-                        .unwrap_or(false)
-                }
-            }
-            _ => true,
-        },
-        WindowFrameUnits::Range | WindowFrameUnits::Groups => match end_bound {
-            WindowFrameBound::Preceding(val) => {
-                // val can be either numeric type or Utf8 type (which is initial type after parsing)
-                // In subsequent stages, Utf8 type converted to the appropriate types.
-                if val.is_null() {
-                    // unbounded preceding
-                    true
-                } else {
-                    ScalarValue::new_zero(&val.data_type())
-                        .map(|zero| val.gt(&zero))
-                        .unwrap_or(false)
-                }
-            }
-            _ => false,
-        },
     }
 }
 
