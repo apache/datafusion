@@ -255,10 +255,13 @@ impl DFSchema {
 
         let mut new_metadata = self.inner.metadata.clone();
         new_metadata.extend(schema.inner.metadata.clone());
+        self.functional_dependencies
+            .extend(schema.functional_dependencies);
 
         let new_self = Self {
             inner: Arc::new(Schema::new_with_metadata(new_fields, new_metadata)),
             field_qualifiers: new_field_qualifiers,
+            functional_dependencies: self.functional_dependencies.clone(),
         };
         Ok(new_self)
     }
@@ -269,10 +272,10 @@ impl DFSchema {
         if other_schema.fields.is_empty() {
             return;
         }
-        for field in other_schema.fields() {
+        for (qualifier, field) in other_schema.iter() {
             // skip duplicate columns
-            let duplicated_field = match field.qualifier() {
-                Some(q) => self.has_column_with_qualified_name(q, field.name()),
+            let duplicated_field = match qualifier {
+                Some(q) => self.has_column_with_qualified_name(qualifier, field.name()),
                 // for unqualified columns, check as unqualified name
                 None => self.has_column_with_unqualified_name(field.name()),
             };
@@ -373,7 +376,7 @@ impl DFSchema {
         &self,
         qualifier: Option<&TableReference>,
         name: &str,
-    ) -> Result<&DFField> {
+    ) -> Result<&Field> {
         if let Some(qualifier) = qualifier {
             self.field_with_qualified_name(qualifier, name)
         } else {
@@ -382,11 +385,8 @@ impl DFSchema {
     }
 
     /// Find all fields having the given qualifier
-    pub fn fields_with_qualified(&self, qualifier: &TableReference) -> Vec<&DFField> {
-        self.fields
-            .iter()
-            .filter(|field| field.qualifier().map(|q| q.eq(qualifier)).unwrap_or(false))
-            .collect()
+    pub fn fields_with_qualified(&self, qualifier: &TableReference) -> Vec<&Field> {
+        self.iter().filter(|(q, f)| q == qualifier).collect()
     }
 
     /// Find all fields indices having the given qualifier
@@ -394,56 +394,24 @@ impl DFSchema {
         &self,
         qualifier: &TableReference,
     ) -> Vec<usize> {
-        // self.inner
-        //     .fields
-        //     .iter()
-        //     .enumerate()
-        //     .filter_map(|(idx, field)| {
-        //         field
-        //             .qualifier()
-        //             .and_then(|q| q.eq(qualifier).then_some(idx))
-        //     })
-        //     .collect()
-    }
-
-    /// Find all fields match the given name
-    pub fn fields_with_unqualified_name(&self, name: &str) -> Vec<&DFField> {
-        self.fields
-            .iter()
-            .filter(|field| field.name() == name)
+        self.iter()
+            .enumerate()
+            .filter(|(idx, (q, field))| qualifier == q)
             .collect()
     }
 
+    /// Find all fields match the given name
+    pub fn fields_with_unqualified_name(&self, name: &str) -> Vec<&Field> {
+        self.iter().filter(|field| field.name() == name).collect()
+    }
+
     /// Find the field with the given name
-    pub fn field_with_unqualified_name(&self, name: &str) -> Result<&DFField> {
-        let matches = self.fields_with_unqualified_name(name);
-        match matches.len() {
-            0 => Err(unqualified_field_not_found(name, self)),
-            1 => Ok(matches[0]),
-            _ => {
-                // When `matches` size > 1, it doesn't necessarily mean an `ambiguous name` problem.
-                // Because name may generate from Alias/... . It means that it don't own qualifier.
-                // For example:
-                //             Join on id = b.id
-                // Project a.id as id   TableScan b id
-                // In this case, there isn't `ambiguous name` problem. When `matches` just contains
-                // one field without qualifier, we should return it.
-                let fields_without_qualifier = matches
-                    .iter()
-                    .filter(|f| f.qualifier.is_none())
-                    .collect::<Vec<_>>();
-                if fields_without_qualifier.len() == 1 {
-                    Ok(fields_without_qualifier[0])
-                } else {
-                    _schema_err!(SchemaError::AmbiguousReference {
-                        field: Column {
-                            relation: None,
-                            name: name.to_string(),
-                        },
-                    })
-                }
-            }
-        }
+    pub fn field_with_unqualified_name(&self, name: &str) -> Result<&Field> {
+        let field = self
+            .iter()
+            .filter(|(q, f)| name == f.name())
+            .map(|(q, f)| f);
+        Ok(field)
     }
 
     /// Find the field with the given qualified name
@@ -451,12 +419,12 @@ impl DFSchema {
         &self,
         qualifier: &TableReference,
         name: &str,
-    ) -> Result<&DFField> {
-        let idx = self
-            .index_of_column_by_name(Some(qualifier), name)?
-            .ok_or_else(|| field_not_found(Some(qualifier.to_string()), name, self))?;
-
-        Ok(self.field(idx))
+    ) -> Result<&Field> {
+        let field = self
+            .iter()
+            .find(|(q, f)| q == qualifier && name == f.name())
+            .map(|(q, f)| f);
+        Ok(field)
     }
 
     /// Find the field with the given qualified column
@@ -663,33 +631,21 @@ impl DFSchema {
 
     /// Strip all field qualifier in schema
     pub fn strip_qualifiers(self) -> Self {
-        DFSchema {
-            fields: self
-                .fields
-                .into_iter()
-                .map(|f| f.strip_qualifier())
-                .collect(),
-            ..self
-        }
+        self.field_qualifiers = vec![None; self.inner.fields.len()];
+        self
     }
 
     /// Replace all field qualifier with new value in schema
     pub fn replace_qualifier(self, qualifier: impl Into<OwnedTableReference>) -> Self {
         let qualifier = qualifier.into();
-        DFSchema {
-            fields: self
-                .fields
-                .into_iter()
-                .map(|f| DFField::from_qualified(qualifier.clone(), f.field))
-                .collect(),
-            ..self
-        }
+        self.field_qualifiers = vec![qualifier; self.inner.fields().len()];
+        self
     }
 
     /// Get list of fully-qualified field names in this schema
     pub fn field_names(&self) -> Vec<String> {
         self.iter()
-            .map(|qualifier, field| qualified_name(qualifier, field))
+            .map(|(qualifier, field)| qualified_name(&qualifier, field))
             .collect::<Vec<_>>()
     }
 
@@ -733,14 +689,12 @@ impl From<&DFSchema> for Schema {
 impl TryFrom<Schema> for DFSchema {
     type Error = DataFusionError;
     fn try_from(schema: Schema) -> Result<Self, Self::Error> {
-        Self::new_with_metadata(
-            schema
-                .fields()
-                .iter()
-                .map(|f| DFField::from(f.clone()))
-                .collect(),
-            schema.metadata().clone(),
-        )
+        let dfschema = Self {
+            inner: schema,
+            field_qualifiers: vec![None, schema.fields.len()],
+            functional_dependencies: FunctionalDependencies::empty(),
+        };
+        Ok(dfschema)
     }
 }
 
@@ -753,8 +707,8 @@ impl From<DFSchema> for SchemaRef {
 // Hashing refers to a subset of fields considered in PartialEq.
 impl Hash for DFSchema {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.fields.hash(state);
-        self.metadata.len().hash(state); // HashMap is not hashable
+        self.inner.fields.hash(state);
+        self.inner.metadata.len().hash(state); // HashMap is not hashable
     }
 }
 
@@ -789,9 +743,18 @@ impl ToDFSchema for SchemaRef {
     }
 }
 
-impl ToDFSchema for Vec<DFField> {
+impl ToDFSchema for Vec<Field> {
     fn to_dfschema(self) -> Result<DFSchema> {
-        DFSchema::new_with_metadata(self, HashMap::new())
+        let schema = Schema {
+            fields: self.into(),
+            metadata: HashMap::new(),
+        };
+        let dfschema = DFSchema {
+            inner: schema.into(),
+            field_qualifiers: vec![None; self.len()],
+            functional_dependencies: FunctionalDependencies::empty(),
+        };
+        Ok(dfschema)
     }
 }
 
@@ -800,12 +763,13 @@ impl Display for DFSchema {
         write!(
             f,
             "fields:[{}], metadata:{:?}",
-            self.fields
+            self.inner
+                .fields
                 .iter()
                 .map(|field| field.qualified_name())
                 .collect::<Vec<String>>()
                 .join(", "),
-            self.metadata
+            self.inner.metadata
         )
     }
 }
