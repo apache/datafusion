@@ -2228,7 +2228,6 @@ impl ScalarValue {
                 let arr =
                     Arc::new(array_into_fixed_size_list_array(nested_array, list_size));
 
-                // ScalarValue::List(arr)
                 ScalarValue::FixedSizeList(arr)
             }
             DataType::Date32 => typed_cast!(array, index, Date32Array, Date32)?,
