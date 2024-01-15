@@ -19,7 +19,7 @@
 
 use std::borrow::Borrow;
 use std::cmp::Ordering;
-use std::collections::HashSet;
+use std::collections::{HashSet, VecDeque};
 use std::convert::{Infallible, TryInto};
 use std::hash::Hash;
 use std::str::FromStr;
@@ -2622,6 +2622,18 @@ impl ScalarValue {
         std::mem::size_of_val(vec)
             + (std::mem::size_of::<ScalarValue>() * vec.capacity())
             + vec
+                .iter()
+                .map(|sv| sv.size() - std::mem::size_of_val(sv))
+                .sum::<usize>()
+    }
+
+    /// Estimates [size](Self::size) of [`VecDeque`] in bytes.
+    ///
+    /// Includes the size of the [`VecDeque`] container itself.
+    pub fn size_of_vec_deque(vec_deque: &VecDeque<Self>) -> usize {
+        std::mem::size_of_val(vec_deque)
+            + (std::mem::size_of::<ScalarValue>() * vec_deque.capacity())
+            + vec_deque
                 .iter()
                 .map(|sv| sv.size() - std::mem::size_of_val(sv))
                 .sum::<usize>()

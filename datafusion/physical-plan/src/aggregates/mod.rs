@@ -903,6 +903,10 @@ fn get_aggregate_exprs_requirement(
         let aggr_req = PhysicalSortRequirement::from_sort_exprs(aggr_req);
         let reverse_aggr_req =
             PhysicalSortRequirement::from_sort_exprs(&reverse_aggr_req);
+
+        // Get absolutely necessary requirement for the aggregator.
+        let aggr_hard_req = get_aggregate_expr_req(aggr_expr, group_by, agg_mode);
+        let reverse_aggr_hard_req = reverse_order_bys(&aggr_hard_req);
         if let Some(first_value) = aggr_expr.as_any().downcast_ref::<FirstValue>() {
             let mut first_value = first_value.clone();
             if eq_properties.ordering_satisfy_requirement(&concat_slices(
@@ -925,7 +929,9 @@ fn get_aggregate_exprs_requirement(
                 first_value = first_value.with_requirement_satisfied(false);
                 *aggr_expr = Arc::new(first_value) as _;
             }
-        } else if let Some(last_value) = aggr_expr.as_any().downcast_ref::<LastValue>() {
+            continue;
+        }
+        if let Some(last_value) = aggr_expr.as_any().downcast_ref::<LastValue>() {
             let mut last_value = last_value.clone();
             if eq_properties.ordering_satisfy_requirement(&concat_slices(
                 prefix_requirement,
@@ -947,11 +953,41 @@ fn get_aggregate_exprs_requirement(
                 last_value = last_value.with_requirement_satisfied(false);
                 *aggr_expr = Arc::new(last_value) as _;
             }
-        } else if let Some(finer_ordering) =
+            continue;
+        }
+        if aggr_hard_req.is_empty() {
+            continue;
+        }
+        if eq_properties.ordering_satisfy(&aggr_hard_req) {
+            if let Some(finer_ordering) =
+                finer_ordering(&requirement, aggr_expr, group_by, eq_properties, agg_mode)
+            {
+                requirement = finer_ordering;
+                continue;
+            }
+        }
+        if let Some(reverse_aggr_expr) = aggr_expr.reverse_expr() {
+            if eq_properties.ordering_satisfy(&reverse_aggr_hard_req) {
+                if let Some(finer_ordering) = finer_ordering(
+                    &requirement,
+                    &reverse_aggr_expr,
+                    group_by,
+                    eq_properties,
+                    agg_mode,
+                ) {
+                    requirement = finer_ordering;
+                    *aggr_expr = reverse_aggr_expr;
+                    continue;
+                }
+            }
+        }
+        if let Some(finer_ordering) =
             finer_ordering(&requirement, aggr_expr, group_by, eq_properties, agg_mode)
         {
             requirement = finer_ordering;
-        } else if let Some(reverse_aggr_expr) = aggr_expr.reverse_expr() {
+            continue;
+        }
+        if let Some(reverse_aggr_expr) = aggr_expr.reverse_expr() {
             if let Some(finer_ordering) = finer_ordering(
                 &requirement,
                 &reverse_aggr_expr,
@@ -959,21 +995,17 @@ fn get_aggregate_exprs_requirement(
                 eq_properties,
                 agg_mode,
             ) {
-                *aggr_expr = reverse_aggr_expr;
                 requirement = finer_ordering;
-            } else {
-                return not_impl_err!(
-                    "Conflicting ordering requirements in aggregate functions is not supported"
-                );
+                *aggr_expr = reverse_aggr_expr;
+                continue;
             }
-        } else {
-            // If neither of the requirements satisfy the other, this means
-            // requirements are conflicting. Currently, we do not support
-            // conflicting requirements.
-            return not_impl_err!(
-                "Conflicting ordering requirements in aggregate functions is not supported"
-            );
         }
+        // If neither of the requirements satisfy the other, this means
+        // requirements are conflicting. Currently, we do not support
+        // conflicting requirements.
+        return not_impl_err!(
+            "Conflicting ordering requirements in aggregate functions is not supported"
+        );
     }
     Ok(PhysicalSortRequirement::from_sort_exprs(&requirement))
 }

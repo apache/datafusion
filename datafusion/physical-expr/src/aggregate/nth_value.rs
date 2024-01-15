@@ -19,6 +19,7 @@
 //! that can evaluated at runtime during query execution
 
 use std::any::Any;
+use std::collections::VecDeque;
 use std::sync::Arc;
 
 use crate::aggregate::array_agg_ordered::merge_ordered_arrays;
@@ -160,14 +161,14 @@ impl PartialEq<dyn Any> for NthValueAgg {
 pub(crate) struct NthValueAccumulator {
     n: i64,
     // `values` stores entries in the NTH_VALUE result.
-    values: Vec<ScalarValue>,
+    values: VecDeque<ScalarValue>,
     // `ordering_values` stores values of ordering requirement expression
     // corresponding to each value in the NTH_VALUE.
     // For each `ScalarValue` inside `values`, there will be a corresponding
     // `Vec<ScalarValue>` inside `ordering_values` which stores its ordering.
     // This information is used during merging results of the different partitions.
     // For detailed information how merging is done see [`merge_ordered_arrays`]
-    ordering_values: Vec<Vec<ScalarValue>>,
+    ordering_values: VecDeque<Vec<ScalarValue>>,
     // Stores datatype of the expression inside NTH_VALUE and ordering requirement expressions.
     datatypes: Vec<DataType>,
     // Stores ordering requirement of the Accumulator
@@ -191,8 +192,8 @@ impl NthValueAccumulator {
         datatypes.extend(ordering_dtypes.iter().cloned());
         Ok(Self {
             n,
-            values: vec![],
-            ordering_values: vec![],
+            values: VecDeque::new(),
+            ordering_values: VecDeque::new(),
             datatypes,
             ordering_req,
         })
@@ -237,7 +238,7 @@ impl Accumulator for NthValueAccumulator {
             let array_agg_res =
                 ScalarValue::convert_array_to_scalar_vec(array_agg_values)?;
             // Stores NTH_VALUE results coming from each partition
-            let mut partition_values = vec![];
+            let mut partition_values = VecDeque::new();
             // Existing values should be merged also.
             partition_values.extend(self.values.clone());
             for v in array_agg_res.into_iter() {
@@ -254,24 +255,27 @@ impl Accumulator for NthValueAccumulator {
             // values received from its ordering requirement expression. (This information is necessary for during merging).
 
             // Stores NTH_VALUE results coming from each partition
-            let mut partition_values = vec![];
+            let mut partition_values: Vec<&[ScalarValue]> = vec![];
             // Stores ordering requirement expression results coming from each partition
-            let mut partition_ordering_values = vec![];
+            let mut partition_ordering_values: Vec<&[Vec<ScalarValue>]> = vec![];
 
             // Existing values should be merged also.
-            partition_values.push(self.values.clone());
-            partition_ordering_values.push(self.ordering_values.clone());
+            let partition_value = self.values.make_contiguous();
+            partition_values.push(partition_value);
+
+            let partition_ordering_value = self.ordering_values.make_contiguous();
+            partition_ordering_values.push(partition_ordering_value);
 
             let array_agg_res =
                 ScalarValue::convert_array_to_scalar_vec(array_agg_values)?;
 
-            for v in array_agg_res.into_iter() {
+            for v in array_agg_res.iter() {
                 partition_values.push(v);
             }
 
             let orderings = ScalarValue::convert_array_to_scalar_vec(agg_orderings)?;
 
-            for partition_ordering_rows in orderings.into_iter() {
+            let ordering_values = orderings.into_iter().map(|partition_ordering_rows| {
                 // Extract value from struct to ordering_rows for each group/partition
                 let ordering_value = partition_ordering_rows.into_iter().map(|ordering_row| {
                     if let ScalarValue::Struct(Some(ordering_columns_per_row), _) = ordering_row {
@@ -283,8 +287,10 @@ impl Accumulator for NthValueAccumulator {
                             )
                     }
                 }).collect::<Result<Vec<_>>>()?;
-
-                partition_ordering_values.push(ordering_value);
+                Ok(ordering_value)
+            }).collect::<Result<Vec<_>>>()?;
+            for ordering_values in ordering_values.iter() {
+                partition_ordering_values.push(ordering_values);
             }
 
             let sort_options = self
@@ -297,8 +303,8 @@ impl Accumulator for NthValueAccumulator {
                 &partition_ordering_values,
                 &sort_options,
             )?;
-            self.values = new_values;
-            self.ordering_values = new_orderings;
+            self.values = new_values.into();
+            self.ordering_values = new_orderings.into();
         } else {
             return exec_err!("Expects to receive a list array");
         }
@@ -333,7 +339,7 @@ impl Accumulator for NthValueAccumulator {
 
     fn size(&self) -> usize {
         let mut total = std::mem::size_of_val(self)
-            + ScalarValue::size_of_vec(&self.values)
+            + ScalarValue::size_of_vec_deque(&self.values)
             - std::mem::size_of_val(&self.values);
 
         // Add size of the `self.ordering_values`
@@ -375,7 +381,9 @@ impl NthValueAccumulator {
     }
 
     fn evaluate_values(&self) -> ScalarValue {
-        ScalarValue::List(ScalarValue::new_list(&self.values, &self.datatypes[0]))
+        let mut values_cloned = self.values.clone();
+        let values_slice = values_cloned.make_contiguous();
+        ScalarValue::List(ScalarValue::new_list(values_slice, &self.datatypes[0]))
     }
 
     /// Updates state, with the `values`. Fetch contains missing number of entries for state to be complete
@@ -393,8 +401,8 @@ impl NthValueAccumulator {
         };
         for index in 0..n_to_add {
             let row = get_row_at_idx(values, index)?;
-            self.values.push(row[0].clone());
-            self.ordering_values.push(row[1..].to_vec());
+            self.values.push_back(row[0].clone());
+            self.ordering_values.push_back(row[1..].to_vec());
         }
         Ok(())
     }
