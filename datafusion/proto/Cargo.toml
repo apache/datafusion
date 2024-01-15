@@ -54,5 +54,5 @@ serde_json = { workspace = true, optional = true }
 
 [dev-dependencies]
 doc-comment = { workspace = true }
-tokio = "1.18"
 strum = { version = "0.25.0", features = ["derive"] }
+tokio = "1.18"
