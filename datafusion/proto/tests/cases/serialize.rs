@@ -23,9 +23,12 @@ use arrow::datatypes::DataType;
 use datafusion::execution::FunctionRegistry;
 use datafusion::physical_plan::functions::make_scalar_function;
 use datafusion::prelude::SessionContext;
+use datafusion_common::DataFusionError;
 use datafusion_expr::{col, create_udf, lit};
 use datafusion_expr::{Expr, Volatility};
 use datafusion_proto::bytes::Serializeable;
+
+use crate::cases::serialize;
 
 #[test]
 #[should_panic(
@@ -242,4 +245,32 @@ fn context_with_udf() -> SessionContext {
     ctx.register_udf(udf);
 
     ctx
+}
+
+#[test]
+fn test_expression_serialization_roundtrip() {
+    use datafusion_common::ScalarValue;
+    use datafusion_expr::expr::ScalarFunction;
+    use datafusion_expr::BuiltinScalarFunction;
+    use datafusion_proto::logical_plan::from_proto::parse_expr;
+    use datafusion_proto::protobuf::LogicalExprNode;
+    use strum::IntoEnumIterator;
+
+    let ctx = SessionContext::new();
+    let lit = Expr::Literal(ScalarValue::Utf8(None));
+    for builtin_fun in BuiltinScalarFunction::iter() {
+        let expr =
+            Expr::ScalarFunction(ScalarFunction::new(builtin_fun, vec![lit.clone(); 4]));
+
+        let proto = LogicalExprNode::try_from(&expr).unwrap();
+
+        let desirilize = parse_expr(&proto, &ctx).unwrap();
+
+        let serialize_name = expr.display_name().unwrap();
+        let serialize_name = serialize_name.split("(").collect::<Vec<&str>>()[0];
+
+        let deserialize_name = desirilize.display_name().unwrap();
+        let deserialize_name = deserialize_name.split("(").collect::<Vec<&str>>()[0];
+        assert_eq!(serialize_name, deserialize_name);
+    }
 }
