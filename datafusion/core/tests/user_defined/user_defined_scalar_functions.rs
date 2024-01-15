@@ -167,13 +167,12 @@ async fn scalar_udf_zero_params() -> Result<()> {
     ctx.register_batch("t", batch)?;
     // create function just returns 100 regardless of inp
     let myfunc = Arc::new(|args: &[ColumnarValue]| {
-        let ColumnarValue::Array(array) = &args[0] else {
-            panic!()
+        let ColumnarValue::Scalar(_) = &args[0] else {
+            panic!("expect scalar")
         };
-        let num_rows = array.len();
-        Ok(ColumnarValue::Array(Arc::new(
-            (0..num_rows).map(|_| 100).collect::<Int32Array>(),
-        ) as ArrayRef))
+        Ok(ColumnarValue::Array(
+            Arc::new((0..1).map(|_| 100).collect::<Int32Array>()) as ArrayRef,
+        ))
     });
 
     ctx.register_udf(create_udf(
