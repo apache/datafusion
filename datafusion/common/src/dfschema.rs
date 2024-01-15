@@ -18,7 +18,7 @@
 //! DFSchema is an extended schema struct that DataFusion uses to provide support for
 //! fields with optional relation names.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap};
 use std::convert::TryFrom;
 use std::fmt::{Display, Formatter};
 use std::hash::Hash;
@@ -135,8 +135,8 @@ impl DFSchema {
         fields: Vec<DFField>,
         metadata: HashMap<String, String>,
     ) -> Result<Self> {
-        let mut qualified_names = HashSet::new();
-        let mut unqualified_names = HashSet::new();
+        let mut qualified_names = BTreeSet::new();
+        let mut unqualified_names = BTreeSet::new();
 
         for field in &fields {
             if let Some(qualifier) = field.qualifier() {
@@ -148,14 +148,8 @@ impl DFSchema {
             }
         }
 
-        // check for mix of qualified and unqualified field with same unqualified name
-        // note that we need to sort the contents of the HashSet first so that errors are
-        // deterministic
-        let mut qualified_names = qualified_names
-            .iter()
-            .map(|(l, r)| (l.to_owned(), r.to_owned()))
-            .collect::<Vec<(&OwnedTableReference, &String)>>();
-        qualified_names.sort();
+        // Check for mix of qualified and unqualified fields with same unqualified name.
+        // The BTreeSet storage makes sure that errors are reported in deterministic order.
         for (qualifier, name) in &qualified_names {
             if unqualified_names.contains(name) {
                 return _schema_err!(SchemaError::AmbiguousReference {
