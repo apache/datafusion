@@ -88,7 +88,7 @@ async fn scalar_udf() -> Result<()> {
         let ColumnarValue::Array(l) = &args[0] else {
             panic!()
         };
-        let ColumnarValue::Array(r) = &args[0] else {
+        let ColumnarValue::Array(r) = &args[1] else {
             panic!()
         };
 
