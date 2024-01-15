@@ -236,18 +236,13 @@ impl Accumulator for NthValueAccumulator {
         if self.ordering_req.is_empty() {
             let array_agg_res =
                 ScalarValue::convert_array_to_scalar_vec(array_agg_values)?;
-            // Stores NTH_VALUE results coming from each partition
-            let mut partition_values = VecDeque::new();
-            // Existing values should be merged also.
-            partition_values.extend(self.values.clone());
             for v in array_agg_res.into_iter() {
-                partition_values.extend(v);
-                if partition_values.len() > n_required {
+                self.values.extend(v);
+                if self.values.len() > n_required {
                     // There is enough data collected can stop merging
                     break;
                 }
             }
-            self.values = partition_values;
         } else if let Some(agg_orderings) = states[1].as_list_opt::<i32>() {
             // 2nd entry stores values received for ordering requirement columns, for each aggregation value inside NTH_VALUE list.
             // For each `StructArray` inside NTH_VALUE list, we will receive an `Array` that stores
@@ -276,17 +271,16 @@ impl Accumulator for NthValueAccumulator {
 
             let ordering_values = orderings.into_iter().map(|partition_ordering_rows| {
                 // Extract value from struct to ordering_rows for each group/partition
-                let ordering_value = partition_ordering_rows.into_iter().map(|ordering_row| {
+                partition_ordering_rows.into_iter().map(|ordering_row| {
                     if let ScalarValue::Struct(Some(ordering_columns_per_row), _) = ordering_row {
                         Ok(ordering_columns_per_row)
                     } else {
                         exec_err!(
-                                "Expects to receive ScalarValue::Struct(Some(..), _) but got:{:?}",
-                                ordering_row.data_type()
-                            )
+                            "Expects to receive ScalarValue::Struct(Some(..), _) but got: {:?}",
+                            ordering_row.data_type()
+                        )
                     }
-                }).collect::<Result<Vec<_>>>()?;
-                Ok(ordering_value)
+                }).collect::<Result<Vec<_>>>()
             }).collect::<Result<Vec<_>>>()?;
             for ordering_values in ordering_values.iter() {
                 partition_ordering_values.push(ordering_values);
@@ -364,7 +358,7 @@ impl Accumulator for NthValueAccumulator {
 impl NthValueAccumulator {
     fn evaluate_orderings(&self) -> ScalarValue {
         let fields = ordering_fields(&self.ordering_req, &self.datatypes[1..]);
-        let struct_field = Fields::from(fields.clone());
+        let struct_field = Fields::from(fields);
 
         let orderings = self
             .ordering_values
@@ -373,7 +367,7 @@ impl NthValueAccumulator {
                 ScalarValue::Struct(Some(ordering.clone()), struct_field.clone())
             })
             .collect::<Vec<_>>();
-        let struct_type = DataType::Struct(Fields::from(fields));
+        let struct_type = DataType::Struct(struct_field);
 
         // Wrap in List, so we have the same data structure ListArray(StructArray..) for group by cases
         ScalarValue::List(ScalarValue::new_list(&orderings, &struct_type))
