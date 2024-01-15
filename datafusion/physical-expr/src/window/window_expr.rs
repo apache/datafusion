@@ -236,7 +236,7 @@ pub trait AggregateWindowExpr: WindowExpr {
             // Start search from the last_range. This squeezes searched range.
             let cur_range =
                 window_frame_ctx.calculate_range(&order_bys, last_range, length, idx)?;
-            // Exit if the range extends all the way and end point is not exact:
+            // Exit if the range is non-causal and extends all the way:
             if cur_range.end == length && !is_causal && not_end {
                 break;
             }

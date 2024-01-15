@@ -229,7 +229,7 @@ impl WindowExpr for BuiltInWindowExpr {
                     evaluator.get_range(idx, num_rows)
                 }?;
 
-                // Exit if the range extends all the way and not exact:
+                // Exit if the range is non-causal and extends all the way:
                 if frame_range.end == num_rows
                     && !is_causal
                     && !partition_batch_state.is_end
