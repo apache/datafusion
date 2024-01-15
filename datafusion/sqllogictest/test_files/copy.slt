@@ -19,9 +19,6 @@
 statement ok
 create table source_table(col1 integer, col2 varchar) as values (1, 'Foo'), (2, 'Bar');
 
-statement ok
-create table source_table_nested as values (struct ('foo', 1)), (struct('bar', 2));
-
 # Copy to directory as multiple files
 query IT
 COPY source_table TO 'test_files/scratch/copy/table' (format parquet, single_file_output false, compression 'zstd(10)');
@@ -67,8 +64,11 @@ select * from validate_parquet;
 1 Foo
 2 Bar
 
-query ?
-COPY (select * from source_table_nested) to 'test_files/scratch/copy/table_nested' (format parquet, single_file_output false);
+query ??
+COPY 
+(values (struct ('foo', (struct ('foo', make_array(1,2,3)))), make_array(timestamp '2023-01-01 01:00:01',timestamp '2023-01-01 01:00:01')), 
+(struct('bar', (struct ('foo', make_array(1,2,3)))), make_array(timestamp '2023-01-01 01:00:01', timestamp '2023-01-01 01:00:01'))) 
+to 'test_files/scratch/copy/table_nested' (format parquet, single_file_output false);
 ----
 2
 
@@ -76,11 +76,11 @@ COPY (select * from source_table_nested) to 'test_files/scratch/copy/table_neste
 statement ok
 CREATE EXTERNAL TABLE validate_parquet_nested STORED AS PARQUET LOCATION 'test_files/scratch/copy/table_nested/';
 
-query ?
+query ??
 select * from validate_parquet_nested;
 ----
-{c0: foo, c1: 1}
-{c0: bar, c1: 2}
+{c0: foo, c1: {c0: foo, c1: [1, 2, 3]}} [2023-01-01T01:00:01, 2023-01-01T01:00:01]
+{c0: bar, c1: {c0: foo, c1: [1, 2, 3]}} [2023-01-01T01:00:01, 2023-01-01T01:00:01]
 
 
 # Copy parquet with all supported statment overrides
