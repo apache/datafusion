@@ -57,7 +57,7 @@
 //! use datafusion_expr::{col, lit};
 //! use datafusion_functions::expr_fn;
 //! // Equivalent to "encode(my_data, 'hex')" in SQL:
-//! let expr = expr_fn::encode(vec![col("my_data"), lit("hex")]);
+//! let expr = expr_fn::encode(col("my_data"), lit("hex"));
 //! ```
 //!
 //![`Expr`]: datafusion_expr::Expr
