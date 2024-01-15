@@ -927,7 +927,7 @@ impl HashJoinStreamState {
 struct ProcessProbeBatchState {
     /// Current probe-side batch
     batch: RecordBatch,
-    /// Matching offset
+    /// Starting offset for JoinHashMap lookups
     offset: JoinHashMapOffset,
     /// Max joined probe-side index from current batch
     joined_probe_idx: Option<usize>,
@@ -1344,7 +1344,7 @@ impl HashJoinStream {
         )?;
 
         self.join_metrics.output_batches.add(1);
-        self.join_metrics.output_rows.add(state.batch.num_rows());
+        self.join_metrics.output_rows.add(result.num_rows());
         timer.done();
 
         if probe_batch_scanned {
