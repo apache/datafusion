@@ -159,13 +159,11 @@ impl ContextWithParquet {
     ) -> Self {
         let file = match unit {
             Unit::RowGroup => {
-                let config = config.options_mut();
-                config.execution.parquet.bloom_filter_enabled = true;
+                config = config.with_parquet_bloom_filter_pruning(true);
                 make_test_file_rg(scenario).await
             }
             Unit::Page => {
-                let config = config.options_mut();
-                config.execution.parquet.enable_page_index = true;
+                config = config.with_parquet_page_index_pruning(true);
                 make_test_file_page(scenario).await
             }
         };
