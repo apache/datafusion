@@ -191,9 +191,11 @@ pub(crate) enum Hint {
     AcceptsSingular,
 }
 
-/// decorates a function to handle [`ScalarValue`]s by converting them to arrays before calling the function
+/// Decorates a function to handle [`ScalarValue`]s by converting them to arrays before calling the function
 /// and vice-versa after evaluation.
-pub fn make_scalar_function<F>(inner: F) -> ScalarFunctionImplementation
+/// Note that this function makes a scalar function with no arguments or all scalar inputs return a scalar.
+/// That's said its output will be same for all input rows in a batch.
+pub(crate) fn make_scalar_function<F>(inner: F) -> ScalarFunctionImplementation
 where
     F: Fn(&[ArrayRef]) -> Result<ArrayRef> + Sync + Send + 'static,
 {
