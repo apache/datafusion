@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Function packages for DataFusion.
+//! Function packages for [DataFusion].
 //!
 //! This crate contains a collection of various function packages for DataFusion,
 //! implemented using the extension API. Users may wish to control which functions
@@ -24,6 +24,8 @@
 //!
 //! Each package is a implemented as a separate
 //! module, activated by a feature flag.
+//!
+//! [DataFusion]: https://crates.io/crates/datafusion
 //!
 //! # Available Packages
 //! See the list of [modules](#modules) in this crate for available packages.
@@ -85,10 +87,10 @@ pub mod macros;
 make_package!(
     encoding,
     "encoding_expressions",
-    "Hex and binary `encode` and `decode` functions"
+    "Hex and binary `encode` and `decode` functions."
 );
 
-/// Fluent-style API for creating `Expr`s to invoke functions
+/// Fluent-style API for creating `Expr`s
 pub mod expr_fn {
     #[cfg(feature = "encoding_expressions")]
     pub use super::encoding::expr_fn::*;
