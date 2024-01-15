@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Expr module contains core type definition for `Expr`.
+//! Logical Expressions: [`Expr`]
 
 use crate::expr_fn::binary_expr;
 use crate::logical_plan::Subquery;
@@ -1948,6 +1948,7 @@ mod test {
         );
 
         // UDF
+        #[derive(Debug)]
         struct TestScalarUDF {
             signature: Signature,
         }

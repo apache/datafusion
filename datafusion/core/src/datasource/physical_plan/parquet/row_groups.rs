@@ -81,7 +81,7 @@ pub(crate) fn prune_row_groups_by_statistics(
                 Ok(values) => {
                     // NB: false means don't scan row group
                     if !values[0] {
-                        metrics.row_groups_pruned.add(1);
+                        metrics.row_groups_pruned_statistics.add(1);
                         continue;
                     }
                 }
@@ -159,7 +159,7 @@ pub(crate) async fn prune_row_groups_by_bloom_filters<
         };
 
         if prune_group {
-            metrics.row_groups_pruned.add(1);
+            metrics.row_groups_pruned_bloom_filter.add(1);
         } else {
             filtered.push(*idx);
         }
@@ -1010,7 +1010,7 @@ mod tests {
     fn logical2physical(expr: &Expr, schema: &Schema) -> Arc<dyn PhysicalExpr> {
         let df_schema = schema.clone().to_dfschema().unwrap();
         let execution_props = ExecutionProps::new();
-        create_physical_expr(expr, &df_schema, schema, &execution_props).unwrap()
+        create_physical_expr(expr, &df_schema, &execution_props).unwrap()
     }
 
     #[tokio::test]
@@ -1049,12 +1049,9 @@ mod tests {
         let schema = Schema::new(vec![Field::new("String", DataType::Utf8, false)]);
 
         let expr = col(r#""String""#).in_list(
-            vec![
-                lit("Hello_Not_Exists"),
-                lit("Hello_Not_Exists2"),
-                lit("Hello_Not_Exists3"),
-                lit("Hello_Not_Exist4"),
-            ],
+            (1..25)
+                .map(|i| lit(format!("Hello_Not_Exists{}", i)))
+                .collect::<Vec<_>>(),
             false,
         );
         let expr = logical2physical(&expr, &schema);

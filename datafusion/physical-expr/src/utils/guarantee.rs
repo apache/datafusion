@@ -23,6 +23,7 @@ use crate::{split_conjunction, PhysicalExpr};
 use datafusion_common::{Column, ScalarValue};
 use datafusion_expr::Operator;
 use std::collections::{HashMap, HashSet};
+use std::fmt::{self, Display, Formatter};
 use std::sync::Arc;
 
 /// Represents a guarantee that must be true for a boolean expression to
@@ -222,6 +223,33 @@ impl LiteralGuarantee {
     }
 }
 
+impl Display for LiteralGuarantee {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self.guarantee {
+            Guarantee::In => write!(
+                f,
+                "{} in ({})",
+                self.column.name,
+                self.literals
+                    .iter()
+                    .map(|lit| lit.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+            Guarantee::NotIn => write!(
+                f,
+                "{} not in ({})",
+                self.column.name,
+                self.literals
+                    .iter()
+                    .map(|lit| lit.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+        }
+    }
+}
+
 /// Combines conjuncts (aka terms `AND`ed together) into [`LiteralGuarantee`]s,
 /// preserving insert order
 #[derive(Debug, Default)]
@@ -398,6 +426,7 @@ mod test {
     use datafusion_common::ToDFSchema;
     use datafusion_expr::expr_fn::*;
     use datafusion_expr::{lit, Expr};
+    use itertools::Itertools;
     use std::sync::OnceLock;
 
     #[test]
@@ -691,6 +720,11 @@ mod test {
             col("b").in_list(vec![lit(1), lit(2), lit(3)], true),
             vec![not_in_guarantee("b", [1, 2, 3])],
         );
+        // b IN (1,2,3,4...24)
+        test_analyze(
+            col("b").in_list((1..25).map(lit).collect_vec(), false),
+            vec![in_guarantee("b", 1..25)],
+        );
     }
 
     #[test]
@@ -837,7 +871,7 @@ mod test {
     fn logical2physical(expr: &Expr, schema: &Schema) -> Arc<dyn PhysicalExpr> {
         let df_schema = schema.clone().to_dfschema().unwrap();
         let execution_props = ExecutionProps::new();
-        create_physical_expr(expr, &df_schema, schema, &execution_props).unwrap()
+        create_physical_expr(expr, &df_schema, &execution_props).unwrap()
     }
 
     // Schema for testing

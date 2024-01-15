@@ -25,11 +25,11 @@ use arrow::array::{Array, ArrayRef};
 use arrow_array::cast::AsArray;
 use arrow_array::types::*;
 use arrow_array::{ArrowNativeTypeOp, ArrowPrimitiveType};
-use arrow_buffer::{ArrowNativeType, ToByteSlice};
+use arrow_buffer::ArrowNativeType;
 use std::collections::HashSet;
 
 use crate::aggregate::sum::downcast_sum;
-use crate::aggregate::utils::down_cast_any_ref;
+use crate::aggregate::utils::{down_cast_any_ref, Hashable};
 use crate::{AggregateExpr, PhysicalExpr};
 use datafusion_common::{not_impl_err, DataFusionError, Result, ScalarValue};
 use datafusion_expr::type_coercion::aggregates::sum_return_type;
@@ -118,24 +118,6 @@ impl PartialEq<dyn Any> for DistinctSum {
             .unwrap_or(false)
     }
 }
-
-/// A wrapper around a type to provide hash for floats
-#[derive(Copy, Clone)]
-struct Hashable<T>(T);
-
-impl<T: ToByteSlice> std::hash::Hash for Hashable<T> {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.0.to_byte_slice().hash(state)
-    }
-}
-
-impl<T: ArrowNativeTypeOp> PartialEq for Hashable<T> {
-    fn eq(&self, other: &Self) -> bool {
-        self.0.is_eq(other.0)
-    }
-}
-
-impl<T: ArrowNativeTypeOp> Eq for Hashable<T> {}
 
 struct DistinctSumAccumulator<T: ArrowPrimitiveType> {
     values: HashSet<Hashable<T::Native>, RandomState>,

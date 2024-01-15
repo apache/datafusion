@@ -2134,7 +2134,6 @@ mod tests {
     use crate::test;
     use crate::test_util::{plan_and_collect, populate_csv_partitions};
     use crate::variable::VarType;
-    use arrow_schema::Schema;
     use async_trait::async_trait;
     use datafusion_expr::Expr;
     use std::env;
@@ -2514,7 +2513,6 @@ mod tests {
             &self,
             _expr: &Expr,
             _input_dfschema: &crate::common::DFSchema,
-            _input_schema: &Schema,
             _session_state: &SessionState,
         ) -> Result<Arc<dyn crate::physical_plan::PhysicalExpr>> {
             unimplemented!()

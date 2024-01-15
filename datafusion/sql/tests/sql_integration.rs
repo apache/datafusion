@@ -451,10 +451,6 @@ Dml: op=[Insert Into] table=[test_decimal]
     "INSERT INTO test_decimal (nonexistent, price) VALUES (1, 2), (4, 5)",
     "Schema error: No field named nonexistent. Valid fields are id, price."
 )]
-#[case::type_mismatch(
-    "INSERT INTO test_decimal SELECT '2022-01-01', to_timestamp('2022-01-01T12:00:00')",
-    "Error during planning: Cannot automatically convert Timestamp(Nanosecond, None) to Decimal128(10, 2)"
-)]
 #[case::target_column_count_mismatch(
     "INSERT INTO person (id, first_name, last_name) VALUES ($1, $2)",
     "Error during planning: Column count doesn't match insert query!"
@@ -756,9 +752,11 @@ fn join_with_ambiguous_column() {
 #[test]
 fn where_selection_with_ambiguous_column() {
     let sql = "SELECT * FROM person a, person b WHERE id = id + 1";
-    let err = logical_plan(sql).expect_err("query should have failed");
+    let err = logical_plan(sql)
+        .expect_err("query should have failed")
+        .strip_backtrace();
     assert_eq!(
-        "SchemaError(AmbiguousReference { field: Column { relation: None, name: \"id\" } })",
+        "\"Schema error: Ambiguous reference to unqualified field id\"",
         format!("{err:?}")
     );
 }

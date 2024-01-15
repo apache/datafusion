@@ -751,13 +751,13 @@ mod test {
     use datafusion_expr::{
         cast, col, concat, concat_ws, create_udaf, is_true, AccumulatorFactoryFunction,
         AggregateFunction, AggregateUDF, BinaryExpr, BuiltinScalarFunction, Case,
-        ColumnarValue, ExprSchemable, Filter, Operator, ScalarUDFImpl, StateTypeFunction,
-        Subquery,
+        ColumnarValue, ExprSchemable, Filter, Operator, ScalarUDFImpl,
+        SimpleAggregateUDF, Subquery,
     };
     use datafusion_expr::{
         lit,
         logical_plan::{EmptyRelation, Projection},
-        Expr, LogicalPlan, ReturnTypeFunction, ScalarUDF, Signature, Volatility,
+        Expr, LogicalPlan, ScalarUDF, Signature, Volatility,
     };
     use datafusion_physical_expr::expressions::AvgAccumulator;
 
@@ -811,6 +811,7 @@ mod test {
 
     static TEST_SIGNATURE: OnceLock<Signature> = OnceLock::new();
 
+    #[derive(Debug, Clone, Default)]
     struct TestScalarUDF {}
     impl ScalarUDFImpl for TestScalarUDF {
         fn as_any(&self) -> &dyn Any {
@@ -902,19 +903,17 @@ mod test {
     #[test]
     fn agg_udaf_invalid_input() -> Result<()> {
         let empty = empty();
-        let return_type: ReturnTypeFunction =
-            Arc::new(move |_| Ok(Arc::new(DataType::Float64)));
-        let state_type: StateTypeFunction =
-            Arc::new(move |_| Ok(Arc::new(vec![DataType::UInt64, DataType::Float64])));
+        let return_type = DataType::Float64;
+        let state_type = vec![DataType::UInt64, DataType::Float64];
         let accumulator: AccumulatorFactoryFunction =
             Arc::new(|_| Ok(Box::<AvgAccumulator>::default()));
-        let my_avg = AggregateUDF::new(
+        let my_avg = AggregateUDF::from(SimpleAggregateUDF::new_with_signature(
             "MY_AVG",
-            &Signature::uniform(1, vec![DataType::Float64], Volatility::Immutable),
-            &return_type,
-            &accumulator,
-            &state_type,
-        );
+            Signature::uniform(1, vec![DataType::Float64], Volatility::Immutable),
+            return_type,
+            accumulator,
+            state_type,
+        ));
         let udaf = Expr::AggregateFunction(expr::AggregateFunction::new_udf(
             Arc::new(my_avg),
             vec![lit("10")],
@@ -964,7 +963,7 @@ mod test {
     }
 
     #[test]
-    fn agg_function_invalid_input() -> Result<()> {
+    fn agg_function_invalid_input_avg() -> Result<()> {
         let empty = empty();
         let fun: AggregateFunction = AggregateFunction::Avg;
         let agg_expr = Expr::AggregateFunction(expr::AggregateFunction::new(
@@ -983,6 +982,30 @@ mod test {
             err
         );
         Ok(())
+    }
+
+    #[test]
+    fn agg_function_invalid_input_percentile() {
+        let empty = empty();
+        let fun: AggregateFunction = AggregateFunction::ApproxPercentileCont;
+        let agg_expr = Expr::AggregateFunction(expr::AggregateFunction::new(
+            fun,
+            vec![lit(0.95), lit(42.0), lit(100.0)],
+            false,
+            None,
+            None,
+        ));
+
+        let err = Projection::try_new(vec![agg_expr], empty)
+            .err()
+            .unwrap()
+            .strip_backtrace();
+
+        let prefix = "Error during planning: No function matches the given name and argument types 'APPROX_PERCENTILE_CONT(Float64, Float64, Float64)'. You might need to add explicit type casts.\n\tCandidate functions:";
+        assert!(!err
+            .strip_prefix(prefix)
+            .unwrap()
+            .contains("APPROX_PERCENTILE_CONT(Float64, Float64, Float64)"));
     }
 
     #[test]

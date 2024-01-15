@@ -102,7 +102,7 @@ jobs:
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
-          rust-version: stable
+          rust-version: stable        
       - name: Run tests (excluding doctests)
         run: cargo test --lib --tests --bins --features avro,json,backtrace
       - name: Verify Working Directory Clean
@@ -282,23 +282,8 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: true
-      - name: Install protobuf compiler
-        shell: bash
-        run: |
-          mkdir -p $HOME/d/protoc
-          cd $HOME/d/protoc
-          export PROTO_ZIP="protoc-21.4-win64.zip"
-          curl -LO https://github.com/protocolbuffers/protobuf/releases/download/v21.4/$PROTO_ZIP
-          unzip $PROTO_ZIP
-          export PATH=$PATH:$HOME/d/protoc/bin
-          protoc.exe --version
-      # TODO: this won't cache anything, which is expensive. Setup this action
-      # with a OS-dependent path.
       - name: Setup Rust toolchain
-        run: |
-          rustup toolchain install stable
-          rustup default stable
-          rustup component add rustfmt
+        uses: ./.github/actions/setup-windows-builder
       - name: Run tests (excluding doctests)
         shell: bash
         run: |
@@ -306,46 +291,22 @@ jobs:
           cargo test --lib --tests --bins --features avro,json,backtrace
           cd datafusion-cli
           cargo test --lib --tests --bins --all-features
-        env:
-          # do not produce debug symbols to keep memory usage down
-          RUSTFLAGS: "-C debuginfo=0"
-          RUST_BACKTRACE: "1"
 
   macos:
-    name: cargo test (mac)
+    name: cargo test (macos)
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
         with:
-          submodules: true
-      - name: Install protobuf compiler
-        shell: bash
-        run: |
-          mkdir -p $HOME/d/protoc
-          cd $HOME/d/protoc
-          export PROTO_ZIP="protoc-21.4-osx-x86_64.zip"
-          curl -LO https://github.com/protocolbuffers/protobuf/releases/download/v21.4/$PROTO_ZIP
-          unzip $PROTO_ZIP
-          echo "$HOME/d/protoc/bin" >> $GITHUB_PATH
-          export PATH=$PATH:$HOME/d/protoc/bin
-          protoc --version
-      # TODO: this won't cache anything, which is expensive. Setup this action
-      # with a OS-dependent path.
+          submodules: true      
       - name: Setup Rust toolchain
-        run: |
-          rustup toolchain install stable
-          rustup default stable
-          rustup component add rustfmt
+        uses: ./.github/actions/setup-macos-builder       
       - name: Run tests (excluding doctests)
         shell: bash
         run: |
           cargo test --lib --tests --bins --features avro,json,backtrace
           cd datafusion-cli
-          cargo test --lib --tests --bins --all-features
-        env:
-          # do not produce debug symbols to keep memory usage down
-          RUSTFLAGS: "-C debuginfo=0"
-          RUST_BACKTRACE: "1"
+          cargo test --lib --tests --bins --all-features  
 
   test-datafusion-pyarrow:
     name: cargo test pyarrow (amd64)

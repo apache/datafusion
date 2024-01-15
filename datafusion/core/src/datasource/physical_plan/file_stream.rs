@@ -535,7 +535,6 @@ mod tests {
     use arrow_schema::Schema;
     use datafusion_common::{internal_err, DataFusionError, Statistics};
 
-    use async_trait::async_trait;
     use bytes::Bytes;
     use futures::StreamExt;
 
@@ -989,9 +988,8 @@ mod tests {
         bytes: Bytes,
     }
 
-    #[async_trait]
     impl BatchSerializer for TestSerializer {
-        async fn serialize(&self, _batch: RecordBatch, _initial: bool) -> Result<Bytes> {
+        fn serialize(&self, _batch: RecordBatch, _initial: bool) -> Result<Bytes> {
             Ok(self.bytes.clone())
         }
     }

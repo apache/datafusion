@@ -349,8 +349,8 @@ pub struct CreateExternalTableNode {
     pub delimiter: ::prost::alloc::string::String,
     #[prost(string, tag = "9")]
     pub definition: ::prost::alloc::string::String,
-    #[prost(string, tag = "10")]
-    pub file_compression_type: ::prost::alloc::string::String,
+    #[prost(enumeration = "CompressionTypeVariant", tag = "17")]
+    pub file_compression_type: i32,
     #[prost(message, repeated, tag = "13")]
     pub order_exprs: ::prost::alloc::vec::Vec<LogicalExprNodeCollection>,
     #[prost(bool, tag = "14")]
@@ -2178,6 +2178,10 @@ pub struct SymmetricHashJoinExecNode {
     pub null_equals_null: bool,
     #[prost(message, optional, tag = "8")]
     pub filter: ::core::option::Option<JoinFilter>,
+    #[prost(message, repeated, tag = "9")]
+    pub left_sort_exprs: ::prost::alloc::vec::Vec<PhysicalSortExprNode>,
+    #[prost(message, repeated, tag = "10")]
+    pub right_sort_exprs: ::prost::alloc::vec::Vec<PhysicalSortExprNode>,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -2752,6 +2756,7 @@ pub enum ScalarFunction {
     FindInSet = 127,
     ArraySort = 128,
     ArrayDistinct = 129,
+    ArrayResize = 130,
 }
 impl ScalarFunction {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -2888,6 +2893,7 @@ impl ScalarFunction {
             ScalarFunction::FindInSet => "FindInSet",
             ScalarFunction::ArraySort => "ArraySort",
             ScalarFunction::ArrayDistinct => "ArrayDistinct",
+            ScalarFunction::ArrayResize => "ArrayResize",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -3021,6 +3027,7 @@ impl ScalarFunction {
             "FindInSet" => Some(Self::FindInSet),
             "ArraySort" => Some(Self::ArraySort),
             "ArrayDistinct" => Some(Self::ArrayDistinct),
+            "ArrayResize" => Some(Self::ArrayResize),
             _ => None,
         }
     }

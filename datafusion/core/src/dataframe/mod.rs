@@ -802,6 +802,7 @@ impl DataFrame {
 
     /// Executes this DataFrame and returns a stream over a single partition
     ///
+    /// # Example
     /// ```
     /// # use datafusion::prelude::*;
     /// # use datafusion::error::Result;
@@ -813,6 +814,11 @@ impl DataFrame {
     /// # Ok(())
     /// # }
     /// ```
+    ///
+    /// # Aborting Execution
+    ///
+    /// Dropping the stream will abort the execution of the query, and free up
+    /// any allocated resources
     pub async fn execute_stream(self) -> Result<SendableRecordBatchStream> {
         let task_ctx = Arc::new(self.task_ctx());
         let plan = self.create_physical_plan().await?;
@@ -841,6 +847,7 @@ impl DataFrame {
 
     /// Executes this DataFrame and returns one stream per partition.
     ///
+    /// # Example
     /// ```
     /// # use datafusion::prelude::*;
     /// # use datafusion::error::Result;
@@ -852,6 +859,10 @@ impl DataFrame {
     /// # Ok(())
     /// # }
     /// ```
+    /// # Aborting Execution
+    ///
+    /// Dropping the stream will abort the execution of the query, and free up
+    /// any allocated resources
     pub async fn execute_stream_partitioned(
         self,
     ) -> Result<Vec<SendableRecordBatchStream>> {
@@ -1145,6 +1156,11 @@ impl DataFrame {
     /// Rename one column by applying a new projection. This is a no-op if the column to be
     /// renamed does not exist.
     ///
+    /// The method supports case sensitive rename with wrapping column name into one of following symbols (  "  or  '  or  `  )
+    ///
+    /// Alternatively setting Datafusion param `datafusion.sql_parser.enable_ident_normalization` to `false` will enable  
+    /// case sensitive rename without need to wrap column name into special symbols
+    ///
     /// ```
     /// # use datafusion::prelude::*;
     /// # use datafusion::error::Result;
@@ -1153,6 +1169,7 @@ impl DataFrame {
     /// let ctx = SessionContext::new();
     /// let df = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?;
     /// let df = df.with_column_renamed("ab_sum", "total")?;
+    ///
     /// # Ok(())
     /// # }
     /// ```
@@ -1175,7 +1192,7 @@ impl DataFrame {
         let field_to_rename = match self.plan.schema().field_from_column(&old_column) {
             Ok(field) => field,
             // no-op if field not found
-            Err(DataFusionError::SchemaError(SchemaError::FieldNotFound { .. })) => {
+            Err(DataFusionError::SchemaError(SchemaError::FieldNotFound { .. }, _)) => {
                 return Ok(self)
             }
             Err(err) => return Err(err),
