@@ -70,6 +70,8 @@ macro_rules! make_udf_function {
             std::sync::OnceLock::new();
 
         /// Return a [`ScalarUDF`] for [`$UDF`]
+        ///
+        /// [`ScalarUDF`]: datafusion_expr::ScalarUDF
         fn $NAME() -> std::sync::Arc<datafusion_expr::ScalarUDF> {
             $GNAME
                 .get_or_init(|| {
