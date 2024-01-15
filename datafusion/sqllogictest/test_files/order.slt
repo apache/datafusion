@@ -611,14 +611,31 @@ SELECT a FROM repeat_much ORDER BY a LIMIT 20;
 
 
 # Create external table with optional pre-known sort order
-# DataFusion may take advantage of this ordering to omit sorts or use more efficient algorithms.
+# ORDER BY query should be able to take advantage of the pre-existing order and drop SortExec
+# in the physical plan
 statement ok
 set datafusion.catalog.information_schema = true;
 
 statement ok
-CREATE EXTERNAL TABLE dt (a_id integer, a_str string, a_bool boolean) STORED AS CSV WITH ORDER (a_id ASC) LOCATION 'file://path/to/table';
+CREATE EXTERNAL TABLE IF NOT EXISTS orders (
+        o_orderkey BIGINT,
+        o_custkey BIGINT,
+        o_orderstatus VARCHAR,
+        o_totalprice DECIMAL(15, 2),
+        o_orderdate DATE,
+        o_orderpriority VARCHAR,
+        o_clerk VARCHAR,
+        o_shippriority INTEGER,
+        o_comment VARCHAR,
+) STORED AS CSV  WITH ORDER (o_orderkey ASC) DELIMITER ',' WITH HEADER ROW LOCATION '../core/tests/tpch-csv/orders.csv';
 
-#TODO: How to check for order in sqllogictest?
+query TT
+EXPLAIN SELECT o_orderkey, o_orderstatus FROM orders ORDER BY o_orderkey ASC
+----
+logical_plan
+Sort: orders.o_orderkey ASC NULLS LAST
+--TableScan: orders projection=[o_orderkey, o_orderstatus]
+physical_plan CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/tpch-csv/orders.csv]]}, projection=[o_orderkey, o_orderstatus], output_ordering=[o_orderkey@0 ASC NULLS LAST], has_header=true
 
 
 # Create external table with DDL ordered columns that are missing
