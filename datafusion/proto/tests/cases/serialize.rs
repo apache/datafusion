@@ -256,18 +256,28 @@ fn test_expression_serialization_roundtrip() {
     let ctx = SessionContext::new();
     let lit = Expr::Literal(ScalarValue::Utf8(None));
     for builtin_fun in BuiltinScalarFunction::iter() {
-        let expr =
-            Expr::ScalarFunction(ScalarFunction::new(builtin_fun, vec![lit.clone(); 4]));
+        println!("Checking function: {}", builtin_fun.name());
+        // default to 4 args (though some exprs like substr have error checking)
+        let num_args = match builtin_fun {
+            BuiltinScalarFunction::Substr => 3,
+            _ => 4,
+        };
+        let args: Vec<_> = std::iter::repeat(&lit).take(num_args).cloned().collect();
+        let expr = Expr::ScalarFunction(ScalarFunction::new(builtin_fun, args));
 
         let proto = LogicalExprNode::try_from(&expr).unwrap();
+        let deserialize = parse_expr(&proto, &ctx).unwrap();
 
-        let desirilize = parse_expr(&proto, &ctx).unwrap();
+        let serialize_name = extract_function_name(&expr);
+        let deserialize_name = extract_function_name(&deserialize);
 
-        let serialize_name = expr.display_name().unwrap();
-        let serialize_name = serialize_name.split('(').collect::<Vec<&str>>()[0];
-
-        let deserialize_name = desirilize.display_name().unwrap();
-        let deserialize_name = deserialize_name.split('(').collect::<Vec<&str>>()[0];
         assert_eq!(serialize_name, deserialize_name);
+    }
+
+    /// Extracts the first part of a function name
+    /// 'foo(bar)' -> 'foo'
+    fn extract_function_name(expr: &Expr) -> String {
+        let name = expr.display_name().unwrap();
+        name.split('(').next().unwrap().to_string()
     }
 }
