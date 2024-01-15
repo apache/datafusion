@@ -20,7 +20,6 @@ pub const DATAFUSION_CLI_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 pub mod catalog;
 pub mod command;
-pub mod error;
 pub mod exec;
 pub mod functions;
 pub mod helper;
