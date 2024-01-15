@@ -21,6 +21,7 @@
 
 [DataFusion][df] is an extensible query execution framework, written in Rust, that uses Apache Arrow as its in-memory format.
 
-This crate contains several packages of function that can be used with DataFusion.
+This crate contains packages of function that can be used to customize the
+functionality of DataFusion.
 
 [df]: https://crates.io/crates/datafusion
