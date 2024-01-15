@@ -21,12 +21,12 @@ use std::path::Path;
 use std::str::FromStr;
 use std::sync::{Arc, OnceLock};
 
-use datafusion::error::{DataFusionError, Result};
 use datafusion::execution::context::SessionConfig;
 use datafusion::execution::memory_pool::{FairSpillPool, GreedyMemoryPool};
 use datafusion::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
 use datafusion::prelude::SessionContext;
 use datafusion_cli::catalog::DynamicFileCatalog;
+use datafusion_cli::error::DataFusionCLIError;
 use datafusion_cli::functions::ParquetMetadataFunc;
 use datafusion_cli::{
     exec,
@@ -36,6 +36,7 @@ use datafusion_cli::{
 };
 
 use clap::Parser;
+use datafusion_common::DataFusionError;
 use mimalloc::MiMalloc;
 
 #[global_allocator]
@@ -138,7 +139,7 @@ struct Args {
 }
 
 #[tokio::main]
-pub async fn main() -> Result<()> {
+pub async fn main() -> Result<(), DataFusionCLIError> {
     env_logger::init();
     let args = Args::parse();
 
@@ -219,9 +220,7 @@ pub async fn main() -> Result<()> {
             exec::exec_from_files(&mut ctx, rc, &print_options).await?;
         }
         // TODO maybe we can have thiserror for cli but for now let's keep it simple
-        return exec::exec_from_repl(&mut ctx, &mut print_options)
-            .await
-            .map_err(|e| DataFusionError::External(Box::new(e)));
+        exec::exec_from_repl(&mut ctx, &mut print_options).await?
     }
 
     if !files.is_empty() {
@@ -235,7 +234,7 @@ pub async fn main() -> Result<()> {
     Ok(())
 }
 
-fn create_runtime_env(rn_config: RuntimeConfig) -> Result<RuntimeEnv> {
+fn create_runtime_env(rn_config: RuntimeConfig) -> Result<RuntimeEnv, DataFusionError> {
     RuntimeEnv::new(rn_config)
 }
 
@@ -335,6 +334,7 @@ fn extract_memory_pool_size(size: &str) -> Result<usize, String> {
 mod tests {
     use super::*;
     use datafusion::assert_batches_eq;
+    use datafusion_common::DataFusionError;
 
     fn assert_conversion(input: &str, expected: Result<usize, String>) {
         let result = extract_memory_pool_size(input);

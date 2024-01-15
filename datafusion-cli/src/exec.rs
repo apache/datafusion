@@ -78,10 +78,7 @@ pub async fn exec_from_lines(
                 let line = line.trim_end();
                 query.push_str(line);
                 if line.ends_with(';') {
-                    match exec_and_print(ctx, print_options, query).await {
-                        Ok(_) => {}
-                        Err(err) => eprintln!("{err}"),
-                    }
+                    exec_and_print(ctx, print_options, query).await?;
                     query = "".to_owned();
                 } else {
                     query.push('\n');
