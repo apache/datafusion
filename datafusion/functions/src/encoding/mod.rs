@@ -17,13 +17,14 @@
 
 mod inner;
 
-// create `encode` and `decode` functions
+
+// create `encode` and `decode` UDFs
 make_udf_function!(inner::EncodeFunc, ENCODE, encode);
 make_udf_function!(inner::DecodeFunc, DECODE, decode);
 
 // Export the functions out of this package, both as expr_fn as well as a list of functions
 export_functions!(
-    (encode, "encode the `input`, using the `encoding`. encoding can be base64 or hex"),
-    (decode, "decode the`input`, using the `encoding`. encoding can be base64 or hex")
+    (encode, input encoding, "encode the `input`, using the `encoding`. encoding can be base64 or hex"),
+    (decode, input encoding, "decode the `input`, using the `encoding`. encoding can be base64 or hex")
 );
 

@@ -759,7 +759,7 @@ async fn test_fn_upper() -> Result<()> {
 
 #[tokio::test]
 async fn test_fn_encode() -> Result<()> {
-    let expr = encode(vec![col("a"), lit("hex")]);
+    let expr = encode(col("a"), lit("hex"));
 
     let expected = [
         "+----------------------------+",
@@ -782,7 +782,7 @@ async fn test_fn_decode() -> Result<()> {
     // binary is "hexadecimal" and therefore the output looks like decode did
     // nothing. So compare to a constant.
     let df_schema = DFSchema::try_from(test_schema().as_ref().clone())?;
-    let expr = decode(vec![encode(vec![col("a"), lit("hex")]), lit("hex")])
+    let expr = decode(encode(col("a"), lit("hex")), lit("hex"))
         // need to cast to utf8 otherwise the default display of binary array is hex
         // so it looks like nothing is done
         .cast_to(&DataType::Utf8, &df_schema)?;

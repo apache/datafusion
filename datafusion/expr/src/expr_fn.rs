@@ -496,7 +496,7 @@ pub fn is_not_unknown(expr: Expr) -> Expr {
 
 macro_rules! scalar_expr {
     ($ENUM:ident, $FUNC:ident, $($arg:ident)*, $DOC:expr) => {
-        #[doc = $DOC ]
+        #[doc = $DOC]
         pub fn $FUNC($($arg: Expr),*) -> Expr {
             Expr::ScalarFunction(ScalarFunction::new(
                 built_in_function::BuiltinScalarFunction::$ENUM,

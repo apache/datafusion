@@ -37,13 +37,13 @@
 /// }
 /// ```
 macro_rules! export_functions {
-    ($($name:ident),*) => {
+    ($(($FUNC:ident,  $($arg:ident)*, $DOC:expr)),*) => {
         pub mod expr_fn {
             $(
-                #[doc = concat!("Call the `", $name, "`function")]
+                #[doc = $DOC]
                 /// Return $name(arg)
-                pub fn $name(args: Vec<datafusion_expr::Expr>) -> datafusion_expr::Expr {
-                    super::$name().call(args)
+                pub fn $FUNC($($arg: datafusion_expr::Expr),*) -> datafusion_expr::Expr {
+                    super::$FUNC().call(vec![$($arg),*],)
                 }
             )*
         }
@@ -52,7 +52,7 @@ macro_rules! export_functions {
         pub fn functions() -> Vec<std::sync::Arc<datafusion_expr::ScalarUDF>> {
             vec![
                 $(
-                    $name(),
+                    $FUNC(),
                 )*
             ]
         }

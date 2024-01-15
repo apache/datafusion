@@ -55,9 +55,9 @@ use datafusion_expr::logical_plan::{Extension, UserDefinedLogicalNodeCore};
 use datafusion_expr::{
     col, create_udaf, lit, Accumulator, AggregateFunction,
     BuiltinScalarFunction::{Sqrt, Substr},
-    Expr, LogicalPlan, Operator, PartitionEvaluator, Signature, TryCast, Volatility,
-    WindowFrame, WindowFrameBound, WindowFrameUnits, WindowFunctionDefinition, WindowUDF,
-    WindowUDFImpl,
+    Expr, ExprSchemable, LogicalPlan, Operator, PartitionEvaluator, Signature, TryCast,
+    Volatility, WindowFrame, WindowFrameBound, WindowFrameUnits,
+    WindowFunctionDefinition, WindowUDF, WindowUDFImpl,
 };
 use datafusion_proto::bytes::{
     logical_plan_from_bytes, logical_plan_from_bytes_with_extension_codec,
@@ -539,11 +539,8 @@ async fn roundtrip_expr_api() -> Result<()> {
     // ensure expressions created with the expr api can be round tripped
     let plan = table
         .select(vec![
-            encode(vec![
-                col("a").cast_to(&DataType::Utf8, &schema)?,
-                lit("hex"),
-            ]),
-            decode(vec![lit("1234"), lit("hex")]),
+            encode(col("a").cast_to(&DataType::Utf8, &schema)?, lit("hex")),
+            decode(lit("1234"), lit("hex")),
         ])?
         .into_optimized_plan()?;
     let bytes = logical_plan_to_bytes(&plan)?;

@@ -15,19 +15,25 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Function packages for DataFusion
+//! Function packages for DataFusion.
+//!
+//! This crate contains a collection of various function packages for DataFusion,
+//! implemented using the extension API. Users may wish to control which functions
+//! are available to control the binary size of their application as well as
+//! use dialect specific implementations of functions (e.g. Spark vs Postgres)
 //!
 //! Each package is a implemented as a separate
-//! module, which can be activated by a feature flag.
-//!
+//! module, activated by a feature flag.
 //!
 //! # Available Packages
-//! See the list of modules in this crate for available packages.
+//! See the list of [modules](#modules) in this crate for available packages.
 //!
-//! # Using Package
+//! # Using A Package
 //! You can register all functions in all packages using the [`register_all`] function.
 //!
-//! To register only the functions in a certain package, you can do:
+//! To access and use only the functions in a certain package, use the
+//! `functions()` method in each module.
+//!
 //! ```
 //! # fn main() -> datafusion_common::Result<()> {
 //! # let mut registry = datafusion_execution::registry::MemoryFunctionRegistry::new();
@@ -41,14 +47,14 @@
 //! # }
 //! ```
 //!
-//! You can also use the "expr_fn" module to create [`Expr`]s that invoke
-//! functions in a fluent style:
+//! Each package also exports an `expr_fn` submodule to help create [`Expr`]s that invoke
+//! functions using a fluent style. For example:
 //!
 //! ```
 //! // create an Expr that will invoke the encode function
 //! use datafusion_expr::{col, lit};
 //! use datafusion_functions::expr_fn;
-//! // encode(my_data, 'hex')
+//! // Equivalent to "encode(my_data, 'hex')" in SQL:
 //! let expr = expr_fn::encode(vec![col("my_data"), lit("hex")]);
 //! ```
 //!
@@ -56,22 +62,25 @@
 //!
 //! # Implementing A New Package
 //!
-//! To add a new package to this crate::
+//! To add a new package to this crate, you should follow the model of existing
+//! packages. The high level steps are:
 //!
-//! 1. Create a new module with the appropriate `ScalarUDF` implementations.
+//! 1. Create a new module with the appropriate [`ScalarUDF`] implementations.
 //!
-//! 2. Use the `make_udf_function!` and `export_functions!` macros to create
-//! standard entry points
+//! 2. Use the macros in [`macros`] to create standard entry points.
 //!
-//! 3. Add a new feature flag to `Cargo.toml`, with any optional dependencies
+//! 3. Add a new feature to `Cargo.toml`, with any optional dependencies
 //!
-//! 4. Use the `make_package!` macro to export the module if the specified feature is enabled
+//! 4. Use the `make_package!` macro to expose the module when the
+//! feature is enabled.
+//!
+//! [`ScalarUDF`]: datafusion_expr::ScalarUDF
 use datafusion_common::Result;
 use datafusion_execution::FunctionRegistry;
 use log::debug;
 
 #[macro_use]
-mod macros;
+pub mod macros;
 
 make_package!(
     encoding,
