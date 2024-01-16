@@ -1692,17 +1692,35 @@ pub fn parse_expr(
                     parse_expr(&args[1], registry)?,
                 )),
                 ScalarFunction::ToHex => Ok(to_hex(parse_expr(&args[0], registry)?)),
+                ScalarFunction::ToTimestamp => {
+                    Ok(to_timestamp_seconds(args.to_owned()
+                        .iter()
+                        .map(|expr| parse_expr(expr, registry))
+                        .collect::<Result<Vec<_>, _>>()?))
+                }
                 ScalarFunction::ToTimestampMillis => {
-                    Ok(to_timestamp_millis(parse_expr(&args[0], registry)?))
+                    Ok(to_timestamp_millis(args.to_owned()
+                        .iter()
+                        .map(|expr| parse_expr(expr, registry))
+                        .collect::<Result<Vec<_>, _>>()?))
                 }
                 ScalarFunction::ToTimestampMicros => {
-                    Ok(to_timestamp_micros(parse_expr(&args[0], registry)?))
+                    Ok(to_timestamp_micros(args.to_owned()
+                        .iter()
+                        .map(|expr| parse_expr(expr, registry))
+                        .collect::<Result<Vec<_>, _>>()?))
                 }
                 ScalarFunction::ToTimestampNanos => {
-                    Ok(to_timestamp_nanos(parse_expr(&args[0], registry)?))
+                    Ok(to_timestamp_nanos(args.to_owned()
+                        .iter()
+                        .map(|expr| parse_expr(expr, registry))
+                        .collect::<Result<Vec<_>, _>>()?))
                 }
                 ScalarFunction::ToTimestampSeconds => {
-                    Ok(to_timestamp_seconds(parse_expr(&args[0], registry)?))
+                    Ok(to_timestamp_seconds(args.to_owned()
+                        .iter()
+                        .map(|expr| parse_expr(expr, registry))
+                        .collect::<Result<Vec<_>, _>>()?))
                 }
                 ScalarFunction::Now => Ok(now()),
                 ScalarFunction::Translate => Ok(translate(
@@ -1743,9 +1761,6 @@ pub fn parse_expr(
                 ScalarFunction::Iszero => Ok(iszero(parse_expr(&args[0], registry)?)),
                 ScalarFunction::ArrowTypeof => {
                     Ok(arrow_typeof(parse_expr(&args[0], registry)?))
-                }
-                ScalarFunction::ToTimestamp => {
-                    Ok(to_timestamp_seconds(parse_expr(&args[0], registry)?))
                 }
                 ScalarFunction::Flatten => Ok(flatten(parse_expr(&args[0], registry)?)),
                 ScalarFunction::StringToArray => Ok(string_to_array(

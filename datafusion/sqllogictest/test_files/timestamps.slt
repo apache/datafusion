@@ -331,6 +331,35 @@ SELECT COUNT(*) FROM ts_data_secs where ts > to_timestamp_seconds('2020-09-08T12
 ----
 2
 
+# to_timestamp with formatting
+query I
+SELECT COUNT(*) FROM ts_data_nanos where ts > to_timestamp('2020-09-08T12:00:00+00:00', '2020-09-08 12/00/00+00:00', '%c', '%+', '%Y-%m-%d %H/%M/%s%#z')
+----
+2
+
+# to_timestamp_nanos with formatting
+query I
+SELECT COUNT(*) FROM ts_data_nanos where ts > to_timestamp_nanos('2020-09-08 12/00/00+00:00', '%c', '%+', '%Y-%m-%d %H/%M/%S%#z')
+----
+2
+
+# to_timestamp_millis with formatting
+query I
+SELECT COUNT(*) FROM ts_data_millis where ts > to_timestamp_millis('2020-09-08 12/00/00+00:00', '%c', '%+', '%Y-%m-%d %H/%M/%S%#z')
+----
+2
+
+# to_timestamp_micros with formatting
+query I
+SELECT COUNT(*) FROM ts_data_micros where ts > to_timestamp_micros('2020-09-08 12/00/00+00:00', '%c', '%+', '%Y-%m-%d %H/%M/%S%#z')
+----
+2
+
+# to_timestamp_seconds with formatting
+query I
+SELECT COUNT(*) FROM ts_data_secs where ts > to_timestamp_seconds('2020-09-08 12/00/00+00:00', '%c', '%+', '%Y-%m-%d %H/%M/%S%#z')
+----
+2
 
 # to_timestamp float inputs
 
@@ -1880,7 +1909,7 @@ SELECT to_timestamp(null), to_timestamp(0), to_timestamp(1926632005), to_timesta
 ----
 NULL 1970-01-01T00:00:00 2031-01-19T23:33:25 1970-01-01T00:00:01 1969-12-31T23:59:59 1969-12-31T23:59:59
 
-# verify timestamp syntax stlyes are consistent
+# verify timestamp syntax styles are consistent
 query BBBBBBBBBBBBB
 SELECT to_timestamp(null) is null as c1,
        null::timestamp is null as c2, 
@@ -1921,6 +1950,65 @@ true true true true true true
 #SELECT to_timestamp(-62125747200), to_timestamp(1926632005177), -62125747200::timestamp, 1926632005177::timestamp, cast(-62125747200 as timestamp), cast(1926632005177 as timestamp)
 #----
 #0001-04-25T00:00:00 +63022-07-16T12:59:37 0001-04-25T00:00:00 +63022-07-16T12:59:37 0001-04-25T00:00:00 +63022-07-16T12:59:37
+
+# verify timestamp data with formatting options
+query PPPPPP
+SELECT to_timestamp(null, '%+'), to_timestamp(0, '%s'), to_timestamp(1926632005, '%s'), to_timestamp(1, '%+', '%s'), to_timestamp(-1, '%c', '%+', '%s'), to_timestamp(0-1, '%c', '%+', '%s')
+----
+NULL 1970-01-01T00:00:00 2031-01-19T23:33:25 1970-01-01T00:00:01 1969-12-31T23:59:59 1969-12-31T23:59:59
+
+# verify timestamp data with formatting options
+query PPPPPP
+SELECT to_timestamp(null, '%+'), to_timestamp(0, '%s'), to_timestamp(1926632005, '%s'), to_timestamp(1, '%+', '%s'), to_timestamp(-1, '%c', '%+', '%s'), to_timestamp(0-1, '%c', '%+', '%s')
+----
+NULL 1970-01-01T00:00:00 2031-01-19T23:33:25 1970-01-01T00:00:01 1969-12-31T23:59:59 1969-12-31T23:59:59
+
+# verify timestamp output types with formatting options
+query TTT
+SELECT arrow_typeof(to_timestamp(1, '%c', '%s')), arrow_typeof(to_timestamp(null, '%+', '%s')), arrow_typeof(to_timestamp('2023-01-10 12:34:56.000', '%Y-%m-%d %H:%M:%S%.f'))
+----
+Timestamp(Nanosecond, None) Timestamp(Nanosecond, None) Timestamp(Nanosecond, None)
+
+# to_timestamp with invalid formatting
+query error input contains invalid characters
+SELECT to_timestamp('2020-09-08 12/00/00+00:00', '%c', '%+')
+
+# to_timestamp_nanos with invalid formatting
+query error input contains invalid characters
+SELECT to_timestamp_nanos('2020-09-08 12/00/00+00:00', '%c', '%+')
+
+# to_timestamp_millis with invalid formatting
+query error input contains invalid characters
+SELECT to_timestamp_millis('2020-09-08 12/00/00+00:00', '%c', '%+')
+
+# to_timestamp_micros with invalid formatting
+query error input contains invalid characters
+SELECT to_timestamp_micros('2020-09-08 12/00/00+00:00', '%c', '%+')
+
+# to_timestamp_seconds with invalid formatting
+query error input contains invalid characters
+SELECT to_timestamp_seconds('2020-09-08 12/00/00+00:00', '%c', '%+')
+
+# to_timestamp with broken formatting
+query error bad or unsupported format string
+SELECT to_timestamp('2020-09-08 12/00/00+00:00', '%q')
+
+# to_timestamp_nanos with broken formatting
+query error bad or unsupported format string
+SELECT to_timestamp_nanos('2020-09-08 12/00/00+00:00', '%q')
+
+# to_timestamp_millis with broken formatting
+query error bad or unsupported format string
+SELECT to_timestamp_millis('2020-09-08 12/00/00+00:00', '%q')
+
+# to_timestamp_micros with broken formatting
+query error bad or unsupported format string
+SELECT to_timestamp_micros('2020-09-08 12/00/00+00:00', '%q')
+
+# to_timestamp_seconds with broken formatting
+query error bad or unsupported format string
+SELECT to_timestamp_seconds('2020-09-08 12/00/00+00:00', '%q')
+
 
 ##########
 ## Test binary temporal coercion for Date and Timestamp
