@@ -1730,6 +1730,40 @@ impl ScalarValue {
         Arc::new(array_into_list_array(values))
     }
 
+    /// Converts `IntoIterator<Item = ScalarValue>` where each element has type corresponding to
+    /// `data_type`, to a [`ListArray`].
+    ///
+    /// Example
+    /// ```
+    /// use datafusion_common::ScalarValue;
+    /// use arrow::array::{ListArray, Int32Array};
+    /// use arrow::datatypes::{DataType, Int32Type};
+    /// use datafusion_common::cast::as_list_array;
+    ///
+    /// let scalars = vec![
+    ///    ScalarValue::Int32(Some(1)),
+    ///    ScalarValue::Int32(None),
+    ///    ScalarValue::Int32(Some(2))
+    /// ];
+    ///
+    /// let result = ScalarValue::new_list_from_iter(scalars.iter(), &DataType::Int32);
+    ///
+    /// let expected = ListArray::from_iter_primitive::<Int32Type, _, _>(
+    ///     vec![
+    ///        Some(vec![Some(1), None, Some(2)])
+    ///     ]);
+    ///
+    /// assert_eq!(*result, expected);
+    /// ```
+    pub fn new_list_from_iter(values: impl IntoIterator<Item = ScalarValue> + ExactSizeIterator, data_type: &DataType) -> Arc<ListArray> {
+        let values = if values.len() == 0 {
+            new_empty_array(data_type)
+        } else {
+            Self::iter_to_array(values).unwrap()
+        };
+        Arc::new(array_into_list_array(values))
+    }
+
     /// Converts `Vec<ScalarValue>` where each element has type corresponding to
     /// `data_type`, to a [`LargeListArray`].
     ///

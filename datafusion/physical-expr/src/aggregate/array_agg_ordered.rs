@@ -288,12 +288,11 @@ impl Accumulator for OrderSensitiveArrayAggAccumulator {
     }
 
     fn evaluate(&self) -> Result<ScalarValue> {
+        let values = self.values.clone();
         let array = if self.reverse {
-            let mut reverse_values = self.values.clone();
-            reverse_values.reverse();
-            ScalarValue::new_list(&reverse_values, &self.datatypes[0])
+            ScalarValue::new_list_from_iter(values.into_iter().rev(), &self.datatypes[0])
         } else {
-            ScalarValue::new_list(&self.values, &self.datatypes[0])
+            ScalarValue::new_list_from_iter(values.into_iter(), &self.datatypes[0])
         };
         Ok(ScalarValue::List(array))
     }
