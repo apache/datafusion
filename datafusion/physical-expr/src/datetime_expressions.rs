@@ -36,7 +36,9 @@ use arrow::{
 use arrow_array::temporal_conversions::NANOSECONDS;
 use arrow_array::timezone::Tz;
 use arrow_array::types::ArrowTimestampType;
+use arrow_array::GenericStringArray;
 use chrono::prelude::*;
+use chrono::LocalResult::Single;
 use chrono::{Duration, Months, NaiveDate};
 use datafusion_common::cast::{
     as_date32_array, as_date64_array, as_generic_string_array, as_primitive_array,
@@ -48,11 +50,9 @@ use datafusion_common::{
     ScalarValue,
 };
 use datafusion_expr::ColumnarValue;
+use itertools::Either;
 use std::str::FromStr;
 use std::sync::Arc;
-use arrow_array::GenericStringArray;
-use chrono::LocalResult::Single;
-use itertools::Either;
 
 /// Error message if nanosecond conversion request beyond supported interval
 const ERR_NANOSECONDS_NOT_SUPPORTED: &str = "The dates that can be represented as nanoseconds have to be between 1677-09-21T00:12:44.0 and 2262-04-11T23:47:16.854775804";
@@ -85,9 +85,16 @@ const ERR_NANOSECONDS_NOT_SUPPORTED: &str = "The dates that can be represented a
 /// [`chrono::format::strftime`]: https://docs.rs/chrono/latest/chrono/format/strftime/index.html
 ///
 #[inline]
-pub(crate) fn string_to_timestamp_nanos_formatted(s: &str, format: &str) -> Result<i64, DataFusionError> {
-    string_to_datetime_formatted(&Utc, s, format)?.naive_utc().timestamp_nanos_opt()
-        .ok_or_else(|| DataFusionError::Execution(ERR_NANOSECONDS_NOT_SUPPORTED.to_string()))
+pub(crate) fn string_to_timestamp_nanos_formatted(
+    s: &str,
+    format: &str,
+) -> Result<i64, DataFusionError> {
+    string_to_datetime_formatted(&Utc, s, format)?
+        .naive_utc()
+        .timestamp_nanos_opt()
+        .ok_or_else(|| {
+            DataFusionError::Execution(ERR_NANOSECONDS_NOT_SUPPORTED.to_string())
+        })
 }
 
 /// Accepts a string and parses it using the [`chrono::format::strftime`] specifiers
@@ -102,9 +109,16 @@ pub(crate) fn string_to_timestamp_nanos_formatted(s: &str, format: &str) -> Resu
 ///
 /// [`chrono::format::strftime`]: https://docs.rs/chrono/latest/chrono/format/strftime/index.html
 /// [IANA timezones]: https://www.iana.org/time-zones
-pub(crate) fn string_to_datetime_formatted<T: TimeZone>(timezone: &T, s: &str, format: &str) -> Result<DateTime<T>, DataFusionError> {
-    let err = |err_ctx: &str|
-        DataFusionError::Execution(format!("Error parsing timestamp from '{s}' using format '{format}': {err_ctx}"));
+pub(crate) fn string_to_datetime_formatted<T: TimeZone>(
+    timezone: &T,
+    s: &str,
+    format: &str,
+) -> Result<DateTime<T>, DataFusionError> {
+    let err = |err_ctx: &str| {
+        DataFusionError::Execution(format!(
+            "Error parsing timestamp from '{s}' using format '{format}': {err_ctx}"
+        ))
+    };
 
     // attempt to parse the string assuming it has a timezone
     let dt = DateTime::parse_from_str(s, format);
@@ -118,12 +132,10 @@ pub(crate) fn string_to_datetime_formatted<T: TimeZone>(timezone: &T, s: &str, f
 
         if let Single(e) = &timezone.from_local_datetime(&ndt.unwrap()) {
             Ok(e.to_owned())
+        } else {
+            Err(err(&e.to_string()))
         }
-        else {
-            return Err(err(&e.to_string()));
-        }
-    }
-    else {
+    } else {
         Ok(dt.unwrap().with_timezone(timezone))
     }
 }
@@ -177,11 +189,11 @@ pub(crate) fn strings_to_primitive_function<'a, T, O, F, F2>(
     op2: F2,
     name: &str,
 ) -> Result<PrimitiveArray<O>>
-    where
-        O: ArrowPrimitiveType,
-        T: OffsetSizeTrait,
-        F: Fn(&'a str, &'a str) -> Result<O::Native>,
-        F2: Fn(O::Native) -> O::Native,
+where
+    O: ArrowPrimitiveType,
+    T: OffsetSizeTrait,
+    F: Fn(&'a str, &'a str) -> Result<O::Native>,
+    F2: Fn(O::Native) -> O::Native,
 {
     if args.len() < 2 {
         return internal_err!(
@@ -192,29 +204,30 @@ pub(crate) fn strings_to_primitive_function<'a, T, O, F, F2>(
     }
 
     // this will throw the error if any of the array args are not castable to GenericStringArray
-    let data = args.iter()
-        .map(|a| {
-            match a {
-                ColumnarValue::Array(a) => Ok(Either::Left(as_generic_string_array::<T>(a.as_ref())?)),
-                ColumnarValue::Scalar(s) => {
-                    match s {
-                        ScalarValue::Utf8(a) | ScalarValue::LargeUtf8(a) => {
-                            Ok(Either::Right(a))
-                        },
-                        other => return internal_err!("Unexpected scalar type encountered '{other}' for function '{name}'")
-                    }
-                }
+    let data = args
+        .iter()
+        .map(|a| match a {
+            ColumnarValue::Array(a) => {
+                Ok(Either::Left(as_generic_string_array::<T>(a.as_ref())?))
             }
+            ColumnarValue::Scalar(s) => match s {
+                ScalarValue::Utf8(a) | ScalarValue::LargeUtf8(a) => Ok(Either::Right(a)),
+                other => internal_err!(
+                    "Unexpected scalar type encountered '{other}' for function '{name}'"
+                ),
+            },
         })
         .collect::<Result<Vec<Either<&GenericStringArray<T>, &Option<String>>>>>()?;
 
-    let first_arg = &data.get(0).unwrap().left().unwrap();
+    let first_arg = &data.first().unwrap().left().unwrap();
 
-    first_arg.iter().enumerate().map(|(pos, x)| {
-        let mut val = None;
+    first_arg
+        .iter()
+        .enumerate()
+        .map(|(pos, x)| {
+            let mut val = None;
 
-        match x {
-            Some(x) => {
+            if let Some(x) = x {
                 let param_args = data.iter().skip(1);
 
                 // go through the args and find the first successful result. Only the last
@@ -222,35 +235,30 @@ pub(crate) fn strings_to_primitive_function<'a, T, O, F, F2>(
                 for param_arg in param_args {
                     // param_arg is an array, use the corresponding index into the array as the arg
                     // we're currently parsing
-                    let p = param_arg.clone();
+                    let p = *param_arg;
                     let r = if p.is_left() {
                         let p = p.left().unwrap();
-                        op(x, &p.value(pos))
+                        op(x, p.value(pos))
                     }
                     // args is a scalar, use it directly
-                    else {
-                        if let Some(p) = p.right().unwrap() {
-                            op(x, p.as_str())
-                        }
-                        else {
-                            continue;
-                        }
+                    else if let Some(p) = p.right().unwrap() {
+                        op(x, p.as_str())
+                    } else {
+                        continue;
                     };
 
                     if r.is_ok() {
                         val = Some(Ok(op2(r.unwrap())));
                         break;
-                    }
-                    else {
+                    } else {
                         val = Some(r);
                     }
                 }
-            },
-            None => ()
-        }
+            };
 
-        val.transpose()
-    }).collect()
+            val.transpose()
+        })
+        .collect()
 }
 
 // given an function that maps a `&str` to an arrow native type,
@@ -292,11 +300,11 @@ fn handle_multiple<'a, O, F, S, M>(
     op2: M,
     name: &str,
 ) -> Result<ColumnarValue>
-    where
-        O: ArrowPrimitiveType,
-        S: ScalarType<O::Native>,
-        F: Fn(&'a str, &'a str) -> Result<O::Native>,
-        M: Fn(O::Native) -> O::Native,
+where
+    O: ArrowPrimitiveType,
+    S: ScalarType<O::Native>,
+    F: Fn(&'a str, &'a str) -> Result<O::Native>,
+    M: Fn(O::Native) -> O::Native,
 {
     match &args[0] {
         ColumnarValue::Array(a) => match a.data_type() {
@@ -322,8 +330,12 @@ fn handle_multiple<'a, O, F, S, M>(
                 Ok(ColumnarValue::Array(Arc::new(
                     strings_to_primitive_function::<i32, O, _, _>(args, op, op2, name)?,
                 )))
-            },
-            other => return internal_err!("Unsupported data type {other:?} for function {name}"),
+            }
+            other => {
+                internal_err!(
+                    "Unsupported data type {other:?} for function {name}"
+                )
+            }
         },
         // if the first argument is a scalar utf8 all arguments are expected to be scalar utf8
         ColumnarValue::Scalar(scalar) => match scalar {
@@ -334,16 +346,22 @@ fn handle_multiple<'a, O, F, S, M>(
                 match a {
                     Some(a) => {
                         // enumerate all the values finding the first one that returns an Ok result
-                        for (pos, &ref v) in args.iter().enumerate().skip(1) {
+                        for (pos, v) in args.iter().enumerate().skip(1) {
                             if let ColumnarValue::Scalar(s) = v {
-                                if let ScalarValue::Utf8(x) | ScalarValue::LargeUtf8(x) = s {
+                                if let ScalarValue::Utf8(x) | ScalarValue::LargeUtf8(x) =
+                                    s
+                                {
                                     if let Some(s) = x {
-                                        match op(a.as_str(), &s.as_str()) {
+                                        match op(a.as_str(), s.as_str()) {
                                             Ok(r) => {
-                                                val = Some(Ok(ColumnarValue::Scalar(S::scalar(Some(op2(r))))));
+                                                val = Some(Ok(ColumnarValue::Scalar(
+                                                    S::scalar(Some(op2(r))),
+                                                )));
                                                 break;
-                                            },
-                                            Err(e) => { err = Some(e); },
+                                            }
+                                            Err(e) => {
+                                                err = Some(e);
+                                            }
                                         }
                                     }
                                 } else {
@@ -353,17 +371,21 @@ fn handle_multiple<'a, O, F, S, M>(
                                 return internal_err!("Unsupported data type {v:?} for function {name}, arg # {pos}");
                             }
                         }
-                    },
+                    }
                     None => (),
                 }
 
-                if val.is_some() {
-                    val.unwrap()
+                if let Some(v) = val {
+                    v
                 } else {
                     Err(err.unwrap())
                 }
             }
-            other => return internal_err!("Unsupported data type {other:?} for function {name}"),
+            other => {
+                internal_err!(
+                    "Unsupported data type {other:?} for function {name}"
+                )
+            }
         },
     }
 }
@@ -375,7 +397,7 @@ fn string_to_timestamp_nanos_shim(s: &str) -> Result<i64> {
 
 /// Calls string_to_timestamp_nanos_formatted and converts the error type
 fn string_to_timestamp_nanos_with_format_shim(s: &str, f: &str) -> Result<i64> {
-    string_to_timestamp_nanos_formatted(s, f).map_err(|e| e.into())
+    string_to_timestamp_nanos_formatted(s, f)
 }
 
 /// to_timestamp SQL function
@@ -387,16 +409,18 @@ fn string_to_timestamp_nanos_with_format_shim(s: &str, f: &str) -> Result<i64> {
 pub fn to_timestamp(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     match args.len() {
         1 => handle::<TimestampNanosecondType, _, TimestampNanosecondType>(
-                args,
-                string_to_timestamp_nanos_shim,
-                "to_timestamp",
-            ),
-        n if n >=2 => handle_multiple::<TimestampNanosecondType, _, TimestampNanosecondType, _>(
             args,
-            string_to_timestamp_nanos_with_format_shim,
-            |n| n,
+            string_to_timestamp_nanos_shim,
             "to_timestamp",
         ),
+        n if n >= 2 => {
+            handle_multiple::<TimestampNanosecondType, _, TimestampNanosecondType, _>(
+                args,
+                string_to_timestamp_nanos_with_format_shim,
+                |n| n,
+                "to_timestamp",
+            )
+        }
         _ => internal_err!("Unsupported 0 argument count for function to_timestamp"),
     }
 }
@@ -409,13 +433,17 @@ pub fn to_timestamp_millis(args: &[ColumnarValue]) -> Result<ColumnarValue> {
             |s| string_to_timestamp_nanos_shim(s).map(|n| n / 1_000_000),
             "to_timestamp_millis",
         ),
-        n if n >= 2 => handle_multiple::<TimestampMillisecondType, _, TimestampMillisecondType, _>(
-            args,
-            string_to_timestamp_nanos_with_format_shim,
-            |n| n / 1_000_000,
-            "to_timestamp_millis",
-        ),
-        _ => internal_err!("Unsupported 0 argument count for function to_timestamp_millis"),
+        n if n >= 2 => {
+            handle_multiple::<TimestampMillisecondType, _, TimestampMillisecondType, _>(
+                args,
+                string_to_timestamp_nanos_with_format_shim,
+                |n| n / 1_000_000,
+                "to_timestamp_millis",
+            )
+        }
+        _ => {
+            internal_err!("Unsupported 0 argument count for function to_timestamp_millis")
+        }
     }
 }
 
@@ -427,13 +455,17 @@ pub fn to_timestamp_micros(args: &[ColumnarValue]) -> Result<ColumnarValue> {
             |s| string_to_timestamp_nanos_shim(s).map(|n| n / 1_000),
             "to_timestamp_micros",
         ),
-        n if n >= 2 => handle_multiple::<TimestampMicrosecondType, _, TimestampMicrosecondType, _>(
-            args,
-            string_to_timestamp_nanos_with_format_shim,
-            |n| n / 1_000,
-            "to_timestamp_micros",
-        ),
-        _ => internal_err!("Unsupported 0 argument count for function to_timestamp_micros"),
+        n if n >= 2 => {
+            handle_multiple::<TimestampMicrosecondType, _, TimestampMicrosecondType, _>(
+                args,
+                string_to_timestamp_nanos_with_format_shim,
+                |n| n / 1_000,
+                "to_timestamp_micros",
+            )
+        }
+        _ => {
+            internal_err!("Unsupported 0 argument count for function to_timestamp_micros")
+        }
     }
 }
 
@@ -445,13 +477,17 @@ pub fn to_timestamp_nanos(args: &[ColumnarValue]) -> Result<ColumnarValue> {
             string_to_timestamp_nanos_shim,
             "to_timestamp_nanos",
         ),
-        n if n >= 2 => handle_multiple::<TimestampNanosecondType, _, TimestampNanosecondType, _>(
-            args,
-            string_to_timestamp_nanos_with_format_shim,
-            |n| n,
-            "to_timestamp_nanos",
-        ),
-        _ => internal_err!("Unsupported 0 argument count for function to_timestamp_nanos"),
+        n if n >= 2 => {
+            handle_multiple::<TimestampNanosecondType, _, TimestampNanosecondType, _>(
+                args,
+                string_to_timestamp_nanos_with_format_shim,
+                |n| n,
+                "to_timestamp_nanos",
+            )
+        }
+        _ => {
+            internal_err!("Unsupported 0 argument count for function to_timestamp_nanos")
+        }
     }
 }
 
@@ -469,9 +505,10 @@ pub fn to_timestamp_seconds(args: &[ColumnarValue]) -> Result<ColumnarValue> {
             |n| n / 1_000_000_000,
             "to_timestamp_seconds",
         ),
-        _ => internal_err!("Unsupported 0 argument count for function to_timestamp_seconds"),
+        _ => internal_err!(
+            "Unsupported 0 argument count for function to_timestamp_seconds"
+        ),
     }
-
 }
 
 /// Create an implementation of `now()` that always returns the
@@ -1216,7 +1253,7 @@ where
 
 /// to_timestamp() SQL function implementation
 pub fn to_timestamp_invoke(args: &[ColumnarValue]) -> Result<ColumnarValue> {
-    if args.len() == 0 {
+    if args.is_empty() {
         return internal_err!(
             "to_timestamp function requires 1 or more arguments, got {}",
             args.len()
@@ -1225,7 +1262,7 @@ pub fn to_timestamp_invoke(args: &[ColumnarValue]) -> Result<ColumnarValue> {
 
     // validate that any args after the first one are Utf8
     if args.len() > 1 {
-        for (idx, a) in args.into_iter().skip(1).enumerate() {
+        for (idx, a) in args.iter().skip(1).enumerate() {
             if a.data_type() != DataType::Utf8 {
                 return internal_err!(
                     "to_timestamp function unsupported data type at index {}: {}",
@@ -1264,7 +1301,7 @@ pub fn to_timestamp_invoke(args: &[ColumnarValue]) -> Result<ColumnarValue> {
 
 /// to_timestamp_millis() SQL function implementation
 pub fn to_timestamp_millis_invoke(args: &[ColumnarValue]) -> Result<ColumnarValue> {
-    if args.len() == 0 {
+    if args.is_empty() {
         return internal_err!(
             "to_timestamp_millis function requires 1 or more arguments, got {}",
             args.len()
@@ -1273,7 +1310,7 @@ pub fn to_timestamp_millis_invoke(args: &[ColumnarValue]) -> Result<ColumnarValu
 
     // validate that any args after the first one are Utf8
     if args.len() > 1 {
-        for (idx, a) in args.into_iter().skip(1).enumerate() {
+        for (idx, a) in args.iter().skip(1).enumerate() {
             if a.data_type() != DataType::Utf8 {
                 return internal_err!(
                     "to_timestamp_millis function unsupported data type at index {}: {}",
@@ -1285,7 +1322,10 @@ pub fn to_timestamp_millis_invoke(args: &[ColumnarValue]) -> Result<ColumnarValu
     }
 
     match args[0].data_type() {
-        DataType::Null | DataType::Int32 | DataType::Int64 | DataType::Timestamp(_, None) => cast_column(
+        DataType::Null
+        | DataType::Int32
+        | DataType::Int64
+        | DataType::Timestamp(_, None) => cast_column(
             &args[0],
             &DataType::Timestamp(TimeUnit::Millisecond, None),
             None,
@@ -1302,7 +1342,7 @@ pub fn to_timestamp_millis_invoke(args: &[ColumnarValue]) -> Result<ColumnarValu
 
 /// to_timestamp_micros() SQL function implementation
 pub fn to_timestamp_micros_invoke(args: &[ColumnarValue]) -> Result<ColumnarValue> {
-    if args.len() == 0 {
+    if args.is_empty() {
         return internal_err!(
             "to_timestamp_micros function requires 1 or more arguments, got {}",
             args.len()
@@ -1311,7 +1351,7 @@ pub fn to_timestamp_micros_invoke(args: &[ColumnarValue]) -> Result<ColumnarValu
 
     // validate that any args after the first one are Utf8
     if args.len() > 1 {
-        for (idx, a) in args.into_iter().skip(1).enumerate() {
+        for (idx, a) in args.iter().skip(1).enumerate() {
             if a.data_type() != DataType::Utf8 {
                 return internal_err!(
                     "to_timestamp_micros function unsupported data type at index {}: {}",
@@ -1323,7 +1363,10 @@ pub fn to_timestamp_micros_invoke(args: &[ColumnarValue]) -> Result<ColumnarValu
     }
 
     match args[0].data_type() {
-        DataType::Null | DataType::Int32 | DataType::Int64 | DataType::Timestamp(_, None) => cast_column(
+        DataType::Null
+        | DataType::Int32
+        | DataType::Int64
+        | DataType::Timestamp(_, None) => cast_column(
             &args[0],
             &DataType::Timestamp(TimeUnit::Microsecond, None),
             None,
@@ -1340,7 +1383,7 @@ pub fn to_timestamp_micros_invoke(args: &[ColumnarValue]) -> Result<ColumnarValu
 
 /// to_timestamp_nanos() SQL function implementation
 pub fn to_timestamp_nanos_invoke(args: &[ColumnarValue]) -> Result<ColumnarValue> {
-    if args.len() == 0 {
+    if args.is_empty() {
         return internal_err!(
             "to_timestamp_nanos function requires 1 or more arguments, got {}",
             args.len()
@@ -1349,7 +1392,7 @@ pub fn to_timestamp_nanos_invoke(args: &[ColumnarValue]) -> Result<ColumnarValue
 
     // validate that any args after the first one are Utf8
     if args.len() > 1 {
-        for (idx, a) in args.into_iter().skip(1).enumerate() {
+        for (idx, a) in args.iter().skip(1).enumerate() {
             if a.data_type() != DataType::Utf8 {
                 return internal_err!(
                     "to_timestamp_nanos function unsupported data type at index {}: {}",
@@ -1361,7 +1404,10 @@ pub fn to_timestamp_nanos_invoke(args: &[ColumnarValue]) -> Result<ColumnarValue
     }
 
     match args[0].data_type() {
-        DataType::Null | DataType::Int32 | DataType::Int64 | DataType::Timestamp(_, None) => cast_column(
+        DataType::Null
+        | DataType::Int32
+        | DataType::Int64
+        | DataType::Timestamp(_, None) => cast_column(
             &args[0],
             &DataType::Timestamp(TimeUnit::Nanosecond, None),
             None,
@@ -1378,7 +1424,7 @@ pub fn to_timestamp_nanos_invoke(args: &[ColumnarValue]) -> Result<ColumnarValue
 
 /// to_timestamp_seconds() SQL function implementation
 pub fn to_timestamp_seconds_invoke(args: &[ColumnarValue]) -> Result<ColumnarValue> {
-    if args.len() == 0 {
+    if args.is_empty() {
         return internal_err!(
             "to_timestamp_seconds function requires 1 or more arguments, got {}",
             args.len()
@@ -1387,7 +1433,7 @@ pub fn to_timestamp_seconds_invoke(args: &[ColumnarValue]) -> Result<ColumnarVal
 
     // validate that any args after the first one are Utf8
     if args.len() > 1 {
-        for (idx, a) in args.into_iter().skip(1).enumerate() {
+        for (idx, a) in args.iter().skip(1).enumerate() {
             if a.data_type() != DataType::Utf8 {
                 return internal_err!(
                     "to_timestamp_seconds function unsupported data type at index {}: {}",
@@ -1399,7 +1445,10 @@ pub fn to_timestamp_seconds_invoke(args: &[ColumnarValue]) -> Result<ColumnarVal
     }
 
     match args[0].data_type() {
-        DataType::Null | DataType::Int32 | DataType::Int64 | DataType::Timestamp(_, None) => {
+        DataType::Null
+        | DataType::Int32
+        | DataType::Int64
+        | DataType::Timestamp(_, None) => {
             cast_column(&args[0], &DataType::Timestamp(TimeUnit::Second, None), None)
         }
         DataType::Utf8 => to_timestamp_seconds(args),
@@ -1481,7 +1530,6 @@ mod tests {
         let mut format2_builder = StringBuilder::with_capacity(2, 1024);
         let mut format3_builder = StringBuilder::with_capacity(2, 1024);
         let mut ts_builder = TimestampNanosecondArray::builder(2);
-
 
         date_string_builder.append_null();
         format1_builder.append_null();
@@ -2091,7 +2139,7 @@ mod tests {
         builder.append_value(1);
         let int64array = [
             ColumnarValue::Array(Arc::new(builder.finish())),
-            ColumnarValue::Array(Arc::new(builder.finish()))
+            ColumnarValue::Array(Arc::new(builder.finish())),
         ];
 
         let expected_err =
@@ -2116,7 +2164,8 @@ mod tests {
 
         date_string_builder.append_value("2020-09-08 - 13:42:29.19085Z");
 
-        let string_array = ColumnarValue::Array(Arc::new(date_string_builder.finish()) as ArrayRef);
+        let string_array =
+            ColumnarValue::Array(Arc::new(date_string_builder.finish()) as ArrayRef);
 
         let expected_err =
             "Arrow error: Parser error: Error parsing timestamp from '2020-09-08 - 13:42:29.19085Z': error parsing time";
@@ -2195,11 +2244,12 @@ mod tests {
         );
         assert_eq!(
             1599572549000000000,
-            parse_timestamp_formatted("09-08-2020 13/42/29", "%m-%d-%Y %H/%M/%S").unwrap()
+            parse_timestamp_formatted("09-08-2020 13/42/29", "%m-%d-%Y %H/%M/%S")
+                .unwrap()
         );
     }
 
-    fn parse_timestamp_formatted(s: &str, format: & str) -> Result<i64, DataFusionError> {
+    fn parse_timestamp_formatted(s: &str, format: &str) -> Result<i64, DataFusionError> {
         let result = string_to_timestamp_nanos_formatted(s, format);
         if let Err(e) = &result {
             eprintln!("Error parsing timestamp '{s}' using format '{format}': {e:?}");
@@ -2214,13 +2264,23 @@ mod tests {
             ("", "%Y%m%d %H%M%S", "premature end of input"),
             ("SS", "%c", "premature end of input"),
             ("Wed, 18 Feb 2015 23:16:09 GMT", "", "trailing input"),
-            ("Wed, 18 Feb 2015 23:16:09 GMT", "%XX", "input contains invalid characters"),
-            ("Wed, 18 Feb 2015 23:16:09 GMT", "%Y%m%d %H%M%S", "input contains invalid characters"),
+            (
+                "Wed, 18 Feb 2015 23:16:09 GMT",
+                "%XX",
+                "input contains invalid characters",
+            ),
+            (
+                "Wed, 18 Feb 2015 23:16:09 GMT",
+                "%Y%m%d %H%M%S",
+                "input contains invalid characters",
+            ),
         ];
 
         for (s, f, ctx) in cases {
             let expected = format!("Execution error: Error parsing timestamp from '{s}' using format '{f}': {ctx}");
-            let actual = string_to_datetime_formatted(&Utc, s, f).unwrap_err().to_string();
+            let actual = string_to_datetime_formatted(&Utc, s, f)
+                .unwrap_err()
+                .to_string();
             assert_eq!(actual, expected)
         }
     }

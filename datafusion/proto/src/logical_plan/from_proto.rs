@@ -1689,36 +1689,36 @@ pub fn parse_expr(
                     parse_expr(&args[1], registry)?,
                 )),
                 ScalarFunction::ToHex => Ok(to_hex(parse_expr(&args[0], registry)?)),
-                ScalarFunction::ToTimestamp => {
-                    Ok(to_timestamp_seconds(args.to_owned()
+                ScalarFunction::ToTimestamp => Ok(to_timestamp_seconds(
+                    args.to_owned()
                         .iter()
                         .map(|expr| parse_expr(expr, registry))
-                        .collect::<Result<Vec<_>, _>>()?))
-                }
-                ScalarFunction::ToTimestampMillis => {
-                    Ok(to_timestamp_millis(args.to_owned()
+                        .collect::<Result<Vec<_>, _>>()?,
+                )),
+                ScalarFunction::ToTimestampMillis => Ok(to_timestamp_millis(
+                    args.to_owned()
                         .iter()
                         .map(|expr| parse_expr(expr, registry))
-                        .collect::<Result<Vec<_>, _>>()?))
-                }
-                ScalarFunction::ToTimestampMicros => {
-                    Ok(to_timestamp_micros(args.to_owned()
+                        .collect::<Result<Vec<_>, _>>()?,
+                )),
+                ScalarFunction::ToTimestampMicros => Ok(to_timestamp_micros(
+                    args.to_owned()
                         .iter()
                         .map(|expr| parse_expr(expr, registry))
-                        .collect::<Result<Vec<_>, _>>()?))
-                }
-                ScalarFunction::ToTimestampNanos => {
-                    Ok(to_timestamp_nanos(args.to_owned()
+                        .collect::<Result<Vec<_>, _>>()?,
+                )),
+                ScalarFunction::ToTimestampNanos => Ok(to_timestamp_nanos(
+                    args.to_owned()
                         .iter()
                         .map(|expr| parse_expr(expr, registry))
-                        .collect::<Result<Vec<_>, _>>()?))
-                }
-                ScalarFunction::ToTimestampSeconds => {
-                    Ok(to_timestamp_seconds(args.to_owned()
+                        .collect::<Result<Vec<_>, _>>()?,
+                )),
+                ScalarFunction::ToTimestampSeconds => Ok(to_timestamp_seconds(
+                    args.to_owned()
                         .iter()
                         .map(|expr| parse_expr(expr, registry))
-                        .collect::<Result<Vec<_>, _>>()?))
-                }
+                        .collect::<Result<Vec<_>, _>>()?,
+                )),
                 ScalarFunction::Now => Ok(now()),
                 ScalarFunction::Translate => Ok(translate(
                     parse_expr(&args[0], registry)?,

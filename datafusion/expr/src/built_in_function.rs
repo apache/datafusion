@@ -1059,7 +1059,7 @@ impl BuiltinScalarFunction {
             | BuiltinScalarFunction::ToTimestampMicros
             | BuiltinScalarFunction::ToTimestampNanos => {
                 Signature::variadic_any(self.volatility())
-            },
+            }
             BuiltinScalarFunction::FromUnixtime => {
                 Signature::uniform(1, vec![Int64], self.volatility())
             }
