@@ -1471,84 +1471,106 @@ extract(field FROM source)
 
 Converts a value to a timestamp (`YYYY-MM-DDT00:00:00Z`).
 Supports strings, integer, unsigned integer, and double types as input.
-Strings are parsed as RFC3339 (e.g. '2023-07-20T05:44:00')
+Strings are parsed as RFC3339 (e.g. '2023-07-20T05:44:00') if no [Chrono formats] are provided.
 Integers, unsigned integers, and doubles are interpreted as seconds since the unix epoch (`1970-01-01T00:00:00Z`)
 return the corresponding timestamp.
 
 Note: `to_timestamp` returns `Timestamp(Nanosecond)`. The supported range for integer input is between `-9223372037` and `9223372036`.
-Supported range for string input is between `1677-09-21T00:12:44.0` and `2262-04-11T23:47:16.0`. Please use `to_timestamp_seconds` for the input outside of supported bounds.
+Supported range for string input is between `1677-09-21T00:12:44.0` and `2262-04-11T23:47:16.0`. Please use `to_timestamp_seconds` 
+for the input outside of supported bounds.
 
 ```
-to_timestamp(expression)
+to_timestamp(expression[, ..., format_n])
 ```
 
 #### Arguments
 
 - **expression**: Expression to operate on.
   Can be a constant, column, or function, and any combination of arithmetic operators.
+- **format_n**: Optional [Chrono format] strings to use to parse the expression. Formats will be tried in the order
+  they appear with the first successful one being returned. If none of the formats successfully parse the expression
+  an error will be returned.
+
+[Chrono format]: https://docs.rs/chrono/latest/chrono/format/strftime/index.html
 
 ### `to_timestamp_millis`
 
 Converts a value to a timestamp (`YYYY-MM-DDT00:00:00.000Z`).
 Supports strings, integer, and unsigned integer types as input.
-Strings are parsed as RFC3339 (e.g. '2023-07-20T05:44:00')
+Strings are parsed as RFC3339 (e.g. '2023-07-20T05:44:00') if no [Chrono format]s are provided.
 Integers and unsigned integers are interpreted as milliseconds since the unix epoch (`1970-01-01T00:00:00Z`)
 return the corresponding timestamp.
 
 ```
-to_timestamp_millis(expression)
+to_timestamp_millis(expression[, ..., format_n])
 ```
 
 #### Arguments
 
 - **expression**: Expression to operate on.
   Can be a constant, column, or function, and any combination of arithmetic operators.
+- **format_n**: Optional [Chrono format] strings to use to parse the expression. Formats will be tried in the order
+  they appear with the first successful one being returned. If none of the formats successfully parse the expression
+  an error will be returned.
 
 ### `to_timestamp_micros`
 
 Converts a value to a timestamp (`YYYY-MM-DDT00:00:00.000000Z`).
 Supports strings, integer, and unsigned integer types as input.
-Strings are parsed as RFC3339 (e.g. '2023-07-20T05:44:00')
+Strings are parsed as RFC3339 (e.g. '2023-07-20T05:44:00') if no [Chrono format]s are provided.
 Integers and unsigned integers are interpreted as microseconds since the unix epoch (`1970-01-01T00:00:00Z`)
 return the corresponding timestamp.
 
 ```
-to_timestamp_nanos(expression)
+to_timestamp_nanos(expression[, ..., format_n])
 ```
+
+#### Arguments
+
+- **expression**: Expression to operate on.
+  Can be a constant, column, or function, and any combination of arithmetic operators.
+- **format_n**: Optional [Chrono format] strings to use to parse the expression. Formats will be tried in the order
+  they appear with the first successful one being returned. If none of the formats successfully parse the expression
+  an error will be returned.
 
 ### `to_timestamp_nanos`
 
 Converts a value to a timestamp (`YYYY-MM-DDT00:00:00.000000000Z`).
 Supports strings, integer, and unsigned integer types as input.
-Strings are parsed as RFC3339 (e.g. '2023-07-20T05:44:00')
+Strings are parsed as RFC3339 (e.g. '2023-07-20T05:44:00') if no [Chrono format]s are provided.
 Integers and unsigned integers are interpreted as nanoseconds since the unix epoch (`1970-01-01T00:00:00Z`)
 return the corresponding timestamp.
 
 ```
-to_timestamp_nanos(expression)
+to_timestamp_nanos(expression[, ..., format_n])
 ```
 
 #### Arguments
 
 - **expression**: Expression to operate on.
   Can be a constant, column, or function, and any combination of arithmetic operators.
-
+- **format_n**: Optional [Chrono format] strings to use to parse the expression. Formats will be tried in the order
+  they appear with the first successful one being returned. If none of the formats successfully parse the expression
+  an error will be returned.
 ### `to_timestamp_seconds`
 
 Converts a value to a timestamp (`YYYY-MM-DDT00:00:00.000Z`).
 Supports strings, integer, and unsigned integer types as input.
-Strings are parsed as RFC3339 (e.g. '2023-07-20T05:44:00')
+Strings are parsed as RFC3339 (e.g. '2023-07-20T05:44:00') if no [Chrono format]s are provided.
 Integers and unsigned integers are interpreted as seconds since the unix epoch (`1970-01-01T00:00:00Z`)
 return the corresponding timestamp.
 
 ```
-to_timestamp_seconds(expression)
+to_timestamp_seconds(expression[, ..., format_n])
 ```
 
 #### Arguments
 
 - **expression**: Expression to operate on.
   Can be a constant, column, or function, and any combination of arithmetic operators.
+- **format_n**: Optional [Chrono format] strings to use to parse the expression. Formats will be tried in the order
+  they appear with the first successful one being returned. If none of the formats successfully parse the expression
+  an error will be returned. 
 
 ### `from_unixtime`
 
