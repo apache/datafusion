@@ -2974,6 +2974,19 @@ impl TryFrom<&DataType> for ScalarValue {
                 .to_owned()
                 .into(),
             ),
+            // `ScalaValue::FixedSizeList` contains single element `FixedSizeList`.
+            DataType::FixedSizeList(field, _) => ScalarValue::FixedSizeList(
+                new_null_array(
+                    &DataType::FixedSizeList(
+                        Arc::new(Field::new("item", field.data_type().clone(), true)),
+                        1,
+                    ),
+                    1,
+                )
+                .as_fixed_size_list()
+                .to_owned()
+                .into(),
+            ),
             DataType::Struct(fields) => ScalarValue::Struct(None, fields.clone()),
             DataType::Null => ScalarValue::Null,
             _ => {
