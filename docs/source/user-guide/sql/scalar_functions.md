@@ -1472,8 +1472,8 @@ extract(field FROM source)
 Converts a value to a timestamp (`YYYY-MM-DDT00:00:00Z`).
 Supports strings, integer, unsigned integer, and double types as input.
 Strings are parsed as RFC3339 (e.g. '2023-07-20T05:44:00') if no [Chrono formats] are provided.
-Integers, unsigned integers, and doubles are interpreted as seconds since the unix epoch (`1970-01-01T00:00:00Z`)
-return the corresponding timestamp.
+Integers, unsigned integers, and doubles are interpreted as seconds since the unix epoch (`1970-01-01T00:00:00Z`).
+Returns the corresponding timestamp.
 
 Note: `to_timestamp` returns `Timestamp(Nanosecond)`. The supported range for integer input is between `-9223372037` and `9223372036`.
 Supported range for string input is between `1677-09-21T00:12:44.0` and `2262-04-11T23:47:16.0`. Please use `to_timestamp_seconds` 
@@ -1498,8 +1498,8 @@ to_timestamp(expression[, ..., format_n])
 Converts a value to a timestamp (`YYYY-MM-DDT00:00:00.000Z`).
 Supports strings, integer, and unsigned integer types as input.
 Strings are parsed as RFC3339 (e.g. '2023-07-20T05:44:00') if no [Chrono format]s are provided.
-Integers and unsigned integers are interpreted as milliseconds since the unix epoch (`1970-01-01T00:00:00Z`)
-return the corresponding timestamp.
+Integers and unsigned integers are interpreted as milliseconds since the unix epoch (`1970-01-01T00:00:00Z`).
+Returns the corresponding timestamp.
 
 ```
 to_timestamp_millis(expression[, ..., format_n])
@@ -1519,10 +1519,10 @@ Converts a value to a timestamp (`YYYY-MM-DDT00:00:00.000000Z`).
 Supports strings, integer, and unsigned integer types as input.
 Strings are parsed as RFC3339 (e.g. '2023-07-20T05:44:00') if no [Chrono format]s are provided.
 Integers and unsigned integers are interpreted as microseconds since the unix epoch (`1970-01-01T00:00:00Z`)
-return the corresponding timestamp.
+Returns the corresponding timestamp.
 
 ```
-to_timestamp_nanos(expression[, ..., format_n])
+to_timestamp_micros(expression[, ..., format_n])
 ```
 
 #### Arguments
@@ -1538,8 +1538,8 @@ to_timestamp_nanos(expression[, ..., format_n])
 Converts a value to a timestamp (`YYYY-MM-DDT00:00:00.000000000Z`).
 Supports strings, integer, and unsigned integer types as input.
 Strings are parsed as RFC3339 (e.g. '2023-07-20T05:44:00') if no [Chrono format]s are provided.
-Integers and unsigned integers are interpreted as nanoseconds since the unix epoch (`1970-01-01T00:00:00Z`)
-return the corresponding timestamp.
+Integers and unsigned integers are interpreted as nanoseconds since the unix epoch (`1970-01-01T00:00:00Z`).
+Returns the corresponding timestamp.
 
 ```
 to_timestamp_nanos(expression[, ..., format_n])
@@ -1557,8 +1557,8 @@ to_timestamp_nanos(expression[, ..., format_n])
 Converts a value to a timestamp (`YYYY-MM-DDT00:00:00.000Z`).
 Supports strings, integer, and unsigned integer types as input.
 Strings are parsed as RFC3339 (e.g. '2023-07-20T05:44:00') if no [Chrono format]s are provided.
-Integers and unsigned integers are interpreted as seconds since the unix epoch (`1970-01-01T00:00:00Z`)
-return the corresponding timestamp.
+Integers and unsigned integers are interpreted as seconds since the unix epoch (`1970-01-01T00:00:00Z`).
+Returns the corresponding timestamp.
 
 ```
 to_timestamp_seconds(expression[, ..., format_n])
