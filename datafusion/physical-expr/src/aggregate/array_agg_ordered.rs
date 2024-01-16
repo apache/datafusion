@@ -38,8 +38,6 @@ use datafusion_common::utils::{compare_rows, get_row_at_idx};
 use datafusion_common::{exec_err, DataFusionError, Result, ScalarValue};
 use datafusion_expr::Accumulator;
 
-use itertools::izip;
-
 /// Expression for a `ARRAY_AGG(... ORDER BY ..., ...)` aggregation. In a multi
 /// partition setting, partial aggregations are computed for every partition,
 /// and then their results are merged.
@@ -453,12 +451,6 @@ pub(crate) fn merge_ordered_arrays(
         );
     }
     let n_branch = values.len();
-    // For each branch we keep track of indices of next will be merged entry
-    let mut indices = vec![0_usize; n_branch];
-    // Keep track of sizes of each branch.
-    let end_indices = (0..n_branch)
-        .map(|idx| values[idx].len())
-        .collect::<Vec<_>>();
     let mut merged_values = vec![];
     let mut merged_orderings = vec![];
     // Continue iterating the loop until consuming data of all branches.
@@ -467,23 +459,21 @@ pub(crate) fn merge_ordered_arrays(
             minimum
         } else {
             // Heap is empty, fill it with the next entries from each branch.
-            for (idx, end_idx, ordering, branch_index) in izip!(
-                indices.iter(),
-                end_indices.iter(),
-                ordering_values.iter(),
-                0..n_branch
-            ) {
-                // If we consumed this branch, skip it.
-                if idx != end_idx {
+            for branch_idx in 0..n_branch {
+                if let Some(orderings) = ordering_values[branch_idx].pop_front() {
+                    // Their size should be same, we can safely .unwrap here.
+                    let value = values[branch_idx].pop_front().unwrap();
                     // Push the next element to the heap:
                     heap.push(CustomElement::new(
-                        branch_index,
-                        values[branch_index][*idx].clone(),
-                        ordering[*idx].to_vec(),
+                        branch_idx,
+                        value,
+                        orderings,
                         sort_options,
                     ));
                 }
+                // If None, we consumed this branch, skip it.
             }
+
             // Now we have filled the heap, get the largest entry (this will be
             // the next element in merge).
             if let Some(minimum) = heap.pop() {
@@ -495,21 +485,26 @@ pub(crate) fn merge_ordered_arrays(
                 break;
             }
         };
-        let branch_idx = minimum.branch_idx;
-        // Increment the index of merged branch,
-        indices[branch_idx] += 1;
-        let row_idx = indices[branch_idx];
-        merged_values.push(minimum.value);
-        merged_orderings.push(minimum.ordering);
-        if row_idx < end_indices[branch_idx] {
-            // If there is an available entry, push next entry in the most
-            // recently consumed branch to the heap.
-            let value = values[branch_idx][row_idx].clone();
-            let ordering_row = ordering_values[branch_idx][row_idx].to_vec();
+        let CustomElement {
+            branch_idx,
+            value,
+            ordering,
+            ..
+        } = minimum;
+        // Add minimum value in the heap to the result
+        merged_values.push(value);
+        merged_orderings.push(ordering);
+
+        // If there is an available entry, push next entry in the most
+        // recently consumed branch to the heap.
+        if let Some(orderings) = ordering_values[branch_idx].pop_front() {
+            // Their size should be same, we can safely .unwrap here.
+            let value = values[branch_idx].pop_front().unwrap();
+            // Push the next element to the heap:
             heap.push(CustomElement::new(
                 branch_idx,
                 value,
-                ordering_row,
+                orderings,
                 sort_options,
             ));
         }
