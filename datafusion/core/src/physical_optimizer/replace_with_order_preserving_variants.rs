@@ -237,6 +237,7 @@ mod tests {
     use crate::datasource::file_format::file_compression_type::FileCompressionType;
     use crate::datasource::listing::PartitionedFile;
     use crate::datasource::physical_plan::{CsvExec, FileScanConfig};
+    use crate::physical_optimizer::test_utils::crosscheck_helper;
     use crate::physical_plan::coalesce_batches::CoalesceBatchesExec;
     use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
     use crate::physical_plan::filter::FilterExec;
@@ -365,28 +366,6 @@ mod tests {
                 "\n**Optimized Plan Mismatch\n\nexpected:\n\n{expected_optimized_lines:#?}\nactual:\n\n{actual:#?}\n\n"
             );
         };
-    }
-
-    fn crosscheck_helper<T>(context: PlanContext<T>) -> Result<()>
-    where
-        PlanContext<T>: TreeNode,
-    {
-        let empty_node = context.transform_up(&|mut node| {
-            assert_eq!(node.children.len(), node.plan.children().len());
-            if !node.children.is_empty() {
-                assert_eq!(
-                    get_plan_string(&node.plan),
-                    get_plan_string(&node.plan.clone().with_new_children(
-                        node.children.iter().map(|c| c.plan.clone()).collect()
-                    )?)
-                );
-                node.children = vec![];
-            }
-            Ok(Transformed::No(node))
-        })?;
-
-        assert!(empty_node.children.is_empty());
-        Ok(())
     }
 
     #[rstest]

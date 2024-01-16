@@ -444,14 +444,14 @@ pub type PipelineFixerSubrule =
 fn hash_join_convert_symmetric_subrule(
     mut input: PipelineStatePropagator,
     config_options: &ConfigOptions,
-) -> Option<Result<PipelineStatePropagator>> {
+) -> Result<PipelineStatePropagator> {
     // Check if the current plan node is a HashJoinExec.
     if let Some(hash_join) = input.plan.as_any().downcast_ref::<HashJoinExec>() {
         // Determine if left and right children are unbounded.
-        let ub_flags = input.children_unbounded();
+        let ub_flags = children_unbounded(&input);
         let (left_unbounded, right_unbounded) = (ub_flags[0], ub_flags[1]);
         // Update the unbounded flag of the input.
-        input.unbounded = left_unbounded || right_unbounded;
+        input.data = left_unbounded || right_unbounded;
         // Process only if both left and right sides are unbounded.
         let result = if left_unbounded && right_unbounded {
             // Determine the partition mode based on configuration.
@@ -497,7 +497,7 @@ fn hash_join_convert_symmetric_subrule(
                                 let name = schema.field(*index).name();
                                 let col = Arc::new(Column::new(name, *index)) as _;
                                 // Check if the column is ordered.
-                                equivalence.get_expr_ordering(col).state
+                                equivalence.get_expr_ordering(col).data
                                     != SortProperties::Unordered
                             },
                         )
@@ -527,11 +527,18 @@ fn hash_join_convert_symmetric_subrule(
                 left_order,
                 right_order,
                 mode,
-            )?;
-            input.plan = Arc::new(shj);
-        }
+            )
+            .map(|exec| {
+                input.plan = Arc::new(exec) as _;
+                input
+            })
+        } else {
+            Ok(input)
+        };
+        result
+    } else {
+        Ok(input)
     }
-    Ok(input)
 }
 
 /// This subrule will swap build/probe sides of a hash join depending on whether
@@ -656,6 +663,7 @@ mod tests_statistical {
 
     use super::*;
     use crate::{
+        physical_optimizer::test_utils::crosscheck_helper,
         physical_plan::{
             displayable, joins::PartitionMode, ColumnStatistics, Statistics,
         },
@@ -666,7 +674,6 @@ mod tests_statistical {
     use datafusion_common::{stats::Precision, JoinType, ScalarValue};
     use datafusion_physical_expr::expressions::Column;
     use datafusion_physical_expr::PhysicalExpr;
-    use datafusion_physical_plan::{get_plan_string, tree_node::PlanContext};
 
     fn create_big_and_small() -> (Arc<dyn ExecutionPlan>, Arc<dyn ExecutionPlan>) {
         let big = Arc::new(StatisticsExec::new(
@@ -762,28 +769,6 @@ mod tests_statistical {
         ));
 
         (big, medium, small)
-    }
-
-    fn crosscheck_helper<T>(context: PlanContext<T>) -> Result<()>
-    where
-        PlanContext<T>: TreeNode,
-    {
-        let empty_node = context.transform_up(&|mut node| {
-            assert_eq!(node.children.len(), node.plan.children().len());
-            if !node.children.is_empty() {
-                assert_eq!(
-                    get_plan_string(&node.plan),
-                    get_plan_string(&node.plan.clone().with_new_children(
-                        node.children.iter().map(|c| c.plan.clone()).collect()
-                    )?)
-                );
-                node.children = vec![];
-            }
-            Ok(Transformed::No(node))
-        })?;
-
-        assert!(empty_node.children.is_empty());
-        Ok(())
     }
 
     pub(crate) fn crosscheck_plans(plan: Arc<dyn ExecutionPlan>) -> Result<()> {

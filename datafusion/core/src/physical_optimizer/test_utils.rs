@@ -39,11 +39,14 @@ use crate::physical_plan::{ExecutionPlan, InputOrderMode, Partitioning};
 use crate::prelude::{CsvReadOptions, SessionContext};
 
 use arrow_schema::{Schema, SchemaRef, SortOptions};
+use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{JoinType, Statistics};
 use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_expr::{AggregateFunction, WindowFrame, WindowFunctionDefinition};
 use datafusion_physical_expr::expressions::col;
 use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
+use datafusion_physical_plan::get_plan_string;
+use datafusion_physical_plan::tree_node::PlanContext;
 
 use crate::datasource::stream::{StreamConfig, StreamTable};
 use async_trait::async_trait;
@@ -360,4 +363,26 @@ pub fn sort_exec(
 ) -> Arc<dyn ExecutionPlan> {
     let sort_exprs = sort_exprs.into_iter().collect();
     Arc::new(SortExec::new(sort_exprs, input))
+}
+
+pub fn crosscheck_helper<T>(context: PlanContext<T>) -> Result<()>
+where
+    PlanContext<T>: TreeNode,
+{
+    let empty_node = context.transform_up(&|mut node| {
+        assert_eq!(node.children.len(), node.plan.children().len());
+        if !node.children.is_empty() {
+            assert_eq!(
+                get_plan_string(&node.plan),
+                get_plan_string(&node.plan.clone().with_new_children(
+                    node.children.iter().map(|c| c.plan.clone()).collect()
+                )?)
+            );
+            node.children = vec![];
+        }
+        Ok(Transformed::No(node))
+    })?;
+
+    assert!(empty_node.children.is_empty());
+    Ok(())
 }

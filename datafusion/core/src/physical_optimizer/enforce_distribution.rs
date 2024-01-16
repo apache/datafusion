@@ -1347,6 +1347,7 @@ pub(crate) mod tests {
     use crate::datasource::physical_plan::{CsvExec, FileScanConfig};
     use crate::physical_optimizer::enforce_sorting::EnforceSorting;
     use crate::physical_optimizer::output_requirements::OutputRequirements;
+    use crate::physical_optimizer::test_utils::crosscheck_helper;
     use crate::physical_plan::aggregates::{
         AggregateExec, AggregateMode, PhysicalGroupBy,
     };
@@ -1376,7 +1377,6 @@ pub(crate) mod tests {
         expressions, expressions::binary, expressions::lit, expressions::Column,
         LexOrdering, PhysicalExpr, PhysicalSortExpr, PhysicalSortRequirement,
     };
-    use datafusion_physical_plan::get_plan_string;
 
     /// Models operators like BoundedWindowExec that require an input
     /// ordering but is easy to construct
@@ -1869,28 +1869,6 @@ pub(crate) mod tests {
                 expected_lines, actual_lines
             );
         };
-    }
-
-    fn crosscheck_helper<T>(context: PlanContext<T>) -> Result<()>
-    where
-        PlanContext<T>: TreeNode,
-    {
-        let empty_node = context.transform_up(&|mut node| {
-            assert_eq!(node.children.len(), node.plan.children().len());
-            if !node.children.is_empty() {
-                assert_eq!(
-                    get_plan_string(&node.plan),
-                    get_plan_string(&node.plan.clone().with_new_children(
-                        node.children.iter().map(|c| c.plan.clone()).collect()
-                    )?)
-                );
-                node.children = vec![];
-            }
-            Ok(Transformed::No(node))
-        })?;
-
-        assert!(empty_node.children.is_empty());
-        Ok(())
     }
 
     macro_rules! crosscheck_plans {

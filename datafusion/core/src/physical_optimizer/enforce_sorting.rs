@@ -612,10 +612,11 @@ mod tests {
     use crate::physical_optimizer::enforce_distribution::EnforceDistribution;
     use crate::physical_optimizer::test_utils::{
         aggregate_exec, bounded_window_exec, coalesce_batches_exec,
-        coalesce_partitions_exec, filter_exec, global_limit_exec, hash_join_exec,
-        limit_exec, local_limit_exec, memory_exec, parquet_exec, parquet_exec_sorted,
-        repartition_exec, sort_exec, sort_expr, sort_expr_options, sort_merge_join_exec,
-        sort_preserving_merge_exec, spr_repartition_exec, union_exec,
+        coalesce_partitions_exec, crosscheck_helper, filter_exec, global_limit_exec,
+        hash_join_exec, limit_exec, local_limit_exec, memory_exec, parquet_exec,
+        parquet_exec_sorted, repartition_exec, sort_exec, sort_expr, sort_expr_options,
+        sort_merge_join_exec, sort_preserving_merge_exec, spr_repartition_exec,
+        union_exec,
     };
     use crate::physical_plan::repartition::RepartitionExec;
     use crate::physical_plan::{displayable, get_plan_string, Partitioning};
@@ -697,28 +698,6 @@ mod tests {
             );
 
         };
-    }
-
-    fn crosscheck_helper<T>(context: PlanContext<T>) -> Result<()>
-    where
-        PlanContext<T>: TreeNode,
-    {
-        let empty_node = context.transform_up(&|mut node| {
-            assert_eq!(node.children.len(), node.plan.children().len());
-            if !node.children.is_empty() {
-                assert_eq!(
-                    get_plan_string(&node.plan),
-                    get_plan_string(&node.plan.clone().with_new_children(
-                        node.children.iter().map(|c| c.plan.clone()).collect()
-                    )?)
-                );
-                node.children = vec![];
-            }
-            Ok(Transformed::No(node))
-        })?;
-
-        assert!(empty_node.children.is_empty());
-        Ok(())
     }
 
     fn crosscheck_plans(
