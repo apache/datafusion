@@ -20,7 +20,7 @@
 
 use std::any::Any;
 use std::cmp::Ordering;
-use std::collections::BinaryHeap;
+use std::collections::{BinaryHeap, VecDeque};
 use std::fmt::Debug;
 use std::sync::Arc;
 
@@ -240,13 +240,13 @@ impl Accumulator for OrderSensitiveArrayAggAccumulator {
         let mut partition_ordering_values = vec![];
 
         // Existing values should be merged also.
-        partition_values.push(self.values.as_slice());
-        partition_ordering_values.push(self.ordering_values.as_slice());
+        partition_values.push(self.values.clone().into());
+        partition_ordering_values.push(self.ordering_values.clone().into());
 
         let array_agg_res = ScalarValue::convert_array_to_scalar_vec(array_agg_values)?;
 
-        for v in array_agg_res.iter() {
-            partition_values.push(v);
+        for v in array_agg_res.into_iter() {
+            partition_values.push(v.into());
         }
 
         let orderings = ScalarValue::convert_array_to_scalar_vec(agg_orderings)?;
@@ -262,9 +262,9 @@ impl Accumulator for OrderSensitiveArrayAggAccumulator {
                         ordering_row.data_type()
                     )
                 }
-            }).collect::<Result<Vec<_>>>()
+            }).collect::<Result<VecDeque<_>>>()
         }).collect::<Result<Vec<_>>>()?;
-        for ordering_values in ordering_values.iter() {
+        for ordering_values in ordering_values.into_iter() {
             partition_ordering_values.push(ordering_values);
         }
 
@@ -431,11 +431,11 @@ impl<'a> PartialOrd for CustomElement<'a> {
 /// Inner `Vec<ScalarValue>`s of the `ordering_values` will be compared according `sort_options` (Their sizes should match)
 pub(crate) fn merge_ordered_arrays(
     // We will merge values into single `Vec<ScalarValue>`.
-    values: &[&[ScalarValue]],
+    values: &[VecDeque<ScalarValue>],
     // `values` will be merged according to `ordering_values`.
     // Inner `Vec<ScalarValue>` can be thought as ordering information for the
     // each `ScalarValue` in the values`.
-    ordering_values: &[&[Vec<ScalarValue>]],
+    ordering_values: &[VecDeque<Vec<ScalarValue>>],
     // Defines according to which ordering comparisons should be done.
     sort_options: &[SortOptions],
 ) -> Result<(Vec<ScalarValue>, Vec<Vec<ScalarValue>>)> {
@@ -520,6 +520,7 @@ pub(crate) fn merge_ordered_arrays(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::VecDeque;
     use std::sync::Arc;
 
     use crate::aggregate::array_agg_ordered::merge_ordered_arrays;
@@ -538,7 +539,7 @@ mod tests {
         let n_row = lhs_arrays[0].len();
         let lhs_orderings = (0..n_row)
             .map(|idx| get_row_at_idx(&lhs_arrays, idx))
-            .collect::<Result<Vec<_>>>()?;
+            .collect::<Result<VecDeque<_>>>()?;
 
         let rhs_arrays: Vec<ArrayRef> = vec![
             Arc::new(Int64Array::from(vec![0, 0, 1, 1, 2])),
@@ -547,7 +548,7 @@ mod tests {
         let n_row = rhs_arrays[0].len();
         let rhs_orderings = (0..n_row)
             .map(|idx| get_row_at_idx(&rhs_arrays, idx))
-            .collect::<Result<Vec<_>>>()?;
+            .collect::<Result<VecDeque<_>>>()?;
         let sort_options = vec![
             SortOptions {
                 descending: false,
@@ -562,12 +563,12 @@ mod tests {
         let lhs_vals_arr = Arc::new(Int64Array::from(vec![0, 1, 2, 3, 4])) as ArrayRef;
         let lhs_vals = (0..lhs_vals_arr.len())
             .map(|idx| ScalarValue::try_from_array(&lhs_vals_arr, idx))
-            .collect::<Result<Vec<_>>>()?;
+            .collect::<Result<VecDeque<_>>>()?;
 
         let rhs_vals_arr = Arc::new(Int64Array::from(vec![0, 1, 2, 3, 4])) as ArrayRef;
         let rhs_vals = (0..rhs_vals_arr.len())
             .map(|idx| ScalarValue::try_from_array(&rhs_vals_arr, idx))
-            .collect::<Result<Vec<_>>>()?;
+            .collect::<Result<VecDeque<_>>>()?;
         let expected =
             Arc::new(Int64Array::from(vec![0, 0, 1, 1, 2, 2, 3, 3, 4, 4])) as ArrayRef;
         let expected_ts = vec![
@@ -576,8 +577,8 @@ mod tests {
         ];
 
         let (merged_vals, merged_ts) = merge_ordered_arrays(
-            &[&lhs_vals, &rhs_vals],
-            &[&lhs_orderings, &rhs_orderings],
+            &[lhs_vals, rhs_vals],
+            &[lhs_orderings, rhs_orderings],
             &sort_options,
         )?;
         let merged_vals = ScalarValue::iter_to_array(merged_vals.into_iter())?;
@@ -605,7 +606,7 @@ mod tests {
         let n_row = lhs_arrays[0].len();
         let lhs_orderings = (0..n_row)
             .map(|idx| get_row_at_idx(&lhs_arrays, idx))
-            .collect::<Result<Vec<_>>>()?;
+            .collect::<Result<VecDeque<_>>>()?;
 
         let rhs_arrays: Vec<ArrayRef> = vec![
             Arc::new(Int64Array::from(vec![2, 1, 1, 0, 0])),
@@ -614,7 +615,7 @@ mod tests {
         let n_row = rhs_arrays[0].len();
         let rhs_orderings = (0..n_row)
             .map(|idx| get_row_at_idx(&rhs_arrays, idx))
-            .collect::<Result<Vec<_>>>()?;
+            .collect::<Result<VecDeque<_>>>()?;
         let sort_options = vec![
             SortOptions {
                 descending: true,
@@ -630,12 +631,12 @@ mod tests {
         let lhs_vals_arr = Arc::new(Int64Array::from(vec![0, 1, 2, 1, 2])) as ArrayRef;
         let lhs_vals = (0..lhs_vals_arr.len())
             .map(|idx| ScalarValue::try_from_array(&lhs_vals_arr, idx))
-            .collect::<Result<Vec<_>>>()?;
+            .collect::<Result<VecDeque<_>>>()?;
 
         let rhs_vals_arr = Arc::new(Int64Array::from(vec![0, 1, 2, 1, 2])) as ArrayRef;
         let rhs_vals = (0..rhs_vals_arr.len())
             .map(|idx| ScalarValue::try_from_array(&rhs_vals_arr, idx))
-            .collect::<Result<Vec<_>>>()?;
+            .collect::<Result<VecDeque<_>>>()?;
         let expected =
             Arc::new(Int64Array::from(vec![0, 0, 1, 1, 2, 2, 1, 1, 2, 2])) as ArrayRef;
         let expected_ts = vec![
@@ -643,8 +644,8 @@ mod tests {
             Arc::new(Int64Array::from(vec![4, 4, 3, 3, 2, 2, 1, 1, 0, 0])) as ArrayRef,
         ];
         let (merged_vals, merged_ts) = merge_ordered_arrays(
-            &[&lhs_vals, &rhs_vals],
-            &[&lhs_orderings, &rhs_orderings],
+            &[lhs_vals, rhs_vals],
+            &[lhs_orderings, rhs_orderings],
             &sort_options,
         )?;
         let merged_vals = ScalarValue::iter_to_array(merged_vals.into_iter())?;

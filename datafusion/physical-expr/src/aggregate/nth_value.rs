@@ -249,22 +249,20 @@ impl Accumulator for NthValueAccumulator {
             // values received from its ordering requirement expression. (This information is necessary for during merging).
 
             // Stores NTH_VALUE results coming from each partition
-            let mut partition_values: Vec<&[ScalarValue]> = vec![];
+            let mut partition_values: Vec<VecDeque<ScalarValue>> = vec![];
             // Stores ordering requirement expression results coming from each partition
-            let mut partition_ordering_values: Vec<&[Vec<ScalarValue>]> = vec![];
+            let mut partition_ordering_values: Vec<VecDeque<Vec<ScalarValue>>> = vec![];
 
             // Existing values should be merged also.
-            let partition_value = self.values.make_contiguous();
-            partition_values.push(partition_value);
+            partition_values.push(self.values.clone());
 
-            let partition_ordering_value = self.ordering_values.make_contiguous();
-            partition_ordering_values.push(partition_ordering_value);
+            partition_ordering_values.push(self.ordering_values.clone());
 
             let array_agg_res =
                 ScalarValue::convert_array_to_scalar_vec(array_agg_values)?;
 
-            for v in array_agg_res.iter() {
-                partition_values.push(v);
+            for v in array_agg_res.into_iter() {
+                partition_values.push(v.into());
             }
 
             let orderings = ScalarValue::convert_array_to_scalar_vec(agg_orderings)?;
@@ -282,8 +280,8 @@ impl Accumulator for NthValueAccumulator {
                     }
                 }).collect::<Result<Vec<_>>>()
             }).collect::<Result<Vec<_>>>()?;
-            for ordering_values in ordering_values.iter() {
-                partition_ordering_values.push(ordering_values);
+            for ordering_values in ordering_values.into_iter() {
+                partition_ordering_values.push(ordering_values.into());
             }
 
             let sort_options = self

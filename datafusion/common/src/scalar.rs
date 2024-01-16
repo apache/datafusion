@@ -1755,7 +1755,10 @@ impl ScalarValue {
     ///
     /// assert_eq!(*result, expected);
     /// ```
-    pub fn new_list_from_iter(values: impl IntoIterator<Item = ScalarValue> + ExactSizeIterator, data_type: &DataType) -> Arc<ListArray> {
+    pub fn new_list_from_iter(
+        values: impl IntoIterator<Item = ScalarValue> + ExactSizeIterator,
+        data_type: &DataType,
+    ) -> Arc<ListArray> {
         let values = if values.len() == 0 {
             new_empty_array(data_type)
         } else {
