@@ -358,6 +358,10 @@ select arrow_typeof(arrow_cast(make_array(1, 2, 3), 'List(Int64)'));
 ----
 List(Field { name: "item", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} })
 
+query T
+select arrow_typeof(arrow_cast(arrow_cast(make_array([1, 2, 3]), 'LargeList(LargeList(Int64))'), 'List(List(Int64))'));
+----
+List(Field { name: "item", data_type: List(Field { name: "item", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} })
 
 ## LargeList
 
@@ -376,3 +380,8 @@ query T
 select arrow_typeof(arrow_cast(make_array(1, 2, 3), 'LargeList(Int64)'));
 ----
 LargeList(Field { name: "item", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} })
+
+query T
+select arrow_typeof(arrow_cast(make_array([1, 2, 3]), 'LargeList(LargeList(Int64))'));
+----
+LargeList(Field { name: "item", data_type: LargeList(Field { name: "item", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} })
