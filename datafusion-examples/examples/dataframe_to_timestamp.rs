@@ -101,11 +101,7 @@ async fn main() -> Result<()> {
         .collect()
         .await;
 
-    if result.is_err() {
-        println!("Received the expected error: {:?}", result.err().unwrap());
-    } else {
-        panic!("timestamp parsing with no matching formats should fail")
-    }
+    assert_eq!(result.unwrap_err(), "timestamp parsing with no matching formats should fail");
 
     Ok(())
 }
