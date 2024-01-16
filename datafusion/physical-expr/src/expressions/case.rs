@@ -26,11 +26,11 @@ use crate::PhysicalExpr;
 use arrow::array::*;
 use arrow::compute::kernels::cmp::eq;
 use arrow::compute::kernels::zip::zip;
-use arrow::compute::{and, is_null, not, or, prep_null_mask_filter};
+use arrow::compute::{and, is_null, not, nullif, or, prep_null_mask_filter};
 use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
-use datafusion_common::exec_err;
 use datafusion_common::{cast::as_boolean_array, internal_err, DataFusionError, Result};
+use datafusion_common::{exec_err, ScalarValue};
 use datafusion_expr::ColumnarValue;
 
 use itertools::Itertools;
@@ -151,15 +151,18 @@ impl CaseExpr {
             let then_value = self.when_then_expr[i]
                 .1
                 .evaluate_selection(batch, &when_match)?;
-            let then_value = match then_value {
-                ColumnarValue::Scalar(value) if value.is_null() => {
-                    new_null_array(&return_type, batch.num_rows())
-                }
-                _ => then_value.into_array(batch.num_rows())?,
-            };
 
-            current_value =
-                zip(&when_match, then_value.as_ref(), current_value.as_ref())?;
+            current_value = match then_value {
+                ColumnarValue::Scalar(ScalarValue::Null) => {
+                    nullif(current_value.as_ref(), &when_match)?
+                }
+                ColumnarValue::Scalar(then_value) => {
+                    zip(&when_match, &then_value.to_scalar()?, &current_value)?
+                }
+                ColumnarValue::Array(then_value) => {
+                    zip(&when_match, &then_value, &current_value)?
+                }
+            };
 
             remainder = and(&remainder, &not(&when_match)?)?;
         }
@@ -173,7 +176,7 @@ impl CaseExpr {
             let else_ = expr
                 .evaluate_selection(batch, &remainder)?
                 .into_array(batch.num_rows())?;
-            current_value = zip(&remainder, else_.as_ref(), current_value.as_ref())?;
+            current_value = zip(&remainder, &else_, &current_value)?;
         }
 
         Ok(ColumnarValue::Array(current_value))
@@ -214,15 +217,18 @@ impl CaseExpr {
             let then_value = self.when_then_expr[i]
                 .1
                 .evaluate_selection(batch, &when_value)?;
-            let then_value = match then_value {
-                ColumnarValue::Scalar(value) if value.is_null() => {
-                    new_null_array(&return_type, batch.num_rows())
-                }
-                _ => then_value.into_array(batch.num_rows())?,
-            };
 
-            current_value =
-                zip(&when_value, then_value.as_ref(), current_value.as_ref())?;
+            current_value = match then_value {
+                ColumnarValue::Scalar(ScalarValue::Null) => {
+                    nullif(current_value.as_ref(), &when_value)?
+                }
+                ColumnarValue::Scalar(then_value) => {
+                    zip(&when_value, &then_value.to_scalar()?, &current_value)?
+                }
+                ColumnarValue::Array(then_value) => {
+                    zip(&when_value, &then_value, &current_value)?
+                }
+            };
 
             // Succeed tuples should be filtered out for short-circuit evaluation,
             // null values for the current when expr should be kept
@@ -236,7 +242,7 @@ impl CaseExpr {
             let else_ = expr
                 .evaluate_selection(batch, &remainder)?
                 .into_array(batch.num_rows())?;
-            current_value = zip(&remainder, else_.as_ref(), current_value.as_ref())?;
+            current_value = zip(&remainder, &else_, &current_value)?;
         }
 
         Ok(ColumnarValue::Array(current_value))

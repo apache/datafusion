@@ -903,7 +903,6 @@ fn add_hash_on_top(
     mut input: DistributionContext,
     hash_exprs: Vec<Arc<dyn PhysicalExpr>>,
     n_target: usize,
-    repartition_beneficial_stats: bool,
 ) -> Result<DistributionContext> {
     // Early return if hash repartition is unnecessary
     if n_target == 1 {
@@ -928,12 +927,6 @@ fn add_hash_on_top(
         //   requirements.
         // - Usage of order preserving variants is not desirable (per the flag
         //   `config.optimizer.prefer_existing_sort`).
-        if repartition_beneficial_stats {
-            // Since hashing benefits from partitioning, add a round-robin repartition
-            // before it:
-            input = add_roundrobin_on_top(input, n_target)?;
-        }
-
         let partitioning = Partitioning::Hash(hash_exprs, n_target);
         let repartition = RepartitionExec::try_new(input.plan.clone(), partitioning)?
             .with_preserve_order();
@@ -1172,6 +1165,12 @@ fn ensure_distribution(
                 true
             };
 
+            let add_roundrobin = enable_round_robin
+                // Operator benefits from partitioning (e.g. filter):
+                && (would_benefit && repartition_beneficial_stats)
+                // Unless partitioning increases the partition count, it is not beneficial:
+                && child.plan.output_partitioning().partition_count() < target_partitions;
+
             // When `repartition_file_scans` is set, attempt to increase
             // parallelism at the source.
             if repartition_file_scans && repartition_beneficial_stats {
@@ -1182,33 +1181,26 @@ fn ensure_distribution(
                 }
             }
 
-            if enable_round_robin
-                // Operator benefits from partitioning (e.g. filter):
-                && (would_benefit && repartition_beneficial_stats)
-                // Unless partitioning doesn't increase the partition count, it is not beneficial:
-                && child.plan.output_partitioning().partition_count() < target_partitions
-            {
-                // Increase parallelism by adding round-robin repartitioning
-                // on top of the operator. Note that we only do this if the
-                // partition count is not already equal to the desired partition
-                // count.
-                child = add_roundrobin_on_top(child, target_partitions)?;
-            }
-
             // Satisfy the distribution requirement if it is unmet.
             match requirement {
                 Distribution::SinglePartition => {
                     child = add_spm_on_top(child);
                 }
                 Distribution::HashPartitioned(exprs) => {
-                    child = add_hash_on_top(
-                        child,
-                        exprs.to_vec(),
-                        target_partitions,
-                        repartition_beneficial_stats,
-                    )?;
+                    if add_roundrobin {
+                        // Add round-robin repartitioning on top of the operator
+                        // to increase parallelism.
+                        child = add_roundrobin_on_top(child, target_partitions)?;
+                    }
+                    child = add_hash_on_top(child, exprs.to_vec(), target_partitions)?;
                 }
-                Distribution::UnspecifiedDistribution => {}
+                Distribution::UnspecifiedDistribution => {
+                    if add_roundrobin {
+                        // Add round-robin repartitioning on top of the operator
+                        // to increase parallelism.
+                        child = add_roundrobin_on_top(child, target_partitions)?;
+                    }
+                }
             };
 
             // There is an ordering requirement of the operator:
@@ -1759,7 +1751,7 @@ pub(crate) mod tests {
         let distribution_context = DistributionContext::new_default(plan);
         let mut config = ConfigOptions::new();
         config.execution.target_partitions = target_partitions;
-        config.optimizer.enable_round_robin_repartition = false;
+        config.optimizer.enable_round_robin_repartition = true;
         config.optimizer.repartition_file_scans = false;
         config.optimizer.repartition_file_min_size = 1024;
         config.optimizer.prefer_existing_sort = prefer_existing_sort;

@@ -1112,3 +1112,22 @@ SELECT abs(x), abs(x) + abs(y) FROM t;
 
 statement ok
 DROP TABLE t;
+
+# related to https://github.com/apache/arrow-datafusion/issues/8814
+statement ok
+create table t(x int, y int) as values (1,1), (2,2), (3,3), (0,0), (4,0);
+
+query II
+SELECT
+CASE WHEN B.x > 0 THEN A.x / B.x ELSE 0 END AS value1,
+CASE WHEN B.x > 0 AND B.y > 0 THEN A.x / B.x ELSE 0 END AS value3
+FROM t AS A, (SELECT * FROM t WHERE x = 0) AS B; 
+----
+0 0
+0 0
+0 0
+0 0
+0 0
+
+statement ok
+DROP TABLE t;
