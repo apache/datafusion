@@ -459,7 +459,7 @@ AS
 query error
 select [1, true, null]
 
-query error DataFusion error: This feature is not implemented: ScalarFunctions without MakeArray are not supported: now()
+query error
 SELECT [now()]
 
 query TTT

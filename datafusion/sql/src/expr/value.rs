@@ -20,7 +20,7 @@ use arrow::compute::kernels::cast_utils::parse_interval_month_day_nano;
 use arrow::datatypes::DECIMAL128_MAX_PRECISION;
 use arrow_schema::DataType;
 use datafusion_common::{
-    not_impl_err, plan_err, DFSchema, DataFusionError, Result, ScalarValue,
+    internal_err, not_impl_err, plan_err, DFSchema, DataFusionError, Result, ScalarValue,
 };
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::expr::{BinaryExpr, Placeholder};
@@ -145,23 +145,23 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             )?;
 
             match value {
-                Expr::Literal(_) => {
-                    values.push(value);
-                }
-                Expr::ScalarFunction(ScalarFunction {
-                    func_def: ScalarFunctionDefinition::BuiltIn(fun),
+                Expr::Literal(_)
+                // Array literal
+                | Expr::ScalarFunction(ScalarFunction {
+                    func_def:
+                        ScalarFunctionDefinition::BuiltIn(BuiltinScalarFunction::MakeArray),
+                    ..
+                })
+                // Struct literal
+                | Expr::ScalarFunction(ScalarFunction {
+                    func_def:
+                        ScalarFunctionDefinition::BuiltIn(BuiltinScalarFunction::Struct),
                     ..
                 }) => {
-                    if fun == BuiltinScalarFunction::MakeArray {
-                        values.push(value);
-                    } else {
-                        return not_impl_err!(
-                            "ScalarFunctions without MakeArray are not supported: {value}"
-                        );
-                    }
+                    values.push(value);
                 }
                 _ => {
-                    return not_impl_err!(
+                    return internal_err!(
                         "Arrays with elements other than literal are not supported: {value}"
                     );
                 }
