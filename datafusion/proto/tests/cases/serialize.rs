@@ -256,7 +256,6 @@ fn test_expression_serialization_roundtrip() {
     let ctx = SessionContext::new();
     let lit = Expr::Literal(ScalarValue::Utf8(None));
     for builtin_fun in BuiltinScalarFunction::iter() {
-        println!("Checking function: {}", builtin_fun.name());
         // default to 4 args (though some exprs like substr have error checking)
         let num_args = match builtin_fun {
             BuiltinScalarFunction::Substr => 3,
