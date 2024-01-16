@@ -290,8 +290,8 @@ impl Accumulator for NthValueAccumulator {
                 .map(|sort_expr| sort_expr.options)
                 .collect::<Vec<_>>();
             let (new_values, new_orderings) = merge_ordered_arrays(
-                &partition_values,
-                &partition_ordering_values,
+                &mut partition_values,
+                &mut partition_ordering_values,
                 &sort_options,
             )?;
             self.values = new_values.into();
