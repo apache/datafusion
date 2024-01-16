@@ -23,7 +23,7 @@ use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::error::Result;
 use datafusion::prelude::*;
 
-/// This example demonstrates how to use the DataFrame API against in-memory data.
+/// This example demonstrates how to use the to_timestamp function in the DataFrame API as well as via sql.
 #[tokio::main]
 async fn main() -> Result<()> {
     // define a schema.
