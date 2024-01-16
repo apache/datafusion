@@ -2907,6 +2907,20 @@ impl TryFrom<&DataType> for ScalarValue {
                 .to_owned()
                 .into(),
             ),
+            // 'ScalarValue::LargeList' contains single element `LargeListArray
+            DataType::LargeList(field) => ScalarValue::LargeList(
+                new_null_array(
+                    &DataType::LargeList(Arc::new(Field::new(
+                        "item",
+                        field.data_type().clone(),
+                        true,
+                    ))),
+                    1,
+                )
+                .as_list::<i64>()
+                .to_owned()
+                .into(),
+            ),
             DataType::Struct(fields) => ScalarValue::Struct(None, fields.clone()),
             DataType::Null => ScalarValue::Null,
             _ => {
