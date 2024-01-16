@@ -332,9 +332,7 @@ where
                 )))
             }
             other => {
-                internal_err!(
-                    "Unsupported data type {other:?} for function {name}"
-                )
+                internal_err!("Unsupported data type {other:?} for function {name}")
             }
         },
         // if the first argument is a scalar utf8 all arguments are expected to be scalar utf8
@@ -382,9 +380,7 @@ where
                 }
             }
             other => {
-                internal_err!(
-                    "Unsupported data type {other:?} for function {name}"
-                )
+                internal_err!("Unsupported data type {other:?} for function {name}")
             }
         },
     }
