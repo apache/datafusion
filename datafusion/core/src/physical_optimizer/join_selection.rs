@@ -453,7 +453,7 @@ fn hash_join_convert_symmetric_subrule(
         // Update the unbounded flag of the input.
         input.data = left_unbounded || right_unbounded;
         // Process only if both left and right sides are unbounded.
-        let result = if left_unbounded && right_unbounded {
+        if left_unbounded && right_unbounded {
             // Determine the partition mode based on configuration.
             let mode = if config_options.optimizer.repartition_joins {
                 StreamJoinPartitionMode::Partitioned
@@ -534,8 +534,7 @@ fn hash_join_convert_symmetric_subrule(
             })
         } else {
             Ok(input)
-        };
-        result
+        }
     } else {
         Ok(input)
     }

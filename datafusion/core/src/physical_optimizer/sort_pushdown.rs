@@ -69,11 +69,11 @@ pub(crate) fn pushdown_sorts(
             add_sort_above(&mut requirements, &parent_required, sort_exec.fetch());
         };
 
-        let required_ordering = requirements
-            .plan
+        let required_ordering = plan
             .output_ordering()
             .map(PhysicalSortRequirement::from_sort_exprs)
             .unwrap_or_default();
+
         // Since new_plan is a SortExec, we can safely get the 0th index.
         let mut child = requirements.children.swap_remove(0);
         if let Some(adjusted) =
@@ -98,14 +98,15 @@ pub(crate) fn pushdown_sorts(
             .ordering_satisfy_requirement(&parent_required)
         {
             // Satisfies parent requirements, immediately return.
-            let reqs = requirements.plan.required_input_ordering();
+            let reqs = plan.required_input_ordering();
             for (child, order) in requirements.children.iter_mut().zip(reqs) {
                 child.data = order;
             }
-            return Ok(Transformed::Yes(requirements));
+            Ok(Transformed::Yes(requirements))
         }
         // Can not satisfy the parent requirements, check whether the requirements can be pushed down:
-        if let Some(adjusted) = pushdown_requirement_to_children(&plan, &parent_required)?
+        else if let Some(adjusted) =
+            pushdown_requirement_to_children(&plan, &parent_required)?
         {
             for (c, o) in requirements.children.iter_mut().zip(adjusted) {
                 c.data = o;

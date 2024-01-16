@@ -356,7 +356,7 @@ mod tests {
             let config = SessionConfig::new().with_prefer_existing_sort($PREFER_EXISTING_SORT);
             let plan_with_pipeline_fixer = OrderPreservationContext::new_default(physical_plan);
             let parallel = plan_with_pipeline_fixer.transform_up(&|plan_with_pipeline_fixer| replace_with_order_preserving_variants(plan_with_pipeline_fixer, false, false, config.options()))?;
-            let _ = crosscheck_helper(parallel.clone()).unwrap();
+            crosscheck_helper(parallel.clone()).unwrap();
             let optimized_physical_plan = parallel.plan;
 
             // Get string representation of the plan

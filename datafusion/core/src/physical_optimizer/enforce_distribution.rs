@@ -1998,20 +1998,7 @@ pub(crate) mod tests {
                     };
                     assert_optimized!(expected, top_join.clone(), true);
                     assert_optimized!(expected, top_join, false);
-                    match join_type {
-                        JoinType::Inner
-                        | JoinType::Left
-                        | JoinType::LeftSemi
-                        | JoinType::RightSemi
-                        | JoinType::LeftAnti
-                        | JoinType::RightAnti => {
-                            crosscheck_plans!(&top_join);
-                        }
-
-                        JoinType::Right | JoinType::Full => {
-                            crosscheck_plans!(&top_join);
-                        }
-                    }
+                    crosscheck_plans!(&top_join);
                 }
                 JoinType::RightSemi | JoinType::RightAnti => {}
             }
@@ -2076,19 +2063,7 @@ pub(crate) mod tests {
                     };
                     assert_optimized!(expected, top_join.clone(), true);
                     assert_optimized!(expected, top_join, false);
-                    match join_type {
-                        JoinType::Inner
-                        | JoinType::LeftSemi
-                        | JoinType::LeftAnti
-                        | JoinType::RightSemi
-                        | JoinType::RightAnti
-                        | JoinType::Right => {
-                            crosscheck_plans!(&top_join);
-                        }
-                        JoinType::Left | JoinType::Full => {
-                            crosscheck_plans!(&top_join);
-                        }
-                    }
+                    crosscheck_plans!(&top_join);
                 }
                 JoinType::LeftSemi | JoinType::LeftAnti => {}
             }

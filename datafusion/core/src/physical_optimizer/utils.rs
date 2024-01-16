@@ -33,7 +33,7 @@ use datafusion_physical_plan::tree_node::PlanContext;
 
 /// This utility function adds a `SortExec` above an operator according to the
 /// given ordering requirements while preserving the original partitioning.
-pub fn add_sort_above<T: Clone + Sized + Default>(
+pub fn add_sort_above<T: Clone + Default>(
     node: &mut PlanContext<T>,
     sort_requirement: LexRequirementRef,
     fetch: Option<usize>,
