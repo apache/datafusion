@@ -19,11 +19,13 @@
 
 use std::borrow::Borrow;
 use std::cmp::Ordering;
-use std::collections::HashSet;
-use std::convert::{Infallible, TryInto};
+use std::collections::{HashSet, VecDeque};
+use std::convert::{Infallible, TryFrom, TryInto};
+use std::fmt;
 use std::hash::Hash;
+use std::iter::repeat;
 use std::str::FromStr;
-use std::{convert::TryFrom, fmt, iter::repeat, sync::Arc};
+use std::sync::Arc;
 
 use crate::arrow_datafusion_err;
 use crate::cast::{
@@ -33,23 +35,22 @@ use crate::cast::{
 use crate::error::{DataFusionError, Result, _internal_err, _not_impl_err};
 use crate::hash_utils::create_hashes;
 use crate::utils::{array_into_large_list_array, array_into_list_array};
+
 use arrow::compute::kernels::numeric::*;
-use arrow::datatypes::{i256, Fields, SchemaBuilder};
 use arrow::util::display::{ArrayFormatter, FormatOptions};
 use arrow::{
     array::*,
     compute::kernels::cast::{cast_with_options, CastOptions},
     datatypes::{
-        ArrowDictionaryKeyType, ArrowNativeType, DataType, Field, Float32Type, Int16Type,
-        Int32Type, Int64Type, Int8Type, IntervalDayTimeType, IntervalMonthDayNanoType,
-        IntervalUnit, IntervalYearMonthType, TimeUnit, TimestampMicrosecondType,
+        i256, ArrowDictionaryKeyType, ArrowNativeType, ArrowTimestampType, DataType,
+        Field, Fields, Float32Type, Int16Type, Int32Type, Int64Type, Int8Type,
+        IntervalDayTimeType, IntervalMonthDayNanoType, IntervalUnit,
+        IntervalYearMonthType, SchemaBuilder, TimeUnit, TimestampMicrosecondType,
         TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType,
         UInt16Type, UInt32Type, UInt64Type, UInt8Type, DECIMAL128_MAX_PRECISION,
     },
 };
 use arrow_array::cast::as_list_array;
-use arrow_array::types::ArrowTimestampType;
-use arrow_array::{ArrowNativeTypeOp, Scalar};
 
 /// A dynamically typed, nullable single value, (the single-valued counter-part
 /// to arrow's [`Array`])
@@ -1728,6 +1729,43 @@ impl ScalarValue {
         Arc::new(array_into_list_array(values))
     }
 
+    /// Converts `IntoIterator<Item = ScalarValue>` where each element has type corresponding to
+    /// `data_type`, to a [`ListArray`].
+    ///
+    /// Example
+    /// ```
+    /// use datafusion_common::ScalarValue;
+    /// use arrow::array::{ListArray, Int32Array};
+    /// use arrow::datatypes::{DataType, Int32Type};
+    /// use datafusion_common::cast::as_list_array;
+    ///
+    /// let scalars = vec![
+    ///    ScalarValue::Int32(Some(1)),
+    ///    ScalarValue::Int32(None),
+    ///    ScalarValue::Int32(Some(2))
+    /// ];
+    ///
+    /// let result = ScalarValue::new_list_from_iter(scalars.into_iter(), &DataType::Int32);
+    ///
+    /// let expected = ListArray::from_iter_primitive::<Int32Type, _, _>(
+    ///     vec![
+    ///        Some(vec![Some(1), None, Some(2)])
+    ///     ]);
+    ///
+    /// assert_eq!(*result, expected);
+    /// ```
+    pub fn new_list_from_iter(
+        values: impl IntoIterator<Item = ScalarValue> + ExactSizeIterator,
+        data_type: &DataType,
+    ) -> Arc<ListArray> {
+        let values = if values.len() == 0 {
+            new_empty_array(data_type)
+        } else {
+            Self::iter_to_array(values).unwrap()
+        };
+        Arc::new(array_into_list_array(values))
+    }
+
     /// Converts `Vec<ScalarValue>` where each element has type corresponding to
     /// `data_type`, to a [`LargeListArray`].
     ///
@@ -2626,6 +2664,18 @@ impl ScalarValue {
                 .sum::<usize>()
     }
 
+    /// Estimates [size](Self::size) of [`VecDeque`] in bytes.
+    ///
+    /// Includes the size of the [`VecDeque`] container itself.
+    pub fn size_of_vec_deque(vec_deque: &VecDeque<Self>) -> usize {
+        std::mem::size_of_val(vec_deque)
+            + (std::mem::size_of::<ScalarValue>() * vec_deque.capacity())
+            + vec_deque
+                .iter()
+                .map(|sv| sv.size() - std::mem::size_of_val(sv))
+                .sum::<usize>()
+    }
+
     /// Estimates [size](Self::size) of [`HashSet`] in bytes.
     ///
     /// Includes the size of the [`HashSet`] container itself.
@@ -3151,22 +3201,19 @@ impl ScalarType<i64> for TimestampNanosecondType {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     use std::cmp::Ordering;
     use std::sync::Arc;
 
-    use chrono::NaiveDate;
-    use rand::Rng;
+    use super::*;
+    use crate::cast::{as_string_array, as_uint32_array, as_uint64_array};
 
     use arrow::buffer::OffsetBuffer;
-    use arrow::compute::kernels;
-    use arrow::compute::{concat, is_null};
-    use arrow::datatypes::ArrowPrimitiveType;
+    use arrow::compute::{concat, is_null, kernels};
+    use arrow::datatypes::{ArrowNumericType, ArrowPrimitiveType};
     use arrow::util::pretty::pretty_format_columns;
-    use arrow_array::ArrowNumericType;
 
-    use crate::cast::{as_string_array, as_uint32_array, as_uint64_array};
+    use chrono::NaiveDate;
+    use rand::Rng;
 
     #[test]
     fn test_to_array_of_size_for_list() {

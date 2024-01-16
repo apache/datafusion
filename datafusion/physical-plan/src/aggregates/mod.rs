@@ -25,7 +25,6 @@ use crate::aggregates::{
     no_grouping::AggregateStream, row_hash::GroupedHashAggregateStream,
     topk_stream::GroupedTopKAggregateStream,
 };
-
 use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::windows::get_ordered_partition_by_indices;
 use crate::{
@@ -909,6 +908,7 @@ fn get_aggregate_exprs_requirement(
         let aggr_req = PhysicalSortRequirement::from_sort_exprs(aggr_req);
         let reverse_aggr_req =
             PhysicalSortRequirement::from_sort_exprs(&reverse_aggr_req);
+
         if let Some(first_value) = aggr_expr.as_any().downcast_ref::<FirstValue>() {
             let mut first_value = first_value.clone();
             if eq_properties.ordering_satisfy_requirement(&concat_slices(
@@ -931,7 +931,9 @@ fn get_aggregate_exprs_requirement(
                 first_value = first_value.with_requirement_satisfied(false);
                 *aggr_expr = Arc::new(first_value) as _;
             }
-        } else if let Some(last_value) = aggr_expr.as_any().downcast_ref::<LastValue>() {
+            continue;
+        }
+        if let Some(last_value) = aggr_expr.as_any().downcast_ref::<LastValue>() {
             let mut last_value = last_value.clone();
             if eq_properties.ordering_satisfy_requirement(&concat_slices(
                 prefix_requirement,
@@ -953,18 +955,63 @@ fn get_aggregate_exprs_requirement(
                 last_value = last_value.with_requirement_satisfied(false);
                 *aggr_expr = Arc::new(last_value) as _;
             }
-        } else if let Some(finer_ordering) =
+            continue;
+        }
+        if let Some(finer_ordering) =
             finer_ordering(&requirement, aggr_expr, group_by, eq_properties, agg_mode)
         {
-            requirement = finer_ordering;
-        } else {
-            // If neither of the requirements satisfy the other, this means
-            // requirements are conflicting. Currently, we do not support
-            // conflicting requirements.
-            return not_impl_err!(
-                "Conflicting ordering requirements in aggregate functions is not supported"
-            );
+            if eq_properties.ordering_satisfy(&finer_ordering) {
+                // Requirement is satisfied by existing ordering
+                requirement = finer_ordering;
+                continue;
+            }
         }
+        if let Some(reverse_aggr_expr) = aggr_expr.reverse_expr() {
+            if let Some(finer_ordering) = finer_ordering(
+                &requirement,
+                &reverse_aggr_expr,
+                group_by,
+                eq_properties,
+                agg_mode,
+            ) {
+                if eq_properties.ordering_satisfy(&finer_ordering) {
+                    // Reverse requirement is satisfied by exiting ordering.
+                    // Hence reverse the aggregator
+                    requirement = finer_ordering;
+                    *aggr_expr = reverse_aggr_expr;
+                    continue;
+                }
+            }
+        }
+        if let Some(finer_ordering) =
+            finer_ordering(&requirement, aggr_expr, group_by, eq_properties, agg_mode)
+        {
+            // There is a requirement that both satisfies existing requirement and current
+            // aggregate requirement. Use updated requirement
+            requirement = finer_ordering;
+            continue;
+        }
+        if let Some(reverse_aggr_expr) = aggr_expr.reverse_expr() {
+            if let Some(finer_ordering) = finer_ordering(
+                &requirement,
+                &reverse_aggr_expr,
+                group_by,
+                eq_properties,
+                agg_mode,
+            ) {
+                // There is a requirement that both satisfies existing requirement and reverse
+                // aggregate requirement. Use updated requirement
+                requirement = finer_ordering;
+                *aggr_expr = reverse_aggr_expr;
+                continue;
+            }
+        }
+        // Neither the existing requirement and current aggregate requirement satisfy the other, this means
+        // requirements are conflicting. Currently, we do not support
+        // conflicting requirements.
+        return not_impl_err!(
+            "Conflicting ordering requirements in aggregate functions is not supported"
+        );
     }
     Ok(PhysicalSortRequirement::from_sort_exprs(&requirement))
 }
