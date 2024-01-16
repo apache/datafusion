@@ -22,6 +22,7 @@ use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::error::Result;
 use datafusion::prelude::*;
+use datafusion_common::assert_contains;
 
 /// This example demonstrates how to use the to_timestamp function in the DataFrame API as well as via sql.
 #[tokio::main]
@@ -101,7 +102,8 @@ async fn main() -> Result<()> {
         .collect()
         .await;
 
-    assert_eq!(result.unwrap_err(), "timestamp parsing with no matching formats should fail");
+    let expected = "Error parsing timestamp from '01-14-2023 01/01/30' using format '%d-%m-%Y %H:%M:%S': input contains invalid characters";
+    assert_contains!(result.unwrap_err().to_string(), expected);
 
     Ok(())
 }
