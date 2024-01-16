@@ -605,9 +605,16 @@ cargo<span class="w"> </span>build
 <h3>Protoc Installation<a class="headerlink" href="#protoc-installation" title="Link to this heading">¶</a></h3>
 <p>Compiling DataFusion from sources requires an installed version of the protobuf compiler, <code class="docutils literal notranslate"><span class="pre">protoc</span></code>.</p>
 <p>On most platforms this can be installed from your system’s package manager</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>$ sudo apt install -y protobuf-compiler
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span># Ubuntu
+$ sudo apt install -y protobuf-compiler
+
+# Fedora
 $ dnf install -y protobuf-devel
+
+# Arch Linux
 $ pacman -S protobuf
+
+# macOS
 $ brew install protobuf
 </pre></div>
 </div>
