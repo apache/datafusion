@@ -248,15 +248,13 @@ fn parallelize_sorts(
         // executors don't require single partition), then we can replace
         // the `CoalescePartitionsExec` + `SortExec` cascade with a `SortExec`
         // + `SortPreservingMergeExec` cascade to parallelize sorting.
-        // let (sort_exprs, fetch) = get_sort_exprs(&requirements.plan)?;
-        // let sort_reqs = PhysicalSortRequirement::from_sort_exprs(sort_exprs);
-        // let sort_exprs = sort_exprs.to_vec();
-        println!("1) REQ: {:?}", requirements.plan);
-        remove_corresponding_coalesce_in_sub_plan(&mut requirements)?;
-
         let (sort_exprs, fetch) = get_sort_exprs(&requirements.plan)?;
         let sort_reqs = PhysicalSortRequirement::from_sort_exprs(sort_exprs);
         let sort_exprs = sort_exprs.to_vec();
+
+        println!("1) REQ: {:?}", requirements.plan);
+        remove_corresponding_coalesce_in_sub_plan(&mut requirements)?;
+        requirements = requirements.children[0].clone();
 
         println!("2) REQ: {:?}", requirements.plan);
         if !requirements
@@ -485,44 +483,7 @@ fn analyze_window_sort_removal(
     Ok(())
 }
 
-fn remove_corresponding_coalesce_in_sub_plan_helper(
-    node: &mut PlanWithCorrespondingCoalescePartitions,
-    parent: &Arc<dyn ExecutionPlan>,
-) -> Result<Arc<dyn ExecutionPlan>> {
-    if is_coalesce_partitions(&node.plan) {
-        // We can safely use the 0th index since we have a `CoalescePartitionsExec`.
-        let mut new_plan = node.plan.children().swap_remove(0);
-        while new_plan.output_partitioning() == parent.output_partitioning()
-            && is_repartition(&new_plan)
-            && is_repartition(parent)
-        {
-            new_plan = new_plan.children().swap_remove(0)
-        }
-        Ok(new_plan)
-    } else {
-        let plan = node.plan.clone();
-        let mut children = plan.children();
-        for (idx, node) in node.children.iter_mut().enumerate() {
-            if node.data {
-                children[idx] =
-                    remove_corresponding_coalesce_in_sub_plan_helper(node, &plan)?;
-            }
-        }
-        plan.with_new_children(children)
-    }
-}
-
 /// Removes the [`CoalescePartitionsExec`] from the plan in `node`.
-// fn remove_corresponding_coalesce_in_sub_plan(
-//     requirements: &mut PlanWithCorrespondingCoalescePartitions,
-// ) -> Result<()> {
-//     requirements.plan = remove_corresponding_coalesce_in_sub_plan_helper(
-//         &mut requirements.children[0],
-//         &requirements.plan,
-//     )?;
-//     Ok(())
-// }
-
 fn remove_corresponding_coalesce_in_sub_plan(
     requirements: &mut PlanWithCorrespondingCoalescePartitions,
 ) -> Result<()> {
