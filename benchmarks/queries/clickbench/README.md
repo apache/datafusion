@@ -28,6 +28,23 @@ SELECT
 FROM hits;
 ```
 
+### Q1
+Query to test distinct count for String. Three of them are all small string (length either 1 or 2).
+
+```sql
+SELECT 
+    COUNT(DISTINCT "HitColor"), COUNT(DISTINCT "BrowserCountry"), COUNT(DISTINCT "BrowserLanguage")
+FROM hits;
+```
+
+### Q2
+Query to test distinct count for String. "URL" has length greater than 8
+
+```sql
+SELECT 
+    COUNT(DISTINCT "HitColor"), COUNT(DISTINCT "BrowserCountry"), COUNT(DISTINCT "BrowserLanguage"), COUNT(DISTINCT "URL")
+FROM hits;
+```
 
 
 
