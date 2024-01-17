@@ -54,7 +54,18 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             // Process CTEs from top to bottom
             // do not allow self-references
             if with.recursive {
-                return not_impl_err!("Recursive CTEs are not supported");
+                if self
+                    .context_provider
+                    .options()
+                    .execution
+                    .enable_recursive_ctes
+                {
+                    return plan_err!(
+                        "Recursive CTEs are enabled but are not yet supported"
+                    );
+                } else {
+                    return not_impl_err!("Recursive CTEs are not supported");
+                }
             }
 
             for cte in with.cte_tables {
