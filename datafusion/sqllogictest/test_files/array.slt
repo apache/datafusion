@@ -456,21 +456,33 @@ AS
   FROM nested_arrays_with_repeating_elements
 ;
 
+# Array literal
+
+## boolean coercion is not supported
 query error
 select [1, true, null]
 
-query error
-SELECT [now()]
-
-query ?
-select [struct('foo', 1)];
+## wrapped in array_length to get deterministic results
+query I
+SELECT array_length([now()])
 ----
-[{c0: foo, c1: 1}]
+1
 
+## array literal with functions
 query ?
-select [struct('foo', [1,2,3])];
+select [abs(-1.2), sin(-1), log(2), ceil(3.141)]
 ----
-[{c0: foo, c1: [1, 2, 3]}]
+[1.2, -0.8414709848078965, 0.3010299801826477, 4.0]
+
+## array literal with nested types
+query ???
+select
+  [struct('foo', 1)],
+  [struct('foo', [1,2,3])],
+  [struct('foo', [struct(3, 'x')])]
+;
+----
+[{c0: foo, c1: 1}] [{c0: foo, c1: [1, 2, 3]}] [{c0: foo, c1: [{c0: 3, c1: x}]}]
 
 query TTT
 select arrow_typeof(column1), arrow_typeof(column2), arrow_typeof(column3) from arrays;

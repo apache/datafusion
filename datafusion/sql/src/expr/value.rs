@@ -20,12 +20,12 @@ use arrow::compute::kernels::cast_utils::parse_interval_month_day_nano;
 use arrow::datatypes::DECIMAL128_MAX_PRECISION;
 use arrow_schema::DataType;
 use datafusion_common::{
-    internal_err, not_impl_err, plan_err, DFSchema, DataFusionError, Result, ScalarValue,
+    not_impl_err, plan_err, DFSchema, DataFusionError, Result, ScalarValue,
 };
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::expr::{BinaryExpr, Placeholder};
+use datafusion_expr::BuiltinScalarFunction;
 use datafusion_expr::{lit, Expr, Operator};
-use datafusion_expr::{BuiltinScalarFunction, ScalarFunctionDefinition};
 use log::debug;
 use sqlparser::ast::{BinaryOperator, Expr as SQLExpr, Interval, Value};
 use sqlparser::parser::ParserError::ParserError;
@@ -135,38 +135,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         elements: Vec<SQLExpr>,
         schema: &DFSchema,
     ) -> Result<Expr> {
-        let mut values = Vec::with_capacity(elements.len());
-
-        for element in elements {
-            let value = self.sql_expr_to_logical_expr(
-                element,
-                schema,
-                &mut PlannerContext::new(),
-            )?;
-
-            match value {
-                Expr::Literal(_)
-                // Array literal
-                | Expr::ScalarFunction(ScalarFunction {
-                    func_def:
-                        ScalarFunctionDefinition::BuiltIn(BuiltinScalarFunction::MakeArray),
-                    ..
-                })
-                // Struct literal
-                | Expr::ScalarFunction(ScalarFunction {
-                    func_def:
-                        ScalarFunctionDefinition::BuiltIn(BuiltinScalarFunction::Struct),
-                    ..
-                }) => {
-                    values.push(value);
-                }
-                _ => {
-                    return internal_err!(
-                        "Arrays with elements other than literal are not supported: {value}"
-                    );
-                }
-            }
-        }
+        let values = elements
+            .into_iter()
+            .map(|element| {
+                self.sql_expr_to_logical_expr(element, schema, &mut PlannerContext::new())
+            })
+            .collect::<Result<Vec<_>>>()?;
 
         Ok(Expr::ScalarFunction(ScalarFunction::new(
             BuiltinScalarFunction::MakeArray,
