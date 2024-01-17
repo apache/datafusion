@@ -17,7 +17,7 @@
 
 //! [`GroupsAccumulator`] helpers: [`NullState`] and [`accumulate_indices`]
 //!
-//! [`GroupsAccumulator`]: crate::GroupsAccumulator
+//! [`GroupsAccumulator`]: datafusion_expr::GroupsAccumulator
 
 use arrow::datatypes::ArrowPrimitiveType;
 use arrow_array::{Array, BooleanArray, PrimitiveArray};
@@ -48,7 +48,7 @@ use datafusion_expr::EmitTo;
 /// had at least one value to accumulate so they do not need to track
 /// if they have seen values for a particular group.
 ///
-/// [`GroupsAccumulator`]: crate::GroupsAccumulator
+/// [`GroupsAccumulator`]: datafusion_expr::GroupsAccumulator
 #[derive(Debug)]
 pub struct NullState {
     /// Have we seen any non-filtered input values for `group_index`?
