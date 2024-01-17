@@ -252,11 +252,9 @@ fn parallelize_sorts(
         let sort_reqs = PhysicalSortRequirement::from_sort_exprs(sort_exprs);
         let sort_exprs = sort_exprs.to_vec();
 
-        println!("1) REQ: {:?}", requirements.plan);
         remove_corresponding_coalesce_in_sub_plan(&mut requirements)?;
         requirements = requirements.children[0].clone();
 
-        println!("2) REQ: {:?}", requirements.plan);
         if !requirements
             .plan
             .equivalence_properties()
@@ -276,6 +274,7 @@ fn parallelize_sorts(
     } else if is_coalesce_partitions(&requirements.plan) {
         // There is an unnecessary `CoalescePartitionsExec` in the plan.
         remove_corresponding_coalesce_in_sub_plan(&mut requirements)?;
+        requirements = requirements.children[0].clone();
 
         Ok(Transformed::Yes(PlanWithCorrespondingCoalescePartitions {
             plan: Arc::new(CoalescePartitionsExec::new(requirements.plan.clone())),
@@ -492,7 +491,7 @@ fn remove_corresponding_coalesce_in_sub_plan(
         data,
         children,
     } = requirements;
-    let mut child_node = children[0].clone();
+    let child_node = children[0].clone();
     if is_coalesce_partitions(&child_node.plan) {
         // We can safely use the 0th index since we have a `CoalescePartitionsExec`.
         let mut new_child_node = child_node.children[0].clone();
