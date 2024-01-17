@@ -435,10 +435,13 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 overwrite,
                 source,
                 partitioned,
+                priority: _,
                 after_columns,
                 table,
+                table_alias: _,
                 on,
                 returning,
+                replace_into: _,
                 ignore,
             } => {
                 if or.is_some() {

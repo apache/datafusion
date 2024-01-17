@@ -69,6 +69,14 @@ pub enum Operator {
     RegexNotMatch,
     /// Case insensitive regex not match
     RegexNotIMatch,
+    /// Case sensitive pattern match
+    LikeMatch,
+    /// Case insensitive pattern match
+    ILikeMatch,
+    /// Case sensitive pattern not match
+    NotLikeMatch,
+    /// Case insensitive pattern not match
+    NotILikeMatch,
     /// Bitwise and, like `&`
     BitwiseAnd,
     /// Bitwise or, like `|`
@@ -100,6 +108,10 @@ impl Operator {
             Operator::GtEq => Some(Operator::Lt),
             Operator::IsDistinctFrom => Some(Operator::IsNotDistinctFrom),
             Operator::IsNotDistinctFrom => Some(Operator::IsDistinctFrom),
+            Operator::LikeMatch => Some(Operator::NotLikeMatch),
+            Operator::ILikeMatch => Some(Operator::NotILikeMatch),
+            Operator::NotLikeMatch => Some(Operator::LikeMatch),
+            Operator::NotILikeMatch => Some(Operator::ILikeMatch),
             Operator::Plus
             | Operator::Minus
             | Operator::Multiply
@@ -192,6 +204,10 @@ impl Operator {
             | Operator::RegexIMatch
             | Operator::RegexNotMatch
             | Operator::RegexNotIMatch
+            | Operator::LikeMatch
+            | Operator::ILikeMatch
+            | Operator::NotLikeMatch
+            | Operator::NotILikeMatch
             | Operator::BitwiseAnd
             | Operator::BitwiseOr
             | Operator::BitwiseXor
@@ -221,6 +237,10 @@ impl Operator {
             | Operator::RegexNotMatch
             | Operator::RegexIMatch
             | Operator::RegexNotIMatch
+            | Operator::LikeMatch
+            | Operator::ILikeMatch
+            | Operator::NotLikeMatch
+            | Operator::NotILikeMatch
             | Operator::BitwiseAnd
             | Operator::BitwiseOr
             | Operator::BitwiseShiftLeft
@@ -253,6 +273,10 @@ impl fmt::Display for Operator {
             Operator::RegexIMatch => "~*",
             Operator::RegexNotMatch => "!~",
             Operator::RegexNotIMatch => "!~*",
+            Operator::LikeMatch => "~~",
+            Operator::ILikeMatch => "~~*",
+            Operator::NotLikeMatch => "!~~",
+            Operator::NotILikeMatch => "!~~*",
             Operator::IsDistinctFrom => "IS DISTINCT FROM",
             Operator::IsNotDistinctFrom => "IS NOT DISTINCT FROM",
             Operator::BitwiseAnd => "&",

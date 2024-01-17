@@ -220,6 +220,30 @@ SELECT * FROM test WHERE column1 !~* 'z'
 foo
 Barrr
 
+query T
+SELECT * FROM test WHERE column1 ~~ '__z%'
+----
+Bazzz
+
+query T
+SELECT * FROM test WHERE column1 ~~* '__z%'
+----
+Bazzz
+ZZZZZ
+
+query T
+SELECT * FROM test WHERE column1 !~~ '__z%'
+----
+foo
+Barrr
+ZZZZZ
+
+query T
+SELECT * FROM test WHERE column1 !~~* '__z%'
+----
+foo
+Barrr
+
 statement ok
 DROP TABLE test;
 
