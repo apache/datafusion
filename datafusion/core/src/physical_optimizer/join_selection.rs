@@ -932,7 +932,6 @@ mod tests_statistical {
                 );
 
             assert_eq!(swapped_join.schema().fields().len(), 1);
-
             assert_eq!(
                 swapped_join.left().statistics().unwrap().total_byte_size,
                 Precision::Inexact(10)
@@ -941,7 +940,6 @@ mod tests_statistical {
                 swapped_join.right().statistics().unwrap().total_byte_size,
                 Precision::Inexact(100000)
             );
-
             assert_eq!(original_schema, swapped_join.schema());
             crosscheck_plans(join).unwrap();
         }

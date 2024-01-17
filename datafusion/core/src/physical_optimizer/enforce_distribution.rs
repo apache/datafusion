@@ -2141,7 +2141,6 @@ pub(crate) mod tests {
             "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
             "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
         ];
-
         assert_optimized!(expected, top_join.clone(), true);
         assert_optimized!(expected, top_join, false);
         crosscheck_plans!(&top_join);
@@ -3146,7 +3145,6 @@ pub(crate) mod tests {
             "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
             "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
         ];
-
         assert_optimized!(expected, plan.clone(), true);
         assert_optimized!(expected, plan, false);
         crosscheck_plans!(&plan);
@@ -3167,7 +3165,6 @@ pub(crate) mod tests {
             "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
             "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
         ];
-
         assert_optimized!(expected, plan.clone(), true);
         assert_optimized!(expected, plan, false);
         crosscheck_plans!(&plan);
@@ -3213,7 +3210,6 @@ pub(crate) mod tests {
             "SortExec: expr=[c@2 ASC]",
             "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
         ];
-
         assert_optimized!(expected, plan.clone(), true);
         assert_optimized!(expected, plan, false);
         crosscheck_plans!(&plan);
@@ -3272,7 +3268,6 @@ pub(crate) mod tests {
             // Expect no repartition to happen for local limit
             "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
         ];
-
         assert_optimized!(expected, plan.clone(), true);
         assert_optimized!(expected, plan, false);
         crosscheck_plans!(&plan);
@@ -3316,7 +3311,6 @@ pub(crate) mod tests {
             "SortExec: expr=[c@2 ASC]",
             "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
         ];
-
         assert_optimized!(expected, plan.clone(), true);
         assert_optimized!(expected, plan, false);
         crosscheck_plans!(&plan);
@@ -3450,7 +3444,6 @@ pub(crate) mod tests {
             "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
             "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
         ];
-
         assert_optimized!(expected, plan.clone(), true);
         assert_optimized!(expected, plan, false);
         crosscheck_plans!(&plan);
@@ -3526,7 +3519,6 @@ pub(crate) mod tests {
             "ProjectionExec: expr=[a@0 as a, b@1 as b, c@2 as c]",
             "ParquetExec: file_groups={2 groups: [[x], [y]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC]",
         ];
-
         assert_optimized!(expected, plan.clone(), true);
         assert_optimized!(expected, plan, false);
         crosscheck_plans!(&plan);
@@ -3557,7 +3549,6 @@ pub(crate) mod tests {
             "ProjectionExec: expr=[a@0 as a]",
             "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
         ];
-
         assert_optimized!(expected, plan.clone(), true);
         assert_optimized!(expected, plan, false);
         crosscheck_plans!(&plan);
@@ -3665,7 +3656,6 @@ pub(crate) mod tests {
             "AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[]",
             "CsvExec: file_groups={2 groups: [[x:0..50], [x:50..100]]}, projection=[a, b, c, d, e], has_header=false",
         ];
-
         assert_optimized!(expected_parquet, plan_parquet, true, false, 2, true, 10);
         crosscheck_plans!(&plan_parquet, false, 2, true, 10);
         assert_optimized!(expected_csv, plan_csv, true, false, 2, true, 10);
@@ -3782,7 +3772,6 @@ pub(crate) mod tests {
                 )),
                 vec![("a".to_string(), "a".to_string())],
             );
-
             assert_optimized!(expected, plan, true, false, 2, true, 10);
             crosscheck_plans!(&plan, false, 2, true, 10);
         }
@@ -3810,7 +3799,6 @@ pub(crate) mod tests {
             // Plan already has two partitions
             "CsvExec: file_groups={2 groups: [[x:0..100], [y:0..100]]}, projection=[a, b, c, d, e], has_header=false",
         ];
-
         assert_optimized!(expected_parquet, plan_parquet, true, false, 2, true, 10);
         crosscheck_plans!(&plan_parquet, false, 2, true, 10);
         assert_optimized!(expected_csv, plan_csv, true, false, 2, true, 10);
@@ -3839,7 +3827,6 @@ pub(crate) mod tests {
             // Multiple source files splitted across partitions
             "CsvExec: file_groups={4 groups: [[x:0..50], [x:50..100], [y:0..50], [y:50..100]]}, projection=[a, b, c, d, e], has_header=false",
         ];
-
         assert_optimized!(expected_parquet, plan_parquet, true, false, 4, true, 10);
         crosscheck_plans!(&plan_parquet, false, 4, true, 10);
         assert_optimized!(expected_csv, plan_csv, true, false, 4, true, 10);
@@ -3874,7 +3861,6 @@ pub(crate) mod tests {
             // Doesn't parallelize for SortExec without preserve_partitioning
             "CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], has_header=false",
         ];
-
         assert_optimized!(expected_parquet, plan_parquet, true);
         crosscheck_plans!(&plan_parquet);
         assert_optimized!(expected_csv, plan_csv, true);
@@ -3922,7 +3908,6 @@ pub(crate) mod tests {
             // SortExec doesn't benefit from input partitioning
             "CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], has_header=false",
         ];
-
         assert_optimized!(expected_parquet, plan_parquet, true);
         crosscheck_plans!(&plan_parquet);
         assert_optimized!(expected_csv, plan_csv, true);
@@ -3975,7 +3960,6 @@ pub(crate) mod tests {
             "LocalLimitExec: fetch=100",
             "CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], has_header=false",
         ];
-
         assert_optimized!(expected_parquet, plan_parquet, true);
         crosscheck_plans!(&plan_parquet);
         assert_optimized!(expected_csv, plan_csv, true);
@@ -4007,7 +3991,6 @@ pub(crate) mod tests {
             "CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], has_header=false",
             "CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], has_header=false",
         ];
-
         assert_optimized!(expected_parquet, plan_parquet, true);
         crosscheck_plans!(&plan_parquet);
         assert_optimized!(expected_csv, plan_csv, true);
@@ -4040,7 +4023,6 @@ pub(crate) mod tests {
         let expected_csv = &[
             "CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC], has_header=false",
         ];
-
         assert_optimized!(expected_parquet, plan_parquet, true);
         crosscheck_plans!(&plan_parquet);
         assert_optimized!(expected_csv, plan_csv, true);
@@ -4077,7 +4059,6 @@ pub(crate) mod tests {
             "CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC], has_header=false",
             "CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC], has_header=false",
         ];
-
         assert_optimized!(expected_parquet, plan_parquet, true);
         crosscheck_plans!(&plan_parquet);
         assert_optimized!(expected_csv, plan_csv, true);
@@ -4108,7 +4089,6 @@ pub(crate) mod tests {
             "SortRequiredExec: [c@2 ASC]",
             "CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC], has_header=false",
         ];
-
         assert_optimized!(expected_parquet, plan_parquet, true);
         crosscheck_plans!(&plan_parquet);
         assert_optimized!(expected_csv, plan_csv, true);
@@ -4153,7 +4133,6 @@ pub(crate) mod tests {
             "ProjectionExec: expr=[a@0 as a2, c@2 as c2]",
             "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC]",
         ];
-
         assert_optimized!(expected_parquet, plan_parquet, true);
         crosscheck_plans!(&plan_parquet);
 
@@ -4194,7 +4173,6 @@ pub(crate) mod tests {
             "ProjectionExec: expr=[a@0 as a2, c@2 as c2]",
             "CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC], has_header=false",
         ];
-
         assert_optimized!(expected_csv, plan_csv, true);
         crosscheck_plans!(&plan_csv);
 
@@ -4220,7 +4198,6 @@ pub(crate) mod tests {
             "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
             "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
         ];
-
         assert_optimized!(expected, physical_plan.clone(), true);
         assert_optimized!(expected, physical_plan, false);
         crosscheck_plans!(&physical_plan);
@@ -4244,7 +4221,6 @@ pub(crate) mod tests {
             "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=2, preserve_order=true, sort_exprs=c@2 ASC",
             "ParquetExec: file_groups={2 groups: [[x], [y]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC]",
         ];
-
         // last flag sets config.optimizer.PREFER_EXISTING_SORT
         assert_optimized!(expected, physical_plan.clone(), true, true);
         assert_optimized!(expected, physical_plan, false, true);
@@ -4304,7 +4280,6 @@ pub(crate) mod tests {
             "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=2",
             "ParquetExec: file_groups={2 groups: [[x], [y]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC]",
         ];
-
         assert_optimized!(expected, physical_plan.clone(), true);
         assert_optimized!(expected, physical_plan, false);
         crosscheck_plans!(&physical_plan);
@@ -4366,7 +4341,6 @@ pub(crate) mod tests {
             "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=2",
             "ParquetExec: file_groups={2 groups: [[x], [y]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC]",
         ];
-
         assert_optimized!(expected, physical_plan.clone(), true);
         assert_optimized!(expected, physical_plan, false);
         crosscheck_plans!(&physical_plan);
@@ -4468,7 +4442,6 @@ pub(crate) mod tests {
             "AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[]",
             "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC]",
         ];
-
         // Make sure target partition number is 1. In this case hash repartition is unnecessary
         assert_optimized!(expected, physical_plan.clone(), true, false, 1, false, 1024);
         assert_optimized!(expected, physical_plan, false, false, 1, false, 1024);
@@ -4500,7 +4473,6 @@ pub(crate) mod tests {
             "RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=2",
             "ParquetExec: file_groups={2 groups: [[x], [y]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC]",
         ];
-
         // Make sure target partition number is larger than 2 (e.g partition number at the source).
         assert_optimized!(expected, physical_plan.clone(), true, false, 4, false, 1024);
         assert_optimized!(expected, physical_plan, false, false, 4, false, 1024);
@@ -4521,7 +4493,6 @@ pub(crate) mod tests {
 
         let expected =
             &["ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]"];
-
         assert_optimized!(expected, physical_plan.clone(), true);
         assert_optimized!(expected, physical_plan, false);
         crosscheck_plans!(&physical_plan);
@@ -4550,7 +4521,6 @@ pub(crate) mod tests {
             "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
             "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
         ];
-
         assert_optimized!(expected, physical_plan.clone(), true);
         assert_optimized!(expected, physical_plan, false);
         crosscheck_plans!(&physical_plan);
