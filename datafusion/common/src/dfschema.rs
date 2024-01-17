@@ -34,6 +34,7 @@ use crate::{
 
 use arrow::compute::can_cast_types;
 use arrow::datatypes::{DataType, Field, FieldRef, Fields, Schema, SchemaRef};
+use arrow_schema::SchemaBuilder;
 
 /// A reference-counted reference to a [DFSchema].
 pub type DFSchemaRef = Arc<DFSchema>;
@@ -218,14 +219,12 @@ impl DFSchema {
         schema: &Schema,
     ) -> Result<Self> {
         let qualifier = qualifier.into();
-        Self::new_with_metadata(
-            schema
-                .fields()
-                .iter()
-                .map(|f| DFField::from_qualified(qualifier.clone(), f.clone()))
-                .collect(),
-            schema.metadata().clone(),
-        )
+        let schema = DFSchema {
+            inner: schema.clone().into(),
+            field_qualifiers: vec![Some(qualifier); schema.fields.len()],
+            functional_dependencies: FunctionalDependencies::empty(),
+        };
+        Ok(schema)
     }
 
     /// Assigns functional dependencies.
@@ -269,21 +268,27 @@ impl DFSchema {
     /// Modify this schema by appending the fields from the supplied schema, ignoring any
     /// duplicate fields.
     pub fn merge(&mut self, other_schema: &DFSchema) {
-        if other_schema.fields.is_empty() {
+        if other_schema.inner.fields.is_empty() {
             return;
         }
+        let mut schema_builder = SchemaBuilder::from(self.inner.fields);
         for (qualifier, field) in other_schema.iter() {
             // skip duplicate columns
             let duplicated_field = match qualifier {
-                Some(q) => self.has_column_with_qualified_name(qualifier, field.name()),
+                Some(q) => self.has_column_with_qualified_name(q, field.name()),
                 // for unqualified columns, check as unqualified name
                 None => self.has_column_with_unqualified_name(field.name()),
             };
             if !duplicated_field {
-                self.fields.push(field.clone());
+                // self.inner.fields.push(field.clone());
+                schema_builder.push(field.clone())
             }
         }
-        self.metadata.extend(other_schema.metadata.clone())
+        let finished = schema_builder.finish();
+        self.inner = finished.into();
+        self.inner
+            .metadata
+            .extend(other_schema.inner.metadata.clone());
     }
 
     /// Get a list of fields
@@ -297,31 +302,31 @@ impl DFSchema {
         &self.inner.fields[i]
     }
 
-    #[deprecated(since = "8.0.0", note = "please use `index_of_column_by_name` instead")]
+    // #[deprecated(since = "8.0.0", note = "please use `index_of_column_by_name` instead")]
     /// Find the index of the column with the given unqualified name
-    pub fn index_of(&self, name: &str) -> Result<usize> {
-        for i in 0..self.fields.len() {
-            if self.fields[i].name() == name {
-                return Ok(i);
-            } else {
-                // Now that `index_of` is deprecated an error is thrown if
-                // a fully qualified field name is provided.
-                match &self.fields[i].qualifier {
-                    Some(qualifier) => {
-                        if (qualifier.to_string() + "." + self.fields[i].name()) == name {
-                            return _plan_err!(
-                                "Fully qualified field name '{name}' was supplied to `index_of` \
-                                which is deprecated. Please use `index_of_column_by_name` instead"
-                            );
-                        }
-                    }
-                    None => (),
-                }
-            }
-        }
-
-        Err(unqualified_field_not_found(name, self))
-    }
+    // pub fn index_of(&self, name: &str) -> Result<usize> {
+    //     for i in 0..self.fields.len() {
+    //         if self.fields[i].name() == name {
+    //             return Ok(i);
+    //         } else {
+    //             // Now that `index_of` is deprecated an error is thrown if
+    //             // a fully qualified field name is provided.
+    //             match &self.fields[i].qualifier {
+    //                 Some(qualifier) => {
+    //                     if (qualifier.to_string() + "." + self.fields[i].name()) == name {
+    //                         return _plan_err!(
+    //                             "Fully qualified field name '{name}' was supplied to `index_of` \
+    //                             which is deprecated. Please use `index_of_column_by_name` instead"
+    //                         );
+    //                     }
+    //                 }
+    //                 None => (),
+    //             }
+    //         }
+    //     }
+    //
+    //     Err(unqualified_field_not_found(name, self))
+    // }
 
     pub fn index_of_column_by_name(
         &self,
@@ -329,21 +334,18 @@ impl DFSchema {
         name: &str,
     ) -> Result<Option<usize>> {
         let mut matches = self
-            .fields
             .iter()
             .enumerate()
-            .filter(|(_, field)| match (qualifier, &field.qualifier) {
+            .filter(|(i, (q, f))| match (qualifier, q) {
                 // field to lookup is qualified.
                 // current field is qualified and not shared between relations, compare both
                 // qualifier and name.
-                (Some(q), Some(field_q)) => {
-                    q.resolved_eq(field_q) && field.name() == name
-                }
+                (Some(q), Some(field_q)) => q.resolved_eq(field_q) && f.name() == name,
                 // field to lookup is qualified but current field is unqualified.
                 (Some(qq), None) => {
                     // the original field may now be aliased with a name that matches the
                     // original qualified name
-                    let column = Column::from_qualified_name(field.name());
+                    let column = Column::from_qualified_name(f.name());
                     match column {
                         Column {
                             relation: Some(r),
@@ -353,7 +355,7 @@ impl DFSchema {
                     }
                 }
                 // field to lookup is unqualified, no need to compare qualifier
-                (None, Some(_)) | (None, None) => field.name() == name,
+                (None, Some(_)) | (None, None) => f.name() == name,
             })
             .map(|(idx, _)| idx);
         Ok(matches.next())
@@ -386,7 +388,12 @@ impl DFSchema {
 
     /// Find all fields having the given qualifier
     pub fn fields_with_qualified(&self, qualifier: &TableReference) -> Vec<&Field> {
-        self.iter().filter(|(q, f)| q == qualifier).collect()
+        let fields = self
+            .iter()
+            .filter(|(q, f)| q.map(|q| q == qualifier).unwrap_or(false))
+            .map(|(_, f)| f.into())
+            .collect();
+        fields
     }
 
     /// Find all fields indices having the given qualifier
@@ -446,10 +453,8 @@ impl DFSchema {
         qualifier: &TableReference,
         name: &str,
     ) -> bool {
-        self.fields().iter().any(|field| {
-            field.qualifier().map(|q| q.eq(qualifier)).unwrap_or(false)
-                && field.name() == name
-        })
+        self.iter()
+            .any(|(q, f)| q.map(|q| q == qualifier).unwrap_or(false) && f.name() == name)
     }
 
     /// Find if the field exists with the given qualified column
@@ -631,21 +636,29 @@ impl DFSchema {
 
     /// Strip all field qualifier in schema
     pub fn strip_qualifiers(self) -> Self {
-        self.field_qualifiers = vec![None; self.inner.fields.len()];
-        self
+        let stripped_schema = DFSchema {
+            inner: self.inner.clone(),
+            field_qualifiers: vec![None; self.inner.fields.len()],
+            functional_dependencies: self.functional_dependencies.clone(),
+        };
+        stripped_schema
     }
 
     /// Replace all field qualifier with new value in schema
     pub fn replace_qualifier(self, qualifier: impl Into<OwnedTableReference>) -> Self {
         let qualifier = qualifier.into();
-        self.field_qualifiers = vec![qualifier; self.inner.fields().len()];
-        self
+        let replaced_schema = DFSchema {
+            inner: self.inner.clone(),
+            field_qualifiers: vec![Some(qualifier); self.inner.fields.len()],
+            functional_dependencies: self.functional_dependencies.clone(),
+        };
+        replaced_schema
     }
 
     /// Get list of fully-qualified field names in this schema
     pub fn field_names(&self) -> Vec<String> {
         self.iter()
-            .map(|(qualifier, field)| qualified_name(&qualifier, field))
+            .map(|(qualifier, field)| qualified_name(qualifier, field.name()))
             .collect::<Vec<_>>()
     }
 
@@ -672,16 +685,16 @@ impl DFSchema {
 impl From<DFSchema> for Schema {
     /// Convert DFSchema into a Schema
     fn from(df_schema: DFSchema) -> Self {
-        let fields: Fields = df_schema.fields.into_iter().map(|f| f.field).collect();
-        Schema::new_with_metadata(fields, df_schema.metadata)
+        let fields: Fields = df_schema.inner.fields.clone();
+        Schema::new_with_metadata(fields, df_schema.inner.metadata)
     }
 }
 
 impl From<&DFSchema> for Schema {
     /// Convert DFSchema reference into a Schema
     fn from(df_schema: &DFSchema) -> Self {
-        let fields: Fields = df_schema.fields.iter().map(|f| f.field.clone()).collect();
-        Schema::new_with_metadata(fields, df_schema.metadata.clone())
+        let fields: Fields = df_schema.inner.fields.clone();
+        Schema::new_with_metadata(fields, df_schema.inner.metadata.clone())
     }
 }
 
@@ -690,8 +703,8 @@ impl TryFrom<Schema> for DFSchema {
     type Error = DataFusionError;
     fn try_from(schema: Schema) -> Result<Self, Self::Error> {
         let dfschema = Self {
-            inner: schema,
-            field_qualifiers: vec![None, schema.fields.len()],
+            inner: schema.into(),
+            field_qualifiers: vec![None; schema.fields.len()],
             functional_dependencies: FunctionalDependencies::empty(),
         };
         Ok(dfschema)
@@ -763,10 +776,8 @@ impl Display for DFSchema {
         write!(
             f,
             "fields:[{}], metadata:{:?}",
-            self.inner
-                .fields
-                .iter()
-                .map(|field| field.qualified_name())
+            self.iter()
+                .map(|(q, f)| qualified_name(q, f.name()))
                 .collect::<Vec<String>>()
                 .join(", "),
             self.inner.metadata
@@ -871,7 +882,7 @@ impl SchemaExt for Schema {
     }
 }
 
-fn qualified_name(qualifier: &Option<OwnedTableReference>, name: &str) -> String {
+fn qualified_name(qualifier: Option<&TableReference>, name: &str) -> String {
     match qualifier {
         Some(q) => format!("{}.{}", q, name),
         None => name.to_string(),
