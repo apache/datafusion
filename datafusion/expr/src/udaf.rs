@@ -17,12 +17,13 @@
 
 //! [`AggregateUDF`]: User Defined Aggregate Functions
 
+use crate::groups_accumulator::GroupsAccumulator;
 use crate::{Accumulator, Expr};
 use crate::{
     AccumulatorFactoryFunction, ReturnTypeFunction, Signature, StateTypeFunction,
 };
 use arrow::datatypes::DataType;
-use datafusion_common::Result;
+use datafusion_common::{DataFusionError, Result, not_impl_err};
 use std::any::Any;
 use std::fmt::{self, Debug, Formatter};
 use std::sync::Arc;
@@ -250,6 +251,22 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
     /// Return the type used to serialize the  [`Accumulator`]'s intermediate state.
     /// See [`Accumulator::state()`] for more details
     fn state_type(&self, return_type: &DataType) -> Result<Vec<DataType>>;
+    
+    /// If the aggregate expression has a specialized
+    /// [`GroupsAccumulator`] implementation. If this returns true,
+    /// `[Self::create_groups_accumulator`] will be called.
+    fn groups_accumulator_supported(&self) -> bool {
+        false
+    }
+
+    /// Return a specialized [`GroupsAccumulator`] that manages state
+    /// for all groups.
+    ///
+    /// For maximum performance, a [`GroupsAccumulator`] should be
+    /// implemented in addition to [`Accumulator`].
+    fn create_groups_accumulator(&self) -> Result<Box<dyn GroupsAccumulator>> {
+        not_impl_err!("GroupsAccumulator hasn't been implemented for {self:?} yet")
+    }
 }
 
 /// Implementation of [`AggregateUDFImpl`] that wraps the function style pointers

@@ -23,7 +23,7 @@ use std::ops::BitAnd;
 use std::sync::Arc;
 
 use crate::aggregate::utils::down_cast_any_ref;
-use crate::{AggregateExpr, GroupsAccumulator, PhysicalExpr};
+use crate::{AggregateExpr, PhysicalExpr};
 use arrow::array::{Array, Int64Array};
 use arrow::compute;
 use arrow::datatypes::DataType;
@@ -34,12 +34,11 @@ use arrow_array::PrimitiveArray;
 use arrow_buffer::BooleanBuffer;
 use datafusion_common::{downcast_value, ScalarValue};
 use datafusion_common::{DataFusionError, Result};
-use datafusion_expr::Accumulator;
+use datafusion_expr::{Accumulator, EmitTo, GroupsAccumulator};
 
 use crate::expressions::format_state_name;
 
 use super::groups_accumulator::accumulate::accumulate_indices;
-use super::groups_accumulator::EmitTo;
 
 /// COUNT aggregate expression
 /// Returns the amount of non-null values of the given expression.

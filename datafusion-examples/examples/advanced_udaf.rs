@@ -25,7 +25,7 @@ use arrow::{
 use datafusion::error::Result;
 use datafusion::prelude::*;
 use datafusion_common::{cast::as_float64_array, ScalarValue};
-use datafusion_expr::{Accumulator, AggregateUDF, AggregateUDFImpl, Signature};
+use datafusion_expr::{Accumulator, AggregateUDF, AggregateUDFImpl, Signature, GroupsAccumulator};
 
 /// This example shows how to use the full AggregateUDFImpl API to implement a user
 /// defined aggregate function. As in the `simple_udaf.rs` example, this struct implements
@@ -33,12 +33,12 @@ use datafusion_expr::{Accumulator, AggregateUDF, AggregateUDFImpl, Signature};
 ///
 /// To do so, we must implement the `AggregateUDFImpl` trait.
 #[derive(Debug, Clone)]
-struct GeoMeanUdf {
+struct GeoMeanUdaf {
     signature: Signature,
 }
 
-impl GeoMeanUdf {
-    /// Create a new instance of the GeoMeanUdf struct
+impl GeoMeanUdaf {
+    /// Create a new instance of the GeoMeanUdaf struct
     fn new() -> Self {
         Self {
             signature: Signature::exact(
@@ -52,7 +52,7 @@ impl GeoMeanUdf {
     }
 }
 
-impl AggregateUDFImpl for GeoMeanUdf {
+impl AggregateUDFImpl for GeoMeanUdaf {
     /// We implement as_any so that we can downcast the AggregateUDFImpl trait object
     fn as_any(&self) -> &dyn Any {
         self
@@ -81,6 +81,14 @@ impl AggregateUDFImpl for GeoMeanUdf {
     /// This is the description of the state. accumulator's state() must match the types here.
     fn state_type(&self, _return_type: &DataType) -> Result<Vec<DataType>> {
         Ok(vec![DataType::Float64, DataType::UInt32])
+    }
+
+    fn groups_accumulator_supported(&self) -> bool {
+        true
+    }
+
+    fn create_groups_accumulator(&self) -> Result<Box<dyn GroupsAccumulator>> {
+        todo!()
     }
 }
 
@@ -194,12 +202,57 @@ fn create_context() -> Result<SessionContext> {
     Ok(ctx)
 }
 
+struct GeometricMeanGroupsAccumulator {
+    counts: Vec<u32>,
+    prods: Vec<f64>,
+}
+
+impl GeometricMeanGroupsAccumulator {
+    fn new() {
+
+    }
+}
+
+impl GroupsAccumulator for GeometricMeanGroupsAccumulator {
+    fn update_batch(
+        &mut self,
+        values: &[ArrayRef],
+        group_indices: &[usize],
+        opt_filter: Option<&arrow::array::BooleanArray>,
+        total_num_groups: usize,
+    ) -> Result<()> {
+        todo!()
+    }
+
+    fn evaluate(&mut self, emit_to: datafusion_expr::EmitTo) -> Result<ArrayRef> {
+        todo!()
+    }
+
+    fn state(&mut self, emit_to: datafusion_expr::EmitTo) -> Result<Vec<ArrayRef>> {
+        todo!()
+    }
+
+    fn merge_batch(
+        &mut self,
+        values: &[ArrayRef],
+        group_indices: &[usize],
+        opt_filter: Option<&arrow::array::BooleanArray>,
+        total_num_groups: usize,
+    ) -> Result<()> {
+        todo!()
+    }
+
+    fn size(&self) -> usize {
+        todo!()
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let ctx = create_context()?;
 
     // create the AggregateUDF
-    let geometric_mean = AggregateUDF::from(GeoMeanUdf::new());
+    let geometric_mean = AggregateUDF::from(GeoMeanUdaf::new());
     ctx.register_udaf(geometric_mean.clone());
 
     let sql_df = ctx.sql("SELECT geo_mean(a) FROM t").await?;

@@ -21,10 +21,10 @@ use arrow::array::AsArray;
 use arrow_array::{ArrayRef, BooleanArray};
 use arrow_buffer::{BooleanBuffer, BooleanBufferBuilder};
 use datafusion_common::Result;
+use datafusion_expr::{EmitTo, GroupsAccumulator};
 
-use crate::GroupsAccumulator;
 
-use super::{accumulate::NullState, EmitTo};
+use super::accumulate::NullState;
 
 /// An accumulator that implements a single operation over a
 /// [`BooleanArray`] where the accumulated state is also boolean (such
