@@ -23,7 +23,6 @@ use arrow_buffer::{BooleanBuffer, BooleanBufferBuilder};
 use datafusion_common::Result;
 use datafusion_expr::{EmitTo, GroupsAccumulator};
 
-
 use super::accumulate::NullState;
 
 /// An accumulator that implements a single operation over a

@@ -61,6 +61,12 @@ pub struct NullState {
     seen_values: BooleanBufferBuilder,
 }
 
+impl Default for NullState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl NullState {
     pub fn new() -> Self {
         Self {

@@ -40,6 +40,7 @@ datafusion = { path = "../datafusion/core", features = ["avro"] }
 datafusion-common = { path = "../datafusion/common" }
 datafusion-expr = { path = "../datafusion/expr" }
 datafusion-optimizer = { path = "../datafusion/optimizer" }
+datafusion-physical-expr = { workspace = true }
 datafusion-sql = { path = "../datafusion/sql" }
 env_logger = { workspace = true }
 futures = { workspace = true }

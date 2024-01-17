@@ -17,6 +17,7 @@
 
 pub(crate) mod accumulate;
 mod adapter;
+pub use accumulate::NullState;
 pub use adapter::GroupsAccumulatorAdapter;
 
 pub(crate) mod bool_op;

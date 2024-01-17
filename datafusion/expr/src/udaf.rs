@@ -23,7 +23,7 @@ use crate::{
     AccumulatorFactoryFunction, ReturnTypeFunction, Signature, StateTypeFunction,
 };
 use arrow::datatypes::DataType;
-use datafusion_common::{DataFusionError, Result, not_impl_err};
+use datafusion_common::{not_impl_err, DataFusionError, Result};
 use std::any::Any;
 use std::fmt::{self, Debug, Formatter};
 use std::sync::Arc;
@@ -251,7 +251,7 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
     /// Return the type used to serialize the  [`Accumulator`]'s intermediate state.
     /// See [`Accumulator::state()`] for more details
     fn state_type(&self, return_type: &DataType) -> Result<Vec<DataType>>;
-    
+
     /// If the aggregate expression has a specialized
     /// [`GroupsAccumulator`] implementation. If this returns true,
     /// `[Self::create_groups_accumulator`] will be called.

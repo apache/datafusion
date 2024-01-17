@@ -112,7 +112,6 @@ pub(crate) mod tests {
     use datafusion_common::{Result, ScalarValue};
     use datafusion_expr::type_coercion::aggregates::coerce_types;
     use datafusion_expr::{AggregateFunction, EmitTo};
-    use std::sync::Arc;
 
     /// macro to perform an aggregation using [`datafusion_expr::Accumulator`] and verify the
     /// result.
