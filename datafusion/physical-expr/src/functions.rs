@@ -195,7 +195,14 @@ pub(crate) enum Hint {
 /// and vice-versa after evaluation.
 /// Note that this function makes a scalar function with no arguments or all scalar inputs return a scalar.
 /// That's said its output will be same for all input rows in a batch.
-pub(crate) fn make_scalar_function<F>(inner: F) -> ScalarFunctionImplementation
+#[deprecated(since = "35.0.0", note = "Implement your function directly in terms of ColumnarValue or use `ScalarUDF` instead")]
+pub fn make_scalar_function<F>(inner: F) -> ScalarFunctionImplementation
+  make_scaler_function_inner(inner)
+}
+
+/// Internal implementation, see comments on `make_scalar_function` for caveats
+pub(crate) fn make_scalar_function_inner<F>(inner: F) -> ScalarFunctionImplementation 
+
 where
     F: Fn(&[ArrayRef]) -> Result<ArrayRef> + Sync + Send + 'static,
 {
