@@ -161,7 +161,7 @@ impl PrintFormat {
         maxrows: MaxRows,
         with_header: bool,
     ) -> Result<()> {
-        if batches.is_empty() || batches[0].num_rows() == 0 {
+        if batches.is_empty() {
             return Ok(());
         }
 
@@ -189,7 +189,7 @@ mod tests {
 
     use super::*;
 
-    use arrow::array::Int32Array;
+    use arrow::array::{ArrayRef, Int32Array};
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion::error::Result;
 
@@ -350,5 +350,83 @@ mod tests {
         assert_eq!(multi_batches, multi_batches_expected);
 
         Ok(())
+    }
+
+
+    #[test]
+    fn test_print_batches_empty_batches() -> Result<()> {
+        let batch = RecordBatch::try_from_iter(
+            vec![
+                ("a", Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef),
+            ],
+        )?;
+        let empty_batch = RecordBatch::new_empty(batch.schema());
+
+        PrintBatchesTest::new()
+            .with_format(PrintFormat::Table)
+            .with_batches(vec![
+                empty_batch.clone(),
+                batch,
+                empty_batch,
+            ])
+            .with_expected(
+                &[
+            "+---+",
+            "| a |",
+            "+---+",
+            "| 1 |",
+            "| 2 |",
+            "| 3 |",
+            "+---+\n",
+        ])
+            .run();
+       Ok(())
+    }
+
+    struct PrintBatchesTest {
+        format: PrintFormat,
+        batches: Vec<RecordBatch>,
+        maxrows: MaxRows,
+        with_header: bool,
+        expected: Vec<&'static str>,
+    }
+
+    impl PrintBatchesTest {
+        fn new() -> Self {
+            Self {
+                format: PrintFormat::Table,
+                batches: vec![],
+                maxrows: MaxRows::Unlimited,
+                with_header: false,
+                expected: vec![]
+            }
+        }
+
+        /// set the format
+        fn with_format(mut self, format: PrintFormat) -> Self {
+            self.format = format;
+            self
+        }
+
+        /// set the batches to convert
+        fn with_batches(mut self, batches: Vec<RecordBatch>) -> Self {
+            self.batches = batches;
+            self
+        }
+
+        /// set expected output
+        fn with_expected(mut self, expected: &[&'static str]) -> Self {
+            self.expected = expected.to_vec();
+            self
+        }
+
+        /// run the test
+        fn run(self) {
+            let mut buffer: Vec<u8> = vec![];
+            self.format.print_batches(&mut buffer, &self.batches, self.maxrows, self.with_header).unwrap();
+            let actual = String::from_utf8(buffer).unwrap();
+            let expected = self.expected.join("\n");
+            assert_eq!(actual, expected, "actual:\n\n{actual}expected:\n\n{expected}");
+        }
     }
 }
