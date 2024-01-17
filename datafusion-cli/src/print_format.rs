@@ -352,35 +352,31 @@ mod tests {
         Ok(())
     }
 
-
     #[test]
     fn test_print_batches_empty_batches() -> Result<()> {
-        let batch = RecordBatch::try_from_iter(
-            vec![
-                ("a", Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef),
-            ],
-        )?;
+        let batch = RecordBatch::try_from_iter(vec![(
+            "a",
+            Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef,
+        )])?;
         let empty_batch = RecordBatch::new_empty(batch.schema());
+
+        #[rustfmt::skip]
+            let expected =&[
+                "+---+",
+                "| a |",
+                "+---+",
+                "| 1 |",
+                "| 2 |",
+                "| 3 |",
+                "+---+\n",
+            ];
 
         PrintBatchesTest::new()
             .with_format(PrintFormat::Table)
-            .with_batches(vec![
-                empty_batch.clone(),
-                batch,
-                empty_batch,
-            ])
-            .with_expected(
-                &[
-            "+---+",
-            "| a |",
-            "+---+",
-            "| 1 |",
-            "| 2 |",
-            "| 3 |",
-            "+---+\n",
-        ])
+            .with_batches(vec![empty_batch.clone(), batch, empty_batch])
+            .with_expected(expected)
             .run();
-       Ok(())
+        Ok(())
     }
 
     struct PrintBatchesTest {
@@ -398,7 +394,7 @@ mod tests {
                 batches: vec![],
                 maxrows: MaxRows::Unlimited,
                 with_header: false,
-                expected: vec![]
+                expected: vec![],
             }
         }
 
@@ -423,10 +419,15 @@ mod tests {
         /// run the test
         fn run(self) {
             let mut buffer: Vec<u8> = vec![];
-            self.format.print_batches(&mut buffer, &self.batches, self.maxrows, self.with_header).unwrap();
+            self.format
+                .print_batches(&mut buffer, &self.batches, self.maxrows, self.with_header)
+                .unwrap();
             let actual = String::from_utf8(buffer).unwrap();
             let expected = self.expected.join("\n");
-            assert_eq!(actual, expected, "actual:\n\n{actual}expected:\n\n{expected}");
+            assert_eq!(
+                actual, expected,
+                "actual:\n\n{actual}expected:\n\n{expected}"
+            );
         }
     }
 }
