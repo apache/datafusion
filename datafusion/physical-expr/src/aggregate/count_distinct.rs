@@ -521,6 +521,23 @@ struct SSOStringHeader {
     offset_or_inline: usize,
 }
 
+impl SSOStringHeader {
+    fn evaluate(&self, buffer: &[u8]) -> String {
+        if self.len <= SHORT_STRING_LEN {
+            self.offset_or_inline.to_string()
+        } else {
+            let offset = self.offset_or_inline;
+            // SAFETY: buffer is only appended to, and we correctly inserted values
+            unsafe {
+                std::str::from_utf8_unchecked(
+                    buffer.get_unchecked(offset..offset + self.len),
+                )
+            }
+            .to_string()
+        }
+    }
+}
+
 // Short String Optimizated HashSet for String
 // Equivalent to HashSet<String> but with better memory usage
 #[derive(Default)]
@@ -601,19 +618,8 @@ impl SSOStringHashSet {
         let buffer = self.buffer.as_slice();
 
         for header in self.header_set.iter() {
-            let s = if header.len <= SHORT_STRING_LEN {
-                let inline = header.offset_or_inline;
-                // convert usize to &[u8]
-                let ptr = &inline as *const usize as *const u8;
-                let len = std::mem::size_of::<usize>();
-                unsafe { std::slice::from_raw_parts(ptr, len) }
-            } else {
-                let offset = header.offset_or_inline;
-                // SAFETY: buffer is only appended to, and we correctly inserted values
-                unsafe { buffer.get_unchecked(offset..offset + header.len) }
-            };
-
-            values.extend_from_slice(s);
+            let s = header.evaluate(buffer);
+            values.extend_from_slice(s.as_bytes());
             offsets.push(values.len() as i32);
         }
 
