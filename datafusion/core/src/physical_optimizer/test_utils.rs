@@ -21,6 +21,7 @@ use std::sync::Arc;
 
 use crate::datasource::listing::PartitionedFile;
 use crate::datasource::physical_plan::{FileScanConfig, ParquetExec};
+use crate::datasource::stream::{StreamConfig, StreamTable};
 use crate::error::Result;
 use crate::physical_plan::aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy};
 use crate::physical_plan::coalesce_batches::CoalesceBatchesExec;
@@ -48,7 +49,6 @@ use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
 use datafusion_physical_plan::get_plan_string;
 use datafusion_physical_plan::tree_node::PlanContext;
 
-use crate::datasource::stream::{StreamConfig, StreamTable};
 use async_trait::async_trait;
 
 async fn register_current_csv(
@@ -365,17 +365,14 @@ pub fn sort_exec(
     Arc::new(SortExec::new(sort_exprs, input))
 }
 
-pub fn crosscheck_helper<T>(context: PlanContext<T>) -> Result<()>
-where
-    PlanContext<T>: TreeNode,
-{
+pub fn crosscheck_helper<T: Clone>(context: PlanContext<T>) -> Result<()> {
     let empty_node = context.transform_up(&|mut node| {
         assert_eq!(node.children.len(), node.plan.children().len());
         if !node.children.is_empty() {
             assert_eq!(
                 get_plan_string(&node.plan),
                 get_plan_string(&node.plan.clone().with_new_children(
-                    node.children.iter().map(|c| c.plan.clone()).collect()
+                    node.children.into_iter().map(|c| c.plan).collect()
                 )?)
             );
             node.children = vec![];

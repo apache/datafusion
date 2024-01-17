@@ -72,8 +72,8 @@ impl<T: Default> PlanContext<T> {
 impl<T: Display> Display for PlanContext<T> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         let plan_string = get_plan_string(&self.plan);
-        write!(f, "plan: {:?}", plan_string)?;
-        write!(f, "data:{}", self.data)?;
+        write!(f, "plan: {}", plan_string[0])?;
+        write!(f, "data: {}", self.data)?;
         write!(f, "")
     }
 }

@@ -27,7 +27,7 @@ use crate::physical_plan::union::UnionExec;
 use crate::physical_plan::windows::{BoundedWindowAggExec, WindowAggExec};
 use crate::physical_plan::ExecutionPlan;
 
-use datafusion_physical_expr::{LexRequirementRef, PhysicalSortRequirement};
+use datafusion_physical_expr::{LexRequirement, PhysicalSortRequirement};
 use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion_physical_plan::tree_node::PlanContext;
 
@@ -35,19 +35,15 @@ use datafusion_physical_plan::tree_node::PlanContext;
 /// given ordering requirements while preserving the original partitioning.
 pub fn add_sort_above<T: Clone + Default>(
     node: &mut PlanContext<T>,
-    sort_requirement: LexRequirementRef,
+    sort_requirements: LexRequirement,
     fetch: Option<usize>,
 ) {
-    let sort_expr = PhysicalSortRequirement::to_sort_exprs(sort_requirement.to_vec());
+    let sort_expr = PhysicalSortRequirement::to_sort_exprs(sort_requirements);
     let mut new_sort = SortExec::new(sort_expr, node.plan.clone()).with_fetch(fetch);
     if node.plan.output_partitioning().partition_count() > 1 {
         new_sort = new_sort.with_preserve_partitioning(true);
     }
-    *node = PlanContext {
-        plan: Arc::new(new_sort) as _,
-        data: T::default(),
-        children: vec![node.clone()],
-    };
+    *node = PlanContext::new(Arc::new(new_sort), T::default(), vec![node.clone()]);
 }
 
 /// Checks whether the given operator is a limit;

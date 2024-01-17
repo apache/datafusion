@@ -57,25 +57,27 @@ pub fn assign_initial_requirements(node: &mut SortPushDown) {
 pub(crate) fn pushdown_sorts(
     mut requirements: SortPushDown,
 ) -> Result<Transformed<SortPushDown>> {
-    let plan = requirements.plan.clone();
-    let parent_reqs = requirements.data.clone().unwrap_or_default();
+    let plan = &requirements.plan;
+    let parent_reqs = requirements.data.as_deref().unwrap_or(&[]);
     let satisfy_parent = plan
         .equivalence_properties()
-        .ordering_satisfy_requirement(&parent_reqs);
+        .ordering_satisfy_requirement(parent_reqs);
 
     if let Some(sort_exec) = plan.as_any().downcast_ref::<SortExec>() {
-        if !satisfy_parent {
-            // If the current plan is a SortExec, modify it to satisfy parent requirements:
-            requirements = requirements.children.swap_remove(0);
-            add_sort_above(&mut requirements, &parent_reqs, sort_exec.fetch());
-        };
-
         let required_ordering = plan
             .output_ordering()
             .map(PhysicalSortRequirement::from_sort_exprs)
             .unwrap_or_default();
 
-        // Since new_plan is a SortExec, we can safely get the 0th index.
+        if !satisfy_parent {
+            // Make sure this `SortExec` satisfies parent requirements:
+            let fetch = sort_exec.fetch();
+            let sort_reqs = requirements.data.unwrap_or_default();
+            requirements = requirements.children.swap_remove(0);
+            add_sort_above(&mut requirements, sort_reqs, fetch);
+        };
+
+        // We can safely get the 0th index as we are dealing with a `SortExec`.
         let mut child = requirements.children.swap_remove(0);
         if let Some(adjusted) =
             pushdown_requirement_to_children(&child.plan, &required_ordering)?
@@ -97,8 +99,7 @@ pub(crate) fn pushdown_sorts(
         for (child, order) in requirements.children.iter_mut().zip(reqs) {
             child.data = order;
         }
-    } else if let Some(adjusted) = pushdown_requirement_to_children(&plan, &parent_reqs)?
-    {
+    } else if let Some(adjusted) = pushdown_requirement_to_children(plan, parent_reqs)? {
         // Can not satisfy the parent requirements, check whether we can push
         // requirements down:
         for (child, order) in requirements.children.iter_mut().zip(adjusted) {
@@ -106,8 +107,9 @@ pub(crate) fn pushdown_sorts(
         }
         requirements.data = None;
     } else {
-        // Can not push down requirements, add new SortExec:
-        add_sort_above(&mut requirements, &parent_reqs, None);
+        // Can not push down requirements, add new `SortExec`:
+        let sort_reqs = requirements.data.clone().unwrap_or_default();
+        add_sort_above(&mut requirements, sort_reqs, None);
         assign_initial_requirements(&mut requirements);
     }
     Ok(Transformed::Yes(requirements))
@@ -140,9 +142,7 @@ fn pushdown_requirement_to_children(
         let left_columns_len = smj.left().schema().fields().len();
         let parent_required_expr =
             PhysicalSortRequirement::to_sort_exprs(parent_required.iter().cloned());
-        let expr_source_side =
-            expr_source_sides(&parent_required_expr, smj.join_type(), left_columns_len);
-        match expr_source_side {
+        match expr_source_side(&parent_required_expr, smj.join_type(), left_columns_len) {
             Some(JoinSide::Left) => try_pushdown_requirements_to_join(
                 smj,
                 parent_required,
@@ -281,7 +281,7 @@ fn try_pushdown_requirements_to_join(
     }))
 }
 
-fn expr_source_sides(
+fn expr_source_side(
     required_exprs: &[PhysicalSortExpr],
     join_type: JoinType,
     left_columns_len: usize,
@@ -333,20 +333,16 @@ fn shift_right_required(
     parent_required: LexRequirementRef,
     left_columns_len: usize,
 ) -> Result<Vec<PhysicalSortRequirement>> {
-    let new_right_required: Vec<PhysicalSortRequirement> = parent_required
+    let new_right_required = parent_required
         .iter()
         .filter_map(|r| {
             let col = r.expr.as_any().downcast_ref::<Column>()?;
-
-            if col.index() < left_columns_len {
-                return None;
-            }
-
-            let new_col =
-                Arc::new(Column::new(col.name(), col.index() - left_columns_len));
-            Some(r.clone().with_expr(new_col))
+            col.index().checked_sub(left_columns_len).map(|offset| {
+                r.clone()
+                    .with_expr(Arc::new(Column::new(col.name(), offset)))
+            })
         })
-        .collect();
+        .collect::<Vec<_>>();
     if new_right_required.len() == parent_required.len() {
         Ok(new_right_required)
     } else {

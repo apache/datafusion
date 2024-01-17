@@ -262,17 +262,17 @@ fn parallelize_sorts(
             .equivalence_properties()
             .ordering_satisfy_requirement(&sort_reqs)
         {
-            add_sort_above(&mut requirements, &sort_reqs, fetch);
+            add_sort_above(&mut requirements, sort_reqs, fetch);
         }
 
-        Ok(Transformed::Yes(PlanWithCorrespondingCoalescePartitions {
-            plan: Arc::new(
-                SortPreservingMergeExec::new(sort_exprs, requirements.plan.clone())
-                    .with_fetch(fetch),
+        let spm = SortPreservingMergeExec::new(sort_exprs, requirements.plan.clone());
+        Ok(Transformed::Yes(
+            PlanWithCorrespondingCoalescePartitions::new(
+                Arc::new(spm.with_fetch(fetch)),
+                false,
+                vec![requirements],
             ),
-            data: false,
-            children: vec![requirements],
-        }))
+        ))
     } else if is_coalesce_partitions(&requirements.plan) {
         // There is an unnecessary `CoalescePartitionsExec` in the plan.
         // This will handle the recursive `CoalescePartitionsExec` plans.
@@ -280,11 +280,13 @@ fn parallelize_sorts(
         // For the removal of self node which is also a `CoalescePartitionsExec`.
         requirements = requirements.children[0].clone();
 
-        Ok(Transformed::Yes(PlanWithCorrespondingCoalescePartitions {
-            plan: Arc::new(CoalescePartitionsExec::new(requirements.plan.clone())),
-            data: false,
-            children: vec![requirements],
-        }))
+        Ok(Transformed::Yes(
+            PlanWithCorrespondingCoalescePartitions::new(
+                Arc::new(CoalescePartitionsExec::new(requirements.plan.clone())),
+                false,
+                vec![requirements],
+            ),
+        ))
     } else {
         Ok(Transformed::Yes(requirements))
     }
@@ -308,14 +310,14 @@ fn ensure_sorting(
     for (idx, required_ordering) in requirements
         .plan
         .required_input_ordering()
-        .iter()
+        .into_iter()
         .enumerate()
     {
         let physical_ordering = requirements.children[idx].plan.output_ordering();
 
         if let Some(required) = required_ordering {
             let eq_properties = requirements.children[idx].plan.equivalence_properties();
-            if !eq_properties.ordering_satisfy_requirement(required) {
+            if !eq_properties.ordering_satisfy_requirement(&required) {
                 // Make sure we preserve the ordering requirements:
                 if physical_ordering.is_some() {
                     update_child_to_remove_unnecessary_sort(
@@ -456,7 +458,7 @@ fn analyze_window_sort_removal(
     } else {
         // We were unable to change the window to accommodate the input, so we
         // will insert a sort.
-        let reqs = &window_tree
+        let reqs = window_tree
             .plan
             .required_input_ordering()
             .swap_remove(0)
