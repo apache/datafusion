@@ -3281,7 +3281,7 @@ select count(distinct column1), count(distinct column2), count(distinct column3)
 3 3 6 6
 
 # run through merge_batch
-query IIII
+query IIII rowsort
 select count(distinct column1), count(distinct column2), count(distinct column3), count(distinct column4) from distinct_count_string_table group by column1;
 ----
 1 1 1 1
