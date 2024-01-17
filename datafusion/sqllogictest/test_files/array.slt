@@ -462,6 +462,16 @@ select [1, true, null]
 query error
 SELECT [now()]
 
+query ?
+select [struct('foo', 1)];
+----
+[{c0: foo, c1: 1}]
+
+query ?
+select [struct('foo', [1,2,3])];
+----
+[{c0: foo, c1: [1, 2, 3]}]
+
 query TTT
 select arrow_typeof(column1), arrow_typeof(column2), arrow_typeof(column3) from arrays;
 ----
