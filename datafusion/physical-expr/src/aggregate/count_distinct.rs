@@ -24,7 +24,7 @@ use arrow_array::types::{
     TimestampSecondType, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
 };
 use arrow_array::{PrimitiveArray, StringArray};
-use arrow_buffer::BufferBuilder;
+use arrow_buffer::{BufferBuilder, MutableBuffer, OffsetBuffer};
 
 use std::any::Any;
 use std::cmp::Eq;
@@ -453,7 +453,7 @@ impl StringDistinctCountAccumulator {
 
 impl Accumulator for StringDistinctCountAccumulator {
     fn state(&self) -> Result<Vec<ScalarValue>> {
-        let arr = StringArray::from_iter_values(self.0.iter());
+        let arr = self.0.state();
         let list = Arc::new(array_into_list_array(Arc::new(arr)));
         Ok(vec![ScalarValue::List(list)])
     }
@@ -515,37 +515,28 @@ const SHORT_STRING_LEN: usize = mem::size_of::<usize>();
 struct SSOStringHeader {
     /// hash of the string value (used when resizing table)
     hash: u64,
-
+    /// length of the string
     len: usize,
+    /// short strings are stored inline, long strings are stored in the buffer
     offset_or_inline: usize,
-}
-
-impl SSOStringHeader {
-    fn evaluate(&self, buffer: &[u8]) -> String {
-        if self.len <= SHORT_STRING_LEN {
-            self.offset_or_inline.to_string()
-        } else {
-            let offset = self.offset_or_inline;
-            // SAFETY: buffer is only appended to, and we correctly inserted values
-            unsafe {
-                std::str::from_utf8_unchecked(
-                    buffer.get_unchecked(offset..offset + self.len),
-                )
-            }
-            .to_string()
-        }
-    }
 }
 
 // Short String Optimizated HashSet for String
 // Equivalent to HashSet<String> but with better memory usage
 #[derive(Default)]
 struct SSOStringHashSet {
+    /// Core of the HashSet, it stores both the short and long string headers
     header_set: HashSet<SSOStringHeader>,
+    /// Used to check if the long string already exists
     long_string_map: hashbrown::raw::RawTable<SSOStringHeader>,
+    /// Total size of the map in bytes
     map_size: usize,
+    /// Buffer containing all long strings
     buffer: BufferBuilder<u8>,
+    /// The random state used to generate hashes
     state: RandomState,
+    /// Used for capacity calculation, equivalent to the sum of all string lengths
+    size_hint: usize,
 }
 
 impl SSOStringHashSet {
@@ -555,6 +546,7 @@ impl SSOStringHashSet {
 
     fn insert(&mut self, value: &str) {
         let value_len = value.len();
+        self.size_hint += value_len;
         let value_bytes = value.as_bytes();
 
         if value_len <= SHORT_STRING_LEN {
@@ -562,8 +554,7 @@ impl SSOStringHashSet {
                 .iter()
                 .fold(0usize, |acc, &x| acc << 8 | x as usize);
             let short_string_header = SSOStringHeader {
-                // no need for short string cases
-                hash: 0,
+                hash: 0, // no need for short string cases
                 len: value_len,
                 offset_or_inline: inline,
             };
@@ -601,18 +592,39 @@ impl SSOStringHashSet {
         }
     }
 
-    fn iter(&self) -> Vec<String> {
-        self.header_set
-            .iter()
-            .map(|header| header.evaluate(self.buffer.as_slice()))
-            .collect()
+    // Returns a StringArray with the current state of the set
+    fn state(&self) -> StringArray {
+        let mut offsets = Vec::with_capacity(self.size_hint + 1);
+        offsets.push(0);
+
+        let mut values = MutableBuffer::new(0);
+        let buffer = self.buffer.as_slice();
+
+        for header in self.header_set.iter() {
+            let s = if header.len <= SHORT_STRING_LEN {
+                let inline = header.offset_or_inline;
+                // convert usize to &[u8]
+                let ptr = &inline as *const usize as *const u8;
+                let len = std::mem::size_of::<usize>();
+                unsafe { std::slice::from_raw_parts(ptr, len) }
+            } else {
+                let offset = header.offset_or_inline;
+                // SAFETY: buffer is only appended to, and we correctly inserted values
+                unsafe { buffer.get_unchecked(offset..offset + header.len) }
+            };
+
+            values.extend_from_slice(s);
+            offsets.push(values.len() as i32);
+        }
+
+        let value_offsets = OffsetBuffer::<i32>::new(offsets.into());
+        StringArray::new(value_offsets, values.into(), None)
     }
 
     fn len(&self) -> usize {
         self.header_set.len()
     }
 
-    // NEED HELPED
     fn size(&self) -> usize {
         self.header_set.len() * mem::size_of::<SSOStringHeader>()
             + self.map_size

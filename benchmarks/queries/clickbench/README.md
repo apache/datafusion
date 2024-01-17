@@ -29,6 +29,7 @@ FROM hits;
 ```
 
 ### Q1
+Models initial Data exploration, to understand some statistics of data.
 Query to test distinct count for String. Three of them are all small string (length either 1 or 2).
 
 ```sql
@@ -38,12 +39,13 @@ FROM hits;
 ```
 
 ### Q2
-Query to test distinct count for String. "URL" has length greater than 8
+Models initial Data exploration, to understand some statistics of data.
+Extend with `group by` from Q1
 
 ```sql
 SELECT 
-    COUNT(DISTINCT "HitColor"), COUNT(DISTINCT "BrowserCountry"), COUNT(DISTINCT "BrowserLanguage"), COUNT(DISTINCT "URL")
-FROM hits;
+    "BrowserCountry",  COUNT(DISTINCT "HitColor"), COUNT(DISTINCT "BrowserCountry"), COUNT(DISTINCT "BrowserLanguage")
+FROM hits GROUP BY 1 ORDER BY 2 DESC LIMIT 10;
 ```
 
 
