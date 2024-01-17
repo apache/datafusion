@@ -106,7 +106,7 @@ async fn main() -> Result<()> {
 
         // `Ok` because no error occurred during the calculation (we should add one if exponent was [0, 1[ and the base < 0 because that panics!)
         // `Arc` because arrays are immutable, thread-safe, trait objects.
-        Ok(ColumnarValue::Array(Arc::new(array) as ArrayRef))
+        Ok(ColumnarValue::from(Arc::new(array) as ArrayRef))
     });
 
     // Next:

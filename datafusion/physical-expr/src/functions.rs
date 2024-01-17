@@ -195,14 +195,19 @@ pub(crate) enum Hint {
 /// and vice-versa after evaluation.
 /// Note that this function makes a scalar function with no arguments or all scalar inputs return a scalar.
 /// That's said its output will be same for all input rows in a batch.
-#[deprecated(since = "35.0.0", note = "Implement your function directly in terms of ColumnarValue or use `ScalarUDF` instead")]
+#[deprecated(
+    since = "35.0.0",
+    note = "Implement your function directly in terms of ColumnarValue or use `ScalarUDF` instead"
+)]
 pub fn make_scalar_function<F>(inner: F) -> ScalarFunctionImplementation
-  make_scaler_function_inner(inner)
+where
+    F: Fn(&[ArrayRef]) -> Result<ArrayRef> + Sync + Send + 'static,
+{
+    make_scalar_function_inner(inner)
 }
 
 /// Internal implementation, see comments on `make_scalar_function` for caveats
-pub(crate) fn make_scalar_function_inner<F>(inner: F) -> ScalarFunctionImplementation 
-
+pub(crate) fn make_scalar_function_inner<F>(inner: F) -> ScalarFunctionImplementation
 where
     F: Fn(&[ArrayRef]) -> Result<ArrayRef> + Sync + Send + 'static,
 {
@@ -269,9 +274,9 @@ pub fn create_physical_fun(
 ) -> Result<ScalarFunctionImplementation> {
     Ok(match fun {
         // math functions
-        BuiltinScalarFunction::Abs => {
-            Arc::new(|args| make_scalar_function(math_expressions::abs_invoke)(args))
-        }
+        BuiltinScalarFunction::Abs => Arc::new(|args| {
+            make_scalar_function_inner(math_expressions::abs_invoke)(args)
+        }),
         BuiltinScalarFunction::Acos => Arc::new(math_expressions::acos),
         BuiltinScalarFunction::Asin => Arc::new(math_expressions::asin),
         BuiltinScalarFunction::Atan => Arc::new(math_expressions::atan),
@@ -284,31 +289,31 @@ pub fn create_physical_fun(
         BuiltinScalarFunction::Degrees => Arc::new(math_expressions::to_degrees),
         BuiltinScalarFunction::Exp => Arc::new(math_expressions::exp),
         BuiltinScalarFunction::Factorial => {
-            Arc::new(|args| make_scalar_function(math_expressions::factorial)(args))
+            Arc::new(|args| make_scalar_function_inner(math_expressions::factorial)(args))
         }
         BuiltinScalarFunction::Floor => Arc::new(math_expressions::floor),
         BuiltinScalarFunction::Gcd => {
-            Arc::new(|args| make_scalar_function(math_expressions::gcd)(args))
+            Arc::new(|args| make_scalar_function_inner(math_expressions::gcd)(args))
         }
         BuiltinScalarFunction::Isnan => {
-            Arc::new(|args| make_scalar_function(math_expressions::isnan)(args))
+            Arc::new(|args| make_scalar_function_inner(math_expressions::isnan)(args))
         }
         BuiltinScalarFunction::Iszero => {
-            Arc::new(|args| make_scalar_function(math_expressions::iszero)(args))
+            Arc::new(|args| make_scalar_function_inner(math_expressions::iszero)(args))
         }
         BuiltinScalarFunction::Lcm => {
-            Arc::new(|args| make_scalar_function(math_expressions::lcm)(args))
+            Arc::new(|args| make_scalar_function_inner(math_expressions::lcm)(args))
         }
         BuiltinScalarFunction::Ln => Arc::new(math_expressions::ln),
         BuiltinScalarFunction::Log10 => Arc::new(math_expressions::log10),
         BuiltinScalarFunction::Log2 => Arc::new(math_expressions::log2),
         BuiltinScalarFunction::Nanvl => {
-            Arc::new(|args| make_scalar_function(math_expressions::nanvl)(args))
+            Arc::new(|args| make_scalar_function_inner(math_expressions::nanvl)(args))
         }
         BuiltinScalarFunction::Radians => Arc::new(math_expressions::to_radians),
         BuiltinScalarFunction::Random => Arc::new(math_expressions::random),
         BuiltinScalarFunction::Round => {
-            Arc::new(|args| make_scalar_function(math_expressions::round)(args))
+            Arc::new(|args| make_scalar_function_inner(math_expressions::round)(args))
         }
         BuiltinScalarFunction::Signum => Arc::new(math_expressions::signum),
         BuiltinScalarFunction::Sin => Arc::new(math_expressions::sin),
@@ -318,135 +323,135 @@ pub fn create_physical_fun(
         BuiltinScalarFunction::Tan => Arc::new(math_expressions::tan),
         BuiltinScalarFunction::Tanh => Arc::new(math_expressions::tanh),
         BuiltinScalarFunction::Trunc => {
-            Arc::new(|args| make_scalar_function(math_expressions::trunc)(args))
+            Arc::new(|args| make_scalar_function_inner(math_expressions::trunc)(args))
         }
         BuiltinScalarFunction::Pi => Arc::new(math_expressions::pi),
         BuiltinScalarFunction::Power => {
-            Arc::new(|args| make_scalar_function(math_expressions::power)(args))
+            Arc::new(|args| make_scalar_function_inner(math_expressions::power)(args))
         }
         BuiltinScalarFunction::Atan2 => {
-            Arc::new(|args| make_scalar_function(math_expressions::atan2)(args))
+            Arc::new(|args| make_scalar_function_inner(math_expressions::atan2)(args))
         }
         BuiltinScalarFunction::Log => {
-            Arc::new(|args| make_scalar_function(math_expressions::log)(args))
+            Arc::new(|args| make_scalar_function_inner(math_expressions::log)(args))
         }
         BuiltinScalarFunction::Cot => {
-            Arc::new(|args| make_scalar_function(math_expressions::cot)(args))
+            Arc::new(|args| make_scalar_function_inner(math_expressions::cot)(args))
         }
 
         // array functions
-        BuiltinScalarFunction::ArrayAppend => {
-            Arc::new(|args| make_scalar_function(array_expressions::array_append)(args))
-        }
-        BuiltinScalarFunction::ArraySort => {
-            Arc::new(|args| make_scalar_function(array_expressions::array_sort)(args))
-        }
-        BuiltinScalarFunction::ArrayConcat => {
-            Arc::new(|args| make_scalar_function(array_expressions::array_concat)(args))
-        }
-        BuiltinScalarFunction::ArrayEmpty => {
-            Arc::new(|args| make_scalar_function(array_expressions::array_empty)(args))
-        }
-        BuiltinScalarFunction::ArrayHasAll => {
-            Arc::new(|args| make_scalar_function(array_expressions::array_has_all)(args))
-        }
-        BuiltinScalarFunction::ArrayHasAny => {
-            Arc::new(|args| make_scalar_function(array_expressions::array_has_any)(args))
-        }
-        BuiltinScalarFunction::ArrayHas => {
-            Arc::new(|args| make_scalar_function(array_expressions::array_has)(args))
-        }
-        BuiltinScalarFunction::ArrayDims => {
-            Arc::new(|args| make_scalar_function(array_expressions::array_dims)(args))
-        }
-        BuiltinScalarFunction::ArrayDistinct => {
-            Arc::new(|args| make_scalar_function(array_expressions::array_distinct)(args))
-        }
-        BuiltinScalarFunction::ArrayElement => {
-            Arc::new(|args| make_scalar_function(array_expressions::array_element)(args))
-        }
-        BuiltinScalarFunction::ArrayExcept => {
-            Arc::new(|args| make_scalar_function(array_expressions::array_except)(args))
-        }
-        BuiltinScalarFunction::ArrayLength => {
-            Arc::new(|args| make_scalar_function(array_expressions::array_length)(args))
-        }
+        BuiltinScalarFunction::ArrayAppend => Arc::new(|args| {
+            make_scalar_function_inner(array_expressions::array_append)(args)
+        }),
+        BuiltinScalarFunction::ArraySort => Arc::new(|args| {
+            make_scalar_function_inner(array_expressions::array_sort)(args)
+        }),
+        BuiltinScalarFunction::ArrayConcat => Arc::new(|args| {
+            make_scalar_function_inner(array_expressions::array_concat)(args)
+        }),
+        BuiltinScalarFunction::ArrayEmpty => Arc::new(|args| {
+            make_scalar_function_inner(array_expressions::array_empty)(args)
+        }),
+        BuiltinScalarFunction::ArrayHasAll => Arc::new(|args| {
+            make_scalar_function_inner(array_expressions::array_has_all)(args)
+        }),
+        BuiltinScalarFunction::ArrayHasAny => Arc::new(|args| {
+            make_scalar_function_inner(array_expressions::array_has_any)(args)
+        }),
+        BuiltinScalarFunction::ArrayHas => Arc::new(|args| {
+            make_scalar_function_inner(array_expressions::array_has)(args)
+        }),
+        BuiltinScalarFunction::ArrayDims => Arc::new(|args| {
+            make_scalar_function_inner(array_expressions::array_dims)(args)
+        }),
+        BuiltinScalarFunction::ArrayDistinct => Arc::new(|args| {
+            make_scalar_function_inner(array_expressions::array_distinct)(args)
+        }),
+        BuiltinScalarFunction::ArrayElement => Arc::new(|args| {
+            make_scalar_function_inner(array_expressions::array_element)(args)
+        }),
+        BuiltinScalarFunction::ArrayExcept => Arc::new(|args| {
+            make_scalar_function_inner(array_expressions::array_except)(args)
+        }),
+        BuiltinScalarFunction::ArrayLength => Arc::new(|args| {
+            make_scalar_function_inner(array_expressions::array_length)(args)
+        }),
         BuiltinScalarFunction::Flatten => {
-            Arc::new(|args| make_scalar_function(array_expressions::flatten)(args))
+            Arc::new(|args| make_scalar_function_inner(array_expressions::flatten)(args))
         }
-        BuiltinScalarFunction::ArrayNdims => {
-            Arc::new(|args| make_scalar_function(array_expressions::array_ndims)(args))
-        }
+        BuiltinScalarFunction::ArrayNdims => Arc::new(|args| {
+            make_scalar_function_inner(array_expressions::array_ndims)(args)
+        }),
         BuiltinScalarFunction::ArrayPopFront => Arc::new(|args| {
-            make_scalar_function(array_expressions::array_pop_front)(args)
+            make_scalar_function_inner(array_expressions::array_pop_front)(args)
         }),
-        BuiltinScalarFunction::ArrayPopBack => {
-            Arc::new(|args| make_scalar_function(array_expressions::array_pop_back)(args))
-        }
-        BuiltinScalarFunction::ArrayPosition => {
-            Arc::new(|args| make_scalar_function(array_expressions::array_position)(args))
-        }
+        BuiltinScalarFunction::ArrayPopBack => Arc::new(|args| {
+            make_scalar_function_inner(array_expressions::array_pop_back)(args)
+        }),
+        BuiltinScalarFunction::ArrayPosition => Arc::new(|args| {
+            make_scalar_function_inner(array_expressions::array_position)(args)
+        }),
         BuiltinScalarFunction::ArrayPositions => Arc::new(|args| {
-            make_scalar_function(array_expressions::array_positions)(args)
+            make_scalar_function_inner(array_expressions::array_positions)(args)
         }),
-        BuiltinScalarFunction::ArrayPrepend => {
-            Arc::new(|args| make_scalar_function(array_expressions::array_prepend)(args))
-        }
-        BuiltinScalarFunction::ArrayRepeat => {
-            Arc::new(|args| make_scalar_function(array_expressions::array_repeat)(args))
-        }
-        BuiltinScalarFunction::ArrayRemove => {
-            Arc::new(|args| make_scalar_function(array_expressions::array_remove)(args))
-        }
-        BuiltinScalarFunction::ArrayRemoveN => {
-            Arc::new(|args| make_scalar_function(array_expressions::array_remove_n)(args))
-        }
+        BuiltinScalarFunction::ArrayPrepend => Arc::new(|args| {
+            make_scalar_function_inner(array_expressions::array_prepend)(args)
+        }),
+        BuiltinScalarFunction::ArrayRepeat => Arc::new(|args| {
+            make_scalar_function_inner(array_expressions::array_repeat)(args)
+        }),
+        BuiltinScalarFunction::ArrayRemove => Arc::new(|args| {
+            make_scalar_function_inner(array_expressions::array_remove)(args)
+        }),
+        BuiltinScalarFunction::ArrayRemoveN => Arc::new(|args| {
+            make_scalar_function_inner(array_expressions::array_remove_n)(args)
+        }),
         BuiltinScalarFunction::ArrayRemoveAll => Arc::new(|args| {
-            make_scalar_function(array_expressions::array_remove_all)(args)
+            make_scalar_function_inner(array_expressions::array_remove_all)(args)
         }),
-        BuiltinScalarFunction::ArrayReplace => {
-            Arc::new(|args| make_scalar_function(array_expressions::array_replace)(args))
-        }
+        BuiltinScalarFunction::ArrayReplace => Arc::new(|args| {
+            make_scalar_function_inner(array_expressions::array_replace)(args)
+        }),
         BuiltinScalarFunction::ArrayReplaceN => Arc::new(|args| {
-            make_scalar_function(array_expressions::array_replace_n)(args)
+            make_scalar_function_inner(array_expressions::array_replace_n)(args)
         }),
         BuiltinScalarFunction::ArrayReplaceAll => Arc::new(|args| {
-            make_scalar_function(array_expressions::array_replace_all)(args)
+            make_scalar_function_inner(array_expressions::array_replace_all)(args)
         }),
-        BuiltinScalarFunction::ArraySlice => {
-            Arc::new(|args| make_scalar_function(array_expressions::array_slice)(args))
-        }
+        BuiltinScalarFunction::ArraySlice => Arc::new(|args| {
+            make_scalar_function_inner(array_expressions::array_slice)(args)
+        }),
         BuiltinScalarFunction::ArrayToString => Arc::new(|args| {
-            make_scalar_function(array_expressions::array_to_string)(args)
+            make_scalar_function_inner(array_expressions::array_to_string)(args)
         }),
         BuiltinScalarFunction::ArrayIntersect => Arc::new(|args| {
-            make_scalar_function(array_expressions::array_intersect)(args)
+            make_scalar_function_inner(array_expressions::array_intersect)(args)
         }),
-        BuiltinScalarFunction::Range => {
-            Arc::new(|args| make_scalar_function(array_expressions::gen_range)(args))
-        }
-        BuiltinScalarFunction::Cardinality => {
-            Arc::new(|args| make_scalar_function(array_expressions::cardinality)(args))
-        }
-        BuiltinScalarFunction::ArrayResize => {
-            Arc::new(|args| make_scalar_function(array_expressions::array_resize)(args))
-        }
-        BuiltinScalarFunction::MakeArray => {
-            Arc::new(|args| make_scalar_function(array_expressions::make_array)(args))
-        }
-        BuiltinScalarFunction::ArrayUnion => {
-            Arc::new(|args| make_scalar_function(array_expressions::array_union)(args))
-        }
+        BuiltinScalarFunction::Range => Arc::new(|args| {
+            make_scalar_function_inner(array_expressions::gen_range)(args)
+        }),
+        BuiltinScalarFunction::Cardinality => Arc::new(|args| {
+            make_scalar_function_inner(array_expressions::cardinality)(args)
+        }),
+        BuiltinScalarFunction::ArrayResize => Arc::new(|args| {
+            make_scalar_function_inner(array_expressions::array_resize)(args)
+        }),
+        BuiltinScalarFunction::MakeArray => Arc::new(|args| {
+            make_scalar_function_inner(array_expressions::make_array)(args)
+        }),
+        BuiltinScalarFunction::ArrayUnion => Arc::new(|args| {
+            make_scalar_function_inner(array_expressions::array_union)(args)
+        }),
         // struct functions
         BuiltinScalarFunction::Struct => Arc::new(struct_expressions::struct_expr),
 
         // string functions
         BuiltinScalarFunction::Ascii => Arc::new(|args| match args[0].data_type() {
             DataType::Utf8 => {
-                make_scalar_function(string_expressions::ascii::<i32>)(args)
+                make_scalar_function_inner(string_expressions::ascii::<i32>)(args)
             }
             DataType::LargeUtf8 => {
-                make_scalar_function(string_expressions::ascii::<i64>)(args)
+                make_scalar_function_inner(string_expressions::ascii::<i64>)(args)
             }
             other => internal_err!("Unsupported data type {other:?} for function ascii"),
         }),
@@ -464,10 +469,10 @@ pub fn create_physical_fun(
         }),
         BuiltinScalarFunction::Btrim => Arc::new(|args| match args[0].data_type() {
             DataType::Utf8 => {
-                make_scalar_function(string_expressions::btrim::<i32>)(args)
+                make_scalar_function_inner(string_expressions::btrim::<i32>)(args)
             }
             DataType::LargeUtf8 => {
-                make_scalar_function(string_expressions::btrim::<i64>)(args)
+                make_scalar_function_inner(string_expressions::btrim::<i64>)(args)
             }
             other => internal_err!("Unsupported data type {other:?} for function btrim"),
         }),
@@ -479,7 +484,7 @@ pub fn create_physical_fun(
                         Int32Type,
                         "character_length"
                     );
-                    make_scalar_function(func)(args)
+                    make_scalar_function_inner(func)(args)
                 }
                 DataType::LargeUtf8 => {
                     let func = invoke_if_unicode_expressions_feature_flag!(
@@ -487,7 +492,7 @@ pub fn create_physical_fun(
                         Int64Type,
                         "character_length"
                     );
-                    make_scalar_function(func)(args)
+                    make_scalar_function_inner(func)(args)
                 }
                 other => internal_err!(
                     "Unsupported data type {other:?} for function character_length"
@@ -495,13 +500,13 @@ pub fn create_physical_fun(
             })
         }
         BuiltinScalarFunction::Chr => {
-            Arc::new(|args| make_scalar_function(string_expressions::chr)(args))
+            Arc::new(|args| make_scalar_function_inner(string_expressions::chr)(args))
         }
         BuiltinScalarFunction::Coalesce => Arc::new(conditional_expressions::coalesce),
         BuiltinScalarFunction::Concat => Arc::new(string_expressions::concat),
-        BuiltinScalarFunction::ConcatWithSeparator => {
-            Arc::new(|args| make_scalar_function(string_expressions::concat_ws)(args))
-        }
+        BuiltinScalarFunction::ConcatWithSeparator => Arc::new(|args| {
+            make_scalar_function_inner(string_expressions::concat_ws)(args)
+        }),
         BuiltinScalarFunction::DatePart => Arc::new(datetime_expressions::date_part),
         BuiltinScalarFunction::DateTrunc => Arc::new(datetime_expressions::date_trunc),
         BuiltinScalarFunction::DateBin => Arc::new(datetime_expressions::date_bin),
@@ -543,10 +548,10 @@ pub fn create_physical_fun(
         }
         BuiltinScalarFunction::InitCap => Arc::new(|args| match args[0].data_type() {
             DataType::Utf8 => {
-                make_scalar_function(string_expressions::initcap::<i32>)(args)
+                make_scalar_function_inner(string_expressions::initcap::<i32>)(args)
             }
             DataType::LargeUtf8 => {
-                make_scalar_function(string_expressions::initcap::<i64>)(args)
+                make_scalar_function_inner(string_expressions::initcap::<i64>)(args)
             }
             other => {
                 internal_err!("Unsupported data type {other:?} for function initcap")
@@ -555,11 +560,11 @@ pub fn create_physical_fun(
         BuiltinScalarFunction::Left => Arc::new(|args| match args[0].data_type() {
             DataType::Utf8 => {
                 let func = invoke_if_unicode_expressions_feature_flag!(left, i32, "left");
-                make_scalar_function(func)(args)
+                make_scalar_function_inner(func)(args)
             }
             DataType::LargeUtf8 => {
                 let func = invoke_if_unicode_expressions_feature_flag!(left, i64, "left");
-                make_scalar_function(func)(args)
+                make_scalar_function_inner(func)(args)
             }
             other => internal_err!("Unsupported data type {other:?} for function left"),
         }),
@@ -567,20 +572,20 @@ pub fn create_physical_fun(
         BuiltinScalarFunction::Lpad => Arc::new(|args| match args[0].data_type() {
             DataType::Utf8 => {
                 let func = invoke_if_unicode_expressions_feature_flag!(lpad, i32, "lpad");
-                make_scalar_function(func)(args)
+                make_scalar_function_inner(func)(args)
             }
             DataType::LargeUtf8 => {
                 let func = invoke_if_unicode_expressions_feature_flag!(lpad, i64, "lpad");
-                make_scalar_function(func)(args)
+                make_scalar_function_inner(func)(args)
             }
             other => internal_err!("Unsupported data type {other:?} for function lpad"),
         }),
         BuiltinScalarFunction::Ltrim => Arc::new(|args| match args[0].data_type() {
             DataType::Utf8 => {
-                make_scalar_function(string_expressions::ltrim::<i32>)(args)
+                make_scalar_function_inner(string_expressions::ltrim::<i32>)(args)
             }
             DataType::LargeUtf8 => {
-                make_scalar_function(string_expressions::ltrim::<i64>)(args)
+                make_scalar_function_inner(string_expressions::ltrim::<i64>)(args)
             }
             other => internal_err!("Unsupported data type {other:?} for function ltrim"),
         }),
@@ -617,7 +622,7 @@ pub fn create_physical_fun(
                         i32,
                         "regexp_match"
                     );
-                    make_scalar_function(func)(args)
+                    make_scalar_function_inner(func)(args)
                 }
                 DataType::LargeUtf8 => {
                     let func = invoke_on_array_if_regex_expressions_feature_flag!(
@@ -625,7 +630,7 @@ pub fn create_physical_fun(
                         i64,
                         "regexp_match"
                     );
-                    make_scalar_function(func)(args)
+                    make_scalar_function_inner(func)(args)
                 }
                 other => internal_err!(
                     "Unsupported data type {other:?} for function regexp_match"
@@ -659,19 +664,19 @@ pub fn create_physical_fun(
         }
         BuiltinScalarFunction::Repeat => Arc::new(|args| match args[0].data_type() {
             DataType::Utf8 => {
-                make_scalar_function(string_expressions::repeat::<i32>)(args)
+                make_scalar_function_inner(string_expressions::repeat::<i32>)(args)
             }
             DataType::LargeUtf8 => {
-                make_scalar_function(string_expressions::repeat::<i64>)(args)
+                make_scalar_function_inner(string_expressions::repeat::<i64>)(args)
             }
             other => internal_err!("Unsupported data type {other:?} for function repeat"),
         }),
         BuiltinScalarFunction::Replace => Arc::new(|args| match args[0].data_type() {
             DataType::Utf8 => {
-                make_scalar_function(string_expressions::replace::<i32>)(args)
+                make_scalar_function_inner(string_expressions::replace::<i32>)(args)
             }
             DataType::LargeUtf8 => {
-                make_scalar_function(string_expressions::replace::<i64>)(args)
+                make_scalar_function_inner(string_expressions::replace::<i64>)(args)
             }
             other => {
                 internal_err!("Unsupported data type {other:?} for function replace")
@@ -681,12 +686,12 @@ pub fn create_physical_fun(
             DataType::Utf8 => {
                 let func =
                     invoke_if_unicode_expressions_feature_flag!(reverse, i32, "reverse");
-                make_scalar_function(func)(args)
+                make_scalar_function_inner(func)(args)
             }
             DataType::LargeUtf8 => {
                 let func =
                     invoke_if_unicode_expressions_feature_flag!(reverse, i64, "reverse");
-                make_scalar_function(func)(args)
+                make_scalar_function_inner(func)(args)
             }
             other => {
                 internal_err!("Unsupported data type {other:?} for function reverse")
@@ -696,32 +701,32 @@ pub fn create_physical_fun(
             DataType::Utf8 => {
                 let func =
                     invoke_if_unicode_expressions_feature_flag!(right, i32, "right");
-                make_scalar_function(func)(args)
+                make_scalar_function_inner(func)(args)
             }
             DataType::LargeUtf8 => {
                 let func =
                     invoke_if_unicode_expressions_feature_flag!(right, i64, "right");
-                make_scalar_function(func)(args)
+                make_scalar_function_inner(func)(args)
             }
             other => internal_err!("Unsupported data type {other:?} for function right"),
         }),
         BuiltinScalarFunction::Rpad => Arc::new(|args| match args[0].data_type() {
             DataType::Utf8 => {
                 let func = invoke_if_unicode_expressions_feature_flag!(rpad, i32, "rpad");
-                make_scalar_function(func)(args)
+                make_scalar_function_inner(func)(args)
             }
             DataType::LargeUtf8 => {
                 let func = invoke_if_unicode_expressions_feature_flag!(rpad, i64, "rpad");
-                make_scalar_function(func)(args)
+                make_scalar_function_inner(func)(args)
             }
             other => internal_err!("Unsupported data type {other:?} for function rpad"),
         }),
         BuiltinScalarFunction::Rtrim => Arc::new(|args| match args[0].data_type() {
             DataType::Utf8 => {
-                make_scalar_function(string_expressions::rtrim::<i32>)(args)
+                make_scalar_function_inner(string_expressions::rtrim::<i32>)(args)
             }
             DataType::LargeUtf8 => {
-                make_scalar_function(string_expressions::rtrim::<i64>)(args)
+                make_scalar_function_inner(string_expressions::rtrim::<i64>)(args)
             }
             other => internal_err!("Unsupported data type {other:?} for function rtrim"),
         }),
@@ -739,10 +744,10 @@ pub fn create_physical_fun(
         }
         BuiltinScalarFunction::SplitPart => Arc::new(|args| match args[0].data_type() {
             DataType::Utf8 => {
-                make_scalar_function(string_expressions::split_part::<i32>)(args)
+                make_scalar_function_inner(string_expressions::split_part::<i32>)(args)
             }
             DataType::LargeUtf8 => {
-                make_scalar_function(string_expressions::split_part::<i64>)(args)
+                make_scalar_function_inner(string_expressions::split_part::<i64>)(args)
             }
             other => {
                 internal_err!("Unsupported data type {other:?} for function split_part")
@@ -750,12 +755,12 @@ pub fn create_physical_fun(
         }),
         BuiltinScalarFunction::StringToArray => {
             Arc::new(|args| match args[0].data_type() {
-                DataType::Utf8 => {
-                    make_scalar_function(array_expressions::string_to_array::<i32>)(args)
-                }
-                DataType::LargeUtf8 => {
-                    make_scalar_function(array_expressions::string_to_array::<i64>)(args)
-                }
+                DataType::Utf8 => make_scalar_function_inner(
+                    array_expressions::string_to_array::<i32>,
+                )(args),
+                DataType::LargeUtf8 => make_scalar_function_inner(
+                    array_expressions::string_to_array::<i64>,
+                )(args),
                 other => {
                     internal_err!(
                         "Unsupported data type {other:?} for function string_to_array"
@@ -765,10 +770,10 @@ pub fn create_physical_fun(
         }
         BuiltinScalarFunction::StartsWith => Arc::new(|args| match args[0].data_type() {
             DataType::Utf8 => {
-                make_scalar_function(string_expressions::starts_with::<i32>)(args)
+                make_scalar_function_inner(string_expressions::starts_with::<i32>)(args)
             }
             DataType::LargeUtf8 => {
-                make_scalar_function(string_expressions::starts_with::<i64>)(args)
+                make_scalar_function_inner(string_expressions::starts_with::<i64>)(args)
             }
             other => {
                 internal_err!("Unsupported data type {other:?} for function starts_with")
@@ -779,13 +784,13 @@ pub fn create_physical_fun(
                 let func = invoke_if_unicode_expressions_feature_flag!(
                     strpos, Int32Type, "strpos"
                 );
-                make_scalar_function(func)(args)
+                make_scalar_function_inner(func)(args)
             }
             DataType::LargeUtf8 => {
                 let func = invoke_if_unicode_expressions_feature_flag!(
                     strpos, Int64Type, "strpos"
                 );
-                make_scalar_function(func)(args)
+                make_scalar_function_inner(func)(args)
             }
             other => internal_err!("Unsupported data type {other:?} for function strpos"),
         }),
@@ -793,21 +798,21 @@ pub fn create_physical_fun(
             DataType::Utf8 => {
                 let func =
                     invoke_if_unicode_expressions_feature_flag!(substr, i32, "substr");
-                make_scalar_function(func)(args)
+                make_scalar_function_inner(func)(args)
             }
             DataType::LargeUtf8 => {
                 let func =
                     invoke_if_unicode_expressions_feature_flag!(substr, i64, "substr");
-                make_scalar_function(func)(args)
+                make_scalar_function_inner(func)(args)
             }
             other => internal_err!("Unsupported data type {other:?} for function substr"),
         }),
         BuiltinScalarFunction::ToHex => Arc::new(|args| match args[0].data_type() {
             DataType::Int32 => {
-                make_scalar_function(string_expressions::to_hex::<Int32Type>)(args)
+                make_scalar_function_inner(string_expressions::to_hex::<Int32Type>)(args)
             }
             DataType::Int64 => {
-                make_scalar_function(string_expressions::to_hex::<Int64Type>)(args)
+                make_scalar_function_inner(string_expressions::to_hex::<Int64Type>)(args)
             }
             other => internal_err!("Unsupported data type {other:?} for function to_hex"),
         }),
@@ -818,7 +823,7 @@ pub fn create_physical_fun(
                     i32,
                     "translate"
                 );
-                make_scalar_function(func)(args)
+                make_scalar_function_inner(func)(args)
             }
             DataType::LargeUtf8 => {
                 let func = invoke_if_unicode_expressions_feature_flag!(
@@ -826,7 +831,7 @@ pub fn create_physical_fun(
                     i64,
                     "translate"
                 );
-                make_scalar_function(func)(args)
+                make_scalar_function_inner(func)(args)
             }
             other => {
                 internal_err!("Unsupported data type {other:?} for function translate")
@@ -834,10 +839,10 @@ pub fn create_physical_fun(
         }),
         BuiltinScalarFunction::Trim => Arc::new(|args| match args[0].data_type() {
             DataType::Utf8 => {
-                make_scalar_function(string_expressions::btrim::<i32>)(args)
+                make_scalar_function_inner(string_expressions::btrim::<i32>)(args)
             }
             DataType::LargeUtf8 => {
-                make_scalar_function(string_expressions::btrim::<i64>)(args)
+                make_scalar_function_inner(string_expressions::btrim::<i64>)(args)
             }
             other => internal_err!("Unsupported data type {other:?} for function trim"),
         }),
@@ -858,10 +863,10 @@ pub fn create_physical_fun(
         }),
         BuiltinScalarFunction::OverLay => Arc::new(|args| match args[0].data_type() {
             DataType::Utf8 => {
-                make_scalar_function(string_expressions::overlay::<i32>)(args)
+                make_scalar_function_inner(string_expressions::overlay::<i32>)(args)
             }
             DataType::LargeUtf8 => {
-                make_scalar_function(string_expressions::overlay::<i64>)(args)
+                make_scalar_function_inner(string_expressions::overlay::<i64>)(args)
             }
             other => Err(DataFusionError::Internal(format!(
                 "Unsupported data type {other:?} for function overlay",
@@ -869,12 +874,12 @@ pub fn create_physical_fun(
         }),
         BuiltinScalarFunction::Levenshtein => {
             Arc::new(|args| match args[0].data_type() {
-                DataType::Utf8 => {
-                    make_scalar_function(string_expressions::levenshtein::<i32>)(args)
-                }
-                DataType::LargeUtf8 => {
-                    make_scalar_function(string_expressions::levenshtein::<i64>)(args)
-                }
+                DataType::Utf8 => make_scalar_function_inner(
+                    string_expressions::levenshtein::<i32>,
+                )(args),
+                DataType::LargeUtf8 => make_scalar_function_inner(
+                    string_expressions::levenshtein::<i64>,
+                )(args),
                 other => Err(DataFusionError::Internal(format!(
                     "Unsupported data type {other:?} for function levenshtein",
                 ))),
@@ -888,7 +893,7 @@ pub fn create_physical_fun(
                         i32,
                         "substr_index"
                     );
-                    make_scalar_function(func)(args)
+                    make_scalar_function_inner(func)(args)
                 }
                 DataType::LargeUtf8 => {
                     let func = invoke_if_unicode_expressions_feature_flag!(
@@ -896,7 +901,7 @@ pub fn create_physical_fun(
                         i64,
                         "substr_index"
                     );
-                    make_scalar_function(func)(args)
+                    make_scalar_function_inner(func)(args)
                 }
                 other => Err(DataFusionError::Internal(format!(
                     "Unsupported data type {other:?} for function substr_index",
@@ -910,7 +915,7 @@ pub fn create_physical_fun(
                     Int32Type,
                     "find_in_set"
                 );
-                make_scalar_function(func)(args)
+                make_scalar_function_inner(func)(args)
             }
             DataType::LargeUtf8 => {
                 let func = invoke_if_unicode_expressions_feature_flag!(
@@ -918,7 +923,7 @@ pub fn create_physical_fun(
                     Int64Type,
                     "find_in_set"
                 );
-                make_scalar_function(func)(args)
+                make_scalar_function_inner(func)(args)
             }
             other => Err(DataFusionError::Internal(format!(
                 "Unsupported data type {other:?} for function find_in_set",
@@ -3117,7 +3122,7 @@ mod tests {
 
     #[test]
     fn test_make_scalar_function() -> Result<()> {
-        let adapter_func = make_scalar_function(dummy_function);
+        let adapter_func = make_scalar_function_inner(dummy_function);
 
         let scalar_arg = ColumnarValue::Scalar(ScalarValue::Int64(Some(1)));
         let array_arg = ColumnarValue::Array(

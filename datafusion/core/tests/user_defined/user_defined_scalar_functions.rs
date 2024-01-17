@@ -86,15 +86,15 @@ async fn scalar_udf() -> Result<()> {
 
     let myfunc = Arc::new(|args: &[ColumnarValue]| {
         let ColumnarValue::Array(l) = &args[0] else {
-            panic!()
+            panic!("should be array")
         };
         let ColumnarValue::Array(r) = &args[1] else {
-            panic!()
+            panic!("should be array")
         };
 
         let l = as_int32_array(l)?;
         let r = as_int32_array(r)?;
-        Ok(ColumnarValue::Array(Arc::new(add(l, r)?) as ArrayRef))
+        Ok(ColumnarValue::from(Arc::new(add(l, r)?) as ArrayRef))
     });
 
     ctx.register_udf(create_udf(
@@ -315,9 +315,9 @@ async fn case_sensitive_identifiers_user_defined_functions() -> Result<()> {
 
     let myfunc = Arc::new(|args: &[ColumnarValue]| {
         let ColumnarValue::Array(array) = &args[0] else {
-            panic!()
+            panic!("should be array")
         };
-        Ok(ColumnarValue::Array(Arc::clone(array)))
+        Ok(ColumnarValue::from(Arc::clone(array)))
     });
 
     ctx.register_udf(create_udf(
@@ -360,9 +360,9 @@ async fn test_user_defined_functions_with_alias() -> Result<()> {
 
     let myfunc = Arc::new(|args: &[ColumnarValue]| {
         let ColumnarValue::Array(array) = &args[0] else {
-            panic!()
+            panic!("should be array")
         };
-        Ok(ColumnarValue::Array(Arc::clone(array)))
+        Ok(ColumnarValue::from(Arc::clone(array)))
     });
 
     let udf = create_udf(

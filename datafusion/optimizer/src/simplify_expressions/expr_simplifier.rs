@@ -1476,7 +1476,7 @@ mod tests {
                 })
                 .collect::<Int32Array>();
 
-            Ok(ColumnarValue::Array(Arc::new(array) as ArrayRef))
+            Ok(ColumnarValue::from(Arc::new(array) as ArrayRef))
         });
 
         Arc::new(create_udf(

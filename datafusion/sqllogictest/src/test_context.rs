@@ -357,10 +357,10 @@ pub async fn register_metadata_tables(ctx: &SessionContext) {
 fn create_example_udf() -> ScalarUDF {
     let adder = Arc::new(|args: &[ColumnarValue]| {
         let ColumnarValue::Array(lhs) = &args[0] else {
-            panic!()
+            panic!("should be array")
         };
         let ColumnarValue::Array(rhs) = &args[1] else {
-            panic!()
+            panic!("should be array")
         };
 
         let lhs = as_float64_array(lhs).expect("cast failed");
@@ -373,7 +373,7 @@ fn create_example_udf() -> ScalarUDF {
                 _ => None,
             })
             .collect::<Float64Array>();
-        Ok(ColumnarValue::Array(Arc::new(array) as ArrayRef))
+        Ok(ColumnarValue::from(Arc::new(array) as ArrayRef))
     });
     create_udf(
         "example",

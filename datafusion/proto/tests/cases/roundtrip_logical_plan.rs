@@ -1593,9 +1593,9 @@ fn roundtrip_aggregate_udf() {
 fn roundtrip_scalar_udf() {
     let scalar_fn = Arc::new(|args: &[ColumnarValue]| {
         let ColumnarValue::Array(array) = &args[0] else {
-            panic!()
+            panic!("should be array")
         };
-        Ok(ColumnarValue::Array(Arc::new(array.clone()) as ArrayRef))
+        Ok(ColumnarValue::from(Arc::new(array.clone()) as ArrayRef))
     });
 
     let udf = create_udf(
