@@ -80,8 +80,8 @@ async fn main() -> Result<()> {
 
         let inferred_length = len.unwrap_or(1);
 
-        let arg0 = args[0].into_array(inferred_length)?;
-        let arg1 = args[1].into_array(inferred_length)?;
+        let arg0 = args[0].clone().into_array(inferred_length)?;
+        let arg1 = args[1].clone().into_array(inferred_length)?;
 
         // 1. cast both arguments to f64. These casts MUST be aligned with the signature or this function panics!
         let base = as_float64_array(&arg0).expect("cast failed");
