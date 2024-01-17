@@ -70,16 +70,22 @@ async fn main() -> Result<()> {
         // this is guaranteed by DataFusion based on the function's signature.
         assert_eq!(args.len(), 2);
 
-        let ColumnarValue::Array(arg0) = &args[0] else {
-            panic!("should be array")
-        };
-        let ColumnarValue::Array(arg1) = &args[0] else {
-            panic!("should be array")
-        };
+        // Try to obtain row number
+        let len = args
+            .iter()
+            .fold(Option::<usize>::None, |acc, arg| match arg {
+                ColumnarValue::Scalar(_) => acc,
+                ColumnarValue::Array(a) => Some(a.len()),
+            });
+
+        let inferred_length = len.unwrap_or(1);
+
+        let arg0 = args[0].into_array(inferred_length)?;
+        let arg1 = args[1].into_array(inferred_length)?;
 
         // 1. cast both arguments to f64. These casts MUST be aligned with the signature or this function panics!
-        let base = as_float64_array(arg0).expect("cast failed");
-        let exponent = as_float64_array(arg1).expect("cast failed");
+        let base = as_float64_array(&arg0).expect("cast failed");
+        let exponent = as_float64_array(&arg1).expect("cast failed");
 
         // this is guaranteed by DataFusion. We place it just to make it obvious.
         assert_eq!(exponent.len(), base.len());
