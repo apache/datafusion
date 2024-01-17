@@ -17,6 +17,7 @@
 
 use std::sync::Arc;
 
+use super::utils::add_sort_above;
 use crate::physical_optimizer::utils::{
     is_limit, is_sort_preserving_merge, is_union, is_window,
 };
@@ -36,8 +37,6 @@ use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::{
     LexRequirementRef, PhysicalSortExpr, PhysicalSortRequirement,
 };
-
-use super::utils::add_sort_above;
 
 /// This is a "data class" we use within the [`EnforceSorting`] rule to push
 /// down [`SortExec`] in the plan. In some cases, we can reduce the total
@@ -59,14 +58,16 @@ pub(crate) fn pushdown_sorts(
     mut requirements: SortPushDown,
 ) -> Result<Transformed<SortPushDown>> {
     let plan = requirements.plan.clone();
-    let parent_required = requirements.data.clone().unwrap_or_default();
+    let parent_reqs = requirements.data.clone().unwrap_or_default();
+    let satisfy_parent = plan
+        .equivalence_properties()
+        .ordering_satisfy_requirement(&parent_reqs);
 
     if let Some(sort_exec) = plan.as_any().downcast_ref::<SortExec>() {
-        let eq_properties = plan.equivalence_properties();
-        if !eq_properties.ordering_satisfy_requirement(&parent_required) {
+        if !satisfy_parent {
             // If the current plan is a SortExec, modify it to satisfy parent requirements:
             requirements = requirements.children.swap_remove(0);
-            add_sort_above(&mut requirements, &parent_required, sort_exec.fetch());
+            add_sort_above(&mut requirements, &parent_reqs, sort_exec.fetch());
         };
 
         let required_ordering = plan
@@ -79,48 +80,37 @@ pub(crate) fn pushdown_sorts(
         if let Some(adjusted) =
             pushdown_requirement_to_children(&child.plan, &required_ordering)?
         {
-            for (c, o) in child.children.iter_mut().zip(adjusted) {
-                c.data = o;
+            for (grand_child, order) in child.children.iter_mut().zip(adjusted) {
+                grand_child.data = order;
             }
             // Can push down requirements
             child.data = None;
-            Ok(Transformed::Yes(child))
+            return Ok(Transformed::Yes(child));
         } else {
             // Can not push down requirements
             requirements.children = vec![child];
             assign_initial_requirements(&mut requirements);
-            Ok(Transformed::Yes(requirements))
         }
+    } else if satisfy_parent {
+        // For non-sort operators, immediately return if parent requirements are met:
+        let reqs = plan.required_input_ordering();
+        for (child, order) in requirements.children.iter_mut().zip(reqs) {
+            child.data = order;
+        }
+    } else if let Some(adjusted) = pushdown_requirement_to_children(&plan, &parent_reqs)?
+    {
+        // Can not satisfy the parent requirements, check whether we can push
+        // requirements down:
+        for (child, order) in requirements.children.iter_mut().zip(adjusted) {
+            child.data = order;
+        }
+        requirements.data = None;
     } else {
-        // Executors other than SortExec
-        if plan
-            .equivalence_properties()
-            .ordering_satisfy_requirement(&parent_required)
-        {
-            // Satisfies parent requirements, immediately return.
-            let reqs = plan.required_input_ordering();
-            for (child, order) in requirements.children.iter_mut().zip(reqs) {
-                child.data = order;
-            }
-            Ok(Transformed::Yes(requirements))
-        }
-        // Can not satisfy the parent requirements, check whether the requirements can be pushed down:
-        else if let Some(adjusted) =
-            pushdown_requirement_to_children(&plan, &parent_required)?
-        {
-            for (c, o) in requirements.children.iter_mut().zip(adjusted) {
-                c.data = o;
-            }
-            requirements.data = None;
-            Ok(Transformed::Yes(requirements))
-        } else {
-            // Can not push down requirements, add new SortExec:
-            add_sort_above(&mut requirements, &parent_required, None);
-            assign_initial_requirements(&mut requirements);
-            // Can not push down requirements
-            Ok(Transformed::Yes(requirements))
-        }
+        // Can not push down requirements, add new SortExec:
+        add_sort_above(&mut requirements, &parent_reqs, None);
+        assign_initial_requirements(&mut requirements);
     }
+    Ok(Transformed::Yes(requirements))
 }
 
 fn pushdown_requirement_to_children(
