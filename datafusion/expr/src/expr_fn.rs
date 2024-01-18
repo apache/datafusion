@@ -888,27 +888,27 @@ scalar_expr!(DateBin, date_bin, stride source origin, "coerces an arbitrary time
 nary_scalar_expr!(
     ToTimestamp,
     to_timestamp,
-    "converts a string to a `Timestamp(Nanoseconds, None)`"
+    "converts a string and optional formats to a `Timestamp(Nanoseconds, None)`"
 );
 nary_scalar_expr!(
     ToTimestampMillis,
     to_timestamp_millis,
-    "converts a string to a `Timestamp(Milliseconds, None)`"
+    "converts a string and optional formats  to a `Timestamp(Milliseconds, None)`"
 );
 nary_scalar_expr!(
     ToTimestampMicros,
     to_timestamp_micros,
-    "converts a string to a `Timestamp(Microseconds, None)`"
+    "converts a string and optional formats  to a `Timestamp(Microseconds, None)`"
 );
 nary_scalar_expr!(
     ToTimestampNanos,
     to_timestamp_nanos,
-    "converts a string to a `Timestamp(Nanoseconds, None)`"
+    "converts a string and optional formats  to a `Timestamp(Nanoseconds, None)`"
 );
 nary_scalar_expr!(
     ToTimestampSeconds,
     to_timestamp_seconds,
-    "converts a string to a `Timestamp(Seconds, None)`"
+    "converts a string and optional formats  to a `Timestamp(Seconds, None)`"
 );
 scalar_expr!(
     FromUnixtime,
