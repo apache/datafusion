@@ -65,7 +65,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         "WITH query name {cte_name:?} specified more than once"
                     )));
                 }
-                let cte_query = cte.query;
 
                 if is_recursive {
                     if !self
@@ -77,7 +76,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         return not_impl_err!("Recursive CTEs are not enabled");
                     }
 
-                    match *cte_query.body {
+                    match *cte.query.body {
                         SetExpr::SetOperation {
                             op: SetOperator::Union,
                             left,
@@ -170,7 +169,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         }
                         _ => {
                             return Err(DataFusionError::SQL(
-                                ParserError("Invalid recursive CTE".to_string()),
+                                ParserError(format!("Unsupported CTE: {cte}")),
                                 None,
                             ));
                         }
@@ -179,7 +178,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     // create logical plan & pass backreferencing CTEs
                     // CTE expr don't need extend outer_query_schema
                     let logical_plan =
-                        self.query_to_plan(*cte_query, &mut planner_context.clone())?;
+                        self.query_to_plan(*cte.query, &mut planner_context.clone())?;
 
                     // Each `WITH` block can change the column names in the last
                     // projection (e.g. "WITH table(t1, t2) AS SELECT 1, 2").

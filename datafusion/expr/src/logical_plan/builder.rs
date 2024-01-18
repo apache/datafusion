@@ -124,6 +124,7 @@ impl LogicalPlanBuilder {
     }
 
     /// Convert a regular plan into a recursive query.
+    /// `is_distinct` indicates whether the recursive term should be de-duplicated (`UNION`) after each iteration or not (`UNION ALL`).
     pub fn to_recursive_query(
         &self,
         name: String,
@@ -133,7 +134,7 @@ impl LogicalPlanBuilder {
         // TODO: we need to do a bunch of validation here. Maybe more.
         if is_distinct {
             return Err(DataFusionError::NotImplemented(
-                "Recursive queries with distinct is not supported".to_string(),
+                "Recursive queries with a distinct 'UNION' (in which the previous iteration's results will be de-duplicated) is not supported".to_string(),
             ));
         }
         Ok(Self::from(LogicalPlan::RecursiveQuery(RecursiveQuery {
