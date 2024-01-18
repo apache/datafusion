@@ -1031,12 +1031,6 @@ where
     let res = match list_array.value_type() {
         DataType::List(_) => concat_internal::<i32>(args)?,
         DataType::LargeList(_) => concat_internal::<i64>(args)?,
-        DataType::Null => {
-            return make_array(&[
-                list_array.values().to_owned(),
-                element_array.to_owned(),
-            ]);
-        }
         data_type => {
             return generic_append_and_prepend::<O>(
                 list_array,
