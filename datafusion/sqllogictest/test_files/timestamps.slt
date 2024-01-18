@@ -18,7 +18,7 @@
 ##########
 ## Common timestamp data
 #
-# ts_data:        Int64 nanosecods
+# ts_data:        Int64 nanoseconds
 # ts_data_nanos:  Timestamp(Nanosecond, None)
 # ts_data_micros: Timestamp(Microsecond, None)
 # ts_data_millis: Timestamp(Millisecond, None)
@@ -2009,6 +2009,57 @@ SELECT to_timestamp_micros('2020-09-08 12/00/00+00:00', '%q')
 query error bad or unsupported format string
 SELECT to_timestamp_seconds('2020-09-08 12/00/00+00:00', '%q')
 
+# Create string timestamp table with different formats
+# including a few very non-standard formats
+
+statement ok
+create table ts_utf8_data(ts varchar(100), format varchar(100)) as values
+  ('2020-09-08 12/00/00+00:00', '%Y-%m-%d %H/%M/%S%#z'),
+  ('2031-01-19T23:33:25+05:00', '%+'),
+  ('08-09-2020 12:00:00+00:00', '%d-%m-%Y %H:%M:%S%#z'),
+  ('1926632005', '%s'),
+  ('2000-01-01T01:01:01+07:00', '%+');
+
+# verify timestamp data using tables with formatting options
+query P
+SELECT to_timestamp(t.ts, t.format) from ts_utf8_data as t
+----
+2020-09-08T12:00:00
+2031-01-19T18:33:25
+2020-09-08T12:00:00
+2031-01-19T23:33:25
+1999-12-31T18:01:01
+
+# verify timestamp data using tables with formatting options
+query P
+SELECT to_timestamp(t.ts, '%Y-%m-%d %H/%M/%S%#z', '%+', '%s', '%d-%m-%Y %H:%M:%S%#z') from ts_utf8_data as t
+----
+2020-09-08T12:00:00
+2031-01-19T18:33:25
+2020-09-08T12:00:00
+2031-01-19T23:33:25
+1999-12-31T18:01:01
+
+# verify timestamp data using tables with formatting options where at least one column cannot be parsed
+query error Error parsing timestamp from '1926632005' using format '%d-%m-%Y %H:%M:%S%#z': input contains invalid characters
+SELECT to_timestamp(t.ts, '%Y-%m-%d %H/%M/%S%#z', '%+', '%d-%m-%Y %H:%M:%S%#z') from ts_utf8_data as t
+
+# verify timestamp data using tables with formatting options where one of the formats is invalid
+query P
+SELECT to_timestamp(t.ts, '%Y-%m-%d %H/%M/%S%#z', '%s', '%q', '%d-%m-%Y %H:%M:%S%#z', '%+') from ts_utf8_data as t
+----
+2020-09-08T12:00:00
+2031-01-19T18:33:25
+2020-09-08T12:00:00
+2031-01-19T23:33:25
+1999-12-31T18:01:01
+
+# timestamp data using tables with formatting options in an array is not supported at this time
+query error function unsupported data type at index 1:
+SELECT to_timestamp(t.ts, make_array('%Y-%m-%d %H/%M/%S%#z', '%s', '%q', '%d-%m-%Y %H:%M:%S%#z', '%+')) from ts_utf8_data as t
+
+statement ok
+drop table ts_utf8_data
 
 ##########
 ## Test binary temporal coercion for Date and Timestamp
