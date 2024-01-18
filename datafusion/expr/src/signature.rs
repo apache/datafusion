@@ -263,6 +263,20 @@ impl Signature {
             volatility,
         }
     }
+    /// Specialized Signature for ArrayAppend and similar functions
+    pub fn array_and_element(volatility: Volatility) -> Self {
+        Signature {
+            type_signature: TypeSignature::ArrayAndElement,
+            volatility,
+        }
+    }
+    /// Specialized Signature for ArrayPrepend and similar functions
+    pub fn element_and_array(volatility: Volatility) -> Self {
+        Signature {
+            type_signature: TypeSignature::ElementAndArray,
+            volatility,
+        }
+    }
 }
 
 /// Monotonicity of the `ScalarFunctionExpr` with respect to its arguments.

@@ -100,8 +100,8 @@ fn get_valid_types(
 
         // We need to find the coerced base type, mainly for cases like:
         // `array_append(List(null), i64)` -> `List(i64)`
-        let array_base_type = datafusion_common::utils::base_type(array_type);
-        let elem_base_type = datafusion_common::utils::base_type(elem_type);
+        let array_base_type = dbg!(datafusion_common::utils::base_type(array_type));
+        let elem_base_type = dbg!(datafusion_common::utils::base_type(elem_type));
         let new_base_type = comparison_coercion(&array_base_type, &elem_base_type);
 
         if new_base_type.is_none() {
@@ -118,6 +118,14 @@ fn get_valid_types(
 
         match array_type {
             DataType::List(ref field) | DataType::LargeList(ref field) => {
+                let elem_type = field.data_type();
+                if is_append {
+                    Ok(vec![vec![array_type.clone(), elem_type.to_owned()]])
+                } else {
+                    Ok(vec![vec![elem_type.to_owned(), array_type.clone()]])
+                }
+            }
+            DataType::FixedSizeList(ref field, _) => {
                 let elem_type = field.data_type();
                 if is_append {
                     Ok(vec![vec![array_type.clone(), elem_type.to_owned()]])
@@ -161,7 +169,7 @@ fn get_valid_types(
 
         TypeSignature::Exact(valid_types) => vec![valid_types.clone()],
         TypeSignature::ArrayAndElement => {
-            return array_append_or_prepend_valid_types(current_types, true)
+            return dbg!(array_append_or_prepend_valid_types(current_types, true))
         }
         TypeSignature::ElementAndArray => {
             return array_append_or_prepend_valid_types(current_types, false)
@@ -310,6 +318,8 @@ fn coerced_from<'a>(
         // Any type can be coerced into strings
         Utf8 | LargeUtf8 => Some(type_into.clone()),
         Null if can_cast_types(type_from, type_into) => Some(type_into.clone()),
+
+        List(_) if matches!(type_from, FixedSizeList(_, _)) => Some(type_into.clone()),
 
         // Only accept list and largelist with the same number of dimensions unless the type is Null.
         // List or LargeList with different dimensions should be handled in TypeSignature or other places before this.

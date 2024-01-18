@@ -440,9 +440,9 @@ pub fn arrays_into_list_array(
 /// ```
 pub fn base_type(data_type: &DataType) -> DataType {
     match data_type {
-        DataType::List(field) | DataType::LargeList(field) => {
-            base_type(field.data_type())
-        }
+        DataType::List(field)
+        | DataType::LargeList(field)
+        | DataType::FixedSizeList(field, _) => base_type(field.data_type()),
         _ => data_type.to_owned(),
     }
 }
@@ -464,9 +464,9 @@ pub fn coerced_type_with_base_type_only(
     base_type: &DataType,
 ) -> DataType {
     match data_type {
-        DataType::List(field) => {
+        DataType::List(field) | DataType::FixedSizeList(field, _) => {
             let data_type = match field.data_type() {
-                DataType::List(_) => {
+                DataType::List(_) | DataType::FixedSizeList(_, _) => {
                     coerced_type_with_base_type_only(field.data_type(), base_type)
                 }
                 _ => base_type.to_owned(),
