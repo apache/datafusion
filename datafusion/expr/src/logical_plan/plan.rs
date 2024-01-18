@@ -1751,16 +1751,39 @@ pub struct EmptyRelation {
     pub schema: DFSchemaRef,
 }
 
-/// A variadic query operation
+/// A variadic query operation, Recursive CTE.
+///
+/// # Recursive Query Evaluation
+///
+/// From the [Postgres Docs]:
+///
+/// 1. Evaluate the non-recursive term. For `UNION` (but not `UNION ALL`),
+/// discard duplicate rows. Include all remaining rows in the result of the
+/// recursive query, and also place them in a temporary working table.
+//
+/// 2. So long as the working table is not empty, repeat these steps:
+///
+/// * Evaluate the recursive term, substituting the current contents of the
+/// working table for the recursive self-reference. For `UNION` (but not `UNION
+/// ALL`), discard duplicate rows and rows that duplicate any previous result
+/// row. Include all remaining rows in the result of the recursive query, and
+/// also place them in a temporary intermediate table.
+///
+/// * Replace the contents of the working table with the contents of the
+/// intermediate table, then empty the intermediate table.
+///
+/// [Postgres Docs]: https://www.postgresql.org/docs/current/queries-with.html#QUERIES-WITH-RECURSIVE
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct RecursiveQuery {
     /// Name of the query
     pub name: String,
-    /// The static term
+    /// The static term (initial contents of the working table)
     pub static_term: Arc<LogicalPlan>,
-    /// The recursive term
+    /// The recursive term (evaluated on the contents of the working table until
+    /// it returns an empty set)
     pub recursive_term: Arc<LogicalPlan>,
-    /// Distinction
+    /// Should the output of the recursive term be deduplicated (`UNION`) or
+    /// not (`UNION ALL`).
     pub is_distinct: bool,
 }
 
