@@ -39,6 +39,9 @@ use crate::execution::context::SessionState;
 /// Naming is based on PostgreSQL's implementation.
 /// See here for more details: www.postgresql.org/docs/11/queries-with.html#id-1.5.6.12.5.4
 pub struct CteWorkTable {
+    /// The name of the CTE work table
+    // WIP, see https://github.com/apache/arrow-datafusion/issues/462
+    #[allow(dead_code)]
     name: String,
     /// This schema must be shared across both the static and recursive terms of a recursive query
     table_schema: SchemaRef,
