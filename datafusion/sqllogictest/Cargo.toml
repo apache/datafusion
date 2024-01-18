@@ -59,6 +59,7 @@ avro = ["datafusion/avro"]
 postgres = ["bytes", "chrono", "tokio-postgres", "postgres-types", "postgres-protocol"]
 
 [dev-dependencies]
+tokio = { version = "1.0" , features = ["rt-multi-thread"]}
 env_logger = { workspace = true }
 num_cpus = { workspace = true }
 
