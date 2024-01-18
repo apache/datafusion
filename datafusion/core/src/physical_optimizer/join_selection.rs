@@ -662,7 +662,7 @@ mod tests_statistical {
 
     use super::*;
     use crate::{
-        physical_optimizer::test_utils::crosscheck_helper,
+        physical_optimizer::test_utils::check_integrity,
         physical_plan::{
             displayable, joins::PartitionMode, ColumnStatistics, Statistics,
         },
@@ -777,8 +777,8 @@ mod tests_statistical {
             Box::new(hash_join_swap_subrule),
         ];
         let state = pipeline
-            .transform_up(&|p| apply_subrules(p, &subrules, &ConfigOptions::new()))?;
-        crosscheck_helper(state.clone())?;
+            .transform_up(&|p| apply_subrules(p, &subrules, &ConfigOptions::new()))
+            .and_then(check_integrity)?;
         // TODO: End state payloads will be checked here.
         let config = ConfigOptions::new().optimizer;
         let collect_left_threshold = config.hash_join_single_partition_threshold;

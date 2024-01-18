@@ -631,12 +631,11 @@ mod tests {
     use super::*;
     use crate::physical_optimizer::enforce_distribution::EnforceDistribution;
     use crate::physical_optimizer::test_utils::{
-        aggregate_exec, bounded_window_exec, coalesce_batches_exec,
-        coalesce_partitions_exec, crosscheck_helper, filter_exec, global_limit_exec,
-        hash_join_exec, limit_exec, local_limit_exec, memory_exec, parquet_exec,
-        parquet_exec_sorted, repartition_exec, sort_exec, sort_expr, sort_expr_options,
-        sort_merge_join_exec, sort_preserving_merge_exec, spr_repartition_exec,
-        union_exec,
+        aggregate_exec, bounded_window_exec, check_integrity, coalesce_batches_exec,
+        coalesce_partitions_exec, filter_exec, global_limit_exec, hash_join_exec,
+        limit_exec, local_limit_exec, memory_exec, parquet_exec, parquet_exec_sorted,
+        repartition_exec, sort_exec, sort_expr, sort_expr_options, sort_merge_join_exec,
+        sort_preserving_merge_exec, spr_repartition_exec, union_exec,
     };
     use crate::physical_plan::repartition::RepartitionExec;
     use crate::physical_plan::{displayable, get_plan_string, Partitioning};
@@ -729,15 +728,16 @@ mod tests {
         let state = session_ctx.state();
 
         let plan_requirements = PlanWithCorrespondingSort::new_default(plan);
-        let adjusted = plan_requirements.transform_up(&ensure_sorting)?;
-        crosscheck_helper(adjusted.clone())?;
+        let adjusted = plan_requirements
+            .transform_up(&ensure_sorting)
+            .and_then(check_integrity)?;
         // TODO: End state payloads will be checked here.
         let new_plan = if state.config_options().optimizer.repartition_sorts {
             let plan_with_coalesce_partitions =
                 PlanWithCorrespondingCoalescePartitions::new_default(adjusted.plan);
-            let parallel =
-                plan_with_coalesce_partitions.transform_up(&parallelize_sorts)?;
-            crosscheck_helper(parallel.clone())?;
+            let parallel = plan_with_coalesce_partitions
+                .transform_up(&parallelize_sorts)
+                .and_then(check_integrity)?;
             // TODO: End state payloads will be checked here.
             parallel.plan
         } else {
@@ -745,22 +745,23 @@ mod tests {
         };
 
         let plan_with_pipeline_fixer = OrderPreservationContext::new_default(new_plan);
-        let updated_plan =
-            plan_with_pipeline_fixer.transform_up(&|plan_with_pipeline_fixer| {
+        let updated_plan = plan_with_pipeline_fixer
+            .transform_up(&|plan_with_pipeline_fixer| {
                 replace_with_order_preserving_variants(
                     plan_with_pipeline_fixer,
                     false,
                     true,
                     state.config_options(),
                 )
-            })?;
-        crosscheck_helper(updated_plan.clone())?;
+            })
+            .and_then(check_integrity)?;
         // TODO: End state payloads will be checked here.
 
         let mut sort_pushdown = SortPushDown::new_default(updated_plan.plan);
         assign_initial_requirements(&mut sort_pushdown);
-        let adjusted = sort_pushdown.transform_down(&pushdown_sorts)?;
-        crosscheck_helper(adjusted.clone())?;
+        sort_pushdown
+            .transform_down(&pushdown_sorts)
+            .and_then(check_integrity)?;
         // TODO: End state payloads will be checked here.
         Ok(())
     }

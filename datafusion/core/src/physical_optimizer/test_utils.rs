@@ -365,23 +365,16 @@ pub fn sort_exec(
     Arc::new(SortExec::new(sort_exprs, input))
 }
 
-pub fn crosscheck_helper<T: Clone>(context: PlanContext<T>) -> Result<()> {
-    let _empty_node = context.transform_up(&|node| {
-        assert_eq!(node.children.len(), node.plan.children().len());
-        if !node.children.is_empty() {
-            node.plan
-                .children()
-                .iter()
-                .zip(node.children.iter())
-                .for_each(|(plan_child, child_node)| {
-                    assert_eq!(
-                        displayable(plan_child.as_ref()).one_line().to_string(),
-                        displayable(child_node.plan.as_ref()).one_line().to_string()
-                    );
-                });
+pub fn check_integrity<T: Clone>(context: PlanContext<T>) -> Result<PlanContext<T>> {
+    context.transform_up(&|node| {
+        let children_plans = node.plan.children();
+        assert_eq!(node.children.len(), children_plans.len());
+        for (child_plan, child_node) in children_plans.iter().zip(node.children.iter()) {
+            assert_eq!(
+                displayable(child_plan.as_ref()).one_line().to_string(),
+                displayable(child_node.plan.as_ref()).one_line().to_string()
+            );
         }
         Ok(Transformed::No(node))
-    })?;
-
-    Ok(())
+    })
 }

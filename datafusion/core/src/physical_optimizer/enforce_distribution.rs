@@ -298,8 +298,13 @@ fn adjust_input_keys_ordering(
                         )
                         .map(|e| Arc::new(e) as _)
                     };
-                reorder_partitioned_join_keys(requirements, on, vec![], &join_constructor)
-                    .map(Transformed::Yes)
+                return reorder_partitioned_join_keys(
+                    requirements,
+                    on,
+                    vec![],
+                    &join_constructor,
+                )
+                .map(Transformed::Yes);
             }
             PartitionMode::CollectLeft => {
                 let new_right_request = match join_type {
@@ -317,13 +322,11 @@ fn adjust_input_keys_ordering(
                 };
 
                 // Push down requirements to the right side
-                requirements.children[1].data = new_right_request.unwrap_or(vec![]);
-                Ok(Transformed::Yes(requirements))
+                requirements.children[1].data = new_right_request.unwrap_or_default();
             }
             PartitionMode::Auto => {
                 // Can not satisfy, clear the current requirements and generate new empty requirements
                 requirements.data.clear();
-                Ok(Transformed::Yes(requirements))
             }
         }
     } else if let Some(CrossJoinExec { left, .. }) =
@@ -334,7 +337,6 @@ fn adjust_input_keys_ordering(
         requirements.children[1].data =
             shift_right_required(&requirements.data, left_columns_len)
                 .unwrap_or_default();
-        Ok(Transformed::Yes(requirements))
     } else if let Some(SortMergeJoinExec {
         left,
         right,
@@ -357,28 +359,27 @@ fn adjust_input_keys_ordering(
                 )
                 .map(|e| Arc::new(e) as _)
             };
-        reorder_partitioned_join_keys(
+        return reorder_partitioned_join_keys(
             requirements,
             on,
             sort_options.clone(),
             &join_constructor,
         )
-        .map(Transformed::Yes)
+        .map(Transformed::Yes);
     } else if let Some(aggregate_exec) = plan.as_any().downcast_ref::<AggregateExec>() {
         if !requirements.data.is_empty() {
             match aggregate_exec.mode() {
                 AggregateMode::FinalPartitioned => {
-                    reorder_aggregate_keys(requirements.clone(), aggregate_exec)
-                        .map(Transformed::Yes)
+                    return reorder_aggregate_keys(requirements, aggregate_exec)
+                        .map(Transformed::Yes);
                 }
                 _ => {
                     requirements.data.clear();
-                    Ok(Transformed::Yes(requirements))
                 }
             }
         } else {
             // Keep everything unchanged
-            Ok(Transformed::No(requirements))
+            return Ok(Transformed::No(requirements));
         }
     } else if let Some(proj) = plan.as_any().downcast_ref::<ProjectionExec>() {
         let expr = proj.expr();
@@ -388,11 +389,9 @@ fn adjust_input_keys_ordering(
         let new_required = map_columns_before_projection(&requirements.data, expr);
         if new_required.len() == requirements.data.len() {
             requirements.children[0].data = new_required;
-            Ok(Transformed::Yes(requirements))
         } else {
             // Can not satisfy, clear the current requirements and generate new empty requirements
             requirements.data.clear();
-            Ok(Transformed::Yes(requirements))
         }
     } else if plan.as_any().downcast_ref::<RepartitionExec>().is_some()
         || plan
@@ -402,14 +401,13 @@ fn adjust_input_keys_ordering(
         || plan.as_any().downcast_ref::<WindowAggExec>().is_some()
     {
         requirements.data.clear();
-        Ok(Transformed::Yes(requirements))
     } else {
         // By default, push down the parent requirements to children
         for child in requirements.children.iter_mut() {
             child.data = requirements.data.clone();
         }
-        Ok(Transformed::Yes(requirements))
     }
+    Ok(Transformed::Yes(requirements))
 }
 
 fn reorder_partitioned_join_keys<F>(
@@ -472,53 +470,38 @@ fn reorder_aggregate_keys(
         .map(|c| Arc::new(c.clone()) as _)
         .collect::<Vec<_>>();
 
-    if parent_required.len() != output_exprs.len()
-        || !agg_exec.group_by().null_expr().is_empty()
-        || physical_exprs_equal(&output_exprs, parent_required)
+    if parent_required.len() == output_exprs.len()
+        && agg_exec.group_by().null_expr().is_empty()
+        && !physical_exprs_equal(&output_exprs, parent_required)
     {
-        Ok(agg_node)
-    } else {
-        let new_positions = expected_expr_positions(&output_exprs, parent_required);
-        match new_positions {
-            None => Ok(agg_node),
-            Some(positions) => {
-                let new_partial_agg = if let Some(agg_exec) =
-                    agg_exec.input().as_any().downcast_ref::<AggregateExec>()
-                {
-                    if matches!(agg_exec.mode(), &AggregateMode::Partial) {
-                        let group_exprs = agg_exec.group_by().expr();
-                        let new_group_exprs = positions
-                            .into_iter()
-                            .map(|idx| group_exprs[idx].clone())
-                            .collect();
-                        let new_partial_group_by =
-                            PhysicalGroupBy::new_single(new_group_exprs);
-                        Some(Arc::new(AggregateExec::try_new(
-                            AggregateMode::Partial,
-                            new_partial_group_by,
-                            agg_exec.aggr_expr().to_vec(),
-                            agg_exec.filter_expr().to_vec(),
-                            agg_exec.input().clone(),
-                            agg_exec.input_schema.clone(),
-                        )?))
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                };
-                if let Some(partial_agg) = new_partial_agg {
+        if let Some(positions) = expected_expr_positions(&output_exprs, parent_required) {
+            if let Some(agg_exec) =
+                agg_exec.input().as_any().downcast_ref::<AggregateExec>()
+            {
+                if matches!(agg_exec.mode(), &AggregateMode::Partial) {
+                    let group_exprs = agg_exec.group_by().expr();
+                    let new_group_exprs = positions
+                        .into_iter()
+                        .map(|idx| group_exprs[idx].clone())
+                        .collect();
+                    let partial_agg = Arc::new(AggregateExec::try_new(
+                        AggregateMode::Partial,
+                        PhysicalGroupBy::new_single(new_group_exprs),
+                        agg_exec.aggr_expr().to_vec(),
+                        agg_exec.filter_expr().to_vec(),
+                        agg_exec.input().clone(),
+                        agg_exec.input_schema.clone(),
+                    )?);
                     // Build new group expressions that correspond to the output of partial_agg
                     let group_exprs = partial_agg.group_expr().expr();
                     let new_final_group = partial_agg.output_group_expr();
                     let new_group_by = PhysicalGroupBy::new_single(
                         new_final_group
-                            .iter()
+                            .into_iter()
                             .enumerate()
-                            .map(|(idx, expr)| (expr.clone(), group_exprs[idx].1.clone()))
+                            .map(|(idx, expr)| (expr, group_exprs[idx].1.clone()))
                             .collect(),
                     );
-
                     let new_final_agg = Arc::new(AggregateExec::try_new(
                         AggregateMode::FinalPartitioned,
                         new_group_by,
@@ -534,15 +517,10 @@ fn reorder_aggregate_keys(
                         .iter()
                         .map(|col| {
                             let name = col.name();
-                            (
-                                Arc::new(Column::new(
-                                    name,
-                                    agg_schema.index_of(name).unwrap(),
-                                )) as _,
-                                name.to_owned(),
-                            )
+                            let index = agg_schema.index_of(name)?;
+                            Ok((Arc::new(Column::new(name, index)) as _, name.to_owned()))
                         })
-                        .collect::<Vec<_>>();
+                        .collect::<Result<Vec<_>>>()?;
                     let agg_fields = agg_schema.fields();
                     for (idx, field) in
                         agg_fields.iter().enumerate().skip(output_columns.len())
@@ -552,14 +530,14 @@ fn reorder_aggregate_keys(
                             .push((Arc::new(Column::new(name, idx)) as _, name.clone()))
                     }
                     // TODO merge adjacent Projections if there are
-                    ProjectionExec::try_new(proj_exprs, new_final_agg)
-                        .map(|proj| PlanWithKeyRequirements::new_default(Arc::new(proj)))
-                } else {
-                    Ok(agg_node)
+                    return ProjectionExec::try_new(proj_exprs, new_final_agg).map(
+                        |proj| PlanWithKeyRequirements::new_default(Arc::new(proj)),
+                    );
                 }
             }
         }
     }
+    Ok(agg_node)
 }
 
 fn shift_right_required(
@@ -1342,7 +1320,7 @@ pub(crate) mod tests {
     use crate::datasource::physical_plan::{CsvExec, FileScanConfig};
     use crate::physical_optimizer::enforce_sorting::EnforceSorting;
     use crate::physical_optimizer::output_requirements::OutputRequirements;
-    use crate::physical_optimizer::test_utils::crosscheck_helper;
+    use crate::physical_optimizer::test_utils::check_integrity;
     use crate::physical_plan::aggregates::{
         AggregateExec, AggregateMode, PhysicalGroupBy,
     };
@@ -1882,9 +1860,9 @@ pub(crate) mod tests {
             let adjusted = if config.optimizer.top_down_join_key_reordering {
                 let plan_requirements =
                     PlanWithKeyRequirements::new_default($plan.clone());
-                let adjusted =
-                    plan_requirements.transform_down(&adjust_input_keys_ordering)?;
-                crosscheck_helper(adjusted.clone())?;
+                let adjusted = plan_requirements
+                    .transform_down(&adjust_input_keys_ordering)
+                    .and_then(check_integrity)?;
                 // TODO: End state payloads will be checked here.
                 adjusted.plan
             } else {
@@ -1893,12 +1871,11 @@ pub(crate) mod tests {
                 })?
             };
 
-            let distribution_context = DistributionContext::new_default(adjusted);
-            let distribution_context =
-                distribution_context.transform_up(&|distribution_context| {
+            DistributionContext::new_default(adjusted)
+                .transform_up(&|distribution_context| {
                     ensure_distribution(distribution_context, &config)
-                })?;
-            crosscheck_helper(distribution_context.clone())?;
+                })
+                .and_then(check_integrity)?;
             // TODO: End state payloads will be checked here.
         };
     }
