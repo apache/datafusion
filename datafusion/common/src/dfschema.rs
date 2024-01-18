@@ -388,10 +388,10 @@ impl DFSchema {
 
     /// Find all fields having the given qualifier
     pub fn fields_with_qualified(&self, qualifier: &TableReference) -> Vec<&Field> {
-        let fields = self
+        let fields: Vec<&Field> = self
             .iter()
             .filter(|(q, f)| q.map(|q| q == qualifier).unwrap_or(false))
-            .map(|(_, f)| f.into())
+            .map(|(_, f)| f.as_ref())
             .collect();
         fields
     }
@@ -403,22 +403,37 @@ impl DFSchema {
     ) -> Vec<usize> {
         self.iter()
             .enumerate()
-            .filter(|(idx, (q, field))| qualifier == q)
+            .filter_map(|(idx, (q, _))| {
+                let qualifier_matches = match q {
+                    Some(q) => *q == *qualifier,
+                    None => false,
+                };
+                match qualifier_matches {
+                    true => Some(idx),
+                    false => None,
+                }
+            })
             .collect()
     }
 
     /// Find all fields match the given name
     pub fn fields_with_unqualified_name(&self, name: &str) -> Vec<&Field> {
-        self.iter().filter(|field| field.name() == name).collect()
+        self.iter()
+            .filter(|(_, field)| field.name() == name)
+            .map(|(_, f)| f.as_ref())
+            .collect()
     }
 
     /// Find the field with the given name
     pub fn field_with_unqualified_name(&self, name: &str) -> Result<&Field> {
-        let field = self
-            .iter()
-            .filter(|(q, f)| name == f.name())
-            .map(|(q, f)| f);
-        Ok(field)
+        let field = self.iter().find(|(q, f)| match q {
+            Some(q) => false,
+            None => name == f.name(),
+        });
+        match field {
+            Some((_, f)) => Ok(f),
+            None => Err(DataFusionError::Internal("Field not found".to_string())),
+        }
     }
 
     /// Find the field with the given qualified name
@@ -427,11 +442,14 @@ impl DFSchema {
         qualifier: &TableReference,
         name: &str,
     ) -> Result<&Field> {
-        let field = self
-            .iter()
-            .find(|(q, f)| q == qualifier && name == f.name())
-            .map(|(q, f)| f);
-        Ok(field)
+        let qualifier_and_field = self.iter().find(|(q, f)| match q {
+            Some(q) => *q == qualifier && name == f.name(),
+            None => false,
+        });
+        match qualifier_and_field {
+            Some((q, f)) => Ok(f),
+            None => Err(DataFusionError::Internal("Field not found".to_string())),
+        }
     }
 
     /// Find the field with the given qualified column
@@ -506,10 +524,10 @@ impl DFSchema {
         if self.fields().len() != other.fields().len() {
             return false;
         }
-        let self_fields = self.fields().iter();
-        let other_fields = other.fields().iter();
-        self_fields.zip(other_fields).all(|(f1, f2)| {
-            f1.qualifier() == f2.qualifier()
+        let self_fields = self.iter();
+        let other_fields = other.iter();
+        self_fields.zip(other_fields).all(|((q1, f1), (q2, f2))| {
+            q1 == q2
                 && f1.name() == f2.name()
                 && Self::datatype_is_logically_equal(f1.data_type(), f2.data_type())
         })
@@ -528,10 +546,10 @@ impl DFSchema {
         if self.fields().len() != other.fields().len() {
             return false;
         }
-        let self_fields = self.fields().iter();
-        let other_fields = other.fields().iter();
-        self_fields.zip(other_fields).all(|(f1, f2)| {
-            f1.qualifier() == f2.qualifier()
+        let self_fields = self.iter();
+        let other_fields = other.iter();
+        self_fields.zip(other_fields).all(|((q1, f1), (q2, f2))| {
+            q1 == q2
                 && f1.name() == f2.name()
                 && Self::datatype_is_semantically_equal(f1.data_type(), f2.data_type())
         })
