@@ -20,7 +20,7 @@
 use std::fmt::{self, Display, Formatter};
 use std::sync::Arc;
 
-use crate::{get_plan_string, with_new_children_if_necessary, ExecutionPlan};
+use crate::{displayable, with_new_children_if_necessary, ExecutionPlan};
 
 use datafusion_common::tree_node::{ConcreteTreeNode, DynTreeNode, Transformed};
 use datafusion_common::Result;
@@ -71,9 +71,9 @@ impl<T: Default> PlanContext<T> {
 
 impl<T: Display> Display for PlanContext<T> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        let plan_string = get_plan_string(&self.plan);
-        write!(f, "plan: {}", plan_string[0])?;
-        write!(f, "data: {}", self.data)?;
+        let node_string = displayable(self.plan.as_ref()).one_line();
+        write!(f, "Node plan: {}", node_string)?;
+        write!(f, "Node data: {}", self.data)?;
         write!(f, "")
     }
 }

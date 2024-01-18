@@ -46,7 +46,7 @@ use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_expr::{AggregateFunction, WindowFrame, WindowFunctionDefinition};
 use datafusion_physical_expr::expressions::col;
 use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
-use datafusion_physical_plan::get_plan_string;
+use datafusion_physical_plan::displayable;
 use datafusion_physical_plan::tree_node::PlanContext;
 
 use async_trait::async_trait;
@@ -366,20 +366,22 @@ pub fn sort_exec(
 }
 
 pub fn crosscheck_helper<T: Clone>(context: PlanContext<T>) -> Result<()> {
-    let empty_node = context.transform_up(&|mut node| {
+    let _empty_node = context.transform_up(&|node| {
         assert_eq!(node.children.len(), node.plan.children().len());
         if !node.children.is_empty() {
-            assert_eq!(
-                get_plan_string(&node.plan),
-                get_plan_string(&node.plan.clone().with_new_children(
-                    node.children.into_iter().map(|c| c.plan).collect()
-                )?)
-            );
-            node.children = vec![];
+            node.plan
+                .children()
+                .iter()
+                .zip(node.children.iter())
+                .for_each(|(plan_child, child_node)| {
+                    assert_eq!(
+                        displayable(plan_child.as_ref()).one_line().to_string(),
+                        displayable(child_node.plan.as_ref()).one_line().to_string()
+                    );
+                });
         }
         Ok(Transformed::No(node))
     })?;
 
-    assert!(empty_node.children.is_empty());
     Ok(())
 }
