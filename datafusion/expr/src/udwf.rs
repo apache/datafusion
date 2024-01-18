@@ -222,7 +222,7 @@ where
 ///     vec![col("speed")],                 // smooth_it(speed)
 ///     vec![col("car")],                   // PARTITION BY car
 ///     vec![col("time").sort(true, true)], // ORDER BY time ASC
-///     WindowFrame::new(false),
+///     WindowFrame::new(None),
 /// );
 /// ```
 pub trait WindowUDFImpl: Debug + Send + Sync {

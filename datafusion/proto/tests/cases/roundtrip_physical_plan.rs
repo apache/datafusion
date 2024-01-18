@@ -255,11 +255,11 @@ fn roundtrip_window() -> Result<()> {
     let field_b = Field::new("b", DataType::Int64, false);
     let schema = Arc::new(Schema::new(vec![field_a, field_b]));
 
-    let window_frame = WindowFrame {
-        units: datafusion_expr::WindowFrameUnits::Range,
-        start_bound: WindowFrameBound::Preceding(ScalarValue::Int64(None)),
-        end_bound: WindowFrameBound::CurrentRow,
-    };
+    let window_frame = WindowFrame::new_bounds(
+        datafusion_expr::WindowFrameUnits::Range,
+        WindowFrameBound::Preceding(ScalarValue::Int64(None)),
+        WindowFrameBound::CurrentRow,
+    );
 
     let builtin_window_expr = Arc::new(BuiltInWindowExpr::new(
         Arc::new(NthValue::first(
@@ -286,14 +286,14 @@ fn roundtrip_window() -> Result<()> {
         )),
         &[],
         &[],
-        Arc::new(WindowFrame::new(false)),
+        Arc::new(WindowFrame::new(None)),
     ));
 
-    let window_frame = WindowFrame {
-        units: datafusion_expr::WindowFrameUnits::Range,
-        start_bound: WindowFrameBound::CurrentRow,
-        end_bound: WindowFrameBound::Preceding(ScalarValue::Int64(None)),
-    };
+    let window_frame = WindowFrame::new_bounds(
+        datafusion_expr::WindowFrameUnits::Range,
+        WindowFrameBound::CurrentRow,
+        WindowFrameBound::Preceding(ScalarValue::Int64(None)),
+    );
 
     let sliding_aggr_window_expr = Arc::new(SlidingAggregateWindowExpr::new(
         Arc::new(Sum::new(

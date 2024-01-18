@@ -107,18 +107,17 @@ AS VALUES
   (make_array(make_array(4, 5, 6), make_array(10, 11, 12), make_array(4, 9, 8), make_array(7, 8, 9), make_array(10, 11, 12), make_array(1, 8, 7)), make_array(10, 11, 12), 3, make_array([[11, 12, 13], [14, 15, 16]], [[17, 18, 19], [20, 21, 22]]), make_array(121, 131, 141))
 ;
 
-# TODO: add this when #8305 is fixed
-# statement ok
-# CREATE TABLE large_nested_arrays
-# AS
-#   SELECT
-#     arrow_cast(column1, 'LargeList(LargeList(Int64))') AS column1,
-#     arrow_cast(column2, 'LargeList(Int64)') AS column2,
-#     column3,
-#     arrow_cast(column4, 'LargeList(LargeList(List(Int64)))') AS column4,
-#     arrow_cast(column5, 'LargeList(Int64)') AS column5
-#   FROM nested_arrays
-# ;
+statement ok
+CREATE TABLE large_nested_arrays
+AS
+  SELECT
+    arrow_cast(column1, 'LargeList(LargeList(Int64))') AS column1,
+    arrow_cast(column2, 'LargeList(Int64)') AS column2,
+    column3,
+    arrow_cast(column4, 'LargeList(LargeList(List(Int64)))') AS column4,
+    arrow_cast(column5, 'LargeList(Int64)') AS column5
+  FROM nested_arrays
+;
 
 statement ok
 CREATE TABLE arrays_values
@@ -155,16 +154,15 @@ AS VALUES
   (NULL, NULL, NULL, NULL)
 ;
 
-# TODO: add this when #8305 is fixed
-# statement ok
-# CREATE TABLE large_arrays_values_v2
-# AS SELECT
-#   arrow_cast(column1, 'LargeList(Int64)') AS column1,
-#   arrow_cast(column2, 'LargeList(Int64)') AS column2,
-#   column3,
-#   arrow_cast(column4, 'LargeList(LargeList(Int64))') AS column4
-# FROM arrays_values_v2
-# ;
+statement ok
+CREATE TABLE large_arrays_values_v2
+AS SELECT
+  arrow_cast(column1, 'LargeList(Int64)') AS column1,
+  arrow_cast(column2, 'LargeList(Int64)') AS column2,
+  column3,
+  arrow_cast(column4, 'LargeList(LargeList(Int64))') AS column4
+FROM arrays_values_v2
+;
 
 statement ok
 CREATE TABLE flatten_table
@@ -456,11 +454,33 @@ AS
   FROM nested_arrays_with_repeating_elements
 ;
 
+# Array literal
+
+## boolean coercion is not supported
 query error
 select [1, true, null]
 
-query error DataFusion error: This feature is not implemented: ScalarFunctions without MakeArray are not supported: now()
-SELECT [now()]
+## wrapped in array_length to get deterministic results
+query I
+SELECT array_length([now()])
+----
+1
+
+## array literal with functions
+query ?
+select [abs(-1.2), sin(-1), log(2), ceil(3.141)]
+----
+[1.2, -0.8414709848078965, 0.3010299801826477, 4.0]
+
+## array literal with nested types
+query ???
+select
+  [struct('foo', 1)],
+  [struct('foo', [1,2,3])],
+  [struct('foo', [struct(3, 'x')])]
+;
+----
+[{c0: foo, c1: 1}] [{c0: foo, c1: [1, 2, 3]}] [{c0: foo, c1: [{c0: 3, c1: x}]}]
 
 query TTT
 select arrow_typeof(column1), arrow_typeof(column2), arrow_typeof(column3) from arrays;
@@ -953,7 +973,7 @@ select array_element(arrow_cast(make_array(make_array(1, 2, 3, 4, 5), make_array
 ----
 [1, 2, 3, 4, 5]
 
-# array_extract scalar function #8 (function alias `array_slice`)
+# array_extract scalar function #8 (function alias `array_element`)
 query IT
 select array_extract(make_array(1, 2, 3, 4, 5), 2), array_extract(make_array('h', 'e', 'l', 'l', 'o'), 3);
 ----
@@ -964,7 +984,7 @@ select array_extract(arrow_cast(make_array(1, 2, 3, 4, 5), 'LargeList(Int64)'), 
 ----
 2 l
 
-# list_element scalar function #9 (function alias `array_slice`)
+# list_element scalar function #9 (function alias `array_element`)
 query IT
 select list_element(make_array(1, 2, 3, 4, 5), 2), list_element(make_array('h', 'e', 'l', 'l', 'o'), 3);
 ----
@@ -975,7 +995,7 @@ select list_element(arrow_cast(make_array(1, 2, 3, 4, 5), 'LargeList(Int64)'), 2
 ----
 2 l
 
-# list_extract scalar function #10 (function alias `array_slice`)
+# list_extract scalar function #10 (function alias `array_element`)
 query IT
 select list_extract(make_array(1, 2, 3, 4, 5), 2), list_extract(make_array('h', 'e', 'l', 'l', 'o'), 3);
 ----
@@ -1576,16 +1596,15 @@ select
 ----
 [4] [] [1, , 3, 4] [, , 1]
 
-# TODO: add this when #8305 is fixed
-# query ????
-# select
-#   array_append(arrow_cast(make_array(), 'LargeList(Null)'), 4),
-#   array_append(make_array(), null),
-#   array_append(make_array(1, null, 3), 4),
-#   array_append(make_array(null, null), 1)
-# ;
-# ----
-# [4] [] [1, , 3, 4] [, , 1]
+query ????
+select
+  array_append(arrow_cast(make_array(), 'LargeList(Null)'), 4),
+  array_append(make_array(), null),
+  array_append(make_array(1, null, 3), 4),
+  array_append(make_array(null, null), 1)
+;
+----
+[4] [] [1, , 3, 4] [, , 1]
 
 # test invalid (non-null)
 query error
@@ -1604,13 +1623,12 @@ select
 ----
 [[1, , 3], []] [[1, , 3], ]
 
-# TODO: add this when #8305 is fixed
-# query ??
-# select
-#   array_append(arrow_cast(make_array(make_array(1, null, 3), 'LargeList(LargeList(Int64))')), arrow_cast(make_array(null), 'LargeList(Int64)')),
-#   array_append(arrow_cast(make_array(make_array(1, null, 3), 'LargeList(LargeList(Int64))')), null);
-# ----
-# [[1, , 3], []] [[1, , 3], ]
+query ??
+select
+  array_append(arrow_cast(make_array(make_array(1, null, 3)), 'LargeList(LargeList(Int64))'), arrow_cast(make_array(null), 'LargeList(Int64)')),
+  array_append(arrow_cast(make_array(make_array(1, null, 3)), 'LargeList(LargeList(Int64))'), null);
+----
+[[1, , 3], []] [[1, , 3], ]
 
 # array_append scalar function #3
 query ???
@@ -1629,11 +1647,10 @@ select array_append(make_array([1], [2], [3]), make_array(4)), array_append(make
 ----
 [[1], [2], [3], [4]] [[1.0], [2.0], [3.0], [4.0]] [[h], [e], [l], [l], [o]]
 
-# TODO: add this when #8305 is fixed
-# query ???
-# select array_append(arrow_cast(make_array([1], [2], [3]), 'LargeList(LargeList(Int64))'), arrow_cast(make_array(4), 'LargeList(Int64)')), array_append(arrow_cast(make_array([1.0], [2.0], [3.0]), 'LargeList(LargeList(Float64))'), arrow_cast(make_array(4.0), 'LargeList(Float64)')), array_append(arrow_cast(make_array(['h'], ['e'], ['l'], ['l']), 'LargeList(LargeList(Utf8))'), arrow_cast(make_array('o'), 'LargeList(Utf8)'));
-# ----
-# [[1], [2], [3], [4]] [[1.0], [2.0], [3.0], [4.0]] [[h], [e], [l], [l], [o]]
+query ???
+select array_append(arrow_cast(make_array([1], [2], [3]), 'LargeList(LargeList(Int64))'), arrow_cast(make_array(4), 'LargeList(Int64)')), array_append(arrow_cast(make_array([1.0], [2.0], [3.0]), 'LargeList(LargeList(Float64))'), arrow_cast(make_array(4.0), 'LargeList(Float64)')), array_append(arrow_cast(make_array(['h'], ['e'], ['l'], ['l']), 'LargeList(LargeList(Utf8))'), arrow_cast(make_array('o'), 'LargeList(Utf8)'));
+----
+[[1], [2], [3], [4]] [[1.0], [2.0], [3.0], [4.0]] [[h], [e], [l], [l], [o]]
 
 # list_append scalar function #5 (function alias `array_append`)
 query ???
@@ -1700,12 +1717,11 @@ select array_append(column1, column2) from nested_arrays;
 [[1, 2, 3], [2, 9, 1], [7, 8, 9], [1, 2, 3], [1, 7, 4], [4, 5, 6], [7, 8, 9]]
 [[4, 5, 6], [10, 11, 12], [4, 9, 8], [7, 8, 9], [10, 11, 12], [1, 8, 7], [10, 11, 12]]
 
-# TODO: add this when #8305 is fixed
-# query ?
-# select array_append(column1, column2) from large_nested_arrays;
-# ----
-# [[1, 2, 3], [2, 9, 1], [7, 8, 9], [1, 2, 3], [1, 7, 4], [4, 5, 6], [7, 8, 9]]
-# [[4, 5, 6], [10, 11, 12], [4, 9, 8], [7, 8, 9], [10, 11, 12], [1, 8, 7], [10, 11, 12]]
+query ?
+select array_append(column1, column2) from large_nested_arrays;
+----
+[[1, 2, 3], [2, 9, 1], [7, 8, 9], [1, 2, 3], [1, 7, 4], [4, 5, 6], [7, 8, 9]]
+[[4, 5, 6], [10, 11, 12], [4, 9, 8], [7, 8, 9], [10, 11, 12], [1, 8, 7], [10, 11, 12]]
 
 # array_append with columns and scalars #1
 query ??
@@ -1737,12 +1753,11 @@ select array_append(column1, make_array(1, 11, 111)), array_append(make_array(ma
 [[1, 2, 3], [2, 9, 1], [7, 8, 9], [1, 2, 3], [1, 7, 4], [4, 5, 6], [1, 11, 111]] [[1, 2, 3], [11, 12, 13], [7, 8, 9]]
 [[4, 5, 6], [10, 11, 12], [4, 9, 8], [7, 8, 9], [10, 11, 12], [1, 8, 7], [1, 11, 111]] [[1, 2, 3], [11, 12, 13], [10, 11, 12]]
 
-# TODO: add this when #8305 is fixed
-# query ??
-# select array_append(column1, arrow_cast(make_array(1, 11, 111), 'LargeList(Int64)')), array_append(arrow_cast(make_array(make_array(1, 2, 3), make_array(11, 12, 13)), 'LargeList(LargeList(Int64))'), column2) from large_nested_arrays;
-# ----
-# [[1, 2, 3], [2, 9, 1], [7, 8, 9], [1, 2, 3], [1, 7, 4], [4, 5, 6], [1, 11, 111]] [[1, 2, 3], [11, 12, 13], [7, 8, 9]]
-# [[4, 5, 6], [10, 11, 12], [4, 9, 8], [7, 8, 9], [10, 11, 12], [1, 8, 7], [1, 11, 111]] [[1, 2, 3], [11, 12, 13], [10, 11, 12]]
+query ??
+select array_append(column1, arrow_cast(make_array(1, 11, 111), 'LargeList(Int64)')), array_append(arrow_cast(make_array(make_array(1, 2, 3), make_array(11, 12, 13)), 'LargeList(LargeList(Int64))'), column2) from large_nested_arrays;
+----
+[[1, 2, 3], [2, 9, 1], [7, 8, 9], [1, 2, 3], [1, 7, 4], [4, 5, 6], [1, 11, 111]] [[1, 2, 3], [11, 12, 13], [7, 8, 9]]
+[[4, 5, 6], [10, 11, 12], [4, 9, 8], [7, 8, 9], [10, 11, 12], [1, 8, 7], [1, 11, 111]] [[1, 2, 3], [11, 12, 13], [10, 11, 12]]
 
 ## array_prepend (aliases: `list_prepend`, `array_push_front`, `list_push_front`)
 
@@ -1816,11 +1831,12 @@ select array_prepend(make_array(1), make_array(make_array(2), make_array(3), mak
 ----
 [[1], [2], [3], [4]] [[1.0], [2.0], [3.0], [4.0]] [[h], [e], [l], [l], [o]]
 
-# TODO: add this when #8305 is fixed
-# query ???
-# select array_prepend(arrow_cast(make_array(1), 'LargeList(Int64)'), arrow_cast(make_array(make_array(2), make_array(3), make_array(4)), 'LargeList(LargeList(Int64))')), array_prepend(arrow_cast(make_array(1.0), 'LargeList(Float64)'), arrow_cast(make_array([2.0], [3.0], [4.0]), 'LargeList(LargeList(Float64))')), array_prepend(arrow_cast(make_array('h'), 'LargeList(Utf8)'), arrow_cast(make_array(['e'], ['l'], ['l'], ['o']), 'LargeList(LargeList(Utf8))''));
-# ----
-# [[1], [2], [3], [4]] [[1.0], [2.0], [3.0], [4.0]] [[h], [e], [l], [l], [o]]
+query ???
+select array_prepend(arrow_cast(make_array(1), 'LargeList(Int64)'), arrow_cast(make_array(make_array(2), make_array(3), make_array(4)), 'LargeList(LargeList(Int64))')),
+       array_prepend(arrow_cast(make_array(1.0), 'LargeList(Float64)'), arrow_cast(make_array([2.0], [3.0], [4.0]), 'LargeList(LargeList(Float64))')),
+       array_prepend(arrow_cast(make_array('h'), 'LargeList(Utf8)'), arrow_cast(make_array(['e'], ['l'], ['l'], ['o']), 'LargeList(LargeList(Utf8))'));
+----
+[[1], [2], [3], [4]] [[1.0], [2.0], [3.0], [4.0]] [[h], [e], [l], [l], [o]]
 
 # list_prepend scalar function #5 (function alias `array_prepend`)
 query ???
@@ -1887,12 +1903,11 @@ select array_prepend(column2, column1) from nested_arrays;
 [[7, 8, 9], [1, 2, 3], [2, 9, 1], [7, 8, 9], [1, 2, 3], [1, 7, 4], [4, 5, 6]]
 [[10, 11, 12], [4, 5, 6], [10, 11, 12], [4, 9, 8], [7, 8, 9], [10, 11, 12], [1, 8, 7]]
 
-# TODO: add this when #8305 is fixed
-# query ?
-# select array_prepend(column2, column1) from large_nested_arrays;
-# ----
-# [[7, 8, 9], [1, 2, 3], [2, 9, 1], [7, 8, 9], [1, 2, 3], [1, 7, 4], [4, 5, 6]]
-# [[10, 11, 12], [4, 5, 6], [10, 11, 12], [4, 9, 8], [7, 8, 9], [10, 11, 12], [1, 8, 7]]
+query ?
+select array_prepend(column2, column1) from large_nested_arrays;
+----
+[[7, 8, 9], [1, 2, 3], [2, 9, 1], [7, 8, 9], [1, 2, 3], [1, 7, 4], [4, 5, 6]]
+[[10, 11, 12], [4, 5, 6], [10, 11, 12], [4, 9, 8], [7, 8, 9], [10, 11, 12], [1, 8, 7]]
 
 # array_prepend with columns and scalars #1
 query ??
@@ -1924,12 +1939,11 @@ select array_prepend(make_array(1, 11, 111), column1), array_prepend(column2, ma
 [[1, 11, 111], [1, 2, 3], [2, 9, 1], [7, 8, 9], [1, 2, 3], [1, 7, 4], [4, 5, 6]] [[7, 8, 9], [1, 2, 3], [11, 12, 13]]
 [[1, 11, 111], [4, 5, 6], [10, 11, 12], [4, 9, 8], [7, 8, 9], [10, 11, 12], [1, 8, 7]] [[10, 11, 12], [1, 2, 3], [11, 12, 13]]
 
-# TODO: add this when #8305 is fixed
-# query ??
-# select array_prepend(arrow_cast(make_array(1, 11, 111), 'LargeList(Int64)'), column1), array_prepend(column2, arrow_cast(make_array(make_array(1, 2, 3), make_array(11, 12, 13)), 'LargeList(LargeList(Int64))')) from large_nested_arrays;
-# ----
-# [[1, 11, 111], [1, 2, 3], [2, 9, 1], [7, 8, 9], [1, 2, 3], [1, 7, 4], [4, 5, 6]] [[7, 8, 9], [1, 2, 3], [11, 12, 13]]
-# [[1, 11, 111], [4, 5, 6], [10, 11, 12], [4, 9, 8], [7, 8, 9], [10, 11, 12], [1, 8, 7]] [[10, 11, 12], [1, 2, 3], [11, 12, 13]]
+query ??
+select array_prepend(arrow_cast(make_array(1, 11, 111), 'LargeList(Int64)'), column1), array_prepend(column2, arrow_cast(make_array(make_array(1, 2, 3), make_array(11, 12, 13)), 'LargeList(LargeList(Int64))')) from large_nested_arrays;
+----
+[[1, 11, 111], [1, 2, 3], [2, 9, 1], [7, 8, 9], [1, 2, 3], [1, 7, 4], [4, 5, 6]] [[7, 8, 9], [1, 2, 3], [11, 12, 13]]
+[[1, 11, 111], [4, 5, 6], [10, 11, 12], [4, 9, 8], [7, 8, 9], [10, 11, 12], [1, 8, 7]] [[10, 11, 12], [1, 2, 3], [11, 12, 13]]
 
 ## array_repeat (aliases: `list_repeat`)
 
@@ -2372,12 +2386,11 @@ select array_position(column1, column2), array_position(column1, column2, column
 3 3
 2 5
 
-#TODO: add this test when #8305 is fixed
-#query II
-#select array_position(column1, column2), array_position(column1, column2, column3) from nested_arrays;
-#----
-#3 3
-#2 5
+query II
+select array_position(column1, column2), array_position(column1, column2, column3) from nested_arrays;
+----
+3 3
+2 5
 
 # array_position with columns and scalars #1
 query III
@@ -2403,12 +2416,11 @@ select array_position(make_array([1, 2, 3], [4, 5, 6], [11, 12, 13]), column2), 
 NULL 6 4
 NULL 1 NULL
 
-#TODO: add this test when #8305 is fixed
-#query III
-#select array_position(arrow_cast(make_array([1, 2, 3], [4, 5, 6], [11, 12, 13]), 'LargeList(List(Int64))'), column2), array_position(column1, make_array(4, 5, 6)), array_position(column1, make_array(1, 2, 3), 2) from large_nested_arrays;
-#----
-#NULL 6 4
-#NULL 1 NULL
+query III
+select array_position(arrow_cast(make_array([1, 2, 3], [4, 5, 6], [11, 12, 13]), 'LargeList(LargeList(Int64))'), column2), array_position(column1, arrow_cast(make_array(4, 5, 6), 'LargeList(Int64)')), array_position(column1, arrow_cast(make_array(1, 2, 3), 'LargeList(Int64)'), 2) from large_nested_arrays;
+----
+NULL 6 4
+NULL 1 NULL
 
 ## array_positions (aliases: `list_positions`)
 
@@ -4894,6 +4906,90 @@ select string_to_list(e, 'm') from values;
 [adipiscing]
 NULL
 
+# array_resize scalar function #1
+query ?
+select array_resize(make_array(1, 2, 3), 1);
+----
+[1]
+
+query ?
+select array_resize(arrow_cast(make_array(1, 2, 3), 'LargeList(Int64)'), 1);
+----
+[1]
+
+# array_resize scalar function #2
+query ?
+select array_resize(make_array(1, 2, 3), 5);
+----
+[1, 2, 3, , ]
+
+query ?
+select array_resize(arrow_cast(make_array(1, 2, 3), 'LargeList(Int64)'), 5);
+----
+[1, 2, 3, , ]
+
+# array_resize scalar function #3
+query ?
+select array_resize(make_array(1, 2, 3), 5, 4);
+----
+[1, 2, 3, 4, 4]
+
+query ?
+select array_resize(arrow_cast(make_array(1, 2, 3), 'LargeList(Int64)'), 5, 4);
+----
+[1, 2, 3, 4, 4]
+
+# array_resize scalar function #4
+query error
+select array_resize(make_array(1, 2, 3), -5, 2);
+
+# array_resize scalar function #5
+query ?
+select array_resize(make_array(1.1, 2.2, 3.3), 10, 9.9);
+----
+[1.1, 2.2, 3.3, 9.9, 9.9, 9.9, 9.9, 9.9, 9.9, 9.9]
+
+query ?
+select array_resize(arrow_cast(make_array(1.1, 2.2, 3.3), 'LargeList(Float64)'), 10, 9.9);
+----
+[1.1, 2.2, 3.3, 9.9, 9.9, 9.9, 9.9, 9.9, 9.9, 9.9]
+
+# array_resize scalar function #5
+query ?
+select array_resize(column1, column2, column3) from arrays_values;
+----
+[]
+[11, 12, 13, 14, 15, 16, 17, 18, , 20, 2, 2]
+[21, 22, 23, , 25, 26, 27, 28, 29, 30, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3]
+[31, 32, 33, 34, 35, , 37, 38, 39, 40, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4]
+[5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5]
+[]
+[51, 52, , 54, 55, 56, 57, 58, 59, 60, , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , ]
+[61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7]
+
+query ?
+select array_resize(arrow_cast(column1, 'LargeList(Int64)'), column2, column3) from arrays_values;
+----
+[]
+[11, 12, 13, 14, 15, 16, 17, 18, , 20, 2, 2]
+[21, 22, 23, , 25, 26, 27, 28, 29, 30, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3]
+[31, 32, 33, 34, 35, , 37, 38, 39, 40, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4]
+[5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5]
+[]
+[51, 52, , 54, 55, 56, 57, 58, 59, 60, , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , ]
+[61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7]
+
+# array_resize scalar function #5
+query ?
+select array_resize([[1], [2], [3]], 10, [5]);
+----
+[[1], [2], [3], [5], [5], [5], [5], [5], [5], [5]]
+
+query ?
+select array_resize(arrow_cast([[1], [2], [3]], 'LargeList(List(Int64))'), 10, [5]);
+----
+[[1], [2], [3], [5], [5], [5], [5], [5], [5], [5]]
+
 ### Delete tables
 
 statement ok
@@ -4904,6 +5000,9 @@ drop table values_without_nulls;
 
 statement ok
 drop table nested_arrays;
+
+statement ok
+drop table large_nested_arrays;
 
 statement ok
 drop table arrays;
@@ -4922,6 +5021,9 @@ drop table arrays_values;
 
 statement ok
 drop table arrays_values_v2;
+
+statement ok
+drop table large_arrays_values_v2;
 
 statement ok
 drop table array_has_table_1D;

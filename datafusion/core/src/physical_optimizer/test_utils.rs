@@ -239,7 +239,7 @@ pub fn bounded_window_exec(
                 &[col(col_name, &schema).unwrap()],
                 &[],
                 &sort_exprs,
-                Arc::new(WindowFrame::new(true)),
+                Arc::new(WindowFrame::new(Some(false))),
                 schema.as_ref(),
             )
             .unwrap()],

@@ -998,6 +998,6 @@ NULL
 
 # Verify that multiple calls to volatile functions like `random()` are not combined / optimized away
 query B
-SELECT r FROM (SELECT r1 == r2 r, r1, r2 FROM (SELECT random() r1, random() r2) WHERE r1 > 0 AND r2 > 0)
+SELECT r FROM (SELECT r1 == r2 r, r1, r2 FROM (SELECT random()+1 r1, random()+1 r2) WHERE r1 > 0 AND r2 > 0)
 ----
 false
