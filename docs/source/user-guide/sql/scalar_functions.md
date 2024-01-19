@@ -1350,7 +1350,6 @@ date_bin(interval, expression, origin-timestamp)
 - **origin-timestamp**: Optional. Starting point used to determine bin boundaries. If not specified
   defaults `1970-01-01T00:00:00Z` (the UNIX epoch in UTC).
 
-
 The following intervals are supported:
 
 - nanoseconds
