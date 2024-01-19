@@ -1430,6 +1430,7 @@ mod tests {
         TimestampSecondArray,
     };
     use datafusion_common::assert_contains;
+    use datafusion_expr::ScalarFunctionImplementation;
 
     use super::*;
 
@@ -2258,15 +2259,14 @@ mod tests {
         date_string_builder.append_value("2020-09-08T13:42:29.19085Z");
 
         let data = date_string_builder.finish();
-        let mut funcs = Vec::<(
-            Box<dyn Fn(&[ColumnarValue]) -> Result<ColumnarValue>>,
-            TimeUnit,
-        )>::new();
-        funcs.push((Box::new(|a| to_timestamp(a)), TimeUnit::Nanosecond));
-        funcs.push((Box::new(|a| to_timestamp_micros(a)), TimeUnit::Microsecond));
-        funcs.push((Box::new(|a| to_timestamp_millis(a)), TimeUnit::Millisecond));
-        funcs.push((Box::new(|a| to_timestamp_nanos(a)), TimeUnit::Nanosecond));
-        funcs.push((Box::new(|a| to_timestamp_seconds(a)), TimeUnit::Second));
+
+        let funcs: Vec<(ScalarFunctionImplementation, TimeUnit)> = vec![
+            (Arc::new(to_timestamp), TimeUnit::Nanosecond),
+            (Arc::new(to_timestamp_micros), TimeUnit::Microsecond),
+            (Arc::new(to_timestamp_millis), TimeUnit::Millisecond),
+            (Arc::new(to_timestamp_nanos), TimeUnit::Nanosecond),
+            (Arc::new(to_timestamp_seconds), TimeUnit::Second),
+        ];
 
         let mut nanos_builder = TimestampNanosecondArray::builder(2);
         let mut millis_builder = TimestampMillisecondArray::builder(2);
