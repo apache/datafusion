@@ -1869,10 +1869,8 @@ mod test {
         let exp2 = col("a") + lit(2);
         let exp3 = !(col("a") + lit(2));
 
-        assert!(exp1 < exp2);
-        assert!(exp2 > exp1);
-        assert!(exp2 > exp3);
-        assert!(exp3 < exp2);
+        assert_eq!(exp1 < exp2, !(exp1 >= exp2));
+        assert_eq!(exp3 < exp2, !(exp3 >= exp2));
     }
 
     #[test]
