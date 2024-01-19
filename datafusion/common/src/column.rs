@@ -178,11 +178,11 @@ impl Column {
         }
 
         for schema in schemas {
-            let fields = schema.fields_with_unqualified_name(&self.name);
+            let fields = schema.qualified_fields_with_unqualified_name(&self.name);
             match fields.len() {
                 0 => continue,
                 1 => {
-                    return Ok(fields[0].qualified_column());
+                    return Ok(fields[0].into());
                 }
                 _ => {
                     // More than 1 fields in this schema have their names set to self.name.
@@ -199,13 +199,11 @@ impl Column {
 
                     // Compare matched fields with one USING JOIN clause at a time
                     for using_col in using_columns {
-                        let all_matched = fields
-                            .iter()
-                            .all(|f| using_col.contains(&f.qualified_column()));
+                        let all_matched = fields.iter().all(|f| using_col.contains(f));
                         // All matched fields belong to the same using column set, in orther words
                         // the same join clause. We simply pick the qualifer from the first match.
                         if all_matched {
-                            return Ok(fields[0].qualified_column());
+                            return Ok(fields[0].into());
                         }
                     }
                 }

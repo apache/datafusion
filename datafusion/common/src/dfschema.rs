@@ -424,6 +424,16 @@ impl DFSchema {
             .collect()
     }
 
+    /// Find all fields with the given name and return their fully qualified name.
+    /// This was added after making DFSchema wrap SchemaRef to facilitate the transition
+    /// for `Column`. TODO: Or maybe just make a columns_with_unqualified_name method?
+    pub fn qualified_fields_with_unqualified_name(&self, name: &str) -> Vec<String> {
+        self.iter()
+            .filter(|(_, field)| field.name() == name)
+            .map(|(q, f)| qualified_name(q, f.name()))
+            .collect()
+    }
+
     /// Find the field with the given name
     pub fn field_with_unqualified_name(&self, name: &str) -> Result<&Field> {
         let field = self.iter().find(|(q, f)| match q {
