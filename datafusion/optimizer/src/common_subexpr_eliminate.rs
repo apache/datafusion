@@ -20,6 +20,7 @@
 use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
 
+use crate::utils::is_volatile_expression;
 use crate::{utils, OptimizerConfig, OptimizerRule};
 
 use arrow::datatypes::DataType;
@@ -29,7 +30,7 @@ use datafusion_common::tree_node::{
 use datafusion_common::{
     internal_err, Column, DFField, DFSchema, DFSchemaRef, DataFusionError, Result,
 };
-use datafusion_expr::expr::{is_volatile, Alias};
+use datafusion_expr::expr::Alias;
 use datafusion_expr::logical_plan::{
     Aggregate, Filter, LogicalPlan, Projection, Sort, Window,
 };
@@ -364,6 +365,7 @@ impl OptimizerRule for CommonSubexprEliminate {
             | LogicalPlan::Dml(_)
             | LogicalPlan::Copy(_)
             | LogicalPlan::Unnest(_)
+            | LogicalPlan::RecursiveQuery(_)
             | LogicalPlan::Prepare(_) => {
                 // apply the optimization to all inputs of the plan
                 utils::optimize_children(self, plan, config)?
@@ -518,7 +520,7 @@ enum ExprMask {
 }
 
 impl ExprMask {
-    fn ignores(&self, expr: &Expr) -> Result<bool> {
+    fn ignores(&self, expr: &Expr) -> bool {
         let is_normal_minus_aggregates = matches!(
             expr,
             Expr::Literal(..)
@@ -529,14 +531,12 @@ impl ExprMask {
                 | Expr::Wildcard { .. }
         );
 
-        let is_volatile = is_volatile(expr)?;
-
         let is_aggr = matches!(expr, Expr::AggregateFunction(..));
 
-        Ok(match self {
-            Self::Normal => is_volatile || is_normal_minus_aggregates || is_aggr,
-            Self::NormalAndAggregates => is_volatile || is_normal_minus_aggregates,
-        })
+        match self {
+            Self::Normal => is_normal_minus_aggregates || is_aggr,
+            Self::NormalAndAggregates => is_normal_minus_aggregates,
+        }
     }
 }
 
@@ -614,7 +614,12 @@ impl ExprIdentifierVisitor<'_> {
 impl TreeNodeVisitor for ExprIdentifierVisitor<'_> {
     type N = Expr;
 
-    fn pre_visit(&mut self, _expr: &Expr) -> Result<VisitRecursion> {
+    fn pre_visit(&mut self, expr: &Expr) -> Result<VisitRecursion> {
+        // related to https://github.com/apache/arrow-datafusion/issues/8814
+        // If the expr contain volatile expression or is a case expression, skip it.
+        if matches!(expr, Expr::Case(..)) || is_volatile_expression(expr)? {
+            return Ok(VisitRecursion::Skip);
+        }
         self.visit_stack
             .push(VisitRecord::EnterMark(self.node_count));
         self.node_count += 1;
@@ -628,7 +633,7 @@ impl TreeNodeVisitor for ExprIdentifierVisitor<'_> {
 
         let (idx, sub_expr_desc) = self.pop_enter_mark();
         // skip exprs should not be recognize.
-        if self.expr_mask.ignores(expr)? {
+        if self.expr_mask.ignores(expr) {
             self.id_array[idx].0 = self.series_number;
             let desc = Self::desc_expr(expr);
             self.visit_stack.push(VisitRecord::ExprItem(desc));

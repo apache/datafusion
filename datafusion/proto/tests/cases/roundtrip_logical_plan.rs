@@ -27,6 +27,7 @@ use arrow::datatypes::{
     IntervalUnit, Schema, SchemaRef, TimeUnit, UnionFields, UnionMode,
 };
 
+use datafusion_common::file_options::arrow_writer::ArrowWriterOptions;
 use prost::Message;
 
 use datafusion::datasource::provider::TableProviderFactory;
@@ -391,6 +392,45 @@ async fn roundtrip_logical_plan_copy_to_writer_options() -> Result<()> {
         }
         _ => panic!(),
     }
+    Ok(())
+}
+
+#[tokio::test]
+async fn roundtrip_logical_plan_copy_to_arrow() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    let input = create_csv_scan(&ctx).await?;
+
+    let plan = LogicalPlan::Copy(CopyTo {
+        input: Arc::new(input),
+        output_url: "test.arrow".to_string(),
+        file_format: FileType::ARROW,
+        single_file_output: true,
+        copy_options: CopyOptions::WriterOptions(Box::new(FileTypeWriterOptions::Arrow(
+            ArrowWriterOptions::new(),
+        ))),
+    });
+
+    let bytes = logical_plan_to_bytes(&plan)?;
+    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx)?;
+    assert_eq!(format!("{plan:?}"), format!("{logical_round_trip:?}"));
+
+    match logical_round_trip {
+        LogicalPlan::Copy(copy_to) => {
+            assert_eq!("test.arrow", copy_to.output_url);
+            assert_eq!(FileType::ARROW, copy_to.file_format);
+            assert!(copy_to.single_file_output);
+            match &copy_to.copy_options {
+                CopyOptions::WriterOptions(y) => match y.as_ref() {
+                    FileTypeWriterOptions::Arrow(_) => {}
+                    _ => panic!(),
+                },
+                _ => panic!(),
+            }
+        }
+        _ => panic!(),
+    }
+
     Ok(())
 }
 
@@ -1671,7 +1711,7 @@ fn roundtrip_window() {
         vec![],
         vec![col("col1")],
         vec![col("col2")],
-        WindowFrame::new(true),
+        WindowFrame::new(Some(false)),
     ));
 
     // 2. with default window_frame
@@ -1682,15 +1722,15 @@ fn roundtrip_window() {
         vec![],
         vec![col("col1")],
         vec![col("col2")],
-        WindowFrame::new(true),
+        WindowFrame::new(Some(false)),
     ));
 
     // 3. with window_frame with row numbers
-    let range_number_frame = WindowFrame {
-        units: WindowFrameUnits::Range,
-        start_bound: WindowFrameBound::Preceding(ScalarValue::UInt64(Some(2))),
-        end_bound: WindowFrameBound::Following(ScalarValue::UInt64(Some(2))),
-    };
+    let range_number_frame = WindowFrame::new_bounds(
+        WindowFrameUnits::Range,
+        WindowFrameBound::Preceding(ScalarValue::UInt64(Some(2))),
+        WindowFrameBound::Following(ScalarValue::UInt64(Some(2))),
+    );
 
     let test_expr3 = Expr::WindowFunction(expr::WindowFunction::new(
         WindowFunctionDefinition::BuiltInWindowFunction(
@@ -1703,11 +1743,11 @@ fn roundtrip_window() {
     ));
 
     // 4. test with AggregateFunction
-    let row_number_frame = WindowFrame {
-        units: WindowFrameUnits::Rows,
-        start_bound: WindowFrameBound::Preceding(ScalarValue::UInt64(Some(2))),
-        end_bound: WindowFrameBound::Following(ScalarValue::UInt64(Some(2))),
-    };
+    let row_number_frame = WindowFrame::new_bounds(
+        WindowFrameUnits::Rows,
+        WindowFrameBound::Preceding(ScalarValue::UInt64(Some(2))),
+        WindowFrameBound::Following(ScalarValue::UInt64(Some(2))),
+    );
 
     let test_expr4 = Expr::WindowFunction(expr::WindowFunction::new(
         WindowFunctionDefinition::AggregateFunction(AggregateFunction::Max),
