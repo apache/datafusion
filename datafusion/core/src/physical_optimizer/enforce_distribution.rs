@@ -307,22 +307,21 @@ fn adjust_input_keys_ordering(
                 .map(Transformed::Yes);
             }
             PartitionMode::CollectLeft => {
-                let new_right_request = match join_type {
+                // Push down requirements to the right side
+                requirements.children[1].data = match join_type {
                     JoinType::Inner | JoinType::Right => shift_right_required(
                         &requirements.data,
                         left.schema().fields().len(),
-                    ),
+                    )
+                    .unwrap_or_default(),
                     JoinType::RightSemi | JoinType::RightAnti => {
-                        Some(requirements.data.clone())
+                        requirements.data.clone()
                     }
                     JoinType::Left
                     | JoinType::LeftSemi
                     | JoinType::LeftAnti
-                    | JoinType::Full => None,
+                    | JoinType::Full => vec![],
                 };
-
-                // Push down requirements to the right side
-                requirements.children[1].data = new_right_request.unwrap_or_default();
             }
             PartitionMode::Auto => {
                 // Can not satisfy, clear the current requirements and generate new empty requirements
@@ -368,14 +367,11 @@ fn adjust_input_keys_ordering(
         .map(Transformed::Yes);
     } else if let Some(aggregate_exec) = plan.as_any().downcast_ref::<AggregateExec>() {
         if !requirements.data.is_empty() {
-            match aggregate_exec.mode() {
-                AggregateMode::FinalPartitioned => {
-                    return reorder_aggregate_keys(requirements, aggregate_exec)
-                        .map(Transformed::Yes);
-                }
-                _ => {
-                    requirements.data.clear();
-                }
+            if aggregate_exec.mode() == &AggregateMode::FinalPartitioned {
+                return reorder_aggregate_keys(requirements, aggregate_exec)
+                    .map(Transformed::Yes);
+            } else {
+                requirements.data.clear();
             }
         } else {
             // Keep everything unchanged
@@ -421,6 +417,7 @@ where
 {
     let parent_required = &join_plan.data;
     let join_key_pairs = extract_join_keys(on);
+    let eq_properties = join_plan.plan.equivalence_properties();
 
     if let Some((
         JoinKeyPairs {
@@ -428,11 +425,8 @@ where
             right_keys,
         },
         new_positions,
-    )) = try_reorder(
-        join_key_pairs.clone(),
-        parent_required,
-        &join_plan.plan.equivalence_properties(),
-    ) {
+    )) = try_reorder(join_key_pairs.clone(), parent_required, &eq_properties)
+    {
         if !new_positions.is_empty() {
             let new_join_on = new_join_conditions(&left_keys, &right_keys);
             let new_sort_options = (0..sort_options.len())
@@ -1323,6 +1317,9 @@ pub(crate) mod tests {
     use crate::physical_optimizer::enforce_sorting::EnforceSorting;
     use crate::physical_optimizer::output_requirements::OutputRequirements;
     use crate::physical_optimizer::test_utils::check_integrity;
+    use crate::physical_optimizer::test_utils::{
+        coalesce_partitions_exec, repartition_exec,
+    };
     use crate::physical_plan::aggregates::{
         AggregateExec, AggregateMode, PhysicalGroupBy,
     };
@@ -1332,15 +1329,11 @@ pub(crate) mod tests {
     use crate::physical_plan::joins::{
         utils::JoinOn, HashJoinExec, PartitionMode, SortMergeJoinExec,
     };
+    use crate::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
     use crate::physical_plan::projection::ProjectionExec;
+    use crate::physical_plan::sorts::sort::SortExec;
     use crate::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
     use crate::physical_plan::{displayable, DisplayAs, DisplayFormatType, Statistics};
-
-    use crate::physical_optimizer::test_utils::{
-        coalesce_partitions_exec, repartition_exec,
-    };
-    use crate::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
-    use crate::physical_plan::sorts::sort::SortExec;
 
     use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
@@ -3041,8 +3034,8 @@ pub(crate) mod tests {
         let exec = Arc::new(CoalesceBatchesExec::new(exec, 4096));
 
         // Merge from multiple parquet files and keep the data sorted
-        let exec = Arc::new(SortPreservingMergeExec::new(sort_key, exec))
-            as Arc<dyn ExecutionPlan>;
+        let exec: Arc<dyn ExecutionPlan> =
+            Arc::new(SortPreservingMergeExec::new(sort_key, exec));
 
         // The optimizer should not add an additional SortExec as the
         // data is already sorted
@@ -4358,10 +4351,9 @@ pub(crate) mod tests {
         config.execution.target_partitions = 10;
         config.optimizer.enable_round_robin_repartition = true;
         config.optimizer.prefer_existing_sort = false;
-        let distribution_plan =
-            EnforceDistribution::new().optimize(physical_plan.clone(), &config)?;
-        assert_plan_txt!(expected, distribution_plan);
         crosscheck_plans!(&physical_plan, false, 10, true, 10 * 1024 * 1024);
+        let dist_plan = EnforceDistribution::new().optimize(physical_plan, &config)?;
+        assert_plan_txt!(expected, dist_plan);
 
         Ok(())
     }
@@ -4397,10 +4389,9 @@ pub(crate) mod tests {
         config.execution.target_partitions = 10;
         config.optimizer.enable_round_robin_repartition = true;
         config.optimizer.prefer_existing_sort = false;
-        let distribution_plan =
-            EnforceDistribution::new().optimize(physical_plan.clone(), &config)?;
-        assert_plan_txt!(expected, distribution_plan);
         crosscheck_plans!(&physical_plan, false, 10, true, 10 * 1024 * 1024);
+        let dist_plan = EnforceDistribution::new().optimize(physical_plan, &config)?;
+        assert_plan_txt!(expected, dist_plan);
 
         Ok(())
     }
