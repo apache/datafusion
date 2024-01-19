@@ -453,7 +453,7 @@ where
 }
 
 fn reorder_aggregate_keys(
-    agg_node: PlanWithKeyRequirements,
+    mut agg_node: PlanWithKeyRequirements,
     agg_exec: &AggregateExec,
 ) -> Result<PlanWithKeyRequirements> {
     let parent_required = &agg_node.data;
@@ -507,9 +507,20 @@ fn reorder_aggregate_keys(
                         new_group_by,
                         agg_exec.aggr_expr().to_vec(),
                         agg_exec.filter_expr().to_vec(),
-                        partial_agg,
+                        partial_agg.clone(),
                         agg_exec.input_schema(),
                     )?);
+
+                    let partial_agg_node = PlanWithKeyRequirements {
+                        plan: partial_agg as _,
+                        data: vec![],
+                        children: agg_node.children.swap_remove(0).children,
+                    };
+                    let new_final_agg_node = PlanWithKeyRequirements {
+                        plan: new_final_agg.clone(),
+                        data: vec![],
+                        children: vec![partial_agg_node],
+                    };
 
                     // Need to create a new projection to change the expr ordering back
                     let agg_schema = new_final_agg.schema();
@@ -529,10 +540,13 @@ fn reorder_aggregate_keys(
                         proj_exprs
                             .push((Arc::new(Column::new(name, idx)) as _, name.clone()))
                     }
-                    // TODO merge adjacent Projections if there are
-                    return ProjectionExec::try_new(proj_exprs, new_final_agg).map(
-                        |proj| PlanWithKeyRequirements::new_default(Arc::new(proj)),
-                    );
+                    return ProjectionExec::try_new(proj_exprs, new_final_agg).map(|p| {
+                        PlanWithKeyRequirements {
+                            plan: Arc::new(p),
+                            data: vec![],
+                            children: vec![new_final_agg_node],
+                        }
+                    });
                 }
             }
         }
