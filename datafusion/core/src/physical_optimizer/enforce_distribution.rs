@@ -869,7 +869,7 @@ fn add_roundrobin_on_top(
 /// A [`Result`] object that contains new execution plan where the desired
 /// distribution is satisfied by adding a Hash repartition.
 fn add_hash_on_top(
-    mut input: DistributionContext,
+    input: DistributionContext,
     hash_exprs: Vec<Arc<dyn PhysicalExpr>>,
     n_target: usize,
 ) -> Result<DistributionContext> {
@@ -899,10 +899,9 @@ fn add_hash_on_top(
         let partitioning = Partitioning::Hash(hash_exprs, n_target);
         let repartition = RepartitionExec::try_new(input.plan.clone(), partitioning)?
             .with_preserve_order();
+        let plan = Arc::new(repartition) as _;
 
-        input.children = vec![input.clone()];
-        input.data = true;
-        input.plan = Arc::new(repartition) as _;
+        return Ok(DistributionContext::new(plan, true, vec![input]));
     }
 
     Ok(input)
@@ -1001,12 +1000,12 @@ fn replace_order_preserving_variants(
 ) -> Result<DistributionContext> {
     let mut updated_children = context
         .children
-        .iter()
+        .into_iter()
         .map(|child| {
             if child.data {
-                replace_order_preserving_variants(child.clone())
+                replace_order_preserving_variants(child)
             } else {
-                Ok(child.clone())
+                Ok(child)
             }
         })
         .collect::<Result<Vec<_>>>()?;

@@ -36,6 +36,7 @@
 
 use std::sync::Arc;
 
+use super::utils::add_sort_above;
 use crate::config::ConfigOptions;
 use crate::error::Result;
 use crate::physical_optimizer::replace_with_order_preserving_variants::{
@@ -66,8 +67,6 @@ use datafusion_physical_expr::{PhysicalSortExpr, PhysicalSortRequirement};
 use datafusion_physical_plan::repartition::RepartitionExec;
 
 use itertools::izip;
-
-use super::utils::add_sort_above;
 
 /// This rule inspects [`SortExec`]'s in the given physical plan and removes the
 /// ones it can prove unnecessary.
@@ -120,10 +119,10 @@ fn update_sort_ctx_children(
         .iter()
         .map(|child| child.plan.clone())
         .collect();
-    let plan = with_new_children_if_necessary(node.plan.clone(), children_plans)?.into();
 
-    node.plan = plan;
+    node.plan = with_new_children_if_necessary(node.plan.clone(), children_plans)?.into();
     node.data = data;
+
     Ok(())
 }
 
@@ -307,53 +306,43 @@ fn ensure_sorting(
         return Ok(Transformed::Yes(result));
     }
 
-    for (idx, required_ordering) in requirements
-        .plan
+    let plan = &requirements.plan;
+    for (idx, (required_ordering, child_node)) in plan
         .required_input_ordering()
         .into_iter()
+        .zip(requirements.children.iter_mut())
         .enumerate()
     {
-        let physical_ordering = requirements.children[idx].plan.output_ordering();
+        let physical_ordering = child_node.plan.output_ordering();
 
         if let Some(required) = required_ordering {
-            let eq_properties = requirements.children[idx].plan.equivalence_properties();
+            let eq_properties = child_node.plan.equivalence_properties();
             if !eq_properties.ordering_satisfy_requirement(&required) {
                 // Make sure we preserve the ordering requirements:
                 if physical_ordering.is_some() {
-                    update_child_to_remove_unnecessary_sort(
-                        idx,
-                        &mut requirements.children[idx],
-                        &requirements.plan,
-                    )?;
+                    update_child_to_remove_unnecessary_sort(idx, child_node, plan)?;
                 }
 
-                add_sort_above(&mut requirements.children[idx], required, None);
-                update_sort_ctx_children(&mut requirements.children[idx], true)?;
+                add_sort_above(child_node, required, None);
+                update_sort_ctx_children(child_node, true)?;
             }
         } else if physical_ordering.is_none()
-            || !requirements.plan.maintains_input_order()[idx]
-            || is_union(&requirements.plan)
+            || !plan.maintains_input_order()[idx]
+            || is_union(plan)
         {
             // We have a `SortExec` whose effect may be neutralized by another
             // order-imposing operator, remove this sort:
-            update_child_to_remove_unnecessary_sort(
-                idx,
-                &mut requirements.children[idx],
-                &requirements.plan,
-            )?;
+            update_child_to_remove_unnecessary_sort(idx, child_node, plan)?;
         }
     }
     // For window expressions, we can remove some sorts when we can
     // calculate the result in reverse:
-    if is_window(&requirements.plan) && requirements.children[0].data {
+    let child_node = &requirements.children[0];
+    if is_window(plan) && child_node.data {
         analyze_window_sort_removal(&mut requirements)?;
         return Ok(Transformed::Yes(requirements));
-    } else if is_sort_preserving_merge(&requirements.plan)
-        && requirements.children[0]
-            .plan
-            .output_partitioning()
-            .partition_count()
-            <= 1
+    } else if is_sort_preserving_merge(plan)
+        && child_node.plan.output_partitioning().partition_count() <= 1
     {
         // This `SortPreservingMergeExec` is unnecessary, input already has a
         // single partition.
@@ -584,24 +573,14 @@ fn remove_corresponding_sort_from_sub_plan(
     {
         // If there is existing ordering, to preserve ordering use
         // `SortPreservingMergeExec` instead of a `CoalescePartitionsExec`.
-        let mut new_node = if let Some(ordering) = node.plan.output_ordering() {
-            PlanWithCorrespondingSort {
-                plan: Arc::new(SortPreservingMergeExec::new(
-                    ordering.to_vec(),
-                    node.plan.clone(),
-                )) as _,
-                data: false,
-                children: vec![node.clone()],
-            }
+        let plan = node.plan.clone();
+        let plan = if let Some(ordering) = node.plan.output_ordering() {
+            Arc::new(SortPreservingMergeExec::new(ordering.to_vec(), plan)) as _
         } else {
-            PlanWithCorrespondingSort {
-                plan: Arc::new(CoalescePartitionsExec::new(node.plan.clone())) as _,
-                data: false,
-                children: vec![node.clone()],
-            }
+            Arc::new(CoalescePartitionsExec::new(plan)) as _
         };
-        update_sort_ctx_children(&mut new_node, false)?;
-        *node = new_node;
+        *node = PlanWithCorrespondingSort::new(plan, false, vec![node.clone()]);
+        update_sort_ctx_children(node, false)?;
     }
     Ok(())
 }
@@ -612,13 +591,9 @@ fn get_sort_exprs(
 ) -> Result<(&[PhysicalSortExpr], Option<usize>)> {
     if let Some(sort_exec) = sort_any.as_any().downcast_ref::<SortExec>() {
         Ok((sort_exec.expr(), sort_exec.fetch()))
-    } else if let Some(sort_preserving_merge_exec) =
-        sort_any.as_any().downcast_ref::<SortPreservingMergeExec>()
+    } else if let Some(spm) = sort_any.as_any().downcast_ref::<SortPreservingMergeExec>()
     {
-        Ok((
-            sort_preserving_merge_exec.expr(),
-            sort_preserving_merge_exec.fetch(),
-        ))
+        Ok((spm.expr(), spm.fetch()))
     } else {
         plan_err!("Given ExecutionPlan is not a SortExec or a SortPreservingMergeExec")
     }
@@ -654,7 +629,6 @@ mod tests {
         let nullable_column = Field::new("nullable_col", DataType::Int32, true);
         let non_nullable_column = Field::new("non_nullable_col", DataType::Int32, false);
         let schema = Arc::new(Schema::new(vec![nullable_column, non_nullable_column]));
-
         Ok(schema)
     }
 
