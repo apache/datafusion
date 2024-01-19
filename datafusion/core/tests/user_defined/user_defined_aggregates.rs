@@ -19,7 +19,7 @@
 //! user defined aggregate functions
 
 use arrow::{array::AsArray, datatypes::Fields};
-use arrow_array::{types::UInt64Type, Int32Array, PrimitiveArray};
+use arrow_array::{types::UInt64Type, Int32Array, PrimitiveArray, StructArray};
 use arrow_schema::Schema;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -589,16 +589,14 @@ impl FirstSelector {
     }
 
     /// Convert to a set of ScalarValues
-    fn to_state(&self) -> Vec<ScalarValue> {
-        vec![
-            ScalarValue::Float64(Some(self.value)),
-            ScalarValue::TimestampNanosecond(Some(self.time), None),
-        ]
-    }
+    fn to_state(&self) -> Result<ScalarValue> {
+        let f64arr = Arc::new(Float64Array::from(vec![self.value])) as ArrayRef;
+        let timearr =
+            Arc::new(TimestampNanosecondArray::from(vec![self.time])) as ArrayRef;
 
-    /// return this selector as a single scalar (struct) value
-    fn to_scalar(&self) -> ScalarValue {
-        ScalarValue::Struct(Some(self.to_state()), Self::fields())
+        let struct_arr =
+            StructArray::try_new(Self::fields(), vec![f64arr, timearr], None)?;
+        Ok(ScalarValue::Struct(Arc::new(struct_arr)))
     }
 }
 

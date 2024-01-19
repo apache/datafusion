@@ -1985,7 +1985,6 @@ mod tests {
     use crate::physical_plan::{DisplayAs, SendableRecordBatchStream};
     use crate::physical_planner::PhysicalPlanner;
     use crate::prelude::{SessionConfig, SessionContext};
-    use crate::scalar::ScalarValue;
     use crate::test_util::{scan_empty, scan_empty_with_partitions};
     use arrow::array::{ArrayRef, DictionaryArray, Int32Array};
     use arrow::datatypes::{DataType, Field, Int32Type, SchemaRef};
@@ -2310,10 +2309,11 @@ mod tests {
 
     /// Return a `null` literal representing a struct type like: `{ a: bool }`
     fn struct_literal() -> Expr {
-        let struct_literal = ScalarValue::Struct(
-            None,
+        let struct_literal = ScalarValue::try_from(DataType::Struct(
             vec![Field::new("foo", DataType::Boolean, false)].into(),
-        );
+        ))
+        .unwrap();
+
         lit(struct_literal)
     }
 
