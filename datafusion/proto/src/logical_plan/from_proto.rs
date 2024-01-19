@@ -65,10 +65,9 @@ use datafusion_expr::{
     radians, random, regexp_match, regexp_replace, repeat, replace, reverse, right,
     round, rpad, rtrim, sha224, sha256, sha384, sha512, signum, sin, sinh, split_part,
     sqrt, starts_with, string_to_array, strpos, struct_fun, substr, substr_index,
-    substring, tan, tanh, to_hex, to_timestamp_micros, to_timestamp_millis,
-    to_timestamp_nanos, to_timestamp_seconds, translate, trim, trunc, upper, uuid,
-    AggregateFunction, Between, BinaryExpr, BuiltInWindowFunction, BuiltinScalarFunction,
-    Case, Cast, Expr, GetFieldAccess, GetIndexedField, GroupingSet,
+    substring, tan, tanh, to_hex, translate, trim, trunc, upper, uuid, AggregateFunction,
+    Between, BinaryExpr, BuiltInWindowFunction, BuiltinScalarFunction, Case, Cast, Expr,
+    GetFieldAccess, GetIndexedField, GroupingSet,
     GroupingSet::GroupingSets,
     JoinConstraint, JoinType, Like, Operator, TryCast, WindowFrame, WindowFrameBound,
     WindowFrameUnits,
@@ -476,7 +475,6 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::Trim => Self::Trim,
             ScalarFunction::Ltrim => Self::Ltrim,
             ScalarFunction::Rtrim => Self::Rtrim,
-            ScalarFunction::ToTimestamp => Self::ToTimestamp,
             ScalarFunction::ArrayAppend => Self::ArrayAppend,
             ScalarFunction::ArraySort => Self::ArraySort,
             ScalarFunction::ArrayConcat => Self::ArrayConcat,
@@ -523,7 +521,6 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::Digest => Self::Digest,
             ScalarFunction::Encode => Self::Encode,
             ScalarFunction::Decode => Self::Decode,
-            ScalarFunction::ToTimestampMillis => Self::ToTimestampMillis,
             ScalarFunction::Log2 => Self::Log2,
             ScalarFunction::Signum => Self::Signum,
             ScalarFunction::Ascii => Self::Ascii,
@@ -548,6 +545,8 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::Strpos => Self::Strpos,
             ScalarFunction::Substr => Self::Substr,
             ScalarFunction::ToHex => Self::ToHex,
+            ScalarFunction::ToTimestamp => Self::ToTimestamp,
+            ScalarFunction::ToTimestampMillis => Self::ToTimestampMillis,
             ScalarFunction::ToTimestampMicros => Self::ToTimestampMicros,
             ScalarFunction::ToTimestampNanos => Self::ToTimestampNanos,
             ScalarFunction::ToTimestampSeconds => Self::ToTimestampSeconds,
@@ -1689,36 +1688,56 @@ pub fn parse_expr(
                     parse_expr(&args[1], registry)?,
                 )),
                 ScalarFunction::ToHex => Ok(to_hex(parse_expr(&args[0], registry)?)),
-                ScalarFunction::ToTimestamp => Ok(to_timestamp_seconds(
-                    args.to_owned()
+                ScalarFunction::ToTimestamp => {
+                    let args: Vec<_> = args
                         .iter()
                         .map(|expr| parse_expr(expr, registry))
-                        .collect::<Result<Vec<_>, _>>()?,
-                )),
-                ScalarFunction::ToTimestampMillis => Ok(to_timestamp_millis(
-                    args.to_owned()
+                        .collect::<std::result::Result<_, _>>()?;
+                    Ok(Expr::ScalarFunction(expr::ScalarFunction::new(
+                        BuiltinScalarFunction::ToTimestamp,
+                        args,
+                    )))
+                }
+                ScalarFunction::ToTimestampMillis => {
+                    let args: Vec<_> = args
                         .iter()
                         .map(|expr| parse_expr(expr, registry))
-                        .collect::<Result<Vec<_>, _>>()?,
-                )),
-                ScalarFunction::ToTimestampMicros => Ok(to_timestamp_micros(
-                    args.to_owned()
+                        .collect::<Result<_, _>>()?;
+                    Ok(Expr::ScalarFunction(expr::ScalarFunction::new(
+                        BuiltinScalarFunction::ToTimestampMillis,
+                        args,
+                    )))
+                }
+                ScalarFunction::ToTimestampMicros => {
+                    let args: Vec<_> = args
                         .iter()
                         .map(|expr| parse_expr(expr, registry))
-                        .collect::<Result<Vec<_>, _>>()?,
-                )),
-                ScalarFunction::ToTimestampNanos => Ok(to_timestamp_nanos(
-                    args.to_owned()
+                        .collect::<std::result::Result<_, _>>()?;
+                    Ok(Expr::ScalarFunction(expr::ScalarFunction::new(
+                        BuiltinScalarFunction::ToTimestampMicros,
+                        args,
+                    )))
+                }
+                ScalarFunction::ToTimestampNanos => {
+                    let args: Vec<_> = args
                         .iter()
                         .map(|expr| parse_expr(expr, registry))
-                        .collect::<Result<Vec<_>, _>>()?,
-                )),
-                ScalarFunction::ToTimestampSeconds => Ok(to_timestamp_seconds(
-                    args.to_owned()
+                        .collect::<Result<_, _>>()?;
+                    Ok(Expr::ScalarFunction(expr::ScalarFunction::new(
+                        BuiltinScalarFunction::ToTimestampNanos,
+                        args,
+                    )))
+                }
+                ScalarFunction::ToTimestampSeconds => {
+                    let args: Vec<_> = args
                         .iter()
                         .map(|expr| parse_expr(expr, registry))
-                        .collect::<Result<Vec<_>, _>>()?,
-                )),
+                        .collect::<std::result::Result<_, _>>()?;
+                    Ok(Expr::ScalarFunction(expr::ScalarFunction::new(
+                        BuiltinScalarFunction::ToTimestampSeconds,
+                        args,
+                    )))
+                }
                 ScalarFunction::Now => Ok(now()),
                 ScalarFunction::Translate => Ok(translate(
                     parse_expr(&args[0], registry)?,
