@@ -3261,6 +3261,8 @@ select count(*) from (select count(*) a, count(*) b from (select 1));
 ----
 1
 
+# rule `aggregate_statistics` should not optimize MIN/MAX to wrong values on empty relation
+
 statement ok
 CREATE TABLE empty(col0 INTEGER);
 
@@ -3276,3 +3278,19 @@ NULL
 
 statement ok
 DROP TABLE empty;
+
+statement ok
+CREATE TABLE t(col0 INTEGER) as VALUES(2);
+
+query I
+SELECT MIN(col0) FROM t WHERE col0=1;
+----
+NULL
+
+query I
+SELECT MAX(col0) FROM t WHERE col0=1;
+----
+NULL
+
+statement ok
+DROP TABLE t;
