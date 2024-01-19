@@ -492,11 +492,12 @@ fn reorder_aggregate_keys(
                         agg_exec.input().clone(),
                         agg_exec.input_schema.clone(),
                     )?);
-                    // Build new group expressions that correspond to the output of partial_agg
+                    // Build new group expressions that correspond to the output
+                    // of the "reordered" aggregator:
                     let group_exprs = partial_agg.group_expr().expr();
-                    let new_final_group = partial_agg.output_group_expr();
                     let new_group_by = PhysicalGroupBy::new_single(
-                        new_final_group
+                        partial_agg
+                            .output_group_expr()
                             .into_iter()
                             .enumerate()
                             .map(|(idx, expr)| (expr, group_exprs[idx].1.clone()))
@@ -511,16 +512,13 @@ fn reorder_aggregate_keys(
                         agg_exec.input_schema(),
                     )?);
 
-                    let partial_agg_node = PlanWithKeyRequirements {
-                        plan: partial_agg as _,
-                        data: vec![],
-                        children: agg_node.children.swap_remove(0).children,
-                    };
-                    let new_final_agg_node = PlanWithKeyRequirements {
-                        plan: new_final_agg.clone(),
-                        data: vec![],
-                        children: vec![partial_agg_node],
-                    };
+                    agg_node.plan = new_final_agg.clone();
+                    agg_node.data.clear();
+                    agg_node.children = vec![PlanWithKeyRequirements::new(
+                        partial_agg as _,
+                        vec![],
+                        agg_node.children.swap_remove(0).children,
+                    )];
 
                     // Need to create a new projection to change the expr ordering back
                     let agg_schema = new_final_agg.schema();
@@ -537,15 +535,11 @@ fn reorder_aggregate_keys(
                         agg_fields.iter().enumerate().skip(output_columns.len())
                     {
                         let name = field.name();
-                        proj_exprs
-                            .push((Arc::new(Column::new(name, idx)) as _, name.clone()))
+                        let plan = Arc::new(Column::new(name, idx)) as _;
+                        proj_exprs.push((plan, name.clone()))
                     }
                     return ProjectionExec::try_new(proj_exprs, new_final_agg).map(|p| {
-                        PlanWithKeyRequirements {
-                            plan: Arc::new(p),
-                            data: vec![],
-                            children: vec![new_final_agg_node],
-                        }
+                        PlanWithKeyRequirements::new(Arc::new(p), vec![], vec![agg_node])
                     });
                 }
             }
@@ -561,17 +555,11 @@ fn shift_right_required(
     let new_right_required = parent_required
         .iter()
         .filter_map(|r| {
-            if let Some(col) = r.as_any().downcast_ref::<Column>() {
-                let idx = col.index();
-                if idx >= left_columns_len {
-                    let result = Column::new(col.name(), idx - left_columns_len);
-                    Some(Arc::new(result) as _)
-                } else {
-                    None
-                }
-            } else {
-                None
-            }
+            r.as_any().downcast_ref::<Column>().and_then(|col| {
+                col.index()
+                    .checked_sub(left_columns_len)
+                    .map(|index| Arc::new(Column::new(col.name(), index)) as _)
+            })
         })
         .collect::<Vec<_>>();
 
