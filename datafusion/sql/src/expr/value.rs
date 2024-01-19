@@ -24,8 +24,8 @@ use datafusion_common::{
 };
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::expr::{BinaryExpr, Placeholder};
+use datafusion_expr::BuiltinScalarFunction;
 use datafusion_expr::{lit, Expr, Operator};
-use datafusion_expr::{BuiltinScalarFunction, ScalarFunctionDefinition};
 use log::debug;
 use sqlparser::ast::{BinaryOperator, Expr as SQLExpr, Interval, Value};
 use sqlparser::parser::ParserError::ParserError;
@@ -135,38 +135,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         elements: Vec<SQLExpr>,
         schema: &DFSchema,
     ) -> Result<Expr> {
-        let mut values = Vec::with_capacity(elements.len());
-
-        for element in elements {
-            let value = self.sql_expr_to_logical_expr(
-                element,
-                schema,
-                &mut PlannerContext::new(),
-            )?;
-
-            match value {
-                Expr::Literal(_) => {
-                    values.push(value);
-                }
-                Expr::ScalarFunction(ScalarFunction {
-                    func_def: ScalarFunctionDefinition::BuiltIn(fun),
-                    ..
-                }) => {
-                    if fun == BuiltinScalarFunction::MakeArray {
-                        values.push(value);
-                    } else {
-                        return not_impl_err!(
-                            "ScalarFunctions without MakeArray are not supported: {value}"
-                        );
-                    }
-                }
-                _ => {
-                    return not_impl_err!(
-                        "Arrays with elements other than literal are not supported: {value}"
-                    );
-                }
-            }
-        }
+        let values = elements
+            .into_iter()
+            .map(|element| {
+                self.sql_expr_to_logical_expr(element, schema, &mut PlannerContext::new())
+            })
+            .collect::<Result<Vec<_>>>()?;
 
         Ok(Expr::ScalarFunction(ScalarFunction::new(
             BuiltinScalarFunction::MakeArray,

@@ -58,8 +58,8 @@ use datafusion_expr::{
     current_date, current_time, date_bin, date_part, date_trunc, decode, degrees, digest,
     encode, exp,
     expr::{self, InList, Sort, WindowFunction},
-    factorial, find_in_set, flatten, floor, from_unixtime, gcd, gen_range, isnan, iszero,
-    lcm, left, levenshtein, ln, log, log10, log2,
+    factorial, find_in_set, flatten, floor, from_unixtime, gcd, gen_range, initcap,
+    isnan, iszero, lcm, left, levenshtein, ln, log, log10, log2,
     logical_plan::{PlanType, StringifiedPlan},
     lower, lpad, ltrim, md5, nanvl, now, nullif, octet_length, overlay, pi, power,
     radians, random, regexp_match, regexp_replace, repeat, replace, reverse, right,
@@ -1585,7 +1585,7 @@ pub fn parse_expr(
                     Ok(character_length(parse_expr(&args[0], registry)?))
                 }
                 ScalarFunction::Chr => Ok(chr(parse_expr(&args[0], registry)?)),
-                ScalarFunction::InitCap => Ok(ascii(parse_expr(&args[0], registry)?)),
+                ScalarFunction::InitCap => Ok(initcap(parse_expr(&args[0], registry)?)),
                 ScalarFunction::Gcd => Ok(gcd(
                     parse_expr(&args[0], registry)?,
                     parse_expr(&args[1], registry)?,
