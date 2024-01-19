@@ -586,6 +586,30 @@ mod tests {
     #[test]
     // Tests actual values of hashes, which are different if forcing collisions
     #[cfg(not(feature = "force_hash_collisions"))]
+    fn create_hashes_for_fixed_size_list_arrays() {
+        let data = vec![
+            Some(vec![Some(0), Some(1), Some(2)]),
+            None,
+            Some(vec![Some(3), None, Some(5)]),
+            Some(vec![Some(3), None, Some(5)]),
+            None,
+            Some(vec![Some(0), Some(1), Some(2)]),
+        ];
+        let list_array =
+            Arc::new(FixedSizeListArray::from_iter_primitive::<Int32Type, _, _>(
+                data, 3,
+            )) as ArrayRef;
+        let random_state = RandomState::with_seeds(0, 0, 0, 0);
+        let mut hashes = vec![0; list_array.len()];
+        create_hashes(&[list_array], &random_state, &mut hashes).unwrap();
+        assert_eq!(hashes[0], hashes[5]);
+        assert_eq!(hashes[1], hashes[4]);
+        assert_eq!(hashes[2], hashes[3]);
+    }
+
+    #[test]
+    // Tests actual values of hashes, which are different if forcing collisions
+    #[cfg(not(feature = "force_hash_collisions"))]
     fn create_hashes_for_struct_arrays() {
         use arrow_buffer::Buffer;
 
