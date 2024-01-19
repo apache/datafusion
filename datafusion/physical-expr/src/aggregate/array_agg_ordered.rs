@@ -225,6 +225,7 @@ impl Accumulator for OrderSensitiveArrayAggAccumulator {
         if states.is_empty() {
             return Ok(());
         }
+
         // First entry in the state is the aggregation result. Second entry
         // stores values received for ordering requirement columns for each
         // aggregation value inside `ARRAY_AGG` list. For each `StructArray`
@@ -244,12 +245,20 @@ impl Accumulator for OrderSensitiveArrayAggAccumulator {
         let mut partition_ordering_values = vec![];
 
         // Existing values should be merged also.
-        partition_values.push(self.values.clone().into());
-        partition_ordering_values.push(self.ordering_values.clone().into());
+        partition_values.push(self.values.clone());
+        partition_ordering_values.push(self.ordering_values.clone());
 
+        // Convert array to Scalars to sort them easily. Convert back to array at evaluation.
         let array_agg_res = ScalarValue::convert_array_to_scalar_vec(array_agg_values)?;
-
         partition_values.extend(array_agg_res);
+
+        let orderings = ScalarValue::convert_array_to_scalar_vec(agg_orderings)?;
+
+        for partition_ordering_rows in orderings.into_iter() {
+            // Extract value from struct to ordering_rows for each group/partition
+            let ordering_value = partition_ordering_rows.into_iter().map(|ordering_row| {
+                        if let ScalarValue::Struct(s) = ordering_row {
+                            let mut ordering_columns_per_row = vec![];
 
         let orderings = ScalarValue::convert_array_to_scalar_vec(agg_orderings)?;
         for partition_ordering_rows in orderings.into_iter() {
@@ -271,6 +280,7 @@ impl Accumulator for OrderSensitiveArrayAggAccumulator {
                         )
                     }
                 }).collect::<Result<Vec<_>>>()?;
+                    // }).collect::<Result<Vec<_>>>()?;
             partition_ordering_values.push(ordering_value);
         }
 
