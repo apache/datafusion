@@ -1476,7 +1476,7 @@ Integers, unsigned integers, and doubles are interpreted as seconds since the un
 Returns the corresponding timestamp.
 
 Note: `to_timestamp` returns `Timestamp(Nanosecond)`. The supported range for integer input is between `-9223372037` and `9223372036`.
-Supported range for string input is between `1677-09-21T00:12:44.0` and `2262-04-11T23:47:16.0`. Please use `to_timestamp_seconds` 
+Supported range for string input is between `1677-09-21T00:12:44.0` and `2262-04-11T23:47:16.0`. Please use `to_timestamp_seconds`
 for the input outside of supported bounds.
 
 ```
@@ -1491,7 +1491,7 @@ to_timestamp(expression[, ..., format_n])
   they appear with the first successful one being returned. If none of the formats successfully parse the expression
   an error will be returned.
 
-[Chrono format]: https://docs.rs/chrono/latest/chrono/format/strftime/index.html
+[chrono format]: https://docs.rs/chrono/latest/chrono/format/strftime/index.html
 
 ### `to_timestamp_millis`
 
@@ -1552,6 +1552,7 @@ to_timestamp_nanos(expression[, ..., format_n])
 - **format_n**: Optional [Chrono format] strings to use to parse the expression. Formats will be tried in the order
   they appear with the first successful one being returned. If none of the formats successfully parse the expression
   an error will be returned.
+
 ### `to_timestamp_seconds`
 
 Converts a value to a timestamp (`YYYY-MM-DDT00:00:00.000Z`).
@@ -1570,7 +1571,7 @@ to_timestamp_seconds(expression[, ..., format_n])
   Can be a constant, column, or function, and any combination of arithmetic operators.
 - **format_n**: Optional [Chrono format] strings to use to parse the expression. Formats will be tried in the order
   they appear with the first successful one being returned. If none of the formats successfully parse the expression
-  an error will be returned. 
+  an error will be returned.
 
 ### `from_unixtime`
 
