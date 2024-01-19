@@ -87,8 +87,8 @@ use datafusion_expr::expr::{
 use datafusion_expr::expr_rewriter::unnormalize_cols;
 use datafusion_expr::logical_plan::builder::wrap_projection_for_join_if_necessary;
 use datafusion_expr::{
-    DescribeTable, DmlStatement, ScalarFunctionDefinition, StringifiedPlan, WindowFrame,
-    WindowFrameBound, WriteOp,
+    DescribeTable, DmlStatement, RecursiveQuery, ScalarFunctionDefinition,
+    StringifiedPlan, WindowFrame, WindowFrameBound, WriteOp,
 };
 use datafusion_physical_expr::expressions::Literal;
 use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
@@ -1289,6 +1289,9 @@ impl DefaultPhysicalPlanner {
                     } else {
                         Ok(plan)
                     }
+                }
+                LogicalPlan::RecursiveQuery(RecursiveQuery { name: _, static_term: _, recursive_term: _, is_distinct: _,.. }) => {
+                    not_impl_err!("Physical counterpart of RecursiveQuery is not implemented yet")
                 }
             };
             exec_plan
