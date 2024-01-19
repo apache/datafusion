@@ -795,6 +795,8 @@ fn try_swapping_with_sym_hash_join(
         new_filter,
         sym_join.join_type(),
         sym_join.null_equals_null(),
+        sym_join.right().output_ordering().map(|p| p.to_vec()),
+        sym_join.left().output_ordering().map(|p| p.to_vec()),
         sym_join.partition_mode(),
     )?)))
 }
@@ -2048,6 +2050,8 @@ mod tests {
             )),
             &JoinType::Inner,
             true,
+            None,
+            None,
             StreamJoinPartitionMode::SinglePartition,
         )?);
         let projection: Arc<dyn ExecutionPlan> = Arc::new(ProjectionExec::try_new(

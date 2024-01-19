@@ -114,6 +114,14 @@ VALUES (1,2,3,4,5,6,7,8,9,10,11,12,13,NULL,'F',3.5)
 ----
 1 2 3 4 5 6 7 8 9 10 11 12 13 NULL F 3.5
 
+# Test non-literal expressions in VALUES
+query II
+VALUES (1, CASE WHEN RANDOM() > 0.5 THEN 1 ELSE 1 END), 
+       (2, CASE WHEN RANDOM() > 0.5 THEN 2 ELSE 2 END);
+----
+1 1
+2 2
+
 query IT
 SELECT * FROM (VALUES (1,'a'),(2,NULL)) AS t(c1, c2)
 ----
@@ -1101,6 +1109,25 @@ SELECT abs(x), abs(x) + abs(y) FROM t;
 ----
 1 3
 1 4
+
+statement ok
+DROP TABLE t;
+
+# related to https://github.com/apache/arrow-datafusion/issues/8814
+statement ok
+create table t(x int, y int) as values (1,1), (2,2), (3,3), (0,0), (4,0);
+
+query II
+SELECT
+CASE WHEN B.x > 0 THEN A.x / B.x ELSE 0 END AS value1,
+CASE WHEN B.x > 0 AND B.y > 0 THEN A.x / B.x ELSE 0 END AS value3
+FROM t AS A, (SELECT * FROM t WHERE x = 0) AS B; 
+----
+0 0
+0 0
+0 0
+0 0
+0 0
 
 statement ok
 DROP TABLE t;

@@ -349,8 +349,8 @@ pub struct CreateExternalTableNode {
     pub delimiter: ::prost::alloc::string::String,
     #[prost(string, tag = "9")]
     pub definition: ::prost::alloc::string::String,
-    #[prost(string, tag = "10")]
-    pub file_compression_type: ::prost::alloc::string::String,
+    #[prost(enumeration = "CompressionTypeVariant", tag = "17")]
+    pub file_compression_type: i32,
     #[prost(message, repeated, tag = "13")]
     pub order_exprs: ::prost::alloc::vec::Vec<LogicalExprNodeCollection>,
     #[prost(bool, tag = "14")]
@@ -1646,7 +1646,7 @@ pub struct PartitionColumn {
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct FileTypeWriterOptions {
-    #[prost(oneof = "file_type_writer_options::FileType", tags = "1, 2, 3")]
+    #[prost(oneof = "file_type_writer_options::FileType", tags = "1, 2, 3, 4")]
     pub file_type: ::core::option::Option<file_type_writer_options::FileType>,
 }
 /// Nested message and enum types in `FileTypeWriterOptions`.
@@ -1660,6 +1660,8 @@ pub mod file_type_writer_options {
         ParquetOptions(super::ParquetWriterOptions),
         #[prost(message, tag = "3")]
         CsvOptions(super::CsvWriterOptions),
+        #[prost(message, tag = "4")]
+        ArrowOptions(super::ArrowWriterOptions),
     }
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
@@ -1702,6 +1704,9 @@ pub struct CsvWriterOptions {
     #[prost(string, tag = "8")]
     pub null_value: ::prost::alloc::string::String,
 }
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ArrowWriterOptions {}
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct WriterProperties {
@@ -2178,6 +2183,10 @@ pub struct SymmetricHashJoinExecNode {
     pub null_equals_null: bool,
     #[prost(message, optional, tag = "8")]
     pub filter: ::core::option::Option<JoinFilter>,
+    #[prost(message, repeated, tag = "9")]
+    pub left_sort_exprs: ::prost::alloc::vec::Vec<PhysicalSortExprNode>,
+    #[prost(message, repeated, tag = "10")]
+    pub right_sort_exprs: ::prost::alloc::vec::Vec<PhysicalSortExprNode>,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -2754,6 +2763,7 @@ pub enum ScalarFunction {
     FindInSet = 127,
     ArraySort = 128,
     ArrayDistinct = 129,
+    ArrayResize = 130,
 }
 impl ScalarFunction {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -2892,6 +2902,7 @@ impl ScalarFunction {
             ScalarFunction::FindInSet => "FindInSet",
             ScalarFunction::ArraySort => "ArraySort",
             ScalarFunction::ArrayDistinct => "ArrayDistinct",
+            ScalarFunction::ArrayResize => "ArrayResize",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -3027,6 +3038,7 @@ impl ScalarFunction {
             "FindInSet" => Some(Self::FindInSet),
             "ArraySort" => Some(Self::ArraySort),
             "ArrayDistinct" => Some(Self::ArrayDistinct),
+            "ArrayResize" => Some(Self::ArrayResize),
             _ => None,
         }
     }
@@ -3072,6 +3084,7 @@ pub enum AggregateFunction {
     RegrSyy = 33,
     RegrSxy = 34,
     StringAgg = 35,
+    NthValueAgg = 36,
 }
 impl AggregateFunction {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -3118,6 +3131,7 @@ impl AggregateFunction {
             AggregateFunction::RegrSyy => "REGR_SYY",
             AggregateFunction::RegrSxy => "REGR_SXY",
             AggregateFunction::StringAgg => "STRING_AGG",
+            AggregateFunction::NthValueAgg => "NTH_VALUE_AGG",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -3161,6 +3175,7 @@ impl AggregateFunction {
             "REGR_SYY" => Some(Self::RegrSyy),
             "REGR_SXY" => Some(Self::RegrSxy),
             "STRING_AGG" => Some(Self::StringAgg),
+            "NTH_VALUE_AGG" => Some(Self::NthValueAgg),
             _ => None,
         }
     }

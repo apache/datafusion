@@ -52,7 +52,7 @@ SELECT SUM("AdvEngineID"), COUNT(*), AVG("ResolutionWidth") FROM hits;
 query R
 SELECT AVG("UserID") FROM hits;
 ----
--304548765855551600
+-304548765855551740
 
 query I
 SELECT COUNT(DISTINCT "UserID") FROM hits;

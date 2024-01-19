@@ -25,7 +25,6 @@ use crate::aggregates::{
     no_grouping::AggregateStream, row_hash::GroupedHashAggregateStream,
     topk_stream::GroupedTopKAggregateStream,
 };
-
 use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::windows::get_ordered_partition_by_indices;
 use crate::{
@@ -37,7 +36,7 @@ use arrow::array::ArrayRef;
 use arrow::datatypes::{Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::stats::Precision;
-use datafusion_common::{not_impl_err, plan_err, DataFusionError, Result};
+use datafusion_common::{internal_err, not_impl_err, plan_err, DataFusionError, Result};
 use datafusion_execution::TaskContext;
 use datafusion_expr::Accumulator;
 use datafusion_physical_expr::{
@@ -321,6 +320,11 @@ impl AggregateExec {
         input_schema: SchemaRef,
         schema: SchemaRef,
     ) -> Result<Self> {
+        // Make sure arguments are consistent in size
+        if aggr_expr.len() != filter_expr.len() {
+            return internal_err!("Inconsistent aggregate expr: {:?} and filter expr: {:?} for AggregateExec, their size should match", aggr_expr, filter_expr);
+        }
+
         let input_eq_properties = input.equivalence_properties();
         // Get GROUP BY expressions:
         let groupby_exprs = group_by.input_exprs();
@@ -904,6 +908,7 @@ fn get_aggregate_exprs_requirement(
         let aggr_req = PhysicalSortRequirement::from_sort_exprs(aggr_req);
         let reverse_aggr_req =
             PhysicalSortRequirement::from_sort_exprs(&reverse_aggr_req);
+
         if let Some(first_value) = aggr_expr.as_any().downcast_ref::<FirstValue>() {
             let mut first_value = first_value.clone();
             if eq_properties.ordering_satisfy_requirement(&concat_slices(
@@ -926,7 +931,9 @@ fn get_aggregate_exprs_requirement(
                 first_value = first_value.with_requirement_satisfied(false);
                 *aggr_expr = Arc::new(first_value) as _;
             }
-        } else if let Some(last_value) = aggr_expr.as_any().downcast_ref::<LastValue>() {
+            continue;
+        }
+        if let Some(last_value) = aggr_expr.as_any().downcast_ref::<LastValue>() {
             let mut last_value = last_value.clone();
             if eq_properties.ordering_satisfy_requirement(&concat_slices(
                 prefix_requirement,
@@ -948,18 +955,63 @@ fn get_aggregate_exprs_requirement(
                 last_value = last_value.with_requirement_satisfied(false);
                 *aggr_expr = Arc::new(last_value) as _;
             }
-        } else if let Some(finer_ordering) =
+            continue;
+        }
+        if let Some(finer_ordering) =
             finer_ordering(&requirement, aggr_expr, group_by, eq_properties, agg_mode)
         {
-            requirement = finer_ordering;
-        } else {
-            // If neither of the requirements satisfy the other, this means
-            // requirements are conflicting. Currently, we do not support
-            // conflicting requirements.
-            return not_impl_err!(
-                "Conflicting ordering requirements in aggregate functions is not supported"
-            );
+            if eq_properties.ordering_satisfy(&finer_ordering) {
+                // Requirement is satisfied by existing ordering
+                requirement = finer_ordering;
+                continue;
+            }
         }
+        if let Some(reverse_aggr_expr) = aggr_expr.reverse_expr() {
+            if let Some(finer_ordering) = finer_ordering(
+                &requirement,
+                &reverse_aggr_expr,
+                group_by,
+                eq_properties,
+                agg_mode,
+            ) {
+                if eq_properties.ordering_satisfy(&finer_ordering) {
+                    // Reverse requirement is satisfied by exiting ordering.
+                    // Hence reverse the aggregator
+                    requirement = finer_ordering;
+                    *aggr_expr = reverse_aggr_expr;
+                    continue;
+                }
+            }
+        }
+        if let Some(finer_ordering) =
+            finer_ordering(&requirement, aggr_expr, group_by, eq_properties, agg_mode)
+        {
+            // There is a requirement that both satisfies existing requirement and current
+            // aggregate requirement. Use updated requirement
+            requirement = finer_ordering;
+            continue;
+        }
+        if let Some(reverse_aggr_expr) = aggr_expr.reverse_expr() {
+            if let Some(finer_ordering) = finer_ordering(
+                &requirement,
+                &reverse_aggr_expr,
+                group_by,
+                eq_properties,
+                agg_mode,
+            ) {
+                // There is a requirement that both satisfies existing requirement and reverse
+                // aggregate requirement. Use updated requirement
+                requirement = finer_ordering;
+                *aggr_expr = reverse_aggr_expr;
+                continue;
+            }
+        }
+        // Neither the existing requirement and current aggregate requirement satisfy the other, this means
+        // requirements are conflicting. Currently, we do not support
+        // conflicting requirements.
+        return not_impl_err!(
+            "Conflicting ordering requirements in aggregate functions is not supported"
+        );
     }
     Ok(PhysicalSortRequirement::from_sort_exprs(&requirement))
 }
@@ -1477,7 +1529,7 @@ mod tests {
         ))];
 
         let task_ctx = if spill {
-            new_spill_ctx(2, 1500)
+            new_spill_ctx(2, 1600)
         } else {
             Arc::new(TaskContext::default())
         };
@@ -1733,7 +1785,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore]
     async fn aggregate_source_with_yielding_with_spill() -> Result<()> {
         let input: Arc<dyn ExecutionPlan> =
             Arc::new(TestYieldingExec { yield_first: true });
@@ -1795,11 +1846,12 @@ mod tests {
             (1, groups_some.clone(), aggregates_v1),
             (2, groups_some, aggregates_v2),
         ] {
+            let n_aggr = aggregates.len();
             let partial_aggregate = Arc::new(AggregateExec::try_new(
                 AggregateMode::Partial,
                 groups,
                 aggregates,
-                vec![None; 3],
+                vec![None; n_aggr],
                 input.clone(),
                 input_schema.clone(),
             )?);
@@ -1943,7 +1995,7 @@ mod tests {
         spill: bool,
     ) -> Result<()> {
         let task_ctx = if spill {
-            new_spill_ctx(2, 2886)
+            new_spill_ctx(2, 3200)
         } else {
             Arc::new(TaskContext::default())
         };

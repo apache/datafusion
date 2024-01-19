@@ -83,11 +83,9 @@ pub struct FileStream<F: FileOpener> {
     projected_schema: SchemaRef,
     /// The remaining number of records to parse, None if no limit
     remain: Option<usize>,
-    /// A closure that takes a reader and an optional remaining number of lines
-    /// (before reaching the limit) and returns a batch iterator. If the file reader
-    /// is not capable of limiting the number of records in the last batch, the file
-    /// stream will take care of truncating it.
-    file_reader: F,
+    /// A generic [`FileOpener`]. Calling `open()` returns a [`FileOpenFuture`],
+    /// which can be resolved to a stream of `RecordBatch`.
+    file_opener: F,
     /// The partition column projector
     pc_projector: PartitionColumnProjector,
     /// The stream state
@@ -250,7 +248,7 @@ impl<F: FileOpener> FileStream<F> {
     pub fn new(
         config: &FileScanConfig,
         partition: usize,
-        file_reader: F,
+        file_opener: F,
         metrics: &ExecutionPlanMetricsSet,
     ) -> Result<Self> {
         let (projected_schema, ..) = config.project();
@@ -269,7 +267,7 @@ impl<F: FileOpener> FileStream<F> {
             file_iter: files.into(),
             projected_schema,
             remain: config.limit,
-            file_reader,
+            file_opener,
             pc_projector,
             state: FileStreamState::Idle,
             file_stream_metrics: FileStreamMetrics::new(metrics, partition),
@@ -301,7 +299,7 @@ impl<F: FileOpener> FileStream<F> {
         };
 
         Some(
-            self.file_reader
+            self.file_opener
                 .open(file_meta)
                 .map(|future| (future, part_file.partition_values)),
         )
@@ -535,7 +533,6 @@ mod tests {
     use arrow_schema::Schema;
     use datafusion_common::{internal_err, DataFusionError, Statistics};
 
-    use async_trait::async_trait;
     use bytes::Bytes;
     use futures::StreamExt;
 
@@ -989,9 +986,8 @@ mod tests {
         bytes: Bytes,
     }
 
-    #[async_trait]
     impl BatchSerializer for TestSerializer {
-        async fn serialize(&self, _batch: RecordBatch, _initial: bool) -> Result<Bytes> {
+        fn serialize(&self, _batch: RecordBatch, _initial: bool) -> Result<Bytes> {
             Ok(self.bytes.clone())
         }
     }

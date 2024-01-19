@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::sync::Arc;
+
 use crate::protobuf::{
     self,
     plan_type::PlanTypeEnum::{
@@ -26,7 +28,9 @@ use crate::protobuf::{
     AnalyzedLogicalPlanType, CubeNode, GroupingSetNode, OptimizedLogicalPlanType,
     OptimizedPhysicalPlanType, PlaceholderNode, RollupNode,
 };
+
 use arrow::{
+    array::AsArray,
     buffer::Buffer,
     datatypes::{
         i256, DataType, Field, IntervalMonthDayNanoType, IntervalUnit, Schema, TimeUnit,
@@ -40,20 +44,22 @@ use datafusion_common::{
     Constraints, DFField, DFSchema, DFSchemaRef, DataFusionError, OwnedTableReference,
     Result, ScalarValue,
 };
+use datafusion_expr::expr::{Alias, Placeholder};
 use datafusion_expr::window_frame::{check_window_frame, regularize_window_order_by};
 use datafusion_expr::{
     abs, acos, acosh, array, array_append, array_concat, array_dims, array_distinct,
-    array_element, array_except, array_has, array_has_all, array_has_any,
-    array_intersect, array_length, array_ndims, array_position, array_positions,
-    array_prepend, array_remove, array_remove_all, array_remove_n, array_repeat,
-    array_replace, array_replace_all, array_replace_n, array_slice, array_sort,
-    array_to_string, arrow_typeof, ascii, asin, asinh, atan, atan2, atanh, bit_length,
-    btrim, cardinality, cbrt, ceil, character_length, chr, coalesce, concat_expr,
-    concat_ws_expr, cos, cosh, cot, current_date, current_time, date_bin, date_part,
-    date_trunc, decode, degrees, digest, encode, exp,
+    array_element, array_empty, array_except, array_has, array_has_all, array_has_any,
+    array_intersect, array_length, array_ndims, array_pop_back, array_pop_front,
+    array_position, array_positions, array_prepend, array_remove, array_remove_all,
+    array_remove_n, array_repeat, array_replace, array_replace_all, array_replace_n,
+    array_resize, array_slice, array_sort, array_to_string, array_union, arrow_typeof,
+    ascii, asin, asinh, atan, atan2, atanh, bit_length, btrim, cardinality, cbrt, ceil,
+    character_length, chr, coalesce, concat_expr, concat_ws_expr, cos, cosh, cot,
+    current_date, current_time, date_bin, date_part, date_trunc, decode, degrees, digest,
+    encode, exp,
     expr::{self, InList, Sort, WindowFunction},
-    factorial, find_in_set, flatten, floor, from_unixtime, gcd, gen_range, isnan, iszero,
-    lcm, left, levenshtein, ln, log, log10, log2,
+    factorial, find_in_set, flatten, floor, from_unixtime, gcd, gen_range, initcap,
+    isnan, iszero, lcm, left, levenshtein, ln, log, log10, log2,
     logical_plan::{PlanType, StringifiedPlan},
     lower, lpad, ltrim, md5, nanvl, now, nullif, octet_length, overlay, pi, power,
     radians, random, regexp_match, regexp_replace, repeat, replace, reverse, right,
@@ -67,11 +73,6 @@ use datafusion_expr::{
     JoinConstraint, JoinType, Like, Operator, TryCast, WindowFrame, WindowFrameBound,
     WindowFrameUnits,
 };
-use datafusion_expr::{
-    array_empty, array_pop_back, array_pop_front,
-    expr::{Alias, Placeholder},
-};
-use std::sync::Arc;
 
 #[derive(Debug)]
 pub enum Error {
@@ -506,6 +507,7 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::ArrayToString => Self::ArrayToString,
             ScalarFunction::ArrayIntersect => Self::ArrayIntersect,
             ScalarFunction::ArrayUnion => Self::ArrayUnion,
+            ScalarFunction::ArrayResize => Self::ArrayResize,
             ScalarFunction::Range => Self::Range,
             ScalarFunction::Cardinality => Self::Cardinality,
             ScalarFunction::Array => Self::MakeArray,
@@ -615,6 +617,7 @@ impl From<protobuf::AggregateFunction> for AggregateFunction {
             protobuf::AggregateFunction::Median => Self::Median,
             protobuf::AggregateFunction::FirstValueAgg => Self::FirstValue,
             protobuf::AggregateFunction::LastValueAgg => Self::LastValue,
+            protobuf::AggregateFunction::NthValueAgg => Self::NthValue,
             protobuf::AggregateFunction::StringAgg => Self::StringAgg,
         }
     }
@@ -722,9 +725,15 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
                 .map_err(|e| e.context("Decoding ScalarValue::List Value"))?;
                 let arr = record_batch.column(0);
                 match value {
-                    Value::ListValue(_) => Self::List(arr.to_owned()),
-                    Value::LargeListValue(_) => Self::LargeList(arr.to_owned()),
-                    Value::FixedSizeListValue(_) => Self::FixedSizeList(arr.to_owned()),
+                    Value::ListValue(_) => {
+                        Self::List(arr.as_list::<i32>().to_owned().into())
+                    }
+                    Value::LargeListValue(_) => {
+                        Self::LargeList(arr.as_list::<i64>().to_owned().into())
+                    }
+                    Value::FixedSizeListValue(_) => {
+                        Self::FixedSizeList(arr.as_fixed_size_list().to_owned().into())
+                    }
                     _ => unreachable!(),
                 }
             }
@@ -871,11 +880,7 @@ impl TryFrom<protobuf::WindowFrame> for WindowFrame {
             })
             .transpose()?
             .unwrap_or(WindowFrameBound::CurrentRow);
-        Ok(Self {
-            units,
-            start_bound,
-            end_bound,
-        })
+        Ok(WindowFrame::new_bounds(units, start_bound, end_bound))
     }
 }
 
@@ -1486,11 +1491,14 @@ pub fn parse_expr(
                 ScalarFunction::ArrayNdims => {
                     Ok(array_ndims(parse_expr(&args[0], registry)?))
                 }
-                ScalarFunction::ArrayUnion => Ok(array(
-                    args.to_owned()
-                        .iter()
-                        .map(|expr| parse_expr(expr, registry))
-                        .collect::<Result<Vec<_>, _>>()?,
+                ScalarFunction::ArrayUnion => Ok(array_union(
+                    parse_expr(&args[0], registry)?,
+                    parse_expr(&args[1], registry)?,
+                )),
+                ScalarFunction::ArrayResize => Ok(array_resize(
+                    parse_expr(&args[0], registry)?,
+                    parse_expr(&args[1], registry)?,
+                    parse_expr(&args[2], registry)?,
                 )),
                 ScalarFunction::Sqrt => Ok(sqrt(parse_expr(&args[0], registry)?)),
                 ScalarFunction::Cbrt => Ok(cbrt(parse_expr(&args[0], registry)?)),
@@ -1577,7 +1585,7 @@ pub fn parse_expr(
                     Ok(character_length(parse_expr(&args[0], registry)?))
                 }
                 ScalarFunction::Chr => Ok(chr(parse_expr(&args[0], registry)?)),
-                ScalarFunction::InitCap => Ok(ascii(parse_expr(&args[0], registry)?)),
+                ScalarFunction::InitCap => Ok(initcap(parse_expr(&args[0], registry)?)),
                 ScalarFunction::Gcd => Ok(gcd(
                     parse_expr(&args[0], registry)?,
                     parse_expr(&args[1], registry)?,
@@ -1734,7 +1742,16 @@ pub fn parse_expr(
                     Ok(arrow_typeof(parse_expr(&args[0], registry)?))
                 }
                 ScalarFunction::ToTimestamp => {
-                    Ok(to_timestamp_seconds(parse_expr(&args[0], registry)?))
+                    let args: Vec<_> = args
+                        .iter()
+                        .map(|expr| parse_expr(expr, registry))
+                        .collect::<Result<_, _>>()?;
+                    Ok(Expr::ScalarFunction(
+                        datafusion_expr::expr::ScalarFunction::new(
+                            BuiltinScalarFunction::ToTimestamp,
+                            args,
+                        ),
+                    ))
                 }
                 ScalarFunction::Flatten => Ok(flatten(parse_expr(&args[0], registry)?)),
                 ScalarFunction::StringToArray => Ok(string_to_array(

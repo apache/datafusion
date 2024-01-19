@@ -70,6 +70,19 @@ select cast(now() as date) = today();
 ----
 true
 
+##########
+## Current time Tests
+##########
+
+query B
+select cast(now() as time) = current_time();
+----
+true
+
+query T
+select case when current_time() = (now()::bigint % 86400000000000)::time then 'OK' else 'FAIL' end result
+----
+OK
 
 ##########
 ## Timestamp Handling Tests
@@ -194,6 +207,9 @@ SELECT to_timestamp_seconds(ts / 1000) FROM t1 LIMIT 3
 2009-03-01T00:00:00
 2009-03-01T00:01:00
 2009-04-01T00:00:00
+
+statement ok
+drop table t1
 
 
 
@@ -1811,6 +1827,26 @@ SELECT arrow_typeof(date_trunc('day', time)) FROM foo LIMIT 1
 ----
 Timestamp(Nanosecond, Some("+05:00"))
 
+query T
+select arrow_typeof(date_trunc('minute', to_timestamp_seconds(61)))
+----
+Timestamp(Second, None)
+
+query T
+select arrow_typeof(date_trunc('second', to_timestamp_millis(61)))
+----
+Timestamp(Millisecond, None)
+
+query T
+select arrow_typeof(date_trunc('millisecond', to_timestamp_micros(61)))
+----
+Timestamp(Microsecond, None)
+
+query T
+select arrow_typeof(date_trunc('microsecond', to_timestamp(61)))
+----
+Timestamp(Nanosecond, None)  
+
 # check date_bin
 query P
 SELECT date_bin(INTERVAL '1 day', time, '1970-01-01T00:00:00+05:00') FROM foo
@@ -1894,3 +1930,168 @@ query B
 select arrow_cast(now(), 'Date64') < arrow_cast('2022-02-02 02:02:02', 'Timestamp(Nanosecond, None)');
 ----
 false
+
+##########
+## Test query MAX Timestamp and MiN Timestamp
+##########
+
+statement ok
+create table table_a (val int, ts timestamp) as values (1, '2020-09-08T11:42:29.190'::timestamp), (2, '2000-02-01T00:00:00'::timestamp)
+
+query P
+SELECT MIN(table_a.ts) FROM table_a;
+----
+2000-02-01T00:00:00
+
+query P
+SELECT MAX(table_a.ts) FROM table_a;
+----
+2020-09-08T11:42:29.190
+
+statement ok
+drop table table_a
+
+##########
+## Test query MAX Timestamp and MiN Timestamp
+##########
+
+statement ok
+create table table_a (ts timestamp) as values 
+    ('2020-09-08T11:42:29Z'::timestamp), 
+    ('2020-09-08T12:42:29Z'::timestamp),
+    ('2020-09-08T13:42:29Z'::timestamp)
+
+statement ok
+create table table_b (ts timestamp) as values 
+    ('2020-09-08T11:42:29.190Z'::timestamp),
+    ('2020-09-08T13:42:29.190Z'::timestamp),
+    ('2020-09-08T12:42:29.190Z'::timestamp)
+
+query PPB
+SELECT table_a.ts, table_b.ts, table_a.ts = table_b.ts FROM table_a, table_b order by table_a.ts desc, table_b.ts desc
+----
+2020-09-08T13:42:29 2020-09-08T13:42:29.190 false
+2020-09-08T13:42:29 2020-09-08T12:42:29.190 false
+2020-09-08T13:42:29 2020-09-08T11:42:29.190 false
+2020-09-08T12:42:29 2020-09-08T13:42:29.190 false
+2020-09-08T12:42:29 2020-09-08T12:42:29.190 false
+2020-09-08T12:42:29 2020-09-08T11:42:29.190 false
+2020-09-08T11:42:29 2020-09-08T13:42:29.190 false
+2020-09-08T11:42:29 2020-09-08T12:42:29.190 false
+2020-09-08T11:42:29 2020-09-08T11:42:29.190 false
+
+
+statement ok
+drop table table_a
+
+statement ok
+drop table table_b
+
+##########
+## Test query Group BY Timestamp Millisecond
+##########
+
+statement ok
+create table t1 (val int, ts timestamp) as values (80, '2018-07-01T06:00:00'::timestamp), (130, '2018-07-01T07:00:00'::timestamp)
+
+query PI
+SELECT t1.ts, SUM(val) FROM t1 GROUP BY t1.ts ORDER BY t1.ts ASC
+----
+2018-07-01T06:00:00 80
+2018-07-01T07:00:00 130
+
+##########
+## Test query Timestamp Add Interval Months
+##########
+
+query PP
+SELECT t1.ts, t1.ts + INTERVAL '17' MONTH FROM t1;
+----
+2018-07-01T06:00:00 2019-12-01T06:00:00
+2018-07-01T07:00:00 2019-12-01T07:00:00
+
+##########
+## Test query Timestamp Add Interval Years
+##########
+
+query PP
+SELECT t1.ts, t1.ts + INTERVAL '1' YEAR FROM t1;
+----
+2018-07-01T06:00:00 2019-07-01T06:00:00
+2018-07-01T07:00:00 2019-07-01T07:00:00
+
+##########
+## Test query Timestamp Add Interval MILLISECONDS
+##########
+
+query PP
+SELECT t1.ts, t1.ts - INTERVAL '8' MILLISECONDS FROM t1;
+----
+2018-07-01T06:00:00 2018-07-01T05:59:59.992
+2018-07-01T07:00:00 2018-07-01T06:59:59.992
+
+##########
+## Test query Timestamp Add Interval SECOND
+##########
+
+query PP
+SELECT t1.ts, t1.ts + INTERVAL '1' SECOND FROM t1;
+----
+2018-07-01T06:00:00 2018-07-01T06:00:01
+2018-07-01T07:00:00 2018-07-01T07:00:01
+
+##########
+## Test query CAST
+##########
+
+query PT
+SELECT t1.ts::timestamptz, arrow_typeof(t1.ts::timestamptz) FROM t1;
+----
+2018-07-01T06:00:00Z Timestamp(Nanosecond, Some("+00"))
+2018-07-01T07:00:00Z Timestamp(Nanosecond, Some("+00"))
+
+query D
+SELECT 0::TIME
+----
+00:00:00
+
+query D
+SELECT 0::TIME WITHOUT TIME ZONE
+----
+00:00:00
+
+query I
+select count(1) result from (select now() as n) a where n = '2000-01-01'::date
+----
+0
+
+query I
+select count(1) result from (select now() as n) a where n >= '2000-01-01'::date
+----
+1
+
+query B
+select now() = '2000-01-01'::date as result
+----
+false
+
+query B
+select now() >= '2000-01-01'::date as result
+----
+true
+
+statement ok
+drop table t1
+
+statement ok
+create table table_a (val int, ts1 timestamp, ts2 timestamp) as values 
+    (1, '2018-07-01T06:00:00'::timestamp, '2018-07-01T07:00:00'::timestamp), 
+    (2, '2018-07-01T07:00:00'::timestamp, '2018-07-01T08:00:00'::timestamp)
+
+query I?
+SELECT val, ts1 - ts2 AS ts_diff FROM table_a ORDER BY ts2 - ts1
+----
+1 0 days -1 hours 0 mins 0.000000000 secs
+2 0 days -1 hours 0 mins 0.000000000 secs
+
+

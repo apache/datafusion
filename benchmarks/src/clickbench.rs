@@ -15,13 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::path::Path;
 use std::{path::PathBuf, time::Instant};
 
 use datafusion::{
-    common::exec_err,
     error::{DataFusionError, Result},
     prelude::SessionContext,
 };
+use datafusion_common::exec_datafusion_err;
 use structopt::StructOpt;
 
 use crate::{BenchmarkRun, CommonOpt};
@@ -69,15 +70,49 @@ pub struct RunOpt {
     output_path: Option<PathBuf>,
 }
 
-const CLICKBENCH_QUERY_START_ID: usize = 0;
-const CLICKBENCH_QUERY_END_ID: usize = 42;
+struct AllQueries {
+    queries: Vec<String>,
+}
 
+impl AllQueries {
+    fn try_new(path: &Path) -> Result<Self> {
+        // ClickBench has all queries in a single file identified by line number
+        let all_queries = std::fs::read_to_string(path)
+            .map_err(|e| exec_datafusion_err!("Could not open {path:?}: {e}"))?;
+        Ok(Self {
+            queries: all_queries.lines().map(|s| s.to_string()).collect(),
+        })
+    }
+
+    /// Returns the text of query `query_id`
+    fn get_query(&self, query_id: usize) -> Result<&str> {
+        self.queries
+            .get(query_id)
+            .ok_or_else(|| {
+                let min_id = self.min_query_id();
+                let max_id = self.max_query_id();
+                exec_datafusion_err!(
+                    "Invalid query id {query_id}. Must be between {min_id} and {max_id}"
+                )
+            })
+            .map(|s| s.as_str())
+    }
+
+    fn min_query_id(&self) -> usize {
+        0
+    }
+
+    fn max_query_id(&self) -> usize {
+        self.queries.len() - 1
+    }
+}
 impl RunOpt {
     pub async fn run(self) -> Result<()> {
         println!("Running benchmarks with the following options: {self:?}");
+        let queries = AllQueries::try_new(self.queries_path.as_path())?;
         let query_range = match self.query {
             Some(query_id) => query_id..=query_id,
-            None => CLICKBENCH_QUERY_START_ID..=CLICKBENCH_QUERY_END_ID,
+            None => queries.min_query_id()..=queries.max_query_id(),
         };
 
         let config = self.common.config();
@@ -88,12 +123,12 @@ impl RunOpt {
         let mut benchmark_run = BenchmarkRun::new();
         for query_id in query_range {
             benchmark_run.start_new_case(&format!("Query {query_id}"));
-            let sql = self.get_query(query_id)?;
+            let sql = queries.get_query(query_id)?;
             println!("Q{query_id}: {sql}");
 
             for i in 0..iterations {
                 let start = Instant::now();
-                let results = ctx.sql(&sql).await?.collect().await?;
+                let results = ctx.sql(sql).await?.collect().await?;
                 let elapsed = start.elapsed();
                 let ms = elapsed.as_secs_f64() * 1000.0;
                 let row_count: usize = results.iter().map(|b| b.num_rows()).sum();
@@ -119,24 +154,5 @@ impl RunOpt {
                     Box::new(e),
                 )
             })
-    }
-
-    /// Returns the text of query `query_id`
-    fn get_query(&self, query_id: usize) -> Result<String> {
-        if query_id > CLICKBENCH_QUERY_END_ID {
-            return exec_err!(
-                "Invalid query id {query_id}. Must be between {CLICKBENCH_QUERY_START_ID} and {CLICKBENCH_QUERY_END_ID}"
-            );
-        }
-
-        let path = self.queries_path.as_path();
-
-        // ClickBench has all queries in a single file identified by line number
-        let all_queries = std::fs::read_to_string(path).map_err(|e| {
-            DataFusionError::Execution(format!("Could not open {path:?}: {e}"))
-        })?;
-        let all_queries: Vec<_> = all_queries.lines().collect();
-
-        Ok(all_queries.get(query_id).map(|s| s.to_string()).unwrap())
     }
 }
