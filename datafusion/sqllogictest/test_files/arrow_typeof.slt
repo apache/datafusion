@@ -385,3 +385,40 @@ query T
 select arrow_typeof(arrow_cast(make_array([1, 2, 3]), 'LargeList(LargeList(Int64))'));
 ----
 LargeList(Field { name: "item", data_type: LargeList(Field { name: "item", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} })
+
+## FixedSizeList
+
+query ?
+select arrow_cast(null, 'FixedSizeList(1, Int64)');
+----
+NULL
+
+#TODO: arrow-rs doesn't support it yet
+#query ?
+#select arrow_cast('1', 'FixedSizeList(1, Int64)');
+#----
+#[1]
+
+
+query ?
+select arrow_cast([1], 'FixedSizeList(1, Int64)');
+----
+[1]
+
+query error DataFusion error: Optimizer rule 'simplify_expressions' failed
+select arrow_cast(make_array(1, 2, 3), 'FixedSizeList(4, Int64)');
+
+query ?
+select arrow_cast(make_array(1, 2, 3), 'FixedSizeList(3, Int64)');
+----
+[1, 2, 3]
+
+query T
+select arrow_typeof(arrow_cast(arrow_cast(make_array(1, 2, 3), 'LargeList(Int64)'), 'FixedSizeList(3, Int64)'));
+----
+FixedSizeList(Field { name: "item", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, 3)
+
+query ?
+select arrow_cast([1, 2, 3], 'FixedSizeList(3, Int64)');
+----
+[1, 2, 3]
