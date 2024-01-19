@@ -1872,8 +1872,11 @@ mod test {
         // Since comparisons are done using hash value of the expression
         // expr < expr2 may return false, or true. There is no guaranteed result.
         // The only guarantee is "<" operator should have the opposite result of ">=" operator
-        assert_eq!(exp1 < exp2, !(exp1 >= exp2));
-        assert_eq!(exp3 < exp2, !(exp3 >= exp2));
+        let greater_or_equal = exp1 >= exp2;
+        assert_eq!(exp1 < exp2, !greater_or_equal);
+
+        let greater_or_equal = exp3 >= exp2;
+        assert_eq!(exp3 < exp2, !greater_or_equal);
     }
 
     #[test]
