@@ -33,12 +33,9 @@ use crate::{
 use arrow::array::{Array, ArrayRef};
 use arrow::datatypes::{DataType, Field};
 use arrow_array::cast::AsArray;
-use arrow_array::Array;
 use arrow_array::{new_empty_array, StructArray};
 use arrow_schema::{Fields, SortOptions};
 
-use datafusion_common::cast::as_list_array;
-use datafusion_common::internal_err;
 use datafusion_common::utils::array_into_list_array;
 use datafusion_common::utils::{compare_rows, get_row_at_idx};
 use datafusion_common::{exec_err, DataFusionError, Result, ScalarValue};
@@ -245,22 +242,17 @@ impl Accumulator for OrderSensitiveArrayAggAccumulator {
         let mut partition_ordering_values = vec![];
 
         // Existing values should be merged also.
-        partition_values.push(self.values.clone());
-        partition_ordering_values.push(self.ordering_values.clone());
+        partition_values.push(self.values.clone().into());
+        partition_ordering_values.push(self.ordering_values.clone().into());
 
         // Convert array to Scalars to sort them easily. Convert back to array at evaluation.
         let array_agg_res = ScalarValue::convert_array_to_scalar_vec(array_agg_values)?;
-        partition_values.extend(array_agg_res);
+        for v in array_agg_res.into_iter() {
+            partition_values.push(v.into());
+        }
 
         let orderings = ScalarValue::convert_array_to_scalar_vec(agg_orderings)?;
 
-        for partition_ordering_rows in orderings.into_iter() {
-            // Extract value from struct to ordering_rows for each group/partition
-            let ordering_value = partition_ordering_rows.into_iter().map(|ordering_row| {
-                        if let ScalarValue::Struct(s) = ordering_row {
-                            let mut ordering_columns_per_row = vec![];
-
-        let orderings = ScalarValue::convert_array_to_scalar_vec(agg_orderings)?;
         for partition_ordering_rows in orderings.into_iter() {
             // Extract value from struct to ordering_rows for each group/partition
             let ordering_value = partition_ordering_rows.into_iter().map(|ordering_row| {
@@ -274,13 +266,13 @@ impl Accumulator for OrderSensitiveArrayAggAccumulator {
 
                         Ok(ordering_columns_per_row)
                     } else {
-                        internal_err!(
+                        exec_err!(
                             "Expects to receive ScalarValue::Struct(Arc<StructArray>) but got:{:?}",
                             ordering_row.data_type()
                         )
                     }
-                }).collect::<Result<Vec<_>>>()?;
-                    // }).collect::<Result<Vec<_>>>()?;
+                }).collect::<Result<VecDeque<_>>>()?;
+
             partition_ordering_values.push(ordering_value);
         }
 
@@ -289,13 +281,12 @@ impl Accumulator for OrderSensitiveArrayAggAccumulator {
             .iter()
             .map(|sort_expr| sort_expr.options)
             .collect::<Vec<_>>();
-        let (new_values, new_orderings) = merge_ordered_arrays(
-            &partition_values,
-            &partition_ordering_values,
+
+        (self.values, self.ordering_values) = merge_ordered_arrays(
+            &mut partition_values,
+            &mut partition_ordering_values,
             &sort_options,
         )?;
-        self.values = new_values;
-        self.ordering_values = new_orderings;
 
         Ok(())
     }
@@ -314,10 +305,6 @@ impl Accumulator for OrderSensitiveArrayAggAccumulator {
             ScalarValue::new_list_from_iter(values.into_iter(), &self.datatypes[0])
         };
         Ok(ScalarValue::List(array))
-        // Ok(ScalarValue::List(ScalarValue::new_list(
-        //     &self.values,
-        //     &self.datatypes[0],
-        // )))
     }
 
     fn size(&self) -> usize {
@@ -348,18 +335,10 @@ impl Accumulator for OrderSensitiveArrayAggAccumulator {
 impl OrderSensitiveArrayAggAccumulator {
     fn evaluate_orderings(&self) -> Result<ScalarValue> {
         let fields = ordering_fields(&self.ordering_req, &self.datatypes[1..]);
-        let struct_field = Fields::from(fields);
-
-        // let orderings: Vec<ScalarValue> = self
-        //     .ordering_values
-        //     .iter()
-        //     .map(|ordering| {
-        //         ScalarValue::Struct(Some(ordering.clone()), struct_field.clone())
-        //     })
-        //     .collect();
-        // let struct_type = DataType::Struct(struct_field);
-        let mut column_wise_ordering_values = vec![];
         let num_columns = fields.len();
+        let struct_field = Fields::from(fields.clone());
+
+        let mut column_wise_ordering_values = vec![];
         for i in 0..num_columns {
             let column_values = self
                 .ordering_values

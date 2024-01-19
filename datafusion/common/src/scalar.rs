@@ -52,7 +52,6 @@ use arrow::{
     },
 };
 use arrow_array::cast::as_list_array;
-use arrow_array::types::ArrowTimestampType;
 use arrow_array::{ArrowNativeTypeOp, Scalar};
 use arrow_buffer::{Buffer, NullBuffer};
 
@@ -376,31 +375,7 @@ impl PartialOrd for ScalarValue {
             }
             (List(_), _) | (LargeList(_), _) | (FixedSizeList(_), _) => None,
             (Struct(struct_arr1), Struct(struct_arr2)) => {
-                if struct_arr1.len() != struct_arr2.len() {
-                    return None;
-                }
-
-                if struct_arr1.data_type() != struct_arr2.data_type() {
-                    return None;
-                }
-
-                for col_index in 0..struct_arr1.num_columns() {
-                    let arr1 = struct_arr1.column(col_index);
-                    let arr2 = struct_arr2.column(col_index);
-
-                    let lt_res = arrow::compute::kernels::cmp::lt(arr1, arr2).ok()?;
-                    let eq_res = arrow::compute::kernels::cmp::eq(arr1, arr2).ok()?;
-
-                    for j in 0..lt_res.len() {
-                        if lt_res.is_valid(j) && lt_res.value(j) {
-                            return Some(Ordering::Less);
-                        }
-                        if eq_res.is_valid(j) && !eq_res.value(j) {
-                            return Some(Ordering::Greater);
-                        }
-                    }
-                }
-                Some(Ordering::Equal)
+                partial_cmp_struct(struct_arr1, struct_arr2)
             }
             (Struct(_), _) => None,
             (Date32(v1), Date32(v2)) => v1.partial_cmp(v2),
@@ -493,6 +468,34 @@ fn partial_cmp_list(arr1: &dyn Array, arr2: &dyn Array) -> Option<Ordering> {
         }
     }
 
+    Some(Ordering::Equal)
+}
+
+fn partial_cmp_struct(s1: &Arc<StructArray>, s2: &Arc<StructArray>) -> Option<Ordering> {
+    if s1.len() != s2.len() {
+        return None;
+    }
+
+    if s1.data_type() != s2.data_type() {
+        return None;
+    }
+
+    for col_index in 0..s1.num_columns() {
+        let arr1 = s1.column(col_index);
+        let arr2 = s2.column(col_index);
+
+        let lt_res = arrow::compute::kernels::cmp::lt(arr1, arr2).ok()?;
+        let eq_res = arrow::compute::kernels::cmp::eq(arr1, arr2).ok()?;
+
+        for j in 0..lt_res.len() {
+            if lt_res.is_valid(j) && lt_res.value(j) {
+                return Some(Ordering::Less);
+            }
+            if eq_res.is_valid(j) && !eq_res.value(j) {
+                return Some(Ordering::Greater);
+            }
+        }
+    }
     Some(Ordering::Equal)
 }
 
@@ -3323,18 +3326,10 @@ mod tests {
     use crate::cast::{as_string_array, as_uint32_array, as_uint64_array};
 
     use arrow::buffer::OffsetBuffer;
-    use arrow::compute::{concat, is_null, kernels};
+    use arrow::compute::{is_null, kernels};
     use arrow::datatypes::{ArrowNumericType, ArrowPrimitiveType};
     use arrow::util::pretty::pretty_format_columns;
     use arrow_buffer::Buffer;
-    use chrono::NaiveDate;
-    use rand::Rng;
-
-    use arrow::compute::kernels;
-    use arrow::datatypes::ArrowPrimitiveType;
-    use arrow::{buffer::OffsetBuffer, compute::is_null};
-    use arrow_array::ArrowNumericType;
-
     use chrono::NaiveDate;
     use rand::Rng;
 
