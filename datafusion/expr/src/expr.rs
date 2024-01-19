@@ -1869,6 +1869,9 @@ mod test {
         let exp2 = col("a") + lit(2);
         let exp3 = !(col("a") + lit(2));
 
+        // Since comparisons are done using hash value of the expression
+        // expr < expr2 may return false, or true. There is no guaranteed result.
+        // The only guarantee is "<" operator should have the opposite result of ">=" operator
         assert_eq!(exp1 < exp2, !(exp1 >= exp2));
         assert_eq!(exp3 < exp2, !(exp3 >= exp2));
     }
