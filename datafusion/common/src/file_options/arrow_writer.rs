@@ -27,6 +27,18 @@ use super::StatementOptions;
 #[derive(Clone, Debug)]
 pub struct ArrowWriterOptions {}
 
+impl ArrowWriterOptions {
+    pub fn new() -> Self {
+        Self {}
+    }
+}
+
+impl Default for ArrowWriterOptions {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TryFrom<(&ConfigOptions, &StatementOptions)> for ArrowWriterOptions {
     type Error = DataFusionError;
 

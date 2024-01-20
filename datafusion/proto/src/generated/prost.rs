@@ -1646,7 +1646,7 @@ pub struct PartitionColumn {
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct FileTypeWriterOptions {
-    #[prost(oneof = "file_type_writer_options::FileType", tags = "1, 2, 3")]
+    #[prost(oneof = "file_type_writer_options::FileType", tags = "1, 2, 3, 4")]
     pub file_type: ::core::option::Option<file_type_writer_options::FileType>,
 }
 /// Nested message and enum types in `FileTypeWriterOptions`.
@@ -1660,6 +1660,8 @@ pub mod file_type_writer_options {
         ParquetOptions(super::ParquetWriterOptions),
         #[prost(message, tag = "3")]
         CsvOptions(super::CsvWriterOptions),
+        #[prost(message, tag = "4")]
+        ArrowOptions(super::ArrowWriterOptions),
     }
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
@@ -1702,6 +1704,9 @@ pub struct CsvWriterOptions {
     #[prost(string, tag = "8")]
     pub null_value: ::prost::alloc::string::String,
 }
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ArrowWriterOptions {}
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct WriterProperties {
@@ -3073,6 +3078,7 @@ pub enum AggregateFunction {
     RegrSyy = 33,
     RegrSxy = 34,
     StringAgg = 35,
+    NthValueAgg = 36,
 }
 impl AggregateFunction {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -3119,6 +3125,7 @@ impl AggregateFunction {
             AggregateFunction::RegrSyy => "REGR_SYY",
             AggregateFunction::RegrSxy => "REGR_SXY",
             AggregateFunction::StringAgg => "STRING_AGG",
+            AggregateFunction::NthValueAgg => "NTH_VALUE_AGG",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -3162,6 +3169,7 @@ impl AggregateFunction {
             "REGR_SYY" => Some(Self::RegrSyy),
             "REGR_SXY" => Some(Self::RegrSxy),
             "STRING_AGG" => Some(Self::StringAgg),
+            "NTH_VALUE_AGG" => Some(Self::NthValueAgg),
             _ => None,
         }
     }

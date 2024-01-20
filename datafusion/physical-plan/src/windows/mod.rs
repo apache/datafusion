@@ -654,7 +654,7 @@ mod tests {
                 &[col("a", &schema)?],
                 &[],
                 &[],
-                Arc::new(WindowFrame::new(false)),
+                Arc::new(WindowFrame::new(None)),
                 schema.as_ref(),
             )?],
             blocking_exec,

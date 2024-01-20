@@ -883,29 +883,30 @@ nary_scalar_expr!(
 scalar_expr!(DatePart, date_part, part date, "extracts a subfield from the date");
 scalar_expr!(DateTrunc, date_trunc, part date, "truncates the date to a specified level of precision");
 scalar_expr!(DateBin, date_bin, stride source origin, "coerces an arbitrary timestamp to the start of the nearest specified interval");
-scalar_expr!(
+nary_scalar_expr!(
+    ToTimestamp,
+    to_timestamp,
+    "converts a string and optional formats to a `Timestamp(Nanoseconds, None)`"
+);
+nary_scalar_expr!(
     ToTimestampMillis,
     to_timestamp_millis,
-    date,
-    "converts a string to a `Timestamp(Milliseconds, None)`"
+    "converts a string and optional formats  to a `Timestamp(Milliseconds, None)`"
 );
-scalar_expr!(
+nary_scalar_expr!(
     ToTimestampMicros,
     to_timestamp_micros,
-    date,
-    "converts a string to a `Timestamp(Microseconds, None)`"
+    "converts a string and optional formats  to a `Timestamp(Microseconds, None)`"
 );
-scalar_expr!(
+nary_scalar_expr!(
     ToTimestampNanos,
     to_timestamp_nanos,
-    date,
-    "converts a string to a `Timestamp(Nanoseconds, None)`"
+    "converts a string and optional formats  to a `Timestamp(Nanoseconds, None)`"
 );
-scalar_expr!(
+nary_scalar_expr!(
     ToTimestampSeconds,
     to_timestamp_seconds,
-    date,
-    "converts a string to a `Timestamp(Seconds, None)`"
+    "converts a string and optional formats  to a `Timestamp(Seconds, None)`"
 );
 scalar_expr!(
     FromUnixtime,

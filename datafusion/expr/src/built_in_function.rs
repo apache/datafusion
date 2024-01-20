@@ -1023,67 +1023,13 @@ impl BuiltinScalarFunction {
                 vec![Exact(vec![Utf8, Int64]), Exact(vec![LargeUtf8, Int64])],
                 self.volatility(),
             ),
-            BuiltinScalarFunction::ToTimestamp => Signature::uniform(
-                1,
-                vec![
-                    Int64,
-                    Float64,
-                    Timestamp(Nanosecond, None),
-                    Timestamp(Microsecond, None),
-                    Timestamp(Millisecond, None),
-                    Timestamp(Second, None),
-                    Utf8,
-                ],
-                self.volatility(),
-            ),
-            BuiltinScalarFunction::ToTimestampMillis => Signature::uniform(
-                1,
-                vec![
-                    Int64,
-                    Timestamp(Nanosecond, None),
-                    Timestamp(Microsecond, None),
-                    Timestamp(Millisecond, None),
-                    Timestamp(Second, None),
-                    Utf8,
-                ],
-                self.volatility(),
-            ),
-            BuiltinScalarFunction::ToTimestampMicros => Signature::uniform(
-                1,
-                vec![
-                    Int64,
-                    Timestamp(Nanosecond, None),
-                    Timestamp(Microsecond, None),
-                    Timestamp(Millisecond, None),
-                    Timestamp(Second, None),
-                    Utf8,
-                ],
-                self.volatility(),
-            ),
-            BuiltinScalarFunction::ToTimestampNanos => Signature::uniform(
-                1,
-                vec![
-                    Int64,
-                    Timestamp(Nanosecond, None),
-                    Timestamp(Microsecond, None),
-                    Timestamp(Millisecond, None),
-                    Timestamp(Second, None),
-                    Utf8,
-                ],
-                self.volatility(),
-            ),
-            BuiltinScalarFunction::ToTimestampSeconds => Signature::uniform(
-                1,
-                vec![
-                    Int64,
-                    Timestamp(Nanosecond, None),
-                    Timestamp(Microsecond, None),
-                    Timestamp(Millisecond, None),
-                    Timestamp(Second, None),
-                    Utf8,
-                ],
-                self.volatility(),
-            ),
+            BuiltinScalarFunction::ToTimestamp
+            | BuiltinScalarFunction::ToTimestampSeconds
+            | BuiltinScalarFunction::ToTimestampMillis
+            | BuiltinScalarFunction::ToTimestampMicros
+            | BuiltinScalarFunction::ToTimestampNanos => {
+                Signature::variadic_any(self.volatility())
+            }
             BuiltinScalarFunction::FromUnixtime => {
                 Signature::uniform(1, vec![Int64], self.volatility())
             }
