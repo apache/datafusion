@@ -30,6 +30,7 @@ FROM hits;
 
 ### Q1
 Models initial Data exploration, to understand some statistics of data.
+Models initial Data exploration, to understand some statistics of data. 
 Query to test distinct count for String. Three of them are all small string (length either 1 or 2).
 
 ```sql
