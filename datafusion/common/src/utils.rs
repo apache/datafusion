@@ -466,7 +466,10 @@ pub fn coerced_type_with_base_type_only(
     match data_type {
         DataType::List(field) | DataType::FixedSizeList(field, _) => {
             let data_type = match field.data_type() {
-                DataType::List(_) | DataType::FixedSizeList(_, _) => {
+                // nested type could be different list type
+                DataType::List(_)
+                | DataType::FixedSizeList(_, _)
+                | DataType::LargeList(_) => {
                     coerced_type_with_base_type_only(field.data_type(), base_type)
                 }
                 _ => base_type.to_owned(),
@@ -480,7 +483,10 @@ pub fn coerced_type_with_base_type_only(
         }
         DataType::LargeList(field) => {
             let data_type = match field.data_type() {
-                DataType::LargeList(_) => {
+                // nested type could be different list type
+                DataType::List(_)
+                | DataType::FixedSizeList(_, _)
+                | DataType::LargeList(_) => {
                     coerced_type_with_base_type_only(field.data_type(), base_type)
                 }
                 _ => base_type.to_owned(),

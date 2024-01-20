@@ -941,7 +941,7 @@ from arrays_values_without_nulls;
 ## array_element (aliases: array_extract, list_extract, list_element)
 
 # array_element error
-query error DataFusion error: Error during planning: The array_element function can only accept list or largelist as the first argument
+query error DataFusion error: Error during planning: No function matches the given name and argument types 'array_element\(Int64, Int64\)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tarray_element\(ArrayAndElement\(List<T>, T\)\)
 select array_element(1, 2);
 
 

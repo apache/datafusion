@@ -22,7 +22,9 @@ use arrow::{
     datatypes::{DataType, TimeUnit},
 };
 use datafusion_common::utils::list_ndims;
-use datafusion_common::{internal_err, plan_err, DataFusionError, Result};
+use datafusion_common::{
+    internal_datafusion_err, internal_err, plan_err, DataFusionError, Result,
+};
 
 use super::binary::comparison_coercion;
 
@@ -48,7 +50,6 @@ pub fn data_types(
             );
         }
     }
-
     let valid_types = get_valid_types(&signature.type_signature, current_types)?;
 
     if valid_types
@@ -100,35 +101,35 @@ fn get_valid_types(
 
         // We need to find the coerced base type, mainly for cases like:
         // `array_append(List(null), i64)` -> `List(i64)`
-        let array_base_type = dbg!(datafusion_common::utils::base_type(array_type));
-        let elem_base_type = dbg!(datafusion_common::utils::base_type(elem_type));
+        let array_base_type = datafusion_common::utils::base_type(array_type);
+        let elem_base_type = datafusion_common::utils::base_type(elem_type);
         let new_base_type = comparison_coercion(&array_base_type, &elem_base_type);
 
-        if new_base_type.is_none() {
-            return internal_err!(
+        let new_base_type = new_base_type.ok_or_else(|| {
+            internal_datafusion_err!(
                 "Coercion from {array_base_type:?} to {elem_base_type:?} not supported."
-            );
-        }
-        let new_base_type = new_base_type.unwrap();
+            )
+        })?;
 
         let array_type = datafusion_common::utils::coerced_type_with_base_type_only(
             array_type,
             &new_base_type,
         );
 
+        // dbg!(&array_type, &elem_type);
         match array_type {
-            DataType::List(ref field) | DataType::LargeList(ref field) => {
-                let elem_type = field.data_type();
-                if is_append {
-                    Ok(vec![vec![array_type.clone(), elem_type.to_owned()]])
+            DataType::List(ref field)
+            | DataType::LargeList(ref field)
+            | DataType::FixedSizeList(ref field, _) => {
+                let elem_type = if array_base_type.eq(&DataType::Null)
+                    || (elem_base_type.eq(&DataType::Null))
+                {
+                    field.data_type()
                 } else {
-                    Ok(vec![vec![elem_type.to_owned(), array_type.clone()]])
-                }
-            }
-            DataType::FixedSizeList(ref field, _) => {
-                let elem_type = field.data_type();
+                    elem_type
+                };
                 if is_append {
-                    Ok(vec![vec![array_type.clone(), elem_type.to_owned()]])
+                    Ok(vec![vec![array_type.clone(), elem_type.clone()]])
                 } else {
                     Ok(vec![vec![elem_type.to_owned(), array_type.clone()]])
                 }
@@ -169,7 +170,7 @@ fn get_valid_types(
 
         TypeSignature::Exact(valid_types) => vec![valid_types.clone()],
         TypeSignature::ArrayAndElement => {
-            return dbg!(array_append_or_prepend_valid_types(current_types, true))
+            return array_append_or_prepend_valid_types(current_types, true)
         }
         TypeSignature::ElementAndArray => {
             return array_append_or_prepend_valid_types(current_types, false)

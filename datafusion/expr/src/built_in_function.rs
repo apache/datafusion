@@ -962,9 +962,7 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::ArrayElement => {
                 Signature::array_and_element(self.volatility())
             }
-            BuiltinScalarFunction::ArrayExcept => {
-                Signature::array_and_element(self.volatility())
-            }
+            BuiltinScalarFunction::ArrayExcept => Signature::any(2, self.volatility()),
             BuiltinScalarFunction::Flatten => Signature::any(1, self.volatility()),
             BuiltinScalarFunction::ArrayHasAll
             | BuiltinScalarFunction::ArrayHasAny
@@ -985,9 +983,7 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::ArrayPrepend => {
                 Signature::element_and_array(self.volatility())
             }
-            BuiltinScalarFunction::ArrayRepeat => {
-                Signature::array_and_element(self.volatility())
-            }
+            BuiltinScalarFunction::ArrayRepeat => Signature::any(2, self.volatility()),
             BuiltinScalarFunction::ArrayRemove => {
                 Signature::array_and_element(self.volatility())
             }
@@ -1007,12 +1003,8 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::ArrayToString => {
                 Signature::variadic_any(self.volatility())
             }
-            BuiltinScalarFunction::ArrayIntersect => {
-                Signature::array_and_element(self.volatility())
-            }
-            BuiltinScalarFunction::ArrayUnion => {
-                Signature::array_and_element(self.volatility())
-            }
+            BuiltinScalarFunction::ArrayIntersect => Signature::any(2, self.volatility()),
+            BuiltinScalarFunction::ArrayUnion => Signature::any(2, self.volatility()),
             BuiltinScalarFunction::Cardinality => Signature::any(1, self.volatility()),
             BuiltinScalarFunction::ArrayResize => {
                 Signature::variadic_any(self.volatility())
