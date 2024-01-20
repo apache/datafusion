@@ -4538,7 +4538,8 @@ minute bin it is in: <code class="docutils literal notranslate"><span class="pre
 <li><p><strong>interval</strong>: Bin interval.</p></li>
 <li><p><strong>expression</strong>: Time expression to operate on.
 Can be a constant, column, or function.</p></li>
-<li><p><strong>timestamp</strong>: Starting point used to determine bin boundaries.</p></li>
+<li><p><strong>origin-timestamp</strong>: Optional. Starting point used to determine bin boundaries. If not specified
+defaults <code class="docutils literal notranslate"><span class="pre">1970-01-01T00:00:00Z</span></code> (the UNIX epoch in UTC).</p></li>
 </ul>
 <p>The following intervals are supported:</p>
 <ul class="simple">
