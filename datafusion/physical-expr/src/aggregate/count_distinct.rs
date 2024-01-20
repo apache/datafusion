@@ -689,7 +689,7 @@ impl SSOStringHashSet {
         let values = buffer.finish();
 
         let nulls = None; // count distinct ignores nulls
-        // SAFETY: all the values that went in are coming
+                          // SAFETY: all the values that went in are coming
         unsafe { StringArray::new_unchecked(OffsetBuffer::new(offsets), values, nulls) }
     }
 
