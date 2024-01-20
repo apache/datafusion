@@ -887,14 +887,14 @@ async fn send_arrays_to_col_writers(
 ) -> Result<()> {
     // Each leaf column has its own channel, increment next_channel for each leaf column sent.
     let mut next_channel = 0;
-    for (array, field) in rb.columns()
-        .iter()
-        .zip(schema.fields())
-    {
+    for (array, field) in rb.columns().iter().zip(schema.fields()) {
         for c in compute_leaves(field, array)? {
-            col_array_channels[next_channel].send(c).await.map_err(|_| {
-                DataFusionError::Internal("Unable to send array to writer!".into())
-            })?;
+            col_array_channels[next_channel]
+                .send(c)
+                .await
+                .map_err(|_| {
+                    DataFusionError::Internal("Unable to send array to writer!".into())
+                })?;
             next_channel += 1;
         }
     }
