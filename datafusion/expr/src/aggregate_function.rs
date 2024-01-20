@@ -17,12 +17,15 @@
 
 //! Aggregate function module contains all built-in aggregate functions definitions
 
-use crate::utils;
-use crate::{type_coercion::aggregates::*, Signature, TypeSignature, Volatility};
-use arrow::datatypes::{DataType, Field};
-use datafusion_common::{plan_datafusion_err, plan_err, DataFusionError, Result};
 use std::sync::Arc;
 use std::{fmt, str::FromStr};
+
+use crate::utils;
+use crate::{type_coercion::aggregates::*, Signature, TypeSignature, Volatility};
+
+use arrow::datatypes::{DataType, Field};
+use datafusion_common::{plan_datafusion_err, plan_err, DataFusionError, Result};
+
 use strum_macros::EnumIter;
 
 /// Enum of all built-in aggregate functions
@@ -30,26 +33,28 @@ use strum_macros::EnumIter;
 // https://arrow.apache.org/datafusion/contributor-guide/index.html#how-to-add-a-new-aggregate-function
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash, EnumIter)]
 pub enum AggregateFunction {
-    /// count
+    /// Count
     Count,
-    /// sum
+    /// Sum
     Sum,
-    /// min
+    /// Minimum
     Min,
-    /// max
+    /// Maximum
     Max,
-    /// avg
+    /// Average
     Avg,
-    /// median
+    /// Median
     Median,
-    /// Approximate aggregate function
+    /// Approximate distinct function
     ApproxDistinct,
-    /// array_agg
+    /// Aggregation into an array
     ArrayAgg,
-    /// first_value
+    /// First value in a group according to some ordering
     FirstValue,
-    /// last_value
+    /// Last value in a group according to some ordering
     LastValue,
+    /// N'th value in a group according to some ordering
+    NthValue,
     /// Variance (Sample)
     Variance,
     /// Variance (Population)
@@ -100,7 +105,7 @@ pub enum AggregateFunction {
     BoolAnd,
     /// Bool Or
     BoolOr,
-    /// string_agg
+    /// String aggregation
     StringAgg,
 }
 
@@ -118,6 +123,7 @@ impl AggregateFunction {
             ArrayAgg => "ARRAY_AGG",
             FirstValue => "FIRST_VALUE",
             LastValue => "LAST_VALUE",
+            NthValue => "NTH_VALUE",
             Variance => "VAR",
             VariancePop => "VAR_POP",
             Stddev => "STDDEV",
@@ -174,6 +180,7 @@ impl FromStr for AggregateFunction {
             "array_agg" => AggregateFunction::ArrayAgg,
             "first_value" => AggregateFunction::FirstValue,
             "last_value" => AggregateFunction::LastValue,
+            "nth_value" => AggregateFunction::NthValue,
             "string_agg" => AggregateFunction::StringAgg,
             // statistical
             "corr" => AggregateFunction::Correlation,
@@ -300,9 +307,9 @@ impl AggregateFunction {
                 Ok(coerced_data_types[0].clone())
             }
             AggregateFunction::Grouping => Ok(DataType::Int32),
-            AggregateFunction::FirstValue | AggregateFunction::LastValue => {
-                Ok(coerced_data_types[0].clone())
-            }
+            AggregateFunction::FirstValue
+            | AggregateFunction::LastValue
+            | AggregateFunction::NthValue => Ok(coerced_data_types[0].clone()),
             AggregateFunction::StringAgg => Ok(DataType::LargeUtf8),
         }
     }
@@ -371,6 +378,7 @@ impl AggregateFunction {
             | AggregateFunction::LastValue => {
                 Signature::uniform(1, NUMERICS.to_vec(), Volatility::Immutable)
             }
+            AggregateFunction::NthValue => Signature::any(2, Volatility::Immutable),
             AggregateFunction::Covariance
             | AggregateFunction::CovariancePop
             | AggregateFunction::Correlation
@@ -428,6 +436,7 @@ impl AggregateFunction {
 #[cfg(test)]
 mod tests {
     use super::*;
+
     use strum::IntoEnumIterator;
 
     #[test]

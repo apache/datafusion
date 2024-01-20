@@ -197,17 +197,28 @@ fn take_optimizable_min(
     agg_expr: &dyn AggregateExpr,
     stats: &Statistics,
 ) -> Option<(ScalarValue, String)> {
-    let col_stats = &stats.column_statistics;
-    if let Some(casted_expr) = agg_expr.as_any().downcast_ref::<expressions::Min>() {
-        if casted_expr.expressions().len() == 1 {
-            // TODO optimize with exprs other than Column
-            if let Some(col_expr) = casted_expr.expressions()[0]
-                .as_any()
-                .downcast_ref::<expressions::Column>()
+    if let Precision::Exact(num_rows) = &stats.num_rows {
+        if *num_rows > 0 {
+            let col_stats = &stats.column_statistics;
+            if let Some(casted_expr) =
+                agg_expr.as_any().downcast_ref::<expressions::Min>()
             {
-                if let Precision::Exact(val) = &col_stats[col_expr.index()].min_value {
-                    if !val.is_null() {
-                        return Some((val.clone(), casted_expr.name().to_string()));
+                if casted_expr.expressions().len() == 1 {
+                    // TODO optimize with exprs other than Column
+                    if let Some(col_expr) = casted_expr.expressions()[0]
+                        .as_any()
+                        .downcast_ref::<expressions::Column>()
+                    {
+                        if let Precision::Exact(val) =
+                            &col_stats[col_expr.index()].min_value
+                        {
+                            if !val.is_null() {
+                                return Some((
+                                    val.clone(),
+                                    casted_expr.name().to_string(),
+                                ));
+                            }
+                        }
                     }
                 }
             }
@@ -221,17 +232,28 @@ fn take_optimizable_max(
     agg_expr: &dyn AggregateExpr,
     stats: &Statistics,
 ) -> Option<(ScalarValue, String)> {
-    let col_stats = &stats.column_statistics;
-    if let Some(casted_expr) = agg_expr.as_any().downcast_ref::<expressions::Max>() {
-        if casted_expr.expressions().len() == 1 {
-            // TODO optimize with exprs other than Column
-            if let Some(col_expr) = casted_expr.expressions()[0]
-                .as_any()
-                .downcast_ref::<expressions::Column>()
+    if let Precision::Exact(num_rows) = &stats.num_rows {
+        if *num_rows > 0 {
+            let col_stats = &stats.column_statistics;
+            if let Some(casted_expr) =
+                agg_expr.as_any().downcast_ref::<expressions::Max>()
             {
-                if let Precision::Exact(val) = &col_stats[col_expr.index()].max_value {
-                    if !val.is_null() {
-                        return Some((val.clone(), casted_expr.name().to_string()));
+                if casted_expr.expressions().len() == 1 {
+                    // TODO optimize with exprs other than Column
+                    if let Some(col_expr) = casted_expr.expressions()[0]
+                        .as_any()
+                        .downcast_ref::<expressions::Column>()
+                    {
+                        if let Precision::Exact(val) =
+                            &col_stats[col_expr.index()].max_value
+                        {
+                            if !val.is_null() {
+                                return Some((
+                                    val.clone(),
+                                    casted_expr.name().to_string(),
+                                ));
+                            }
+                        }
                     }
                 }
             }

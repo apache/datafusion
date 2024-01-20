@@ -17,7 +17,7 @@
   under the License.
 -->
 
-# DataFusion Common
+# DataFusion Execution
 
 [DataFusion][df] is an extensible query execution framework, written in Rust, that uses Apache Arrow as its in-memory format.
 

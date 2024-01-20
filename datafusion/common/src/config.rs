@@ -290,6 +290,11 @@ config_namespace! {
         /// Hive. Note that this setting does not affect reading partitioned
         /// tables (e.g. `/table/year=2021/month=01/data.parquet`).
         pub listing_table_ignore_subdirectory: bool, default = true
+
+        /// Should DataFusion support recursive CTEs
+        /// Defaults to false since this feature is a work in progress and may not
+        /// behave as expected
+        pub enable_recursive_ctes: bool, default = false
     }
 }
 
@@ -403,7 +408,7 @@ config_namespace! {
         /// parquet files by serializing them in parallel. Each column
         /// in each row group in each output file are serialized in parallel
         /// leveraging a maximum possible core count of n_files*n_row_groups*n_columns.
-        pub allow_single_file_parallelism: bool, default = true
+        pub allow_single_file_parallelism: bool, default = false
 
         /// By default parallel parquet writer is tuned for minimum
         /// memory usage in a streaming execution plan. You may see
