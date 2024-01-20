@@ -672,31 +672,35 @@ Environment variables are read during <code class="docutils literal notranslate"
 <td><p>1048576</p></td>
 <td><p>The maximum estimated size in bytes for one input side of a HashJoin will be collected into a single partition</p></td>
 </tr>
-<tr class="row-even"><td><p>datafusion.optimizer.default_filter_selectivity</p></td>
+<tr class="row-even"><td><p>datafusion.optimizer.hash_join_single_partition_threshold_rows</p></td>
+<td><p>131072</p></td>
+<td><p>The maximum estimated size in rows for one input side of a HashJoin will be collected into a single partition</p></td>
+</tr>
+<tr class="row-odd"><td><p>datafusion.optimizer.default_filter_selectivity</p></td>
 <td><p>20</p></td>
 <td><p>The default filter selectivity used by Filter Statistics when an exact selectivity cannot be determined. Valid values are between 0 (no selectivity) and 100 (all rows are selected).</p></td>
 </tr>
-<tr class="row-odd"><td><p>datafusion.explain.logical_plan_only</p></td>
+<tr class="row-even"><td><p>datafusion.explain.logical_plan_only</p></td>
 <td><p>false</p></td>
 <td><p>When set to true, the explain statement will only print logical plans</p></td>
 </tr>
-<tr class="row-even"><td><p>datafusion.explain.physical_plan_only</p></td>
+<tr class="row-odd"><td><p>datafusion.explain.physical_plan_only</p></td>
 <td><p>false</p></td>
 <td><p>When set to true, the explain statement will only print physical plans</p></td>
 </tr>
-<tr class="row-odd"><td><p>datafusion.explain.show_statistics</p></td>
+<tr class="row-even"><td><p>datafusion.explain.show_statistics</p></td>
 <td><p>false</p></td>
 <td><p>When set to true, the explain statement will print operator statistics for physical plans</p></td>
 </tr>
-<tr class="row-even"><td><p>datafusion.sql_parser.parse_float_as_decimal</p></td>
+<tr class="row-odd"><td><p>datafusion.sql_parser.parse_float_as_decimal</p></td>
 <td><p>false</p></td>
 <td><p>When set to true, SQL parser will parse float as decimal type</p></td>
 </tr>
-<tr class="row-odd"><td><p>datafusion.sql_parser.enable_ident_normalization</p></td>
+<tr class="row-even"><td><p>datafusion.sql_parser.enable_ident_normalization</p></td>
 <td><p>true</p></td>
 <td><p>When set to true, SQL parser will normalize ident (convert ident to lowercase when not quoted)</p></td>
 </tr>
-<tr class="row-even"><td><p>datafusion.sql_parser.dialect</p></td>
+<tr class="row-odd"><td><p>datafusion.sql_parser.dialect</p></td>
 <td><p>generic</p></td>
 <td><p>Configure the SQL dialect used by DataFusion’s parser; supported values include: Generic, MySQL, PostgreSQL, Hive, SQLite, Snowflake, Redshift, MsSQL, ClickHouse, BigQuery, and Ansi.</p></td>
 </tr>
