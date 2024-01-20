@@ -1098,7 +1098,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion"
-version = "34.0.0"
+version = "35.0.0"
 dependencies = [
  "ahash",
  "apache-avro",
@@ -1146,7 +1146,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-cli"
-version = "34.0.0"
+version = "35.0.0"
 dependencies = [
  "arrow",
  "assert_cmd",
@@ -1174,7 +1174,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-common"
-version = "34.0.0"
+version = "35.0.0"
 dependencies = [
  "ahash",
  "apache-avro",
@@ -1193,7 +1193,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-execution"
-version = "34.0.0"
+version = "35.0.0"
 dependencies = [
  "arrow",
  "chrono",
@@ -1212,7 +1212,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-expr"
-version = "34.0.0"
+version = "35.0.0"
 dependencies = [
  "ahash",
  "arrow",
@@ -1226,7 +1226,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-optimizer"
-version = "34.0.0"
+version = "35.0.0"
 dependencies = [
  "arrow",
  "async-trait",
@@ -1242,7 +1242,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-physical-expr"
-version = "34.0.0"
+version = "35.0.0"
 dependencies = [
  "ahash",
  "arrow",
@@ -1274,7 +1274,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-physical-plan"
-version = "34.0.0"
+version = "35.0.0"
 dependencies = [
  "ahash",
  "arrow",
@@ -1303,7 +1303,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-sql"
-version = "34.0.0"
+version = "35.0.0"
 dependencies = [
  "arrow",
  "arrow-schema",
@@ -3092,9 +3092,9 @@ dependencies = [
 
 [[package]]
 name = "smallvec"
-version = "1.12.0"
+version = "1.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2593d31f82ead8df961d8bd23a64c2ccf2eb5dd34b0a34bfb4dd54011c72009e"
+checksum = "e6ecd384b10a64542d77071bd64bd7b231f4ed5940fba55e98c3de13824cf3d7"
 
 [[package]]
 name = "snafu"
@@ -3621,9 +3621,9 @@ checksum = "711b9620af191e0cdc7468a8d14e709c3dcdb115b36f838e601583af800a370a"
 
 [[package]]
 name = "uuid"
-version = "1.6.1"
+version = "1.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5e395fcf16a7a3d8127ec99782007af141946b4795001f876d54fb0d55978560"
+checksum = "f00cc9702ca12d3c81455259621e676d0f7251cec66a21e98fe2e9a37db93b2a"
 dependencies = [
  "getrandom",
  "serde",
