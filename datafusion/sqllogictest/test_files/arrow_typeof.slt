@@ -412,6 +412,11 @@ select arrow_cast(make_array(1, 2, 3), 'FixedSizeList(3, Int64)');
 ----
 [1, 2, 3]
 
+query ?
+select arrow_cast([1, 2, 3], 'FixedSizeList(3, Int64)');
+----
+[1, 2, 3]
+
 query T
 select arrow_typeof(arrow_cast(arrow_cast(make_array(1, 2, 3), 'LargeList(Int64)'), 'FixedSizeList(3, Int64)'));
 ----
