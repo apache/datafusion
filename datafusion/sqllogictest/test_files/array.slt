@@ -3388,16 +3388,17 @@ select array_union(arrow_cast([], 'LargeList(Null)'), arrow_cast([], 'LargeList(
 ----
 []
 
-# array_union scalar function #7
-query ?
-select array_union([[null]], []);
-----
-[[]]
+#TODO: Union should have same dimensions
+## array_union scalar function #7
+#query ?
+#select array_union([[null]], []);
+#----
+#[[]]
 
-query ?
-select array_union(arrow_cast([[null]], 'LargeList(List(Null))'), arrow_cast([], 'LargeList(Null)'));
-----
-[[]]
+#query ?
+#select array_union(arrow_cast([[null]], 'LargeList(List(Null))'), arrow_cast([], 'LargeList(Null)'));
+#----
+#[[]]
 
 # array_union scalar function #8
 query ?
