@@ -74,7 +74,7 @@ pub(crate) fn pushdown_sorts(
             let fetch = sort_exec.fetch();
             let sort_reqs = requirements.data.unwrap_or_default();
             requirements = requirements.children.swap_remove(0);
-            add_sort_above(&mut requirements, sort_reqs, fetch);
+            requirements = add_sort_above(requirements, sort_reqs, fetch);
         };
 
         // We can safely get the 0th index as we are dealing with a `SortExec`.
@@ -109,7 +109,7 @@ pub(crate) fn pushdown_sorts(
     } else {
         // Can not push down requirements, add new `SortExec`:
         let sort_reqs = requirements.data.clone().unwrap_or_default();
-        add_sort_above(&mut requirements, sort_reqs, None);
+        requirements = add_sort_above(requirements, sort_reqs, None);
         assign_initial_requirements(&mut requirements);
     }
     Ok(Transformed::Yes(requirements))

@@ -57,7 +57,7 @@ impl<T> ExprContext<T> {
 
     pub fn update_plan_from_children(mut self) -> Result<Self> {
         let children_plans = self.children.iter().map(|c| c.expr.clone()).collect();
-        self.expr = self.expr.with_new_children(children_plans)?;
+        self.expr = with_new_children_if_necessary(self.expr, children_plans)?;
         Ok(self)
     }
 }
@@ -88,9 +88,7 @@ impl<T> ConcreteTreeNode for ExprContext<T> {
     }
 
     fn with_new_children(mut self, children: Vec<Self>) -> Result<Self> {
-        let children_plans = children.iter().map(|c| c.expr.clone()).collect::<Vec<_>>();
-        self.expr = with_new_children_if_necessary(self.expr, children_plans)?;
         self.children = children;
-        Ok(self)
+        self.update_plan_from_children()
     }
 }

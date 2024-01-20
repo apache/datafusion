@@ -32,7 +32,7 @@ use crate::Result;
 /// [`PhysicalExpr`]: https://docs.rs/datafusion/latest/datafusion/physical_plan/trait.PhysicalExpr.html
 /// [`LogicalPlan`]: https://docs.rs/datafusion-expr/latest/datafusion_expr/logical_plan/enum.LogicalPlan.html
 /// [`Expr`]: https://docs.rs/datafusion-expr/latest/datafusion_expr/expr/enum.Expr.html
-pub trait TreeNode: Sized + Clone {
+pub trait TreeNode: Sized {
     /// Use preorder to iterate the node on the tree so that we can
     /// stop fast for some cases.
     ///
@@ -381,7 +381,7 @@ pub trait ConcreteTreeNode: Sized {
     fn with_new_children(self, children: Vec<Self>) -> Result<Self>;
 }
 
-impl<T: ConcreteTreeNode + Clone> TreeNode for T {
+impl<T: ConcreteTreeNode> TreeNode for T {
     /// Apply the closure `F` to the node's children
     fn apply_children<F>(&self, op: &mut F) -> Result<VisitRecursion>
     where

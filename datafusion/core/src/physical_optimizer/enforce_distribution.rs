@@ -998,7 +998,7 @@ fn remove_dist_changing_operators(
 fn replace_order_preserving_variants(
     mut context: DistributionContext,
 ) -> Result<DistributionContext> {
-    let mut updated_children = context
+    context.children = context
         .children
         .into_iter()
         .map(|child| {
@@ -1011,25 +1011,21 @@ fn replace_order_preserving_variants(
         .collect::<Result<Vec<_>>>()?;
 
     if is_sort_preserving_merge(&context.plan) {
-        let child = updated_children.swap_remove(0);
-        context.plan = Arc::new(CoalescePartitionsExec::new(child.plan.clone()));
-        context.children = vec![child];
+        let child_plan = context.children[0].plan.clone();
+        context.plan = Arc::new(CoalescePartitionsExec::new(child_plan));
         return Ok(context);
     } else if let Some(repartition) =
         context.plan.as_any().downcast_ref::<RepartitionExec>()
     {
         if repartition.preserve_order() {
-            let child = updated_children.swap_remove(0);
             context.plan = Arc::new(RepartitionExec::try_new(
-                child.plan.clone(),
+                context.children[0].plan.clone(),
                 repartition.partitioning().clone(),
             )?);
-            context.children = vec![child];
             return Ok(context);
         }
     }
 
-    context.children = updated_children;
     context.update_plan_from_children()
 }
 

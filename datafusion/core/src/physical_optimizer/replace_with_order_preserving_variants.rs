@@ -26,7 +26,6 @@ use crate::error::Result;
 use crate::physical_optimizer::utils::{is_coalesce_partitions, is_sort};
 use crate::physical_plan::repartition::RepartitionExec;
 use crate::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
-use crate::physical_plan::with_new_children_if_necessary;
 
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::Transformed;
@@ -40,9 +39,7 @@ use datafusion_physical_plan::unbounded_output;
 pub type OrderPreservationContext = PlanContext<bool>;
 
 /// Creates a new order-preservation context from those of children nodes.
-pub fn update_children(
-    mut opc: OrderPreservationContext,
-) -> Result<OrderPreservationContext> {
+pub fn update_children(opc: &mut OrderPreservationContext) {
     for PlanContext {
         plan,
         children,
@@ -83,14 +80,7 @@ pub fn update_children(
                 .any(|(idx, c)| c.data && inspect_child(idx))
         }
     }
-
-    opc.plan = with_new_children_if_necessary(
-        opc.plan,
-        opc.children.iter().map(|c| c.plan.clone()).collect(),
-    )?
-    .into();
     opc.data = false;
-    Ok(opc)
 }
 
 /// Calculates the updated plan by replacing operators that lose ordering
@@ -119,7 +109,6 @@ fn get_updated_plan(
         })
         .collect::<Result<_>>()?;
     sort_input.data = false;
-    sort_input = sort_input.update_plan_from_children()?;
 
     // When a `RepartitionExec` doesn't preserve ordering, replace it with
     // a sort-preserving variant if appropriate:
@@ -127,12 +116,13 @@ fn get_updated_plan(
         && !sort_input.plan.maintains_input_order()[0]
         && is_spr_better
     {
-        let child = sort_input.plan.children().swap_remove(0);
-        let repartition =
-            RepartitionExec::try_new(child, sort_input.plan.output_partitioning())?
-                .with_preserve_order();
-        sort_input.plan = Arc::new(repartition) as _;
+        let child = sort_input.children[0].plan.clone();
+        let partitioning = sort_input.plan.output_partitioning();
+        sort_input.plan = Arc::new(
+            RepartitionExec::try_new(child, partitioning)?.with_preserve_order(),
+        ) as _;
         sort_input.children[0].data = true;
+        return Ok(sort_input);
     } else if is_coalesce_partitions(&sort_input.plan) && is_spm_better {
         // When the input of a `CoalescePartitionsExec` has an ordering, replace it
         // with a `SortPreservingMergeExec` if appropriate:
@@ -142,14 +132,15 @@ fn get_updated_plan(
             .map(|o| o.to_vec())
         {
             // Now we can mutate `new_node.children_nodes` safely
-            let child = sort_input.children.clone().swap_remove(0);
+            let child = sort_input.children[0].plan.clone();
             sort_input.plan =
-                Arc::new(SortPreservingMergeExec::new(ordering, child.plan)) as _;
+                Arc::new(SortPreservingMergeExec::new(ordering, child)) as _;
             sort_input.children[0].data = true;
+            return Ok(sort_input);
         }
     }
 
-    Ok(sort_input)
+    sort_input.update_plan_from_children()
 }
 
 /// The `replace_with_order_preserving_variants` optimizer sub-rule tries to
@@ -182,7 +173,7 @@ fn get_updated_plan(
 /// 5. Continue the bottom-up traversal until another `SortExec` is seen, or the traversal
 ///    is complete.
 pub(crate) fn replace_with_order_preserving_variants(
-    requirements: OrderPreservationContext,
+    mut requirements: OrderPreservationContext,
     // A flag indicating that replacing `RepartitionExec`s with
     // `SortPreservingRepartitionExec`s is desirable when it helps
     // to remove a `SortExec` from the plan. If this flag is `false`,
@@ -195,7 +186,7 @@ pub(crate) fn replace_with_order_preserving_variants(
     is_spm_better: bool,
     config: &ConfigOptions,
 ) -> Result<Transformed<OrderPreservationContext>> {
-    let mut requirements = update_children(requirements)?;
+    update_children(&mut requirements);
     if !(is_sort(&requirements.plan) && requirements.children[0].data) {
         return Ok(Transformed::No(requirements));
     }
