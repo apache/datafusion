@@ -253,7 +253,8 @@ fn roundtrip_nested_loop_join() -> Result<()> {
 fn roundtrip_window() -> Result<()> {
     let field_a = Field::new("a", DataType::Int64, false);
     let field_b = Field::new("b", DataType::Int64, false);
-    let schema = Arc::new(Schema::new(vec![field_a, field_b]));
+    let field_c = Field::new("FIRST_VALUE(a) PARTITION BY [b] ORDER BY [a ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW", DataType::Int64, false);
+    let schema = Arc::new(Schema::new(vec![field_a, field_b, field_c]));
 
     let window_frame = WindowFrame::new_bounds(
         datafusion_expr::WindowFrameUnits::Range,

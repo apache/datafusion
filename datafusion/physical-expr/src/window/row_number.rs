@@ -36,12 +36,16 @@ use std::sync::Arc;
 #[derive(Debug)]
 pub struct RowNumber {
     name: String,
+    data_type: DataType,
 }
 
 impl RowNumber {
     /// Create a new ROW_NUMBER function
-    pub fn new(name: impl Into<String>) -> Self {
-        Self { name: name.into() }
+    pub fn new(name: impl Into<String>, data_type: &DataType) -> Self {
+        Self {
+            name: name.into(),
+            data_type: data_type.clone(),
+        }
     }
 }
 
@@ -53,8 +57,7 @@ impl BuiltInWindowFunctionExpr for RowNumber {
 
     fn field(&self) -> Result<Field> {
         let nullable = false;
-        let data_type = DataType::UInt64;
-        Ok(Field::new(self.name(), data_type, nullable))
+        Ok(Field::new(self.name(), self.data_type.clone(), nullable))
     }
 
     fn expressions(&self) -> Vec<Arc<dyn PhysicalExpr>> {
@@ -127,7 +130,7 @@ mod tests {
         ]));
         let schema = Schema::new(vec![Field::new("arr", DataType::Boolean, true)]);
         let batch = RecordBatch::try_new(Arc::new(schema), vec![arr])?;
-        let row_number = RowNumber::new("row_number".to_owned());
+        let row_number = RowNumber::new("row_number".to_owned(), &DataType::UInt64);
         let values = row_number.evaluate_args(&batch)?;
         let result = row_number
             .create_evaluator()?
@@ -145,7 +148,7 @@ mod tests {
         ]));
         let schema = Schema::new(vec![Field::new("arr", DataType::Boolean, false)]);
         let batch = RecordBatch::try_new(Arc::new(schema), vec![arr])?;
-        let row_number = RowNumber::new("row_number".to_owned());
+        let row_number = RowNumber::new("row_number".to_owned(), &DataType::UInt64);
         let values = row_number.evaluate_args(&batch)?;
         let result = row_number
             .create_evaluator()?
