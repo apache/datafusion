@@ -178,11 +178,11 @@ impl Column {
         }
 
         for schema in schemas {
-            let fields = schema.qualified_fields_with_unqualified_name(&self.name);
-            match fields.len() {
+            let columns = schema.columns_with_unqualified_name(&self.name);
+            match columns.len() {
                 0 => continue,
                 1 => {
-                    return Ok(fields[0].into());
+                    return Ok(columns[0].into());
                 }
                 _ => {
                     // More than 1 fields in this schema have their names set to self.name.
@@ -199,11 +199,11 @@ impl Column {
 
                     // Compare matched fields with one USING JOIN clause at a time
                     for using_col in using_columns {
-                        let all_matched = fields.iter().all(|f| using_col.contains(f));
+                        let all_matched = columns.iter().all(|f| using_col.contains(f));
                         // All matched fields belong to the same using column set, in orther words
                         // the same join clause. We simply pick the qualifer from the first match.
                         if all_matched {
-                            return Ok(fields[0].into());
+                            return Ok(columns[0].into());
                         }
                     }
                 }
@@ -212,10 +212,7 @@ impl Column {
 
         _schema_err!(SchemaError::FieldNotFound {
             field: Box::new(Column::new(self.relation.clone(), self.name)),
-            valid_fields: schemas
-                .iter()
-                .flat_map(|s| s.fields().iter().map(|f| f.qualified_column()))
-                .collect(),
+            valid_fields: schemas.iter().flat_map(|s| s.columns()).collect(),
         })
     }
 
@@ -265,13 +262,14 @@ impl Column {
         }
 
         for schema_level in schemas {
-            let fields = schema_level
+            let columns = schema_level
                 .iter()
-                .flat_map(|s| s.fields_with_unqualified_name(&self.name))
+                .flat_map(|s| s.columns_with_unqualified_name(&self.name))
                 .collect::<Vec<_>>();
-            match fields.len() {
+            match columns.len() {
                 0 => continue,
-                1 => return Ok(fields[0].qualified_column()),
+                1 => return Ok(columns[0]),
+
                 _ => {
                     // More than 1 fields in this schema have their names set to self.name.
                     //
@@ -287,13 +285,11 @@ impl Column {
 
                     // Compare matched fields with one USING JOIN clause at a time
                     for using_col in using_columns {
-                        let all_matched = fields
-                            .iter()
-                            .all(|f| using_col.contains(&f.qualified_column()));
+                        let all_matched = columns.iter().all(|c| using_col.contains(c));
                         // All matched fields belong to the same using column set, in orther words
                         // the same join clause. We simply pick the qualifer from the first match.
                         if all_matched {
-                            return Ok(fields[0].qualified_column());
+                            return Ok(columns[0]);
                         }
                     }
 
@@ -310,7 +306,7 @@ impl Column {
             valid_fields: schemas
                 .iter()
                 .flat_map(|s| s.iter())
-                .flat_map(|s| s.fields().iter().map(|f| f.qualified_column()))
+                .flat_map(|s| s.columns())
                 .collect(),
         })
     }

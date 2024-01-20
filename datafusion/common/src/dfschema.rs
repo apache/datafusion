@@ -18,7 +18,7 @@
 //! DFSchema is an extended schema struct that DataFusion uses to provide support for
 //! fields with optional relation names.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::fmt::{Display, Formatter};
 use std::hash::Hash;
@@ -416,7 +416,7 @@ impl DFSchema {
             .collect()
     }
 
-    /// Find all fields match the given name
+    /// Find all fields that match the given name
     pub fn fields_with_unqualified_name(&self, name: &str) -> Vec<&Field> {
         self.iter()
             .filter(|(_, field)| field.name() == name)
@@ -424,10 +424,23 @@ impl DFSchema {
             .collect()
     }
 
+    /// Find all fields that match the given name and convert to column
+    pub fn columns_with_unqualified_name(&self, name: &str) -> Vec<Column> {
+        self.iter()
+            .filter(|(_, field)| field.name() == name)
+            .map(|(_, f)| Column::from_name(f.name()))
+            .collect()
+    }
+
+    /// Return all `Column`s for the schema
+    pub fn columns(&self) -> Vec<Column> {
+        self.iter().map(|(q, f)| Column::new(q, f.name())).collect()
+    }
+
     /// Find all fields with the given name and return their fully qualified name.
     /// This was added after making DFSchema wrap SchemaRef to facilitate the transition
     /// for `Column`. TODO: Or maybe just make a columns_with_unqualified_name method?
-    pub fn qualified_fields_with_unqualified_name(&self, name: &str) -> Vec<String> {
+    pub fn columns_with_unqualified_name(&self, name: &str) -> Vec<String> {
         self.iter()
             .filter(|(_, field)| field.name() == name)
             .map(|(q, f)| qualified_name(q, f.name()))
