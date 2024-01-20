@@ -1031,12 +1031,6 @@ where
     let res = match list_array.value_type() {
         DataType::List(_) => concat_internal::<i32>(args)?,
         DataType::LargeList(_) => concat_internal::<i64>(args)?,
-        DataType::Null => {
-            return make_array(&[
-                list_array.values().to_owned(),
-                element_array.to_owned(),
-            ]);
-        }
         data_type => {
             return generic_append_and_prepend::<O>(
                 list_array,
@@ -1074,7 +1068,9 @@ pub fn array_prepend(args: &[ArrayRef]) -> Result<ArrayRef> {
     }
 }
 
-fn align_array_dimensions(args: Vec<ArrayRef>) -> Result<Vec<ArrayRef>> {
+fn align_array_dimensions<O: OffsetSizeTrait>(
+    args: Vec<ArrayRef>,
+) -> Result<Vec<ArrayRef>> {
     let args_ndim = args
         .iter()
         .map(|arg| datafusion_common::utils::list_ndims(arg.data_type()))
@@ -1091,9 +1087,9 @@ fn align_array_dimensions(args: Vec<ArrayRef>) -> Result<Vec<ArrayRef>> {
                 for _ in 0..(max_ndim - ndim) {
                     let data_type = aligned_array.data_type().to_owned();
                     let array_lengths = vec![1; aligned_array.len()];
-                    let offsets = OffsetBuffer::<i32>::from_lengths(array_lengths);
+                    let offsets = OffsetBuffer::<O>::from_lengths(array_lengths);
 
-                    aligned_array = Arc::new(ListArray::try_new(
+                    aligned_array = Arc::new(GenericListArray::<O>::try_new(
                         Arc::new(Field::new("item", data_type, true)),
                         offsets,
                         aligned_array,
@@ -1112,13 +1108,12 @@ fn align_array_dimensions(args: Vec<ArrayRef>) -> Result<Vec<ArrayRef>> {
 
 // Concatenate arrays on the same row.
 fn concat_internal<O: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
-    let args = align_array_dimensions(args.to_vec())?;
+    let args = align_array_dimensions::<O>(args.to_vec())?;
 
     let list_arrays = args
         .iter()
         .map(|arg| as_generic_list_array::<O>(arg))
         .collect::<Result<Vec<_>>>()?;
-
     // Assume number of rows is the same for all arrays
     let row_count = list_arrays[0].len();
 
@@ -2733,9 +2728,11 @@ mod tests {
         let array2d_1 = Arc::new(array_into_list_array(array1d_1.clone())) as ArrayRef;
         let array2d_2 = Arc::new(array_into_list_array(array1d_2.clone())) as ArrayRef;
 
-        let res =
-            align_array_dimensions(vec![array1d_1.to_owned(), array2d_2.to_owned()])
-                .unwrap();
+        let res = align_array_dimensions::<i32>(vec![
+            array1d_1.to_owned(),
+            array2d_2.to_owned(),
+        ])
+        .unwrap();
 
         let expected = as_list_array(&array2d_1).unwrap();
         let expected_dim = datafusion_common::utils::list_ndims(array2d_1.data_type());
@@ -2748,7 +2745,8 @@ mod tests {
         let array3d_1 = Arc::new(array_into_list_array(array2d_1)) as ArrayRef;
         let array3d_2 = array_into_list_array(array2d_2.to_owned());
         let res =
-            align_array_dimensions(vec![array1d_1, Arc::new(array3d_2.clone())]).unwrap();
+            align_array_dimensions::<i32>(vec![array1d_1, Arc::new(array3d_2.clone())])
+                .unwrap();
 
         let expected = as_list_array(&array3d_1).unwrap();
         let expected_dim = datafusion_common::utils::list_ndims(array3d_1.data_type());

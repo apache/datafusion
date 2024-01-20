@@ -63,7 +63,7 @@ SELECT
 NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL
 
 # test_array_cast_invalid_timezone_will_panic
-statement error Parser error: Invalid timezone "Foo": 'Foo' is not a valid timezone 
+statement error Parser error: Invalid timezone "Foo": 'Foo' is not a valid timezone
 SELECT arrow_cast('2021-01-02T03:04:00', 'Timestamp(Nanosecond, Some("Foo"))')
 
 # test_array_index

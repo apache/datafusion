@@ -1156,6 +1156,11 @@ impl DataFrame {
     /// Rename one column by applying a new projection. This is a no-op if the column to be
     /// renamed does not exist.
     ///
+    /// The method supports case sensitive rename with wrapping column name into one of following symbols (  "  or  '  or  `  )
+    ///
+    /// Alternatively setting Datafusion param `datafusion.sql_parser.enable_ident_normalization` to `false` will enable  
+    /// case sensitive rename without need to wrap column name into special symbols
+    ///
     /// ```
     /// # use datafusion::prelude::*;
     /// # use datafusion::error::Result;
@@ -1164,6 +1169,7 @@ impl DataFrame {
     /// let ctx = SessionContext::new();
     /// let df = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?;
     /// let df = df.with_column_renamed("ab_sum", "total")?;
+    ///
     /// # Ok(())
     /// # }
     /// ```
@@ -1542,7 +1548,7 @@ mod tests {
             vec![col("aggregate_test_100.c1")],
             vec![col("aggregate_test_100.c2")],
             vec![],
-            WindowFrame::new(false),
+            WindowFrame::new(None),
         ));
         let t2 = t.select(vec![col("c1"), first_row])?;
         let plan = t2.plan.clone();
