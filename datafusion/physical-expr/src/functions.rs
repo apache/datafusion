@@ -196,7 +196,7 @@ pub(crate) enum Hint {
 /// Note that this function makes a scalar function with no arguments or all scalar inputs return a scalar.
 /// That's said its output will be same for all input rows in a batch.
 #[deprecated(
-    since = "35.0.0",
+    since = "36.0.0",
     note = "Implement your function directly in terms of ColumnarValue or use `ScalarUDF` instead"
 )]
 pub fn make_scalar_function<F>(inner: F) -> ScalarFunctionImplementation
