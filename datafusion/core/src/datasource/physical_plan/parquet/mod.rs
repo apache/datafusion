@@ -550,7 +550,7 @@ impl FileOpener for ParquetOpener {
             if enable_page_index && !row_groups.is_empty() {
                 if let Some(p) = page_pruning_predicate {
                     let pruned =
-                        p.prune(&row_groups, file_metadata.as_ref(), &file_metrics)?;
+                        p.prune(&file_schema, builder.parquet_schema(), &row_groups, file_metadata.as_ref(), &file_metrics)?;
                     if let Some(row_selection) = pruned {
                         builder = builder.with_row_selection(row_selection);
                     }
