@@ -15,7 +15,19 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::any::Any;
+use std::cmp::Eq;
+use std::collections::HashSet;
+use std::fmt::Debug;
+use std::hash::Hash;
+use std::mem;
+use std::ops::Range;
+use std::sync::{Arc, Mutex};
+
+use ahash::RandomState;
+use arrow::array::{Array, ArrayRef};
 use arrow::datatypes::{DataType, Field, TimeUnit};
+use arrow_array::cast::AsArray;
 use arrow_array::types::{
     ArrowPrimitiveType, Date32Type, Date64Type, Decimal128Type, Decimal256Type,
     Float16Type, Float32Type, Float64Type, Int16Type, Int32Type, Int64Type, Int8Type,
@@ -24,27 +36,18 @@ use arrow_array::types::{
     TimestampSecondType, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
 };
 use arrow_array::{PrimitiveArray, StringArray};
-use arrow_buffer::{BufferBuilder, MutableBuffer, OffsetBuffer};
+use arrow_buffer::{BufferBuilder, OffsetBuffer, ScalarBuffer};
 
-use std::any::Any;
-use std::cmp::Eq;
-use std::fmt::Debug;
-use std::hash::Hash;
-use std::mem;
-use std::sync::Arc;
-
-use ahash::RandomState;
-use arrow::array::{Array, ArrayRef};
-use std::collections::HashSet;
-
-use crate::aggregate::utils::{down_cast_any_ref, Hashable};
-use crate::expressions::format_state_name;
-use crate::{AggregateExpr, PhysicalExpr};
-use datafusion_common::cast::{as_list_array, as_primitive_array, as_string_array};
+use datafusion_common::cast::{as_list_array, as_primitive_array};
+use datafusion_common::hash_utils::create_hashes;
 use datafusion_common::utils::array_into_list_array;
 use datafusion_common::{Result, ScalarValue};
 use datafusion_execution::memory_pool::proxy::RawTableAllocExt;
 use datafusion_expr::Accumulator;
+
+use crate::aggregate::utils::{down_cast_any_ref, Hashable};
+use crate::expressions::format_state_name;
+use crate::{AggregateExpr, PhysicalExpr};
 
 type DistinctScalarValues = ScalarValue;
 
@@ -444,16 +447,22 @@ where
 }
 
 #[derive(Debug)]
-struct StringDistinctCountAccumulator(SSOStringHashSet);
+struct StringDistinctCountAccumulator(Mutex<SSOStringHashSet>);
 impl StringDistinctCountAccumulator {
     fn new() -> Self {
-        Self(SSOStringHashSet::new())
+        Self(Mutex::new(SSOStringHashSet::new()))
     }
 }
 
 impl Accumulator for StringDistinctCountAccumulator {
     fn state(&self) -> Result<Vec<ScalarValue>> {
-        let arr = self.0.state();
+        // TODO this should not need a lock/clone (should make
+        // `Accumulator::state` take a mutable reference)
+        let mut lk = self.0.lock().unwrap();
+        let set: &mut SSOStringHashSet = &mut lk;
+        // take the state out of the string set and replace with default
+        let set = std::mem::take(set);
+        let arr = set.into_state();
         let list = Arc::new(array_into_list_array(Arc::new(arr)));
         Ok(vec![ScalarValue::List(list)])
     }
@@ -463,12 +472,7 @@ impl Accumulator for StringDistinctCountAccumulator {
             return Ok(());
         }
 
-        let arr = as_string_array(&values[0])?;
-        arr.iter().for_each(|value| {
-            if let Some(value) = value {
-                self.0.insert(value);
-            }
-        });
+        self.0.lock().unwrap().insert(values[0].clone());
 
         Ok(())
     }
@@ -486,74 +490,64 @@ impl Accumulator for StringDistinctCountAccumulator {
         let arr = as_list_array(&states[0])?;
         arr.iter().try_for_each(|maybe_list| {
             if let Some(list) = maybe_list {
-                let list = as_string_array(&list)?;
-
-                list.iter().for_each(|value| {
-                    if let Some(value) = value {
-                        self.0.insert(value);
-                    }
-                })
+                self.0.lock().unwrap().insert(list);
             };
             Ok(())
         })
     }
 
     fn evaluate(&self) -> Result<ScalarValue> {
-        Ok(ScalarValue::Int64(Some(self.0.len() as i64)))
+        Ok(ScalarValue::Int64(
+            Some(self.0.lock().unwrap().len() as i64),
+        ))
     }
 
     fn size(&self) -> usize {
         // Size of accumulator
         // + SSOStringHashSet size
-        std::mem::size_of_val(self) + self.0.size()
+        std::mem::size_of_val(self) + self.0.lock().unwrap().size()
     }
 }
 
+/// Maximum size of a string that can be inlined in the hash table
 const SHORT_STRING_LEN: usize = mem::size_of::<usize>();
 
+/// Entry that is stored in the actual hash table
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
 struct SSOStringHeader {
-    /// hash of the string value (used when resizing table)
+    /// hash of the string value (stored to avoid recomputing it when checking)
+    /// TODO can we simply recreate when needed
     hash: u64,
-    /// length of the string
+    /// length of the string, in bytes
     len: usize,
-    /// short strings are stored inline, long strings are stored in the buffer
+    /// if len =< SHORT_STRING_LEN: the string data inlined
+    /// if len > SHORT_STRING_LEN, the offset
     offset_or_inline: usize,
 }
 
+impl SSOStringHeader {}
+
 impl SSOStringHeader {
-    fn evaluate(&self, buffer: &[u8]) -> String {
-        if self.len <= SHORT_STRING_LEN {
-            self.offset_or_inline.to_string()
-        } else {
-            let offset = self.offset_or_inline;
-            // SAFETY: buffer is only appended to, and we correctly inserted values
-            unsafe {
-                std::str::from_utf8_unchecked(
-                    buffer.get_unchecked(offset..offset + self.len),
-                )
-            }
-            .to_string()
-        }
+    /// returns self.offset..self.offset + self.len
+    fn range(&self) -> Range<usize> {
+        self.offset_or_inline..self.offset_or_inline + self.len
     }
 }
 
-// Short String Optimizated HashSet for String
+// Short String Optimized HashSet for String
 // Equivalent to HashSet<String> but with better memory usage
 #[derive(Default)]
 struct SSOStringHashSet {
-    /// Core of the HashSet, it stores both the short and long string headers
-    header_set: HashSet<SSOStringHeader>,
-    /// Used to check if the long string already exists
-    long_string_map: hashbrown::raw::RawTable<SSOStringHeader>,
-    /// Total size of the map in bytes
+    /// Store entries for each distinct string
+    map: hashbrown::raw::RawTable<SSOStringHeader>,
+    /// Total size of the map in bytes (TODO)
     map_size: usize,
     /// Buffer containing all long strings
     buffer: BufferBuilder<u8>,
     /// The random state used to generate hashes
-    state: RandomState,
-    /// Used for capacity calculation, equivalent to the sum of all string lengths
-    size_hint: usize,
+    random_state: RandomState,
+    // buffer to be reused to store hashes
+    hashes_buffer: Vec<u64>,
 }
 
 impl SSOStringHashSet {
@@ -561,99 +555,183 @@ impl SSOStringHashSet {
         Self::default()
     }
 
-    fn insert(&mut self, value: &str) {
-        let value_len = value.len();
-        self.size_hint += value_len;
-        let value_bytes = value.as_bytes();
+    fn insert(&mut self, values: ArrayRef) {
+        // step 1: compute hashes for the strings
+        let batch_hashes = &mut self.hashes_buffer;
+        batch_hashes.clear();
+        batch_hashes.resize(values.len(), 0);
+        create_hashes(&[values.clone()], &self.random_state, batch_hashes)
+            // hash is supported for all string types and create_hashes only
+            // returns errors for unsupported types
+            .unwrap();
 
-        if value_len <= SHORT_STRING_LEN {
-            let inline = value_bytes
-                .iter()
-                .fold(0usize, |acc, &x| acc << 8 | x as usize);
-            let short_string_header = SSOStringHeader {
-                hash: 0, // no need for short string cases
-                len: value_len,
-                offset_or_inline: inline,
+        // TODO make this generic (to support large strings)
+        let values = values.as_string::<i32>();
+
+        // step 2: insert each string into the set, if not already present
+
+        // Assert for unsafe values call
+        assert_eq!(values.len(), batch_hashes.len());
+
+        for (value, &hash) in values.iter().zip(batch_hashes.iter()) {
+            // count distinct ignores nulls
+            let Some(value) = value else {
+                continue;
             };
-            self.header_set.insert(short_string_header);
-        } else {
-            let hash = self.state.hash_one(value_bytes);
 
-            let entry = self.long_string_map.get_mut(hash, |header| {
-                // if hash matches, check if the bytes match
-                let offset = header.offset_or_inline;
-                let len = header.len;
+            // from here on only use bytes (not str/chars) for value
+            let value = value.as_bytes();
 
-                // SAFETY: buffer is only appended to, and we correctly inserted values
-                let existing_value =
-                    unsafe { self.buffer.as_slice().get_unchecked(offset..offset + len) };
+            if value.len() <= SHORT_STRING_LEN {
+                let inline = value.iter().fold(0usize, |acc, &x| acc << 8 | x as usize);
 
-                value_bytes == existing_value
-            });
+                // Check if the value is already present in the set
+                let entry = self.map.get_mut(hash, |header| {
+                    // if hash matches, must also compare the values
+                    if header.len != value.len() {
+                        return false;
+                    }
+                    inline == header.offset_or_inline
+                });
 
-            if entry.is_none() {
-                let offset = self.buffer.len();
-                self.buffer.append_slice(value_bytes);
-                let header = SSOStringHeader {
-                    hash,
-                    len: value_len,
-                    offset_or_inline: offset,
-                };
-                self.long_string_map.insert_accounted(
-                    header,
-                    |header| header.hash,
-                    &mut self.map_size,
-                );
-                self.header_set.insert(header);
+                // Insert an entry for this value if it is not present
+                if entry.is_none() {
+                    let new_header = SSOStringHeader {
+                        hash,
+                        len: value.len(),
+                        offset_or_inline: inline,
+                    };
+                    self.map.insert_accounted(
+                        new_header,
+                        |header| header.hash,
+                        &mut self.map_size,
+                    );
+                }
+            }
+            // handle large strings
+            else {
+                // Check if the value is already present in the set
+                let entry = self.map.get_mut(hash, |header| {
+                    // if hash matches, must also compare the values
+                    if header.len != value.len() {
+                        return false;
+                    }
+                    // SAFETY: buffer is only appended to, and we correctly inserted values
+                    let existing_value =
+                        unsafe { self.buffer.as_slice().get_unchecked(header.range()) };
+                    value == existing_value
+                });
+
+                // Insert the value if it is not present
+                if entry.is_none() {
+                    // long strings are stored as a length/offset into the buffer
+                    let offset = self.buffer.len();
+                    self.buffer.append_slice(value);
+                    let new_header = SSOStringHeader {
+                        hash,
+                        len: value.len(),
+                        offset_or_inline: offset,
+                    };
+                    self.map.insert_accounted(
+                        new_header,
+                        |header| header.hash,
+                        &mut self.map_size,
+                    );
+                }
             }
         }
     }
 
-    // Returns a StringArray with the current state of the set
-    fn state(&self) -> StringArray {
-        let mut offsets = Vec::with_capacity(self.size_hint + 1);
-        offsets.push(0);
+    /// Converts this set into a StringArray of the distinct string values
+    fn into_state(self) -> StringArray {
+        // The map contains entries that have offsets in some arbitrary order
+        // but the buffer contains the actual strings in the order they were inserted
+        // so we need to build offsets for the strings in the buffer in order
+        // then append short strings, if any, and then build the StringArray
+        // TODO a picture would be nice here
+        let Self {
+            map,
+            map_size: _,
+            mut buffer,
+            random_state: _,
+            hashes_buffer: _,
+        } = self;
 
-        let mut values = MutableBuffer::new(0);
-        let buffer = self.buffer.as_slice();
+        // Sort all headers so that long strings come first, in offset order
+        // followed by short strings ordered by value
+        let mut headers = map.into_iter().collect::<Vec<_>>();
+        headers.sort_unstable_by(|a, b| {
+            if a.len <= SHORT_STRING_LEN && b.len <= SHORT_STRING_LEN {
+                // both are short strings, compare the inlined values
+                a.offset_or_inline.cmp(&b.offset_or_inline)
+            } else if a.len <= SHORT_STRING_LEN {
+                // a is a short string, b is a long string
+                // (long strings sort before short strings)
+                std::cmp::Ordering::Greater
+            } else if b.len <= SHORT_STRING_LEN {
+                // a is a long string, b is a short string
+                // (long strings sort before short strings)
+                std::cmp::Ordering::Less
+            } else {
+                // both are long strings, sort by offsets
+                a.offset_or_inline.cmp(&b.offset_or_inline)
+            }
+        });
 
-        for header in self.header_set.iter() {
-            let s = header.evaluate(buffer);
-            values.extend_from_slice(s.as_bytes());
-            offsets.push(values.len() as i32);
-        }
+        // create offsets for the long strings
+        let offsets: ScalarBuffer<_> = std::iter::once(0)
+            .chain(headers.into_iter().map(|header| {
+                if header.len > SHORT_STRING_LEN {
+                    // long strings are already stored in the buffer, so take
+                    // offset directly
+                    (header.offset_or_inline + header.len) as i32
+                } else {
+                    // short strings are inlined, so append their bytes to the
+                    // buffer now
+                    // a string like {10, 20, 30} was stored as [30, 20, 10]
+                    // so need to reverse here
+                    // todo maybe we could cast directly to *u8 and avoid this shifting / finagling
+                    for i in 0..header.len {
+                        let shift = 8 * (header.len - i - 1);
+                        let mask = 0xffusize << shift;
+                        let v = ((header.offset_or_inline & mask) >> shift) as u8;
+                        buffer.append(v);
+                    }
+                    buffer.len() as i32
+                }
+            }))
+            .collect();
 
-        let value_offsets = OffsetBuffer::<i32>::new(offsets.into());
-        StringArray::new(value_offsets, values.into(), None)
+        // get the values and reset self.buffer
+        let values = buffer.finish();
+
+        let nulls = None; // count distinct ignores nulls
+                          // todo could use unchecked to avoid utf8 validation
+        StringArray::new(OffsetBuffer::new(offsets), values, nulls)
     }
 
     fn len(&self) -> usize {
-        self.header_set.len()
+        self.map.len()
     }
 
     fn size(&self) -> usize {
-        self.header_set.len() * mem::size_of::<SSOStringHeader>()
-            + self.map_size
-            + self.buffer.len()
+        self.map_size + self.buffer.len()
     }
 }
 
 impl Debug for SSOStringHashSet {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("SSOStringHashSet")
-            .field("header_set", &self.header_set)
-            // TODO: Print long_string_map
+            .field("map", &"<map>")
             .field("map_size", &self.map_size)
             .field("buffer", &self.buffer)
-            .field("state", &self.state)
+            .field("random_state", &self.random_state)
+            .field("hashes_buffer", &self.hashes_buffer)
             .finish()
     }
 }
 #[cfg(test)]
 mod tests {
-    use crate::expressions::NoOp;
-
-    use super::*;
     use arrow::array::{
         ArrayRef, BooleanArray, Float32Array, Float64Array, Int16Array, Int32Array,
         Int64Array, Int8Array, UInt16Array, UInt32Array, UInt64Array, UInt8Array,
@@ -665,9 +743,14 @@ mod tests {
     };
     use arrow_array::Decimal256Array;
     use arrow_buffer::i256;
+
     use datafusion_common::cast::{as_boolean_array, as_list_array, as_primitive_array};
     use datafusion_common::internal_err;
     use datafusion_common::DataFusionError;
+
+    use crate::expressions::NoOp;
+
+    use super::*;
 
     macro_rules! state_to_vec_primitive {
         ($LIST:expr, $DATA_TYPE:ident) => {{
@@ -1055,4 +1138,91 @@ mod tests {
         assert_eq!(result, ScalarValue::Int64(Some(2)));
         Ok(())
     }
+    #[test]
+    fn string_set_empty() {
+        for values in [StringArray::new_null(0), StringArray::new_null(11)] {
+            let mut set = SSOStringHashSet::new();
+            set.insert(Arc::new(values));
+            assert_set(set, &[]);
+        }
+    }
+
+    #[test]
+    fn string_set_basic() {
+        // basic test for mixed small and large string values
+        let values = StringArray::from(vec![
+            Some("a"),
+            Some("b"),
+            Some("CXCCCCCCCC"), // 10 bytes
+            Some(""),
+            Some("cbcxx"), // 5 bytes
+            None,
+            Some("AAAAAAAA"),  // 8 bytes
+            Some("BBBBBQBBB"), // 9 bytes
+            Some("a"),
+            Some("cbcxx"),
+            Some("b"),
+            Some("cbcxx"),
+            Some(""),
+            None,
+            Some("BBBBBQBBB"),
+            Some("BBBBBQBBB"),
+            Some("AAAAAAAA"),
+            Some("CXCCCCCCCC"),
+        ]);
+
+        let mut set = SSOStringHashSet::new();
+        set.insert(Arc::new(values));
+        assert_set(
+            set,
+            &[
+                Some(""),
+                Some("AAAAAAAA"),
+                Some("BBBBBQBBB"),
+                Some("CXCCCCCCCC"),
+                Some("a"),
+                Some("b"),
+                Some("cbcxx"),
+            ],
+        );
+    }
+
+    #[test]
+    fn string_set_non_utf8() {
+        // basic test for mixed small and large string values
+        let values = StringArray::from(vec![
+            Some("a"),
+            Some("✨🔥"),
+            Some("🔥"),
+            Some("✨✨✨"),
+            Some("foobarbaz"),
+            Some("🔥"),
+            Some("✨🔥"),
+        ]);
+
+        let mut set = SSOStringHashSet::new();
+        set.insert(Arc::new(values));
+        assert_set(
+            set,
+            &[
+                Some("a"),
+                Some("foobarbaz"),
+                Some("✨✨✨"),
+                Some("✨🔥"),
+                Some("🔥"),
+            ],
+        );
+    }
+
+    // asserts that the set contains the expected strings
+    fn assert_set(set: SSOStringHashSet, expected: &[Option<&str>]) {
+        let strings = set.into_state();
+        let mut state = strings.into_iter().collect::<Vec<_>>();
+        state.sort();
+        assert_eq!(state, expected);
+    }
+
+    // TODO fuzz testing
+
+    // inserting strings into the set does not increase reported memoyr
 }
