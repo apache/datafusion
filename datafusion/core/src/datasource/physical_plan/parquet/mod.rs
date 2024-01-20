@@ -782,7 +782,7 @@ mod tests {
         array::{Int64Array, Int8Array, StringArray},
         datatypes::{DataType, Field, SchemaBuilder},
     };
-    use arrow_array::{Date64Array, GenericStringArray, StructArray};
+    use arrow_array::{Date64Array, StructArray};
     use chrono::{TimeZone, Utc};
     use datafusion_common::{assert_contains, ToDFSchema};
     use datafusion_common::{FileType, GetExt, ScalarValue};
