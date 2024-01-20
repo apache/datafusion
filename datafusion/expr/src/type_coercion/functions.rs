@@ -116,6 +116,12 @@ fn get_valid_types(
             &new_base_type,
         );
 
+        // type coercion for nested FixedSizeArray
+        let elem_type = datafusion_common::utils::coerced_type_with_base_type_only(
+            elem_type,
+            &elem_base_type,
+        );
+
         // dbg!(&array_type, &elem_type);
         match array_type {
             DataType::List(ref field)
@@ -126,7 +132,7 @@ fn get_valid_types(
                 {
                     field.data_type()
                 } else {
-                    elem_type
+                    &elem_type
                 };
                 if is_append {
                     Ok(vec![vec![array_type.clone(), elem_type.clone()]])

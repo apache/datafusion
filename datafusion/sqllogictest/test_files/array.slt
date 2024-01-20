@@ -77,6 +77,19 @@ AS
   FROM arrays
 ;
 
+#TODO: create FixedSizeList with NULL column
+statement ok
+CREATE TABLE fixed_size_arrays
+AS VALUES
+  (arrow_cast(make_array(make_array(NULL, 2),make_array(3, NULL)), 'FixedSizeList(2, List(Int64))'), arrow_cast(make_array(1.1, 2.2, 3.3), 'FixedSizeList(3, Float64)'), arrow_cast(make_array('L', 'o', 'r', 'e', 'm'), 'FixedSizeList(5, Utf8)')),
+  (arrow_cast(make_array(make_array(3, 4),make_array(5, 6)), 'FixedSizeList(2, List(Int64))'), arrow_cast(make_array(NULL, 5.5, 6.6), 'FixedSizeList(3, Float64)'), arrow_cast(make_array('i', 'p', NULL, 'u', 'm'), 'FixedSizeList(5, Utf8)')),
+  (arrow_cast(make_array(make_array(5, 6),make_array(7, 8)), 'FixedSizeList(2, List(Int64))'), arrow_cast(make_array(7.7, 8.8, 9.9), 'FixedSizeList(3, Float64)'), arrow_cast(make_array('d', NULL, 'l', 'o', 'r'), 'FixedSizeList(5, Utf8)')),
+  (arrow_cast(make_array(make_array(7, NULL),make_array(9, 10)), 'FixedSizeList(2, List(Int64))'), arrow_cast(make_array(10.1, NULL, 12.2), 'FixedSizeList(3, Float64)'), arrow_cast(make_array('s', 'i', 't', 'a', 'b'), 'FixedSizeList(5, Utf8)')),
+  (arrow_cast(make_array(make_array(7, NULL),make_array(9, 10)), 'FixedSizeList(2, List(Int64))'), arrow_cast(make_array(13.3, 14.4, 15.5), 'FixedSizeList(3, Float64)'), arrow_cast(make_array('a', 'm', 'e', 't', 'x'), 'FixedSizeList(5, Utf8)')),
+  (arrow_cast(make_array(make_array(11, 12),make_array(13, 14)), 'FixedSizeList(2, List(Int64))'), arrow_cast(make_array(13.3, 14.4, 15.5), 'FixedSizeList(3, Float64)'), arrow_cast(make_array(',','a','b','c','d'), 'FixedSizeList(5, Utf8)')),
+  (arrow_cast(make_array(make_array(15, 16),make_array(NULL, 18)), 'FixedSizeList(2, List(Int64))'), arrow_cast(make_array(16.6, 17.7, 18.8), 'FixedSizeList(3, Float64)'), arrow_cast(make_array(',','a','b','c','d'), 'FixedSizeList(5, Utf8)'))
+;
+
 statement ok
 CREATE TABLE slices
 AS VALUES
@@ -190,10 +203,24 @@ AS VALUES
 ;
 
 statement ok
+CREATE TABLE fixed_size_array_has_table_1D
+AS VALUES
+  (arrow_cast(make_array(1, 2, 3), 'FixedSizeList(3, Int64)'), 1, arrow_cast(make_array(1, 2, 3, 4), 'FixedSizeList(4, Int64)'), arrow_cast(make_array(1,3), 'FixedSizeList(2, Int64)'), arrow_cast(make_array(1,3,5), 'FixedSizeList(3, Int64)'), arrow_cast(make_array(2, 4, 6, 8, 1, 3, 5), 'FixedSizeList(7, Int64)')),
+  (arrow_cast(make_array(3, 4, 5), 'FixedSizeList(3, Int64)'), 2, arrow_cast(make_array(1, 2, 3, 4), 'FixedSizeList(4, Int64)'), arrow_cast(make_array(2,5), 'FixedSizeList(2, Int64)'), arrow_cast(make_array(2,4,6), 'FixedSizeList(3, Int64)'), arrow_cast(make_array(1, 3, 5, 7, 9, 11, 13), 'FixedSizeList(7, Int64)'))
+;
+
+statement ok
 CREATE TABLE array_has_table_1D_Float
 AS VALUES
   (make_array(1.0, 2.0), 1.0, make_array(1.0,2.0,3.0), make_array(1.0,3.0), make_array(1.11), make_array(2.22, 3.33)),
   (make_array(3.0, 4.0, 5.0), 2.0, make_array(1.0,2.0,3.0,4.0), make_array(2.0,5.0), make_array(2.22, 1.11), make_array(1.11, 3.33))
+;
+
+statement ok
+CREATE TABLE fixed_size_array_has_table_1D_Float
+AS VALUES
+  (arrow_cast(make_array(1.0, 2.0, 3.0), 'FixedSizeList(3, Float64)'), 1.0, arrow_cast(make_array(1.0, 2.0, 3.0, 4.0), 'FixedSizeList(4, Float64)'), arrow_cast(make_array(1.0,3.0), 'FixedSizeList(2, Float64)'), arrow_cast(make_array(1.11, 2.22), 'FixedSizeList(2, Float64)'), arrow_cast(make_array(2.22, 3.33), 'FixedSizeList(2, Float64)')),
+  (arrow_cast(make_array(3.0, 4.0, 5.0), 'FixedSizeList(3, Float64)'), 2.0, arrow_cast(make_array(1.0, 2.0, 3.0, 4.0), 'FixedSizeList(4, Float64)'), arrow_cast(make_array(2.0,5.0), 'FixedSizeList(2, Float64)'), arrow_cast(make_array(2.22, 1.11), 'FixedSizeList(2, Float64)'), arrow_cast(make_array(1.11, 3.33), 'FixedSizeList(2, Float64)'))
 ;
 
 statement ok
@@ -204,10 +231,24 @@ AS VALUES
 ;
 
 statement ok
+CREATE TABLE fixed_size_array_has_table_1D_Boolean
+AS VALUES
+  (arrow_cast(make_array(true, true, true), 'FixedSizeList(3, Boolean)'), false, arrow_cast(make_array(true, true, false, true, false), 'FixedSizeList(5, Boolean)'), arrow_cast(make_array(true, false, true), 'FixedSizeList(3, Boolean)'), arrow_cast(make_array(false, true), 'FixedSizeList(2, Boolean)'), arrow_cast(make_array(true, false, true), 'FixedSizeList(3, Boolean)')),
+  (arrow_cast(make_array(false, false, false), 'FixedSizeList(3, Boolean)'), false, arrow_cast(make_array(true, false, true, true, false), 'FixedSizeList(5, Boolean)'), arrow_cast(make_array(true, true, false), 'FixedSizeList(3, Boolean)'), arrow_cast(make_array(true, true), 'FixedSizeList(2, Boolean)'), arrow_cast(make_array(false,false,true), 'FixedSizeList(3, Boolean)'))
+;
+
+statement ok
 CREATE TABLE array_has_table_1D_UTF8
 AS VALUES
   (make_array('a', 'bc', 'def'), 'bc', make_array('datafusion', 'rust', 'arrow'), make_array('rust', 'arrow'), make_array('rust', 'arrow', 'python'), make_array('data')),
   (make_array('a', 'bc', 'def'), 'defg', make_array('datafusion', 'rust', 'arrow'), make_array('datafusion', 'rust', 'arrow', 'python'), make_array('rust', 'arrow'), make_array('datafusion', 'rust', 'arrow'))
+;
+
+statement ok
+CREATE TABLE fixed_size_array_has_table_1D_UTF8
+AS VALUES
+  (arrow_cast(make_array('a', 'bc', 'def'), 'FixedSizeList(3, Utf8)'), 'bc', arrow_cast(make_array('datafusion', 'rust', 'arrow'), 'FixedSizeList(3, Utf8)'), arrow_cast(make_array('rust', 'arrow', 'datafusion', 'rust'), 'FixedSizeList(4, Utf8)'), arrow_cast(make_array('rust', 'arrow', 'python'), 'FixedSizeList(3, Utf8)'), arrow_cast(make_array('data', 'fusion', 'rust'), 'FixedSizeList(3, Utf8)')),
+  (arrow_cast(make_array('a', 'bc', 'def'), 'FixedSizeList(3, Utf8)'), 'defg', arrow_cast(make_array('datafusion', 'rust', 'arrow'), 'FixedSizeList(3, Utf8)'), arrow_cast(make_array('datafusion', 'rust', 'arrow', 'python'), 'FixedSizeList(4, Utf8)'), arrow_cast(make_array('rust', 'arrow', 'python'), 'FixedSizeList(3, Utf8)'), arrow_cast(make_array('datafusion', 'rust', 'arrow'), 'FixedSizeList(3, Utf8)'))
 ;
 
 statement ok
@@ -218,10 +259,24 @@ AS VALUES
 ;
 
 statement ok
+CREATE TABLE fixed_size_array_has_table_2D
+AS VALUES
+  (arrow_cast(make_array([1,2], [3,4]), 'FixedSizeList(2, List(Int64))'), arrow_cast(make_array(1,3), 'FixedSizeList(2, Int64)'), arrow_cast(make_array([1,2,3], [4,5], [6,7]), 'FixedSizeList(3, List(Int64))'), arrow_cast(make_array([4,5], [6,7], [1,2]), 'FixedSizeList(3, List(Int64))')),
+  (arrow_cast(make_array([3,4], [5]), 'FixedSizeList(2, List(Int64))'), arrow_cast(make_array(5, 3), 'FixedSizeList(2, Int64)'), arrow_cast(make_array([1,2,3,4], [5,6,7], [8,9,10]), 'FixedSizeList(3, List(Int64))'), arrow_cast(make_array([1,2,3], [5,6,7], [8,9,10]), 'FixedSizeList(3, List(Int64))'))
+;
+
+statement ok
 CREATE TABLE array_has_table_2D_float
 AS VALUES
   (make_array([1.0, 2.0, 3.0], [1.1, 2.2], [3.3]), make_array([1.1, 2.2], [3.3])),
   (make_array([1.0, 2.0, 3.0], [1.1, 2.2], [3.3]), make_array([1.0], [1.1, 2.2], [3.3]))
+;
+
+statement ok
+CREATE TABLE fixed_size_array_has_table_2D_Float
+AS VALUES
+  (arrow_cast(make_array([1.0, 2.0, 3.0], [1.1, 2.2], [3.3]), 'FixedSizeList(3, List(Float64))'), arrow_cast(make_array([1.1, 2.2], [3.3], [4.4]), 'FixedSizeList(3, List(Float64))')),
+  (arrow_cast(make_array([1.0, 2.0, 3.0], [1.1, 2.2], [3.3]), 'FixedSizeList(3, List(Float64))'), arrow_cast(make_array([1.0], [1.1, 2.2], [3.3]), 'FixedSizeList(3, List(Float64))'))
 ;
 
 statement ok
@@ -234,6 +289,18 @@ AS VALUES
   (make_array([[1], [2]]), make_array([1], [2])),
   (make_array([[1], [2]], [[2], [3]]), make_array([1], [2], [3])),
   (make_array([[1], [2]], [[2], [3]]), make_array([1], [2]))
+;
+
+statement ok
+CREATE TABLE fixed_size_array_has_table_3D
+AS VALUES
+  (arrow_cast(make_array([[1,2]], [[3, 4]]), 'FixedSizeList(2, List(List(Int64)))'), arrow_cast(make_array([1], [2]), 'FixedSizeList(2, List(Int64))')),
+  (arrow_cast(make_array([[1,2]], [[4, 4]]), 'FixedSizeList(2, List(List(Int64)))'), arrow_cast(make_array([1,2], [3, 4]), 'FixedSizeList(2, List(Int64))')),
+  (arrow_cast(make_array([[1,2]], [[4, 4]]), 'FixedSizeList(2, List(List(Int64)))'), arrow_cast(make_array([1,2,3], [1]), 'FixedSizeList(2, List(Int64))')),
+  (arrow_cast(make_array([[1], [2]], []), 'FixedSizeList(2, List(List(Int64)))'), arrow_cast(make_array([2], [3]), 'FixedSizeList(2, List(Int64))')),
+  (arrow_cast(make_array([[1], [2]], []), 'FixedSizeList(2, List(List(Int64)))'), arrow_cast(make_array([1], [2]), 'FixedSizeList(2, List(Int64))')),
+  (arrow_cast(make_array([[1], [2]], [[2], [3]]), 'FixedSizeList(2, List(List(Int64)))'), arrow_cast(make_array([1], [2]), 'FixedSizeList(2, List(Int64))')),
+  (arrow_cast(make_array([[1], [2]], [[2], [3]]), 'FixedSizeList(2, List(List(Int64)))'), arrow_cast(make_array([1], [2]), 'FixedSizeList(2, List(Int64))'))
 ;
 
 statement ok
@@ -4251,6 +4318,23 @@ select array_has(arrow_cast(make_array(1,2), 'LargeList(Int64)'), 1),
 ----
 true true true true true false true false true false true false
 
+query BBBBBBBBBBBB
+select array_has(arrow_cast(make_array(1,2), 'FixedSizeList(2, Int64)'), 1),
+       array_has(arrow_cast(make_array(1,2,NULL), 'FixedSizeList(3, Int64)'), 1),
+       array_has(arrow_cast(make_array([2,3], [3,4]), 'FixedSizeList(2, List(Int64))'), make_array(2,3)),
+       array_has(arrow_cast(make_array([[1], [2,3]], [[4,5], [6]]), 'FixedSizeList(2, List(List(Int64)))'), make_array([1], [2,3])),
+       array_has(arrow_cast(make_array([[1], [2,3]], [[4,5], [6]]), 'FixedSizeList(2, List(List(Int64)))'), make_array([4,5], [6])),
+       array_has(arrow_cast(make_array([[1], [2,3]], [[4,5], [6]]), 'FixedSizeList(2, List(List(Int64)))'), make_array([1])),
+       array_has(arrow_cast(make_array([[[1]]]), 'FixedSizeList(1, List(List(List(Int64))))'), make_array([[1]])),
+       array_has(arrow_cast(make_array([[[1]]], [[[1], [2]]]), 'FixedSizeList(2, List(List(List(Int64))))'), make_array([[2]])),
+       array_has(arrow_cast(make_array([[[1]]], [[[1], [2]]]), 'FixedSizeList(2, List(List(List(Int64))))'), make_array([[1], [2]])),
+       list_has(arrow_cast(make_array(1,2,3), 'FixedSizeList(3, Int64)'), 4),
+       array_contains(arrow_cast(make_array(1,2,3), 'FixedSizeList(3, Int64)'), 3),
+       list_contains(arrow_cast(make_array(1,2,3), 'FixedSizeList(3, Int64)'), 0)
+;
+----
+true true true true true false true false true false true false
+
 query BBB
 select array_has(column1, column2),
        array_has_all(column3, column4),
@@ -4265,6 +4349,15 @@ select array_has(arrow_cast(column1, 'LargeList(Int64)'), column2),
        array_has_all(arrow_cast(column3, 'LargeList(Int64)'), arrow_cast(column4, 'LargeList(Int64)')),
        array_has_any(arrow_cast(column5, 'LargeList(Int64)'), arrow_cast(column6, 'LargeList(Int64)'))
 from array_has_table_1D;
+----
+true true true
+false false false
+
+query BBB
+select array_has(column1, column2),
+       array_has_all(column3, column4),
+       array_has_any(column5, column6)
+from fixed_size_array_has_table_1D;
 ----
 true true true
 false false false
@@ -4291,6 +4384,15 @@ query BBB
 select array_has(column1, column2),
        array_has_all(column3, column4),
        array_has_any(column5, column6)
+from fixed_size_array_has_table_1D_Float;
+----
+true true true
+false false true
+
+query BBB
+select array_has(column1, column2),
+       array_has_all(column3, column4),
+       array_has_any(column5, column6)
 from array_has_table_1D_Boolean;
 ----
 false true true
@@ -4301,6 +4403,15 @@ select array_has(arrow_cast(column1, 'LargeList(Boolean)'), column2),
        array_has_all(arrow_cast(column3, 'LargeList(Boolean)'), arrow_cast(column4, 'LargeList(Boolean)')),
        array_has_any(arrow_cast(column5, 'LargeList(Boolean)'), arrow_cast(column6, 'LargeList(Boolean)'))
 from array_has_table_1D_Boolean;
+----
+false true true
+true true true
+
+query BBB
+select array_has(column1, column2),
+       array_has_all(column3, column4),
+       array_has_any(column5, column6)
+from fixed_size_array_has_table_1D_Boolean;
 ----
 false true true
 true true true
@@ -4323,6 +4434,13 @@ from array_has_table_1D_UTF8;
 true true false
 false false true
 
+query B
+select array_has(column1, column2)
+from fixed_size_array_has_table_1D_UTF8;
+----
+true
+false
+
 query BB
 select array_has(column1, column2),
        array_has_all(column3, column4)
@@ -4339,6 +4457,14 @@ from array_has_table_2D;
 false true
 true false
 
+query BB
+select array_has(column1, column2),
+       array_has_all(column3, column4)
+from fixed_size_array_has_table_2D;
+----
+false false
+false false
+
 query B
 select array_has_all(column1, column2)
 from array_has_table_2D_float;
@@ -4351,6 +4477,13 @@ select array_has_all(arrow_cast(column1, 'LargeList(List(Float64))'), arrow_cast
 from array_has_table_2D_float;
 ----
 true
+false
+
+query B
+select array_has_all(column1, column2)
+from fixed_size_array_has_table_2D_float;
+----
+false
 false
 
 query B
@@ -4373,6 +4506,17 @@ false
 false
 true
 false
+true
+
+query B
+select array_has(column1, column2) from fixed_size_array_has_table_3D;
+----
+false
+false
+false
+false
+true
+true
 true
 
 query BBBB
@@ -4399,6 +4543,21 @@ from arrays;
 false false false true
 true false true false
 true false false true
+false true false false
+false false false false
+false false false false
+
+query BBBB
+select array_has(column1, make_array(5, 6)),
+       array_has(column1, make_array(7, NULL)),
+       array_has(column2, 5.5),
+       array_has(column3, 'o')
+from fixed_size_arrays;
+----
+false false false true
+true false true false
+true false false true
+false true false false
 false true false false
 false false false false
 false false false false
@@ -4440,19 +4599,19 @@ select array_has_all(arrow_cast(make_array(1,2,3), 'LargeList(Int64)'), arrow_ca
 true false true false false false true true false false true false true
 
 query BBBBBBBBBBBBB
-select array_has_all(arrow_cast(make_array(1,2,3), 'LargeList(Int64)'), arrow_cast(make_array(1,3), 'LargeList(Int64)')),
-       array_has_all(arrow_cast(make_array(1,2,3),'LargeList(Int64)'), arrow_cast(make_array(1,4), 'LargeList(Int64)')),
-       array_has_all(arrow_cast(make_array([1,2], [3,4]), 'LargeList(List(Int64))'), arrow_cast(make_array([1,2]), 'LargeList(List(Int64))')),
-       array_has_all(arrow_cast(make_array([1,2], [3,4]), 'LargeList(List(Int64))'), arrow_cast(make_array([1,3]), 'LargeList(List(Int64))')),
-       array_has_all(arrow_cast(make_array([1,2], [3,4]), 'LargeList(List(Int64))'), arrow_cast(make_array([1,2], [3,4], [5,6]), 'LargeList(List(Int64))')),
-       array_has_all(arrow_cast(make_array([[1,2,3]]), 'LargeList(List(List(Int64)))'), arrow_cast(make_array([[1]]), 'LargeList(List(List(Int64)))')),
-       array_has_all(arrow_cast(make_array([[1,2,3]]), 'LargeList(List(List(Int64)))'), arrow_cast(make_array([[1,2,3]]), 'LargeList(List(List(Int64)))')),
-       array_has_any(arrow_cast(make_array(1,2,3),'LargeList(Int64)'), arrow_cast(make_array(1,10,100), 'LargeList(Int64)')),
-       array_has_any(arrow_cast(make_array(1,2,3),'LargeList(Int64)'), arrow_cast(make_array(10,100),'LargeList(Int64)')),
-       array_has_any(arrow_cast(make_array([1,2], [3,4]), 'LargeList(List(Int64))'), arrow_cast(make_array([1,10], [10,4]), 'LargeList(List(Int64))')),
-       array_has_any(arrow_cast(make_array([1,2], [3,4]), 'LargeList(List(Int64))'), arrow_cast(make_array([10,20], [3,4]), 'LargeList(List(Int64))')),
-       array_has_any(arrow_cast(make_array([[1,2,3]]), 'LargeList(List(List(Int64)))'), arrow_cast(make_array([[1,2,3], [4,5,6]]), 'LargeList(List(List(Int64)))')),
-       array_has_any(arrow_cast(make_array([[1,2,3]]), 'LargeList(List(List(Int64)))'), arrow_cast(make_array([[1,2,3]], [[4,5,6]]), 'LargeList(List(List(Int64)))'))
+select array_has_all(arrow_cast(make_array(1,2,3), 'FixedSizeList(3, Int64)'), arrow_cast(make_array(1, 3), 'FixedSizeList(2, Int64)')),
+       array_has_all(arrow_cast(make_array(1,2,3),'FixedSizeList(3, Int64)'), arrow_cast(make_array(1, 4), 'FixedSizeList(2, Int64)')),
+       array_has_all(arrow_cast(make_array([1,2], [3,4]), 'FixedSizeList(2, List(Int64))'), arrow_cast(make_array([1,2]), 'FixedSizeList(1, List(Int64))')),
+       array_has_all(arrow_cast(make_array([1,2], [3,4]), 'FixedSizeList(2, List(Int64))'), arrow_cast(make_array([1,3]), 'FixedSizeList(1, List(Int64))')),
+       array_has_all(arrow_cast(make_array([1,2], [3,4]), 'FixedSizeList(2, List(Int64))'), arrow_cast(make_array([1,2], [3,4], [5,6]), 'FixedSizeList(3, List(Int64))')),
+       array_has_all(arrow_cast(make_array([[1,2,3]]), 'FixedSizeList(1, List(List(Int64)))'), arrow_cast(make_array([[1]]), 'FixedSizeList(1, List(List(Int64)))')),
+       array_has_all(arrow_cast(make_array([[1,2,3]]), 'FixedSizeList(1, List(List(Int64)))'), arrow_cast(make_array([[1,2,3]]), 'FixedSizeList(1, List(List(Int64)))')),
+       array_has_any(arrow_cast(make_array(1,2,3),'FixedSizeList(3, Int64)'), arrow_cast(make_array(1,10,100), 'FixedSizeList(3, Int64)')),
+       array_has_any(arrow_cast(make_array(1,2,3),'FixedSizeList(3, Int64)'), arrow_cast(make_array(10, 100),'FixedSizeList(2, Int64)')),
+       array_has_any(arrow_cast(make_array([1,2], [3,4]), 'FixedSizeList(2, List(Int64))'), arrow_cast(make_array([1,10], [10,4]), 'FixedSizeList(2, List(Int64))')),
+       array_has_any(arrow_cast(make_array([1,2], [3,4]), 'FixedSizeList(2, List(Int64))'), arrow_cast(make_array([10,20], [3,4]), 'FixedSizeList(2, List(Int64))')),
+       array_has_any(arrow_cast(make_array([[1,2,3]]), 'FixedSizeList(1, List(List(Int64)))'), arrow_cast(make_array([[1,2,3], [4,5,6]]), 'FixedSizeList(1, List(List(Int64)))')),
+       array_has_any(arrow_cast(make_array([[1,2,3]]), 'FixedSizeList(1, List(List(Int64)))'), arrow_cast(make_array([[1,2,3]], [[4,5,6]]), 'FixedSizeList(2, List(List(Int64)))'))
 ;
 ----
 true false true false false false true true false false true false true
