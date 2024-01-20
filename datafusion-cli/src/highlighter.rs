@@ -57,10 +57,10 @@ impl Highlighter for SyntaxHighlighter {
                 for token in tokens.iter() {
                     match token {
                         Token::Word(w) if w.keyword != Keyword::NoKeyword => {
-                            out_line.push_str(&Color::red(&token));
+                            out_line.push_str(&Color::red(token));
                         }
                         Token::SingleQuotedString(_) => {
-                            out_line.push_str(&Color::green(&token));
+                            out_line.push_str(&Color::green(token));
                         }
                         other => out_line.push_str(&format!("{other}")),
                     }
