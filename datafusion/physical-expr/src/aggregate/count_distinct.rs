@@ -521,7 +521,7 @@ struct SSOStringHeader {
     /// length of the string, in bytes
     len: usize,
     /// if len =< SHORT_STRING_LEN: the string data inlined
-    /// if len > SHORT_STRING_LEN, the offset
+    /// if len > SHORT_STRING_LEN, the offset of where the data starts
     offset_or_inline: usize,
 }
 
@@ -536,23 +536,38 @@ impl SSOStringHeader {
 
 // Short String Optimized HashSet for String
 // Equivalent to HashSet<String> but with better memory usage
-#[derive(Default)]
 struct SSOStringHashSet {
     /// Store entries for each distinct string
     map: hashbrown::raw::RawTable<SSOStringHeader>,
     /// Total size of the map in bytes (TODO)
     map_size: usize,
-    /// Buffer containing all long strings
+    /// Buffer containing all string values
     buffer: BufferBuilder<u8>,
+    /// offsets into buffer of the distinct values. These are the same offsets
+    /// as are used for a GenericStringArray
+    offsets: Vec<i32>,
     /// The random state used to generate hashes
     random_state: RandomState,
     // buffer to be reused to store hashes
     hashes_buffer: Vec<u64>,
 }
 
+impl Default for SSOStringHashSet {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SSOStringHashSet {
     fn new() -> Self {
-        Self::default()
+        Self {
+            map: hashbrown::raw::RawTable::new(),
+            map_size: 0,
+            buffer: BufferBuilder::new(0),
+            offsets: vec![0], // first offset is always 0
+            random_state: RandomState::new(),
+            hashes_buffer: vec![],
+        }
     }
 
     fn insert(&mut self, values: ArrayRef) {
@@ -596,6 +611,12 @@ impl SSOStringHashSet {
 
                 // Insert an entry for this value if it is not present
                 if entry.is_none() {
+                    // Put the small values into buffer and output so it appears
+                    // the output array, but store the actual bytes inline
+                    self.buffer.append_slice(value);
+                    self.offsets.push(self.buffer.len() as i32);
+
+                    // store the actual value inline
                     let new_header = SSOStringHeader {
                         hash,
                         len: value.len(),
@@ -619,14 +640,17 @@ impl SSOStringHashSet {
                     // SAFETY: buffer is only appended to, and we correctly inserted values
                     let existing_value =
                         unsafe { self.buffer.as_slice().get_unchecked(header.range()) };
+
                     value == existing_value
                 });
 
                 // Insert the value if it is not present
                 if entry.is_none() {
                     // long strings are stored as a length/offset into the buffer
-                    let offset = self.buffer.len();
+                    let offset = self.buffer.len(); // offset of start fof data
                     self.buffer.append_slice(value);
+                    self.offsets.push(self.buffer.len() as i32);
+
                     let new_header = SSOStringHeader {
                         hash,
                         len: value.len(),
@@ -650,64 +674,23 @@ impl SSOStringHashSet {
         // then append short strings, if any, and then build the StringArray
         // TODO a picture would be nice here
         let Self {
-            map,
+            map: _,
             map_size: _,
+            offsets,
             mut buffer,
             random_state: _,
             hashes_buffer: _,
         } = self;
 
-        // Sort all headers so that long strings come first, in offset order
-        // followed by short strings ordered by value
-        let mut headers = map.into_iter().collect::<Vec<_>>();
-        headers.sort_unstable_by(|a, b| {
-            if a.len <= SHORT_STRING_LEN && b.len <= SHORT_STRING_LEN {
-                // both are short strings, compare the inlined values
-                a.offset_or_inline.cmp(&b.offset_or_inline)
-            } else if a.len <= SHORT_STRING_LEN {
-                // a is a short string, b is a long string
-                // (long strings sort before short strings)
-                std::cmp::Ordering::Greater
-            } else if b.len <= SHORT_STRING_LEN {
-                // a is a long string, b is a short string
-                // (long strings sort before short strings)
-                std::cmp::Ordering::Less
-            } else {
-                // both are long strings, sort by offsets
-                a.offset_or_inline.cmp(&b.offset_or_inline)
-            }
-        });
-
-        // create offsets for the long strings
-        let offsets: ScalarBuffer<_> = std::iter::once(0)
-            .chain(headers.into_iter().map(|header| {
-                if header.len > SHORT_STRING_LEN {
-                    // long strings are already stored in the buffer, so take
-                    // offset directly
-                    (header.offset_or_inline + header.len) as i32
-                } else {
-                    // short strings are inlined, so append their bytes to the
-                    // buffer now
-                    // a string like {10, 20, 30} was stored as [30, 20, 10]
-                    // so need to reverse here
-                    // todo maybe we could cast directly to *u8 and avoid this shifting / finagling
-                    for i in 0..header.len {
-                        let shift = 8 * (header.len - i - 1);
-                        let mask = 0xffusize << shift;
-                        let v = ((header.offset_or_inline & mask) >> shift) as u8;
-                        buffer.append(v);
-                    }
-                    buffer.len() as i32
-                }
-            }))
-            .collect();
+        // Add any
+        let offsets: ScalarBuffer<_> = offsets.into();
 
         // get the values and reset self.buffer
         let values = buffer.finish();
 
         let nulls = None; // count distinct ignores nulls
-                          // todo could use unchecked to avoid utf8 validation
-        StringArray::new(OffsetBuffer::new(offsets), values, nulls)
+        // SAFETY: all the values that went in are coming
+        unsafe { StringArray::new_unchecked(OffsetBuffer::new(offsets), values, nulls) }
     }
 
     fn len(&self) -> usize {
