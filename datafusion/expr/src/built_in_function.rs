@@ -977,7 +977,10 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::ArrayReplaceAll => {
                 Signature::any(3, self.volatility())
             }
-            BuiltinScalarFunction::ArraySlice => Signature::any(3, self.volatility()),
+            BuiltinScalarFunction::ArraySlice => {
+                Signature::variadic_any(self.volatility())
+            }
+
             BuiltinScalarFunction::ArrayToString => {
                 Signature::variadic_any(self.volatility())
             }
