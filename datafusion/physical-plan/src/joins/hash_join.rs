@@ -1234,6 +1234,9 @@ impl HashJoinStream {
                 self.hashes_buffer.resize(batch.num_rows(), 0);
                 create_hashes(&keys_values, &self.random_state, &mut self.hashes_buffer)?;
 
+                self.join_metrics.input_batches.add(1);
+                self.join_metrics.input_rows.add(batch.num_rows());
+
                 self.state =
                     HashJoinStreamState::ProcessProbeBatch(ProcessProbeBatchState {
                         batch,
@@ -1256,8 +1259,6 @@ impl HashJoinStream {
         let state = self.state.try_as_process_probe_batch_mut()?;
         let build_side = self.build_side.try_as_ready_mut()?;
 
-        self.join_metrics.input_batches.add(1);
-        self.join_metrics.input_rows.add(state.batch.num_rows());
         let timer = self.join_metrics.join_time.timer();
 
         // get the matched by join keys indices
@@ -1294,13 +1295,6 @@ impl HashJoinStream {
             });
         }
 
-        // check if probe batch scanned based on `next_offset` returned from lookup function
-        let probe_batch_scanned = next_offset.is_none()
-            || next_offset.is_some_and(|(probe_idx, build_idx)| {
-                probe_idx + 1 >= state.batch.num_rows()
-                    && build_idx.is_some_and(|v| v == 0)
-            });
-
         // The goals of index alignment for different join types are:
         //
         // 1) Right & FullJoin -- to append all missing probe-side indices between
@@ -1326,7 +1320,7 @@ impl HashJoinStream {
         // Calculate range and perform alignment.
         // In case probe batch has been processed -- align all remaining rows.
         let index_alignment_range_start = state.joined_probe_idx.map_or(0, |v| v + 1);
-        let index_alignment_range_end = if probe_batch_scanned {
+        let index_alignment_range_end = if next_offset.is_none() {
             state.batch.num_rows()
         } else {
             last_joined_right_idx.map_or(0, |v| v + 1)
@@ -1353,7 +1347,7 @@ impl HashJoinStream {
         self.join_metrics.output_rows.add(result.num_rows());
         timer.done();
 
-        if probe_batch_scanned {
+        if next_offset.is_none() {
             self.state = HashJoinStreamState::FetchProbeBatch;
         } else {
             state.advance(
