@@ -327,6 +327,18 @@ impl<'a> ConstEvaluator<'a> {
         // added they can be checked for their ability to be evaluated
         // at plan time
         match expr {
+            // do not optimze casting to timestamp since arrow converts timestamp with tailing
+            // timezone (like -03 or +09) to regular date (it just adds & sums the timezone)
+            // you can see in arrow-cast-46.0.0/src/cast.rs in row 2529 this code:
+            // let naive = string_to_datetime(tz, v)?.naive_utc();
+            // And postgres has special handling for those cases, which are only handled later
+            Expr::Cast(t) => {
+                if let DataType::Timestamp(_, _) = &t.data_type {
+                    false
+                } else {
+                    true
+                }
+            }
             // Has no runtime cost, but needed during planning
             Expr::Alias(..)
             | Expr::AggregateFunction { .. }
@@ -365,7 +377,6 @@ impl<'a> ConstEvaluator<'a> {
             | Expr::Like { .. }
             | Expr::SimilarTo { .. }
             | Expr::Case(_)
-            | Expr::Cast { .. }
             | Expr::TryCast { .. }
             | Expr::InList { .. }
             | Expr::GetIndexedField { .. } => true,
