@@ -549,8 +549,13 @@ impl FileOpener for ParquetOpener {
             // with that range can be skipped as well
             if enable_page_index && !row_groups.is_empty() {
                 if let Some(p) = page_pruning_predicate {
-                    let pruned =
-                        p.prune(&file_schema, builder.parquet_schema(), &row_groups, file_metadata.as_ref(), &file_metrics)?;
+                    let pruned = p.prune(
+                        &file_schema,
+                        builder.parquet_schema(),
+                        &row_groups,
+                        file_metadata.as_ref(),
+                        &file_metrics,
+                    )?;
                     if let Some(row_selection) = pruned {
                         builder = builder.with_row_selection(row_selection);
                     }
@@ -782,7 +787,9 @@ mod tests {
         array::{Int64Array, Int8Array, StringArray},
         datatypes::{DataType, Field, SchemaBuilder},
     };
+    use arrow_array::cast::AsArray;
     use arrow_array::{Date64Array, StructArray};
+    use arrow_schema::Fields;
     use chrono::{TimeZone, Utc};
     use datafusion_common::{assert_contains, ToDFSchema};
     use datafusion_common::{FileType, GetExt, ScalarValue};
@@ -793,11 +800,9 @@ mod tests {
     use object_store::local::LocalFileSystem;
     use object_store::path::Path;
     use object_store::ObjectMeta;
+    use parquet::arrow::ArrowWriter;
     use std::fs::{self, File};
     use std::io::Write;
-    use arrow_array::cast::AsArray;
-    use arrow_schema::Fields;
-    use parquet::arrow::ArrowWriter;
     use tempfile::TempDir;
     use url::Url;
 
@@ -1768,7 +1773,7 @@ mod tests {
 
         // assert the batches and some metrics
         #[rustfmt::skip]
-        let expected = ["+-----+",
+            let expected = ["+-----+",
             "| int |",
             "+-----+",
             "| 4   |",
@@ -2140,11 +2145,10 @@ mod tests {
         create_physical_expr(expr, &df_schema, &execution_props).unwrap()
     }
 
-
     #[tokio::test]
     async fn test_struct_filter_parquet() -> Result<()> {
         let tmp_dir = TempDir::new()?;
-        let path =tmp_dir.path().to_str().unwrap().to_string()+"/test.parquet";
+        let path = tmp_dir.path().to_str().unwrap().to_string() + "/test.parquet";
         write_file(&path);
         let ctx = SessionContext::new();
         let opt = ListingOptions::new(Arc::new(ParquetFormat::default()));
@@ -2153,12 +2157,14 @@ mod tests {
             .unwrap();
         let sql = "select * from base_table where name='test02'";
         let batch = ctx.sql(sql).await.unwrap().collect().await.unwrap();
-        assert_eq!(batch.len(),1);
-        let expected = ["+---------------------+----+--------+",
-                            "| struct              | id | name   |",
-                            "+---------------------+----+--------+",
-                            "| {id: 4, name: aaa2} | 2  | test02 |",
-                            "+---------------------+----+--------+"];
+        assert_eq!(batch.len(), 1);
+        let expected = [
+            "+---------------------+----+--------+",
+            "| struct              | id | name   |",
+            "+---------------------+----+--------+",
+            "| {id: 4, name: aaa2} | 2  | test02 |",
+            "+---------------------+----+--------+",
+        ];
         crate::assert_batches_eq!(expected, &batch);
         Ok(())
     }
@@ -2191,13 +2197,12 @@ mod tests {
                 Arc::new(name_array),
             ],
         )
-            .unwrap();
+        .unwrap();
         let file = File::create(file).unwrap();
         let w_opt = WriterProperties::builder().build();
         let mut writer = ArrowWriter::try_new(file, schema, Some(w_opt)).unwrap();
         writer.write(&batch).unwrap();
         writer.flush().unwrap();
         writer.close().unwrap();
-
     }
 }

@@ -23,6 +23,7 @@ use arrow::array::{
 };
 use arrow::datatypes::DataType;
 use arrow::{array::ArrayRef, datatypes::SchemaRef, error::ArrowError};
+use arrow_schema::Schema;
 use datafusion_common::{DataFusionError, Result, ScalarValue};
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::{split_conjunction, PhysicalExpr};
@@ -39,10 +40,11 @@ use parquet::{
 };
 use std::collections::HashSet;
 use std::sync::Arc;
-use arrow_schema::Schema;
 
 use crate::datasource::physical_plan::parquet::parquet_to_arrow_decimal_type;
-use crate::datasource::physical_plan::parquet::statistics::{from_bytes_to_i128, parquet_column};
+use crate::datasource::physical_plan::parquet::statistics::{
+    from_bytes_to_i128, parquet_column,
+};
 use crate::physical_optimizer::pruning::{PruningPredicate, PruningStatistics};
 
 use super::metrics::ParquetFileMetrics;
@@ -170,8 +172,9 @@ impl PagePruningPredicate {
 
             let name = find_column_name(predicate);
             let mut parquet_col = None;
-            if name.is_some(){
-                parquet_col = parquet_column(parquet_schema, arrow_schema, name.unwrap().as_str());
+            if name.is_some() {
+                parquet_col =
+                    parquet_column(parquet_schema, arrow_schema, name.unwrap().as_str());
             }
             let mut selectors = Vec::with_capacity(row_groups.len());
             for r in row_groups.iter() {
@@ -257,9 +260,7 @@ impl PagePruningPredicate {
 /// that `extract_page_index_push_down_predicates` only return
 /// predicate with one col)
 ///
-fn find_column_name(
-    predicate: &PruningPredicate,
-) -> Option<String> {
+fn find_column_name(predicate: &PruningPredicate) -> Option<String> {
     let mut found_required_column: Option<&Column> = None;
 
     for required_column_details in predicate.required_columns().iter() {
