@@ -75,6 +75,7 @@ DROP TABLE parquet_table;
 
 
 # Unbounded repartition
+# See https://github.com/apache/arrow-datafusion/issues/5278
 # Set up unbounded table and run a query - the query plan should display a `RepartitionExec`
 # and a `CoalescePartitionsExec`
 CREATE UNBOUNDED EXTERNAL TABLE sink_table (
