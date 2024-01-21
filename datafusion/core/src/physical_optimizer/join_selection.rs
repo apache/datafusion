@@ -354,7 +354,7 @@ fn try_collect_left(
         )?))),
         (false, true) => {
             if supports_swap(*hash_join.join_type()) {
-                Ok(Some(swap_hash_join(hash_join, PartitionMode::CollectLeft)?))
+                swap_hash_join(hash_join, PartitionMode::CollectLeft).map(Some)
             } else {
                 Ok(None)
             }
@@ -539,7 +539,7 @@ fn hash_join_convert_symmetric_subrule(
             let left_order = determine_order(JoinSide::Left);
             let right_order = determine_order(JoinSide::Right);
 
-            SymmetricHashJoinExec::try_new(
+            return SymmetricHashJoinExec::try_new(
                 hash_join.left().clone(),
                 hash_join.right().clone(),
                 hash_join.on().to_vec(),
@@ -553,13 +553,10 @@ fn hash_join_convert_symmetric_subrule(
             .map(|exec| {
                 input.plan = Arc::new(exec) as _;
                 input
-            })
-        } else {
-            Ok(input)
+            });
         }
-    } else {
-        Ok(input)
     }
+    Ok(input)
 }
 
 /// This subrule will swap build/probe sides of a hash join depending on whether
@@ -664,7 +661,7 @@ fn apply_subrules(
     for subrule in subrules {
         input = subrule(input, config_options)?;
     }
-    let is_unbounded = input
+    input.data = input
         .plan
         .unbounded_output(&children_unbounded(&input))
         // Treat the case where an operator can not run on unbounded data as
@@ -674,7 +671,6 @@ fn apply_subrules(
         // etc. If this doesn't happen, the final `PipelineChecker` rule will
         // catch this and raise an error anyway.
         .unwrap_or(true);
-    input.data = is_unbounded;
     Ok(Transformed::Yes(input))
 }
 
@@ -844,8 +840,13 @@ mod tests_statistical {
         // TODO: End state payloads will be checked here.
         let config = ConfigOptions::new().optimizer;
         let collect_left_threshold = config.hash_join_single_partition_threshold;
+        let collect_threshold_num_rows = config.hash_join_single_partition_threshold_rows;
         let _ = state.plan.transform_up(&|plan| {
-            statistical_join_selection_subrule(plan, collect_left_threshold)
+            statistical_join_selection_subrule(
+                plan,
+                collect_left_threshold,
+                collect_threshold_num_rows,
+            )
         })?;
         Ok(())
     }
