@@ -116,7 +116,7 @@ VALUES (1,2,3,4,5,6,7,8,9,10,11,12,13,NULL,'F',3.5)
 
 # Test non-literal expressions in VALUES
 query II
-VALUES (1, CASE WHEN RANDOM() > 0.5 THEN 1 ELSE 1 END), 
+VALUES (1, CASE WHEN RANDOM() > 0.5 THEN 1 ELSE 1 END),
        (2, CASE WHEN RANDOM() > 0.5 THEN 2 ELSE 2 END);
 ----
 1 1
@@ -496,15 +496,265 @@ ProjectionExec: expr=[c1@0 >= 2 AND c1@0 <= 3 as select_between_data.c1 BETWEEN 
 --MemoryExec: partitions=1, partition_sizes=[1]
 
 
-# TODO: query_get_indexed_field
+######
+# Query indexed field
+######
 
-# TODO: query_nested_get_indexed_field
+statement ok
+CREATE TABLE indexed_fields
+AS VALUES
+(make_array(1, 2, 3), 'a'),
+(make_array(4, 5, 6), 'b'),
+(make_array(7, 8, 9), 'c');
 
-# TODO: query_nested_get_indexed_field_on_struct
+query ?T
+SELECT * FROM indexed_fields;
+----
+[1, 2, 3] a
+[4, 5, 6] b
+[7, 8, 9] c
 
-# TODO: query_on_string_dictionary
+query I
+SELECT column1[1] as i0 FROM indexed_fields LIMIT 3;
+----
+1
+4
+7
 
-# TODO: sort_on_window_null_string
+
+######
+# Query nested indexed field
+######
+
+statement ok
+CREATE TABLE nested_indexed_fields
+AS VALUES
+(make_array(make_array(0, 1), make_array(2, 3), make_array(3, 4)), 'a'),
+(make_array(make_array(5, 6), make_array(7, 8), make_array(9, 10)), 'b'),
+(make_array(make_array(11, 12), make_array(13, 14), make_array(15, 16)), 'c');
+
+query ?T
+SELECT * FROM nested_indexed_fields;
+----
+[[0, 1], [2, 3], [3, 4]] a
+[[5, 6], [7, 8], [9, 10]] b
+[[11, 12], [13, 14], [15, 16]] c
+
+query ?
+SELECT column1[1] as i0 FROM nested_indexed_fields LIMIT 3;
+----
+[0, 1]
+[5, 6]
+[11, 12]
+
+query I
+SELECT column1[1][1] as i0 FROM nested_indexed_fields LIMIT 3;
+----
+0
+5
+11
+
+######
+# Query nested indexed field on struct
+######
+
+statement ok
+CREATE TABLE nested_structs_data
+AS VALUES
+(make_array(0, 1, 2, 3), 'a'),
+(make_array(4, 5, 6, 7), 'b'),
+(make_array(8, 9, 10, 11), 'c');
+
+statement ok
+CREATE TABLE nested_structs AS SELECT struct(column1) AS some_struct FROM nested_structs_data;
+
+query ?
+SELECT some_struct['c0'] as l0 FROM nested_structs LIMIT 3;
+----
+[0, 1, 2, 3]
+[4, 5, 6, 7]
+[8, 9, 10, 11]
+
+query ?
+SELECT some_struct.c0 as l0 FROM nested_structs LIMIT 3;
+----
+[0, 1, 2, 3]
+[4, 5, 6, 7]
+[8, 9, 10, 11]
+
+query I
+SELECT some_struct['c0'][1] as i0 FROM nested_structs LIMIT 3;
+----
+0
+4
+8
+
+
+######
+# Queries on string dictionary
+######
+
+statement ok
+CREATE TABLE test AS
+SELECT
+    arrow_cast(column1, 'Dictionary(Int32, Utf8)') as d1,
+    arrow_cast(column2, 'Dictionary(Int32, Utf8)') as d2,
+    arrow_cast(column3, 'Utf8') as d3
+FROM (
+    VALUES
+    ('one', 'blarg', 'XYZ'),
+    (NULL, NULL, NULL),
+    ('three', 'three', 'three')
+);
+
+# Basic SELECT
+query ?
+SELECT d1 FROM test;
+----
+one
+NULL
+three
+
+# Basic filtering
+query ?
+SELECT d1 FROM test WHERE d1 IS NOT NULL;
+----
+one
+three
+
+# Comparison with constant
+query ?
+SELECT d1 FROM test WHERE d1 = 'three';
+----
+three
+
+# Comparison with another dictionary column
+query ?
+SELECT d1 FROM test WHERE d1 = d2
+----
+three
+
+# Order comparison with another dictionary column
+query ?
+SELECT d1 FROM test WHERE d1 <= d2
+----
+three
+
+# Comparison with a non-dictionary column
+query ?
+SELECT d1 FROM test WHERE d1 = d3
+----
+three
+
+# Filtering with constant
+query ?
+SELECT d1 FROM test WHERE d1 = 'three'
+----
+three
+
+# Expression evaluation
+query T
+SELECT concat(d1, '-foo') FROM test
+----
+one-foo
+-foo
+three-foo
+
+# Expression evaluation with two dictionaries
+query T
+SELECT concat(d1, d2) FROM test
+----
+oneblarg
+(empty)
+threethree
+
+# Aggregation
+query I
+SELECT COUNT(d1) FROM test
+----
+2
+
+# Aggregation min
+query T
+SELECT MIN(d1) FROM test
+----
+one
+
+# Aggregation max
+query T
+SELECT MAX(d1) FROM test
+----
+three
+
+# Grouping
+query ?I
+SELECT d1, COUNT(*) FROM test GROUP BY d1 ORDER BY d1;
+----
+one 1
+three 1
+NULL 1
+
+# Window functions
+query ?I
+SELECT d1, row_number() OVER (PARTITION BY d1) AS rn1 FROM test ORDER BY d1;
+----
+one 1
+three 1
+NULL 1
+
+# Drop table
+statement ok
+DROP TABLE test;
+
+
+######
+# Sort on window string
+######
+
+statement ok
+CREATE TABLE test AS
+SELECT
+    arrow_cast(column1, 'Dictionary(Int32, Utf8)') as d1,
+    arrow_cast(column2, 'Utf8') as d2,
+    arrow_cast(column3, 'LargeUtf8') as d3
+FROM (
+    VALUES
+    ('one', 'ONE', 'One'),
+    (NULL, NULL, NULL),
+    ('three', 'THREE', 'Three')
+);
+
+# Sort on Dictionary window
+query ?I
+SELECT d1, row_number() OVER (PARTITION BY d1) AS rn1 FROM test ORDER BY d1 ASC;
+----
+one 1
+three 1
+NULL 1
+
+# Sort on string window
+query TI
+SELECT d2, row_number() OVER (PARTITION BY d2) AS rn1 FROM test ORDER BY d2 ASC;
+----
+ONE 1
+THREE 1
+NULL 1
+
+# Sort on string window
+query TI
+SELECT d2, row_number() OVER (PARTITION BY d2 ORDER BY d2 DESC) as rn1 FROM test ORDER BY d2 DESC;
+----
+NULL 1
+THREE 1
+ONE 1
+
+# Sort on LargeUtf8 window
+query TI
+SELECT d3, row_number() OVER (PARTITION BY d3) AS rn1 FROM test ORDER BY d3 DESC;
+----
+NULL 1
+Three 1
+One 1
 
 
 # # Create time tables with different precisions but the same logical values
@@ -1121,7 +1371,7 @@ query II
 SELECT
 CASE WHEN B.x > 0 THEN A.x / B.x ELSE 0 END AS value1,
 CASE WHEN B.x > 0 AND B.y > 0 THEN A.x / B.x ELSE 0 END AS value3
-FROM t AS A, (SELECT * FROM t WHERE x = 0) AS B; 
+FROM t AS A, (SELECT * FROM t WHERE x = 0) AS B;
 ----
 0 0
 0 0
