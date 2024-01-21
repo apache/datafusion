@@ -805,7 +805,7 @@ mod test {
     use datafusion_common::DFSchema;
     use datafusion_expr::logical_plan::{table_scan, JoinType};
     use datafusion_expr::{
-        avg, col, lit, logical_plan::builder::LogicalPlanBuilder, sum, not,
+        avg, col, lit, logical_plan::builder::LogicalPlanBuilder, sum,
     };
     use datafusion_expr::{
         grouping_set, AccumulatorFactoryFunction, AggregateUDF, Signature,
@@ -1272,12 +1272,12 @@ mod test {
         let table_scan = test_table_scan()?;
 
         let plan = LogicalPlanBuilder::from(table_scan)
-            .project(vec![not(lit(1).gt(col("a"))), lit(1).gt(col("a"))])?
+            .filter((lit(1)+col("a")-lit(10)).gt(lit(1)+col("a")))?
             .build()?;
 
-        let expected = "Projection: NOT Int32(1) > test.atest.aInt32(1) AS Int32(1) > test.a, Int32(1) > test.atest.aInt32(1) AS Int32(1) > test.a\
-        \n  Projection: Int32(1) > test.a AS Int32(1) > test.atest.aInt32(1), test.a, test.b, test.c\
-        \n    TableScan: test";
+        let expected = "Projection: test.a, test.b, test.c\
+        \n  Filter: Int32(1) + test.atest.aInt32(1) AS Int32(1) + test.a - Int32(10) > Int32(1) + test.atest.aInt32(1) AS Int32(1) + test.a\n    Projection: Int32(1) + test.a AS Int32(1) + test.atest.aInt32(1), test.a, test.b, test.c\
+        \n      TableScan: test";
 
         assert_optimized_plan_eq(expected, &plan);
 
