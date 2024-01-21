@@ -95,28 +95,28 @@ impl SimplifyExpressions {
 
         let expr = match plan {
             LogicalPlan::Join(_) => {
-                plan
-                .expressions()
-                .into_iter()
-                .map(|e| {
-                    // TODO: unify with `rewrite_preserving_name`
-                    let original_name = e.name_for_alias()?;
-                    let new_e = simplifier.simplify(e)?;
-                    new_e.alias_if_changed(original_name)
-                }).collect::<Result<Vec<_>>>()?
-            },
+                plan.expressions()
+                    .into_iter()
+                    .map(|e| {
+                        // TODO: unify with `rewrite_preserving_name`
+                        let original_name = e.name_for_alias()?;
+                        let new_e = simplifier.simplify(e)?;
+                        new_e.alias_if_changed(original_name)
+                    })
+                    .collect::<Result<Vec<_>>>()?
+            }
             _ => {
-                plan
-                .expressions()
-                .into_iter()
-                .map(|e| {
-                    // TODO: unify with `rewrite_preserving_name`
-                    let original_name = e.name_for_alias()?;
-                    let cano_e = simplifier.canonicalize(e)?;
-                    let new_e = simplifier.simplify(cano_e)?;
-                    new_e.alias_if_changed(original_name)
-                }).collect::<Result<Vec<_>>>()?
-            },
+                plan.expressions()
+                    .into_iter()
+                    .map(|e| {
+                        // TODO: unify with `rewrite_preserving_name`
+                        let original_name = e.name_for_alias()?;
+                        let cano_e = simplifier.canonicalize(e)?;
+                        let new_e = simplifier.simplify(cano_e)?;
+                        new_e.alias_if_changed(original_name)
+                    })
+                    .collect::<Result<Vec<_>>>()?
+            }
         };
 
         plan.with_new_exprs(expr, &new_inputs)

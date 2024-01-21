@@ -1356,7 +1356,7 @@ mod tests {
     use std::{
         collections::HashMap,
         ops::{BitAnd, BitOr, BitXor},
-        sync::Arc, fs::canonicalize,
+        sync::Arc,
     };
 
     use super::*;
