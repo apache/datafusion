@@ -435,7 +435,7 @@ impl TimeSum {
 }
 
 impl Accumulator for TimeSum {
-    fn state(&self) -> Result<Vec<ScalarValue>> {
+    fn state(&mut self) -> Result<Vec<ScalarValue>> {
         Ok(vec![self.evaluate()?])
     }
 
@@ -457,7 +457,7 @@ impl Accumulator for TimeSum {
         self.update_batch(states)
     }
 
-    fn evaluate(&self) -> Result<ScalarValue> {
+    fn evaluate(&mut self) -> Result<ScalarValue> {
         println!("Evaluating to {}", self.sum);
         Ok(ScalarValue::TimestampNanosecond(Some(self.sum), None))
     }
@@ -582,14 +582,14 @@ impl FirstSelector {
 }
 
 impl Accumulator for FirstSelector {
-    fn state(&self) -> Result<Vec<ScalarValue>> {
+    fn state(&mut self) -> Result<Vec<ScalarValue>> {
         let state = self.to_state().into_iter().collect::<Vec<_>>();
 
         Ok(state)
     }
 
     /// produce the output structure
-    fn evaluate(&self) -> Result<ScalarValue> {
+    fn evaluate(&mut self) -> Result<ScalarValue> {
         Ok(self.to_scalar())
     }
 

@@ -239,7 +239,7 @@ pub struct AvgAccumulator {
 }
 
 impl Accumulator for AvgAccumulator {
-    fn state(&self) -> Result<Vec<ScalarValue>> {
+    fn state(&mut self) -> Result<Vec<ScalarValue>> {
         Ok(vec![
             ScalarValue::from(self.count),
             ScalarValue::Float64(self.sum),
@@ -277,7 +277,7 @@ impl Accumulator for AvgAccumulator {
         Ok(())
     }
 
-    fn evaluate(&self) -> Result<ScalarValue> {
+    fn evaluate(&mut self) -> Result<ScalarValue> {
         Ok(ScalarValue::Float64(
             self.sum.map(|f| f / self.count as f64),
         ))
@@ -315,7 +315,7 @@ impl<T: DecimalType + ArrowNumericType> Debug for DecimalAvgAccumulator<T> {
 }
 
 impl<T: DecimalType + ArrowNumericType> Accumulator for DecimalAvgAccumulator<T> {
-    fn state(&self) -> Result<Vec<ScalarValue>> {
+    fn state(&mut self) -> Result<Vec<ScalarValue>> {
         Ok(vec![
             ScalarValue::from(self.count),
             ScalarValue::new_primitive::<T>(
@@ -357,7 +357,7 @@ impl<T: DecimalType + ArrowNumericType> Accumulator for DecimalAvgAccumulator<T>
         Ok(())
     }
 
-    fn evaluate(&self) -> Result<ScalarValue> {
+    fn evaluate(&mut self) -> Result<ScalarValue> {
         let v = self
             .sum
             .map(|v| {

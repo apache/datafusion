@@ -260,7 +260,7 @@ impl CovarianceAccumulator {
 }
 
 impl Accumulator for CovarianceAccumulator {
-    fn state(&self) -> Result<Vec<ScalarValue>> {
+    fn state(&mut self) -> Result<Vec<ScalarValue>> {
         Ok(vec![
             ScalarValue::from(self.count),
             ScalarValue::from(self.mean1),
@@ -381,7 +381,7 @@ impl Accumulator for CovarianceAccumulator {
         Ok(())
     }
 
-    fn evaluate(&self) -> Result<ScalarValue> {
+    fn evaluate(&mut self) -> Result<ScalarValue> {
         let count = match self.stats_type {
             StatsType::Population => self.count,
             StatsType::Sample => {
@@ -768,7 +768,7 @@ mod tests {
             .collect::<Result<Vec<_>>>()?;
         accum1.update_batch(&values1)?;
         accum2.update_batch(&values2)?;
-        let state2 = get_accum_scalar_values_as_arrays(accum2.as_ref())?;
+        let state2 = get_accum_scalar_values_as_arrays(accum2.as_mut())?;
         accum1.merge_batch(&state2)?;
         accum1.evaluate()
     }
