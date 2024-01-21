@@ -1039,15 +1039,14 @@ impl RecordBatchStream for HashJoinStream {
 /// Probe indices: 3, 3, 4, 5
 /// ```
 #[allow(clippy::too_many_arguments)]
-fn lookup_join_hashmap<T: JoinHashMapType>(
-    build_hashmap: &T,
+fn lookup_join_hashmap(
+    build_hashmap: &JoinHashMap,
     build_input_buffer: &RecordBatch,
     probe_batch: &RecordBatch,
     build_on: &[Column],
     probe_on: &[Column],
-    random_state: &RandomState,
     null_equals_null: bool,
-    hashes_buffer: &mut Vec<u64>,
+    hashes_buffer: &[u64],
     limit: usize,
     offset: JoinHashMapOffset,
 ) -> Result<(UInt64Array, UInt32Array, Option<JoinHashMapOffset>)> {
@@ -1063,17 +1062,8 @@ fn lookup_join_hashmap<T: JoinHashMapType>(
         })
         .collect::<Result<Vec<_>>>()?;
 
-    hashes_buffer.clear();
-    hashes_buffer.resize(probe_batch.num_rows(), 0);
-    let hash_values = create_hashes(&keys_values, random_state, hashes_buffer)?;
-
     let (mut probe_builder, mut build_builder, next_offset) = build_hashmap
-        .get_matched_indices_with_limit_offset(
-            hash_values.iter().enumerate(),
-            None,
-            limit,
-            offset,
-        );
+        .get_matched_indices_with_limit_offset(hashes_buffer, None, limit, offset);
 
     let build_indices: UInt64Array =
         PrimitiveArray::new(build_builder.finish().into(), None);
@@ -1233,6 +1223,17 @@ impl HashJoinStream {
                 self.state = HashJoinStreamState::ExhaustedProbeSide;
             }
             Some(Ok(batch)) => {
+                // Precalculate hash values for fetched batch
+                let keys_values = self
+                    .on_right
+                    .iter()
+                    .map(|c| c.evaluate(&batch)?.into_array(batch.num_rows()))
+                    .collect::<Result<Vec<_>>>()?;
+
+                self.hashes_buffer.clear();
+                self.hashes_buffer.resize(batch.num_rows(), 0);
+                create_hashes(&keys_values, &self.random_state, &mut self.hashes_buffer)?;
+
                 self.state =
                     HashJoinStreamState::ProcessProbeBatch(ProcessProbeBatchState {
                         batch,
@@ -1266,9 +1267,8 @@ impl HashJoinStream {
             &state.batch,
             &self.on_left,
             &self.on_right,
-            &self.random_state,
             self.null_equals_null,
-            &mut self.hashes_buffer,
+            &self.hashes_buffer,
             self.batch_size,
             state.offset,
         )?;
@@ -2935,18 +2935,24 @@ mod tests {
             ("c", &vec![30, 40]),
         );
 
+        // Join key column for both join sides
+        let key_column = Column::new("a", 0);
+
         let join_hash_map = JoinHashMap::new(hashmap_left, next);
-        let mut hashes_buffer = vec![0];
+
+        let right_keys_values =
+            key_column.evaluate(&right)?.into_array(right.num_rows())?;
+        let mut hashes_buffer = vec![0; right.num_rows()];
+        create_hashes(&[right_keys_values], &random_state, &mut hashes_buffer)?;
 
         let (l, r, _) = lookup_join_hashmap(
             &join_hash_map,
             &left,
             &right,
-            &[Column::new("a", 0)],
-            &[Column::new("a", 0)],
-            &random_state,
+            &[key_column.clone()],
+            &[key_column],
             false,
-            &mut hashes_buffer,
+            &hashes_buffer,
             8192,
             (0, None),
         )?;

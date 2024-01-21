@@ -236,9 +236,9 @@ pub trait JoinHashMapType {
     ///
     /// This method only compares hashes, so additional further check for actual values
     /// equality may be required.
-    fn get_matched_indices_with_limit_offset<'a>(
+    fn get_matched_indices_with_limit_offset(
         &self,
-        iter: impl Iterator<Item = (usize, &'a u64)>,
+        iter: &[u64],
         deleted_offset: Option<usize>,
         limit: usize,
         offset: JoinHashMapOffset,
@@ -251,30 +251,52 @@ pub trait JoinHashMapType {
         let mut match_indices = UInt64BufferBuilder::new(0);
 
         let mut output_tuples = 0_usize;
-        let mut next_offset = None;
 
         let hash_map: &RawTable<(u64, u64)> = self.get_map();
         let next_chain = self.get_list();
 
-        let (initial_idx, initial_next_idx) = offset;
-        'probe: for (row_idx, hash_value) in iter.skip(initial_idx) {
-            let index = if initial_next_idx.is_some() && row_idx == initial_idx {
-                // If `initial_next_idx` is zero, then input index has been processed
-                // during previous iteration, and it can be skipped now
-                if let Some(0) = initial_next_idx {
-                    continue;
+        let to_skip = match offset {
+            (initial_idx, None) => initial_idx,
+            (initial_idx, Some(0)) => initial_idx + 1,
+            (initial_idx, Some(initial_next_idx)) => {
+                let mut i = initial_next_idx - 1;
+                loop {
+                    let match_row_idx = if let Some(offset) = deleted_offset {
+                        // This arguments means that we prune the next index way before here.
+                        if i < offset as u64 {
+                            // End of the list due to pruning
+                            break;
+                        }
+                        i - offset as u64
+                    } else {
+                        i
+                    };
+                    match_indices.append(match_row_idx);
+                    input_indices.append(initial_idx as u32);
+                    output_tuples += 1;
+                    // Follow the chain to get the next index value
+                    let next = next_chain[match_row_idx as usize];
+
+                    if output_tuples >= limit {
+                        let next_offset = Some((initial_idx, Some(next)));
+                        return (input_indices, match_indices, next_offset);
+                    }
+                    if next == 0 {
+                        // end of list
+                        break;
+                    }
+                    i = next - 1;
                 }
-                // Otherwise, use `initial_next_idx` as-is
-                initial_next_idx
-            } else if let Some((_, index)) =
+
+                initial_idx + 1
+            }
+        };
+
+        let mut row_idx = to_skip;
+        for hash_value in &iter[to_skip..] {
+            if let Some((_, index)) =
                 hash_map.get(*hash_value, |(hash, _)| *hash_value == *hash)
             {
-                Some(*index)
-            } else {
-                None
-            };
-
-            if let Some(index) = index {
                 let mut i = index - 1;
                 loop {
                     let match_row_idx = if let Some(offset) = deleted_offset {
@@ -294,8 +316,8 @@ pub trait JoinHashMapType {
                     let next = next_chain[match_row_idx as usize];
 
                     if output_tuples >= limit {
-                        next_offset = Some((row_idx, Some(next)));
-                        break 'probe;
+                        let next_offset = Some((row_idx, Some(next)));
+                        return (input_indices, match_indices, next_offset);
                     }
                     if next == 0 {
                         // end of list
@@ -304,9 +326,10 @@ pub trait JoinHashMapType {
                     i = next - 1;
                 }
             }
+            row_idx += 1;
         }
 
-        (input_indices, match_indices, next_offset)
+        (input_indices, match_indices, None)
     }
 }
 
