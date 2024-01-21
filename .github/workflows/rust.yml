@@ -285,8 +285,6 @@ jobs:
           cargo test --lib --tests --bins --features avro,json,backtrace
           cd datafusion-cli
           cargo test --lib --tests --bins --all-features
-        env:
-          RUSTFLAGS: "-C debuginfo=line-tables-only"
 
   macos:
     name: cargo test (macos)
