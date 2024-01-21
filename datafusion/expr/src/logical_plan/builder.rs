@@ -55,6 +55,8 @@ use datafusion_common::{
     ScalarValue, TableReference, ToDFSchema, UnnestOptions,
 };
 
+use super::plan::RecursiveQuery;
+
 /// Default table name for unnamed table
 pub const UNNAMED_TABLE: &str = "?table?";
 
@@ -119,6 +121,28 @@ impl LogicalPlanBuilder {
             produce_one_row,
             schema: DFSchemaRef::new(DFSchema::empty()),
         }))
+    }
+
+    /// Convert a regular plan into a recursive query.
+    /// `is_distinct` indicates whether the recursive term should be de-duplicated (`UNION`) after each iteration or not (`UNION ALL`).
+    pub fn to_recursive_query(
+        &self,
+        name: String,
+        recursive_term: LogicalPlan,
+        is_distinct: bool,
+    ) -> Result<Self> {
+        // TODO: we need to do a bunch of validation here. Maybe more.
+        if is_distinct {
+            return Err(DataFusionError::NotImplemented(
+                "Recursive queries with a distinct 'UNION' (in which the previous iteration's results will be de-duplicated) is not supported".to_string(),
+            ));
+        }
+        Ok(Self::from(LogicalPlan::RecursiveQuery(RecursiveQuery {
+            name,
+            static_term: Arc::new(self.plan.clone()),
+            recursive_term: Arc::new(recursive_term),
+            is_distinct,
+        })))
     }
 
     /// Create a values list based relation, and the schema is inferred from data, consuming
