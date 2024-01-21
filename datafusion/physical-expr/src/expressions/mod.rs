@@ -60,6 +60,7 @@ pub use crate::aggregate::grouping::Grouping;
 pub use crate::aggregate::median::Median;
 pub use crate::aggregate::min_max::{Max, Min};
 pub use crate::aggregate::min_max::{MaxAccumulator, MinAccumulator};
+pub use crate::aggregate::nth_value::NthValueAgg;
 pub use crate::aggregate::regr::{Regr, RegrType};
 pub use crate::aggregate::stats::StatsType;
 pub use crate::aggregate::stddev::{Stddev, StddevPop};
@@ -67,7 +68,6 @@ pub use crate::aggregate::string_agg::StringAgg;
 pub use crate::aggregate::sum::Sum;
 pub use crate::aggregate::sum_distinct::DistinctSum;
 pub use crate::aggregate::variance::{Variance, VariancePop};
-
 pub use crate::window::cume_dist::cume_dist;
 pub use crate::window::cume_dist::CumeDist;
 pub use crate::window::lead_lag::WindowShift;
@@ -77,6 +77,7 @@ pub use crate::window::ntile::Ntile;
 pub use crate::window::rank::{dense_rank, percent_rank, rank};
 pub use crate::window::rank::{Rank, RankType};
 pub use crate::window::row_number::RowNumber;
+pub use crate::PhysicalSortExpr;
 
 pub use binary::{binary, BinaryExpr};
 pub use case::{case, CaseExpr};
@@ -98,20 +99,20 @@ pub use try_cast::{try_cast, TryCastExpr};
 pub fn format_state_name(name: &str, state_name: &str) -> String {
     format!("{name}[{state_name}]")
 }
-pub use crate::PhysicalSortExpr;
 
 #[cfg(test)]
 pub(crate) mod tests {
+    use std::sync::Arc;
+
     use crate::expressions::{col, create_aggregate_expr, try_cast};
     use crate::{AggregateExpr, EmitTo};
+
     use arrow::record_batch::RecordBatch;
     use arrow_array::ArrayRef;
     use arrow_schema::{Field, Schema};
-    use datafusion_common::Result;
-    use datafusion_common::ScalarValue;
+    use datafusion_common::{Result, ScalarValue};
     use datafusion_expr::type_coercion::aggregates::coerce_types;
     use datafusion_expr::AggregateFunction;
-    use std::sync::Arc;
 
     /// macro to perform an aggregation using [`datafusion_expr::Accumulator`] and verify the
     /// result.

@@ -19,6 +19,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use crate::optimizer::ApplyOrder;
+use crate::utils::is_volatile_expression;
 use crate::{OptimizerConfig, OptimizerRule};
 
 use datafusion_common::tree_node::{Transformed, TreeNode, VisitRecursion};
@@ -34,7 +35,7 @@ use datafusion_expr::logical_plan::{
 use datafusion_expr::utils::{conjunction, split_conjunction, split_conjunction_owned};
 use datafusion_expr::{
     and, build_join_schema, or, BinaryExpr, Expr, Filter, LogicalPlanBuilder, Operator,
-    ScalarFunctionDefinition, TableProviderFilterPushDown, Volatility,
+    ScalarFunctionDefinition, TableProviderFilterPushDown,
 };
 
 use itertools::Itertools;
@@ -739,7 +740,9 @@ impl OptimizerRule for PushDownFilter {
 
                             (field.qualified_name(), expr)
                         })
-                        .partition(|(_, value)| is_volatile_expression(value));
+                        .partition(|(_, value)| {
+                            is_volatile_expression(value).unwrap_or(true)
+                        });
 
                 let mut push_predicates = vec![];
                 let mut keep_predicates = vec![];
@@ -1026,38 +1029,6 @@ pub fn replace_cols_by_name(
             Transformed::No(expr)
         })
     })
-}
-
-/// check whether the expression is volatile predicates
-fn is_volatile_expression(e: &Expr) -> bool {
-    let mut is_volatile = false;
-    e.apply(&mut |expr| {
-        Ok(match expr {
-            Expr::ScalarFunction(f) => match &f.func_def {
-                ScalarFunctionDefinition::BuiltIn(fun)
-                    if fun.volatility() == Volatility::Volatile =>
-                {
-                    is_volatile = true;
-                    VisitRecursion::Stop
-                }
-                ScalarFunctionDefinition::UDF(fun)
-                    if fun.signature().volatility == Volatility::Volatile =>
-                {
-                    is_volatile = true;
-                    VisitRecursion::Stop
-                }
-                ScalarFunctionDefinition::Name(_) => {
-                    return internal_err!(
-                        "Function `Expr` with name should be resolved."
-                    );
-                }
-                _ => VisitRecursion::Continue,
-            },
-            _ => VisitRecursion::Continue,
-        })
-    })
-    .unwrap();
-    is_volatile
 }
 
 /// check whether the expression uses the columns in `check_map`.

@@ -26,6 +26,7 @@ mod parquet;
 use crate::{
     catalog::{CatalogList, MemoryCatalogList},
     datasource::{
+        cte_worktable::CteWorkTable,
         function::{TableFunction, TableFunctionImpl},
         listing::{ListingOptions, ListingTable},
         provider::TableProviderFactory,
@@ -1899,6 +1900,18 @@ impl<'a> ContextProvider for SessionContextProvider<'a> {
         Ok(provider_as_source(provider))
     }
 
+    /// Create a new CTE work table for a recursive CTE logical plan
+    /// This table will be used in conjunction with a Worktable physical plan
+    /// to read and write each iteration of a recursive CTE
+    fn create_cte_work_table(
+        &self,
+        name: &str,
+        schema: SchemaRef,
+    ) -> Result<Arc<dyn TableSource>> {
+        let table = Arc::new(CteWorkTable::new(name, schema));
+        Ok(provider_as_source(table))
+    }
+
     fn get_function_meta(&self, name: &str) -> Option<Arc<ScalarUDF>> {
         self.state.scalar_functions().get(name).cloned()
     }
@@ -2124,7 +2137,6 @@ mod tests {
     use crate::test;
     use crate::test_util::{plan_and_collect, populate_csv_partitions};
     use crate::variable::VarType;
-    use arrow_schema::Schema;
     use async_trait::async_trait;
     use datafusion_expr::Expr;
     use std::env;
@@ -2504,7 +2516,6 @@ mod tests {
             &self,
             _expr: &Expr,
             _input_dfschema: &crate::common::DFSchema,
-            _input_schema: &Schema,
             _session_state: &SessionState,
         ) -> Result<Arc<dyn crate::physical_plan::PhysicalExpr>> {
             unimplemented!()

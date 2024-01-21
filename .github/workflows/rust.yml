@@ -53,7 +53,7 @@ jobs:
           rust-version: stable
 
       - name: Cache Cargo
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
           path: |
             ~/.cargo/bin/
@@ -383,7 +383,7 @@ jobs:
   #         rustup default stable
   #         rustup component add rustfmt clippy
   #     - name: Cache Cargo
-  #       uses: actions/cache@v3
+  #       uses: actions/cache@v4
   #       with:
   #         path: /home/runner/.cargo
   #         # this key is not equal because the user is different than on a container (runner vs github)

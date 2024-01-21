@@ -95,6 +95,9 @@ SELECT approx_percentile_cont(c3, 0.95, c1) FROM aggregate_test_100
 statement error DataFusion error: Error during planning: No function matches the given name and argument types 'APPROX_PERCENTILE_CONT\(Int16, Float64, Float64\)'\. You might need to add explicit type casts\.
 SELECT approx_percentile_cont(c3, 0.95, 111.1) FROM aggregate_test_100
 
+statement error DataFusion error: Error during planning: No function matches the given name and argument types 'APPROX_PERCENTILE_CONT\(Float64, Float64, Float64\)'\. You might need to add explicit type casts\.
+SELECT approx_percentile_cont(c12, 0.95, 111.1) FROM aggregate_test_100
+
 # array agg can use order by
 query ?
 SELECT array_agg(c13 ORDER BY c13)
@@ -3257,3 +3260,37 @@ query I
 select count(*) from (select count(*) a, count(*) b from (select 1));
 ----
 1
+
+# rule `aggregate_statistics` should not optimize MIN/MAX to wrong values on empty relation
+
+statement ok
+CREATE TABLE empty(col0 INTEGER);
+
+query I
+SELECT MIN(col0) FROM empty WHERE col0=1;
+----
+NULL
+
+query I
+SELECT MAX(col0) FROM empty WHERE col0=1;
+----
+NULL
+
+statement ok
+DROP TABLE empty;
+
+statement ok
+CREATE TABLE t(col0 INTEGER) as VALUES(2);
+
+query I
+SELECT MIN(col0) FROM t WHERE col0=1;
+----
+NULL
+
+query I
+SELECT MAX(col0) FROM t WHERE col0=1;
+----
+NULL
+
+statement ok
+DROP TABLE t;

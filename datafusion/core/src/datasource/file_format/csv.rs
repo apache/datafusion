@@ -423,9 +423,8 @@ impl CsvSerializer {
     }
 }
 
-#[async_trait]
 impl BatchSerializer for CsvSerializer {
-    async fn serialize(&self, batch: RecordBatch, initial: bool) -> Result<Bytes> {
+    fn serialize(&self, batch: RecordBatch, initial: bool) -> Result<Bytes> {
         let mut buffer = Vec::with_capacity(4096);
         let builder = self.builder.clone();
         let header = self.header && initial;
@@ -829,7 +828,7 @@ mod tests {
             .await?;
         let batch = concat_batches(&batches[0].schema(), &batches)?;
         let serializer = CsvSerializer::new();
-        let bytes = serializer.serialize(batch, true).await?;
+        let bytes = serializer.serialize(batch, true)?;
         assert_eq!(
             "c2,c3\n2,1\n5,-40\n1,29\n1,-85\n5,-82\n4,-111\n3,104\n3,13\n1,38\n4,-38\n",
             String::from_utf8(bytes.into()).unwrap()
@@ -853,7 +852,7 @@ mod tests {
             .await?;
         let batch = concat_batches(&batches[0].schema(), &batches)?;
         let serializer = CsvSerializer::new().with_header(false);
-        let bytes = serializer.serialize(batch, true).await?;
+        let bytes = serializer.serialize(batch, true)?;
         assert_eq!(
             "2,1\n5,-40\n1,29\n1,-85\n5,-82\n4,-111\n3,104\n3,13\n1,38\n4,-38\n",
             String::from_utf8(bytes.into()).unwrap()
