@@ -38,7 +38,7 @@ use datafusion_physical_plan::unbounded_output;
 /// (but somewhat slower) cousins.
 pub type OrderPreservationContext = PlanContext<bool>;
 
-/// Creates a new order-preservation context from those of children nodes.
+/// Updates order-preservation data for all children of the given node.
 pub fn update_children(opc: &mut OrderPreservationContext) {
     for PlanContext {
         plan,
@@ -99,12 +99,12 @@ fn get_updated_plan(
     sort_input.children = sort_input
         .children
         .into_iter()
-        .map(|item| {
+        .map(|node| {
             // Update children and their descendants in the given tree if the connection is open:
-            if item.data {
-                get_updated_plan(item, is_spr_better, is_spm_better)
+            if node.data {
+                get_updated_plan(node, is_spr_better, is_spm_better)
             } else {
-                Ok(item)
+                Ok(node)
             }
         })
         .collect::<Result<_>>()?;
@@ -126,15 +126,11 @@ fn get_updated_plan(
     } else if is_coalesce_partitions(&sort_input.plan) && is_spm_better {
         // When the input of a `CoalescePartitionsExec` has an ordering, replace it
         // with a `SortPreservingMergeExec` if appropriate:
-        if let Some(ordering) = sort_input.children[0]
-            .plan
-            .output_ordering()
-            .map(|o| o.to_vec())
-        {
+        let child = &sort_input.children[0].plan;
+        if let Some(ordering) = child.output_ordering().map(Vec::from) {
             // Now we can mutate `new_node.children_nodes` safely
-            let child = sort_input.children[0].plan.clone();
-            sort_input.plan =
-                Arc::new(SortPreservingMergeExec::new(ordering, child)) as _;
+            let spm = SortPreservingMergeExec::new(ordering, child.clone());
+            sort_input.plan = Arc::new(spm) as _;
             sort_input.children[0].data = true;
             return Ok(sort_input);
         }
@@ -146,20 +142,20 @@ fn get_updated_plan(
 /// The `replace_with_order_preserving_variants` optimizer sub-rule tries to
 /// remove `SortExec`s from the physical plan by replacing operators that do
 /// not preserve ordering with their order-preserving variants; i.e. by replacing
-/// `RepartitionExec`s with `SortPreservingRepartitionExec`s or by replacing
+/// ordinary `RepartitionExec`s with their sort-preserving variants or by replacing
 /// `CoalescePartitionsExec`s with `SortPreservingMergeExec`s.
 ///
 /// If this replacement is helpful for removing a `SortExec`, it updates the plan.
 /// Otherwise, it leaves the plan unchanged.
 ///
-/// Note: this optimizer sub-rule will only produce `SortPreservingRepartitionExec`s
-/// if the query is bounded or if the config option `bounded_order_preserving_variants`
-/// is set to `true`.
+/// NOTE: This optimizer sub-rule will only produce sort-preserving `RepartitionExec`s
+/// if the query is bounded or if the config option `prefer_existing_sort` is
+/// set to `true`.
 ///
 /// The algorithm flow is simply like this:
 /// 1. Visit nodes of the physical plan bottom-up and look for `SortExec` nodes.
-/// 1_1. During the traversal, keep track of operators that maintain ordering
-///    (or can maintain ordering when replaced by an order-preserving variant) until
+///    During the traversal, keep track of operators that maintain ordering (or
+///    can maintain ordering when replaced by an order-preserving variant) until
 ///    a `SortExec` is found.
 /// 2. When a `SortExec` is found, update the child of the `SortExec` by replacing
 ///    operators that do not preserve ordering in the tree with their order
@@ -168,20 +164,20 @@ fn get_updated_plan(
 ///    its input ordering with the output ordering it imposes. We do this because
 ///    replacing operators that lose ordering with their order-preserving variants
 ///    enables us to preserve the previously lost ordering at the input of `SortExec`.
-/// 4. If the `SortExec` in question turns out to be unnecessary, remove it and use
-///     updated plan. Otherwise, use the original plan.
-/// 5. Continue the bottom-up traversal until another `SortExec` is seen, or the traversal
-///    is complete.
+/// 4. If the `SortExec` in question turns out to be unnecessary, remove it and
+///    use updated plan. Otherwise, use the original plan.
+/// 5. Continue the bottom-up traversal until another `SortExec` is seen, or the
+///    traversal is complete.
 pub(crate) fn replace_with_order_preserving_variants(
     mut requirements: OrderPreservationContext,
-    // A flag indicating that replacing `RepartitionExec`s with
-    // `SortPreservingRepartitionExec`s is desirable when it helps
-    // to remove a `SortExec` from the plan. If this flag is `false`,
-    // this replacement should only be made to fix the pipeline (streaming).
+    // A flag indicating that replacing `RepartitionExec`s with sort-preserving
+    // variants is desirable when it helps to remove a `SortExec` from the plan.
+    // If this flag is `false`, this replacement should only be made to fix the
+    // pipeline (streaming).
     is_spr_better: bool,
     // A flag indicating that replacing `CoalescePartitionsExec`s with
-    // `SortPreservingMergeExec`s is desirable when it helps to remove
-    // a `SortExec` from the plan. If this flag is `false`, this replacement
+    // `SortPreservingMergeExec`s is desirable when it helps to remove a
+    // `SortExec` from the plan. If this flag is `false`, this replacement
     // should only be made to fix the pipeline (streaming).
     is_spm_better: bool,
     config: &ConfigOptions,
@@ -191,9 +187,8 @@ pub(crate) fn replace_with_order_preserving_variants(
         return Ok(Transformed::No(requirements));
     }
 
-    // For unbounded cases, replace with the order-preserving variant in
-    // any case, as doing so helps fix the pipeline.
-    // Also do the replacement if opted-in via config options.
+    // For unbounded cases, replace with the order-preserving variant in any
+    // case, as doing so helps fix the pipeline. Also replace if config allows.
     let use_order_preserving_variant =
         config.optimizer.prefer_existing_sort || unbounded_output(&requirements.plan);
 
