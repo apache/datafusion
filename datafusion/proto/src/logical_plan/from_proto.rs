@@ -1456,6 +1456,7 @@ pub fn parse_expr(
                     parse_expr(&args[0], registry)?,
                     parse_expr(&args[1], registry)?,
                     parse_expr(&args[2], registry)?,
+                    parse_expr(&args[3], registry)?,
                 )),
                 ScalarFunction::ArrayToString => Ok(array_to_string(
                     parse_expr(&args[0], registry)?,
