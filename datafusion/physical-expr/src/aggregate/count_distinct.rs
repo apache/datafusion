@@ -515,6 +515,9 @@ const SHORT_STRING_LEN: usize = mem::size_of::<usize>();
 /// Entry that is stored in a `SSOStringHashSet` that represents a string
 /// that is either stored inline or in the buffer
 ///
+/// This helps the case where there are many short (less than 8 bytes) strings
+/// that are the same (e.g. "MA", "CA", "NY", "TX", etc)
+///
 /// ```text
 ///                                                                ┌──────────────────┐
 ///                                                                │...               │
@@ -629,21 +632,22 @@ impl SSOStringHashSet {
 
                 // Check if the value is already present in the set
                 let entry = self.map.get_mut(hash, |header| {
-                    // if hash matches, must also compare the values
+                    // compare value if hashes match
                     if header.len != value.len() {
                         return false;
                     }
+                    // value is stored inline so no need to consult buffer
+                    // (this is the "small string optimization") here
                     inline == header.offset_or_inline
                 });
 
-                // Insert an entry for this value if it is not present
+                // if no existing entry, make a new one
                 if entry.is_none() {
-                    // Put the small values into buffer and output so it appears
-                    // the output array, but store the actual bytes inline
+                    // Put the small values into buffer and offsets  so it appears
+                    // the output array, but store the actual bytes inline for
+                    // comparison
                     self.buffer.append_slice(value);
                     self.offsets.push(self.buffer.len() as i32);
-
-                    // store the actual value inline
                     let new_header = SSOStringHeader {
                         hash,
                         len: value.len(),
@@ -656,24 +660,26 @@ impl SSOStringHashSet {
                     );
                 }
             }
-            // handle large strings
+            // value is not a "small" string
             else {
                 // Check if the value is already present in the set
                 let entry = self.map.get_mut(hash, |header| {
-                    // if hash matches, must also compare the values
+                    // compare value if hashes match
                     if header.len != value.len() {
                         return false;
                     }
-                    // SAFETY: buffer is only appended to, and we correctly inserted values
+                    // Need to compare the bytes in the buffer
+                    // SAFETY: buffer is only appended to, and we correctly inserted values and offsets
                     let existing_value =
                         unsafe { self.buffer.as_slice().get_unchecked(header.range()) };
-
                     value == existing_value
                 });
 
-                // Insert the value if it is not present
+                // if no existing entry, make a new one
                 if entry.is_none() {
-                    // long strings are stored as a length/offset into the buffer
+                    // Put the small values into buffer and offsets so it
+                    // appears the output array, and store that offset
+                    // so the bytes can be compared if needed
                     let offset = self.buffer.len(); // offset of start fof data
                     self.buffer.append_slice(value);
                     self.offsets.push(self.buffer.len() as i32);
