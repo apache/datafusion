@@ -125,7 +125,6 @@ fn get_valid_types(
         let array_dim = datafusion_common::utils::list_ndims(&array_type);
         let elem_dim = datafusion_common::utils::list_ndims(&elem_type);
 
-        dbg!(&array_type, &elem_type);
         match array_type {
             DataType::List(ref field)
             | DataType::LargeList(ref field)
