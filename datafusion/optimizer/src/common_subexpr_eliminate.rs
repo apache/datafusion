@@ -34,7 +34,10 @@ use datafusion_expr::expr::Alias;
 use datafusion_expr::logical_plan::{
     Aggregate, Filter, LogicalPlan, Projection, Sort, Window,
 };
-use datafusion_expr::{col, Expr, ExprSchemable};
+use datafusion_expr::{
+    col, expr::ScalarFunction, BinaryExpr, BuiltinScalarFunction, Expr, ExprSchemable,
+    Operator, ScalarFunctionDefinition,
+};
 
 /// A map from expression's identifier to tuple including
 /// - the expression itself (cloned)
@@ -616,8 +619,8 @@ impl TreeNodeVisitor for ExprIdentifierVisitor<'_> {
 
     fn pre_visit(&mut self, expr: &Expr) -> Result<VisitRecursion> {
         // related to https://github.com/apache/arrow-datafusion/issues/8814
-        // If the expr contain volatile expression or is a case expression, skip it.
-        if matches!(expr, Expr::Case(..)) || is_volatile_expression(expr)? {
+        // If the expr contain volatile expression or is a short-circuit expression, skip it.
+        if is_short_circuit_expression(expr) || is_volatile_expression(expr)? {
             return Ok(VisitRecursion::Skip);
         }
         self.visit_stack
@@ -652,6 +655,20 @@ impl TreeNodeVisitor for ExprIdentifierVisitor<'_> {
             .or_insert_with(|| (expr.clone(), 0, data_type))
             .1 += 1;
         Ok(VisitRecursion::Continue)
+    }
+}
+
+/// Check if the expression is short-circuit expression
+fn is_short_circuit_expression(expr: &Expr) -> bool {
+    match expr {
+        Expr::ScalarFunction(ScalarFunction { func_def, .. }) => {
+            matches!(func_def, ScalarFunctionDefinition::BuiltIn(fun) if *fun == BuiltinScalarFunction::Coalesce)
+        }
+        Expr::BinaryExpr(BinaryExpr { op, .. }) => {
+            matches!(op, Operator::And | Operator::Or)
+        }
+        Expr::Case { .. } => true,
+        _ => false,
     }
 }
 
@@ -696,7 +713,13 @@ struct CommonSubexprRewriter<'a> {
 impl TreeNodeRewriter for CommonSubexprRewriter<'_> {
     type N = Expr;
 
-    fn pre_visit(&mut self, _: &Expr) -> Result<RewriteRecursion> {
+    fn pre_visit(&mut self, expr: &Expr) -> Result<RewriteRecursion> {
+        // The `CommonSubexprRewriter` relies on `ExprIdentifierVisitor` to generate
+        // the `id_array`, which records the expr's identifier used to rewrite expr. So if we
+        // skip an expr in `ExprIdentifierVisitor`, we should skip it here, too.
+        if is_short_circuit_expression(expr) || is_volatile_expression(expr)? {
+            return Ok(RewriteRecursion::Stop);
+        }
         if self.curr_index >= self.id_array.len()
             || self.max_series_number > self.id_array[self.curr_index].0
         {
@@ -782,7 +805,7 @@ mod test {
     use datafusion_common::DFSchema;
     use datafusion_expr::logical_plan::{table_scan, JoinType};
     use datafusion_expr::{
-        avg, col, lit, logical_plan::builder::LogicalPlanBuilder, sum,
+        avg, col, lit, logical_plan::builder::LogicalPlanBuilder, sum, not,
     };
     use datafusion_expr::{
         grouping_set, AccumulatorFactoryFunction, AggregateUDF, Signature,
@@ -1249,13 +1272,12 @@ mod test {
         let table_scan = test_table_scan()?;
 
         let plan = LogicalPlanBuilder::from(table_scan)
-            .filter(lit(1).gt(col("a")).and(lit(1).gt(col("a"))))?
+            .project(vec![not(lit(1).gt(col("a"))), lit(1).gt(col("a"))])?
             .build()?;
 
-        let expected = "Projection: test.a, test.b, test.c\
-        \n  Filter: Int32(1) > test.atest.aInt32(1) AS Int32(1) > test.a AND Int32(1) > test.atest.aInt32(1) AS Int32(1) > test.a\
-        \n    Projection: Int32(1) > test.a AS Int32(1) > test.atest.aInt32(1), test.a, test.b, test.c\
-        \n      TableScan: test";
+        let expected = "Projection: NOT Int32(1) > test.atest.aInt32(1) AS Int32(1) > test.a, Int32(1) > test.atest.aInt32(1) AS Int32(1) > test.a\
+        \n  Projection: Int32(1) > test.a AS Int32(1) > test.atest.aInt32(1), test.a, test.b, test.c\
+        \n    TableScan: test";
 
         assert_optimized_plan_eq(expected, &plan);
 
