@@ -1272,7 +1272,7 @@ mod test {
         let table_scan = test_table_scan()?;
 
         let plan = LogicalPlanBuilder::from(table_scan)
-            .filter((lit(1)+col("a")-lit(10)).gt(lit(1)+col("a")))?
+            .filter((lit(1) + col("a") - lit(10)).gt(lit(1) + col("a")))?
             .build()?;
 
         let expected = "Projection: test.a, test.b, test.c\
