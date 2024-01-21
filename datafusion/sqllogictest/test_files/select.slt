@@ -501,11 +501,16 @@ ProjectionExec: expr=[c1@0 >= 2 AND c1@0 <= 3 as select_between_data.c1 BETWEEN 
 ######
 
 statement ok
-CREATE TABLE indexed_fields
-AS VALUES
-(make_array(1, 2, 3), 'a'),
-(make_array(4, 5, 6), 'b'),
-(make_array(7, 8, 9), 'c');
+CREATE TABLE indexed_fields AS
+SELECT
+    column1 as some_list,
+    column2 as some_string
+FROM (
+    VALUES
+    (make_array(1, 2, 3), 'a'),
+    (make_array(4, 5, 6), 'b'),
+    (make_array(7, 8, 9), 'c')
+);
 
 query ?T
 SELECT * FROM indexed_fields;
@@ -515,7 +520,7 @@ SELECT * FROM indexed_fields;
 [7, 8, 9] c
 
 query I
-SELECT column1[1] as i0 FROM indexed_fields LIMIT 3;
+SELECT some_list[1] as i0 FROM indexed_fields LIMIT 3;
 ----
 1
 4
@@ -527,11 +532,16 @@ SELECT column1[1] as i0 FROM indexed_fields LIMIT 3;
 ######
 
 statement ok
-CREATE TABLE nested_indexed_fields
-AS VALUES
-(make_array(make_array(0, 1), make_array(2, 3), make_array(3, 4)), 'a'),
-(make_array(make_array(5, 6), make_array(7, 8), make_array(9, 10)), 'b'),
-(make_array(make_array(11, 12), make_array(13, 14), make_array(15, 16)), 'c');
+CREATE TABLE nested_indexed_fields AS
+SELECT
+    column1 as some_list,
+    column2 as some_string
+FROM (
+    VALUES
+    (make_array(make_array(0, 1), make_array(2, 3), make_array(3, 4)), 'a'),
+    (make_array(make_array(5, 6), make_array(7, 8), make_array(9, 10)), 'b'),
+    (make_array(make_array(11, 12), make_array(13, 14), make_array(15, 16)), 'c')
+);
 
 query ?T
 SELECT * FROM nested_indexed_fields;
@@ -541,32 +551,35 @@ SELECT * FROM nested_indexed_fields;
 [[11, 12], [13, 14], [15, 16]] c
 
 query ?
-SELECT column1[1] as i0 FROM nested_indexed_fields LIMIT 3;
+SELECT some_list[1] as i0 FROM nested_indexed_fields LIMIT 3;
 ----
 [0, 1]
 [5, 6]
 [11, 12]
 
 query I
-SELECT column1[1][1] as i0 FROM nested_indexed_fields LIMIT 3;
+SELECT some_list[1][1] as i0 FROM nested_indexed_fields LIMIT 3;
 ----
 0
 5
 11
+
 
 ######
 # Query nested indexed field on struct
 ######
 
 statement ok
-CREATE TABLE nested_structs_data
-AS VALUES
-(make_array(0, 1, 2, 3), 'a'),
-(make_array(4, 5, 6, 7), 'b'),
-(make_array(8, 9, 10, 11), 'c');
-
-statement ok
-CREATE TABLE nested_structs AS SELECT struct(column1) AS some_struct FROM nested_structs_data;
+CREATE TABLE nested_structs AS
+SELECT
+    struct(column1) as some_struct,
+    column2 as some_string
+FROM (
+    VALUES
+    (make_array(0, 1, 2, 3), 'a'),
+    (make_array(4, 5, 6, 7), 'b'),
+    (make_array(8, 9, 10, 11), 'c')
+);
 
 query ?
 SELECT some_struct['c0'] as l0 FROM nested_structs LIMIT 3;
