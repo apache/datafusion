@@ -94,6 +94,8 @@ impl SimplifyExpressions {
             .collect::<Result<Vec<_>>>()?;
 
         let expr = match plan {
+            // Canonicalize step won't reorder expressions in a Join on clause.
+            // The left and right expressions in a Join on clause are not commutative.
             LogicalPlan::Join(_) => {
                 plan.expressions()
                     .into_iter()
