@@ -512,17 +512,44 @@ impl Accumulator for StringDistinctCountAccumulator {
 /// Maximum size of a string that can be inlined in the hash table
 const SHORT_STRING_LEN: usize = mem::size_of::<usize>();
 
-/// Entry that is stored in the actual hash table
+/// Entry that is stored in a `SSOStringHashSet` that represents a string
+/// that is either stored inline or in the buffer
+///
+/// ```text
+///                                                                ┌──────────────────┐
+///                                                                │...               │
+///                                                                │TheQuickBrownFox  │
+///                                                  ─ ─ ─ ─ ─ ─ ─▶│...               │
+///                                                 │              │                  │
+///                                                                └──────────────────┘
+///                                                 │               buffer of u8
+///
+///                                                 │
+///                        ┌────────────────┬───────────────┬───────────────┐
+///  Storing               │                │ starting byte │  length, in   │
+///  "TheQuickBrownFox"    │   hash value   │   offset in   │  bytes (not   │
+///  (long string)         │                │    buffer     │  characters)  │
+///                        └────────────────┴───────────────┴───────────────┘
+///                              8 bytes          8 bytes       4 or 8
+///
+///
+///                         ┌───────────────┬─┬─┬─┬─┬─┬─┬─┬─┬───────────────┐
+/// Storing "foobar"        │               │ │ │ │ │ │ │ │ │  length, in   │
+/// (short string)          │  hash value   │?│?│f│o│o│b│a│r│  bytes (not   │
+///                         │               │ │ │ │ │ │ │ │ │  characters)  │
+///                         └───────────────┴─┴─┴─┴─┴─┴─┴─┴─┴───────────────┘
+///                              8 bytes         8 bytes        4 or 8
+/// ```
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
 struct SSOStringHeader {
-    /// hash of the string value (stored to avoid recomputing it when checking)
-    /// TODO can we simply recreate when needed
+    /// hash of the string value (stored to avoid recomputing it in hash table
+    /// check)
     hash: u64,
-    /// length of the string, in bytes
-    len: usize,
     /// if len =< SHORT_STRING_LEN: the string data inlined
     /// if len > SHORT_STRING_LEN, the offset of where the data starts
     offset_or_inline: usize,
+    /// length of the string, in bytes
+    len: usize,
 }
 
 impl SSOStringHeader {}
@@ -668,11 +695,6 @@ impl SSOStringHashSet {
 
     /// Converts this set into a StringArray of the distinct string values
     fn into_state(self) -> StringArray {
-        // The map contains entries that have offsets in some arbitrary order
-        // but the buffer contains the actual strings in the order they were inserted
-        // so we need to build offsets for the strings in the buffer in order
-        // then append short strings, if any, and then build the StringArray
-        // TODO a picture would be nice here
         let Self {
             map: _,
             map_size: _,
@@ -682,14 +704,11 @@ impl SSOStringHashSet {
             hashes_buffer: _,
         } = self;
 
-        // Add any
         let offsets: ScalarBuffer<_> = offsets.into();
-
-        // get the values and reset self.buffer
         let values = buffer.finish();
+        let nulls = None; // count distinct ignores nulls so intermediate state never has nulls
 
-        let nulls = None; // count distinct ignores nulls
-                          // SAFETY: all the values that went in are coming
+        // SAFETY: all the values that went in were valid utf8 so are all the values that come out
         unsafe { StringArray::new_unchecked(OffsetBuffer::new(offsets), values, nulls) }
     }
 
