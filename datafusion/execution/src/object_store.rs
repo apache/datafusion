@@ -180,7 +180,8 @@ impl DefaultObjectStoreRegistry {
     /// Default without any backend registered.
     #[cfg(target_arch = "wasm32")]
     pub fn new() -> Self {
-        Self::default()
+        let object_stores: DashMap<String, Arc<dyn ObjectStore>> = DashMap::new();
+        Self { object_stores }
     }
 }
 
