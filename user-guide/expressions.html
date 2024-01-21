@@ -988,34 +988,37 @@ but these operators always return a <code class="docutils literal notranslate"><
 <tr class="row-even"><td><p>array_replace_all(array, from, to)</p></td>
 <td><p>Replaces all occurrences of the specified element with another specified element. <code class="docutils literal notranslate"><span class="pre">array_replace_all([1,</span> <span class="pre">2,</span> <span class="pre">2,</span> <span class="pre">3,</span> <span class="pre">2,</span> <span class="pre">1,</span> <span class="pre">4],</span> <span class="pre">2,</span> <span class="pre">5)</span> <span class="pre">-&gt;</span> <span class="pre">[1,</span> <span class="pre">5,</span> <span class="pre">5,</span> <span class="pre">3,</span> <span class="pre">5,</span> <span class="pre">1,</span> <span class="pre">4]</span></code></p></td>
 </tr>
-<tr class="row-odd"><td><p>array_slice(array, index)</p></td>
+<tr class="row-odd"><td><p>array_slice(array, begin,end)</p></td>
 <td><p>Returns a slice of the array. <code class="docutils literal notranslate"><span class="pre">array_slice([1,</span> <span class="pre">2,</span> <span class="pre">3,</span> <span class="pre">4,</span> <span class="pre">5,</span> <span class="pre">6,</span> <span class="pre">7,</span> <span class="pre">8],</span> <span class="pre">3,</span> <span class="pre">6)</span> <span class="pre">-&gt;</span> <span class="pre">[3,</span> <span class="pre">4,</span> <span class="pre">5,</span> <span class="pre">6]</span></code></p></td>
 </tr>
-<tr class="row-even"><td><p>array_to_string(array, delimiter)</p></td>
+<tr class="row-even"><td><p>array_slice(array, begin, end, stride)</p></td>
+<td><p>Returns a slice of the array with added stride feature. <code class="docutils literal notranslate"><span class="pre">array_slice([1,</span> <span class="pre">2,</span> <span class="pre">3,</span> <span class="pre">4,</span> <span class="pre">5,</span> <span class="pre">6,</span> <span class="pre">7,</span> <span class="pre">8],</span> <span class="pre">3,</span> <span class="pre">6,</span> <span class="pre">2)</span> <span class="pre">-&gt;</span> <span class="pre">[3,</span> <span class="pre">5,</span> <span class="pre">6]</span></code></p></td>
+</tr>
+<tr class="row-odd"><td><p>array_to_string(array, delimiter)</p></td>
 <td><p>Converts each element to its text representation. <code class="docutils literal notranslate"><span class="pre">array_to_string([1,</span> <span class="pre">2,</span> <span class="pre">3,</span> <span class="pre">4],</span> <span class="pre">',')</span> <span class="pre">-&gt;</span> <span class="pre">1,2,3,4</span></code></p></td>
 </tr>
-<tr class="row-odd"><td><p>array_intersect(array1, array2)</p></td>
+<tr class="row-even"><td><p>array_intersect(array1, array2)</p></td>
 <td><p>Returns an array of the elements in the intersection of array1 and array2. <code class="docutils literal notranslate"><span class="pre">array_intersect([1,</span> <span class="pre">2,</span> <span class="pre">3,</span> <span class="pre">4],</span> <span class="pre">[5,</span> <span class="pre">6,</span> <span class="pre">3,</span> <span class="pre">4])</span> <span class="pre">-&gt;</span> <span class="pre">[3,</span> <span class="pre">4]</span></code></p></td>
 </tr>
-<tr class="row-even"><td><p>array_union(array1, array2)</p></td>
+<tr class="row-odd"><td><p>array_union(array1, array2)</p></td>
 <td><p>Returns an array of the elements in the union of array1 and array2 without duplicates. <code class="docutils literal notranslate"><span class="pre">array_union([1,</span> <span class="pre">2,</span> <span class="pre">3,</span> <span class="pre">4],</span> <span class="pre">[5,</span> <span class="pre">6,</span> <span class="pre">3,</span> <span class="pre">4])</span> <span class="pre">-&gt;</span> <span class="pre">[1,</span> <span class="pre">2,</span> <span class="pre">3,</span> <span class="pre">4,</span> <span class="pre">5,</span> <span class="pre">6]</span></code></p></td>
 </tr>
-<tr class="row-odd"><td><p>array_except(array1, array2)</p></td>
+<tr class="row-even"><td><p>array_except(array1, array2)</p></td>
 <td><p>Returns an array of the elements that appear in the first array but not in the second. <code class="docutils literal notranslate"><span class="pre">array_except([1,</span> <span class="pre">2,</span> <span class="pre">3,</span> <span class="pre">4],</span> <span class="pre">[5,</span> <span class="pre">6,</span> <span class="pre">3,</span> <span class="pre">4])</span> <span class="pre">-&gt;</span> <span class="pre">[3,</span> <span class="pre">4]</span></code></p></td>
 </tr>
-<tr class="row-even"><td><p>array_resize(array, size, value)</p></td>
+<tr class="row-odd"><td><p>array_resize(array, size, value)</p></td>
 <td><p>Resizes the list to contain size elements. Initializes new elements with value or empty if value is not set. <code class="docutils literal notranslate"><span class="pre">array_resize([1,</span> <span class="pre">2,</span> <span class="pre">3],</span> <span class="pre">5,</span> <span class="pre">0)</span> <span class="pre">-&gt;</span> <span class="pre">[1,</span> <span class="pre">2,</span> <span class="pre">3,</span> <span class="pre">4,</span> <span class="pre">5,</span> <span class="pre">6]</span></code></p></td>
 </tr>
-<tr class="row-odd"><td><p>cardinality(array)</p></td>
+<tr class="row-even"><td><p>cardinality(array)</p></td>
 <td><p>Returns the total number of elements in the array. <code class="docutils literal notranslate"><span class="pre">cardinality([[1,</span> <span class="pre">2,</span> <span class="pre">3],</span> <span class="pre">[4,</span> <span class="pre">5,</span> <span class="pre">6]])</span> <span class="pre">-&gt;</span> <span class="pre">6</span></code></p></td>
 </tr>
-<tr class="row-even"><td><p>make_array(value1, [value2 [, …]])</p></td>
+<tr class="row-odd"><td><p>make_array(value1, [value2 [, …]])</p></td>
 <td><p>Returns an Arrow array using the specified input expressions. <code class="docutils literal notranslate"><span class="pre">make_array(1,</span> <span class="pre">2,</span> <span class="pre">3)</span> <span class="pre">-&gt;</span> <span class="pre">[1,</span> <span class="pre">2,</span> <span class="pre">3]</span></code></p></td>
 </tr>
-<tr class="row-odd"><td><p>range(start [, stop, step])</p></td>
+<tr class="row-even"><td><p>range(start [, stop, step])</p></td>
 <td><p>Returns an Arrow array between start and stop with step. <code class="docutils literal notranslate"><span class="pre">SELECT</span> <span class="pre">range(2,</span> <span class="pre">10,</span> <span class="pre">3)</span> <span class="pre">-&gt;</span> <span class="pre">[2,</span> <span class="pre">5,</span> <span class="pre">8]</span></code></p></td>
 </tr>
-<tr class="row-even"><td><p>trim_array(array, n)</p></td>
+<tr class="row-odd"><td><p>trim_array(array, n)</p></td>
 <td><p>Deprecated</p></td>
 </tr>
 </tbody>
