@@ -131,7 +131,6 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
     /// ```
     pub fn simplify(&self, expr: Expr) -> Result<Expr> {
         let mut simplifier = Simplifier::new(&self.info);
-        let mut canonicalizer = Canonicalizer::new();
         let mut const_evaluator = ConstEvaluator::try_new(self.info.execution_props())?;
         let mut or_in_list_simplifier = OrInListSimplifier::new();
         let mut guarantee_rewriter = GuaranteeRewriter::new(&self.guarantees);
@@ -141,7 +140,6 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
         // simplifications can enable new constant evaluation)
         // https://github.com/apache/arrow-datafusion/issues/1160
         expr.rewrite(&mut const_evaluator)?
-            .rewrite(&mut canonicalizer)?
             .rewrite(&mut simplifier)?
             .rewrite(&mut or_in_list_simplifier)?
             .rewrite(&mut guarantee_rewriter)?
@@ -150,6 +148,10 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
             .rewrite(&mut simplifier)
     }
 
+    pub fn canonicalize(&self, expr: Expr) -> Result<Expr> {
+        let mut canonicalizer = Canonicalizer::new();
+        expr.rewrite(&mut canonicalizer)
+    }
     /// Apply type coercion to an [`Expr`] so that it can be
     /// evaluated as a [`PhysicalExpr`](datafusion_physical_expr::PhysicalExpr).
     ///
@@ -1354,7 +1356,7 @@ mod tests {
     use std::{
         collections::HashMap,
         ops::{BitAnd, BitOr, BitXor},
-        sync::Arc,
+        sync::Arc, fs::canonicalize,
     };
 
     use super::*;
@@ -2888,7 +2890,8 @@ mod tests {
         let simplifier = ExprSimplifier::new(
             SimplifyContext::new(&execution_props).with_schema(schema),
         );
-        simplifier.simplify(expr)
+        let cano = simplifier.canonicalize(expr)?;
+        simplifier.simplify(cano)
     }
 
     fn simplify(expr: Expr) -> Expr {
