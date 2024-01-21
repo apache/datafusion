@@ -36,6 +36,7 @@ use std::sync::Arc;
 #[derive(Debug)]
 pub struct RowNumber {
     name: String,
+    /// Output data type
     data_type: DataType,
 }
 

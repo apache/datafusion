@@ -41,6 +41,7 @@ use std::sync::Arc;
 pub struct Rank {
     name: String,
     rank_type: RankType,
+    /// Output data type
     data_type: DataType,
 }
 

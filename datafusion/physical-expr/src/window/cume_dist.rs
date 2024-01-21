@@ -34,6 +34,7 @@ use std::sync::Arc;
 #[derive(Debug)]
 pub struct CumeDist {
     name: String,
+    /// Output data type
     data_type: DataType,
 }
 

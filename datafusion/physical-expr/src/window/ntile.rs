@@ -35,6 +35,7 @@ use std::sync::Arc;
 pub struct Ntile {
     name: String,
     n: u64,
+    /// Output data type
     data_type: DataType,
 }
 

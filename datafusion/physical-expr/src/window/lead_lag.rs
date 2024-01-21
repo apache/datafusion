@@ -35,6 +35,7 @@ use std::sync::Arc;
 #[derive(Debug)]
 pub struct WindowShift {
     name: String,
+    /// Output data type
     data_type: DataType,
     shift_offset: i64,
     expr: Arc<dyn PhysicalExpr>,
