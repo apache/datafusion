@@ -222,6 +222,17 @@ fn take_optimizable_min(
                     }
                 }
             }
+        } else if *num_rows == 0 {
+            // MIN/MAX with 0 rows is always null
+            if let Some(casted_expr) =
+                agg_expr.as_any().downcast_ref::<expressions::Min>()
+            {
+                if let Ok(min_data_type) =
+                    ScalarValue::try_from(casted_expr.field().unwrap().data_type())
+                {
+                    return Some((min_data_type, casted_expr.name().to_string()));
+                }
+            }
         }
     }
     None
@@ -255,6 +266,17 @@ fn take_optimizable_max(
                             }
                         }
                     }
+                }
+            }
+        } else if *num_rows == 0 {
+            // MIN/MAX with 0 rows is always null
+            if let Some(casted_expr) =
+                agg_expr.as_any().downcast_ref::<expressions::Max>()
+            {
+                if let Ok(max_data_type) =
+                    ScalarValue::try_from(casted_expr.field().unwrap().data_type())
+                {
+                    return Some((max_data_type, casted_expr.name().to_string()));
                 }
             }
         }
