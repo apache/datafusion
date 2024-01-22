@@ -464,7 +464,9 @@ pub fn coerced_type_with_base_type_only(
     base_type: &DataType,
 ) -> DataType {
     match data_type {
-        DataType::List(field) | DataType::FixedSizeList(field, _) => {
+        DataType::List(field)
+        | DataType::FixedSizeList(field, _)
+        | DataType::LargeList(field) => {
             let data_type = match field.data_type() {
                 // nested type could be different list type
                 DataType::List(_)
@@ -474,31 +476,20 @@ pub fn coerced_type_with_base_type_only(
                 }
                 _ => base_type.to_owned(),
             };
-
-            DataType::List(Arc::new(Field::new(
-                field.name(),
-                data_type,
-                field.is_nullable(),
-            )))
+            if matches!(data_type, DataType::LargeList(_)) {
+                DataType::LargeList(Arc::new(Field::new(
+                    field.name(),
+                    data_type,
+                    field.is_nullable(),
+                )))
+            } else {
+                DataType::List(Arc::new(Field::new(
+                    field.name(),
+                    data_type,
+                    field.is_nullable(),
+                )))
+            }
         }
-        DataType::LargeList(field) => {
-            let data_type = match field.data_type() {
-                // nested type could be different list type
-                DataType::List(_)
-                | DataType::FixedSizeList(_, _)
-                | DataType::LargeList(_) => {
-                    coerced_type_with_base_type_only(field.data_type(), base_type)
-                }
-                _ => base_type.to_owned(),
-            };
-
-            DataType::LargeList(Arc::new(Field::new(
-                field.name(),
-                data_type,
-                field.is_nullable(),
-            )))
-        }
-
         _ => base_type.clone(),
     }
 }
