@@ -17,7 +17,6 @@
 
 //! This module implements a rule that simplifies expressions that is guaranteed to be true or false at planning time
 
-use std::borrow::Cow;
 use std::collections::HashSet;
 
 use datafusion_common::tree_node::TreeNodeRewriter;
@@ -43,45 +42,44 @@ impl TreeNodeRewriter for InListSimplifier {
 
     fn mutate(&mut self, expr: Expr) -> Result<Expr> {
         if let Expr::BinaryExpr(BinaryExpr { left, op, right }) = &expr {
-            match (left.as_ref(), op, right.as_ref()) {
-                (Expr::InList(l1), Operator::And, Expr::InList(l2)) => {
-                    if l1.expr == l2.expr && !l1.negated && !l2.negated {
-                        let l1_set: HashSet<Expr> = l1.list.iter().cloned().collect();
-                        let intersect_list: Vec<Expr> = l2
-                            .list
-                            .iter()
-                            .filter(|x| l1_set.contains(x))
-                            .cloned()
-                            .collect();
-                        if intersect_list.is_empty() {
-                            return Ok(lit(false));
-                        }
-                        let merged_inlist = InList {
-                            expr: l1.expr.clone(),
-                            list: intersect_list,
-                            negated: false,
-                        };
-                        return Ok(Expr::InList(merged_inlist));
-                    } else if l1.expr == l2.expr && l1.negated && l2.negated {
-                        let l1_set: HashSet<Expr> = l1.list.iter().cloned().collect();
-                        let intersect_list: Vec<Expr> = l2
-                            .list
-                            .iter()
-                            .filter(|x| l1_set.contains(x))
-                            .cloned()
-                            .collect();
-                        if intersect_list.is_empty() {
-                            return Ok(lit(true));
-                        }
-                        let merged_inlist = InList {
-                            expr: l1.expr.clone(),
-                            list: intersect_list,
-                            negated: true,
-                        };
-                        return Ok(Expr::InList(merged_inlist));
+            if let (Expr::InList(l1), Operator::And, Expr::InList(l2)) =
+                (left.as_ref(), op, right.as_ref())
+            {
+                if l1.expr == l2.expr && !l1.negated && !l2.negated {
+                    let l1_set: HashSet<Expr> = l1.list.iter().cloned().collect();
+                    let intersect_list: Vec<Expr> = l2
+                        .list
+                        .iter()
+                        .filter(|x| l1_set.contains(x))
+                        .cloned()
+                        .collect();
+                    if intersect_list.is_empty() {
+                        return Ok(lit(false));
                     }
+                    let merged_inlist = InList {
+                        expr: l1.expr.clone(),
+                        list: intersect_list,
+                        negated: false,
+                    };
+                    return Ok(Expr::InList(merged_inlist));
+                } else if l1.expr == l2.expr && l1.negated && l2.negated {
+                    let l1_set: HashSet<Expr> = l1.list.iter().cloned().collect();
+                    let intersect_list: Vec<Expr> = l2
+                        .list
+                        .iter()
+                        .filter(|x| l1_set.contains(x))
+                        .cloned()
+                        .collect();
+                    if intersect_list.is_empty() {
+                        return Ok(lit(true));
+                    }
+                    let merged_inlist = InList {
+                        expr: l1.expr.clone(),
+                        list: intersect_list,
+                        negated: true,
+                    };
+                    return Ok(Expr::InList(merged_inlist));
                 }
-                _ => {}
             }
         }
 
