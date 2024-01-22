@@ -30,7 +30,6 @@ use datafusion::physical_plan::ExecutionPlanVisitor;
 use datafusion::prelude::*;
 use datafusion::test_util;
 use datafusion::{assert_batches_eq, assert_batches_sorted_eq};
-use datafusion::physical_plan::collect;
 use datafusion::{execution::context::SessionContext, physical_plan::displayable};
 use datafusion_common::{assert_contains, assert_not_contains};
 use object_store::path::Path;

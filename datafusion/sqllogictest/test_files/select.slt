@@ -116,7 +116,7 @@ VALUES (1,2,3,4,5,6,7,8,9,10,11,12,13,NULL,'F',3.5)
 
 # Test non-literal expressions in VALUES
 query II
-VALUES (1, CASE WHEN RANDOM() > 0.5 THEN 1 ELSE 1 END), 
+VALUES (1, CASE WHEN RANDOM() > 0.5 THEN 1 ELSE 1 END),
        (2, CASE WHEN RANDOM() > 0.5 THEN 2 ELSE 2 END);
 ----
 1 1
@@ -506,10 +506,6 @@ ProjectionExec: expr=[c1@0 >= 2 AND c1@0 <= 3 as select_between_data.c1 BETWEEN 
 
 # TODO: sort_on_window_null_string
 
-# Drop table
-statement ok
-DROP TABLE test;
-
 
 # # Create time tables with different precisions but the same logical values
 
@@ -679,7 +675,98 @@ c 3 1 b 4 -82
 # TODO: Test named query parameters
 # Dependency on https://github.com/apache/arrow-datafusion/issues/4539#issuecomment-1755430857
 
-# TODO: parallel_query_with_filter
+
+######
+# Parallel query with filter
+######
+
+# Set up csv files
+statement ok
+CREATE TABLE src_table_base (
+  c2 INT,
+  c3 BOOLEAN
+) AS VALUES
+(1, FALSE),
+(2, TRUE),
+(3, FALSE),
+(4, TRUE),
+(5, FALSE),
+(6, TRUE),
+(7, FALSE),
+(8, TRUE),
+(9, FALSE),
+(10, TRUE);
+
+query IIB
+COPY (
+  SELECT 0 as c1, c2, c3 FROM src_table_base
+) TO 'test_files/scratch/select/csv_partitions/partition-1.csv'
+(FORMAT CSV, SINGLE_FILE_OUTPUT true);
+----
+10
+
+query IIB
+COPY (
+  SELECT 1 as c1, c2, c3 FROM src_table_base
+) TO 'test_files/scratch/select/csv_partitions/partition-2.csv'
+(FORMAT CSV, SINGLE_FILE_OUTPUT true);
+----
+10
+
+query IIB
+COPY (
+  SELECT 2 as c1, c2, c3 FROM src_table_base
+) TO 'test_files/scratch/select/csv_partitions/partition-3.csv'
+(FORMAT CSV, SINGLE_FILE_OUTPUT true);
+----
+10
+
+query IIB
+COPY (
+  SELECT 3 as c1, c2, c3 FROM src_table_base
+) TO 'test_files/scratch/select/csv_partitions/partition-4.csv'
+(FORMAT CSV, SINGLE_FILE_OUTPUT true);
+----
+10
+
+# Set up table
+statement ok
+CREATE EXTERNAL TABLE test (
+  c1 INT,
+  c2 INT,
+  c3 BOOLEAN,
+)
+STORED AS CSV
+WITH HEADER ROW
+LOCATION 'test_files/scratch/select/csv_partitions'
+
+query II
+SELECT c1, c2 FROM test WHERE c1 > 0 AND c1 < 3;
+----
+2 1
+2 2
+2 3
+2 4
+2 5
+2 6
+2 7
+2 8
+2 9
+2 10
+1 1
+1 2
+1 3
+1 4
+1 5
+1 6
+1 7
+1 8
+1 9
+1 10
+
+# Drop table
+statement ok
+DROP TABLE test;
 
 
 # query with filter string type coercion
@@ -718,30 +805,29 @@ SELECT * FROM empty_table
 ######
 
 statement ok
+CREATE EXTERNAL TABLE test_base (
+  c1 INT,
+  c2 INT,
+  c3 BOOLEAN,
+)
+STORED AS CSV
+WITH HEADER ROW
+LOCATION 'test_files/scratch/select/csv_partitions'
+
+statement ok
 CREATE TABLE test AS
 SELECT
-    arrow_cast(column1, 'UInt32') as c1,
-    arrow_cast(column2, 'UInt64') as c2,
-    arrow_cast(column3, 'Boolean') as c3
-FROM (
-    VALUES
-    (1, 1, FALSE),
-    (1, 2, TRUE),
-    (1, 3, FALSE),
-    (1, 4, TRUE),
-    (2, 1, FALSE),
-    (2, 2, TRUE),
-    (2, 3, FALSE),
-    (2, 4, TRUE),
-    (3, 1, FALSE),
-    (3, 2, TRUE),
-    (3, 3, FALSE),
-    (3, 4, TRUE)
-);
+    arrow_cast(c1, 'UInt32') as c1,
+    arrow_cast(c2, 'UInt64') as c2,
+    arrow_cast(c3, 'Boolean') as c3
+FROM test_base;
 
 query IB
 SELECT c1, c3 FROM test WHERE c1 > 2 AND c3 = true
 ----
+3 true
+3 true
+3 true
 3 true
 3 true
 
@@ -1174,7 +1260,7 @@ query II
 SELECT
 CASE WHEN B.x > 0 THEN A.x / B.x ELSE 0 END AS value1,
 CASE WHEN B.x > 0 AND B.y > 0 THEN A.x / B.x ELSE 0 END AS value3
-FROM t AS A, (SELECT * FROM t WHERE x = 0) AS B; 
+FROM t AS A, (SELECT * FROM t WHERE x = 0) AS B;
 ----
 0 0
 0 0
