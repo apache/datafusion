@@ -27,9 +27,12 @@ use datafusion_expr::{lit, BinaryExpr, Expr, Operator};
 /// Simplify expressions that is guaranteed to be true or false to a literal boolean expression
 ///
 /// Rules:
-/// 1. `a in (1,2,3) AND a in (4,5) -> a in (1,2,3,4,5) Intersection`
-/// 2. `a not int (1,2,3) AND a not in (4,5,6) -> a not in (1,2,3,4,5,6) Intersection`
-/// 3. `a in (1,2,3) AND a not in (1,3,x,y,z...) -> a in (2) Exception`
+/// If both expressions are positive or negative, then we can apply intersection of both inlist expressions
+///     1. `a in (1,2,3) AND a in (4,5) -> a in (1,2,3,4,5)`
+///     2. `a not int (1,2,3) AND a not in (4,5,6) -> a not in (1,2,3,4,5,6)`
+/// If one of the expressions is negated, then we apply exception on positive expression
+///     1. `a in (1,2,3) AND a not in (1,2,3,4,5) -> a in ()`
+///     2. `a not in (1,2,3) AND a in (1,2,3,4,5) -> a in (4,5)`
 pub(super) struct InListSimplifier {}
 
 impl InListSimplifier {
