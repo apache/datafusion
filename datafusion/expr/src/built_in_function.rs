@@ -964,9 +964,10 @@ impl BuiltinScalarFunction {
             }
             BuiltinScalarFunction::ArrayExcept => Signature::any(2, self.volatility()),
             BuiltinScalarFunction::Flatten => Signature::any(1, self.volatility()),
-            BuiltinScalarFunction::ArrayHasAll
-            | BuiltinScalarFunction::ArrayHasAny
-            | BuiltinScalarFunction::ArrayHas => {
+            BuiltinScalarFunction::ArrayHasAll | BuiltinScalarFunction::ArrayHasAny => {
+                Signature::any(2, self.volatility())
+            }
+            BuiltinScalarFunction::ArrayHas => {
                 Signature::array_and_element(self.volatility())
             }
             BuiltinScalarFunction::ArrayLength => {
