@@ -1112,3 +1112,66 @@ SELECT abs(x), abs(x) + abs(y) FROM t;
 
 statement ok
 DROP TABLE t;
+
+# related to https://github.com/apache/arrow-datafusion/issues/8814
+statement ok
+create table t(x int, y int) as values (1,1), (2,2), (3,3), (0,0), (4,0);
+
+query II
+SELECT
+CASE WHEN B.x > 0 THEN A.x / B.x ELSE 0 END AS value1,
+CASE WHEN B.x > 0 AND B.y > 0 THEN A.x / B.x ELSE 0 END AS value3
+FROM t AS A, (SELECT * FROM t WHERE x = 0) AS B; 
+----
+0 0
+0 0
+0 0
+0 0
+0 0
+
+# Expressions that short circuit should not be refactored out as that may cause side effects (divide by zero)
+# at plan time that would not actually happen during execution, so the follow three query should not be extract
+# the common sub-expression
+query TT
+explain select coalesce(1, y/x), coalesce(2, y/x) from t;
+----
+logical_plan
+Projection: coalesce(Int64(1), CAST(t.y / t.x AS Int64)), coalesce(Int64(2), CAST(t.y / t.x AS Int64))
+--TableScan: t projection=[x, y]
+physical_plan
+ProjectionExec: expr=[coalesce(1, CAST(y@1 / x@0 AS Int64)) as coalesce(Int64(1),t.y / t.x), coalesce(2, CAST(y@1 / x@0 AS Int64)) as coalesce(Int64(2),t.y / t.x)]
+--MemoryExec: partitions=1, partition_sizes=[1]
+
+query TT
+EXPLAIN SELECT y > 0 and 1 / y < 1, x > 0 and y > 0 and 1 / y < 1 / x from t;
+----
+logical_plan
+Projection: t.y > Int32(0) AND Int64(1) / CAST(t.y AS Int64) < Int64(1) AS t.y > Int64(0) AND Int64(1) / t.y < Int64(1), t.x > Int32(0) AND t.y > Int32(0) AND Int64(1) / CAST(t.y AS Int64) < Int64(1) / CAST(t.x AS Int64) AS t.x > Int64(0) AND t.y > Int64(0) AND Int64(1) / t.y < Int64(1) / t.x
+--TableScan: t projection=[x, y]
+physical_plan
+ProjectionExec: expr=[y@1 > 0 AND 1 / CAST(y@1 AS Int64) < 1 as t.y > Int64(0) AND Int64(1) / t.y < Int64(1), x@0 > 0 AND y@1 > 0 AND 1 / CAST(y@1 AS Int64) < 1 / CAST(x@0 AS Int64) as t.x > Int64(0) AND t.y > Int64(0) AND Int64(1) / t.y < Int64(1) / t.x]
+--MemoryExec: partitions=1, partition_sizes=[1]
+
+query TT
+EXPLAIN SELECT y = 0 or 1 / y < 1, x = 0 or y = 0 or 1 / y < 1 / x from t;
+----
+logical_plan
+Projection: t.y = Int32(0) OR Int64(1) / CAST(t.y AS Int64) < Int64(1) AS t.y = Int64(0) OR Int64(1) / t.y < Int64(1), t.x = Int32(0) OR t.y = Int32(0) OR Int64(1) / CAST(t.y AS Int64) < Int64(1) / CAST(t.x AS Int64) AS t.x = Int64(0) OR t.y = Int64(0) OR Int64(1) / t.y < Int64(1) / t.x
+--TableScan: t projection=[x, y]
+physical_plan
+ProjectionExec: expr=[y@1 = 0 OR 1 / CAST(y@1 AS Int64) < 1 as t.y = Int64(0) OR Int64(1) / t.y < Int64(1), x@0 = 0 OR y@1 = 0 OR 1 / CAST(y@1 AS Int64) < 1 / CAST(x@0 AS Int64) as t.x = Int64(0) OR t.y = Int64(0) OR Int64(1) / t.y < Int64(1) / t.x]
+--MemoryExec: partitions=1, partition_sizes=[1]
+
+# due to the reason describe in https://github.com/apache/arrow-datafusion/issues/8927,
+# the following queries will fail
+query error
+select coalesce(1, y/x), coalesce(2, y/x) from t;
+
+query error
+SELECT y > 0 and 1 / y < 1, x > 0 and y > 0 and 1 / y < 1 / x from t;
+
+query error
+SELECT y = 0 or 1 / y < 1, x = 0 or y = 0 or 1 / y < 1 / x from t;
+
+statement ok
+DROP TABLE t;

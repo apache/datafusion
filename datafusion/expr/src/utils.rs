@@ -911,6 +911,7 @@ pub fn can_hash(data_type: &DataType) -> bool {
         }
         DataType::List(_) => true,
         DataType::LargeList(_) => true,
+        DataType::FixedSizeList(_, _) => true,
         _ => false,
     }
 }

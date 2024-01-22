@@ -290,6 +290,11 @@ config_namespace! {
         /// Hive. Note that this setting does not affect reading partitioned
         /// tables (e.g. `/table/year=2021/month=01/data.parquet`).
         pub listing_table_ignore_subdirectory: bool, default = true
+
+        /// Should DataFusion support recursive CTEs
+        /// Defaults to false since this feature is a work in progress and may not
+        /// behave as expected
+        pub enable_recursive_ctes: bool, default = false
     }
 }
 
@@ -555,6 +560,10 @@ config_namespace! {
         /// The maximum estimated size in bytes for one input side of a HashJoin
         /// will be collected into a single partition
         pub hash_join_single_partition_threshold: usize, default = 1024 * 1024
+
+        /// The maximum estimated size in rows for one input side of a HashJoin
+        /// will be collected into a single partition
+        pub hash_join_single_partition_threshold_rows: usize, default = 1024 * 128
 
         /// The default filter selectivity used by Filter Statistics
         /// when an exact selectivity cannot be determined. Valid values are
