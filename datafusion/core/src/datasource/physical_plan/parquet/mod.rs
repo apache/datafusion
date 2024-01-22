@@ -787,8 +787,7 @@ mod tests {
         array::{Int64Array, Int8Array, StringArray},
         datatypes::{DataType, Field, SchemaBuilder},
     };
-    use arrow_array::cast::AsArray;
-    use arrow_array::{Date64Array, StructArray};
+        use arrow_array::{Date64Array, StructArray};
     use arrow_schema::Fields;
     use chrono::{TimeZone, Utc};
     use datafusion_common::{assert_contains, ToDFSchema};
