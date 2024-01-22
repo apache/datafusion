@@ -100,7 +100,7 @@ mod tests {
         let highlighter = SyntaxHighlighter::new("generic");
         let out = highlighter.highlight(s, s.len());
         assert_eq!(
-            "\u{1b}[31mSElect\u{1b}[0m col_a \u{1b}[31mfrom\u{1b}[0m tab_1;",
+            "\u{1b}[91mSElect\u{1b}[0m col_a \u{1b}[91mfrom\u{1b}[0m tab_1;",
             out
         );
     }
@@ -111,7 +111,7 @@ mod tests {
         let highlighter = SyntaxHighlighter::new("generic");
         let out = highlighter.highlight(s, s.len());
         assert_eq!(
-            "\u{1b}[31mSElect\u{1b}[0m col_a \u{1b}[31mfrom\u{1b}[0m tab_1\n \u{1b}[31mWHERE\u{1b}[0m col_b = \u{1b}[32m'なにか'\u{1b}[0m;",
+            "\u{1b}[91mSElect\u{1b}[0m col_a \u{1b}[91mfrom\u{1b}[0m tab_1\n \u{1b}[91mWHERE\u{1b}[0m col_b = \u{1b}[92m'なにか'\u{1b}[0m;",
             out
         );
     }
