@@ -6,7 +6,7 @@
 // "License"); you may not use this file except in compliance
 // with the License.  You may obtain a copy of the License at
 //
-//   http://www.apndache.org/licenses/LICENSE-2.0
+//   http://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing,
 // software distributed under the License is distributed on an
@@ -81,11 +81,11 @@ struct Color {}
 
 impl Color {
     fn green(s: impl Display) -> String {
-        format!("\x1b[32m{s}\x1b[0m")
+        format!("\x1b[92m{s}\x1b[0m")
     }
 
     fn red(s: impl Display) -> String {
-        format!("\x1b[31m{s}\x1b[0m")
+        format!("\x1b[91m{s}\x1b[0m")
     }
 }
 
