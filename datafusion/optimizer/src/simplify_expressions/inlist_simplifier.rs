@@ -27,8 +27,9 @@ use datafusion_expr::{lit, BinaryExpr, Expr, Operator};
 /// Simplify expressions that is guaranteed to be true or false to a literal boolean expression
 ///
 /// Rules:
-/// 1. `a in (1,2,3) AND a in (4,5) -> Intersection`
-// 2. `a in (1,2,3) OR a in (1,2,3) -> a in (1,2,3)`
+/// 1. `a in (1,2,3) AND a in (4,5) -> a in (1,2,3,4,5) Intersection`
+/// 2. `a not int (1,2,3) AND a not in (4,5,6) -> a not in (1,2,3,4,5,6) Intersection`
+/// 3. `a in (1,2,3) AND a not in (1,3,x,y,z...) -> a in (2) Exception`
 pub(super) struct InListSimplifier {}
 
 impl InListSimplifier {
@@ -76,6 +77,40 @@ impl TreeNodeRewriter for InListSimplifier {
                     let merged_inlist = InList {
                         expr: l1.expr.clone(),
                         list: intersect_list,
+                        negated: true,
+                    };
+                    return Ok(Expr::InList(merged_inlist));
+                } else if l1.expr == l2.expr && !l1.negated && l2.negated {
+                    let l2_set: HashSet<Expr> = l2.list.iter().cloned().collect();
+                    let except_list: Vec<Expr> = l1
+                        .list
+                        .iter()
+                        .filter(|x| !l2_set.contains(x))
+                        .cloned()
+                        .collect();
+                    if except_list.is_empty() {
+                        return Ok(lit(false));
+                    }
+                    let merged_inlist = InList {
+                        expr: l1.expr.clone(),
+                        list: except_list,
+                        negated: false,
+                    };
+                    return Ok(Expr::InList(merged_inlist));
+                } else if l1.expr == l2.expr && l1.negated && !l2.negated {
+                    let l2_set: HashSet<Expr> = l2.list.iter().cloned().collect();
+                    let except_list: Vec<Expr> = l1
+                        .list
+                        .iter()
+                        .filter(|x| !l2_set.contains(x))
+                        .cloned()
+                        .collect();
+                    if except_list.is_empty() {
+                        return Ok(lit(true));
+                    }
+                    let merged_inlist = InList {
+                        expr: l1.expr.clone(),
+                        list: except_list,
                         negated: true,
                     };
                     return Ok(Expr::InList(merged_inlist));
