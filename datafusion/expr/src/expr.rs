@@ -1280,7 +1280,7 @@ impl Expr {
             Expr::Case { .. } => true,
             // Use explicit pattern match instead of a default
             // implementation, so that in the future if someone adds
-            // new Expr types, they will check here as well 
+            // new Expr types, they will check here as well
             Expr::AggregateFunction(..)
             | Expr::Alias(..)
             | Expr::Between(..)
