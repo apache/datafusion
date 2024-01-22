@@ -63,3 +63,76 @@ id6 value"6
 id7 value"7
 id8 value"8
 id9 value"9
+
+
+# Read partitioned csv
+statement ok
+CREATE TABLE src_table_1 (
+  int_col INT,
+  string_col TEXT,
+  bigint_col BIGINT,
+  partition_col INT
+) AS VALUES
+(1, 'aaa', 100, 1),
+(2, 'bbb', 200, 1),
+(3, 'ccc', 300, 1),
+(4, 'ddd', 400, 1);
+
+statement ok
+CREATE TABLE src_table_2 (
+  int_col INT,
+  string_col TEXT,
+  bigint_col BIGINT,
+  partition_col INT
+) AS VALUES
+(5, 'eee', 500, 2),
+(6, 'fff', 600, 2),
+(7, 'ggg', 700, 2),
+(8, 'hhh', 800, 2);
+
+query ITII
+COPY  src_table_1 TO 'test_files/scratch/csv_files/csv_partitions/1.csv'
+(FORMAT CSV, SINGLE_FILE_OUTPUT true);
+----
+4
+
+
+query ITII
+COPY  src_table_2 TO 'test_files/scratch/csv_files/csv_partitions/2.csv'
+(FORMAT CSV, SINGLE_FILE_OUTPUT true);
+----
+4
+
+statement ok
+CREATE EXTERNAL TABLE partitioned_table (
+  int_col INT,
+  string_col TEXT,
+  bigint_col BIGINT,
+  partition_col INT
+)
+STORED AS CSV
+WITH HEADER ROW
+LOCATION 'test_files/scratch/csv_files/csv_partitions';
+
+query ITII
+SELECT * FROM partitioned_table ORDER BY int_col;
+----
+1 aaa 100 1
+2 bbb 200 1
+3 ccc 300 1
+4 ddd 400 1
+5 eee 500 2
+6 fff 600 2
+7 ggg 700 2
+8 hhh 800 2
+
+query TT
+EXPLAIN SELECT * FROM partitioned_table ORDER BY int_col;
+----
+logical_plan
+Sort: partitioned_table.int_col ASC NULLS LAST
+--TableScan: partitioned_table projection=[int_col, string_col, bigint_col, partition_col]
+physical_plan
+SortPreservingMergeExec: [int_col@0 ASC NULLS LAST]
+--SortExec: expr=[int_col@0 ASC NULLS LAST]
+----CsvExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/csv_files/csv_partitions/1.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/csv_files/csv_partitions/2.csv]]}, projection=[int_col, string_col, bigint_col, partition_col], has_header=true
