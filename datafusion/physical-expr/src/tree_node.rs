@@ -39,7 +39,7 @@ impl DynTreeNode for dyn PhysicalExpr {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct ExprContext<T: Sized> {
     pub expr: Arc<dyn PhysicalExpr>,
     pub data: T,
