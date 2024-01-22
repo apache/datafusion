@@ -885,16 +885,17 @@ async fn send_arrays_to_col_writers(
     rb: &RecordBatch,
     schema: Arc<Schema>,
 ) -> Result<()> {
-    for (tx, array, field) in col_array_channels
-        .iter()
-        .zip(rb.columns())
-        .zip(schema.fields())
-        .map(|((a, b), c)| (a, b, c))
-    {
+    // Each leaf column has its own channel, increment next_channel for each leaf column sent.
+    let mut next_channel = 0;
+    for (array, field) in rb.columns().iter().zip(schema.fields()) {
         for c in compute_leaves(field, array)? {
-            tx.send(c).await.map_err(|_| {
-                DataFusionError::Internal("Unable to send array to writer!".into())
-            })?;
+            col_array_channels[next_channel]
+                .send(c)
+                .await
+                .map_err(|_| {
+                    DataFusionError::Internal("Unable to send array to writer!".into())
+                })?;
+            next_channel += 1;
         }
     }
 
@@ -902,7 +903,7 @@ async fn send_arrays_to_col_writers(
 }
 
 /// Spawns a tokio task which joins the parallel column writer tasks,
-/// and finalizes the row group.
+/// and finalizes the row group
 fn spawn_rg_join_and_finalize_task(
     column_writer_handles: Vec<JoinHandle<Result<ArrowColumnWriter>>>,
     rg_rows: usize,
