@@ -1007,7 +1007,7 @@ mod tests {
     use arrow::{
         array::{
             Array, ArrayRef, BinaryArray, BooleanArray, Float32Array, Float64Array,
-            Int32Array, StringArray, UInt64Array,
+            Int32Array, Int64Array, StringArray, UInt64Array,
         },
         datatypes::Field,
         record_batch::RecordBatch,
@@ -1438,6 +1438,55 @@ mod tests {
             i32,
             Int32,
             Int32Array
+        );
+        test_function!(
+            InStr,
+            &[lit("Helloworld"), lit(ScalarValue::Utf8(None))],
+            Ok(None),
+            i32,
+            Int32,
+            Int32Array
+        );
+        test_function!(
+            InStr,
+            &[lit(ScalarValue::Utf8(None)), lit("Hello")],
+            Ok(None),
+            i32,
+            Int32,
+            Int32Array
+        );
+        test_function!(
+            InStr,
+            &[
+                lit(ScalarValue::LargeUtf8(Some("Helloworld".to_string()))),
+                lit(ScalarValue::LargeUtf8(Some("world".to_string())))
+            ],
+            Ok(Some(6)),
+            i64,
+            Int64,
+            Int64Array
+        );
+        test_function!(
+            InStr,
+            &[
+                lit(ScalarValue::LargeUtf8(None)),
+                lit(ScalarValue::LargeUtf8(Some("world".to_string())))
+            ],
+            Ok(None),
+            i64,
+            Int64,
+            Int64Array
+        );
+        test_function!(
+            InStr,
+            &[
+                lit(ScalarValue::LargeUtf8(Some("Helloworld".to_string()))),
+                lit(ScalarValue::LargeUtf8(None))
+            ],
+            Ok(None),
+            i64,
+            Int64,
+            Int64Array
         );
         #[cfg(feature = "unicode_expressions")]
         test_function!(

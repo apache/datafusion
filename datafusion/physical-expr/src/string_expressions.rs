@@ -23,8 +23,8 @@
 
 use arrow::{
     array::{
-        Array, ArrayRef, BooleanArray, GenericStringArray, Int32Array, Int64Array,
-        OffsetSizeTrait, StringArray,
+        Array, ArrayRef, GenericStringArray, Int32Array, Int64Array, OffsetSizeTrait,
+        StringArray,
     },
     datatypes::{ArrowNativeType, ArrowPrimitiveType, DataType},
 };
@@ -309,10 +309,10 @@ pub fn instr<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
                 .iter()
                 .zip(substr_array.iter())
                 .map(|(string, substr)| match (string, substr) {
-                    (Some(string), Some(substr)) => {
-                        string.find(substr).map_or(0, |index| (index + 1) as i32)
-                    }
-                    _ => 0,
+                    (Some(string), Some(substr)) => string
+                        .find(substr)
+                        .map_or(Some(0), |index| Some((index + 1) as i32)),
+                    _ => None,
                 })
                 .collect::<Int32Array>();
 
@@ -323,10 +323,10 @@ pub fn instr<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
                 .iter()
                 .zip(substr_array.iter())
                 .map(|(string, substr)| match (string, substr) {
-                    (Some(string), Some(substr)) => {
-                        string.find(substr).map_or(0, |index| (index + 1) as i64)
-                    }
-                    _ => 0,
+                    (Some(string), Some(substr)) => string
+                        .find(substr)
+                        .map_or(Some(0), |index| Some((index + 1) as i64)),
+                    _ => None,
                 })
                 .collect::<Int64Array>();
 
@@ -505,17 +505,10 @@ pub fn split_part<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
 /// Returns true if string starts with prefix.
 /// starts_with('alphabet', 'alph') = 't'
 pub fn starts_with<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
-    let string_array = as_generic_string_array::<T>(&args[0])?;
-    let prefix_array = as_generic_string_array::<T>(&args[1])?;
+    let left = as_generic_string_array::<T>(&args[0])?;
+    let right = as_generic_string_array::<T>(&args[1])?;
 
-    let result = string_array
-        .iter()
-        .zip(prefix_array.iter())
-        .map(|(string, prefix)| match (string, prefix) {
-            (Some(string), Some(prefix)) => Some(string.starts_with(prefix)),
-            _ => None,
-        })
-        .collect::<BooleanArray>();
+    let result = arrow::compute::kernels::comparison::starts_with(left, right)?;
 
     Ok(Arc::new(result) as ArrayRef)
 }
@@ -523,17 +516,10 @@ pub fn starts_with<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
 /// Returns true if string ends with suffix.
 /// ends_with('alphabet', 'abet') = 't'
 pub fn ends_with<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
-    let string_array = as_generic_string_array::<T>(&args[0])?;
-    let suffix_array = as_generic_string_array::<T>(&args[1])?;
+    let left = as_generic_string_array::<T>(&args[0])?;
+    let right = as_generic_string_array::<T>(&args[1])?;
 
-    let result = string_array
-        .iter()
-        .zip(suffix_array.iter())
-        .map(|(string, suffix)| match (string, suffix) {
-            (Some(string), Some(suffix)) => Some(string.ends_with(suffix)),
-            _ => None,
-        })
-        .collect::<BooleanArray>();
+    let result = arrow::compute::kernels::comparison::ends_with(left, right)?;
 
     Ok(Arc::new(result) as ArrayRef)
 }
