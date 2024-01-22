@@ -26,3 +26,5 @@ pub mod helper;
 pub mod object_storage;
 pub mod print_format;
 pub mod print_options;
+
+mod highlighter;
