@@ -214,7 +214,11 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
                     let stop = create_physical_name(stop, false)?;
                     format!("{expr}[{start}:{stop}]")
                 }
-                GetFieldAccess::ListStride { start, stop, stride } => {
+                GetFieldAccess::ListStride {
+                    start,
+                    stop,
+                    stride,
+                } => {
                     let start = create_physical_name(start, false)?;
                     let stop = create_physical_name(stop, false)?;
                     let stride = create_physical_name(stride, false)?;
