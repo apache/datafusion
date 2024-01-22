@@ -1258,7 +1258,54 @@ mod tests {
         assert_eq!(state, expected);
     }
 
-    // TODO fuzz testing
-
     // inserting strings into the set does not increase reported memoyr
+    #[test]
+    fn test_string_set_memory_usage() {
+        let strings1 = GenericStringArray::<i32>::from(vec![
+            Some("a"),
+            Some("b"),
+            Some("CXCCCCCCCC"), // 10 bytes
+            Some("AAAAAAAA"),   // 8 bytes
+            Some("BBBBBQBBB"),  // 9 bytes
+        ]);
+        let total_strings1_len = strings1
+            .iter()
+            .map(|s| s.map(|s| s.len()).unwrap_or(0))
+            .sum::<usize>();
+        let values1: ArrayRef = Arc::new(GenericStringArray::<i32>::from(strings1));
+
+        // Much larger strings in strings2
+        let strings2 = GenericStringArray::<i32>::from(vec![
+            "FOO".repeat(1000),
+            "BAR".repeat(2000),
+            "BAZ".repeat(3000),
+        ]);
+        let total_strings2_len = strings2
+            .iter()
+            .map(|s| s.map(|s| s.len()).unwrap_or(0))
+            .sum::<usize>();
+        let values2: ArrayRef = Arc::new(GenericStringArray::<i32>::from(strings2));
+
+        let mut set = SSOStringHashSet::<i32>::new();
+        let size_empty = set.size();
+
+        set.insert(values1.clone());
+        let size_after_values1 = set.size();
+        assert!(size_empty < size_after_values1);
+        assert!(
+            size_after_values1 > total_strings1_len,
+            "expect {size_after_values1} to be more than {total_strings1_len}"
+        );
+        assert!(size_after_values1 < total_strings1_len + total_strings2_len);
+
+        // inserting the same strings should not affect the size
+        set.insert(values1.clone());
+        assert_eq!(set.size(), size_after_values1);
+
+        // inserting the large strings should increase the reported size
+        set.insert(values2);
+        let size_after_values2 = set.size();
+        assert!(size_after_values2 > size_after_values1);
+        assert!(size_after_values2 > total_strings1_len + total_strings2_len);
+    }
 }
