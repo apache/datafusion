@@ -21,9 +21,9 @@ use std::{any::Any, sync::Arc};
 
 use arrow::{
     array::{
-        ArrayRef, AsArray, Float32Array, PrimitiveArray, PrimitiveBuilder, UInt64Array,
+        ArrayRef, AsArray, Float32Array, PrimitiveArray, PrimitiveBuilder, UInt32Array,
     },
-    datatypes::{ArrowNativeTypeOp, ArrowPrimitiveType, Float64Type, UInt64Type},
+    datatypes::{ArrowNativeTypeOp, ArrowPrimitiveType, Float64Type, UInt32Type},
     record_batch::RecordBatch,
 };
 use datafusion::error::Result;
@@ -80,6 +80,11 @@ impl AggregateUDFImpl for GeoMeanUdaf {
     }
 
     /// This is the accumulator factory; DataFusion uses it to create new accumulators.
+    ///
+    /// This is the accumulator factory for row wise accumulation; Even when `GroupsAccumulator`
+    /// is supported, DataFusion will use this row oriented
+    /// accumulator when the aggregate function is used as a window function
+    /// or when there are only aggregates (no GROUP BY columns) in the plan.
     fn accumulator(&self, _arg: &DataType) -> Result<Box<dyn Accumulator>> {
         Ok(Box::new(GeometricMean::new()))
     }
@@ -89,14 +94,14 @@ impl AggregateUDFImpl for GeoMeanUdaf {
         Ok(vec![DataType::Float64, DataType::UInt32])
     }
 
+    /// Tell DataFusion that this aggregate supports the more performant `GroupsAccumulator`
+    /// which is used for cases when there are grouping columns in the query
     fn groups_accumulator_supported(&self) -> bool {
         true
     }
 
     fn create_groups_accumulator(&self) -> Result<Box<dyn GroupsAccumulator>> {
-        Ok(Box::new(GeometricMeanGroupsAccumulator::new(
-            |pord: f64, count: u64| Ok(pord.powf(1.0 / count as f64)),
-        )))
+        Ok(Box::new(GeometricMeanGroupsAccumulator::new()))
     }
 }
 
@@ -189,16 +194,25 @@ fn create_context() -> Result<SessionContext> {
     use datafusion::arrow::datatypes::{Field, Schema};
     use datafusion::datasource::MemTable;
     // define a schema.
-    let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Float32, false)]));
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("a", DataType::Float32, false),
+        Field::new("b", DataType::Float32, false),
+    ]));
 
     // define data in two partitions
     let batch1 = RecordBatch::try_new(
         schema.clone(),
-        vec![Arc::new(Float32Array::from(vec![2.0, 4.0, 8.0]))],
+        vec![
+            Arc::new(Float32Array::from(vec![2.0, 4.0, 8.0])),
+            Arc::new(Float32Array::from(vec![2.0, 2.0, 2.0])),
+        ],
     )?;
     let batch2 = RecordBatch::try_new(
         schema.clone(),
-        vec![Arc::new(Float32Array::from(vec![64.0]))],
+        vec![
+            Arc::new(Float32Array::from(vec![64.0])),
+            Arc::new(Float32Array::from(vec![2.0])),
+        ],
     )?;
 
     // declare a new context. In spark API, this corresponds to a new spark SQLsession
@@ -210,61 +224,44 @@ fn create_context() -> Result<SessionContext> {
     Ok(ctx)
 }
 
-struct GeometricMeanGroupsAccumulator<F>
-where
-    F: Fn(
-            <Float64Type as ArrowPrimitiveType>::Native,
-            u64,
-        ) -> Result<<Float64Type as ArrowPrimitiveType>::Native>
-        + Send,
-{
+// Define a `GroupsAccumulator` for GeometricMean
+/// which handles accumulator state for multiple groups at once.
+/// This API is significantly more complicated than `Accumulator`, which manages
+/// the state for a single group, but for queries with a large number of groups
+/// can be significantly faster. See the `GroupsAccumulator` documentation for
+/// more information.
+struct GeometricMeanGroupsAccumulator {
     /// The type of the internal sum
     prod_data_type: DataType,
 
     /// The type of the returned sum
     return_data_type: DataType,
 
-    /// Count per group (use u64 to make UInt64Array)
-    counts: Vec<u64>,
+    /// Count per group (use u32 to make UInt32Array)
+    counts: Vec<u32>,
 
-    /// product per group, stored as the native type
+    /// product per group, stored as the native type (not `ScalarValue`)
     prods: Vec<f64>,
 
     /// Track nulls in the input / filters
     null_state: NullState,
-
-    /// Function that computes the final geometric mean (value / count)
-    geo_mean_fn: F,
 }
 
-impl<F> GeometricMeanGroupsAccumulator<F>
-where
-    F: Fn(
-            <Float64Type as ArrowPrimitiveType>::Native,
-            u64,
-        ) -> Result<<Float64Type as ArrowPrimitiveType>::Native>
-        + Send,
-{
-    fn new(geo_mean_fn: F) -> Self {
+impl GeometricMeanGroupsAccumulator {
+    fn new() -> Self {
         Self {
             prod_data_type: DataType::Float64,
             return_data_type: DataType::Float64,
             counts: vec![],
             prods: vec![],
             null_state: NullState::new(),
-            geo_mean_fn,
         }
     }
 }
 
-impl<F> GroupsAccumulator for GeometricMeanGroupsAccumulator<F>
-where
-    F: Fn(
-            <Float64Type as ArrowPrimitiveType>::Native,
-            u64,
-        ) -> Result<<Float64Type as ArrowPrimitiveType>::Native>
-        + Send,
-{
+impl GroupsAccumulator for GeometricMeanGroupsAccumulator {
+    /// Updates the accumulator state given input. DataFusion provides `group_indices`,
+    /// the groups that each row in `values` belongs to as well as an optional filter of which rows passed.
     fn update_batch(
         &mut self,
         values: &[ArrayRef],
@@ -277,8 +274,8 @@ where
 
         // increment counts, update sums
         self.counts.resize(total_num_groups, 0);
-        self.prods
-            .resize(total_num_groups, Float64Type::default_value());
+        self.prods.resize(total_num_groups, 1.0);
+        // Use the `NullState` structure to generate specialized code for null / non null input elements
         self.null_state.accumulate(
             group_indices,
             values,
@@ -295,6 +292,7 @@ where
         Ok(())
     }
 
+    /// Merge the results from previous invocations of `evaluate` into this accumulator's state
     fn merge_batch(
         &mut self,
         values: &[ArrayRef],
@@ -304,8 +302,8 @@ where
     ) -> Result<()> {
         assert_eq!(values.len(), 2, "two arguments to merge_batch");
         // first batch is counts, second is partial sums
-        let partial_counts = values[0].as_primitive::<UInt64Type>();
-        let partial_prods = values[1].as_primitive::<Float64Type>();
+        let partial_prods = values[0].as_primitive::<Float64Type>();
+        let partial_counts = values[1].as_primitive::<UInt32Type>();
         // update counts with partial counts
         self.counts.resize(total_num_groups, 0);
         self.null_state.accumulate(
@@ -319,8 +317,7 @@ where
         );
 
         // update prods
-        self.prods
-            .resize(total_num_groups, Float64Type::default_value());
+        self.prods.resize(total_num_groups, 1.0);
         self.null_state.accumulate(
             group_indices,
             partial_prods,
@@ -335,6 +332,7 @@ where
         Ok(())
     }
 
+    /// Generate output, as specififed by `emit_to` and update the intermediate state
     fn evaluate(&mut self, emit_to: datafusion_expr::EmitTo) -> Result<ArrayRef> {
         let counts = emit_to.take_needed(&mut self.counts);
         let prods = emit_to.take_needed(&mut self.prods);
@@ -351,7 +349,7 @@ where
 
             for ((prod, count), is_valid) in iter {
                 if is_valid {
-                    builder.append_value((self.geo_mean_fn)(prod, count)?)
+                    builder.append_value(prod.powf(1.0 / count as f64))
                 } else {
                     builder.append_null();
                 }
@@ -360,9 +358,9 @@ where
         } else {
             let geo_mean: Vec<<Float64Type as ArrowPrimitiveType>::Native> = prods
                 .into_iter()
-                .zip(counts.into_iter())
-                .map(|(prod, count)| (self.geo_mean_fn)(prod, count))
-                .collect::<Result<Vec<_>>>()?;
+                .zip(counts)
+                .map(|(prod, count)| prod.powf(1.0 / count as f64))
+                .collect::<Vec<_>>();
             PrimitiveArray::new(geo_mean.into(), Some(nulls)) // no copy
                 .with_data_type(self.return_data_type.clone())
         };
@@ -376,20 +374,20 @@ where
         let nulls = Some(nulls);
 
         let counts = emit_to.take_needed(&mut self.counts);
-        let counts = UInt64Array::new(counts.into(), nulls.clone()); // zero copy
+        let counts = UInt32Array::new(counts.into(), nulls.clone()); // zero copy
 
         let prods = emit_to.take_needed(&mut self.prods);
         let prods = PrimitiveArray::<Float64Type>::new(prods.into(), nulls) // zero copy
             .with_data_type(self.prod_data_type.clone());
 
         Ok(vec![
-            Arc::new(counts) as ArrayRef,
             Arc::new(prods) as ArrayRef,
+            Arc::new(counts) as ArrayRef,
         ])
     }
 
     fn size(&self) -> usize {
-        self.counts.capacity() * std::mem::size_of::<u64>()
+        self.counts.capacity() * std::mem::size_of::<u32>()
             + self.prods.capacity() * std::mem::size_of::<Float64Type>()
     }
 }
@@ -402,7 +400,7 @@ async fn main() -> Result<()> {
     let geometric_mean = AggregateUDF::from(GeoMeanUdaf::new());
     ctx.register_udaf(geometric_mean.clone());
 
-    let sql_df = ctx.sql("SELECT geo_mean(a) FROM t").await?;
+    let sql_df = ctx.sql("SELECT geo_mean(a) FROM t group by b").await?;
     sql_df.show().await?;
 
     // get a DataFrame from the context

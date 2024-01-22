@@ -17,6 +17,7 @@
 
 //! This module contains functions and structs supporting user-defined aggregate functions.
 
+use datafusion_expr::GroupsAccumulator;
 use fmt::Debug;
 use std::any::Any;
 use std::fmt;
@@ -165,6 +166,14 @@ impl AggregateExpr for AggregateFunctionExpr {
 
     fn name(&self) -> &str {
         &self.name
+    }
+
+    fn groups_accumulator_supported(&self) -> bool {
+        self.fun.groups_accumulator_supported()
+    }
+
+    fn create_groups_accumulator(&self) -> Result<Box<dyn GroupsAccumulator>> {
+        self.fun.create_groups_accumulator()
     }
 }
 

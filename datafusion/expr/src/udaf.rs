@@ -164,6 +164,16 @@ impl AggregateUDF {
     pub fn state_type(&self, return_type: &DataType) -> Result<Vec<DataType>> {
         self.inner.state_type(return_type)
     }
+
+    /// See [`AggregateUDFImpl::groups_accumulator_supported`] for more details.
+    pub fn groups_accumulator_supported(&self) -> bool {
+        self.inner.groups_accumulator_supported()
+    }
+
+    /// See [`AggregateUDFImpl::create_groups_accumulator`] for more details.
+    pub fn create_groups_accumulator(&self) -> Result<Box<dyn GroupsAccumulator>> {
+        self.inner.create_groups_accumulator()
+    }
 }
 
 impl<F> From<F> for AggregateUDF
