@@ -252,6 +252,19 @@ pub fn create_physical_expr(
                         )?,
                     }
                 }
+                GetFieldAccess::ListStride {
+                    start,
+                    stop,
+                    stride,
+                } => GetFieldAccessExpr::ListStride {
+                    start: create_physical_expr(start, input_dfschema, execution_props)?,
+                    stop: create_physical_expr(stop, input_dfschema, execution_props)?,
+                    stride: create_physical_expr(
+                        stride,
+                        input_dfschema,
+                        execution_props,
+                    )?,
+                },
             };
             Ok(Arc::new(GetIndexedFieldExpr::new(
                 create_physical_expr(expr, input_dfschema, execution_props)?,

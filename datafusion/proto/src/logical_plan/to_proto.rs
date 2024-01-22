@@ -1041,6 +1041,15 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                             },
                         ))
                     }
+                    GetFieldAccess::ListStride { start, stop, stride } => {
+                        protobuf::get_indexed_field::Field::ListStride(Box::new(
+                            protobuf::ListStride {
+                                start: Some(Box::new(start.as_ref().try_into()?)),
+                                stop: Some(Box::new(stop.as_ref().try_into()?)),
+                                stride: Some(Box::new(stride.as_ref().try_into()?)),
+                            },
+                        ))
+                    }
                 };
 
                 Self {

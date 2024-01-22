@@ -468,12 +468,19 @@ message ListRange {
   LogicalExprNode stop = 2;
 }
 
+message ListStride {
+  LogicalExprNode start = 1;
+  LogicalExprNode stop = 2;
+  LogicalExprNode stride = 3;
+}
+
 message GetIndexedField {
   LogicalExprNode expr = 1;
   oneof field {
     NamedStructField named_struct_field = 2;
     ListIndex list_index = 3;
     ListRange list_range = 4;
+    ListStride list_stride = 5;
   }
 }
 
@@ -1775,11 +1782,18 @@ message ListRangeExpr {
   PhysicalExprNode stop = 2;
 }
 
+message ListStrideExpr {
+  PhysicalExprNode start = 1;
+  PhysicalExprNode stop = 2;
+  PhysicalExprNode stride = 3;
+}
+
 message PhysicalGetIndexedFieldExprNode {
   PhysicalExprNode arg = 1;
   oneof field {
     NamedStructFieldExpr named_struct_field_expr = 2;
     ListIndexExpr list_index_expr = 3;
     ListRangeExpr list_range_expr = 4;
+    ListStrideExpr list_stride_expr = 5;
   }
 }

@@ -423,6 +423,12 @@ pub enum GetFieldAccess {
     ListIndex { key: Box<Expr> },
     /// List range, for example `list[i:j]`
     ListRange { start: Box<Expr>, stop: Box<Expr> },
+    /// List stride, for example `list[i:j:k]`
+    ListStride {
+        start: Box<Expr>,
+        stop: Box<Expr>,
+        stride: Box<Expr>,
+    },
 }
 
 /// Returns the field of a [`arrow::array::ListArray`] or
@@ -1533,6 +1539,13 @@ impl fmt::Display for Expr {
                 GetFieldAccess::ListRange { start, stop } => {
                     write!(f, "({expr})[{start}:{stop}]")
                 }
+                GetFieldAccess::ListStride {
+                    start,
+                    stop,
+                    stride,
+                } => {
+                    write!(f, "({expr})[{start}:{stop}:{stride}]")
+                }
             },
             Expr::GroupingSet(grouping_sets) => match grouping_sets {
                 GroupingSet::Rollup(exprs) => {
@@ -1736,6 +1749,16 @@ fn create_name(e: &Expr) -> Result<String> {
                     let start = create_name(start)?;
                     let stop = create_name(stop)?;
                     Ok(format!("{expr}[{start}:{stop}]"))
+                }
+                GetFieldAccess::ListStride {
+                    start,
+                    stop,
+                    stride,
+                } => {
+                    let start = create_name(start)?;
+                    let stop = create_name(stop)?;
+                    let stride = create_name(stride)?;
+                    Ok(format!("{expr}[{start}:{stop}:{stride}]"))
                 }
             }
         }

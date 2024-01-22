@@ -412,7 +412,28 @@ pub fn parse_physical_expr(
                         input_schema
                     )?,
                 },
-                None =>                 return Err(proto_error(
+                Some(protobuf::physical_get_indexed_field_expr_node::Field::ListStrideExpr(list_stride_expr)) => GetFieldAccessExpr::ListStride{
+                    start: parse_required_physical_expr(
+                        list_stride_expr.start.as_deref(),
+                        registry,
+                        "start",
+                        input_schema,
+                    )?,
+                    stop: parse_required_physical_expr(
+                        list_stride_expr.stop.as_deref(),
+                        registry,
+                        "stop",
+                        input_schema
+                    )?,
+                    stride: parse_required_physical_expr(
+                        list_stride_expr.stride.as_deref(),
+                        registry,
+                        "stride",
+                        input_schema
+                    )?,
+                },
+                None =>
+                    return Err(proto_error(
                     "Field must not be None",
                 )),
             };

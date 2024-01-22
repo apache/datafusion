@@ -568,6 +568,15 @@ impl TryFrom<Arc<dyn PhysicalExpr>> for protobuf::PhysicalExprNode {
                         stop: Some(Box::new(stop.to_owned().try_into()?)),
                     }))
                 ),
+                GetFieldAccessExpr::ListStride { start, stop, stride } => {
+                    Some(
+                        protobuf::physical_get_indexed_field_expr_node::Field::ListStrideExpr(Box::new(protobuf::ListStrideExpr {
+                            start: Some(Box::new(start.to_owned().try_into()?)),
+                            stop: Some(Box::new(stop.to_owned().try_into()?)),
+                            stride: Some(Box::new(stride.to_owned().try_into()?)),
+                        }))
+                    )
+                }
             };
 
             Ok(protobuf::PhysicalExprNode {

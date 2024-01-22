@@ -1069,6 +1069,25 @@ pub fn parse_expr(
                         )?),
                     }
                 }
+                Some(protobuf::get_indexed_field::Field::ListStride(list_stride)) => {
+                    GetFieldAccess::ListStride {
+                        start: Box::new(parse_required_expr(
+                            list_stride.start.as_deref(),
+                            registry,
+                            "start",
+                        )?),
+                        stop: Box::new(parse_required_expr(
+                            list_stride.stop.as_deref(),
+                            registry,
+                            "stop",
+                        )?),
+                        stride: Box::new(parse_required_expr(
+                            list_stride.stride.as_deref(),
+                            registry,
+                            "stride",
+                        )?),
+                    }
+                }
                 None => return Err(proto_error("Field must not be None")),
             };
 

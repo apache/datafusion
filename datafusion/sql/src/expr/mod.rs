@@ -753,18 +753,46 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 operator: JsonOperator::Colon,
                 right,
             } => {
-                let start = Box::new(self.sql_expr_to_logical_expr(
-                    *left,
-                    schema,
-                    planner_context,
-                )?);
-                let stop = Box::new(self.sql_expr_to_logical_expr(
-                    *right,
+                // the last value could represent stop or stride
+                let last = Box::new(self.sql_expr_to_logical_expr(
+                    *right.clone(),
                     schema,
                     planner_context,
                 )?);
 
-                GetFieldAccess::ListRange { start, stop }
+                match *left {
+                    SQLExpr::JsonAccess {
+                        left,
+                        operator: JsonOperator::Colon,
+                        right,
+                    } => {
+                        let start = Box::new(self.sql_expr_to_logical_expr(
+                            *left,
+                            schema,
+                            planner_context,
+                        )?);
+                        let stop = Box::new(self.sql_expr_to_logical_expr(
+                            *right,
+                            schema,
+                            planner_context,
+                        )?);
+
+                        GetFieldAccess::ListStride {
+                            start,
+                            stop,
+                            stride: last,
+                        }
+                    }
+                    _ => {
+                        let start = Box::new(self.sql_expr_to_logical_expr(
+                            *left,
+                            schema,
+                            planner_context,
+                        )?);
+
+                        GetFieldAccess::ListRange { start, stop: last }
+                    }
+                }
             }
             _ => GetFieldAccess::ListIndex {
                 key: Box::new(self.sql_expr_to_logical_expr(

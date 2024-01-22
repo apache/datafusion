@@ -734,10 +734,20 @@ pub struct ListRange {
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ListStride {
+    #[prost(message, optional, boxed, tag = "1")]
+    pub start: ::core::option::Option<::prost::alloc::boxed::Box<LogicalExprNode>>,
+    #[prost(message, optional, boxed, tag = "2")]
+    pub stop: ::core::option::Option<::prost::alloc::boxed::Box<LogicalExprNode>>,
+    #[prost(message, optional, boxed, tag = "3")]
+    pub stride: ::core::option::Option<::prost::alloc::boxed::Box<LogicalExprNode>>,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct GetIndexedField {
     #[prost(message, optional, boxed, tag = "1")]
     pub expr: ::core::option::Option<::prost::alloc::boxed::Box<LogicalExprNode>>,
-    #[prost(oneof = "get_indexed_field::Field", tags = "2, 3, 4")]
+    #[prost(oneof = "get_indexed_field::Field", tags = "2, 3, 4, 5")]
     pub field: ::core::option::Option<get_indexed_field::Field>,
 }
 /// Nested message and enum types in `GetIndexedField`.
@@ -751,6 +761,8 @@ pub mod get_indexed_field {
         ListIndex(::prost::alloc::boxed::Box<super::ListIndex>),
         #[prost(message, tag = "4")]
         ListRange(::prost::alloc::boxed::Box<super::ListRange>),
+        #[prost(message, tag = "5")]
+        ListStride(::prost::alloc::boxed::Box<super::ListStride>),
     }
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
@@ -2541,10 +2553,20 @@ pub struct ListRangeExpr {
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ListStrideExpr {
+    #[prost(message, optional, boxed, tag = "1")]
+    pub start: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalExprNode>>,
+    #[prost(message, optional, boxed, tag = "2")]
+    pub stop: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalExprNode>>,
+    #[prost(message, optional, boxed, tag = "3")]
+    pub stride: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalExprNode>>,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PhysicalGetIndexedFieldExprNode {
     #[prost(message, optional, boxed, tag = "1")]
     pub arg: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalExprNode>>,
-    #[prost(oneof = "physical_get_indexed_field_expr_node::Field", tags = "2, 3, 4")]
+    #[prost(oneof = "physical_get_indexed_field_expr_node::Field", tags = "2, 3, 4, 5")]
     pub field: ::core::option::Option<physical_get_indexed_field_expr_node::Field>,
 }
 /// Nested message and enum types in `PhysicalGetIndexedFieldExprNode`.
@@ -2558,6 +2580,8 @@ pub mod physical_get_indexed_field_expr_node {
         ListIndexExpr(::prost::alloc::boxed::Box<super::ListIndexExpr>),
         #[prost(message, tag = "4")]
         ListRangeExpr(::prost::alloc::boxed::Box<super::ListRangeExpr>),
+        #[prost(message, tag = "5")]
+        ListStrideExpr(::prost::alloc::boxed::Box<super::ListStrideExpr>),
     }
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
