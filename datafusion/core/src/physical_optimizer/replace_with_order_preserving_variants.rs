@@ -143,10 +143,10 @@ fn get_updated_plan(
 }
 
 /// Calculates the updated plan by replacing operators that preserve ordering
-/// inside `sort_input` with their non-order-preserving variants. This will
+/// inside `sort_input` with their order-breaking variants. This will
 /// generate an alternative plan, where redundant order-preserving operators
 /// are replaced in the plan.
-fn get_plan_with_non_order_preserving_variants(
+fn get_plan_with_order_breaking_variants(
     mut sort_input: OrderPreservationContext,
 ) -> Result<OrderPreservationContext> {
     sort_input.children = izip!(
@@ -166,7 +166,7 @@ fn get_plan_with_non_order_preserving_variants(
         // Replace with non-order preserving variants as long as ordering is preserved
         // and ordering is not required by intermediate operators
         if maintains && (!ordering_needed || is_sort_preserving_merge(&sort_input.plan)) {
-            get_plan_with_non_order_preserving_variants(node)
+            get_plan_with_order_breaking_variants(node)
         } else {
             Ok(node)
         }
@@ -273,7 +273,7 @@ pub(crate) fn replace_with_order_preserving_variants(
         Ok(Transformed::Yes(updated_sort_input))
     } else {
         let mut updated_sort_input =
-            get_plan_with_non_order_preserving_variants(updated_sort_input)?;
+            get_plan_with_order_breaking_variants(updated_sort_input)?;
         updated_sort_input.data = false;
         let updated_children = vec![updated_sort_input];
         let requirements = PlanContext {
