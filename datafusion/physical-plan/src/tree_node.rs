@@ -39,7 +39,7 @@ impl DynTreeNode for dyn ExecutionPlan {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct PlanContext<T: Sized> {
     pub plan: Arc<dyn ExecutionPlan>,
     pub data: T,

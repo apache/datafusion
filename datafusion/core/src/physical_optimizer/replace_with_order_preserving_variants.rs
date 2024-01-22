@@ -21,7 +21,7 @@
 
 use std::sync::Arc;
 
-use super::utils::is_repartition;
+use super::utils::{is_repartition, is_sort_preserving_merge};
 use crate::error::Result;
 use crate::physical_optimizer::utils::{is_coalesce_partitions, is_sort};
 use crate::physical_plan::repartition::RepartitionExec;
@@ -29,8 +29,11 @@ use crate::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::Transformed;
+use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion_physical_plan::tree_node::PlanContext;
 use datafusion_physical_plan::unbounded_output;
+
+use itertools::izip;
 
 /// For a given `plan`, this object carries the information one needs from its
 /// descendants to decide whether it is beneficial to replace order-losing (but
@@ -139,6 +142,59 @@ fn get_updated_plan(
     sort_input.update_plan_from_children()
 }
 
+/// Calculates the updated plan by replacing operators that preserve ordering
+/// inside `sort_input` with their non-order-preserving variants. This will
+/// generate an alternative plan, where redundant order-preserving operators
+/// are replaced in the plan.
+fn get_plan_with_non_order_preserving_variants(
+    mut sort_input: OrderPreservationContext,
+) -> Result<OrderPreservationContext> {
+    sort_input.children = izip!(
+        sort_input.children,
+        sort_input.plan.maintains_input_order(),
+        sort_input.plan.required_input_ordering()
+    )
+    .map(|(node, maintains, required_ordering)| {
+        // Update children and their descendants, if operator maintains order for corresponding child:
+        let ordering_needed = if let Some(required_ordering) = required_ordering {
+            node.plan
+                .equivalence_properties()
+                .ordering_satisfy_requirement(&required_ordering)
+        } else {
+            false
+        };
+        // Replace with non-order preserving variants as long as ordering is preserved
+        // and ordering is not required by intermediate operators
+        if maintains && (!ordering_needed || is_sort_preserving_merge(&sort_input.plan)) {
+            get_plan_with_non_order_preserving_variants(node)
+        } else {
+            Ok(node)
+        }
+    })
+    .collect::<Result<_>>()?;
+    sort_input.data = false;
+
+    // When a `RepartitionExec` preserve ordering, replace it with
+    // a non-sort-preserving variant if appropriate:
+    if is_repartition(&sort_input.plan) && sort_input.plan.maintains_input_order()[0] {
+        let child = sort_input.children[0].plan.clone();
+        let partitioning = sort_input.plan.output_partitioning();
+        sort_input.plan = Arc::new(RepartitionExec::try_new(child, partitioning)?) as _;
+        sort_input.children[0].data = false;
+        return Ok(sort_input);
+    } else if is_sort_preserving_merge(&sort_input.plan) {
+        // Replace `SortPreservingMergeExec` with a `CoalescePartitionsExec`
+        let child = &sort_input.children[0].plan;
+        // Now we can mutate `new_node.children_nodes` safely
+        let coalesce = CoalescePartitionsExec::new(child.clone());
+        sort_input.plan = Arc::new(coalesce) as _;
+        sort_input.children[0].data = false;
+        return Ok(sort_input);
+    }
+
+    sort_input.update_plan_from_children()
+}
+
 /// The `replace_with_order_preserving_variants` optimizer sub-rule tries to
 /// remove `SortExec`s from the physical plan by replacing operators that do
 /// not preserve ordering with their order-preserving variants; i.e. by replacing
@@ -192,8 +248,15 @@ pub(crate) fn replace_with_order_preserving_variants(
     let use_order_preserving_variant =
         config.optimizer.prefer_existing_sort || unbounded_output(&requirements.plan);
 
+    let PlanContext {
+        plan,
+        mut children,
+        data: connection,
+    } = requirements;
+    let sort_child = children.swap_remove(0);
+
     let mut updated_sort_input = get_updated_plan(
-        requirements.children.clone().swap_remove(0),
+        sort_child,
         is_spr_better || use_order_preserving_variant,
         is_spm_better || use_order_preserving_variant,
     )?;
@@ -202,16 +265,22 @@ pub(crate) fn replace_with_order_preserving_variants(
     if updated_sort_input
         .plan
         .equivalence_properties()
-        .ordering_satisfy(requirements.plan.output_ordering().unwrap_or(&[]))
+        .ordering_satisfy(plan.output_ordering().unwrap_or(&[]))
     {
         for child in updated_sort_input.children.iter_mut() {
             child.data = false;
         }
         Ok(Transformed::Yes(updated_sort_input))
     } else {
-        for child in requirements.children.iter_mut() {
-            child.data = false;
-        }
+        let mut updated_sort_input =
+            get_plan_with_non_order_preserving_variants(updated_sort_input)?;
+        updated_sort_input.data = false;
+        let updated_children = vec![updated_sort_input];
+        let requirements = PlanContext {
+            plan,
+            data: connection,
+            children: updated_children,
+        };
         Ok(Transformed::Yes(requirements))
     }
 }
