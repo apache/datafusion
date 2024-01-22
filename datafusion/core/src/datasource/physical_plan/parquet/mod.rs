@@ -1772,12 +1772,14 @@ mod tests {
 
         // assert the batches and some metrics
         #[rustfmt::skip]
-            let expected = ["+-----+",
+        let expected = [
+            "+-----+",
             "| int |",
             "+-----+",
             "| 4   |",
             "| 5   |",
-            "+-----+"];
+            "+-----+"
+        ];
         assert_batches_sorted_eq!(expected, &rt.batches.unwrap());
         assert_eq!(get_value(&metrics, "page_index_rows_filtered"), 4);
         assert!(
