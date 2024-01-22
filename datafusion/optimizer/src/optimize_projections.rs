@@ -868,7 +868,20 @@ fn rewrite_projection_given_requirements(
         optimize_projections(&proj.input, config, &required_indices)?
     {
         if &projection_schema(&input, &exprs_used)? == input.schema() {
-            Ok(Some(input))
+            if let LogicalPlan::Projection(_) = input {
+                if exprs_used != input.expressions() {
+                    // Even if the schemas are the same, when the outer Projection
+                    // plan has different expressions than the inner one it should
+                    // remain in place since some non-trivial expression could be
+                    // aliased with an existing field name.
+                    Projection::try_new(exprs_used, Arc::new(input))
+                        .map(|proj| Some(LogicalPlan::Projection(proj)))
+                } else {
+                    Ok(Some(input))
+                }
+            } else {
+                Ok(Some(input))
+            }
         } else {
             Projection::try_new(exprs_used, Arc::new(input))
                 .map(|proj| Some(LogicalPlan::Projection(proj)))
@@ -899,7 +912,7 @@ mod tests {
     use datafusion_common::{Result, TableReference};
     use datafusion_expr::{
         binary_expr, col, count, lit, logical_plan::builder::LogicalPlanBuilder, not,
-        table_scan, try_cast, Expr, Like, LogicalPlan, Operator,
+        table_scan, try_cast, when, Expr, Like, LogicalPlan, Operator,
     };
 
     fn assert_optimized_plan_equal(plan: &LogicalPlan, expected: &str) -> Result<()> {
@@ -956,6 +969,27 @@ mod tests {
 
         let expected = "Projection: test.a AS alias\
         \n  TableScan: test projection=[a]";
+        assert_optimized_plan_equal(&plan, expected)
+    }
+
+    // Test outer projection isn't discarded despite the same schema as inner
+    // https://github.com/apache/arrow-datafusion/issues/8942
+    #[test]
+    fn test_derived_column() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .project(vec![col("a"), lit(0).alias("d")])?
+            .project(vec![
+                col("a"),
+                when(col("a").eq(lit(1)), lit(10))
+                    .otherwise(col("d"))?
+                    .alias("d"),
+            ])?
+            .build()?;
+
+        let expected = "Projection: test.a, CASE WHEN test.a = Int32(1) THEN Int32(10) ELSE d END AS d\
+        \n  Projection: test.a, Int32(0) AS d\
+        \n    TableScan: test projection=[a]";
         assert_optimized_plan_equal(&plan, expected)
     }
 
