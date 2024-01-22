@@ -67,10 +67,10 @@ impl DistinctCount {
     pub fn new(
         input_data_type: DataType,
         expr: Arc<dyn PhysicalExpr>,
-        name: String,
+        name: impl Into<String>,
     ) -> Self {
         Self {
-            name,
+            name: name.into(),
             state_data_type: input_data_type,
             expr,
         }
@@ -556,8 +556,6 @@ struct SSOStringHeader {
     /// length of the string, in bytes
     len: usize,
 }
-
-impl SSOStringHeader {}
 
 impl SSOStringHeader {
     /// returns self.offset..self.offset + self.len
