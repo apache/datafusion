@@ -129,14 +129,13 @@ fn get_valid_types(
             DataType::List(ref field)
             | DataType::LargeList(ref field)
             | DataType::FixedSizeList(ref field, _) => {
-                let elem_type = if (array_base_type.eq(&DataType::Null)
-                    || elem_base_type.eq(&DataType::Null))
-                    && elem_dim != array_dim
-                {
-                    field.data_type()
-                } else {
-                    &elem_type
-                };
+                // for the functions with signature 'array_element(array, int) -> element_type'
+                let elem_type =
+                    if elem_base_type.eq(&DataType::Null) && elem_dim != array_dim {
+                        field.data_type()
+                    } else {
+                        &elem_type
+                    };
                 if is_append {
                     Ok(vec![vec![array_type.clone(), elem_type.clone()]])
                 } else {
