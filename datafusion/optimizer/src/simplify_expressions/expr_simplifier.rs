@@ -1321,9 +1321,7 @@ mod tests {
         assert_contains, cast::as_int32_array, plan_datafusion_err, DFField, ToDFSchema,
     };
     use datafusion_expr::{interval_arithmetic::Interval, *};
-    use datafusion_physical_expr::{
-        execution_props::ExecutionProps, functions::make_scalar_function,
-    };
+    use datafusion_physical_expr::execution_props::ExecutionProps;
 
     use chrono::{DateTime, TimeZone, Utc};
 
@@ -1438,9 +1436,31 @@ mod tests {
         let input_types = vec![DataType::Int32, DataType::Int32];
         let return_type = Arc::new(DataType::Int32);
 
-        let fun = |args: &[ArrayRef]| {
-            let arg0 = as_int32_array(&args[0])?;
-            let arg1 = as_int32_array(&args[1])?;
+        let fun = Arc::new(|args: &[ColumnarValue]| {
+            let len = args
+                .iter()
+                .fold(Option::<usize>::None, |acc, arg| match arg {
+                    ColumnarValue::Scalar(_) => acc,
+                    ColumnarValue::Array(a) => Some(a.len()),
+                });
+
+            let inferred_length = len.unwrap_or(1);
+
+            let arg0 = match &args[0] {
+                ColumnarValue::Array(array) => array.clone(),
+                ColumnarValue::Scalar(scalar) => {
+                    scalar.to_array_of_size(inferred_length).unwrap()
+                }
+            };
+            let arg1 = match &args[1] {
+                ColumnarValue::Array(array) => array.clone(),
+                ColumnarValue::Scalar(scalar) => {
+                    scalar.to_array_of_size(inferred_length).unwrap()
+                }
+            };
+
+            let arg0 = as_int32_array(&arg0)?;
+            let arg1 = as_int32_array(&arg1)?;
 
             // 2. perform the computation
             let array = arg0
@@ -1456,10 +1476,9 @@ mod tests {
                 })
                 .collect::<Int32Array>();
 
-            Ok(Arc::new(array) as ArrayRef)
-        };
+            Ok(ColumnarValue::from(Arc::new(array) as ArrayRef))
+        });
 
-        let fun = make_scalar_function(fun);
         Arc::new(create_udf(
             "udf_add",
             input_types,
