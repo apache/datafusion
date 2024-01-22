@@ -47,77 +47,57 @@ impl TreeNodeRewriter for InListSimplifier {
                 (left.as_ref(), op, right.as_ref())
             {
                 if l1.expr == l2.expr && !l1.negated && !l2.negated {
-                    let l1_set: HashSet<Expr> = l1.list.iter().cloned().collect();
-                    let intersect_list: Vec<Expr> = l2
-                        .list
-                        .iter()
-                        .filter(|x| l1_set.contains(x))
-                        .cloned()
-                        .collect();
-                    if intersect_list.is_empty() {
-                        return Ok(lit(false));
-                    }
-                    let merged_inlist = InList {
-                        expr: l1.expr.clone(),
-                        list: intersect_list,
-                        negated: false,
-                    };
-                    return Ok(Expr::InList(merged_inlist));
+                    return inlist_intersection(l1, l2, false);
                 } else if l1.expr == l2.expr && l1.negated && l2.negated {
-                    let l1_set: HashSet<Expr> = l1.list.iter().cloned().collect();
-                    let intersect_list: Vec<Expr> = l2
-                        .list
-                        .iter()
-                        .filter(|x| l1_set.contains(x))
-                        .cloned()
-                        .collect();
-                    if intersect_list.is_empty() {
-                        return Ok(lit(true));
-                    }
-                    let merged_inlist = InList {
-                        expr: l1.expr.clone(),
-                        list: intersect_list,
-                        negated: true,
-                    };
-                    return Ok(Expr::InList(merged_inlist));
+                    return inlist_intersection(l1, l2, true);
                 } else if l1.expr == l2.expr && !l1.negated && l2.negated {
-                    let l2_set: HashSet<Expr> = l2.list.iter().cloned().collect();
-                    let except_list: Vec<Expr> = l1
-                        .list
-                        .iter()
-                        .filter(|x| !l2_set.contains(x))
-                        .cloned()
-                        .collect();
-                    if except_list.is_empty() {
-                        return Ok(lit(false));
-                    }
-                    let merged_inlist = InList {
-                        expr: l1.expr.clone(),
-                        list: except_list,
-                        negated: false,
-                    };
-                    return Ok(Expr::InList(merged_inlist));
+                    return inlist_except(l1, l2);
                 } else if l1.expr == l2.expr && l1.negated && !l2.negated {
-                    let l2_set: HashSet<Expr> = l2.list.iter().cloned().collect();
-                    let except_list: Vec<Expr> = l1
-                        .list
-                        .iter()
-                        .filter(|x| !l2_set.contains(x))
-                        .cloned()
-                        .collect();
-                    if except_list.is_empty() {
-                        return Ok(lit(true));
-                    }
-                    let merged_inlist = InList {
-                        expr: l1.expr.clone(),
-                        list: except_list,
-                        negated: true,
-                    };
-                    return Ok(Expr::InList(merged_inlist));
+                    return inlist_except(l2, l1);
                 }
             }
         }
 
         Ok(expr)
     }
+}
+
+fn inlist_intersection(l1: &InList, l2: &InList, negated: bool) -> Result<Expr> {
+    let l1_set: HashSet<Expr> = l1.list.iter().cloned().collect();
+    let intersect_list: Vec<Expr> = l2
+        .list
+        .iter()
+        .filter(|x| l1_set.contains(x))
+        .cloned()
+        .collect();
+    // e in () is always false
+    // e not in () is always true
+    if intersect_list.is_empty() {
+        return Ok(lit(negated));
+    }
+    let merged_inlist = InList {
+        expr: l1.expr.clone(),
+        list: intersect_list,
+        negated,
+    };
+    Ok(Expr::InList(merged_inlist))
+}
+
+fn inlist_except(l1: &InList, l2: &InList) -> Result<Expr> {
+    let l2_set: HashSet<Expr> = l2.list.iter().cloned().collect();
+    let except_list: Vec<Expr> = l1
+        .list
+        .iter()
+        .filter(|x| !l2_set.contains(x))
+        .cloned()
+        .collect();
+    if except_list.is_empty() {
+        return Ok(lit(false));
+    }
+    let merged_inlist = InList {
+        expr: l1.expr.clone(),
+        list: except_list,
+        negated: false,
+    };
+    Ok(Expr::InList(merged_inlist))
 }
