@@ -72,7 +72,6 @@ pub mod create_drop;
 pub mod explain_analyze;
 pub mod expr;
 pub mod joins;
-pub mod partitioned_csv;
 pub mod repartition;
 pub mod select;
 mod sql_api;
