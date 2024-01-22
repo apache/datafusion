@@ -31,7 +31,7 @@ The DataFusion CLI is a command line utility that runs SQL queries using the Dat
 
 Answer: See the [`datafusion-cli` documentation](https://arrow.apache.org/datafusion/user-guide/cli.html) for further information.
 
-## How do I make my IDE with `datafusion-cli`?
+## How do I make my IDE work with `datafusion-cli`?
 
 Answer: "open" the `datafusion/datafusion-cli` project as its own top level
 project in my IDE (rather than opening `datafusion`)
