@@ -22,11 +22,11 @@ use datafusion_common::cast::as_list_array;
 use std::any::Any;
 use std::sync::Arc;
 
-use crate::{AggregateExpr, GroupsAccumulator, PhysicalExpr};
+use crate::{AggregateExpr, PhysicalExpr};
 use arrow::datatypes::DataType;
 use arrow::{array::ArrayRef, datatypes::Field};
 use datafusion_common::{not_impl_err, DataFusionError, Result, ScalarValue};
-use datafusion_expr::Accumulator;
+use datafusion_expr::{Accumulator, GroupsAccumulator};
 use std::collections::HashSet;
 
 use crate::aggregate::groups_accumulator::prim_op::PrimitiveGroupsAccumulator;

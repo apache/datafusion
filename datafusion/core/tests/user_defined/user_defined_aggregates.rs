@@ -19,7 +19,7 @@
 //! user defined aggregate functions
 
 use arrow::{array::AsArray, datatypes::Fields};
-use arrow_array::Int32Array;
+use arrow_array::{types::UInt64Type, Int32Array, PrimitiveArray};
 use arrow_schema::Schema;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -45,7 +45,9 @@ use datafusion::{
 use datafusion_common::{
     assert_contains, cast::as_primitive_array, exec_err, DataFusionError,
 };
-use datafusion_expr::{create_udaf, SimpleAggregateUDF};
+use datafusion_expr::{
+    create_udaf, AggregateUDFImpl, GroupsAccumulator, SimpleAggregateUDF,
+};
 use datafusion_physical_expr::expressions::AvgAccumulator;
 
 /// Test to show the contents of the setup
@@ -293,6 +295,25 @@ async fn case_sensitive_identifiers_user_defined_aggregates() -> Result<()> {
         "+-------------+",
     ];
     assert_batches_eq!(expected, &result);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_groups_accumulator() -> Result<()> {
+    let ctx = SessionContext::new();
+    let arr = Int32Array::from(vec![1]);
+    let batch = RecordBatch::try_from_iter(vec![("a", Arc::new(arr) as _)])?;
+    ctx.register_batch("t", batch).unwrap();
+
+    let udaf = AggregateUDF::from(TestGroupsAccumulator {
+        signature: Signature::exact(vec![DataType::Float64], Volatility::Immutable),
+        result: 1,
+    });
+    ctx.register_udaf(udaf.clone());
+
+    let sql_df = ctx.sql("SELECT geo_mean(a) FROM t group by a").await?;
+    sql_df.show().await?;
 
     Ok(())
 }
@@ -619,5 +640,108 @@ impl Accumulator for FirstSelector {
 
     fn size(&self) -> usize {
         std::mem::size_of_val(self)
+    }
+}
+
+#[derive(Debug, Clone)]
+struct TestGroupsAccumulator {
+    signature: Signature,
+    result: u64,
+}
+
+impl AggregateUDFImpl for TestGroupsAccumulator {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn name(&self) -> &str {
+        "geo_mean"
+    }
+
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        Ok(DataType::UInt64)
+    }
+
+    fn accumulator(&self, _arg: &DataType) -> Result<Box<dyn Accumulator>> {
+        // should use groups accumulator
+        panic!("accumulator shouldn't invoke");
+    }
+
+    fn state_type(&self, _return_type: &DataType) -> Result<Vec<DataType>> {
+        Ok(vec![DataType::UInt64])
+    }
+
+    fn groups_accumulator_supported(&self) -> bool {
+        true
+    }
+
+    fn create_groups_accumulator(&self) -> Result<Box<dyn GroupsAccumulator>> {
+        Ok(Box::new(self.clone()))
+    }
+}
+
+impl Accumulator for TestGroupsAccumulator {
+    fn update_batch(&mut self, _values: &[ArrayRef]) -> Result<()> {
+        Ok(())
+    }
+
+    fn evaluate(&self) -> Result<ScalarValue> {
+        Ok(ScalarValue::from(self.result))
+    }
+
+    fn size(&self) -> usize {
+        std::mem::size_of::<u64>()
+    }
+
+    fn state(&self) -> Result<Vec<ScalarValue>> {
+        Ok(vec![ScalarValue::from(self.result)])
+    }
+
+    fn merge_batch(&mut self, _states: &[ArrayRef]) -> Result<()> {
+        Ok(())
+    }
+}
+
+impl GroupsAccumulator for TestGroupsAccumulator {
+    fn update_batch(
+        &mut self,
+        _values: &[ArrayRef],
+        _group_indices: &[usize],
+        _opt_filter: Option<&arrow_array::BooleanArray>,
+        _total_num_groups: usize,
+    ) -> Result<()> {
+        Ok(())
+    }
+
+    fn evaluate(&mut self, _emit_to: datafusion_expr::EmitTo) -> Result<ArrayRef> {
+        Ok(Arc::new(PrimitiveArray::<UInt64Type>::new(
+            vec![self.result].into(),
+            None,
+        )) as ArrayRef)
+    }
+
+    fn state(&mut self, _emit_to: datafusion_expr::EmitTo) -> Result<Vec<ArrayRef>> {
+        Ok(vec![Arc::new(PrimitiveArray::<UInt64Type>::new(
+            vec![self.result].into(),
+            None,
+        )) as ArrayRef])
+    }
+
+    fn merge_batch(
+        &mut self,
+        _values: &[ArrayRef],
+        _group_indices: &[usize],
+        _opt_filter: Option<&arrow_array::BooleanArray>,
+        _total_num_groups: usize,
+    ) -> Result<()> {
+        Ok(())
+    }
+
+    fn size(&self) -> usize {
+        std::mem::size_of::<u64>()
     }
 }

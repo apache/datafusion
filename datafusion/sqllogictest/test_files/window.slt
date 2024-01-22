@@ -3906,3 +3906,69 @@ ProjectionExec: expr=[sn@0 as sn, ts@1 as ts, currency@2 as currency, amount@3 a
 --BoundedWindowAggExec: wdw=[SUM(table_with_pk.amount) ORDER BY [table_with_pk.sn ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Ok(Field { name: "SUM(table_with_pk.amount) ORDER BY [table_with_pk.sn ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: CurrentRow }], mode=[Sorted]
 ----SortExec: expr=[sn@0 ASC NULLS LAST]
 ------MemoryExec: partitions=1, partition_sizes=[1]
+
+# test ROW_NUMBER window function returns correct data_type
+query T
+select arrow_typeof(row_number() over ()) from (select 1 a)
+----
+UInt64
+
+# test RANK window function returns correct data_type
+query T
+select arrow_typeof(rank() over ()) from (select 1 a)
+----
+UInt64
+
+# test DENSE_RANK window function returns correct data_type
+query T
+select arrow_typeof(dense_rank() over ()) from (select 1 a)
+----
+UInt64
+
+# test PERCENT_RANK window function returns correct data_type
+query T
+select arrow_typeof(percent_rank() over ()) from (select 1 a)
+----
+Float64
+
+# test CUME_DIST window function returns correct data_type
+query T
+select arrow_typeof(cume_dist() over ()) from (select 1 a)
+----
+Float64
+
+# test NTILE window function returns correct data_type
+query T
+select arrow_typeof(ntile(1) over ()) from (select 1 a)
+----
+UInt64
+
+# test LAG window function returns correct data_type
+query T
+select arrow_typeof(lag(a) over ()) from (select 1 a)
+----
+Int64
+
+# test LEAD window function returns correct data_type
+query T
+select arrow_typeof(lead(a) over ()) from (select 1 a)
+----
+Int64
+
+# test FIRST_VALUE window function returns correct data_type
+query T
+select arrow_typeof(first_value(a) over ()) from (select 1 a)
+----
+Int64
+
+# test LAST_VALUE window function returns correct data_type
+query T
+select arrow_typeof(last_value(a) over ()) from (select 1 a)
+----
+Int64
+
+# test NTH_VALUE window function returns correct data_type
+query T
+select arrow_typeof(nth_value(a, 1) over ()) from (select 1 a)
+----
+Int64

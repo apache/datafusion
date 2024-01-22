@@ -23,7 +23,7 @@ use std::sync::Arc;
 use super::groups_accumulator::prim_op::PrimitiveGroupsAccumulator;
 use crate::aggregate::utils::down_cast_any_ref;
 use crate::expressions::format_state_name;
-use crate::{AggregateExpr, GroupsAccumulator, PhysicalExpr};
+use crate::{AggregateExpr, PhysicalExpr};
 use arrow::compute::sum;
 use arrow::datatypes::DataType;
 use arrow::{array::ArrayRef, datatypes::Field};
@@ -35,7 +35,7 @@ use arrow_array::{Array, ArrowNativeTypeOp, ArrowNumericType};
 use arrow_buffer::ArrowNativeType;
 use datafusion_common::{not_impl_err, DataFusionError, Result, ScalarValue};
 use datafusion_expr::type_coercion::aggregates::sum_return_type;
-use datafusion_expr::Accumulator;
+use datafusion_expr::{Accumulator, GroupsAccumulator};
 
 /// SUM aggregate expression
 #[derive(Debug, Clone)]

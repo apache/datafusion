@@ -27,7 +27,7 @@ use std::sync::Arc;
 use crate::aggregate::groups_accumulator::accumulate::NullState;
 use crate::aggregate::utils::down_cast_any_ref;
 use crate::expressions::format_state_name;
-use crate::{AggregateExpr, GroupsAccumulator, PhysicalExpr};
+use crate::{AggregateExpr, PhysicalExpr};
 use arrow::compute::sum;
 use arrow::datatypes::{DataType, Decimal128Type, Float64Type, UInt64Type};
 use arrow::{
@@ -41,9 +41,8 @@ use arrow_array::{
 use arrow_buffer::{i256, ArrowNativeType};
 use datafusion_common::{not_impl_err, DataFusionError, Result, ScalarValue};
 use datafusion_expr::type_coercion::aggregates::avg_return_type;
-use datafusion_expr::Accumulator;
+use datafusion_expr::{Accumulator, EmitTo, GroupsAccumulator};
 
-use super::groups_accumulator::EmitTo;
 use super::utils::DecimalAverager;
 
 /// AVG aggregate expression

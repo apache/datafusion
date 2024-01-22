@@ -22,7 +22,7 @@ use std::convert::TryFrom;
 use std::sync::Arc;
 
 use crate::aggregate::groups_accumulator::prim_op::PrimitiveGroupsAccumulator;
-use crate::{AggregateExpr, GroupsAccumulator, PhysicalExpr};
+use crate::{AggregateExpr, PhysicalExpr};
 use arrow::compute;
 use arrow::datatypes::{
     DataType, Date32Type, Date64Type, Time32MillisecondType, Time32SecondType,
@@ -47,7 +47,7 @@ use arrow_array::types::{
 use datafusion_common::internal_err;
 use datafusion_common::ScalarValue;
 use datafusion_common::{downcast_value, DataFusionError, Result};
-use datafusion_expr::Accumulator;
+use datafusion_expr::{Accumulator, GroupsAccumulator};
 
 use crate::aggregate::utils::down_cast_any_ref;
 use crate::expressions::format_state_name;

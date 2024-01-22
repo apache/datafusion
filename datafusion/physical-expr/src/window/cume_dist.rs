@@ -34,11 +34,16 @@ use std::sync::Arc;
 #[derive(Debug)]
 pub struct CumeDist {
     name: String,
+    /// Output data type
+    data_type: DataType,
 }
 
 /// Create a cume_dist window function
-pub fn cume_dist(name: String) -> CumeDist {
-    CumeDist { name }
+pub fn cume_dist(name: String, data_type: &DataType) -> CumeDist {
+    CumeDist {
+        name,
+        data_type: data_type.clone(),
+    }
 }
 
 impl BuiltInWindowFunctionExpr for CumeDist {
@@ -49,8 +54,7 @@ impl BuiltInWindowFunctionExpr for CumeDist {
 
     fn field(&self) -> Result<Field> {
         let nullable = false;
-        let data_type = DataType::Float64;
-        Ok(Field::new(self.name(), data_type, nullable))
+        Ok(Field::new(self.name(), self.data_type.clone(), nullable))
     }
 
     fn expressions(&self) -> Vec<Arc<dyn PhysicalExpr>> {
@@ -119,7 +123,7 @@ mod tests {
     #[test]
     #[allow(clippy::single_range_in_vec_init)]
     fn test_cume_dist() -> Result<()> {
-        let r = cume_dist("arr".into());
+        let r = cume_dist("arr".into(), &DataType::Float64);
 
         let expected = vec![0.0; 0];
         test_i32_result(&r, 0, vec![], expected)?;

@@ -17,7 +17,6 @@
 
 //! Adapter that makes [`GroupsAccumulator`] out of [`Accumulator`]
 
-use super::{EmitTo, GroupsAccumulator};
 use arrow::{
     array::{AsArray, UInt32Builder},
     compute,
@@ -28,7 +27,7 @@ use datafusion_common::{
     arrow_datafusion_err, utils::get_arrayref_at_indices, DataFusionError, Result,
     ScalarValue,
 };
-use datafusion_expr::Accumulator;
+use datafusion_expr::{Accumulator, EmitTo, GroupsAccumulator};
 
 /// An adapter that implements [`GroupsAccumulator`] for any [`Accumulator`]
 ///
