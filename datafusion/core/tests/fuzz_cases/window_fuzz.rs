@@ -22,6 +22,7 @@ use arrow::compute::{concat_batches, SortOptions};
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use arrow::util::pretty::pretty_format_batches;
+use arrow_schema::{Field, Schema};
 use datafusion::physical_plan::memory::MemoryExec;
 use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::physical_plan::windows::{
@@ -37,6 +38,7 @@ use datafusion_expr::{
 };
 use datafusion_physical_expr::expressions::{cast, col, lit};
 use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
+use itertools::Itertools;
 use test_utils::add_empty_batches;
 
 use hashbrown::HashMap;
@@ -482,7 +484,6 @@ async fn run_window_test(
     let session_config = SessionConfig::new().with_batch_size(50);
     let ctx = SessionContext::new_with_config(session_config);
     let (window_fn, args, fn_name) = get_random_function(&schema, &mut rng, is_linear);
-
     let window_frame = get_random_window_frame(&mut rng, is_linear);
     let mut orderby_exprs = vec![];
     for column in &orderby_columns {
@@ -532,6 +533,40 @@ async fn run_window_test(
     if is_linear {
         exec1 = Arc::new(SortExec::new(sort_keys.clone(), exec1)) as _;
     }
+
+    // The schema needs to be enriched before the `create_window_expr`
+    // The reason for this is window expressions datatypes are derived from the schema
+    // The datafusion code enriches the schema on physical planner and this test copies the same behavior manually
+    // Also bunch of functions dont require input arguments thus just send an empty vec for such functions
+    let data_types = if [
+        "row_number",
+        "rank",
+        "dense_rank",
+        "percent_rank",
+        "ntile",
+        "cume_dist",
+    ]
+    .contains(&fn_name.as_str())
+    {
+        vec![]
+    } else {
+        args.iter()
+            .map(|e| e.clone().as_ref().data_type(&schema))
+            .collect::<Result<Vec<_>>>()?
+    };
+    let window_expr_return_type = window_fn.return_type(&data_types)?;
+    let mut window_fields = schema
+        .fields()
+        .iter()
+        .map(|f| f.as_ref().clone())
+        .collect_vec();
+    window_fields.extend_from_slice(&[Field::new(
+        &fn_name,
+        window_expr_return_type,
+        true,
+    )]);
+    let extended_schema = Arc::new(Schema::new(window_fields));
+
     let usual_window_exec = Arc::new(
         WindowAggExec::try_new(
             vec![create_window_expr(
@@ -541,7 +576,7 @@ async fn run_window_test(
                 &partitionby_exprs,
                 &orderby_exprs,
                 Arc::new(window_frame.clone()),
-                schema.as_ref(),
+                &extended_schema,
             )
             .unwrap()],
             exec1,
@@ -563,7 +598,7 @@ async fn run_window_test(
                 &partitionby_exprs,
                 &orderby_exprs,
                 Arc::new(window_frame.clone()),
-                schema.as_ref(),
+                extended_schema.as_ref(),
             )
             .unwrap()],
             exec2,
