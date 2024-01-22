@@ -22,7 +22,6 @@ use arrow::{
     util::display::array_value_to_string,
 };
 
-use datafusion::datasource::TableProvider;
 use datafusion::error::Result;
 use datafusion::logical_expr::{Aggregate, LogicalPlan, TableScan};
 use datafusion::physical_plan::metrics::MetricValue;
@@ -31,7 +30,7 @@ use datafusion::physical_plan::ExecutionPlanVisitor;
 use datafusion::prelude::*;
 use datafusion::test_util;
 use datafusion::{assert_batches_eq, assert_batches_sorted_eq};
-use datafusion::{datasource::MemTable, physical_plan::collect};
+use datafusion::physical_plan::collect;
 use datafusion::{execution::context::SessionContext, physical_plan::displayable};
 use datafusion_common::{assert_contains, assert_not_contains};
 use object_store::path::Path;
@@ -320,21 +319,6 @@ async fn register_alltypes_parquet(ctx: &SessionContext) {
     )
     .await
     .unwrap();
-}
-
-/// Return a new table provider that has a single Int32 column with
-/// values between `seq_start` and `seq_end`
-pub fn table_with_sequence(
-    seq_start: i32,
-    seq_end: i32,
-) -> Result<Arc<dyn TableProvider>> {
-    let schema = Arc::new(Schema::new(vec![Field::new("i", DataType::Int32, true)]));
-    let arr = Arc::new(Int32Array::from((seq_start..=seq_end).collect::<Vec<_>>()));
-    let partitions = vec![vec![RecordBatch::try_new(
-        schema.clone(),
-        vec![arr as ArrayRef],
-    )?]];
-    Ok(Arc::new(MemTable::try_new(schema, partitions)?))
 }
 
 pub struct ExplainNormalizer {
