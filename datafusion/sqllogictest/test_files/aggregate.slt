@@ -3262,6 +3262,7 @@ select count(*) from (select count(*) a, count(*) b from (select 1));
 1
 
 # Distinct Count for string
+# (test for the specialized implementation of distinct count for strings)
 
 # UTF8 string matters for string to &[u8] conversion, add it to prevent regression
 statement ok
@@ -3283,6 +3284,30 @@ select count(distinct column1), count(distinct column2), count(distinct column3)
 # run through merge_batch
 query IIII rowsort
 select count(distinct column1), count(distinct column2), count(distinct column3), count(distinct column4) from distinct_count_string_table group by column1;
+----
+1 1 1 1
+1 1 2 2
+1 1 3 3
+
+
+# test with long strings as well
+statement ok
+create table distinct_count_long_string_table as
+SELECT column1,
+  arrow_cast(column2, 'LargeUtf8') as column2,
+  arrow_cast(column3, 'LargeUtf8') as column3,
+  arrow_cast(column4, 'LargeUtf8') as column4
+FROM distinct_count_string_table;
+
+# run through update_batch
+query IIII
+select count(distinct column1), count(distinct column2), count(distinct column3), count(distinct column4) from distinct_count_long_string_table;
+----
+3 3 6 6
+
+# run through merge_batch
+query IIII rowsort
+select count(distinct column1), count(distinct column2), count(distinct column3), count(distinct column4) from distinct_count_long_string_table group by column1;
 ----
 1 1 1 1
 1 1 2 2
