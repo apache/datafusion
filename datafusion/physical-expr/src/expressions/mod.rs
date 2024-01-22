@@ -105,14 +105,13 @@ pub(crate) mod tests {
     use std::sync::Arc;
 
     use crate::expressions::{col, create_aggregate_expr, try_cast};
-    use crate::{AggregateExpr, EmitTo};
-
+    use crate::AggregateExpr;
     use arrow::record_batch::RecordBatch;
     use arrow_array::ArrayRef;
     use arrow_schema::{Field, Schema};
     use datafusion_common::{Result, ScalarValue};
     use datafusion_expr::type_coercion::aggregates::coerce_types;
-    use datafusion_expr::AggregateFunction;
+    use datafusion_expr::{AggregateFunction, EmitTo};
 
     /// macro to perform an aggregation using [`datafusion_expr::Accumulator`] and verify the
     /// result.

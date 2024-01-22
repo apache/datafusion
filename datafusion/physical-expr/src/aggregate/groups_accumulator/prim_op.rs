@@ -21,10 +21,9 @@ use arrow::{array::AsArray, datatypes::ArrowPrimitiveType};
 use arrow_array::{ArrayRef, BooleanArray, PrimitiveArray};
 use arrow_schema::DataType;
 use datafusion_common::Result;
+use datafusion_expr::{EmitTo, GroupsAccumulator};
 
-use crate::GroupsAccumulator;
-
-use super::{accumulate::NullState, EmitTo};
+use super::accumulate::NullState;
 
 /// An accumulator that implements a single operation over
 /// [`ArrowPrimitiveType`] where the accumulated state is the same as

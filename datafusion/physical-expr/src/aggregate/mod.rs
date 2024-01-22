@@ -19,13 +19,12 @@ use std::any::Any;
 use std::fmt::Debug;
 use std::sync::Arc;
 
-use self::groups_accumulator::GroupsAccumulator;
 use crate::expressions::{NthValueAgg, OrderSensitiveArrayAgg};
 use crate::{PhysicalExpr, PhysicalSortExpr};
 
 use arrow::datatypes::Field;
 use datafusion_common::{not_impl_err, DataFusionError, Result};
-use datafusion_expr::Accumulator;
+use datafusion_expr::{Accumulator, GroupsAccumulator};
 
 mod hyperloglog;
 mod tdigest;
