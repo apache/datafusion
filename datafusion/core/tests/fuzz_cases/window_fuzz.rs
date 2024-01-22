@@ -534,39 +534,6 @@ async fn run_window_test(
         exec1 = Arc::new(SortExec::new(sort_keys.clone(), exec1)) as _;
     }
 
-    // The schema needs to be enriched before the `create_window_expr`
-    // The reason for this is window expressions datatypes are derived from the schema
-    // The datafusion code enriches the schema on physical planner and this test copies the same behavior manually
-    // Also bunch of functions dont require input arguments thus just send an empty vec for such functions
-    let data_types = if [
-        "row_number",
-        "rank",
-        "dense_rank",
-        "percent_rank",
-        "ntile",
-        "cume_dist",
-    ]
-    .contains(&fn_name.as_str())
-    {
-        vec![]
-    } else {
-        args.iter()
-            .map(|e| e.clone().as_ref().data_type(&schema))
-            .collect::<Result<Vec<_>>>()?
-    };
-    let window_expr_return_type = window_fn.return_type(&data_types)?;
-    let mut window_fields = schema
-        .fields()
-        .iter()
-        .map(|f| f.as_ref().clone())
-        .collect_vec();
-    window_fields.extend_from_slice(&[Field::new(
-        &fn_name,
-        window_expr_return_type,
-        true,
-    )]);
-    let extended_schema = Arc::new(Schema::new(window_fields));
-
     let usual_window_exec = Arc::new(
         WindowAggExec::try_new(
             vec![create_window_expr(
@@ -576,7 +543,7 @@ async fn run_window_test(
                 &partitionby_exprs,
                 &orderby_exprs,
                 Arc::new(window_frame.clone()),
-                &extended_schema,
+                &schema.as_ref(),
             )
             .unwrap()],
             exec1,
@@ -598,7 +565,7 @@ async fn run_window_test(
                 &partitionby_exprs,
                 &orderby_exprs,
                 Arc::new(window_frame.clone()),
-                extended_schema.as_ref(),
+                schema.as_ref(),
             )
             .unwrap()],
             exec2,

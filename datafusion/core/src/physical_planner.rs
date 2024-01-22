@@ -86,7 +86,6 @@ use datafusion_expr::expr::{
 };
 use datafusion_expr::expr_rewriter::unnormalize_cols;
 use datafusion_expr::logical_plan::builder::wrap_projection_for_join_if_necessary;
-use datafusion_expr::utils::exprlist_to_fields;
 use datafusion_expr::{
     DescribeTable, DmlStatement, RecursiveQuery, ScalarFunctionDefinition,
     StringifiedPlan, WindowFrame, WindowFrameBound, WriteOp,
@@ -720,16 +719,14 @@ impl DefaultPhysicalPlanner {
                     }
 
                     let logical_input_schema = input.schema();
-                    // Extend the schema to include window expression fields as builtin window functions derives its datatype from incoming schema
-                    let mut window_fields = logical_input_schema.fields().clone();
-                    window_fields.extend_from_slice(&exprlist_to_fields(window_expr.iter(), input)?);
-                    let extended_schema = &DFSchema::new_with_metadata(window_fields, HashMap::new())?;
+                    let physical_input_schema = &input_exec.schema();
                     let window_expr = window_expr
                         .iter()
                         .map(|e| {
                             create_window_expr(
                                 e,
-                                extended_schema,
+                                logical_input_schema,
+                                physical_input_schema,
                                 session_state.execution_props(),
                             )
                         })
@@ -1552,10 +1549,10 @@ pub fn create_window_expr_with_name(
     e: &Expr,
     name: impl Into<String>,
     logical_input_schema: &DFSchema,
+    physical_input_schema: &Schema,
     execution_props: &ExecutionProps,
 ) -> Result<Arc<dyn WindowExpr>> {
     let name = name.into();
-    let physical_input_schema: &Schema = &logical_input_schema.into();
     match e {
         Expr::WindowFunction(WindowFunction {
             fun,
@@ -1605,6 +1602,7 @@ pub fn create_window_expr_with_name(
 pub fn create_window_expr(
     e: &Expr,
     logical_input_schema: &DFSchema,
+    physical_input_schema: &Schema,
     execution_props: &ExecutionProps,
 ) -> Result<Arc<dyn WindowExpr>> {
     // unpack aliased logical expressions, e.g. "sum(col) over () as total"
@@ -1612,7 +1610,13 @@ pub fn create_window_expr(
         Expr::Alias(Alias { expr, name, .. }) => (name.clone(), expr.as_ref()),
         _ => (e.display_name()?, e),
     };
-    create_window_expr_with_name(e, name, logical_input_schema, execution_props)
+    create_window_expr_with_name(
+        e,
+        name,
+        logical_input_schema,
+        physical_input_schema,
+        execution_props,
+    )
 }
 
 type AggregateExprWithOptionalArgs = (
