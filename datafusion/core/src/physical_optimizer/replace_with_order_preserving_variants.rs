@@ -239,44 +239,33 @@ pub(crate) fn replace_with_order_preserving_variants(
         return Ok(Transformed::No(requirements));
     }
 
-    // For unbounded cases, replace with the order-preserving variant in any
+    // For unbounded cases, we replace with the order-preserving variant in any
     // case, as doing so helps fix the pipeline. Also replace if config allows.
     let use_order_preserving_variant =
         config.optimizer.prefer_existing_sort || unbounded_output(&requirements.plan);
 
-    let PlanContext {
-        plan,
-        mut children,
-        data: connection,
-    } = requirements;
-    let sort_child = children.swap_remove(0);
-
-    let mut updated_sort_input = plan_with_order_preserving_variants(
-        sort_child,
+    // Create an alternate plan with order-preserving variants:
+    let mut alternate_plan = plan_with_order_preserving_variants(
+        requirements.children.swap_remove(0),
         is_spr_better || use_order_preserving_variant,
         is_spm_better || use_order_preserving_variant,
     )?;
 
-    // If this sort is unnecessary, we should remove it and update the plan:
-    if updated_sort_input
+    // If the alternate plan makes this sort unnecessary, accept the alternate:
+    if alternate_plan
         .plan
         .equivalence_properties()
-        .ordering_satisfy(plan.output_ordering().unwrap_or(&[]))
+        .ordering_satisfy(requirements.plan.output_ordering().unwrap_or(&[]))
     {
-        for child in updated_sort_input.children.iter_mut() {
+        for child in alternate_plan.children.iter_mut() {
             child.data = false;
         }
-        Ok(Transformed::Yes(updated_sort_input))
+        Ok(Transformed::Yes(alternate_plan))
     } else {
-        let mut updated_sort_input =
-            plan_with_order_breaking_variants(updated_sort_input)?;
-        updated_sort_input.data = false;
-        let updated_children = vec![updated_sort_input];
-        let requirements = PlanContext {
-            plan,
-            data: connection,
-            children: updated_children,
-        };
+        // The alternate plan does not help, use faster order-breaking variants:
+        alternate_plan = plan_with_order_breaking_variants(alternate_plan)?;
+        alternate_plan.data = false;
+        requirements.children = vec![alternate_plan];
         Ok(Transformed::Yes(requirements))
     }
 }
