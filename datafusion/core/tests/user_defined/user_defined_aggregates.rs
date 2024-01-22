@@ -689,7 +689,7 @@ impl Accumulator for TestGroupsAccumulator {
         Ok(())
     }
 
-    fn evaluate(&self) -> Result<ScalarValue> {
+    fn evaluate(&mut self) -> Result<ScalarValue> {
         Ok(ScalarValue::from(self.result))
     }
 
@@ -697,7 +697,7 @@ impl Accumulator for TestGroupsAccumulator {
         std::mem::size_of::<u64>()
     }
 
-    fn state(&self) -> Result<Vec<ScalarValue>> {
+    fn state(&mut self) -> Result<Vec<ScalarValue>> {
         Ok(vec![ScalarValue::from(self.result)])
     }
 
