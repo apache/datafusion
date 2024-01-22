@@ -1266,6 +1266,51 @@ impl Expr {
             Ok(Transformed::Yes(expr))
         })
     }
+
+    /// Returns true if some of this `exprs` subexpressions may not be evaluated
+    /// and thus any side effects (like divide by zero) may not be encountered
+    pub fn short_circuits(&self) -> bool {
+        match self {
+            Expr::ScalarFunction(ScalarFunction { func_def, .. }) => {
+                matches!(func_def, ScalarFunctionDefinition::BuiltIn(fun) if *fun == BuiltinScalarFunction::Coalesce)
+            }
+            Expr::BinaryExpr(BinaryExpr { op, .. }) => {
+                matches!(op, Operator::And | Operator::Or)
+            }
+            Expr::Case { .. } => true,
+            Expr::AggregateFunction(..)
+            | Expr::Alias(..)
+            | Expr::Between(..)
+            | Expr::Cast(..)
+            | Expr::Column(..)
+            | Expr::Exists(..)
+            | Expr::GetIndexedField(..)
+            | Expr::GroupingSet(..)
+            | Expr::InList(..)
+            | Expr::InSubquery(..)
+            | Expr::IsFalse(..)
+            | Expr::IsNotFalse(..)
+            | Expr::IsNotNull(..)
+            | Expr::IsNotTrue(..)
+            | Expr::IsNotUnknown(..)
+            | Expr::IsNull(..)
+            | Expr::IsTrue(..)
+            | Expr::IsUnknown(..)
+            | Expr::Like(..)
+            | Expr::ScalarSubquery(..)
+            | Expr::ScalarVariable(_, _)
+            | Expr::SimilarTo(..)
+            | Expr::Not(..)
+            | Expr::Negative(..)
+            | Expr::OuterReferenceColumn(_, _)
+            | Expr::TryCast(..)
+            | Expr::Wildcard { .. }
+            | Expr::WindowFunction(..)
+            | Expr::Literal(..)
+            | Expr::Sort(..)
+            | Expr::Placeholder(..) => false,
+        }
+    }
 }
 
 // modifies expr if it is a placeholder with datatype of right

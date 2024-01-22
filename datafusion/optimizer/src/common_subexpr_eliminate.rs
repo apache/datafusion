@@ -34,10 +34,7 @@ use datafusion_expr::expr::Alias;
 use datafusion_expr::logical_plan::{
     Aggregate, Filter, LogicalPlan, Projection, Sort, Window,
 };
-use datafusion_expr::{
-    col, expr::ScalarFunction, BinaryExpr, BuiltinScalarFunction, Expr, ExprSchemable,
-    Operator, ScalarFunctionDefinition,
-};
+use datafusion_expr::{col, Expr, ExprSchemable};
 
 /// A map from expression's identifier to tuple including
 /// - the expression itself (cloned)
@@ -620,7 +617,7 @@ impl TreeNodeVisitor for ExprIdentifierVisitor<'_> {
     fn pre_visit(&mut self, expr: &Expr) -> Result<VisitRecursion> {
         // related to https://github.com/apache/arrow-datafusion/issues/8814
         // If the expr contain volatile expression or is a short-circuit expression, skip it.
-        if is_short_circuit_expression(expr) || is_volatile_expression(expr)? {
+        if expr.short_circuits() || is_volatile_expression(expr)? {
             return Ok(VisitRecursion::Skip);
         }
         self.visit_stack
@@ -655,20 +652,6 @@ impl TreeNodeVisitor for ExprIdentifierVisitor<'_> {
             .or_insert_with(|| (expr.clone(), 0, data_type))
             .1 += 1;
         Ok(VisitRecursion::Continue)
-    }
-}
-
-/// Check if the expression is short-circuit expression
-fn is_short_circuit_expression(expr: &Expr) -> bool {
-    match expr {
-        Expr::ScalarFunction(ScalarFunction { func_def, .. }) => {
-            matches!(func_def, ScalarFunctionDefinition::BuiltIn(fun) if *fun == BuiltinScalarFunction::Coalesce)
-        }
-        Expr::BinaryExpr(BinaryExpr { op, .. }) => {
-            matches!(op, Operator::And | Operator::Or)
-        }
-        Expr::Case { .. } => true,
-        _ => false,
     }
 }
 
@@ -717,7 +700,7 @@ impl TreeNodeRewriter for CommonSubexprRewriter<'_> {
         // The `CommonSubexprRewriter` relies on `ExprIdentifierVisitor` to generate
         // the `id_array`, which records the expr's identifier used to rewrite expr. So if we
         // skip an expr in `ExprIdentifierVisitor`, we should skip it here, too.
-        if is_short_circuit_expression(expr) || is_volatile_expression(expr)? {
+        if expr.short_circuits() || is_volatile_expression(expr)? {
             return Ok(RewriteRecursion::Stop);
         }
         if self.curr_index >= self.id_array.len()

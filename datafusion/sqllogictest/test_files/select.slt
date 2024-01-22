@@ -1129,6 +1129,9 @@ FROM t AS A, (SELECT * FROM t WHERE x = 0) AS B;
 0 0
 0 0
 
+# Expressions that short circuit should not be refactored out as that may cause side effects (divide by zero)
+# at plan time that would not actually happen during execution, so the follow three query should not be extract
+# the common sub-expression
 query TT
 explain select coalesce(1, y/x), coalesce(2, y/x) from t;
 ----
@@ -1158,6 +1161,17 @@ Projection: t.y = Int32(0) OR Int64(1) / CAST(t.y AS Int64) < Int64(1) AS t.y = 
 physical_plan
 ProjectionExec: expr=[y@1 = 0 OR 1 / CAST(y@1 AS Int64) < 1 as t.y = Int64(0) OR Int64(1) / t.y < Int64(1), x@0 = 0 OR y@1 = 0 OR 1 / CAST(y@1 AS Int64) < 1 / CAST(x@0 AS Int64) as t.x = Int64(0) OR t.y = Int64(0) OR Int64(1) / t.y < Int64(1) / t.x]
 --MemoryExec: partitions=1, partition_sizes=[1]
+
+# due to the reason describe in https://github.com/apache/arrow-datafusion/issues/8927,
+# the following queries will fail
+query error
+select coalesce(1, y/x), coalesce(2, y/x) from t;
+
+query error
+SELECT y > 0 and 1 / y < 1, x > 0 and y > 0 and 1 / y < 1 / x from t;
+
+query error
+SELECT y = 0 or 1 / y < 1, x = 0 or y = 0 or 1 / y < 1 / x from t;
 
 statement ok
 DROP TABLE t;
