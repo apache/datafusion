@@ -95,7 +95,8 @@ impl SimplifyExpressions {
 
         let expr = match plan {
             // Canonicalize step won't reorder expressions in a Join on clause.
-            // The left and right expressions in a Join on clause are not commutative.
+            // The left and right expressions in a Join on clause are not commutative,
+            // since the order of the columns must match the order of the children.
             LogicalPlan::Join(_) => {
                 plan.expressions()
                     .into_iter()
