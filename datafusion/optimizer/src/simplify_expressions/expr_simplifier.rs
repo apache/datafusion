@@ -3186,13 +3186,37 @@ mod tests {
             col("c1").eq(subquery1).or(col("c1").eq(subquery2))
         );
 
-        // c1 NOT IN (1, 2, 3, 4) OR c1 NOT IN (5, 6, 7, 8) ->
-        // c1 NOT IN (1, 2, 3, 4) OR c1 NOT IN (5, 6, 7, 8)
+        // c1 NOT IN (1, 2, 3, 4) OR c1 NOT IN (5, 6, 7, 8) -> true
         let expr = in_list(col("c1"), vec![lit(1), lit(2), lit(3), lit(4)], true).or(
             in_list(col("c1"), vec![lit(5), lit(6), lit(7), lit(8)], true),
         );
-        assert_eq!(simplify(expr.clone()), expr);
-    }
+        assert_eq!(simplify(expr.clone()), lit(true));
+
+        // c1 IN (1,2,3,4) AND c1 IN (5,6,7,8) -> false
+        let expr = in_list(col("c1"), vec![lit(1), lit(2), lit(3), lit(4)], false).and(
+            in_list(col("c1"), vec![lit(5), lit(6), lit(7), lit(8)], false),
+        );
+        assert_eq!(simplify(expr.clone()), lit(false));
+
+        // c1 IN (1,2,3,4) AND c1 IN (3,4,5,6) -> c1 = 3 or c1 = 4
+        let expr = in_list(col("c1"), vec![lit(1), lit(2), lit(3), lit(4)], false).and(
+            in_list(col("c1"), vec![lit(3), lit(4), lit(5), lit(6)], false),
+        );
+        assert_eq!(
+            simplify(expr.clone()),
+            col("c1").eq(lit(3)).or(col("c1").eq(lit(4)))
+        );
+
+        // c1 NOT IN (1,2,3,4) AND c1 NOT IN (5,6,7,8) -> c1 NOT IN (1,2,3,4,5,6,7,8)
+        let expr = in_list(col("c1"), vec![lit(1), lit(2), lit(3), lit(4)], true).and(
+            in_list(col("c1"), vec![lit(5), lit(6), lit(7), lit(8)], true),
+        );
+        assert_eq!(
+            simplify(expr.clone()),
+            in_list(col("c1"), vec![lit(1), lit(2), lit(3), lit(4), lit(5), lit(6), lit(7), lit(8)], true)
+        );
+
+    }   
 
     #[test]
     fn simplify_large_or() {

@@ -740,8 +740,13 @@ physical_plan EmptyExec
 query TT
 explain select x from t where x NOT IN (1,2,3,4) AND x NOT IN (5,6,7,8);
 ----
-logical_plan TableScan: t projection=[x]
-physical_plan MemoryExec: partitions=1, partition_sizes=[1]
+logical_plan
+Filter: t.x NOT IN ([Int32(1), Int32(2), Int32(3), Int32(4), Int32(5), Int32(6), Int32(7), Int32(8)])
+--TableScan: t projection=[x]
+physical_plan
+CoalesceBatchesExec: target_batch_size=8192
+--FilterExec: x@0 NOT IN (SET) ([Literal { value: Int32(1) }, Literal { value: Int32(2) }, Literal { value: Int32(3) }, Literal { value: Int32(4) }, Literal { value: Int32(5) }, Literal { value: Int32(6) }, Literal { value: Int32(7) }, Literal { value: Int32(8) }])
+----MemoryExec: partitions=1, partition_sizes=[1]
 
 query TT
 explain select x from t where x IN (1,2,3,4) AND x NOT IN (1,2,3,4,5,6);
