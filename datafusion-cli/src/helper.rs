@@ -18,6 +18,8 @@
 //! Helper that helps with interactive editing, including multi-line parsing and validation,
 //! and auto-completion for file name during creating external table.
 
+use std::borrow::Cow;
+
 use datafusion::common::sql_err;
 use datafusion::error::DataFusionError;
 use datafusion::sql::parser::{DFParser, Statement};
@@ -36,9 +38,12 @@ use rustyline::Context;
 use rustyline::Helper;
 use rustyline::Result;
 
+use crate::highlighter::SyntaxHighlighter;
+
 pub struct CliHelper {
     completer: FilenameCompleter,
     dialect: String,
+    highlighter: SyntaxHighlighter,
 }
 
 impl CliHelper {
@@ -46,6 +51,7 @@ impl CliHelper {
         Self {
             completer: FilenameCompleter::new(),
             dialect: dialect.into(),
+            highlighter: SyntaxHighlighter::new(dialect),
         }
     }
 
@@ -100,7 +106,15 @@ impl Default for CliHelper {
     }
 }
 
-impl Highlighter for CliHelper {}
+impl Highlighter for CliHelper {
+    fn highlight<'l>(&self, line: &'l str, pos: usize) -> Cow<'l, str> {
+        self.highlighter.highlight(line, pos)
+    }
+
+    fn highlight_char(&self, line: &str, pos: usize) -> bool {
+        self.highlighter.highlight_char(line, pos)
+    }
+}
 
 impl Hinter for CliHelper {
     type Hint = String;

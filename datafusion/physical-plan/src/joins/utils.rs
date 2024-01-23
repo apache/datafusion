@@ -20,7 +20,7 @@
 use std::collections::HashSet;
 use std::fmt::{self, Debug};
 use std::future::Future;
-use std::ops::IndexMut;
+use std::ops::{IndexMut, Range};
 use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::usize;
@@ -35,6 +35,8 @@ use arrow::array::{
 use arrow::compute;
 use arrow::datatypes::{Field, Schema, SchemaBuilder};
 use arrow::record_batch::{RecordBatch, RecordBatchOptions};
+use arrow_array::{ArrowPrimitiveType, NativeAdapter, PrimitiveArray};
+use arrow_buffer::ArrowNativeType;
 use datafusion_common::cast::as_boolean_array;
 use datafusion_common::stats::Precision;
 use datafusion_common::{
@@ -136,6 +138,53 @@ impl JoinHashMap {
     }
 }
 
+// Type of offsets for obtaining indices from JoinHashMap.
+pub(crate) type JoinHashMapOffset = (usize, Option<u64>);
+
+// Macro for traversing chained values with limit.
+// Early returns in case of reacing output tuples limit.
+macro_rules! chain_traverse {
+    (
+        $input_indices:ident, $match_indices:ident, $hash_values:ident, $next_chain:ident,
+        $input_idx:ident, $chain_idx:ident, $deleted_offset:ident, $remaining_output:ident
+    ) => {
+        let mut i = $chain_idx - 1;
+        loop {
+            let match_row_idx = if let Some(offset) = $deleted_offset {
+                // This arguments means that we prune the next index way before here.
+                if i < offset as u64 {
+                    // End of the list due to pruning
+                    break;
+                }
+                i - offset as u64
+            } else {
+                i
+            };
+            $match_indices.append(match_row_idx);
+            $input_indices.append($input_idx as u32);
+            $remaining_output -= 1;
+            // Follow the chain to get the next index value
+            let next = $next_chain[match_row_idx as usize];
+
+            if $remaining_output == 0 {
+                // In case current input index is the last, and no more chain values left
+                // returning None as whole input has been scanned
+                let next_offset = if $input_idx == $hash_values.len() - 1 && next == 0 {
+                    None
+                } else {
+                    Some(($input_idx, Some(next)))
+                };
+                return ($input_indices, $match_indices, next_offset);
+            }
+            if next == 0 {
+                // end of list
+                break;
+            }
+            i = next - 1;
+        }
+    };
+}
+
 // Trait defining methods that must be implemented by a hash map type to be used for joins.
 pub trait JoinHashMapType {
     /// The type of list used to store the next list
@@ -223,6 +272,78 @@ pub trait JoinHashMapType {
         }
 
         (input_indices, match_indices)
+    }
+
+    /// Matches hashes with taking limit and offset into account.
+    /// Returns pairs of matched indices along with the starting point for next
+    /// matching iteration (`None` if limit has not been reached).
+    ///
+    /// This method only compares hashes, so additional further check for actual values
+    /// equality may be required.
+    fn get_matched_indices_with_limit_offset(
+        &self,
+        hash_values: &[u64],
+        deleted_offset: Option<usize>,
+        limit: usize,
+        offset: JoinHashMapOffset,
+    ) -> (
+        UInt32BufferBuilder,
+        UInt64BufferBuilder,
+        Option<JoinHashMapOffset>,
+    ) {
+        let mut input_indices = UInt32BufferBuilder::new(0);
+        let mut match_indices = UInt64BufferBuilder::new(0);
+
+        let mut remaining_output = limit;
+
+        let hash_map: &RawTable<(u64, u64)> = self.get_map();
+        let next_chain = self.get_list();
+
+        // Calculate initial `hash_values` index before iterating
+        let to_skip = match offset {
+            // None `initial_next_idx` indicates that `initial_idx` processing has'n been started
+            (initial_idx, None) => initial_idx,
+            // Zero `initial_next_idx` indicates that `initial_idx` has been processed during
+            // previous iteration, and it should be skipped
+            (initial_idx, Some(0)) => initial_idx + 1,
+            // Otherwise, process remaining `initial_idx` matches by traversing `next_chain`,
+            // to start with the next index
+            (initial_idx, Some(initial_next_idx)) => {
+                chain_traverse!(
+                    input_indices,
+                    match_indices,
+                    hash_values,
+                    next_chain,
+                    initial_idx,
+                    initial_next_idx,
+                    deleted_offset,
+                    remaining_output
+                );
+
+                initial_idx + 1
+            }
+        };
+
+        let mut row_idx = to_skip;
+        for hash_value in &hash_values[to_skip..] {
+            if let Some((_, index)) =
+                hash_map.get(*hash_value, |(hash, _)| *hash_value == *hash)
+            {
+                chain_traverse!(
+                    input_indices,
+                    match_indices,
+                    hash_values,
+                    next_chain,
+                    row_idx,
+                    index,
+                    deleted_offset,
+                    remaining_output
+                );
+            }
+            row_idx += 1;
+        }
+
+        (input_indices, match_indices, None)
     }
 }
 
@@ -1079,7 +1200,7 @@ pub(crate) fn build_batch_from_indices(
 pub(crate) fn adjust_indices_by_join_type(
     left_indices: UInt64Array,
     right_indices: UInt32Array,
-    count_right_batch: usize,
+    adjust_range: Range<usize>,
     join_type: JoinType,
 ) -> (UInt64Array, UInt32Array) {
     match join_type {
@@ -1095,21 +1216,20 @@ pub(crate) fn adjust_indices_by_join_type(
         JoinType::Right | JoinType::Full => {
             // matched
             // unmatched right row will be produced in this batch
-            let right_unmatched_indices =
-                get_anti_indices(count_right_batch, &right_indices);
+            let right_unmatched_indices = get_anti_indices(adjust_range, &right_indices);
             // combine the matched and unmatched right result together
             append_right_indices(left_indices, right_indices, right_unmatched_indices)
         }
         JoinType::RightSemi => {
             // need to remove the duplicated record in the right side
-            let right_indices = get_semi_indices(count_right_batch, &right_indices);
+            let right_indices = get_semi_indices(adjust_range, &right_indices);
             // the left_indices will not be used later for the `right semi` join
             (left_indices, right_indices)
         }
         JoinType::RightAnti => {
             // need to remove the duplicated record in the right side
             // get the anti index for the right side
-            let right_indices = get_anti_indices(count_right_batch, &right_indices);
+            let right_indices = get_anti_indices(adjust_range, &right_indices);
             // the left_indices will not be used later for the `right anti` join
             (left_indices, right_indices)
         }
@@ -1151,72 +1271,62 @@ pub(crate) fn append_right_indices(
     }
 }
 
-/// Get unmatched and deduplicated indices
-pub(crate) fn get_anti_indices(
-    row_count: usize,
-    input_indices: &UInt32Array,
-) -> UInt32Array {
-    let mut bitmap = BooleanBufferBuilder::new(row_count);
-    bitmap.append_n(row_count, false);
-    input_indices.iter().flatten().for_each(|v| {
-        bitmap.set_bit(v as usize, true);
-    });
+/// Returns `range` indices which are not present in `input_indices`
+pub(crate) fn get_anti_indices<T: ArrowPrimitiveType>(
+    range: Range<usize>,
+    input_indices: &PrimitiveArray<T>,
+) -> PrimitiveArray<T>
+where
+    NativeAdapter<T>: From<<T as ArrowPrimitiveType>::Native>,
+{
+    let mut bitmap = BooleanBufferBuilder::new(range.len());
+    bitmap.append_n(range.len(), false);
+    input_indices
+        .iter()
+        .flatten()
+        .map(|v| v.as_usize())
+        .filter(|v| range.contains(v))
+        .for_each(|v| {
+            bitmap.set_bit(v - range.start, true);
+        });
+
+    let offset = range.start;
 
     // get the anti index
-    (0..row_count)
-        .filter_map(|idx| (!bitmap.get_bit(idx)).then_some(idx as u32))
-        .collect::<UInt32Array>()
+    (range)
+        .filter_map(|idx| {
+            (!bitmap.get_bit(idx - offset)).then_some(T::Native::from_usize(idx))
+        })
+        .collect::<PrimitiveArray<T>>()
 }
 
-/// Get unmatched and deduplicated indices
-pub(crate) fn get_anti_u64_indices(
-    row_count: usize,
-    input_indices: &UInt64Array,
-) -> UInt64Array {
-    let mut bitmap = BooleanBufferBuilder::new(row_count);
-    bitmap.append_n(row_count, false);
-    input_indices.iter().flatten().for_each(|v| {
-        bitmap.set_bit(v as usize, true);
-    });
+/// Returns intersection of `range` and `input_indices` omitting duplicates
+pub(crate) fn get_semi_indices<T: ArrowPrimitiveType>(
+    range: Range<usize>,
+    input_indices: &PrimitiveArray<T>,
+) -> PrimitiveArray<T>
+where
+    NativeAdapter<T>: From<<T as ArrowPrimitiveType>::Native>,
+{
+    let mut bitmap = BooleanBufferBuilder::new(range.len());
+    bitmap.append_n(range.len(), false);
+    input_indices
+        .iter()
+        .flatten()
+        .map(|v| v.as_usize())
+        .filter(|v| range.contains(v))
+        .for_each(|v| {
+            bitmap.set_bit(v - range.start, true);
+        });
 
-    // get the anti index
-    (0..row_count)
-        .filter_map(|idx| (!bitmap.get_bit(idx)).then_some(idx as u64))
-        .collect::<UInt64Array>()
-}
-
-/// Get matched and deduplicated indices
-pub(crate) fn get_semi_indices(
-    row_count: usize,
-    input_indices: &UInt32Array,
-) -> UInt32Array {
-    let mut bitmap = BooleanBufferBuilder::new(row_count);
-    bitmap.append_n(row_count, false);
-    input_indices.iter().flatten().for_each(|v| {
-        bitmap.set_bit(v as usize, true);
-    });
+    let offset = range.start;
 
     // get the semi index
-    (0..row_count)
-        .filter_map(|idx| (bitmap.get_bit(idx)).then_some(idx as u32))
-        .collect::<UInt32Array>()
-}
-
-/// Get matched and deduplicated indices
-pub(crate) fn get_semi_u64_indices(
-    row_count: usize,
-    input_indices: &UInt64Array,
-) -> UInt64Array {
-    let mut bitmap = BooleanBufferBuilder::new(row_count);
-    bitmap.append_n(row_count, false);
-    input_indices.iter().flatten().for_each(|v| {
-        bitmap.set_bit(v as usize, true);
-    });
-
-    // get the semi index
-    (0..row_count)
-        .filter_map(|idx| (bitmap.get_bit(idx)).then_some(idx as u64))
-        .collect::<UInt64Array>()
+    (range)
+        .filter_map(|idx| {
+            (bitmap.get_bit(idx - offset)).then_some(T::Native::from_usize(idx))
+        })
+        .collect::<PrimitiveArray<T>>()
 }
 
 /// Metrics for build & probe joins

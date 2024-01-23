@@ -160,12 +160,13 @@ fn create_built_in_window_expr(
     input_schema: &Schema,
     name: String,
 ) -> Result<Arc<dyn BuiltInWindowFunctionExpr>> {
+    let data_type = input_schema.field_with_name(&name)?.data_type();
     Ok(match fun {
-        BuiltInWindowFunction::RowNumber => Arc::new(RowNumber::new(name)),
-        BuiltInWindowFunction::Rank => Arc::new(rank(name)),
-        BuiltInWindowFunction::DenseRank => Arc::new(dense_rank(name)),
-        BuiltInWindowFunction::PercentRank => Arc::new(percent_rank(name)),
-        BuiltInWindowFunction::CumeDist => Arc::new(cume_dist(name)),
+        BuiltInWindowFunction::RowNumber => Arc::new(RowNumber::new(name, data_type)),
+        BuiltInWindowFunction::Rank => Arc::new(rank(name, data_type)),
+        BuiltInWindowFunction::DenseRank => Arc::new(dense_rank(name, data_type)),
+        BuiltInWindowFunction::PercentRank => Arc::new(percent_rank(name, data_type)),
+        BuiltInWindowFunction::CumeDist => Arc::new(cume_dist(name, data_type)),
         BuiltInWindowFunction::Ntile => {
             let n = get_scalar_value_from_args(args, 0)?.ok_or_else(|| {
                 DataFusionError::Execution(
@@ -179,32 +180,42 @@ fn create_built_in_window_expr(
 
             if n.is_unsigned() {
                 let n: u64 = n.try_into()?;
-                Arc::new(Ntile::new(name, n))
+                Arc::new(Ntile::new(name, n, data_type))
             } else {
                 let n: i64 = n.try_into()?;
                 if n <= 0 {
                     return exec_err!("NTILE requires a positive integer");
                 }
-                Arc::new(Ntile::new(name, n as u64))
+                Arc::new(Ntile::new(name, n as u64, data_type))
             }
         }
         BuiltInWindowFunction::Lag => {
             let arg = args[0].clone();
-            let data_type = args[0].data_type(input_schema)?;
             let shift_offset = get_scalar_value_from_args(args, 1)?
                 .map(|v| v.try_into())
                 .and_then(|v| v.ok());
             let default_value = get_scalar_value_from_args(args, 2)?;
-            Arc::new(lag(name, data_type, arg, shift_offset, default_value))
+            Arc::new(lag(
+                name,
+                data_type.clone(),
+                arg,
+                shift_offset,
+                default_value,
+            ))
         }
         BuiltInWindowFunction::Lead => {
             let arg = args[0].clone();
-            let data_type = args[0].data_type(input_schema)?;
             let shift_offset = get_scalar_value_from_args(args, 1)?
                 .map(|v| v.try_into())
                 .and_then(|v| v.ok());
             let default_value = get_scalar_value_from_args(args, 2)?;
-            Arc::new(lead(name, data_type, arg, shift_offset, default_value))
+            Arc::new(lead(
+                name,
+                data_type.clone(),
+                arg,
+                shift_offset,
+                default_value,
+            ))
         }
         BuiltInWindowFunction::NthValue => {
             let arg = args[0].clone();
@@ -214,18 +225,15 @@ fn create_built_in_window_expr(
                 .try_into()
                 .map_err(|e| DataFusionError::Execution(format!("{e:?}")))?;
             let n: u32 = n as u32;
-            let data_type = args[0].data_type(input_schema)?;
-            Arc::new(NthValue::nth(name, arg, data_type, n)?)
+            Arc::new(NthValue::nth(name, arg, data_type.clone(), n)?)
         }
         BuiltInWindowFunction::FirstValue => {
             let arg = args[0].clone();
-            let data_type = args[0].data_type(input_schema)?;
-            Arc::new(NthValue::first(name, arg, data_type))
+            Arc::new(NthValue::first(name, arg, data_type.clone()))
         }
         BuiltInWindowFunction::LastValue => {
             let arg = args[0].clone();
-            let data_type = args[0].data_type(input_schema)?;
-            Arc::new(NthValue::last(name, arg, data_type))
+            Arc::new(NthValue::last(name, arg, data_type.clone()))
         }
     })
 }

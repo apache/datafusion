@@ -19,9 +19,9 @@ use arrow::record_batch::RecordBatch;
 use arrow_array::{downcast_primitive, ArrayRef};
 use arrow_schema::SchemaRef;
 use datafusion_common::Result;
-use datafusion_physical_expr::EmitTo;
 
 pub(crate) mod primitive;
+use datafusion_expr::EmitTo;
 use primitive::GroupValuesPrimitive;
 
 mod row;
