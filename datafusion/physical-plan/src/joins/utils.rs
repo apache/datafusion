@@ -293,17 +293,9 @@ fn check_join_set_is_valid(
     let right_missing = on_right.difference(right).collect::<HashSet<_>>();
 
     if !left_missing.is_empty() | !right_missing.is_empty() {
-        let on_left_reverse = &on.iter().map(|on| on.1.clone()).collect::<HashSet<_>>();
-        let left_missing_reverse =
-            on_left_reverse.difference(left).collect::<HashSet<_>>();
-        let on_right_reverse = &on.iter().map(|on| on.0.clone()).collect::<HashSet<_>>();
-        let right_missing_reverse =
-            on_right_reverse.difference(right).collect::<HashSet<_>>();
-        if !left_missing_reverse.is_empty() | !right_missing_reverse.is_empty() {
-            return plan_err!(
-                "The left or right side of the join does not have all columns on \"on\": \nMissing on the left: {left_missing:?}\nMissing on the right: {right_missing:?}"
-            );
-        }
+        return plan_err!(
+            "The left or right side of the join does not have all columns on \"on\": \nMissing on the left: {left_missing:?}\nMissing on the right: {right_missing:?}"
+        );
     };
 
     Ok(())
