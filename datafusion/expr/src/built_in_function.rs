@@ -221,8 +221,12 @@ pub enum BuiltinScalarFunction {
     DateTrunc,
     /// date_bin
     DateBin,
+    /// ends_with
+    EndsWith,
     /// initcap
     InitCap,
+    /// InStr
+    InStr,
     /// left
     Left,
     /// lpad
@@ -446,7 +450,9 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::DatePart => Volatility::Immutable,
             BuiltinScalarFunction::DateTrunc => Volatility::Immutable,
             BuiltinScalarFunction::DateBin => Volatility::Immutable,
+            BuiltinScalarFunction::EndsWith => Volatility::Immutable,
             BuiltinScalarFunction::InitCap => Volatility::Immutable,
+            BuiltinScalarFunction::InStr => Volatility::Immutable,
             BuiltinScalarFunction::Left => Volatility::Immutable,
             BuiltinScalarFunction::Lpad => Volatility::Immutable,
             BuiltinScalarFunction::Lower => Volatility::Immutable,
@@ -708,6 +714,9 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::InitCap => {
                 utf8_to_str_type(&input_expr_types[0], "initcap")
             }
+            BuiltinScalarFunction::InStr => {
+                utf8_to_int_type(&input_expr_types[0], "instr")
+            }
             BuiltinScalarFunction::Left => utf8_to_str_type(&input_expr_types[0], "left"),
             BuiltinScalarFunction::Lower => {
                 utf8_to_str_type(&input_expr_types[0], "lower")
@@ -795,6 +804,7 @@ impl BuiltinScalarFunction {
                 true,
             )))),
             BuiltinScalarFunction::StartsWith => Ok(Boolean),
+            BuiltinScalarFunction::EndsWith => Ok(Boolean),
             BuiltinScalarFunction::Strpos => {
                 utf8_to_int_type(&input_expr_types[0], "strpos")
             }
@@ -1211,17 +1221,19 @@ impl BuiltinScalarFunction {
                 ],
                 self.volatility(),
             ),
-            BuiltinScalarFunction::Strpos | BuiltinScalarFunction::StartsWith => {
-                Signature::one_of(
-                    vec![
-                        Exact(vec![Utf8, Utf8]),
-                        Exact(vec![Utf8, LargeUtf8]),
-                        Exact(vec![LargeUtf8, Utf8]),
-                        Exact(vec![LargeUtf8, LargeUtf8]),
-                    ],
-                    self.volatility(),
-                )
-            }
+
+            BuiltinScalarFunction::EndsWith
+            | BuiltinScalarFunction::InStr
+            | BuiltinScalarFunction::Strpos
+            | BuiltinScalarFunction::StartsWith => Signature::one_of(
+                vec![
+                    Exact(vec![Utf8, Utf8]),
+                    Exact(vec![Utf8, LargeUtf8]),
+                    Exact(vec![LargeUtf8, Utf8]),
+                    Exact(vec![LargeUtf8, LargeUtf8]),
+                ],
+                self.volatility(),
+            ),
 
             BuiltinScalarFunction::Substr => Signature::one_of(
                 vec![
@@ -1473,7 +1485,9 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Concat => &["concat"],
             BuiltinScalarFunction::ConcatWithSeparator => &["concat_ws"],
             BuiltinScalarFunction::Chr => &["chr"],
+            BuiltinScalarFunction::EndsWith => &["ends_with"],
             BuiltinScalarFunction::InitCap => &["initcap"],
+            BuiltinScalarFunction::InStr => &["instr"],
             BuiltinScalarFunction::Left => &["left"],
             BuiltinScalarFunction::Lower => &["lower"],
             BuiltinScalarFunction::Lpad => &["lpad"],

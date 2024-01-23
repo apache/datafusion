@@ -613,7 +613,9 @@ nullif(expression1, expression2)
 - [concat](#concat)
 - [concat_ws](#concat_ws)
 - [chr](#chr)
+- [ends_with](#ends_with)
 - [initcap](#initcap)
+- [instr](#instr)
 - [left](#left)
 - [length](#length)
 - [lower](#lower)
@@ -756,6 +758,20 @@ chr(expression)
 **Related functions**:
 [ascii](#ascii)
 
+### `ends_with`
+
+Tests if a string ends with a substring.
+
+```
+ends_with(str, substr)
+```
+
+#### Arguments
+
+- **str**: String expression to test.
+  Can be a constant, column, or function, and any combination of string operators.
+- **substr**: Substring to test for.
+
 ### `initcap`
 
 Capitalizes the first character in each word in the input string.
@@ -773,6 +789,22 @@ initcap(str)
 **Related functions**:
 [lower](#lower),
 [upper](#upper)
+
+### `instr`
+
+Returns the location where substr first appeared in str (counting from 1).
+If substr does not appear in str, return 0.
+
+```
+instr(str, substr)
+```
+
+#### Arguments
+
+- **str**: String expression to operate on.
+  Can be a constant, column, or function, and any combination of string operators.
+- **substr**: Substring expression to search for.
+  Can be a constant, column, or function, and any combination of string operators.
 
 ### `left`
 
