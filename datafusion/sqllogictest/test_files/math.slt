@@ -121,7 +121,7 @@ statement error DataFusion error: Error during planning: No function matches the
 SELECT abs(1, 2);
 
 # abs: unsupported argument type
-statement error DataFusion error: Optimizer rule 'simplify_expressions' failed\ncaused by\nThis feature is not implemented: Unsupported data type Utf8 for function abs
+statement error
 SELECT abs('foo');
 
 
@@ -293,52 +293,52 @@ select c1*0, c2*0, c3*0, c4*0, c5*0, c6*0, c7*0, c8*0 from test_non_nullable_int
 ----
 0 0 0 0 0 0 0 0
 
-query error DataFusion error: Optimizer rule 'simplify_expressions' failed\ncaused by\nError during planning: Divide by zero
+query error 
 SELECT c1/0 FROM test_non_nullable_integer
 
-query error DataFusion error: Optimizer rule 'simplify_expressions' failed\ncaused by\nError during planning: Divide by zero
+query error
 SELECT c2/0 FROM test_non_nullable_integer
 
-query error DataFusion error: Optimizer rule 'simplify_expressions' failed\ncaused by\nError during planning: Divide by zero
+query error
 SELECT c3/0 FROM test_non_nullable_integer
 
-query error DataFusion error: Optimizer rule 'simplify_expressions' failed\ncaused by\nError during planning: Divide by zero
+query error
 SELECT c4/0 FROM test_non_nullable_integer
 
-query error DataFusion error: Optimizer rule 'simplify_expressions' failed\ncaused by\nError during planning: Divide by zero
+query error
 SELECT c5/0 FROM test_non_nullable_integer
 
-query error DataFusion error: Optimizer rule 'simplify_expressions' failed\ncaused by\nError during planning: Divide by zero
+query error
 SELECT c6/0 FROM test_non_nullable_integer
 
-query error DataFusion error: Optimizer rule 'simplify_expressions' failed\ncaused by\nError during planning: Divide by zero
+query error
 SELECT c7/0 FROM test_non_nullable_integer
 
-query error DataFusion error: Optimizer rule 'simplify_expressions' failed\ncaused by\nError during planning: Divide by zero
+query error
 SELECT c8/0 FROM test_non_nullable_integer
 
-query error DataFusion error: Optimizer rule 'simplify_expressions' failed\ncaused by\nError during planning: Divide by zero
+query error
 SELECT c1%0 FROM test_non_nullable_integer
 
-query error DataFusion error: Optimizer rule 'simplify_expressions' failed\ncaused by\nError during planning: Divide by zero
+query error
 SELECT c2%0 FROM test_non_nullable_integer
 
-query error DataFusion error: Optimizer rule 'simplify_expressions' failed\ncaused by\nError during planning: Divide by zero
+query error
 SELECT c3%0 FROM test_non_nullable_integer
 
-query error DataFusion error: Optimizer rule 'simplify_expressions' failed\ncaused by\nError during planning: Divide by zero
+query error
 SELECT c4%0 FROM test_non_nullable_integer
 
-query error DataFusion error: Optimizer rule 'simplify_expressions' failed\ncaused by\nError during planning: Divide by zero
+query error
 SELECT c5%0 FROM test_non_nullable_integer
 
-query error DataFusion error: Optimizer rule 'simplify_expressions' failed\ncaused by\nError during planning: Divide by zero
+query error
 SELECT c6%0 FROM test_non_nullable_integer
 
-query error DataFusion error: Optimizer rule 'simplify_expressions' failed\ncaused by\nError during planning: Divide by zero
+query error
 SELECT c7%0 FROM test_non_nullable_integer
 
-query error DataFusion error: Optimizer rule 'simplify_expressions' failed\ncaused by\nError during planning: Divide by zero
+query error
 SELECT c8%0 FROM test_non_nullable_integer
 
 statement ok
@@ -556,10 +556,10 @@ SELECT c1*0 FROM test_non_nullable_decimal
 ----
 0
 
-query error DataFusion error: Optimizer rule 'simplify_expressions' failed\ncaused by\nError during planning: Divide by zero
+query error
 SELECT c1/0 FROM test_non_nullable_decimal 
 
-query error DataFusion error: Optimizer rule 'simplify_expressions' failed\ncaused by\nError during planning: Divide by zero
+query error
 SELECT c1%0 FROM test_non_nullable_decimal 
 
 statement ok

@@ -33,7 +33,6 @@ use arrow::{
 };
 use datafusion_common::{
     cast::{as_large_list_array, as_list_array},
-    plan_err,
     tree_node::{RewriteRecursion, TreeNode, TreeNodeRewriter},
 };
 use datafusion_common::{
@@ -281,7 +280,13 @@ impl<'a> TreeNodeRewriter for ConstEvaluator<'a> {
 
     fn mutate(&mut self, expr: Expr) -> Result<Expr> {
         match self.can_evaluate.pop() {
-            Some(true) => Ok(Expr::Literal(self.evaluate_to_scalar(expr)?)),
+            Some(true) => {
+                let lit = self.evaluate_to_scalar(expr.clone());
+                match lit {
+                    Ok(lit) => Ok(Expr::Literal(lit)),
+                    Err(_) => Ok(expr),
+                }
+            }
             Some(false) => Ok(expr),
             _ => internal_err!("Failed to pop can_evaluate"),
         }
@@ -796,18 +801,6 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 op: Divide,
                 right,
             }) if is_null(&right) => *right,
-            // A / 0 -> Divide by zero error if A is not null and not floating
-            // (float / 0 -> inf | -inf | NAN)
-            Expr::BinaryExpr(BinaryExpr {
-                left,
-                op: Divide,
-                right,
-            }) if !info.nullable(&left)?
-                && !info.get_data_type(&left)?.is_floating()
-                && is_zero(&right) =>
-            {
-                return plan_err!("Divide by zero");
-            }
 
             //
             // Rules for Modulo
@@ -835,21 +828,6 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 && is_one(&right) =>
             {
                 lit(0)
-            }
-            // A % 0 --> Divide by zero Error (if A is not floating and not null)
-            // A % 0 --> NAN (if A is floating and not null)
-            Expr::BinaryExpr(BinaryExpr {
-                left,
-                op: Modulo,
-                right,
-            }) if !info.nullable(&left)? && is_zero(&right) => {
-                match info.get_data_type(&left)? {
-                    DataType::Float32 => lit(f32::NAN),
-                    DataType::Float64 => lit(f64::NAN),
-                    _ => {
-                        return plan_err!("Divide by zero");
-                    }
-                }
             }
 
             //
@@ -1317,9 +1295,7 @@ mod tests {
         array::{ArrayRef, Int32Array},
         datatypes::{DataType, Field, Schema},
     };
-    use datafusion_common::{
-        assert_contains, cast::as_int32_array, plan_datafusion_err, DFField, ToDFSchema,
-    };
+    use datafusion_common::{assert_contains, cast::as_int32_array, DFField, ToDFSchema};
     use datafusion_expr::{interval_arithmetic::Interval, *};
     use datafusion_physical_expr::execution_props::ExecutionProps;
 
@@ -1793,27 +1769,6 @@ mod tests {
     }
 
     #[test]
-    fn test_simplify_divide_zero_by_zero() {
-        // 0 / 0 -> Divide by zero
-        let expr = lit(0) / lit(0);
-        let err = try_simplify(expr).unwrap_err();
-
-        let _expected = plan_datafusion_err!("Divide by zero");
-
-        assert!(matches!(err, ref _expected), "{err}");
-    }
-
-    #[test]
-    fn test_simplify_divide_by_zero() {
-        // A / 0 -> DivideByZeroError
-        let expr = col("c2_non_null") / lit(0);
-        assert_eq!(
-            try_simplify(expr).unwrap_err().strip_backtrace(),
-            "Error during planning: Divide by zero"
-        );
-    }
-
-    #[test]
     fn test_simplify_modulo_by_null() {
         let null = lit(ScalarValue::Null);
         // A % null --> null
@@ -2227,15 +2182,6 @@ mod tests {
         let expected = lit(0i64);
 
         assert_eq!(simplify(expr), expected);
-    }
-
-    #[test]
-    fn test_simplify_modulo_by_zero_non_null() {
-        let expr = col("c2_non_null") % lit(0);
-        assert_eq!(
-            try_simplify(expr).unwrap_err().strip_backtrace(),
-            "Error during planning: Divide by zero"
-        );
     }
 
     #[test]

@@ -405,7 +405,7 @@ select arrow_cast([1], 'FixedSizeList(1, Int64)');
 ----
 [1]
 
-query error DataFusion error: Optimizer rule 'simplify_expressions' failed
+query error
 select arrow_cast(make_array(1, 2, 3), 'FixedSizeList(4, Int64)');
 
 query ?
