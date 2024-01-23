@@ -559,10 +559,10 @@ pub fn create_physical_fun(
         }),
         BuiltinScalarFunction::InStr => Arc::new(|args| match args[0].data_type() {
             DataType::Utf8 => {
-                make_scalar_function(string_expressions::instr::<i32>)(args)
+                make_scalar_function_inner(string_expressions::instr::<i32>)(args)
             }
             DataType::LargeUtf8 => {
-                make_scalar_function(string_expressions::instr::<i64>)(args)
+                make_scalar_function_inner(string_expressions::instr::<i64>)(args)
             }
             other => internal_err!("Unsupported data type {other:?} for function instr"),
         }),
@@ -790,10 +790,10 @@ pub fn create_physical_fun(
         }),
         BuiltinScalarFunction::EndsWith => Arc::new(|args| match args[0].data_type() {
             DataType::Utf8 => {
-                make_scalar_function(string_expressions::ends_with::<i32>)(args)
+                make_scalar_function_inner(string_expressions::ends_with::<i32>)(args)
             }
             DataType::LargeUtf8 => {
-                make_scalar_function(string_expressions::ends_with::<i64>)(args)
+                make_scalar_function_inner(string_expressions::ends_with::<i64>)(args)
             }
             other => {
                 internal_err!("Unsupported data type {other:?} for function ends_with")
