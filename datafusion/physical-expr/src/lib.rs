@@ -46,9 +46,7 @@ pub mod utils;
 pub mod var_provider;
 pub mod window;
 
-pub use aggregate::groups_accumulator::{
-    EmitTo, GroupsAccumulator, GroupsAccumulatorAdapter,
-};
+pub use aggregate::groups_accumulator::{GroupsAccumulatorAdapter, NullState};
 pub use aggregate::AggregateExpr;
 pub use analysis::{analyze, AnalysisContext, ExprBoundaries};
 pub use equivalence::EquivalenceProperties;

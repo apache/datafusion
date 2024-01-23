@@ -37,6 +37,18 @@ pub enum ColumnarValue {
     Scalar(ScalarValue),
 }
 
+impl From<ArrayRef> for ColumnarValue {
+    fn from(value: ArrayRef) -> Self {
+        ColumnarValue::Array(value)
+    }
+}
+
+impl From<ScalarValue> for ColumnarValue {
+    fn from(value: ScalarValue) -> Self {
+        ColumnarValue::Scalar(value)
+    }
+}
+
 impl ColumnarValue {
     pub fn data_type(&self) -> DataType {
         match self {

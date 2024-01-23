@@ -482,7 +482,7 @@ async fn sort_on_window_null_string() -> Result<()> {
 async fn test_prepare_statement() -> Result<()> {
     let tmp_dir = TempDir::new()?;
     let partition_count = 4;
-    let ctx = partitioned_csv::create_ctx(&tmp_dir, partition_count).await?;
+    let ctx = create_ctx_with_partition(&tmp_dir, partition_count).await?;
 
     // sql to statement then to prepare logical plan with parameters
     // c1 defined as UINT32, c2 defined as UInt64 but the params are Int32 and Float64
@@ -529,7 +529,7 @@ async fn test_prepare_statement() -> Result<()> {
 async fn test_named_query_parameters() -> Result<()> {
     let tmp_dir = TempDir::new()?;
     let partition_count = 4;
-    let ctx = partitioned_csv::create_ctx(&tmp_dir, partition_count).await?;
+    let ctx = create_ctx_with_partition(&tmp_dir, partition_count).await?;
 
     // sql to statement then to logical plan with parameters
     // c1 defined as UINT32, c2 defined as UInt64
@@ -576,7 +576,7 @@ async fn test_named_query_parameters() -> Result<()> {
 async fn parallel_query_with_filter() -> Result<()> {
     let tmp_dir = TempDir::new()?;
     let partition_count = 4;
-    let ctx = partitioned_csv::create_ctx(&tmp_dir, partition_count).await?;
+    let ctx = create_ctx_with_partition(&tmp_dir, partition_count).await?;
 
     let dataframe = ctx
         .sql("SELECT c1, c2 FROM test WHERE c1 > 0 AND c1 < 3")

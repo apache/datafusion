@@ -35,10 +35,7 @@ use datafusion::datasource::TableProvider;
 use datafusion::execution::context::SessionState;
 use datafusion::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
 use datafusion::parquet::file::properties::{WriterProperties, WriterVersion};
-use datafusion::physical_plan::functions::make_scalar_function;
-use datafusion::prelude::{
-    create_udf, decode, encode, CsvReadOptions, SessionConfig, SessionContext,
-};
+use datafusion::prelude::*;
 use datafusion::test_util::{TestTableFactory, TestTableProvider};
 use datafusion_common::file_options::csv_writer::CsvWriterOptions;
 use datafusion_common::file_options::parquet_writer::ParquetWriterOptions;
@@ -56,8 +53,8 @@ use datafusion_expr::logical_plan::{Extension, UserDefinedLogicalNodeCore};
 use datafusion_expr::{
     col, create_udaf, lit, Accumulator, AggregateFunction,
     BuiltinScalarFunction::{Sqrt, Substr},
-    Expr, ExprSchemable, LogicalPlan, Operator, PartitionEvaluator, Signature, TryCast,
-    Volatility, WindowFrame, WindowFrameBound, WindowFrameUnits,
+    ColumnarValue, Expr, ExprSchemable, LogicalPlan, Operator, PartitionEvaluator,
+    Signature, TryCast, Volatility, WindowFrame, WindowFrameBound, WindowFrameUnits,
     WindowFunctionDefinition, WindowUDF, WindowUDFImpl,
 };
 use datafusion_proto::bytes::{
@@ -1655,9 +1652,12 @@ fn roundtrip_aggregate_udf() {
 
 #[test]
 fn roundtrip_scalar_udf() {
-    let fn_impl = |args: &[ArrayRef]| Ok(Arc::new(args[0].clone()) as ArrayRef);
-
-    let scalar_fn = make_scalar_function(fn_impl);
+    let scalar_fn = Arc::new(|args: &[ColumnarValue]| {
+        let ColumnarValue::Array(array) = &args[0] else {
+            panic!("should be array")
+        };
+        Ok(ColumnarValue::from(Arc::new(array.clone()) as ArrayRef))
+    });
 
     let udf = create_udf(
         "dummy",

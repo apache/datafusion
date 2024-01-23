@@ -23,7 +23,6 @@ use crate::physical_plan::{
     AsExecutionPlan, DefaultPhysicalExtensionCodec, PhysicalExtensionCodec,
 };
 use crate::protobuf;
-use datafusion::physical_plan::functions::make_scalar_function;
 use datafusion_common::{plan_datafusion_err, DataFusionError, Result};
 use datafusion_expr::{
     create_udaf, create_udf, create_udwf, AggregateUDF, Expr, LogicalPlan, Volatility,
@@ -117,7 +116,7 @@ impl Serializeable for Expr {
                     vec![],
                     Arc::new(arrow::datatypes::DataType::Null),
                     Volatility::Immutable,
-                    make_scalar_function(|_| unimplemented!()),
+                    Arc::new(|_| unimplemented!()),
                 )))
             }
 

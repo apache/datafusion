@@ -18,7 +18,8 @@
 use arrow_array::ArrayRef;
 use arrow_schema::Schema;
 use datafusion_common::Result;
-use datafusion_physical_expr::{EmitTo, PhysicalSortExpr};
+use datafusion_expr::EmitTo;
+use datafusion_physical_expr::PhysicalSortExpr;
 
 mod full;
 mod partial;
