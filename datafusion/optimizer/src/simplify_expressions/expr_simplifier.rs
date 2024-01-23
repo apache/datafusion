@@ -36,7 +36,7 @@ use datafusion_common::{
     tree_node::{RewriteRecursion, TreeNode, TreeNodeRewriter},
 };
 use datafusion_common::{
-    exec_err, internal_err, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue,
+    internal_err, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue,
 };
 use datafusion_expr::{
     and, lit, or, BinaryExpr, BuiltinScalarFunction, Case, ColumnarValue, Expr, Like,
@@ -248,6 +248,14 @@ struct ConstEvaluator<'a> {
     input_batch: RecordBatch,
 }
 
+/// The simplify result of ConstEvaluator
+enum ConstSimplifyResult {
+    // Expr was simplifed and contains the new expression
+    Simplified(ScalarValue),
+    // Evalaution encountered an error, contains the original expression
+    SimplifyRuntimeError(DataFusionError, Expr),
+}
+
 impl<'a> TreeNodeRewriter for ConstEvaluator<'a> {
     type N = Expr;
 
@@ -285,10 +293,10 @@ impl<'a> TreeNodeRewriter for ConstEvaluator<'a> {
             // if any error is countered during simplification, return the original
             // so that normal evaluation can occur
             Some(true) => {
-                let lit = self.evaluate_to_scalar(&expr);
-                match lit {
-                    Ok(lit) => Ok(Expr::Literal(lit)),
-                    Err(_) => Ok(expr),
+                let result = self.evaluate_to_scalar(expr);
+                match result {
+                    ConstSimplifyResult::Simplified(s) => Ok(Expr::Literal(s)),
+                    ConstSimplifyResult::SimplifyRuntimeError(_, expr) => Ok(expr),
                 }
             }
             Some(false) => Ok(expr),
@@ -385,29 +393,40 @@ impl<'a> ConstEvaluator<'a> {
     }
 
     /// Internal helper to evaluates an Expr
-    pub(crate) fn evaluate_to_scalar(&mut self, expr: &Expr) -> Result<ScalarValue> {
+    pub(crate) fn evaluate_to_scalar(&mut self, expr: Expr) -> ConstSimplifyResult {
         if let Expr::Literal(s) = expr {
-            return Ok(s.to_owned());
+            return ConstSimplifyResult::Simplified(s);
         }
 
         let phys_expr =
-            create_physical_expr(expr, &self.input_schema, self.execution_props)?;
-        let col_val = phys_expr.evaluate(&self.input_batch)?;
+            match create_physical_expr(&expr, &self.input_schema, self.execution_props) {
+                Ok(e) => e,
+                Err(err) => return ConstSimplifyResult::SimplifyRuntimeError(err, expr),
+            };
+        let col_val = match phys_expr.evaluate(&self.input_batch) {
+            Ok(v) => v,
+            Err(err) => return ConstSimplifyResult::SimplifyRuntimeError(err, expr),
+        };
         match col_val {
             ColumnarValue::Array(a) => {
                 if a.len() != 1 {
-                    exec_err!(
-                        "Could not evaluate the expression, found a result of length {}",
-                        a.len()
+                    ConstSimplifyResult::SimplifyRuntimeError(
+                        DataFusionError::Execution(format!("Could not evaluate the expression, found a result of length {}", a.len())),
+                        expr,
                     )
                 } else if as_list_array(&a).is_ok() || as_large_list_array(&a).is_ok() {
-                    Ok(ScalarValue::List(a.as_list().to_owned().into()))
+                    ConstSimplifyResult::Simplified(ScalarValue::List(
+                        a.as_list().to_owned().into(),
+                    ))
                 } else {
                     // Non-ListArray
-                    ScalarValue::try_from_array(&a, 0)
+                    match ScalarValue::try_from_array(&a, 0) {
+                        Ok(s) => ConstSimplifyResult::Simplified(s),
+                        Err(err) => ConstSimplifyResult::SimplifyRuntimeError(err, expr),
+                    }
                 }
             }
-            ColumnarValue::Scalar(s) => Ok(s),
+            ColumnarValue::Scalar(s) => ConstSimplifyResult::Simplified(s),
         }
     }
 }
@@ -3377,7 +3396,7 @@ mod tests {
 
     #[test]
     fn test_expression_partial_simplify_2() {
-        // (1 > 2) and (4 / 0) -> false and (4 / 0) -> false
+        // (1 > 2) and (4 / 0) -> false
         let expr = (lit(1).gt(lit(2))).and(lit(4) / lit(0));
         let expected = lit(false);
 

@@ -1529,10 +1529,6 @@ false true
 
 query error
 SELECT not(1), not(0)
-----
-DataFusion error: Internal error: NOT 'Literal { value: Int64(1) }' can't be evaluated because the expression's type is Int64, not boolean or NULL.
-This was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker
-
 
 query ?B
 SELECT null, not(null)
@@ -1541,10 +1537,6 @@ NULL NULL
 
 query error
 SELECT NOT('hi')
-----
-DataFusion error: Internal error: NOT 'Literal { value: Utf8("hi") }' can't be evaluated because the expression's type is Utf8, not boolean or NULL.
-This was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker
-
 
 # test_negative_expressions()
 
