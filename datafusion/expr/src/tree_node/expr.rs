@@ -305,11 +305,9 @@ impl TreeNode for Expr {
                     ))
                 }
                 AggregateFunctionDefinition::UDF(fun) => {
-                    let order_by = if let Some(order_by) = order_by {
-                        Some(transform_vec(order_by, &mut transform)?)
-                    } else {
-                        None
-                    };
+                    let order_by = order_by
+                        .map(|order_by| transform_vec(order_by, &mut transform))
+                        .transpose()?;
                     Expr::AggregateFunction(AggregateFunction::new_udf(
                         fun,
                         transform_vec(args, &mut transform)?,
@@ -338,7 +336,6 @@ impl TreeNode for Expr {
                     ))
                 }
             },
-
             Expr::InList(InList {
                 expr,
                 list,
