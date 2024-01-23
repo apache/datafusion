@@ -80,7 +80,7 @@ impl TreeNodeRewriter for InListSimplifier {
 
 fn inlist_union(l1: &InList, l2: &InList, negated: bool) -> Result<Expr> {
     let mut seen: HashSet<Expr> = HashSet::new();
-    let list_set = l1
+    let list = l1
         .list
         .iter()
         .chain(l2.list.iter())
@@ -89,7 +89,7 @@ fn inlist_union(l1: &InList, l2: &InList, negated: bool) -> Result<Expr> {
         .collect::<Vec<_>>();
     let merged_inlist = InList {
         expr: l1.expr.clone(),
-        list: list_set,
+        list,
         negated,
     };
     Ok(Expr::InList(merged_inlist))

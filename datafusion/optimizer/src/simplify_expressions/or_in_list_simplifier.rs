@@ -54,7 +54,7 @@ impl TreeNodeRewriter for OrInListSimplifier {
                         let lhs = lhs.into_owned();
                         let rhs = rhs.into_owned();
                         let mut seen: HashSet<Expr> = HashSet::new();
-                        let list_set = lhs
+                        let list = lhs
                             .list
                             .into_iter()
                             .chain(rhs.list)
@@ -63,7 +63,7 @@ impl TreeNodeRewriter for OrInListSimplifier {
 
                         let merged_inlist = InList {
                             expr: lhs.expr,
-                            list: list_set,
+                            list,
                             negated: false,
                         };
                         return Ok(Expr::InList(merged_inlist));

@@ -3277,19 +3277,28 @@ mod tests {
         // c1 NOT IN (1,2,3,4) AND c1 IN (5,6,7,8) AND c1 NOT IN (3,4,5,6) AND c1 IN (8,9,10) -> c1 = 8
         let expr = in_list(col("c1"), vec![lit(1), lit(2), lit(3), lit(4)], true).and(
             in_list(col("c1"), vec![lit(5), lit(6), lit(7), lit(8)], false)
-            .and(in_list(col("c1"), vec![lit(3), lit(4), lit(5), lit(6)], true))
-            .and(in_list(col("c1"), vec![lit(8), lit(9), lit(10)], false)));
+                .and(in_list(
+                    col("c1"),
+                    vec![lit(3), lit(4), lit(5), lit(6)],
+                    true,
+                ))
+                .and(in_list(col("c1"), vec![lit(8), lit(9), lit(10)], false)),
+        );
         assert_eq!(simplify(expr.clone()), col("c1").eq(lit(8)));
 
         // Contains non-InList expression
         // c1 NOT IN (1,2,3,4) OR c1 != 5 OR c1 NOT IN (6,7,8,9) -> c1 NOT IN (1,2,3,4) OR c1 != 5 OR c1 NOT IN (6,7,8,9)
-        let expr = in_list(col("c1"), vec![lit(1), lit(2), lit(3), lit(4)], true).or(
-            col("c1").not_eq(lit(5))
-            .or(in_list(col("c1"), vec![lit(6), lit(7), lit(8), lit(9)], true)));
+        let expr =
+            in_list(col("c1"), vec![lit(1), lit(2), lit(3), lit(4)], true).or(col("c1")
+                .not_eq(lit(5))
+                .or(in_list(
+                    col("c1"),
+                    vec![lit(6), lit(7), lit(8), lit(9)],
+                    true,
+                )));
         // TODO: Further simplify this expression
         // assert_eq!(simplify(expr.clone()), lit(true));
         assert_eq!(simplify(expr.clone()), expr);
-        
     }
 
     #[test]
