@@ -18,6 +18,7 @@
 //! This module implements a rule that simplifies OR expressions into IN list expressions
 
 use std::borrow::Cow;
+use std::collections::HashSet;
 
 use datafusion_common::tree_node::TreeNodeRewriter;
 use datafusion_common::Result;
@@ -52,12 +53,17 @@ impl TreeNodeRewriter for OrInListSimplifier {
                     {
                         let lhs = lhs.into_owned();
                         let rhs = rhs.into_owned();
-                        let mut list = vec![];
-                        list.extend(lhs.list);
-                        list.extend(rhs.list);
+                        let mut seen: HashSet<Expr> = HashSet::new();
+                        let list_set = lhs
+                            .list
+                            .into_iter()
+                            .chain(rhs.list.into_iter())
+                            .filter(|e| seen.insert(e.to_owned()))
+                            .collect::<Vec<_>>();
+
                         let merged_inlist = InList {
                             expr: lhs.expr,
-                            list,
+                            list: list_set,
                             negated: false,
                         };
                         return Ok(Expr::InList(merged_inlist));

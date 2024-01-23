@@ -29,16 +29,17 @@ use datafusion_expr::{lit, BinaryExpr, Expr, Operator};
 /// Rules:
 /// If both expressions are `IN` or `NOT IN`, then we can apply intersection or union on both lists
 ///   Intersection:
-///     1. `a in (1,2,3) AND a in (4,5) -> a in ()`
+///     1. `a in (1,2,3) AND a in (4,5) -> a in (), which is false`
 ///     2. `a in (1,2,3) AND a in (2,3,4) -> a in (2,3)`
 ///     3. `a not in (1,2,3) OR a not in (3,4,5,6) -> a not in (3)`
 ///   Union:
-///     1. `a not int (1,2,3) AND a not in (4,5,6) -> a not in (1,2,3,4,5,6)`
-///     2. `a in (1,2,3) OR a in (4,5,6) -> a in (1,2,3,4,5,6)`
+///     4. `a not int (1,2,3) AND a not in (4,5,6) -> a not in (1,2,3,4,5,6)`
+///     # This rule is handled by `or_in_list_simplifier.rs`
+///     5. `a in (1,2,3) OR a in (4,5,6) -> a in (1,2,3,4,5,6)`
 /// If one of the expressions is `IN` and another one is `NOT IN`, then we apply exception on `In` expression
-///     1. `a in (1,2,3) AND a not in (1,2,3,4,5) -> a in (), which is false`
-///     2. `a not in (1,2,3) AND a in (1,2,3,4,5) -> a in (4,5)`
-///     3. `a in (1,2,3) AND a not in (4,5) -> a in (1,2,3)`
+///     6. `a in (1,2,3,4) AND a not in (1,2,3,4,5) -> a in (), which is false`
+///     7. `a not in (1,2,3,4) AND a in (1,2,3,4,5) -> a = 5`
+///     8. `a in (1,2,3,4) AND a not in (5,6,7,8) -> a in (1,2,3,4)`
 pub(super) struct InListSimplifier {}
 
 impl InListSimplifier {
@@ -51,7 +52,7 @@ impl TreeNodeRewriter for InListSimplifier {
     type N = Expr;
 
     fn mutate(&mut self, expr: Expr) -> Result<Expr> {
-        if let Expr::BinaryExpr(BinaryExpr {left, op, right }) = &expr {
+        if let Expr::BinaryExpr(BinaryExpr { left, op, right }) = &expr {
             if let (Expr::InList(l1), Operator::And, Expr::InList(l2)) =
                 (left.as_ref(), op, right.as_ref())
             {
@@ -68,7 +69,7 @@ impl TreeNodeRewriter for InListSimplifier {
                 (left.as_ref(), op, right.as_ref())
             {
                 if l1.expr == l2.expr && l1.negated && l2.negated {
-                    return inlist_intersection(l1, l2, true)
+                    return inlist_intersection(l1, l2, true);
                 }
             }
         }
@@ -78,12 +79,17 @@ impl TreeNodeRewriter for InListSimplifier {
 }
 
 fn inlist_union(l1: &InList, l2: &InList, negated: bool) -> Result<Expr> {
-    let mut list = vec![];
-    list.extend(l1.list.clone());
-    list.extend(l2.list.clone());
+    let mut seen: HashSet<Expr> = HashSet::new();
+    let list_set = l1
+        .list
+        .iter()
+        .chain(l2.list.iter())
+        .filter(|&e| seen.insert(e.to_owned()))
+        .cloned()
+        .collect::<Vec<_>>();
     let merged_inlist = InList {
         expr: l1.expr.clone(),
-        list,
+        list: list_set,
         negated,
     };
     Ok(Expr::InList(merged_inlist))
