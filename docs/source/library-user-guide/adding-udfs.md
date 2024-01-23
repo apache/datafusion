@@ -42,11 +42,11 @@ use std::sync::Arc;
 use datafusion::arrow::array::{ArrayRef, Int64Array};
 use datafusion::common::Result;
 use datafusion::common::cast::as_int64_array;
-use datafusion::physical_plan::functions::process_scalar_func_inputs;
+use datafusion::physical_plan::functions::columnar_values_to_array;
 
 pub fn add_one(args: &[ColumnarValue]) -> Result<ArrayRef> {
     // Error handling omitted for brevity
-    let args = process_scalar_func_inputs(args)?;
+    let args = columnar_values_to_array(args)?;
     let i64s = as_int64_array(&args[0])?;
 
     let new_array = i64s

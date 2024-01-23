@@ -28,7 +28,7 @@ use datafusion::error::Result;
 use datafusion::prelude::*;
 use datafusion_common::cast::as_float64_array;
 use datafusion_expr::ColumnarValue;
-use datafusion_physical_expr::functions::process_scalar_func_inputs;
+use datafusion_physical_expr::functions::columnar_values_to_array;
 use std::sync::Arc;
 
 /// create local execution context with an in-memory table:
@@ -71,7 +71,7 @@ async fn main() -> Result<()> {
         // this is guaranteed by DataFusion based on the function's signature.
         assert_eq!(args.len(), 2);
 
-        let args = process_scalar_func_inputs(args)?;
+        let args = columnar_values_to_array(args)?;
 
         // 1. cast both arguments to f64. These casts MUST be aligned with the signature or this function panics!
         let base = as_float64_array(&args[0]).expect("cast failed");

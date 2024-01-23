@@ -1324,7 +1324,7 @@ mod tests {
     use datafusion_physical_expr::execution_props::ExecutionProps;
 
     use chrono::{DateTime, TimeZone, Utc};
-    use datafusion_physical_expr::functions::process_scalar_func_inputs;
+    use datafusion_physical_expr::functions::columnar_values_to_array;
 
     // ------------------------------
     // --- ExprSimplifier tests -----
@@ -1438,7 +1438,7 @@ mod tests {
         let return_type = Arc::new(DataType::Int32);
 
         let fun = Arc::new(|args: &[ColumnarValue]| {
-            let args = process_scalar_func_inputs(args)?;
+            let args = columnar_values_to_array(args)?;
 
             let arg0 = as_int32_array(&args[0])?;
             let arg1 = as_int32_array(&args[1])?;
