@@ -37,12 +37,12 @@ use std::sync::Arc;
 /// functions (`GROUP BY` clause) as well as window functions (`OVER`
 /// clause).
 ///
-/// `AggregateUDF` provides DataFusion the information needed to plan
-/// and call aggregate functions, including name, type information,
-/// and a factory function to create [`Accumulator`], which peform the
-/// actual aggregation.
+/// `AggregateUDF` provides DataFusion the information needed to plan and call
+/// aggregate functions, including name, type information, and a factory
+/// function to create an [`Accumulator`] instance, to perform the actual
+/// aggregation.
 ///
-/// For more information, please see [the examples].
+/// For more information, please see [the examples]:
 ///
 /// 1. For simple (less performant) use cases, use [`create_udaf`] and [`simple_udaf.rs`].
 ///
@@ -58,7 +58,6 @@ use std::sync::Arc;
 /// [`create_udaf`]: crate::expr_fn::create_udaf
 /// [`simple_udaf.rs`]: https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/simple_udaf.rs
 /// [`advanced_udaf.rs`]: https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/advanced_udaf.rs
-
 #[derive(Debug, Clone)]
 pub struct AggregateUDF {
     inner: Arc<dyn AggregateUDFImpl>,
@@ -153,7 +152,7 @@ impl AggregateUDF {
         self.inner.return_type(args)
     }
 
-    /// Return an accumualator the given aggregate, given
+    /// Return an accumulator the given aggregate, given
     /// its return datatype.
     pub fn accumulator(&self, return_type: &DataType) -> Result<Box<dyn Accumulator>> {
         self.inner.accumulator(return_type)

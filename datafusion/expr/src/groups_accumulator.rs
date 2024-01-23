@@ -59,12 +59,24 @@ impl EmitTo {
 /// `GroupAccumulator` implements a single aggregate (e.g. AVG) and
 /// stores the state for *all* groups internally.
 ///
+/// # Notes on Implementing `GroupAccumulator`
+///
+/// All aggregates must first implement the simpler [`Accumulator`] trait, which
+/// handles state for a single group. Implementing `GroupsAccumulator` is
+/// optional and is harder to implement than `Accumulator`, but can be much
+/// faster for queries with many group values.  See the [Aggregating Millions of
+/// Groups Fast blog] for more background.
+///
+/// # Details
 /// Each group is assigned a `group_index` by the hash table and each
-/// accumulator manages the specific state, one per group_index.
+/// accumulator manages the specific state, one per `group_index`.
 ///
 /// group_indexes are contiguous (there aren't gaps), and thus it is
-/// expected that each GroupAccumulator will use something like `Vec<..>`
+/// expected that each `GroupAccumulator` will use something like `Vec<..>`
 /// to store the group states.
+///
+/// [`Accumulator`]: crate::Accumulator
+/// [Aggregating Millions of Groups Fast blog]: https://arrow.apache.org/blog/2023/08/05/datafusion_fast_grouping/
 pub trait GroupsAccumulator: Send {
     /// Updates the accumulator's state from its arguments, encoded as
     /// a vector of [`ArrayRef`]s.
