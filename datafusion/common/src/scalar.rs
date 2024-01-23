@@ -34,8 +34,9 @@ use crate::cast::{
 };
 use crate::error::{DataFusionError, Result, _internal_err, _not_impl_err};
 use crate::hash_utils::create_hashes;
-use crate::utils::{array_into_large_list_array, array_into_list_array};
-
+use crate::utils::{
+    array_into_fixed_size_list_array, array_into_large_list_array, array_into_list_array,
+};
 use arrow::compute::kernels::numeric::*;
 use arrow::util::display::{ArrayFormatter, FormatOptions};
 use arrow::{
@@ -2223,9 +2224,11 @@ impl ScalarValue {
                 let list_array = as_fixed_size_list_array(array)?;
                 let nested_array = list_array.value(index);
                 // Produces a single element `ListArray` with the value at `index`.
-                let arr = Arc::new(array_into_list_array(nested_array));
+                let list_size = nested_array.len();
+                let arr =
+                    Arc::new(array_into_fixed_size_list_array(nested_array, list_size));
 
-                ScalarValue::List(arr)
+                ScalarValue::FixedSizeList(arr)
             }
             DataType::Date32 => typed_cast!(array, index, Date32Array, Date32)?,
             DataType::Date64 => typed_cast!(array, index, Date64Array, Date64)?,
@@ -2954,6 +2957,33 @@ impl TryFrom<&DataType> for ScalarValue {
                     1,
                 )
                 .as_list::<i32>()
+                .to_owned()
+                .into(),
+            ),
+            // 'ScalarValue::LargeList' contains single element `LargeListArray
+            DataType::LargeList(field) => ScalarValue::LargeList(
+                new_null_array(
+                    &DataType::LargeList(Arc::new(Field::new(
+                        "item",
+                        field.data_type().clone(),
+                        true,
+                    ))),
+                    1,
+                )
+                .as_list::<i64>()
+                .to_owned()
+                .into(),
+            ),
+            // `ScalaValue::FixedSizeList` contains single element `FixedSizeList`.
+            DataType::FixedSizeList(field, _) => ScalarValue::FixedSizeList(
+                new_null_array(
+                    &DataType::FixedSizeList(
+                        Arc::new(Field::new("item", field.data_type().clone(), true)),
+                        1,
+                    ),
+                    1,
+                )
+                .as_fixed_size_list()
                 .to_owned()
                 .into(),
             ),

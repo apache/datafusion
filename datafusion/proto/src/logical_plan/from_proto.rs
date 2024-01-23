@@ -58,17 +58,16 @@ use datafusion_expr::{
     current_date, current_time, date_bin, date_part, date_trunc, decode, degrees, digest,
     encode, exp,
     expr::{self, InList, Sort, WindowFunction},
-    factorial, find_in_set, flatten, floor, from_unixtime, gcd, gen_range, isnan, iszero,
-    lcm, left, levenshtein, ln, log, log10, log2,
+    factorial, find_in_set, flatten, floor, from_unixtime, gcd, gen_range, initcap,
+    isnan, iszero, lcm, left, levenshtein, ln, log, log10, log2,
     logical_plan::{PlanType, StringifiedPlan},
     lower, lpad, ltrim, md5, nanvl, now, nullif, octet_length, overlay, pi, power,
     radians, random, regexp_match, regexp_replace, repeat, replace, reverse, right,
     round, rpad, rtrim, sha224, sha256, sha384, sha512, signum, sin, sinh, split_part,
     sqrt, starts_with, string_to_array, strpos, struct_fun, substr, substr_index,
-    substring, tan, tanh, to_hex, to_timestamp_micros, to_timestamp_millis,
-    to_timestamp_nanos, to_timestamp_seconds, translate, trim, trunc, upper, uuid,
-    AggregateFunction, Between, BinaryExpr, BuiltInWindowFunction, BuiltinScalarFunction,
-    Case, Cast, Expr, GetFieldAccess, GetIndexedField, GroupingSet,
+    substring, tan, tanh, to_hex, translate, trim, trunc, upper, uuid, AggregateFunction,
+    Between, BinaryExpr, BuiltInWindowFunction, BuiltinScalarFunction, Case, Cast, Expr,
+    GetFieldAccess, GetIndexedField, GroupingSet,
     GroupingSet::GroupingSets,
     JoinConstraint, JoinType, Like, Operator, TryCast, WindowFrame, WindowFrameBound,
     WindowFrameUnits,
@@ -476,7 +475,6 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::Trim => Self::Trim,
             ScalarFunction::Ltrim => Self::Ltrim,
             ScalarFunction::Rtrim => Self::Rtrim,
-            ScalarFunction::ToTimestamp => Self::ToTimestamp,
             ScalarFunction::ArrayAppend => Self::ArrayAppend,
             ScalarFunction::ArraySort => Self::ArraySort,
             ScalarFunction::ArrayConcat => Self::ArrayConcat,
@@ -523,7 +521,6 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::Digest => Self::Digest,
             ScalarFunction::Encode => Self::Encode,
             ScalarFunction::Decode => Self::Decode,
-            ScalarFunction::ToTimestampMillis => Self::ToTimestampMillis,
             ScalarFunction::Log2 => Self::Log2,
             ScalarFunction::Signum => Self::Signum,
             ScalarFunction::Ascii => Self::Ascii,
@@ -548,6 +545,8 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::Strpos => Self::Strpos,
             ScalarFunction::Substr => Self::Substr,
             ScalarFunction::ToHex => Self::ToHex,
+            ScalarFunction::ToTimestamp => Self::ToTimestamp,
+            ScalarFunction::ToTimestampMillis => Self::ToTimestampMillis,
             ScalarFunction::ToTimestampMicros => Self::ToTimestampMicros,
             ScalarFunction::ToTimestampNanos => Self::ToTimestampNanos,
             ScalarFunction::ToTimestampSeconds => Self::ToTimestampSeconds,
@@ -1457,6 +1456,7 @@ pub fn parse_expr(
                     parse_expr(&args[0], registry)?,
                     parse_expr(&args[1], registry)?,
                     parse_expr(&args[2], registry)?,
+                    parse_expr(&args[3], registry)?,
                 )),
                 ScalarFunction::ArrayToString => Ok(array_to_string(
                     parse_expr(&args[0], registry)?,
@@ -1585,7 +1585,7 @@ pub fn parse_expr(
                     Ok(character_length(parse_expr(&args[0], registry)?))
                 }
                 ScalarFunction::Chr => Ok(chr(parse_expr(&args[0], registry)?)),
-                ScalarFunction::InitCap => Ok(ascii(parse_expr(&args[0], registry)?)),
+                ScalarFunction::InitCap => Ok(initcap(parse_expr(&args[0], registry)?)),
                 ScalarFunction::Gcd => Ok(gcd(
                     parse_expr(&args[0], registry)?,
                     parse_expr(&args[1], registry)?,
@@ -1689,17 +1689,55 @@ pub fn parse_expr(
                     parse_expr(&args[1], registry)?,
                 )),
                 ScalarFunction::ToHex => Ok(to_hex(parse_expr(&args[0], registry)?)),
+                ScalarFunction::ToTimestamp => {
+                    let args: Vec<_> = args
+                        .iter()
+                        .map(|expr| parse_expr(expr, registry))
+                        .collect::<std::result::Result<_, _>>()?;
+                    Ok(Expr::ScalarFunction(expr::ScalarFunction::new(
+                        BuiltinScalarFunction::ToTimestamp,
+                        args,
+                    )))
+                }
                 ScalarFunction::ToTimestampMillis => {
-                    Ok(to_timestamp_millis(parse_expr(&args[0], registry)?))
+                    let args: Vec<_> = args
+                        .iter()
+                        .map(|expr| parse_expr(expr, registry))
+                        .collect::<Result<_, _>>()?;
+                    Ok(Expr::ScalarFunction(expr::ScalarFunction::new(
+                        BuiltinScalarFunction::ToTimestampMillis,
+                        args,
+                    )))
                 }
                 ScalarFunction::ToTimestampMicros => {
-                    Ok(to_timestamp_micros(parse_expr(&args[0], registry)?))
+                    let args: Vec<_> = args
+                        .iter()
+                        .map(|expr| parse_expr(expr, registry))
+                        .collect::<std::result::Result<_, _>>()?;
+                    Ok(Expr::ScalarFunction(expr::ScalarFunction::new(
+                        BuiltinScalarFunction::ToTimestampMicros,
+                        args,
+                    )))
                 }
                 ScalarFunction::ToTimestampNanos => {
-                    Ok(to_timestamp_nanos(parse_expr(&args[0], registry)?))
+                    let args: Vec<_> = args
+                        .iter()
+                        .map(|expr| parse_expr(expr, registry))
+                        .collect::<Result<_, _>>()?;
+                    Ok(Expr::ScalarFunction(expr::ScalarFunction::new(
+                        BuiltinScalarFunction::ToTimestampNanos,
+                        args,
+                    )))
                 }
                 ScalarFunction::ToTimestampSeconds => {
-                    Ok(to_timestamp_seconds(parse_expr(&args[0], registry)?))
+                    let args: Vec<_> = args
+                        .iter()
+                        .map(|expr| parse_expr(expr, registry))
+                        .collect::<std::result::Result<_, _>>()?;
+                    Ok(Expr::ScalarFunction(expr::ScalarFunction::new(
+                        BuiltinScalarFunction::ToTimestampSeconds,
+                        args,
+                    )))
                 }
                 ScalarFunction::Now => Ok(now()),
                 ScalarFunction::Translate => Ok(translate(
@@ -1740,9 +1778,6 @@ pub fn parse_expr(
                 ScalarFunction::Iszero => Ok(iszero(parse_expr(&args[0], registry)?)),
                 ScalarFunction::ArrowTypeof => {
                     Ok(arrow_typeof(parse_expr(&args[0], registry)?))
-                }
-                ScalarFunction::ToTimestamp => {
-                    Ok(to_timestamp_seconds(parse_expr(&args[0], registry)?))
                 }
                 ScalarFunction::Flatten => Ok(flatten(parse_expr(&args[0], registry)?)),
                 ScalarFunction::StringToArray => Ok(string_to_array(

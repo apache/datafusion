@@ -4854,3 +4854,8 @@ SELECT a, b, NTH_VALUE(c, 2 ORDER BY c ASC), NTH_VALUE(c, 3 ORDER BY d ASC)
 FROM multiple_ordered_table
 GROUP BY a, b
 ORDER BY a, b;
+
+query II
+SELECT a + 1 AS d, a + 1 + b AS c FROM (SELECT 1 AS a, 2 AS b) GROUP BY a + 1, a + 1 + b;
+----
+2 4

@@ -61,6 +61,19 @@ pub trait ContextProvider {
         not_impl_err!("Table Functions are not supported")
     }
 
+    /// This provides a worktable (an intermediate table that is used to store the results of a CTE during execution)
+    /// We don't directly implement this in the logical plan's ['SqlToRel`]
+    /// because the sql code needs access to a table that contains execution-related types that can't be a direct dependency
+    /// of the sql crate (namely, the `CteWorktable`).
+    /// The [`ContextProvider`] provides a way to "hide" this dependency.
+    fn create_cte_work_table(
+        &self,
+        _name: &str,
+        _schema: SchemaRef,
+    ) -> Result<Arc<dyn TableSource>> {
+        not_impl_err!("Recursive CTE is not implemented")
+    }
+
     /// Getter for a UDF description
     fn get_function_meta(&self, name: &str) -> Option<Arc<ScalarUDF>>;
     /// Getter for a UDAF description

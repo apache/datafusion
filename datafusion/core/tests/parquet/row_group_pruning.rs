@@ -26,11 +26,12 @@ use crate::parquet::Unit::RowGroup;
 use crate::parquet::{ContextWithParquet, Scenario};
 use datafusion_expr::{col, lit};
 
-async fn test_prune(
+async fn test_row_group_prune(
     case_data_type: Scenario,
     sql: &str,
     expected_errors: Option<usize>,
-    expected_row_group_pruned: Option<usize>,
+    expected_row_group_pruned_by_statistics: Option<usize>,
+    expected_row_group_pruned_by_bloom_filter: Option<usize>,
     expected_results: usize,
 ) {
     let output = ContextWithParquet::new(case_data_type, RowGroup)
@@ -40,7 +41,14 @@ async fn test_prune(
 
     println!("{}", output.description());
     assert_eq!(output.predicate_evaluation_errors(), expected_errors);
-    assert_eq!(output.row_groups_pruned(), expected_row_group_pruned);
+    assert_eq!(
+        output.row_groups_pruned_statistics(),
+        expected_row_group_pruned_by_statistics
+    );
+    assert_eq!(
+        output.row_groups_pruned_bloom_filter(),
+        expected_row_group_pruned_by_bloom_filter
+    );
     assert_eq!(
         output.result_rows,
         expected_results,
@@ -83,11 +91,12 @@ async fn test_prune_verbose(
 
 #[tokio::test]
 async fn prune_timestamps_nanos() {
-    test_prune(
+    test_row_group_prune(
         Scenario::Timestamps,
         "SELECT * FROM t where nanos < to_timestamp('2020-01-02 01:01:11Z')",
         Some(0),
         Some(1),
+        Some(0),
         10,
     )
     .await;
@@ -95,11 +104,12 @@ async fn prune_timestamps_nanos() {
 
 #[tokio::test]
 async fn prune_timestamps_micros() {
-    test_prune(
+    test_row_group_prune(
         Scenario::Timestamps,
         "SELECT * FROM t where micros < to_timestamp_micros('2020-01-02 01:01:11Z')",
         Some(0),
         Some(1),
+        Some(0),
         10,
     )
     .await;
@@ -107,11 +117,12 @@ async fn prune_timestamps_micros() {
 
 #[tokio::test]
 async fn prune_timestamps_millis() {
-    test_prune(
+    test_row_group_prune(
         Scenario::Timestamps,
         "SELECT * FROM t where millis < to_timestamp_millis('2020-01-02 01:01:11Z')",
         Some(0),
         Some(1),
+        Some(0),
         10,
     )
     .await;
@@ -119,11 +130,12 @@ async fn prune_timestamps_millis() {
 
 #[tokio::test]
 async fn prune_timestamps_seconds() {
-    test_prune(
+    test_row_group_prune(
         Scenario::Timestamps,
         "SELECT * FROM t where seconds < to_timestamp_seconds('2020-01-02 01:01:11Z')",
         Some(0),
         Some(1),
+        Some(0),
         10,
     )
     .await;
@@ -131,11 +143,12 @@ async fn prune_timestamps_seconds() {
 
 #[tokio::test]
 async fn prune_date32() {
-    test_prune(
+    test_row_group_prune(
         Scenario::Dates,
         "SELECT * FROM t where date32 < cast('2020-01-02' as date)",
         Some(0),
         Some(3),
+        Some(0),
         1,
     )
     .await;
@@ -168,11 +181,12 @@ async fn prune_date64() {
 
 #[tokio::test]
 async fn prune_disabled() {
-    test_prune(
+    test_row_group_prune(
         Scenario::Timestamps,
         "SELECT * FROM t where nanos < to_timestamp('2020-01-02 01:01:11Z')",
         Some(0),
         Some(1),
+        Some(0),
         10,
     )
     .await;
@@ -201,21 +215,23 @@ async fn prune_disabled() {
 
 #[tokio::test]
 async fn prune_int32_lt() {
-    test_prune(
+    test_row_group_prune(
         Scenario::Int32,
         "SELECT * FROM t where i < 1",
         Some(0),
         Some(1),
+        Some(0),
         11,
     )
     .await;
     // result of sql "SELECT * FROM t where i < 1" is same as
     // "SELECT * FROM t where -i > -1"
-    test_prune(
+    test_row_group_prune(
         Scenario::Int32,
         "SELECT * FROM t where -i > -1",
         Some(0),
         Some(1),
+        Some(0),
         11,
     )
     .await;
@@ -223,22 +239,24 @@ async fn prune_int32_lt() {
 
 #[tokio::test]
 async fn prune_int32_eq() {
-    test_prune(
+    test_row_group_prune(
         Scenario::Int32,
         "SELECT * FROM t where i = 1",
         Some(0),
         Some(3),
+        Some(0),
         1,
     )
     .await;
 }
 #[tokio::test]
 async fn prune_int32_scalar_fun_and_eq() {
-    test_prune(
+    test_row_group_prune(
         Scenario::Int32,
         "SELECT * FROM t where abs(i) = 1  and i = 1",
         Some(0),
         Some(3),
+        Some(0),
         1,
     )
     .await;
@@ -246,9 +264,10 @@ async fn prune_int32_scalar_fun_and_eq() {
 
 #[tokio::test]
 async fn prune_int32_scalar_fun() {
-    test_prune(
+    test_row_group_prune(
         Scenario::Int32,
         "SELECT * FROM t where abs(i) = 1",
+        Some(0),
         Some(0),
         Some(0),
         3,
@@ -258,9 +277,10 @@ async fn prune_int32_scalar_fun() {
 
 #[tokio::test]
 async fn prune_int32_complex_expr() {
-    test_prune(
+    test_row_group_prune(
         Scenario::Int32,
         "SELECT * FROM t where i+1 = 1",
+        Some(0),
         Some(0),
         Some(0),
         2,
@@ -270,9 +290,10 @@ async fn prune_int32_complex_expr() {
 
 #[tokio::test]
 async fn prune_int32_complex_expr_subtract() {
-    test_prune(
+    test_row_group_prune(
         Scenario::Int32,
         "SELECT * FROM t where 1-i > 1",
+        Some(0),
         Some(0),
         Some(0),
         9,
@@ -282,19 +303,21 @@ async fn prune_int32_complex_expr_subtract() {
 
 #[tokio::test]
 async fn prune_f64_lt() {
-    test_prune(
+    test_row_group_prune(
         Scenario::Float64,
         "SELECT * FROM t where f < 1",
         Some(0),
         Some(1),
+        Some(0),
         11,
     )
     .await;
-    test_prune(
+    test_row_group_prune(
         Scenario::Float64,
         "SELECT * FROM t where -f > -1",
         Some(0),
         Some(1),
+        Some(0),
         11,
     )
     .await;
@@ -304,11 +327,12 @@ async fn prune_f64_lt() {
 async fn prune_f64_scalar_fun_and_gt() {
     // result of sql "SELECT * FROM t where abs(f - 1) <= 0.000001  and f >= 0.1"
     // only use "f >= 0" to prune
-    test_prune(
+    test_row_group_prune(
         Scenario::Float64,
         "SELECT * FROM t where abs(f - 1) <= 0.000001  and f >= 0.1",
         Some(0),
         Some(2),
+        Some(0),
         1,
     )
     .await;
@@ -317,9 +341,10 @@ async fn prune_f64_scalar_fun_and_gt() {
 #[tokio::test]
 async fn prune_f64_scalar_fun() {
     // result of sql "SELECT * FROM t where abs(f-1) <= 0.000001" is not supported
-    test_prune(
+    test_row_group_prune(
         Scenario::Float64,
         "SELECT * FROM t where abs(f-1) <= 0.000001",
+        Some(0),
         Some(0),
         Some(0),
         1,
@@ -330,9 +355,10 @@ async fn prune_f64_scalar_fun() {
 #[tokio::test]
 async fn prune_f64_complex_expr() {
     // result of sql "SELECT * FROM t where f+1 > 1.1"" is not supported
-    test_prune(
+    test_row_group_prune(
         Scenario::Float64,
         "SELECT * FROM t where f+1 > 1.1",
+        Some(0),
         Some(0),
         Some(0),
         9,
@@ -343,9 +369,10 @@ async fn prune_f64_complex_expr() {
 #[tokio::test]
 async fn prune_f64_complex_expr_subtract() {
     // result of sql "SELECT * FROM t where 1-f > 1" is not supported
-    test_prune(
+    test_row_group_prune(
         Scenario::Float64,
         "SELECT * FROM t where 1-f > 1",
+        Some(0),
         Some(0),
         Some(0),
         9,
@@ -356,11 +383,12 @@ async fn prune_f64_complex_expr_subtract() {
 #[tokio::test]
 async fn prune_int32_eq_in_list() {
     // result of sql "SELECT * FROM t where in (1)"
-    test_prune(
+    test_row_group_prune(
         Scenario::Int32,
         "SELECT * FROM t where i in (1)",
         Some(0),
         Some(3),
+        Some(0),
         1,
     )
     .await;
@@ -404,9 +432,10 @@ async fn prune_int32_eq_large_in_list() {
 #[tokio::test]
 async fn prune_int32_eq_in_list_negated() {
     // result of sql "SELECT * FROM t where not in (1)" prune nothing
-    test_prune(
+    test_row_group_prune(
         Scenario::Int32,
         "SELECT * FROM t where i not in (1)",
+        Some(0),
         Some(0),
         Some(0),
         19,
@@ -419,39 +448,43 @@ async fn prune_decimal_lt() {
     // The data type of decimal_col is decimal(9,2)
     // There are three row groups:
     // [1.00, 6.00], [-5.00,6.00], [20.00,60.00]
-    test_prune(
+    test_row_group_prune(
         Scenario::Decimal,
         "SELECT * FROM t where decimal_col < 4",
         Some(0),
         Some(1),
+        Some(0),
         6,
     )
     .await;
     // compare with the casted decimal value
-    test_prune(
+    test_row_group_prune(
         Scenario::Decimal,
         "SELECT * FROM t where decimal_col < cast(4.55 as decimal(20,2))",
         Some(0),
         Some(1),
+        Some(0),
         8,
     )
     .await;
 
     // The data type of decimal_col is decimal(38,2)
-    test_prune(
+    test_row_group_prune(
         Scenario::DecimalLargePrecision,
         "SELECT * FROM t where decimal_col < 4",
         Some(0),
         Some(1),
+        Some(0),
         6,
     )
     .await;
     // compare with the casted decimal value
-    test_prune(
+    test_row_group_prune(
         Scenario::DecimalLargePrecision,
         "SELECT * FROM t where decimal_col < cast(4.55 as decimal(20,2))",
         Some(0),
         Some(1),
+        Some(0),
         8,
     )
     .await;
@@ -462,37 +495,41 @@ async fn prune_decimal_eq() {
     // The data type of decimal_col is decimal(9,2)
     // There are three row groups:
     // [1.00, 6.00], [-5.00,6.00], [20.00,60.00]
-    test_prune(
+    test_row_group_prune(
         Scenario::Decimal,
         "SELECT * FROM t where decimal_col = 4",
         Some(0),
         Some(1),
+        Some(0),
         2,
     )
     .await;
-    test_prune(
+    test_row_group_prune(
         Scenario::Decimal,
         "SELECT * FROM t where decimal_col = 4.00",
         Some(0),
         Some(1),
+        Some(0),
         2,
     )
     .await;
 
     // The data type of decimal_col is decimal(38,2)
-    test_prune(
+    test_row_group_prune(
         Scenario::DecimalLargePrecision,
         "SELECT * FROM t where decimal_col = 4",
         Some(0),
         Some(1),
+        Some(0),
         2,
     )
     .await;
-    test_prune(
+    test_row_group_prune(
         Scenario::DecimalLargePrecision,
         "SELECT * FROM t where decimal_col = 4.00",
         Some(0),
         Some(1),
+        Some(0),
         2,
     )
     .await;
@@ -503,37 +540,41 @@ async fn prune_decimal_in_list() {
     // The data type of decimal_col is decimal(9,2)
     // There are three row groups:
     // [1.00, 6.00], [-5.00,6.00], [20.00,60.00]
-    test_prune(
+    test_row_group_prune(
         Scenario::Decimal,
         "SELECT * FROM t where decimal_col in (4,3,2,123456789123)",
         Some(0),
         Some(1),
+        Some(0),
         5,
     )
     .await;
-    test_prune(
+    test_row_group_prune(
         Scenario::Decimal,
         "SELECT * FROM t where decimal_col in (4.00,3.00,11.2345,1)",
         Some(0),
         Some(1),
+        Some(0),
         6,
     )
     .await;
 
     // The data type of decimal_col is decimal(38,2)
-    test_prune(
+    test_row_group_prune(
         Scenario::DecimalLargePrecision,
         "SELECT * FROM t where decimal_col in (4,3,2,123456789123)",
         Some(0),
         Some(1),
+        Some(0),
         5,
     )
     .await;
-    test_prune(
+    test_row_group_prune(
         Scenario::DecimalLargePrecision,
         "SELECT * FROM t where decimal_col in (4.00,3.00,11.2345,1)",
         Some(0),
         Some(1),
+        Some(0),
         6,
     )
     .await;
@@ -545,28 +586,31 @@ async fn prune_periods_in_column_names() {
     // name = "HTTP GET / DISPATCH", service.name = ['frontend', 'frontend'],
     // name = "HTTP PUT / DISPATCH", service.name = ['backend',  'frontend'],
     // name = "HTTP GET / DISPATCH", service.name = ['backend',  'backend' ],
-    test_prune(
+    test_row_group_prune(
         Scenario::PeriodsInColumnNames,
         // use double quotes to use column named "service.name"
         "SELECT \"name\", \"service.name\" FROM t WHERE \"service.name\" = 'frontend'",
         Some(0),
         Some(1), // prune out last row group
+        Some(0),
         7,
     )
     .await;
-    test_prune(
+    test_row_group_prune(
         Scenario::PeriodsInColumnNames,
         "SELECT \"name\", \"service.name\" FROM t WHERE \"name\" != 'HTTP GET / DISPATCH'",
         Some(0),
         Some(2), // prune out first and last row group
+        Some(0),
         5,
     )
     .await;
-    test_prune(
+    test_row_group_prune(
         Scenario::PeriodsInColumnNames,
         "SELECT \"name\", \"service.name\" FROM t WHERE \"service.name\" = 'frontend' AND \"name\" != 'HTTP GET / DISPATCH'",
         Some(0),
         Some(2), // prune out middle and last row group
+        Some(0),
         2,
     )
     .await;

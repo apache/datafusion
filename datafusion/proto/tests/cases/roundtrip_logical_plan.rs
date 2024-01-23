@@ -27,6 +27,7 @@ use arrow::datatypes::{
     IntervalUnit, Schema, SchemaRef, TimeUnit, UnionFields, UnionMode,
 };
 
+use datafusion_common::file_options::arrow_writer::ArrowWriterOptions;
 use prost::Message;
 
 use datafusion::datasource::provider::TableProviderFactory;
@@ -34,7 +35,6 @@ use datafusion::datasource::TableProvider;
 use datafusion::execution::context::SessionState;
 use datafusion::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
 use datafusion::parquet::file::properties::{WriterProperties, WriterVersion};
-use datafusion::physical_plan::functions::make_scalar_function;
 use datafusion::prelude::{create_udf, CsvReadOptions, SessionConfig, SessionContext};
 use datafusion::test_util::{TestTableFactory, TestTableProvider};
 use datafusion_common::file_options::csv_writer::CsvWriterOptions;
@@ -53,9 +53,9 @@ use datafusion_expr::logical_plan::{Extension, UserDefinedLogicalNodeCore};
 use datafusion_expr::{
     col, create_udaf, lit, Accumulator, AggregateFunction,
     BuiltinScalarFunction::{Sqrt, Substr},
-    Expr, LogicalPlan, Operator, PartitionEvaluator, Signature, TryCast, Volatility,
-    WindowFrame, WindowFrameBound, WindowFrameUnits, WindowFunctionDefinition, WindowUDF,
-    WindowUDFImpl,
+    ColumnarValue, Expr, LogicalPlan, Operator, PartitionEvaluator, Signature, TryCast,
+    Volatility, WindowFrame, WindowFrameBound, WindowFrameUnits,
+    WindowFunctionDefinition, WindowUDF, WindowUDFImpl,
 };
 use datafusion_proto::bytes::{
     logical_plan_from_bytes, logical_plan_from_bytes_with_extension_codec,
@@ -391,6 +391,45 @@ async fn roundtrip_logical_plan_copy_to_writer_options() -> Result<()> {
         }
         _ => panic!(),
     }
+    Ok(())
+}
+
+#[tokio::test]
+async fn roundtrip_logical_plan_copy_to_arrow() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    let input = create_csv_scan(&ctx).await?;
+
+    let plan = LogicalPlan::Copy(CopyTo {
+        input: Arc::new(input),
+        output_url: "test.arrow".to_string(),
+        file_format: FileType::ARROW,
+        single_file_output: true,
+        copy_options: CopyOptions::WriterOptions(Box::new(FileTypeWriterOptions::Arrow(
+            ArrowWriterOptions::new(),
+        ))),
+    });
+
+    let bytes = logical_plan_to_bytes(&plan)?;
+    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx)?;
+    assert_eq!(format!("{plan:?}"), format!("{logical_round_trip:?}"));
+
+    match logical_round_trip {
+        LogicalPlan::Copy(copy_to) => {
+            assert_eq!("test.arrow", copy_to.output_url);
+            assert_eq!(FileType::ARROW, copy_to.file_format);
+            assert!(copy_to.single_file_output);
+            match &copy_to.copy_options {
+                CopyOptions::WriterOptions(y) => match y.as_ref() {
+                    FileTypeWriterOptions::Arrow(_) => {}
+                    _ => panic!(),
+                },
+                _ => panic!(),
+            }
+        }
+        _ => panic!(),
+    }
+
     Ok(())
 }
 
@@ -1592,9 +1631,12 @@ fn roundtrip_aggregate_udf() {
 
 #[test]
 fn roundtrip_scalar_udf() {
-    let fn_impl = |args: &[ArrayRef]| Ok(Arc::new(args[0].clone()) as ArrayRef);
-
-    let scalar_fn = make_scalar_function(fn_impl);
+    let scalar_fn = Arc::new(|args: &[ColumnarValue]| {
+        let ColumnarValue::Array(array) = &args[0] else {
+            panic!("should be array")
+        };
+        Ok(ColumnarValue::from(Arc::new(array.clone()) as ArrayRef))
+    });
 
     let udf = create_udf(
         "dummy",

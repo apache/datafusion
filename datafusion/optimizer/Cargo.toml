@@ -44,7 +44,7 @@ async-trait = { workspace = true }
 chrono = { workspace = true }
 datafusion-common = { workspace = true }
 datafusion-expr = { workspace = true }
-datafusion-physical-expr = { path = "../physical-expr", version = "34.0.0", default-features = false }
+datafusion-physical-expr = { path = "../physical-expr", version = "35.0.0", default-features = false }
 hashbrown = { version = "0.14", features = ["raw"] }
 itertools = { workspace = true }
 log = { workspace = true }
@@ -52,5 +52,5 @@ regex-syntax = "0.8.0"
 
 [dev-dependencies]
 ctor = { workspace = true }
-datafusion-sql = { path = "../sql", version = "34.0.0" }
+datafusion-sql = { path = "../sql", version = "35.0.0" }
 env_logger = "0.10.0"

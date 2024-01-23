@@ -26,6 +26,7 @@ mod parquet;
 use crate::{
     catalog::{CatalogList, MemoryCatalogList},
     datasource::{
+        cte_worktable::CteWorkTable,
         function::{TableFunction, TableFunctionImpl},
         listing::{ListingOptions, ListingTable},
         provider::TableProviderFactory,
@@ -1897,6 +1898,18 @@ impl<'a> ContextProvider for SessionContextProvider<'a> {
         let provider = tbl_func.create_table_provider(&args)?;
 
         Ok(provider_as_source(provider))
+    }
+
+    /// Create a new CTE work table for a recursive CTE logical plan
+    /// This table will be used in conjunction with a Worktable physical plan
+    /// to read and write each iteration of a recursive CTE
+    fn create_cte_work_table(
+        &self,
+        name: &str,
+        schema: SchemaRef,
+    ) -> Result<Arc<dyn TableSource>> {
+        let table = Arc::new(CteWorkTable::new(name, schema));
+        Ok(provider_as_source(table))
     }
 
     fn get_function_meta(&self, name: &str) -> Option<Arc<ScalarUDF>> {

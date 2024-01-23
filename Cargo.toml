@@ -29,7 +29,7 @@ license = "Apache-2.0"
 readme = "README.md"
 repository = "https://github.com/apache/arrow-datafusion"
 rust-version = "1.70"
-version = "34.0.0"
+version = "35.0.0"
 
 [workspace.dependencies]
 arrow = { version = "50.0.0", features = ["prettyprint"] }
@@ -45,17 +45,17 @@ bytes = "1.4"
 chrono = { version = "0.4.31", default-features = false }
 ctor = "0.2.0"
 dashmap = "5.4.0"
-datafusion = { path = "datafusion/core", version = "34.0.0" }
-datafusion-common = { path = "datafusion/common", version = "34.0.0" }
-datafusion-execution = { path = "datafusion/execution", version = "34.0.0" }
-datafusion-expr = { path = "datafusion/expr", version = "34.0.0" }
-datafusion-optimizer = { path = "datafusion/optimizer", version = "34.0.0" }
-datafusion-physical-expr = { path = "datafusion/physical-expr", version = "34.0.0" }
-datafusion-physical-plan = { path = "datafusion/physical-plan", version = "34.0.0" }
-datafusion-proto = { path = "datafusion/proto", version = "34.0.0" }
-datafusion-sql = { path = "datafusion/sql", version = "34.0.0" }
-datafusion-sqllogictest = { path = "datafusion/sqllogictest", version = "34.0.0" }
-datafusion-substrait = { path = "datafusion/substrait", version = "34.0.0" }
+datafusion = { path = "datafusion/core", version = "35.0.0" }
+datafusion-common = { path = "datafusion/common", version = "35.0.0" }
+datafusion-execution = { path = "datafusion/execution", version = "35.0.0" }
+datafusion-expr = { path = "datafusion/expr", version = "35.0.0" }
+datafusion-optimizer = { path = "datafusion/optimizer", version = "35.0.0" }
+datafusion-physical-expr = { path = "datafusion/physical-expr", version = "35.0.0" }
+datafusion-physical-plan = { path = "datafusion/physical-plan", version = "35.0.0" }
+datafusion-proto = { path = "datafusion/proto", version = "35.0.0" }
+datafusion-sql = { path = "datafusion/sql", version = "35.0.0" }
+datafusion-sqllogictest = { path = "datafusion/sqllogictest", version = "35.0.0" }
+datafusion-substrait = { path = "datafusion/substrait", version = "35.0.0" }
 doc-comment = "0.3"
 env_logger = "0.10"
 futures = "0.3"
