@@ -57,7 +57,7 @@ impl TreeNodeRewriter for OrInListSimplifier {
                         let list_set = lhs
                             .list
                             .into_iter()
-                            .chain(rhs.list.into_iter())
+                            .chain(rhs.list)
                             .filter(|e| seen.insert(e.to_owned()))
                             .collect::<Vec<_>>();
 
