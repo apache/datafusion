@@ -191,6 +191,30 @@ pub(crate) enum Hint {
     AcceptsSingular,
 }
 
+/// A helper function used to infer the length of arguments of Scalar functions and convert
+/// [`ColumnarValue`]s to [`ArrayRef`]s with the inferred length. Note that this function
+/// only works for functions that accept either that all arguments are scalars or all arguments
+/// are arrays with same length. Otherwise, it will return an error.
+pub fn process_scalar_func_inputs(args: &[ColumnarValue]) -> Result<Vec<ArrayRef>> {
+    let len = args
+        .iter()
+        .fold(Option::<usize>::None, |acc, arg| match arg {
+            ColumnarValue::Scalar(_) => acc,
+            ColumnarValue::Array(a) => Some(a.len()),
+        });
+
+    let inferred_length = len.ok_or(DataFusionError::Internal(
+        "Arguments has mixed length".to_string(),
+    ))?;
+
+    let args = args
+        .iter()
+        .map(|arg| arg.clone().into_array(inferred_length))
+        .collect::<Result<Vec<_>>>()?;
+
+    Ok(args)
+}
+
 /// Decorates a function to handle [`ScalarValue`]s by converting them to arrays before calling the function
 /// and vice-versa after evaluation.
 /// Note that this function makes a scalar function with no arguments or all scalar inputs return a scalar.

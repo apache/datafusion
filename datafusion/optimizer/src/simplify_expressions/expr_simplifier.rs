@@ -1324,6 +1324,7 @@ mod tests {
     use datafusion_physical_expr::execution_props::ExecutionProps;
 
     use chrono::{DateTime, TimeZone, Utc};
+    use datafusion_physical_expr::functions::process_scalar_func_inputs;
 
     // ------------------------------
     // --- ExprSimplifier tests -----
@@ -1437,30 +1438,10 @@ mod tests {
         let return_type = Arc::new(DataType::Int32);
 
         let fun = Arc::new(|args: &[ColumnarValue]| {
-            let len = args
-                .iter()
-                .fold(Option::<usize>::None, |acc, arg| match arg {
-                    ColumnarValue::Scalar(_) => acc,
-                    ColumnarValue::Array(a) => Some(a.len()),
-                });
+            let args = process_scalar_func_inputs(args)?;
 
-            let inferred_length = len.unwrap_or(1);
-
-            let arg0 = match &args[0] {
-                ColumnarValue::Array(array) => array.clone(),
-                ColumnarValue::Scalar(scalar) => {
-                    scalar.to_array_of_size(inferred_length).unwrap()
-                }
-            };
-            let arg1 = match &args[1] {
-                ColumnarValue::Array(array) => array.clone(),
-                ColumnarValue::Scalar(scalar) => {
-                    scalar.to_array_of_size(inferred_length).unwrap()
-                }
-            };
-
-            let arg0 = as_int32_array(&arg0)?;
-            let arg1 = as_int32_array(&arg1)?;
+            let arg0 = as_int32_array(&args[0])?;
+            let arg1 = as_int32_array(&args[1])?;
 
             // 2. perform the computation
             let array = arg0
