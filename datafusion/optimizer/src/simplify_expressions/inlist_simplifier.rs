@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! This module implements a rule that simplifies expressions that is guaranteed to be true or false at planning time
+//! This module implements a rule that simplifies the values for `InList`s
 
 use std::collections::HashSet;
 
@@ -27,12 +27,14 @@ use datafusion_expr::{lit, BinaryExpr, Expr, Operator};
 /// Simplify expressions that is guaranteed to be true or false to a literal boolean expression
 ///
 /// Rules:
-/// If both expressions are positive or negative, then we can apply intersection of both inlist expressions
+/// If both expressions are `IN` or `NOT IN`, then we can apply intersection of both lists
 ///     1. `a in (1,2,3) AND a in (4,5) -> a in (1,2,3,4,5)`
-///     2. `a not int (1,2,3) AND a not in (4,5,6) -> a not in (1,2,3,4,5,6)`
-/// If one of the expressions is negated, then we apply exception on positive expression
-///     1. `a in (1,2,3) AND a not in (1,2,3,4,5) -> a in ()`
+///     2. `a in (1,2,3) AND a in (2,3,4) -> a in (1,2,3,4)`
+///     3. `a not int (1,2,3) AND a not in (4,5,6) -> a not in (1,2,3,4,5,6)`
+/// If one of the expressions is `IN` and another one is `NOT IN`, then we apply exception on `In` expression
+///     1. `a in (1,2,3) AND a not in (1,2,3,4,5) -> a in (), which is false`
 ///     2. `a not in (1,2,3) AND a in (1,2,3,4,5) -> a in (4,5)`
+///     3. `a in (1,2,3) AND a not in (4,5) -> a in (1,2,3)`
 pub(super) struct InListSimplifier {}
 
 impl InListSimplifier {
