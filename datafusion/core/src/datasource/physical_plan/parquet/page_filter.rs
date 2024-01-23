@@ -168,24 +168,17 @@ impl PagePruningPredicate {
 
         let mut row_selections = Vec::with_capacity(page_index_predicates.len());
         for predicate in page_index_predicates {
-            // find column index by looking in the row group metadata.
-
-            let name = find_column_name(predicate);
-            let mut parquet_col = None;
-            if name.is_some() {
-                parquet_col =
-                    parquet_column(parquet_schema, arrow_schema, name.unwrap().as_str());
-            }
+            // find column index in the parquet schema
+            let col_idx = find_column_index(predicate, arrow_schema, parquet_schema);
             let mut selectors = Vec::with_capacity(row_groups.len());
             for r in row_groups.iter() {
                 let row_group_metadata = &groups[*r];
 
                 let rg_offset_indexes = file_offset_indexes.get(*r);
                 let rg_page_indexes = file_page_indexes.get(*r);
-                if let (Some(rg_page_indexes), Some(rg_offset_indexes), Some(col_ref)) =
-                    (rg_page_indexes, rg_offset_indexes, parquet_col)
+                if let (Some(rg_page_indexes), Some(rg_offset_indexes), Some(col_idx)) =
+                    (rg_page_indexes, rg_offset_indexes, col_idx)
                 {
-                    let col_idx = col_ref.0;
                     selectors.extend(
                         prune_pages_in_one_row_group(
                             row_group_metadata,
@@ -242,7 +235,7 @@ impl PagePruningPredicate {
     }
 }
 
-/// Returns the column index in the row group metadata for the single
+/// Returns the column index in the row parquet schema for the single
 /// column of a single column pruning predicate.
 ///
 /// For example, give the predicate `y > 5`
@@ -257,10 +250,13 @@ impl PagePruningPredicate {
 /// Panics:
 ///
 /// If the predicate contains more than one column reference (assumes
-/// that `extract_page_index_push_down_predicates` only return
+/// that `extract_page_index_push_down_predicates` only returns
 /// predicate with one col)
-///
-fn find_column_name(predicate: &PruningPredicate) -> Option<String> {
+fn find_column_index(
+    predicate: &PruningPredicate,
+    arrow_schema: &Schema,
+    parquet_schema: &SchemaDescriptor
+) -> Option<usize> {
     let mut found_required_column: Option<&Column> = None;
 
     for required_column_details in predicate.required_columns().iter() {
@@ -277,14 +273,13 @@ fn find_column_name(predicate: &PruningPredicate) -> Option<String> {
         }
     }
 
-    let column = if let Some(found_required_column) = found_required_column.as_ref() {
-        found_required_column
-    } else {
+    let Some(column) = found_required_column.as_ref() else {
         trace!("No column references in pruning predicate");
         return None;
     };
 
-    Some(column.name().to_string())
+    parquet_column(parquet_schema, arrow_schema, column.name())
+        .map(|x| x.0)
 }
 
 /// Intersects the [`RowSelector`]s
