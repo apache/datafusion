@@ -3223,6 +3223,12 @@ mod tests {
         );
         assert_eq!(simplify(expr.clone()), lit(true));
 
+        // 3.5 c1 NOT IN (1, 2, 3, 4) OR c1 NOT IN (4, 5, 6, 7) -> c1 != 4 (4 overlaps)
+        let expr = in_list(col("c1"), vec![lit(1), lit(2), lit(3), lit(4)], true).or(
+            in_list(col("c1"), vec![lit(4), lit(5), lit(6), lit(7)], true),
+        );
+        assert_eq!(simplify(expr.clone()), col("c1").not_eq(lit(4)));
+
         // 4. c1 NOT IN (1,2,3,4) AND c1 NOT IN (4,5,6,7) -> c1 NOT IN (1,2,3,4,5,6,7)
         let expr = in_list(col("c1"), vec![lit(1), lit(2), lit(3), lit(4)], true).and(
             in_list(col("c1"), vec![lit(4), lit(5), lit(6), lit(7)], true),
@@ -3316,6 +3322,7 @@ mod tests {
                     true,
                 )));
         // TODO: Further simplify this expression
+        // https://github.com/apache/arrow-datafusion/issues/8970
         // assert_eq!(simplify(expr.clone()), lit(true));
         assert_eq!(simplify(expr.clone()), expr);
     }
