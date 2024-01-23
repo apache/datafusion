@@ -144,14 +144,19 @@ impl TreeNode for Expr {
         mut transform: F,
     ) -> Result<Self> {
         Ok(match self {
+            Expr::Column(_)
+            | Expr::Wildcard { .. }
+            | Expr::Placeholder(Placeholder { .. })
+            | Expr::OuterReferenceColumn(_, _)
+            | Expr::Exists { .. }
+            | Expr::ScalarSubquery(_)
+            | Expr::ScalarVariable(_, _)
+            | Expr::Literal(_) => self,
             Expr::Alias(Alias {
                 expr,
                 relation,
                 name,
             }) => Expr::Alias(Alias::new(transform(*expr)?, relation, name)),
-            Expr::Column(_) => self,
-            Expr::OuterReferenceColumn(_, _) => self,
-            Expr::Exists { .. } => self,
             Expr::InSubquery(InSubquery {
                 expr,
                 subquery,
@@ -161,9 +166,6 @@ impl TreeNode for Expr {
                 subquery,
                 negated,
             )),
-            Expr::ScalarSubquery(_) => self,
-            Expr::ScalarVariable(ty, names) => Expr::ScalarVariable(ty, names),
-            Expr::Literal(value) => Expr::Literal(value),
             Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
                 Expr::BinaryExpr(BinaryExpr::new(
                     transform_boxed(left, &mut transform)?,
@@ -242,7 +244,6 @@ impl TreeNode for Expr {
                         ))
                     })
                     .collect::<Result<Vec<_>>>()?;
-
                 let else_expr = transform_option_box(case.else_expr, &mut transform)?;
 
                 Expr::Case(Case::new(expr, when_then_expr, else_expr))
@@ -271,9 +272,7 @@ impl TreeNode for Expr {
                     ScalarFunction::new_udf(fun, transform_vec(args, &mut transform)?),
                 ),
                 ScalarFunctionDefinition::Name(_) => {
-                    return internal_err!(
-                        "Function `Expr` with name should be resolved."
-                    );
+                    return internal_err!("Function `Expr` with name should be resolved.")
                 }
             },
             Expr::WindowFunction(WindowFunction {
@@ -320,9 +319,7 @@ impl TreeNode for Expr {
                     ))
                 }
                 AggregateFunctionDefinition::Name(_) => {
-                    return internal_err!(
-                        "Function `Expr` with name should be resolved."
-                    );
+                    return internal_err!("Function `Expr` with name should be resolved.")
                 }
             },
             Expr::GroupingSet(grouping_set) => match grouping_set {
@@ -335,8 +332,8 @@ impl TreeNode for Expr {
                 GroupingSet::GroupingSets(lists_of_exprs) => {
                     Expr::GroupingSet(GroupingSet::GroupingSets(
                         lists_of_exprs
-                            .iter()
-                            .map(|exprs| transform_vec(exprs.clone(), &mut transform))
+                            .into_iter()
+                            .map(|exprs| transform_vec(exprs, &mut transform))
                             .collect::<Result<Vec<_>>>()?,
                     ))
                 }
@@ -351,15 +348,11 @@ impl TreeNode for Expr {
                 transform_vec(list, &mut transform)?,
                 negated,
             )),
-            Expr::Wildcard { qualifier } => Expr::Wildcard { qualifier },
             Expr::GetIndexedField(GetIndexedField { expr, field }) => {
                 Expr::GetIndexedField(GetIndexedField::new(
                     transform_boxed(expr, &mut transform)?,
                     field,
                 ))
-            }
-            Expr::Placeholder(Placeholder { id, data_type }) => {
-                Expr::Placeholder(Placeholder { id, data_type })
             }
         })
     }
