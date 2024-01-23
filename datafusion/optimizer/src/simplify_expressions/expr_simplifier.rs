@@ -280,8 +280,12 @@ impl<'a> TreeNodeRewriter for ConstEvaluator<'a> {
 
     fn mutate(&mut self, expr: Expr) -> Result<Expr> {
         match self.can_evaluate.pop() {
+            // Certain expressions such as `CASE` and `COALESCE` are short circuiting
+            // and may not evalute all their sub expressions. Thus if
+            // if any error is countered during simplification, return the original
+            // so that normal evaluation can occur
             Some(true) => {
-                let lit = self.evaluate_to_scalar(expr.clone());
+                let lit = self.evaluate_to_scalar(&expr);
                 match lit {
                     Ok(lit) => Ok(Expr::Literal(lit)),
                     Err(_) => Ok(expr),
@@ -381,13 +385,13 @@ impl<'a> ConstEvaluator<'a> {
     }
 
     /// Internal helper to evaluates an Expr
-    pub(crate) fn evaluate_to_scalar(&mut self, expr: Expr) -> Result<ScalarValue> {
+    pub(crate) fn evaluate_to_scalar(&mut self, expr: &Expr) -> Result<ScalarValue> {
         if let Expr::Literal(s) = expr {
-            return Ok(s);
+            return Ok(s.to_owned());
         }
 
         let phys_expr =
-            create_physical_expr(&expr, &self.input_schema, self.execution_props)?;
+            create_physical_expr(expr, &self.input_schema, self.execution_props)?;
         let col_val = phys_expr.evaluate(&self.input_batch)?;
         match col_val {
             ColumnarValue::Array(a) => {
@@ -1793,6 +1797,26 @@ mod tests {
     }
 
     #[test]
+    fn test_simplify_divide_zero_by_zero() {
+        // because divide by 0 maybe occur in short-circuit expression
+        // so we should not simplify this, and throw error in runtime
+        let expr = lit(0) / lit(0);
+        let expected = expr.clone();
+
+        assert_eq!(simplify(expr), expected);
+    }
+
+    #[test]
+    fn test_simplify_divide_by_zero() {
+        // because divide by 0 maybe occur in short-circuit expression
+        // so we should not simplify this, and throw error in runtime
+        let expr = col("c2_non_null") / lit(0);
+        let expected = expr.clone();
+
+        assert_eq!(simplify(expr), expected);
+    }
+
+    #[test]
     fn test_simplify_modulo_by_one_non_null() {
         let expr = col("c2_non_null") % lit(1);
         let expected = lit(0);
@@ -2180,6 +2204,16 @@ mod tests {
         // c3 ^ c3 -> 0
         let expr = col("c3").bitxor(col("c3"));
         let expected = lit(0i64);
+
+        assert_eq!(simplify(expr), expected);
+    }
+
+    #[test]
+    fn test_simplify_modulo_by_zero_non_null() {
+        // because modulo by 0 maybe occur in short-circuit expression
+        // so we should not simplify this, and throw error in runtime.
+        let expr = col("c2_non_null") % lit(0);
+        let expected = expr.clone();
 
         assert_eq!(simplify(expr), expected);
     }
@@ -3330,5 +3364,23 @@ mod tests {
         )];
         let output = simplify_with_guarantee(expr.clone(), guarantees);
         assert_eq!(&output, &expr_x);
+    }
+
+    #[test]
+    fn test_expression_partial_simplify_1() {
+        // (1 + 2) + (4 / 0) -> 3 + (4 / 0)
+        let expr = (lit(1) + lit(2)) + (lit(4) / lit(0));
+        let expected = (lit(3)) + (lit(4) / lit(0));
+
+        assert_eq!(simplify(expr), expected);
+    }
+
+    #[test]
+    fn test_expression_partial_simplify_2() {
+        // (1 > 2) and (4 / 0) -> false and (4 / 0) -> false
+        let expr = (lit(1).gt(lit(2))).and(lit(4) / lit(0));
+        let expected = lit(false);
+
+        assert_eq!(simplify(expr), expected);
     }
 }
