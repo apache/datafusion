@@ -378,13 +378,15 @@ fn analyze_immediate_sort_removal(
 fn adjust_window_sort_removal(
     mut window_tree: PlanWithCorrespondingSort,
 ) -> Result<PlanWithCorrespondingSort> {
-    window_tree.children[0] = remove_corresponding_sort_from_sub_plan(
-        window_tree.children.swap_remove(0),
+    // Window plans are known to have only 1 child.
+    let window_child = window_tree.children.swap_remove(0);
+    window_tree.children = vec![remove_corresponding_sort_from_sub_plan(
+        window_child,
         matches!(
             window_tree.plan.required_input_distribution()[0],
             Distribution::SinglePartition
         ),
-    )?;
+    )?];
 
     let plan = window_tree.plan.as_any();
     let child_plan = &window_tree.children[0].plan;
