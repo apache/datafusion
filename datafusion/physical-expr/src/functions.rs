@@ -195,7 +195,7 @@ pub(crate) enum Hint {
 /// [`ColumnarValue`]s to [`ArrayRef`]s with the inferred length. Note that this function
 /// only works for functions that accept either that all arguments are scalars or all arguments
 /// are arrays with same length. Otherwise, it will return an error.
-pub fn process_scalar_func_inputs(args: &[ColumnarValue]) -> Result<Vec<ArrayRef>> {
+pub fn columnar_values_to_array(args: &[ColumnarValue]) -> Result<Vec<ArrayRef>> {
     let len = args
         .iter()
         .fold(Option::<usize>::None, |acc, arg| match arg {
