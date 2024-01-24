@@ -154,67 +154,132 @@ async fn bounded_window_causal_non_causal() -> Result<()> {
         schema.clone(),
         None,
     )?);
-    let window_fn = WindowFunctionDefinition::AggregateFunction(AggregateFunction::Count);
-    let fn_name = "COUNT".to_string();
-    let args = vec![col("x", &schema)?];
+
+    // Different window functions to test causality
+    let window_functions = vec![
+        // Simulate cases of the following form:
+        // COUNT(x) OVER (
+        //     ROWS BETWEEN UNBOUNDED PRECEDING AND <end_bound> PRECEDING/FOLLOWING
+        // )
+        (
+            // Window function
+            WindowFunctionDefinition::AggregateFunction(AggregateFunction::Count),
+            // its name
+            "COUNT",
+            // window function argument
+            vec![col("x", &schema)?],
+            // Expected causality, for None cases causality will be determined from window frame boundaries
+            None,
+        ),
+        // Simulate cases of the following form:
+        // ROW_NUMBER() OVER (
+        //     ROWS BETWEEN UNBOUNDED PRECEDING AND <end_bound> PRECEDING/FOLLOWING
+        // )
+        (
+            // Window function
+            WindowFunctionDefinition::BuiltInWindowFunction(
+                BuiltInWindowFunction::RowNumber,
+            ),
+            // its name
+            "ROW_NUMBER",
+            // no argument
+            vec![],
+            // Expected causality, for None cases causality will be determined from window frame boundaries
+            Some(true),
+        ),
+        // Simulate cases of the following form:
+        // LAG(x) OVER (
+        //     ROWS BETWEEN UNBOUNDED PRECEDING AND <end_bound> PRECEDING/FOLLOWING
+        // )
+        (
+            // Window function
+            WindowFunctionDefinition::BuiltInWindowFunction(BuiltInWindowFunction::Lag),
+            // its name
+            "LAG",
+            // no argument
+            vec![col("x", &schema)?],
+            // Expected causality, for None cases causality will be determined from window frame boundaries
+            Some(true),
+        ),
+        // Simulate cases of the following form:
+        // LEAD(x) OVER (
+        //     ROWS BETWEEN UNBOUNDED PRECEDING AND <end_bound> PRECEDING/FOLLOWING
+        // )
+        (
+            // Window function
+            WindowFunctionDefinition::BuiltInWindowFunction(BuiltInWindowFunction::Lead),
+            // its name
+            "LEAD",
+            // no argument
+            vec![col("x", &schema)?],
+            // Expected causality, for None cases causality will be determined from window frame boundaries
+            Some(false),
+        ),
+    ];
+
     let partitionby_exprs = vec![];
     let orderby_exprs = vec![];
     // Window frame starts with "UNBOUNDED PRECEDING":
     let start_bound = WindowFrameBound::Preceding(ScalarValue::UInt64(None));
 
-    // Simulate cases of the following form:
-    // COUNT(x) OVER (
-    //     ROWS BETWEEN UNBOUNDED PRECEDING AND <end_bound> PRECEDING/FOLLOWING
-    // )
-    for is_preceding in [false, true] {
-        for end_bound in [0, 1, 2, 3] {
-            let end_bound = if is_preceding {
-                WindowFrameBound::Preceding(ScalarValue::UInt64(Some(end_bound)))
-            } else {
-                WindowFrameBound::Following(ScalarValue::UInt64(Some(end_bound)))
-            };
-            let window_frame = WindowFrame::new_bounds(
-                WindowFrameUnits::Rows,
-                start_bound.clone(),
-                end_bound,
-            );
-            let causal = window_frame.is_causal();
+    for (window_fn, fn_name, args, expected_causal) in window_functions {
+        for is_preceding in [false, true] {
+            for end_bound in [0, 1, 2, 3] {
+                let end_bound = if is_preceding {
+                    WindowFrameBound::Preceding(ScalarValue::UInt64(Some(end_bound)))
+                } else {
+                    WindowFrameBound::Following(ScalarValue::UInt64(Some(end_bound)))
+                };
+                let window_frame = WindowFrame::new_bounds(
+                    WindowFrameUnits::Rows,
+                    start_bound.clone(),
+                    end_bound,
+                );
+                let causal = if let Some(expected_causal) = expected_causal {
+                    expected_causal
+                } else {
+                    // If there is no expected causality
+                    // calculate it from window frame
+                    window_frame.is_causal()
+                };
 
-            let window_expr = create_window_expr(
-                &window_fn,
-                fn_name.clone(),
-                &args,
-                &partitionby_exprs,
-                &orderby_exprs,
-                Arc::new(window_frame),
-                schema.as_ref(),
-            )?;
-            let running_window_exec = Arc::new(BoundedWindowAggExec::try_new(
-                vec![window_expr],
-                memory_exec.clone(),
-                vec![],
-                InputOrderMode::Linear,
-            )?);
-            let task_ctx = ctx.task_ctx();
-            let mut collected_results = collect(running_window_exec, task_ctx).await?;
-            collected_results.retain(|batch| batch.num_rows() > 0);
-            let input_batch_sizes = batches
-                .iter()
-                .map(|batch| batch.num_rows())
-                .collect::<Vec<_>>();
-            let result_batch_sizes = collected_results
-                .iter()
-                .map(|batch| batch.num_rows())
-                .collect::<Vec<_>>();
-            if causal {
-                // For causal window frames, we can generate results immediately
-                // for each input batch. Hence, batch sizes should match.
-                assert_eq!(input_batch_sizes, result_batch_sizes);
-            } else {
-                // For non-causal window frames, we cannot generate results
-                // immediately for each input batch. Hence, batch sizes shouldn't
-                // match.
-                assert_ne!(input_batch_sizes, result_batch_sizes);
+                let window_expr = create_window_expr(
+                    &window_fn,
+                    fn_name.to_string(),
+                    &args,
+                    &partitionby_exprs,
+                    &orderby_exprs,
+                    Arc::new(window_frame),
+                    schema.as_ref(),
+                )?;
+                let running_window_exec = Arc::new(BoundedWindowAggExec::try_new(
+                    vec![window_expr],
+                    memory_exec.clone(),
+                    vec![],
+                    InputOrderMode::Linear,
+                )?);
+                let task_ctx = ctx.task_ctx();
+                let mut collected_results =
+                    collect(running_window_exec, task_ctx).await?;
+                collected_results.retain(|batch| batch.num_rows() > 0);
+                let input_batch_sizes = batches
+                    .iter()
+                    .map(|batch| batch.num_rows())
+                    .collect::<Vec<_>>();
+                let result_batch_sizes = collected_results
+                    .iter()
+                    .map(|batch| batch.num_rows())
+                    .collect::<Vec<_>>();
+                if causal {
+                    // For causal window frames, we can generate results immediately
+                    // for each input batch. Hence, batch sizes should match.
+                    assert_eq!(input_batch_sizes, result_batch_sizes);
+                } else {
+                    // For non-causal window frames, we cannot generate results
+                    // immediately for each input batch. Hence, batch sizes shouldn't
+                    // match.
+                    assert_ne!(input_batch_sizes, result_batch_sizes);
+                }
             }
         }
     }

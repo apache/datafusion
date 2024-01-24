@@ -92,6 +92,11 @@ pub(crate) struct NumRowsEvaluator {
 }
 
 impl PartitionEvaluator for NumRowsEvaluator {
+    fn is_causal(&self) -> bool {
+        // row number doesn't need any future value
+        true
+    }
+
     /// evaluate window function result inside given range
     fn evaluate(
         &mut self,
