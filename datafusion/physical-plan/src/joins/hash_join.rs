@@ -26,7 +26,7 @@ use std::{any::Any, usize, vec};
 use crate::joins::utils::{
     adjust_indices_by_join_type, apply_join_filter_to_indices, build_batch_from_indices,
     calculate_join_output_ordering, get_final_indices_from_bit_map,
-    need_produce_result_in_final, JoinHashMap, JoinHashMapType,
+    need_produce_result_in_final, JoinHashMap, JoinHashMapOffset, JoinHashMapType,
 };
 use crate::{
     coalesce_partitions::CoalescePartitionsExec,
@@ -61,7 +61,8 @@ use arrow::util::bit_util;
 use arrow_array::cast::downcast_array;
 use arrow_schema::ArrowError;
 use datafusion_common::{
-    exec_err, internal_err, plan_err, DataFusionError, JoinSide, JoinType, Result,
+    internal_datafusion_err, internal_err, plan_err, DataFusionError, JoinSide, JoinType,
+    Result,
 };
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::TaskContext;
@@ -644,6 +645,8 @@ impl ExecutionPlan for HashJoinExec {
             }
         };
 
+        let batch_size = context.session_config().batch_size();
+
         let reservation = MemoryConsumer::new(format!("HashJoinStream[{partition}]"))
             .register(context.memory_pool());
 
@@ -665,6 +668,8 @@ impl ExecutionPlan for HashJoinExec {
             reservation,
             state: HashJoinStreamState::WaitBuildSide,
             build_side: BuildSide::Initial(BuildSideInitialState { left_fut }),
+            batch_size,
+            hashes_buffer: vec![],
         }))
     }
 
@@ -908,19 +913,32 @@ enum HashJoinStreamState {
     Completed,
 }
 
+impl HashJoinStreamState {
+    /// Tries to extract ProcessProbeBatchState from HashJoinStreamState enum.
+    /// Returns an error if state is not ProcessProbeBatchState.
+    fn try_as_process_probe_batch_mut(&mut self) -> Result<&mut ProcessProbeBatchState> {
+        match self {
+            HashJoinStreamState::ProcessProbeBatch(state) => Ok(state),
+            _ => internal_err!("Expected hash join stream in ProcessProbeBatch state"),
+        }
+    }
+}
+
 /// Container for HashJoinStreamState::ProcessProbeBatch related data
 struct ProcessProbeBatchState {
     /// Current probe-side batch
     batch: RecordBatch,
+    /// Starting offset for JoinHashMap lookups
+    offset: JoinHashMapOffset,
+    /// Max joined probe-side index from current batch
+    joined_probe_idx: Option<usize>,
 }
 
-impl HashJoinStreamState {
-    /// Tries to extract ProcessProbeBatchState from HashJoinStreamState enum.
-    /// Returns an error if state is not ProcessProbeBatchState.
-    fn try_as_process_probe_batch(&self) -> Result<&ProcessProbeBatchState> {
-        match self {
-            HashJoinStreamState::ProcessProbeBatch(state) => Ok(state),
-            _ => internal_err!("Expected hash join stream in ProcessProbeBatch state"),
+impl ProcessProbeBatchState {
+    fn advance(&mut self, offset: JoinHashMapOffset, joined_probe_idx: Option<usize>) {
+        self.offset = offset;
+        if joined_probe_idx.is_some() {
+            self.joined_probe_idx = joined_probe_idx;
         }
     }
 }
@@ -960,6 +978,10 @@ struct HashJoinStream {
     state: HashJoinStreamState,
     /// Build side
     build_side: BuildSide,
+    /// Maximum output batch size
+    batch_size: usize,
+    /// Scratch space for computing hashes
+    hashes_buffer: Vec<u64>,
 }
 
 impl RecordBatchStream for HashJoinStream {
@@ -968,7 +990,10 @@ impl RecordBatchStream for HashJoinStream {
     }
 }
 
-/// Returns build/probe indices satisfying the equality condition.
+/// Executes lookups by hash against JoinHashMap and resolves potential
+/// hash collisions.
+/// Returns build/probe indices satisfying the equality condition, along with
+/// (optional) starting point for next iteration.
 ///
 /// # Example
 ///
@@ -1014,20 +1039,17 @@ impl RecordBatchStream for HashJoinStream {
 /// Probe indices: 3, 3, 4, 5
 /// ```
 #[allow(clippy::too_many_arguments)]
-pub fn build_equal_condition_join_indices<T: JoinHashMapType>(
-    build_hashmap: &T,
+fn lookup_join_hashmap(
+    build_hashmap: &JoinHashMap,
     build_input_buffer: &RecordBatch,
     probe_batch: &RecordBatch,
     build_on: &[Column],
     probe_on: &[Column],
-    random_state: &RandomState,
     null_equals_null: bool,
-    hashes_buffer: &mut Vec<u64>,
-    filter: Option<&JoinFilter>,
-    build_side: JoinSide,
-    deleted_offset: Option<usize>,
-    fifo_hashmap: bool,
-) -> Result<(UInt64Array, UInt32Array)> {
+    hashes_buffer: &[u64],
+    limit: usize,
+    offset: JoinHashMapOffset,
+) -> Result<(UInt64Array, UInt32Array, Option<JoinHashMapOffset>)> {
     let keys_values = probe_on
         .iter()
         .map(|c| c.evaluate(probe_batch)?.into_array(probe_batch.num_rows()))
@@ -1039,76 +1061,24 @@ pub fn build_equal_condition_join_indices<T: JoinHashMapType>(
                 .into_array(build_input_buffer.num_rows())
         })
         .collect::<Result<Vec<_>>>()?;
-    hashes_buffer.clear();
-    hashes_buffer.resize(probe_batch.num_rows(), 0);
-    let hash_values = create_hashes(&keys_values, random_state, hashes_buffer)?;
 
-    // In case build-side input has not been inverted while JoinHashMap creation, the chained list algorithm
-    // will return build indices for each probe row in a reverse order as such:
-    // Build Indices: [5, 4, 3]
-    // Probe Indices: [1, 1, 1]
-    //
-    // This affects the output sequence. Hypothetically, it's possible to preserve the lexicographic order on the build side.
-    // Let's consider probe rows [0,1] as an example:
-    //
-    // When the probe iteration sequence is reversed, the following pairings can be derived:
-    //
-    // For probe row 1:
-    //     (5, 1)
-    //     (4, 1)
-    //     (3, 1)
-    //
-    // For probe row 0:
-    //     (5, 0)
-    //     (4, 0)
-    //     (3, 0)
-    //
-    // After reversing both sets of indices, we obtain reversed indices:
-    //
-    //     (3,0)
-    //     (4,0)
-    //     (5,0)
-    //     (3,1)
-    //     (4,1)
-    //     (5,1)
-    //
-    // With this approach, the lexicographic order on both the probe side and the build side is preserved.
-    let (mut probe_indices, mut build_indices) = if fifo_hashmap {
-        build_hashmap.get_matched_indices(hash_values.iter().enumerate(), deleted_offset)
-    } else {
-        let (mut matched_probe, mut matched_build) = build_hashmap
-            .get_matched_indices(hash_values.iter().enumerate().rev(), deleted_offset);
+    let (mut probe_builder, mut build_builder, next_offset) = build_hashmap
+        .get_matched_indices_with_limit_offset(hashes_buffer, None, limit, offset);
 
-        matched_probe.as_slice_mut().reverse();
-        matched_build.as_slice_mut().reverse();
+    let build_indices: UInt64Array =
+        PrimitiveArray::new(build_builder.finish().into(), None);
+    let probe_indices: UInt32Array =
+        PrimitiveArray::new(probe_builder.finish().into(), None);
 
-        (matched_probe, matched_build)
-    };
-
-    let left: UInt64Array = PrimitiveArray::new(build_indices.finish().into(), None);
-    let right: UInt32Array = PrimitiveArray::new(probe_indices.finish().into(), None);
-
-    let (left, right) = if let Some(filter) = filter {
-        // Filter the indices which satisfy the non-equal join condition, like `left.b1 = 10`
-        apply_join_filter_to_indices(
-            build_input_buffer,
-            probe_batch,
-            left,
-            right,
-            filter,
-            build_side,
-        )?
-    } else {
-        (left, right)
-    };
-
-    equal_rows_arr(
-        &left,
-        &right,
+    let (build_indices, probe_indices) = equal_rows_arr(
+        &build_indices,
+        &probe_indices,
         &build_join_values,
         &keys_values,
         null_equals_null,
-    )
+    )?;
+
+    Ok((build_indices, probe_indices, next_offset))
 }
 
 // version of eq_dyn supporting equality on null arrays
@@ -1253,9 +1223,25 @@ impl HashJoinStream {
                 self.state = HashJoinStreamState::ExhaustedProbeSide;
             }
             Some(Ok(batch)) => {
+                // Precalculate hash values for fetched batch
+                let keys_values = self
+                    .on_right
+                    .iter()
+                    .map(|c| c.evaluate(&batch)?.into_array(batch.num_rows()))
+                    .collect::<Result<Vec<_>>>()?;
+
+                self.hashes_buffer.clear();
+                self.hashes_buffer.resize(batch.num_rows(), 0);
+                create_hashes(&keys_values, &self.random_state, &mut self.hashes_buffer)?;
+
+                self.join_metrics.input_batches.add(1);
+                self.join_metrics.input_rows.add(batch.num_rows());
+
                 self.state =
                     HashJoinStreamState::ProcessProbeBatch(ProcessProbeBatchState {
                         batch,
+                        offset: (0, None),
+                        joined_probe_idx: None,
                     });
             }
             Some(Err(err)) => return Poll::Ready(Err(err)),
@@ -1270,70 +1256,108 @@ impl HashJoinStream {
     fn process_probe_batch(
         &mut self,
     ) -> Result<StatefulStreamResult<Option<RecordBatch>>> {
-        let state = self.state.try_as_process_probe_batch()?;
+        let state = self.state.try_as_process_probe_batch_mut()?;
         let build_side = self.build_side.try_as_ready_mut()?;
 
-        self.join_metrics.input_batches.add(1);
-        self.join_metrics.input_rows.add(state.batch.num_rows());
         let timer = self.join_metrics.join_time.timer();
 
-        let mut hashes_buffer = vec![];
-        // get the matched two indices for the on condition
-        let left_right_indices = build_equal_condition_join_indices(
+        // get the matched by join keys indices
+        let (left_indices, right_indices, next_offset) = lookup_join_hashmap(
             build_side.left_data.hash_map(),
             build_side.left_data.batch(),
             &state.batch,
             &self.on_left,
             &self.on_right,
-            &self.random_state,
             self.null_equals_null,
-            &mut hashes_buffer,
-            self.filter.as_ref(),
-            JoinSide::Left,
-            None,
-            true,
+            &self.hashes_buffer,
+            self.batch_size,
+            state.offset,
+        )?;
+
+        // apply join filter if exists
+        let (left_indices, right_indices) = if let Some(filter) = &self.filter {
+            apply_join_filter_to_indices(
+                build_side.left_data.batch(),
+                &state.batch,
+                left_indices,
+                right_indices,
+                filter,
+                JoinSide::Left,
+            )?
+        } else {
+            (left_indices, right_indices)
+        };
+
+        // mark joined left-side indices as visited, if required by join type
+        if need_produce_result_in_final(self.join_type) {
+            left_indices.iter().flatten().for_each(|x| {
+                build_side.visited_left_side.set_bit(x as usize, true);
+            });
+        }
+
+        // The goals of index alignment for different join types are:
+        //
+        // 1) Right & FullJoin -- to append all missing probe-side indices between
+        //    previous (excluding) and current joined indices.
+        // 2) SemiJoin -- deduplicate probe indices in range between previous
+        //    (excluding) and current joined indices.
+        // 3) AntiJoin -- return only missing indices in range between
+        //    previous and current joined indices.
+        //    Inclusion/exclusion of the indices themselves don't matter
+        //
+        // As a summary -- alignment range can be produced based only on
+        // joined (matched with filters applied) probe side indices, excluding starting one
+        // (left from previous iteration).
+
+        // if any rows have been joined -- get last joined probe-side (right) row
+        // it's important that index counts as "joined" after hash collisions checks
+        // and join filters applied.
+        let last_joined_right_idx = match right_indices.len() {
+            0 => None,
+            n => Some(right_indices.value(n - 1) as usize),
+        };
+
+        // Calculate range and perform alignment.
+        // In case probe batch has been processed -- align all remaining rows.
+        let index_alignment_range_start = state.joined_probe_idx.map_or(0, |v| v + 1);
+        let index_alignment_range_end = if next_offset.is_none() {
+            state.batch.num_rows()
+        } else {
+            last_joined_right_idx.map_or(0, |v| v + 1)
+        };
+
+        let (left_indices, right_indices) = adjust_indices_by_join_type(
+            left_indices,
+            right_indices,
+            index_alignment_range_start..index_alignment_range_end,
+            self.join_type,
         );
 
-        let result = match left_right_indices {
-            Ok((left_side, right_side)) => {
-                // set the left bitmap
-                // and only left, full, left semi, left anti need the left bitmap
-                if need_produce_result_in_final(self.join_type) {
-                    left_side.iter().flatten().for_each(|x| {
-                        build_side.visited_left_side.set_bit(x as usize, true);
-                    });
-                }
+        let result = build_batch_from_indices(
+            &self.schema,
+            build_side.left_data.batch(),
+            &state.batch,
+            &left_indices,
+            &right_indices,
+            &self.column_indices,
+            JoinSide::Left,
+        )?;
 
-                // adjust the two side indices base on the join type
-                let (left_side, right_side) = adjust_indices_by_join_type(
-                    left_side,
-                    right_side,
-                    state.batch.num_rows(),
-                    self.join_type,
-                );
-
-                let result = build_batch_from_indices(
-                    &self.schema,
-                    build_side.left_data.batch(),
-                    &state.batch,
-                    &left_side,
-                    &right_side,
-                    &self.column_indices,
-                    JoinSide::Left,
-                );
-                self.join_metrics.output_batches.add(1);
-                self.join_metrics.output_rows.add(state.batch.num_rows());
-                result
-            }
-            Err(err) => {
-                exec_err!("Fail to build join indices in HashJoinExec, error:{err}")
-            }
-        };
+        self.join_metrics.output_batches.add(1);
+        self.join_metrics.output_rows.add(result.num_rows());
         timer.done();
 
-        self.state = HashJoinStreamState::FetchProbeBatch;
+        if next_offset.is_none() {
+            self.state = HashJoinStreamState::FetchProbeBatch;
+        } else {
+            state.advance(
+                next_offset
+                    .ok_or_else(|| internal_datafusion_err!("unexpected None offset"))?,
+                last_joined_right_idx,
+            )
+        };
 
-        Ok(StatefulStreamResult::Ready(Some(result?)))
+        Ok(StatefulStreamResult::Ready(Some(result)))
     }
 
     /// Processes unmatched build-side rows for certain join types and produces output batch
@@ -1399,15 +1423,15 @@ mod tests {
 
     use super::*;
     use crate::{
-        common, expressions::Column, hash_utils::create_hashes,
-        joins::hash_join::build_equal_condition_join_indices, memory::MemoryExec,
+        common, expressions::Column, hash_utils::create_hashes, memory::MemoryExec,
         repartition::RepartitionExec, test::build_table_i32, test::exec::MockExec,
     };
 
     use arrow::array::{ArrayRef, Date32Array, Int32Array, UInt32Builder, UInt64Builder};
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::{
-        assert_batches_eq, assert_batches_sorted_eq, assert_contains, ScalarValue,
+        assert_batches_eq, assert_batches_sorted_eq, assert_contains, exec_err,
+        ScalarValue,
     };
     use datafusion_execution::config::SessionConfig;
     use datafusion_execution::runtime_env::{RuntimeConfig, RuntimeEnv};
@@ -1415,6 +1439,21 @@ mod tests {
     use datafusion_physical_expr::expressions::{BinaryExpr, Literal};
 
     use hashbrown::raw::RawTable;
+    use rstest::*;
+    use rstest_reuse::{self, *};
+
+    fn div_ceil(a: usize, b: usize) -> usize {
+        (a + b - 1) / b
+    }
+
+    #[template]
+    #[rstest]
+    fn batch_sizes(#[values(8192, 10, 5, 2, 1)] batch_size: usize) {}
+
+    fn prepare_task_ctx(batch_size: usize) -> Arc<TaskContext> {
+        let session_config = SessionConfig::default().with_batch_size(batch_size);
+        Arc::new(TaskContext::default().with_session_config(session_config))
+    }
 
     fn build_table(
         a: (&str, &Vec<i32>),
@@ -1533,9 +1572,10 @@ mod tests {
         Ok((columns, batches))
     }
 
+    #[apply(batch_sizes)]
     #[tokio::test]
-    async fn join_inner_one() -> Result<()> {
-        let task_ctx = Arc::new(TaskContext::default());
+    async fn join_inner_one(batch_size: usize) -> Result<()> {
+        let task_ctx = prepare_task_ctx(batch_size);
         let left = build_table(
             ("a1", &vec![1, 2, 3]),
             ("b1", &vec![4, 5, 5]), // this has a repetition
@@ -1580,9 +1620,10 @@ mod tests {
         Ok(())
     }
 
+    #[apply(batch_sizes)]
     #[tokio::test]
-    async fn partitioned_join_inner_one() -> Result<()> {
-        let task_ctx = Arc::new(TaskContext::default());
+    async fn partitioned_join_inner_one(batch_size: usize) -> Result<()> {
+        let task_ctx = prepare_task_ctx(batch_size);
         let left = build_table(
             ("a1", &vec![1, 2, 3]),
             ("b1", &vec![4, 5, 5]), // this has a repetition
@@ -1703,9 +1744,10 @@ mod tests {
         Ok(())
     }
 
+    #[apply(batch_sizes)]
     #[tokio::test]
-    async fn join_inner_two() -> Result<()> {
-        let task_ctx = Arc::new(TaskContext::default());
+    async fn join_inner_two(batch_size: usize) -> Result<()> {
+        let task_ctx = prepare_task_ctx(batch_size);
         let left = build_table(
             ("a1", &vec![1, 2, 2]),
             ("b2", &vec![1, 2, 2]),
@@ -1732,7 +1774,13 @@ mod tests {
 
         assert_eq!(columns, vec!["a1", "b2", "c1", "a1", "b2", "c2"]);
 
-        assert_eq!(batches.len(), 1);
+        // expected joined records = 3
+        // in case batch_size is 1 - additional empty batch for remaining 3-2 row
+        let mut expected_batch_count = div_ceil(3, batch_size);
+        if batch_size == 1 {
+            expected_batch_count += 1;
+        }
+        assert_eq!(batches.len(), expected_batch_count);
 
         let expected = [
             "+----+----+----+----+----+----+",
@@ -1751,9 +1799,10 @@ mod tests {
     }
 
     /// Test where the left has 2 parts, the right with 1 part => 1 part
+    #[apply(batch_sizes)]
     #[tokio::test]
-    async fn join_inner_one_two_parts_left() -> Result<()> {
-        let task_ctx = Arc::new(TaskContext::default());
+    async fn join_inner_one_two_parts_left(batch_size: usize) -> Result<()> {
+        let task_ctx = prepare_task_ctx(batch_size);
         let batch1 = build_table_i32(
             ("a1", &vec![1, 2]),
             ("b2", &vec![1, 2]),
@@ -1787,7 +1836,13 @@ mod tests {
 
         assert_eq!(columns, vec!["a1", "b2", "c1", "a1", "b2", "c2"]);
 
-        assert_eq!(batches.len(), 1);
+        // expected joined records = 3
+        // in case batch_size is 1 - additional empty batch for remaining 3-2 row
+        let mut expected_batch_count = div_ceil(3, batch_size);
+        if batch_size == 1 {
+            expected_batch_count += 1;
+        }
+        assert_eq!(batches.len(), expected_batch_count);
 
         let expected = [
             "+----+----+----+----+----+----+",
@@ -1856,9 +1911,10 @@ mod tests {
     }
 
     /// Test where the left has 1 part, the right has 2 parts => 2 parts
+    #[apply(batch_sizes)]
     #[tokio::test]
-    async fn join_inner_one_two_parts_right() -> Result<()> {
-        let task_ctx = Arc::new(TaskContext::default());
+    async fn join_inner_one_two_parts_right(batch_size: usize) -> Result<()> {
+        let task_ctx = prepare_task_ctx(batch_size);
         let left = build_table(
             ("a1", &vec![1, 2, 3]),
             ("b1", &vec![4, 5, 5]), // this has a repetition
@@ -1890,7 +1946,14 @@ mod tests {
         // first part
         let stream = join.execute(0, task_ctx.clone())?;
         let batches = common::collect(stream).await?;
-        assert_eq!(batches.len(), 1);
+
+        // expected joined records = 1 (first right batch)
+        // and additional empty batch for non-joined 20-6-80
+        let mut expected_batch_count = div_ceil(1, batch_size);
+        if batch_size == 1 {
+            expected_batch_count += 1;
+        }
+        assert_eq!(batches.len(), expected_batch_count);
 
         let expected = [
             "+----+----+----+----+----+----+",
@@ -1906,7 +1969,11 @@ mod tests {
         // second part
         let stream = join.execute(1, task_ctx.clone())?;
         let batches = common::collect(stream).await?;
-        assert_eq!(batches.len(), 1);
+
+        // expected joined records = 2 (second right batch)
+        let expected_batch_count = div_ceil(2, batch_size);
+        assert_eq!(batches.len(), expected_batch_count);
+
         let expected = [
             "+----+----+----+----+----+----+",
             "| a1 | b1 | c1 | a2 | b1 | c2 |",
@@ -1934,9 +2001,10 @@ mod tests {
         )
     }
 
+    #[apply(batch_sizes)]
     #[tokio::test]
-    async fn join_left_multi_batch() {
-        let task_ctx = Arc::new(TaskContext::default());
+    async fn join_left_multi_batch(batch_size: usize) {
+        let task_ctx = prepare_task_ctx(batch_size);
         let left = build_table(
             ("a1", &vec![1, 2, 3]),
             ("b1", &vec![4, 5, 7]), // 7 does not exist on the right
@@ -1975,9 +2043,10 @@ mod tests {
         assert_batches_sorted_eq!(expected, &batches);
     }
 
+    #[apply(batch_sizes)]
     #[tokio::test]
-    async fn join_full_multi_batch() {
-        let task_ctx = Arc::new(TaskContext::default());
+    async fn join_full_multi_batch(batch_size: usize) {
+        let task_ctx = prepare_task_ctx(batch_size);
         let left = build_table(
             ("a1", &vec![1, 2, 3]),
             ("b1", &vec![4, 5, 7]), // 7 does not exist on the right
@@ -2019,9 +2088,10 @@ mod tests {
         assert_batches_sorted_eq!(expected, &batches);
     }
 
+    #[apply(batch_sizes)]
     #[tokio::test]
-    async fn join_left_empty_right() {
-        let task_ctx = Arc::new(TaskContext::default());
+    async fn join_left_empty_right(batch_size: usize) {
+        let task_ctx = prepare_task_ctx(batch_size);
         let left = build_table(
             ("a1", &vec![1, 2, 3]),
             ("b1", &vec![4, 5, 7]),
@@ -2055,9 +2125,10 @@ mod tests {
         assert_batches_sorted_eq!(expected, &batches);
     }
 
+    #[apply(batch_sizes)]
     #[tokio::test]
-    async fn join_full_empty_right() {
-        let task_ctx = Arc::new(TaskContext::default());
+    async fn join_full_empty_right(batch_size: usize) {
+        let task_ctx = prepare_task_ctx(batch_size);
         let left = build_table(
             ("a1", &vec![1, 2, 3]),
             ("b1", &vec![4, 5, 7]),
@@ -2091,9 +2162,10 @@ mod tests {
         assert_batches_sorted_eq!(expected, &batches);
     }
 
+    #[apply(batch_sizes)]
     #[tokio::test]
-    async fn join_left_one() -> Result<()> {
-        let task_ctx = Arc::new(TaskContext::default());
+    async fn join_left_one(batch_size: usize) -> Result<()> {
+        let task_ctx = prepare_task_ctx(batch_size);
         let left = build_table(
             ("a1", &vec![1, 2, 3]),
             ("b1", &vec![4, 5, 7]), // 7 does not exist on the right
@@ -2134,9 +2206,10 @@ mod tests {
         Ok(())
     }
 
+    #[apply(batch_sizes)]
     #[tokio::test]
-    async fn partitioned_join_left_one() -> Result<()> {
-        let task_ctx = Arc::new(TaskContext::default());
+    async fn partitioned_join_left_one(batch_size: usize) -> Result<()> {
+        let task_ctx = prepare_task_ctx(batch_size);
         let left = build_table(
             ("a1", &vec![1, 2, 3]),
             ("b1", &vec![4, 5, 7]), // 7 does not exist on the right
@@ -2197,9 +2270,10 @@ mod tests {
         )
     }
 
+    #[apply(batch_sizes)]
     #[tokio::test]
-    async fn join_left_semi() -> Result<()> {
-        let task_ctx = Arc::new(TaskContext::default());
+    async fn join_left_semi(batch_size: usize) -> Result<()> {
+        let task_ctx = prepare_task_ctx(batch_size);
         let left = build_semi_anti_left_table();
         let right = build_semi_anti_right_table();
         // left_table left semi join right_table on left_table.b1 = right_table.b2
@@ -2231,9 +2305,10 @@ mod tests {
         Ok(())
     }
 
+    #[apply(batch_sizes)]
     #[tokio::test]
-    async fn join_left_semi_with_filter() -> Result<()> {
-        let task_ctx = Arc::new(TaskContext::default());
+    async fn join_left_semi_with_filter(batch_size: usize) -> Result<()> {
+        let task_ctx = prepare_task_ctx(batch_size);
         let left = build_semi_anti_left_table();
         let right = build_semi_anti_right_table();
 
@@ -2317,9 +2392,10 @@ mod tests {
         Ok(())
     }
 
+    #[apply(batch_sizes)]
     #[tokio::test]
-    async fn join_right_semi() -> Result<()> {
-        let task_ctx = Arc::new(TaskContext::default());
+    async fn join_right_semi(batch_size: usize) -> Result<()> {
+        let task_ctx = prepare_task_ctx(batch_size);
         let left = build_semi_anti_left_table();
         let right = build_semi_anti_right_table();
 
@@ -2353,9 +2429,10 @@ mod tests {
         Ok(())
     }
 
+    #[apply(batch_sizes)]
     #[tokio::test]
-    async fn join_right_semi_with_filter() -> Result<()> {
-        let task_ctx = Arc::new(TaskContext::default());
+    async fn join_right_semi_with_filter(batch_size: usize) -> Result<()> {
+        let task_ctx = prepare_task_ctx(batch_size);
         let left = build_semi_anti_left_table();
         let right = build_semi_anti_right_table();
 
@@ -2442,9 +2519,10 @@ mod tests {
         Ok(())
     }
 
+    #[apply(batch_sizes)]
     #[tokio::test]
-    async fn join_left_anti() -> Result<()> {
-        let task_ctx = Arc::new(TaskContext::default());
+    async fn join_left_anti(batch_size: usize) -> Result<()> {
+        let task_ctx = prepare_task_ctx(batch_size);
         let left = build_semi_anti_left_table();
         let right = build_semi_anti_right_table();
         // left_table left anti join right_table on left_table.b1 = right_table.b2
@@ -2475,9 +2553,10 @@ mod tests {
         Ok(())
     }
 
+    #[apply(batch_sizes)]
     #[tokio::test]
-    async fn join_left_anti_with_filter() -> Result<()> {
-        let task_ctx = Arc::new(TaskContext::default());
+    async fn join_left_anti_with_filter(batch_size: usize) -> Result<()> {
+        let task_ctx = prepare_task_ctx(batch_size);
         let left = build_semi_anti_left_table();
         let right = build_semi_anti_right_table();
         // left_table left anti join right_table on left_table.b1 = right_table.b2 and right_table.a2!=8
@@ -2568,9 +2647,10 @@ mod tests {
         Ok(())
     }
 
+    #[apply(batch_sizes)]
     #[tokio::test]
-    async fn join_right_anti() -> Result<()> {
-        let task_ctx = Arc::new(TaskContext::default());
+    async fn join_right_anti(batch_size: usize) -> Result<()> {
+        let task_ctx = prepare_task_ctx(batch_size);
         let left = build_semi_anti_left_table();
         let right = build_semi_anti_right_table();
         let on = vec![(
@@ -2601,9 +2681,10 @@ mod tests {
         Ok(())
     }
 
+    #[apply(batch_sizes)]
     #[tokio::test]
-    async fn join_right_anti_with_filter() -> Result<()> {
-        let task_ctx = Arc::new(TaskContext::default());
+    async fn join_right_anti_with_filter(batch_size: usize) -> Result<()> {
+        let task_ctx = prepare_task_ctx(batch_size);
         let left = build_semi_anti_left_table();
         let right = build_semi_anti_right_table();
         // left_table right anti join right_table on left_table.b1 = right_table.b2 and left_table.a1!=13
@@ -2701,9 +2782,10 @@ mod tests {
         Ok(())
     }
 
+    #[apply(batch_sizes)]
     #[tokio::test]
-    async fn join_right_one() -> Result<()> {
-        let task_ctx = Arc::new(TaskContext::default());
+    async fn join_right_one(batch_size: usize) -> Result<()> {
+        let task_ctx = prepare_task_ctx(batch_size);
         let left = build_table(
             ("a1", &vec![1, 2, 3]),
             ("b1", &vec![4, 5, 7]),
@@ -2739,9 +2821,10 @@ mod tests {
         Ok(())
     }
 
+    #[apply(batch_sizes)]
     #[tokio::test]
-    async fn partitioned_join_right_one() -> Result<()> {
-        let task_ctx = Arc::new(TaskContext::default());
+    async fn partitioned_join_right_one(batch_size: usize) -> Result<()> {
+        let task_ctx = prepare_task_ctx(batch_size);
         let left = build_table(
             ("a1", &vec![1, 2, 3]),
             ("b1", &vec![4, 5, 7]),
@@ -2778,9 +2861,10 @@ mod tests {
         Ok(())
     }
 
+    #[apply(batch_sizes)]
     #[tokio::test]
-    async fn join_full_one() -> Result<()> {
-        let task_ctx = Arc::new(TaskContext::default());
+    async fn join_full_one(batch_size: usize) -> Result<()> {
+        let task_ctx = prepare_task_ctx(batch_size);
         let left = build_table(
             ("a1", &vec![1, 2, 3]),
             ("b1", &vec![4, 5, 7]), // 7 does not exist on the right
@@ -2845,21 +2929,26 @@ mod tests {
             ("c", &vec![30, 40]),
         );
 
+        // Join key column for both join sides
+        let key_column = Column::new("a", 0);
+
         let join_hash_map = JoinHashMap::new(hashmap_left, next);
 
-        let (l, r) = build_equal_condition_join_indices(
+        let right_keys_values =
+            key_column.evaluate(&right)?.into_array(right.num_rows())?;
+        let mut hashes_buffer = vec![0; right.num_rows()];
+        create_hashes(&[right_keys_values], &random_state, &mut hashes_buffer)?;
+
+        let (l, r, _) = lookup_join_hashmap(
             &join_hash_map,
             &left,
             &right,
-            &[Column::new("a", 0)],
-            &[Column::new("a", 0)],
-            &random_state,
+            &[key_column.clone()],
+            &[key_column],
             false,
-            &mut vec![0; right.num_rows()],
-            None,
-            JoinSide::Left,
-            None,
-            false,
+            &hashes_buffer,
+            8192,
+            (0, None),
         )?;
 
         let mut left_ids = UInt64Builder::with_capacity(0);
@@ -2941,9 +3030,10 @@ mod tests {
         JoinFilter::new(filter_expression, column_indices, intermediate_schema)
     }
 
+    #[apply(batch_sizes)]
     #[tokio::test]
-    async fn join_inner_with_filter() -> Result<()> {
-        let task_ctx = Arc::new(TaskContext::default());
+    async fn join_inner_with_filter(batch_size: usize) -> Result<()> {
+        let task_ctx = prepare_task_ctx(batch_size);
         let left = build_table(
             ("a", &vec![0, 1, 2, 2]),
             ("b", &vec![4, 5, 7, 8]),
@@ -2981,9 +3071,10 @@ mod tests {
         Ok(())
     }
 
+    #[apply(batch_sizes)]
     #[tokio::test]
-    async fn join_left_with_filter() -> Result<()> {
-        let task_ctx = Arc::new(TaskContext::default());
+    async fn join_left_with_filter(batch_size: usize) -> Result<()> {
+        let task_ctx = prepare_task_ctx(batch_size);
         let left = build_table(
             ("a", &vec![0, 1, 2, 2]),
             ("b", &vec![4, 5, 7, 8]),
@@ -3024,9 +3115,10 @@ mod tests {
         Ok(())
     }
 
+    #[apply(batch_sizes)]
     #[tokio::test]
-    async fn join_right_with_filter() -> Result<()> {
-        let task_ctx = Arc::new(TaskContext::default());
+    async fn join_right_with_filter(batch_size: usize) -> Result<()> {
+        let task_ctx = prepare_task_ctx(batch_size);
         let left = build_table(
             ("a", &vec![0, 1, 2, 2]),
             ("b", &vec![4, 5, 7, 8]),
@@ -3066,9 +3158,10 @@ mod tests {
         Ok(())
     }
 
+    #[apply(batch_sizes)]
     #[tokio::test]
-    async fn join_full_with_filter() -> Result<()> {
-        let task_ctx = Arc::new(TaskContext::default());
+    async fn join_full_with_filter(batch_size: usize) -> Result<()> {
+        let task_ctx = prepare_task_ctx(batch_size);
         let left = build_table(
             ("a", &vec![0, 1, 2, 2]),
             ("b", &vec![4, 5, 7, 8]),
@@ -3208,6 +3301,140 @@ mod tests {
                 result_string.contains("bad data error"),
                 "actual: {result_string}"
             );
+        }
+    }
+
+    #[tokio::test]
+    async fn join_splitted_batch() {
+        let left = build_table(
+            ("a1", &vec![1, 2, 3, 4]),
+            ("b1", &vec![1, 1, 1, 1]),
+            ("c1", &vec![0, 0, 0, 0]),
+        );
+        let right = build_table(
+            ("a2", &vec![10, 20, 30, 40, 50]),
+            ("b2", &vec![1, 1, 1, 1, 1]),
+            ("c2", &vec![0, 0, 0, 0, 0]),
+        );
+        let on = vec![(
+            Column::new_with_schema("b1", &left.schema()).unwrap(),
+            Column::new_with_schema("b2", &right.schema()).unwrap(),
+        )];
+
+        let join_types = vec![
+            JoinType::Inner,
+            JoinType::Left,
+            JoinType::Right,
+            JoinType::Full,
+            JoinType::RightSemi,
+            JoinType::RightAnti,
+            JoinType::LeftSemi,
+            JoinType::LeftAnti,
+        ];
+        let expected_resultset_records = 20;
+        let common_result = [
+            "+----+----+----+----+----+----+",
+            "| a1 | b1 | c1 | a2 | b2 | c2 |",
+            "+----+----+----+----+----+----+",
+            "| 1  | 1  | 0  | 10 | 1  | 0  |",
+            "| 2  | 1  | 0  | 10 | 1  | 0  |",
+            "| 3  | 1  | 0  | 10 | 1  | 0  |",
+            "| 4  | 1  | 0  | 10 | 1  | 0  |",
+            "| 1  | 1  | 0  | 20 | 1  | 0  |",
+            "| 2  | 1  | 0  | 20 | 1  | 0  |",
+            "| 3  | 1  | 0  | 20 | 1  | 0  |",
+            "| 4  | 1  | 0  | 20 | 1  | 0  |",
+            "| 1  | 1  | 0  | 30 | 1  | 0  |",
+            "| 2  | 1  | 0  | 30 | 1  | 0  |",
+            "| 3  | 1  | 0  | 30 | 1  | 0  |",
+            "| 4  | 1  | 0  | 30 | 1  | 0  |",
+            "| 1  | 1  | 0  | 40 | 1  | 0  |",
+            "| 2  | 1  | 0  | 40 | 1  | 0  |",
+            "| 3  | 1  | 0  | 40 | 1  | 0  |",
+            "| 4  | 1  | 0  | 40 | 1  | 0  |",
+            "| 1  | 1  | 0  | 50 | 1  | 0  |",
+            "| 2  | 1  | 0  | 50 | 1  | 0  |",
+            "| 3  | 1  | 0  | 50 | 1  | 0  |",
+            "| 4  | 1  | 0  | 50 | 1  | 0  |",
+            "+----+----+----+----+----+----+",
+        ];
+        let left_batch = [
+            "+----+----+----+",
+            "| a1 | b1 | c1 |",
+            "+----+----+----+",
+            "| 1  | 1  | 0  |",
+            "| 2  | 1  | 0  |",
+            "| 3  | 1  | 0  |",
+            "| 4  | 1  | 0  |",
+            "+----+----+----+",
+        ];
+        let right_batch = [
+            "+----+----+----+",
+            "| a2 | b2 | c2 |",
+            "+----+----+----+",
+            "| 10 | 1  | 0  |",
+            "| 20 | 1  | 0  |",
+            "| 30 | 1  | 0  |",
+            "| 40 | 1  | 0  |",
+            "| 50 | 1  | 0  |",
+            "+----+----+----+",
+        ];
+        let right_empty = [
+            "+----+----+----+",
+            "| a2 | b2 | c2 |",
+            "+----+----+----+",
+            "+----+----+----+",
+        ];
+        let left_empty = [
+            "+----+----+----+",
+            "| a1 | b1 | c1 |",
+            "+----+----+----+",
+            "+----+----+----+",
+        ];
+
+        // validation of partial join results output for different batch_size setting
+        for join_type in join_types {
+            for batch_size in (1..21).rev() {
+                let task_ctx = prepare_task_ctx(batch_size);
+
+                let join =
+                    join(left.clone(), right.clone(), on.clone(), &join_type, false)
+                        .unwrap();
+
+                let stream = join.execute(0, task_ctx).unwrap();
+                let batches = common::collect(stream).await.unwrap();
+
+                // For inner/right join expected batch count equals dev_ceil result,
+                // as there is no need to append non-joined build side data.
+                // For other join types it'll be div_ceil + 1 -- for additional batch
+                // containing not visited build side rows (empty in this test case).
+                let expected_batch_count = match join_type {
+                    JoinType::Inner
+                    | JoinType::Right
+                    | JoinType::RightSemi
+                    | JoinType::RightAnti => {
+                        (expected_resultset_records + batch_size - 1) / batch_size
+                    }
+                    _ => (expected_resultset_records + batch_size - 1) / batch_size + 1,
+                };
+                assert_eq!(
+                    batches.len(),
+                    expected_batch_count,
+                    "expected {} output batches for {} join with batch_size = {}",
+                    expected_batch_count,
+                    join_type,
+                    batch_size
+                );
+
+                let expected = match join_type {
+                    JoinType::RightSemi => right_batch.to_vec(),
+                    JoinType::RightAnti => right_empty.to_vec(),
+                    JoinType::LeftSemi => left_batch.to_vec(),
+                    JoinType::LeftAnti => left_empty.to_vec(),
+                    _ => common_result.to_vec(),
+                };
+                assert_batches_eq!(expected, &batches);
+            }
         }
     }
 

@@ -36,7 +36,7 @@ use std::{
 ///
 /// 1. For simple (less performant) use cases, use [`create_udwf`] and [`simple_udwf.rs`].
 ///
-/// 2. For advanced use cases, use [`WindowUDFImpl`] and [`advanced_udf.rs`].
+/// 2. For advanced use cases, use [`WindowUDFImpl`] and [`advanced_udwf.rs`].
 ///
 /// # API Note
 /// This is a separate struct from `WindowUDFImpl` to maintain backwards
@@ -222,7 +222,7 @@ where
 ///     vec![col("speed")],                 // smooth_it(speed)
 ///     vec![col("car")],                   // PARTITION BY car
 ///     vec![col("time").sort(true, true)], // ORDER BY time ASC
-///     WindowFrame::new(false),
+///     WindowFrame::new(None),
 /// );
 /// ```
 pub trait WindowUDFImpl: Debug + Send + Sync {

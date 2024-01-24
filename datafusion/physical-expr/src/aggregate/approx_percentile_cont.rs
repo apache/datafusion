@@ -377,7 +377,7 @@ impl ApproxPercentileAccumulator {
 }
 
 impl Accumulator for ApproxPercentileAccumulator {
-    fn state(&self) -> Result<Vec<ScalarValue>> {
+    fn state(&mut self) -> Result<Vec<ScalarValue>> {
         Ok(self.digest.to_scalar_state().into_iter().collect())
     }
 
@@ -389,7 +389,7 @@ impl Accumulator for ApproxPercentileAccumulator {
         Ok(())
     }
 
-    fn evaluate(&self) -> Result<ScalarValue> {
+    fn evaluate(&mut self) -> Result<ScalarValue> {
         if self.digest.count() == 0.0 {
             return exec_err!("aggregate function needs at least one non-null element");
         }

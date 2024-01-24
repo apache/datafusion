@@ -35,7 +35,7 @@ use datafusion_expr::Accumulator;
 
 /// Convert scalar values from an accumulator into arrays.
 pub fn get_accum_scalar_values_as_arrays(
-    accum: &dyn Accumulator,
+    accum: &mut dyn Accumulator,
 ) -> Result<Vec<ArrayRef>> {
     accum
         .state()?
@@ -196,9 +196,9 @@ pub(crate) fn ordering_fields(
     ordering_req
         .iter()
         .zip(data_types.iter())
-        .map(|(expr, dtype)| {
+        .map(|(sort_expr, dtype)| {
             Field::new(
-                expr.to_string().as_str(),
+                sort_expr.expr.to_string().as_str(),
                 dtype.clone(),
                 // Multi partitions may be empty hence field should be nullable.
                 true,

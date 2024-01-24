@@ -18,6 +18,7 @@
 use std::collections::HashMap;
 use std::env;
 use std::path::Path;
+use std::process::ExitCode;
 use std::str::FromStr;
 use std::sync::{Arc, OnceLock};
 
@@ -138,7 +139,18 @@ struct Args {
 }
 
 #[tokio::main]
-pub async fn main() -> Result<()> {
+/// Calls [`main_inner`], then handles printing errors and returning the correct exit code
+pub async fn main() -> ExitCode {
+    if let Err(e) = main_inner().await {
+        println!("Error: {e}");
+        return ExitCode::FAILURE;
+    }
+
+    ExitCode::SUCCESS
+}
+
+/// Main CLI entrypoint
+async fn main_inner() -> Result<()> {
     env_logger::init();
     let args = Args::parse();
 
@@ -216,7 +228,7 @@ pub async fn main() -> Result<()> {
 
     if commands.is_empty() && files.is_empty() {
         if !rc.is_empty() {
-            exec::exec_from_files(rc, &mut ctx, &print_options).await
+            exec::exec_from_files(&mut ctx, rc, &print_options).await?;
         }
         // TODO maybe we can have thiserror for cli but for now let's keep it simple
         return exec::exec_from_repl(&mut ctx, &mut print_options)
@@ -225,11 +237,11 @@ pub async fn main() -> Result<()> {
     }
 
     if !files.is_empty() {
-        exec::exec_from_files(files, &mut ctx, &print_options).await;
+        exec::exec_from_files(&mut ctx, files, &print_options).await?;
     }
 
     if !commands.is_empty() {
-        exec::exec_from_commands(&mut ctx, &print_options, commands).await;
+        exec::exec_from_commands(&mut ctx, commands, &print_options).await?;
     }
 
     Ok(())

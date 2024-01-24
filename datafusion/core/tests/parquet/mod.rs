@@ -63,9 +63,13 @@ enum Scenario {
     Timestamps,
     Dates,
     Int32,
+    Int32Range,
     Float64,
     Decimal,
+    DecimalBloomFilterInt32,
+    DecimalBloomFilterInt64,
     DecimalLargePrecision,
+    DecimalLargePrecisionBloomFilter,
     PeriodsInColumnNames,
 }
 
@@ -113,12 +117,24 @@ impl TestOutput {
         self.metric_value("predicate_evaluation_errors")
     }
 
-    /// The number of times the pruning predicate evaluation errors
-    fn row_groups_pruned(&self) -> Option<usize> {
-        self.metric_value("row_groups_pruned")
+    /// The number of row_groups pruned by bloom filter
+    fn row_groups_pruned_bloom_filter(&self) -> Option<usize> {
+        self.metric_value("row_groups_pruned_bloom_filter")
     }
 
-    /// The number of times the pruning predicate evaluation errors
+    /// The number of row_groups pruned by statistics
+    fn row_groups_pruned_statistics(&self) -> Option<usize> {
+        self.metric_value("row_groups_pruned_statistics")
+    }
+
+    /// The number of row_groups pruned
+    fn row_groups_pruned(&self) -> Option<usize> {
+        self.row_groups_pruned_bloom_filter()
+            .zip(self.row_groups_pruned_statistics())
+            .map(|(a, b)| a + b)
+    }
+
+    /// The number of row pages pruned
     fn row_pages_pruned(&self) -> Option<usize> {
         self.metric_value("page_index_rows_filtered")
     }
@@ -145,10 +161,12 @@ impl ContextWithParquet {
         mut config: SessionConfig,
     ) -> Self {
         let file = match unit {
-            Unit::RowGroup => make_test_file_rg(scenario).await,
+            Unit::RowGroup => {
+                config = config.with_parquet_bloom_filter_pruning(true);
+                make_test_file_rg(scenario).await
+            }
             Unit::Page => {
-                let config = config.options_mut();
-                config.execution.parquet.enable_page_index = true;
+                config = config.with_parquet_page_index_pruning(true);
                 make_test_file_page(scenario).await
             }
         };
@@ -360,6 +378,13 @@ fn make_int32_batch(start: i32, end: i32) -> RecordBatch {
     RecordBatch::try_new(schema, vec![array.clone()]).unwrap()
 }
 
+fn make_int32_range(start: i32, end: i32) -> RecordBatch {
+    let schema = Arc::new(Schema::new(vec![Field::new("i", DataType::Int32, true)]));
+    let v = vec![start, end];
+    let array = Arc::new(Int32Array::from(v)) as ArrayRef;
+    RecordBatch::try_new(schema, vec![array.clone()]).unwrap()
+}
+
 /// Return record batch with f64 vector
 ///
 /// Columns are named
@@ -508,6 +533,9 @@ fn create_data_batch(scenario: Scenario) -> Vec<RecordBatch> {
                 make_int32_batch(5, 10),
             ]
         }
+        Scenario::Int32Range => {
+            vec![make_int32_range(0, 10), make_int32_range(200000, 300000)]
+        }
         Scenario::Float64 => {
             vec![
                 make_f64_batch(vec![-5.0, -4.0, -3.0, -2.0, -1.0]),
@@ -524,6 +552,22 @@ fn create_data_batch(scenario: Scenario) -> Vec<RecordBatch> {
                 make_decimal_batch(vec![2000, 3000, 3000, 4000, 6000], 9, 2),
             ]
         }
+        Scenario::DecimalBloomFilterInt32 => {
+            // decimal record batch
+            vec![
+                make_decimal_batch(vec![100, 200, 300, 400, 500], 6, 2),
+                make_decimal_batch(vec![100, 200, 300, 400, 600], 6, 2),
+                make_decimal_batch(vec![100, 200, 300, 400, 600], 6, 2),
+            ]
+        }
+        Scenario::DecimalBloomFilterInt64 => {
+            // decimal record batch
+            vec![
+                make_decimal_batch(vec![100, 200, 300, 400, 500], 9, 2),
+                make_decimal_batch(vec![100, 200, 300, 400, 600], 9, 2),
+                make_decimal_batch(vec![100, 200, 300, 400, 600], 9, 2),
+            ]
+        }
         Scenario::DecimalLargePrecision => {
             // decimal record batch with large precision,
             // and the data will stored as FIXED_LENGTH_BYTE_ARRAY
@@ -531,6 +575,15 @@ fn create_data_batch(scenario: Scenario) -> Vec<RecordBatch> {
                 make_decimal_batch(vec![100, 200, 300, 400, 600], 38, 2),
                 make_decimal_batch(vec![-500, 100, 300, 400, 600], 38, 2),
                 make_decimal_batch(vec![2000, 3000, 3000, 4000, 6000], 38, 2),
+            ]
+        }
+        Scenario::DecimalLargePrecisionBloomFilter => {
+            // decimal record batch with large precision,
+            // and the data will stored as FIXED_LENGTH_BYTE_ARRAY
+            vec![
+                make_decimal_batch(vec![100000, 200000, 300000, 400000, 500000], 38, 5),
+                make_decimal_batch(vec![-100000, 200000, 300000, 400000, 600000], 38, 5),
+                make_decimal_batch(vec![100000, 200000, 300000, 400000, 600000], 38, 5),
             ]
         }
         Scenario::PeriodsInColumnNames => {
@@ -565,6 +618,7 @@ async fn make_test_file_rg(scenario: Scenario) -> NamedTempFile {
 
     let props = WriterProperties::builder()
         .set_max_row_group_size(5)
+        .set_bloom_filter_enabled(true)
         .build();
 
     let batches = create_data_batch(scenario);

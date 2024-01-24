@@ -314,6 +314,11 @@ impl PruningPredicate {
         &self.predicate_expr
     }
 
+    /// Returns a reference to the literal guarantees
+    pub fn literal_guarantees(&self) -> &[LiteralGuarantee] {
+        &self.literal_guarantees
+    }
+
     /// Returns true if this pruning predicate can not prune anything.
     ///
     /// This happens if the predicate is a literal `true`  and
@@ -921,11 +926,17 @@ fn build_is_null_column_expr(
     }
 }
 
+/// The maximum number of entries in an `InList` that might be rewritten into
+/// an OR chain
+const MAX_LIST_VALUE_SIZE_REWRITE: usize = 20;
+
 /// Translate logical filter expression into pruning predicate
 /// expression that will evaluate to FALSE if it can be determined no
 /// rows between the min/max values could pass the predicates.
 ///
 /// Returns the pruning predicate as an [`PhysicalExpr`]
+///
+/// Notice: Does not handle [`phys_expr::InListExpr`] greater than 20, which will be rewritten to TRUE
 fn build_predicate_expression(
     expr: &Arc<dyn PhysicalExpr>,
     schema: &Schema,
@@ -955,7 +966,9 @@ fn build_predicate_expression(
         }
     }
     if let Some(in_list) = expr_any.downcast_ref::<phys_expr::InListExpr>() {
-        if !in_list.list().is_empty() && in_list.list().len() < 20 {
+        if !in_list.list().is_empty()
+            && in_list.list().len() <= MAX_LIST_VALUE_SIZE_REWRITE
+        {
             let eq_op = if in_list.negated() {
                 Operator::NotEq
             } else {
@@ -1946,6 +1959,68 @@ mod tests {
         let expected_expr = "(c1_min@0 != 1 OR 1 != c1_max@1) \
         AND (c1_min@0 != 2 OR 2 != c1_max@1) \
         AND (c1_min@0 != 3 OR 3 != c1_max@1)";
+        let predicate_expr =
+            test_build_predicate_expression(&expr, &schema, &mut RequiredColumns::new());
+        assert_eq!(predicate_expr.to_string(), expected_expr);
+
+        Ok(())
+    }
+
+    #[test]
+    fn row_group_predicate_between() -> Result<()> {
+        let schema = Schema::new(vec![
+            Field::new("c1", DataType::Int32, false),
+            Field::new("c2", DataType::Int32, false),
+        ]);
+
+        // test c1 BETWEEN 1 AND 5
+        let expr1 = col("c1").between(lit(1), lit(5));
+
+        // test 1 <= c1 <= 5
+        let expr2 = col("c1").gt_eq(lit(1)).and(col("c1").lt_eq(lit(5)));
+
+        let predicate_expr1 =
+            test_build_predicate_expression(&expr1, &schema, &mut RequiredColumns::new());
+
+        let predicate_expr2 =
+            test_build_predicate_expression(&expr2, &schema, &mut RequiredColumns::new());
+        assert_eq!(predicate_expr1.to_string(), predicate_expr2.to_string());
+
+        Ok(())
+    }
+
+    #[test]
+    fn row_group_predicate_between_with_in_list() -> Result<()> {
+        let schema = Schema::new(vec![
+            Field::new("c1", DataType::Int32, false),
+            Field::new("c2", DataType::Int32, false),
+        ]);
+        // test c1 in(1, 2)
+        let expr1 = col("c1").in_list(vec![lit(1), lit(2)], false);
+
+        // test c2 BETWEEN 4 AND 5
+        let expr2 = col("c2").between(lit(4), lit(5));
+
+        // test c1 in(1, 2) and c2 BETWEEN 4 AND 5
+        let expr3 = expr1.and(expr2);
+
+        let expected_expr = "(c1_min@0 <= 1 AND 1 <= c1_max@1 OR c1_min@0 <= 2 AND 2 <= c1_max@1) AND c2_max@2 >= 4 AND c2_min@3 <= 5";
+        let predicate_expr =
+            test_build_predicate_expression(&expr3, &schema, &mut RequiredColumns::new());
+        assert_eq!(predicate_expr.to_string(), expected_expr);
+
+        Ok(())
+    }
+
+    #[test]
+    fn row_group_predicate_in_list_to_many_values() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("c1", DataType::Int32, false)]);
+        // test c1 in(1..21)
+        // in pruning.rs has MAX_LIST_VALUE_SIZE_REWRITE = 20, more than this value will be rewrite
+        // always true
+        let expr = col("c1").in_list((1..=21).map(lit).collect(), false);
+
+        let expected_expr = "true";
         let predicate_expr =
             test_build_predicate_expression(&expr, &schema, &mut RequiredColumns::new());
         assert_eq!(predicate_expr.to_string(), expected_expr);
@@ -3139,6 +3214,6 @@ mod tests {
     fn logical2physical(expr: &Expr, schema: &Schema) -> Arc<dyn PhysicalExpr> {
         let df_schema = schema.clone().to_dfschema().unwrap();
         let execution_props = ExecutionProps::new();
-        create_physical_expr(expr, &df_schema, schema, &execution_props).unwrap()
+        create_physical_expr(expr, &df_schema, &execution_props).unwrap()
     }
 }

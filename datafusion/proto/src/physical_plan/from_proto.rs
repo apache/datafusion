@@ -42,6 +42,7 @@ use datafusion::physical_plan::windows::create_window_expr;
 use datafusion::physical_plan::{
     functions, ColumnStatistics, Partitioning, PhysicalExpr, Statistics, WindowExpr,
 };
+use datafusion_common::file_options::arrow_writer::ArrowWriterOptions;
 use datafusion_common::file_options::csv_writer::CsvWriterOptions;
 use datafusion_common::file_options::json_writer::JsonWriterOptions;
 use datafusion_common::file_options::parquet_writer::ParquetWriterOptions;
@@ -91,6 +92,36 @@ pub fn parse_physical_sort_expr(
     } else {
         Err(proto_error("Unexpected empty physical expression"))
     }
+}
+
+/// Parses a physical sort expressions from a protobuf.
+///
+/// # Arguments
+///
+/// * `proto` - Input proto with vector of physical sort expression node
+/// * `registry` - A registry knows how to build logical expressions out of user-defined function' names
+/// * `input_schema` - The Arrow schema for the input, used for determining expression data types
+///                    when performing type coercion.
+pub fn parse_physical_sort_exprs(
+    proto: &[protobuf::PhysicalSortExprNode],
+    registry: &dyn FunctionRegistry,
+    input_schema: &Schema,
+) -> Result<Vec<PhysicalSortExpr>> {
+    proto
+        .iter()
+        .map(|sort_expr| {
+            if let Some(expr) = &sort_expr.expr {
+                let expr = parse_physical_expr(expr.as_ref(), registry, input_schema)?;
+                let options = SortOptions {
+                    descending: !sort_expr.asc,
+                    nulls_first: sort_expr.nulls_first,
+                };
+                Ok(PhysicalSortExpr { expr, options })
+            } else {
+                Err(proto_error("Unexpected empty physical expression"))
+            }
+        })
+        .collect::<Result<Vec<_>>>()
 }
 
 /// Parses a physical window expr from a protobuf.
@@ -782,6 +813,18 @@ impl From<protobuf::CompressionTypeVariant> for CompressionTypeVariant {
     }
 }
 
+impl From<CompressionTypeVariant> for protobuf::CompressionTypeVariant {
+    fn from(value: CompressionTypeVariant) -> Self {
+        match value {
+            CompressionTypeVariant::GZIP => Self::Gzip,
+            CompressionTypeVariant::BZIP2 => Self::Bzip2,
+            CompressionTypeVariant::XZ => Self::Xz,
+            CompressionTypeVariant::ZSTD => Self::Zstd,
+            CompressionTypeVariant::UNCOMPRESSED => Self::Uncompressed,
+        }
+    }
+}
+
 impl TryFrom<&protobuf::FileTypeWriterOptions> for FileTypeWriterOptions {
     type Error = DataFusionError;
 
@@ -792,6 +835,10 @@ impl TryFrom<&protobuf::FileTypeWriterOptions> for FileTypeWriterOptions {
             .ok_or_else(|| proto_error("Missing required file_type field in protobuf"))?;
 
         match file_type {
+            protobuf::file_type_writer_options::FileType::ArrowOptions(_) => {
+                Ok(Self::Arrow(ArrowWriterOptions::new()))
+            }
+
             protobuf::file_type_writer_options::FileType::JsonOptions(opts) => {
                 let compression: CompressionTypeVariant = opts.compression().into();
                 Ok(Self::JSON(JsonWriterOptions::new(compression)))

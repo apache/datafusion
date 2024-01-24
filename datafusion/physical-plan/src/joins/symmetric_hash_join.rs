@@ -32,7 +32,7 @@ use std::task::Poll;
 use std::{usize, vec};
 
 use crate::common::SharedMemoryReservation;
-use crate::joins::hash_join::{build_equal_condition_join_indices, update_hash};
+use crate::joins::hash_join::{equal_rows_arr, update_hash};
 use crate::joins::stream_join_utils::{
     calculate_filter_expr_intervals, combine_two_batches,
     convert_sort_expr_with_filter_schema, get_pruning_anti_indices,
@@ -41,22 +41,26 @@ use crate::joins::stream_join_utils::{
     StreamJoinMetrics,
 };
 use crate::joins::utils::{
-    build_batch_from_indices, build_join_schema, check_join_is_valid,
-    partitioned_join_output_partitioning, ColumnIndex, JoinFilter, JoinOn,
-    StatefulStreamResult,
+    apply_join_filter_to_indices, build_batch_from_indices, build_join_schema,
+    check_join_is_valid, partitioned_join_output_partitioning, ColumnIndex, JoinFilter,
+    JoinHashMapType, JoinOn, StatefulStreamResult,
 };
 use crate::{
     expressions::{Column, PhysicalSortExpr},
     joins::StreamJoinPartitionMode,
     metrics::{ExecutionPlanMetricsSet, MetricsSet},
     DisplayAs, DisplayFormatType, Distribution, EquivalenceProperties, ExecutionPlan,
-    Partitioning, RecordBatchStream, SendableRecordBatchStream, Statistics,
+    Partitioning, PhysicalExpr, RecordBatchStream, SendableRecordBatchStream, Statistics,
 };
 
-use arrow::array::{ArrowPrimitiveType, NativeAdapter, PrimitiveArray, PrimitiveBuilder};
+use arrow::array::{
+    ArrowPrimitiveType, NativeAdapter, PrimitiveArray, PrimitiveBuilder, UInt32Array,
+    UInt64Array,
+};
 use arrow::compute::concat_batches;
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
+use datafusion_common::hash_utils::create_hashes;
 use datafusion_common::utils::bisect;
 use datafusion_common::{
     internal_err, plan_err, DataFusionError, JoinSide, JoinType, Result,
@@ -68,6 +72,7 @@ use datafusion_physical_expr::equivalence::join_equivalence_properties;
 use datafusion_physical_expr::intervals::cp_solver::ExprIntervalGraph;
 
 use ahash::RandomState;
+use datafusion_physical_expr::PhysicalSortRequirement;
 use futures::Stream;
 use hashbrown::HashSet;
 use parking_lot::Mutex;
@@ -181,6 +186,10 @@ pub struct SymmetricHashJoinExec {
     column_indices: Vec<ColumnIndex>,
     /// If null_equals_null is true, null == null else null != null
     pub(crate) null_equals_null: bool,
+    /// Left side sort expression(s)
+    pub(crate) left_sort_exprs: Option<Vec<PhysicalSortExpr>>,
+    /// Right side sort expression(s)
+    pub(crate) right_sort_exprs: Option<Vec<PhysicalSortExpr>>,
     /// Partition Mode
     mode: StreamJoinPartitionMode,
 }
@@ -192,6 +201,7 @@ impl SymmetricHashJoinExec {
     /// - It is not possible to join the left and right sides on keys `on`, or
     /// - It fails to construct `SortedFilterExpr`s, or
     /// - It fails to create the [ExprIntervalGraph].
+    #[allow(clippy::too_many_arguments)]
     pub fn try_new(
         left: Arc<dyn ExecutionPlan>,
         right: Arc<dyn ExecutionPlan>,
@@ -199,6 +209,8 @@ impl SymmetricHashJoinExec {
         filter: Option<JoinFilter>,
         join_type: &JoinType,
         null_equals_null: bool,
+        left_sort_exprs: Option<Vec<PhysicalSortExpr>>,
+        right_sort_exprs: Option<Vec<PhysicalSortExpr>>,
         mode: StreamJoinPartitionMode,
     ) -> Result<Self> {
         let left_schema = left.schema();
@@ -232,6 +244,8 @@ impl SymmetricHashJoinExec {
             metrics: ExecutionPlanMetricsSet::new(),
             column_indices,
             null_equals_null,
+            left_sort_exprs,
+            right_sort_exprs,
             mode,
         })
     }
@@ -269,6 +283,16 @@ impl SymmetricHashJoinExec {
     /// Get partition mode
     pub fn partition_mode(&self) -> StreamJoinPartitionMode {
         self.mode
+    }
+
+    /// Get left_sort_exprs
+    pub fn left_sort_exprs(&self) -> Option<&[PhysicalSortExpr]> {
+        self.left_sort_exprs.as_deref()
+    }
+
+    /// Get right_sort_exprs
+    pub fn right_sort_exprs(&self) -> Option<&[PhysicalSortExpr]> {
+        self.right_sort_exprs.as_deref()
     }
 
     /// Check if order information covers every column in the filter expression.
@@ -337,10 +361,6 @@ impl ExecutionPlan for SymmetricHashJoinExec {
         Ok(children.iter().any(|u| *u))
     }
 
-    fn benefits_from_input_partitioning(&self) -> Vec<bool> {
-        vec![false, false]
-    }
-
     fn required_input_distribution(&self) -> Vec<Distribution> {
         match self.mode {
             StreamJoinPartitionMode::Partitioned => {
@@ -358,6 +378,17 @@ impl ExecutionPlan for SymmetricHashJoinExec {
                 vec![Distribution::SinglePartition, Distribution::SinglePartition]
             }
         }
+    }
+
+    fn required_input_ordering(&self) -> Vec<Option<Vec<PhysicalSortRequirement>>> {
+        vec![
+            self.left_sort_exprs
+                .as_ref()
+                .map(PhysicalSortRequirement::from_sort_exprs),
+            self.right_sort_exprs
+                .as_ref()
+                .map(PhysicalSortRequirement::from_sort_exprs),
+        ]
     }
 
     fn output_partitioning(&self) -> Partitioning {
@@ -403,6 +434,8 @@ impl ExecutionPlan for SymmetricHashJoinExec {
             self.filter.clone(),
             &self.join_type,
             self.null_equals_null,
+            self.left_sort_exprs.clone(),
+            self.right_sort_exprs.clone(),
             self.mode,
         )?))
     }
@@ -431,24 +464,21 @@ impl ExecutionPlan for SymmetricHashJoinExec {
         }
         // If `filter_state` and `filter` are both present, then calculate sorted filter expressions
         // for both sides, and build an expression graph.
-        let (left_sorted_filter_expr, right_sorted_filter_expr, graph) = match (
-            self.left.output_ordering(),
-            self.right.output_ordering(),
-            &self.filter,
-        ) {
-            (Some(left_sort_exprs), Some(right_sort_exprs), Some(filter)) => {
-                let (left, right, graph) = prepare_sorted_exprs(
-                    filter,
-                    &self.left,
-                    &self.right,
-                    left_sort_exprs,
-                    right_sort_exprs,
-                )?;
-                (Some(left), Some(right), Some(graph))
-            }
-            // If `filter_state` or `filter` is not present, then return None for all three values:
-            _ => (None, None, None),
-        };
+        let (left_sorted_filter_expr, right_sorted_filter_expr, graph) =
+            match (&self.left_sort_exprs, &self.right_sort_exprs, &self.filter) {
+                (Some(left_sort_exprs), Some(right_sort_exprs), Some(filter)) => {
+                    let (left, right, graph) = prepare_sorted_exprs(
+                        filter,
+                        &self.left,
+                        &self.right,
+                        left_sort_exprs,
+                        right_sort_exprs,
+                    )?;
+                    (Some(left), Some(right), Some(graph))
+                }
+                // If `filter_state` or `filter` is not present, then return None for all three values:
+                _ => (None, None, None),
+            };
 
         let (on_left, on_right) = self.on.iter().cloned().unzip();
 
@@ -759,7 +789,7 @@ pub(crate) fn join_with_probe_batch(
     if build_hash_joiner.input_buffer.num_rows() == 0 || probe_batch.num_rows() == 0 {
         return Ok(None);
     }
-    let (build_indices, probe_indices) = build_equal_condition_join_indices(
+    let (build_indices, probe_indices) = lookup_join_hashmap(
         &build_hash_joiner.hashmap,
         &build_hash_joiner.input_buffer,
         probe_batch,
@@ -768,11 +798,22 @@ pub(crate) fn join_with_probe_batch(
         random_state,
         null_equals_null,
         &mut build_hash_joiner.hashes_buffer,
-        filter,
-        build_hash_joiner.build_side,
         Some(build_hash_joiner.deleted_offset),
-        false,
     )?;
+
+    let (build_indices, probe_indices) = if let Some(filter) = filter {
+        apply_join_filter_to_indices(
+            &build_hash_joiner.input_buffer,
+            probe_batch,
+            build_indices,
+            probe_indices,
+            filter,
+            build_hash_joiner.build_side,
+        )?
+    } else {
+        (build_indices, probe_indices)
+    };
+
     if need_to_produce_result_in_final(build_hash_joiner.build_side, join_type) {
         record_visited_indices(
             &mut build_hash_joiner.visited_rows,
@@ -807,6 +848,102 @@ pub(crate) fn join_with_probe_batch(
         )
         .map(|batch| (batch.num_rows() > 0).then_some(batch))
     }
+}
+
+/// This method performs lookups against JoinHashMap by hash values of join-key columns, and handles potential
+/// hash collisions.
+///
+/// # Arguments
+///
+/// * `build_hashmap` - hashmap collected from build side data.
+/// * `build_batch` - Build side record batch.
+/// * `probe_batch` - Probe side record batch.
+/// * `build_on` - An array of columns on which the join will be performed. The columns are from the build side of the join.
+/// * `probe_on` - An array of columns on which the join will be performed. The columns are from the probe side of the join.
+/// * `random_state` - The random state for the join.
+/// * `null_equals_null` - A boolean indicating whether NULL values should be treated as equal when joining.
+/// * `hashes_buffer` - Buffer used for probe side keys hash calculation.
+/// * `deleted_offset` - deleted offset for build side data.
+///
+/// # Returns
+///
+/// A [Result] containing a tuple with two equal length arrays, representing indices of rows from build and probe side,
+/// matched by join key columns.
+#[allow(clippy::too_many_arguments)]
+fn lookup_join_hashmap(
+    build_hashmap: &PruningJoinHashMap,
+    build_batch: &RecordBatch,
+    probe_batch: &RecordBatch,
+    build_on: &[Column],
+    probe_on: &[Column],
+    random_state: &RandomState,
+    null_equals_null: bool,
+    hashes_buffer: &mut Vec<u64>,
+    deleted_offset: Option<usize>,
+) -> Result<(UInt64Array, UInt32Array)> {
+    let keys_values = probe_on
+        .iter()
+        .map(|c| c.evaluate(probe_batch)?.into_array(probe_batch.num_rows()))
+        .collect::<Result<Vec<_>>>()?;
+    let build_join_values = build_on
+        .iter()
+        .map(|c| c.evaluate(build_batch)?.into_array(build_batch.num_rows()))
+        .collect::<Result<Vec<_>>>()?;
+
+    hashes_buffer.clear();
+    hashes_buffer.resize(probe_batch.num_rows(), 0);
+    let hash_values = create_hashes(&keys_values, random_state, hashes_buffer)?;
+
+    // As SymmetricHashJoin uses LIFO JoinHashMap, the chained list algorithm
+    // will return build indices for each probe row in a reverse order as such:
+    // Build Indices: [5, 4, 3]
+    // Probe Indices: [1, 1, 1]
+    //
+    // This affects the output sequence. Hypothetically, it's possible to preserve the lexicographic order on the build side.
+    // Let's consider probe rows [0,1] as an example:
+    //
+    // When the probe iteration sequence is reversed, the following pairings can be derived:
+    //
+    // For probe row 1:
+    //     (5, 1)
+    //     (4, 1)
+    //     (3, 1)
+    //
+    // For probe row 0:
+    //     (5, 0)
+    //     (4, 0)
+    //     (3, 0)
+    //
+    // After reversing both sets of indices, we obtain reversed indices:
+    //
+    //     (3,0)
+    //     (4,0)
+    //     (5,0)
+    //     (3,1)
+    //     (4,1)
+    //     (5,1)
+    //
+    // With this approach, the lexicographic order on both the probe side and the build side is preserved.
+    let (mut matched_probe, mut matched_build) = build_hashmap
+        .get_matched_indices(hash_values.iter().enumerate().rev(), deleted_offset);
+
+    matched_probe.as_slice_mut().reverse();
+    matched_build.as_slice_mut().reverse();
+
+    let build_indices: UInt64Array =
+        PrimitiveArray::new(matched_build.finish().into(), None);
+    let probe_indices: UInt32Array =
+        PrimitiveArray::new(matched_probe.finish().into(), None);
+
+    let (build_indices, probe_indices) = equal_rows_arr(
+        &build_indices,
+        &probe_indices,
+        &build_join_values,
+        &keys_values,
+        null_equals_null,
+    )?;
+
+    Ok((build_indices, probe_indices))
 }
 
 pub struct OneSideHashJoiner {

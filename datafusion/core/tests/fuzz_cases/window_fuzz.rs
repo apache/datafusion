@@ -139,19 +139,102 @@ async fn window_bounded_window_random_comparison() -> Result<()> {
     Ok(())
 }
 
+// This tests whether we can generate bounded window results for each input
+// batch immediately for causal window frames.
+#[tokio::test(flavor = "multi_thread", worker_threads = 16)]
+async fn bounded_window_causal_non_causal() -> Result<()> {
+    let session_config = SessionConfig::new();
+    let ctx = SessionContext::new_with_config(session_config);
+    let mut batches = make_staggered_batches::<true>(1000, 10, 23_u64);
+    // Remove empty batches:
+    batches.retain(|batch| batch.num_rows() > 0);
+    let schema = batches[0].schema();
+    let memory_exec = Arc::new(MemoryExec::try_new(
+        &[batches.clone()],
+        schema.clone(),
+        None,
+    )?);
+    let window_fn = WindowFunctionDefinition::AggregateFunction(AggregateFunction::Count);
+    let fn_name = "COUNT".to_string();
+    let args = vec![col("x", &schema)?];
+    let partitionby_exprs = vec![];
+    let orderby_exprs = vec![];
+    // Window frame starts with "UNBOUNDED PRECEDING":
+    let start_bound = WindowFrameBound::Preceding(ScalarValue::UInt64(None));
+
+    // Simulate cases of the following form:
+    // COUNT(x) OVER (
+    //     ROWS BETWEEN UNBOUNDED PRECEDING AND <end_bound> PRECEDING/FOLLOWING
+    // )
+    for is_preceding in [false, true] {
+        for end_bound in [0, 1, 2, 3] {
+            let end_bound = if is_preceding {
+                WindowFrameBound::Preceding(ScalarValue::UInt64(Some(end_bound)))
+            } else {
+                WindowFrameBound::Following(ScalarValue::UInt64(Some(end_bound)))
+            };
+            let window_frame = WindowFrame::new_bounds(
+                WindowFrameUnits::Rows,
+                start_bound.clone(),
+                end_bound,
+            );
+            let causal = window_frame.is_causal();
+
+            let window_expr = create_window_expr(
+                &window_fn,
+                fn_name.clone(),
+                &args,
+                &partitionby_exprs,
+                &orderby_exprs,
+                Arc::new(window_frame),
+                schema.as_ref(),
+            )?;
+            let running_window_exec = Arc::new(BoundedWindowAggExec::try_new(
+                vec![window_expr],
+                memory_exec.clone(),
+                vec![],
+                InputOrderMode::Linear,
+            )?);
+            let task_ctx = ctx.task_ctx();
+            let mut collected_results = collect(running_window_exec, task_ctx).await?;
+            collected_results.retain(|batch| batch.num_rows() > 0);
+            let input_batch_sizes = batches
+                .iter()
+                .map(|batch| batch.num_rows())
+                .collect::<Vec<_>>();
+            let result_batch_sizes = collected_results
+                .iter()
+                .map(|batch| batch.num_rows())
+                .collect::<Vec<_>>();
+            if causal {
+                // For causal window frames, we can generate results immediately
+                // for each input batch. Hence, batch sizes should match.
+                assert_eq!(input_batch_sizes, result_batch_sizes);
+            } else {
+                // For non-causal window frames, we cannot generate results
+                // immediately for each input batch. Hence, batch sizes shouldn't
+                // match.
+                assert_ne!(input_batch_sizes, result_batch_sizes);
+            }
+        }
+    }
+
+    Ok(())
+}
+
 fn get_random_function(
     schema: &SchemaRef,
     rng: &mut StdRng,
     is_linear: bool,
 ) -> (WindowFunctionDefinition, Vec<Arc<dyn PhysicalExpr>>, String) {
-    let mut args = if is_linear {
+    let arg = if is_linear {
         // In linear test for the test version with WindowAggExec we use insert SortExecs to the plan to be able to generate
         // same result with BoundedWindowAggExec which doesn't use any SortExec. To make result
         // non-dependent on table order. We should use column a in the window function
         // (Given that we do not use ROWS for the window frame. ROWS also introduces dependency to the table order.).
-        vec![col("a", schema).unwrap()]
+        col("a", schema).unwrap()
     } else {
-        vec![col("x", schema).unwrap()]
+        col("x", schema).unwrap()
     };
     let mut window_fn_map = HashMap::new();
     // HashMap values consists of tuple first element is WindowFunction, second is additional argument
@@ -160,28 +243,28 @@ fn get_random_function(
         "sum",
         (
             WindowFunctionDefinition::AggregateFunction(AggregateFunction::Sum),
-            vec![],
+            vec![arg.clone()],
         ),
     );
     window_fn_map.insert(
         "count",
         (
             WindowFunctionDefinition::AggregateFunction(AggregateFunction::Count),
-            vec![],
+            vec![arg.clone()],
         ),
     );
     window_fn_map.insert(
         "min",
         (
             WindowFunctionDefinition::AggregateFunction(AggregateFunction::Min),
-            vec![],
+            vec![arg.clone()],
         ),
     );
     window_fn_map.insert(
         "max",
         (
             WindowFunctionDefinition::AggregateFunction(AggregateFunction::Max),
-            vec![],
+            vec![arg.clone()],
         ),
     );
     if !is_linear {
@@ -222,6 +305,7 @@ fn get_random_function(
                     BuiltInWindowFunction::Lead,
                 ),
                 vec![
+                    arg.clone(),
                     lit(ScalarValue::Int64(Some(rng.gen_range(1..10)))),
                     lit(ScalarValue::Int64(Some(rng.gen_range(1..1000)))),
                 ],
@@ -234,6 +318,7 @@ fn get_random_function(
                     BuiltInWindowFunction::Lag,
                 ),
                 vec![
+                    arg.clone(),
                     lit(ScalarValue::Int64(Some(rng.gen_range(1..10)))),
                     lit(ScalarValue::Int64(Some(rng.gen_range(1..1000)))),
                 ],
@@ -246,7 +331,7 @@ fn get_random_function(
             WindowFunctionDefinition::BuiltInWindowFunction(
                 BuiltInWindowFunction::FirstValue,
             ),
-            vec![],
+            vec![arg.clone()],
         ),
     );
     window_fn_map.insert(
@@ -255,7 +340,7 @@ fn get_random_function(
             WindowFunctionDefinition::BuiltInWindowFunction(
                 BuiltInWindowFunction::LastValue,
             ),
-            vec![],
+            vec![arg.clone()],
         ),
     );
     window_fn_map.insert(
@@ -264,23 +349,26 @@ fn get_random_function(
             WindowFunctionDefinition::BuiltInWindowFunction(
                 BuiltInWindowFunction::NthValue,
             ),
-            vec![lit(ScalarValue::Int64(Some(rng.gen_range(1..10))))],
+            vec![
+                arg.clone(),
+                lit(ScalarValue::Int64(Some(rng.gen_range(1..10)))),
+            ],
         ),
     );
 
     let rand_fn_idx = rng.gen_range(0..window_fn_map.len());
     let fn_name = window_fn_map.keys().collect::<Vec<_>>()[rand_fn_idx];
-    let (window_fn, new_args) = window_fn_map.values().collect::<Vec<_>>()[rand_fn_idx];
+    let (window_fn, args) = window_fn_map.values().collect::<Vec<_>>()[rand_fn_idx];
+    let mut args = args.clone();
     if let WindowFunctionDefinition::AggregateFunction(f) = window_fn {
-        let a = args[0].clone();
-        let dt = a.data_type(schema.as_ref()).unwrap();
-        let sig = f.signature();
-        let coerced = coerce_types(f, &[dt], &sig).unwrap();
-        args[0] = cast(a, schema, coerced[0].clone()).unwrap();
-    }
-
-    for new_arg in new_args {
-        args.push(new_arg.clone());
+        if !args.is_empty() {
+            // Do type coercion first argument
+            let a = args[0].clone();
+            let dt = a.data_type(schema.as_ref()).unwrap();
+            let sig = f.signature();
+            let coerced = coerce_types(f, &[dt], &sig).unwrap();
+            args[0] = cast(a, schema, coerced[0].clone()).unwrap();
+        }
     }
 
     (window_fn.clone(), args, fn_name.to_string())
@@ -343,11 +431,7 @@ fn get_random_window_frame(rng: &mut StdRng, is_linear: bool) -> WindowFrame {
             } else {
                 WindowFrameBound::Following(ScalarValue::Int32(Some(end_bound.val)))
             };
-            let mut window_frame = WindowFrame {
-                units,
-                start_bound,
-                end_bound,
-            };
+            let mut window_frame = WindowFrame::new_bounds(units, start_bound, end_bound);
             // with 10% use unbounded preceding in tests
             if rng.gen_range(0..10) == 0 {
                 window_frame.start_bound =
@@ -375,11 +459,7 @@ fn get_random_window_frame(rng: &mut StdRng, is_linear: bool) -> WindowFrame {
                     end_bound.val as u64,
                 )))
             };
-            let mut window_frame = WindowFrame {
-                units,
-                start_bound,
-                end_bound,
-            };
+            let mut window_frame = WindowFrame::new_bounds(units, start_bound, end_bound);
             // with 10% use unbounded preceding in tests
             if rng.gen_range(0..10) == 0 {
                 window_frame.start_bound =
@@ -407,7 +487,6 @@ async fn run_window_test(
     let session_config = SessionConfig::new().with_batch_size(50);
     let ctx = SessionContext::new_with_config(session_config);
     let (window_fn, args, fn_name) = get_random_function(&schema, &mut rng, is_linear);
-
     let window_frame = get_random_window_frame(&mut rng, is_linear);
     let mut orderby_exprs = vec![];
     for column in &orderby_columns {
@@ -457,6 +536,7 @@ async fn run_window_test(
     if is_linear {
         exec1 = Arc::new(SortExec::new(sort_keys.clone(), exec1)) as _;
     }
+
     let usual_window_exec = Arc::new(
         WindowAggExec::try_new(
             vec![create_window_expr(

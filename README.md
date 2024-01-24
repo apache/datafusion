@@ -19,6 +19,25 @@
 
 # DataFusion
 
+[![Crates.io][crates-badge]][crates-url]
+[![MIT licensed][mit-badge]][mit-url]
+[![Build Status][actions-badge]][actions-url]
+[![Discord chat][discord-badge]][discord-url]
+
+[crates-badge]: https://img.shields.io/crates/v/datafusion.svg
+[crates-url]: https://crates.io/crates/datafusion
+[mit-badge]: https://img.shields.io/badge/license-MIT-blue.svg
+[mit-url]: https://github.com/apache/arrow-datafusion/blob/main/LICENSE.txt
+[actions-badge]: https://github.com/apache/arrow-datafusion/actions/workflows/rust.yml/badge.svg
+[actions-url]: https://github.com/apache/arrow-datafusion/actions?query=branch%3Amain
+[discord-badge]: https://img.shields.io/discord/885562378132000778.svg?logo=discord&style=flat-square
+[discord-url]: https://discord.com/channels/885562378132000778/885562378132000781
+
+[Website](https://github.com/apache/arrow-datafusion) |
+[Guides](https://github.com/apache/arrow-datafusion/tree/main/docs) |
+[API Docs](https://docs.rs/datafusion/latest/datafusion/) |
+[Chat](https://discord.com/channels/885562378132000778/885562378132000781)
+
 <img src="https://arrow.apache.org/datafusion/_images/DataFusion-Logo-Background-White.png" width="256" alt="logo"/>
 
 DataFusion is a very fast, extensible query engine for building high-quality data-centric systems in
@@ -69,7 +88,6 @@ Optional features:
 - `backtrace`: include backtrace information in error messages
 - `pyarrow`: conversions between PyArrow and DataFusion types
 - `serde`: enable arrow-schema's `serde` feature
-- `simd`: enable arrow-rs's manual `SIMD` kernels (requires Rust `nightly`)
 
 [apache avro]: https://avro.apache.org/
 [apache parquet]: https://parquet.apache.org/

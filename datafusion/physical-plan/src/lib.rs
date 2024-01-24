@@ -610,4 +610,7 @@ pub fn get_plan_string(plan: &Arc<dyn ExecutionPlan>) -> Vec<String> {
 }
 
 #[cfg(test)]
+#[allow(clippy::single_component_path_imports)]
+use rstest_reuse;
+
 pub mod test;

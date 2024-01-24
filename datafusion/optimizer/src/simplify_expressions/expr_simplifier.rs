@@ -19,25 +19,26 @@
 
 use std::ops::Not;
 
-use super::or_in_list_simplifier::OrInListSimplifier;
 use super::utils::*;
+use super::{
+    inlist_simplifier::InListSimplifier, or_in_list_simplifier::OrInListSimplifier,
+};
 use crate::analyzer::type_coercion::TypeCoercionRewriter;
 use crate::simplify_expressions::guarantees::GuaranteeRewriter;
 use crate::simplify_expressions::regex::simplify_regex_expr;
 use crate::simplify_expressions::SimplifyInfo;
 
 use arrow::{
-    array::new_null_array,
+    array::{new_null_array, AsArray},
     datatypes::{DataType, Field, Schema},
     record_batch::RecordBatch,
 };
 use datafusion_common::{
     cast::{as_large_list_array, as_list_array},
-    plan_err,
     tree_node::{RewriteRecursion, TreeNode, TreeNodeRewriter},
 };
 use datafusion_common::{
-    exec_err, internal_err, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue,
+    internal_err, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue,
 };
 use datafusion_expr::{
     and, lit, or, BinaryExpr, BuiltinScalarFunction, Case, ColumnarValue, Expr, Like,
@@ -133,6 +134,7 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
         let mut simplifier = Simplifier::new(&self.info);
         let mut const_evaluator = ConstEvaluator::try_new(self.info.execution_props())?;
         let mut or_in_list_simplifier = OrInListSimplifier::new();
+        let mut inlist_simplifier = InListSimplifier::new();
         let mut guarantee_rewriter = GuaranteeRewriter::new(&self.guarantees);
 
         // TODO iterate until no changes are made during rewrite
@@ -142,6 +144,7 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
         expr.rewrite(&mut const_evaluator)?
             .rewrite(&mut simplifier)?
             .rewrite(&mut or_in_list_simplifier)?
+            .rewrite(&mut inlist_simplifier)?
             .rewrite(&mut guarantee_rewriter)?
             // run both passes twice to try an minimize simplifications that we missed
             .rewrite(&mut const_evaluator)?
@@ -298,6 +301,14 @@ struct ConstEvaluator<'a> {
     input_batch: RecordBatch,
 }
 
+/// The simplify result of ConstEvaluator
+enum ConstSimplifyResult {
+    // Expr was simplifed and contains the new expression
+    Simplified(ScalarValue),
+    // Evalaution encountered an error, contains the original expression
+    SimplifyRuntimeError(DataFusionError, Expr),
+}
+
 impl<'a> TreeNodeRewriter for ConstEvaluator<'a> {
     type N = Expr;
 
@@ -330,7 +341,17 @@ impl<'a> TreeNodeRewriter for ConstEvaluator<'a> {
 
     fn mutate(&mut self, expr: Expr) -> Result<Expr> {
         match self.can_evaluate.pop() {
-            Some(true) => Ok(Expr::Literal(self.evaluate_to_scalar(expr)?)),
+            // Certain expressions such as `CASE` and `COALESCE` are short circuiting
+            // and may not evalute all their sub expressions. Thus if
+            // if any error is countered during simplification, return the original
+            // so that normal evaluation can occur
+            Some(true) => {
+                let result = self.evaluate_to_scalar(expr);
+                match result {
+                    ConstSimplifyResult::Simplified(s) => Ok(Expr::Literal(s)),
+                    ConstSimplifyResult::SimplifyRuntimeError(_, expr) => Ok(expr),
+                }
+            }
             Some(false) => Ok(expr),
             _ => internal_err!("Failed to pop can_evaluate"),
         }
@@ -425,33 +446,40 @@ impl<'a> ConstEvaluator<'a> {
     }
 
     /// Internal helper to evaluates an Expr
-    pub(crate) fn evaluate_to_scalar(&mut self, expr: Expr) -> Result<ScalarValue> {
+    pub(crate) fn evaluate_to_scalar(&mut self, expr: Expr) -> ConstSimplifyResult {
         if let Expr::Literal(s) = expr {
-            return Ok(s);
+            return ConstSimplifyResult::Simplified(s);
         }
 
-        let phys_expr = create_physical_expr(
-            &expr,
-            &self.input_schema,
-            &self.input_batch.schema(),
-            self.execution_props,
-        )?;
-        let col_val = phys_expr.evaluate(&self.input_batch)?;
+        let phys_expr =
+            match create_physical_expr(&expr, &self.input_schema, self.execution_props) {
+                Ok(e) => e,
+                Err(err) => return ConstSimplifyResult::SimplifyRuntimeError(err, expr),
+            };
+        let col_val = match phys_expr.evaluate(&self.input_batch) {
+            Ok(v) => v,
+            Err(err) => return ConstSimplifyResult::SimplifyRuntimeError(err, expr),
+        };
         match col_val {
             ColumnarValue::Array(a) => {
                 if a.len() != 1 {
-                    exec_err!(
-                        "Could not evaluate the expression, found a result of length {}",
-                        a.len()
+                    ConstSimplifyResult::SimplifyRuntimeError(
+                        DataFusionError::Execution(format!("Could not evaluate the expression, found a result of length {}", a.len())),
+                        expr,
                     )
                 } else if as_list_array(&a).is_ok() || as_large_list_array(&a).is_ok() {
-                    Ok(ScalarValue::List(a))
+                    ConstSimplifyResult::Simplified(ScalarValue::List(
+                        a.as_list().to_owned().into(),
+                    ))
                 } else {
                     // Non-ListArray
-                    ScalarValue::try_from_array(&a, 0)
+                    match ScalarValue::try_from_array(&a, 0) {
+                        Ok(s) => ConstSimplifyResult::Simplified(s),
+                        Err(err) => ConstSimplifyResult::SimplifyRuntimeError(err, expr),
+                    }
                 }
             }
-            ColumnarValue::Scalar(s) => Ok(s),
+            ColumnarValue::Scalar(s) => ConstSimplifyResult::Simplified(s),
         }
     }
 }
@@ -849,18 +877,6 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 op: Divide,
                 right,
             }) if is_null(&right) => *right,
-            // A / 0 -> Divide by zero error if A is not null and not floating
-            // (float / 0 -> inf | -inf | NAN)
-            Expr::BinaryExpr(BinaryExpr {
-                left,
-                op: Divide,
-                right,
-            }) if !info.nullable(&left)?
-                && !info.get_data_type(&left)?.is_floating()
-                && is_zero(&right) =>
-            {
-                return plan_err!("Divide by zero");
-            }
 
             //
             // Rules for Modulo
@@ -888,21 +904,6 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 && is_one(&right) =>
             {
                 lit(0)
-            }
-            // A % 0 --> Divide by zero Error (if A is not floating and not null)
-            // A % 0 --> NAN (if A is floating and not null)
-            Expr::BinaryExpr(BinaryExpr {
-                left,
-                op: Modulo,
-                right,
-            }) if !info.nullable(&left)? && is_zero(&right) => {
-                match info.get_data_type(&left)? {
-                    DataType::Float32 => lit(f32::NAN),
-                    DataType::Float64 => lit(f64::NAN),
-                    _ => {
-                        return plan_err!("Divide by zero");
-                    }
-                }
             }
 
             //
@@ -1370,13 +1371,9 @@ mod tests {
         array::{ArrayRef, Int32Array},
         datatypes::{DataType, Field, Schema},
     };
-    use datafusion_common::{
-        assert_contains, cast::as_int32_array, plan_datafusion_err, DFField, ToDFSchema,
-    };
+    use datafusion_common::{assert_contains, cast::as_int32_array, DFField, ToDFSchema};
     use datafusion_expr::{interval_arithmetic::Interval, *};
-    use datafusion_physical_expr::{
-        execution_props::ExecutionProps, functions::make_scalar_function,
-    };
+    use datafusion_physical_expr::execution_props::ExecutionProps;
 
     use chrono::{DateTime, TimeZone, Utc};
 
@@ -1491,9 +1488,31 @@ mod tests {
         let input_types = vec![DataType::Int32, DataType::Int32];
         let return_type = Arc::new(DataType::Int32);
 
-        let fun = |args: &[ArrayRef]| {
-            let arg0 = as_int32_array(&args[0])?;
-            let arg1 = as_int32_array(&args[1])?;
+        let fun = Arc::new(|args: &[ColumnarValue]| {
+            let len = args
+                .iter()
+                .fold(Option::<usize>::None, |acc, arg| match arg {
+                    ColumnarValue::Scalar(_) => acc,
+                    ColumnarValue::Array(a) => Some(a.len()),
+                });
+
+            let inferred_length = len.unwrap_or(1);
+
+            let arg0 = match &args[0] {
+                ColumnarValue::Array(array) => array.clone(),
+                ColumnarValue::Scalar(scalar) => {
+                    scalar.to_array_of_size(inferred_length).unwrap()
+                }
+            };
+            let arg1 = match &args[1] {
+                ColumnarValue::Array(array) => array.clone(),
+                ColumnarValue::Scalar(scalar) => {
+                    scalar.to_array_of_size(inferred_length).unwrap()
+                }
+            };
+
+            let arg0 = as_int32_array(&arg0)?;
+            let arg1 = as_int32_array(&arg1)?;
 
             // 2. perform the computation
             let array = arg0
@@ -1509,10 +1528,9 @@ mod tests {
                 })
                 .collect::<Int32Array>();
 
-            Ok(Arc::new(array) as ArrayRef)
-        };
+            Ok(ColumnarValue::from(Arc::new(array) as ArrayRef))
+        });
 
-        let fun = make_scalar_function(fun);
         Arc::new(create_udf(
             "udf_add",
             input_types,
@@ -1879,27 +1897,6 @@ mod tests {
     }
 
     #[test]
-    fn test_simplify_divide_zero_by_zero() {
-        // 0 / 0 -> Divide by zero
-        let expr = lit(0) / lit(0);
-        let err = try_simplify(expr).unwrap_err();
-
-        let _expected = plan_datafusion_err!("Divide by zero");
-
-        assert!(matches!(err, ref _expected), "{err}");
-    }
-
-    #[test]
-    fn test_simplify_divide_by_zero() {
-        // A / 0 -> DivideByZeroError
-        let expr = col("c2_non_null") / lit(0);
-        assert_eq!(
-            try_simplify(expr).unwrap_err().strip_backtrace(),
-            "Error during planning: Divide by zero"
-        );
-    }
-
-    #[test]
     fn test_simplify_modulo_by_null() {
         let null = lit(ScalarValue::Null);
         // A % null --> null
@@ -1918,6 +1915,26 @@ mod tests {
     fn test_simplify_modulo_by_one() {
         let expr = col("c2") % lit(1);
         // if c2 is null, c2 % 1 = null, so can't simplify
+        let expected = expr.clone();
+
+        assert_eq!(simplify(expr), expected);
+    }
+
+    #[test]
+    fn test_simplify_divide_zero_by_zero() {
+        // because divide by 0 maybe occur in short-circuit expression
+        // so we should not simplify this, and throw error in runtime
+        let expr = lit(0) / lit(0);
+        let expected = expr.clone();
+
+        assert_eq!(simplify(expr), expected);
+    }
+
+    #[test]
+    fn test_simplify_divide_by_zero() {
+        // because divide by 0 maybe occur in short-circuit expression
+        // so we should not simplify this, and throw error in runtime
+        let expr = col("c2_non_null") / lit(0);
         let expected = expr.clone();
 
         assert_eq!(simplify(expr), expected);
@@ -2317,11 +2334,12 @@ mod tests {
 
     #[test]
     fn test_simplify_modulo_by_zero_non_null() {
+        // because modulo by 0 maybe occur in short-circuit expression
+        // so we should not simplify this, and throw error in runtime.
         let expr = col("c2_non_null") % lit(0);
-        assert_eq!(
-            try_simplify(expr).unwrap_err().strip_backtrace(),
-            "Error during planning: Divide by zero"
-        );
+        let expected = expr.clone();
+
+        assert_eq!(simplify(expr), expected);
     }
 
     #[test]
@@ -3288,11 +3306,118 @@ mod tests {
             col("c1").eq(subquery1).or(col("c1").eq(subquery2))
         );
 
-        // c1 NOT IN (1, 2, 3, 4) OR c1 NOT IN (5, 6, 7, 8) ->
-        // c1 NOT IN (1, 2, 3, 4) OR c1 NOT IN (5, 6, 7, 8)
+        // 1. c1 IN (1,2,3,4) AND c1 IN (5,6,7,8) -> false
+        let expr = in_list(col("c1"), vec![lit(1), lit(2), lit(3), lit(4)], false).and(
+            in_list(col("c1"), vec![lit(5), lit(6), lit(7), lit(8)], false),
+        );
+        assert_eq!(simplify(expr.clone()), lit(false));
+
+        // 2. c1 IN (1,2,3,4) AND c1 IN (4,5,6,7) -> c1 = 4
+        let expr = in_list(col("c1"), vec![lit(1), lit(2), lit(3), lit(4)], false).and(
+            in_list(col("c1"), vec![lit(4), lit(5), lit(6), lit(7)], false),
+        );
+        assert_eq!(simplify(expr.clone()), col("c1").eq(lit(4)));
+
+        // 3. c1 NOT IN (1, 2, 3, 4) OR c1 NOT IN (5, 6, 7, 8) -> true
         let expr = in_list(col("c1"), vec![lit(1), lit(2), lit(3), lit(4)], true).or(
             in_list(col("c1"), vec![lit(5), lit(6), lit(7), lit(8)], true),
         );
+        assert_eq!(simplify(expr.clone()), lit(true));
+
+        // 4. c1 NOT IN (1,2,3,4) AND c1 NOT IN (4,5,6,7) -> c1 NOT IN (1,2,3,4,5,6,7)
+        let expr = in_list(col("c1"), vec![lit(1), lit(2), lit(3), lit(4)], true).and(
+            in_list(col("c1"), vec![lit(4), lit(5), lit(6), lit(7)], true),
+        );
+        assert_eq!(
+            simplify(expr.clone()),
+            in_list(
+                col("c1"),
+                vec![lit(1), lit(2), lit(3), lit(4), lit(5), lit(6), lit(7)],
+                true
+            )
+        );
+
+        // 5. c1 IN (1,2,3,4) OR c1 IN (2,3,4,5) -> c1 IN (1,2,3,4,5)
+        let expr = in_list(col("c1"), vec![lit(1), lit(2), lit(3), lit(4)], false).or(
+            in_list(col("c1"), vec![lit(2), lit(3), lit(4), lit(5)], false),
+        );
+        assert_eq!(
+            simplify(expr.clone()),
+            in_list(
+                col("c1"),
+                vec![lit(1), lit(2), lit(3), lit(4), lit(5)],
+                false
+            )
+        );
+
+        // 6. c1 IN (1,2,3) AND c1 NOT INT (1,2,3,4,5) -> false
+        let expr = in_list(col("c1"), vec![lit(1), lit(2), lit(3)], false).and(in_list(
+            col("c1"),
+            vec![lit(1), lit(2), lit(3), lit(4), lit(5)],
+            true,
+        ));
+        assert_eq!(simplify(expr.clone()), lit(false));
+
+        // 7. c1 NOT IN (1,2,3,4) AND c1 IN (1,2,3,4,5) -> c1 = 5
+        let expr =
+            in_list(col("c1"), vec![lit(1), lit(2), lit(3), lit(4)], true).and(in_list(
+                col("c1"),
+                vec![lit(1), lit(2), lit(3), lit(4), lit(5)],
+                false,
+            ));
+        assert_eq!(simplify(expr.clone()), col("c1").eq(lit(5)));
+
+        // 8. c1 IN (1,2,3,4) AND c1 NOT IN (5,6,7,8) -> c1 IN (1,2,3,4)
+        let expr = in_list(col("c1"), vec![lit(1), lit(2), lit(3), lit(4)], false).and(
+            in_list(col("c1"), vec![lit(5), lit(6), lit(7), lit(8)], true),
+        );
+        assert_eq!(
+            simplify(expr.clone()),
+            in_list(col("c1"), vec![lit(1), lit(2), lit(3), lit(4)], false)
+        );
+
+        // inlist with more than two expressions
+        // c1 IN (1,2,3,4,5,6) AND c1 IN (1,3,5,6) AND c1 IN (3,6) -> c1 = 3 OR c1 = 6
+        let expr = in_list(
+            col("c1"),
+            vec![lit(1), lit(2), lit(3), lit(4), lit(5), lit(6)],
+            false,
+        )
+        .and(in_list(
+            col("c1"),
+            vec![lit(1), lit(3), lit(5), lit(6)],
+            false,
+        ))
+        .and(in_list(col("c1"), vec![lit(3), lit(6)], false));
+        assert_eq!(
+            simplify(expr.clone()),
+            col("c1").eq(lit(3)).or(col("c1").eq(lit(6)))
+        );
+
+        // c1 NOT IN (1,2,3,4) AND c1 IN (5,6,7,8) AND c1 NOT IN (3,4,5,6) AND c1 IN (8,9,10) -> c1 = 8
+        let expr = in_list(col("c1"), vec![lit(1), lit(2), lit(3), lit(4)], true).and(
+            in_list(col("c1"), vec![lit(5), lit(6), lit(7), lit(8)], false)
+                .and(in_list(
+                    col("c1"),
+                    vec![lit(3), lit(4), lit(5), lit(6)],
+                    true,
+                ))
+                .and(in_list(col("c1"), vec![lit(8), lit(9), lit(10)], false)),
+        );
+        assert_eq!(simplify(expr.clone()), col("c1").eq(lit(8)));
+
+        // Contains non-InList expression
+        // c1 NOT IN (1,2,3,4) OR c1 != 5 OR c1 NOT IN (6,7,8,9) -> c1 NOT IN (1,2,3,4) OR c1 != 5 OR c1 NOT IN (6,7,8,9)
+        let expr =
+            in_list(col("c1"), vec![lit(1), lit(2), lit(3), lit(4)], true).or(col("c1")
+                .not_eq(lit(5))
+                .or(in_list(
+                    col("c1"),
+                    vec![lit(6), lit(7), lit(8), lit(9)],
+                    true,
+                )));
+        // TODO: Further simplify this expression
+        // assert_eq!(simplify(expr.clone()), lit(true));
         assert_eq!(simplify(expr.clone()), expr);
     }
 
@@ -3471,5 +3596,23 @@ mod tests {
         )];
         let output = simplify_with_guarantee(expr.clone(), guarantees);
         assert_eq!(&output, &expr_x);
+    }
+
+    #[test]
+    fn test_expression_partial_simplify_1() {
+        // (1 + 2) + (4 / 0) -> 3 + (4 / 0)
+        let expr = (lit(1) + lit(2)) + (lit(4) / lit(0));
+        let expected = (lit(3)) + (lit(4) / lit(0));
+
+        assert_eq!(simplify(expr), expected);
+    }
+
+    #[test]
+    fn test_expression_partial_simplify_2() {
+        // (1 > 2) and (4 / 0) -> false
+        let expr = (lit(1).gt(lit(2))).and(lit(4) / lit(0));
+        let expected = lit(false);
+
+        assert_eq!(simplify(expr), expected);
     }
 }

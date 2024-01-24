@@ -24,10 +24,10 @@ use std::sync::Arc;
 
 use arrow::array::*;
 use arrow::buffer::OffsetBuffer;
-use arrow::compute;
+use arrow::compute::{self};
 use arrow::datatypes::{DataType, Field, UInt64Type};
 use arrow::row::{RowConverter, SortField};
-use arrow_buffer::NullBuffer;
+use arrow_buffer::{ArrowNativeType, NullBuffer};
 
 use arrow_schema::{FieldRef, SortOptions};
 use datafusion_common::cast::{
@@ -36,7 +36,8 @@ use datafusion_common::cast::{
 };
 use datafusion_common::utils::{array_into_list_array, list_ndims};
 use datafusion_common::{
-    exec_err, internal_err, not_impl_err, plan_err, DataFusionError, Result,
+    exec_err, internal_datafusion_err, internal_err, not_impl_err, plan_err,
+    DataFusionError, Result, ScalarValue,
 };
 
 use itertools::Itertools;
@@ -529,7 +530,7 @@ fn general_except<OffsetSize: OffsetSizeTrait>(
 
 pub fn array_except(args: &[ArrayRef]) -> Result<ArrayRef> {
     if args.len() != 2 {
-        return internal_err!("array_except needs two arguments");
+        return exec_err!("array_except needs two arguments");
     }
 
     let array1 = &args[0];
@@ -574,23 +575,31 @@ pub fn array_except(args: &[ArrayRef]) -> Result<ArrayRef> {
 ///
 /// See test cases in `array.slt` for more details.
 pub fn array_slice(args: &[ArrayRef]) -> Result<ArrayRef> {
-    if args.len() != 3 {
-        return exec_err!("array_slice needs three arguments");
+    let args_len = args.len();
+    if args_len != 3 && args_len != 4 {
+        return exec_err!("array_slice needs three or four arguments");
     }
+
+    let stride = if args_len == 4 {
+        Some(as_int64_array(&args[3])?)
+    } else {
+        None
+    };
+
+    let from_array = as_int64_array(&args[1])?;
+    let to_array = as_int64_array(&args[2])?;
 
     let array_data_type = args[0].data_type();
     match array_data_type {
         DataType::List(_) => {
             let array = as_list_array(&args[0])?;
-            let from_array = as_int64_array(&args[1])?;
-            let to_array = as_int64_array(&args[2])?;
-            general_array_slice::<i32>(array, from_array, to_array)
+            general_array_slice::<i32>(array, from_array, to_array, stride)
         }
         DataType::LargeList(_) => {
             let array = as_large_list_array(&args[0])?;
             let from_array = as_int64_array(&args[1])?;
             let to_array = as_int64_array(&args[2])?;
-            general_array_slice::<i64>(array, from_array, to_array)
+            general_array_slice::<i64>(array, from_array, to_array, stride)
         }
         _ => exec_err!("array_slice does not support type: {:?}", array_data_type),
     }
@@ -600,6 +609,7 @@ fn general_array_slice<O: OffsetSizeTrait>(
     array: &GenericListArray<O>,
     from_array: &Int64Array,
     to_array: &Int64Array,
+    stride: Option<&Int64Array>,
 ) -> Result<ArrayRef>
 where
     i64: TryInto<O>,
@@ -651,7 +661,7 @@ where
         let adjusted_zero_index = if index < 0 {
             // array_slice in duckdb with negative to_index is python-like, so index itself is exclusive
             if let Ok(index) = index.try_into() {
-                index + len - O::usize_as(1)
+                index + len
             } else {
                 return exec_err!("array_slice got invalid index: {}", index);
             }
@@ -699,17 +709,67 @@ where
         };
 
         if let (Some(from), Some(to)) = (from_index, to_index) {
+            let stride = stride.map(|s| s.value(row_index));
+            // array_slice with stride in duckdb, return empty array if stride is not supported and from > to.
+            if stride.is_none() && from > to {
+                // return empty array
+                offsets.push(offsets[row_index]);
+                continue;
+            }
+            let stride = stride.unwrap_or(1);
+            if stride.is_zero() {
+                return exec_err!(
+                    "array_slice got invalid stride: {:?}, it cannot be 0",
+                    stride
+                );
+            } else if from <= to && stride.is_negative() {
+                // return empty array
+                offsets.push(offsets[row_index]);
+                continue;
+            }
+
+            let stride: O = stride.try_into().map_err(|_| {
+                internal_datafusion_err!("array_slice got invalid stride: {}", stride)
+            })?;
+
             if from <= to {
                 assert!(start + to <= end);
-                mutable.extend(
-                    0,
-                    (start + from).to_usize().unwrap(),
-                    (start + to + O::usize_as(1)).to_usize().unwrap(),
-                );
-                offsets.push(offsets[row_index] + (to - from + O::usize_as(1)));
+                if stride.eq(&O::one()) {
+                    // stride is default to 1
+                    mutable.extend(
+                        0,
+                        (start + from).to_usize().unwrap(),
+                        (start + to + O::usize_as(1)).to_usize().unwrap(),
+                    );
+                    offsets.push(offsets[row_index] + (to - from + O::usize_as(1)));
+                    continue;
+                }
+                let mut index = start + from;
+                let mut cnt = 0;
+                while index <= start + to {
+                    mutable.extend(
+                        0,
+                        index.to_usize().unwrap(),
+                        index.to_usize().unwrap() + 1,
+                    );
+                    index += stride;
+                    cnt += 1;
+                }
+                offsets.push(offsets[row_index] + O::usize_as(cnt));
             } else {
+                let mut index = start + from;
+                let mut cnt = 0;
+                while index >= start + to {
+                    mutable.extend(
+                        0,
+                        index.to_usize().unwrap(),
+                        index.to_usize().unwrap() + 1,
+                    );
+                    index += stride;
+                    cnt += 1;
+                }
                 // invalid range, return empty array
-                offsets.push(offsets[row_index]);
+                offsets.push(offsets[row_index] + O::usize_as(cnt));
             }
         } else {
             // invalid range, return empty array
@@ -740,7 +800,7 @@ where
             .map(|arr| arr.map_or(0, |arr| arr.len() as i64))
             .collect::<Vec<i64>>(),
     );
-    general_array_slice::<O>(array, &from_array, &to_array)
+    general_array_slice::<O>(array, &from_array, &to_array, None)
 }
 
 fn general_pop_back_list<O: OffsetSizeTrait>(
@@ -756,7 +816,7 @@ where
             .map(|arr| arr.map_or(0, |arr| arr.len() as i64 - 1))
             .collect::<Vec<i64>>(),
     );
-    general_array_slice::<O>(array, &from_array, &to_array)
+    general_array_slice::<O>(array, &from_array, &to_array, None)
 }
 
 /// array_pop_front SQL function
@@ -894,7 +954,7 @@ pub fn gen_range(args: &[ArrayRef]) -> Result<ArrayRef> {
             as_int64_array(&args[1])?,
             Some(as_int64_array(&args[2])?),
         ),
-        _ => return internal_err!("gen_range expects 1 to 3 arguments"),
+        _ => return exec_err!("gen_range expects 1 to 3 arguments"),
     };
 
     let mut values = vec![];
@@ -948,7 +1008,7 @@ pub fn array_sort(args: &[ArrayRef]) -> Result<ArrayRef> {
                 nulls_first: order_nulls_first(nulls_first)?,
             })
         }
-        _ => return internal_err!("array_sort expects 1 to 3 arguments"),
+        _ => return exec_err!("array_sort expects 1 to 3 arguments"),
     };
 
     let list_array = as_list_array(&args[0])?;
@@ -994,7 +1054,7 @@ fn order_desc(modifier: &str) -> Result<bool> {
     match modifier.to_uppercase().as_str() {
         "DESC" => Ok(true),
         "ASC" => Ok(false),
-        _ => internal_err!("the second parameter of array_sort expects DESC or ASC"),
+        _ => exec_err!("the second parameter of array_sort expects DESC or ASC"),
     }
 }
 
@@ -1002,7 +1062,7 @@ fn order_nulls_first(modifier: &str) -> Result<bool> {
     match modifier.to_uppercase().as_str() {
         "NULLS FIRST" => Ok(true),
         "NULLS LAST" => Ok(false),
-        _ => internal_err!(
+        _ => exec_err!(
             "the third parameter of array_sort expects NULLS FIRST or NULLS LAST"
         ),
     }
@@ -1030,12 +1090,6 @@ where
     let res = match list_array.value_type() {
         DataType::List(_) => concat_internal::<i32>(args)?,
         DataType::LargeList(_) => concat_internal::<i64>(args)?,
-        DataType::Null => {
-            return make_array(&[
-                list_array.values().to_owned(),
-                element_array.to_owned(),
-            ]);
-        }
         data_type => {
             return generic_append_and_prepend::<O>(
                 list_array,
@@ -1073,7 +1127,9 @@ pub fn array_prepend(args: &[ArrayRef]) -> Result<ArrayRef> {
     }
 }
 
-fn align_array_dimensions(args: Vec<ArrayRef>) -> Result<Vec<ArrayRef>> {
+fn align_array_dimensions<O: OffsetSizeTrait>(
+    args: Vec<ArrayRef>,
+) -> Result<Vec<ArrayRef>> {
     let args_ndim = args
         .iter()
         .map(|arg| datafusion_common::utils::list_ndims(arg.data_type()))
@@ -1090,9 +1146,9 @@ fn align_array_dimensions(args: Vec<ArrayRef>) -> Result<Vec<ArrayRef>> {
                 for _ in 0..(max_ndim - ndim) {
                     let data_type = aligned_array.data_type().to_owned();
                     let array_lengths = vec![1; aligned_array.len()];
-                    let offsets = OffsetBuffer::<i32>::from_lengths(array_lengths);
+                    let offsets = OffsetBuffer::<O>::from_lengths(array_lengths);
 
-                    aligned_array = Arc::new(ListArray::try_new(
+                    aligned_array = Arc::new(GenericListArray::<O>::try_new(
                         Arc::new(Field::new("item", data_type, true)),
                         offsets,
                         aligned_array,
@@ -1111,13 +1167,12 @@ fn align_array_dimensions(args: Vec<ArrayRef>) -> Result<Vec<ArrayRef>> {
 
 // Concatenate arrays on the same row.
 fn concat_internal<O: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
-    let args = align_array_dimensions(args.to_vec())?;
+    let args = align_array_dimensions::<O>(args.to_vec())?;
 
     let list_arrays = args
         .iter()
         .map(|arg| as_generic_list_array::<O>(arg))
         .collect::<Result<Vec<_>>>()?;
-
     // Assume number of rows is the same for all arrays
     let row_count = list_arrays[0].len();
 
@@ -1190,7 +1245,10 @@ pub fn array_concat(args: &[ArrayRef]) -> Result<ArrayRef> {
         }
     }
 
-    concat_internal::<i32>(new_args.as_slice())
+    match &args[0].data_type() {
+        DataType::LargeList(_) => concat_internal::<i64>(new_args.as_slice()),
+        _ => concat_internal::<i32>(new_args.as_slice()),
+    }
 }
 
 /// Array_empty SQL function
@@ -1208,7 +1266,7 @@ pub fn array_empty(args: &[ArrayRef]) -> Result<ArrayRef> {
     match array_type {
         DataType::List(_) => array_empty_dispatch::<i32>(&args[0]),
         DataType::LargeList(_) => array_empty_dispatch::<i64>(&args[0]),
-        _ => internal_err!("array_empty does not support type '{array_type:?}'."),
+        _ => exec_err!("array_empty does not support type '{array_type:?}'."),
     }
 }
 
@@ -1239,7 +1297,7 @@ pub fn array_repeat(args: &[ArrayRef]) -> Result<ArrayRef> {
             let list_array = as_large_list_array(element)?;
             general_list_repeat::<i64>(list_array, count_array)
         }
-        _ => general_repeat(element, count_array),
+        _ => general_repeat::<i32>(element, count_array),
     }
 }
 
@@ -1255,7 +1313,10 @@ pub fn array_repeat(args: &[ArrayRef]) -> Result<ArrayRef> {
 ///     [1, 2, 3], [2, 0, 1] => [[1, 1], [], [3]]
 /// )
 /// ```
-fn general_repeat(array: &ArrayRef, count_array: &Int64Array) -> Result<ArrayRef> {
+fn general_repeat<O: OffsetSizeTrait>(
+    array: &ArrayRef,
+    count_array: &Int64Array,
+) -> Result<ArrayRef> {
     let data_type = array.data_type();
     let mut new_values = vec![];
 
@@ -1288,7 +1349,7 @@ fn general_repeat(array: &ArrayRef, count_array: &Int64Array) -> Result<ArrayRef
     let new_values: Vec<_> = new_values.iter().map(|a| a.as_ref()).collect();
     let values = compute::concat(&new_values)?;
 
-    Ok(Arc::new(ListArray::try_new(
+    Ok(Arc::new(GenericListArray::<O>::try_new(
         Arc::new(Field::new("item", data_type.to_owned(), true)),
         OffsetBuffer::from_lengths(count_vec),
         values,
@@ -1598,7 +1659,9 @@ fn array_remove_internal(
             let list_array = array.as_list::<i64>();
             general_remove::<i64>(list_array, element_array, arr_n)
         }
-        _ => internal_err!("array_remove_all expects a list array"),
+        array_type => {
+            exec_err!("array_remove_all does not support type '{array_type:?}'.")
+        }
     }
 }
 
@@ -2260,10 +2323,7 @@ pub fn array_length(args: &[ArrayRef]) -> Result<ArrayRef> {
     match &args[0].data_type() {
         DataType::List(_) => array_length_dispatch::<i32>(args),
         DataType::LargeList(_) => array_length_dispatch::<i64>(args),
-        _ => internal_err!(
-            "array_length does not support type '{:?}'",
-            args[0].data_type()
-        ),
+        array_type => exec_err!("array_length does not support type '{array_type:?}'"),
     }
 }
 
@@ -2288,11 +2348,8 @@ pub fn array_dims(args: &[ArrayRef]) -> Result<ArrayRef> {
                 .map(compute_array_dims)
                 .collect::<Result<Vec<_>>>()?
         }
-        _ => {
-            return exec_err!(
-                "array_dims does not support type '{:?}'",
-                args[0].data_type()
-            );
+        array_type => {
+            return exec_err!("array_dims does not support type '{array_type:?}'");
         }
     };
 
@@ -2441,7 +2498,7 @@ pub fn array_has_any(args: &[ArrayRef]) -> Result<ArrayRef> {
         DataType::LargeList(_) => {
             general_array_has_dispatch::<i64>(&args[0], &args[1], ComparisonType::Any)
         }
-        _ => internal_err!("array_has_any does not support type '{array_type:?}'."),
+        _ => exec_err!("array_has_any does not support type '{array_type:?}'."),
     }
 }
 
@@ -2460,7 +2517,7 @@ pub fn array_has_all(args: &[ArrayRef]) -> Result<ArrayRef> {
         DataType::LargeList(_) => {
             general_array_has_dispatch::<i64>(&args[0], &args[1], ComparisonType::All)
         }
-        _ => internal_err!("array_has_all does not support type '{array_type:?}'."),
+        _ => exec_err!("array_has_all does not support type '{array_type:?}'."),
     }
 }
 
@@ -2543,7 +2600,7 @@ pub fn string_to_array<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef
                 });
         }
         _ => {
-            return internal_err!(
+            return exec_err!(
                 "Expect string_to_array function to take two or three parameters"
             )
         }
@@ -2611,8 +2668,102 @@ pub fn array_distinct(args: &[ArrayRef]) -> Result<ArrayRef> {
             let array = as_large_list_array(&args[0])?;
             general_array_distinct(array, field)
         }
-        _ => internal_err!("array_distinct only support list array"),
+        array_type => exec_err!("array_distinct does not support type '{array_type:?}'"),
     }
+}
+
+/// array_resize SQL function
+pub fn array_resize(arg: &[ArrayRef]) -> Result<ArrayRef> {
+    if arg.len() < 2 || arg.len() > 3 {
+        return exec_err!("array_resize needs two or three arguments");
+    }
+
+    let new_len = as_int64_array(&arg[1])?;
+    let new_element = if arg.len() == 3 {
+        Some(arg[2].clone())
+    } else {
+        None
+    };
+
+    match &arg[0].data_type() {
+        DataType::List(field) => {
+            let array = as_list_array(&arg[0])?;
+            general_list_resize::<i32>(array, new_len, field, new_element)
+        }
+        DataType::LargeList(field) => {
+            let array = as_large_list_array(&arg[0])?;
+            general_list_resize::<i64>(array, new_len, field, new_element)
+        }
+        array_type => exec_err!("array_resize does not support type '{array_type:?}'."),
+    }
+}
+
+/// array_resize keep the original array and append the default element to the end
+fn general_list_resize<O: OffsetSizeTrait>(
+    array: &GenericListArray<O>,
+    count_array: &Int64Array,
+    field: &FieldRef,
+    default_element: Option<ArrayRef>,
+) -> Result<ArrayRef>
+where
+    O: TryInto<i64>,
+{
+    let data_type = array.value_type();
+
+    let values = array.values();
+    let original_data = values.to_data();
+
+    // create default element array
+    let default_element = if let Some(default_element) = default_element {
+        default_element
+    } else {
+        let null_scalar = ScalarValue::try_from(&data_type)?;
+        null_scalar.to_array_of_size(original_data.len())?
+    };
+    let default_value_data = default_element.to_data();
+
+    // create a mutable array to store the original data
+    let capacity = Capacities::Array(original_data.len() + default_value_data.len());
+    let mut offsets = vec![O::usize_as(0)];
+    let mut mutable = MutableArrayData::with_capacities(
+        vec![&original_data, &default_value_data],
+        false,
+        capacity,
+    );
+
+    for (row_index, offset_window) in array.offsets().windows(2).enumerate() {
+        let count = count_array.value(row_index).to_usize().ok_or_else(|| {
+            internal_datafusion_err!("array_resize: failed to convert size to usize")
+        })?;
+        let count = O::usize_as(count);
+        let start = offset_window[0];
+        if start + count > offset_window[1] {
+            let extra_count =
+                (start + count - offset_window[1]).try_into().map_err(|_| {
+                    internal_datafusion_err!(
+                        "array_resize: failed to convert size to i64"
+                    )
+                })?;
+            let end = offset_window[1];
+            mutable.extend(0, (start).to_usize().unwrap(), (end).to_usize().unwrap());
+            // append default element
+            for _ in 0..extra_count {
+                mutable.extend(1, row_index, row_index + 1);
+            }
+        } else {
+            let end = start + count;
+            mutable.extend(0, (start).to_usize().unwrap(), (end).to_usize().unwrap());
+        };
+        offsets.push(offsets[row_index] + count);
+    }
+
+    let data = mutable.freeze();
+    Ok(Arc::new(GenericListArray::<O>::try_new(
+        field.clone(),
+        OffsetBuffer::<O>::new(offsets.into()),
+        arrow_array::make_array(data),
+        None,
+    )?))
 }
 
 #[cfg(test)]
@@ -2636,9 +2787,11 @@ mod tests {
         let array2d_1 = Arc::new(array_into_list_array(array1d_1.clone())) as ArrayRef;
         let array2d_2 = Arc::new(array_into_list_array(array1d_2.clone())) as ArrayRef;
 
-        let res =
-            align_array_dimensions(vec![array1d_1.to_owned(), array2d_2.to_owned()])
-                .unwrap();
+        let res = align_array_dimensions::<i32>(vec![
+            array1d_1.to_owned(),
+            array2d_2.to_owned(),
+        ])
+        .unwrap();
 
         let expected = as_list_array(&array2d_1).unwrap();
         let expected_dim = datafusion_common::utils::list_ndims(array2d_1.data_type());
@@ -2651,7 +2804,8 @@ mod tests {
         let array3d_1 = Arc::new(array_into_list_array(array2d_1)) as ArrayRef;
         let array3d_2 = array_into_list_array(array2d_2.to_owned());
         let res =
-            align_array_dimensions(vec![array1d_1, Arc::new(array3d_2.clone())]).unwrap();
+            align_array_dimensions::<i32>(vec![array1d_1, Arc::new(array3d_2.clone())])
+                .unwrap();
 
         let expected = as_list_array(&array3d_1).unwrap();
         let expected_dim = datafusion_common::utils::list_ndims(array3d_1.data_type());

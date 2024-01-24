@@ -25,7 +25,9 @@ use arrow::compute;
 use arrow::compute::{partition, SortColumn, SortOptions};
 use arrow::datatypes::{Field, SchemaRef, UInt32Type};
 use arrow::record_batch::RecordBatch;
-use arrow_array::{Array, LargeListArray, ListArray, RecordBatchOptions};
+use arrow_array::{
+    Array, FixedSizeListArray, LargeListArray, ListArray, RecordBatchOptions,
+};
 use arrow_schema::DataType;
 use sqlparser::ast::Ident;
 use sqlparser::dialect::GenericDialect;
@@ -363,6 +365,19 @@ pub fn array_into_large_list_array(arr: ArrayRef) -> LargeListArray {
     LargeListArray::new(
         Arc::new(Field::new("item", arr.data_type().to_owned(), true)),
         offsets,
+        arr,
+        None,
+    )
+}
+
+pub fn array_into_fixed_size_list_array(
+    arr: ArrayRef,
+    list_size: usize,
+) -> FixedSizeListArray {
+    let list_size = list_size as i32;
+    FixedSizeListArray::new(
+        Arc::new(Field::new("item", arr.data_type().to_owned(), true)),
+        list_size,
         arr,
         None,
     )

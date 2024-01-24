@@ -47,7 +47,6 @@ use datafusion::physical_plan::expressions::{
     GetFieldAccessExpr, GetIndexedFieldExpr, NotExpr, NthValue, PhysicalSortExpr, Sum,
 };
 use datafusion::physical_plan::filter::FilterExec;
-use datafusion::physical_plan::functions::make_scalar_function;
 use datafusion::physical_plan::insert::FileSinkExec;
 use datafusion::physical_plan::joins::{
     HashJoinExec, NestedLoopJoinExec, PartitionMode, StreamJoinPartitionMode,
@@ -73,8 +72,8 @@ use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::stats::Precision;
 use datafusion_common::{FileTypeWriterOptions, Result};
 use datafusion_expr::{
-    Accumulator, AccumulatorFactoryFunction, AggregateUDF, ReturnTypeFunction, Signature,
-    StateTypeFunction, WindowFrame, WindowFrameBound,
+    Accumulator, AccumulatorFactoryFunction, AggregateUDF, ColumnarValue, Signature,
+    SimpleAggregateUDF, WindowFrame, WindowFrameBound,
 };
 use datafusion_proto::physical_plan::{AsExecutionPlan, DefaultPhysicalExtensionCodec};
 use datafusion_proto::protobuf;
@@ -253,13 +252,14 @@ fn roundtrip_nested_loop_join() -> Result<()> {
 fn roundtrip_window() -> Result<()> {
     let field_a = Field::new("a", DataType::Int64, false);
     let field_b = Field::new("b", DataType::Int64, false);
-    let schema = Arc::new(Schema::new(vec![field_a, field_b]));
+    let field_c = Field::new("FIRST_VALUE(a) PARTITION BY [b] ORDER BY [a ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW", DataType::Int64, false);
+    let schema = Arc::new(Schema::new(vec![field_a, field_b, field_c]));
 
-    let window_frame = WindowFrame {
-        units: datafusion_expr::WindowFrameUnits::Range,
-        start_bound: WindowFrameBound::Preceding(ScalarValue::Int64(None)),
-        end_bound: WindowFrameBound::CurrentRow,
-    };
+    let window_frame = WindowFrame::new_bounds(
+        datafusion_expr::WindowFrameUnits::Range,
+        WindowFrameBound::Preceding(ScalarValue::Int64(None)),
+        WindowFrameBound::CurrentRow,
+    );
 
     let builtin_window_expr = Arc::new(BuiltInWindowExpr::new(
         Arc::new(NthValue::first(
@@ -286,14 +286,14 @@ fn roundtrip_window() -> Result<()> {
         )),
         &[],
         &[],
-        Arc::new(WindowFrame::new(false)),
+        Arc::new(WindowFrame::new(None)),
     ));
 
-    let window_frame = WindowFrame {
-        units: datafusion_expr::WindowFrameUnits::Range,
-        start_bound: WindowFrameBound::CurrentRow,
-        end_bound: WindowFrameBound::Preceding(ScalarValue::Int64(None)),
-    };
+    let window_frame = WindowFrame::new_bounds(
+        datafusion_expr::WindowFrameUnits::Range,
+        WindowFrameBound::CurrentRow,
+        WindowFrameBound::Preceding(ScalarValue::Int64(None)),
+    );
 
     let sliding_aggr_window_expr = Arc::new(SlidingAggregateWindowExpr::new(
         Arc::new(Sum::new(
@@ -353,7 +353,7 @@ fn roundtrip_aggregate_udaf() -> Result<()> {
     #[derive(Debug)]
     struct Example;
     impl Accumulator for Example {
-        fn state(&self) -> Result<Vec<ScalarValue>> {
+        fn state(&mut self) -> Result<Vec<ScalarValue>> {
             Ok(vec![ScalarValue::Int64(Some(0))])
         }
 
@@ -365,7 +365,7 @@ fn roundtrip_aggregate_udaf() -> Result<()> {
             Ok(())
         }
 
-        fn evaluate(&self) -> Result<ScalarValue> {
+        fn evaluate(&mut self) -> Result<ScalarValue> {
             Ok(ScalarValue::Int64(Some(0)))
         }
 
@@ -374,18 +374,17 @@ fn roundtrip_aggregate_udaf() -> Result<()> {
         }
     }
 
-    let rt_func: ReturnTypeFunction = Arc::new(move |_| Ok(Arc::new(DataType::Int64)));
+    let return_type = DataType::Int64;
     let accumulator: AccumulatorFactoryFunction = Arc::new(|_| Ok(Box::new(Example)));
-    let st_func: StateTypeFunction =
-        Arc::new(move |_| Ok(Arc::new(vec![DataType::Int64])));
+    let state_type = vec![DataType::Int64];
 
-    let udaf = AggregateUDF::new(
+    let udaf = AggregateUDF::from(SimpleAggregateUDF::new_with_signature(
         "example",
-        &Signature::exact(vec![DataType::Int64], Volatility::Immutable),
-        &rt_func,
-        &accumulator,
-        &st_func,
-    );
+        Signature::exact(vec![DataType::Int64], Volatility::Immutable),
+        return_type,
+        accumulator,
+        state_type,
+    ));
 
     let ctx = SessionContext::new();
     ctx.register_udaf(udaf.clone());
@@ -569,9 +568,12 @@ fn roundtrip_scalar_udf() -> Result<()> {
 
     let input = Arc::new(EmptyExec::new(schema.clone()));
 
-    let fn_impl = |args: &[ArrayRef]| Ok(Arc::new(args[0].clone()) as ArrayRef);
-
-    let scalar_fn = make_scalar_function(fn_impl);
+    let scalar_fn = Arc::new(|args: &[ColumnarValue]| {
+        let ColumnarValue::Array(array) = &args[0] else {
+            panic!("should be array")
+        };
+        Ok(ColumnarValue::from(Arc::new(array.clone()) as ArrayRef))
+    });
 
     let udf = create_udf(
         "dummy",
@@ -904,17 +906,35 @@ fn roundtrip_sym_hash_join() -> Result<()> {
             StreamJoinPartitionMode::Partitioned,
             StreamJoinPartitionMode::SinglePartition,
         ] {
-            roundtrip_test(Arc::new(
-                datafusion::physical_plan::joins::SymmetricHashJoinExec::try_new(
-                    Arc::new(EmptyExec::new(schema_left.clone())),
-                    Arc::new(EmptyExec::new(schema_right.clone())),
-                    on.clone(),
+            for left_order in &[
+                None,
+                Some(vec![PhysicalSortExpr {
+                    expr: Arc::new(Column::new("col", schema_left.index_of("col")?)),
+                    options: Default::default(),
+                }]),
+            ] {
+                for right_order in &[
                     None,
-                    join_type,
-                    false,
-                    *partition_mode,
-                )?,
-            ))?;
+                    Some(vec![PhysicalSortExpr {
+                        expr: Arc::new(Column::new("col", schema_right.index_of("col")?)),
+                        options: Default::default(),
+                    }]),
+                ] {
+                    roundtrip_test(Arc::new(
+                        datafusion::physical_plan::joins::SymmetricHashJoinExec::try_new(
+                            Arc::new(EmptyExec::new(schema_left.clone())),
+                            Arc::new(EmptyExec::new(schema_right.clone())),
+                            on.clone(),
+                            None,
+                            join_type,
+                            false,
+                            left_order.clone(),
+                            right_order.clone(),
+                            *partition_mode,
+                        )?,
+                    ))?;
+                }
+            }
         }
     }
     Ok(())

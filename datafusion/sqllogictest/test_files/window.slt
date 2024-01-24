@@ -3871,3 +3871,104 @@ FROM (SELECT c1, c2, ROW_NUMBER() OVER(PARTITION BY c1) as rn
     LIMIT 5)
 GROUP BY rn
 ORDER BY rn;
+
+# create a table for testing
+statement ok
+CREATE TABLE table_with_pk (
+          sn INT PRIMARY KEY,
+          ts TIMESTAMP,
+          currency VARCHAR(3),
+          amount FLOAT
+        ) as VALUES
+          (0, '2022-01-01 06:00:00'::timestamp, 'EUR', 30.0),
+          (1, '2022-01-01 08:00:00'::timestamp, 'EUR', 50.0),
+          (2, '2022-01-01 11:30:00'::timestamp, 'TRY', 75.0),
+          (3, '2022-01-02 12:00:00'::timestamp, 'EUR', 200.0),
+          (4, '2022-01-03 10:00:00'::timestamp, 'TRY', 100.0)
+
+# An OVER clause of the form `OVER (ORDER BY <expr>)` gets treated as if it was
+# `OVER (ORDER BY <expr> RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)`.
+# However, if we know that <expr> contains a unique column (e.g. a PRIMARY KEY),
+# it can be treated as `OVER (ORDER BY <expr> ROWS BETWEEN UNBOUNDED PRECEDING
+# AND CURRENT ROW)` where window frame units change from `RANGE` to `ROWS`. This
+# conversion makes the window frame manifestly causal by eliminating the possiblity
+# of ties explicitly (see window frame documentation for a discussion of causality
+# in this context). The Query below should have `ROWS` in its window frame.
+query TT
+EXPLAIN SELECT *, SUM(amount) OVER (ORDER BY sn) as sum1 FROM table_with_pk;
+----
+logical_plan
+Projection: table_with_pk.sn, table_with_pk.ts, table_with_pk.currency, table_with_pk.amount, SUM(table_with_pk.amount) ORDER BY [table_with_pk.sn ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS sum1
+--WindowAggr: windowExpr=[[SUM(CAST(table_with_pk.amount AS Float64)) ORDER BY [table_with_pk.sn ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+----TableScan: table_with_pk projection=[sn, ts, currency, amount]
+physical_plan
+ProjectionExec: expr=[sn@0 as sn, ts@1 as ts, currency@2 as currency, amount@3 as amount, SUM(table_with_pk.amount) ORDER BY [table_with_pk.sn ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@4 as sum1]
+--BoundedWindowAggExec: wdw=[SUM(table_with_pk.amount) ORDER BY [table_with_pk.sn ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Ok(Field { name: "SUM(table_with_pk.amount) ORDER BY [table_with_pk.sn ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: CurrentRow }], mode=[Sorted]
+----SortExec: expr=[sn@0 ASC NULLS LAST]
+------MemoryExec: partitions=1, partition_sizes=[1]
+
+# test ROW_NUMBER window function returns correct data_type
+query T
+select arrow_typeof(row_number() over ()) from (select 1 a)
+----
+UInt64
+
+# test RANK window function returns correct data_type
+query T
+select arrow_typeof(rank() over ()) from (select 1 a)
+----
+UInt64
+
+# test DENSE_RANK window function returns correct data_type
+query T
+select arrow_typeof(dense_rank() over ()) from (select 1 a)
+----
+UInt64
+
+# test PERCENT_RANK window function returns correct data_type
+query T
+select arrow_typeof(percent_rank() over ()) from (select 1 a)
+----
+Float64
+
+# test CUME_DIST window function returns correct data_type
+query T
+select arrow_typeof(cume_dist() over ()) from (select 1 a)
+----
+Float64
+
+# test NTILE window function returns correct data_type
+query T
+select arrow_typeof(ntile(1) over ()) from (select 1 a)
+----
+UInt64
+
+# test LAG window function returns correct data_type
+query T
+select arrow_typeof(lag(a) over ()) from (select 1 a)
+----
+Int64
+
+# test LEAD window function returns correct data_type
+query T
+select arrow_typeof(lead(a) over ()) from (select 1 a)
+----
+Int64
+
+# test FIRST_VALUE window function returns correct data_type
+query T
+select arrow_typeof(first_value(a) over ()) from (select 1 a)
+----
+Int64
+
+# test LAST_VALUE window function returns correct data_type
+query T
+select arrow_typeof(last_value(a) over ()) from (select 1 a)
+----
+Int64
+
+# test NTH_VALUE window function returns correct data_type
+query T
+select arrow_typeof(nth_value(a, 1) over ()) from (select 1 a)
+----
+Int64

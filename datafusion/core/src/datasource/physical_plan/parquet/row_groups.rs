@@ -19,6 +19,8 @@ use arrow::{array::ArrayRef, datatypes::Schema};
 use arrow_array::BooleanArray;
 use arrow_schema::FieldRef;
 use datafusion_common::{Column, ScalarValue};
+use parquet::basic::Type;
+use parquet::data_type::Decimal;
 use parquet::file::metadata::ColumnChunkMetaData;
 use parquet::schema::types::SchemaDescriptor;
 use parquet::{
@@ -81,7 +83,7 @@ pub(crate) fn prune_row_groups_by_statistics(
                 Ok(values) => {
                     // NB: false means don't scan row group
                     if !values[0] {
-                        metrics.row_groups_pruned.add(1);
+                        metrics.row_groups_pruned_statistics.add(1);
                         continue;
                     }
                 }
@@ -143,7 +145,10 @@ pub(crate) async fn prune_row_groups_by_bloom_filters<
                     continue;
                 }
             };
-            column_sbbf.insert(column_name.to_string(), bf);
+            let physical_type =
+                builder.parquet_schema().column(column_idx).physical_type();
+
+            column_sbbf.insert(column_name.to_string(), (bf, physical_type));
         }
 
         let stats = BloomFilterStatistics { column_sbbf };
@@ -159,7 +164,7 @@ pub(crate) async fn prune_row_groups_by_bloom_filters<
         };
 
         if prune_group {
-            metrics.row_groups_pruned.add(1);
+            metrics.row_groups_pruned_bloom_filter.add(1);
         } else {
             filtered.push(*idx);
         }
@@ -169,8 +174,8 @@ pub(crate) async fn prune_row_groups_by_bloom_filters<
 
 /// Implements `PruningStatistics` for Parquet Split Block Bloom Filters (SBBF)
 struct BloomFilterStatistics {
-    /// Maps column name to the parquet bloom filter
-    column_sbbf: HashMap<String, Sbbf>,
+    /// Maps column name to the parquet bloom filter and parquet physical type
+    column_sbbf: HashMap<String, (Sbbf, Type)>,
 }
 
 impl PruningStatistics for BloomFilterStatistics {
@@ -200,7 +205,7 @@ impl PruningStatistics for BloomFilterStatistics {
         column: &Column,
         values: &HashSet<ScalarValue>,
     ) -> Option<BooleanArray> {
-        let sbbf = self.column_sbbf.get(column.name.as_str())?;
+        let (sbbf, parquet_type) = self.column_sbbf.get(column.name.as_str())?;
 
         // Bloom filters are probabilistic data structures that can return false
         // positives (i.e. it might return true even if the value is not
@@ -209,16 +214,63 @@ impl PruningStatistics for BloomFilterStatistics {
 
         let known_not_present = values
             .iter()
-            .map(|value| match value {
-                ScalarValue::Utf8(Some(v)) => sbbf.check(&v.as_str()),
-                ScalarValue::Boolean(Some(v)) => sbbf.check(v),
-                ScalarValue::Float64(Some(v)) => sbbf.check(v),
-                ScalarValue::Float32(Some(v)) => sbbf.check(v),
-                ScalarValue::Int64(Some(v)) => sbbf.check(v),
-                ScalarValue::Int32(Some(v)) => sbbf.check(v),
-                ScalarValue::Int16(Some(v)) => sbbf.check(v),
-                ScalarValue::Int8(Some(v)) => sbbf.check(v),
-                _ => true,
+            .map(|value| {
+                match value {
+                    ScalarValue::Utf8(Some(v)) => sbbf.check(&v.as_str()),
+                    ScalarValue::Boolean(Some(v)) => sbbf.check(v),
+                    ScalarValue::Float64(Some(v)) => sbbf.check(v),
+                    ScalarValue::Float32(Some(v)) => sbbf.check(v),
+                    ScalarValue::Int64(Some(v)) => sbbf.check(v),
+                    ScalarValue::Int32(Some(v)) => sbbf.check(v),
+                    ScalarValue::Int16(Some(v)) => sbbf.check(v),
+                    ScalarValue::Int8(Some(v)) => sbbf.check(v),
+                    ScalarValue::Decimal128(Some(v), p, s) => match parquet_type {
+                        Type::INT32 => {
+                            //https://github.com/apache/parquet-format/blob/eb4b31c1d64a01088d02a2f9aefc6c17c54cc6fc/Encodings.md?plain=1#L35-L42
+                            // All physical type  are little-endian
+                            if *p > 9 {
+                                //DECIMAL can be used to annotate the following types:
+                                //
+                                // int32: for 1 <= precision <= 9
+                                // int64: for 1 <= precision <= 18
+                                return true;
+                            }
+                            let b = (*v as i32).to_le_bytes();
+                            // Use Decimal constructor after https://github.com/apache/arrow-rs/issues/5325
+                            let decimal = Decimal::Int32 {
+                                value: b,
+                                precision: *p as i32,
+                                scale: *s as i32,
+                            };
+                            sbbf.check(&decimal)
+                        }
+                        Type::INT64 => {
+                            if *p > 18 {
+                                return true;
+                            }
+                            let b = (*v as i64).to_le_bytes();
+                            let decimal = Decimal::Int64 {
+                                value: b,
+                                precision: *p as i32,
+                                scale: *s as i32,
+                            };
+                            sbbf.check(&decimal)
+                        }
+                        Type::FIXED_LEN_BYTE_ARRAY => {
+                            // keep with from_bytes_to_i128
+                            let b = v.to_be_bytes().to_vec();
+                            // Use Decimal constructor after https://github.com/apache/arrow-rs/issues/5325
+                            let decimal = Decimal::Bytes {
+                                value: b.into(),
+                                precision: *p as i32,
+                                scale: *s as i32,
+                            };
+                            sbbf.check(&decimal)
+                        }
+                        _ => true,
+                    },
+                    _ => true,
+                }
             })
             // The row group doesn't contain any of the values if
             // all the checks are false
@@ -1010,7 +1062,7 @@ mod tests {
     fn logical2physical(expr: &Expr, schema: &Schema) -> Arc<dyn PhysicalExpr> {
         let df_schema = schema.clone().to_dfschema().unwrap();
         let execution_props = ExecutionProps::new();
-        create_physical_expr(expr, &df_schema, schema, &execution_props).unwrap()
+        create_physical_expr(expr, &df_schema, &execution_props).unwrap()
     }
 
     #[tokio::test]
@@ -1049,12 +1101,9 @@ mod tests {
         let schema = Schema::new(vec![Field::new("String", DataType::Utf8, false)]);
 
         let expr = col(r#""String""#).in_list(
-            vec![
-                lit("Hello_Not_Exists"),
-                lit("Hello_Not_Exists2"),
-                lit("Hello_Not_Exists3"),
-                lit("Hello_Not_Exist4"),
-            ],
+            (1..25)
+                .map(|i| lit(format!("Hello_Not_Exists{}", i)))
+                .collect::<Vec<_>>(),
             false,
         );
         let expr = logical2physical(&expr, &schema);

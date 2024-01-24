@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Expr module contains core type definition for `Expr`.
+//! Logical Expressions: [`Expr`]
 
 use crate::expr_fn::binary_expr;
 use crate::logical_plan::Subquery;
@@ -1266,6 +1266,54 @@ impl Expr {
             Ok(Transformed::Yes(expr))
         })
     }
+
+    /// Returns true if some of this `exprs` subexpressions may not be evaluated
+    /// and thus any side effects (like divide by zero) may not be encountered
+    pub fn short_circuits(&self) -> bool {
+        match self {
+            Expr::ScalarFunction(ScalarFunction { func_def, .. }) => {
+                matches!(func_def, ScalarFunctionDefinition::BuiltIn(fun) if *fun == BuiltinScalarFunction::Coalesce)
+            }
+            Expr::BinaryExpr(BinaryExpr { op, .. }) => {
+                matches!(op, Operator::And | Operator::Or)
+            }
+            Expr::Case { .. } => true,
+            // Use explicit pattern match instead of a default
+            // implementation, so that in the future if someone adds
+            // new Expr types, they will check here as well
+            Expr::AggregateFunction(..)
+            | Expr::Alias(..)
+            | Expr::Between(..)
+            | Expr::Cast(..)
+            | Expr::Column(..)
+            | Expr::Exists(..)
+            | Expr::GetIndexedField(..)
+            | Expr::GroupingSet(..)
+            | Expr::InList(..)
+            | Expr::InSubquery(..)
+            | Expr::IsFalse(..)
+            | Expr::IsNotFalse(..)
+            | Expr::IsNotNull(..)
+            | Expr::IsNotTrue(..)
+            | Expr::IsNotUnknown(..)
+            | Expr::IsNull(..)
+            | Expr::IsTrue(..)
+            | Expr::IsUnknown(..)
+            | Expr::Like(..)
+            | Expr::ScalarSubquery(..)
+            | Expr::ScalarVariable(_, _)
+            | Expr::SimilarTo(..)
+            | Expr::Not(..)
+            | Expr::Negative(..)
+            | Expr::OuterReferenceColumn(_, _)
+            | Expr::TryCast(..)
+            | Expr::Wildcard { .. }
+            | Expr::WindowFunction(..)
+            | Expr::Literal(..)
+            | Expr::Sort(..)
+            | Expr::Placeholder(..) => false,
+        }
+    }
 }
 
 // modifies expr if it is a placeholder with datatype of right
@@ -1869,10 +1917,14 @@ mod test {
         let exp2 = col("a") + lit(2);
         let exp3 = !(col("a") + lit(2));
 
-        assert!(exp1 < exp2);
-        assert!(exp2 > exp1);
-        assert!(exp2 > exp3);
-        assert!(exp3 < exp2);
+        // Since comparisons are done using hash value of the expression
+        // expr < expr2 may return false, or true. There is no guaranteed result.
+        // The only guarantee is "<" operator should have the opposite result of ">=" operator
+        let greater_or_equal = exp1 >= exp2;
+        assert_eq!(exp1 < exp2, !greater_or_equal);
+
+        let greater_or_equal = exp3 >= exp2;
+        assert_eq!(exp3 < exp2, !greater_or_equal);
     }
 
     #[test]
@@ -1948,6 +2000,7 @@ mod test {
         );
 
         // UDF
+        #[derive(Debug)]
         struct TestScalarUDF {
             signature: Signature,
         }

@@ -16,6 +16,7 @@
 // under the License.
 
 use arrow::csv::WriterBuilder;
+use datafusion_common::file_options::arrow_writer::ArrowWriterOptions;
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::str::FromStr;
@@ -538,6 +539,16 @@ impl AsLogicalPlan for LogicalPlanNode {
                     column_defaults.insert(col_name.clone(), expr);
                 }
 
+                let file_compression_type = protobuf::CompressionTypeVariant::try_from(
+                    create_extern_table.file_compression_type,
+                )
+                .map_err(|_| {
+                    proto_error(format!(
+                        "Unknown file compression type {}",
+                        create_extern_table.file_compression_type
+                    ))
+                })?;
+
                 Ok(LogicalPlan::Ddl(DdlStatement::CreateExternalTable(CreateExternalTable {
                     schema: pb_schema.try_into()?,
                     name: from_owned_table_reference(create_extern_table.name.as_ref(), "CreateExternalTable")?,
@@ -552,7 +563,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                         .clone(),
                     order_exprs,
                     if_not_exists: create_extern_table.if_not_exists,
-                    file_compression_type: CompressionTypeVariant::from_str(&create_extern_table.file_compression_type).map_err(|_| DataFusionError::NotImplemented(format!("Unsupported file compression type {}", create_extern_table.file_compression_type)))?,
+                    file_compression_type: file_compression_type.into(),
                     definition,
                     unbounded: create_extern_table.unbounded,
                     options: create_extern_table.options.clone(),
@@ -848,6 +859,13 @@ impl AsLogicalPlan for LogicalPlanNode {
                     Some(copy_to_node::CopyOptions::WriterOptions(opt)) => {
                         match &opt.file_type {
                             Some(ft) => match ft {
+                                file_type_writer_options::FileType::ArrowOptions(_) => {
+                                    CopyOptions::WriterOptions(Box::new(
+                                        FileTypeWriterOptions::Arrow(
+                                            ArrowWriterOptions::new(),
+                                        ),
+                                    ))
+                                }
                                 file_type_writer_options::FileType::CsvOptions(
                                     writer_options,
                                 ) => {
@@ -1410,6 +1428,9 @@ impl AsLogicalPlan for LogicalPlanNode {
                     converted_column_defaults.insert(col_name.clone(), expr.try_into()?);
                 }
 
+                let file_compression_type =
+                    protobuf::CompressionTypeVariant::from(file_compression_type);
+
                 Ok(protobuf::LogicalPlanNode {
                     logical_plan_type: Some(LogicalPlanType::CreateExternalTable(
                         protobuf::CreateExternalTableNode {
@@ -1423,7 +1444,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                             delimiter: String::from(*delimiter),
                             order_exprs: converted_order_exprs,
                             definition: definition.clone().unwrap_or_default(),
-                            file_compression_type: file_compression_type.to_string(),
+                            file_compression_type: file_compression_type.into(),
                             unbounded: *unbounded,
                             options: options.clone(),
                             constraints: Some(constraints.clone().into()),
@@ -1646,6 +1667,17 @@ impl AsLogicalPlan for LogicalPlanNode {
                         }
                         CopyOptions::WriterOptions(opt) => {
                             match opt.as_ref() {
+                                FileTypeWriterOptions::Arrow(_) => {
+                                    let arrow_writer_options =
+                                        file_type_writer_options::FileType::ArrowOptions(
+                                            protobuf::ArrowWriterOptions {},
+                                        );
+                                    Some(copy_to_node::CopyOptions::WriterOptions(
+                                        protobuf::FileTypeWriterOptions {
+                                            file_type: Some(arrow_writer_options),
+                                        },
+                                    ))
+                                }
                                 FileTypeWriterOptions::CSV(csv_opts) => {
                                     let csv_options = &csv_opts.writer_options;
                                     let csv_writer_options = csv_writer_options_to_proto(
@@ -1701,6 +1733,9 @@ impl AsLogicalPlan for LogicalPlanNode {
             }
             LogicalPlan::DescribeTable(_) => Err(proto_error(
                 "LogicalPlan serde is not yet implemented for DescribeTable",
+            )),
+            LogicalPlan::RecursiveQuery(_) => Err(proto_error(
+                "LogicalPlan serde is not yet implemented for RecursiveQuery",
             )),
         }
     }

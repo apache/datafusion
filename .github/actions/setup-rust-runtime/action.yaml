@@ -1,0 +1,41 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+name: Setup Rust Runtime
+description: 'Setup Rust Runtime Environment'
+runs:
+  using: "composite"
+  steps:
+    - name: Run sccache-cache
+      uses: mozilla-actions/sccache-action@v0.0.3   
+    - name: Configure runtime env
+      shell: bash
+      # do not produce debug symbols to keep memory usage down
+      # hardcoding other profile params to avoid profile override values
+      # More on Cargo profiles https://doc.rust-lang.org/cargo/reference/profiles.html?profile-settings#profile-settings
+      # 
+      # Set debuginfo=line-tables-only as debuginfo=0 causes immensely slow build
+      # See for more details: https://github.com/rust-lang/rust/issues/119560
+      #
+      # set RUST_MIN_STACK to avoid rust stack overflows on tpc-ds tests
+      run: |
+        echo "RUSTC_WRAPPER=sccache" >> $GITHUB_ENV  
+        echo "SCCACHE_GHA_ENABLED=true" >> $GITHUB_ENV 
+        echo "RUST_BACKTRACE=1" >> $GITHUB_ENV
+        echo "RUST_MIN_STACK=3000000" >> $GITHUB_ENV
+        echo "RUSTFLAGS=-C debuginfo=line-tables-only -C incremental=false" >> $GITHUB_ENV
+     

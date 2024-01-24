@@ -74,6 +74,7 @@ parquet:                Benchmark of parquet reader's filtering speed
 sort:                   Benchmark of sorting speed
 clickbench_1:           ClickBench queries against a single parquet file
 clickbench_partitioned: ClickBench queries against a partitioned (100 files) parquet
+clickbench_extended:    ClickBench "inspired" queries against a single parquet (DataFusion specific)
 
 **********
 * Supported Configuration (Environment Variables)
@@ -155,6 +156,9 @@ main() {
                 clickbench_partitioned)
                     data_clickbench_partitioned
                     ;;
+                clickbench_extended)
+                    data_clickbench_1
+                    ;;
                 *)
                     echo "Error: unknown benchmark '$BENCHMARK' for data generation"
                     usage
@@ -193,6 +197,7 @@ main() {
                     run_sort
                     run_clickbench_1
                     run_clickbench_partitioned
+                    run_clickbench_extended
                     ;;
                 tpch)
                     run_tpch "1"
@@ -217,6 +222,9 @@ main() {
                     ;;
                 clickbench_partitioned)
                     run_clickbench_partitioned
+                    ;;
+                clickbench_extended)
+                    run_clickbench_extended
                     ;;
                 *)
                     echo "Error: unknown benchmark '$BENCHMARK' for run"
@@ -400,6 +408,15 @@ run_clickbench_partitioned() {
     echo "Running clickbench (partitioned, 100 files) benchmark..."
     $CARGO_COMMAND --bin dfbench -- clickbench  --iterations 5 --path "${DATA_DIR}/hits_partitioned" --queries-path "${SCRIPT_DIR}/queries/clickbench/queries.sql" -o ${RESULTS_FILE}
 }
+
+# Runs the clickbench "extended" benchmark with a single large parquet file
+run_clickbench_extended() {
+    RESULTS_FILE="${RESULTS_DIR}/clickbench_extended.json"
+    echo "RESULTS_FILE: ${RESULTS_FILE}"
+    echo "Running clickbench (1 file) extended benchmark..."
+    $CARGO_COMMAND --bin dfbench -- clickbench  --iterations 5 --path "${DATA_DIR}/hits.parquet" --queries-path "${SCRIPT_DIR}/queries/clickbench/extended.sql" -o ${RESULTS_FILE}
+}
+
 
 compare_benchmarks() {
     BASE_RESULTS_DIR="${SCRIPT_DIR}/results"

@@ -95,9 +95,16 @@ Compiling DataFusion from sources requires an installed version of the protobuf 
 On most platforms this can be installed from your system's package manager
 
 ```
-$ apt install -y protobuf-compiler
+# Ubuntu
+$ sudo apt install -y protobuf-compiler
+
+# Fedora
 $ dnf install -y protobuf-devel
+
+# Arch Linux
 $ pacman -S protobuf
+
+# macOS
 $ brew install protobuf
 ```
 

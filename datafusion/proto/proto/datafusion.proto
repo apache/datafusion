@@ -212,7 +212,8 @@ message CreateExternalTableNode {
   bool if_not_exists = 7;
   string delimiter = 8;
   string definition = 9;
-  string file_compression_type = 10;
+  reserved 10; // was string file_compression_type
+  CompressionTypeVariant file_compression_type = 17;
   repeated LogicalExprNodeCollection order_exprs = 13;
   bool unbounded = 14;
   map<string, string> options = 11;
@@ -667,6 +668,9 @@ enum ScalarFunction {
   FindInSet = 127;
   ArraySort = 128;
   ArrayDistinct = 129;
+  ArrayResize = 130;
+  EndsWith = 131;
+  InStr = 132;
 }
 
 message ScalarFunctionNode {
@@ -713,6 +717,7 @@ enum AggregateFunction {
   REGR_SYY = 33;
   REGR_SXY = 34;
   STRING_AGG = 35;
+  NTH_VALUE_AGG = 36;
 }
 
 message AggregateExprNode {
@@ -1210,6 +1215,7 @@ message FileTypeWriterOptions {
     JsonWriterOptions json_options = 1;
     ParquetWriterOptions parquet_options = 2;
     CsvWriterOptions csv_options = 3;
+    ArrowWriterOptions arrow_options = 4;
   }
 }
 
@@ -1239,6 +1245,8 @@ message CsvWriterOptions {
   // Optional value to represent null
   string null_value = 8;
 }
+
+message ArrowWriterOptions {}
 
 message WriterProperties {
   uint64 data_page_size_limit = 1;
@@ -1536,6 +1544,8 @@ message SymmetricHashJoinExecNode {
   StreamPartitionMode partition_mode = 6;
   bool null_equals_null = 7;
   JoinFilter filter = 8;
+  repeated PhysicalSortExprNode left_sort_exprs = 9;
+  repeated PhysicalSortExprNode right_sort_exprs = 10;
 }
 
 message InterleaveExecNode {
