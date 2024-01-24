@@ -669,6 +669,8 @@ enum ScalarFunction {
   ArraySort = 128;
   ArrayDistinct = 129;
   ArrayResize = 130;
+  EndsWith = 131;
+  InStr = 132;
 }
 
 message ScalarFunctionNode {

@@ -19,8 +19,10 @@
 
 use std::ops::Not;
 
-use super::or_in_list_simplifier::OrInListSimplifier;
 use super::utils::*;
+use super::{
+    inlist_simplifier::InListSimplifier, or_in_list_simplifier::OrInListSimplifier,
+};
 use crate::analyzer::type_coercion::TypeCoercionRewriter;
 use crate::simplify_expressions::guarantees::GuaranteeRewriter;
 use crate::simplify_expressions::regex::simplify_regex_expr;
@@ -133,6 +135,7 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
         let mut simplifier = Simplifier::new(&self.info);
         let mut const_evaluator = ConstEvaluator::try_new(self.info.execution_props())?;
         let mut or_in_list_simplifier = OrInListSimplifier::new();
+        let mut inlist_simplifier = InListSimplifier::new();
         let mut guarantee_rewriter = GuaranteeRewriter::new(&self.guarantees);
 
         // TODO iterate until no changes are made during rewrite
@@ -142,6 +145,7 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
         expr.rewrite(&mut const_evaluator)?
             .rewrite(&mut simplifier)?
             .rewrite(&mut or_in_list_simplifier)?
+            .rewrite(&mut inlist_simplifier)?
             .rewrite(&mut guarantee_rewriter)?
             // run both passes twice to try an minimize simplifications that we missed
             .rewrite(&mut const_evaluator)?
@@ -3201,11 +3205,118 @@ mod tests {
             col("c1").eq(subquery1).or(col("c1").eq(subquery2))
         );
 
-        // c1 NOT IN (1, 2, 3, 4) OR c1 NOT IN (5, 6, 7, 8) ->
-        // c1 NOT IN (1, 2, 3, 4) OR c1 NOT IN (5, 6, 7, 8)
+        // 1. c1 IN (1,2,3,4) AND c1 IN (5,6,7,8) -> false
+        let expr = in_list(col("c1"), vec![lit(1), lit(2), lit(3), lit(4)], false).and(
+            in_list(col("c1"), vec![lit(5), lit(6), lit(7), lit(8)], false),
+        );
+        assert_eq!(simplify(expr.clone()), lit(false));
+
+        // 2. c1 IN (1,2,3,4) AND c1 IN (4,5,6,7) -> c1 = 4
+        let expr = in_list(col("c1"), vec![lit(1), lit(2), lit(3), lit(4)], false).and(
+            in_list(col("c1"), vec![lit(4), lit(5), lit(6), lit(7)], false),
+        );
+        assert_eq!(simplify(expr.clone()), col("c1").eq(lit(4)));
+
+        // 3. c1 NOT IN (1, 2, 3, 4) OR c1 NOT IN (5, 6, 7, 8) -> true
         let expr = in_list(col("c1"), vec![lit(1), lit(2), lit(3), lit(4)], true).or(
             in_list(col("c1"), vec![lit(5), lit(6), lit(7), lit(8)], true),
         );
+        assert_eq!(simplify(expr.clone()), lit(true));
+
+        // 4. c1 NOT IN (1,2,3,4) AND c1 NOT IN (4,5,6,7) -> c1 NOT IN (1,2,3,4,5,6,7)
+        let expr = in_list(col("c1"), vec![lit(1), lit(2), lit(3), lit(4)], true).and(
+            in_list(col("c1"), vec![lit(4), lit(5), lit(6), lit(7)], true),
+        );
+        assert_eq!(
+            simplify(expr.clone()),
+            in_list(
+                col("c1"),
+                vec![lit(1), lit(2), lit(3), lit(4), lit(5), lit(6), lit(7)],
+                true
+            )
+        );
+
+        // 5. c1 IN (1,2,3,4) OR c1 IN (2,3,4,5) -> c1 IN (1,2,3,4,5)
+        let expr = in_list(col("c1"), vec![lit(1), lit(2), lit(3), lit(4)], false).or(
+            in_list(col("c1"), vec![lit(2), lit(3), lit(4), lit(5)], false),
+        );
+        assert_eq!(
+            simplify(expr.clone()),
+            in_list(
+                col("c1"),
+                vec![lit(1), lit(2), lit(3), lit(4), lit(5)],
+                false
+            )
+        );
+
+        // 6. c1 IN (1,2,3) AND c1 NOT INT (1,2,3,4,5) -> false
+        let expr = in_list(col("c1"), vec![lit(1), lit(2), lit(3)], false).and(in_list(
+            col("c1"),
+            vec![lit(1), lit(2), lit(3), lit(4), lit(5)],
+            true,
+        ));
+        assert_eq!(simplify(expr.clone()), lit(false));
+
+        // 7. c1 NOT IN (1,2,3,4) AND c1 IN (1,2,3,4,5) -> c1 = 5
+        let expr =
+            in_list(col("c1"), vec![lit(1), lit(2), lit(3), lit(4)], true).and(in_list(
+                col("c1"),
+                vec![lit(1), lit(2), lit(3), lit(4), lit(5)],
+                false,
+            ));
+        assert_eq!(simplify(expr.clone()), col("c1").eq(lit(5)));
+
+        // 8. c1 IN (1,2,3,4) AND c1 NOT IN (5,6,7,8) -> c1 IN (1,2,3,4)
+        let expr = in_list(col("c1"), vec![lit(1), lit(2), lit(3), lit(4)], false).and(
+            in_list(col("c1"), vec![lit(5), lit(6), lit(7), lit(8)], true),
+        );
+        assert_eq!(
+            simplify(expr.clone()),
+            in_list(col("c1"), vec![lit(1), lit(2), lit(3), lit(4)], false)
+        );
+
+        // inlist with more than two expressions
+        // c1 IN (1,2,3,4,5,6) AND c1 IN (1,3,5,6) AND c1 IN (3,6) -> c1 = 3 OR c1 = 6
+        let expr = in_list(
+            col("c1"),
+            vec![lit(1), lit(2), lit(3), lit(4), lit(5), lit(6)],
+            false,
+        )
+        .and(in_list(
+            col("c1"),
+            vec![lit(1), lit(3), lit(5), lit(6)],
+            false,
+        ))
+        .and(in_list(col("c1"), vec![lit(3), lit(6)], false));
+        assert_eq!(
+            simplify(expr.clone()),
+            col("c1").eq(lit(3)).or(col("c1").eq(lit(6)))
+        );
+
+        // c1 NOT IN (1,2,3,4) AND c1 IN (5,6,7,8) AND c1 NOT IN (3,4,5,6) AND c1 IN (8,9,10) -> c1 = 8
+        let expr = in_list(col("c1"), vec![lit(1), lit(2), lit(3), lit(4)], true).and(
+            in_list(col("c1"), vec![lit(5), lit(6), lit(7), lit(8)], false)
+                .and(in_list(
+                    col("c1"),
+                    vec![lit(3), lit(4), lit(5), lit(6)],
+                    true,
+                ))
+                .and(in_list(col("c1"), vec![lit(8), lit(9), lit(10)], false)),
+        );
+        assert_eq!(simplify(expr.clone()), col("c1").eq(lit(8)));
+
+        // Contains non-InList expression
+        // c1 NOT IN (1,2,3,4) OR c1 != 5 OR c1 NOT IN (6,7,8,9) -> c1 NOT IN (1,2,3,4) OR c1 != 5 OR c1 NOT IN (6,7,8,9)
+        let expr =
+            in_list(col("c1"), vec![lit(1), lit(2), lit(3), lit(4)], true).or(col("c1")
+                .not_eq(lit(5))
+                .or(in_list(
+                    col("c1"),
+                    vec![lit(6), lit(7), lit(8), lit(9)],
+                    true,
+                )));
+        // TODO: Further simplify this expression
+        // assert_eq!(simplify(expr.clone()), lit(true));
         assert_eq!(simplify(expr.clone()), expr);
     }
 
