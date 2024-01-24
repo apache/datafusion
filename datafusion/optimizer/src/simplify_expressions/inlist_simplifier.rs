@@ -107,22 +107,18 @@ fn inlist_union(mut l1: InList, l2: InList, negated: bool) -> Result<Expr> {
         .filter_map(|e| if l1_items.contains(&e) { None } else { Some(e) })
         .collect();
 
-    l1.list.extend(keep_l2.into_iter());
+    l1.list.extend(keep_l2);
     l1.negated = negated;
     Ok(Expr::InList(l1))
 }
 
-/// Return the union of two inlist expressions
+/// Return the intersection of two inlist expressions
 /// maintaining the order of the elements in the two lists
 fn inlist_intersection(mut l1: InList, l2: InList, negated: bool) -> Result<Expr> {
     let l2_items = l2.list.iter().collect::<HashSet<_>>();
 
     // remove all items from l1 that are not in l2
-    l1.list = l1
-        .list
-        .into_iter()
-        .filter(|e| l2_items.contains(e))
-        .collect();
+    l1.list.retain(|e| l2_items.contains(e));
 
     // e in () is always false
     // e not in () is always true
@@ -132,21 +128,16 @@ fn inlist_intersection(mut l1: InList, l2: InList, negated: bool) -> Result<Expr
     Ok(Expr::InList(l1))
 }
 
-fn inlist_except(l1: InList, l2: InList) -> Result<Expr> {
-    let l2_set: HashSet<Expr> = l2.list.iter().cloned().collect();
-    let except_list: Vec<Expr> = l1
-        .list
-        .iter()
-        .filter(|x| !l2_set.contains(x))
-        .cloned()
-        .collect();
-    if except_list.is_empty() {
+/// Return the all items in l1 that are not in l2
+/// maintaining the order of the elements in the two lists
+fn inlist_except(mut l1: InList, l2: InList) -> Result<Expr> {
+    let l2_items = l2.list.iter().collect::<HashSet<_>>();
+
+    // keep only items from l1 that are not in l2
+    l1.list.retain(|e| !l2_items.contains(e));
+
+    if l1.list.is_empty() {
         return Ok(lit(false));
     }
-    let merged_inlist = InList {
-        expr: l1.expr.clone(),
-        list: except_list,
-        negated: false,
-    };
-    Ok(Expr::InList(merged_inlist))
+    Ok(Expr::InList(l1))
 }
