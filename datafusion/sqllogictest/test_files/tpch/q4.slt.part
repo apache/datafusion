@@ -50,8 +50,8 @@ Sort: orders.o_orderpriority ASC NULLS LAST
 --------------TableScan: orders projection=[o_orderkey, o_orderdate, o_orderpriority], partial_filters=[orders.o_orderdate >= Date32("8582"), orders.o_orderdate < Date32("8674")]
 ----------SubqueryAlias: __correlated_sq_1
 ------------Projection: lineitem.l_orderkey
---------------Filter: lineitem.l_commitdate < lineitem.l_receiptdate
-----------------TableScan: lineitem projection=[l_orderkey, l_commitdate, l_receiptdate], partial_filters=[lineitem.l_commitdate < lineitem.l_receiptdate]
+--------------Filter: lineitem.l_receiptdate > lineitem.l_commitdate
+----------------TableScan: lineitem projection=[l_orderkey, l_commitdate, l_receiptdate], partial_filters=[lineitem.l_receiptdate > lineitem.l_commitdate]
 physical_plan
 SortPreservingMergeExec: [o_orderpriority@0 ASC NULLS LAST]
 --SortExec: expr=[o_orderpriority@0 ASC NULLS LAST]
@@ -73,7 +73,7 @@ SortPreservingMergeExec: [o_orderpriority@0 ASC NULLS LAST]
 ----------------------RepartitionExec: partitioning=Hash([l_orderkey@0], 4), input_partitions=4
 ------------------------ProjectionExec: expr=[l_orderkey@0 as l_orderkey]
 --------------------------CoalesceBatchesExec: target_batch_size=8192
-----------------------------FilterExec: l_commitdate@1 < l_receiptdate@2
+----------------------------FilterExec: l_receiptdate@2 > l_commitdate@1
 ------------------------------CsvExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:0..18561749], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:18561749..37123498], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:37123498..55685247], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:55685247..74246996]]}, projection=[l_orderkey, l_commitdate, l_receiptdate], has_header=false
 
 

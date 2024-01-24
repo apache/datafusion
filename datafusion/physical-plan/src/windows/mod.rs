@@ -160,7 +160,14 @@ fn create_built_in_window_expr(
     input_schema: &Schema,
     name: String,
 ) -> Result<Arc<dyn BuiltInWindowFunctionExpr>> {
-    let data_type = input_schema.field_with_name(&name)?.data_type();
+    // need to get the types into an owned vec for some reason
+    let input_types: Vec<_> = args
+        .iter()
+        .map(|arg| arg.data_type(input_schema))
+        .collect::<Result<_>>()?;
+
+    // figure out the output type
+    let data_type = &fun.return_type(&input_types)?;
     Ok(match fun {
         BuiltInWindowFunction::RowNumber => Arc::new(RowNumber::new(name, data_type)),
         BuiltInWindowFunction::Rank => Arc::new(rank(name, data_type)),

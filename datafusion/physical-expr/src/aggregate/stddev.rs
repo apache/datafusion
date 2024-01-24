@@ -200,7 +200,7 @@ impl StddevAccumulator {
 }
 
 impl Accumulator for StddevAccumulator {
-    fn state(&self) -> Result<Vec<ScalarValue>> {
+    fn state(&mut self) -> Result<Vec<ScalarValue>> {
         Ok(vec![
             ScalarValue::from(self.variance.get_count()),
             ScalarValue::from(self.variance.get_mean()),
@@ -220,7 +220,7 @@ impl Accumulator for StddevAccumulator {
         self.variance.merge_batch(states)
     }
 
-    fn evaluate(&self) -> Result<ScalarValue> {
+    fn evaluate(&mut self) -> Result<ScalarValue> {
         let variance = self.variance.evaluate()?;
         match variance {
             ScalarValue::Float64(e) => {
@@ -459,7 +459,7 @@ mod tests {
             .collect::<Result<Vec<_>>>()?;
         accum1.update_batch(&values1)?;
         accum2.update_batch(&values2)?;
-        let state2 = get_accum_scalar_values_as_arrays(accum2.as_ref())?;
+        let state2 = get_accum_scalar_values_as_arrays(accum2.as_mut())?;
         accum1.merge_batch(&state2)?;
         accum1.evaluate()
     }

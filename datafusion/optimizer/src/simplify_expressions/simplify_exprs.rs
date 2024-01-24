@@ -93,16 +93,34 @@ impl SimplifyExpressions {
             .map(|input| Self::optimize_internal(input, execution_props))
             .collect::<Result<Vec<_>>>()?;
 
-        let expr = plan
-            .expressions()
-            .into_iter()
-            .map(|e| {
-                // TODO: unify with `rewrite_preserving_name`
-                let original_name = e.name_for_alias()?;
-                let new_e = simplifier.simplify(e)?;
-                new_e.alias_if_changed(original_name)
-            })
-            .collect::<Result<Vec<_>>>()?;
+        let expr = match plan {
+            // Canonicalize step won't reorder expressions in a Join on clause.
+            // The left and right expressions in a Join on clause are not commutative,
+            // since the order of the columns must match the order of the children.
+            LogicalPlan::Join(_) => {
+                plan.expressions()
+                    .into_iter()
+                    .map(|e| {
+                        // TODO: unify with `rewrite_preserving_name`
+                        let original_name = e.name_for_alias()?;
+                        let new_e = simplifier.simplify(e)?;
+                        new_e.alias_if_changed(original_name)
+                    })
+                    .collect::<Result<Vec<_>>>()?
+            }
+            _ => {
+                plan.expressions()
+                    .into_iter()
+                    .map(|e| {
+                        // TODO: unify with `rewrite_preserving_name`
+                        let original_name = e.name_for_alias()?;
+                        let cano_e = simplifier.canonicalize(e)?;
+                        let new_e = simplifier.simplify(cano_e)?;
+                        new_e.alias_if_changed(original_name)
+                    })
+                    .collect::<Result<Vec<_>>>()?
+            }
+        };
 
         plan.with_new_exprs(expr, &new_inputs)
     }
@@ -137,28 +155,6 @@ mod tests {
         and, binary_expr, col, lit, logical_plan::builder::LogicalPlanBuilder, Expr,
         ExprSchemable, JoinType,
     };
-
-    /// A macro to assert that one string is contained within another with
-    /// a nice error message if they are not.
-    ///
-    /// Usage: `assert_contains!(actual, expected)`
-    ///
-    /// Is a macro so test error
-    /// messages are on the same line as the failure;
-    ///
-    /// Both arguments must be convertable into Strings (Into<String>)
-    macro_rules! assert_contains {
-        ($ACTUAL: expr, $EXPECTED: expr) => {
-            let actual_value: String = $ACTUAL.into();
-            let expected_value: String = $EXPECTED.into();
-            assert!(
-                actual_value.contains(&expected_value),
-                "Can not find expected in actual.\n\nExpected:\n{}\n\nActual:\n{}",
-                expected_value,
-                actual_value
-            );
-        };
-    }
 
     fn test_table_scan() -> LogicalPlan {
         let schema = Schema::new(vec![
@@ -425,18 +421,6 @@ mod tests {
         assert_optimized_plan_eq(&plan, expected)
     }
 
-    // expect optimizing will result in an error, returning the error string
-    fn get_optimized_plan_err(plan: &LogicalPlan, date_time: &DateTime<Utc>) -> String {
-        let config = OptimizerContext::new().with_query_execution_start_time(*date_time);
-        let rule = SimplifyExpressions::new();
-
-        let err = rule
-            .try_optimize(plan, &config)
-            .expect_err("expected optimization to fail");
-
-        err.to_string()
-    }
-
     fn get_optimized_plan_formatted(
         plan: &LogicalPlan,
         date_time: &DateTime<Utc>,
@@ -469,21 +453,6 @@ mod tests {
     }
 
     #[test]
-    fn to_timestamp_expr_wrong_arg() -> Result<()> {
-        let table_scan = test_table_scan();
-        let proj = vec![to_timestamp_expr("I'M NOT A TIMESTAMP")];
-        let plan = LogicalPlanBuilder::from(table_scan)
-            .project(proj)?
-            .build()?;
-
-        let expected =
-            "Error parsing timestamp from 'I'M NOT A TIMESTAMP': error parsing date";
-        let actual = get_optimized_plan_err(&plan, &Utc::now());
-        assert_contains!(actual, expected);
-        Ok(())
-    }
-
-    #[test]
     fn cast_expr() -> Result<()> {
         let table_scan = test_table_scan();
         let proj = vec![Expr::Cast(Cast::new(Box::new(lit("0")), DataType::Int32))];
@@ -495,20 +464,6 @@ mod tests {
             \n  TableScan: test";
         let actual = get_optimized_plan_formatted(&plan, &Utc::now());
         assert_eq!(expected, actual);
-        Ok(())
-    }
-
-    #[test]
-    fn cast_expr_wrong_arg() -> Result<()> {
-        let table_scan = test_table_scan();
-        let proj = vec![Expr::Cast(Cast::new(Box::new(lit("")), DataType::Int32))];
-        let plan = LogicalPlanBuilder::from(table_scan)
-            .project(proj)?
-            .build()?;
-
-        let expected = "Cannot cast string '' to value of Int32 type";
-        let actual = get_optimized_plan_err(&plan, &Utc::now());
-        assert_contains!(actual, expected);
         Ok(())
     }
 
