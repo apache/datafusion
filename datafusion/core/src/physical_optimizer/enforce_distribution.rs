@@ -1311,9 +1311,8 @@ pub(crate) mod tests {
     use crate::datasource::physical_plan::{CsvExec, FileScanConfig};
     use crate::physical_optimizer::enforce_sorting::EnforceSorting;
     use crate::physical_optimizer::output_requirements::OutputRequirements;
-    use crate::physical_optimizer::test_utils::check_integrity;
     use crate::physical_optimizer::test_utils::{
-        coalesce_partitions_exec, repartition_exec,
+        check_integrity, coalesce_partitions_exec, repartition_exec,
     };
     use crate::physical_plan::aggregates::{
         AggregateExec, AggregateMode, PhysicalGroupBy,
