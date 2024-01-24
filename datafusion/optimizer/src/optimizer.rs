@@ -375,10 +375,10 @@ impl Optimizer {
 
         let new_inputs = result
             .into_iter()
-            .enumerate()
-            .map(|(i, o)| match o {
+            .zip(inputs)
+            .map(|(new_plan, old_plan)| match new_plan {
                 Some(plan) => plan,
-                None => (*(inputs.get(i).unwrap())).clone(),
+                None => old_plan.clone(),
             })
             .collect::<Vec<_>>();
 
