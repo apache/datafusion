@@ -1391,7 +1391,7 @@ query B
 SELECT NOT c1 FROM test_boolean
 ----
 true
-true
+NULL
 false
 
 
@@ -1533,7 +1533,7 @@ SELECT not(1), not(0)
 query ?B
 SELECT null, not(null)
 ----
-NULL true
+NULL NULL
 
 query error type_coercion\ncaused by\nError during planning: Cannot infer common argument type for comparison operation Utf8 IS DISTINCT FROM Boolean
 SELECT NOT('hi')
