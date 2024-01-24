@@ -30,27 +30,20 @@ use datafusion_expr::Accumulator;
 use std::fmt::Debug;
 use std::mem;
 use std::ops::Range;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 #[derive(Debug)]
-pub(super) struct StringDistinctCountAccumulator<O: OffsetSizeTrait>(
-    Mutex<SSOStringHashSet<O>>,
-);
+pub(super) struct StringDistinctCountAccumulator<O: OffsetSizeTrait>(SSOStringHashSet<O>);
 impl<O: OffsetSizeTrait> StringDistinctCountAccumulator<O> {
     pub(super) fn new() -> Self {
-        Self(Mutex::new(SSOStringHashSet::<O>::new()))
+        Self(SSOStringHashSet::<O>::new())
     }
 }
 
 impl<O: OffsetSizeTrait> Accumulator for StringDistinctCountAccumulator<O> {
-    fn state(&self) -> datafusion_common::Result<Vec<ScalarValue>> {
-        // TODO this should not need a lock/clone (should make
-        // `Accumulator::state` take a mutable reference)
-        // see https://github.com/apache/arrow-datafusion/pull/8925
-        let mut lk = self.0.lock().unwrap();
-        let set: &mut SSOStringHashSet<_> = &mut lk;
+    fn state(&mut self) -> datafusion_common::Result<Vec<ScalarValue>> {
         // take the state out of the string set and replace with default
-        let set = std::mem::take(set);
+        let set = std::mem::take(&mut self.0);
         let arr = set.into_state();
         let list = Arc::new(array_into_list_array(arr));
         Ok(vec![ScalarValue::List(list)])
@@ -61,7 +54,7 @@ impl<O: OffsetSizeTrait> Accumulator for StringDistinctCountAccumulator<O> {
             return Ok(());
         }
 
-        self.0.lock().unwrap().insert(values[0].clone());
+        self.0.insert(values[0].clone());
 
         Ok(())
     }
@@ -79,22 +72,20 @@ impl<O: OffsetSizeTrait> Accumulator for StringDistinctCountAccumulator<O> {
         let arr = as_list_array(&states[0])?;
         arr.iter().try_for_each(|maybe_list| {
             if let Some(list) = maybe_list {
-                self.0.lock().unwrap().insert(list);
+                self.0.insert(list);
             };
             Ok(())
         })
     }
 
-    fn evaluate(&self) -> datafusion_common::Result<ScalarValue> {
-        Ok(ScalarValue::Int64(
-            Some(self.0.lock().unwrap().len() as i64),
-        ))
+    fn evaluate(&mut self) -> datafusion_common::Result<ScalarValue> {
+        Ok(ScalarValue::Int64(Some(self.0.len() as i64)))
     }
 
     fn size(&self) -> usize {
         // Size of accumulator
         // + SSOStringHashSet size
-        std::mem::size_of_val(self) + self.0.lock().unwrap().size()
+        std::mem::size_of_val(self) + self.0.size()
     }
 }
 
