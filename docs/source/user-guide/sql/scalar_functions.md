@@ -1544,7 +1544,7 @@ to_timestamp(expression[, ..., format_n])
 ```
 Additional examples can be found [here]
 
-[here]: https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/dataframe_to_timestamp.rs
+[here]: https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/to_timestamp.rs
 
 ### `to_timestamp_millis`
 
@@ -1583,7 +1583,7 @@ to_timestamp_millis(expression[, ..., format_n])
 ```
 Additional examples can be found [here]
 
-[here]: https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/dataframe_to_timestamp.rs
+[here]: https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/to_timestamp.rs
 
 ### `to_timestamp_micros`
 
@@ -1622,7 +1622,7 @@ to_timestamp_micros(expression[, ..., format_n])
 ```
 Additional examples can be found [here]
 
-[here]: https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/dataframe_to_timestamp.rs
+[here]: https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/to_timestamp.rs
 
 ### `to_timestamp_nanos`
 
@@ -1661,7 +1661,7 @@ to_timestamp_nanos(expression[, ..., format_n])
 ```
 Additional examples can be found [here]
 
-[here]: https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/dataframe_to_timestamp.rs
+[here]: https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/to_timestamp.rs
 
 ### `to_timestamp_seconds`
 
@@ -1700,7 +1700,7 @@ to_timestamp_seconds(expression[, ..., format_n])
 ```
 Additional examples can be found [here]
 
-[here]: https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/dataframe_to_timestamp.rs
+[here]: https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/to_timestamp.rs
 
 ### `from_unixtime`
 
