@@ -236,6 +236,7 @@ impl PruningStatistics for BloomFilterStatistics {
                                 return true;
                             }
                             let b = (*v as i32).to_le_bytes();
+                            // Use Decimal constructor after https://github.com/apache/arrow-rs/issues/5325
                             let decimal = Decimal::Int32 {
                                 value: b,
                                 precision: *p as i32,
@@ -258,6 +259,7 @@ impl PruningStatistics for BloomFilterStatistics {
                         Type::FIXED_LEN_BYTE_ARRAY => {
                             // keep with from_bytes_to_i128
                             let b = v.to_be_bytes().to_vec();
+                            // Use Decimal constructor after https://github.com/apache/arrow-rs/issues/5325
                             let decimal = Decimal::Bytes {
                                 value: b.into(),
                                 precision: *p as i32,
