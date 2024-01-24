@@ -22,6 +22,20 @@ use std::sync::Arc;
 
 use crate::Result;
 
+#[macro_export]
+macro_rules! handle_tree_recursion {
+    ($EXPR:expr) => {
+        match $EXPR {
+            VisitRecursion::Continue => {}
+            // If the recursion should skip, do not apply to its children, let
+            // the recursion continue:
+            VisitRecursion::Skip => return Ok(VisitRecursion::Continue),
+            // If the recursion should stop, do not apply to its children:
+            VisitRecursion::Stop => return Ok(VisitRecursion::Stop),
+        }
+    };
+}
+
 /// Defines a visitable and rewriteable a tree node. This trait is
 /// implemented for plans ([`ExecutionPlan`] and [`LogicalPlan`]) as
 /// well as expression trees ([`PhysicalExpr`], [`Expr`]) in
@@ -38,18 +52,11 @@ pub trait TreeNode: Sized {
     ///
     /// The `op` closure can be used to collect some info from the
     /// tree node or do some checking for the tree node.
-    fn apply<F>(&self, op: &mut F) -> Result<VisitRecursion>
-    where
-        F: FnMut(&Self) -> Result<VisitRecursion>,
-    {
-        match op(self)? {
-            VisitRecursion::Continue => {}
-            // If the recursion should skip, do not apply to its children. And let the recursion continue
-            VisitRecursion::Skip => return Ok(VisitRecursion::Continue),
-            // If the recursion should stop, do not apply to its children
-            VisitRecursion::Stop => return Ok(VisitRecursion::Stop),
-        };
-
+    fn apply<F: FnMut(&Self) -> Result<VisitRecursion>>(
+        &self,
+        op: &mut F,
+    ) -> Result<VisitRecursion> {
+        handle_tree_recursion!(op(self)?);
         self.apply_children(&mut |node| node.apply(op))
     }
 
@@ -85,22 +92,8 @@ pub trait TreeNode: Sized {
         &self,
         visitor: &mut V,
     ) -> Result<VisitRecursion> {
-        match visitor.pre_visit(self)? {
-            VisitRecursion::Continue => {}
-            // If the recursion should skip, do not apply to its children. And let the recursion continue
-            VisitRecursion::Skip => return Ok(VisitRecursion::Continue),
-            // If the recursion should stop, do not apply to its children
-            VisitRecursion::Stop => return Ok(VisitRecursion::Stop),
-        };
-
-        match self.apply_children(&mut |node| node.visit(visitor))? {
-            VisitRecursion::Continue => {}
-            // If the recursion should skip, do not apply to its children. And let the recursion continue
-            VisitRecursion::Skip => return Ok(VisitRecursion::Continue),
-            // If the recursion should stop, do not apply to its children
-            VisitRecursion::Stop => return Ok(VisitRecursion::Stop),
-        }
-
+        handle_tree_recursion!(visitor.pre_visit(self)?);
+        handle_tree_recursion!(self.apply_children(&mut |node| node.visit(visitor))?);
         visitor.post_visit(self)
     }
 
@@ -144,7 +137,6 @@ pub trait TreeNode: Sized {
         F: Fn(Self) -> Result<Transformed<Self>>,
     {
         let after_op_children = self.map_children(|node| node.transform_up(op))?;
-
         let new_node = op(after_op_children)?.into();
         Ok(new_node)
     }
@@ -157,7 +149,6 @@ pub trait TreeNode: Sized {
         F: FnMut(Self) -> Result<Transformed<Self>>,
     {
         let after_op_children = self.map_children(|node| node.transform_up_mut(op))?;
-
         let new_node = op(after_op_children)?.into();
         Ok(new_node)
     }
@@ -348,11 +339,7 @@ impl<T: DynTreeNode + ?Sized> TreeNode for Arc<T> {
         F: FnMut(&Self) -> Result<VisitRecursion>,
     {
         for child in self.arc_children() {
-            match op(&child)? {
-                VisitRecursion::Continue => {}
-                VisitRecursion::Skip => return Ok(VisitRecursion::Continue),
-                VisitRecursion::Stop => return Ok(VisitRecursion::Stop),
-            }
+            handle_tree_recursion!(op(&child)?)
         }
         Ok(VisitRecursion::Continue)
     }
@@ -388,11 +375,7 @@ impl<T: ConcreteTreeNode> TreeNode for T {
         F: FnMut(&Self) -> Result<VisitRecursion>,
     {
         for child in self.children() {
-            match op(child)? {
-                VisitRecursion::Continue => {}
-                VisitRecursion::Skip => return Ok(VisitRecursion::Continue),
-                VisitRecursion::Stop => return Ok(VisitRecursion::Stop),
-            }
+            handle_tree_recursion!(op(child)?)
         }
         Ok(VisitRecursion::Continue)
     }

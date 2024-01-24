@@ -20,27 +20,17 @@
 use crate::LogicalPlan;
 
 use datafusion_common::tree_node::{TreeNode, TreeNodeVisitor, VisitRecursion};
-use datafusion_common::Result;
+use datafusion_common::{handle_tree_recursion, Result};
 
 impl TreeNode for LogicalPlan {
-    fn apply<F>(&self, op: &mut F) -> Result<VisitRecursion>
-    where
-        F: FnMut(&Self) -> Result<VisitRecursion>,
-    {
-        // Note,
-        //
+    fn apply<F: FnMut(&Self) -> Result<VisitRecursion>>(
+        &self,
+        op: &mut F,
+    ) -> Result<VisitRecursion> {
         // Compared to the default implementation, we need to invoke
         // [`Self::apply_subqueries`] before visiting its children
-        match op(self)? {
-            VisitRecursion::Continue => {}
-            // If the recursion should skip, do not apply to its children. And let the recursion continue
-            VisitRecursion::Skip => return Ok(VisitRecursion::Continue),
-            // If the recursion should stop, do not apply to its children
-            VisitRecursion::Stop => return Ok(VisitRecursion::Stop),
-        };
-
+        handle_tree_recursion!(op(self)?);
         self.apply_subqueries(op)?;
-
         self.apply_children(&mut |node| node.apply(op))
     }
 
@@ -70,40 +60,19 @@ impl TreeNode for LogicalPlan {
     ) -> Result<VisitRecursion> {
         // Compared to the default implementation, we need to invoke
         // [`Self::visit_subqueries`] before visiting its children
-
-        match visitor.pre_visit(self)? {
-            VisitRecursion::Continue => {}
-            // If the recursion should skip, do not apply to its children. And let the recursion continue
-            VisitRecursion::Skip => return Ok(VisitRecursion::Continue),
-            // If the recursion should stop, do not apply to its children
-            VisitRecursion::Stop => return Ok(VisitRecursion::Stop),
-        };
-
+        handle_tree_recursion!(visitor.pre_visit(self)?);
         self.visit_subqueries(visitor)?;
-
-        match self.apply_children(&mut |node| node.visit(visitor))? {
-            VisitRecursion::Continue => {}
-            // If the recursion should skip, do not apply to its children. And let the recursion continue
-            VisitRecursion::Skip => return Ok(VisitRecursion::Continue),
-            // If the recursion should stop, do not apply to its children
-            VisitRecursion::Stop => return Ok(VisitRecursion::Stop),
-        }
-
+        handle_tree_recursion!(self.apply_children(&mut |node| node.visit(visitor))?);
         visitor.post_visit(self)
     }
 
-    fn apply_children<F>(&self, op: &mut F) -> Result<VisitRecursion>
-    where
-        F: FnMut(&Self) -> Result<VisitRecursion>,
-    {
+    fn apply_children<F: FnMut(&Self) -> Result<VisitRecursion>>(
+        &self,
+        op: &mut F,
+    ) -> Result<VisitRecursion> {
         for child in self.inputs() {
-            match op(child)? {
-                VisitRecursion::Continue => {}
-                VisitRecursion::Skip => return Ok(VisitRecursion::Continue),
-                VisitRecursion::Stop => return Ok(VisitRecursion::Stop),
-            }
+            handle_tree_recursion!(op(child)?)
         }
-
         Ok(VisitRecursion::Continue)
     }
 
