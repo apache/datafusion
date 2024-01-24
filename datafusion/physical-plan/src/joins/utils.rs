@@ -377,9 +377,9 @@ impl fmt::Debug for JoinHashMap {
 }
 
 /// The on clause of the join, as vector of (left, right) columns.
-pub type JoinOn = Vec<(Column, Column)>;
+pub type JoinOn = Vec<(Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>)>;
 /// Reference for JoinOn.
-pub type JoinOnRef<'a> = &'a [(Column, Column)];
+pub type JoinOnRef<'a> = &'a [(Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>)];
 
 /// Checks whether the schemas "left" and "right" and columns "on" represent a valid join.
 /// They are valid whenever their columns' intersection equals the set `on`
@@ -1805,7 +1805,8 @@ mod tests {
 
             // We should also be able to use join_cardinality to get the same results
             let join_type = JoinType::Inner;
-            let join_on = vec![(Column::new("a", 0), Column::new("b", 0))];
+            let join_on =
+                vec![(Arc::new(Column::new("a", 0)), Arc::new(Column::new("b", 0)))];
             let partial_join_stats = estimate_join_cardinality(
                 &join_type,
                 create_stats(Some(left_num_rows), left_col_stats.clone(), false),
@@ -1929,8 +1930,8 @@ mod tests {
 
         for (join_type, expected_num_rows) in cases {
             let join_on = vec![
-                (Column::new("a", 0), Column::new("c", 0)),
-                (Column::new("b", 1), Column::new("d", 1)),
+                (Arc::new(Column::new("a", 0)), Arc::new(Column::new("c", 0))),
+                (Arc::new(Column::new("b", 1)), Arc::new(Column::new("d", 1))),
             ];
 
             let partial_join_stats = estimate_join_cardinality(
@@ -1977,8 +1978,8 @@ mod tests {
         ];
 
         let join_on = vec![
-            (Column::new("a", 0), Column::new("c", 0)),
-            (Column::new("x", 2), Column::new("y", 2)),
+            (Arc::new(Column::new("a", 0)), Arc::new(Column::new("c", 0))),
+            (Arc::new(Column::new("x", 2)), Arc::new(Column::new("y", 2))),
         ];
 
         let cases = vec![

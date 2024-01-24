@@ -483,7 +483,7 @@ struct StreamedBatch {
 }
 
 impl StreamedBatch {
-    fn new(batch: RecordBatch, on_column: &[Column]) -> Self {
+    fn new(batch: RecordBatch, on_column: &[Arc<dyn PhysicalExpr>]) -> Self {
         let join_arrays = join_arrays(&batch, on_column);
         StreamedBatch {
             batch,
@@ -609,9 +609,9 @@ struct SMJStream {
     /// The comparison result of current streamed row and buffered batches
     pub current_ordering: Ordering,
     /// Join key columns of streamed
-    pub on_streamed: Vec<Column>,
+    pub on_streamed: Vec<Arc<dyn PhysicalExpr>>,
     /// Join key columns of buffered
-    pub on_buffered: Vec<Column>,
+    pub on_buffered: Vec<Arc<dyn PhysicalExpr>>,
     /// Staging output array builders
     pub output_record_batches: Vec<RecordBatch>,
     /// Staging output size, including output batches and staging joined results
@@ -736,8 +736,8 @@ impl SMJStream {
         null_equals_null: bool,
         streamed: SendableRecordBatchStream,
         buffered: SendableRecordBatchStream,
-        on_streamed: Vec<Column>,
-        on_buffered: Vec<Column>,
+        on_streamed: Vec<Arc<dyn PhysicalExpr>>,
+        on_buffered: Vec<Arc<dyn PhysicalExpr>>,
         join_type: JoinType,
         batch_size: usize,
         join_metrics: SortMergeJoinMetrics,
@@ -1218,10 +1218,17 @@ impl BufferedData {
 }
 
 /// Get join array refs of given batch and join columns
-fn join_arrays(batch: &RecordBatch, on_column: &[Column]) -> Vec<ArrayRef> {
+fn join_arrays(
+    batch: &RecordBatch,
+    on_column: &[Arc<dyn PhysicalExpr>],
+) -> Vec<ArrayRef> {
     on_column
         .iter()
-        .map(|c| batch.column(c.index()).clone())
+        .map(|c| {
+            let num_rows = batch.num_rows();
+            let c = c.evaluate(batch).unwrap();
+            c.into_array(num_rows).unwrap()
+        })
         .collect()
 }
 
@@ -1582,8 +1589,8 @@ mod tests {
         );
 
         let on = vec![(
-            Column::new_with_schema("b1", &left.schema())?,
-            Column::new_with_schema("b1", &right.schema())?,
+            Arc::new(Column::new_with_schema("b1", &left.schema())?),
+            Arc::new(Column::new_with_schema("b1", &right.schema())?),
         )];
 
         let (_, batches) = join_collect(left, right, on, JoinType::Inner).await?;
@@ -1616,12 +1623,12 @@ mod tests {
         );
         let on = vec![
             (
-                Column::new_with_schema("a1", &left.schema())?,
-                Column::new_with_schema("a1", &right.schema())?,
+                Arc::new(Column::new_with_schema("a1", &left.schema())?),
+                Arc::new(Column::new_with_schema("a1", &right.schema())?),
             ),
             (
-                Column::new_with_schema("b2", &left.schema())?,
-                Column::new_with_schema("b2", &right.schema())?,
+                Arc::new(Column::new_with_schema("b2", &left.schema())?),
+                Arc::new(Column::new_with_schema("b2", &right.schema())?),
             ),
         ];
 
@@ -1654,12 +1661,12 @@ mod tests {
         );
         let on = vec![
             (
-                Column::new_with_schema("a1", &left.schema())?,
-                Column::new_with_schema("a1", &right.schema())?,
+                Arc::new(Column::new_with_schema("a1", &left.schema())?),
+                Arc::new(Column::new_with_schema("a1", &right.schema())?),
             ),
             (
-                Column::new_with_schema("b2", &left.schema())?,
-                Column::new_with_schema("b2", &right.schema())?,
+                Arc::new(Column::new_with_schema("b2", &left.schema())?),
+                Arc::new(Column::new_with_schema("b2", &right.schema())?),
             ),
         ];
 
@@ -1693,12 +1700,12 @@ mod tests {
         );
         let on = vec![
             (
-                Column::new_with_schema("a1", &left.schema())?,
-                Column::new_with_schema("a1", &right.schema())?,
+                Arc::new(Column::new_with_schema("a1", &left.schema())?),
+                Arc::new(Column::new_with_schema("a1", &right.schema())?),
             ),
             (
-                Column::new_with_schema("b2", &left.schema())?,
-                Column::new_with_schema("b2", &right.schema())?,
+                Arc::new(Column::new_with_schema("b2", &left.schema())?),
+                Arc::new(Column::new_with_schema("b2", &right.schema())?),
             ),
         ];
 
@@ -1731,12 +1738,12 @@ mod tests {
         );
         let on = vec![
             (
-                Column::new_with_schema("a1", &left.schema())?,
-                Column::new_with_schema("a1", &right.schema())?,
+                Arc::new(Column::new_with_schema("a1", &left.schema())?),
+                Arc::new(Column::new_with_schema("a1", &right.schema())?),
             ),
             (
-                Column::new_with_schema("b2", &left.schema())?,
-                Column::new_with_schema("b2", &right.schema())?,
+                Arc::new(Column::new_with_schema("b2", &left.schema())?),
+                Arc::new(Column::new_with_schema("b2", &right.schema())?),
             ),
         ];
         let (_, batches) = join_collect_with_options(
@@ -1783,12 +1790,12 @@ mod tests {
         );
         let on = vec![
             (
-                Column::new_with_schema("a1", &left.schema())?,
-                Column::new_with_schema("a1", &right.schema())?,
+                Arc::new(Column::new_with_schema("a1", &left.schema())?),
+                Arc::new(Column::new_with_schema("a1", &right.schema())?),
             ),
             (
-                Column::new_with_schema("b2", &left.schema())?,
-                Column::new_with_schema("b2", &right.schema())?,
+                Arc::new(Column::new_with_schema("b2", &left.schema())?),
+                Arc::new(Column::new_with_schema("b2", &right.schema())?),
             ),
         ];
 
@@ -1824,8 +1831,8 @@ mod tests {
             ("c2", &vec![70, 80, 90]),
         );
         let on = vec![(
-            Column::new_with_schema("b1", &left.schema())?,
-            Column::new_with_schema("b1", &right.schema())?,
+            Arc::new(Column::new_with_schema("b1", &left.schema())?),
+            Arc::new(Column::new_with_schema("b1", &right.schema())?),
         )];
 
         let (_, batches) = join_collect(left, right, on, JoinType::Left).await?;
@@ -1856,8 +1863,8 @@ mod tests {
             ("c2", &vec![70, 80, 90]),
         );
         let on = vec![(
-            Column::new_with_schema("b1", &left.schema())?,
-            Column::new_with_schema("b1", &right.schema())?,
+            Arc::new(Column::new_with_schema("b1", &left.schema())?),
+            Arc::new(Column::new_with_schema("b1", &right.schema())?),
         )];
 
         let (_, batches) = join_collect(left, right, on, JoinType::Right).await?;
@@ -1888,8 +1895,8 @@ mod tests {
             ("c2", &vec![70, 80, 90]),
         );
         let on = vec![(
-            Column::new_with_schema("b1", &left.schema()).unwrap(),
-            Column::new_with_schema("b2", &right.schema()).unwrap(),
+            Arc::new(Column::new_with_schema("b1", &left.schema()).unwrap()),
+            Arc::new(Column::new_with_schema("b2", &right.schema()).unwrap()),
         )];
 
         let (_, batches) = join_collect(left, right, on, JoinType::Full).await?;
@@ -1920,8 +1927,8 @@ mod tests {
             ("c2", &vec![70, 80, 90]),
         );
         let on = vec![(
-            Column::new_with_schema("b1", &left.schema())?,
-            Column::new_with_schema("b1", &right.schema())?,
+            Arc::new(Column::new_with_schema("b1", &left.schema())?),
+            Arc::new(Column::new_with_schema("b1", &right.schema())?),
         )];
 
         let (_, batches) = join_collect(left, right, on, JoinType::LeftAnti).await?;
@@ -1951,8 +1958,8 @@ mod tests {
             ("c2", &vec![70, 80, 90]),
         );
         let on = vec![(
-            Column::new_with_schema("b1", &left.schema())?,
-            Column::new_with_schema("b1", &right.schema())?,
+            Arc::new(Column::new_with_schema("b1", &left.schema())?),
+            Arc::new(Column::new_with_schema("b1", &right.schema())?),
         )];
 
         let (_, batches) = join_collect(left, right, on, JoinType::LeftSemi).await?;
@@ -1984,8 +1991,8 @@ mod tests {
         );
         let on = vec![(
             // join on a=b so there are duplicate column names on unjoined columns
-            Column::new_with_schema("a", &left.schema())?,
-            Column::new_with_schema("b", &right.schema())?,
+            Arc::new(Column::new_with_schema("a", &left.schema())?),
+            Arc::new(Column::new_with_schema("b", &right.schema())?),
         )];
 
         let (_, batches) = join_collect(left, right, on, JoinType::Inner).await?;
@@ -2016,8 +2023,8 @@ mod tests {
         );
 
         let on = vec![(
-            Column::new_with_schema("b1", &left.schema())?,
-            Column::new_with_schema("b1", &right.schema())?,
+            Arc::new(Column::new_with_schema("b1", &left.schema())?),
+            Arc::new(Column::new_with_schema("b1", &right.schema())?),
         )];
 
         let (_, batches) = join_collect(left, right, on, JoinType::Inner).await?;
@@ -2048,8 +2055,8 @@ mod tests {
         );
 
         let on = vec![(
-            Column::new_with_schema("b1", &left.schema())?,
-            Column::new_with_schema("b1", &right.schema())?,
+            Arc::new(Column::new_with_schema("b1", &left.schema())?),
+            Arc::new(Column::new_with_schema("b1", &right.schema())?),
         )];
 
         let (_, batches) = join_collect(left, right, on, JoinType::Inner).await?;
@@ -2079,8 +2086,8 @@ mod tests {
             ("c2", &vec![50, 60, 70, 80, 90]),
         );
         let on = vec![(
-            Column::new_with_schema("b1", &left.schema())?,
-            Column::new_with_schema("b2", &right.schema())?,
+            Arc::new(Column::new_with_schema("b1", &left.schema())?),
+            Arc::new(Column::new_with_schema("b2", &right.schema())?),
         )];
 
         let (_, batches) = join_collect(left, right, on, JoinType::Left).await?;
@@ -2115,8 +2122,8 @@ mod tests {
             ("c2", &vec![60, 70, 80, 90]),
         );
         let on = vec![(
-            Column::new_with_schema("b1", &left.schema())?,
-            Column::new_with_schema("b2", &right.schema())?,
+            Arc::new(Column::new_with_schema("b1", &left.schema())?),
+            Arc::new(Column::new_with_schema("b2", &right.schema())?),
         )];
 
         let (_, batches) = join_collect(left, right, on, JoinType::Right).await?;
@@ -2159,8 +2166,8 @@ mod tests {
         let left = build_table_from_batches(vec![left_batch_1, left_batch_2]);
         let right = build_table_from_batches(vec![right_batch_1, right_batch_2]);
         let on = vec![(
-            Column::new_with_schema("b1", &left.schema())?,
-            Column::new_with_schema("b2", &right.schema())?,
+            Arc::new(Column::new_with_schema("b1", &left.schema())?),
+            Arc::new(Column::new_with_schema("b2", &right.schema())?),
         )];
 
         let (_, batches) = join_collect(left, right, on, JoinType::Left).await?;
@@ -2208,8 +2215,8 @@ mod tests {
         let left = build_table_from_batches(vec![left_batch_1, left_batch_2]);
         let right = build_table_from_batches(vec![right_batch_1, right_batch_2]);
         let on = vec![(
-            Column::new_with_schema("b1", &left.schema())?,
-            Column::new_with_schema("b2", &right.schema())?,
+            Arc::new(Column::new_with_schema("b1", &left.schema())?),
+            Arc::new(Column::new_with_schema("b2", &right.schema())?),
         )];
 
         let (_, batches) = join_collect(left, right, on, JoinType::Right).await?;
@@ -2257,8 +2264,8 @@ mod tests {
         let left = build_table_from_batches(vec![left_batch_1, left_batch_2]);
         let right = build_table_from_batches(vec![right_batch_1, right_batch_2]);
         let on = vec![(
-            Column::new_with_schema("b1", &left.schema())?,
-            Column::new_with_schema("b2", &right.schema())?,
+            Arc::new(Column::new_with_schema("b1", &left.schema())?),
+            Arc::new(Column::new_with_schema("b2", &right.schema())?),
         )];
 
         let (_, batches) = join_collect(left, right, on, JoinType::Full).await?;
