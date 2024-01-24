@@ -544,7 +544,7 @@ async fn prepared_statement_type_coercion() -> Result<()> {
         ])?
         .collect()
         .await?;
-    let expected = vec![
+    let expected = [
         "+--------+----------+",
         "| signed | unsigned |",
         "+--------+----------+",
@@ -674,7 +674,7 @@ async fn test_parameter_type_coercion() -> Result<()> {
             ("str", ScalarValue::from("1")),
         ])?
         .collect().await?;
-    let expected = vec![
+    let expected = [
         "+--------+----------+",
         "| signed | unsigned |",
         "+--------+----------+",
