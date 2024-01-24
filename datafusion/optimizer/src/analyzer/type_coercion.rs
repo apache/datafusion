@@ -47,7 +47,7 @@ use datafusion_expr::{
     is_false, is_not_false, is_not_true, is_not_unknown, is_true, is_unknown,
     type_coercion, AggregateFunction, BuiltinScalarFunction, Expr, ExprSchemable,
     LogicalPlan, Operator, Projection, ScalarFunctionDefinition, Signature, WindowFrame,
-    WindowFrameBound, WindowFrameUnits,
+    WindowFrameBound, WindowFrameUnits, not,
 };
 
 use crate::analyzer::AnalyzerRule;
@@ -177,7 +177,7 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                 )))
             }
             Expr::Not(expr) => {
-                let expr = is_not_true(get_casted_expr_for_bool_op(&expr, &self.schema)?);
+                let expr = not(get_casted_expr_for_bool_op(&expr, &self.schema)?);
                 Ok(expr)
             }
             Expr::IsTrue(expr) => {

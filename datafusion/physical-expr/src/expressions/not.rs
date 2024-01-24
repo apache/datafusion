@@ -78,6 +78,9 @@ impl PhysicalExpr for NotExpr {
                 )))
             }
             ColumnarValue::Scalar(scalar) => {
+                if scalar.is_null() {
+                    return Ok(ColumnarValue::Scalar(ScalarValue::Boolean(None)));
+                }
                 let bool_value: bool = scalar.try_into()?;
                 Ok(ColumnarValue::Scalar(ScalarValue::Boolean(Some(
                     !bool_value,
