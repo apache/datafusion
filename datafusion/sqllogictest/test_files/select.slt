@@ -1175,3 +1175,14 @@ SELECT y = 0 or 1 / y < 1, x = 0 or y = 0 or 1 / y < 1 / x from t;
 
 statement ok
 DROP TABLE t;
+
+query I
+SELECT CASE 1 WHEN 2 THEN 4 / 0 END;
+----
+NULL
+
+query error DataFusion error: Arrow error: Parser error: Error parsing timestamp from 'I AM NOT A TIMESTAMP': error parsing date
+SELECT to_timestamp('I AM NOT A TIMESTAMP');
+
+query error DataFusion error: Arrow error: Cast error: Cannot cast string '' to value of Int32 type
+SELECT CAST('' AS int);
