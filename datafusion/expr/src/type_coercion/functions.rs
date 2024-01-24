@@ -116,26 +116,16 @@ fn get_valid_types(
             &new_base_type,
         );
 
-        // type coercion for nested FixedSizeList
-        let elem_type = datafusion_common::utils::coerced_type_with_base_type_only(
-            elem_type,
-            &elem_base_type,
-        );
-
-        let array_dim = datafusion_common::utils::list_ndims(&array_type);
-        let elem_dim = datafusion_common::utils::list_ndims(&elem_type);
-
         match array_type {
             DataType::List(ref field)
             | DataType::LargeList(ref field)
             | DataType::FixedSizeList(ref field, _) => {
                 // for the functions with signature 'array_element(array, int)'
-                let elem_type =
-                    if elem_base_type.eq(&DataType::Null) && elem_dim != array_dim {
-                        field.data_type()
-                    } else {
-                        &elem_type
-                    };
+                let elem_type = if elem_base_type.eq(&DataType::Null) {
+                    field.data_type()
+                } else {
+                    elem_type
+                };
                 if is_append {
                     Ok(vec![vec![array_type.clone(), elem_type.clone()]])
                 } else {

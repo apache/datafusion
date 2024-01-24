@@ -599,8 +599,9 @@ impl BuiltinScalarFunction {
             }
             BuiltinScalarFunction::ArrayDistinct => Ok(input_expr_types[0].clone()),
             BuiltinScalarFunction::ArrayElement => match &input_expr_types[0] {
-                List(field)|FixedSizeList(field,_) => Ok(field.data_type().clone()),
-                LargeList(field) => Ok(field.data_type().clone()),
+                List(field)
+                | LargeList(field)
+                | FixedSizeList(field, _) => Ok(field.data_type().clone()),
                 _ => plan_err!(
                     "The {self} function can only accept List, LargeList or FixedSizeList as the first argument"
                 ),

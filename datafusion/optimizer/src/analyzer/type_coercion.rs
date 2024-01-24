@@ -23,6 +23,7 @@ use arrow::datatypes::{DataType, IntervalUnit};
 
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{RewriteRecursion, TreeNodeRewriter};
+use datafusion_common::utils::coerced_fixed_size_list_to_list;
 use datafusion_common::{
     exec_err, internal_err, plan_datafusion_err, plan_err, DFSchema, DFSchemaRef,
     DataFusionError, Result, ScalarValue,
@@ -592,19 +593,14 @@ fn coerce_arguments_for_fun(
 
     let mut expressions: Vec<Expr> = expressions.to_vec();
 
-    // Cast Fixedsizelist to List for array functions
-    if *fun == BuiltinScalarFunction::MakeArray {
+    // coerce the fixed size list to list for all array fucntions
+    if fun.name().contains("array") {
         expressions = expressions
             .into_iter()
             .map(|expr| {
                 let data_type = expr.get_type(schema).unwrap();
-                if let DataType::FixedSizeList(field, _) = data_type {
-                    let field = field.as_ref().clone();
-                    let to_type = DataType::List(Arc::new(field));
-                    expr.cast_to(&to_type, schema)
-                } else {
-                    Ok(expr)
-                }
+                let to_type = coerced_fixed_size_list_to_list(&data_type);
+                expr.cast_to(&to_type, schema)
             })
             .collect::<Result<Vec<_>>>()?;
     }
