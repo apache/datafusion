@@ -342,16 +342,20 @@
 //!
 //! [`ExecutionPlan`]s process data using the [Apache Arrow] memory
 //! format, making heavy use of functions from the [arrow]
-//! crate. Calling [`execute`] produces 1 or more partitions of data,
-//! consisting an operator that implements
-//! [`SendableRecordBatchStream`].
-//!
-//! Values are represented with [`ColumnarValue`], which are either
+//! crate. Values are represented with [`ColumnarValue`], which are either
 //! [`ScalarValue`] (single constant values) or [`ArrayRef`] (Arrow
 //! Arrays).
 //!
-//! Balanced parallelism is achieved using [`RepartitionExec`], which
-//! implements a [Volcano style] "Exchange".
+//! Calling [`execute`] produces 1 or more partitions of data,
+//! as a [`SendableRecordBatchStream`], which implements a pull based execution
+//! API. Calling `.next().await` will incrementally compute and return the next
+//! [`RecordBatch`]. Balanced parallelism is achieved using [Volcano style]
+//! "Exchange" operations implemented by  [`RepartitionExec`].
+//!
+//! While some recent research such as [Morsel-Driven Parallelism] describes challenges
+//! with the pull style Volcano execution model on NUMA architectures, in practice DataFusion achieves
+//! similar scalability as systems that use morsel driven approach such as DuckDB.
+//! See the [DataFusion paper submitted SIGMOD] for more details.
 //!
 //! [`execute`]: physical_plan::ExecutionPlan::execute
 //! [`SendableRecordBatchStream`]: crate::physical_plan::SendableRecordBatchStream
@@ -364,7 +368,25 @@
 //!
 //! [`RepartitionExec`]: https://docs.rs/datafusion/latest/datafusion/physical_plan/repartition/struct.RepartitionExec.html
 //! [Volcano style]: https://w6113.github.io/files/papers/volcanoparallelism-89.pdf
+//! [Morsel-Driven Parallelism]: https://db.in.tum.de/~leis/papers/morsels.pdf
+//! [DataFusion paper submitted SIGMOD]: https://github.com/apache/arrow-datafusion/files/13874720/DataFusion_Query_Engine___SIGMOD_2024.pdf
 //! [implementors of `ExecutionPlan`]: https://docs.rs/datafusion/latest/datafusion/physical_plan/trait.ExecutionPlan.html#implementors
+//!
+//! ## Thread Scheduling
+//!
+//! DataFusion incrementally computes output from a [`SendableRecordBatchStream`]
+//! with `target_partitions` threads. Parallelism is implementing using multiple
+//! [Tokio] [`task`]s, which are executed by threads managed by a tokio Runtime.
+//! While tokio is most commonly used
+//! for asynchronous network I/O, its combination of an efficient, work-stealing
+//! scheduler, first class compiler support for automatic continuation generation,
+//! and exceptional performance makes it a compelling choice for CPU intensive
+//! applications as well, as explained in more detail in [Using Rustlang’s Async Tokio
+//! Runtime for CPU-Bound Tasks].
+//!
+//! [Tokio]:  https://tokio.rs
+//! [`task`]: tokio::task
+//! [Using Rustlang’s Async Tokio Runtime for CPU-Bound Tasks]: https://thenewstack.io/using-rustlangs-async-tokio-runtime-for-cpu-bound-tasks/
 //!
 //! ## State Management and Configuration
 //!
@@ -393,10 +415,12 @@
 //!
 //! The amount of memory and temporary local disk space used by
 //! DataFusion when running a plan can be controlled using the
-//! [`MemoryPool`] and [`DiskManager`].
+//! [`MemoryPool`] and [`DiskManager`]. Other runtime options can be
+//! found on [`RuntimeEnv`].
 //!
 //! [`DiskManager`]: crate::execution::DiskManager
 //! [`MemoryPool`]: crate::execution::memory_pool::MemoryPool
+//! [`RuntimeEnv`]: crate::execution::runtime_env::RuntimeEnv
 //! [`ObjectStoreRegistry`]: crate::datasource::object_store::ObjectStoreRegistry
 //!
 //! ## Crate Organization
