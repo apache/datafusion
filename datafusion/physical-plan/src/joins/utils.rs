@@ -47,7 +47,7 @@ use datafusion_physical_expr::equivalence::add_offset_to_expr;
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::utils::merge_vectors;
 use datafusion_physical_expr::{
-    LexOrdering, LexOrderingRef, PhysicalExpr, PhysicalSortExpr,
+    LexOrdering, LexOrderingRef, PhysicalExpr, PhysicalExprRef, PhysicalSortExpr,
 };
 
 use futures::future::{BoxFuture, Shared};
@@ -377,9 +377,9 @@ impl fmt::Debug for JoinHashMap {
 }
 
 /// The on clause of the join, as vector of (left, right) columns.
-pub type JoinOn = Vec<(Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>)>;
+pub type JoinOn = Vec<(PhysicalExprRef, PhysicalExprRef)>;
 /// Reference for JoinOn.
-pub type JoinOnRef<'a> = &'a [(Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>)];
+pub type JoinOnRef<'a> = &'a [(PhysicalExprRef, PhysicalExprRef)];
 
 /// Checks whether the schemas "left" and "right" and columns "on" represent a valid join.
 /// They are valid whenever their columns' intersection equals the set `on`
