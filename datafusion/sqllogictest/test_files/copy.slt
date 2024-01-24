@@ -64,6 +64,24 @@ select * from validate_parquet;
 1 Foo
 2 Bar
 
+query ?
+copy (values (struct(timestamp '2021-01-01 01:00:01', 1)), (struct(timestamp '2022-01-01 01:00:01', 2)), 
+(struct(timestamp '2023-01-03 01:00:01', 3)), (struct(timestamp '2024-01-01 01:00:01', 4)))
+to 'test_files/scratch/copy/table_nested2' (format parquet, single_file_output false);
+----
+4
+
+statement ok
+CREATE EXTERNAL TABLE validate_parquet_nested2 STORED AS PARQUET LOCATION 'test_files/scratch/copy/table_nested2/';
+
+query ?
+select * from validate_parquet_nested2;
+----
+{c0: 2021-01-01T01:00:01, c1: 1}
+{c0: 2022-01-01T01:00:01, c1: 2}
+{c0: 2023-01-03T01:00:01, c1: 3}
+{c0: 2024-01-01T01:00:01, c1: 4}
+
 query ??
 COPY 
 (values (struct ('foo', (struct ('foo', make_array(struct('a',1), struct('b',2))))), make_array(timestamp '2023-01-01 01:00:01',timestamp '2023-01-01 01:00:01')), 
@@ -72,15 +90,47 @@ to 'test_files/scratch/copy/table_nested' (format parquet, single_file_output fa
 ----
 2
 
-# validate multiple parquet file output
 statement ok
-CREATE EXTERNAL TABLE validate_parquet_nested STORED AS PARQUET LOCATION 'test_files/scratch/copy/table_nested/';
+CREATE EXTERNAL TABLE validate_parquet_nested STORED AS PARQUET 
+LOCATION 'test_files/scratch/copy/table_nested/';
 
 query ??
 select * from validate_parquet_nested;
 ----
 {c0: foo, c1: {c0: foo, c1: [{c0: a, c1: 1}, {c0: b, c1: 2}]}} [2023-01-01T01:00:01, 2023-01-01T01:00:01]
 {c0: bar, c1: {c0: foo, c1: [{c0: aa, c1: 10}, {c0: bb, c1: 20}]}} [2024-01-01T01:00:01, 2024-01-01T01:00:01]
+
+query ?
+copy (values ([struct('foo', 1), struct('bar', 2)])) 
+to 'test_files/scratch/copy/array_of_struct/'
+(format parquet, single_file_output false);
+----
+1
+
+statement ok
+CREATE EXTERNAL TABLE validate_array_of_struct 
+STORED AS PARQUET LOCATION 'test_files/scratch/copy/array_of_struct/';
+
+query ?
+select * from validate_array_of_struct;
+----
+[{c0: foo, c1: 1}, {c0: bar, c1: 2}]
+
+query ?
+copy (values (struct('foo', [1,2,3], struct('bar', [2,3,4])))) 
+to 'test_files/scratch/copy/struct_with_array/'
+(format parquet, single_file_output false);
+----
+1
+
+statement ok
+CREATE EXTERNAL TABLE validate_struct_with_array
+STORED AS PARQUET LOCATION 'test_files/scratch/copy/struct_with_array/';
+
+query ?
+select * from validate_struct_with_array;
+----
+{c0: foo, c1: [1, 2, 3], c2: {c0: bar, c1: [2, 3, 4]}}
 
 
 # Copy parquet with all supported statment overrides

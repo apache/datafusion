@@ -227,14 +227,14 @@ fn get_random_function(
     rng: &mut StdRng,
     is_linear: bool,
 ) -> (WindowFunctionDefinition, Vec<Arc<dyn PhysicalExpr>>, String) {
-    let mut args = if is_linear {
+    let arg = if is_linear {
         // In linear test for the test version with WindowAggExec we use insert SortExecs to the plan to be able to generate
         // same result with BoundedWindowAggExec which doesn't use any SortExec. To make result
         // non-dependent on table order. We should use column a in the window function
         // (Given that we do not use ROWS for the window frame. ROWS also introduces dependency to the table order.).
-        vec![col("a", schema).unwrap()]
+        col("a", schema).unwrap()
     } else {
-        vec![col("x", schema).unwrap()]
+        col("x", schema).unwrap()
     };
     let mut window_fn_map = HashMap::new();
     // HashMap values consists of tuple first element is WindowFunction, second is additional argument
@@ -243,28 +243,28 @@ fn get_random_function(
         "sum",
         (
             WindowFunctionDefinition::AggregateFunction(AggregateFunction::Sum),
-            vec![],
+            vec![arg.clone()],
         ),
     );
     window_fn_map.insert(
         "count",
         (
             WindowFunctionDefinition::AggregateFunction(AggregateFunction::Count),
-            vec![],
+            vec![arg.clone()],
         ),
     );
     window_fn_map.insert(
         "min",
         (
             WindowFunctionDefinition::AggregateFunction(AggregateFunction::Min),
-            vec![],
+            vec![arg.clone()],
         ),
     );
     window_fn_map.insert(
         "max",
         (
             WindowFunctionDefinition::AggregateFunction(AggregateFunction::Max),
-            vec![],
+            vec![arg.clone()],
         ),
     );
     if !is_linear {
@@ -305,6 +305,7 @@ fn get_random_function(
                     BuiltInWindowFunction::Lead,
                 ),
                 vec![
+                    arg.clone(),
                     lit(ScalarValue::Int64(Some(rng.gen_range(1..10)))),
                     lit(ScalarValue::Int64(Some(rng.gen_range(1..1000)))),
                 ],
@@ -317,6 +318,7 @@ fn get_random_function(
                     BuiltInWindowFunction::Lag,
                 ),
                 vec![
+                    arg.clone(),
                     lit(ScalarValue::Int64(Some(rng.gen_range(1..10)))),
                     lit(ScalarValue::Int64(Some(rng.gen_range(1..1000)))),
                 ],
@@ -329,7 +331,7 @@ fn get_random_function(
             WindowFunctionDefinition::BuiltInWindowFunction(
                 BuiltInWindowFunction::FirstValue,
             ),
-            vec![],
+            vec![arg.clone()],
         ),
     );
     window_fn_map.insert(
@@ -338,7 +340,7 @@ fn get_random_function(
             WindowFunctionDefinition::BuiltInWindowFunction(
                 BuiltInWindowFunction::LastValue,
             ),
-            vec![],
+            vec![arg.clone()],
         ),
     );
     window_fn_map.insert(
@@ -347,23 +349,26 @@ fn get_random_function(
             WindowFunctionDefinition::BuiltInWindowFunction(
                 BuiltInWindowFunction::NthValue,
             ),
-            vec![lit(ScalarValue::Int64(Some(rng.gen_range(1..10))))],
+            vec![
+                arg.clone(),
+                lit(ScalarValue::Int64(Some(rng.gen_range(1..10)))),
+            ],
         ),
     );
 
     let rand_fn_idx = rng.gen_range(0..window_fn_map.len());
     let fn_name = window_fn_map.keys().collect::<Vec<_>>()[rand_fn_idx];
-    let (window_fn, new_args) = window_fn_map.values().collect::<Vec<_>>()[rand_fn_idx];
+    let (window_fn, args) = window_fn_map.values().collect::<Vec<_>>()[rand_fn_idx];
+    let mut args = args.clone();
     if let WindowFunctionDefinition::AggregateFunction(f) = window_fn {
-        let a = args[0].clone();
-        let dt = a.data_type(schema.as_ref()).unwrap();
-        let sig = f.signature();
-        let coerced = coerce_types(f, &[dt], &sig).unwrap();
-        args[0] = cast(a, schema, coerced[0].clone()).unwrap();
-    }
-
-    for new_arg in new_args {
-        args.push(new_arg.clone());
+        if !args.is_empty() {
+            // Do type coercion first argument
+            let a = args[0].clone();
+            let dt = a.data_type(schema.as_ref()).unwrap();
+            let sig = f.signature();
+            let coerced = coerce_types(f, &[dt], &sig).unwrap();
+            args[0] = cast(a, schema, coerced[0].clone()).unwrap();
+        }
     }
 
     (window_fn.clone(), args, fn_name.to_string())
@@ -482,7 +487,6 @@ async fn run_window_test(
     let session_config = SessionConfig::new().with_batch_size(50);
     let ctx = SessionContext::new_with_config(session_config);
     let (window_fn, args, fn_name) = get_random_function(&schema, &mut rng, is_linear);
-
     let window_frame = get_random_window_frame(&mut rng, is_linear);
     let mut orderby_exprs = vec![];
     for column in &orderby_columns {
@@ -532,6 +536,7 @@ async fn run_window_test(
     if is_linear {
         exec1 = Arc::new(SortExec::new(sort_keys.clone(), exec1)) as _;
     }
+
     let usual_window_exec = Arc::new(
         WindowAggExec::try_new(
             vec![create_window_expr(

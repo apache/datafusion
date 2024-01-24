@@ -17,7 +17,7 @@
 
 //! Defines physical expressions that can evaluated at runtime during query execution
 
-use crate::{AggregateExpr, GroupsAccumulator, PhysicalExpr};
+use crate::{AggregateExpr, PhysicalExpr};
 use arrow::datatypes::DataType;
 use arrow::{
     array::{ArrayRef, BooleanArray},
@@ -26,7 +26,7 @@ use arrow::{
 use datafusion_common::{
     downcast_value, internal_err, not_impl_err, DataFusionError, Result, ScalarValue,
 };
-use datafusion_expr::Accumulator;
+use datafusion_expr::{Accumulator, GroupsAccumulator};
 use std::any::Any;
 use std::sync::Arc;
 

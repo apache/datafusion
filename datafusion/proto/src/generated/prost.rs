@@ -2764,6 +2764,8 @@ pub enum ScalarFunction {
     ArraySort = 128,
     ArrayDistinct = 129,
     ArrayResize = 130,
+    EndsWith = 131,
+    InStr = 132,
 }
 impl ScalarFunction {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -2903,6 +2905,8 @@ impl ScalarFunction {
             ScalarFunction::ArraySort => "ArraySort",
             ScalarFunction::ArrayDistinct => "ArrayDistinct",
             ScalarFunction::ArrayResize => "ArrayResize",
+            ScalarFunction::EndsWith => "EndsWith",
+            ScalarFunction::InStr => "InStr",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -3039,6 +3043,8 @@ impl ScalarFunction {
             "ArraySort" => Some(Self::ArraySort),
             "ArrayDistinct" => Some(Self::ArrayDistinct),
             "ArrayResize" => Some(Self::ArrayResize),
+            "EndsWith" => Some(Self::EndsWith),
+            "InStr" => Some(Self::InStr),
             _ => None,
         }
     }

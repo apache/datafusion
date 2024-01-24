@@ -36,7 +36,9 @@ use hashbrown::HashMap;
 use regex::Regex;
 use std::sync::{Arc, OnceLock};
 
-use crate::functions::{make_scalar_function, make_scalar_function_with_hints, Hint};
+use crate::functions::{
+    make_scalar_function_inner, make_scalar_function_with_hints, Hint,
+};
 
 /// Get the first argument from the given string array.
 ///
@@ -401,7 +403,7 @@ pub fn specialize_regexp_replace<T: OffsetSizeTrait>(
 
         // If there are no specialized implementations, we'll fall back to the
         // generic implementation.
-        (_, _, _, _) => Ok(make_scalar_function(regexp_replace::<T>)),
+        (_, _, _, _) => Ok(make_scalar_function_inner(regexp_replace::<T>)),
     }
 }
 

@@ -19,10 +19,7 @@ use arrow::compute::kernels::numeric::add;
 use arrow_array::{ArrayRef, Float64Array, Int32Array, RecordBatch};
 use arrow_schema::{DataType, Field, Schema};
 use datafusion::prelude::*;
-use datafusion::{
-    execution::registry::FunctionRegistry,
-    physical_plan::functions::make_scalar_function, test_util,
-};
+use datafusion::{execution::registry::FunctionRegistry, test_util};
 use datafusion_common::cast::as_float64_array;
 use datafusion_common::{assert_batches_eq, cast::as_int32_array, Result, ScalarValue};
 use datafusion_expr::{
@@ -87,12 +84,18 @@ async fn scalar_udf() -> Result<()> {
 
     ctx.register_batch("t", batch)?;
 
-    let myfunc = |args: &[ArrayRef]| {
-        let l = as_int32_array(&args[0])?;
-        let r = as_int32_array(&args[1])?;
-        Ok(Arc::new(add(l, r)?) as ArrayRef)
-    };
-    let myfunc = make_scalar_function(myfunc);
+    let myfunc = Arc::new(|args: &[ColumnarValue]| {
+        let ColumnarValue::Array(l) = &args[0] else {
+            panic!("should be array")
+        };
+        let ColumnarValue::Array(r) = &args[1] else {
+            panic!("should be array")
+        };
+
+        let l = as_int32_array(l)?;
+        let r = as_int32_array(r)?;
+        Ok(ColumnarValue::from(Arc::new(add(l, r)?) as ArrayRef))
+    });
 
     ctx.register_udf(create_udf(
         "my_add",
@@ -163,11 +166,14 @@ async fn scalar_udf_zero_params() -> Result<()> {
 
     ctx.register_batch("t", batch)?;
     // create function just returns 100 regardless of inp
-    let myfunc = |args: &[ArrayRef]| {
-        let num_rows = args[0].len();
-        Ok(Arc::new((0..num_rows).map(|_| 100).collect::<Int32Array>()) as ArrayRef)
-    };
-    let myfunc = make_scalar_function(myfunc);
+    let myfunc = Arc::new(|args: &[ColumnarValue]| {
+        let ColumnarValue::Scalar(_) = &args[0] else {
+            panic!("expect scalar")
+        };
+        Ok(ColumnarValue::Array(
+            Arc::new((0..1).map(|_| 100).collect::<Int32Array>()) as ArrayRef,
+        ))
+    });
 
     ctx.register_udf(create_udf(
         "get_100",
@@ -307,8 +313,12 @@ async fn case_sensitive_identifiers_user_defined_functions() -> Result<()> {
     let batch = RecordBatch::try_from_iter(vec![("i", Arc::new(arr) as _)])?;
     ctx.register_batch("t", batch).unwrap();
 
-    let myfunc = |args: &[ArrayRef]| Ok(Arc::clone(&args[0]));
-    let myfunc = make_scalar_function(myfunc);
+    let myfunc = Arc::new(|args: &[ColumnarValue]| {
+        let ColumnarValue::Array(array) = &args[0] else {
+            panic!("should be array")
+        };
+        Ok(ColumnarValue::from(Arc::clone(array)))
+    });
 
     ctx.register_udf(create_udf(
         "MY_FUNC",
@@ -348,8 +358,12 @@ async fn test_user_defined_functions_with_alias() -> Result<()> {
     let batch = RecordBatch::try_from_iter(vec![("i", Arc::new(arr) as _)])?;
     ctx.register_batch("t", batch).unwrap();
 
-    let myfunc = |args: &[ArrayRef]| Ok(Arc::clone(&args[0]));
-    let myfunc = make_scalar_function(myfunc);
+    let myfunc = Arc::new(|args: &[ColumnarValue]| {
+        let ColumnarValue::Array(array) = &args[0] else {
+            panic!("should be array")
+        };
+        Ok(ColumnarValue::from(Arc::clone(array)))
+    });
 
     let udf = create_udf(
         "dummy",
