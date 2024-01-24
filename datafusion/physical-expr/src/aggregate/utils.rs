@@ -35,7 +35,7 @@ use datafusion_expr::Accumulator;
 
 /// Convert scalar values from an accumulator into arrays.
 pub fn get_accum_scalar_values_as_arrays(
-    accum: &dyn Accumulator,
+    accum: &mut dyn Accumulator,
 ) -> Result<Vec<ArrayRef>> {
     accum
         .state()?

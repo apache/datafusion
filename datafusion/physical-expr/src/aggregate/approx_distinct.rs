@@ -244,12 +244,12 @@ macro_rules! default_accumulator_impl {
             Ok(())
         }
 
-        fn state(&self) -> Result<Vec<ScalarValue>> {
+        fn state(&mut self) -> Result<Vec<ScalarValue>> {
             let value = ScalarValue::from(&self.hll);
             Ok(vec![value])
         }
 
-        fn evaluate(&self) -> Result<ScalarValue> {
+        fn evaluate(&mut self) -> Result<ScalarValue> {
             Ok(ScalarValue::UInt64(Some(self.hll.count() as u64)))
         }
 
