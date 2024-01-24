@@ -563,7 +563,7 @@ fn create_data_batch(scenario: Scenario) -> Vec<RecordBatch> {
         Scenario::DecimalBloomFilterInt64 => {
             // decimal record batch
             vec![
-                make_decimal_batch(vec![100000, 200000, 300000, 400000, 500000], 12, 5),
+                make_decimal_batch(vec![100, 200, 300, 400, 500], 9, 2),
                 make_decimal_batch(vec![100, 200, 300, 400, 600], 9, 2),
                 make_decimal_batch(vec![100, 200, 300, 400, 600], 9, 2),
             ]
@@ -581,9 +581,9 @@ fn create_data_batch(scenario: Scenario) -> Vec<RecordBatch> {
             // decimal record batch with large precision,
             // and the data will stored as FIXED_LENGTH_BYTE_ARRAY
             vec![
-                make_decimal_batch(vec![100000, 200000, 300000, 400000, 500000], 12, 5),
-                make_decimal_batch(vec![-100000, 200000, 300000, 400000, 600000], 12, 5),
-                make_decimal_batch(vec![100000, 200000, 300000, 400000, 600000], 12, 5),
+                make_decimal_batch(vec![100000, 200000, 300000, 400000, 500000], 38, 5),
+                make_decimal_batch(vec![-100000, 200000, 300000, 400000, 600000], 38, 5),
+                make_decimal_batch(vec![100000, 200000, 300000, 400000, 600000], 38, 5),
             ]
         }
         Scenario::PeriodsInColumnNames => {
