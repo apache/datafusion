@@ -215,6 +215,36 @@ async fn bounded_window_causal_non_causal() -> Result<()> {
             // Expected causality, for None cases causality will be determined from window frame boundaries
             Some(false),
         ),
+        // Simulate cases of the following form:
+        // RANK() OVER (
+        //     ROWS BETWEEN UNBOUNDED PRECEDING AND <end_bound> PRECEDING/FOLLOWING
+        // )
+        (
+            // Window function
+            WindowFunctionDefinition::BuiltInWindowFunction(BuiltInWindowFunction::Rank),
+            // its name
+            "RANK",
+            // no argument
+            vec![],
+            // Expected causality, for None cases causality will be determined from window frame boundaries
+            Some(true),
+        ),
+        // Simulate cases of the following form:
+        // DENSE_RANK() OVER (
+        //     ROWS BETWEEN UNBOUNDED PRECEDING AND <end_bound> PRECEDING/FOLLOWING
+        // )
+        (
+            // Window function
+            WindowFunctionDefinition::BuiltInWindowFunction(
+                BuiltInWindowFunction::DenseRank,
+            ),
+            // its name
+            "DENSE_RANK",
+            // no argument
+            vec![],
+            // Expected causality, for None cases causality will be determined from window frame boundaries
+            Some(true),
+        ),
     ];
 
     let partitionby_exprs = vec![];

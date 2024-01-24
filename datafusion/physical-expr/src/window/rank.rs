@@ -132,6 +132,10 @@ pub(crate) struct RankEvaluator {
 }
 
 impl PartitionEvaluator for RankEvaluator {
+    fn is_causal(&self) -> bool {
+        matches!(self.rank_type, RankType::Basic | RankType::Dense)
+    }
+
     /// Evaluates the window function inside the given range.
     fn evaluate(
         &mut self,
