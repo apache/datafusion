@@ -86,7 +86,6 @@ use datafusion_expr::expr::{
 };
 use datafusion_expr::expr_rewriter::unnormalize_cols;
 use datafusion_expr::logical_plan::builder::wrap_projection_for_join_if_necessary;
-use datafusion_expr::utils::exprlist_to_fields;
 use datafusion_expr::{
     DescribeTable, DmlStatement, RecursiveQuery, ScalarFunctionDefinition,
     StringifiedPlan, WindowFrame, WindowFrameBound, WriteOp,
@@ -720,16 +719,12 @@ impl DefaultPhysicalPlanner {
                     }
 
                     let logical_input_schema = input.schema();
-                    // Extend the schema to include window expression fields as builtin window functions derives its datatype from incoming schema
-                    let mut window_fields = logical_input_schema.fields().clone();
-                    window_fields.extend_from_slice(&exprlist_to_fields(window_expr.iter(), input)?);
-                    let extended_schema = &DFSchema::new_with_metadata(window_fields, HashMap::new())?;
                     let window_expr = window_expr
                         .iter()
                         .map(|e| {
                             create_window_expr(
                                 e,
-                                extended_schema,
+                                logical_input_schema,
                                 session_state.execution_props(),
                             )
                         })

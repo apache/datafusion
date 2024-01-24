@@ -148,6 +148,11 @@ impl CaseExpr {
             // Make sure we only consider rows that have not been matched yet
             let when_match = and(&when_match, &remainder)?;
 
+            // When no rows available for when clause, skip then clause
+            if when_match.true_count() == 0 {
+                continue;
+            }
+
             let then_value = self.when_then_expr[i]
                 .1
                 .evaluate_selection(batch, &when_match)?;
@@ -213,6 +218,11 @@ impl CaseExpr {
             };
             // Make sure we only consider rows that have not been matched yet
             let when_value = and(&when_value, &remainder)?;
+
+            // When no rows available for when clause, skip then clause
+            if when_value.true_count() == 0 {
+                continue;
+            }
 
             let then_value = self.when_then_expr[i]
                 .1
