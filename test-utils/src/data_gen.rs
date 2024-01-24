@@ -62,10 +62,7 @@ struct BatchBuilder {
     request_bytes: Int32Builder,
     response_bytes: Int32Builder,
     response_status: UInt16Builder,
-    decimal128_price: Decimal128Builder,
-    decimal128_id_int32: Decimal128Builder,
-    decimal128_id_int64: Decimal128Builder,
-    decimal128_id_fixed_len_byte: Decimal128Builder,
+    prices_status: Decimal128Builder,
 
     options: GeneratorOptions,
     row_count: usize,
@@ -95,14 +92,7 @@ impl BatchBuilder {
             Field::new("request_bytes", DataType::Int32, true),
             Field::new("response_bytes", DataType::Int32, true),
             Field::new("response_status", DataType::UInt16, false),
-            Field::new("decimal128_price", DataType::Decimal128(38, 0), false),
-            Field::new("decimal128_id_int32", DataType::Decimal128(8, 0), false),
-            Field::new("decimal128_id_int64", DataType::Decimal128(12, 0), false),
-            Field::new(
-                "decimal128_id_fixed_len_byte",
-                DataType::Decimal128(38, 0),
-                false,
-            ),
+            Field::new("decimal_price", DataType::Decimal128(38, 0), false),
         ]))
     }
 
@@ -179,19 +169,7 @@ impl BatchBuilder {
             .append_option(rng.gen_bool(0.9).then(|| rng.gen()));
         self.response_status
             .append_value(status[rng.gen_range(0..status.len())]);
-        self.decimal128_price.append_value(self.row_count as i128);
-
-        let val = rng.gen_range(0..100);
-        // Avoid row group min_max to prune this, so skip 50 between 0..99
-        if val == 50 {
-            self.decimal128_id_int32.append_value(1);
-            self.decimal128_id_int64.append_value(1);
-            self.decimal128_id_fixed_len_byte.append_value(1);
-        } else {
-            self.decimal128_id_int32.append_value(val);
-            self.decimal128_id_int64.append_value(val);
-            self.decimal128_id_fixed_len_byte.append_value(val);
-        }
+        self.prices_status.append_value(self.row_count as i128);
     }
 
     fn finish(mut self, schema: SchemaRef) -> RecordBatch {
@@ -213,25 +191,7 @@ impl BatchBuilder {
                 Arc::new(self.response_bytes.finish()),
                 Arc::new(self.response_status.finish()),
                 Arc::new(
-                    self.decimal128_price
-                        .finish()
-                        .with_precision_and_scale(38, 0)
-                        .unwrap(),
-                ),
-                Arc::new(
-                    self.decimal128_id_int32
-                        .finish()
-                        .with_precision_and_scale(8, 0)
-                        .unwrap(),
-                ),
-                Arc::new(
-                    self.decimal128_id_int64
-                        .finish()
-                        .with_precision_and_scale(12, 0)
-                        .unwrap(),
-                ),
-                Arc::new(
-                    self.decimal128_id_fixed_len_byte
+                    self.prices_status
                         .finish()
                         .with_precision_and_scale(38, 0)
                         .unwrap(),
@@ -285,10 +245,6 @@ fn generate_sorted_strings(
 /// request_bytes:       -312099516
 /// response_bytes:      1448834362
 /// response_status:     200
-/// decimal128_price:    1000,
-/// decimal128_id_int32: 5,
-/// decimal128_id_int64: 5,
-/// decimal128_id_fixed_len_byte: 5,
 /// ```
 #[derive(Debug)]
 pub struct AccessLogGenerator {

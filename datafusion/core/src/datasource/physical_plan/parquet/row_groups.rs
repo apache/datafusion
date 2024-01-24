@@ -228,6 +228,13 @@ impl PruningStatistics for BloomFilterStatistics {
                         Type::INT32 => {
                             //https://github.com/apache/parquet-format/blob/eb4b31c1d64a01088d02a2f9aefc6c17c54cc6fc/Encodings.md?plain=1#L35-L42
                             // All physical type  are little-endian
+                            if *p > 9 {
+                                //DECIMAL can be used to annotate the following types:
+                                //
+                                // int32: for 1 <= precision <= 9
+                                // int64: for 1 <= precision <= 18
+                                return true;
+                            }
                             let b = (*v as i32).to_le_bytes();
                             let decimal = Decimal::Int32 {
                                 value: b,
@@ -237,6 +244,9 @@ impl PruningStatistics for BloomFilterStatistics {
                             sbbf.check(&decimal)
                         }
                         Type::INT64 => {
+                            if *p > 18 {
+                                return true;
+                            }
                             let b = (*v as i64).to_le_bytes();
                             let decimal = Decimal::Int64 {
                                 value: b,
@@ -246,7 +256,8 @@ impl PruningStatistics for BloomFilterStatistics {
                             sbbf.check(&decimal)
                         }
                         Type::FIXED_LEN_BYTE_ARRAY => {
-                            let b = v.to_le_bytes().to_vec();
+                            // keep with from_bytes_to_i128
+                            let b = v.to_be_bytes().to_vec();
                             let decimal = Decimal::Bytes {
                                 value: b.into(),
                                 precision: *p as i32,

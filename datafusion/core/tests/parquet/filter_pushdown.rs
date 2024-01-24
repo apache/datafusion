@@ -34,7 +34,6 @@ use datafusion::physical_plan::collect;
 use datafusion::physical_plan::metrics::MetricsSet;
 use datafusion::prelude::{col, lit, lit_timestamp_nano, Expr, SessionContext};
 use datafusion::test_util::parquet::{ParquetScanOptions, TestParquetFile};
-use datafusion_common::ScalarValue;
 use datafusion_expr::utils::{conjunction, disjunction, split_conjunction};
 use itertools::Itertools;
 use parquet::file::properties::WriterProperties;
@@ -339,59 +338,6 @@ async fn single_file_small_data_pages() {
         .await;
 }
 
-#[cfg(not(target_family = "windows"))]
-#[tokio::test]
-async fn single_file_with_bloom_filter() {
-    let tempdir = TempDir::new().unwrap();
-
-    let props = WriterProperties::builder()
-        .set_bloom_filter_enabled(true)
-        .build();
-    let test_parquet_file = generate_file(&tempdir, props);
-
-    TestCase::new(&test_parquet_file)
-        .with_name("bloom_filter_on_decimal128_int32")
-        // predicate is chosen carefully to prune row groups id from 0 to 99 except 50
-        // decimal128_id_int32 = 50
-        .with_filter(
-            col("decimal128_id_int32")
-                .in_list(vec![lit(ScalarValue::Decimal128(Some(50), 8, 0))], false),
-        )
-        .with_bloom_filter_filtering_expected(BloomFilterFilteringExpected::Some)
-        .with_pushdown_expected(PushdownExpected::None)
-        .with_expected_rows(0)
-        .run()
-        .await;
-
-    TestCase::new(&test_parquet_file)
-        .with_name("bloom_filter_on_decimal128_int64")
-        // predicate is chosen carefully to prune row groups id from 0 to 99 except 50
-        // decimal128_id_int64 = 50
-        .with_filter(
-            col("decimal128_id_int64")
-                .in_list(vec![lit(ScalarValue::Decimal128(Some(50), 12, 0))], false),
-        )
-        .with_bloom_filter_filtering_expected(BloomFilterFilteringExpected::Some)
-        .with_pushdown_expected(PushdownExpected::None)
-        .with_expected_rows(0)
-        .run()
-        .await;
-
-    TestCase::new(&test_parquet_file)
-        .with_name("bloom_filter_on_decimal128_fixed_len_byte_array")
-        // predicate is chosen carefully to prune row groups id from 0 to 99 except 50
-        // decimal128_id_fixed_len_byte = 50
-        .with_filter(
-            col("decimal128_id_fixed_len_byte")
-                .in_list(vec![lit(ScalarValue::Decimal128(Some(50), 38, 0))], false),
-        )
-        .with_bloom_filter_filtering_expected(BloomFilterFilteringExpected::Some)
-        .with_pushdown_expected(PushdownExpected::None)
-        .with_expected_rows(0)
-        .run()
-        .await;
-}
-
 /// Expected pushdown behavior
 #[derive(Debug, Clone, Copy)]
 enum PushdownExpected {
@@ -410,14 +356,6 @@ enum PageIndexFilteringExpected {
     Some,
 }
 
-#[derive(Debug, Clone, Copy)]
-enum BloomFilterFilteringExpected {
-    /// Did not expect filter pushdown to filter any rows
-    None,
-    /// Expected that more than 0 were pruned
-    Some,
-}
-
 /// parameters for running a test
 struct TestCase<'a> {
     test_parquet_file: &'a TestParquetFile,
@@ -430,9 +368,6 @@ struct TestCase<'a> {
 
     /// Did we expect page filtering to filter out pages
     page_index_filtering_expected: PageIndexFilteringExpected,
-
-    /// Did we expect bloom filter filtering to filter out row
-    bloom_filter_filtering_expected: BloomFilterFilteringExpected,
 
     /// How many rows are expected to pass the predicate overall?
     expected_rows: usize,
@@ -447,7 +382,6 @@ impl<'a> TestCase<'a> {
             filter: lit(true),
             pushdown_expected: PushdownExpected::None,
             page_index_filtering_expected: PageIndexFilteringExpected::None,
-            bloom_filter_filtering_expected: BloomFilterFilteringExpected::None,
             expected_rows: 0,
         }
     }
@@ -475,15 +409,6 @@ impl<'a> TestCase<'a> {
         v: PageIndexFilteringExpected,
     ) -> Self {
         self.page_index_filtering_expected = v;
-        self
-    }
-
-    /// Set the expected bloom filyer filtering
-    fn with_bloom_filter_filtering_expected(
-        mut self,
-        v: BloomFilterFilteringExpected,
-    ) -> Self {
-        self.bloom_filter_filtering_expected = v;
         self
     }
 
@@ -517,7 +442,6 @@ impl<'a> TestCase<'a> {
                     pushdown_filters: false,
                     reorder_filters: false,
                     enable_page_index: false,
-                    enable_bloom_filter: false,
                 },
                 filter,
             )
@@ -529,7 +453,6 @@ impl<'a> TestCase<'a> {
                     pushdown_filters: true,
                     reorder_filters: false,
                     enable_page_index: false,
-                    enable_bloom_filter: false,
                 },
                 filter,
             )
@@ -543,7 +466,6 @@ impl<'a> TestCase<'a> {
                     pushdown_filters: true,
                     reorder_filters: true,
                     enable_page_index: false,
-                    enable_bloom_filter: false,
                 },
                 filter,
             )
@@ -557,7 +479,6 @@ impl<'a> TestCase<'a> {
                     pushdown_filters: false,
                     reorder_filters: false,
                     enable_page_index: true,
-                    enable_bloom_filter: false,
                 },
                 filter,
             )
@@ -570,40 +491,12 @@ impl<'a> TestCase<'a> {
                     pushdown_filters: true,
                     reorder_filters: true,
                     enable_page_index: true,
-                    enable_bloom_filter: false,
                 },
                 filter,
             )
             .await;
 
         assert_eq!(no_pushdown, pushdown_reordering_and_page_index);
-
-        let bloom_filter_only = self
-            .read_with_options(
-                ParquetScanOptions {
-                    pushdown_filters: false,
-                    reorder_filters: false,
-                    enable_page_index: false,
-                    enable_bloom_filter: true,
-                },
-                filter,
-            )
-            .await;
-        assert_eq!(no_pushdown, bloom_filter_only);
-
-        let pushdown_reordering_and_bloom_filter = self
-            .read_with_options(
-                ParquetScanOptions {
-                    pushdown_filters: false,
-                    reorder_filters: true,
-                    enable_page_index: false,
-                    enable_bloom_filter: true,
-                },
-                filter,
-            )
-            .await;
-
-        assert_eq!(no_pushdown, pushdown_reordering_and_bloom_filter);
     }
 
     /// Reads data from a test parquet file using the specified scan options
@@ -682,30 +575,6 @@ impl<'a> TestCase<'a> {
                 assert!(
                     page_index_rows_filtered > 0,
                     "Expected to filter rows via page index but none were",
-                );
-            }
-        };
-
-        let row_groups_pruned_bloom_filter =
-            get_value(&metrics, "row_groups_pruned_bloom_filter");
-        println!(" row_groups_pruned_bloom_filter: {row_groups_pruned_bloom_filter}");
-
-        let bloom_filter_filtering_expected = if scan_options.enable_bloom_filter {
-            self.bloom_filter_filtering_expected
-        } else {
-            // if bloom filter filtering is not enabled, don't expect it
-            // to filter rows
-            BloomFilterFilteringExpected::None
-        };
-
-        match bloom_filter_filtering_expected {
-            BloomFilterFilteringExpected::None => {
-                assert_eq!(row_groups_pruned_bloom_filter, 0);
-            }
-            BloomFilterFilteringExpected::Some => {
-                assert!(
-                    row_groups_pruned_bloom_filter > 0,
-                    "Expected to filter rows via bloom filter but none were",
                 );
             }
         };

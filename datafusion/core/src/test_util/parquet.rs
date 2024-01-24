@@ -60,8 +60,6 @@ pub struct ParquetScanOptions {
     pub reorder_filters: bool,
     /// enable page index
     pub enable_page_index: bool,
-    /// enable bloom filter
-    pub enable_bloom_filter: bool,
 }
 
 impl ParquetScanOptions {
@@ -71,7 +69,6 @@ impl ParquetScanOptions {
         config.execution.parquet.pushdown_filters = self.pushdown_filters;
         config.execution.parquet.reorder_filters = self.reorder_filters;
         config.execution.parquet.enable_page_index = self.enable_page_index;
-        config.execution.parquet.bloom_filter_enabled = self.enable_bloom_filter;
         config.into()
     }
 }
