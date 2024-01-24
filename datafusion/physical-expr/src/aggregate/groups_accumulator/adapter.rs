@@ -17,7 +17,6 @@
 
 //! Adapter that makes [`GroupsAccumulator`] out of [`Accumulator`]
 
-use super::{EmitTo, GroupsAccumulator};
 use arrow::{
     array::{AsArray, UInt32Builder},
     compute,
@@ -28,7 +27,7 @@ use datafusion_common::{
     arrow_datafusion_err, utils::get_arrayref_at_indices, DataFusionError, Result,
     ScalarValue,
 };
-use datafusion_expr::Accumulator;
+use datafusion_expr::{Accumulator, EmitTo, GroupsAccumulator};
 
 /// An adapter that implements [`GroupsAccumulator`] for any [`Accumulator`]
 ///
@@ -272,7 +271,7 @@ impl GroupsAccumulator for GroupsAccumulatorAdapter {
 
         let results: Vec<ScalarValue> = states
             .into_iter()
-            .map(|state| {
+            .map(|mut state| {
                 self.free_allocation(state.size());
                 state.accumulator.evaluate()
             })
@@ -293,7 +292,7 @@ impl GroupsAccumulator for GroupsAccumulatorAdapter {
         // which we need to form into columns
         let mut results: Vec<Vec<ScalarValue>> = vec![];
 
-        for state in states {
+        for mut state in states {
             self.free_allocation(state.size());
             let accumulator_state = state.accumulator.state()?;
             results.resize_with(accumulator_state.len(), Vec::new);

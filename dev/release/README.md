@@ -19,7 +19,7 @@
 
 # Release Process
 
-DataFusion typically has major releases every two weeks, including breaking API changes.
+DataFusion typically has major releases around once per month, including breaking API changes.
 
 Patch releases are made on an adhoc basis, but we try and avoid them given the frequent major releases.
 

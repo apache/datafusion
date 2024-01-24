@@ -647,6 +647,21 @@ SELECT initcap(arrow_cast('foo', 'Dictionary(Int32, Utf8)'))
 ----
 Foo
 
+query I
+SELECT instr('foobarbar', 'bar')
+----
+4
+
+query I
+SELECT instr('foobarbar', 'aa')
+----
+0
+
+query I
+SELECT instr('foobarbar', '')
+----
+1
+
 query T
 SELECT lower('FOObar')
 ----
@@ -726,6 +741,26 @@ query T
 SELECT split_part(arrow_cast('foo_bar', 'Dictionary(Int32, Utf8)'), '_', 2)
 ----
 bar
+
+query B
+SELECT starts_with('foobar', 'foo')
+----
+true
+
+query B
+SELECT starts_with('foobar', 'bar')
+----
+false
+
+query B
+SELECT ends_with('foobar', 'bar')
+----
+true
+
+query B
+SELECT ends_with('foobar', 'foo')
+----
+false
 
 query T
 SELECT trim('  foo  ')

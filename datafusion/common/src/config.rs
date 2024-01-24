@@ -408,7 +408,7 @@ config_namespace! {
         /// parquet files by serializing them in parallel. Each column
         /// in each row group in each output file are serialized in parallel
         /// leveraging a maximum possible core count of n_files*n_row_groups*n_columns.
-        pub allow_single_file_parallelism: bool, default = false
+        pub allow_single_file_parallelism: bool, default = true
 
         /// By default parallel parquet writer is tuned for minimum
         /// memory usage in a streaming execution plan. You may see
@@ -560,6 +560,10 @@ config_namespace! {
         /// The maximum estimated size in bytes for one input side of a HashJoin
         /// will be collected into a single partition
         pub hash_join_single_partition_threshold: usize, default = 1024 * 1024
+
+        /// The maximum estimated size in rows for one input side of a HashJoin
+        /// will be collected into a single partition
+        pub hash_join_single_partition_threshold_rows: usize, default = 1024 * 128
 
         /// The default filter selectivity used by Filter Statistics
         /// when an exact selectivity cannot be determined. Valid values are
