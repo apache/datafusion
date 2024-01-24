@@ -1776,6 +1776,35 @@ pub(crate) mod tests {
             let optimizer = OutputRequirements::new_add_mode();
             let optimized = optimizer.optimize($PLAN.clone(), &config)?;
 
+            // This file has 2 rules that use tree node, apply these rules to original plan consecutively
+            // After these operations tree nodes should be in a consistent state.
+            // This code block makes sure that these rules doesn't violate tree node integrity.
+            {
+                let adjusted = if config.optimizer.top_down_join_key_reordering {
+                    // Run adjust_input_keys_ordering rule
+                    let plan_requirements =
+                        PlanWithKeyRequirements::new_default($PLAN.clone());
+                    let adjusted = plan_requirements
+                        .transform_down(&adjust_input_keys_ordering)
+                        .and_then(check_integrity)?;
+                    // TODO: End state payloads will be checked here.
+                    adjusted.plan
+                } else {
+                    // Run reorder_join_keys_to_inputs rule
+                    $PLAN.clone().transform_up(&|plan| {
+                        Ok(Transformed::Yes(reorder_join_keys_to_inputs(plan)?))
+                    })?
+                };
+
+                // Then run ensure_distribution rule
+                DistributionContext::new_default(adjusted)
+                    .transform_up(&|distribution_context| {
+                        ensure_distribution(distribution_context, &config)
+                    })
+                    .and_then(check_integrity)?;
+                // TODO: End state payloads will be checked here.
+            }
+
             let optimized = if $FIRST_ENFORCE_DIST {
                 // Run enforce distribution rule first:
                 let optimizer = EnforceDistribution::new();
@@ -1830,42 +1859,6 @@ pub(crate) mod tests {
                 "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
                 expected_lines, actual_lines
             );
-        };
-    }
-
-    macro_rules! crosscheck_plans {
-        ($plan:expr) => {
-            crosscheck_plans!($plan, false, 10, false, 1024);
-        };
-        ($plan:expr, $prefer_existing_sort:expr) => {
-            crosscheck_plans!($plan, $prefer_existing_sort, 10, false, 1024);
-        };
-        ($plan:expr, $prefer_existing_sort:expr, $target_partitions:expr, $repartition_file_scans:expr, $repartition_file_min_size:expr) => {
-            let mut config = ConfigOptions::new();
-            config.execution.target_partitions = $target_partitions;
-            config.optimizer.repartition_file_scans = $repartition_file_scans;
-            config.optimizer.repartition_file_min_size = $repartition_file_min_size;
-            config.optimizer.prefer_existing_sort = $prefer_existing_sort;
-            let adjusted = if config.optimizer.top_down_join_key_reordering {
-                let plan_requirements =
-                    PlanWithKeyRequirements::new_default($plan.clone());
-                let adjusted = plan_requirements
-                    .transform_down(&adjust_input_keys_ordering)
-                    .and_then(check_integrity)?;
-                // TODO: End state payloads will be checked here.
-                adjusted.plan
-            } else {
-                $plan.clone().transform_up(&|plan| {
-                    Ok(Transformed::Yes(reorder_join_keys_to_inputs(plan)?))
-                })?
-            };
-
-            DistributionContext::new_default(adjusted)
-                .transform_up(&|distribution_context| {
-                    ensure_distribution(distribution_context, &config)
-                })
-                .and_then(check_integrity)?;
-            // TODO: End state payloads will be checked here.
         };
     }
 
@@ -1959,7 +1952,6 @@ pub(crate) mod tests {
                     };
                     assert_optimized!(expected, top_join.clone(), true);
                     assert_optimized!(expected, top_join, false);
-                    crosscheck_plans!(&top_join);
                 }
                 JoinType::RightSemi | JoinType::RightAnti => {}
             }
@@ -2024,7 +2016,6 @@ pub(crate) mod tests {
                     };
                     assert_optimized!(expected, top_join.clone(), true);
                     assert_optimized!(expected, top_join, false);
-                    crosscheck_plans!(&top_join);
                 }
                 JoinType::LeftSemi | JoinType::LeftAnti => {}
             }
@@ -2082,7 +2073,6 @@ pub(crate) mod tests {
         ];
         assert_optimized!(expected, top_join.clone(), true);
         assert_optimized!(expected, top_join, false);
-        crosscheck_plans!(&top_join);
 
         // Join on (a2 == c)
         let top_join_on = vec![(
@@ -2109,7 +2099,6 @@ pub(crate) mod tests {
         ];
         assert_optimized!(expected, top_join.clone(), true);
         assert_optimized!(expected, top_join, false);
-        crosscheck_plans!(&top_join);
 
         Ok(())
     }
@@ -2166,7 +2155,6 @@ pub(crate) mod tests {
 
         assert_optimized!(expected, top_join.clone(), true);
         assert_optimized!(expected, top_join, false);
-        crosscheck_plans!(&top_join);
 
         Ok(())
     }
@@ -2207,7 +2195,6 @@ pub(crate) mod tests {
         ];
         assert_optimized!(expected, join.clone(), true);
         assert_optimized!(expected, join, false);
-        crosscheck_plans!(&join);
 
         Ok(())
     }
@@ -2261,7 +2248,6 @@ pub(crate) mod tests {
         ];
         assert_optimized!(expected, join.clone(), true);
         assert_optimized!(expected, join, false);
-        crosscheck_plans!(&join);
 
         Ok(())
     }
@@ -2379,7 +2365,6 @@ pub(crate) mod tests {
         ];
         assert_optimized!(expected, filter_top_join.clone(), true);
         assert_optimized!(expected, filter_top_join, false);
-        crosscheck_plans!(&filter_top_join);
 
         Ok(())
     }
@@ -2738,7 +2723,6 @@ pub(crate) mod tests {
                 ],
             };
             assert_optimized!(expected, top_join.clone(), true, true);
-            crosscheck_plans!(&top_join);
 
             let expected_first_sort_enforcement = match join_type {
                 // Should include 6 RepartitionExecs (3 hash, 3 round-robin), 3 SortExecs
@@ -2793,7 +2777,6 @@ pub(crate) mod tests {
                 ],
             };
             assert_optimized!(expected_first_sort_enforcement, top_join, false, true);
-            crosscheck_plans!(&top_join);
 
             match join_type {
                 JoinType::Inner | JoinType::Left | JoinType::Right | JoinType::Full => {
@@ -2906,7 +2889,6 @@ pub(crate) mod tests {
                         false,
                         true
                     );
-                    crosscheck_plans!(&top_join);
                 }
                 _ => {}
             }
@@ -3007,7 +2989,6 @@ pub(crate) mod tests {
             "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
         ];
         assert_optimized!(expected_first_sort_enforcement, join, false, true);
-        crosscheck_plans!(&join);
 
         Ok(())
     }
@@ -3051,7 +3032,6 @@ pub(crate) mod tests {
             "ParquetExec: file_groups={2 groups: [[x], [y]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC]",
         ];
         assert_optimized!(expected, exec, false);
-        crosscheck_plans!(&exec);
 
         Ok(())
     }
@@ -3094,7 +3074,6 @@ pub(crate) mod tests {
         ];
         assert_optimized!(expected, plan.clone(), true);
         assert_optimized!(expected, plan, false);
-        crosscheck_plans!(&plan);
 
         Ok(())
     }
@@ -3113,7 +3092,6 @@ pub(crate) mod tests {
         ];
         assert_optimized!(expected, plan.clone(), true);
         assert_optimized!(expected, plan, false);
-        crosscheck_plans!(&plan);
 
         Ok(())
     }
@@ -3133,7 +3111,6 @@ pub(crate) mod tests {
         ];
         assert_optimized!(expected, plan.clone(), true);
         assert_optimized!(expected, plan, false);
-        crosscheck_plans!(&plan);
 
         Ok(())
     }
@@ -3155,7 +3132,6 @@ pub(crate) mod tests {
 
         assert_optimized!(expected, plan.clone(), true);
         assert_optimized!(expected, plan, false);
-        crosscheck_plans!(&plan);
 
         Ok(())
     }
@@ -3178,7 +3154,6 @@ pub(crate) mod tests {
         ];
         assert_optimized!(expected, plan.clone(), true);
         assert_optimized!(expected, plan, false);
-        crosscheck_plans!(&plan);
 
         Ok(())
     }
@@ -3205,7 +3180,6 @@ pub(crate) mod tests {
 
         assert_optimized!(expected, plan.clone(), true);
         assert_optimized!(expected, plan, false);
-        crosscheck_plans!(&plan);
 
         Ok(())
     }
@@ -3236,7 +3210,6 @@ pub(crate) mod tests {
         ];
         assert_optimized!(expected, plan.clone(), true);
         assert_optimized!(expected, plan, false);
-        crosscheck_plans!(&plan);
 
         Ok(())
     }
@@ -3257,7 +3230,6 @@ pub(crate) mod tests {
 
         assert_optimized!(expected, plan.clone(), true);
         assert_optimized!(expected, plan, false);
-        crosscheck_plans!(&plan);
 
         Ok(())
     }
@@ -3279,7 +3251,6 @@ pub(crate) mod tests {
         ];
         assert_optimized!(expected, plan.clone(), true);
         assert_optimized!(expected, plan, false);
-        crosscheck_plans!(&plan);
 
         Ok(())
     }
@@ -3312,7 +3283,6 @@ pub(crate) mod tests {
             "ParquetExec: file_groups={2 groups: [[x], [y]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC]",
         ];
         assert_optimized!(expected, plan, false);
-        crosscheck_plans!(&plan);
 
         Ok(())
     }
@@ -3346,7 +3316,6 @@ pub(crate) mod tests {
             "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC]",
         ];
         assert_optimized!(expected, plan, false);
-        crosscheck_plans!(&plan);
 
         Ok(())
     }
@@ -3373,7 +3342,6 @@ pub(crate) mod tests {
 
         assert_optimized!(expected, plan.clone(), true, true);
         assert_optimized!(expected, plan, false, true);
-        crosscheck_plans!(&plan, true);
 
         Ok(())
     }
@@ -3412,7 +3380,6 @@ pub(crate) mod tests {
         ];
         assert_optimized!(expected, plan.clone(), true);
         assert_optimized!(expected, plan, false);
-        crosscheck_plans!(&plan);
 
         Ok(())
     }
@@ -3456,7 +3423,6 @@ pub(crate) mod tests {
             "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
         ];
         assert_optimized!(expected_first_sort_enforcement, plan, false);
-        crosscheck_plans!(&plan, false);
 
         Ok(())
     }
@@ -3487,7 +3453,6 @@ pub(crate) mod tests {
         ];
         assert_optimized!(expected, plan.clone(), true);
         assert_optimized!(expected, plan, false);
-        crosscheck_plans!(&plan);
 
         Ok(())
     }
@@ -3517,7 +3482,6 @@ pub(crate) mod tests {
         ];
         assert_optimized!(expected, plan.clone(), true);
         assert_optimized!(expected, plan, false);
-        crosscheck_plans!(&plan);
 
         Ok(())
     }
@@ -3551,7 +3515,6 @@ pub(crate) mod tests {
             "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
         ];
         assert_optimized!(expected_first_sort_enforcement, plan, false);
-        crosscheck_plans!(&plan);
 
         Ok(())
     }
@@ -3599,7 +3562,6 @@ pub(crate) mod tests {
             "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
         ];
         assert_optimized!(expected_first_sort_enforcement, plan, false);
-        crosscheck_plans!(&plan);
 
         Ok(())
     }
@@ -3623,9 +3585,7 @@ pub(crate) mod tests {
             "CsvExec: file_groups={2 groups: [[x:0..50], [x:50..100]]}, projection=[a, b, c, d, e], has_header=false",
         ];
         assert_optimized!(expected_parquet, plan_parquet, true, false, 2, true, 10);
-        crosscheck_plans!(&plan_parquet, false, 2, true, 10);
         assert_optimized!(expected_csv, plan_csv, true, false, 2, true, 10);
-        crosscheck_plans!(&plan_csv, false, 2, true, 10);
 
         Ok(())
     }
@@ -3676,7 +3636,6 @@ pub(crate) mod tests {
             true,
             repartition_size
         );
-        crosscheck_plans!(&plan, true, target_partitions, true, repartition_size);
 
         Ok(())
     }
@@ -3739,7 +3698,6 @@ pub(crate) mod tests {
                 vec![("a".to_string(), "a".to_string())],
             );
             assert_optimized!(expected, plan, true, false, 2, true, 10);
-            crosscheck_plans!(&plan, false, 2, true, 10);
         }
         Ok(())
     }
@@ -3766,9 +3724,7 @@ pub(crate) mod tests {
             "CsvExec: file_groups={2 groups: [[x:0..100], [y:0..100]]}, projection=[a, b, c, d, e], has_header=false",
         ];
         assert_optimized!(expected_parquet, plan_parquet, true, false, 2, true, 10);
-        crosscheck_plans!(&plan_parquet, false, 2, true, 10);
         assert_optimized!(expected_csv, plan_csv, true, false, 2, true, 10);
-        crosscheck_plans!(&plan_csv, false, 2, true, 10);
         Ok(())
     }
 
@@ -3794,9 +3750,7 @@ pub(crate) mod tests {
             "CsvExec: file_groups={4 groups: [[x:0..50], [x:50..100], [y:0..50], [y:50..100]]}, projection=[a, b, c, d, e], has_header=false",
         ];
         assert_optimized!(expected_parquet, plan_parquet, true, false, 4, true, 10);
-        crosscheck_plans!(&plan_parquet, false, 4, true, 10);
         assert_optimized!(expected_csv, plan_csv, true, false, 4, true, 10);
-        crosscheck_plans!(&plan_csv, false, 4, true, 10);
 
         Ok(())
     }
@@ -3828,9 +3782,7 @@ pub(crate) mod tests {
             "CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], has_header=false",
         ];
         assert_optimized!(expected_parquet, plan_parquet, true);
-        crosscheck_plans!(&plan_parquet);
         assert_optimized!(expected_csv, plan_csv, true);
-        crosscheck_plans!(&plan_csv);
 
         Ok(())
     }
@@ -3875,9 +3827,7 @@ pub(crate) mod tests {
             "CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], has_header=false",
         ];
         assert_optimized!(expected_parquet, plan_parquet, true);
-        crosscheck_plans!(&plan_parquet);
         assert_optimized!(expected_csv, plan_csv, true);
-        crosscheck_plans!(&plan_csv);
 
         Ok(())
     }
@@ -3927,9 +3877,7 @@ pub(crate) mod tests {
             "CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], has_header=false",
         ];
         assert_optimized!(expected_parquet, plan_parquet, true);
-        crosscheck_plans!(&plan_parquet);
         assert_optimized!(expected_csv, plan_csv, true);
-        crosscheck_plans!(&plan_csv);
 
         Ok(())
     }
@@ -3958,9 +3906,7 @@ pub(crate) mod tests {
             "CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], has_header=false",
         ];
         assert_optimized!(expected_parquet, plan_parquet, true);
-        crosscheck_plans!(&plan_parquet);
         assert_optimized!(expected_csv, plan_csv, true);
-        crosscheck_plans!(&plan_csv);
 
         Ok(())
     }
@@ -3990,9 +3936,7 @@ pub(crate) mod tests {
             "CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC], has_header=false",
         ];
         assert_optimized!(expected_parquet, plan_parquet, true);
-        crosscheck_plans!(&plan_parquet);
         assert_optimized!(expected_csv, plan_csv, true);
-        crosscheck_plans!(&plan_csv);
 
         Ok(())
     }
@@ -4026,9 +3970,7 @@ pub(crate) mod tests {
             "CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC], has_header=false",
         ];
         assert_optimized!(expected_parquet, plan_parquet, true);
-        crosscheck_plans!(&plan_parquet);
         assert_optimized!(expected_csv, plan_csv, true);
-        crosscheck_plans!(&plan_csv);
 
         Ok(())
     }
@@ -4056,9 +3998,7 @@ pub(crate) mod tests {
             "CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC], has_header=false",
         ];
         assert_optimized!(expected_parquet, plan_parquet, true);
-        crosscheck_plans!(&plan_parquet);
         assert_optimized!(expected_csv, plan_csv, true);
-        crosscheck_plans!(&plan_csv);
 
         Ok(())
     }
@@ -4100,7 +4040,6 @@ pub(crate) mod tests {
             "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC]",
         ];
         assert_optimized!(expected_parquet, plan_parquet, true);
-        crosscheck_plans!(&plan_parquet);
 
         Ok(())
     }
@@ -4140,7 +4079,6 @@ pub(crate) mod tests {
             "CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC], has_header=false",
         ];
         assert_optimized!(expected_csv, plan_csv, true);
-        crosscheck_plans!(&plan_csv);
 
         Ok(())
     }
@@ -4166,7 +4104,6 @@ pub(crate) mod tests {
         ];
         assert_optimized!(expected, physical_plan.clone(), true);
         assert_optimized!(expected, physical_plan, false);
-        crosscheck_plans!(&physical_plan);
 
         Ok(())
     }
@@ -4190,7 +4127,6 @@ pub(crate) mod tests {
         // last flag sets config.optimizer.PREFER_EXISTING_SORT
         assert_optimized!(expected, physical_plan.clone(), true, true);
         assert_optimized!(expected, physical_plan, false, true);
-        crosscheck_plans!(&physical_plan, true);
 
         Ok(())
     }
@@ -4223,7 +4159,6 @@ pub(crate) mod tests {
             "ParquetExec: file_groups={2 groups: [[x], [y]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC]",
         ];
         assert_optimized!(expected, physical_plan, false);
-        crosscheck_plans!(&physical_plan);
 
         Ok(())
     }
@@ -4248,7 +4183,6 @@ pub(crate) mod tests {
         ];
         assert_optimized!(expected, physical_plan.clone(), true);
         assert_optimized!(expected, physical_plan, false);
-        crosscheck_plans!(&physical_plan);
 
         Ok(())
     }
@@ -4287,7 +4221,6 @@ pub(crate) mod tests {
             "ParquetExec: file_groups={2 groups: [[x], [y]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC]",
         ];
         assert_optimized!(expected, physical_plan, false);
-        crosscheck_plans!(&physical_plan);
 
         Ok(())
     }
@@ -4309,7 +4242,6 @@ pub(crate) mod tests {
         ];
         assert_optimized!(expected, physical_plan.clone(), true);
         assert_optimized!(expected, physical_plan, false);
-        crosscheck_plans!(&physical_plan);
 
         Ok(())
     }
@@ -4345,7 +4277,6 @@ pub(crate) mod tests {
         config.execution.target_partitions = 10;
         config.optimizer.enable_round_robin_repartition = true;
         config.optimizer.prefer_existing_sort = false;
-        crosscheck_plans!(&physical_plan, false, 10, true, 10 * 1024 * 1024);
         let dist_plan = EnforceDistribution::new().optimize(physical_plan, &config)?;
         assert_plan_txt!(expected, dist_plan);
 
@@ -4383,7 +4314,6 @@ pub(crate) mod tests {
         config.execution.target_partitions = 10;
         config.optimizer.enable_round_robin_repartition = true;
         config.optimizer.prefer_existing_sort = false;
-        crosscheck_plans!(&physical_plan, false, 10, true, 10 * 1024 * 1024);
         let dist_plan = EnforceDistribution::new().optimize(physical_plan, &config)?;
         assert_plan_txt!(expected, dist_plan);
 
@@ -4409,7 +4339,6 @@ pub(crate) mod tests {
         // Make sure target partition number is 1. In this case hash repartition is unnecessary
         assert_optimized!(expected, physical_plan.clone(), true, false, 1, false, 1024);
         assert_optimized!(expected, physical_plan, false, false, 1, false, 1024);
-        crosscheck_plans!(&physical_plan, false, 1, false, 1024);
 
         Ok(())
     }
@@ -4440,7 +4369,6 @@ pub(crate) mod tests {
         // Make sure target partition number is larger than 2 (e.g partition number at the source).
         assert_optimized!(expected, physical_plan.clone(), true, false, 4, false, 1024);
         assert_optimized!(expected, physical_plan, false, false, 4, false, 1024);
-        crosscheck_plans!(&physical_plan, false, 4, false, 1024);
 
         Ok(())
     }
@@ -4459,7 +4387,6 @@ pub(crate) mod tests {
             &["ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]"];
         assert_optimized!(expected, physical_plan.clone(), true);
         assert_optimized!(expected, physical_plan, false);
-        crosscheck_plans!(&physical_plan);
 
         Ok(())
     }
@@ -4487,7 +4414,6 @@ pub(crate) mod tests {
         ];
         assert_optimized!(expected, physical_plan.clone(), true);
         assert_optimized!(expected, physical_plan, false);
-        crosscheck_plans!(&physical_plan);
 
         Ok(())
     }
