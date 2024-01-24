@@ -1109,7 +1109,7 @@ RIGHT JOIN join_t2 on join_t1.t1_id = join_t2.t2_id
 WHERE NOT (join_t1.t1_int = join_t2.t2_int)
 ----
 logical_plan
-Inner Join: join_t1.t1_id = join_t2.t2_id Filter: join_t1.t1_int != join_t2.t2_int
+Inner Join: join_t1.t1_id = join_t2.t2_id Filter: join_t2.t2_int != join_t1.t1_int
 --TableScan: join_t1 projection=[t1_id, t1_name, t1_int]
 --TableScan: join_t2 projection=[t2_id, t2_name, t2_int]
 
@@ -3472,13 +3472,13 @@ FROM annotated_data as l, annotated_data as r
 WHERE l.a > r.a
 ----
 logical_plan
-Inner Join:  Filter: l.a > r.a
+Inner Join:  Filter: r.a < l.a
 --SubqueryAlias: l
 ----TableScan: annotated_data projection=[a0, a, b, c, d]
 --SubqueryAlias: r
 ----TableScan: annotated_data projection=[a0, a, b, c, d]
 physical_plan
-NestedLoopJoinExec: join_type=Inner, filter=a@0 > a@1
+NestedLoopJoinExec: join_type=Inner, filter=a@1 < a@0
 --RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
 ----CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a0, a, b, c, d], output_ordering=[a@1 ASC, b@2 ASC NULLS LAST, c@3 ASC NULLS LAST], has_header=true
 --CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a0, a, b, c, d], output_ordering=[a@1 ASC, b@2 ASC NULLS LAST, c@3 ASC NULLS LAST], has_header=true
