@@ -17,12 +17,13 @@
 
 //! [`ScalarUDF`]: Scalar User Defined Functions
 
+use crate::ExprSchemable;
 use crate::{
     ColumnarValue, Expr, FuncMonotonicity, ReturnTypeFunction,
     ScalarFunctionImplementation, Signature,
 };
 use arrow::datatypes::DataType;
-use datafusion_common::Result;
+use datafusion_common::{DFSchema, Result};
 use std::any::Any;
 use std::fmt;
 use std::fmt::Debug;
@@ -152,6 +153,17 @@ impl ScalarUDF {
         self.inner.return_type(args)
     }
 
+    /// The datatype this function returns given the input argument input types.
+    /// This function is used when the input arguments are [`Expr`]s.
+    /// See [`ScalarUDFImpl::return_type_from_exprs`] for more details.
+    pub fn return_type_from_exprs(
+        &self,
+        args: &[Expr],
+        schema: &DFSchema,
+    ) -> Result<DataType> {
+        self.inner.return_type_from_exprs(args, schema)
+    }
+
     /// Invoke the function on `args`, returning the appropriate result.
     ///
     /// See [`ScalarUDFImpl::invoke`] for more details.
@@ -248,6 +260,22 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
     /// What [`DataType`] will be returned by this function, given the types of
     /// the arguments
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType>;
+
+    /// What [`DataType`] will be returned by this function, given the types of
+    /// the expr arguments
+    fn return_type_from_exprs(
+        &self,
+        arg_exprs: &[Expr],
+        schema: &DFSchema,
+    ) -> Result<DataType> {
+        // provide default implementation that calls `self.return_type()`
+        // so that people don't have to implement `return_type_from_exprs` if they dont want to
+        let arg_types = arg_exprs
+            .iter()
+            .map(|e| e.get_type(schema))
+            .collect::<Result<Vec<_>>>()?;
+        self.return_type(&arg_types)
+    }
 
     /// Invoke the function on `args`, returning the appropriate result
     ///
