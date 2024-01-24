@@ -151,6 +151,10 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
             .rewrite(&mut simplifier)
     }
 
+    pub fn canonicalize(&self, expr: Expr) -> Result<Expr> {
+        let mut canonicalizer = Canonicalizer::new();
+        expr.rewrite(&mut canonicalizer)
+    }
     /// Apply type coercion to an [`Expr`] so that it can be
     /// evaluated as a [`PhysicalExpr`](datafusion_physical_expr::PhysicalExpr).
     ///
@@ -224,6 +228,51 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
     pub fn with_guarantees(mut self, guarantees: Vec<(Expr, NullableInterval)>) -> Self {
         self.guarantees = guarantees;
         self
+    }
+}
+
+/// Canonicalize any BinaryExprs that are not in canonical form
+///
+/// `<literal> <op> <col>` is rewritten to `<col> <op> <literal>`
+///
+/// `<col1> <op> <col2>` is rewritten so that the name of `col1` sorts higher
+/// than `col2` (`b > a` would be canonicalized to `a < b`)
+struct Canonicalizer {}
+
+impl Canonicalizer {
+    fn new() -> Self {
+        Self {}
+    }
+}
+
+impl TreeNodeRewriter for Canonicalizer {
+    type N = Expr;
+
+    fn mutate(&mut self, expr: Expr) -> Result<Expr> {
+        let Expr::BinaryExpr(BinaryExpr { left, op, right }) = expr else {
+            return Ok(expr);
+        };
+        match (left.as_ref(), right.as_ref(), op.swap()) {
+            // <col1> <op> <col2>
+            (Expr::Column(left_col), Expr::Column(right_col), Some(swapped_op))
+                if right_col > left_col =>
+            {
+                Ok(Expr::BinaryExpr(BinaryExpr {
+                    left: right,
+                    op: swapped_op,
+                    right: left,
+                }))
+            }
+            // <literal> <op> <col>
+            (Expr::Literal(_a), Expr::Column(_b), Some(swapped_op)) => {
+                Ok(Expr::BinaryExpr(BinaryExpr {
+                    left: right,
+                    op: swapped_op,
+                    right: left,
+                }))
+            }
+            _ => Ok(Expr::BinaryExpr(BinaryExpr { left, op, right })),
+        }
     }
 }
 
@@ -1613,6 +1662,58 @@ mod tests {
     // ------------------------------
 
     #[test]
+    fn test_simplify_canonicalize() {
+        {
+            let expr = lit(1).lt(col("c2")).and(col("c2").gt(lit(1)));
+            let expected = col("c2").gt(lit(1));
+            assert_eq!(simplify(expr), expected);
+        }
+        {
+            let expr = col("c1").lt(col("c2")).and(col("c2").gt(col("c1")));
+            let expected = col("c2").gt(col("c1"));
+            assert_eq!(simplify(expr), expected);
+        }
+        {
+            let expr = col("c1")
+                .eq(lit(1))
+                .and(lit(1).eq(col("c1")))
+                .and(col("c1").eq(lit(3)));
+            let expected = col("c1").eq(lit(1)).and(col("c1").eq(lit(3)));
+            assert_eq!(simplify(expr), expected);
+        }
+        {
+            let expr = col("c1")
+                .eq(col("c2"))
+                .and(col("c1").gt(lit(5)))
+                .and(col("c2").eq(col("c1")));
+            let expected = col("c2").eq(col("c1")).and(col("c1").gt(lit(5)));
+            assert_eq!(simplify(expr), expected);
+        }
+        {
+            let expr = col("c1")
+                .eq(lit(1))
+                .and(col("c2").gt(lit(3)).or(lit(3).lt(col("c2"))));
+            let expected = col("c1").eq(lit(1)).and(col("c2").gt(lit(3)));
+            assert_eq!(simplify(expr), expected);
+        }
+        {
+            let expr = col("c1").lt(lit(5)).and(col("c1").gt_eq(lit(5)));
+            let expected = col("c1").lt(lit(5)).and(col("c1").gt_eq(lit(5)));
+            assert_eq!(simplify(expr), expected);
+        }
+        {
+            let expr = col("c1").lt(lit(5)).and(col("c1").gt_eq(lit(5)));
+            let expected = col("c1").lt(lit(5)).and(col("c1").gt_eq(lit(5)));
+            assert_eq!(simplify(expr), expected);
+        }
+        {
+            let expr = col("c1").gt(col("c2")).and(col("c1").gt(col("c2")));
+            let expected = col("c2").lt(col("c1"));
+            assert_eq!(simplify(expr), expected);
+        }
+    }
+
+    #[test]
     fn test_simplify_or_true() {
         let expr_a = col("c2").or(lit(true));
         let expr_b = lit(true).or(col("c2"));
@@ -2807,7 +2908,8 @@ mod tests {
         let simplifier = ExprSimplifier::new(
             SimplifyContext::new(&execution_props).with_schema(schema),
         );
-        simplifier.simplify(expr)
+        let cano = simplifier.canonicalize(expr)?;
+        simplifier.simplify(cano)
     }
 
     fn simplify(expr: Expr) -> Expr {
