@@ -255,7 +255,7 @@ impl PagePruningPredicate {
 fn find_column_index(
     predicate: &PruningPredicate,
     arrow_schema: &Schema,
-    parquet_schema: &SchemaDescriptor
+    parquet_schema: &SchemaDescriptor,
 ) -> Option<usize> {
     let mut found_required_column: Option<&Column> = None;
 
@@ -278,8 +278,7 @@ fn find_column_index(
         return None;
     };
 
-    parquet_column(parquet_schema, arrow_schema, column.name())
-        .map(|x| x.0)
+    parquet_column(parquet_schema, arrow_schema, column.name()).map(|x| x.0)
 }
 
 /// Intersects the [`RowSelector`]s
