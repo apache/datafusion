@@ -268,7 +268,7 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
     ///    .with_schema(schema);
     /// let simplifier = ExprSimplifier::new(context);
     ///
-    /// // Expression: a = c AND 1 = b)
+    /// // Expression: a = c AND 1 = b
     /// let expr = col("a").eq(col("c")).and(lit(1).eq(col("b")));
     ///
     /// // With canonicalization, the expression is rewritten to canonical form
