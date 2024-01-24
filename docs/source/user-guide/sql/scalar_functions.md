@@ -1542,6 +1542,7 @@ to_timestamp(expression[, ..., format_n])
 | 2023-05-17T03:59:00.123456789                                                                          |
 +--------------------------------------------------------------------------------------------------------+
 ```
+
 Additional examples can be found [here]
 
 [here]: https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/to_timestamp.rs
@@ -1567,6 +1568,7 @@ to_timestamp_millis(expression[, ..., format_n])
   an error will be returned.
 
 #### Example
+
 ```
 ❯ select to_timestamp_millis('2023-01-31T09:26:56.123456789-05:00');
 +------------------------------------------------------------------+
@@ -1581,6 +1583,7 @@ to_timestamp_millis(expression[, ..., format_n])
 | 2023-05-17T03:59:00.123                                                                                       |
 +---------------------------------------------------------------------------------------------------------------+
 ```
+
 Additional examples can be found [here]
 
 [here]: https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/to_timestamp.rs
@@ -1606,6 +1609,7 @@ to_timestamp_micros(expression[, ..., format_n])
   an error will be returned.
 
 #### Example
+
 ```
 ❯ select to_timestamp_micros('2023-01-31T09:26:56.123456789-05:00');
 +------------------------------------------------------------------+
@@ -1620,6 +1624,7 @@ to_timestamp_micros(expression[, ..., format_n])
 | 2023-05-17T03:59:00.123456                                                                                    |
 +---------------------------------------------------------------------------------------------------------------+
 ```
+
 Additional examples can be found [here]
 
 [here]: https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/to_timestamp.rs
@@ -1645,6 +1650,7 @@ to_timestamp_nanos(expression[, ..., format_n])
   an error will be returned.
 
 #### Example
+
 ```
 ❯ select to_timestamp_nanos('2023-01-31T09:26:56.123456789-05:00');
 +-----------------------------------------------------------------+
@@ -1659,6 +1665,7 @@ to_timestamp_nanos(expression[, ..., format_n])
 | 2023-05-17T03:59:00.123456789                                                                                |
 +---------------------------------------------------------------------------------------------------------------+
 ```
+
 Additional examples can be found [here]
 
 [here]: https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/to_timestamp.rs
@@ -1684,6 +1691,7 @@ to_timestamp_seconds(expression[, ..., format_n])
   an error will be returned.
 
 #### Example
+
 ```
 ❯ select to_timestamp_seconds('2023-01-31T09:26:56.123456789-05:00');
 +-------------------------------------------------------------------+
@@ -1698,6 +1706,7 @@ to_timestamp_seconds(expression[, ..., format_n])
 | 2023-05-17T03:59:00                                                                                            |
 +----------------------------------------------------------------------------------------------------------------+
 ```
+
 Additional examples can be found [here]
 
 [here]: https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/to_timestamp.rs
