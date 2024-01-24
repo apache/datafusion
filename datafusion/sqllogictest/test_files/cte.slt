@@ -19,3 +19,8 @@ query II
 select * from (WITH source AS (select 1 as e) SELECT * FROM source) t1,   (WITH source AS (select 1 as e) SELECT * FROM source) t2
 ----
 1 1
+
+query I
+WITH "T" AS (SELECT 1 a) SELECT * FROM "T"
+----
+1

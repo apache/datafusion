@@ -232,6 +232,12 @@ select
 ----
 false true false true true false false true false true true false true true false false true
 
+# select uppercase alias table
+query I
+select "T".* from (select 1 a) as "T";
+----
+1
+
 # select NaNs
 query BBBB
 select (isnan('NaN'::double) AND 'NaN'::double > 0) a, (isnan('-NaN'::double) AND '-NaN'::double < 0) b, (isnan('NaN'::float) AND 'NaN'::float > 0) c, (isnan('-NaN'::float) AND '-NaN'::float < 0) d
