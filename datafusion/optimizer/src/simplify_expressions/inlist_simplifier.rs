@@ -54,24 +54,39 @@ impl TreeNodeRewriter for InListSimplifier {
     fn mutate(&mut self, expr: Expr) -> Result<Expr> {
         if let Expr::BinaryExpr(BinaryExpr { left, op, right }) = expr {
             match (*left, op, *right) {
-                (Expr::InList(l1), Operator::And, Expr::InList(l2)) if l1.expr == l2.expr && !l1.negated && !l2.negated =>
-                    inlist_intersection(l1, l2, false),
-                (Expr::InList(l1), Operator::And, Expr::InList(l2)) if l1.expr == l2.expr && l1.negated && l2.negated =>
-                    inlist_union(l1, l2, true),
-                (Expr::InList(l1), Operator::And, Expr::InList(l2)) if l1.expr == l2.expr && !l1.negated && l2.negated =>
-                    inlist_except(l1, l2),
-                (Expr::InList(l1), Operator::And, Expr::InList(l2)) if l1.expr == l2.expr && l1.negated && !l2.negated =>
-                    inlist_except(l2, l1),
-                (Expr::InList(l1), Operator::Or, Expr::InList(l2))  if l1.expr == l2.expr && l1.negated && l2.negated  =>
-                    inlist_intersection(l1, l2, true),
-               (left, op, right) => {
-                   // put the expression back together
-                   Ok(Expr::BinaryExpr(BinaryExpr {
-                       left: Box::new(left),
-                       op,
-                       right: Box::new(right),
-                   }))
-               }
+                (Expr::InList(l1), Operator::And, Expr::InList(l2))
+                    if l1.expr == l2.expr && !l1.negated && !l2.negated =>
+                {
+                    inlist_intersection(l1, l2, false)
+                }
+                (Expr::InList(l1), Operator::And, Expr::InList(l2))
+                    if l1.expr == l2.expr && l1.negated && l2.negated =>
+                {
+                    inlist_union(l1, l2, true)
+                }
+                (Expr::InList(l1), Operator::And, Expr::InList(l2))
+                    if l1.expr == l2.expr && !l1.negated && l2.negated =>
+                {
+                    inlist_except(l1, l2)
+                }
+                (Expr::InList(l1), Operator::And, Expr::InList(l2))
+                    if l1.expr == l2.expr && l1.negated && !l2.negated =>
+                {
+                    inlist_except(l2, l1)
+                }
+                (Expr::InList(l1), Operator::Or, Expr::InList(l2))
+                    if l1.expr == l2.expr && l1.negated && l2.negated =>
+                {
+                    inlist_intersection(l1, l2, true)
+                }
+                (left, op, right) => {
+                    // put the expression back together
+                    Ok(Expr::BinaryExpr(BinaryExpr {
+                        left: Box::new(left),
+                        op,
+                        right: Box::new(right),
+                    }))
+                }
             }
         } else {
             Ok(expr)
@@ -86,15 +101,11 @@ fn inlist_union(mut l1: InList, l2: InList, negated: bool) -> Result<Expr> {
     let l1_items: HashSet<_> = l1.list.iter().collect();
 
     // keep all l2 items that do not also appear in l1
-    let keep_l2: Vec<_> = l2.list
+    let keep_l2: Vec<_> = l2
+        .list
         .into_iter()
-        .filter_map(|e| {
-            if l1_items.contains(&e) {
-                None
-            } else {
-                Some(e)
-            }
-        }).collect();
+        .filter_map(|e| if l1_items.contains(&e) { None } else { Some(e) })
+        .collect();
 
     l1.list.extend(keep_l2.into_iter());
     l1.negated = negated;
@@ -107,7 +118,11 @@ fn inlist_intersection(mut l1: InList, l2: InList, negated: bool) -> Result<Expr
     let l2_items = l2.list.iter().collect::<HashSet<_>>();
 
     // remove all items from l1 that are not in l2
-    l1.list = l1.list.into_iter().filter(|e| l2_items.contains(e)).collect();
+    l1.list = l1
+        .list
+        .into_iter()
+        .filter(|e| l2_items.contains(e))
+        .collect();
 
     // e in () is always false
     // e not in () is always true
