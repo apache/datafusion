@@ -26,9 +26,7 @@ use crate::physical_expr::down_cast_any_ref;
 use crate::PhysicalExpr;
 use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
-use datafusion_common::{
-    cast::as_boolean_array, internal_err, DataFusionError, Result, ScalarValue,
-};
+use datafusion_common::{cast::as_boolean_array, Result, ScalarValue};
 use datafusion_expr::ColumnarValue;
 
 /// Not expression
@@ -80,16 +78,6 @@ impl PhysicalExpr for NotExpr {
                 )))
             }
             ColumnarValue::Scalar(scalar) => {
-                if scalar.is_null() {
-                    return Ok(ColumnarValue::Scalar(ScalarValue::Boolean(None)));
-                }
-                let value_type = scalar.data_type();
-                if value_type != DataType::Boolean {
-                    return internal_err!(
-                        "NOT '{:?}' can't be evaluated because the expression's type is {:?}, not boolean or NULL",
-                        self.arg, value_type
-                    );
-                }
                 let bool_value: bool = scalar.try_into()?;
                 Ok(ColumnarValue::Scalar(ScalarValue::Boolean(Some(
                     !bool_value,

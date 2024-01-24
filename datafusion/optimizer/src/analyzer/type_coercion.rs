@@ -176,6 +176,10 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                     negated,
                 )))
             }
+            Expr::Not(expr) => {
+                let expr = is_not_true(get_casted_expr_for_bool_op(&expr, &self.schema)?);
+                Ok(expr)
+            }
             Expr::IsTrue(expr) => {
                 let expr = is_true(get_casted_expr_for_bool_op(&expr, &self.schema)?);
                 Ok(expr)
