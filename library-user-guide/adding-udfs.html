@@ -489,12 +489,12 @@
 
 <span class="k">use</span><span class="w"> </span><span class="n">datafusion</span>::<span class="n">arrow</span>::<span class="n">array</span>::<span class="p">{</span><span class="n">ArrayRef</span><span class="p">,</span><span class="w"> </span><span class="n">Int64Array</span><span class="p">};</span>
 <span class="k">use</span><span class="w"> </span><span class="n">datafusion</span>::<span class="n">common</span>::<span class="nb">Result</span><span class="p">;</span>
-
 <span class="k">use</span><span class="w"> </span><span class="n">datafusion</span>::<span class="n">common</span>::<span class="n">cast</span>::<span class="n">as_int64_array</span><span class="p">;</span>
+<span class="k">use</span><span class="w"> </span><span class="n">datafusion</span>::<span class="n">physical_plan</span>::<span class="n">functions</span>::<span class="n">columnar_values_to_array</span><span class="p">;</span>
 
-<span class="k">pub</span><span class="w"> </span><span class="k">fn</span> <span class="nf">add_one</span><span class="p">(</span><span class="n">args</span>: <span class="kp">&amp;</span><span class="p">[</span><span class="n">ArrayRef</span><span class="p">])</span><span class="w"> </span>-&gt; <span class="nb">Result</span><span class="o">&lt;</span><span class="n">ArrayRef</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="k">pub</span><span class="w"> </span><span class="k">fn</span> <span class="nf">add_one</span><span class="p">(</span><span class="n">args</span>: <span class="kp">&amp;</span><span class="p">[</span><span class="n">ColumnarValue</span><span class="p">])</span><span class="w"> </span>-&gt; <span class="nb">Result</span><span class="o">&lt;</span><span class="n">ArrayRef</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
 <span class="w">    </span><span class="c1">// Error handling omitted for brevity</span>
-
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">args</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">columnar_values_to_array</span><span class="p">(</span><span class="n">args</span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
 <span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">i64s</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">as_int64_array</span><span class="p">(</span><span class="o">&amp;</span><span class="n">args</span><span class="p">[</span><span class="mi">0</span><span class="p">])</span><span class="o">?</span><span class="p">;</span>
 
 <span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">new_array</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">i64s</span>
@@ -524,7 +524,6 @@
 DataFusion provides the <a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/logical_expr/fn.create_udf.html"><code class="docutils literal notranslate"><span class="pre">create_udf</span></code></a> and helper functions to make this easier.
 There is a lower level API with more functionality but is more complex, that is documented in <a class="reference external" href="https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/advanced_udf.rs"><code class="docutils literal notranslate"><span class="pre">advanced_udf.rs</span></code></a>.</p>
 <div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">use</span><span class="w"> </span><span class="n">datafusion</span>::<span class="n">logical_expr</span>::<span class="p">{</span><span class="n">Volatility</span><span class="p">,</span><span class="w"> </span><span class="n">create_udf</span><span class="p">};</span>
-<span class="k">use</span><span class="w"> </span><span class="n">datafusion</span>::<span class="n">physical_plan</span>::<span class="n">functions</span>::<span class="n">make_scalar_function</span><span class="p">;</span>
 <span class="k">use</span><span class="w"> </span><span class="n">datafusion</span>::<span class="n">arrow</span>::<span class="n">datatypes</span>::<span class="n">DataType</span><span class="p">;</span>
 <span class="k">use</span><span class="w"> </span><span class="n">std</span>::<span class="n">sync</span>::<span class="n">Arc</span><span class="p">;</span>
 
@@ -533,7 +532,7 @@ There is a lower level API with more functionality but is more complex, that is 
 <span class="w">    </span><span class="fm">vec!</span><span class="p">[</span><span class="n">DataType</span>::<span class="n">Int64</span><span class="p">],</span>
 <span class="w">    </span><span class="n">Arc</span>::<span class="n">new</span><span class="p">(</span><span class="n">DataType</span>::<span class="n">Int64</span><span class="p">),</span>
 <span class="w">    </span><span class="n">Volatility</span>::<span class="n">Immutable</span><span class="p">,</span>
-<span class="w">    </span><span class="n">make_scalar_function</span><span class="p">(</span><span class="n">add_one</span><span class="p">),</span>
+<span class="w">    </span><span class="n">Arc</span>::<span class="n">new</span><span class="p">(</span><span class="n">add_one</span><span class="p">),</span>
 <span class="p">);</span>
 </pre></div>
 </div>
