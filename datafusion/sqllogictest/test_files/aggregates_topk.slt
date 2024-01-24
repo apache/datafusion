@@ -71,12 +71,12 @@ b 0
 c 1
 
 query TII
-select trace_id, other, MIN(timestamp) from traces group by trace_id, other order by MIN(timestamp), trace_id asc limit 4;
+select trace_id, other, MIN(timestamp) from traces group by trace_id, other order by MIN(timestamp) asc limit 4;
 ----
 a -1 -1
 b 0 0
 NULL 0 0
-a 1 1
+c 1 1
 
 query TII
 select trace_id, MIN(other), MIN(timestamp) from traces group by trace_id order by MIN(timestamp), MIN(other) limit 4;
@@ -196,12 +196,12 @@ NULL 0
 b 0
 
 query TII
-select trace_id, other, MIN(timestamp) from traces group by trace_id, other order by MIN(timestamp), trace_id asc limit 4;
+select trace_id, other, MIN(timestamp) from traces group by trace_id, other order by MIN(timestamp) asc limit 4;
 ----
 a -1 -1
 b 0 0
 NULL 0 0
-a 1 1
+c 1 1
 
 query TII
 select trace_id, MIN(other), MIN(timestamp) from traces group by trace_id order by MIN(timestamp), MIN(other) limit 4;
