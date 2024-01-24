@@ -514,7 +514,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             SQLExpr::Struct { values, fields } => {
                 self.parse_struct(values, fields, schema, planner_context)
             }
-
+            SQLExpr::Position { expr, r#in } => {
+                self.sql_position_to_expr(*expr, *r#in, schema, planner_context)
+            }
             _ => not_impl_err!("Unsupported ast node in sqltorel: {sql:?}"),
         }
     }
@@ -704,7 +706,20 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         };
         Ok(Expr::ScalarFunction(ScalarFunction::new(fun, args)))
     }
-
+    fn sql_position_to_expr(
+        &self,
+        substr_expr: SQLExpr,
+        str_expr: SQLExpr,
+        schema: &DFSchema,
+        planner_context: &mut PlannerContext,
+    ) -> Result<Expr> {
+        let fun = BuiltinScalarFunction::Position;
+        let substr =
+            self.sql_expr_to_logical_expr(substr_expr, schema, planner_context)?;
+        let fullstr = self.sql_expr_to_logical_expr(str_expr, schema, planner_context)?;
+        let args = vec![substr, fullstr];
+        Ok(Expr::ScalarFunction(ScalarFunction::new(fun, args)))
+    }
     fn sql_agg_with_filter_to_expr(
         &self,
         expr: SQLExpr,

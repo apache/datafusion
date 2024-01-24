@@ -241,6 +241,8 @@ pub enum BuiltinScalarFunction {
     NullIf,
     /// octet_length
     OctetLength,
+    /// position
+    Position,
     /// random
     Random,
     /// regexp_replace
@@ -460,6 +462,7 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::MD5 => Volatility::Immutable,
             BuiltinScalarFunction::NullIf => Volatility::Immutable,
             BuiltinScalarFunction::OctetLength => Volatility::Immutable,
+            BuiltinScalarFunction::Position => Volatility::Immutable,
             BuiltinScalarFunction::Radians => Volatility::Immutable,
             BuiltinScalarFunction::RegexpReplace => Volatility::Immutable,
             BuiltinScalarFunction::Repeat => Volatility::Immutable,
@@ -735,6 +738,9 @@ impl BuiltinScalarFunction {
                 utf8_to_int_type(&input_expr_types[0], "octet_length")
             }
             BuiltinScalarFunction::Pi => Ok(Float64),
+            BuiltinScalarFunction::Position => {
+                utf8_to_int_type(&input_expr_types[0], "position")
+            }
             BuiltinScalarFunction::Random => Ok(Float64),
             BuiltinScalarFunction::Uuid => Ok(Utf8),
             BuiltinScalarFunction::RegexpReplace => {
@@ -1225,7 +1231,8 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::EndsWith
             | BuiltinScalarFunction::InStr
             | BuiltinScalarFunction::Strpos
-            | BuiltinScalarFunction::StartsWith => Signature::one_of(
+            | BuiltinScalarFunction::StartsWith
+            | BuiltinScalarFunction::Position => Signature::one_of(
                 vec![
                     Exact(vec![Utf8, Utf8]),
                     Exact(vec![Utf8, LargeUtf8]),
@@ -1498,6 +1505,7 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Reverse => &["reverse"],
             BuiltinScalarFunction::Right => &["right"],
             BuiltinScalarFunction::Rpad => &["rpad"],
+            BuiltinScalarFunction::Position => &["position"],
             BuiltinScalarFunction::Rtrim => &["rtrim"],
             BuiltinScalarFunction::SplitPart => &["split_part"],
             BuiltinScalarFunction::StringToArray => {

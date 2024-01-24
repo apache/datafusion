@@ -641,6 +641,7 @@ nullif(expression1, expression2)
 - [levenshtein](#levenshtein)
 - [substr_index](#substr_index)
 - [find_in_set](#find_in_set)
+- [position](#position)
 
 ### `ascii`
 
@@ -1299,6 +1300,19 @@ regexp_replace(str, regexp, replacement, flags)
   regular expression. The following flags are supported.
   - **g**: (global) Search globally and don't return after the first match.
   - **i**: (insensitive) Ignore case when matching.
+
+### `position`
+
+Returns the position of substr in orig_str
+
+```
+position(substr in origstr)
+```
+
+#### Arguments
+
+- **substr**: he pattern string.
+- **origstr**: The model string.
 
 ## Time and Date Functions
 

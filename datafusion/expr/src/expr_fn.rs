@@ -814,6 +814,12 @@ scalar_expr!(
     string,
     "returns the number of bytes of a string"
 );
+scalar_expr!(
+    Position,
+    position,
+    substring string,
+    "return the position of the appearence of `substring` in `string`"
+);
 scalar_expr!(Replace, replace, string from to, "replaces all occurrences of `from` with `to` in the `string`");
 scalar_expr!(Repeat, repeat, string n, "repeats the `string` to `n` times");
 scalar_expr!(Reverse, reverse, string, "reverses the `string`");

@@ -938,6 +938,23 @@ pub fn create_physical_fun(
                 "Unsupported data type {other:?} for function overlay",
             ))),
         }),
+        BuiltinScalarFunction::Position => Arc::new(|args| match args[0].data_type() {
+            DataType::Utf8 => {
+                make_scalar_function_inner(string_expressions::instr::<i32>)(&[
+                    args[1].clone(),
+                    args[0].clone(),
+                ])
+            }
+            DataType::LargeUtf8 => {
+                make_scalar_function_inner(string_expressions::instr::<i64>)(&[
+                    args[1].clone(),
+                    args[0].clone(),
+                ])
+            }
+            other => Err(DataFusionError::Internal(format!(
+                "Unsupported data type {other:?} for function position"
+            ))),
+        }),
         BuiltinScalarFunction::Levenshtein => {
             Arc::new(|args| match args[0].data_type() {
                 DataType::Utf8 => make_scalar_function_inner(
