@@ -2515,7 +2515,6 @@ false
 true
 NULL
 
-
 #
 # Push limit into distinct group-by aggregation tests
 #
