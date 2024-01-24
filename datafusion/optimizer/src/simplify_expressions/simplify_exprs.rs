@@ -85,8 +85,6 @@ impl SimplifyExpressions {
         };
         let info = SimplifyContext::new(execution_props).with_schema(schema);
 
-        let simplifier = ExprSimplifier::new(info);
-
         let new_inputs = plan
             .inputs()
             .iter()
@@ -98,6 +96,7 @@ impl SimplifyExpressions {
             // The left and right expressions in a Join on clause are not commutative,
             // since the order of the columns must match the order of the children.
             LogicalPlan::Join(_) => {
+                let simplifier = ExprSimplifier::new(info).with_canonicalize(false);
                 plan.expressions()
                     .into_iter()
                     .map(|e| {
@@ -109,13 +108,13 @@ impl SimplifyExpressions {
                     .collect::<Result<Vec<_>>>()?
             }
             _ => {
+                let simplifier = ExprSimplifier::new(info);
                 plan.expressions()
                     .into_iter()
                     .map(|e| {
                         // TODO: unify with `rewrite_preserving_name`
                         let original_name = e.name_for_alias()?;
-                        let cano_e = simplifier.canonicalize(e)?;
-                        let new_e = simplifier.simplify(cano_e)?;
+                        let new_e = simplifier.simplify(e)?;
                         new_e.alias_if_changed(original_name)
                     })
                     .collect::<Result<Vec<_>>>()?
