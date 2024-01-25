@@ -21,12 +21,12 @@ select * from (WITH source AS (select 1 as e) SELECT * FROM source) t1,   (WITH 
 1 1
 
 query I
-WITH "T" AS (SELECT 1 a) SELECT * FROM "T"
+WITH "T" AS (SELECT 1 a) SELECT "T".* FROM "T"
 ----
 1
 
 query TT
-EXPLAIN WITH "NUMBERS" AS (SELECT 1 as a, 2 as b, 3 as c) SELECT * FROM "NUMBERS"
+EXPLAIN WITH "NUMBERS" AS (SELECT 1 as a, 2 as b, 3 as c) SELECT "NUMBERS".* FROM "NUMBERS"
 ----
 logical_plan
 Projection: NUMBERS.a, NUMBERS.b, NUMBERS.c
