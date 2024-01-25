@@ -50,6 +50,7 @@ pub use optimizer::{OptimizerConfig, OptimizerContext, OptimizerRule};
 pub use utils::optimize_children;
 
 mod plan_signature;
+mod group_window_exprs;
 
 #[cfg(test)]
 #[ctor::ctor]

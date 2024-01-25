@@ -315,36 +315,39 @@ impl LogicalPlanBuilder {
         input: LogicalPlan,
         window_exprs: Vec<Expr>,
     ) -> Result<LogicalPlan> {
-        let mut plan = input;
-        let mut groups = group_window_expr_by_sort_keys(window_exprs)?;
-        // To align with the behavior of PostgreSQL, we want the sort_keys sorted as same rule as PostgreSQL that first
-        // we compare the sort key themselves and if one window's sort keys are a prefix of another
-        // put the window with more sort keys first. so more deeply sorted plans gets nested further down as children.
-        // The sort_by() implementation here is a stable sort.
-        // Note that by this rule if there's an empty over, it'll be at the top level
-        groups.sort_by(|(key_a, _), (key_b, _)| {
-            for ((first, _), (second, _)) in key_a.iter().zip(key_b.iter()) {
-                let key_ordering = compare_sort_expr(first, second, plan.schema());
-                match key_ordering {
-                    Ordering::Less => {
-                        return Ordering::Less;
-                    }
-                    Ordering::Greater => {
-                        return Ordering::Greater;
-                    }
-                    Ordering::Equal => {}
-                }
-            }
-            key_b.len().cmp(&key_a.len())
-        });
-        for (_, exprs) in groups {
-            let window_exprs = exprs.into_iter().collect::<Vec<_>>();
-            // Partition and sorting is done at physical level, see the EnforceDistribution
-            // and EnforceSorting rules.
-            plan = LogicalPlanBuilder::from(plan)
-                .window(window_exprs)?
-                .build()?;
-        }
+        let plan = LogicalPlanBuilder::from(input)
+            .window(window_exprs)?
+            .build()?;
+
+        // let mut groups = group_window_expr_by_sort_keys(window_exprs)?;
+        // // To align with the behavior of PostgreSQL, we want the sort_keys sorted as same rule as PostgreSQL that first
+        // // we compare the sort key themselves and if one window's sort keys are a prefix of another
+        // // put the window with more sort keys first. so more deeply sorted plans gets nested further down as children.
+        // // The sort_by() implementation here is a stable sort.
+        // // Note that by this rule if there's an empty over, it'll be at the top level
+        // groups.sort_by(|(key_a, _), (key_b, _)| {
+        //     for ((first, _), (second, _)) in key_a.iter().zip(key_b.iter()) {
+        //         let key_ordering = compare_sort_expr(first, second, plan.schema());
+        //         match key_ordering {
+        //             Ordering::Less => {
+        //                 return Ordering::Less;
+        //             }
+        //             Ordering::Greater => {
+        //                 return Ordering::Greater;
+        //             }
+        //             Ordering::Equal => {}
+        //         }
+        //     }
+        //     key_b.len().cmp(&key_a.len())
+        // });
+        // for (_, exprs) in groups {
+        //     let window_exprs = exprs.into_iter().collect::<Vec<_>>();
+        //     // Partition and sorting is done at physical level, see the EnforceDistribution
+        //     // and EnforceSorting rules.
+        //     plan = LogicalPlanBuilder::from(plan)
+        //         .window(window_exprs)?
+        //         .build()?;
+        // }
         Ok(plan)
     }
     /// Apply a projection without alias.

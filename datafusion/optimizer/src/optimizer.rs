@@ -53,6 +53,7 @@ use datafusion_expr::logical_plan::LogicalPlan;
 
 use chrono::{DateTime, Utc};
 use log::{debug, warn};
+use crate::group_window_exprs::GroupWindowExprs;
 
 /// `OptimizerRule` transforms one [`LogicalPlan`] into another which
 /// computes the same results, but in a potentially more efficient
@@ -255,6 +256,7 @@ impl Optimizer {
             Arc::new(SimplifyExpressions::new()),
             Arc::new(UnwrapCastInComparison::new()),
             Arc::new(CommonSubexprEliminate::new()),
+            Arc::new(GroupWindowExprs::new()),
             Arc::new(OptimizeProjections::new()),
         ];
 
