@@ -33,7 +33,7 @@ use super::{
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::tree_node::{Transformed, TreeNode};
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::{not_impl_err, DataFusionError, Result};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::Partitioning;
 use futures::{ready, Stream, StreamExt};
@@ -309,6 +309,8 @@ fn assign_work_table(
             Ok(Transformed::Yes(Arc::new(
                 exec.with_work_table(work_table.clone()),
             )))
+        } else if plan.as_any().is::<RecursiveQueryExec>() {
+            not_impl_err!("Recursive queries cannot be nested")
         } else {
             Ok(Transformed::No(plan))
         }
