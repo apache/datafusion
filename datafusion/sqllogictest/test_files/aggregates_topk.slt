@@ -26,8 +26,8 @@ CREATE TABLE traces(trace_id varchar, timestamp bigint, other bigint) AS VALUES
 ('a', NULL, NULL),
 ('a', 1, 1),
 ('a', -1, -1),
-('b', 0, 0),
-('c', 1, 1),
+('b', -2, 0),
+('c', 4, 1),
 ('c', 2, 2),
 ('b', 3, 3);
 
@@ -57,34 +57,34 @@ GlobalLimitExec: skip=0, fetch=4
 query TI
 select trace_id, MAX(timestamp) from traces group by trace_id order by MAX(timestamp) desc limit 4;
 ----
+c 4
 b 3
-c 2
 a 1
 NULL 0
 
 query TI
 select trace_id, MIN(timestamp) from traces group by trace_id order by MIN(timestamp) asc limit 4;
 ----
+b -2
 a -1
 NULL 0
-b 0
-c 1
+c 2
 
 query TII
 select trace_id, other, MIN(timestamp) from traces group by trace_id, other order by MIN(timestamp) asc limit 4;
 ----
+b 0 -2
 a -1 -1
-b 0 0
 NULL 0 0
-c 1 1
+a 1 1
 
 query TII
 select trace_id, MIN(other), MIN(timestamp) from traces group by trace_id order by MIN(timestamp), MIN(other) limit 4;
 ----
+b 0 -2
 a -1 -1
 NULL 0 0
-b 0 0
-c 1 1
+c 1 2
 
 statement ok
 set datafusion.optimizer.enable_topk_aggregation = true;
@@ -168,45 +168,45 @@ GlobalLimitExec: skip=0, fetch=4
 query TI
 select trace_id, MAX(timestamp) from traces group by trace_id order by MAX(timestamp) desc limit 4;
 ----
+c 4
 b 3
-c 2
 a 1
 NULL 0
 
 query TI
 select trace_id, MIN(timestamp) from traces group by trace_id order by MIN(timestamp) asc limit 4;
 ----
+b -2
 a -1
 NULL 0
-b 0
-c 1
+c 2
 
 query TI
 select trace_id, MAX(timestamp) from traces group by trace_id order by MAX(timestamp) desc limit 3;
 ----
+c 4
 b 3
-c 2
 a 1
 
 query TI
 select trace_id, MIN(timestamp) from traces group by trace_id order by MIN(timestamp) asc limit 3;
 ----
+b -2
 a -1
 NULL 0
-b 0
 
 query TII
 select trace_id, other, MIN(timestamp) from traces group by trace_id, other order by MIN(timestamp) asc limit 4;
 ----
+b 0 -2
 a -1 -1
-b 0 0
 NULL 0 0
-c 1 1
+a 1 1
 
 query TII
 select trace_id, MIN(other), MIN(timestamp) from traces group by trace_id order by MIN(timestamp), MIN(other) limit 4;
 ----
+b 0 -2
 a -1 -1
 NULL 0 0
-b 0 0
-c 1 1
+c 1 2
