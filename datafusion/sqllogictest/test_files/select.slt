@@ -88,6 +88,14 @@ NULL 1
 THREE 1
 ONE 1
 
+# Test large string as well
+query TI
+SELECT d3, row_number() OVER (partition by d3) as rn1 FROM window_null_string_table;
+----
+One 1
+Three 1
+NULL 1
+
 ##########
 ## query_parameters_table_test
 ##########
