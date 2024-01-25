@@ -549,7 +549,7 @@ pub fn calculate_join_output_ordering(
                     on_columns,
                     &mut right_ordering.to_vec(),
                 );
-                merge_vectors(left_ordering, &right_ordering)
+                merge_vectors(left_ordering, right_ordering)
             } else {
                 left_ordering.to_vec()
             }
@@ -561,7 +561,7 @@ pub fn calculate_join_output_ordering(
                     on_columns,
                     &mut right_ordering.to_vec(),
                 );
-                merge_vectors(&right_ordering, left_ordering)
+                merge_vectors(right_ordering, left_ordering)
             } else {
                 offset_ordering(right_ordering, &join_type, left_columns_len)
             }
