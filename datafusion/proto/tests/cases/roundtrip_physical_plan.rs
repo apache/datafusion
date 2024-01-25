@@ -189,8 +189,8 @@ fn roundtrip_hash_join() -> Result<()> {
     let schema_left = Schema::new(vec![field_a.clone()]);
     let schema_right = Schema::new(vec![field_a]);
     let on = vec![(
-        Column::new("col", schema_left.index_of("col")?),
-        Column::new("col", schema_right.index_of("col")?),
+        Arc::new(Column::new("col", schema_left.index_of("col")?)) as _,
+        Arc::new(Column::new("col", schema_right.index_of("col")?)) as _,
     )];
 
     let schema_left = Arc::new(schema_left);
@@ -886,8 +886,8 @@ fn roundtrip_sym_hash_join() -> Result<()> {
     let schema_left = Schema::new(vec![field_a.clone()]);
     let schema_right = Schema::new(vec![field_a]);
     let on = vec![(
-        Column::new("col", schema_left.index_of("col")?),
-        Column::new("col", schema_right.index_of("col")?),
+        Arc::new(Column::new("col", schema_left.index_of("col")?)) as _,
+        Arc::new(Column::new("col", schema_right.index_of("col")?)) as _,
     )];
 
     let schema_left = Arc::new(schema_left);
