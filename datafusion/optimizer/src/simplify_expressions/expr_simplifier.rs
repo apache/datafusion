@@ -296,7 +296,7 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
 /// `<literal> <op> <col>` is rewritten to `<col> <op> <literal>`
 ///
 /// `<col1> <op> <col2>` is rewritten so that the name of `col1` sorts higher
-/// than `col2` (`b > a` would be canonicalized to `a < b`)
+/// than `col2` (`a > b` would be canonicalized to `b < a`)
 struct Canonicalizer {}
 
 impl Canonicalizer {
