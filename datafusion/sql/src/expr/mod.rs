@@ -776,7 +776,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                             schema,
                             planner_context,
                         )?);
-
                         GetFieldAccess::ListStride {
                             start,
                             stop,
@@ -789,8 +788,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                             schema,
                             planner_context,
                         )?);
-
-                        GetFieldAccess::ListRange { start, stop: last }
+                        let stride = Box::new(Expr::Literal(ScalarValue::Int64(Some(1))));
+                        GetFieldAccess::ListStride {
+                            start,
+                            stop: last,
+                            stride,
+                        }
                     }
                 }
             }

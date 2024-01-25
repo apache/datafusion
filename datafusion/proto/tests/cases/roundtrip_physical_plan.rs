@@ -750,6 +750,7 @@ fn roundtrip_get_indexed_field_list_range() -> Result<()> {
         GetFieldAccessExpr::ListRange {
             start: col_start,
             stop: col_stop,
+            stride: Box::new(ScalarValue::Int64(Some(1))),
         },
     ));
 

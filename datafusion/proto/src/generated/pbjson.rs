@@ -9025,9 +9025,6 @@ impl serde::Serialize for GetIndexedField {
                 get_indexed_field::Field::ListIndex(v) => {
                     struct_ser.serialize_field("listIndex", v)?;
                 }
-                get_indexed_field::Field::ListRange(v) => {
-                    struct_ser.serialize_field("listRange", v)?;
-                }
                 get_indexed_field::Field::ListStride(v) => {
                     struct_ser.serialize_field("listStride", v)?;
                 }
@@ -9048,8 +9045,6 @@ impl<'de> serde::Deserialize<'de> for GetIndexedField {
             "namedStructField",
             "list_index",
             "listIndex",
-            "list_range",
-            "listRange",
             "list_stride",
             "listStride",
         ];
@@ -9059,7 +9054,6 @@ impl<'de> serde::Deserialize<'de> for GetIndexedField {
             Expr,
             NamedStructField,
             ListIndex,
-            ListRange,
             ListStride,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
@@ -9085,7 +9079,6 @@ impl<'de> serde::Deserialize<'de> for GetIndexedField {
                             "expr" => Ok(GeneratedField::Expr),
                             "namedStructField" | "named_struct_field" => Ok(GeneratedField::NamedStructField),
                             "listIndex" | "list_index" => Ok(GeneratedField::ListIndex),
-                            "listRange" | "list_range" => Ok(GeneratedField::ListRange),
                             "listStride" | "list_stride" => Ok(GeneratedField::ListStride),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
@@ -9128,13 +9121,6 @@ impl<'de> serde::Deserialize<'de> for GetIndexedField {
                                 return Err(serde::de::Error::duplicate_field("listIndex"));
                             }
                             field__ = map_.next_value::<::std::option::Option<_>>()?.map(get_indexed_field::Field::ListIndex)
-;
-                        }
-                        GeneratedField::ListRange => {
-                            if field__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("listRange"));
-                            }
-                            field__ = map_.next_value::<::std::option::Option<_>>()?.map(get_indexed_field::Field::ListRange)
 ;
                         }
                         GeneratedField::ListStride => {
@@ -12540,222 +12526,6 @@ impl<'de> serde::Deserialize<'de> for ListIndexExpr {
             }
         }
         deserializer.deserialize_struct("datafusion.ListIndexExpr", FIELDS, GeneratedVisitor)
-    }
-}
-impl serde::Serialize for ListRange {
-    #[allow(deprecated)]
-    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        use serde::ser::SerializeStruct;
-        let mut len = 0;
-        if self.start.is_some() {
-            len += 1;
-        }
-        if self.stop.is_some() {
-            len += 1;
-        }
-        let mut struct_ser = serializer.serialize_struct("datafusion.ListRange", len)?;
-        if let Some(v) = self.start.as_ref() {
-            struct_ser.serialize_field("start", v)?;
-        }
-        if let Some(v) = self.stop.as_ref() {
-            struct_ser.serialize_field("stop", v)?;
-        }
-        struct_ser.end()
-    }
-}
-impl<'de> serde::Deserialize<'de> for ListRange {
-    #[allow(deprecated)]
-    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        const FIELDS: &[&str] = &[
-            "start",
-            "stop",
-        ];
-
-        #[allow(clippy::enum_variant_names)]
-        enum GeneratedField {
-            Start,
-            Stop,
-        }
-        impl<'de> serde::Deserialize<'de> for GeneratedField {
-            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
-            where
-                D: serde::Deserializer<'de>,
-            {
-                struct GeneratedVisitor;
-
-                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
-                    type Value = GeneratedField;
-
-                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                        write!(formatter, "expected one of: {:?}", &FIELDS)
-                    }
-
-                    #[allow(unused_variables)]
-                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
-                    where
-                        E: serde::de::Error,
-                    {
-                        match value {
-                            "start" => Ok(GeneratedField::Start),
-                            "stop" => Ok(GeneratedField::Stop),
-                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
-                        }
-                    }
-                }
-                deserializer.deserialize_identifier(GeneratedVisitor)
-            }
-        }
-        struct GeneratedVisitor;
-        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
-            type Value = ListRange;
-
-            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                formatter.write_str("struct datafusion.ListRange")
-            }
-
-            fn visit_map<V>(self, mut map_: V) -> std::result::Result<ListRange, V::Error>
-                where
-                    V: serde::de::MapAccess<'de>,
-            {
-                let mut start__ = None;
-                let mut stop__ = None;
-                while let Some(k) = map_.next_key()? {
-                    match k {
-                        GeneratedField::Start => {
-                            if start__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("start"));
-                            }
-                            start__ = map_.next_value()?;
-                        }
-                        GeneratedField::Stop => {
-                            if stop__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("stop"));
-                            }
-                            stop__ = map_.next_value()?;
-                        }
-                    }
-                }
-                Ok(ListRange {
-                    start: start__,
-                    stop: stop__,
-                })
-            }
-        }
-        deserializer.deserialize_struct("datafusion.ListRange", FIELDS, GeneratedVisitor)
-    }
-}
-impl serde::Serialize for ListRangeExpr {
-    #[allow(deprecated)]
-    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        use serde::ser::SerializeStruct;
-        let mut len = 0;
-        if self.start.is_some() {
-            len += 1;
-        }
-        if self.stop.is_some() {
-            len += 1;
-        }
-        let mut struct_ser = serializer.serialize_struct("datafusion.ListRangeExpr", len)?;
-        if let Some(v) = self.start.as_ref() {
-            struct_ser.serialize_field("start", v)?;
-        }
-        if let Some(v) = self.stop.as_ref() {
-            struct_ser.serialize_field("stop", v)?;
-        }
-        struct_ser.end()
-    }
-}
-impl<'de> serde::Deserialize<'de> for ListRangeExpr {
-    #[allow(deprecated)]
-    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        const FIELDS: &[&str] = &[
-            "start",
-            "stop",
-        ];
-
-        #[allow(clippy::enum_variant_names)]
-        enum GeneratedField {
-            Start,
-            Stop,
-        }
-        impl<'de> serde::Deserialize<'de> for GeneratedField {
-            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
-            where
-                D: serde::Deserializer<'de>,
-            {
-                struct GeneratedVisitor;
-
-                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
-                    type Value = GeneratedField;
-
-                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                        write!(formatter, "expected one of: {:?}", &FIELDS)
-                    }
-
-                    #[allow(unused_variables)]
-                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
-                    where
-                        E: serde::de::Error,
-                    {
-                        match value {
-                            "start" => Ok(GeneratedField::Start),
-                            "stop" => Ok(GeneratedField::Stop),
-                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
-                        }
-                    }
-                }
-                deserializer.deserialize_identifier(GeneratedVisitor)
-            }
-        }
-        struct GeneratedVisitor;
-        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
-            type Value = ListRangeExpr;
-
-            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                formatter.write_str("struct datafusion.ListRangeExpr")
-            }
-
-            fn visit_map<V>(self, mut map_: V) -> std::result::Result<ListRangeExpr, V::Error>
-                where
-                    V: serde::de::MapAccess<'de>,
-            {
-                let mut start__ = None;
-                let mut stop__ = None;
-                while let Some(k) = map_.next_key()? {
-                    match k {
-                        GeneratedField::Start => {
-                            if start__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("start"));
-                            }
-                            start__ = map_.next_value()?;
-                        }
-                        GeneratedField::Stop => {
-                            if stop__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("stop"));
-                            }
-                            stop__ = map_.next_value()?;
-                        }
-                    }
-                }
-                Ok(ListRangeExpr {
-                    start: start__,
-                    stop: stop__,
-                })
-            }
-        }
-        deserializer.deserialize_struct("datafusion.ListRangeExpr", FIELDS, GeneratedVisitor)
     }
 }
 impl serde::Serialize for ListStride {
@@ -18374,9 +18144,6 @@ impl serde::Serialize for PhysicalGetIndexedFieldExprNode {
                 physical_get_indexed_field_expr_node::Field::ListIndexExpr(v) => {
                     struct_ser.serialize_field("listIndexExpr", v)?;
                 }
-                physical_get_indexed_field_expr_node::Field::ListRangeExpr(v) => {
-                    struct_ser.serialize_field("listRangeExpr", v)?;
-                }
                 physical_get_indexed_field_expr_node::Field::ListStrideExpr(v) => {
                     struct_ser.serialize_field("listStrideExpr", v)?;
                 }
@@ -18397,8 +18164,6 @@ impl<'de> serde::Deserialize<'de> for PhysicalGetIndexedFieldExprNode {
             "namedStructFieldExpr",
             "list_index_expr",
             "listIndexExpr",
-            "list_range_expr",
-            "listRangeExpr",
             "list_stride_expr",
             "listStrideExpr",
         ];
@@ -18408,7 +18173,6 @@ impl<'de> serde::Deserialize<'de> for PhysicalGetIndexedFieldExprNode {
             Arg,
             NamedStructFieldExpr,
             ListIndexExpr,
-            ListRangeExpr,
             ListStrideExpr,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
@@ -18434,7 +18198,6 @@ impl<'de> serde::Deserialize<'de> for PhysicalGetIndexedFieldExprNode {
                             "arg" => Ok(GeneratedField::Arg),
                             "namedStructFieldExpr" | "named_struct_field_expr" => Ok(GeneratedField::NamedStructFieldExpr),
                             "listIndexExpr" | "list_index_expr" => Ok(GeneratedField::ListIndexExpr),
-                            "listRangeExpr" | "list_range_expr" => Ok(GeneratedField::ListRangeExpr),
                             "listStrideExpr" | "list_stride_expr" => Ok(GeneratedField::ListStrideExpr),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
@@ -18477,13 +18240,6 @@ impl<'de> serde::Deserialize<'de> for PhysicalGetIndexedFieldExprNode {
                                 return Err(serde::de::Error::duplicate_field("listIndexExpr"));
                             }
                             field__ = map_.next_value::<::std::option::Option<_>>()?.map(physical_get_indexed_field_expr_node::Field::ListIndexExpr)
-;
-                        }
-                        GeneratedField::ListRangeExpr => {
-                            if field__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("listRangeExpr"));
-                            }
-                            field__ = map_.next_value::<::std::option::Option<_>>()?.map(physical_get_indexed_field_expr_node::Field::ListRangeExpr)
 ;
                         }
                         GeneratedField::ListStrideExpr => {

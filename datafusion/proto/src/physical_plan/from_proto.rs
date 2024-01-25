@@ -398,20 +398,6 @@ pub fn parse_physical_expr(
                         "key",
                         input_schema,
                     )?},
-                Some(protobuf::physical_get_indexed_field_expr_node::Field::ListRangeExpr(list_range_expr)) => GetFieldAccessExpr::ListRange{
-                    start: parse_required_physical_expr(
-                        list_range_expr.start.as_deref(),
-                        registry,
-                        "start",
-                        input_schema,
-                    )?,
-                    stop: parse_required_physical_expr(
-                        list_range_expr.stop.as_deref(),
-                        registry,
-                        "stop",
-                        input_schema
-                    )?,
-                },
                 Some(protobuf::physical_get_indexed_field_expr_node::Field::ListStrideExpr(list_stride_expr)) => GetFieldAccessExpr::ListStride{
                     start: parse_required_physical_expr(
                         list_stride_expr.start.as_deref(),

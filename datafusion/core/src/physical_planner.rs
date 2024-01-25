@@ -209,11 +209,6 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
                     let key = create_physical_name(key, false)?;
                     format!("{expr}[{key}]")
                 }
-                GetFieldAccess::ListRange { start, stop } => {
-                    let start = create_physical_name(start, false)?;
-                    let stop = create_physical_name(stop, false)?;
-                    format!("{expr}[{start}:{stop}]")
-                }
                 GetFieldAccess::ListStride {
                     start,
                     stop,

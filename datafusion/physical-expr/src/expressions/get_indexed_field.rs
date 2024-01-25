@@ -21,6 +21,7 @@ use crate::PhysicalExpr;
 use datafusion_common::exec_err;
 
 use crate::array_expressions::{array_element, array_slice};
+use crate::expressions::Literal;
 use crate::physical_expr::down_cast_any_ref;
 use arrow::{
     array::{Array, Scalar, StringArray},
@@ -43,11 +44,6 @@ pub enum GetFieldAccessExpr {
     NamedStructField { name: ScalarValue },
     /// Single list index, for example: `list[i]`
     ListIndex { key: Arc<dyn PhysicalExpr> },
-    /// List range, for example `list[i:j]`
-    ListRange {
-        start: Arc<dyn PhysicalExpr>,
-        stop: Arc<dyn PhysicalExpr>,
-    },
     /// List stride, for example `list[i:j:k]`
     ListStride {
         start: Arc<dyn PhysicalExpr>,
@@ -61,9 +57,6 @@ impl std::fmt::Display for GetFieldAccessExpr {
         match self {
             GetFieldAccessExpr::NamedStructField { name } => write!(f, "[{}]", name),
             GetFieldAccessExpr::ListIndex { key } => write!(f, "[{}]", key),
-            GetFieldAccessExpr::ListRange { start, stop } => {
-                write!(f, "[{}:{}]", start, stop)
-            }
             GetFieldAccessExpr::ListStride {
                 start,
                 stop,
@@ -77,7 +70,7 @@ impl std::fmt::Display for GetFieldAccessExpr {
 
 impl PartialEq<dyn Any> for GetFieldAccessExpr {
     fn eq(&self, other: &dyn Any) -> bool {
-        use GetFieldAccessExpr::{ListIndex, ListRange, ListStride, NamedStructField};
+        use GetFieldAccessExpr::{ListIndex, ListStride, NamedStructField};
         down_cast_any_ref(other)
             .downcast_ref::<Self>()
             .map(|x| match (self, x) {
@@ -85,16 +78,6 @@ impl PartialEq<dyn Any> for GetFieldAccessExpr {
                     lhs.eq(rhs)
                 }
                 (ListIndex { key: lhs }, ListIndex { key: rhs }) => lhs.eq(rhs),
-                (
-                    ListRange {
-                        start: start_lhs,
-                        stop: stop_lhs,
-                    },
-                    ListRange {
-                        start: start_rhs,
-                        stop: stop_rhs,
-                    },
-                ) => start_lhs.eq(start_rhs) && stop_lhs.eq(stop_rhs),
                 (
                     ListStride {
                         start: start_lhs,
@@ -111,22 +94,9 @@ impl PartialEq<dyn Any> for GetFieldAccessExpr {
                         && stop_lhs.eq(stop_rhs)
                         && stride_lhs.eq(stride_rhs)
                 }
-                (
-                    NamedStructField { .. },
-                    ListIndex { .. } | ListRange { .. } | ListStride { .. },
-                ) => false,
-                (
-                    ListIndex { .. },
-                    NamedStructField { .. } | ListRange { .. } | ListStride { .. },
-                ) => false,
-                (
-                    ListRange { .. },
-                    NamedStructField { .. } | ListIndex { .. } | ListStride { .. },
-                ) => false,
-                (
-                    ListStride { .. },
-                    NamedStructField { .. } | ListIndex { .. } | ListRange { .. },
-                ) => false,
+                (NamedStructField { .. }, ListIndex { .. } | ListStride { .. }) => false,
+                (ListIndex { .. }, NamedStructField { .. } | ListStride { .. }) => false,
+                (ListStride { .. }, NamedStructField { .. } | ListIndex { .. }) => false,
             })
             .unwrap_or(false)
     }
@@ -168,7 +138,15 @@ impl GetIndexedFieldExpr {
         start: Arc<dyn PhysicalExpr>,
         stop: Arc<dyn PhysicalExpr>,
     ) -> Self {
-        Self::new(arg, GetFieldAccessExpr::ListRange { start, stop })
+        Self::new(
+            arg,
+            GetFieldAccessExpr::ListStride {
+                start,
+                stop,
+                stride: Arc::new(Literal::new(ScalarValue::Int64(Some(1))))
+                    as Arc<dyn PhysicalExpr>,
+            },
+        )
     }
 
     /// Create a new [`GetIndexedFieldExpr`] for accessing the stride
@@ -206,12 +184,6 @@ impl GetIndexedFieldExpr {
             GetFieldAccessExpr::ListIndex { key } => GetFieldAccessSchema::ListIndex {
                 key_dt: key.data_type(input_schema)?,
             },
-            GetFieldAccessExpr::ListRange { start, stop } => {
-                GetFieldAccessSchema::ListRange {
-                    start_dt: start.data_type(input_schema)?,
-                    stop_dt: stop.data_type(input_schema)?,
-                }
-            }
             GetFieldAccessExpr::ListStride {
                 start,
                 stop,
@@ -291,21 +263,6 @@ impl PhysicalExpr for GetIndexedFieldExpr {
                                                  with utf8 indexes. Tried {dt:?} with {key:?} index"),
                         }
                 },
-            GetFieldAccessExpr::ListRange{start, stop} => {
-                let start = start.evaluate(batch)?.into_array(batch.num_rows())?;
-                let stop = stop.evaluate(batch)?.into_array(batch.num_rows())?;
-                match (array.data_type(), start.data_type(), stop.data_type()) {
-                    (DataType::List(_), DataType::Int64, DataType::Int64) => Ok(ColumnarValue::Array(array_slice(&[
-                        array, start, stop
-                    ])?)),
-                    (DataType::List(_), start, stop) => exec_err!(
-                        "get indexed field is only possible on lists with int64 indexes. \
-                                 Tried with {start:?} and {stop:?} indices"),
-                    (dt, start, stop) => exec_err!(
-                        "get indexed field is only possible on lists with int64 indexes or struct \
-                                 with utf8 indexes. Tried {dt:?} with {start:?} and {stop:?} indices"),
-                }
-            },
             GetFieldAccessExpr::ListStride { start, stop, stride } => {
                 let start = start.evaluate(batch)?.into_array(batch.num_rows())?;
                 let stop = stop.evaluate(batch)?.into_array(batch.num_rows())?;

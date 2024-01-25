@@ -374,10 +374,6 @@ fn field_for_index<S: ExprSchema>(
         GetFieldAccess::ListIndex { key } => GetFieldAccessSchema::ListIndex {
             key_dt: key.get_type(schema)?,
         },
-        GetFieldAccess::ListRange { start, stop } => GetFieldAccessSchema::ListRange {
-            start_dt: start.get_type(schema)?,
-            stop_dt: stop.get_type(schema)?,
-        },
         GetFieldAccess::ListStride {
             start,
             stop,

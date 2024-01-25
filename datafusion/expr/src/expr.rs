@@ -421,8 +421,6 @@ pub enum GetFieldAccess {
     NamedStructField { name: ScalarValue },
     /// Single list index, for example: `list[i]`
     ListIndex { key: Box<Expr> },
-    /// List range, for example `list[i:j]`
-    ListRange { start: Box<Expr>, stop: Box<Expr> },
     /// List stride, for example `list[i:j:k]`
     ListStride {
         start: Box<Expr>,
@@ -1220,9 +1218,10 @@ impl Expr {
     pub fn range(self, start: Expr, stop: Expr) -> Self {
         Expr::GetIndexedField(GetIndexedField {
             expr: Box::new(self),
-            field: GetFieldAccess::ListRange {
+            field: GetFieldAccess::ListStride {
                 start: Box::new(start),
                 stop: Box::new(stop),
+                stride: Box::new(Expr::Literal(ScalarValue::Int64(Some(1)))),
             },
         })
     }
@@ -1536,9 +1535,6 @@ impl fmt::Display for Expr {
                     write!(f, "({expr})[{name}]")
                 }
                 GetFieldAccess::ListIndex { key } => write!(f, "({expr})[{key}]"),
-                GetFieldAccess::ListRange { start, stop } => {
-                    write!(f, "({expr})[{start}:{stop}]")
-                }
                 GetFieldAccess::ListStride {
                     start,
                     stop,
@@ -1744,11 +1740,6 @@ fn create_name(e: &Expr) -> Result<String> {
                 GetFieldAccess::ListIndex { key } => {
                     let key = create_name(key)?;
                     Ok(format!("{expr}[{key}]"))
-                }
-                GetFieldAccess::ListRange { start, stop } => {
-                    let start = create_name(start)?;
-                    let stop = create_name(stop)?;
-                    Ok(format!("{expr}[{start}:{stop}]"))
                 }
                 GetFieldAccess::ListStride {
                     start,

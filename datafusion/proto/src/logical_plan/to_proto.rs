@@ -1033,14 +1033,6 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                             },
                         ))
                     }
-                    GetFieldAccess::ListRange { start, stop } => {
-                        protobuf::get_indexed_field::Field::ListRange(Box::new(
-                            protobuf::ListRange {
-                                start: Some(Box::new(start.as_ref().try_into()?)),
-                                stop: Some(Box::new(stop.as_ref().try_into()?)),
-                            },
-                        ))
-                    }
                     GetFieldAccess::ListStride {
                         start,
                         stop,
