@@ -19,6 +19,85 @@ use super::*;
 use datafusion_common::ScalarValue;
 use tempfile::TempDir;
 
+#[tokio::test]
+async fn test_list_query_parameters() -> Result<()> {
+    let tmp_dir = TempDir::new()?;
+    let partition_count = 4;
+    let ctx = create_ctx_with_partition(&tmp_dir, partition_count).await?;
+
+    let results = ctx
+        .sql("SELECT * FROM test WHERE c1 = $1")
+        .await?
+        .with_param_values(vec![ScalarValue::from(3i32)])?
+        .collect()
+        .await?;
+    let expected = vec![
+        "+----+----+-------+",
+        "| c1 | c2 | c3    |",
+        "+----+----+-------+",
+        "| 3  | 1  | false |",
+        "| 3  | 10 | true  |",
+        "| 3  | 2  | true  |",
+        "| 3  | 3  | false |",
+        "| 3  | 4  | true  |",
+        "| 3  | 5  | false |",
+        "| 3  | 6  | true  |",
+        "| 3  | 7  | false |",
+        "| 3  | 8  | true  |",
+        "| 3  | 9  | false |",
+        "+----+----+-------+",
+    ];
+    assert_batches_sorted_eq!(expected, &results);
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_named_query_parameters() -> Result<()> {
+    let tmp_dir = TempDir::new()?;
+    let partition_count = 4;
+    let ctx = create_ctx_with_partition(&tmp_dir, partition_count).await?;
+
+    // sql to statement then to logical plan with parameters
+    // c1 defined as UINT32, c2 defined as UInt64
+    let results = ctx
+        .sql("SELECT c1, c2 FROM test WHERE c1 > $coo AND c1 < $foo")
+        .await?
+        .with_param_values(vec![
+            ("foo", ScalarValue::UInt32(Some(3))),
+            ("coo", ScalarValue::UInt32(Some(0))),
+        ])?
+        .collect()
+        .await?;
+    let expected = vec![
+        "+----+----+",
+        "| c1 | c2 |",
+        "+----+----+",
+        "| 1  | 1  |",
+        "| 1  | 2  |",
+        "| 1  | 3  |",
+        "| 1  | 4  |",
+        "| 1  | 5  |",
+        "| 1  | 6  |",
+        "| 1  | 7  |",
+        "| 1  | 8  |",
+        "| 1  | 9  |",
+        "| 1  | 10 |",
+        "| 2  | 1  |",
+        "| 2  | 2  |",
+        "| 2  | 3  |",
+        "| 2  | 4  |",
+        "| 2  | 5  |",
+        "| 2  | 6  |",
+        "| 2  | 7  |",
+        "| 2  | 8  |",
+        "| 2  | 9  |",
+        "| 2  | 10 |",
+        "+----+----+",
+    ];
+    assert_batches_sorted_eq!(expected, &results);
+    Ok(())
+}
+
 // Test prepare statement from sql to final result
 // This test is equivalent with the test parallel_query_with_filter below but using prepare statement
 #[tokio::test]

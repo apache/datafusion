@@ -96,12 +96,9 @@ One 1
 Three 1
 NULL 1
 
-##########
-## query_parameters_table_test
-##########
 
 statement ok
-CREATE TABLE query_parameters_table (
+CREATE TABLE test (
   c1 BIGINT NOT NULL,
   c2 BIGINT NOT NULL,
   c3 BOOLEAN NOT NULL,
@@ -146,24 +143,10 @@ CREATE TABLE query_parameters_table (
 (3, 8, true),
 (3, 9, false);
 
-# test_list_query_parameters
-query IIB
-SELECT * FROM query_parameters_table WHERE c1 = 3;
-----
-3 1 false
-3 10 true
-3 2 true
-3 3 false
-3 4 true
-3 5 false
-3 6 true
-3 7 false
-3 8 true
-3 9 false
 
 # parallel_query_with_filter
 query II
-SELECT c1, c2 FROM query_parameters_table WHERE c1 > 0 AND c1 < 3;
+SELECT c1, c2 FROM test WHERE c1 > 0 AND c1 < 3;
 ----
 1 1
 1 10
@@ -190,13 +173,16 @@ SELECT c1, c2 FROM query_parameters_table WHERE c1 > 0 AND c1 < 3;
 # Boolean literal
 ######
 query IB
-SELECT c1, c3 FROM query_parameters_table WHERE c1 > 2 AND c3 = true;
+SELECT c1, c3 FROM test WHERE c1 > 2 AND c3 = true;
 ----
 3 true
 3 true
 3 true
 3 true
 3 true
+
+statement ok
+drop table test;
 
 ######
 # struct test
