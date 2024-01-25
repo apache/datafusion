@@ -731,7 +731,7 @@ scalar_expr!(
 scalar_expr!(
     ArraySlice,
     array_slice,
-    array offset length,
+    array begin end stride,
     "returns a slice of the array."
 );
 scalar_expr!(
@@ -798,6 +798,7 @@ scalar_expr!(Digest, digest, input algorithm, "compute the binary hash of `input
 scalar_expr!(Encode, encode, input encoding, "encode the `input`, using the `encoding`. encoding can be base64 or hex");
 scalar_expr!(Decode, decode, input encoding, "decode the`input`, using the `encoding`. encoding can be base64 or hex");
 scalar_expr!(InitCap, initcap, string, "converts the first letter of each word in `string` in uppercase and the remaining characters in lowercase");
+scalar_expr!(InStr, instr, string substring, "returns the position of the first occurrence of `substring` in `string`");
 scalar_expr!(Left, left, string n, "returns the first `n` characters in the `string`");
 scalar_expr!(Lower, lower, string, "convert the string to lower case");
 scalar_expr!(
@@ -830,6 +831,7 @@ scalar_expr!(SHA512, sha512, string, "SHA-512 hash");
 scalar_expr!(SplitPart, split_part, string delimiter index, "splits a string based on a delimiter and picks out the desired field based on the index.");
 scalar_expr!(StringToArray, string_to_array, string delimiter null_string, "splits a `string` based on a `delimiter` and returns an array of parts. Any parts matching the optional `null_string` will be replaced with `NULL`");
 scalar_expr!(StartsWith, starts_with, string prefix, "whether the `string` starts with the `prefix`");
+scalar_expr!(EndsWith, ends_with, string suffix, "whether the `string` ends with the `suffix`");
 scalar_expr!(Strpos, strpos, string substring, "finds the position from where the `substring` matches the `string`");
 scalar_expr!(Substr, substr, string position, "substring from the `position` to the end");
 scalar_expr!(Substr, substring, string position length, "substring from the `position` with `length` characters");
@@ -885,29 +887,30 @@ nary_scalar_expr!(
 scalar_expr!(DatePart, date_part, part date, "extracts a subfield from the date");
 scalar_expr!(DateTrunc, date_trunc, part date, "truncates the date to a specified level of precision");
 scalar_expr!(DateBin, date_bin, stride source origin, "coerces an arbitrary timestamp to the start of the nearest specified interval");
-scalar_expr!(
+nary_scalar_expr!(
+    ToTimestamp,
+    to_timestamp,
+    "converts a string and optional formats to a `Timestamp(Nanoseconds, None)`"
+);
+nary_scalar_expr!(
     ToTimestampMillis,
     to_timestamp_millis,
-    date,
-    "converts a string to a `Timestamp(Milliseconds, None)`"
+    "converts a string and optional formats  to a `Timestamp(Milliseconds, None)`"
 );
-scalar_expr!(
+nary_scalar_expr!(
     ToTimestampMicros,
     to_timestamp_micros,
-    date,
-    "converts a string to a `Timestamp(Microseconds, None)`"
+    "converts a string and optional formats  to a `Timestamp(Microseconds, None)`"
 );
-scalar_expr!(
+nary_scalar_expr!(
     ToTimestampNanos,
     to_timestamp_nanos,
-    date,
-    "converts a string to a `Timestamp(Nanoseconds, None)`"
+    "converts a string and optional formats  to a `Timestamp(Nanoseconds, None)`"
 );
-scalar_expr!(
+nary_scalar_expr!(
     ToTimestampSeconds,
     to_timestamp_seconds,
-    date,
-    "converts a string to a `Timestamp(Seconds, None)`"
+    "converts a string and optional formats  to a `Timestamp(Seconds, None)`"
 );
 scalar_expr!(
     FromUnixtime,
@@ -1371,6 +1374,7 @@ mod test {
         test_scalar_expr!(Gcd, gcd, arg_1, arg_2);
         test_scalar_expr!(Lcm, lcm, arg_1, arg_2);
         test_scalar_expr!(InitCap, initcap, string);
+        test_scalar_expr!(InStr, instr, string, substring);
         test_scalar_expr!(Left, left, string, count);
         test_scalar_expr!(Lower, lower, string);
         test_nary_scalar_expr!(Lpad, lpad, string, count);
@@ -1409,6 +1413,7 @@ mod test {
         test_scalar_expr!(SplitPart, split_part, expr, delimiter, index);
         test_scalar_expr!(StringToArray, string_to_array, expr, delimiter, null_value);
         test_scalar_expr!(StartsWith, starts_with, string, characters);
+        test_scalar_expr!(EndsWith, ends_with, string, characters);
         test_scalar_expr!(Strpos, strpos, string, substring);
         test_scalar_expr!(Substr, substr, string, position);
         test_scalar_expr!(Substr, substring, string, position, count);

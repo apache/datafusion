@@ -133,11 +133,11 @@ impl BuiltInWindowFunction {
         match self {
             BuiltInWindowFunction::RowNumber
             | BuiltInWindowFunction::Rank
-            | BuiltInWindowFunction::DenseRank => Ok(DataType::UInt64),
+            | BuiltInWindowFunction::DenseRank
+            | BuiltInWindowFunction::Ntile => Ok(DataType::UInt64),
             BuiltInWindowFunction::PercentRank | BuiltInWindowFunction::CumeDist => {
                 Ok(DataType::Float64)
             }
-            BuiltInWindowFunction::Ntile => Ok(DataType::UInt64),
             BuiltInWindowFunction::Lag
             | BuiltInWindowFunction::Lead
             | BuiltInWindowFunction::FirstValue

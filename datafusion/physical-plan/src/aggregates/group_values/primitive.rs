@@ -26,7 +26,7 @@ use arrow_array::{ArrayRef, ArrowNativeTypeOp, ArrowPrimitiveType, PrimitiveArra
 use arrow_schema::DataType;
 use datafusion_common::Result;
 use datafusion_execution::memory_pool::proxy::VecAllocExt;
-use datafusion_physical_expr::EmitTo;
+use datafusion_expr::EmitTo;
 use half::f16;
 use hashbrown::raw::RawTable;
 use std::sync::Arc;

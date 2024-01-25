@@ -719,14 +719,12 @@ impl DefaultPhysicalPlanner {
                     }
 
                     let logical_input_schema = input.schema();
-                    let physical_input_schema = input_exec.schema();
                     let window_expr = window_expr
                         .iter()
                         .map(|e| {
                             create_window_expr(
                                 e,
                                 logical_input_schema,
-                                &physical_input_schema,
                                 session_state.execution_props(),
                             )
                         })
@@ -1529,7 +1527,7 @@ fn get_physical_expr_pair(
 /// queries like:
 /// OVER (ORDER BY a RANGES BETWEEN 3 PRECEDING AND 5 PRECEDING)
 /// OVER (ORDER BY a RANGES BETWEEN INTERVAL '3 DAY' PRECEDING AND '5 DAY' PRECEDING)  are rejected
-pub fn is_window_valid(window_frame: &WindowFrame) -> bool {
+pub fn is_window_frame_bound_valid(window_frame: &WindowFrame) -> bool {
     match (&window_frame.start_bound, &window_frame.end_bound) {
         (WindowFrameBound::Following(_), WindowFrameBound::Preceding(_))
         | (WindowFrameBound::Following(_), WindowFrameBound::CurrentRow)
@@ -1549,10 +1547,10 @@ pub fn create_window_expr_with_name(
     e: &Expr,
     name: impl Into<String>,
     logical_input_schema: &DFSchema,
-    physical_input_schema: &Schema,
     execution_props: &ExecutionProps,
 ) -> Result<Arc<dyn WindowExpr>> {
     let name = name.into();
+    let physical_input_schema: &Schema = &logical_input_schema.into();
     match e {
         Expr::WindowFunction(WindowFunction {
             fun,
@@ -1575,7 +1573,8 @@ pub fn create_window_expr_with_name(
                     create_physical_sort_expr(e, logical_input_schema, execution_props)
                 })
                 .collect::<Result<Vec<_>>>()?;
-            if !is_window_valid(window_frame) {
+
+            if !is_window_frame_bound_valid(window_frame) {
                 return plan_err!(
                         "Invalid window frame: start bound ({}) cannot be larger than end bound ({})",
                         window_frame.start_bound, window_frame.end_bound
@@ -1601,7 +1600,6 @@ pub fn create_window_expr_with_name(
 pub fn create_window_expr(
     e: &Expr,
     logical_input_schema: &DFSchema,
-    physical_input_schema: &Schema,
     execution_props: &ExecutionProps,
 ) -> Result<Arc<dyn WindowExpr>> {
     // unpack aliased logical expressions, e.g. "sum(col) over () as total"
@@ -1609,13 +1607,7 @@ pub fn create_window_expr(
         Expr::Alias(Alias { expr, name, .. }) => (name.clone(), expr.as_ref()),
         _ => (e.display_name()?, e),
     };
-    create_window_expr_with_name(
-        e,
-        name,
-        logical_input_schema,
-        physical_input_schema,
-        execution_props,
-    )
+    create_window_expr_with_name(e, name, logical_input_schema, execution_props)
 }
 
 type AggregateExprWithOptionalArgs = (

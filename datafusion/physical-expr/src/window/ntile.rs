@@ -35,11 +35,17 @@ use std::sync::Arc;
 pub struct Ntile {
     name: String,
     n: u64,
+    /// Output data type
+    data_type: DataType,
 }
 
 impl Ntile {
-    pub fn new(name: String, n: u64) -> Self {
-        Self { name, n }
+    pub fn new(name: String, n: u64, data_type: &DataType) -> Self {
+        Self {
+            name,
+            n,
+            data_type: data_type.clone(),
+        }
     }
 
     pub fn get_n(&self) -> u64 {
@@ -54,8 +60,7 @@ impl BuiltInWindowFunctionExpr for Ntile {
 
     fn field(&self) -> Result<Field> {
         let nullable = false;
-        let data_type = DataType::UInt64;
-        Ok(Field::new(self.name(), data_type, nullable))
+        Ok(Field::new(self.name(), self.data_type.clone(), nullable))
     }
 
     fn expressions(&self) -> Vec<Arc<dyn PhysicalExpr>> {

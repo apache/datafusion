@@ -23,8 +23,9 @@ use crate::PhysicalExpr;
 use arrow::array::ArrayRef;
 use arrow::compute::cast;
 use arrow::datatypes::{DataType, Field};
-use datafusion_common::{arrow_datafusion_err, ScalarValue};
-use datafusion_common::{internal_err, DataFusionError, Result};
+use datafusion_common::{
+    arrow_datafusion_err, exec_err, DataFusionError, Result, ScalarValue,
+};
 use datafusion_expr::PartitionEvaluator;
 use std::any::Any;
 use std::cmp::min;
@@ -35,6 +36,7 @@ use std::sync::Arc;
 #[derive(Debug)]
 pub struct WindowShift {
     name: String,
+    /// Output data type
     data_type: DataType,
     shift_offset: i64,
     expr: Arc<dyn PhysicalExpr>,
@@ -235,14 +237,16 @@ fn get_default_value(
     default_value: Option<&ScalarValue>,
     dtype: &DataType,
 ) -> Result<ScalarValue> {
-    if let Some(value) = default_value {
-        if let ScalarValue::Int64(Some(val)) = value {
-            ScalarValue::try_from_string(val.to_string(), dtype)
-        } else {
-            internal_err!("Expects default value to have Int64 type")
+    match default_value {
+        Some(v) if v.data_type() == DataType::Int64 => {
+            ScalarValue::try_from_string(v.to_string(), dtype)
         }
-    } else {
-        Ok(ScalarValue::try_from(dtype)?)
+        Some(v) if !v.data_type().is_null() => exec_err!(
+            "Unexpected datatype for default value: {}. Expected: Int64",
+            v.data_type()
+        ),
+        // If None or Null datatype
+        _ => Ok(ScalarValue::try_from(dtype)?),
     }
 }
 

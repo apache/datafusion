@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::error::{_internal_err, _plan_err};
+use crate::error::_plan_err;
 use crate::{DataFusionError, Result, ScalarValue};
 use arrow_schema::DataType;
 use std::collections::HashMap;
@@ -65,11 +65,7 @@ impl ParamValues {
         }
     }
 
-    pub fn get_placeholders_with_values(
-        &self,
-        id: &str,
-        data_type: Option<&DataType>,
-    ) -> Result<ScalarValue> {
+    pub fn get_placeholders_with_values(&self, id: &str) -> Result<ScalarValue> {
         match self {
             ParamValues::List(list) => {
                 if id.is_empty() {
@@ -90,14 +86,6 @@ impl ParamValues {
                         "No value found for placeholder with id {id}"
                     ))
                 })?;
-                // check if the data type of the value matches the data type of the placeholder
-                if Some(&value.data_type()) != data_type {
-                    return _internal_err!(
-                        "Placeholder value type mismatch: expected {:?}, got {:?}",
-                        data_type,
-                        value.data_type()
-                    );
-                }
                 Ok(value.clone())
             }
             ParamValues::Map(map) => {
@@ -109,14 +97,6 @@ impl ParamValues {
                         "No value found for placeholder with name {id}"
                     ))
                 })?;
-                // check if the data type of the value matches the data type of the placeholder
-                if Some(&value.data_type()) != data_type {
-                    return _internal_err!(
-                        "Placeholder value type mismatch: expected {:?}, got {:?}",
-                        data_type,
-                        value.data_type()
-                    );
-                }
                 Ok(value.clone())
             }
         }
