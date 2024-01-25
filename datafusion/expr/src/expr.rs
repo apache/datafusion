@@ -33,7 +33,7 @@ use datafusion_common::{plan_err, Column, DataFusionError, Result, ScalarValue};
 use std::collections::HashSet;
 use std::fmt;
 use std::fmt::{Display, Formatter, Write};
-use std::hash::{BuildHasher, Hash, Hasher};
+use std::hash::Hash;
 use std::str::FromStr;
 use std::sync::Arc;
 
@@ -849,13 +849,8 @@ const SEED: ahash::RandomState = ahash::RandomState::with_seeds(0, 0, 0, 0);
 
 impl PartialOrd for Expr {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        let mut hasher = SEED.build_hasher();
-        self.hash(&mut hasher);
-        let s = hasher.finish();
-
-        let mut hasher = SEED.build_hasher();
-        other.hash(&mut hasher);
-        let o = hasher.finish();
+        let s = SEED.hash_one(self);
+        let o = SEED.hash_one(other);
 
         Some(s.cmp(&o))
     }
