@@ -575,8 +575,8 @@ pub fn calculate_join_output_ordering(
                 )
                 .ok()?;
                 merge_vectors(
-                    right_ordering,
                     &offset_ordering(right_ordering, &join_type, left_columns_len),
+                    left_ordering,
                 )
             } else {
                 offset_ordering(right_ordering, &join_type, left_columns_len)
