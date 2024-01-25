@@ -24,3 +24,15 @@ query I
 WITH "T" AS (SELECT 1 a) SELECT * FROM "T"
 ----
 1
+
+query TT
+EXPLAIN WITH "NUMBERS" AS (SELECT 1 as a, 2 as b, 3 as c) SELECT * FROM "NUMBERS"
+----
+logical_plan
+Projection: NUMBERS.a, NUMBERS.b, NUMBERS.c
+--SubqueryAlias: NUMBERS
+----Projection: Int64(1) AS a, Int64(2) AS b, Int64(3) AS c
+------EmptyRelation
+physical_plan
+ProjectionExec: expr=[1 as a, 2 as b, 3 as c]
+--PlaceholderRowExec

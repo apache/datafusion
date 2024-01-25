@@ -234,9 +234,25 @@ false true false true true false false true false true true false true true fals
 
 # select uppercase alias table
 query I
-select "T".* from (select 1 a) as "T";
+SELECT "T".* from (SELECT 1 a) AS "T"
 ----
 1
+
+# explain select uppercase alias table
+query TT
+EXPLAIN SELECT * FROM ((SELECT column1 FROM foo) "T1" CROSS JOIN (SELECT column2 FROM foo) "T2") AS "F"
+----
+logical_plan
+SubqueryAlias: F
+--CrossJoin:
+----SubqueryAlias: T1
+------TableScan: foo projection=[column1]
+----SubqueryAlias: T2
+------TableScan: foo projection=[column2]
+physical_plan
+CrossJoinExec
+--MemoryExec: partitions=1, partition_sizes=[1]
+--MemoryExec: partitions=1, partition_sizes=[1]
 
 # select NaNs
 query BBBB

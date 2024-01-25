@@ -3130,22 +3130,6 @@ fn cte_with_column_names() {
 }
 
 #[test]
-fn cte_with_uppercase_table_alias() {
-    let sql = "WITH \
-        \"NUMBERS\" AS ( \
-            SELECT 1 as a, 2 as b, 3 as c \
-        ) \
-        SELECT * FROM \"NUMBERS\";";
-
-    let expected = "Projection: NUMBERS.a, NUMBERS.b, NUMBERS.c\
-        \n  SubqueryAlias: NUMBERS\
-        \n    Projection: Int64(1) AS a, Int64(2) AS b, Int64(3) AS c\
-        \n      EmptyRelation";
-
-    quick_test(sql, expected)
-}
-
-#[test]
 fn cte_with_column_aliases_precedence() {
     // The end result should always be what CTE specification says
     let sql = "WITH \
@@ -4290,23 +4274,6 @@ fn test_table_alias() {
         \n        Projection: person.id\
         \n          TableScan: person\
         \n      SubqueryAlias: t2\
-        \n        Projection: person.age\
-        \n          TableScan: person";
-    quick_test(sql, expected);
-
-    let sql = "select * from (\
-          (select id from person) \"T1\" \
-            CROSS JOIN \
-          (select age from person) \"T2\" \
-        ) as \"F\"";
-
-    let expected = "Projection: F.id, F.age\
-        \n  SubqueryAlias: F\
-        \n    CrossJoin:\
-        \n      SubqueryAlias: T1\
-        \n        Projection: person.id\
-        \n          TableScan: person\
-        \n      SubqueryAlias: T2\
         \n        Projection: person.age\
         \n          TableScan: person";
     quick_test(sql, expected);
