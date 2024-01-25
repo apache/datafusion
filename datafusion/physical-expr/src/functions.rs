@@ -42,6 +42,7 @@ use arrow::{
     compute::kernels::length::{bit_length, length},
     datatypes::{DataType, Int32Type, Int64Type, Schema},
 };
+use arrow_array::Array;
 use datafusion_common::{internal_err, DataFusionError, Result, ScalarValue};
 pub use datafusion_expr::FuncMonotonicity;
 use datafusion_expr::{
@@ -189,6 +190,51 @@ pub(crate) enum Hint {
     Pad,
     /// Indicates the argument can be converted to an array of length 1
     AcceptsSingular,
+}
+
+/// A helper function used to infer the length of arguments of Scalar functions and convert
+/// [`ColumnarValue`]s to [`ArrayRef`]s with the inferred length. Note that this function
+/// only works for functions that accept either that all arguments are scalars or all arguments
+/// are arrays with same length. Otherwise, it will return an error.
+pub fn columnar_values_to_array(args: &[ColumnarValue]) -> Result<Vec<ArrayRef>> {
+    if args.is_empty() {
+        return Ok(vec![]);
+    }
+
+    let len = args
+        .iter()
+        .fold(Option::<usize>::None, |acc, arg| match arg {
+            ColumnarValue::Scalar(_) if acc.is_none() => Some(1),
+            ColumnarValue::Scalar(_) => {
+                if let Some(1) = acc {
+                    acc
+                } else {
+                    None
+                }
+            }
+            ColumnarValue::Array(a) => {
+                if let Some(l) = acc {
+                    if l == a.len() {
+                        acc
+                    } else {
+                        None
+                    }
+                } else {
+                    Some(a.len())
+                }
+            }
+        });
+
+    let inferred_length = len.ok_or(DataFusionError::Internal(
+        "Arguments has mixed length".to_string(),
+    ))?;
+
+    let args = args
+        .iter()
+        .map(|arg| arg.clone().into_array(inferred_length))
+        .collect::<Result<Vec<_>>>()?;
+
+    Ok(args)
 }
 
 /// Decorates a function to handle [`ScalarValue`]s by converting them to arrays before calling the function
