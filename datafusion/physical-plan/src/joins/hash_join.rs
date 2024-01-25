@@ -30,7 +30,6 @@ use crate::joins::utils::{
 };
 use crate::{
     coalesce_partitions::CoalescePartitionsExec,
-    expressions::Column,
     expressions::PhysicalSortExpr,
     hash_utils::create_hashes,
     joins::utils::{
@@ -39,8 +38,8 @@ use crate::{
         BuildProbeJoinMetrics, ColumnIndex, JoinFilter, JoinOn, StatefulStreamResult,
     },
     metrics::{ExecutionPlanMetricsSet, MetricsSet},
-    DisplayFormatType, Distribution, ExecutionPlan, Partitioning, PhysicalExpr,
-    RecordBatchStream, SendableRecordBatchStream, Statistics,
+    DisplayFormatType, Distribution, ExecutionPlan, Partitioning, RecordBatchStream,
+    SendableRecordBatchStream, Statistics,
 };
 use crate::{handle_state, DisplayAs};
 
@@ -67,7 +66,7 @@ use datafusion_common::{
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::equivalence::join_equivalence_properties;
-use datafusion_physical_expr::EquivalenceProperties;
+use datafusion_physical_expr::{EquivalenceProperties, PhysicalExprRef};
 
 use ahash::RandomState;
 use futures::{ready, Stream, StreamExt, TryStreamExt};
@@ -278,7 +277,7 @@ pub struct HashJoinExec {
     /// right (probe) side which are filtered by the hash table
     pub right: Arc<dyn ExecutionPlan>,
     /// Set of equijoin columns from the relations: `(left_col, right_col)`
-    pub on: Vec<(Column, Column)>,
+    pub on: Vec<(PhysicalExprRef, PhysicalExprRef)>,
     /// Filters which are applied while finding matching rows
     pub filter: Option<JoinFilter>,
     /// How the join is performed (`OUTER`, `INNER`, etc)
@@ -369,7 +368,7 @@ impl HashJoinExec {
     }
 
     /// Set of common columns used to join on
-    pub fn on(&self) -> &[(Column, Column)] {
+    pub fn on(&self) -> &[(PhysicalExprRef, PhysicalExprRef)] {
         &self.on
     }
 
@@ -451,16 +450,8 @@ impl ExecutionPlan for HashJoinExec {
                 Distribution::UnspecifiedDistribution,
             ],
             PartitionMode::Partitioned => {
-                let (left_expr, right_expr) = self
-                    .on
-                    .iter()
-                    .map(|(l, r)| {
-                        (
-                            Arc::new(l.clone()) as Arc<dyn PhysicalExpr>,
-                            Arc::new(r.clone()) as Arc<dyn PhysicalExpr>,
-                        )
-                    })
-                    .unzip();
+                let (left_expr, right_expr) =
+                    self.on.iter().map(|(l, r)| (l.clone(), r.clone())).unzip();
                 vec![
                     Distribution::HashPartitioned(left_expr),
                     Distribution::HashPartitioned(right_expr),
@@ -697,7 +688,7 @@ async fn collect_left_input(
     partition: Option<usize>,
     random_state: RandomState,
     left: Arc<dyn ExecutionPlan>,
-    on_left: Vec<Column>,
+    on_left: Vec<PhysicalExprRef>,
     context: Arc<TaskContext>,
     metrics: BuildProbeJoinMetrics,
     reservation: MemoryReservation,
@@ -793,7 +784,7 @@ async fn collect_left_input(
 /// as a chain head for rows with equal hash values.
 #[allow(clippy::too_many_arguments)]
 pub fn update_hash<T>(
-    on: &[Column],
+    on: &[PhysicalExprRef],
     batch: &RecordBatch,
     hash_map: &mut T,
     offset: usize,
@@ -955,9 +946,9 @@ struct HashJoinStream {
     /// Input schema
     schema: Arc<Schema>,
     /// equijoin columns from the left (build side)
-    on_left: Vec<Column>,
+    on_left: Vec<PhysicalExprRef>,
     /// equijoin columns from the right (probe side)
-    on_right: Vec<Column>,
+    on_right: Vec<PhysicalExprRef>,
     /// optional join filter
     filter: Option<JoinFilter>,
     /// type of the join (left, right, semi, etc)
@@ -1043,8 +1034,8 @@ fn lookup_join_hashmap(
     build_hashmap: &JoinHashMap,
     build_input_buffer: &RecordBatch,
     probe_batch: &RecordBatch,
-    build_on: &[Column],
-    probe_on: &[Column],
+    build_on: &[PhysicalExprRef],
+    probe_on: &[PhysicalExprRef],
     null_equals_null: bool,
     hashes_buffer: &[u64],
     limit: usize,

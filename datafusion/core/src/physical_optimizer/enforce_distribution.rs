@@ -54,7 +54,7 @@ use datafusion_physical_expr::expressions::{Column, NoOp};
 use datafusion_physical_expr::utils::map_columns_before_projection;
 use datafusion_physical_expr::{
     physical_exprs_equal, EquivalenceProperties, LexRequirementRef, PhysicalExpr,
-    PhysicalSortRequirement,
+    PhysicalExprRef, PhysicalSortRequirement,
 };
 use datafusion_physical_plan::sorts::sort::SortExec;
 use datafusion_physical_plan::windows::{get_best_fitting_window, BoundedWindowAggExec};
@@ -289,19 +289,21 @@ fn adjust_input_keys_ordering(
     {
         match mode {
             PartitionMode::Partitioned => {
-                let join_constructor =
-                    |new_conditions: (Vec<(Column, Column)>, Vec<SortOptions>)| {
-                        HashJoinExec::try_new(
-                            left.clone(),
-                            right.clone(),
-                            new_conditions.0,
-                            filter.clone(),
-                            join_type,
-                            PartitionMode::Partitioned,
-                            *null_equals_null,
-                        )
-                        .map(|e| Arc::new(e) as _)
-                    };
+                let join_constructor = |new_conditions: (
+                    Vec<(PhysicalExprRef, PhysicalExprRef)>,
+                    Vec<SortOptions>,
+                )| {
+                    HashJoinExec::try_new(
+                        left.clone(),
+                        right.clone(),
+                        new_conditions.0,
+                        filter.clone(),
+                        join_type,
+                        PartitionMode::Partitioned,
+                        *null_equals_null,
+                    )
+                    .map(|e| Arc::new(e) as _)
+                };
                 reorder_partitioned_join_keys(
                     requirements.plan.clone(),
                     &parent_required,
@@ -356,18 +358,20 @@ fn adjust_input_keys_ordering(
         ..
     }) = plan_any.downcast_ref::<SortMergeJoinExec>()
     {
-        let join_constructor =
-            |new_conditions: (Vec<(Column, Column)>, Vec<SortOptions>)| {
-                SortMergeJoinExec::try_new(
-                    left.clone(),
-                    right.clone(),
-                    new_conditions.0,
-                    *join_type,
-                    new_conditions.1,
-                    *null_equals_null,
-                )
-                .map(|e| Arc::new(e) as _)
-            };
+        let join_constructor = |new_conditions: (
+            Vec<(PhysicalExprRef, PhysicalExprRef)>,
+            Vec<SortOptions>,
+        )| {
+            SortMergeJoinExec::try_new(
+                left.clone(),
+                right.clone(),
+                new_conditions.0,
+                *join_type,
+                new_conditions.1,
+                *null_equals_null,
+            )
+            .map(|e| Arc::new(e) as _)
+        };
         reorder_partitioned_join_keys(
             requirements.plan.clone(),
             &parent_required,
@@ -427,12 +431,14 @@ fn adjust_input_keys_ordering(
 fn reorder_partitioned_join_keys<F>(
     join_plan: Arc<dyn ExecutionPlan>,
     parent_required: &[Arc<dyn PhysicalExpr>],
-    on: &[(Column, Column)],
+    on: &[(PhysicalExprRef, PhysicalExprRef)],
     sort_options: Vec<SortOptions>,
     join_constructor: &F,
 ) -> Result<PlanWithKeyRequirements>
 where
-    F: Fn((Vec<(Column, Column)>, Vec<SortOptions>)) -> Result<Arc<dyn ExecutionPlan>>,
+    F: Fn(
+        (Vec<(PhysicalExprRef, PhysicalExprRef)>, Vec<SortOptions>),
+    ) -> Result<Arc<dyn ExecutionPlan>>,
 {
     let join_key_pairs = extract_join_keys(on);
     if let Some((
@@ -837,10 +843,10 @@ fn expected_expr_positions(
     Some(indexes)
 }
 
-fn extract_join_keys(on: &[(Column, Column)]) -> JoinKeyPairs {
+fn extract_join_keys(on: &[(PhysicalExprRef, PhysicalExprRef)]) -> JoinKeyPairs {
     let (left_keys, right_keys) = on
         .iter()
-        .map(|(l, r)| (Arc::new(l.clone()) as _, Arc::new(r.clone()) as _))
+        .map(|(l, r)| (l.clone() as _, r.clone() as _))
         .unzip();
     JoinKeyPairs {
         left_keys,
@@ -851,16 +857,11 @@ fn extract_join_keys(on: &[(Column, Column)]) -> JoinKeyPairs {
 fn new_join_conditions(
     new_left_keys: &[Arc<dyn PhysicalExpr>],
     new_right_keys: &[Arc<dyn PhysicalExpr>],
-) -> Vec<(Column, Column)> {
+) -> Vec<(PhysicalExprRef, PhysicalExprRef)> {
     new_left_keys
         .iter()
         .zip(new_right_keys.iter())
-        .map(|(l_key, r_key)| {
-            (
-                l_key.as_any().downcast_ref::<Column>().unwrap().clone(),
-                r_key.as_any().downcast_ref::<Column>().unwrap().clone(),
-            )
-        })
+        .map(|(l_key, r_key)| (l_key.clone(), r_key.clone()))
         .collect()
 }
 

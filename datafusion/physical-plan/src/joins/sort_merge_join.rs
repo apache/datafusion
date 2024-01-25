@@ -30,7 +30,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use crate::expressions::{Column, PhysicalSortExpr};
+use crate::expressions::PhysicalSortExpr;
 use crate::joins::utils::{
     build_join_schema, calculate_join_output_ordering, check_join_is_valid,
     estimate_join_statistics, partitioned_join_output_partitioning, JoinOn,
@@ -52,7 +52,9 @@ use datafusion_common::{
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::equivalence::join_equivalence_properties;
-use datafusion_physical_expr::{EquivalenceProperties, PhysicalSortRequirement};
+use datafusion_physical_expr::{
+    EquivalenceProperties, PhysicalExprRef, PhysicalSortRequirement,
+};
 
 use futures::{Stream, StreamExt};
 
@@ -120,11 +122,11 @@ impl SortMergeJoinExec {
             .zip(sort_options.iter())
             .map(|((l, r), sort_op)| {
                 let left = PhysicalSortExpr {
-                    expr: Arc::new(l.clone()) as Arc<dyn PhysicalExpr>,
+                    expr: l.clone(),
                     options: *sort_op,
                 };
                 let right = PhysicalSortExpr {
-                    expr: Arc::new(r.clone()) as Arc<dyn PhysicalExpr>,
+                    expr: r.clone(),
                     options: *sort_op,
                 };
                 (left, right)
@@ -189,7 +191,7 @@ impl SortMergeJoinExec {
     }
 
     /// Set of common columns used to join on
-    pub fn on(&self) -> &[(Column, Column)] {
+    pub fn on(&self) -> &[(PhysicalExprRef, PhysicalExprRef)] {
         &self.on
     }
 
@@ -236,16 +238,8 @@ impl ExecutionPlan for SortMergeJoinExec {
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
-        let (left_expr, right_expr) = self
-            .on
-            .iter()
-            .map(|(l, r)| {
-                (
-                    Arc::new(l.clone()) as Arc<dyn PhysicalExpr>,
-                    Arc::new(r.clone()) as Arc<dyn PhysicalExpr>,
-                )
-            })
-            .unzip();
+        let (left_expr, right_expr) =
+            self.on.iter().map(|(l, r)| (l.clone(), r.clone())).unzip();
         vec![
             Distribution::HashPartitioned(left_expr),
             Distribution::HashPartitioned(right_expr),
@@ -547,7 +541,11 @@ struct BufferedBatch {
 }
 
 impl BufferedBatch {
-    fn new(batch: RecordBatch, range: Range<usize>, on_column: &[Column]) -> Self {
+    fn new(
+        batch: RecordBatch,
+        range: Range<usize>,
+        on_column: &[PhysicalExprRef],
+    ) -> Self {
         let join_arrays = join_arrays(&batch, on_column);
 
         // Estimation is calculated as
@@ -609,9 +607,9 @@ struct SMJStream {
     /// The comparison result of current streamed row and buffered batches
     pub current_ordering: Ordering,
     /// Join key columns of streamed
-    pub on_streamed: Vec<Arc<dyn PhysicalExpr>>,
+    pub on_streamed: Vec<PhysicalExprRef>,
     /// Join key columns of buffered
-    pub on_buffered: Vec<Arc<dyn PhysicalExpr>>,
+    pub on_buffered: Vec<PhysicalExprRef>,
     /// Staging output array builders
     pub output_record_batches: Vec<RecordBatch>,
     /// Staging output size, including output batches and staging joined results
@@ -1218,10 +1216,7 @@ impl BufferedData {
 }
 
 /// Get join array refs of given batch and join columns
-fn join_arrays(
-    batch: &RecordBatch,
-    on_column: &[Arc<dyn PhysicalExpr>],
-) -> Vec<ArrayRef> {
+fn join_arrays(batch: &RecordBatch, on_column: &[PhysicalExprRef]) -> Vec<ArrayRef> {
     on_column
         .iter()
         .map(|c| {

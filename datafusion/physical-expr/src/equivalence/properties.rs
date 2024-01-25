@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::expressions::Column;
 use arrow_schema::SchemaRef;
 use datafusion_common::{JoinSide, JoinType};
 use indexmap::IndexSet;
@@ -32,7 +31,8 @@ use crate::expressions::Literal;
 use crate::sort_properties::{ExprOrdering, SortProperties};
 use crate::{
     physical_exprs_contains, LexOrdering, LexOrderingRef, LexRequirement,
-    LexRequirementRef, PhysicalExpr, PhysicalSortExpr, PhysicalSortRequirement,
+    LexRequirementRef, PhysicalExpr, PhysicalExprRef, PhysicalSortExpr,
+    PhysicalSortRequirement,
 };
 use datafusion_common::tree_node::{Transformed, TreeNode};
 
@@ -1099,7 +1099,7 @@ pub fn join_equivalence_properties(
     join_schema: SchemaRef,
     maintains_input_order: &[bool],
     probe_side: Option<JoinSide>,
-    on: &[(Column, Column)],
+    on: &[(PhysicalExprRef, PhysicalExprRef)],
 ) -> EquivalenceProperties {
     let left_size = left.schema.fields.len();
     let mut result = EquivalenceProperties::new(join_schema);

@@ -1044,10 +1044,7 @@ impl DefaultPhysicalPlanner {
                                 right_df_schema,
                                 execution_props
                             )?;
-                            Ok((
-                                Arc::new(l),
-                                Arc::new(r),
-                            ))
+                            Ok((l, r))
                         })
                         .collect::<Result<join_utils::JoinOn>>()?;
 
