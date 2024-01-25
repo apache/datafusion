@@ -46,11 +46,294 @@ STORED AS CSV
 WITH HEADER ROW
 LOCATION '../core/tests/data/aggregate_simple.csv'
 
-
 ##########
 ## SELECT Tests
 ##########
 
+##########
+## window_null_string_table_test
+##########
+
+statement ok
+CREATE TABLE window_null_string_value_prepare(x string, y string, z string)
+AS VALUES
+('one', 'ONE', 'One'),
+(NULL, NULL, NULL),
+('three', 'THREE', 'Three');
+
+statement ok
+CREATE TABLE window_null_string_table
+AS SELECT arrow_cast(x, 'Dictionary(Int32, Utf8)') as d1,
+y as d2,
+arrow_cast(z, 'LargeUtf8') as d3 FROM window_null_string_value_prepare;
+
+query ?I
+SELECT d1, row_number() OVER (partition by d1) as rn1 FROM window_null_string_table order by d1 asc;
+----
+one 1
+three 1
+NULL 1
+
+query TI
+SELECT d2, row_number() OVER (partition by d2) as rn1 FROM window_null_string_table ORDER BY d2 asc;
+----
+ONE 1
+THREE 1
+NULL 1
+
+query TI
+SELECT d2, row_number() OVER (partition by d2 order by d2 desc) as rn1 FROM window_null_string_table ORDER BY d2 desc
+----
+NULL 1
+THREE 1
+ONE 1
+
+# Test large string as well
+query TI rowsort
+SELECT d3, row_number() OVER (partition by d3) as rn1 FROM window_null_string_table;
+----
+NULL 1
+One 1
+Three 1
+
+
+statement ok
+CREATE TABLE test (
+  c1 BIGINT NOT NULL,
+  c2 BIGINT NOT NULL,
+  c3 BOOLEAN NOT NULL,
+) AS VALUES (0, 1, false),
+(0, 10, true),
+(0, 2, true),
+(0, 3, false),
+(0, 4, true),
+(0, 5, false),
+(0, 6, true),
+(0, 7, false),
+(0, 8, true),
+(0, 9, false),
+(1, 1, false),
+(1, 10, true),
+(1, 2, true),
+(1, 3, false),
+(1, 4, true),
+(1, 5, false),
+(1, 6, true),
+(1, 7, false),
+(1, 8, true),
+(1, 9, false),
+(2, 1, false),
+(2, 10, true),
+(2, 2, true),
+(2, 3, false),
+(2, 4, true),
+(2, 5, false),
+(2, 6, true),
+(2, 7, false),
+(2, 8, true),
+(2, 9, false),
+(3, 1, false),
+(3, 10, true),
+(3, 2, true),
+(3, 3, false),
+(3, 4, true),
+(3, 5, false),
+(3, 6, true),
+(3, 7, false),
+(3, 8, true),
+(3, 9, false);
+
+
+# parallel_query_with_filter
+query II
+SELECT c1, c2 FROM test WHERE c1 > 0 AND c1 < 3;
+----
+1 1
+1 10
+1 2
+1 3
+1 4
+1 5
+1 6
+1 7
+1 8
+1 9
+2 1
+2 10
+2 2
+2 3
+2 4
+2 5
+2 6
+2 7
+2 8
+2 9
+
+######
+# Boolean literal
+######
+query IB
+SELECT c1, c3 FROM test WHERE c1 > 2 AND c3 = true;
+----
+3 true
+3 true
+3 true
+3 true
+3 true
+
+statement ok
+drop table test;
+
+######
+# struct test
+######
+# Prepare the table with struct values for testing
+statement ok
+CREATE TABLE struct_value
+AS VALUES
+(make_array(0, 1, 2, 3)),
+(make_array(4, 5, 6, 7)),
+(make_array(8, 9, 10, 11));
+
+statement ok
+CREATE TABLE nested_get_indexed_field_on_struct_table
+AS SELECT struct(column1) as some_struct from struct_value;
+
+# Original column is micros, convert to millis and check timestamp
+query ?
+SELECT some_struct['c0'] FROM nested_get_indexed_field_on_struct_table LIMIT 3;
+----
+[0, 1, 2, 3]
+[4, 5, 6, 7]
+[8, 9, 10, 11]
+
+# Access to field of struct by CompoundIdentifier
+query ?
+SELECT some_struct.c0 as l0 FROM nested_get_indexed_field_on_struct_table LIMIT 3;
+----
+[0, 1, 2, 3]
+[4, 5, 6, 7]
+[8, 9, 10, 11]
+
+query I
+SELECT some_struct['c0'][1] as i0 FROM nested_get_indexed_field_on_struct_table LIMIT 3;
+----
+0
+4
+8
+
+# Basic SELECT
+####
+#  dictionary_test
+####
+
+# Prepare the table with dictionary values for testing
+statement ok
+CREATE TABLE value(x string, y string, z string)
+AS VALUES
+('one', 'blarg', 'XYZ'),
+(NULL, NULL, NULL),
+('three', 'three', 'three');
+
+statement ok
+CREATE TABLE string_dictionary_table
+AS SELECT arrow_cast(x, 'Dictionary(Int32, Utf8)') as d1,
+arrow_cast(y, 'Dictionary(Int32, Utf8)') as d2,
+z as d3 FROM value;
+
+query ?
+SELECT d1 FROM string_dictionary_table;
+----
+one
+NULL
+three
+
+# basic filtering
+query ?
+SELECT d1 FROM string_dictionary_table WHERE d1 IS NOT NULL;
+----
+one
+three
+
+# comparison with constant
+query ?
+SELECT d1 FROM string_dictionary_table WHERE d1 = 'three';
+----
+three
+
+# comparison with another dictionary column
+query ?
+SELECT d1 FROM string_dictionary_table WHERE d1 = d2;
+----
+three
+
+# order comparison with another dictionary column
+query ?
+SELECT d1 FROM string_dictionary_table WHERE d1 <= d2;
+----
+three
+
+# comparison with a non dictionary column
+query ?
+SELECT d1 FROM string_dictionary_table WHERE d1 = d3;
+----
+three
+
+# filtering with constant
+query ?
+SELECT d1 FROM string_dictionary_table WHERE d1 = 'three';
+----
+three
+
+# Expression evaluation
+query T
+SELECT concat(d1, '-foo') FROM string_dictionary_table;
+----
+one-foo
+-foo
+three-foo
+
+# Expression evaluation with two dictionaries
+query T
+SELECT concat(d1, d2) FROM string_dictionary_table;
+----
+oneblarg
+(empty)
+threethree
+
+# aggregation
+query I
+SELECT COUNT(d1) FROM string_dictionary_table;
+----
+2
+
+# aggregation min
+query T
+SELECT MIN(d1) FROM string_dictionary_table;
+----
+one
+
+# aggregation max
+query T
+SELECT MAX(d1) FROM string_dictionary_table;
+----
+three
+
+# grouping
+query ?I
+SELECT d1, COUNT(*) FROM string_dictionary_table group by d1 order by d1;
+----
+one 1
+three 1
+NULL 1
+
+# window functions
+query ?I
+SELECT d1, row_number() OVER (partition by d1) as rn1 FROM string_dictionary_table order by d1;
+----
+one 1
+three 1
+NULL 1
 
 # select_values_list
 statement error DataFusion error: SQL error: ParserError\("Expected \(, found: EOF"\)
@@ -1176,10 +1459,68 @@ SELECT y = 0 or 1 / y < 1, x = 0 or y = 0 or 1 / y < 1 / x from t;
 statement ok
 DROP TABLE t;
 
+##########
+## indexed_field_test
+##########
+statement ok
+CREATE TABLE indexed_field
+AS VALUES (make_array(0, 1, 2)),
+(make_array(4, 5, 6)),
+(make_array(7, 8, 9))
+
+# query_get_indexed_field
+query I
+SELECT column1[1] AS i0
+FROM indexed_field LIMIT 3;
+----
+0
+4
+7
+
+##########
+## nested_indexed_field_test
+##########
+statement ok
+CREATE TABLE nested_indexed_field
+AS VALUES (make_array([0, 1], [2, 3], [3, 4])),
+(make_array([5, 6], [7, 8], [9, 10])),
+(make_array([11, 12], [13, 14], [15, 16]))
+
+# query nested_indexed_field
+query ?
+SELECT column1[1] AS i0
+FROM nested_indexed_field LIMIT 3;
+----
+[0, 1]
+[5, 6]
+[11, 12]
+
+query I
+SELECT column1[1][1] AS i0
+FROM nested_indexed_field LIMIT 3;
+----
+0
+5
+11
+
 query I
 SELECT CASE 1 WHEN 2 THEN 4 / 0 END;
 ----
 NULL
+
+
+######
+# Unprojected filter
+######
+
+statement ok
+CREATE TABLE test(i INT) AS
+VALUES (1), (2), (3);
+
+query I
+SELECT i + i FROM test WHERE i > 2;
+----
+6
 
 query error DataFusion error: Arrow error: Parser error: Error parsing timestamp from 'I AM NOT A TIMESTAMP': error parsing date
 SELECT to_timestamp('I AM NOT A TIMESTAMP');
