@@ -1451,8 +1451,8 @@ mod tests {
         )?;
 
         let on = vec![(
-            Column::new_with_schema("lc1", left_schema)?,
-            Column::new_with_schema("rc1", right_schema)?,
+            Arc::new(Column::new_with_schema("lc1", left_schema)?) as _,
+            Arc::new(Column::new_with_schema("rc1", right_schema)?) as _,
         )];
 
         let intermediate_schema = Schema::new(vec![
@@ -1519,8 +1519,8 @@ mod tests {
         )?;
 
         let on = vec![(
-            Column::new_with_schema("lc1", left_schema)?,
-            Column::new_with_schema("rc1", right_schema)?,
+            Arc::new(Column::new_with_schema("lc1", left_schema)?) as _,
+            Arc::new(Column::new_with_schema("rc1", right_schema)?) as _,
         )];
 
         let intermediate_schema = Schema::new(vec![
@@ -1573,8 +1573,8 @@ mod tests {
             create_memory_table(left_partition, right_partition, vec![], vec![])?;
 
         let on = vec![(
-            Column::new_with_schema("lc1", left_schema)?,
-            Column::new_with_schema("rc1", right_schema)?,
+            Arc::new(Column::new_with_schema("lc1", left_schema)?) as _,
+            Arc::new(Column::new_with_schema("rc1", right_schema)?) as _,
         )];
 
         let intermediate_schema = Schema::new(vec![
@@ -1625,8 +1625,8 @@ mod tests {
             create_memory_table(left_partition, right_partition, vec![], vec![])?;
 
         let on = vec![(
-            Column::new_with_schema("lc1", left_schema)?,
-            Column::new_with_schema("rc1", right_schema)?,
+            Arc::new(Column::new_with_schema("lc1", left_schema)?) as _,
+            Arc::new(Column::new_with_schema("rc1", right_schema)?) as _,
         )];
         experiment(left, right, None, join_type, on, task_ctx).await?;
         Ok(())
@@ -1674,8 +1674,8 @@ mod tests {
         )?;
 
         let on = vec![(
-            Column::new_with_schema("lc1", left_schema)?,
-            Column::new_with_schema("rc1", right_schema)?,
+            Arc::new(Column::new_with_schema("lc1", left_schema)?) as _,
+            Arc::new(Column::new_with_schema("rc1", right_schema)?) as _,
         )];
 
         let intermediate_schema = Schema::new(vec![
@@ -1735,8 +1735,8 @@ mod tests {
         )?;
 
         let on = vec![(
-            Column::new_with_schema("lc1", left_schema)?,
-            Column::new_with_schema("rc1", right_schema)?,
+            Arc::new(Column::new_with_schema("lc1", left_schema)?) as _,
+            Arc::new(Column::new_with_schema("rc1", right_schema)?) as _,
         )];
 
         let intermediate_schema = Schema::new(vec![
@@ -1796,8 +1796,8 @@ mod tests {
         )?;
 
         let on = vec![(
-            Column::new_with_schema("lc1", left_schema)?,
-            Column::new_with_schema("rc1", right_schema)?,
+            Arc::new(Column::new_with_schema("lc1", left_schema)?) as _,
+            Arc::new(Column::new_with_schema("rc1", right_schema)?) as _,
         )];
 
         let intermediate_schema = Schema::new(vec![
@@ -1859,8 +1859,8 @@ mod tests {
         )?;
 
         let on = vec![(
-            Column::new_with_schema("lc1", left_schema)?,
-            Column::new_with_schema("rc1", right_schema)?,
+            Arc::new(Column::new_with_schema("lc1", left_schema)?) as _,
+            Arc::new(Column::new_with_schema("rc1", right_schema)?) as _,
         )];
 
         let intermediate_schema = Schema::new(vec![
@@ -1918,8 +1918,8 @@ mod tests {
         )?;
 
         let on = vec![(
-            Column::new_with_schema("lc1", left_schema)?,
-            Column::new_with_schema("rc1", right_schema)?,
+            Arc::new(Column::new_with_schema("lc1", left_schema)?) as _,
+            Arc::new(Column::new_with_schema("rc1", right_schema)?) as _,
         )];
 
         let intermediate_schema = Schema::new(vec![
@@ -1985,8 +1985,8 @@ mod tests {
         )?;
 
         let on = vec![(
-            Column::new_with_schema("lc1", left_schema)?,
-            Column::new_with_schema("rc1", right_schema)?,
+            Arc::new(Column::new_with_schema("lc1", left_schema)?) as _,
+            Arc::new(Column::new_with_schema("rc1", right_schema)?) as _,
         )];
 
         let intermediate_schema = Schema::new(vec![
@@ -2044,8 +2044,8 @@ mod tests {
         let left_schema = &left_partition[0].schema();
         let right_schema = &right_partition[0].schema();
         let on = vec![(
-            Column::new_with_schema("lc1", left_schema)?,
-            Column::new_with_schema("rc1", right_schema)?,
+            Arc::new(Column::new_with_schema("lc1", left_schema)?) as _,
+            Arc::new(Column::new_with_schema("rc1", right_schema)?) as _,
         )];
         let left_sorted = vec![PhysicalSortExpr {
             expr: col("lt1", left_schema)?,
@@ -2128,8 +2128,8 @@ mod tests {
         let left_schema = &left_partition[0].schema();
         let right_schema = &right_partition[0].schema();
         let on = vec![(
-            Column::new_with_schema("lc1", left_schema)?,
-            Column::new_with_schema("rc1", right_schema)?,
+            Arc::new(Column::new_with_schema("lc1", left_schema)?) as _,
+            Arc::new(Column::new_with_schema("rc1", right_schema)?) as _,
         )];
         let left_sorted = vec![PhysicalSortExpr {
             expr: col("li1", left_schema)?,
@@ -2221,8 +2221,8 @@ mod tests {
         )?;
 
         let on = vec![(
-            Column::new_with_schema("lc1", left_schema)?,
-            Column::new_with_schema("rc1", right_schema)?,
+            Arc::new(Column::new_with_schema("lc1", left_schema)?) as _,
+            Arc::new(Column::new_with_schema("rc1", right_schema)?) as _,
         )];
 
         let intermediate_schema = Schema::new(vec![

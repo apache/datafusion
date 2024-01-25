@@ -1511,7 +1511,11 @@ mod tests {
 
     use datafusion_common::{arrow_datafusion_err, arrow_err, ScalarValue};
 
-    fn check(left: &[Column], right: &[Column], on: &[(Column, Column)]) -> Result<()> {
+    fn check(
+        left: &[Column],
+        right: &[Column],
+        on: &[(PhysicalExprRef, PhysicalExprRef)],
+    ) -> Result<()> {
         let left = left
             .iter()
             .map(|x| x.to_owned())
@@ -1527,7 +1531,10 @@ mod tests {
     fn check_valid() -> Result<()> {
         let left = vec![Column::new("a", 0), Column::new("b1", 1)];
         let right = vec![Column::new("a", 0), Column::new("b2", 1)];
-        let on = &[(Column::new("a", 0), Column::new("a", 0))];
+        let on = &[(
+            Arc::new(Column::new("a", 0)) as _,
+            Arc::new(Column::new("a", 0)) as _,
+        )];
 
         check(&left, &right, on)?;
         Ok(())
@@ -1537,7 +1544,10 @@ mod tests {
     fn check_not_in_right() {
         let left = vec![Column::new("a", 0), Column::new("b", 1)];
         let right = vec![Column::new("b", 0)];
-        let on = &[(Column::new("a", 0), Column::new("a", 0))];
+        let on = &[(
+            Arc::new(Column::new("a", 0)) as _,
+            Arc::new(Column::new("a", 0)) as _,
+        )];
 
         assert!(check(&left, &right, on).is_err());
     }
@@ -1579,7 +1589,10 @@ mod tests {
     fn check_not_in_left() {
         let left = vec![Column::new("b", 0)];
         let right = vec![Column::new("a", 0)];
-        let on = &[(Column::new("a", 0), Column::new("a", 0))];
+        let on = &[(
+            Arc::new(Column::new("a", 0)) as _,
+            Arc::new(Column::new("a", 0)) as _,
+        )];
 
         assert!(check(&left, &right, on).is_err());
     }
@@ -1589,7 +1602,10 @@ mod tests {
         // column "a" would appear both in left and right
         let left = vec![Column::new("a", 0), Column::new("c", 1)];
         let right = vec![Column::new("a", 0), Column::new("b", 1)];
-        let on = &[(Column::new("a", 0), Column::new("b", 1))];
+        let on = &[(
+            Arc::new(Column::new("a", 0)) as _,
+            Arc::new(Column::new("b", 1)) as _,
+        )];
 
         assert!(check(&left, &right, on).is_ok());
     }
@@ -1598,7 +1614,10 @@ mod tests {
     fn check_in_right() {
         let left = vec![Column::new("a", 0), Column::new("c", 1)];
         let right = vec![Column::new("b", 0)];
-        let on = &[(Column::new("a", 0), Column::new("b", 0))];
+        let on = &[(
+            Arc::new(Column::new("a", 0)) as _,
+            Arc::new(Column::new("b", 0)) as _,
+        )];
 
         assert!(check(&left, &right, on).is_ok());
     }
@@ -1846,8 +1865,10 @@ mod tests {
 
             // We should also be able to use join_cardinality to get the same results
             let join_type = JoinType::Inner;
-            let join_on =
-                vec![(Arc::new(Column::new("a", 0)), Arc::new(Column::new("b", 0)))];
+            let join_on = vec![(
+                Arc::new(Column::new("a", 0)) as _,
+                Arc::new(Column::new("b", 0)) as _,
+            )];
             let partial_join_stats = estimate_join_cardinality(
                 &join_type,
                 create_stats(Some(left_num_rows), left_col_stats.clone(), false),
@@ -1971,8 +1992,14 @@ mod tests {
 
         for (join_type, expected_num_rows) in cases {
             let join_on = vec![
-                (Arc::new(Column::new("a", 0)), Arc::new(Column::new("c", 0))),
-                (Arc::new(Column::new("b", 1)), Arc::new(Column::new("d", 1))),
+                (
+                    Arc::new(Column::new("a", 0)) as _,
+                    Arc::new(Column::new("c", 0)) as _,
+                ),
+                (
+                    Arc::new(Column::new("b", 1)) as _,
+                    Arc::new(Column::new("d", 1)) as _,
+                ),
             ];
 
             let partial_join_stats = estimate_join_cardinality(
@@ -2019,8 +2046,14 @@ mod tests {
         ];
 
         let join_on = vec![
-            (Arc::new(Column::new("a", 0)), Arc::new(Column::new("c", 0))),
-            (Arc::new(Column::new("x", 2)), Arc::new(Column::new("y", 2))),
+            (
+                Arc::new(Column::new("a", 0)) as _,
+                Arc::new(Column::new("c", 0)) as _,
+            ),
+            (
+                Arc::new(Column::new("x", 2)) as _,
+                Arc::new(Column::new("y", 2)) as _,
+            ),
         ];
 
         let cases = vec![
@@ -2085,7 +2118,10 @@ mod tests {
             },
         ];
         let join_type = JoinType::Inner;
-        let on_columns = [(Column::new("b", 1), Column::new("x", 0))];
+        let on_columns = [(
+            Arc::new(Column::new("b", 1)) as _,
+            Arc::new(Column::new("x", 0)) as _,
+        )];
         let left_columns_len = 5;
         let maintains_input_orders = [[true, false], [false, true]];
         let probe_sides = [Some(JoinSide::Left), Some(JoinSide::Right)];

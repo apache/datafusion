@@ -1428,6 +1428,7 @@ mod tests {
     use datafusion_execution::runtime_env::{RuntimeConfig, RuntimeEnv};
     use datafusion_expr::Operator;
     use datafusion_physical_expr::expressions::{BinaryExpr, Literal};
+    use datafusion_physical_expr::PhysicalExpr;
 
     use hashbrown::raw::RawTable;
     use rstest::*;
@@ -1520,15 +1521,8 @@ mod tests {
     ) -> Result<(Vec<String>, Vec<RecordBatch>)> {
         let partition_count = 4;
 
-        let (left_expr, right_expr) = on
-            .iter()
-            .map(|(l, r)| {
-                (
-                    Arc::new(l.clone()) as Arc<dyn PhysicalExpr>,
-                    Arc::new(r.clone()) as Arc<dyn PhysicalExpr>,
-                )
-            })
-            .unzip();
+        let (left_expr, right_expr) =
+            on.iter().map(|(l, r)| (l.clone(), r.clone())).unzip();
 
         let join = HashJoinExec::try_new(
             Arc::new(RepartitionExec::try_new(
@@ -1579,8 +1573,8 @@ mod tests {
         );
 
         let on = vec![(
-            Column::new_with_schema("b1", &left.schema())?,
-            Column::new_with_schema("b1", &right.schema())?,
+            Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
         )];
 
         let (columns, batches) = join_collect(
@@ -1626,8 +1620,8 @@ mod tests {
             ("c2", &vec![70, 80, 90]),
         );
         let on = vec![(
-            Column::new_with_schema("b1", &left.schema())?,
-            Column::new_with_schema("b1", &right.schema())?,
+            Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
         )];
 
         let (columns, batches) = partitioned_join_collect(
@@ -1670,8 +1664,8 @@ mod tests {
             ("c2", &vec![70, 80, 90]),
         );
         let on = vec![(
-            Column::new_with_schema("b1", &left.schema())?,
-            Column::new_with_schema("b2", &right.schema())?,
+            Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("b2", &right.schema())?) as _,
         )];
 
         let (columns, batches) =
@@ -1709,8 +1703,8 @@ mod tests {
             ("c2", &vec![80, 90, 70]),
         );
         let on = vec![(
-            Column::new_with_schema("b1", &left.schema())?,
-            Column::new_with_schema("b2", &right.schema())?,
+            Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("b2", &right.schema())?) as _,
         )];
 
         let (columns, batches) =
@@ -1751,12 +1745,12 @@ mod tests {
         );
         let on = vec![
             (
-                Column::new_with_schema("a1", &left.schema())?,
-                Column::new_with_schema("a1", &right.schema())?,
+                Arc::new(Column::new_with_schema("a1", &left.schema())?) as _,
+                Arc::new(Column::new_with_schema("a1", &right.schema())?) as _,
             ),
             (
-                Column::new_with_schema("b2", &left.schema())?,
-                Column::new_with_schema("b2", &right.schema())?,
+                Arc::new(Column::new_with_schema("b2", &left.schema())?) as _,
+                Arc::new(Column::new_with_schema("b2", &right.schema())?) as _,
             ),
         ];
 
@@ -1813,12 +1807,12 @@ mod tests {
         );
         let on = vec![
             (
-                Column::new_with_schema("a1", &left.schema())?,
-                Column::new_with_schema("a1", &right.schema())?,
+                Arc::new(Column::new_with_schema("a1", &left.schema())?) as _,
+                Arc::new(Column::new_with_schema("a1", &right.schema())?) as _,
             ),
             (
-                Column::new_with_schema("b2", &left.schema())?,
-                Column::new_with_schema("b2", &right.schema())?,
+                Arc::new(Column::new_with_schema("b2", &left.schema())?) as _,
+                Arc::new(Column::new_with_schema("b2", &right.schema())?) as _,
             ),
         ];
 
@@ -1875,8 +1869,8 @@ mod tests {
             ("c2", &vec![80, 90, 70]),
         );
         let on = vec![(
-            Column::new_with_schema("b1", &left.schema())?,
-            Column::new_with_schema("b2", &right.schema())?,
+            Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("b2", &right.schema())?) as _,
         )];
 
         let (columns, batches) =
@@ -1925,8 +1919,8 @@ mod tests {
         );
 
         let on = vec![(
-            Column::new_with_schema("b1", &left.schema())?,
-            Column::new_with_schema("b1", &right.schema())?,
+            Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
         )];
 
         let join = join(left, right, on, &JoinType::Inner, false)?;
@@ -2007,8 +2001,8 @@ mod tests {
             ("c2", &vec![70, 80, 90]),
         );
         let on = vec![(
-            Column::new_with_schema("b1", &left.schema()).unwrap(),
-            Column::new_with_schema("b1", &right.schema()).unwrap(),
+            Arc::new(Column::new_with_schema("b1", &left.schema()).unwrap()) as _,
+            Arc::new(Column::new_with_schema("b1", &right.schema()).unwrap()) as _,
         )];
 
         let join = join(left, right, on, &JoinType::Left, false).unwrap();
@@ -2050,8 +2044,8 @@ mod tests {
             ("c2", &vec![70, 80, 90]),
         );
         let on = vec![(
-            Column::new_with_schema("b1", &left.schema()).unwrap(),
-            Column::new_with_schema("b2", &right.schema()).unwrap(),
+            Arc::new(Column::new_with_schema("b1", &left.schema()).unwrap()) as _,
+            Arc::new(Column::new_with_schema("b2", &right.schema()).unwrap()) as _,
         )];
 
         let join = join(left, right, on, &JoinType::Full, false).unwrap();
@@ -2090,8 +2084,8 @@ mod tests {
         );
         let right = build_table_i32(("a2", &vec![]), ("b1", &vec![]), ("c2", &vec![]));
         let on = vec![(
-            Column::new_with_schema("b1", &left.schema()).unwrap(),
-            Column::new_with_schema("b1", &right.schema()).unwrap(),
+            Arc::new(Column::new_with_schema("b1", &left.schema()).unwrap()) as _,
+            Arc::new(Column::new_with_schema("b1", &right.schema()).unwrap()) as _,
         )];
         let schema = right.schema();
         let right = Arc::new(MemoryExec::try_new(&[vec![right]], schema, None).unwrap());
@@ -2127,8 +2121,8 @@ mod tests {
         );
         let right = build_table_i32(("a2", &vec![]), ("b2", &vec![]), ("c2", &vec![]));
         let on = vec![(
-            Column::new_with_schema("b1", &left.schema()).unwrap(),
-            Column::new_with_schema("b2", &right.schema()).unwrap(),
+            Arc::new(Column::new_with_schema("b1", &left.schema()).unwrap()) as _,
+            Arc::new(Column::new_with_schema("b2", &right.schema()).unwrap()) as _,
         )];
         let schema = right.schema();
         let right = Arc::new(MemoryExec::try_new(&[vec![right]], schema, None).unwrap());
@@ -2168,8 +2162,8 @@ mod tests {
             ("c2", &vec![70, 80, 90]),
         );
         let on = vec![(
-            Column::new_with_schema("b1", &left.schema())?,
-            Column::new_with_schema("b1", &right.schema())?,
+            Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
         )];
 
         let (columns, batches) = join_collect(
@@ -2212,8 +2206,8 @@ mod tests {
             ("c2", &vec![70, 80, 90]),
         );
         let on = vec![(
-            Column::new_with_schema("b1", &left.schema())?,
-            Column::new_with_schema("b1", &right.schema())?,
+            Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
         )];
 
         let (columns, batches) = partitioned_join_collect(
@@ -2269,8 +2263,8 @@ mod tests {
         let right = build_semi_anti_right_table();
         // left_table left semi join right_table on left_table.b1 = right_table.b2
         let on = vec![(
-            Column::new_with_schema("b1", &left.schema())?,
-            Column::new_with_schema("b2", &right.schema())?,
+            Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("b2", &right.schema())?) as _,
         )];
 
         let join = join(left, right, on, &JoinType::LeftSemi, false)?;
@@ -2305,8 +2299,8 @@ mod tests {
 
         // left_table left semi join right_table on left_table.b1 = right_table.b2 and right_table.a2 != 10
         let on = vec![(
-            Column::new_with_schema("b1", &left.schema())?,
-            Column::new_with_schema("b2", &right.schema())?,
+            Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("b2", &right.schema())?) as _,
         )];
 
         let column_indices = vec![ColumnIndex {
@@ -2392,8 +2386,8 @@ mod tests {
 
         // left_table right semi join right_table on left_table.b1 = right_table.b2
         let on = vec![(
-            Column::new_with_schema("b1", &left.schema())?,
-            Column::new_with_schema("b2", &right.schema())?,
+            Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("b2", &right.schema())?) as _,
         )];
 
         let join = join(left, right, on, &JoinType::RightSemi, false)?;
@@ -2429,8 +2423,8 @@ mod tests {
 
         // left_table right semi join right_table on left_table.b1 = right_table.b2 on left_table.a1!=9
         let on = vec![(
-            Column::new_with_schema("b1", &left.schema())?,
-            Column::new_with_schema("b2", &right.schema())?,
+            Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("b2", &right.schema())?) as _,
         )];
 
         let column_indices = vec![ColumnIndex {
@@ -2518,8 +2512,8 @@ mod tests {
         let right = build_semi_anti_right_table();
         // left_table left anti join right_table on left_table.b1 = right_table.b2
         let on = vec![(
-            Column::new_with_schema("b1", &left.schema())?,
-            Column::new_with_schema("b2", &right.schema())?,
+            Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("b2", &right.schema())?) as _,
         )];
 
         let join = join(left, right, on, &JoinType::LeftAnti, false)?;
@@ -2552,8 +2546,8 @@ mod tests {
         let right = build_semi_anti_right_table();
         // left_table left anti join right_table on left_table.b1 = right_table.b2 and right_table.a2!=8
         let on = vec![(
-            Column::new_with_schema("b1", &left.schema())?,
-            Column::new_with_schema("b2", &right.schema())?,
+            Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("b2", &right.schema())?) as _,
         )];
 
         let column_indices = vec![ColumnIndex {
@@ -2645,8 +2639,8 @@ mod tests {
         let left = build_semi_anti_left_table();
         let right = build_semi_anti_right_table();
         let on = vec![(
-            Column::new_with_schema("b1", &left.schema())?,
-            Column::new_with_schema("b2", &right.schema())?,
+            Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("b2", &right.schema())?) as _,
         )];
 
         let join = join(left, right, on, &JoinType::RightAnti, false)?;
@@ -2680,8 +2674,8 @@ mod tests {
         let right = build_semi_anti_right_table();
         // left_table right anti join right_table on left_table.b1 = right_table.b2 and left_table.a1!=13
         let on = vec![(
-            Column::new_with_schema("b1", &left.schema())?,
-            Column::new_with_schema("b2", &right.schema())?,
+            Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("b2", &right.schema())?) as _,
         )];
 
         let column_indices = vec![ColumnIndex {
@@ -2788,8 +2782,8 @@ mod tests {
             ("c2", &vec![70, 80, 90]),
         );
         let on = vec![(
-            Column::new_with_schema("b1", &left.schema())?,
-            Column::new_with_schema("b1", &right.schema())?,
+            Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
         )];
 
         let (columns, batches) =
@@ -2827,8 +2821,8 @@ mod tests {
             ("c2", &vec![70, 80, 90]),
         );
         let on = vec![(
-            Column::new_with_schema("b1", &left.schema())?,
-            Column::new_with_schema("b1", &right.schema())?,
+            Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
         )];
 
         let (columns, batches) =
@@ -2867,8 +2861,8 @@ mod tests {
             ("c2", &vec![70, 80, 90]),
         );
         let on = vec![(
-            Column::new_with_schema("b1", &left.schema()).unwrap(),
-            Column::new_with_schema("b2", &right.schema()).unwrap(),
+            Arc::new(Column::new_with_schema("b1", &left.schema()).unwrap()) as _,
+            Arc::new(Column::new_with_schema("b2", &right.schema()).unwrap()) as _,
         )];
 
         let join = join(left, right, on, &JoinType::Full, false)?;
@@ -2921,7 +2915,7 @@ mod tests {
         );
 
         // Join key column for both join sides
-        let key_column = Column::new("a", 0);
+        let key_column: PhysicalExprRef = Arc::new(Column::new("a", 0)) as _;
 
         let join_hash_map = JoinHashMap::new(hashmap_left, next);
 
@@ -2972,8 +2966,8 @@ mod tests {
         );
         let on = vec![(
             // join on a=b so there are duplicate column names on unjoined columns
-            Column::new_with_schema("a", &left.schema()).unwrap(),
-            Column::new_with_schema("b", &right.schema()).unwrap(),
+            Arc::new(Column::new_with_schema("a", &left.schema()).unwrap()) as _,
+            Arc::new(Column::new_with_schema("b", &right.schema()).unwrap()) as _,
         )];
 
         let join = join(left, right, on, &JoinType::Inner, false)?;
@@ -3036,8 +3030,8 @@ mod tests {
             ("c", &vec![7, 5, 6, 4]),
         );
         let on = vec![(
-            Column::new_with_schema("a", &left.schema()).unwrap(),
-            Column::new_with_schema("b", &right.schema()).unwrap(),
+            Arc::new(Column::new_with_schema("a", &left.schema()).unwrap()) as _,
+            Arc::new(Column::new_with_schema("b", &right.schema()).unwrap()) as _,
         )];
         let filter = prepare_join_filter();
 
@@ -3077,8 +3071,8 @@ mod tests {
             ("c", &vec![7, 5, 6, 4]),
         );
         let on = vec![(
-            Column::new_with_schema("a", &left.schema()).unwrap(),
-            Column::new_with_schema("b", &right.schema()).unwrap(),
+            Arc::new(Column::new_with_schema("a", &left.schema()).unwrap()) as _,
+            Arc::new(Column::new_with_schema("b", &right.schema()).unwrap()) as _,
         )];
         let filter = prepare_join_filter();
 
@@ -3121,8 +3115,8 @@ mod tests {
             ("c", &vec![7, 5, 6, 4]),
         );
         let on = vec![(
-            Column::new_with_schema("a", &left.schema()).unwrap(),
-            Column::new_with_schema("b", &right.schema()).unwrap(),
+            Arc::new(Column::new_with_schema("a", &left.schema()).unwrap()) as _,
+            Arc::new(Column::new_with_schema("b", &right.schema()).unwrap()) as _,
         )];
         let filter = prepare_join_filter();
 
@@ -3164,8 +3158,8 @@ mod tests {
             ("c", &vec![7, 5, 6, 4]),
         );
         let on = vec![(
-            Column::new_with_schema("a", &left.schema()).unwrap(),
-            Column::new_with_schema("b", &right.schema()).unwrap(),
+            Arc::new(Column::new_with_schema("a", &left.schema()).unwrap()) as _,
+            Arc::new(Column::new_with_schema("b", &right.schema()).unwrap()) as _,
         )];
         let filter = prepare_join_filter();
 
@@ -3214,8 +3208,8 @@ mod tests {
         let right = Arc::new(MemoryExec::try_new(&[vec![batch]], schema, None).unwrap());
 
         let on = vec![(
-            Column::new_with_schema("date", &left.schema()).unwrap(),
-            Column::new_with_schema("date", &right.schema()).unwrap(),
+            Arc::new(Column::new_with_schema("date", &left.schema()).unwrap()) as _,
+            Arc::new(Column::new_with_schema("date", &right.schema()).unwrap()) as _,
         )];
 
         let join = join(left, right, on, &JoinType::Inner, false)?;
@@ -3252,8 +3246,8 @@ mod tests {
         let right = build_table_i32(("a2", &vec![]), ("b1", &vec![]), ("c2", &vec![]));
 
         let on = vec![(
-            Column::new_with_schema("b1", &left.schema()).unwrap(),
-            Column::new_with_schema("b1", &right.schema()).unwrap(),
+            Arc::new(Column::new_with_schema("b1", &left.schema()).unwrap()) as _,
+            Arc::new(Column::new_with_schema("b1", &right.schema()).unwrap()) as _,
         )];
         let schema = right.schema();
         let right = build_table_i32(("a2", &vec![]), ("b1", &vec![]), ("c2", &vec![]));
@@ -3308,8 +3302,8 @@ mod tests {
             ("c2", &vec![0, 0, 0, 0, 0]),
         );
         let on = vec![(
-            Column::new_with_schema("b1", &left.schema()).unwrap(),
-            Column::new_with_schema("b2", &right.schema()).unwrap(),
+            Arc::new(Column::new_with_schema("b1", &left.schema()).unwrap()) as _,
+            Arc::new(Column::new_with_schema("b2", &right.schema()).unwrap()) as _,
         )];
 
         let join_types = vec![
@@ -3442,8 +3436,8 @@ mod tests {
             ("c2", &vec![14, 15]),
         );
         let on = vec![(
-            Column::new_with_schema("a1", &left.schema()).unwrap(),
-            Column::new_with_schema("b2", &right.schema()).unwrap(),
+            Arc::new(Column::new_with_schema("a1", &left.schema()).unwrap()) as _,
+            Arc::new(Column::new_with_schema("b2", &right.schema()).unwrap()) as _,
         )];
 
         let join_types = vec![
@@ -3511,8 +3505,8 @@ mod tests {
             .unwrap(),
         );
         let on = vec![(
-            Column::new_with_schema("b1", &left_batch.schema())?,
-            Column::new_with_schema("b2", &right_batch.schema())?,
+            Arc::new(Column::new_with_schema("b1", &left_batch.schema())?) as _,
+            Arc::new(Column::new_with_schema("b2", &right_batch.schema())?) as _,
         )];
 
         let join_types = vec![

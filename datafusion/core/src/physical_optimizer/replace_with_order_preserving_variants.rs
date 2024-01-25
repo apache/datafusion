@@ -1440,7 +1440,7 @@ mod tests {
             HashJoinExec::try_new(
                 left,
                 right,
-                vec![(left_col.clone(), right_col.clone())],
+                vec![(Arc::new(left_col.clone()), Arc::new(right_col.clone()))],
                 None,
                 &JoinType::Inner,
                 PartitionMode::Partitioned,
