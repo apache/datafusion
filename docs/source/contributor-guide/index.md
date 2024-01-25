@@ -19,17 +19,40 @@
 
 # Introduction
 
-We welcome and encourage contributions of all kinds, such as:
+We welcome and encourage contributions of all kinds, from all levels, such as:
 
-1. Tickets with issue reports of feature requests
-2. Documentation improvements
-3. Code, both PR and (especially) PR Review.
+1. Tickets with issue reports or feature requests
+2. Discussions
+3. Documentation improvements
+4. Code, both PR and (especially) PR Review.
 
-In addition to submitting new PRs, we have a healthy tradition of community members reviewing each other's PRs. Doing so is a great way to help the community as well as get more familiar with Rust and the relevant codebases.
+In addition to submitting new PRs, we have a healthy tradition of community
+members reviewing each other's PRs. Doing so is a great way to help the
+community as well as get more familiar with Rust and the relevant codebases.
 
-You can find a curated
+## Finding and Creating Issues to Work On
+
+You can find a curated [good-first-issue] list to help you get started.
+
+DataFusion is an open contribution project, and thus there is no particular
+project imposed deadline for completing any issue or any restriction on who can
+work on an issue, nor how many people can work on an issue at the same time.
+
+Contributors drive the project forward based on their own priorities and
+interests and thus you are free to work on any issue that interests you.
+
+If someone is already working on an issue that you want or need on but hasn't
+been able to finish it yet, you should feel free to work on it as well. In
+general it is both polite and will help avoid unnecessary duplication of work if
+you leave a note on an issue when you start working on it.
+
+If you plan to work on a new feature that doesn't have an existing ticket, it is
+a good idea to open a ticket to discuss the feature. Advanced discussion often
+helps wasted effort by determining early if the feature is a good fit for
+DataFusion before too much time is invested. It also often helps to discuss your
+ideas with the community to get feedback on implementation.
+
 [good-first-issue](https://github.com/apache/arrow-datafusion/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22)
-list to help you get started.
 
 # Developer's guide
 

@@ -17,4 +17,4 @@
   under the License.
 -->
 
-See the Contributor Guide: https://arrow.apache.org/datafusion/ or the source under `docs/source/contributor-guide`
+See the [Contributor Guide](https://arrow.apache.org/datafusion/contributor-guide/index.html)
