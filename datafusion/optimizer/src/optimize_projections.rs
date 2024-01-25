@@ -218,6 +218,22 @@ fn optimize_projections(
             // Only use the absolutely necessary aggregate expressions required
             // by the parent:
             let mut new_aggr_expr = get_at_indices(&aggregate.aggr_expr, &aggregate_reqs);
+
+            // Aggregations always need at least one aggregate expression.
+            // With a nested count, we don't require any column as input, but
+            // still need to create a correct aggregate, which may be optimized
+            // out later. As an example, consider the following query:
+            //
+            // SELECT COUNT(*) FROM (SELECT COUNT(*) FROM [...])
+            //
+            // which always returns 1.
+            if new_aggr_expr.is_empty()
+                && new_group_bys.is_empty()
+                && !aggregate.aggr_expr.is_empty()
+            {
+                new_aggr_expr = vec![aggregate.aggr_expr[0].clone()];
+            }
+
             let all_exprs_iter = new_group_bys.iter().chain(new_aggr_expr.iter());
             let schema = aggregate.input.schema();
             let necessary_indices = indices_referred_by_exprs(schema, all_exprs_iter)?;
@@ -237,21 +253,6 @@ fn optimize_projections(
             let necessary_exprs = get_required_exprs(schema, &necessary_indices);
             let (aggregate_input, _) =
                 add_projection_on_top_if_helpful(aggregate_input, necessary_exprs)?;
-
-            // Aggregations always need at least one aggregate expression.
-            // With a nested count, we don't require any column as input, but
-            // still need to create a correct aggregate, which may be optimized
-            // out later. As an example, consider the following query:
-            //
-            // SELECT COUNT(*) FROM (SELECT COUNT(*) FROM [...])
-            //
-            // which always returns 1.
-            if new_aggr_expr.is_empty()
-                && new_group_bys.is_empty()
-                && !aggregate.aggr_expr.is_empty()
-            {
-                new_aggr_expr = vec![aggregate.aggr_expr[0].clone()];
-            }
 
             // Create a new aggregate plan with the updated input and only the
             // absolutely necessary fields:
