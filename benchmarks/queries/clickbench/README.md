@@ -29,27 +29,6 @@ SELECT COUNT(DISTINCT "SearchPhrase"), COUNT(DISTINCT "MobilePhone"), COUNT(DIST
 FROM hits;
 ```
 
-### Q1
-Models initial Data exploration, to understand some statistics of data.
-Models initial Data exploration, to understand some statistics of data. 
-Query to test distinct count for String. Three of them are all small string (length either 1 or 2).
-
-```sql
-SELECT 
-    COUNT(DISTINCT "HitColor"), COUNT(DISTINCT "BrowserCountry"), COUNT(DISTINCT "BrowserLanguage")
-FROM hits;
-```
-
-### Q2
-Models initial Data exploration, to understand some statistics of data.
-Extend with `group by` from Q1
-
-```sql
-SELECT 
-    "BrowserCountry",  COUNT(DISTINCT "HitColor"), COUNT(DISTINCT "BrowserCountry"), COUNT(DISTINCT "BrowserLanguage")
-FROM hits GROUP BY 1 ORDER BY 2 DESC LIMIT 10;
-```
-
 ### Q1: Data Exploration
 
 **Question**: "How many distinct "hit color", "browser country" and "language" are there in the dataset?"
@@ -62,7 +41,7 @@ SELECT COUNT(DISTINCT "HitColor"), COUNT(DISTINCT "BrowserCountry"), COUNT(DISTI
 FROM hits;
 ```
 
-### Q2: Top 10 anaylsis
+### Q2: Top 10 analysis
 
 **Question**: "Find the top 10 "browser country" by number of distinct "social network"s, 
 including the distinct counts of  "hit color", "browser language",
