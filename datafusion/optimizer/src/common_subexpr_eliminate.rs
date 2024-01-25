@@ -34,7 +34,7 @@ use datafusion_expr::expr::Alias;
 use datafusion_expr::logical_plan::{
     Aggregate, Filter, LogicalPlan, Projection, Sort, Window,
 };
-use datafusion_expr::{col, Expr, ExprSchemable};
+use datafusion_expr::{col, Expr, ExprSchemable, UserDefinedLogicalNode};
 
 /// A map from expression's identifier to tuple including
 /// - the expression itself (cloned)
@@ -171,6 +171,8 @@ impl CommonSubexprEliminate {
             window_expr,
             schema,
         } = window;
+        println!("-----------");
+        println!("window expr: {:?}", window_expr);
         let mut expr_set = ExprSet::new();
 
         let input_schema = Arc::clone(input.schema());
@@ -179,12 +181,10 @@ impl CommonSubexprEliminate {
 
         let (mut new_expr, new_input) =
             self.rewrite_expr(&[window_expr], &[&arrays], input, &expr_set, config)?;
-
-        Ok(LogicalPlan::Window(Window {
-            input: Arc::new(new_input),
-            window_expr: pop_expr(&mut new_expr)?,
-            schema: schema.clone(),
-        }))
+        println!("new_expr: {:?}", new_expr[0]);
+        println!("window schema fields: {:?}", schema.fields());
+        println!("-----------");
+        Ok(LogicalPlan::Window(Window::try_new(pop_expr(&mut new_expr)?, Arc::new(new_input))?))
     }
 
     fn try_optimize_aggregate(
@@ -375,6 +375,14 @@ impl OptimizerRule for CommonSubexprEliminate {
         };
 
         let original_schema = plan.schema().clone();
+        println!("\n\noriginal schema fields: {:?}", original_schema.fields());
+        if let Some(opt) = &optimized_plan{
+            println!("\n\noptimized_plan.schema fields: {:?}", opt.schema().fields());
+            println!("\n\n{:#?}", opt);
+            println!("\n\n{:#?}", plan);
+
+            assert_eq!(&opt.schema().fields().len(), &original_schema.fields().len());
+        }
         match optimized_plan {
             Some(optimized_plan) if optimized_plan.schema() != &original_schema => {
                 // add an additional projection if the output schema changed.
@@ -476,11 +484,17 @@ fn build_recover_project_plan(
     schema: &DFSchema,
     input: LogicalPlan,
 ) -> Result<LogicalPlan> {
-    let col_exprs = schema
+    println!("input.schema(): {:?}", input.schema().fields());
+    println!("        schema: {:?}", schema.fields());
+    let col_exprs = input.schema()
         .fields()
-        .iter()
-        .map(|field| Expr::Column(field.qualified_column()))
-        .collect();
+        .iter().zip(schema.fields().iter())
+        .map(|(new_field, original_field)| {
+            println!("new_field: {:?}", new_field.qualified_name());
+            println!("original_field: {:?}", original_field.qualified_name());
+            Expr::Column(new_field.qualified_column()).alias_if_changed(original_field.qualified_name())
+        })
+        .collect::<Result<Vec<_>>>()?;
     Ok(LogicalPlan::Projection(Projection::try_new(
         col_exprs,
         Arc::new(input),
