@@ -2324,7 +2324,8 @@ mod tmp_tests {
         Ok(())
     }
 
-    const SOURCE_TABLE: &str = "CREATE UNBOUNDED EXTERNAL TABLE annotated_data_infinite2 (
+    const SOURCE_TABLE: &str =
+        "CREATE UNBOUNDED EXTERNAL TABLE annotated_data_infinite2 (
               a0 INTEGER,
               a INTEGER,
               b INTEGER,
@@ -2335,6 +2336,25 @@ mod tmp_tests {
             WITH HEADER ROW
             WITH ORDER (a ASC, b ASC, c ASC)
             LOCATION '../core/tests/data/window_2.csv';";
+
+    const SOURCE_TABLE2: &str = "CREATE EXTERNAL TABLE aggregate_test_100 (
+          c1  VARCHAR NOT NULL,
+          c2  TINYINT NOT NULL,
+          c3  SMALLINT NOT NULL,
+          c4  SMALLINT,
+          c5  INT,
+          c6  BIGINT NOT NULL,
+          c7  SMALLINT NOT NULL,
+          c8  INT NOT NULL,
+          c9  BIGINT UNSIGNED NOT NULL,
+          c10 VARCHAR NOT NULL,
+          c11 FLOAT NOT NULL,
+          c12 DOUBLE NOT NULL,
+          c13 VARCHAR NOT NULL
+        )
+        STORED AS CSV
+        WITH HEADER ROW
+        LOCATION '../../testing/data/csv/aggregate_test_100.csv'";
 
     #[tokio::test]
     async fn test_query() -> Result<()> {
@@ -2433,6 +2453,109 @@ mod tmp_tests {
             "| 0 | 0 | 3 | 11   | 11   |",
             "| 0 | 0 | 4 | 9    | 9    |",
             "+---+---+---+------+------+",
+        ];
+        assert_batches_eq!(expected, &batches);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_query3() -> Result<()> {
+        let config = SessionConfig::new().with_target_partitions(1);
+        let ctx = SessionContext::new_with_config(config);
+
+        ctx.sql(SOURCE_TABLE).await?;
+        ctx.sql(SOURCE_TABLE2).await?;
+
+        let sql = "SELECT
+            SUM(c3) OVER() as sum1,
+            COUNT(*) OVER () as count1
+            FROM aggregate_test_100
+            ORDER BY c9
+            LIMIT 5";
+
+        let msg = format!("Creating logical plan for '{sql}'");
+        let dataframe = ctx.sql(sql).await.expect(&msg);
+        let physical_plan = dataframe.create_physical_plan().await?;
+        print_plan(&physical_plan)?;
+        let batches = collect(physical_plan.clone(), ctx.task_ctx()).await?;
+        print_batches(&batches)?;
+
+        let expected = vec![
+            "ProjectionExec: expr=[sum1@0 as sum1, count1@1 as count1]",
+            "  GlobalLimitExec: skip=0, fetch=5",
+            "    SortExec: TopK(fetch=5), expr=[c9@2 ASC NULLS LAST]",
+            "      ProjectionExec: expr=[SUM(aggregate_test_100.c3) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@2 as sum1, COUNT(*) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@3 as count1, c9@1 as c9]",
+            "        WindowAggExec: wdw=[SUM(aggregate_test_100.c3) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Ok(Field { name: \"SUM(aggregate_test_100.c3) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)) }, COUNT(*) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Ok(Field { name: \"COUNT(*) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)) }]",
+            "          CsvExec: file_groups={1 group: [[Users/akurmustafa/projects/synnada/arrow-datafusion-synnada/testing/data/csv/aggregate_test_100.csv]]}, projection=[c3, c9], has_header=true",
+        ];
+        // Get string representation of the plan
+        let actual = get_plan_string(&physical_plan);
+        assert_eq!(
+            expected, actual,
+            "\n**Optimized Plan Mismatch\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+        );
+
+        let expected = [
+            "+------+--------+",
+            "| sum1 | count1 |",
+            "+------+--------+",
+            "| 781  | 100    |",
+            "| 781  | 100    |",
+            "| 781  | 100    |",
+            "| 781  | 100    |",
+            "| 781  | 100    |",
+            "+------+--------+",
+        ];
+        assert_batches_eq!(expected, &batches);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_query4() -> Result<()> {
+        let config = SessionConfig::new().with_target_partitions(1);
+        let ctx = SessionContext::new_with_config(config);
+
+        ctx.sql(SOURCE_TABLE).await?;
+        ctx.sql(SOURCE_TABLE2).await?;
+
+        let sql = "SELECT c3,
+            SUM(c9) OVER(ORDER BY c3+c4 DESC, c9 DESC, c2 ASC) as sum1,
+            SUM(c9) OVER(ORDER BY c3+c4 ASC, c9 ASC ) as sum2
+            FROM aggregate_test_100
+            LIMIT 5";
+
+        let msg = format!("Creating logical plan for '{sql}'");
+        let dataframe = ctx.sql(sql).await.expect(&msg);
+        let physical_plan = dataframe.create_physical_plan().await?;
+        print_plan(&physical_plan)?;
+        let batches = collect(physical_plan.clone(), ctx.task_ctx()).await?;
+        print_batches(&batches)?;
+
+        let expected = vec![
+            "ProjectionExec: expr=[sum1@0 as sum1, count1@1 as count1]",
+            "  GlobalLimitExec: skip=0, fetch=5",
+            "    SortExec: TopK(fetch=5), expr=[c9@2 ASC NULLS LAST]",
+            "      ProjectionExec: expr=[SUM(aggregate_test_100.c3) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@2 as sum1, COUNT(*) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@3 as count1, c9@1 as c9]",
+            "        WindowAggExec: wdw=[SUM(aggregate_test_100.c3) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Ok(Field { name: \"SUM(aggregate_test_100.c3) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)) }, COUNT(*) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Ok(Field { name: \"COUNT(*) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)) }]",
+            "          CsvExec: file_groups={1 group: [[Users/akurmustafa/projects/synnada/arrow-datafusion-synnada/testing/data/csv/aggregate_test_100.csv]]}, projection=[c3, c9], has_header=true",
+        ];
+        // Get string representation of the plan
+        let actual = get_plan_string(&physical_plan);
+        assert_eq!(
+            expected, actual,
+            "\n**Optimized Plan Mismatch\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+        );
+
+        let expected = [
+            "+------+--------+",
+            "| sum1 | count1 |",
+            "+------+--------+",
+            "| 781  | 100    |",
+            "| 781  | 100    |",
+            "| 781  | 100    |",
+            "| 781  | 100    |",
+            "| 781  | 100    |",
+            "+------+--------+",
         ];
         assert_batches_eq!(expected, &batches);
         Ok(())

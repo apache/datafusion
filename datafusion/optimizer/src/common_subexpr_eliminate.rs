@@ -331,6 +331,8 @@ impl OptimizerRule for CommonSubexprEliminate {
         plan: &LogicalPlan,
         config: &dyn OptimizerConfig,
     ) -> Result<Option<LogicalPlan>> {
+        println!("CommonSubexprEliminate:");
+        println!("{:?}", plan);
         let optimized_plan = match plan {
             LogicalPlan::Projection(projection) => {
                 Some(self.try_optimize_projection(projection, config)?)

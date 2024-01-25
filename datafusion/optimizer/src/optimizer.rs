@@ -51,9 +51,9 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::logical_plan::LogicalPlan;
 
+use crate::group_window_exprs::GroupWindowExprs;
 use chrono::{DateTime, Utc};
 use log::{debug, warn};
-use crate::group_window_exprs::GroupWindowExprs;
 
 /// `OptimizerRule` transforms one [`LogicalPlan`] into another which
 /// computes the same results, but in a potentially more efficient
@@ -288,7 +288,7 @@ impl Optimizer {
         previous_plans.insert(LogicalPlanSignature::new(&new_plan));
 
         let mut i = 0;
-        while i < options.optimizer.max_passes {
+        while i < 1 {
             log_plan(&format!("Optimizer input (pass {i})"), &new_plan);
 
             for rule in &self.rules {

@@ -573,26 +573,33 @@ pub fn compare_sort_expr(
     }
 }
 
+fn get_sort_key(expr: &Expr) -> Result<WindowSortKey> {
+    match expr {
+        Expr::WindowFunction(WindowFunction {
+            partition_by,
+            order_by,
+            ..
+        }) => generate_sort_key(partition_by, order_by),
+        Expr::Alias(alias) => get_sort_key(&alias.expr),
+        other => internal_err!("Impossibly got non-window expr {other:?}"),
+    }
+}
+
 /// group a slice of window expression expr by their order by expressions
 pub fn group_window_expr_by_sort_keys(
     window_expr: Vec<Expr>,
 ) -> Result<Vec<(WindowSortKey, Vec<Expr>)>> {
     let mut result = vec![];
-    window_expr.into_iter().try_for_each(|expr| match &expr {
-        Expr::WindowFunction( WindowFunction{ partition_by, order_by, .. }) => {
-            let sort_key = generate_sort_key(partition_by, order_by)?;
-            if let Some((_, values)) = result.iter_mut().find(
-                |group: &&mut (WindowSortKey, Vec<Expr>)| matches!(group, (key, _) if *key == sort_key),
-            ) {
-                values.push(expr);
-            } else {
-                result.push((sort_key, vec![expr]))
-            }
-            Ok(())
+    window_expr.into_iter().try_for_each(|expr| {
+        let sort_key = get_sort_key(&expr)?;
+        if let Some((_, values)) = result.iter_mut().find(
+            |group: &&mut (WindowSortKey, Vec<Expr>)| matches!(group, (key, _) if *key == sort_key),
+        ) {
+            values.push(expr);
+        } else {
+            result.push((sort_key, vec![expr]))
         }
-        other => internal_err!(
-            "Impossibly got non-window expr {other:?}"
-        ),
+        Ok::<(), DataFusionError>(())
     })?;
     Ok(result)
 }

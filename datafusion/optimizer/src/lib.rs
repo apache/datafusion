@@ -29,6 +29,7 @@ pub mod eliminate_one_union;
 pub mod eliminate_outer_join;
 pub mod extract_equijoin_predicate;
 pub mod filter_null_join_keys;
+pub mod group_window_exprs;
 pub mod optimize_projections;
 pub mod optimizer;
 pub mod propagate_empty_relation;
@@ -48,9 +49,7 @@ pub mod test;
 
 pub use optimizer::{OptimizerConfig, OptimizerContext, OptimizerRule};
 pub use utils::optimize_children;
-
 mod plan_signature;
-mod group_window_exprs;
 
 #[cfg(test)]
 #[ctor::ctor]

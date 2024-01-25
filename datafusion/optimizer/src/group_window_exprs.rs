@@ -30,8 +30,13 @@ use datafusion_common::{
 };
 use datafusion_expr::expr::{BinaryExpr, Cast, InList, TryCast};
 use datafusion_expr::expr_rewriter::rewrite_preserving_name;
-use datafusion_expr::utils::{compare_sort_expr, group_window_expr_by_sort_keys, merge_schema};
-use datafusion_expr::{binary_expr, in_list, lit, Expr, ExprSchemable, LogicalPlan, Operator, LogicalPlanBuilder};
+use datafusion_expr::utils::{
+    compare_sort_expr, group_window_expr_by_sort_keys, merge_schema,
+};
+use datafusion_expr::{
+    binary_expr, in_list, lit, Expr, ExprSchemable, LogicalPlan, LogicalPlanBuilder,
+    Operator,
+};
 use std::cmp::Ordering;
 use std::sync::Arc;
 
@@ -88,6 +93,12 @@ impl OptimizerRule for GroupWindowExprs {
         _config: &dyn OptimizerConfig,
     ) -> Result<Option<LogicalPlan>> {
         if let LogicalPlan::Window(window) = plan {
+            println!("at the start: ");
+            println!("plan: {:#?}", plan);
+            // for expr in &window.window_expr{
+            //     println!("expr: {:?}", expr);
+            // }
+            // return Ok(None);
             let window_exprs = window.window_expr.to_vec();
             let input = &window.input;
 
@@ -121,6 +132,8 @@ impl OptimizerRule for GroupWindowExprs {
                     .window(window_exprs)?
                     .build()?;
             }
+            println!("at the end: ");
+            println!("plan: {:#?}", plan);
             return Ok(Some(plan));
         }
         Ok(None)

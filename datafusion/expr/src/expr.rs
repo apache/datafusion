@@ -1017,6 +1017,8 @@ impl Expr {
         if new_name == original_name {
             return Ok(self);
         }
+        println!("     new_name: {:?}", new_name);
+        println!("original_name: {:?}", original_name);
 
         Ok(self.alias(original_name))
     }
