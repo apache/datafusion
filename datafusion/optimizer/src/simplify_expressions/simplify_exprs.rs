@@ -93,9 +93,13 @@ impl SimplifyExpressions {
 
         let simplifier = ExprSimplifier::new(info);
 
-        // The left and right expressions in a Join on clause are not commutative,
-        // since the order of the columns must match the order of the children.
-        // Thus, not reorder expressions in a Join `on` clause while simplifying
+        // The left and right expressions in a Join on clause are not
+        // commutative, for reasons that are not entirely clear. Thus, do not
+        // reorder expressions in Join while simplifying.
+        //
+        // This is likely related to the fact that order of the columns must
+        // match the order of the children. see
+        // https://github.com/apache/arrow-datafusion/pull/8780 for more details
         let simplifier = if let LogicalPlan::Join(_) = plan {
             simplifier.with_canonicalize(false)
         } else {
