@@ -350,12 +350,12 @@
 //! as a [`SendableRecordBatchStream`], which implements a pull based execution
 //! API. Calling `.next().await` will incrementally compute and return the next
 //! [`RecordBatch`]. Balanced parallelism is achieved using [Volcano style]
-//! "Exchange" operations implemented by  [`RepartitionExec`].
+//! "Exchange" operations implemented by [`RepartitionExec`].
 //!
 //! While some recent research such as [Morsel-Driven Parallelism] describes challenges
 //! with the pull style Volcano execution model on NUMA architectures, in practice DataFusion achieves
 //! similar scalability as systems that use morsel driven approach such as DuckDB.
-//! See the [DataFusion paper submitted SIGMOD] for more details.
+//! See the [DataFusion paper submitted to SIGMOD] for more details.
 //!
 //! [`execute`]: physical_plan::ExecutionPlan::execute
 //! [`SendableRecordBatchStream`]: crate::physical_plan::SendableRecordBatchStream
@@ -381,7 +381,7 @@
 //! for asynchronous network I/O, its combination of an efficient, work-stealing
 //! scheduler, first class compiler support for automatic continuation generation,
 //! and exceptional performance makes it a compelling choice for CPU intensive
-//! applications as well, as explained in more detail in [Using Rustlang’s Async Tokio
+//! applications as well. This is explained in more detail in [Using Rustlang’s Async Tokio
 //! Runtime for CPU-Bound Tasks].
 //!
 //! [Tokio]:  https://tokio.rs
