@@ -41,14 +41,14 @@ work on an issue, nor how many people can work on an issue at the same time.
 Contributors drive the project forward based on their own priorities and
 interests and thus you are free to work on any issue that interests you.
 
-If someone is already working on an issue that you want or need on but hasn't
+If someone is already working on an issue that you want or need but hasn't
 been able to finish it yet, you should feel free to work on it as well. In
 general it is both polite and will help avoid unnecessary duplication of work if
 you leave a note on an issue when you start working on it.
 
 If you plan to work on a new feature that doesn't have an existing ticket, it is
 a good idea to open a ticket to discuss the feature. Advanced discussion often
-helps wasted effort by determining early if the feature is a good fit for
+helps avoid wasted effort by determining early if the feature is a good fit for
 DataFusion before too much time is invested. It also often helps to discuss your
 ideas with the community to get feedback on implementation.
 
