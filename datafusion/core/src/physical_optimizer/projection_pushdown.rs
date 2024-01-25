@@ -1024,7 +1024,7 @@ fn new_columns_for_join_on(
             // Rewrite all columns in `on`
             (*on)
                 .clone()
-                .transform(&mut |expr| {
+                .transform(&|expr| {
                     if let Some(column) = expr.as_any().downcast_ref::<Column>() {
                         // Find the column in the projection expressions
                         let new_column = projection_exprs
@@ -1035,15 +1035,15 @@ fn new_columns_for_join_on(
                             })
                             .map(|(index, (_, alias))| Column::new(alias, index));
                         if let Some(new_column) = new_column {
-                            return Ok(Transformed::Yes(Arc::new(new_column)));
+                            Ok(Transformed::Yes(Arc::new(new_column)))
                         } else {
                             // If the column is not found in the projection expressions,
                             // it means that the column is not projected. In this case,
                             // we cannot push the projection down.
-                            return Err(DataFusionError::Internal(format!(
+                            Err(DataFusionError::Internal(format!(
                                 "Column {:?} not found in projection expressions",
                                 column
-                            )));
+                            )))
                         }
                     } else {
                         Ok(Transformed::No(expr))
