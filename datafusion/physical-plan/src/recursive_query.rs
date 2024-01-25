@@ -304,11 +304,19 @@ fn assign_work_table(
     plan: Arc<dyn ExecutionPlan>,
     work_table: Arc<WorkTable>,
 ) -> Result<Arc<dyn ExecutionPlan>> {
-    plan.transform_down(&|plan| {
+    let mut work_table_refs = 0;
+    plan.transform_down_mut(&mut |plan| {
         if let Some(exec) = plan.as_any().downcast_ref::<WorkTableExec>() {
-            Ok(Transformed::Yes(Arc::new(
-                exec.with_work_table(work_table.clone()),
-            )))
+            if work_table_refs > 0 {
+                not_impl_err!(
+                    "Multiple recursive references to the same CTE are not supported"
+                )
+            } else {
+                work_table_refs += 1;
+                Ok(Transformed::Yes(Arc::new(
+                    exec.with_work_table(work_table.clone()),
+                )))
+            }
         } else if plan.as_any().is::<RecursiveQueryExec>() {
             not_impl_err!("Recursive queries cannot be nested")
         } else {

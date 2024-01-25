@@ -637,3 +637,14 @@ WITH RECURSIVE outer_cte AS (
    )
 )
 SELECT a FROM outer_cte;
+
+# expect error when recursive CTE is referenced multiple times in the recursive term
+query error DataFusion error: This feature is not implemented: Multiple recursive references to the same CTE are not supported
+WITH RECURSIVE my_cte AS (
+    SELECT 1 as a
+    UNION ALL
+    SELECT my_cte.a+2 as a
+    FROM my_cte join my_cte c2 using(a)
+    WHERE my_cte.a<5
+)
+SELECT a FROM my_cte;
