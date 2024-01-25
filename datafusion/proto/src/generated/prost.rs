@@ -2242,9 +2242,9 @@ pub struct PhysicalColumn {
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct JoinOn {
     #[prost(message, optional, tag = "1")]
-    pub left: ::core::option::Option<PhysicalColumn>,
+    pub left: ::core::option::Option<PhysicalExprNode>,
     #[prost(message, optional, tag = "2")]
-    pub right: ::core::option::Option<PhysicalColumn>,
+    pub right: ::core::option::Option<PhysicalExprNode>,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]

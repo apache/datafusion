@@ -1580,8 +1580,8 @@ message PhysicalColumn {
 }
 
 message JoinOn {
-  PhysicalColumn left = 1;
-  PhysicalColumn right = 2;
+  PhysicalExprNode left = 1;
+  PhysicalExprNode right = 2;
 }
 
 message EmptyExecNode {

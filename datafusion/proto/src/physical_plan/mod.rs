@@ -31,6 +31,7 @@ use datafusion::datasource::physical_plan::ParquetExec;
 use datafusion::datasource::physical_plan::{AvroExec, CsvExec};
 use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::execution::FunctionRegistry;
+use datafusion::physical_expr::PhysicalExprRef;
 use datafusion::physical_plan::aggregates::{create_aggregate_expr, AggregateMode};
 use datafusion::physical_plan::aggregates::{AggregateExec, PhysicalGroupBy};
 use datafusion::physical_plan::analyze::AnalyzeExec;
@@ -38,7 +39,7 @@ use datafusion::physical_plan::coalesce_batches::CoalesceBatchesExec;
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::empty::EmptyExec;
 use datafusion::physical_plan::explain::ExplainExec;
-use datafusion::physical_plan::expressions::{Column, PhysicalSortExpr};
+use datafusion::physical_plan::expressions::PhysicalSortExpr;
 use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::insert::FileSinkExec;
 use datafusion::physical_plan::joins::utils::{ColumnIndex, JoinFilter};
@@ -64,6 +65,7 @@ use prost::Message;
 
 use crate::common::str_to_byte;
 use crate::common::{byte_to_string, proto_error};
+use crate::convert_required;
 use crate::physical_plan::from_proto::{
     parse_physical_expr, parse_physical_sort_expr, parse_physical_sort_exprs,
     parse_protobuf_file_scan_config,
@@ -75,7 +77,6 @@ use crate::protobuf::repartition_exec_node::PartitionMethod;
 use crate::protobuf::{
     self, window_agg_exec_node, PhysicalPlanNode, PhysicalSortExprNodeCollection,
 };
-use crate::{convert_required, into_required};
 
 use self::from_proto::parse_physical_window_expr;
 
@@ -506,12 +507,22 @@ impl AsExecutionPlan for PhysicalPlanNode {
                     runtime,
                     extension_codec,
                 )?;
-                let on: Vec<(Column, Column)> = hashjoin
+                let left_schema = left.schema();
+                let right_schema = right.schema();
+                let on: Vec<(PhysicalExprRef, PhysicalExprRef)> = hashjoin
                     .on
                     .iter()
                     .map(|col| {
-                        let left = into_required!(col.left)?;
-                        let right = into_required!(col.right)?;
+                        let left = parse_physical_expr(
+                            &col.left.clone().unwrap(),
+                            registry,
+                            left_schema.as_ref(),
+                        )?;
+                        let right = parse_physical_expr(
+                            &col.right.clone().unwrap(),
+                            registry,
+                            right_schema.as_ref(),
+                        )?;
                         Ok((left, right))
                     })
                     .collect::<Result<_>>()?;
@@ -595,12 +606,22 @@ impl AsExecutionPlan for PhysicalPlanNode {
                     runtime,
                     extension_codec,
                 )?;
+                let left_schema = left.schema();
+                let right_schema = right.schema();
                 let on = sym_join
                     .on
                     .iter()
                     .map(|col| {
-                        let left = into_required!(col.left)?;
-                        let right = into_required!(col.right)?;
+                        let left = parse_physical_expr(
+                            &col.left.clone().unwrap(),
+                            registry,
+                            left_schema.as_ref(),
+                        )?;
+                        let right = parse_physical_expr(
+                            &col.right.clone().unwrap(),
+                            registry,
+                            right_schema.as_ref(),
+                        )?;
                         Ok((left, right))
                     })
                     .collect::<Result<_>>()?;
@@ -647,7 +668,6 @@ impl AsExecutionPlan for PhysicalPlanNode {
                     })
                     .map_or(Ok(None), |v: Result<JoinFilter>| v.map(Some))?;
 
-                let left_schema = left.schema();
                 let left_sort_exprs = parse_physical_sort_exprs(
                     &sym_join.left_sort_exprs,
                     registry,
@@ -659,7 +679,6 @@ impl AsExecutionPlan for PhysicalPlanNode {
                     Some(left_sort_exprs)
                 };
 
-                let right_schema = right.schema();
                 let right_sort_exprs = parse_physical_sort_exprs(
                     &sym_join.right_sort_exprs,
                     registry,
@@ -1144,17 +1163,15 @@ impl AsExecutionPlan for PhysicalPlanNode {
             let on: Vec<protobuf::JoinOn> = exec
                 .on()
                 .iter()
-                .map(|tuple| protobuf::JoinOn {
-                    left: Some(protobuf::PhysicalColumn {
-                        name: tuple.0.name().to_string(),
-                        index: tuple.0.index() as u32,
-                    }),
-                    right: Some(protobuf::PhysicalColumn {
-                        name: tuple.1.name().to_string(),
-                        index: tuple.1.index() as u32,
-                    }),
+                .map(|tuple| {
+                    let l = tuple.0.to_owned().try_into()?;
+                    let r = tuple.1.to_owned().try_into()?;
+                    Ok::<_, DataFusionError>(protobuf::JoinOn {
+                        left: Some(l),
+                        right: Some(r),
+                    })
                 })
-                .collect();
+                .collect::<Result<_>>()?;
             let join_type: protobuf::JoinType = exec.join_type().to_owned().into();
             let filter = exec
                 .filter()
@@ -1214,17 +1231,15 @@ impl AsExecutionPlan for PhysicalPlanNode {
             let on = exec
                 .on()
                 .iter()
-                .map(|tuple| protobuf::JoinOn {
-                    left: Some(protobuf::PhysicalColumn {
-                        name: tuple.0.name().to_string(),
-                        index: tuple.0.index() as u32,
-                    }),
-                    right: Some(protobuf::PhysicalColumn {
-                        name: tuple.1.name().to_string(),
-                        index: tuple.1.index() as u32,
-                    }),
+                .map(|tuple| {
+                    let l = tuple.0.to_owned().try_into()?;
+                    let r = tuple.1.to_owned().try_into()?;
+                    Ok::<_, DataFusionError>(protobuf::JoinOn {
+                        left: Some(l),
+                        right: Some(r),
+                    })
                 })
-                .collect();
+                .collect::<Result<_>>()?;
             let join_type: protobuf::JoinType = exec.join_type().to_owned().into();
             let filter = exec
                 .filter()
