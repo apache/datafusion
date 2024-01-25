@@ -381,7 +381,7 @@ impl OptimizerRule for CommonSubexprEliminate {
             println!("\n\n{:#?}", opt);
             println!("\n\n{:#?}", plan);
 
-            assert_eq!(&opt.schema().fields().len(), &original_schema.fields().len());
+            // assert_eq!(&opt.schema().fields().len(), &original_schema.fields().len());
         }
         match optimized_plan {
             Some(optimized_plan) if optimized_plan.schema() != &original_schema => {
@@ -484,17 +484,13 @@ fn build_recover_project_plan(
     schema: &DFSchema,
     input: LogicalPlan,
 ) -> Result<LogicalPlan> {
-    println!("input.schema(): {:?}", input.schema().fields());
-    println!("        schema: {:?}", schema.fields());
-    let col_exprs = input.schema()
+    let col_exprs = schema
         .fields()
-        .iter().zip(schema.fields().iter())
-        .map(|(new_field, original_field)| {
-            println!("new_field: {:?}", new_field.qualified_name());
-            println!("original_field: {:?}", original_field.qualified_name());
-            Expr::Column(new_field.qualified_column()).alias_if_changed(original_field.qualified_name())
+        .iter()
+        .map(|field| {
+            Expr::Column(field.qualified_column())
         })
-        .collect::<Result<Vec<_>>>()?;
+        .collect::<Vec<_>>();
     Ok(LogicalPlan::Projection(Projection::try_new(
         col_exprs,
         Arc::new(input),

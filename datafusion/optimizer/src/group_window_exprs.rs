@@ -92,6 +92,7 @@ impl OptimizerRule for GroupWindowExprs {
         plan: &LogicalPlan,
         _config: &dyn OptimizerConfig,
     ) -> Result<Option<LogicalPlan>> {
+        return Ok(None);
         if let LogicalPlan::Window(window) = plan {
             println!("at the start: ");
             println!("plan: {:#?}", plan);

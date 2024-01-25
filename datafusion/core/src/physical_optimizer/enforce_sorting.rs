@@ -2524,6 +2524,12 @@ mod tmp_tests {
             FROM aggregate_test_100
             LIMIT 5";
 
+        let sql = "SELECT c3,
+    SUM(c9) OVER(ORDER BY c3+c4 ASC range between unbounded preceding and 1 following) as sum1,
+    SUM(c9) OVER(ORDER BY c3+c4 ASC range between unbounded preceding and 2 following) as sum2
+    FROM aggregate_test_100
+    LIMIT 5";
+
         let msg = format!("Creating logical plan for '{sql}'");
         let dataframe = ctx.sql(sql).await.expect(&msg);
         let physical_plan = dataframe.create_physical_plan().await?;
