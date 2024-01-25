@@ -24,7 +24,7 @@ authors = ["Apache Arrow <dev@arrow.apache.org>"]
 homepage = "https://github.com/apache/arrow-datafusion"
 repository = "https://github.com/apache/arrow-datafusion"
 license = "Apache-2.0"
-rust-version = "1.70"
+rust-version = "1.71"
 
 [features]
 ci = []

@@ -28,7 +28,7 @@ homepage = "https://github.com/apache/arrow-datafusion"
 license = "Apache-2.0"
 readme = "README.md"
 repository = "https://github.com/apache/arrow-datafusion"
-rust-version = "1.70"
+rust-version = "1.71"
 version = "35.0.0"
 
 [workspace.dependencies]
