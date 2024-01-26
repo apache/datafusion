@@ -1560,4 +1560,4 @@ select a from t;
 ----
 
 statement ok
-set datafusion.optimizer.max_passes=1;
+set datafusion.optimizer.max_passes=3;
