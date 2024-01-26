@@ -15,68 +15,26 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Unwrap-cast binary comparison rule can be used to the binary/inlist comparison expr now, and other type
-//! of expr can be added if needed.
-//! This rule can reduce adding the `Expr::Cast` the expr instead of adding the `Expr::Cast` to literal expr.
+//! GroupWindowExprs rule groups window expressions according to their ordering requirements
+//! such that window expression with same requirements works in same window executor.
+
+use std::cmp::Ordering;
+
 use crate::optimizer::ApplyOrder;
 use crate::{OptimizerConfig, OptimizerRule};
-use arrow::datatypes::{
-    DataType, TimeUnit, MAX_DECIMAL_FOR_EACH_PRECISION, MIN_DECIMAL_FOR_EACH_PRECISION,
-};
-use arrow::temporal_conversions::{MICROSECONDS, MILLISECONDS, NANOSECONDS};
-use datafusion_common::tree_node::{RewriteRecursion, TreeNodeRewriter};
-use datafusion_common::{
-    internal_err, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue,
-};
-use datafusion_expr::expr::{BinaryExpr, Cast, InList, TryCast};
-use datafusion_expr::expr_rewriter::rewrite_preserving_name;
-use datafusion_expr::utils::{
-    compare_sort_expr, group_window_expr_by_sort_keys, merge_schema,
-};
-use datafusion_expr::{
-    binary_expr, in_list, lit, Expr, ExprSchemable, LogicalPlan, LogicalPlanBuilder,
-    Operator,
-};
-use std::cmp::Ordering;
-use std::sync::Arc;
 
-/// [`crate::unwrap_cast_in_comparison::UnwrapCastInComparison`] attempts to remove casts from
-/// comparisons to literals ([`ScalarValue`]s) by applying the casts
-/// to the literals if possible. It is inspired by the optimizer rule
-/// `UnwrapCastInBinaryComparison` of Spark.
-///
-/// Removing casts often improves performance because:
-/// 1. The cast is done once (to the literal) rather than to every value
-/// 2. Can enable other optimizations such as predicate pushdown that
-///    don't support casting
-///
-/// The rule is applied to expressions of the following forms:
-///
-/// 1. `cast(left_expr as data_type) comparison_op literal_expr`
-/// 2. `literal_expr comparison_op cast(left_expr as data_type)`
-/// 3. `cast(literal_expr) IN (expr1, expr2, ...)`
-/// 4. `literal_expr IN (cast(expr1) , cast(expr2), ...)`
-///
-/// If the expression matches one of the forms above, the rule will
-/// ensure the value of `literal` is in range(min, max) of the
-/// expr's data_type, and if the scalar is within range, the literal
-/// will be casted to the data type of expr on the other side, and the
-/// cast will be removed from the other side.
-///
-/// # Example
-///
-/// If the DataType of c1 is INT32. Given the filter
-///
-/// ```text
-/// Filter: cast(c1 as INT64) > INT64(10)`
-/// ```
-///
-/// This rule will remove the cast and rewrite the expression to:
-///
-/// ```text
-/// Filter: c1 > INT32(10)
-/// ```
-///
+use datafusion_common::Result;
+use datafusion_expr::utils::{compare_sort_expr, group_window_expr_by_sort_keys};
+use datafusion_expr::{LogicalPlan, LogicalPlanBuilder};
+
+/// [`GroupWindowExprs`] groups window expressions according to their requirement
+/// window_exprs: vec![
+///   SUM(a) OVER(PARTITION BY a, ORDER BY b),
+///   COUNT(*) OVER(PARTITION BY a, ORDER BY b),
+///   SUM(a) OVER(PARTITION BY a, ORDER BY c),
+///   COUNT(*) OVER(PARTITION BY a, ORDER BY c)
+/// ]
+/// will be received as
 #[derive(Default)]
 pub struct GroupWindowExprs {}
 

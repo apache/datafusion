@@ -18,7 +18,6 @@
 //! This module provides a builder for creating LogicalPlans
 
 use std::any::Any;
-use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 use std::convert::TryFrom;
 use std::iter::zip;
@@ -39,8 +38,8 @@ use crate::logical_plan::{
 };
 use crate::type_coercion::binary::comparison_coercion;
 use crate::utils::{
-    can_hash, columnize_expr, compare_sort_expr, expand_qualified_wildcard,
-    expand_wildcard, find_valid_equijoin_key_pair, group_window_expr_by_sort_keys,
+    can_hash, columnize_expr, expand_qualified_wildcard, expand_wildcard,
+    find_valid_equijoin_key_pair,
 };
 use crate::{
     and, binary_expr, DmlStatement, Expr, ExprSchemable, Operator,

@@ -34,7 +34,7 @@ use datafusion_expr::expr::Alias;
 use datafusion_expr::logical_plan::{
     Aggregate, Filter, LogicalPlan, Projection, Sort, Window,
 };
-use datafusion_expr::{col, Expr, ExprSchemable, UserDefinedLogicalNode};
+use datafusion_expr::{col, Expr, ExprSchemable};
 
 /// A map from expression's identifier to tuple including
 /// - the expression itself (cloned)
@@ -167,9 +167,7 @@ impl CommonSubexprEliminate {
         config: &dyn OptimizerConfig,
     ) -> Result<LogicalPlan> {
         let Window {
-            input,
-            window_expr,
-            schema,
+            input, window_expr, ..
         } = window;
         let mut expr_set = ExprSet::new();
 
