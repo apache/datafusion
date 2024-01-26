@@ -241,22 +241,22 @@ impl Optimizer {
             Arc::new(EliminateFilter::new()),
             Arc::new(EliminateCrossJoin::new()),
             Arc::new(CommonSubexprEliminate::new()),
-            Arc::new(EliminateLimit::new()),
-            Arc::new(PropagateEmptyRelation::new()),
+            // Arc::new(EliminateLimit::new()),
+            // Arc::new(PropagateEmptyRelation::new()),
             // Must be after PropagateEmptyRelation
-            Arc::new(EliminateOneUnion::new()),
-            Arc::new(FilterNullJoinKeys::default()),
-            Arc::new(EliminateOuterJoin::new()),
-            // Filters can't be pushed down past Limits, we should do PushDownFilter after PushDownLimit
-            Arc::new(PushDownLimit::new()),
-            Arc::new(PushDownFilter::new()),
-            Arc::new(SingleDistinctToGroupBy::new()),
+            // Arc::new(EliminateOneUnion::new()),
+            // Arc::new(FilterNullJoinKeys::default()),
+            // Arc::new(EliminateOuterJoin::new()),
+            // // Filters can't be pushed down past Limits, we should do PushDownFilter after PushDownLimit
+            // Arc::new(PushDownLimit::new()),
+            // Arc::new(PushDownFilter::new()),
+            // Arc::new(SingleDistinctToGroupBy::new()),
             // The previous optimizations added expressions and projections,
             // that might benefit from the following rules
-            Arc::new(SimplifyExpressions::new()),
-            Arc::new(UnwrapCastInComparison::new()),
+            // Arc::new(SimplifyExpressions::new()),
+            // Arc::new(UnwrapCastInComparison::new()),
             Arc::new(CommonSubexprEliminate::new()),
-            Arc::new(GroupWindowExprs::new()),
+            // Arc::new(GroupWindowExprs::new()),
             Arc::new(OptimizeProjections::new()),
         ];
 

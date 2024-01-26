@@ -184,9 +184,9 @@ impl CommonSubexprEliminate {
         let new_window_expr = pop_expr(&mut new_expr)?;
         assert_eq!(new_window_expr.len(), window_expr.len());
         let new_window_expr = new_window_expr.into_iter().zip(window_expr.iter()).map(|(new_window_expr, window_expr)| {
-            println!("    window_expr.canonical_name(): {:?}", window_expr.canonical_name());
-            println!("new_window_expr.canonical_name(): {:?}", new_window_expr.canonical_name());
-            new_window_expr.alias_if_changed(window_expr.canonical_name())
+            println!("    window_expr.canonical_name(): {:?}", window_expr.name_for_alias()?);
+            println!("new_window_expr.canonical_name(): {:?}", new_window_expr.name_for_alias()?);
+            new_window_expr.alias_if_changed(window_expr.name_for_alias()?)
         }).collect::<Result<Vec<_>>>()?;
 
         println!("new_expr: {:?}",new_window_expr);
@@ -383,11 +383,13 @@ impl OptimizerRule for CommonSubexprEliminate {
         };
 
         let original_schema = plan.schema().clone();
-        println!("\n\noriginal schema fields: {:?}", original_schema.fields());
+        // println!("\n\noriginal schema fields: {:?}", original_schema.fields());
         if let Some(opt) = &optimized_plan{
-            println!("\n\noptimized_plan.schema fields: {:?}", opt.schema().fields());
-            println!("\n\n{:#?}", opt);
-            println!("\n\n{:#?}", plan);
+            // println!("\n\noptimized_plan.schema fields: {:?}", opt.schema().fields());
+            println!("\n\noptimized plan");
+            println!("{:#?}", opt);
+            println!("\n\nplan");
+            println!("{:#?}", plan);
 
             // assert_eq!(&opt.schema().fields().len(), &original_schema.fields().len());
         }
