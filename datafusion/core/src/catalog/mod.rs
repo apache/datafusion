@@ -53,6 +53,7 @@ pub trait CatalogProviderList: Sync + Send {
     fn catalog(&self, name: &str) -> Option<Arc<dyn CatalogProvider>>;
 }
 
+/// See [`CatalogProviderList`]
 #[deprecated(since = "35.0.0", note = "use [`CatalogProviderList`] instead")]
 pub trait CatalogList: CatalogProviderList {}
 
