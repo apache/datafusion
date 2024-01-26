@@ -159,7 +159,6 @@ fn try_swapping_with_csv(
     projection: &ProjectionExec,
     csv: &CsvExec,
 ) -> Option<Arc<dyn ExecutionPlan>> {
-    // info!("csv exec: {}", csv);
     // If there is any non-column or alias-carrier expression, Projection should not be removed.
     // This process can be moved into CsvExec, but it would be an overlap of their responsibility.
     all_alias_free_columns(projection.expr()).then(|| {
