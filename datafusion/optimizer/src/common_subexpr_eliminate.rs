@@ -53,8 +53,6 @@ type ExprSet = HashMap<Identifier, (Expr, usize, DataType)>;
 /// here is not such a good choose.
 type Identifier = String;
 
-const PRINT_ON: bool = false;
-
 /// Perform Common Sub-expression Elimination optimization.
 ///
 /// Currently only common sub-expressions within one logical plan will
@@ -173,10 +171,6 @@ impl CommonSubexprEliminate {
             window_expr,
             schema,
         } = window;
-        if PRINT_ON {
-            println!("-----------");
-            println!("window expr: {:?}", window_expr);
-        }
         let mut expr_set = ExprSet::new();
 
         let input_schema = Arc::clone(input.schema());
@@ -192,21 +186,9 @@ impl CommonSubexprEliminate {
             .zip(window_expr.iter())
             .map(|(new_window_expr, window_expr)| {
                 let original_name = window_expr.name_for_alias()?;
-                if PRINT_ON {
-                    let new_name = new_window_expr.name_for_alias()?;
-                    // let original_name = window_expr.canonical_name();
-                    // let new_name = new_window_expr.canonical_name();
-                    println!("original_name: {:?}", original_name);
-                    println!("     new_name: {:?}", new_name);
-                }
                 new_window_expr.alias_if_changed(original_name)
             })
             .collect::<Result<Vec<_>>>()?;
-        if PRINT_ON {
-            println!("new_expr: {:?}", new_window_expr);
-            println!("window schema fields: {:?}", schema.fields());
-            println!("-----------");
-        }
         Ok(LogicalPlan::Window(Window::try_new(
             new_window_expr,
             Arc::new(new_input),
