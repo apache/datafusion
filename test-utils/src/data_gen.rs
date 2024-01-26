@@ -33,6 +33,7 @@ struct GeneratorOptions {
     pods_per_host: Range<usize>,
     containers_per_pod: Range<usize>,
     entries_per_container: Range<usize>,
+    service_names: Vec<String>,
 }
 
 impl Default for GeneratorOptions {
@@ -42,6 +43,12 @@ impl Default for GeneratorOptions {
             pods_per_host: 1..15,
             containers_per_pod: 1..3,
             entries_per_container: 1024..8192,
+            service_names: vec![
+                String::from("frontend"),
+                String::from("backend"),
+                String::from("database"),
+                String::from("cache"),
+            ],
         }
     }
 }
@@ -265,9 +272,9 @@ impl Default for AccessLogGenerator {
     }
 }
 
-const  DEFAULT_SEED: [u8; 32] =  [
-1, 0, 0, 0, 23, 0, 3, 0, 200, 1, 0, 0, 210, 30, 8, 0, 1, 0, 21, 0, 6, 0, 0,
-0, 0, 0, 5, 0, 0, 0, 0, 0,
+const DEFAULT_SEED: [u8; 32] = [
+    1, 0, 0, 0, 23, 0, 3, 0, 200, 1, 0, 0, 210, 30, 8, 0, 1, 0, 21, 0, 6, 0, 0, 0, 0, 0,
+    5, 0, 0, 0, 0, 0,
 ];
 
 impl AccessLogGenerator {
@@ -322,6 +329,12 @@ impl AccessLogGenerator {
         self.options.entries_per_container = range;
         self
     }
+
+    /// set the possible service names that are used
+    pub fn with_service_names(mut self, service_names: Vec<String>) -> Self {
+        self.options.service_names = service_names;
+        self
+    }
 }
 
 impl Iterator for AccessLogGenerator {
@@ -350,7 +363,7 @@ impl Iterator for AccessLogGenerator {
         );
         self.host_idx += 1;
 
-        for service in &["frontend", "backend", "database", "cache"] {
+        for service in &self.options.service_names {
             if self.rng.gen_bool(0.5) {
                 continue;
             }

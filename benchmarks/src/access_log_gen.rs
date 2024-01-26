@@ -16,27 +16,24 @@
 // under the License.
 
 use arrow::datatypes::SchemaRef;
+use arrow::record_batch::RecordBatch;
 use arrow::util::pretty::pretty_format_batches;
-use datafusion::common::{Result, DataFusionError};
+use datafusion::common::{DataFusionError, Result};
 use datafusion::dataframe::DataFrameWriteOptions;
 use datafusion::datasource::streaming::StreamingTable;
-use datafusion::datasource::{TableProvider};
+use datafusion::datasource::TableProvider;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
+use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::streaming::PartitionStream;
-use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::SessionContext;
-use parquet::file::properties::{WriterProperties};
+use futures::stream::StreamExt;
+use futures::TryStreamExt;
+use parquet::file::properties::WriterProperties;
 use std::num::NonZeroUsize;
 use std::path::PathBuf;
 use std::sync::Arc;
-use arrow::record_batch::RecordBatch;
 use structopt::StructOpt;
-use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use test_utils::AccessLogGenerator;
-use futures::stream::StreamExt;
-use futures::TryStreamExt;
-use tokio::task::JoinSet;
-use datafusion_common::exec_err;
 
 /// Creates synthetic data that mimic's a web server access log
 /// dataset
@@ -57,12 +54,13 @@ pub struct RunOpt {
     #[structopt(parse(from_os_str), required = true, short = "p", long = "path")]
     path: PathBuf,
 
-    /// Total size of each file in dataset. The default scale factor of 1.0 will generate roughly 1GB parquet files
+    /// Total size of each file in dataset. Defaults to 1.0, which generates
+    /// 10M rows per file
     //#[structopt(long = "scale-factor", default_value = "1.0")]
     #[structopt(long = "scale-factor", default_value = "0.01")]
     scale_factor: f32,
 
-    /// How many files should be created? 10 by default
+    /// How many files are created. Defaults to 10
     #[structopt(default_value = "10", short = "n", long = "num-files")]
     num_files: NonZeroUsize,
 
@@ -82,37 +80,36 @@ impl RunOpt {
 
         std::fs::create_dir_all(&path)?;
 
-        //let ctx = SessionContext::new();
-
         // Create output files in parallel
         let results: Vec<_> = futures::stream::iter(0..num_files.get())
             .map(|i| write_to_file(path.clone(), i, scale_factor, sort))
-            .buffer_unordered(4)
+            // write to files in parallel, using all cores
+            .buffer_unordered(num_cpus::get())
             .try_collect()
             .await?;
 
         // Unnest the Vec<Vec<RecordBatch>> into a Vec<RecordBatch>
-        let results: Vec<_> = results.into_iter()
-            .flat_map(|b| b.into_iter())
-            .collect();
+        let results: Vec<_> = results.into_iter().flat_map(|b| b.into_iter()).collect();
 
         println!("done!");
         println!("{}", pretty_format_batches(&results)?);
 
-
         Ok(())
-
-
     }
 }
 
 /// writes a single parquet file, returning a record batch with the count.
-async fn write_to_file(path: PathBuf, file_index: usize, scale_factor: f32, sort: bool) -> Result<Vec<RecordBatch>> {
+async fn write_to_file(
+    path: PathBuf,
+    file_index: usize,
+    scale_factor: f32,
+    sort: bool,
+) -> Result<Vec<RecordBatch>> {
     let ctx = SessionContext::new();
     let path = path.join(format!("{file_index}.parquet"));
     let output_filename = path.to_str().expect("non utf8 path name");
     let options = DataFrameWriteOptions::new().with_single_file_output(true);
-    // TODO maybe make properties configurable?
+    // TODO maybe make parquet writer properties configurable?
     let writer_properties = WriterProperties::builder()
         //.set_data_page_size_limit(1024 * 1024)
         //.set_write_batch_size(1024 * 1024)
@@ -120,17 +117,15 @@ async fn write_to_file(path: PathBuf, file_index: usize, scale_factor: f32, sort
         .build();
     let seed = (file_index * 17) as u64;
     let provider = access_log_provider(scale_factor, seed)?;
-    println!("writing to {output_filename}...");
-    ctx
-        .read_table(provider)?
+    println!(
+        "writing scale_factor: sf={scale_factor}, seed={seed} to {output_filename}..."
+    );
+    ctx.read_table(provider)?
         .write_parquet(output_filename, options, Some(writer_properties))
         .await
 }
 
-
 fn access_log_provider(scale_factor: f32, seed: u64) -> Result<Arc<dyn TableProvider>> {
-    println!("Using scale_factor={} and seed={}", scale_factor, seed);
-
     let stream = AccessLogStream::new(scale_factor, seed);
 
     let table = StreamingTable::try_new(stream.schema().clone(), vec![Arc::new(stream)])?;
@@ -138,6 +133,7 @@ fn access_log_provider(scale_factor: f32, seed: u64) -> Result<Arc<dyn TableProv
     Ok(Arc::new(table))
 }
 
+/// Stream of access log records generated on demand
 struct AccessLogStream {
     schema: SchemaRef,
     scale_factor: f32,
@@ -161,22 +157,27 @@ impl PartitionStream for AccessLogStream {
     }
 
     fn execute(&self, _ctx: Arc<TaskContext>) -> SendableRecordBatchStream {
+        let row_limit = (10_000_000_f32 * self.scale_factor) as usize;
 
-        let num_batches = (100_f32 * self.scale_factor) as usize;
+        //
+        let service_names: Vec<_> = ["frontend", "backend", "database", "cache"]
+            .iter()
+            .flat_map(|name| {
+                (0..5)
+                    .map(|i| format!("service-{name}{i}"))
+                    .collect::<Vec<_>>()
+            })
+            .collect();
 
-        println!("creating num_batches={}", num_batches);
         let generator = AccessLogGenerator::new()
+            .with_row_limit(row_limit)
+            .with_pods_per_host(1..100)
+            .with_containers_per_pod(10..50)
+            .with_service_names(service_names)
             .with_seed(self.seed);
 
-        let stream = futures::stream::iter(generator)
-            .map(|batch| Ok(batch))
-            .take(num_batches);
+        let stream = futures::stream::iter(generator).map(|batch| Ok(batch));
 
-
-        Box::pin(RecordBatchStreamAdapter::new(
-            self.schema.clone(),
-            stream,
-        ))
+        Box::pin(RecordBatchStreamAdapter::new(self.schema.clone(), stream))
     }
-
 }
