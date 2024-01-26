@@ -48,6 +48,7 @@ pub mod test;
 
 pub use optimizer::{OptimizerConfig, OptimizerContext, OptimizerRule};
 pub use utils::optimize_children;
+
 mod plan_signature;
 
 #[cfg(test)]
