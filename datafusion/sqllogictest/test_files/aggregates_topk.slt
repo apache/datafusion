@@ -28,7 +28,9 @@ CREATE TABLE traces(trace_id varchar, timestamp bigint, other bigint) AS VALUES
 ('a', -1, -1),
 ('b', -2, 0),
 ('c', 4, 1),
+('c', 4, 2),
 ('c', 2, 2),
+('c', 2, 4),
 ('b', 3, 3);
 
 statement ok
