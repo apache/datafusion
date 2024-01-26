@@ -1527,3 +1527,23 @@ SELECT to_timestamp('I AM NOT A TIMESTAMP');
 
 query error DataFusion error: Arrow error: Cast error: Cannot cast string '' to value of Int32 type
 SELECT CAST('' AS int);
+
+# See issue: https://github.com/apache/arrow-datafusion/issues/8978
+statement ok
+create table users (id int, name varchar);
+
+statement ok
+insert into users values (1, 'Tom');
+
+statement ok
+create view v as select count(id) from users;
+
+query I
+select * from v;
+----
+1
+
+query I
+select count(1) from v;
+----
+1
