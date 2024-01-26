@@ -181,10 +181,18 @@ impl CommonSubexprEliminate {
 
         let (mut new_expr, new_input) =
             self.rewrite_expr(&[window_expr], &[&arrays], input, &expr_set, config)?;
-        println!("new_expr: {:?}", new_expr[0]);
+        let new_window_expr = pop_expr(&mut new_expr)?;
+        assert_eq!(new_window_expr.len(), window_expr.len());
+        let new_window_expr = new_window_expr.into_iter().zip(window_expr.iter()).map(|(new_window_expr, window_expr)| {
+            println!("    window_expr.canonical_name(): {:?}", window_expr.canonical_name());
+            println!("new_window_expr.canonical_name(): {:?}", new_window_expr.canonical_name());
+            new_window_expr.alias_if_changed(window_expr.canonical_name())
+        }).collect::<Result<Vec<_>>>()?;
+
+        println!("new_expr: {:?}",new_window_expr);
         println!("window schema fields: {:?}", schema.fields());
         println!("-----------");
-        Ok(LogicalPlan::Window(Window::try_new(pop_expr(&mut new_expr)?, Arc::new(new_input))?))
+        Ok(LogicalPlan::Window(Window::try_new(new_window_expr, Arc::new(new_input))?))
     }
 
     fn try_optimize_aggregate(
