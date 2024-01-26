@@ -17,26 +17,22 @@
 
 use arrow::datatypes::SchemaRef;
 use arrow::util::pretty::pretty_format_batches;
-use async_trait::async_trait;
-use datafusion::common::{DataFusionError, Result};
+use datafusion::common::{Result};
 use datafusion::dataframe::DataFrameWriteOptions;
-use datafusion::datasource::function::TableFunctionImpl;
 use datafusion::datasource::streaming::StreamingTable;
-use datafusion::datasource::{TableProvider, TableType};
-use datafusion::execution::context::SessionState;
+use datafusion::datasource::{TableProvider};
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
-use datafusion::logical_expr::Expr;
 use datafusion::physical_plan::streaming::PartitionStream;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::SessionContext;
-use datafusion_common::{plan_datafusion_err, plan_err, ScalarValue};
-use parquet::file::properties::{WriterProperties, WriterPropertiesBuilder};
-use std::any::Any;
+use parquet::file::properties::{WriterProperties};
 use std::num::NonZeroUsize;
 use std::path::PathBuf;
 use std::sync::Arc;
 use structopt::StructOpt;
+use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use test_utils::AccessLogGenerator;
+use futures::stream::StreamExt;
 
 /// Creates synthetic data that mimic's a web server access log
 /// dataset
@@ -59,7 +55,7 @@ pub struct RunOpt {
 
     /// Total size of each file in dataset. The default scale factor of 1.0 will generate roughly 1GB parquet files
     //#[structopt(long = "scale-factor", default_value = "1.0")]
-    #[structopt(long = "scale-factor", default_value = "0.1")]
+    #[structopt(long = "scale-factor", default_value = "0.01")]
     scale_factor: f32,
 
     /// How many files should be created? 10 by default
@@ -112,11 +108,7 @@ impl RunOpt {
 fn access_log_provider(scale_factor: f32, seed: u64) -> Result<Arc<dyn TableProvider>> {
     println!("Using scale_factor={} and seed={}", scale_factor, seed);
 
-    let generator = AccessLogGenerator::new();
-    //.with_seed(seed);
-    let num_batches = (100_f32 * scale_factor) as usize;
-
-    let stream = AccessLogStream::new(generator, num_batches);
+    let stream = AccessLogStream::new(scale_factor, seed);
 
     let table = StreamingTable::try_new(stream.schema().clone(), vec![Arc::new(stream)])?;
 
@@ -125,16 +117,17 @@ fn access_log_provider(scale_factor: f32, seed: u64) -> Result<Arc<dyn TableProv
 
 struct AccessLogStream {
     schema: SchemaRef,
-    generator: AccessLogGenerator,
-    num_batches: usize,
+    scale_factor: f32,
+    seed: u64,
 }
 
 impl AccessLogStream {
-    fn new(generator: AccessLogGenerator, num_batches: usize) -> Self {
+    fn new(scale_factor: f32, seed: u64) -> Self {
+        let schema = AccessLogGenerator::new().schema();
         Self {
-            schema: generator.schema(),
-            generator,
-            num_batches,
+            schema,
+            scale_factor,
+            seed,
         }
     }
 }
@@ -145,6 +138,22 @@ impl PartitionStream for AccessLogStream {
     }
 
     fn execute(&self, ctx: Arc<TaskContext>) -> SendableRecordBatchStream {
-        todo!()
+
+        let num_batches = (100_f32 * self.scale_factor) as usize;
+
+        println!("creating num_batches={}", num_batches);
+        let generator = AccessLogGenerator::new();
+        // with_seed(self.seed)
+
+        let stream = futures::stream::iter(generator)
+            .map(|batch| Ok(batch))
+            .take(num_batches);
+
+
+        Box::pin(RecordBatchStreamAdapter::new(
+            self.schema.clone(),
+            stream,
+        ))
     }
+
 }
