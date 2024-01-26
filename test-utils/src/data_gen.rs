@@ -265,17 +265,17 @@ impl Default for AccessLogGenerator {
     }
 }
 
+const  DEFAULT_SEED: [u8; 32] =  [
+1, 0, 0, 0, 23, 0, 3, 0, 200, 1, 0, 0, 210, 30, 8, 0, 1, 0, 21, 0, 6, 0, 0,
+0, 0, 0, 5, 0, 0, 0, 0, 0,
+];
+
 impl AccessLogGenerator {
     pub fn new() -> Self {
-        let seed = [
-            1, 0, 0, 0, 23, 0, 3, 0, 200, 1, 0, 0, 210, 30, 8, 0, 1, 0, 21, 0, 6, 0, 0,
-            0, 0, 0, 5, 0, 0, 0, 0, 0,
-        ];
-
         Self {
             schema: BatchBuilder::schema(),
             host_idx: 0,
-            rng: StdRng::from_seed(seed),
+            rng: StdRng::from_seed(DEFAULT_SEED),
             max_batch_size: usize::MAX,
             row_count: 0,
             options: Default::default(),
@@ -285,6 +285,12 @@ impl AccessLogGenerator {
     /// Return the schema of the [`RecordBatch`]es  created
     pub fn schema(&self) -> SchemaRef {
         self.schema.clone()
+    }
+
+    /// Reset the random number generator with the specified seed
+    pub fn with_seed(mut self, seed: u64) -> Self {
+        self.rng = StdRng::seed_from_u64(seed);
+        self
     }
 
     /// Limit the maximum batch size

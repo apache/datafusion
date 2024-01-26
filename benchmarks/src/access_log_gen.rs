@@ -17,7 +17,7 @@
 
 use arrow::datatypes::SchemaRef;
 use arrow::util::pretty::pretty_format_batches;
-use datafusion::common::{Result};
+use datafusion::common::{Result, DataFusionError};
 use datafusion::dataframe::DataFrameWriteOptions;
 use datafusion::datasource::streaming::StreamingTable;
 use datafusion::datasource::{TableProvider};
@@ -29,10 +29,14 @@ use parquet::file::properties::{WriterProperties};
 use std::num::NonZeroUsize;
 use std::path::PathBuf;
 use std::sync::Arc;
+use arrow::record_batch::RecordBatch;
 use structopt::StructOpt;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use test_utils::AccessLogGenerator;
 use futures::stream::StreamExt;
+use futures::TryStreamExt;
+use tokio::task::JoinSet;
+use datafusion_common::exec_err;
 
 /// Creates synthetic data that mimic's a web server access log
 /// dataset
@@ -78,32 +82,51 @@ impl RunOpt {
 
         std::fs::create_dir_all(&path)?;
 
-        let ctx = SessionContext::new();
+        //let ctx = SessionContext::new();
 
-        // use the COPY command to write data to the file
-        let output_file = path.join("1.parquet");
-        let output_filename = output_file.to_str().expect("non utf8 path name");
-        let options = DataFrameWriteOptions::new().with_single_file_output(true);
-
-        let writer_properties = WriterProperties::builder()
-            //.set_data_page_size_limit(1024 * 1024)
-            //.set_write_batch_size(1024 * 1024)
-            //.set_max_row_group_size(1024 * 1024)
-            .build();
-
-        let seed = 1;
-        let provider = access_log_provider(scale_factor, seed)?;
-        println!("writing to parquet...");
-        let res = ctx
-            .read_table(provider)?
-            .write_parquet(output_filename, options, Some(writer_properties))
+        // Create output files in parallel
+        let results: Vec<_> = futures::stream::iter(0..num_files.get())
+            .map(|i| write_to_file(path.clone(), i, scale_factor, sort))
+            .buffer_unordered(4)
+            .try_collect()
             .await?;
+
+        // Unnest the Vec<Vec<RecordBatch>> into a Vec<RecordBatch>
+        let results: Vec<_> = results.into_iter()
+            .flat_map(|b| b.into_iter())
+            .collect();
+
         println!("done!");
-        println!("{}", pretty_format_batches(&res)?);
+        println!("{}", pretty_format_batches(&results)?);
+
 
         Ok(())
+
+
     }
 }
+
+/// writes a single parquet file, returning a record batch with the count.
+async fn write_to_file(path: PathBuf, file_index: usize, scale_factor: f32, sort: bool) -> Result<Vec<RecordBatch>> {
+    let ctx = SessionContext::new();
+    let path = path.join(format!("{file_index}.parquet"));
+    let output_filename = path.to_str().expect("non utf8 path name");
+    let options = DataFrameWriteOptions::new().with_single_file_output(true);
+    // TODO maybe make properties configurable?
+    let writer_properties = WriterProperties::builder()
+        //.set_data_page_size_limit(1024 * 1024)
+        //.set_write_batch_size(1024 * 1024)
+        //.set_max_row_group_size(1024 * 1024)
+        .build();
+    let seed = (file_index * 17) as u64;
+    let provider = access_log_provider(scale_factor, seed)?;
+    println!("writing to {output_filename}...");
+    ctx
+        .read_table(provider)?
+        .write_parquet(output_filename, options, Some(writer_properties))
+        .await
+}
+
 
 fn access_log_provider(scale_factor: f32, seed: u64) -> Result<Arc<dyn TableProvider>> {
     println!("Using scale_factor={} and seed={}", scale_factor, seed);
@@ -137,13 +160,13 @@ impl PartitionStream for AccessLogStream {
         &self.schema
     }
 
-    fn execute(&self, ctx: Arc<TaskContext>) -> SendableRecordBatchStream {
+    fn execute(&self, _ctx: Arc<TaskContext>) -> SendableRecordBatchStream {
 
         let num_batches = (100_f32 * self.scale_factor) as usize;
 
         println!("creating num_batches={}", num_batches);
-        let generator = AccessLogGenerator::new();
-        // with_seed(self.seed)
+        let generator = AccessLogGenerator::new()
+            .with_seed(self.seed);
 
         let stream = futures::stream::iter(generator)
             .map(|batch| Ok(batch))
