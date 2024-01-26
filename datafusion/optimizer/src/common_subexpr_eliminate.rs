@@ -53,6 +53,8 @@ type ExprSet = HashMap<Identifier, (Expr, usize, DataType)>;
 /// here is not such a good choose.
 type Identifier = String;
 
+const PRINT_ON: bool = false;
+
 /// Perform Common Sub-expression Elimination optimization.
 ///
 /// Currently only common sub-expressions within one logical plan will
@@ -171,8 +173,10 @@ impl CommonSubexprEliminate {
             window_expr,
             schema,
         } = window;
-        println!("-----------");
-        println!("window expr: {:?}", window_expr);
+        if PRINT_ON {
+            println!("-----------");
+            println!("window expr: {:?}", window_expr);
+        }
         let mut expr_set = ExprSet::new();
 
         let input_schema = Arc::clone(input.schema());
@@ -183,20 +187,30 @@ impl CommonSubexprEliminate {
             self.rewrite_expr(&[window_expr], &[&arrays], input, &expr_set, config)?;
         let new_window_expr = pop_expr(&mut new_expr)?;
         assert_eq!(new_window_expr.len(), window_expr.len());
-        let new_window_expr = new_window_expr.into_iter().zip(window_expr.iter()).map(|(new_window_expr, window_expr)| {
-            let original_name = window_expr.name_for_alias()?;
-            let new_name = new_window_expr.name_for_alias()?;
-            // let original_name = window_expr.canonical_name();
-            // let new_name = new_window_expr.canonical_name();
-            println!("original_name: {:?}", original_name);
-            println!("     new_name: {:?}", new_name);
-            new_window_expr.alias_if_changed(original_name)
-        }).collect::<Result<Vec<_>>>()?;
-
-        println!("new_expr: {:?}",new_window_expr);
-        println!("window schema fields: {:?}", schema.fields());
-        println!("-----------");
-        Ok(LogicalPlan::Window(Window::try_new(new_window_expr, Arc::new(new_input))?))
+        let new_window_expr = new_window_expr
+            .into_iter()
+            .zip(window_expr.iter())
+            .map(|(new_window_expr, window_expr)| {
+                let original_name = window_expr.name_for_alias()?;
+                if PRINT_ON {
+                    let new_name = new_window_expr.name_for_alias()?;
+                    // let original_name = window_expr.canonical_name();
+                    // let new_name = new_window_expr.canonical_name();
+                    println!("original_name: {:?}", original_name);
+                    println!("     new_name: {:?}", new_name);
+                }
+                new_window_expr.alias_if_changed(original_name)
+            })
+            .collect::<Result<Vec<_>>>()?;
+        if PRINT_ON {
+            println!("new_expr: {:?}", new_window_expr);
+            println!("window schema fields: {:?}", schema.fields());
+            println!("-----------");
+        }
+        Ok(LogicalPlan::Window(Window::try_new(
+            new_window_expr,
+            Arc::new(new_input),
+        )?))
     }
 
     fn try_optimize_aggregate(
@@ -343,8 +357,6 @@ impl OptimizerRule for CommonSubexprEliminate {
         plan: &LogicalPlan,
         config: &dyn OptimizerConfig,
     ) -> Result<Option<LogicalPlan>> {
-        println!("CommonSubexprEliminate:");
-        println!("{:?}", plan);
         let optimized_plan = match plan {
             LogicalPlan::Projection(projection) => {
                 Some(self.try_optimize_projection(projection, config)?)
@@ -387,16 +399,6 @@ impl OptimizerRule for CommonSubexprEliminate {
         };
 
         let original_schema = plan.schema().clone();
-        // // println!("\n\noriginal schema fields: {:?}", original_schema.fields());
-        // if let Some(opt) = &optimized_plan{
-        //     // println!("\n\noptimized_plan.schema fields: {:?}", opt.schema().fields());
-        //     println!("\n\noptimized plan");
-        //     println!("{:#?}", opt);
-        //     println!("\n\nplan");
-        //     println!("{:#?}", plan);
-        //
-        //     // assert_eq!(&opt.schema().fields().len(), &original_schema.fields().len());
-        // }
         match optimized_plan {
             Some(optimized_plan) if optimized_plan.schema() != &original_schema => {
                 // add an additional projection if the output schema changed.
@@ -501,9 +503,7 @@ fn build_recover_project_plan(
     let col_exprs = schema
         .fields()
         .iter()
-        .map(|field| {
-            Expr::Column(field.qualified_column())
-        })
+        .map(|field| Expr::Column(field.qualified_column()))
         .collect::<Vec<_>>();
     Ok(LogicalPlan::Projection(Projection::try_new(
         col_exprs,

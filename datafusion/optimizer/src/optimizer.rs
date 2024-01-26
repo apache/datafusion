@@ -288,7 +288,7 @@ impl Optimizer {
         previous_plans.insert(LogicalPlanSignature::new(&new_plan));
 
         let mut i = 0;
-        while i < 1 {
+        while i < options.optimizer.max_passes {
             log_plan(&format!("Optimizer input (pass {i})"), &new_plan);
 
             for rule in &self.rules {
