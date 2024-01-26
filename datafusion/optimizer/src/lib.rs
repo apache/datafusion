@@ -29,7 +29,6 @@ pub mod eliminate_one_union;
 pub mod eliminate_outer_join;
 pub mod extract_equijoin_predicate;
 pub mod filter_null_join_keys;
-pub mod group_window_exprs;
 pub mod optimize_projections;
 pub mod optimizer;
 pub mod propagate_empty_relation;

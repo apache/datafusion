@@ -18,6 +18,7 @@
 //! This module provides a builder for creating LogicalPlans
 
 use std::any::Any;
+use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 use std::convert::TryFrom;
 use std::iter::zip;
@@ -38,8 +39,8 @@ use crate::logical_plan::{
 };
 use crate::type_coercion::binary::comparison_coercion;
 use crate::utils::{
-    can_hash, columnize_expr, expand_qualified_wildcard, expand_wildcard,
-    find_valid_equijoin_key_pair,
+    can_hash, columnize_expr, compare_sort_expr, expand_qualified_wildcard,
+    expand_wildcard, find_valid_equijoin_key_pair, group_window_expr_by_sort_keys,
 };
 use crate::{
     and, binary_expr, DmlStatement, Expr, ExprSchemable, Operator,
@@ -314,9 +315,36 @@ impl LogicalPlanBuilder {
         input: LogicalPlan,
         window_exprs: Vec<Expr>,
     ) -> Result<LogicalPlan> {
-        let plan = LogicalPlanBuilder::from(input)
-            .window(window_exprs)?
-            .build()?;
+        let mut plan = input;
+        let mut groups = group_window_expr_by_sort_keys(window_exprs)?;
+        // To align with the behavior of PostgreSQL, we want the sort_keys sorted as same rule as PostgreSQL that first
+        // we compare the sort key themselves and if one window's sort keys are a prefix of another
+        // put the window with more sort keys first. so more deeply sorted plans gets nested further down as children.
+        // The sort_by() implementation here is a stable sort.
+        // Note that by this rule if there's an empty over, it'll be at the top level
+        groups.sort_by(|(key_a, _), (key_b, _)| {
+            for ((first, _), (second, _)) in key_a.iter().zip(key_b.iter()) {
+                let key_ordering = compare_sort_expr(first, second, plan.schema());
+                match key_ordering {
+                    Ordering::Less => {
+                        return Ordering::Less;
+                    }
+                    Ordering::Greater => {
+                        return Ordering::Greater;
+                    }
+                    Ordering::Equal => {}
+                }
+            }
+            key_b.len().cmp(&key_a.len())
+        });
+        for (_, exprs) in groups {
+            let window_exprs = exprs.into_iter().collect::<Vec<_>>();
+            // Partition and sorting is done at physical level, see the EnforceDistribution
+            // and EnforceSorting rules.
+            plan = LogicalPlanBuilder::from(plan)
+                .window(window_exprs)?
+                .build()?;
+        }
         Ok(plan)
     }
     /// Apply a projection without alias.

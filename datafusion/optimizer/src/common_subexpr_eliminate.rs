@@ -166,34 +166,67 @@ impl CommonSubexprEliminate {
         window: &Window,
         config: &dyn OptimizerConfig,
     ) -> Result<LogicalPlan> {
-        let Window {
-            input, window_expr, ..
-        } = window;
+        let mut window_exprs = vec![];
+        let mut arrays_per_window = vec![];
         let mut expr_set = ExprSet::new();
 
-        let input_schema = Arc::clone(input.schema());
-        let arrays =
-            to_arrays(window_expr, input_schema, &mut expr_set, ExprMask::Normal)?;
+        // Get all window expressions inside the consecutive window operators.
+        // At this stage all window operators should be consecutive.
+        let mut plan = LogicalPlan::Window(window.clone());
+        while let LogicalPlan::Window(window) = plan {
+            let Window {
+                input, window_expr, ..
+            } = window;
+            plan = input.as_ref().clone();
 
-        let (mut new_expr, new_input) =
-            self.rewrite_expr(&[window_expr], &[&arrays], input, &expr_set, config)?;
-        let new_window_expr = pop_expr(&mut new_expr)?;
-        assert_eq!(new_window_expr.len(), window_expr.len());
+            let input_schema = Arc::clone(input.schema());
+            let arrays =
+                to_arrays(&window_expr, input_schema, &mut expr_set, ExprMask::Normal)?;
 
-        // Rename new re-written window expressions with original name (bu giving alias)
-        // Otherwise we may receive schema error, in subsequent operators.
-        let new_window_expr = new_window_expr
-            .into_iter()
-            .zip(window_expr.iter())
-            .map(|(new_window_expr, window_expr)| {
-                let original_name = window_expr.name_for_alias()?;
-                new_window_expr.alias_if_changed(original_name)
-            })
-            .collect::<Result<Vec<_>>>()?;
-        Ok(LogicalPlan::Window(Window::try_new(
-            new_window_expr,
-            Arc::new(new_input),
-        )?))
+            window_exprs.push(window_expr);
+            arrays_per_window.push(arrays);
+        }
+
+        let mut window_exprs = window_exprs
+            .iter()
+            .map(|expr| expr.as_slice())
+            .collect::<Vec<_>>();
+        let arrays_per_window = arrays_per_window
+            .iter()
+            .map(|arrays| arrays.as_slice())
+            .collect::<Vec<_>>();
+
+        assert_eq!(window_exprs.len(), arrays_per_window.len());
+        let (mut new_expr, new_input) = self.rewrite_expr(
+            &window_exprs,
+            &arrays_per_window,
+            &plan,
+            &expr_set,
+            config,
+        )?;
+        assert_eq!(window_exprs.len(), new_expr.len());
+
+        // Construct consecutive window operator, with their corresponding new window expressions.
+        plan = new_input;
+        while let Some(new_window_expr) = new_expr.pop() {
+            // Since `new_expr` and `window_exprs` length are same. We can safely `.unwrap` here.
+            let orig_window_expr = window_exprs.pop().unwrap();
+            assert_eq!(new_window_expr.len(), orig_window_expr.len());
+
+            // Rename new re-written window expressions with original name (bu giving alias)
+            // Otherwise we may receive schema error, in subsequent operators.
+            let new_window_expr = new_window_expr
+                .into_iter()
+                .zip(orig_window_expr.iter())
+                .map(|(new_window_expr, window_expr)| {
+                    let original_name = window_expr.name_for_alias()?;
+                    new_window_expr.alias_if_changed(original_name)
+                })
+                .collect::<Result<Vec<_>>>()?;
+            plan = LogicalPlan::Window(Window::try_new(new_window_expr, Arc::new(plan))?);
+        }
+
+        Ok(plan)
     }
 
     fn try_optimize_aggregate(
