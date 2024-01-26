@@ -179,6 +179,9 @@ impl CommonSubexprEliminate {
             self.rewrite_expr(&[window_expr], &[&arrays], input, &expr_set, config)?;
         let new_window_expr = pop_expr(&mut new_expr)?;
         assert_eq!(new_window_expr.len(), window_expr.len());
+
+        // Rename new re-written window expressions with original name (bu giving alias)
+        // Otherwise we may receive schema error, in subsequent operators.
         let new_window_expr = new_window_expr
             .into_iter()
             .zip(window_expr.iter())
@@ -484,7 +487,7 @@ fn build_recover_project_plan(
         .fields()
         .iter()
         .map(|field| Expr::Column(field.qualified_column()))
-        .collect::<Vec<_>>();
+        .collect();
     Ok(LogicalPlan::Projection(Projection::try_new(
         col_exprs,
         Arc::new(input),
