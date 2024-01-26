@@ -88,7 +88,7 @@ Projection: nodes.id
 --------Filter: nodes.id < Int64(10)
 ----------TableScan: nodes
 physical_plan
-RecursiveQueryExec: is_distinct=false
+RecursiveQueryExec: name=nodes, is_distinct=false
 --ProjectionExec: expr=[1 as id]
 ----PlaceholderRowExec
 --CoalescePartitionsExec
@@ -136,7 +136,7 @@ Sort: balances.time ASC NULLS LAST, balances.name ASC NULLS LAST, balances.accou
 ------------TableScan: balances
 physical_plan
 SortExec: expr=[time@0 ASC NULLS LAST,name@1 ASC NULLS LAST,account_balance@2 ASC NULLS LAST]
---RecursiveQueryExec: is_distinct=false
+--RecursiveQueryExec: name=balances, is_distinct=false
 ----CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/recursive_cte/balance.csv]]}, projection=[time, name, account_balance], has_header=true
 ----CoalescePartitionsExec
 ------ProjectionExec: expr=[time@0 + 1 as time, name@1 as name, account_balance@2 + 10 as account_balance]

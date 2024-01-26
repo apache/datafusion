@@ -34,7 +34,7 @@ use super::{
     metrics::{ExecutionPlanMetricsSet, MetricsSet},
     SendableRecordBatchStream, Statistics,
 };
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::{internal_err, DataFusionError, Result};
 
 /// The name is from PostgreSQL's terminology.
 /// See <https://wiki.postgresql.org/wiki/CTEReadme#How_Recursion_Works>
@@ -166,10 +166,9 @@ impl ExecutionPlan for WorkTableExec {
     ) -> Result<SendableRecordBatchStream> {
         // WorkTable streams must be the plan base.
         if partition != 0 {
-            return Err(DataFusionError::Internal(format!(
-                "WorkTableExec got an invalid partition {} (expected 0)",
-                partition
-            )));
+            return internal_err!(
+                "WorkTableExec got an invalid partition {partition} (expected 0)"
+            );
         }
 
         let batches = self.work_table.take();

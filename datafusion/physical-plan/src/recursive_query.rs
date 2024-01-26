@@ -190,7 +190,11 @@ impl DisplayAs for RecursiveQueryExec {
     ) -> std::fmt::Result {
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
-                write!(f, "RecursiveQueryExec: is_distinct={}", self.is_distinct)
+                write!(
+                    f,
+                    "RecursiveQueryExec: name={}, is_distinct={}",
+                    self.name, self.is_distinct
+                )
             }
         }
     }
