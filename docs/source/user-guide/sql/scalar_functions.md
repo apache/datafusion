@@ -2176,7 +2176,7 @@ array_pop_back(array)
 
 ### `array_position`
 
-Returns a string with an input string repeated a specified number.
+Returns the position of the first occurrence of the specified element in the array.
 
 ```
 array_position(array, element)
