@@ -33,7 +33,7 @@ use std::sync::Arc;
 ///
 /// Please see the documentation on `CatalogProvider` for details of
 /// implementing a custom catalog.
-pub trait CatalogList: Sync + Send {
+pub trait CatalogProviderList: Sync + Send {
     /// Returns the catalog list as [`Any`]
     /// so that it can be downcast to a specific implementation.
     fn as_any(&self) -> &dyn Any;
@@ -54,13 +54,13 @@ pub trait CatalogList: Sync + Send {
 }
 
 /// Simple in-memory list of catalogs
-pub struct MemoryCatalogList {
+pub struct MemoryCatalogProviderList {
     /// Collection of catalogs containing schemas and ultimately TableProviders
     pub catalogs: DashMap<String, Arc<dyn CatalogProvider>>,
 }
 
-impl MemoryCatalogList {
-    /// Instantiates a new `MemoryCatalogList` with an empty collection of catalogs
+impl MemoryCatalogProviderList {
+    /// Instantiates a new `MemoryCatalogProviderList` with an empty collection of catalogs
     pub fn new() -> Self {
         Self {
             catalogs: DashMap::new(),
@@ -68,13 +68,13 @@ impl MemoryCatalogList {
     }
 }
 
-impl Default for MemoryCatalogList {
+impl Default for MemoryCatalogProviderList {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl CatalogList for MemoryCatalogList {
+impl CatalogProviderList for MemoryCatalogProviderList {
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -105,14 +105,14 @@ impl CatalogList for MemoryCatalogList {
 /// types, and how to access the data.
 ///
 /// The Catalog API consists:
-/// * [`CatalogList`]: a collection of `CatalogProvider`s
+/// * [`CatalogProviderList`]: a collection of `CatalogProvider`s
 /// * [`CatalogProvider`]: a collection of `SchemaProvider`s (sometimes called a "database" in other systems)
 /// * [`SchemaProvider`]:  a collection of `TableProvider`s (often called a "schema" in other systems)
 /// * [`TableProvider]`:  individual tables
 ///
 /// # Implementing Catalogs
 ///
-/// To implement a catalog, you implement at least one of the [`CatalogList`],
+/// To implement a catalog, you implement at least one of the [`CatalogProviderList`],
 /// [`CatalogProvider`] and [`SchemaProvider`] traits and register them
 /// appropriately the [`SessionContext`].
 ///
