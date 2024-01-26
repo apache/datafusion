@@ -15,15 +15,25 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use datafusion::common::Result;
+use arrow::datatypes::SchemaRef;
+use async_trait::async_trait;
+use datafusion::common::{DataFusionError, Result};
 use datafusion::datasource::function::TableFunctionImpl;
-use datafusion::datasource::TableProvider;
+use datafusion::datasource::streaming::StreamingTable;
+use datafusion::datasource::{TableProvider, TableType};
+use datafusion::execution::context::SessionState;
+use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::logical_expr::Expr;
+use datafusion::physical_plan::streaming::PartitionStream;
+use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::SessionContext;
+use datafusion_common::{plan_datafusion_err, plan_err, ScalarValue};
+use std::any::Any;
 use std::num::NonZeroUsize;
 use std::path::PathBuf;
 use std::sync::Arc;
 use structopt::StructOpt;
+use test_utils::AccessLogGenerator;
 
 /// Creates synthetic data that mimic's a web server access log
 /// dataset
@@ -70,7 +80,7 @@ impl RunOpt {
         std::fs::create_dir_all(&path)?;
 
         let mut ctx = SessionContext::new();
-        ctx.register_udtf("access_log_gen", Arc::new(AccessLogTable::new()));
+        ctx.register_udtf("access_log_gen", Arc::new(AccessLogTableFunction::new()));
 
         // use the COPY command to write data to the file
         let output_file = path.join("1.parquet");
@@ -88,19 +98,74 @@ impl RunOpt {
 ///
 /// Usage:
 /// access_log_gen(scale_factor, seed)
-struct AccessLogTable {}
+struct AccessLogTableFunction {}
 
-impl AccessLogTable {
+impl AccessLogTableFunction {
     fn new() -> Self {
         Self {}
     }
 }
 
-impl TableFunctionImpl for AccessLogTable {
+impl TableFunctionImpl for AccessLogTableFunction {
     fn call(&self, args: &[Expr]) -> Result<Arc<dyn TableProvider>> {
-        todo!();
+        if args.len() != 2 {
+            return plan_err!(
+                "access_log_gen requires two arguments (scale_factor, seed), {} provided",
+                args.len()
+            );
+        }
 
-        //let generator = AccessLogGenerator::new();
-        //let num_batches = 100_f32 * self.scale_factor;
+        let scale_factor = match &args[0] {
+            Expr::Literal(ScalarValue::Float32(Some(v))) => *v as f64,
+            Expr::Literal(ScalarValue::Float64(Some(v))) => *v,
+            _ => {
+                return plan_err!("scale_factor must be a float literal, got {}", args[0])
+            }
+        };
+
+        let seed = match &args[1] {
+            Expr::Literal(ScalarValue::Int64(Some(v))) => *v as u64,
+            Expr::Literal(ScalarValue::UInt64(Some(v))) => *v,
+            _ => return plan_err!("seed must be a int literal, got {}", args[1]),
+        };
+
+        println!("Using scale_factor={} and seed={}", scale_factor, seed);
+
+        let generator = AccessLogGenerator::new();
+        //.with_seed(seed);
+        let num_batches = (100_f64 * scale_factor) as usize;
+
+        let stream = AccessLogStream::new(generator, num_batches);
+
+        let table =
+            StreamingTable::try_new(stream.schema().clone(), vec![Arc::new(stream)])?;
+
+        Ok(Arc::new(table))
+    }
+}
+
+struct AccessLogStream {
+    schema: SchemaRef,
+    generator: AccessLogGenerator,
+    num_batches: usize,
+}
+
+impl AccessLogStream {
+    fn new(generator: AccessLogGenerator, num_batches: usize) -> Self {
+        Self {
+            schema: generator.schema(),
+            generator,
+            num_batches,
+        }
+    }
+}
+
+impl PartitionStream for AccessLogStream {
+    fn schema(&self) -> &SchemaRef {
+        &self.schema
+    }
+
+    fn execute(&self, ctx: Arc<TaskContext>) -> SendableRecordBatchStream {
+        todo!()
     }
 }

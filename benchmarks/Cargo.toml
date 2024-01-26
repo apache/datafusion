@@ -33,6 +33,7 @@ snmalloc = ["snmalloc-rs"]
 
 [dependencies]
 arrow = { workspace = true }
+async-trait = "0.1"
 datafusion = { path = "../datafusion/core", version = "35.0.0" }
 datafusion-common = { path = "../datafusion/common", version = "35.0.0" }
 env_logger = { workspace = true }
