@@ -955,7 +955,12 @@ fn max_distinct_count(
             let result = match num_rows {
                 Precision::Absent => Precision::Absent,
                 Precision::Inexact(count) => {
-                    Precision::Inexact(count - stats.null_count.get_value().unwrap_or(&0))
+                    // To safeguard against inexact number of rows (e.g. 0) being smaller than
+                    // an exact null count we need to do a checked subtraction.
+                    match count.checked_sub(*stats.null_count.get_value().unwrap_or(&0)) {
+                        None => Precision::Inexact(0),
+                        Some(non_null_count) => Precision::Inexact(non_null_count),
+                    }
                 }
                 Precision::Exact(count) => {
                     let count = count - stats.null_count.get_value().unwrap_or(&0);
