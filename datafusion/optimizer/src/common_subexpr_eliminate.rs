@@ -184,9 +184,13 @@ impl CommonSubexprEliminate {
         let new_window_expr = pop_expr(&mut new_expr)?;
         assert_eq!(new_window_expr.len(), window_expr.len());
         let new_window_expr = new_window_expr.into_iter().zip(window_expr.iter()).map(|(new_window_expr, window_expr)| {
-            println!("    window_expr.canonical_name(): {:?}", window_expr.name_for_alias()?);
-            println!("new_window_expr.canonical_name(): {:?}", new_window_expr.name_for_alias()?);
-            new_window_expr.alias_if_changed(window_expr.name_for_alias()?)
+            let original_name = window_expr.name_for_alias()?;
+            let new_name = new_window_expr.name_for_alias()?;
+            // let original_name = window_expr.canonical_name();
+            // let new_name = new_window_expr.canonical_name();
+            println!("original_name: {:?}", original_name);
+            println!("     new_name: {:?}", new_name);
+            new_window_expr.alias_if_changed(original_name)
         }).collect::<Result<Vec<_>>>()?;
 
         println!("new_expr: {:?}",new_window_expr);
