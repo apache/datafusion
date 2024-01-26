@@ -1527,7 +1527,7 @@ SELECT not(true), not(false)
 ----
 false true
 
-query error
+query error type_coercion\ncaused by\nError during planning: Cannot infer common argument type for comparison operation Int64 IS DISTINCT FROM Boolean
 SELECT not(1), not(0)
 
 query ?B
@@ -1535,7 +1535,7 @@ SELECT null, not(null)
 ----
 NULL NULL
 
-query error
+query error type_coercion\ncaused by\nError during planning: Cannot infer common argument type for comparison operation Utf8 IS DISTINCT FROM Boolean
 SELECT NOT('hi')
 
 # test_negative_expressions()
