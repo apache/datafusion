@@ -53,6 +53,9 @@ pub trait CatalogProviderList: Sync + Send {
     fn catalog(&self, name: &str) -> Option<Arc<dyn CatalogProvider>>;
 }
 
+#[deprecated(since = "35.0.0", note = "use [`CatalogProviderList`] instead")]
+pub trait CatalogList: CatalogProviderList {}
+
 /// Simple in-memory list of catalogs
 pub struct MemoryCatalogProviderList {
     /// Collection of catalogs containing schemas and ultimately TableProviders
