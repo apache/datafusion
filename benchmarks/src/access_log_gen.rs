@@ -15,24 +15,15 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::AccessLogOpt;
-use crate::{BenchmarkRun, CommonOpt};
-use arrow::util::pretty;
 use datafusion::common::Result;
 use datafusion::datasource::function::TableFunctionImpl;
 use datafusion::datasource::TableProvider;
-use datafusion::logical_expr::utils::disjunction;
-use datafusion::logical_expr::{lit, or, Expr};
-use datafusion::physical_plan::collect;
-use datafusion::prelude::{col, SessionConfig, SessionContext};
-use datafusion::test_util::parquet::{ParquetScanOptions, TestParquetFile};
-use parquet::file::properties::WriterProperties;
+use datafusion::logical_expr::Expr;
+use datafusion::prelude::SessionContext;
 use std::num::NonZeroUsize;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Instant;
 use structopt::StructOpt;
-use test_utils::AccessLogGenerator;
 
 /// Creates synthetic data that mimic's a web server access log
 /// dataset
@@ -86,7 +77,7 @@ impl RunOpt {
         let output_filename = output_file.to_str().expect("non utf8 path name");
         let seed = 1;
         let sql = format!(
-            "COPY (SELECT * from access_log_gen({scale_factor}, {seed})) INTO '{output_filename}')",
+            "COPY (SELECT * from access_log_gen({scale_factor}, {seed})) TO '{output_filename}'",
         );
         println!("Running sql: {}", sql);
         ctx.sql(&sql).await?.show().await
