@@ -201,7 +201,7 @@ fn try_swapping_with_memory(
             MemoryExec::try_new(
                 memory.partitions(),
                 memory.original_schema(),
-                new_projections,
+                Some(new_projections),
             )
             .map(|e| Arc::new(e) as _)
         })
@@ -248,7 +248,7 @@ fn try_swapping_with_streaming_table(
     StreamingTableExec::try_new(
         streaming_table.partition_schema().clone(),
         streaming_table.partitions().clone(),
-        new_projections.as_ref(),
+        Some(new_projections.as_ref()),
         lex_orderings,
         streaming_table.is_infinite(),
     )

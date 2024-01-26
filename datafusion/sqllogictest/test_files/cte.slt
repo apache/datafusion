@@ -38,6 +38,9 @@ Projection: NUMBERS.a, NUMBERS.b, NUMBERS.c
 physical_plan
 ProjectionExec: expr=[1 as a, 2 as b, 3 as c]
 --PlaceholderRowExec
+
+
+
 # enable recursive CTEs
 statement ok
 set datafusion.execution.enable_recursive_ctes = true;
