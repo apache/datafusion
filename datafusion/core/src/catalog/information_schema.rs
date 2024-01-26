@@ -39,7 +39,7 @@ use crate::{
     physical_plan::streaming::PartitionStream,
 };
 
-use super::{schema::SchemaProvider, CatalogList};
+use super::{schema::SchemaProvider, CatalogProviderList};
 
 pub(crate) const INFORMATION_SCHEMA: &str = "information_schema";
 pub(crate) const TABLES: &str = "tables";
@@ -62,7 +62,7 @@ pub struct InformationSchemaProvider {
 
 impl InformationSchemaProvider {
     /// Creates a new [`InformationSchemaProvider`] for the provided `catalog_list`
-    pub fn new(catalog_list: Arc<dyn CatalogList>) -> Self {
+    pub fn new(catalog_list: Arc<dyn CatalogProviderList>) -> Self {
         Self {
             config: InformationSchemaConfig { catalog_list },
         }
@@ -71,7 +71,7 @@ impl InformationSchemaProvider {
 
 #[derive(Clone)]
 struct InformationSchemaConfig {
-    catalog_list: Arc<dyn CatalogList>,
+    catalog_list: Arc<dyn CatalogProviderList>,
 }
 
 impl InformationSchemaConfig {
