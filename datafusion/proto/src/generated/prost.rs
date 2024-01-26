@@ -1738,8 +1738,6 @@ pub struct FileSinkConfig {
     pub output_schema: ::core::option::Option<Schema>,
     #[prost(message, repeated, tag = "5")]
     pub table_partition_cols: ::prost::alloc::vec::Vec<PartitionColumn>,
-    #[prost(bool, tag = "7")]
-    pub single_file_output: bool,
     #[prost(bool, tag = "8")]
     pub overwrite: bool,
     #[prost(message, optional, tag = "9")]

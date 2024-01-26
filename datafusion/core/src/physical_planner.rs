@@ -582,7 +582,6 @@ impl DefaultPhysicalPlanner {
                         file_groups: vec![],
                         output_schema: Arc::new(schema),
                         table_partition_cols: vec![],
-                        single_file_output: *single_file_output,
                         overwrite: false,
                         file_type_writer_options
                     };

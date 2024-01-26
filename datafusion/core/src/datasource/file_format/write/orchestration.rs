@@ -220,7 +220,6 @@ pub(crate) async fn stateless_multipart_put(
         .runtime_env()
         .object_store(&config.object_store_url)?;
 
-    let single_file_output = config.single_file_output;
     let base_output_path = &config.table_paths[0];
     let part_cols = if !config.table_partition_cols.is_empty() {
         Some(config.table_partition_cols.clone())
@@ -234,7 +233,6 @@ pub(crate) async fn stateless_multipart_put(
         part_cols,
         base_output_path.clone(),
         file_extension,
-        single_file_output,
     );
 
     let rb_buffer_size = &context

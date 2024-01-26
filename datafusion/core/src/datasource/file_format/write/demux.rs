@@ -76,10 +76,10 @@ pub(crate) fn start_demuxer_task(
     partition_by: Option<Vec<(String, DataType)>>,
     base_output_path: ListingTableUrl,
     file_extension: String,
-    single_file_output: bool,
 ) -> (JoinHandle<Result<()>>, DemuxedStreamReceiver) {
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
     let context = context.clone();
+    let single_file_output = true;
     let task: JoinHandle<std::result::Result<(), DataFusionError>> = match partition_by {
         Some(parts) => {
             // There could be an arbitrarily large number of parallel hive style partitions being written to, so we cannot
