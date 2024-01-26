@@ -100,11 +100,11 @@ RecursiveQueryExec: is_distinct=false
 
 # setup
 statement ok
-CREATE EXTERNAL TABLE balance STORED as CSV WITH HEADER ROW LOCATION '../../testing/data/csv/r_cte_balance.csv'
+CREATE EXTERNAL TABLE balance STORED as CSV WITH HEADER ROW LOCATION '../core/tests/data/recursive_cte/balance.csv'
 
 # setup
 statement ok
-CREATE EXTERNAL TABLE growth STORED as CSV WITH HEADER ROW LOCATION '../../testing/data/csv/r_cte_growth.csv'
+CREATE EXTERNAL TABLE growth STORED as CSV WITH HEADER ROW LOCATION '../core/tests/data/recursive_cte/growth.csv'
 
 # setup
 statement ok
@@ -137,7 +137,7 @@ Sort: balances.time ASC NULLS LAST, balances.name ASC NULLS LAST, balances.accou
 physical_plan
 SortExec: expr=[time@0 ASC NULLS LAST,name@1 ASC NULLS LAST,account_balance@2 ASC NULLS LAST]
 --RecursiveQueryExec: is_distinct=false
-----CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/r_cte_balance.csv]]}, projection=[time, name, account_balance], has_header=true
+----CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/recursive_cte/balance.csv]]}, projection=[time, name, account_balance], has_header=true
 ----CoalescePartitionsExec
 ------ProjectionExec: expr=[time@0 + 1 as time, name@1 as name, account_balance@2 + 10 as account_balance]
 --------CoalesceBatchesExec: target_batch_size=2
@@ -381,7 +381,7 @@ FROM
 
 # setup
 statement ok
-CREATE EXTERNAL TABLE prices STORED as CSV WITH HEADER ROW LOCATION '../../testing/data/csv/prices.csv'
+CREATE EXTERNAL TABLE prices STORED as CSV WITH HEADER ROW LOCATION '../core/tests/data/recursive_cte/prices.csv'
 
 # CTE within window function inside nested CTE works. This test demonstrates using a nested window function to recursively iterate over a column.
 query RRII
@@ -572,11 +572,11 @@ ORDER BY
 
 # setup
 statement ok
-CREATE EXTERNAL TABLE sales STORED as CSV WITH HEADER ROW LOCATION '../../testing/data/csv/sales.csv'
+CREATE EXTERNAL TABLE sales STORED as CSV WITH HEADER ROW LOCATION '../core/tests/data/recursive_cte/sales.csv'
 
 # setup
 statement ok
-CREATE EXTERNAL TABLE salespersons STORED as CSV WITH HEADER ROW LOCATION '../../testing/data/csv/salespersons.csv'
+CREATE EXTERNAL TABLE salespersons STORED as CSV WITH HEADER ROW LOCATION '../core/tests/data/recursive_cte/salespersons.csv'
 
 
 # group by works within recursive cte. This test case demonstrates rolling up a hierarchy of salespeople to their managers.
