@@ -2524,12 +2524,6 @@ mod tmp_tests {
             FROM aggregate_test_100
             LIMIT 5";
 
-        let sql = "SELECT c3,
-    SUM(c9) OVER(ORDER BY c3+c4 ASC range between unbounded preceding and 1 following) as sum1,
-    SUM(c9) OVER(ORDER BY c3+c4 ASC range between unbounded preceding and 2 following) as sum2
-    FROM aggregate_test_100
-    LIMIT 5";
-
         let msg = format!("Creating logical plan for '{sql}'");
         let dataframe = ctx.sql(sql).await.expect(&msg);
         let physical_plan = dataframe.create_physical_plan().await?;
@@ -2544,6 +2538,57 @@ mod tmp_tests {
             "      ProjectionExec: expr=[SUM(aggregate_test_100.c3) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@2 as sum1, COUNT(*) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@3 as count1, c9@1 as c9]",
             "        WindowAggExec: wdw=[SUM(aggregate_test_100.c3) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Ok(Field { name: \"SUM(aggregate_test_100.c3) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)) }, COUNT(*) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Ok(Field { name: \"COUNT(*) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)) }]",
             "          CsvExec: file_groups={1 group: [[Users/akurmustafa/projects/synnada/arrow-datafusion-synnada/testing/data/csv/aggregate_test_100.csv]]}, projection=[c3, c9], has_header=true",
+        ];
+        // Get string representation of the plan
+        let actual = get_plan_string(&physical_plan);
+        assert_eq!(
+            expected, actual,
+            "\n**Optimized Plan Mismatch\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+        );
+
+        let expected = [
+            "+------+--------+",
+            "| sum1 | count1 |",
+            "+------+--------+",
+            "| 781  | 100    |",
+            "| 781  | 100    |",
+            "| 781  | 100    |",
+            "| 781  | 100    |",
+            "| 781  | 100    |",
+            "+------+--------+",
+        ];
+        assert_batches_eq!(expected, &batches);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_query5() -> Result<()> {
+        let config = SessionConfig::new().with_target_partitions(1);
+        let ctx = SessionContext::new_with_config(config);
+
+        ctx.sql(SOURCE_TABLE).await?;
+        ctx.sql(SOURCE_TABLE2).await?;
+
+        let sql = "SELECT c3,
+            SUM(c9) OVER(ORDER BY c3+c4 ASC range between unbounded preceding and 1 following) as sum1,
+            SUM(c9) OVER(ORDER BY c3+c4 ASC range between unbounded preceding and 2 following) as sum2
+            FROM aggregate_test_100
+            LIMIT 5";
+
+        let msg = format!("Creating logical plan for '{sql}'");
+        let dataframe = ctx.sql(sql).await.expect(&msg);
+        let physical_plan = dataframe.create_physical_plan().await?;
+        print_plan(&physical_plan)?;
+        let batches = collect(physical_plan.clone(), ctx.task_ctx()).await?;
+        print_batches(&batches)?;
+
+        let expected = vec![
+            "GlobalLimitExec: skip=0, fetch=5",
+            "  ProjectionExec: expr=[c3@1 as c3, SUM(aggregate_test_100.c9) ORDER BY [aggregate_test_100.c3 + aggregate_test_100.c4 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND 1 FOLLOWING@3 as sum1, SUM(aggregate_test_100.c9) ORDER BY [aggregate_test_100.c3 + aggregate_test_100.c4 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND 2 FOLLOWING@4 as sum2]",
+            "    BoundedWindowAggExec: wdw=[SUM(aggregate_test_100.c9) ORDER BY [aggregate_test_100.c3 + aggregate_test_100.c4 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND 1 FOLLOWING: Ok(Field { name: \"SUM(aggregate_test_100.c9) ORDER BY [aggregate_test_100.c3 + aggregate_test_100.c4 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND 1 FOLLOWING\", data_type: UInt64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(Int16(NULL)), end_bound: Following(Int16(1)) }, SUM(aggregate_test_100.c9) ORDER BY [aggregate_test_100.c3 + aggregate_test_100.c4 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND 2 FOLLOWING: Ok(Field { name: \"SUM(aggregate_test_100.c9) ORDER BY [aggregate_test_100.c3 + aggregate_test_100.c4 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND 2 FOLLOWING\", data_type: UInt64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(Int16(NULL)), end_bound: Following(Int16(2)) }], mode=[Sorted]",
+            "      SortExec: expr=[aggregate_test_100.c3 + aggregate_test_100.c4aggregate_test_100.c4aggregate_test_100.c3@0 ASC NULLS LAST]",
+            "        ProjectionExec: expr=[c3@0 + c4@1 as aggregate_test_100.c3 + aggregate_test_100.c4aggregate_test_100.c4aggregate_test_100.c3, c3@0 as c3, c9@2 as c9]",
+            "          CsvExec: file_groups={1 group: [[Users/akurmustafa/projects/synnada/arrow-datafusion-synnada/testing/data/csv/aggregate_test_100.csv]]}, projection=[c3, c4, c9], has_header=true",
         ];
         // Get string representation of the plan
         let actual = get_plan_string(&physical_plan);

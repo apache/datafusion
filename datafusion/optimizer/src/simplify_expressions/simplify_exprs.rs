@@ -52,9 +52,6 @@ impl OptimizerRule for SimplifyExpressions {
         plan: &LogicalPlan,
         config: &dyn OptimizerConfig,
     ) -> Result<Option<LogicalPlan>> {
-        println!("simplify expressions:");
-        println!("{:?}", plan);
-        // println!("plan schema fields: {:?}", plan.schema().fields());
         let mut execution_props = ExecutionProps::new();
         execution_props.query_execution_start_time = config.query_execution_start_time();
         Ok(Some(Self::optimize_internal(plan, &execution_props)?))

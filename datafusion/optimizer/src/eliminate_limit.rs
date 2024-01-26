@@ -43,11 +43,6 @@ impl OptimizerRule for EliminateLimit {
         plan: &LogicalPlan,
         _config: &dyn OptimizerConfig,
     ) -> Result<Option<LogicalPlan>> {
-        println!("EliminateLimit:");
-        println!("{:?}", plan);
-        if let LogicalPlan::Projection(projection) = plan{
-            println!("projection expr: {:?}", projection.expr);
-        }
         if let LogicalPlan::Limit(limit) = plan {
             match limit.fetch {
                 Some(fetch) => {
