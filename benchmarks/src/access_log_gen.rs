@@ -16,8 +16,10 @@
 // under the License.
 
 use arrow::datatypes::SchemaRef;
+use arrow::util::pretty::pretty_format_batches;
 use async_trait::async_trait;
 use datafusion::common::{DataFusionError, Result};
+use datafusion::dataframe::DataFrameWriteOptions;
 use datafusion::datasource::function::TableFunctionImpl;
 use datafusion::datasource::streaming::StreamingTable;
 use datafusion::datasource::{TableProvider, TableType};
@@ -28,6 +30,7 @@ use datafusion::physical_plan::streaming::PartitionStream;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::SessionContext;
 use datafusion_common::{plan_datafusion_err, plan_err, ScalarValue};
+use parquet::file::properties::{WriterProperties, WriterPropertiesBuilder};
 use std::any::Any;
 use std::num::NonZeroUsize;
 use std::path::PathBuf;
@@ -79,69 +82,45 @@ impl RunOpt {
 
         std::fs::create_dir_all(&path)?;
 
-        let mut ctx = SessionContext::new();
-        ctx.register_udtf("access_log_gen", Arc::new(AccessLogTableFunction::new()));
+        let ctx = SessionContext::new();
 
         // use the COPY command to write data to the file
         let output_file = path.join("1.parquet");
         let output_filename = output_file.to_str().expect("non utf8 path name");
+        let options = DataFrameWriteOptions::new().with_single_file_output(true);
+
+        let writer_properties = WriterProperties::builder()
+            //.set_data_page_size_limit(1024 * 1024)
+            //.set_write_batch_size(1024 * 1024)
+            //.set_max_row_group_size(1024 * 1024)
+            .build();
+
         let seed = 1;
-        let sql = format!(
-            "COPY (SELECT * from access_log_gen({scale_factor}, {seed})) TO '{output_filename}'",
-        );
-        println!("Running sql: {}", sql);
-        ctx.sql(&sql).await?.show().await
+        let provider = access_log_provider(scale_factor, seed)?;
+        println!("writing to parquet...");
+        let res = ctx
+            .read_table(provider)?
+            .write_parquet(output_filename, options, Some(writer_properties))
+            .await?;
+        println!("done!");
+        println!("{}", pretty_format_batches(&res)?);
+
+        Ok(())
     }
 }
 
-/// User defined table function that generates access logs for a given seed
-///
-/// Usage:
-/// access_log_gen(scale_factor, seed)
-struct AccessLogTableFunction {}
+fn access_log_provider(scale_factor: f32, seed: u64) -> Result<Arc<dyn TableProvider>> {
+    println!("Using scale_factor={} and seed={}", scale_factor, seed);
 
-impl AccessLogTableFunction {
-    fn new() -> Self {
-        Self {}
-    }
-}
+    let generator = AccessLogGenerator::new();
+    //.with_seed(seed);
+    let num_batches = (100_f32 * scale_factor) as usize;
 
-impl TableFunctionImpl for AccessLogTableFunction {
-    fn call(&self, args: &[Expr]) -> Result<Arc<dyn TableProvider>> {
-        if args.len() != 2 {
-            return plan_err!(
-                "access_log_gen requires two arguments (scale_factor, seed), {} provided",
-                args.len()
-            );
-        }
+    let stream = AccessLogStream::new(generator, num_batches);
 
-        let scale_factor = match &args[0] {
-            Expr::Literal(ScalarValue::Float32(Some(v))) => *v as f64,
-            Expr::Literal(ScalarValue::Float64(Some(v))) => *v,
-            _ => {
-                return plan_err!("scale_factor must be a float literal, got {}", args[0])
-            }
-        };
+    let table = StreamingTable::try_new(stream.schema().clone(), vec![Arc::new(stream)])?;
 
-        let seed = match &args[1] {
-            Expr::Literal(ScalarValue::Int64(Some(v))) => *v as u64,
-            Expr::Literal(ScalarValue::UInt64(Some(v))) => *v,
-            _ => return plan_err!("seed must be a int literal, got {}", args[1]),
-        };
-
-        println!("Using scale_factor={} and seed={}", scale_factor, seed);
-
-        let generator = AccessLogGenerator::new();
-        //.with_seed(seed);
-        let num_batches = (100_f64 * scale_factor) as usize;
-
-        let stream = AccessLogStream::new(generator, num_batches);
-
-        let table =
-            StreamingTable::try_new(stream.schema().clone(), vec![Arc::new(stream)])?;
-
-        Ok(Arc::new(table))
-    }
+    Ok(Arc::new(table))
 }
 
 struct AccessLogStream {
