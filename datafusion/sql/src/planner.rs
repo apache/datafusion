@@ -298,7 +298,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let plan = self.apply_expr_alias(plan, alias.columns)?;
 
         LogicalPlanBuilder::from(plan)
-            .alias(self.normalizer.normalize(alias.name))?
+            .alias(TableReference::bare(self.normalizer.normalize(alias.name)))?
             .build()
     }
 

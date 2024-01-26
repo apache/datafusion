@@ -515,6 +515,28 @@ select
 ----
 false true false true true false false true false true true false true true false false true
 
+# select uppercase alias table
+query I
+SELECT "T".* from (SELECT 1 a) AS "T"
+----
+1
+
+# explain select uppercase alias table
+query TT
+EXPLAIN SELECT * FROM ((SELECT column1 FROM foo) "T1" CROSS JOIN (SELECT column2 FROM foo) "T2") AS "F"
+----
+logical_plan
+SubqueryAlias: F
+--CrossJoin:
+----SubqueryAlias: T1
+------TableScan: foo projection=[column1]
+----SubqueryAlias: T2
+------TableScan: foo projection=[column2]
+physical_plan
+CrossJoinExec
+--MemoryExec: partitions=1, partition_sizes=[1]
+--MemoryExec: partitions=1, partition_sizes=[1]
+
 # select NaNs
 query BBBB
 select (isnan('NaN'::double) AND 'NaN'::double > 0) a, (isnan('-NaN'::double) AND '-NaN'::double < 0) b, (isnan('NaN'::float) AND 'NaN'::float > 0) c, (isnan('-NaN'::float) AND '-NaN'::float < 0) d
