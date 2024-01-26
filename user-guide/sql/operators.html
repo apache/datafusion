@@ -532,6 +532,42 @@
      </code>
     </a>
    </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#id16">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       ~~
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#id17">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       ~~*
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#id18">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       !~~
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#id19">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       !~~*
+      </span>
+     </code>
+    </a>
+   </li>
   </ul>
  </li>
  <li class="toc-h2 nav-item toc-entry">
@@ -565,7 +601,7 @@
   </a>
   <ul class="nav section-nav flex-column">
    <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#id16">
+    <a class="reference internal nav-link" href="#id20">
      <code class="docutils literal notranslate">
       <span class="pre">
        &amp;
@@ -574,7 +610,7 @@
     </a>
    </li>
    <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#id17">
+    <a class="reference internal nav-link" href="#id21">
      <code class="docutils literal notranslate">
       <span class="pre">
        |
@@ -583,7 +619,7 @@
     </a>
    </li>
    <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#id18">
+    <a class="reference internal nav-link" href="#id22">
      <code class="docutils literal notranslate">
       <span class="pre">
        #
@@ -592,7 +628,7 @@
     </a>
    </li>
    <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#id19">
+    <a class="reference internal nav-link" href="#id23">
      <code class="docutils literal notranslate">
       <span class="pre">
        &gt;&gt;
@@ -601,7 +637,7 @@
     </a>
    </li>
    <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#id20">
+    <a class="reference internal nav-link" href="#id24">
      <code class="docutils literal notranslate">
       <span class="pre">
        &lt;&lt;
@@ -617,7 +653,7 @@
   </a>
   <ul class="nav section-nav flex-column">
    <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#id21">
+    <a class="reference internal nav-link" href="#id25">
      <code class="docutils literal notranslate">
       <span class="pre">
        ||
@@ -626,7 +662,7 @@
     </a>
    </li>
    <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#id22">
+    <a class="reference internal nav-link" href="#id26">
      <code class="docutils literal notranslate">
       <span class="pre">
        @&gt;
@@ -635,7 +671,7 @@
     </a>
    </li>
    <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#id23">
+    <a class="reference internal nav-link" href="#id27">
      <code class="docutils literal notranslate">
       <span class="pre">
        &lt;@
@@ -923,6 +959,54 @@
 </pre></div>
 </div>
 </section>
+<section id="id16">
+<h3><code class="docutils literal notranslate"><span class="pre">~~</span></code><a class="headerlink" href="#id16" title="Link to this heading">¶</a></h3>
+<p>Like Match</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="err">❯</span><span class="w"> </span><span class="k">SELECT</span><span class="w"> </span><span class="s1">&#39;datafusion&#39;</span><span class="w"> </span><span class="o">~~</span><span class="w"> </span><span class="s1">&#39;dat_f%n&#39;</span><span class="p">;</span>
+<span class="o">+</span><span class="c1">---------------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">Utf8</span><span class="p">(</span><span class="ss">&quot;datafusion&quot;</span><span class="p">)</span><span class="w"> </span><span class="o">~~</span><span class="w"> </span><span class="n">Utf8</span><span class="p">(</span><span class="ss">&quot;dat_f%n&quot;</span><span class="p">)</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">---------------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="k">true</span><span class="w">                                  </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">---------------------------------------+</span>
+</pre></div>
+</div>
+</section>
+<section id="id17">
+<h3><code class="docutils literal notranslate"><span class="pre">~~*</span></code><a class="headerlink" href="#id17" title="Link to this heading">¶</a></h3>
+<p>Case-Insensitive Like Match</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="err">❯</span><span class="w"> </span><span class="k">SELECT</span><span class="w"> </span><span class="s1">&#39;datafusion&#39;</span><span class="w"> </span><span class="o">~~*</span><span class="w"> </span><span class="s1">&#39;Dat_F%n&#39;</span><span class="p">;</span>
+<span class="o">+</span><span class="c1">----------------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">Utf8</span><span class="p">(</span><span class="ss">&quot;datafusion&quot;</span><span class="p">)</span><span class="w"> </span><span class="o">~~*</span><span class="w"> </span><span class="n">Utf8</span><span class="p">(</span><span class="ss">&quot;Dat_F%n&quot;</span><span class="p">)</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">----------------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="k">true</span><span class="w">                                   </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">----------------------------------------+</span>
+</pre></div>
+</div>
+</section>
+<section id="id18">
+<h3><code class="docutils literal notranslate"><span class="pre">!~~</span></code><a class="headerlink" href="#id18" title="Link to this heading">¶</a></h3>
+<p>Not Like Match</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="err">❯</span><span class="w"> </span><span class="k">SELECT</span><span class="w"> </span><span class="s1">&#39;datafusion&#39;</span><span class="w"> </span><span class="o">!~~</span><span class="w"> </span><span class="s1">&#39;Dat_F%n&#39;</span><span class="p">;</span>
+<span class="o">+</span><span class="c1">----------------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">Utf8</span><span class="p">(</span><span class="ss">&quot;datafusion&quot;</span><span class="p">)</span><span class="w"> </span><span class="o">!~~</span><span class="w"> </span><span class="n">Utf8</span><span class="p">(</span><span class="ss">&quot;Dat_F%n&quot;</span><span class="p">)</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">----------------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="k">true</span><span class="w">                                   </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">----------------------------------------+</span>
+</pre></div>
+</div>
+</section>
+<section id="id19">
+<h3><code class="docutils literal notranslate"><span class="pre">!~~*</span></code><a class="headerlink" href="#id19" title="Link to this heading">¶</a></h3>
+<p>Not Case-Insensitive Like Match</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="err">❯</span><span class="w"> </span><span class="k">SELECT</span><span class="w"> </span><span class="s1">&#39;datafusion&#39;</span><span class="w"> </span><span class="o">!~~*</span><span class="w"> </span><span class="s1">&#39;Dat%F_n&#39;</span><span class="p">;</span>
+<span class="o">+</span><span class="c1">-----------------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">Utf8</span><span class="p">(</span><span class="ss">&quot;datafusion&quot;</span><span class="p">)</span><span class="w"> </span><span class="o">!~~*</span><span class="w"> </span><span class="n">Utf8</span><span class="p">(</span><span class="ss">&quot;Dat%F_n&quot;</span><span class="p">)</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">-----------------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="k">true</span><span class="w">                                    </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">-----------------------------------------+</span>
+</pre></div>
+</div>
+</section>
 </section>
 <section id="logical-operators">
 <h2>Logical Operators<a class="headerlink" href="#logical-operators" title="Link to this heading">¶</a></h2>
@@ -964,8 +1048,8 @@
 <li><p><a class="reference internal" href="#id19"><span class="xref myst">&gt;&gt; (bitwise shift right)</span></a></p></li>
 <li><p><a class="reference internal" href="#id20"><span class="xref myst">&lt;&lt; (bitwise shift left)</span></a></p></li>
 </ul>
-<section id="id16">
-<h3><code class="docutils literal notranslate"><span class="pre">&amp;</span></code><a class="headerlink" href="#id16" title="Link to this heading">¶</a></h3>
+<section id="id20">
+<h3><code class="docutils literal notranslate"><span class="pre">&amp;</span></code><a class="headerlink" href="#id20" title="Link to this heading">¶</a></h3>
 <p>Bitwise And</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">SELECT</span><span class="w"> </span><span class="mi">5</span><span class="w"> </span><span class="o">&amp;</span><span class="w"> </span><span class="mi">3</span><span class="p">;</span>
 <span class="o">+</span><span class="c1">---------------------+</span>
@@ -976,8 +1060,8 @@
 </pre></div>
 </div>
 </section>
-<section id="id17">
-<h3><code class="docutils literal notranslate"><span class="pre">|</span></code><a class="headerlink" href="#id17" title="Link to this heading">¶</a></h3>
+<section id="id21">
+<h3><code class="docutils literal notranslate"><span class="pre">|</span></code><a class="headerlink" href="#id21" title="Link to this heading">¶</a></h3>
 <p>Bitwise Or</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">SELECT</span><span class="w"> </span><span class="mi">5</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="mi">3</span><span class="p">;</span>
 <span class="o">+</span><span class="c1">---------------------+</span>
@@ -988,8 +1072,8 @@
 </pre></div>
 </div>
 </section>
-<section id="id18">
-<h3><code class="docutils literal notranslate"><span class="pre">#</span></code><a class="headerlink" href="#id18" title="Link to this heading">¶</a></h3>
+<section id="id22">
+<h3><code class="docutils literal notranslate"><span class="pre">#</span></code><a class="headerlink" href="#id22" title="Link to this heading">¶</a></h3>
 <p>Bitwise Xor (interchangeable with <code class="docutils literal notranslate"><span class="pre">^</span></code>)</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">SELECT</span><span class="w"> </span><span class="mi">5</span><span class="w"> </span><span class="o">#</span><span class="w"> </span><span class="mi">3</span><span class="p">;</span>
 <span class="o">+</span><span class="c1">---------------------+</span>
@@ -1000,8 +1084,8 @@
 </pre></div>
 </div>
 </section>
-<section id="id19">
-<h3><code class="docutils literal notranslate"><span class="pre">&gt;&gt;</span></code><a class="headerlink" href="#id19" title="Link to this heading">¶</a></h3>
+<section id="id23">
+<h3><code class="docutils literal notranslate"><span class="pre">&gt;&gt;</span></code><a class="headerlink" href="#id23" title="Link to this heading">¶</a></h3>
 <p>Bitwise Shift Right</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">SELECT</span><span class="w"> </span><span class="mi">5</span><span class="w"> </span><span class="o">&gt;&gt;</span><span class="w"> </span><span class="mi">3</span><span class="p">;</span>
 <span class="o">+</span><span class="c1">----------------------+</span>
@@ -1012,8 +1096,8 @@
 </pre></div>
 </div>
 </section>
-<section id="id20">
-<h3><code class="docutils literal notranslate"><span class="pre">&lt;&lt;</span></code><a class="headerlink" href="#id20" title="Link to this heading">¶</a></h3>
+<section id="id24">
+<h3><code class="docutils literal notranslate"><span class="pre">&lt;&lt;</span></code><a class="headerlink" href="#id24" title="Link to this heading">¶</a></h3>
 <p>Bitwise Shift Left</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">SELECT</span><span class="w"> </span><span class="mi">5</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="mi">3</span><span class="p">;</span>
 <span class="o">+</span><span class="c1">----------------------+</span>
@@ -1032,8 +1116,8 @@
 <li><p><a class="reference internal" href="#id22"><span class="xref myst">&#64;&gt; (array contains)</span></a></p></li>
 <li><p><a class="reference internal" href="#id23"><span class="xref myst">&lt;&#64; (array is contained by)</span></a></p></li>
 </ul>
-<section id="id21">
-<h3><code class="docutils literal notranslate"><span class="pre">||</span></code><a class="headerlink" href="#id21" title="Link to this heading">¶</a></h3>
+<section id="id25">
+<h3><code class="docutils literal notranslate"><span class="pre">||</span></code><a class="headerlink" href="#id25" title="Link to this heading">¶</a></h3>
 <p>String Concatenation</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">SELECT</span><span class="w"> </span><span class="s1">&#39;Hello, &#39;</span><span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="s1">&#39;DataFusion!&#39;</span><span class="p">;</span>
 <span class="o">+</span><span class="c1">----------------------------------------+</span>
@@ -1044,8 +1128,8 @@
 </pre></div>
 </div>
 </section>
-<section id="id22">
-<h3><code class="docutils literal notranslate"><span class="pre">&#64;&gt;</span></code><a class="headerlink" href="#id22" title="Link to this heading">¶</a></h3>
+<section id="id26">
+<h3><code class="docutils literal notranslate"><span class="pre">&#64;&gt;</span></code><a class="headerlink" href="#id26" title="Link to this heading">¶</a></h3>
 <p>Array Contains</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">SELECT</span><span class="w"> </span><span class="n">make_array</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span><span class="mi">2</span><span class="p">,</span><span class="mi">3</span><span class="p">)</span><span class="w"> </span><span class="o">@&gt;</span><span class="w"> </span><span class="n">make_array</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span><span class="mi">3</span><span class="p">);</span>
 <span class="o">+</span><span class="c1">-------------------------------------------------------------------------+</span>
@@ -1056,8 +1140,8 @@
 </pre></div>
 </div>
 </section>
-<section id="id23">
-<h3><code class="docutils literal notranslate"><span class="pre">&lt;&#64;</span></code><a class="headerlink" href="#id23" title="Link to this heading">¶</a></h3>
+<section id="id27">
+<h3><code class="docutils literal notranslate"><span class="pre">&lt;&#64;</span></code><a class="headerlink" href="#id27" title="Link to this heading">¶</a></h3>
 <p>Array Is Contained By</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">SELECT</span><span class="w"> </span><span class="n">make_array</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span><span class="mi">3</span><span class="p">)</span><span class="w"> </span><span class="o">&lt;@</span><span class="w"> </span><span class="n">make_array</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span><span class="mi">2</span><span class="p">,</span><span class="mi">3</span><span class="p">);</span>
 <span class="o">+</span><span class="c1">-------------------------------------------------------------------------+</span>
