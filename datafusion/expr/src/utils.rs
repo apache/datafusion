@@ -591,7 +591,7 @@ pub fn group_window_expr_by_sort_keys(
             Ok(())
         }
         other => internal_err!(
-        "Impossibly got non-window expr {other:?}"
+            "Impossibly got non-window expr {other:?}"
         ),
     })?;
     Ok(result)
