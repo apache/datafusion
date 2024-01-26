@@ -294,7 +294,7 @@ impl Optimizer {
                     self.optimize_recursively(rule, &new_plan, config)
                         .and_then(|plan| {
                             if let Some(plan) = &plan {
-                                assert_schema_is_the_same(rule.name(), &new_plan, plan)?;
+                                assert_schema_is_the_same(rule.name(), plan, &new_plan)?;
                             }
                             Ok(plan)
                         });
