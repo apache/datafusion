@@ -945,10 +945,9 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::ArraySort => {
                 Signature::variadic_any(self.volatility())
             }
-            BuiltinScalarFunction::ArrayAppend => Signature {
-                type_signature: ArrayAndElement,
-                volatility: self.volatility(),
-            },
+            BuiltinScalarFunction::ArrayAppend => {
+                Signature::array_and_element(self.volatility())
+            }
             BuiltinScalarFunction::MakeArray => {
                 // 0 or more arguments of arbitrary type
                 Signature::one_of(vec![VariadicEqual, Any(0)], self.volatility())
@@ -961,7 +960,7 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::ArrayDims => Signature::any(1, self.volatility()),
             BuiltinScalarFunction::ArrayEmpty => Signature::any(1, self.volatility()),
             BuiltinScalarFunction::ArrayElement => {
-                Signature::array_and_element(self.volatility())
+                Signature::array_and_index(self.volatility())
             }
             BuiltinScalarFunction::ArrayExcept => Signature::any(2, self.volatility()),
             BuiltinScalarFunction::Flatten => Signature::any(1, self.volatility()),

@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::signature::TIMEZONE_WILDCARD;
+use crate::signature::{ArrayFunctionSignature, TIMEZONE_WILDCARD};
 use crate::{Signature, TypeSignature};
 use arrow::{
     compute::can_cast_types,
@@ -166,12 +166,17 @@ fn get_valid_types(
         }
 
         TypeSignature::Exact(valid_types) => vec![valid_types.clone()],
-        TypeSignature::ArrayAndElement => {
-            return array_append_or_prepend_valid_types(current_types, true)
-        }
-        TypeSignature::ElementAndArray => {
-            return array_append_or_prepend_valid_types(current_types, false)
-        }
+        TypeSignature::ArraySignature(ref function_signature) => match function_signature
+        {
+            ArrayFunctionSignature::ArrayAndElement
+            | ArrayFunctionSignature::ArrayAndIndex => {
+                return array_append_or_prepend_valid_types(current_types, true)
+            }
+            ArrayFunctionSignature::ElementAndArray => {
+                return array_append_or_prepend_valid_types(current_types, false)
+            }
+        },
+
         TypeSignature::Any(number) => {
             if current_types.len() != *number {
                 return plan_err!(
