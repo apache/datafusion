@@ -209,6 +209,7 @@ logical_plan after single_distinct_aggregation_to_group_by SAME TEXT AS ABOVE
 logical_plan after simplify_expressions SAME TEXT AS ABOVE
 logical_plan after unwrap_cast_in_comparison SAME TEXT AS ABOVE
 logical_plan after common_sub_expression_eliminate SAME TEXT AS ABOVE
+logical_plan after group_window_exprs SAME TEXT AS ABOVE
 logical_plan after optimize_projections TableScan: simple_explain_test projection=[a, b, c]
 logical_plan after eliminate_nested_union SAME TEXT AS ABOVE
 logical_plan after simplify_expressions SAME TEXT AS ABOVE
@@ -235,6 +236,7 @@ logical_plan after single_distinct_aggregation_to_group_by SAME TEXT AS ABOVE
 logical_plan after simplify_expressions SAME TEXT AS ABOVE
 logical_plan after unwrap_cast_in_comparison SAME TEXT AS ABOVE
 logical_plan after common_sub_expression_eliminate SAME TEXT AS ABOVE
+logical_plan after group_window_exprs SAME TEXT AS ABOVE
 logical_plan after optimize_projections SAME TEXT AS ABOVE
 logical_plan TableScan: simple_explain_test projection=[a, b, c]
 initial_physical_plan CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/example.csv]]}, projection=[a, b, c], has_header=true
