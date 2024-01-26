@@ -92,14 +92,9 @@ impl OptimizerRule for GroupWindowExprs {
         plan: &LogicalPlan,
         _config: &dyn OptimizerConfig,
     ) -> Result<Option<LogicalPlan>> {
-        return Ok(None);
         if let LogicalPlan::Window(window) = plan {
             println!("at the start: ");
             println!("plan: {:#?}", plan);
-            // for expr in &window.window_expr{
-            //     println!("expr: {:?}", expr);
-            // }
-            // return Ok(None);
             let window_exprs = window.window_expr.to_vec();
             let input = &window.input;
 

@@ -387,16 +387,16 @@ impl OptimizerRule for CommonSubexprEliminate {
         };
 
         let original_schema = plan.schema().clone();
-        // println!("\n\noriginal schema fields: {:?}", original_schema.fields());
-        if let Some(opt) = &optimized_plan{
-            // println!("\n\noptimized_plan.schema fields: {:?}", opt.schema().fields());
-            println!("\n\noptimized plan");
-            println!("{:#?}", opt);
-            println!("\n\nplan");
-            println!("{:#?}", plan);
-
-            // assert_eq!(&opt.schema().fields().len(), &original_schema.fields().len());
-        }
+        // // println!("\n\noriginal schema fields: {:?}", original_schema.fields());
+        // if let Some(opt) = &optimized_plan{
+        //     // println!("\n\noptimized_plan.schema fields: {:?}", opt.schema().fields());
+        //     println!("\n\noptimized plan");
+        //     println!("{:#?}", opt);
+        //     println!("\n\nplan");
+        //     println!("{:#?}", plan);
+        //
+        //     // assert_eq!(&opt.schema().fields().len(), &original_schema.fields().len());
+        // }
         match optimized_plan {
             Some(optimized_plan) if optimized_plan.schema() != &original_schema => {
                 // add an additional projection if the output schema changed.

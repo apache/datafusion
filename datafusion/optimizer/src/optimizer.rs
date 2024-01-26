@@ -256,7 +256,7 @@ impl Optimizer {
             // Arc::new(SimplifyExpressions::new()),
             // Arc::new(UnwrapCastInComparison::new()),
             Arc::new(CommonSubexprEliminate::new()),
-            // Arc::new(GroupWindowExprs::new()),
+            Arc::new(GroupWindowExprs::new()),
             Arc::new(OptimizeProjections::new()),
         ];
 
