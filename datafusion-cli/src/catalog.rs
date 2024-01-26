@@ -17,7 +17,7 @@
 
 use async_trait::async_trait;
 use datafusion::catalog::schema::SchemaProvider;
-use datafusion::catalog::{CatalogProviderList, CatalogProvider};
+use datafusion::catalog::{CatalogProvider, CatalogProviderList};
 use datafusion::datasource::listing::{
     ListingTable, ListingTableConfig, ListingTableUrl,
 };
@@ -36,7 +36,10 @@ pub struct DynamicFileCatalog {
 }
 
 impl DynamicFileCatalog {
-    pub fn new(inner: Arc<dyn CatalogProviderList>, state: Weak<RwLock<SessionState>>) -> Self {
+    pub fn new(
+        inner: Arc<dyn CatalogProviderList>,
+        state: Weak<RwLock<SessionState>>,
+    ) -> Self {
         Self { inner, state }
     }
 }
