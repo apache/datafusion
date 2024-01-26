@@ -1569,3 +1569,17 @@ query I
 select count(1) from v;
 ----
 1
+
+# run below query without logical optimizations
+statement ok
+set datafusion.optimizer.max_passes=0;
+
+statement ok
+CREATE TABLE t(a int, b int);
+
+query I
+select a from t;
+----
+
+statement ok
+set datafusion.optimizer.max_passes=3;
