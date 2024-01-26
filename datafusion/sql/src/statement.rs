@@ -52,9 +52,10 @@ use datafusion_expr::{
 };
 use sqlparser::ast;
 use sqlparser::ast::{
-    Assignment, ColumnDef, Expr as SQLExpr, Expr, Ident, ObjectName, ObjectType, Query,
-    SchemaName, SetExpr, ShowCreateObject, ShowStatementFilter, Statement,
-    TableConstraint, TableFactor, TableWithJoins, TransactionMode, UnaryOperator, Value,
+    Assignment, ColumnDef, CreateTableOptions, Expr as SQLExpr, Expr, Ident, ObjectName,
+    ObjectType, Query, SchemaName, SetExpr, ShowCreateObject, ShowStatementFilter,
+    Statement, TableConstraint, TableFactor, TableWithJoins, TransactionMode,
+    UnaryOperator, Value,
 };
 use sqlparser::parser::ParserError::ParserError;
 
@@ -90,18 +91,21 @@ fn calc_inline_constraints_from_columns(columns: &[ColumnDef]) -> Vec<TableConst
     for column in columns {
         for ast::ColumnOptionDef { name, option } in &column.options {
             match option {
-                ast::ColumnOption::Unique { is_primary } => {
-                    constraints.push(ast::TableConstraint::Unique {
-                        name: name.clone(),
-                        columns: vec![column.name.clone()],
-                        is_primary: *is_primary,
-                    })
-                }
+                ast::ColumnOption::Unique {
+                    is_primary,
+                    characteristics,
+                } => constraints.push(ast::TableConstraint::Unique {
+                    name: name.clone(),
+                    columns: vec![column.name.clone()],
+                    is_primary: *is_primary,
+                    characteristics: *characteristics,
+                }),
                 ast::ColumnOption::ForeignKey {
                     foreign_table,
                     referred_columns,
                     on_delete,
                     on_update,
+                    characteristics,
                 } => constraints.push(ast::TableConstraint::ForeignKey {
                     name: name.clone(),
                     columns: vec![],
@@ -109,6 +113,7 @@ fn calc_inline_constraints_from_columns(columns: &[ColumnDef]) -> Vec<TableConst
                     referred_columns: referred_columns.to_vec(),
                     on_delete: *on_delete,
                     on_update: *on_update,
+                    characteristics: *characteristics,
                 }),
                 ast::ColumnOption::Check(expr) => {
                     constraints.push(ast::TableConstraint::Check {
@@ -124,6 +129,7 @@ fn calc_inline_constraints_from_columns(columns: &[ColumnDef]) -> Vec<TableConst
                 | ast::ColumnOption::CharacterSet(_)
                 | ast::ColumnOption::Generated { .. }
                 | ast::ColumnOption::Comment(_)
+                | ast::ColumnOption::Options(_)
                 | ast::ColumnOption::OnUpdate(_) => {}
             }
         }
@@ -292,9 +298,22 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 name,
                 columns,
                 query,
-                with_options,
+                options: CreateTableOptions::None,
                 ..
-            } if with_options.is_empty() => {
+            } => {
+                let columns = columns
+                    .into_iter()
+                    .map(|view_column_def| {
+                        if let Some(options) = view_column_def.options {
+                            plan_err!(
+                                "Options not supported for view columns: {options:?}"
+                            )
+                        } else {
+                            Ok(view_column_def.name)
+                        }
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+
                 let mut plan = self.query_to_plan(*query, &mut PlannerContext::new())?;
                 plan = self.apply_expr_alias(plan, columns)?;
 
@@ -435,14 +454,14 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 overwrite,
                 source,
                 partitioned,
-                priority: _,
                 after_columns,
                 table,
-                table_alias: _,
                 on,
                 returning,
-                replace_into: _,
                 ignore,
+                table_alias,
+                replace_into,
+                priority,
             } => {
                 if or.is_some() {
                     plan_err!("Inserts with or clauses not supported")?;
@@ -467,6 +486,19 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 }
                 let Some(source) = source else {
                     plan_err!("Inserts without a source not supported")?
+                };
+                if let Some(table_alias) = table_alias {
+                    plan_err!(
+                        "Inserts with a table alias not supported: {table_alias:?}"
+                    )?
+                };
+                if replace_into {
+                    plan_err!("Inserts with a `REPLACE INTO` clause not supported")?
+                };
+                if let Some(priority) = priority {
+                    plan_err!(
+                        "Inserts with a `PRIORITY` clause not supported: {priority:?}"
+                    )?
                 };
                 let _ = into; // optional keyword doesn't change behavior
                 self.insert_to_plan(table_name, columns, source, overwrite)
