@@ -2766,6 +2766,65 @@ where
     )?))
 }
 
+/// array_reverse SQL function
+pub fn array_reverse(arg: &[ArrayRef]) -> Result<ArrayRef> {
+    if arg.len() != 1 {
+        return exec_err!("array_reverse needs one argument");
+    }
+
+    match &arg[0].data_type() {
+        DataType::List(field) => {
+            let array = as_list_array(&arg[0])?;
+            general_array_reverse::<i32>(array, &field)
+        }
+        DataType::LargeList(field) => {
+            let array = as_large_list_array(&arg[0])?;
+            general_array_reverse::<i64>(array, &field)
+        }
+        array_type => exec_err!("array_reverse does not support type '{array_type:?}'."),
+    }
+}
+
+fn general_array_reverse<O: OffsetSizeTrait>(
+    array: &GenericListArray<O>,
+    field: &FieldRef,
+) -> Result<ArrayRef>
+where
+    O: TryFrom<i64>,
+{
+    let values = array.values();
+    let original_data = values.to_data();
+    let capacity = Capacities::Array(original_data.len());
+    let mut offsets = vec![O::usize_as(0)];
+    let mut mutable =
+        MutableArrayData::with_capacities(vec![&original_data], false, capacity);
+
+    for (row_index, offset_window) in array.offsets().windows(2).enumerate() {
+        let start = offset_window[0];
+        let end = offset_window[1];
+
+        let mut index = end - O::one();
+        let mut cnt = 0;
+        let stride: O = (-1 as i64).try_into().map_err(|_| {
+            internal_datafusion_err!("array_reverse: failed to convert size to i64")
+        })?;
+        while index >= start {
+            mutable.extend(0, index.to_usize().unwrap(), index.to_usize().unwrap() + 1);
+            index += stride;
+            cnt += 1;
+        }
+        offsets.push(offsets[row_index] + O::usize_as(cnt));
+    }
+
+    let data = mutable.freeze();
+    Ok(Arc::new(GenericListArray::<O>::try_new(
+        field.clone(),
+        OffsetBuffer::<O>::new(offsets.into()),
+        arrow_array::make_array(data),
+        None,
+    )?))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

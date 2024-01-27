@@ -729,6 +729,12 @@ scalar_expr!(
     "replaces all occurrences of the specified element with another specified element."
 );
 scalar_expr!(
+    ArrayReverse,
+    array_reverse,
+    array,
+    "reverses the order of elements in the array."
+);
+scalar_expr!(
     ArraySlice,
     array_slice,
     array begin end stride,

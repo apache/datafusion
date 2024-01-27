@@ -670,6 +670,7 @@ enum ScalarFunction {
   EndsWith = 131;
   InStr = 132;
   MakeDate = 133;
+  ArrayReverse = 134;
 }
 
 message ScalarFunctionNode {

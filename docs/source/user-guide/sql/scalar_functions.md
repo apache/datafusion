@@ -1793,6 +1793,7 @@ from_unixtime(expression)
 - [array_replace](#array_replace)
 - [array_replace_n](#array_replace_n)
 - [array_replace_all](#array_replace_all)
+- [array_reverse](#array_reverse)
 - [array_slice](#array_slice)
 - [array_to_string](#array_to_string)
 - [cardinality](#cardinality)
@@ -2522,6 +2523,34 @@ array_replace_all(array, from, to)
 #### Aliases
 
 - list_replace_all
+
+### `array_reverse`
+
+Returns the array with the order of the elements reversed.
+
+```
+array_reverse(array)
+```
+
+#### Arguments
+
+- **array**: Array expression.
+  Can be a constant, column, or function, and any combination of array operators.
+
+#### Example
+
+```
+❯ select array_reverse([1, 2, 3, 4]);
++------------------------------------------------------------+
+| array_reverse(List([1,2,2,3,2,1,4]))                       |
++------------------------------------------------------------+
+| [4, 3, 2, 1]                                               |
++------------------------------------------------------------+
+```
+
+#### Aliases
+
+- list_reverse
 
 ### `array_slice`
 
