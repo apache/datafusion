@@ -1053,7 +1053,7 @@ from arrays_values_without_nulls;
 ## array_element (aliases: array_extract, list_extract, list_element)
 
 # array_element error
-query error DataFusion error: Error during planning: No function matches the given name and argument types 'array_element\(Int64, Int64\)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tarray_element\(ArrayAndElement\(List<T>, T\)\)
+query error DataFusion error: Error during planning: No function matches the given name and argument types 'array_element\(Int64, Int64\)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tarray_element\(array, index\)
 select array_element(1, 2);
 
 # array_element with null
@@ -1114,14 +1114,20 @@ select array_element(arrow_cast(make_array(1, 2, 3, 4, 5), 'FixedSizeList(5, Int
 NULL NULL
 
 # array_element scalar function #4 (with NULL)
-query error
+query IT
 select array_element(make_array(1, 2, 3, 4, 5), NULL), array_element(make_array('h', 'e', 'l', 'l', 'o'), NULL);
+----
+NULL NULL
 
-query error
+query IT
 select array_element(arrow_cast(make_array(1, 2, 3, 4, 5), 'LargeList(Int64)'), NULL), array_element(arrow_cast(make_array('h', 'e', 'l', 'l', 'o'), 'LargeList(Utf8)'), NULL);
+----
+NULL NULL
 
-query error
+query IT
 select array_element(arrow_cast(make_array(1, 2, 3, 4, 5), 'FixedSizeList(5, Int64)'), NULL), array_element(arrow_cast(make_array('h', 'e', 'l', 'l', 'o'), 'FixedSizeList(5, Utf8)'), NULL);
+----
+NULL NULL
 
 # array_element scalar function #5 (with negative index)
 query IT

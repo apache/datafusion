@@ -120,16 +120,28 @@ fn get_valid_types(
             DataType::List(ref field)
             | DataType::LargeList(ref field)
             | DataType::FixedSizeList(ref field, _) => {
-                let elem_type = if elem_base_type.eq(&DataType::Null) {
-                    field.data_type()
-                } else {
-                    elem_type
-                };
+                let elem_type = field.data_type();
                 if is_append {
                     Ok(vec![vec![array_type.clone(), elem_type.clone()]])
                 } else {
                     Ok(vec![vec![elem_type.to_owned(), array_type.clone()]])
                 }
+            }
+            _ => Ok(vec![vec![]]),
+        }
+    }
+    fn array_and_index(current_types: &[DataType]) -> Result<Vec<Vec<DataType>>> {
+        if current_types.len() != 2 {
+            return Ok(vec![vec![]]);
+        }
+
+        let array_type = &current_types[0];
+
+        match array_type {
+            DataType::List(_)
+            | DataType::LargeList(_)
+            | DataType::FixedSizeList(_, _) => {
+                Ok(vec![vec![array_type.clone(), DataType::Int64]])
             }
             _ => Ok(vec![vec![]]),
         }
@@ -168,9 +180,11 @@ fn get_valid_types(
         TypeSignature::Exact(valid_types) => vec![valid_types.clone()],
         TypeSignature::ArraySignature(ref function_signature) => match function_signature
         {
-            ArrayFunctionSignature::ArrayAndElement
-            | ArrayFunctionSignature::ArrayAndIndex => {
+            ArrayFunctionSignature::ArrayAndElement => {
                 return array_append_or_prepend_valid_types(current_types, true)
+            }
+            ArrayFunctionSignature::ArrayAndIndex => {
+                return array_and_index(current_types)
             }
             ArrayFunctionSignature::ElementAndArray => {
                 return array_append_or_prepend_valid_types(current_types, false)
