@@ -298,7 +298,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let plan = self.apply_expr_alias(plan, alias.columns)?;
 
         LogicalPlanBuilder::from(plan)
-            .alias(self.normalizer.normalize(alias.name))?
+            .alias(TableReference::bare(self.normalizer.normalize(alias.name)))?
             .build()
     }
 
@@ -465,6 +465,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             | SQLDataType::Int64
             | SQLDataType::Float64
             | SQLDataType::Struct(_)
+            | SQLDataType::JSONB
+            | SQLDataType::Unspecified
             => not_impl_err!(
                 "Unsupported SQL type {sql_type:?}"
             ),

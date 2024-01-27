@@ -488,7 +488,7 @@ jobs:
 
   # Verify MSRV for the crates which are directly used by other projects.
   msrv:
-    name: Verify MSRV
+    name: Verify MSRV (Min Supported Rust Version)
     runs-on: ubuntu-latest
     container:
       image: amd64/rust
@@ -500,7 +500,13 @@ jobs:
         run: cargo install cargo-msrv
       - name: Check datafusion
         working-directory: datafusion/core
-        run: cargo msrv verify
+        run: |
+          # If you encounter an error with any of the commands below
+          # it means some crate in your dependency tree has a higher 
+          # MSRV (Min Supported Rust Version) than the one specified 
+          # in the `rust-version` key of `Cargo.toml`. Check your 
+          # dependencies or update the version in `Cargo.toml`
+          cargo msrv verify
       - name: Check datafusion-substrait
         working-directory: datafusion/substrait
         run: cargo msrv verify
