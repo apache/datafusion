@@ -22,15 +22,13 @@ use std::sync::Arc;
 
 use arrow::datatypes::SchemaRef;
 use async_trait::async_trait;
-use datafusion_common::not_impl_err;
+use datafusion_physical_plan::work_table::WorkTableExec;
 
 use crate::{
     error::Result,
     logical_expr::{Expr, LogicalPlan, TableProviderFilterPushDown},
     physical_plan::ExecutionPlan,
 };
-
-use datafusion_common::DataFusionError;
 
 use crate::datasource::{TableProvider, TableType};
 use crate::execution::context::SessionState;
@@ -84,7 +82,11 @@ impl TableProvider for CteWorkTable {
         _filters: &[Expr],
         _limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        not_impl_err!("scan not implemented for CteWorkTable yet")
+        // TODO: pushdown filters and limits
+        Ok(Arc::new(WorkTableExec::new(
+            self.name.clone(),
+            self.table_schema.clone(),
+        )))
     }
 
     fn supports_filter_pushdown(
