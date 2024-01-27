@@ -180,7 +180,7 @@ impl ExprIntervalGraphNode {
     /// object. Literals are created with definite, singleton intervals while
     /// any other expression starts with an indefinite interval ([-∞, ∞]).
     pub fn make_node(node: &ExprTreeNode<NodeIndex>, schema: &Schema) -> Result<Self> {
-        let expr = node.expression().clone();
+        let expr = node.expr.clone();
         if let Some(literal) = expr.as_any().downcast_ref::<Literal>() {
             let value = literal.value();
             Interval::try_new(value.clone(), value.clone())
