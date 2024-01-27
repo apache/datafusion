@@ -1213,7 +1213,7 @@ impl Expr {
     /// # use datafusion_expr::{lit, col};
     /// let expr = col("c1")
     ///    .range(lit(2), lit(4));
-    /// assert_eq!(expr.display_name().unwrap(), "c1[Int32(2):Int32(4)]");
+    /// assert_eq!(expr.display_name().unwrap(), "c1[Int32(2):Int32(4):Int64(1)]");
     /// ```
     pub fn range(self, start: Expr, stop: Expr) -> Self {
         Expr::GetIndexedField(GetIndexedField {
