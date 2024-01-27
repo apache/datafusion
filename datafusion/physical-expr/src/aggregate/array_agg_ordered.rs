@@ -279,13 +279,13 @@ impl Accumulator for OrderSensitiveArrayAggAccumulator {
         Ok(())
     }
 
-    fn state(&self) -> Result<Vec<ScalarValue>> {
+    fn state(&mut self) -> Result<Vec<ScalarValue>> {
         let mut result = vec![self.evaluate()?];
         result.push(self.evaluate_orderings()?);
         Ok(result)
     }
 
-    fn evaluate(&self) -> Result<ScalarValue> {
+    fn evaluate(&mut self) -> Result<ScalarValue> {
         let values = self.values.clone();
         let array = if self.reverse {
             ScalarValue::new_list_from_iter(values.into_iter().rev(), &self.datatypes[0])

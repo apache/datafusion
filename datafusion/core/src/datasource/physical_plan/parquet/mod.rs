@@ -549,8 +549,13 @@ impl FileOpener for ParquetOpener {
             // with that range can be skipped as well
             if enable_page_index && !row_groups.is_empty() {
                 if let Some(p) = page_pruning_predicate {
-                    let pruned =
-                        p.prune(&row_groups, file_metadata.as_ref(), &file_metrics)?;
+                    let pruned = p.prune(
+                        &file_schema,
+                        builder.parquet_schema(),
+                        &row_groups,
+                        file_metadata.as_ref(),
+                        &file_metrics,
+                    )?;
                     if let Some(row_selection) = pruned {
                         builder = builder.with_row_selection(row_selection);
                     }
@@ -782,7 +787,8 @@ mod tests {
         array::{Int64Array, Int8Array, StringArray},
         datatypes::{DataType, Field, SchemaBuilder},
     };
-    use arrow_array::Date64Array;
+    use arrow_array::{Date64Array, StructArray};
+    use arrow_schema::Fields;
     use chrono::{TimeZone, Utc};
     use datafusion_common::{assert_contains, ToDFSchema};
     use datafusion_common::{FileType, GetExt, ScalarValue};
@@ -793,6 +799,7 @@ mod tests {
     use object_store::local::LocalFileSystem;
     use object_store::path::Path;
     use object_store::ObjectMeta;
+    use parquet::arrow::ArrowWriter;
     use std::fs::{self, File};
     use std::io::Write;
     use tempfile::TempDir;
@@ -1765,12 +1772,14 @@ mod tests {
 
         // assert the batches and some metrics
         #[rustfmt::skip]
-        let expected = ["+-----+",
+        let expected = [
+            "+-----+",
             "| int |",
             "+-----+",
             "| 4   |",
             "| 5   |",
-            "+-----+"];
+            "+-----+"
+        ];
         assert_batches_sorted_eq!(expected, &rt.batches.unwrap());
         assert_eq!(get_value(&metrics, "page_index_rows_filtered"), 4);
         assert!(
@@ -2135,5 +2144,66 @@ mod tests {
         let df_schema = schema.clone().to_dfschema().unwrap();
         let execution_props = ExecutionProps::new();
         create_physical_expr(expr, &df_schema, &execution_props).unwrap()
+    }
+
+    #[tokio::test]
+    async fn test_struct_filter_parquet() -> Result<()> {
+        let tmp_dir = TempDir::new()?;
+        let path = tmp_dir.path().to_str().unwrap().to_string() + "/test.parquet";
+        write_file(&path);
+        let ctx = SessionContext::new();
+        let opt = ListingOptions::new(Arc::new(ParquetFormat::default()));
+        ctx.register_listing_table("base_table", path, opt, None, None)
+            .await
+            .unwrap();
+        let sql = "select * from base_table where name='test02'";
+        let batch = ctx.sql(sql).await.unwrap().collect().await.unwrap();
+        assert_eq!(batch.len(), 1);
+        let expected = [
+            "+---------------------+----+--------+",
+            "| struct              | id | name   |",
+            "+---------------------+----+--------+",
+            "| {id: 4, name: aaa2} | 2  | test02 |",
+            "+---------------------+----+--------+",
+        ];
+        crate::assert_batches_eq!(expected, &batch);
+        Ok(())
+    }
+
+    fn write_file(file: &String) {
+        let struct_fields = Fields::from(vec![
+            Field::new("id", DataType::Int64, false),
+            Field::new("name", DataType::Utf8, false),
+        ]);
+        let schema = Schema::new(vec![
+            Field::new("struct", DataType::Struct(struct_fields.clone()), false),
+            Field::new("id", DataType::Int64, true),
+            Field::new("name", DataType::Utf8, false),
+        ]);
+        let id_array = Int64Array::from(vec![Some(1), Some(2)]);
+        let columns = vec![
+            Arc::new(Int64Array::from(vec![3, 4])) as _,
+            Arc::new(StringArray::from(vec!["aaa1", "aaa2"])) as _,
+        ];
+        let struct_array = StructArray::new(struct_fields, columns, None);
+
+        let name_array = StringArray::from(vec![Some("test01"), Some("test02")]);
+        let schema = Arc::new(schema);
+
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(struct_array),
+                Arc::new(id_array),
+                Arc::new(name_array),
+            ],
+        )
+        .unwrap();
+        let file = File::create(file).unwrap();
+        let w_opt = WriterProperties::builder().build();
+        let mut writer = ArrowWriter::try_new(file, schema, Some(w_opt)).unwrap();
+        writer.write(&batch).unwrap();
+        writer.flush().unwrap();
+        writer.close().unwrap();
     }
 }

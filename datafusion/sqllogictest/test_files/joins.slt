@@ -1109,7 +1109,7 @@ RIGHT JOIN join_t2 on join_t1.t1_id = join_t2.t2_id
 WHERE NOT (join_t1.t1_int = join_t2.t2_int)
 ----
 logical_plan
-Inner Join: join_t1.t1_id = join_t2.t2_id Filter: join_t1.t1_int != join_t2.t2_int
+Inner Join: join_t1.t1_id = join_t2.t2_id Filter: join_t2.t2_int != join_t1.t1_int
 --TableScan: join_t1 projection=[t1_id, t1_name, t1_int]
 --TableScan: join_t2 projection=[t2_id, t2_name, t2_int]
 
@@ -3472,13 +3472,13 @@ FROM annotated_data as l, annotated_data as r
 WHERE l.a > r.a
 ----
 logical_plan
-Inner Join:  Filter: l.a > r.a
+Inner Join:  Filter: r.a < l.a
 --SubqueryAlias: l
 ----TableScan: annotated_data projection=[a0, a, b, c, d]
 --SubqueryAlias: r
 ----TableScan: annotated_data projection=[a0, a, b, c, d]
 physical_plan
-NestedLoopJoinExec: join_type=Inner, filter=a@0 > a@1
+NestedLoopJoinExec: join_type=Inner, filter=a@1 < a@0
 --RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
 ----CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a0, a, b, c, d], output_ordering=[a@1 ASC, b@2 ASC NULLS LAST, c@3 ASC NULLS LAST], has_header=true
 --CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a0, a, b, c, d], output_ordering=[a@1 ASC, b@2 ASC NULLS LAST, c@3 ASC NULLS LAST], has_header=true
@@ -3523,3 +3523,73 @@ set datafusion.optimizer.prefer_existing_sort = false;
 
 statement ok
 drop table annotated_data;
+
+####
+#  nestedjoin_with_alias_test
+####
+
+query IIII
+select * from ((select 1 as a, 2 as b) c INNER JOIN (select 1 as c, 3 as d) e on c.a = e.c) f;
+----
+1 2 1 3
+
+####
+#  create_left_semi_anti_join_context_with_null_ids_table_test
+####
+
+statement ok
+CREATE TABLE join_test_left(t1_id INT UNSIGNED, t1_name VARCHAR, t1_int INT UNSIGNED)
+AS VALUES
+(11, 'a', 1),
+(11, 'a', 1),
+(22, 'b', 2),
+(33, 'c', 3),
+(44, 'd', 4),
+(NULL, 'e', 0);
+
+statement ok
+CREATE TABLE join_test_right(t2_id INT UNSIGNED, t2_name VARCHAR, t2_int INT UNSIGNED)
+AS VALUES
+(11, 'z', 3),
+(11, 'z', 3),
+(22, 'y', 1),
+(33, 'x', 3),
+(44, 'w', 3),
+(NULL, 'v', 0);
+
+query IT
+SELECT t1_id, t1_name FROM join_test_left WHERE t1_id NOT IN (SELECT t2_id FROM join_test_right) ORDER BY t1_id;
+----
+NULL e
+
+####
+# join_partitioned_test
+####
+
+statement ok
+CREATE TABLE join_partitioned_table(c1 INT UNSIGNED, c2 INT UNSIGNED, c3 BOOLEAN)
+AS VALUES
+(4, 1, true),
+(4, 2, false),
+(4, 3, true),
+(4, 4, false);
+
+query I
+SELECT 1 FROM join_partitioned_table JOIN (SELECT c1 AS id1 FROM join_partitioned_table) AS a ON c1=id1;
+----
+1
+1
+1
+1
+1
+1
+1
+1
+1
+1
+1
+1
+1
+1
+1
+1

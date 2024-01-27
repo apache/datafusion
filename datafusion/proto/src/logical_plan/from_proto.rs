@@ -55,10 +55,11 @@ use datafusion_expr::{
     array_resize, array_slice, array_sort, array_to_string, array_union, arrow_typeof,
     ascii, asin, asinh, atan, atan2, atanh, bit_length, btrim, cardinality, cbrt, ceil,
     character_length, chr, coalesce, concat_expr, concat_ws_expr, cos, cosh, cot,
-    current_date, current_time, date_bin, date_part, date_trunc, degrees, digest, exp,
+    current_date, current_time, date_bin, date_part, date_trunc, degrees, digest,
+    ends_with, exp,
     expr::{self, InList, Sort, WindowFunction},
     factorial, find_in_set, flatten, floor, from_unixtime, gcd, gen_range, initcap,
-    isnan, iszero, lcm, left, levenshtein, ln, log, log10, log2,
+    instr, isnan, iszero, lcm, left, levenshtein, ln, log, log10, log2,
     logical_plan::{PlanType, StringifiedPlan},
     lower, lpad, ltrim, md5, nanvl, now, nullif, octet_length, overlay, pi, power,
     radians, random, regexp_match, regexp_replace, repeat, replace, reverse, right,
@@ -526,7 +527,9 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::CharacterLength => Self::CharacterLength,
             ScalarFunction::Chr => Self::Chr,
             ScalarFunction::ConcatWithSeparator => Self::ConcatWithSeparator,
+            ScalarFunction::EndsWith => Self::EndsWith,
             ScalarFunction::InitCap => Self::InitCap,
+            ScalarFunction::InStr => Self::InStr,
             ScalarFunction::Left => Self::Left,
             ScalarFunction::Lpad => Self::Lpad,
             ScalarFunction::Random => Self::Random,
@@ -1575,6 +1578,10 @@ pub fn parse_expr(
                 }
                 ScalarFunction::Chr => Ok(chr(parse_expr(&args[0], registry)?)),
                 ScalarFunction::InitCap => Ok(initcap(parse_expr(&args[0], registry)?)),
+                ScalarFunction::InStr => Ok(instr(
+                    parse_expr(&args[0], registry)?,
+                    parse_expr(&args[1], registry)?,
+                )),
                 ScalarFunction::Gcd => Ok(gcd(
                     parse_expr(&args[0], registry)?,
                     parse_expr(&args[1], registry)?,
@@ -1651,6 +1658,10 @@ pub fn parse_expr(
                     parse_expr(&args[2], registry)?,
                 )),
                 ScalarFunction::StartsWith => Ok(starts_with(
+                    parse_expr(&args[0], registry)?,
+                    parse_expr(&args[1], registry)?,
+                )),
+                ScalarFunction::EndsWith => Ok(ends_with(
                     parse_expr(&args[0], registry)?,
                     parse_expr(&args[1], registry)?,
                 )),

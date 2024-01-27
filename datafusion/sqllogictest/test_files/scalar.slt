@@ -1527,7 +1527,7 @@ SELECT not(true), not(false)
 ----
 false true
 
-query error DataFusion error: Optimizer rule 'simplify_expressions' failed\ncaused by\nInternal error: NOT 'Literal \{ value: Int64\(1\) \}' can't be evaluated because the expression's type is Int64, not boolean or NULL
+query error type_coercion\ncaused by\nError during planning: Cannot infer common argument type for comparison operation Int64 IS DISTINCT FROM Boolean
 SELECT not(1), not(0)
 
 query ?B
@@ -1535,7 +1535,7 @@ SELECT null, not(null)
 ----
 NULL NULL
 
-query error DataFusion error: Optimizer rule 'simplify_expressions' failed\ncaused by\nInternal error: NOT 'Literal \{ value: Utf8\("hi"\) \}' can't be evaluated because the expression's type is Utf8, not boolean or NULL
+query error type_coercion\ncaused by\nError during planning: Cannot infer common argument type for comparison operation Utf8 IS DISTINCT FROM Boolean
 SELECT NOT('hi')
 
 # test_negative_expressions()

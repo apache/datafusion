@@ -125,7 +125,7 @@ impl Accumulator for GeometricMean {
     // This function serializes our state to `ScalarValue`, which DataFusion uses
     // to pass this state between execution stages.
     // Note that this can be arbitrary data.
-    fn state(&self) -> Result<Vec<ScalarValue>> {
+    fn state(&mut self) -> Result<Vec<ScalarValue>> {
         Ok(vec![
             ScalarValue::from(self.prod),
             ScalarValue::from(self.n),
@@ -134,7 +134,7 @@ impl Accumulator for GeometricMean {
 
     // DataFusion expects this function to return the final value of this aggregator.
     // in this case, this is the formula of the geometric mean
-    fn evaluate(&self) -> Result<ScalarValue> {
+    fn evaluate(&mut self) -> Result<ScalarValue> {
         let value = self.prod.powf(1.0 / self.n as f64);
         Ok(ScalarValue::from(value))
     }
