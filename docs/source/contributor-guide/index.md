@@ -32,7 +32,7 @@ community as well as get more familiar with Rust and the relevant codebases.
 
 ## Finding and Creating Issues to Work On
 
-You can find a curated [good-first-issue] list to help you get started.
+You can find a curated [good-first-issue](https://github.com/apache/arrow-datafusion/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22) list to help you get started.
 
 DataFusion is an open contribution project, and thus there is no particular
 project imposed deadline for completing any issue or any restriction on who can
