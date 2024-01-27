@@ -42,9 +42,9 @@ impl SyntaxHighlighter {
     }
 }
 
-pub struct NoSyntaxSyntaxHighlighter {}
+pub struct NoSyntaxHighlighter {}
 
-impl Highlighter for NoSyntaxSyntaxHighlighter {}
+impl Highlighter for NoSyntaxHighlighter {}
 
 impl Highlighter for SyntaxHighlighter {
     fn highlight<'l>(&self, line: &'l str, _: usize) -> Cow<'l, str> {

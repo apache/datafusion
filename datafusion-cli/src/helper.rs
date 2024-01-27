@@ -38,7 +38,7 @@ use rustyline::Context;
 use rustyline::Helper;
 use rustyline::Result;
 
-use crate::highlighter::{NoSyntaxSyntaxHighlighter, SyntaxHighlighter};
+use crate::highlighter::{NoSyntaxHighlighter, SyntaxHighlighter};
 
 pub struct CliHelper {
     completer: FilenameCompleter,
@@ -49,7 +49,7 @@ pub struct CliHelper {
 impl CliHelper {
     pub fn new(dialect: &str, color: bool) -> Self {
         let highlighter: Box<dyn Highlighter> = if !color {
-            Box::new(NoSyntaxSyntaxHighlighter {})
+            Box::new(NoSyntaxHighlighter {})
         } else {
             Box::new(SyntaxHighlighter::new(dialect))
         };
