@@ -2797,6 +2797,7 @@ where
     let original_data = values.to_data();
     let capacity = Capacities::Array(original_data.len());
     let mut offsets = vec![O::usize_as(0)];
+    let mut nulls = vec![];
     let mut mutable =
         MutableArrayData::with_capacities(vec![&original_data], false, capacity);
 
@@ -2815,6 +2816,11 @@ where
             cnt += 1;
         }
         offsets.push(offsets[row_index] + O::usize_as(cnt));
+        if cnt == 0 {
+            nulls.push(false);
+        } else {
+            nulls.push(true);
+        }
     }
 
     let data = mutable.freeze();
@@ -2822,7 +2828,7 @@ where
         field.clone(),
         OffsetBuffer::<O>::new(offsets.into()),
         arrow_array::make_array(data),
-        None,
+        Some(nulls.into()),
     )?))
 }
 
