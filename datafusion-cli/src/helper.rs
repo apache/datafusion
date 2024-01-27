@@ -38,20 +38,25 @@ use rustyline::Context;
 use rustyline::Helper;
 use rustyline::Result;
 
-use crate::highlighter::SyntaxHighlighter;
+use crate::highlighter::{NoSyntaxSyntaxHighlighter, SyntaxHighlighter};
 
 pub struct CliHelper {
     completer: FilenameCompleter,
     dialect: String,
-    highlighter: SyntaxHighlighter,
+    highlighter: Box<dyn Highlighter>,
 }
 
 impl CliHelper {
-    pub fn new(dialect: &str) -> Self {
+    pub fn new(dialect: &str, color: bool) -> Self {
+        let highlighter: Box<dyn Highlighter> = if !color {
+            Box::new(NoSyntaxSyntaxHighlighter {})
+        } else {
+            Box::new(SyntaxHighlighter::new(dialect))
+        };
         Self {
             completer: FilenameCompleter::new(),
             dialect: dialect.into(),
-            highlighter: SyntaxHighlighter::new(dialect),
+            highlighter,
         }
     }
 
@@ -102,7 +107,7 @@ impl CliHelper {
 
 impl Default for CliHelper {
     fn default() -> Self {
-        Self::new("generic")
+        Self::new("generic", false)
     }
 }
 

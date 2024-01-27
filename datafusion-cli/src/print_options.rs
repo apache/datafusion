@@ -18,9 +18,11 @@
 use std::fmt::{Display, Formatter};
 use std::io::Write;
 use std::pin::Pin;
+use std::rc::Rc;
 use std::str::FromStr;
 use std::time::Instant;
 
+use crate::highlighter::SyntaxHighlighter;
 use crate::print_format::PrintFormat;
 
 use arrow::record_batch::RecordBatch;
@@ -70,6 +72,7 @@ pub struct PrintOptions {
     pub format: PrintFormat,
     pub quiet: bool,
     pub maxrows: MaxRows,
+    pub color: bool,
 }
 
 fn get_timing_info_str(

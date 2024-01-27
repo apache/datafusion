@@ -30,19 +30,21 @@ use datafusion::sql::sqlparser::{
 use rustyline::highlight::Highlighter;
 
 /// The syntax highlighter.
+#[derive(Debug)]
 pub struct SyntaxHighlighter {
     dialect: Box<dyn Dialect>,
 }
 
 impl SyntaxHighlighter {
     pub fn new(dialect: &str) -> Self {
-        let dialect = match dialect_from_str(dialect) {
-            Some(dialect) => dialect,
-            None => Box::new(GenericDialect {}),
-        };
+        let dialect = dialect_from_str(dialect).unwrap_or(Box::new(GenericDialect {}));
         Self { dialect }
     }
 }
+
+pub struct NoSyntaxSyntaxHighlighter {}
+
+impl Highlighter for NoSyntaxSyntaxHighlighter {}
 
 impl Highlighter for SyntaxHighlighter {
     fn highlight<'l>(&self, line: &'l str, _: usize) -> Cow<'l, str> {
