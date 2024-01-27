@@ -599,6 +599,39 @@ async fn prune_decimal_in_list() {
         .with_expected_rows(6)
         .test_row_group_prune()
         .await;
+
+    // test data -> r1: {1,2,3,4,5}, r2: {1,2,3,4,6}, r3: {1,2,3,4,6}
+    RowGroupPruningTest::new()
+        .with_scenario(Scenario::DecimalBloomFilterInt32)
+        .with_query("SELECT * FROM t where decimal_col in (5)")
+        .with_expected_errors(Some(0))
+        .with_pruned_by_stats(Some(0))
+        .with_pruned_by_bloom_filter(Some(2))
+        .with_expected_rows(1)
+        .test_row_group_prune()
+        .await;
+
+    // test data -> r1: {1,2,3,4,5}, r2: {1,2,3,4,6}, r3: {1,2,3,4,6}
+    RowGroupPruningTest::new()
+        .with_scenario(Scenario::DecimalBloomFilterInt64)
+        .with_query("SELECT * FROM t where decimal_col in (5)")
+        .with_expected_errors(Some(0))
+        .with_pruned_by_stats(Some(0))
+        .with_pruned_by_bloom_filter(Some(2))
+        .with_expected_rows(1)
+        .test_row_group_prune()
+        .await;
+
+    // test data -> r1: {1,2,3,4,5}, r2: {1,2,3,4,6}, r3: {1,2,3,4,6}
+    RowGroupPruningTest::new()
+        .with_scenario(Scenario::DecimalLargePrecisionBloomFilter)
+        .with_query("SELECT * FROM t where decimal_col in (5)")
+        .with_expected_errors(Some(0))
+        .with_pruned_by_stats(Some(0))
+        .with_pruned_by_bloom_filter(Some(2))
+        .with_expected_rows(1)
+        .test_row_group_prune()
+        .await;
 }
 
 #[tokio::test]

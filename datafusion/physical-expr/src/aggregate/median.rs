@@ -145,7 +145,7 @@ impl<T: ArrowNumericType> std::fmt::Debug for MedianAccumulator<T> {
 }
 
 impl<T: ArrowNumericType> Accumulator for MedianAccumulator<T> {
-    fn state(&self) -> Result<Vec<ScalarValue>> {
+    fn state(&mut self) -> Result<Vec<ScalarValue>> {
         let all_values = self
             .all_values
             .iter()
@@ -171,9 +171,8 @@ impl<T: ArrowNumericType> Accumulator for MedianAccumulator<T> {
         Ok(())
     }
 
-    fn evaluate(&self) -> Result<ScalarValue> {
-        // TODO: evaluate could pass &mut self
-        let mut d = self.all_values.clone();
+    fn evaluate(&mut self) -> Result<ScalarValue> {
+        let mut d = std::mem::take(&mut self.all_values);
         let cmp = |x: &T::Native, y: &T::Native| x.compare(*y);
 
         let len = d.len();

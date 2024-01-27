@@ -22,16 +22,15 @@ use arrow::{
     util::display::array_value_to_string,
 };
 
-use datafusion::datasource::TableProvider;
 use datafusion::error::Result;
 use datafusion::logical_expr::{Aggregate, LogicalPlan, TableScan};
+use datafusion::physical_plan::collect;
 use datafusion::physical_plan::metrics::MetricValue;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_plan::ExecutionPlanVisitor;
 use datafusion::prelude::*;
 use datafusion::test_util;
 use datafusion::{assert_batches_eq, assert_batches_sorted_eq};
-use datafusion::{datasource::MemTable, physical_plan::collect};
 use datafusion::{execution::context::SessionContext, physical_plan::displayable};
 use datafusion_common::{assert_contains, assert_not_contains};
 use object_store::path::Path;
@@ -72,82 +71,8 @@ pub mod create_drop;
 pub mod explain_analyze;
 pub mod expr;
 pub mod joins;
-pub mod repartition;
 pub mod select;
 mod sql_api;
-
-fn create_left_semi_anti_join_context_with_null_ids(
-    column_left: &str,
-    column_right: &str,
-    repartition_joins: bool,
-) -> Result<SessionContext> {
-    let ctx = SessionContext::new_with_config(
-        SessionConfig::new()
-            .with_repartition_joins(repartition_joins)
-            .with_target_partitions(2)
-            .with_batch_size(4096),
-    );
-
-    let t1_schema = Arc::new(Schema::new(vec![
-        Field::new(column_left, DataType::UInt32, true),
-        Field::new("t1_name", DataType::Utf8, true),
-        Field::new("t1_int", DataType::UInt32, true),
-    ]));
-    let t1_data = RecordBatch::try_new(
-        t1_schema,
-        vec![
-            Arc::new(UInt32Array::from(vec![
-                Some(11),
-                Some(11),
-                Some(22),
-                Some(33),
-                Some(44),
-                None,
-            ])),
-            Arc::new(StringArray::from(vec![
-                Some("a"),
-                Some("a"),
-                Some("b"),
-                Some("c"),
-                Some("d"),
-                Some("e"),
-            ])),
-            Arc::new(UInt32Array::from(vec![1, 1, 2, 3, 4, 0])),
-        ],
-    )?;
-    ctx.register_batch("t1", t1_data)?;
-
-    let t2_schema = Arc::new(Schema::new(vec![
-        Field::new(column_right, DataType::UInt32, true),
-        Field::new("t2_name", DataType::Utf8, true),
-        Field::new("t2_int", DataType::UInt32, true),
-    ]));
-    let t2_data = RecordBatch::try_new(
-        t2_schema,
-        vec![
-            Arc::new(UInt32Array::from(vec![
-                Some(11),
-                Some(11),
-                Some(22),
-                Some(44),
-                Some(55),
-                None,
-            ])),
-            Arc::new(StringArray::from(vec![
-                Some("z"),
-                Some("z"),
-                Some("y"),
-                Some("x"),
-                Some("w"),
-                Some("v"),
-            ])),
-            Arc::new(UInt32Array::from(vec![3, 3, 1, 3, 3, 0])),
-        ],
-    )?;
-    ctx.register_batch("t2", t2_data)?;
-
-    Ok(ctx)
-}
 
 async fn register_aggregate_csv_by_sql(ctx: &SessionContext) {
     let testdata = datafusion::test_util::arrow_test_data();
@@ -320,21 +245,6 @@ async fn register_alltypes_parquet(ctx: &SessionContext) {
     )
     .await
     .unwrap();
-}
-
-/// Return a new table provider that has a single Int32 column with
-/// values between `seq_start` and `seq_end`
-pub fn table_with_sequence(
-    seq_start: i32,
-    seq_end: i32,
-) -> Result<Arc<dyn TableProvider>> {
-    let schema = Arc::new(Schema::new(vec![Field::new("i", DataType::Int32, true)]));
-    let arr = Arc::new(Int32Array::from((seq_start..=seq_end).collect::<Vec<_>>()));
-    let partitions = vec![vec![RecordBatch::try_new(
-        schema.clone(),
-        vec![arr as ArrayRef],
-    )?]];
-    Ok(Arc::new(MemTable::try_new(schema, partitions)?))
 }
 
 pub struct ExplainNormalizer {

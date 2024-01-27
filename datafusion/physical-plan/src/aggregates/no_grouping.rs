@@ -137,12 +137,13 @@ impl AggregateStream {
                     None => {
                         this.finished = true;
                         let timer = this.baseline_metrics.elapsed_compute().timer();
-                        let result = finalize_aggregation(&this.accumulators, &this.mode)
-                            .and_then(|columns| {
-                                RecordBatch::try_new(this.schema.clone(), columns)
-                                    .map_err(Into::into)
-                            })
-                            .record_output(&this.baseline_metrics);
+                        let result =
+                            finalize_aggregation(&mut this.accumulators, &this.mode)
+                                .and_then(|columns| {
+                                    RecordBatch::try_new(this.schema.clone(), columns)
+                                        .map_err(Into::into)
+                                })
+                                .record_output(&this.baseline_metrics);
 
                         timer.done();
 

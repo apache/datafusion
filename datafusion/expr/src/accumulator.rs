@@ -59,11 +59,18 @@ pub trait Accumulator: Send + Sync + Debug {
     /// running sum.
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()>;
 
-    /// Returns the final aggregate value.
+    /// Returns the final aggregate value, consuming the internal state.
     ///
     /// For example, the `SUM` accumulator maintains a running sum,
     /// and `evaluate` will produce that running sum as its output.
-    fn evaluate(&self) -> Result<ScalarValue>;
+    ///
+    /// After this call, the accumulator's internal state should be
+    /// equivalent to when it was first created.
+    ///
+    /// This function gets `&mut self` to allow for the accumulator to build
+    /// arrow compatible internal state that can be returned without copying
+    /// when possible (for example distinct strings)
+    fn evaluate(&mut self) -> Result<ScalarValue>;
 
     /// Returns the allocated size required for this accumulator, in
     /// bytes, including `Self`.
@@ -75,7 +82,15 @@ pub trait Accumulator: Send + Sync + Debug {
     /// the `capacity` should be used not the `len`.
     fn size(&self) -> usize;
 
-    /// Returns the intermediate state of the accumulator.
+    /// Returns the intermediate state of the accumulator, consuming the
+    /// intermediate state.
+    ///
+    /// After this call, the accumulator's internal state should be
+    /// equivalent to when it was first created.
+    ///
+    /// This function gets `&mut self` to allow for the accumulator to build
+    /// arrow compatible internal state that can be returned without copying
+    /// when possible (for example distinct strings).
     ///
     /// Intermediate state is used for "multi-phase" grouping in
     /// DataFusion, where an aggregate is computed in parallel with
@@ -132,7 +147,7 @@ pub trait Accumulator: Send + Sync + Debug {
     /// Note that [`ScalarValue::List`] can be used to pass multiple
     /// values if the number of intermediate values is not known at
     /// planning time (e.g. for `MEDIAN`)
-    fn state(&self) -> Result<Vec<ScalarValue>>;
+    fn state(&mut self) -> Result<Vec<ScalarValue>>;
 
     /// Updates the accumulator's state from an `Array` containing one
     /// or more intermediate values.
