@@ -60,8 +60,8 @@ pub struct RunOpt {
     #[structopt(long = "scale-factor", default_value = "0.01")]
     scale_factor: f32,
 
-    /// How many files are created. Defaults to 10
-    #[structopt(default_value = "10", short = "n", long = "num-files")]
+    /// How many files are created. Defaults to 25
+    #[structopt(default_value = "25", short = "n", long = "num-files")]
     num_files: NonZeroUsize,
 
     /// Should the files be sorted or not? Defaults to false. If true, the files will be sorted by XX, YY, and timestamp.
