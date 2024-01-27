@@ -1459,7 +1459,7 @@ pub fn parse_expr(
                     parse_expr(&args[1], registry)?,
                     parse_expr(&args[2], registry)?,
                 )),
-                ScalarFunction::ArrayReverse => parse_expr(&args[0], registry)?,
+                ScalarFunction::ArrayReverse => Ok(parse_expr(&args[0], registry)?),
                 ScalarFunction::ArraySlice => Ok(array_slice(
                     parse_expr(&args[0], registry)?,
                     parse_expr(&args[1], registry)?,
