@@ -2781,6 +2781,7 @@ pub fn array_reverse(arg: &[ArrayRef]) -> Result<ArrayRef> {
             let array = as_large_list_array(&arg[0])?;
             general_array_reverse::<i64>(array, &field)
         }
+        DataType::Null => Ok(arg[0].clone()),
         array_type => exec_err!("array_reverse does not support type '{array_type:?}'."),
     }
 }
