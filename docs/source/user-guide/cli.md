@@ -112,7 +112,7 @@ OPTIONS:
             Execute the given command string(s), then exit
 
         --color
-            Enables console syntax highlighting            
+            Enables console syntax highlighting
 
     -f, --file <FILE>...
             Execute commands from file(s), then exit
