@@ -15,7 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Manages all available memory during query execution
+//! [`MemoryPool`] for memory management during query execution, [`proxy]` for
+//! help with allocation accounting.
 
 use datafusion_common::Result;
 use std::{cmp::Ordering, sync::Arc};
@@ -56,7 +57,7 @@ pub use pool::*;
 /// kills the process, DataFusion `ExecutionPlan`s (operators) that consume
 /// large amounts of memory must first request their desired allocation from a
 /// [`MemoryPool`] before allocating more.  The request is typically managed via
-/// a  [`MemoryReservation`].
+/// a  [`MemoryReservation`] and [`MemoryConsumer`].
 ///
 /// If the allocation is successful, the operator should proceed and allocate
 /// the desired memory. If the allocation fails, the operator must either first
@@ -107,9 +108,13 @@ pub trait MemoryPool: Send + Sync + std::fmt::Debug {
     fn reserved(&self) -> usize;
 }
 
-/// A memory consumer that can be tracked by [`MemoryReservation`] in
-/// a [`MemoryPool`]. All allocations are registered to a particular
-/// `MemoryConsumer`;
+/// A memory consumer is a named allocation traced by a particular
+/// [`MemoryReservation`] in a [`MemoryPool`]. All allocations are registered to
+/// a particular `MemoryConsumer`;
+///
+/// For help with allocation accounting, see the [proxy] module.
+///
+/// [proxy]: crate::memory_pool::proxy
 #[derive(Debug)]
 pub struct MemoryConsumer {
     name: String,
