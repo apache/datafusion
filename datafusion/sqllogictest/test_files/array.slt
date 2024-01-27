@@ -5054,6 +5054,22 @@ select array_resize(arrow_cast([[1], [2], [3]], 'LargeList(List(Int64))'), 10, [
 ----
 [[1], [2], [3], [5], [5], [5], [5], [5], [5], [5]]
 
+## array_reverse
+query ??
+select array_reverse(make_array(1, 2, 3)), array_reverse(make_array(1));
+----
+[3, 2, 1] [1]
+
+query ??
+select array_reverse(arrow_cast(make_array(1, 2, 3), 'LargeList(Int64)')), array_reverse(arrow_cast(make_array(1), 'LargeList(Int64)'));
+----
+[3, 2, 1] [1]
+
+query ?
+select array_reverse(NULL);
+----
+NULL
+
 ### Delete tables
 
 statement ok
