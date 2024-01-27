@@ -365,6 +365,14 @@ pub fn sort_exec(
     Arc::new(SortExec::new(sort_exprs, input))
 }
 
+/// A [`PlanContext`] object is susceptible to being left in an inconsistent state after
+/// untested mutable operations. It is crucial that there be no discrepancies between a plan
+/// associated with the root node and the plan generated after traversing all nodes
+/// within the [`PlanContext`] tree. In addition to verifying the plans resulting from optimizer
+/// rules, it is essential to ensure that the overall tree structure corresponds with the plans
+/// contained within the node contexts.
+/// TODO: Once [`ExecutionPlan`] implements [`PartialEq`], string comparisons should be
+/// replaced with direct plan equality checks.
 pub fn check_integrity<T: Clone>(context: PlanContext<T>) -> Result<PlanContext<T>> {
     context.transform_up(&|node| {
         let children_plans = node.plan.children();

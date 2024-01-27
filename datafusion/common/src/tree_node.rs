@@ -22,6 +22,11 @@ use std::sync::Arc;
 
 use crate::Result;
 
+/// If the function returns [`VisitRecursion::Continue`], the normal execution of the
+/// function continues. If it returns [`VisitRecursion::Skip`], the function returns
+/// with [`VisitRecursion::Continue`] to jump next recursion step, bypassing further
+/// exploration of the current step. In case of [`VisitRecursion::Stop`], the function
+/// return with [`VisitRecursion::Stop`] and recursion halts.
 #[macro_export]
 macro_rules! handle_tree_recursion {
     ($EXPR:expr) => {
@@ -47,8 +52,9 @@ macro_rules! handle_tree_recursion {
 /// [`LogicalPlan`]: https://docs.rs/datafusion-expr/latest/datafusion_expr/logical_plan/enum.LogicalPlan.html
 /// [`Expr`]: https://docs.rs/datafusion-expr/latest/datafusion_expr/expr/enum.Expr.html
 pub trait TreeNode: Sized {
-    /// Use preorder to iterate the node on the tree so that we can
-    /// stop fast for some cases.
+    /// Applies `op` to the node and its children. `op` is applied in a preoder way,
+    /// and it is controlled by [`VisitRecursion`], which means result of the `op`
+    /// on the self node can cause an early return.
     ///
     /// The `op` closure can be used to collect some info from the
     /// tree node or do some checking for the tree node.
@@ -360,11 +366,17 @@ impl<T: DynTreeNode + ?Sized> TreeNode for Arc<T> {
     }
 }
 
+/// Instead of implementing [`TreeNode`], it's recommended to implement a [`ConcreteTreeNode`] for
+/// trees that contain nodes with payloads. This approach ensures safe execution of algorithms
+/// involving payloads, by enforcing rules for detaching and reattaching child nodes.
 pub trait ConcreteTreeNode: Sized {
+    /// Provides read-only access to child nodes.
     fn children(&self) -> Vec<&Self>;
 
+    /// Detaches the node from its children, returning the node itself and its detached children.
     fn take_children(self) -> (Self, Vec<Self>);
 
+    /// Reattaches updated child nodes to the node, returning the updated node.
     fn with_new_children(self, children: Vec<Self>) -> Result<Self>;
 }
 

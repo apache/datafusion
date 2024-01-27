@@ -39,10 +39,16 @@ impl DynTreeNode for dyn ExecutionPlan {
     }
 }
 
+/// A node object beneficial for writing optimizer rules, encapsulating an [`ExecutionPlan`] node with a payload.
+/// Since there are two ways to access child plans—directly from the plan and through child nodes—it's recommended
+/// to perform mutable operations via [`Self::update_plan_from_children`].
 #[derive(Debug)]
 pub struct PlanContext<T: Sized> {
+    /// The execution plan associated with this context.
     pub plan: Arc<dyn ExecutionPlan>,
+    /// Custom data payload of the node.
     pub data: T,
+    /// Child contexts of this node.
     pub children: Vec<Self>,
 }
 
