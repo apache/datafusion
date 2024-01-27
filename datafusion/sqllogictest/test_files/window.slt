@@ -3990,3 +3990,31 @@ query T
 select arrow_typeof(nth_value(a, 1) over ()) from (select 1 a)
 ----
 Int64
+
+# test LEAD window function works NULL as default value
+query I
+select lead(a, 1, null) over (order by a) from (select 1 a union all select 2 a)
+----
+2
+NULL
+
+# test LAG window function works NULL as default value
+query I
+select lag(a, 1, null) over (order by a) from (select 1 a union all select 2 a)
+----
+NULL
+1
+
+# test LEAD window function with string default value
+query T
+select lead(a, 1, 'default') over (order by a) from (select '1' a union all select '2' a)
+----
+2
+default
+
+# test LAG window function with string default value
+query T
+select lag(a, 1, 'default') over (order by a) from (select '1' a union all select '2' a)
+----
+default
+1
