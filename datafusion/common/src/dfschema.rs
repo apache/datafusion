@@ -219,7 +219,7 @@ impl DFSchema {
             return;
         }
 
-        let self_fields: HashSet<&DFField> = self.fields.iter().map(|x| x).collect();
+        let self_fields: HashSet<&DFField> = self.fields.iter().collect();
         let self_unqualified_names: HashSet<&str> = self
             .fields
             .iter()
