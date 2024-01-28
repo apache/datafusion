@@ -5065,10 +5065,10 @@ select array_reverse(arrow_cast(make_array(1, 2, 3), 'LargeList(Int64)')), array
 ----
 [3, 2, 1] [1]
 
-query ?
-select array_reverse(NULL);
+query ??
+select array_reverse(NULL), array_reverse([]);
 ----
-NULL
+NULL []
 
 query ??
 select array_reverse(column1), column1 from arrays_values;

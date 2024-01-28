@@ -2816,7 +2816,8 @@ where
             cnt += 1;
         }
         offsets.push(offsets[row_index] + O::usize_as(cnt));
-        if cnt == 0 {
+
+        if array.is_null(row_index) {
             nulls.push(false);
         } else {
             nulls.push(true);
