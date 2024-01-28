@@ -2706,7 +2706,7 @@ _Alias of [array_has](#array_has)._
 
 ### `list_has_all`
 
-_Alias of [array_has_a;;](#array_has_all)._
+_Alias of [array_has_all](#array_has_all)._
 
 ### `list_has_any`
 
