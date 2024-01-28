@@ -54,7 +54,7 @@ impl<O: OffsetSizeTrait> Accumulator for StringDistinctCountAccumulator<O> {
             return Ok(());
         }
 
-        self.0.insert(values[0].clone());
+        self.0.insert(&values[0]);
 
         Ok(())
     }
@@ -72,7 +72,7 @@ impl<O: OffsetSizeTrait> Accumulator for StringDistinctCountAccumulator<O> {
         let arr = as_list_array(&states[0])?;
         arr.iter().try_for_each(|maybe_list| {
             if let Some(list) = maybe_list {
-                self.0.insert(list);
+                self.0.insert(&list);
             };
             Ok(())
         })
@@ -180,7 +180,7 @@ impl<O: OffsetSizeTrait> SSOStringHashSet<O> {
         }
     }
 
-    fn insert(&mut self, values: ArrayRef) {
+    fn insert(&mut self, values: &ArrayRef) {
         // step 1: compute hashes for the strings
         let batch_hashes = &mut self.hashes_buffer;
         batch_hashes.clear();
@@ -336,7 +336,8 @@ mod tests {
     fn string_set_empty() {
         for values in [StringArray::new_null(0), StringArray::new_null(11)] {
             let mut set = SSOStringHashSet::<i32>::new();
-            set.insert(Arc::new(values.clone()));
+            let array: ArrayRef = Arc::new(values);
+            set.insert(&array);
             assert_set(set, &[]);
         }
     }
@@ -373,7 +374,8 @@ mod tests {
         ]);
 
         let mut set = SSOStringHashSet::<O>::new();
-        set.insert(Arc::new(values));
+        let array: ArrayRef = Arc::new(values);
+        set.insert(&array);
         assert_set(
             set,
             &[
@@ -409,7 +411,8 @@ mod tests {
         ]);
 
         let mut set = SSOStringHashSet::<O>::new();
-        set.insert(Arc::new(values));
+        let array: ArrayRef = Arc::new(values);
+        set.insert(&array);
         assert_set(
             set,
             &[
@@ -465,7 +468,7 @@ mod tests {
         let mut set = SSOStringHashSet::<i32>::new();
         let size_empty = set.size();
 
-        set.insert(values1.clone());
+        set.insert(&values1);
         let size_after_values1 = set.size();
         assert!(size_empty < size_after_values1);
         assert!(
@@ -475,11 +478,11 @@ mod tests {
         assert!(size_after_values1 < total_strings1_len + total_strings2_len);
 
         // inserting the same strings should not affect the size
-        set.insert(values1.clone());
+        set.insert(&values1);
         assert_eq!(set.size(), size_after_values1);
 
         // inserting the large strings should increase the reported size
-        set.insert(values2);
+        set.insert(&values2);
         let size_after_values2 = set.size();
         assert!(size_after_values2 > size_after_values1);
         assert!(size_after_values2 > total_strings1_len + total_strings2_len);
