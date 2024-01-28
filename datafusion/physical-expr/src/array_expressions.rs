@@ -2802,6 +2802,16 @@ where
         MutableArrayData::with_capacities(vec![&original_data], false, capacity);
 
     for (row_index, offset_window) in array.offsets().windows(2).enumerate() {
+        // skip the null value
+        if array.is_null(row_index) {
+            nulls.push(false);
+            offsets.push(offsets[row_index] + O::one());
+            mutable.extend(0, 0, 1);
+            continue;
+        } else {
+            nulls.push(true);
+        }
+
         let start = offset_window[0];
         let end = offset_window[1];
 
@@ -2816,12 +2826,6 @@ where
             cnt += 1;
         }
         offsets.push(offsets[row_index] + O::usize_as(cnt));
-
-        if array.is_null(row_index) {
-            nulls.push(false);
-        } else {
-            nulls.push(true);
-        }
     }
 
     let data = mutable.freeze();
