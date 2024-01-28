@@ -2775,11 +2775,11 @@ pub fn array_reverse(arg: &[ArrayRef]) -> Result<ArrayRef> {
     match &arg[0].data_type() {
         DataType::List(field) => {
             let array = as_list_array(&arg[0])?;
-            general_array_reverse::<i32>(array, &field)
+            general_array_reverse::<i32>(array, field)
         }
         DataType::LargeList(field) => {
             let array = as_large_list_array(&arg[0])?;
-            general_array_reverse::<i64>(array, &field)
+            general_array_reverse::<i64>(array, field)
         }
         DataType::Null => Ok(arg[0].clone()),
         array_type => exec_err!("array_reverse does not support type '{array_type:?}'."),
@@ -2817,7 +2817,7 @@ where
 
         let mut index = end - O::one();
         let mut cnt = 0;
-        let stride: O = (-1 as i64).try_into().map_err(|_| {
+        let stride: O = (-1_i64).try_into().map_err(|_| {
             internal_datafusion_err!("array_reverse: failed to convert size to i64")
         })?;
         while index >= start {
