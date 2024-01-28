@@ -73,10 +73,6 @@ impl TestContext {
 
         let file_name = relative_path.file_name().unwrap().to_str().unwrap();
         match file_name {
-            "scalar.slt" => {
-                info!("Registering scalar tables");
-                register_scalar_tables(test_ctx.session_ctx()).await;
-            }
             "information_schema_table_types.slt" => {
                 info!("Registering local temporary table");
                 register_temp_table(test_ctx.session_ctx()).await;
@@ -168,27 +164,6 @@ pub async fn register_avro_tables(ctx: &mut crate::TestContext) {
         )
         .await
         .unwrap();
-}
-
-pub async fn register_scalar_tables(ctx: &SessionContext) {
-    register_nan_table(ctx)
-}
-
-/// Register a table with a NaN value (different than NULL, and can
-/// not be created via SQL)
-fn register_nan_table(ctx: &SessionContext) {
-    let schema = Arc::new(Schema::new(vec![Field::new("c1", DataType::Float64, true)]));
-
-    let data = RecordBatch::try_new(
-        schema,
-        vec![Arc::new(Float64Array::from(vec![
-            Some(1.0),
-            None,
-            Some(f64::NAN),
-        ]))],
-    )
-    .unwrap();
-    ctx.register_batch("test_float", data).unwrap();
 }
 
 /// Generate a partitioned CSV file and register it with an execution context

@@ -58,6 +58,7 @@ use crate::physical_plan::joins::{
 use crate::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use crate::physical_plan::memory::MemoryExec;
 use crate::physical_plan::projection::ProjectionExec;
+use crate::physical_plan::recursive_query::RecursiveQueryExec;
 use crate::physical_plan::repartition::RepartitionExec;
 use crate::physical_plan::sorts::sort::SortExec;
 use crate::physical_plan::union::UnionExec;
@@ -894,7 +895,7 @@ impl DefaultPhysicalPlanner {
                     let filter = FilterExec::try_new(runtime_expr, physical_input)?;
                     Ok(Arc::new(filter.with_default_selectivity(selectivity)?))
                 }
-                LogicalPlan::Union(Union { inputs, .. }) => {
+                LogicalPlan::Union(Union { inputs, schema: _ }) => {
                     let physical_plans = self.create_initial_plan_multi(inputs.iter().map(|lp| lp.as_ref()), session_state).await?;
 
                     Ok(Arc::new(UnionExec::new(physical_plans)))
@@ -1288,8 +1289,10 @@ impl DefaultPhysicalPlanner {
                         Ok(plan)
                     }
                 }
-                LogicalPlan::RecursiveQuery(RecursiveQuery { name: _, static_term: _, recursive_term: _, is_distinct: _,.. }) => {
-                    not_impl_err!("Physical counterpart of RecursiveQuery is not implemented yet")
+                LogicalPlan::RecursiveQuery(RecursiveQuery { name, static_term, recursive_term, is_distinct,.. }) => {
+                    let static_term = self.create_initial_plan(static_term, session_state).await?;
+                    let recursive_term = self.create_initial_plan(recursive_term, session_state).await?;
+                    Ok(Arc::new(RecursiveQueryExec::try_new(name.clone(), static_term, recursive_term, *is_distinct)?))
                 }
             };
             exec_plan

@@ -21,6 +21,7 @@ use std::sync::Arc;
 
 use crate::datasource::listing::PartitionedFile;
 use crate::datasource::physical_plan::{FileScanConfig, ParquetExec};
+use crate::datasource::stream::{StreamConfig, StreamTable};
 use crate::error::Result;
 use crate::physical_plan::aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy};
 use crate::physical_plan::coalesce_batches::CoalesceBatchesExec;
@@ -39,13 +40,15 @@ use crate::physical_plan::{ExecutionPlan, InputOrderMode, Partitioning};
 use crate::prelude::{CsvReadOptions, SessionContext};
 
 use arrow_schema::{Schema, SchemaRef, SortOptions};
+use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{JoinType, Statistics};
 use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_expr::{AggregateFunction, WindowFrame, WindowFunctionDefinition};
 use datafusion_physical_expr::expressions::col;
 use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
+use datafusion_physical_plan::displayable;
+use datafusion_physical_plan::tree_node::PlanContext;
 
-use crate::datasource::stream::{StreamConfig, StreamTable};
 use async_trait::async_trait;
 
 async fn register_current_csv(
@@ -360,4 +363,26 @@ pub fn sort_exec(
 ) -> Arc<dyn ExecutionPlan> {
     let sort_exprs = sort_exprs.into_iter().collect();
     Arc::new(SortExec::new(sort_exprs, input))
+}
+
+/// A [`PlanContext`] object is susceptible to being left in an inconsistent state after
+/// untested mutable operations. It is crucial that there be no discrepancies between a plan
+/// associated with the root node and the plan generated after traversing all nodes
+/// within the [`PlanContext`] tree. In addition to verifying the plans resulting from optimizer
+/// rules, it is essential to ensure that the overall tree structure corresponds with the plans
+/// contained within the node contexts.
+/// TODO: Once [`ExecutionPlan`] implements [`PartialEq`], string comparisons should be
+/// replaced with direct plan equality checks.
+pub fn check_integrity<T: Clone>(context: PlanContext<T>) -> Result<PlanContext<T>> {
+    context.transform_up(&|node| {
+        let children_plans = node.plan.children();
+        assert_eq!(node.children.len(), children_plans.len());
+        for (child_plan, child_node) in children_plans.iter().zip(node.children.iter()) {
+            assert_eq!(
+                displayable(child_plan.as_ref()).one_line().to_string(),
+                displayable(child_node.plan.as_ref()).one_line().to_string()
+            );
+        }
+        Ok(Transformed::No(node))
+    })
 }

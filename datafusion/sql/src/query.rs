@@ -54,7 +54,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let set_expr = query.body;
         if let Some(with) = query.with {
             // Process CTEs from top to bottom
-
             let is_recursive = with.recursive;
 
             for cte in with.cte_tables {

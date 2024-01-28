@@ -70,6 +70,7 @@ pub struct PrintOptions {
     pub format: PrintFormat,
     pub quiet: bool,
     pub maxrows: MaxRows,
+    pub color: bool,
 }
 
 fn get_timing_info_str(
