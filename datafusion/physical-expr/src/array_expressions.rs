@@ -2817,12 +2817,10 @@ where
 
         let mut index = end - O::one();
         let mut cnt = 0;
-        let stride: O = (-1_i64).try_into().map_err(|_| {
-            internal_datafusion_err!("array_reverse: failed to convert size to i64")
-        })?;
+
         while index >= start {
             mutable.extend(0, index.to_usize().unwrap(), index.to_usize().unwrap() + 1);
-            index += stride;
+            index = index - O::one();
             cnt += 1;
         }
         offsets.push(offsets[row_index] + O::usize_as(cnt));
