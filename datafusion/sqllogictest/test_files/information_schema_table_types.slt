@@ -36,6 +36,7 @@ SELECT * from information_schema.tables;
 ----
 datafusion information_schema columns VIEW
 datafusion information_schema df_settings VIEW
+datafusion information_schema schemata VIEW
 datafusion information_schema tables VIEW
 datafusion information_schema views VIEW
 datafusion public physical BASE TABLE
