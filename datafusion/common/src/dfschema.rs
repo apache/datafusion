@@ -220,11 +220,8 @@ impl DFSchema {
         }
 
         let self_fields: HashSet<&DFField> = self.fields.iter().collect();
-        let self_unqualified_names: HashSet<&str> = self
-            .fields
-            .iter()
-            .map(|x| x.name().as_str())
-            .collect();
+        let self_unqualified_names: HashSet<&str> =
+            self.fields.iter().map(|x| x.name().as_str()).collect();
 
         let mut fields_to_add = vec![];
 
