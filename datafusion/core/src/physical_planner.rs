@@ -1111,6 +1111,7 @@ impl DefaultPhysicalPlanner {
                     };
 
                     let prefer_hash_join = session_state.config_options().optimizer.prefer_hash_join;
+
                     if join_on.is_empty() {
                         // there is no equal join condition, use the nested loop join
                         // TODO optimize the plan, and use the config of `target_partitions` and `repartition_joins`
@@ -1126,20 +1127,17 @@ impl DefaultPhysicalPlanner {
                     {
                         // Use SortMergeJoin if hash join is not preferred
                         // Sort-Merge join support currently is experimental
-                        if join_filter.is_some() {
-                            // TODO SortMergeJoinExec need to support join filter
-                            not_impl_err!("SortMergeJoinExec does not support join_filter now.")
-                        } else {
-                            let join_on_len = join_on.len();
-                            Ok(Arc::new(SortMergeJoinExec::try_new(
-                                physical_left,
-                                physical_right,
-                                join_on,
-                                *join_type,
-                                vec![SortOptions::default(); join_on_len],
-                                null_equals_null,
-                            )?))
-                        }
+
+                        let join_on_len = join_on.len();
+                        Ok(Arc::new(SortMergeJoinExec::try_new(
+                            physical_left,
+                            physical_right,
+                            join_on,
+                            join_filter,
+                            *join_type,
+                            vec![SortOptions::default(); join_on_len],
+                            null_equals_null,
+                        )?))
                     } else if session_state.config().target_partitions() > 1
                         && session_state.config().repartition_joins()
                         && prefer_hash_join {

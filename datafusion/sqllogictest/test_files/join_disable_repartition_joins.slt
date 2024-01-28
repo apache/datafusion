@@ -57,12 +57,18 @@ Limit: skip=0, fetch=5
 physical_plan
 GlobalLimitExec: skip=0, fetch=5
 --SortPreservingMergeExec: [a@0 ASC NULLS LAST], fetch=5
-----ProjectionExec: expr=[a@1 as a]
-------CoalesceBatchesExec: target_batch_size=8192
---------HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(c@0, c@1)]
-----------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[c], has_header=true
-----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, c], output_ordering=[a@0 ASC NULLS LAST], has_header=true
+----SortExec: TopK(fetch=5), expr=[a@0 ASC NULLS LAST]
+------ProjectionExec: expr=[a@1 as a]
+--------CoalesceBatchesExec: target_batch_size=8192
+----------HashJoinExec: mode=Partitioned, join_type=Inner, on=[(c@0, c@1)]
+------------CoalesceBatchesExec: target_batch_size=8192
+--------------RepartitionExec: partitioning=Hash([c@0], 4), input_partitions=4
+----------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[c], has_header=true
+------------CoalesceBatchesExec: target_batch_size=8192
+--------------RepartitionExec: partitioning=Hash([c@1], 4), input_partitions=4
+----------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, c], output_ordering=[a@0 ASC NULLS LAST], has_header=true
 
 # preserve_inner_join
 query IIII nosort
@@ -72,11 +78,11 @@ SELECT t1.a, t1.b, t1.c, t2.a as a2
  ON t1.d = t2.d ORDER BY a2, t2.b
  LIMIT 5
 ----
-0 0 0 0
-0 0 2 0
-0 0 3 0
-0 0 6 0
-0 0 20 0
+0 0 7 0
+0 0 11 0
+0 0 12 0
+0 0 14 0
+0 0 1 0
 
 query TT
 EXPLAIN SELECT t2.a as a2, t2.b
@@ -100,14 +106,20 @@ Limit: skip=0, fetch=10
 physical_plan
 GlobalLimitExec: skip=0, fetch=10
 --SortPreservingMergeExec: [a2@0 ASC NULLS LAST,b@1 ASC NULLS LAST], fetch=10
-----ProjectionExec: expr=[a@0 as a2, b@1 as b]
-------CoalesceBatchesExec: target_batch_size=8192
---------HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(d@1, d@3), (c@0, c@2)]
-----------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[c, d], has_header=true
-----------CoalesceBatchesExec: target_batch_size=8192
-------------FilterExec: d@3 = 3
---------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-----------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b, c, d], output_ordering=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST, c@2 ASC NULLS LAST], has_header=true
+----SortExec: TopK(fetch=10), expr=[a2@0 ASC NULLS LAST,b@1 ASC NULLS LAST]
+------ProjectionExec: expr=[a@0 as a2, b@1 as b]
+--------CoalesceBatchesExec: target_batch_size=8192
+----------HashJoinExec: mode=Partitioned, join_type=RightSemi, on=[(d@1, d@3), (c@0, c@2)]
+------------CoalesceBatchesExec: target_batch_size=8192
+--------------RepartitionExec: partitioning=Hash([d@1, c@0], 4), input_partitions=4
+----------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[c, d], has_header=true
+------------CoalesceBatchesExec: target_batch_size=8192
+--------------RepartitionExec: partitioning=Hash([d@3, c@2], 4), input_partitions=4
+----------------CoalesceBatchesExec: target_batch_size=8192
+------------------FilterExec: d@3 = 3
+--------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+----------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b, c, d], output_ordering=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST, c@2 ASC NULLS LAST], has_header=true
 
 # preserve_right_semi_join
 query II nosort
