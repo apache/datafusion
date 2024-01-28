@@ -31,15 +31,27 @@ use crate::protobuf::{
 #[cfg(feature = "parquet")]
 use datafusion::datasource::file_format::parquet::ParquetSink;
 
+use crate::logical_plan::csv_writer_options_to_proto;
 #[cfg(feature = "parquet")]
 use crate::logical_plan::writer_properties_to_proto;
-use crate::logical_plan::csv_writer_options_to_proto;
 use datafusion::datasource::{
     file_format::csv::CsvSink,
     file_format::json::JsonSink,
     listing::{FileRange, PartitionedFile},
     physical_plan::FileScanConfig,
     physical_plan::FileSinkConfig,
+};
+#[cfg(feature = "parquet")]
+use datafusion_common::file_options::parquet_writer::ParquetWriterOptions;
+use datafusion_common::{
+    file_options::{
+        arrow_writer::ArrowWriterOptions, avro_writer::AvroWriterOptions,
+        csv_writer::CsvWriterOptions, json_writer::JsonWriterOptions,
+    },
+    internal_err, not_impl_err,
+    parsers::CompressionTypeVariant,
+    stats::Precision,
+    DataFusionError, FileTypeWriterOptions, JoinSide, Result,
 };
 use datafusion_expr::BuiltinScalarFunction;
 use datafusion_physical_expr::expressions::{GetFieldAccessExpr, GetIndexedFieldExpr};
@@ -59,18 +71,6 @@ use datafusion_physical_plan::udaf::AggregateFunctionExpr;
 use datafusion_physical_plan::windows::{BuiltInWindowExpr, PlainAggregateWindowExpr};
 use datafusion_physical_plan::{
     AggregateExpr, ColumnStatistics, PhysicalExpr, Statistics, WindowExpr,
-};
-#[cfg(feature = "parquet")]
-use datafusion_common::file_options::parquet_writer::ParquetWriterOptions;
-use datafusion_common::{
-    file_options::{
-        arrow_writer::ArrowWriterOptions, avro_writer::AvroWriterOptions,
-        csv_writer::CsvWriterOptions, json_writer::JsonWriterOptions,
-    },
-    internal_err, not_impl_err,
-    parsers::CompressionTypeVariant,
-    stats::Precision,
-    DataFusionError, FileTypeWriterOptions, JoinSide, Result,
 };
 
 impl TryFrom<Arc<dyn AggregateExpr>> for protobuf::PhysicalExprNode {

@@ -29,6 +29,7 @@ use datafusion::datasource::file_format::parquet::ParquetSink;
 #[cfg(feature = "parquet")]
 use datafusion::datasource::physical_plan::ParquetExec;
 use datafusion::datasource::physical_plan::{AvroExec, CsvExec};
+use datafusion_common::{internal_err, not_impl_err, DataFusionError, Result};
 use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_execution::FunctionRegistry;
 use datafusion_physical_plan::aggregates::{create_aggregate_expr, AggregateMode};
@@ -58,7 +59,6 @@ use datafusion_physical_plan::{
     udaf, AggregateExpr, ExecutionPlan, InputOrderMode, Partitioning, PhysicalExpr,
     WindowExpr,
 };
-use datafusion_common::{internal_err, not_impl_err, DataFusionError, Result};
 use prost::bytes::BufMut;
 use prost::Message;
 
