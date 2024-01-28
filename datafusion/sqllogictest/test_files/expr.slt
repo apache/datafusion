@@ -1693,6 +1693,7 @@ NULL
 671
 203
 
+# nested_subquery()
 statement ok
 CREATE TABLE test_t1 (
     id INT,
@@ -1705,11 +1706,16 @@ CREATE TABLE test_t2 (
     a INT
 )
 
+#  the purpose of this test is just to make sure the query produces a valid plan
 query I
 SELECT COUNT(*) as cnt FROM ((SELECT id FROM test_t1) EXCEPT (SELECT id FROM test_t2)) foo;
 ----
 0
 
+
+# comparisons_with_null_lt
+
+# 1. Numeric comparison with NULL
 query B
 select column1 < NULL from (VALUES (1, 'foo' ,2.3), (2, 'bar', 5.4)) as t;
 ----
@@ -1746,12 +1752,14 @@ select column1 != NULL from (VALUES (1, 'foo' ,2.3), (2, 'bar', 5.4)) as t;
 NULL
 NULL
 
+# 1.1 Float value comparison with NULL
 query B
 select column3 < NULL from (VALUES (1, 'foo' ,2.3), (2, 'bar', 5.4)) as t;
 ----
 NULL
 NULL
 
+# 1.1 String comparison with NULL
 query B
 select column2 < NULL from (VALUES (1, 'foo' ,2.3), (2, 'bar', 5.4)) as t;
 ----
