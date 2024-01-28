@@ -1249,3 +1249,754 @@ query B
 SELECT '2' NOT IN ('a','b',NULL,1)
 ----
 NULL
+
+query T
+SELECT encode('tom','base64');
+----
+dG9t
+
+query T
+SELECT arrow_cast(decode('dG9t','base64'), 'Utf8');
+----
+tom
+
+query T
+SELECT encode('tom','hex');
+----
+746f6d
+
+query T
+SELECT arrow_cast(decode('746f6d','hex'), 'Utf8');
+----
+tom
+
+query T
+SELECT encode(arrow_cast('tom', 'LargeUtf8'),'base64');
+----
+dG9t
+
+query T
+SELECT arrow_cast(decode(arrow_cast('dG9t', 'LargeUtf8'),'base64'), 'Utf8');
+----
+tom
+
+query T
+SELECT encode(arrow_cast('tom', 'LargeUtf8'),'hex');
+----
+746f6d
+
+query T
+SELECT arrow_cast(decode(arrow_cast('746f6d', 'LargeUtf8'),'hex'), 'Utf8');
+----
+tom
+
+query T
+SELECT encode(arrow_cast('tom', 'Binary'),'base64');
+----
+dG9t
+
+query T
+SELECT arrow_cast(decode(arrow_cast('dG9t', 'Binary'),'base64'), 'Utf8');
+----
+tom
+
+query T
+SELECT encode(arrow_cast('tom', 'Binary'),'hex');
+----
+746f6d
+
+query T
+SELECT arrow_cast(decode(arrow_cast('746f6d', 'Binary'),'hex'), 'Utf8');
+----
+tom
+
+query T
+SELECT encode(arrow_cast('tom', 'LargeBinary'),'base64');
+----
+dG9t
+
+query T
+SELECT arrow_cast(decode(arrow_cast('dG9t', 'LargeBinary'),'base64'), 'Utf8');
+----
+tom
+
+query T
+SELECT encode(arrow_cast('tom', 'LargeBinary'),'hex');
+----
+746f6d
+
+query T
+SELECT arrow_cast(decode(arrow_cast('746f6d', 'LargeBinary'),'hex'), 'Utf8');
+----
+tom
+
+query ?
+SELECT encode(NULL,'base64');
+----
+NULL
+
+query ?
+SELECT decode(NULL,'base64');
+----
+NULL
+
+query ?
+SELECT encode(NULL,'hex');
+----
+NULL
+
+query ?
+SELECT decode(NULL,'hex');
+----
+NULL
+
+query T
+SELECT encode('','base64');
+----
+(empty)
+
+query ?
+SELECT decode('','base64');
+----
+    
+
+query T
+SELECT encode('','hex');
+----
+(empty)
+
+query ?
+SELECT decode('','hex');
+----
+    
+
+query T
+SELECT md5('tom');
+----
+34b7da764b21d298ef307d04d8152dc5
+
+query ?
+SELECT digest('tom','md5');
+----
+34b7da764b21d298ef307d04d8152dc5
+
+query T
+SELECT md5('');
+----
+d41d8cd98f00b204e9800998ecf8427e
+
+query ?
+SELECT md5(NULL);
+----
+NULL
+
+query ?
+SELECT digest('','md5');
+----
+d41d8cd98f00b204e9800998ecf8427e
+
+query ?
+SELECT digest(NULL,'md5');
+----
+NULL
+
+query ?
+SELECT sha224('tom');
+----
+0bf6cb62649c42a9ae3876ab6f6d92ad36cb5414e495f8873292be4d
+
+query ?
+SELECT digest('tom','sha224')
+----
+0bf6cb62649c42a9ae3876ab6f6d92ad36cb5414e495f8873292be4d
+
+query ?
+SELECT sha224('');
+----
+d14a028c2a3a2bc9476102bb288234c415a2b01f828ea62ac5b3e42f
+
+query ?
+SELECT digest('','sha224');
+----
+d14a028c2a3a2bc9476102bb288234c415a2b01f828ea62ac5b3e42f
+
+query ?
+SELECT sha224(NULL);
+----
+NULL
+
+query ?
+SELECT digest(NULL,'sha224');
+----
+NULL
+
+query ?
+SELECT sha256('tom');
+----
+e1608f75c5d7813f3d4031cb30bfb786507d98137538ff8e128a6ff74e84e643
+
+query ?
+SELECT digest('tom','sha256');
+----
+e1608f75c5d7813f3d4031cb30bfb786507d98137538ff8e128a6ff74e84e643
+
+query ?
+SELECT sha256('');
+----
+e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+
+query ?
+SELECT digest('','sha256');
+----
+e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+
+query ?
+SELECT sha256(NULL);
+----
+NULL
+
+query ?
+SELECT digest(NULL,'sha256');
+----
+NULL
+
+query ?
+SELECT sha384('tom');
+----
+096f5b68aa77848e4fdf5c1c0b350de2dbfad60ffd7c25d9ea07c6c19b8a4d55a9187eb117c557883f58c16dfac3e343
+
+query ?
+SELECT digest('tom','sha384');
+----
+096f5b68aa77848e4fdf5c1c0b350de2dbfad60ffd7c25d9ea07c6c19b8a4d55a9187eb117c557883f58c16dfac3e343
+
+query ?
+SELECT sha384('');
+----
+38b060a751ac96384cd9327eb1b1e36a21fdb71114be07434c0cc7bf63f6e1da274edebfe76f65fbd51ad2f14898b95b
+
+query ?
+SELECT digest('','sha384');
+----
+38b060a751ac96384cd9327eb1b1e36a21fdb71114be07434c0cc7bf63f6e1da274edebfe76f65fbd51ad2f14898b95b
+
+query ?
+SELECT sha384(NULL);
+----
+NULL
+
+query ?
+SELECT digest(NULL,'sha384');
+----
+NULL
+
+query ?
+SELECT sha512('tom');
+----
+6e1b9b3fe840680e37051f7ad5e959d6f39ad0f8885d855166f55c659469d3c8b78118c44a2a49c72ddb481cd6d8731034e11cc030070ba843a90b3495cb8d3e
+
+query ?
+SELECT digest('tom','sha512');
+----
+6e1b9b3fe840680e37051f7ad5e959d6f39ad0f8885d855166f55c659469d3c8b78118c44a2a49c72ddb481cd6d8731034e11cc030070ba843a90b3495cb8d3e
+
+query ?
+SELECT sha512('');
+----
+cf83e1357eefb8bdf1542850d66d8007d620e4050b5715dc83f4a921d36ce9ce47d0d13c5d85f2b0ff8318d2877eec2f63b931bd47417a81a538327af927da3e
+
+query ?
+SELECT digest('','sha512');
+----
+cf83e1357eefb8bdf1542850d66d8007d620e4050b5715dc83f4a921d36ce9ce47d0d13c5d85f2b0ff8318d2877eec2f63b931bd47417a81a538327af927da3e
+
+query ?
+SELECT sha512(NULL);
+----
+NULL
+
+query ?
+SELECT digest(NULL,'sha512');
+----
+NULL
+
+query ?
+SELECT digest(NULL,'blake2s');
+----
+NULL
+
+query ?
+SELECT digest(NULL,'blake2b');
+----
+NULL
+
+query ?
+SELECT digest('','blake2b');
+----
+786a02f742015903c6c6fd852552d272912f4740e15847618a86e217f71f5419d25e1031afee585313896444934eb04b903a685b1448b755d56f701afe9be2ce
+
+query ?
+SELECT digest('tom','blake2b');
+----
+482499a18da10a18d8d35ab5eb4c635551ec5b8d3ff37c3e87a632caf6680fe31566417834b4732e26e0203d1cad4f5366cb7ab57d89694e4c1fda3e26af2c23
+
+query ?
+SELECT digest('','blake2s');
+----
+69217a3079908094e11121d042354a7c1f55b6482ca1a51e1b250dfd1ed0eef9
+
+query ?
+SELECT digest('tom','blake2s');
+----
+5fc3f2b3a07cade5023c3df566e4d697d3823ba1b72bfb3e84cf7e768b2e7529
+
+query ?
+SELECT digest('','blake3');
+----
+af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262
+
+query T
+SELECT substring('alphabet' from 2 for 1);
+----
+l
+
+query T
+SELECT substring('alphabet' from 8);
+----
+t
+
+query T
+SELECT substring('alphabet' for 1);
+----
+a
+
+query T
+SELECT regexp_replace('ABCabcABC', '(abc)', 'X', 'gi');
+----
+XXX
+
+query T
+SELECT regexp_replace('ABCabcABC', '(abc)', 'X', 'i');
+----
+XabcABC
+
+query T
+SELECT regexp_replace('foobarbaz', 'b..', 'X', 'g');
+----
+fooXX
+
+query T
+SELECT regexp_replace('foobarbaz', 'b..', 'X');
+----
+fooXbaz
+
+query T
+SELECT regexp_replace('foobarbaz', 'b(..)', 'X\\1Y', 'g');
+----
+fooXarYXazY
+
+query T
+SELECT regexp_replace('foobarbaz', 'b(..)', 'X\\1Y', NULL);
+----
+NULL
+
+query T
+SELECT regexp_replace('foobarbaz', 'b(..)', NULL, 'g');
+----
+NULL
+
+query T
+SELECT regexp_replace('foobarbaz', NULL, 'X\\1Y', 'g');
+----
+NULL
+
+query T
+SELECT regexp_replace('Thomas', '.[mN]a.', 'M');
+----
+ThM
+
+query ?
+SELECT regexp_replace(NULL, 'b(..)', 'X\\1Y', 'g');
+----
+NULL
+
+query ?
+SELECT regexp_match('foobarbequebaz', '');
+----
+[]
+
+query ?
+SELECT regexp_match('foobarbequebaz', '(bar)(beque)');
+----
+[bar, beque]
+
+query ?
+SELECT regexp_match('foobarbequebaz', '(ba3r)(bequ34e)');
+----
+NULL
+
+query ?
+SELECT regexp_match('aaa-0', '.*-(\d)');
+----
+[0]
+
+query ?
+SELECT regexp_match('bb-1', '.*-(\d)');
+----
+[1]
+
+query ?
+SELECT regexp_match('aa', '.*-(\d)');
+----
+NULL
+
+query ?
+SELECT regexp_match(NULL, '.*-(\d)');
+----
+NULL
+
+query ?
+SELECT regexp_match('aaa-0', NULL);
+----
+NULL
+
+##### csv_query_nullif_divide_by_0
+
+
+statement ok
+CREATE EXTERNAL TABLE aggregate_test_100_by_sql (
+  c1  VARCHAR NOT NULL,
+  c2  TINYINT NOT NULL,
+  c3  SMALLINT NOT NULL,
+  c4  SMALLINT,
+  c5  INT,
+  c6  BIGINT NOT NULL,
+  c7  SMALLINT NOT NULL,
+  c8  INT NOT NULL,
+  c9  BIGINT UNSIGNED NOT NULL,
+  c10 VARCHAR NOT NULL,
+  c11 FLOAT NOT NULL,
+  c12 DOUBLE NOT NULL,
+  c13 VARCHAR NOT NULL
+)
+STORED AS CSV
+WITH HEADER ROW
+LOCATION '../../testing/data/csv/aggregate_test_100.csv'
+
+
+
+query I
+SELECT c8/nullif(c7, 0) FROM aggregate_test_100_by_sql LIMIT 9 OFFSET 81;
+----
+664
+NULL
+22
+164
+448
+365
+1640
+671
+203
+
+#### nested_subquery()
+statement ok
+CREATE TABLE test_t1 (
+    id INT,
+    a INT
+)
+
+statement ok
+CREATE TABLE test_t2 (
+    id INT,
+    a INT
+)
+
+# the purpose of this test is just to make sure the query produces a valid plan
+query I
+SELECT COUNT(*) as cnt FROM ((SELECT id FROM test_t1) EXCEPT (SELECT id FROM test_t2)) foo;
+----
+0
+
+
+#### comparisons_with_null_lt
+
+# 1. Numeric comparison with NULL
+query B
+select column1 < NULL from (VALUES (1, 'foo' ,2.3), (2, 'bar', 5.4)) as t;
+----
+NULL
+NULL
+
+query B
+select column1 <= NULL from (VALUES (1, 'foo' ,2.3), (2, 'bar', 5.4)) as t;
+----
+NULL
+NULL
+
+query B
+select column1 > NULL from (VALUES (1, 'foo' ,2.3), (2, 'bar', 5.4)) as t;
+----
+NULL
+NULL
+
+query B
+select column1 >= NULL from (VALUES (1, 'foo' ,2.3), (2, 'bar', 5.4)) as t;
+----
+NULL
+NULL
+
+query B
+select column1 = NULL from (VALUES (1, 'foo' ,2.3), (2, 'bar', 5.4)) as t;
+----
+NULL
+NULL
+
+query B
+select column1 != NULL from (VALUES (1, 'foo' ,2.3), (2, 'bar', 5.4)) as t;
+----
+NULL
+NULL
+
+# 1.1 Float value comparison with NULL
+query B
+select column3 < NULL from (VALUES (1, 'foo' ,2.3), (2, 'bar', 5.4)) as t;
+----
+NULL
+NULL
+
+# 1.1 String comparison with NULL
+query B
+select column2 < NULL from (VALUES (1, 'foo' ,2.3), (2, 'bar', 5.4)) as t;
+----
+NULL
+NULL
+
+#####
+# same queries, reversed argument order (as they go through
+# a different evaluation path)
+#####
+
+# Boolean comparison with NULL
+query B
+select column1 < NULL from (VALUES (true), (false)) as t;
+----
+NULL
+NULL
+
+query B
+select NULL < column1  from (VALUES (1, 'foo' ,2.3), (2, 'bar', 5.4)) as t;
+----
+NULL
+NULL
+
+query B
+select NULL <= column1 from (VALUES (1, 'foo' ,2.3), (2, 'bar', 5.4)) as t;
+----
+NULL
+NULL
+
+query B
+select NULL > column1 from (VALUES (1, 'foo' ,2.3), (2, 'bar', 5.4)) as t;
+----
+NULL
+NULL
+
+query B
+select NULL >= column1 from (VALUES (1, 'foo' ,2.3), (2, 'bar', 5.4)) as t;
+----
+NULL
+NULL
+
+query B
+select NULL = column1 from (VALUES (1, 'foo' ,2.3), (2, 'bar', 5.4)) as t;
+----
+NULL
+NULL
+
+query B
+select NULL != column1 from (VALUES (1, 'foo' ,2.3), (2, 'bar', 5.4)) as t;
+----
+NULL
+NULL
+
+# 1.1 Float value comparison with NULL
+query B
+select NULL < column3 from (VALUES (1, 'foo' ,2.3), (2, 'bar', 5.4)) as t;
+----
+NULL
+NULL
+
+# String comparison with NULL
+query B
+select NULL < column2 from (VALUES (1, 'foo' ,2.3), (2, 'bar', 5.4)) as t;
+----
+NULL
+NULL
+
+# Boolean comparison with NULL
+query B
+select NULL < column1 from (VALUES (true), (false)) as t;
+----
+NULL
+NULL
+
+#### binary_mathematical_operator_with_null_lt
+
+# 1. Integer and NULL
+query I
+select column1 + NULL from (VALUES (1, 2.3), (2, 5.4)) as t;
+----
+NULL
+NULL
+
+query I
+select column1 - NULL from (VALUES (1, 2.3), (2, 5.4)) as t;
+----
+NULL
+NULL
+
+query I
+select column1 / NULL from (VALUES (1, 2.3), (2, 5.4)) as t;
+----
+NULL
+NULL
+
+query I
+select column1 % NULL from (VALUES (1, 2.3), (2, 5.4)) as t;
+----
+NULL
+NULL
+
+# 2. Float and NULL
+query R
+select column2 + NULL from (VALUES (1, 2.3), (2, 5.4)) as t;
+----
+NULL
+NULL
+
+query R
+select column2 - NULL from (VALUES (1, 2.3), (2, 5.4)) as t;
+----
+NULL
+NULL
+
+query R
+select column2 * NULL from (VALUES (1, 2.3), (2, 5.4)) as t;
+----
+NULL
+NULL
+
+query R
+select column2 / NULL from (VALUES (1, 2.3), (2, 5.4)) as t;
+----
+NULL
+NULL
+
+query R
+select column2 % NULL from (VALUES (1, 2.3), (2, 5.4)) as t;
+----
+NULL
+NULL
+
+#####
+# same queries, reversed argument order (as they go through
+# a different evaluation path)
+#####
+
+# 3. NULL and Integer
+query I
+select NULL + column1 from (VALUES (1, 2.3), (2, 5.4)) as t;
+----
+NULL
+NULL
+
+query I
+select NULL - column1 from (VALUES (1, 2.3), (2, 5.4)) as t;
+----
+NULL
+NULL
+
+query I
+select NULL * column1 from (VALUES (1, 2.3), (2, 5.4)) as t;
+----
+NULL
+NULL
+
+query I
+select NULL / column1 from (VALUES (1, 2.3), (2, 5.4)) as t;
+----
+NULL
+NULL
+
+query I
+select NULL % column1 from (VALUES (1, 2.3), (2, 5.4)) as t;
+----
+NULL
+NULL
+
+# 4. NULL and Float
+
+query R
+select NULL + column2 from (VALUES (1, 2.3), (2, 5.4)) as t;
+----
+NULL
+NULL
+
+query R
+select NULL - column2 from (VALUES (1, 2.3), (2, 5.4)) as t;
+----
+NULL
+NULL
+
+query R
+select NULL * column2 from (VALUES (1, 2.3), (2, 5.4)) as t;
+----
+NULL
+NULL
+
+query R
+select NULL / column2 from (VALUES (1, 2.3), (2, 5.4)) as t;
+----
+NULL
+NULL
+
+query R
+select NULL % column2 from (VALUES (1, 2.3), (2, 5.4)) as t;
+----
+NULL
+NULL
+
+
+# query_binary_eq
+
+statement ok
+CREATE TABLE t_source(
+    column1 String,
+    column2 String,
+    column3 String,
+    column4 String,
+) AS VALUES
+('one', 'one', 'one', 'one'),
+('two', 'two', '', 'two'),
+(NULL, NULL, NULL, NULL),
+('', '', '', ''),
+('three', 'three', 'three', '');
+
+
+statement ok
+CREATE TABLE test as
+select
+  arrow_cast(column1, 'Binary') as c1,
+  arrow_cast(column2, 'LargeBinary') as c2,
+  arrow_cast(column3, 'Binary') as c3,
+  arrow_cast(column4, 'LargeBinary') as c4
+from t_source;
+
+query BBBB
+SELECT sha256(c1)=digest('one', 'sha256'), sha256(c2)=sha256('two'), digest(c1, 'blake2b')=digest(c3, 'blake2b'), c2=c4 FROM test;
+----
+true false true true
+false true false true
+NULL NULL NULL NULL
+false false true true
+false false true false
