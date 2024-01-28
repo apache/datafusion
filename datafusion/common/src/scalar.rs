@@ -2364,6 +2364,16 @@ impl ScalarValue {
         ScalarValue::try_from_array(&cast_arr, 0)
     }
 
+    /// Try to cast this value to a ScalarValue of type `data_type`
+    pub fn cast_to(&self, data_type: &DataType) -> Result<Self> {
+        let cast_options = CastOptions {
+            safe: false,
+            format_options: Default::default(),
+        };
+        let cast_arr = cast_with_options(&self.to_array()?, data_type, &cast_options)?;
+        ScalarValue::try_from_array(&cast_arr, 0)
+    }
+
     fn eq_array_decimal(
         array: &ArrayRef,
         index: usize,

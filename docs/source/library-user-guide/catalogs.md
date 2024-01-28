@@ -23,7 +23,7 @@ This section describes how to create and manage catalogs, schemas, and tables in
 
 ## General Concepts
 
-CatalogList, Catalogs, schemas, and tables are organized in a hierarchy. A CatalogList contains catalogs, a catalog contains schemas and a schema contains tables.
+CatalogProviderList, Catalogs, schemas, and tables are organized in a hierarchy. A CatalogProviderList contains catalog providers, a catalog provider contains schemas and a schema contains tables.
 
 DataFusion comes with a basic in memory catalog functionality in the [`catalog` module]. You can use these in memory implementations as is, or extend DataFusion with your own catalog implementations, for example based on local files or files on remote object storage.
 
@@ -31,9 +31,9 @@ DataFusion comes with a basic in memory catalog functionality in the [`catalog` 
 
 Similarly to other concepts in DataFusion, you'll implement various traits to create your own catalogs, schemas, and tables. The following sections describe the traits you'll need to implement.
 
-The `CatalogList` trait has methods to register new catalogs, get a catalog by name and list all catalogs .The `CatalogProvider` trait has methods to set a schema to a name, get a schema by name, and list all schemas. The `SchemaProvider`, which can be registered with a `CatalogProvider`, has methods to set a table to a name, get a table by name, list all tables, deregister a table, and check for a table's existence. The `TableProvider` trait has methods to scan underlying data and use it in DataFusion. The `TableProvider` trait is covered in more detail [here](./custom-table-providers.md).
+The `CatalogProviderList` trait has methods to register new catalogs, get a catalog by name and list all catalogs .The `CatalogProvider` trait has methods to set a schema to a name, get a schema by name, and list all schemas. The `SchemaProvider`, which can be registered with a `CatalogProvider`, has methods to set a table to a name, get a table by name, list all tables, deregister a table, and check for a table's existence. The `TableProvider` trait has methods to scan underlying data and use it in DataFusion. The `TableProvider` trait is covered in more detail [here](./custom-table-providers.md).
 
-In the following example, we'll implement an in memory catalog, starting with the `SchemaProvider` trait as we need one to register with the `CatalogProvider`. Finally we will implement `CatalogList` to register the `CatalogProvider`.
+In the following example, we'll implement an in memory catalog, starting with the `SchemaProvider` trait as we need one to register with the `CatalogProvider`. Finally we will implement `CatalogProviderList` to register the `CatalogProvider`.
 
 ## Implementing `MemorySchemaProvider`
 
@@ -169,19 +169,19 @@ impl CatalogProvider for MemoryCatalogProvider {
 
 Again, this is fairly straightforward, as there's an underlying data structure to store the state, via key-value pairs.
 
-## Implementing `MemoryCatalogList`
+## Implementing `MemoryCatalogProviderList`
 
 ```rust
-pub struct MemoryCatalogList {
+pub struct MemoryCatalogProviderList {
     /// Collection of catalogs containing schemas and ultimately TableProviders
     pub catalogs: DashMap<String, Arc<dyn CatalogProvider>>,
 }
 ```
 
-With that the `CatalogList` trait can be implemented.
+With that the `CatalogProviderList` trait can be implemented.
 
 ```rust
-impl CatalogList for MemoryCatalogList {
+impl CatalogProviderList for MemoryCatalogProviderList {
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -213,4 +213,4 @@ To recap, you need to:
 1. Implement the `TableProvider` trait to create a table provider, or use an existing one.
 2. Implement the `SchemaProvider` trait to create a schema provider, or use an existing one.
 3. Implement the `CatalogProvider` trait to create a catalog provider, or use an existing one.
-4. Implement the `CatalogList` trait to create a CatalogList, or use an existing one.
+4. Implement the `CatalogProviderList` trait to create a CatalogProviderList, or use an existing one.

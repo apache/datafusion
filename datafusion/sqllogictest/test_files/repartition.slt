@@ -71,3 +71,59 @@ AggregateExec: mode=FinalPartitioned, gby=[column1@0 as column1], aggr=[SUM(parq
 # Cleanup
 statement ok
 DROP TABLE parquet_table;
+
+
+
+# Unbounded repartition
+# See https://github.com/apache/arrow-datafusion/issues/5278
+# Set up unbounded table and run a query - the query plan should display a `RepartitionExec`
+# and a `CoalescePartitionsExec`
+statement ok
+CREATE UNBOUNDED EXTERNAL TABLE sink_table (
+        c1  VARCHAR NOT NULL,
+        c2  TINYINT NOT NULL,
+        c3  SMALLINT NOT NULL,
+        c4  SMALLINT NOT NULL,
+        c5  INTEGER NOT NULL,
+        c6  BIGINT NOT NULL,
+        c7  SMALLINT NOT NULL,
+        c8  INT NOT NULL,
+        c9  INT UNSIGNED NOT NULL,
+        c10 BIGINT UNSIGNED NOT NULL,
+        c11 FLOAT NOT NULL,
+        c12 DOUBLE NOT NULL,
+        c13 VARCHAR NOT NULL
+    )
+STORED AS CSV
+WITH HEADER ROW
+LOCATION '../../testing/data/csv/aggregate_test_100.csv';
+
+query TII
+SELECT c1, c2, c3 FROM sink_table WHERE c3 > 0 LIMIT 5;
+----
+c 2 1
+b 1 29
+e 3 104
+a 3 13
+d 1 38
+
+statement ok
+set datafusion.execution.target_partitions = 3;
+
+statement ok
+set datafusion.optimizer.enable_round_robin_repartition = true;
+
+query TT
+EXPLAIN SELECT c1, c2, c3 FROM sink_table WHERE c3 > 0 LIMIT 5;
+----
+logical_plan
+Limit: skip=0, fetch=5
+--Filter: sink_table.c3 > Int16(0)
+----TableScan: sink_table projection=[c1, c2, c3]
+physical_plan
+GlobalLimitExec: skip=0, fetch=5
+--CoalescePartitionsExec
+----CoalesceBatchesExec: target_batch_size=8192
+------FilterExec: c3@2 > 0
+--------RepartitionExec: partitioning=RoundRobinBatch(3), input_partitions=1
+----------StreamingTableExec: partition_sizes=1, projection=[c1, c2, c3], infinite_source=true

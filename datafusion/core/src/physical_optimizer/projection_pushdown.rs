@@ -164,8 +164,12 @@ fn try_swapping_with_csv(
     // This process can be moved into CsvExec, but it would be an overlap of their responsibility.
     all_alias_free_columns(projection.expr()).then(|| {
         let mut file_scan = csv.base_config().clone();
-        let new_projections =
-            new_projections_for_columns(projection, &file_scan.projection);
+        let new_projections = new_projections_for_columns(
+            projection,
+            &file_scan
+                .projection
+                .unwrap_or((0..csv.schema().fields().len()).collect()),
+        );
         file_scan.projection = Some(new_projections);
 
         Arc::new(CsvExec::new(
@@ -189,8 +193,11 @@ fn try_swapping_with_memory(
     // This process can be moved into MemoryExec, but it would be an overlap of their responsibility.
     all_alias_free_columns(projection.expr())
         .then(|| {
-            let new_projections =
-                new_projections_for_columns(projection, memory.projection());
+            let all_projections = (0..memory.schema().fields().len()).collect();
+            let new_projections = new_projections_for_columns(
+                projection,
+                memory.projection().as_ref().unwrap_or(&all_projections),
+            );
 
             MemoryExec::try_new(
                 memory.partitions(),
@@ -217,8 +224,11 @@ fn try_swapping_with_streaming_table(
         .projection()
         .as_ref()
         .map(|i| i.as_ref().to_vec());
-    let new_projections =
-        new_projections_for_columns(projection, &streaming_table_projections);
+    let new_projections = new_projections_for_columns(
+        projection,
+        &streaming_table_projections
+            .unwrap_or((0..streaming_table.schema().fields().len()).collect()),
+    );
 
     let mut lex_orderings = vec![];
     for lex_ordering in streaming_table.projected_output_ordering().into_iter() {
@@ -239,7 +249,7 @@ fn try_swapping_with_streaming_table(
     StreamingTableExec::try_new(
         streaming_table.partition_schema().clone(),
         streaming_table.partitions().clone(),
-        Some(&new_projections),
+        Some(new_projections.as_ref()),
         lex_orderings,
         streaming_table.is_infinite(),
     )
@@ -834,7 +844,7 @@ fn all_alias_free_columns(exprs: &[(Arc<dyn PhysicalExpr>, String)]) -> bool {
 /// ensure that all expressions are `Column` expressions without aliases.
 fn new_projections_for_columns(
     projection: &ProjectionExec,
-    source: &Option<Vec<usize>>,
+    source: &[usize],
 ) -> Vec<usize> {
     projection
         .expr()
@@ -842,7 +852,7 @@ fn new_projections_for_columns(
         .filter_map(|(expr, _)| {
             expr.as_any()
                 .downcast_ref::<Column>()
-                .and_then(|expr| source.as_ref().map(|proj| proj[expr.index()]))
+                .map(|expr| source[expr.index()])
         })
         .collect()
 }

@@ -15,18 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow_schema::SchemaRef;
-use datafusion_common::{JoinSide, JoinType};
-use indexmap::IndexSet;
-use itertools::Itertools;
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
+use super::ordering::collapse_lex_ordering;
 use crate::equivalence::{
     collapse_lex_req, EquivalenceGroup, OrderingEquivalenceClass, ProjectionMapping,
 };
-
 use crate::expressions::Literal;
 use crate::sort_properties::{ExprOrdering, SortProperties};
 use crate::{
@@ -34,9 +30,13 @@ use crate::{
     LexRequirementRef, PhysicalExpr, PhysicalExprRef, PhysicalSortExpr,
     PhysicalSortRequirement,
 };
-use datafusion_common::tree_node::{Transformed, TreeNode};
 
-use super::ordering::collapse_lex_ordering;
+use arrow_schema::SchemaRef;
+use datafusion_common::tree_node::{Transformed, TreeNode};
+use datafusion_common::{JoinSide, JoinType};
+
+use indexmap::IndexSet;
+use itertools::Itertools;
 
 /// A `EquivalenceProperties` object stores useful information related to a schema.
 /// Currently, it keeps track of:
@@ -314,8 +314,8 @@ impl EquivalenceProperties {
     /// Returns `true` if the specified ordering is satisfied, `false` otherwise.
     fn ordering_satisfy_single(&self, req: &PhysicalSortRequirement) -> bool {
         let expr_ordering = self.get_expr_ordering(req.expr.clone());
-        let ExprOrdering { expr, state, .. } = expr_ordering;
-        match state {
+        let ExprOrdering { expr, data, .. } = expr_ordering;
+        match data {
             SortProperties::Ordered(options) => {
                 let sort_expr = PhysicalSortExpr { expr, options };
                 sort_expr.satisfy(req, self.schema())
@@ -708,9 +708,9 @@ impl EquivalenceProperties {
             let ordered_exprs = search_indices
                 .iter()
                 .flat_map(|&idx| {
-                    let ExprOrdering { expr, state, .. } =
+                    let ExprOrdering { expr, data, .. } =
                         eq_properties.get_expr_ordering(exprs[idx].clone());
-                    if let SortProperties::Ordered(options) = state {
+                    if let SortProperties::Ordered(options) = data {
                         Some((PhysicalSortExpr { expr, options }, idx))
                     } else {
                         None
@@ -776,7 +776,7 @@ impl EquivalenceProperties {
     /// Returns an `ExprOrdering` object containing the ordering information for
     /// the given expression.
     pub fn get_expr_ordering(&self, expr: Arc<dyn PhysicalExpr>) -> ExprOrdering {
-        ExprOrdering::new(expr.clone())
+        ExprOrdering::new_default(expr.clone())
             .transform_up(&|expr| Ok(update_ordering(expr, self)))
             // Guaranteed to always return `Ok`.
             .unwrap()
@@ -802,18 +802,19 @@ fn update_ordering(
     // We have a Column, which is one of the two possible leaf node types:
     let normalized_expr = eq_properties.eq_group.normalize_expr(node.expr.clone());
     if eq_properties.is_expr_constant(&normalized_expr) {
-        node.state = SortProperties::Singleton;
+        node.data = SortProperties::Singleton;
     } else if let Some(options) = eq_properties
         .normalized_oeq_class()
         .get_options(&normalized_expr)
     {
-        node.state = SortProperties::Ordered(options);
+        node.data = SortProperties::Ordered(options);
     } else if !node.expr.children().is_empty() {
         // We have an intermediate (non-leaf) node, account for its children:
-        node.state = node.expr.get_ordering(&node.children_state());
+        let children_orderings = node.children.iter().map(|c| c.data).collect_vec();
+        node.data = node.expr.get_ordering(&children_orderings);
     } else if node.expr.as_any().is::<Literal>() {
         // We have a Literal, which is the other possible leaf node type:
-        node.state = node.expr.get_ordering(&[]);
+        node.data = node.expr.get_ordering(&[]);
     } else {
         return Transformed::No(node);
     }
@@ -1683,9 +1684,9 @@ mod tests {
             let expr_ordering = eq_properties.get_expr_ordering(expr.clone());
             let err_msg = format!(
                 "expr:{:?}, expected: {:?}, actual: {:?}, leading_orderings: {leading_orderings:?}",
-                expr, expected, expr_ordering.state
+                expr, expected, expr_ordering.data
             );
-            assert_eq!(expr_ordering.state, expected, "{}", err_msg);
+            assert_eq!(expr_ordering.data, expected, "{}", err_msg);
         }
 
         Ok(())
