@@ -38,7 +38,7 @@ use arrow::{
     },
     ipc::{reader::read_record_batch, root_as_message},
 };
-use datafusion::execution::registry::FunctionRegistry;
+use datafusion_execution::registry::FunctionRegistry;
 use datafusion_common::{
     arrow_datafusion_err, internal_err, plan_datafusion_err, Column, Constraint,
     Constraints, DFField, DFSchema, DFSchemaRef, DataFusionError, OwnedTableReference,
