@@ -2481,7 +2481,7 @@ array_replace_all(array, from, to)
 
 ### `array_slice`
 
-Returns a slice of the array.
+Returns a slice of the array based on 1-indexed start and end positions.
 
 ```
 array_slice(array, begin, end)
