@@ -1383,7 +1383,8 @@ create table test_boolean(c1 boolean) as values (false), (null), (true);
 statement ok
 create table test_int32(c1 int) as values (0), (1), (null), (3);
 
-## Note that test_float has a NaN (which is not possible to create in SQL) so it is registered via rust.
+statement ok
+create table test_float(c1 double) as values (1.0), (null), ('NaN'::double);
 
 # query_not()
 

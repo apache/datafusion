@@ -38,3 +38,616 @@ Projection: NUMBERS.a, NUMBERS.b, NUMBERS.c
 physical_plan
 ProjectionExec: expr=[1 as a, 2 as b, 3 as c]
 --PlaceholderRowExec
+
+
+
+# enable recursive CTEs
+statement ok
+set datafusion.execution.enable_recursive_ctes = true;
+
+# trivial recursive CTE works
+query I rowsort
+WITH RECURSIVE nodes AS ( 
+    SELECT 1 as id
+    UNION ALL 
+    SELECT id + 1 as id 
+    FROM nodes
+    WHERE id < 10
+)
+SELECT * FROM nodes
+----
+1
+10
+2
+3
+4
+5
+6
+7
+8
+9
+
+# explain trivial recursive CTE
+query TT
+EXPLAIN WITH RECURSIVE nodes AS ( 
+    SELECT 1 as id
+    UNION ALL 
+    SELECT id + 1 as id 
+    FROM nodes
+    WHERE id < 10
+)
+SELECT * FROM nodes
+----
+logical_plan
+Projection: nodes.id
+--SubqueryAlias: nodes
+----RecursiveQuery: is_distinct=false
+------Projection: Int64(1) AS id
+--------EmptyRelation
+------Projection: nodes.id + Int64(1) AS id
+--------Filter: nodes.id < Int64(10)
+----------TableScan: nodes
+physical_plan
+RecursiveQueryExec: name=nodes, is_distinct=false
+--ProjectionExec: expr=[1 as id]
+----PlaceholderRowExec
+--CoalescePartitionsExec
+----ProjectionExec: expr=[id@0 + 1 as id]
+------CoalesceBatchesExec: target_batch_size=8192
+--------FilterExec: id@0 < 10
+----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+------------WorkTableExec: name=nodes
+
+# setup
+statement ok
+CREATE EXTERNAL TABLE balance STORED as CSV WITH HEADER ROW LOCATION '../core/tests/data/recursive_cte/balance.csv'
+
+# setup
+statement ok
+CREATE EXTERNAL TABLE growth STORED as CSV WITH HEADER ROW LOCATION '../core/tests/data/recursive_cte/growth.csv'
+
+# setup
+statement ok
+set datafusion.execution.batch_size = 2;
+
+# recursive CTE with static term derived from table works.
+# use explain to ensure that batch size is set to 2. This should produce multiple batches per iteration since the input
+# table 'balances' has 4 rows
+query TT
+EXPLAIN WITH RECURSIVE balances AS (
+    SELECT * from balance
+    UNION ALL 
+    SELECT time + 1 as time, name, account_balance + 10 as account_balance
+    FROM balances
+    WHERE time < 10
+)
+SELECT * FROM balances
+ORDER BY time, name, account_balance
+----
+logical_plan
+Sort: balances.time ASC NULLS LAST, balances.name ASC NULLS LAST, balances.account_balance ASC NULLS LAST
+--Projection: balances.time, balances.name, balances.account_balance
+----SubqueryAlias: balances
+------RecursiveQuery: is_distinct=false
+--------Projection: balance.time, balance.name, balance.account_balance
+----------TableScan: balance
+--------Projection: balances.time + Int64(1) AS time, balances.name, balances.account_balance + Int64(10) AS account_balance
+----------Filter: balances.time < Int64(10)
+------------TableScan: balances
+physical_plan
+SortExec: expr=[time@0 ASC NULLS LAST,name@1 ASC NULLS LAST,account_balance@2 ASC NULLS LAST]
+--RecursiveQueryExec: name=balances, is_distinct=false
+----CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/recursive_cte/balance.csv]]}, projection=[time, name, account_balance], has_header=true
+----CoalescePartitionsExec
+------ProjectionExec: expr=[time@0 + 1 as time, name@1 as name, account_balance@2 + 10 as account_balance]
+--------CoalesceBatchesExec: target_batch_size=2
+----------FilterExec: time@0 < 10
+------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+--------------WorkTableExec: name=balances
+
+# recursive CTE with static term derived from table works
+# note that this is run with batch size set to 2. This should produce multiple batches per iteration since the input
+# table 'balances' has 4 rows
+query ITI
+WITH RECURSIVE balances AS (
+    SELECT * from balance
+    UNION ALL 
+    SELECT time + 1 as time, name, account_balance + 10 as account_balance
+    FROM balances
+    WHERE time < 10
+)
+SELECT * FROM balances
+ORDER BY time, name, account_balance
+----
+1 John 100
+1 Tim 200
+2 John 110
+2 John 300
+2 Tim 210
+2 Tim 400
+3 John 120
+3 John 310
+3 Tim 220
+3 Tim 410
+4 John 130
+4 John 320
+4 Tim 230
+4 Tim 420
+5 John 140
+5 John 330
+5 Tim 240
+5 Tim 430
+6 John 150
+6 John 340
+6 Tim 250
+6 Tim 440
+7 John 160
+7 John 350
+7 Tim 260
+7 Tim 450
+8 John 170
+8 John 360
+8 Tim 270
+8 Tim 460
+9 John 180
+9 John 370
+9 Tim 280
+9 Tim 470
+10 John 190
+10 John 380
+10 Tim 290
+10 Tim 480
+
+# reset batch size to default
+statement ok
+set datafusion.execution.batch_size = 8182;
+
+# recursive CTE with recursive join works
+query ITI
+WITH RECURSIVE balances AS (
+    SELECT time as time, name as name, account_balance as account_balance
+    FROM balance
+    UNION ALL 
+    SELECT time + 1 as time, balances.name, account_balance + growth.account_growth as account_balance
+    FROM balances
+    JOIN growth
+    ON balances.name = growth.name
+    WHERE time < 10
+)
+SELECT * FROM balances
+ORDER BY time, name, account_balance
+----
+1 John 100
+1 Tim 200
+2 John 103
+2 John 300
+2 Tim 220
+2 Tim 400
+3 John 106
+3 John 303
+3 Tim 240
+3 Tim 420
+4 John 109
+4 John 306
+4 Tim 260
+4 Tim 440
+5 John 112
+5 John 309
+5 Tim 280
+5 Tim 460
+6 John 115
+6 John 312
+6 Tim 300
+6 Tim 480
+7 John 118
+7 John 315
+7 Tim 320
+7 Tim 500
+8 John 121
+8 John 318
+8 Tim 340
+8 Tim 520
+9 John 124
+9 John 321
+9 Tim 360
+9 Tim 540
+10 John 127
+10 John 324
+10 Tim 380
+10 Tim 560
+
+# recursive CTE with aggregations works
+query I rowsort
+WITH RECURSIVE nodes AS ( 
+    SELECT 1 as id
+    UNION ALL 
+    SELECT id + 1 as id 
+    FROM nodes
+    WHERE id < 10
+)
+SELECT sum(id) FROM nodes
+----
+55
+
+# setup
+statement ok
+CREATE TABLE t(a BIGINT) AS VALUES(1),(2),(3);
+
+# referencing CTE multiple times does not error
+query II rowsort
+WITH RECURSIVE my_cte AS (
+    SELECT a from t 
+    UNION ALL 
+    SELECT a+2 as a
+    FROM my_cte 
+    WHERE a<5
+)
+SELECT * FROM my_cte t1, my_cte
+----
+1 1
+1 2
+1 3
+1 3
+1 4
+1 5
+1 5
+1 6
+2 1
+2 2
+2 3
+2 3
+2 4
+2 5
+2 5
+2 6
+3 1
+3 1
+3 2
+3 2
+3 3
+3 3
+3 3
+3 3
+3 4
+3 4
+3 5
+3 5
+3 5
+3 5
+3 6
+3 6
+4 1
+4 2
+4 3
+4 3
+4 4
+4 5
+4 5
+4 6
+5 1
+5 1
+5 2
+5 2
+5 3
+5 3
+5 3
+5 3
+5 4
+5 4
+5 5
+5 5
+5 5
+5 5
+5 6
+5 6
+6 1
+6 2
+6 3
+6 3
+6 4
+6 5
+6 5
+6 6
+
+# CTE within recursive CTE works and does not result in 'index out of bounds: the len is 0 but the index is 0'
+query I
+WITH RECURSIVE "recursive_cte" AS (
+    SELECT 1 as "val"
+  UNION ALL (
+    WITH "sub_cte" AS (
+      SELECT
+        time,
+        1 as "val"
+      FROM
+        (SELECT DISTINCT "time" FROM "balance")
+    )
+    SELECT
+      2 as "val"
+    FROM
+      "recursive_cte" 
+      FULL JOIN "sub_cte" ON 1 = 1
+    WHERE
+      "recursive_cte"."val" < 2
+  )
+)
+SELECT
+   *
+FROM
+  "recursive_cte";
+----
+1
+2
+2
+
+# setup
+statement ok
+CREATE EXTERNAL TABLE prices STORED as CSV WITH HEADER ROW LOCATION '../core/tests/data/recursive_cte/prices.csv'
+
+# CTE within window function inside nested CTE works. This test demonstrates using a nested window function to recursively iterate over a column.
+query RRII
+WITH RECURSIVE "recursive_cte" AS (
+  (
+    WITH "min_prices_row_num_cte" AS (
+      SELECT
+        MIN("prices"."prices_row_num") AS "prices_row_num"
+      FROM
+        "prices"
+    ),
+    "min_prices_row_num_cte_second" AS (
+      SELECT
+        MIN("prices"."prices_row_num") AS "prices_row_num_advancement"
+      FROM
+        "prices"
+      WHERE
+        "prices"."prices_row_num" > (
+          SELECT
+            "prices_row_num"
+          FROM
+            "min_prices_row_num_cte"
+        )
+    )
+    SELECT
+      0.0 AS "beg",
+      (0.0 + 50) AS "end",
+      (
+        SELECT
+          "prices_row_num"
+        FROM
+          "min_prices_row_num_cte"
+      ) AS "prices_row_num",
+      (
+        SELECT
+          "prices_row_num_advancement"
+        FROM
+          "min_prices_row_num_cte_second"
+      ) AS "prices_row_num_advancement"
+    FROM
+      "prices"
+    WHERE
+      "prices"."prices_row_num" = (
+        SELECT
+          DISTINCT "prices_row_num"
+        FROM
+          "min_prices_row_num_cte"
+      )
+  )
+  UNION ALL (
+    WITH "min_prices_row_num_cte" AS (
+      SELECT
+        "prices"."prices_row_num" AS "prices_row_num",
+        LEAD("prices"."prices_row_num", 1) OVER (
+          ORDER BY "prices_row_num"
+        ) AS "prices_row_num_advancement"
+      FROM
+        (
+          SELECT
+            DISTINCT "prices_row_num"
+          FROM
+            "prices"
+        ) AS "prices"
+    )
+    SELECT
+      "recursive_cte"."end" AS "beg",
+      ("recursive_cte"."end" + 50) AS "end",
+      "min_prices_row_num_cte"."prices_row_num" AS "prices_row_num",
+      "min_prices_row_num_cte"."prices_row_num_advancement" AS "prices_row_num_advancement"
+    FROM
+      "recursive_cte"
+      FULL JOIN "prices" ON "prices"."prices_row_num" = "recursive_cte"."prices_row_num_advancement"
+      FULL JOIN "min_prices_row_num_cte" ON "min_prices_row_num_cte"."prices_row_num" = COALESCE(
+        "prices"."prices_row_num",
+        "recursive_cte"."prices_row_num_advancement"
+      )
+    WHERE
+      "recursive_cte"."prices_row_num_advancement" IS NOT NULL
+  )
+)
+SELECT
+  DISTINCT *
+FROM
+  "recursive_cte"
+ORDER BY
+  "prices_row_num" ASC;
+----
+0 50 1 2
+50 100 2 3
+100 150 3 4
+150 200 4 5
+200 250 5 6
+250 300 6 7
+300 350 7 8
+350 400 8 9
+400 450 9 10
+450 500 10 11
+500 550 11 12
+550 600 12 13
+600 650 13 14
+650 700 14 15
+700 750 15 16
+750 800 16 17
+800 850 17 18
+850 900 18 19
+900 950 19 20
+950 1000 20 21
+1000 1050 21 22
+1050 1100 22 23
+1100 1150 23 24
+1150 1200 24 25
+1200 1250 25 26
+1250 1300 26 27
+1300 1350 27 28
+1350 1400 28 29
+1400 1450 29 30
+1450 1500 30 31
+1500 1550 31 32
+1550 1600 32 33
+1600 1650 33 34
+1650 1700 34 35
+1700 1750 35 36
+1750 1800 36 37
+1800 1850 37 38
+1850 1900 38 39
+1900 1950 39 40
+1950 2000 40 41
+2000 2050 41 42
+2050 2100 42 43
+2100 2150 43 44
+2150 2200 44 45
+2200 2250 45 46
+2250 2300 46 47
+2300 2350 47 48
+2350 2400 48 49
+2400 2450 49 50
+2450 2500 50 51
+2500 2550 51 52
+2550 2600 52 53
+2600 2650 53 54
+2650 2700 54 55
+2700 2750 55 56
+2750 2800 56 57
+2800 2850 57 58
+2850 2900 58 59
+2900 2950 59 60
+2950 3000 60 61
+3000 3050 61 62
+3050 3100 62 63
+3100 3150 63 64
+3150 3200 64 65
+3200 3250 65 66
+3250 3300 66 67
+3300 3350 67 68
+3350 3400 68 69
+3400 3450 69 70
+3450 3500 70 71
+3500 3550 71 72
+3550 3600 72 73
+3600 3650 73 74
+3650 3700 74 75
+3700 3750 75 76
+3750 3800 76 77
+3800 3850 77 78
+3850 3900 78 79
+3900 3950 79 80
+3950 4000 80 81
+4000 4050 81 82
+4050 4100 82 83
+4100 4150 83 84
+4150 4200 84 85
+4200 4250 85 86
+4250 4300 86 87
+4300 4350 87 88
+4350 4400 88 89
+4400 4450 89 90
+4450 4500 90 91
+4500 4550 91 92
+4550 4600 92 93
+4600 4650 93 94
+4650 4700 94 95
+4700 4750 95 96
+4750 4800 96 97
+4800 4850 97 98
+4850 4900 98 99
+4900 4950 99 100
+4950 5000 100 NULL
+
+# setup
+statement ok
+CREATE EXTERNAL TABLE sales STORED as CSV WITH HEADER ROW LOCATION '../core/tests/data/recursive_cte/sales.csv'
+
+# setup
+statement ok
+CREATE EXTERNAL TABLE salespersons STORED as CSV WITH HEADER ROW LOCATION '../core/tests/data/recursive_cte/salespersons.csv'
+
+
+# group by works within recursive cte. This test case demonstrates rolling up a hierarchy of salespeople to their managers.
+query III
+WITH RECURSIVE region_sales AS (
+    -- Anchor member
+    SELECT
+        s.salesperson_id AS salesperson_id,
+        SUM(s.sale_amount) AS amount,
+        0 as level
+    FROM
+        sales s
+    GROUP BY
+        s.salesperson_id
+    UNION ALL
+    -- Recursive member
+    SELECT
+      sp.manager_id AS salesperson_id,
+      SUM(rs.amount) AS amount,
+      MIN(rs.level) + 1 as level 
+    FROM
+        region_sales rs
+    INNER JOIN salespersons sp ON rs.salesperson_id = sp.salesperson_id
+    WHERE sp.manager_id IS NOT NULL
+    GROUP BY
+      sp.manager_id
+)
+SELECT
+    salesperson_id,
+    MAX(amount) as amount,
+    MAX(level) as hierarchy_level 
+FROM
+    region_sales
+GROUP BY
+  salesperson_id
+ORDER BY
+  hierarchy_level ASC, salesperson_id ASC;
+----
+4 700 0
+5 600 0
+6 500 0
+7 900 0
+2 1300 1
+3 1400 1
+1 2700 2
+
+#expect error from recursive CTE with nested recursive terms
+query error DataFusion error: This feature is not implemented: Recursive queries cannot be nested
+WITH RECURSIVE outer_cte AS (
+    SELECT 1 as a
+    UNION ALL (
+        WITH  RECURSIVE nested_cte AS (
+           SELECT 1 as a
+           UNION ALL
+           SELECT a+2 as a
+	   FROM nested_cte where a < 3
+         )
+    SELECT outer_cte.a +2
+    FROM outer_cte JOIN nested_cte USING(a)
+    WHERE nested_cte.a < 4
+   )
+)
+SELECT a FROM outer_cte;
+
+# expect error when recursive CTE is referenced multiple times in the recursive term
+query error DataFusion error: This feature is not implemented: Multiple recursive references to the same CTE are not supported
+WITH RECURSIVE my_cte AS (
+    SELECT 1 as a
+    UNION ALL
+    SELECT my_cte.a+2 as a
+    FROM my_cte join my_cte c2 using(a)
+    WHERE my_cte.a<5
+)
+SELECT a FROM my_cte;

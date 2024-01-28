@@ -23,15 +23,17 @@ use crate::expr::{
     ScalarFunction, ScalarFunctionDefinition, Sort, TryCast, WindowFunction,
 };
 use crate::{Expr, GetFieldAccess};
-use std::borrow::Cow;
 
-use datafusion_common::tree_node::TreeNode;
+use datafusion_common::tree_node::{TreeNode, VisitRecursion};
 use datafusion_common::{internal_err, DataFusionError, Result};
 
 impl TreeNode for Expr {
-    fn children_nodes(&self) -> Vec<Cow<Self>> {
-        match self {
-            Expr::Alias(Alias { expr, .. })
+    fn apply_children<F: FnMut(&Self) -> Result<VisitRecursion>>(
+        &self,
+        op: &mut F,
+    ) -> Result<VisitRecursion> {
+        let children = match self {
+            Expr::Alias(Alias{expr, .. })
             | Expr::Not(expr)
             | Expr::IsNotNull(expr)
             | Expr::IsTrue(expr)
@@ -45,79 +47,67 @@ impl TreeNode for Expr {
             | Expr::Cast(Cast { expr, .. })
             | Expr::TryCast(TryCast { expr, .. })
             | Expr::Sort(Sort { expr, .. })
-            | Expr::InSubquery(InSubquery { expr, .. }) => vec![Cow::Borrowed(expr)],
+            | Expr::InSubquery(InSubquery{ expr, .. }) => vec![expr.as_ref()],
             Expr::GetIndexedField(GetIndexedField { expr, field }) => {
-                let expr = Cow::Borrowed(expr.as_ref());
+                let expr = expr.as_ref();
                 match field {
-                    GetFieldAccess::ListIndex { key } => {
-                        vec![Cow::Borrowed(key.as_ref()), expr]
+                    GetFieldAccess::ListIndex {key} => vec![key.as_ref(), expr],
+                    GetFieldAccess::ListRange {start, stop} => {
+                        vec![start.as_ref(), stop.as_ref(), expr]
                     }
-                    GetFieldAccess::ListRange { start, stop } => {
-                        vec![Cow::Borrowed(start), Cow::Borrowed(stop), expr]
-                    }
-                    GetFieldAccess::NamedStructField { name: _name } => {
-                        vec![expr]
-                    }
+                    GetFieldAccess::NamedStructField { .. } => vec![expr],
                 }
             }
             Expr::GroupingSet(GroupingSet::Rollup(exprs))
-            | Expr::GroupingSet(GroupingSet::Cube(exprs)) => exprs.iter().map(Cow::Borrowed).collect(),
-            Expr::ScalarFunction(ScalarFunction { args, .. }) => args.iter().map(Cow::Borrowed).collect(),
+            | Expr::GroupingSet(GroupingSet::Cube(exprs)) => exprs.iter().collect(),
+            Expr::ScalarFunction (ScalarFunction{ args, .. } )  => {
+                args.iter().collect()
+            }
             Expr::GroupingSet(GroupingSet::GroupingSets(lists_of_exprs)) => {
-                lists_of_exprs.iter().flatten().map(Cow::Borrowed).collect()
+                lists_of_exprs.iter().flatten().collect()
             }
             Expr::Column(_)
             // Treat OuterReferenceColumn as a leaf expression
             | Expr::OuterReferenceColumn(_, _)
             | Expr::ScalarVariable(_, _)
             | Expr::Literal(_)
-            | Expr::Exists { .. }
+            | Expr::Exists {..}
             | Expr::ScalarSubquery(_)
-            | Expr::Wildcard { .. }
-            | Expr::Placeholder(_) => vec![],
+            | Expr::Wildcard {..}
+            | Expr::Placeholder (_) => vec![],
             Expr::BinaryExpr(BinaryExpr { left, right, .. }) => {
-                vec![Cow::Borrowed(left), Cow::Borrowed(right)]
+                vec![left.as_ref(), right.as_ref()]
             }
             Expr::Like(Like { expr, pattern, .. })
             | Expr::SimilarTo(Like { expr, pattern, .. }) => {
-                vec![Cow::Borrowed(expr), Cow::Borrowed(pattern)]
+                vec![expr.as_ref(), pattern.as_ref()]
             }
             Expr::Between(Between {
                 expr, low, high, ..
-            }) => vec![
-                Cow::Borrowed(expr),
-                Cow::Borrowed(low),
-                Cow::Borrowed(high),
-            ],
+            }) => vec![expr.as_ref(), low.as_ref(), high.as_ref()],
             Expr::Case(case) => {
                 let mut expr_vec = vec![];
                 if let Some(expr) = case.expr.as_ref() {
-                    expr_vec.push(Cow::Borrowed(expr.as_ref()));
+                    expr_vec.push(expr.as_ref());
                 };
                 for (when, then) in case.when_then_expr.iter() {
-                    expr_vec.push(Cow::Borrowed(when));
-                    expr_vec.push(Cow::Borrowed(then));
+                    expr_vec.push(when.as_ref());
+                    expr_vec.push(then.as_ref());
                 }
                 if let Some(else_expr) = case.else_expr.as_ref() {
-                    expr_vec.push(Cow::Borrowed(else_expr));
+                    expr_vec.push(else_expr.as_ref());
                 }
                 expr_vec
             }
-            Expr::AggregateFunction(AggregateFunction {
-                args,
-                filter,
-                order_by,
-                ..
-            }) => {
-                let mut expr_vec: Vec<_> = args.iter().map(Cow::Borrowed).collect();
-
+            Expr::AggregateFunction(AggregateFunction { args, filter, order_by, .. })
+             => {
+                let mut expr_vec = args.iter().collect::<Vec<_>>();
                 if let Some(f) = filter {
-                    expr_vec.push(Cow::Borrowed(f));
+                    expr_vec.push(f.as_ref());
                 }
-                if let Some(o) = order_by {
-                    expr_vec.extend(o.iter().map(Cow::Borrowed).collect::<Vec<_>>());
+                if let Some(order_by) = order_by {
+                    expr_vec.extend(order_by);
                 }
-
                 expr_vec
             }
             Expr::WindowFunction(WindowFunction {
@@ -126,34 +116,47 @@ impl TreeNode for Expr {
                 order_by,
                 ..
             }) => {
-                let mut expr_vec: Vec<_> = args.iter().map(Cow::Borrowed).collect();
-                expr_vec.extend(partition_by.iter().map(Cow::Borrowed).collect::<Vec<_>>());
-                expr_vec.extend(order_by.iter().map(Cow::Borrowed).collect::<Vec<_>>());
+                let mut expr_vec = args.iter().collect::<Vec<_>>();
+                expr_vec.extend(partition_by);
+                expr_vec.extend(order_by);
                 expr_vec
             }
             Expr::InList(InList { expr, list, .. }) => {
-                let mut expr_vec = vec![Cow::Borrowed(expr.as_ref())];
-                expr_vec.extend(list.iter().map(Cow::Borrowed).collect::<Vec<_>>());
+                let mut expr_vec = vec![expr.as_ref()];
+                expr_vec.extend(list);
                 expr_vec
             }
+        };
+
+        for child in children {
+            match op(child)? {
+                VisitRecursion::Continue => {}
+                VisitRecursion::Skip => return Ok(VisitRecursion::Continue),
+                VisitRecursion::Stop => return Ok(VisitRecursion::Stop),
+            }
         }
+
+        Ok(VisitRecursion::Continue)
     }
 
-    fn map_children<F>(self, transform: F) -> Result<Self>
-    where
-        F: FnMut(Self) -> Result<Self>,
-    {
-        let mut transform = transform;
-
+    fn map_children<F: FnMut(Self) -> Result<Self>>(
+        self,
+        mut transform: F,
+    ) -> Result<Self> {
         Ok(match self {
+            Expr::Column(_)
+            | Expr::Wildcard { .. }
+            | Expr::Placeholder(Placeholder { .. })
+            | Expr::OuterReferenceColumn(_, _)
+            | Expr::Exists { .. }
+            | Expr::ScalarSubquery(_)
+            | Expr::ScalarVariable(_, _)
+            | Expr::Literal(_) => self,
             Expr::Alias(Alias {
                 expr,
                 relation,
                 name,
             }) => Expr::Alias(Alias::new(transform(*expr)?, relation, name)),
-            Expr::Column(_) => self,
-            Expr::OuterReferenceColumn(_, _) => self,
-            Expr::Exists { .. } => self,
             Expr::InSubquery(InSubquery {
                 expr,
                 subquery,
@@ -163,9 +166,6 @@ impl TreeNode for Expr {
                 subquery,
                 negated,
             )),
-            Expr::ScalarSubquery(_) => self,
-            Expr::ScalarVariable(ty, names) => Expr::ScalarVariable(ty, names),
-            Expr::Literal(value) => Expr::Literal(value),
             Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
                 Expr::BinaryExpr(BinaryExpr::new(
                     transform_boxed(left, &mut transform)?,
@@ -244,7 +244,6 @@ impl TreeNode for Expr {
                         ))
                     })
                     .collect::<Result<Vec<_>>>()?;
-
                 let else_expr = transform_option_box(case.else_expr, &mut transform)?;
 
                 Expr::Case(Case::new(expr, when_then_expr, else_expr))
@@ -273,9 +272,7 @@ impl TreeNode for Expr {
                     ScalarFunction::new_udf(fun, transform_vec(args, &mut transform)?),
                 ),
                 ScalarFunctionDefinition::Name(_) => {
-                    return internal_err!(
-                        "Function `Expr` with name should be resolved."
-                    );
+                    return internal_err!("Function `Expr` with name should be resolved.")
                 }
             },
             Expr::WindowFunction(WindowFunction {
@@ -308,11 +305,9 @@ impl TreeNode for Expr {
                     ))
                 }
                 AggregateFunctionDefinition::UDF(fun) => {
-                    let order_by = if let Some(order_by) = order_by {
-                        Some(transform_vec(order_by, &mut transform)?)
-                    } else {
-                        None
-                    };
+                    let order_by = order_by
+                        .map(|order_by| transform_vec(order_by, &mut transform))
+                        .transpose()?;
                     Expr::AggregateFunction(AggregateFunction::new_udf(
                         fun,
                         transform_vec(args, &mut transform)?,
@@ -322,9 +317,7 @@ impl TreeNode for Expr {
                     ))
                 }
                 AggregateFunctionDefinition::Name(_) => {
-                    return internal_err!(
-                        "Function `Expr` with name should be resolved."
-                    );
+                    return internal_err!("Function `Expr` with name should be resolved.")
                 }
             },
             Expr::GroupingSet(grouping_set) => match grouping_set {
@@ -337,13 +330,12 @@ impl TreeNode for Expr {
                 GroupingSet::GroupingSets(lists_of_exprs) => {
                     Expr::GroupingSet(GroupingSet::GroupingSets(
                         lists_of_exprs
-                            .iter()
-                            .map(|exprs| transform_vec(exprs.clone(), &mut transform))
+                            .into_iter()
+                            .map(|exprs| transform_vec(exprs, &mut transform))
                             .collect::<Result<Vec<_>>>()?,
                     ))
                 }
             },
-
             Expr::InList(InList {
                 expr,
                 list,
@@ -353,62 +345,47 @@ impl TreeNode for Expr {
                 transform_vec(list, &mut transform)?,
                 negated,
             )),
-            Expr::Wildcard { qualifier } => Expr::Wildcard { qualifier },
             Expr::GetIndexedField(GetIndexedField { expr, field }) => {
                 Expr::GetIndexedField(GetIndexedField::new(
                     transform_boxed(expr, &mut transform)?,
                     field,
                 ))
             }
-            Expr::Placeholder(Placeholder { id, data_type }) => {
-                Expr::Placeholder(Placeholder { id, data_type })
-            }
         })
     }
 }
 
-fn transform_boxed<F>(boxed_expr: Box<Expr>, transform: &mut F) -> Result<Box<Expr>>
-where
-    F: FnMut(Expr) -> Result<Expr>,
-{
-    // TODO:
-    // It might be possible to avoid an allocation (the Box::new) below by reusing the box.
-    let expr: Expr = *boxed_expr;
-    let rewritten_expr = transform(expr)?;
-    Ok(Box::new(rewritten_expr))
+fn transform_boxed<F: FnMut(Expr) -> Result<Expr>>(
+    boxed_expr: Box<Expr>,
+    transform: &mut F,
+) -> Result<Box<Expr>> {
+    // TODO: It might be possible to avoid an allocation (the Box::new) below by reusing the box.
+    transform(*boxed_expr).map(Box::new)
 }
 
-fn transform_option_box<F>(
+fn transform_option_box<F: FnMut(Expr) -> Result<Expr>>(
     option_box: Option<Box<Expr>>,
     transform: &mut F,
-) -> Result<Option<Box<Expr>>>
-where
-    F: FnMut(Expr) -> Result<Expr>,
-{
+) -> Result<Option<Box<Expr>>> {
     option_box
         .map(|expr| transform_boxed(expr, transform))
         .transpose()
 }
 
 /// &mut transform a Option<`Vec` of `Expr`s>
-fn transform_option_vec<F>(
+fn transform_option_vec<F: FnMut(Expr) -> Result<Expr>>(
     option_box: Option<Vec<Expr>>,
     transform: &mut F,
-) -> Result<Option<Vec<Expr>>>
-where
-    F: FnMut(Expr) -> Result<Expr>,
-{
-    Ok(if let Some(exprs) = option_box {
-        Some(transform_vec(exprs, transform)?)
-    } else {
-        None
-    })
+) -> Result<Option<Vec<Expr>>> {
+    option_box
+        .map(|exprs| transform_vec(exprs, transform))
+        .transpose()
 }
 
 /// &mut transform a `Vec` of `Expr`s
-fn transform_vec<F>(v: Vec<Expr>, transform: &mut F) -> Result<Vec<Expr>>
-where
-    F: FnMut(Expr) -> Result<Expr>,
-{
+fn transform_vec<F: FnMut(Expr) -> Result<Expr>>(
+    v: Vec<Expr>,
+    transform: &mut F,
+) -> Result<Vec<Expr>> {
     v.into_iter().map(transform).collect()
 }

@@ -19,19 +19,19 @@
 //! infinite sources, if there are any. It will reject non-runnable query plans
 //! that use pipeline-breaking operators on infinite input(s).
 
-use std::borrow::Cow;
 use std::sync::Arc;
 
 use crate::config::ConfigOptions;
 use crate::error::Result;
 use crate::physical_optimizer::PhysicalOptimizerRule;
-use crate::physical_plan::{with_new_children_if_necessary, ExecutionPlan};
+use crate::physical_plan::ExecutionPlan;
 
 use datafusion_common::config::OptimizerOptions;
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{plan_err, DataFusionError};
 use datafusion_physical_expr::intervals::utils::{check_support, is_datatype_supported};
 use datafusion_physical_plan::joins::SymmetricHashJoinExec;
+use datafusion_physical_plan::tree_node::PlanContext;
 
 /// The PipelineChecker rule rejects non-runnable query plans that use
 /// pipeline-breaking operators on infinite input(s).
@@ -51,7 +51,7 @@ impl PhysicalOptimizerRule for PipelineChecker {
         plan: Arc<dyn ExecutionPlan>,
         config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let pipeline = PipelineStatePropagator::new(plan);
+        let pipeline = PipelineStatePropagator::new_default(plan);
         let state = pipeline
             .transform_up(&|p| check_finiteness_requirements(p, &config.optimizer))?;
         Ok(state.plan)
@@ -66,54 +66,12 @@ impl PhysicalOptimizerRule for PipelineChecker {
     }
 }
 
-/// [PipelineStatePropagator] propagates the [ExecutionPlan] pipelining information.
-#[derive(Clone, Debug)]
-pub struct PipelineStatePropagator {
-    pub(crate) plan: Arc<dyn ExecutionPlan>,
-    pub(crate) unbounded: bool,
-    pub(crate) children: Vec<Self>,
-}
+/// This object propagates the [`ExecutionPlan`] pipelining information.
+pub type PipelineStatePropagator = PlanContext<bool>;
 
-impl PipelineStatePropagator {
-    /// Constructs a new, default pipelining state.
-    pub fn new(plan: Arc<dyn ExecutionPlan>) -> Self {
-        let children = plan.children();
-        Self {
-            plan,
-            unbounded: false,
-            children: children.into_iter().map(Self::new).collect(),
-        }
-    }
-
-    /// Returns the children unboundedness information.
-    pub fn children_unbounded(&self) -> Vec<bool> {
-        self.children.iter().map(|c| c.unbounded).collect()
-    }
-}
-
-impl TreeNode for PipelineStatePropagator {
-    fn children_nodes(&self) -> Vec<Cow<Self>> {
-        self.children.iter().map(Cow::Borrowed).collect()
-    }
-
-    fn map_children<F>(mut self, transform: F) -> Result<Self>
-    where
-        F: FnMut(Self) -> Result<Self>,
-    {
-        if !self.children.is_empty() {
-            self.children = self
-                .children
-                .into_iter()
-                .map(transform)
-                .collect::<Result<_>>()?;
-            self.plan = with_new_children_if_necessary(
-                self.plan,
-                self.children.iter().map(|c| c.plan.clone()).collect(),
-            )?
-            .into();
-        }
-        Ok(self)
-    }
+/// Collects unboundedness flags of all the children of the plan in `pipeline`.
+pub fn children_unbounded(pipeline: &PipelineStatePropagator) -> Vec<bool> {
+    pipeline.children.iter().map(|c| c.data).collect()
 }
 
 /// This function propagates finiteness information and rejects any plan with
@@ -126,16 +84,15 @@ pub fn check_finiteness_requirements(
         if !(optimizer_options.allow_symmetric_joins_without_pruning
             || (exec.check_if_order_information_available()? && is_prunable(exec)))
         {
-            const MSG: &str = "Join operation cannot operate on a non-prunable stream without enabling \
-                               the 'allow_symmetric_joins_without_pruning' configuration flag";
-            return plan_err!("{}", MSG);
+            return plan_err!("Join operation cannot operate on a non-prunable stream without enabling \
+                              the 'allow_symmetric_joins_without_pruning' configuration flag");
         }
     }
     input
         .plan
-        .unbounded_output(&input.children_unbounded())
+        .unbounded_output(&children_unbounded(&input))
         .map(|value| {
-            input.unbounded = value;
+            input.data = value;
             Transformed::Yes(input)
         })
 }
