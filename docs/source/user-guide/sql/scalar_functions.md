@@ -2852,6 +2852,10 @@ _Alias of [array_replace_n](#array_replace_n)._
 
 _Alias of [array_replace_all](#array_replace_all)._
 
+### `list_reverse`
+
+_Alias of [array_reverse](#array_reverse)._
+
 ### `list_slice`
 
 _Alias of [array_slice](#array_slice)._
