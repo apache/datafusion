@@ -580,6 +580,7 @@ fn roundtrip_builtin_scalar_function() -> Result<()> {
         vec![col("a", &schema)?],
         DataType::Int64,
         None,
+        Signature::exact(vec![DataType::Int64], Volatility::Immutable),
     );
 
     let project =
@@ -617,6 +618,7 @@ fn roundtrip_scalar_udf() -> Result<()> {
         vec![col("a", &schema)?],
         DataType::Int64,
         None,
+        Signature::exact(vec![DataType::Int64], Volatility::Immutable),
     );
 
     let project =

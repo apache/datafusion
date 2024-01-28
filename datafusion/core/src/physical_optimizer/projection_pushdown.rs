@@ -1225,7 +1225,7 @@ mod tests {
     use datafusion_common::{JoinSide, JoinType, Result, ScalarValue, Statistics};
     use datafusion_execution::object_store::ObjectStoreUrl;
     use datafusion_execution::{SendableRecordBatchStream, TaskContext};
-    use datafusion_expr::{ColumnarValue, Operator};
+    use datafusion_expr::{ColumnarValue, Operator, Signature, Volatility};
     use datafusion_physical_expr::expressions::{
         BinaryExpr, CaseExpr, CastExpr, Column, Literal, NegativeExpr,
     };
@@ -1270,6 +1270,10 @@ mod tests {
                 ],
                 DataType::Int32,
                 None,
+                Signature::exact(
+                    vec![DataType::Float32, DataType::Float32],
+                    Volatility::Immutable,
+                ),
             )),
             Arc::new(CaseExpr::try_new(
                 Some(Arc::new(Column::new("d", 2))),
@@ -1336,6 +1340,10 @@ mod tests {
                 ],
                 DataType::Int32,
                 None,
+                Signature::exact(
+                    vec![DataType::Float32, DataType::Float32],
+                    Volatility::Immutable,
+                ),
             )),
             Arc::new(CaseExpr::try_new(
                 Some(Arc::new(Column::new("d", 3))),
@@ -1405,6 +1413,10 @@ mod tests {
                 ],
                 DataType::Int32,
                 None,
+                Signature::exact(
+                    vec![DataType::Float32, DataType::Float32],
+                    Volatility::Immutable,
+                ),
             )),
             Arc::new(CaseExpr::try_new(
                 Some(Arc::new(Column::new("d", 2))),
@@ -1471,6 +1483,10 @@ mod tests {
                 ],
                 DataType::Int32,
                 None,
+                Signature::exact(
+                    vec![DataType::Float32, DataType::Float32],
+                    Volatility::Immutable,
+                ),
             )),
             Arc::new(CaseExpr::try_new(
                 Some(Arc::new(Column::new("d_new", 3))),

@@ -44,7 +44,7 @@ use arrow::record_batch::RecordBatch;
 use datafusion_common::Result;
 use datafusion_expr::{
     expr_vec_fmt, BuiltinScalarFunction, ColumnarValue, FuncMonotonicity,
-    ScalarFunctionImplementation,
+    ScalarFunctionImplementation, Signature,
 };
 
 /// Physical expression of a scalar function
@@ -58,6 +58,8 @@ pub struct ScalarFunctionExpr {
     // and it specifies the effect of an increase or decrease in
     // the corresponding `arg` to the function value.
     monotonicity: Option<FuncMonotonicity>,
+    // Signature of the function
+    signature: Signature,
 }
 
 impl Debug for ScalarFunctionExpr {
@@ -79,6 +81,7 @@ impl ScalarFunctionExpr {
         args: Vec<Arc<dyn PhysicalExpr>>,
         return_type: DataType,
         monotonicity: Option<FuncMonotonicity>,
+        signature: Signature,
     ) -> Self {
         Self {
             fun,
@@ -86,6 +89,7 @@ impl ScalarFunctionExpr {
             args,
             return_type,
             monotonicity,
+            signature,
         }
     }
 
@@ -149,6 +153,9 @@ impl PhysicalExpr for ScalarFunctionExpr {
             {
                 vec![ColumnarValue::create_null_array(batch.num_rows())]
             }
+            (0, _) if self.signature.type_signature.supports_zero_argument() => {
+                vec![ColumnarValue::create_null_array(batch.num_rows())]
+            }
             _ => self
                 .args
                 .iter()
@@ -175,6 +182,7 @@ impl PhysicalExpr for ScalarFunctionExpr {
             children,
             self.return_type().clone(),
             self.monotonicity.clone(),
+            self.signature.clone(),
         )))
     }
 
