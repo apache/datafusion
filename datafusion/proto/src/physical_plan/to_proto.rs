@@ -51,9 +51,9 @@ use datafusion_physical_plan::expressions::{
     CastExpr, Column, Correlation, Count, Covariance, CovariancePop, CumeDist,
     DistinctArrayAgg, DistinctBitXor, DistinctCount, DistinctSum, FirstValue, Grouping,
     InListExpr, IsNotNullExpr, IsNullExpr, LastValue, LikeExpr, Literal, Max, Median,
-    Min, NegativeExpr, NotExpr, NthValue, Ntile, OrderSensitiveArrayAgg, Rank, RankType,
-    Regr, RegrType, RowNumber, Stddev, StddevPop, Sum, TryCastExpr, Variance,
-    VariancePop, WindowShift,
+    Min, NegativeExpr, NotExpr, NthValue, NthValueAgg, Ntile, OrderSensitiveArrayAgg,
+    Rank, RankType, Regr, RegrType, RowNumber, Stddev, StddevPop, StringAgg, Sum,
+    TryCastExpr, Variance, VariancePop, WindowShift,
 };
 use datafusion_physical_plan::udaf::AggregateFunctionExpr;
 use datafusion_physical_plan::windows::{BuiltInWindowExpr, PlainAggregateWindowExpr};
@@ -366,6 +366,10 @@ fn aggr_expr_to_aggr_fn(expr: &dyn AggregateExpr) -> Result<AggrFn> {
         protobuf::AggregateFunction::FirstValueAgg
     } else if aggr_expr.downcast_ref::<LastValue>().is_some() {
         protobuf::AggregateFunction::LastValueAgg
+    } else if aggr_expr.downcast_ref::<StringAgg>().is_some() {
+        protobuf::AggregateFunction::StringAgg
+    } else if aggr_expr.downcast_ref::<NthValueAgg>().is_some() {
+        protobuf::AggregateFunction::NthValueAgg
     } else {
         return not_impl_err!("Aggregate function not supported: {expr:?}");
     };
