@@ -224,53 +224,17 @@ fn criterion_benchmark(c: &mut Criterion) {
         })
     });
 
-    let q1_sql = std::fs::read_to_string("../../benchmarks/queries/q1.sql").unwrap();
-    let q2_sql = std::fs::read_to_string("../../benchmarks/queries/q2.sql").unwrap();
-    let q3_sql = std::fs::read_to_string("../../benchmarks/queries/q3.sql").unwrap();
-    let q4_sql = std::fs::read_to_string("../../benchmarks/queries/q4.sql").unwrap();
-    let q5_sql = std::fs::read_to_string("../../benchmarks/queries/q5.sql").unwrap();
-    let q6_sql = std::fs::read_to_string("../../benchmarks/queries/q6.sql").unwrap();
-    let q7_sql = std::fs::read_to_string("../../benchmarks/queries/q7.sql").unwrap();
-    let q8_sql = std::fs::read_to_string("../../benchmarks/queries/q8.sql").unwrap();
-    let q9_sql = std::fs::read_to_string("../../benchmarks/queries/q9.sql").unwrap();
-    let q10_sql = std::fs::read_to_string("../../benchmarks/queries/q10.sql").unwrap();
-    let q11_sql = std::fs::read_to_string("../../benchmarks/queries/q11.sql").unwrap();
-    let q12_sql = std::fs::read_to_string("../../benchmarks/queries/q12.sql").unwrap();
-    let q13_sql = std::fs::read_to_string("../../benchmarks/queries/q13.sql").unwrap();
-    let q14_sql = std::fs::read_to_string("../../benchmarks/queries/q14.sql").unwrap();
-    // let q15_sql = std::fs::read_to_string("../../benchmarks/queries/q15.sql").unwrap();
-    let q16_sql = std::fs::read_to_string("../../benchmarks/queries/q16.sql").unwrap();
-    let q17_sql = std::fs::read_to_string("../../benchmarks/queries/q17.sql").unwrap();
-    let q18_sql = std::fs::read_to_string("../../benchmarks/queries/q18.sql").unwrap();
-    let q19_sql = std::fs::read_to_string("../../benchmarks/queries/q19.sql").unwrap();
-    let q20_sql = std::fs::read_to_string("../../benchmarks/queries/q20.sql").unwrap();
-    let q21_sql = std::fs::read_to_string("../../benchmarks/queries/q21.sql").unwrap();
-    let q22_sql = std::fs::read_to_string("../../benchmarks/queries/q22.sql").unwrap();
-
-    c.bench_function("physical_plan_tpch", |b| {
-        b.iter(|| physical_plan(&ctx, &q1_sql));
-        b.iter(|| physical_plan(&ctx, &q2_sql));
-        b.iter(|| physical_plan(&ctx, &q3_sql));
-        b.iter(|| physical_plan(&ctx, &q4_sql));
-        b.iter(|| physical_plan(&ctx, &q5_sql));
-        b.iter(|| physical_plan(&ctx, &q6_sql));
-        b.iter(|| physical_plan(&ctx, &q7_sql));
-        b.iter(|| physical_plan(&ctx, &q8_sql));
-        b.iter(|| physical_plan(&ctx, &q9_sql));
-        b.iter(|| physical_plan(&ctx, &q10_sql));
-        b.iter(|| physical_plan(&ctx, &q11_sql));
-        b.iter(|| physical_plan(&ctx, &q12_sql));
-        b.iter(|| physical_plan(&ctx, &q13_sql));
-        b.iter(|| physical_plan(&ctx, &q14_sql));
-        // b.iter(|| physical_plan(&ctx, &q15_sql));
-        b.iter(|| physical_plan(&ctx, &q16_sql));
-        b.iter(|| physical_plan(&ctx, &q17_sql));
-        b.iter(|| physical_plan(&ctx, &q18_sql));
-        b.iter(|| physical_plan(&ctx, &q19_sql));
-        b.iter(|| physical_plan(&ctx, &q20_sql));
-        b.iter(|| physical_plan(&ctx, &q21_sql));
-        b.iter(|| physical_plan(&ctx, &q22_sql));
-    });
+    for q in [
+        "q1", "q2", "q3", "q4", "q5", "q6", "q7", "q8", "q9", "q10", "q11", "q12", "q13",
+        "q14", // "q15",
+        "q16", "q17", "q18", "q19", "q20", "q21", "q22",
+    ] {
+        let sql = std::fs::read_to_string(format!("../../benchmarks/queries/{}.sql", q))
+            .unwrap();
+        c.bench_function(&format!("physical_plan_tpch_{}", q), |b| {
+            b.iter(|| logical_plan(&ctx, &sql))
+        });
+    }
 }
 
 criterion_group!(benches, criterion_benchmark);
