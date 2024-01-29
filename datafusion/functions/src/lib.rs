@@ -22,7 +22,7 @@
 //! are available to control the binary size of their application as well as
 //! use dialect specific implementations of functions (e.g. Spark vs Postgres)
 //!
-//! Each package is a implemented as a separate
+//! Each package is implemented as a separate
 //! module, activated by a feature flag.
 //!
 //! [DataFusion]: https://crates.io/crates/datafusion
