@@ -556,7 +556,7 @@ impl DefaultPhysicalPlanner {
                     input,
                     output_url,
                     file_format,
-                    single_file_output,
+                    single_file_output: _,
                     copy_options,
                 }) => {
                     let input_exec = self.create_initial_plan(input, session_state).await?;
