@@ -238,20 +238,19 @@ pub fn create_physical_expr(
                 GetFieldAccess::ListIndex { key } => GetFieldAccessExpr::ListIndex {
                     key: create_physical_expr(key, input_dfschema, execution_props)?,
                 },
-                GetFieldAccess::ListRange { start, stop } => {
-                    GetFieldAccessExpr::ListRange {
-                        start: create_physical_expr(
-                            start,
-                            input_dfschema,
-                            execution_props,
-                        )?,
-                        stop: create_physical_expr(
-                            stop,
-                            input_dfschema,
-                            execution_props,
-                        )?,
-                    }
-                }
+                GetFieldAccess::ListRange {
+                    start,
+                    stop,
+                    stride,
+                } => GetFieldAccessExpr::ListRange {
+                    start: create_physical_expr(start, input_dfschema, execution_props)?,
+                    stop: create_physical_expr(stop, input_dfschema, execution_props)?,
+                    stride: create_physical_expr(
+                        stride,
+                        input_dfschema,
+                        execution_props,
+                    )?,
+                },
             };
             Ok(Arc::new(GetIndexedFieldExpr::new(
                 create_physical_expr(expr, input_dfschema, execution_props)?,

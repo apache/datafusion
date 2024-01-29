@@ -731,6 +731,8 @@ pub struct ListRange {
     pub start: ::core::option::Option<::prost::alloc::boxed::Box<LogicalExprNode>>,
     #[prost(message, optional, boxed, tag = "2")]
     pub stop: ::core::option::Option<::prost::alloc::boxed::Box<LogicalExprNode>>,
+    #[prost(message, optional, boxed, tag = "3")]
+    pub stride: ::core::option::Option<::prost::alloc::boxed::Box<LogicalExprNode>>,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -2538,6 +2540,8 @@ pub struct ListRangeExpr {
     pub start: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalExprNode>>,
     #[prost(message, optional, boxed, tag = "2")]
     pub stop: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalExprNode>>,
+    #[prost(message, optional, boxed, tag = "3")]
+    pub stride: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalExprNode>>,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
