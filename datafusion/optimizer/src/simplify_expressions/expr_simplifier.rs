@@ -19,10 +19,8 @@
 
 use std::ops::Not;
 
+use super::inlist_simplifier::{InListSimplifier, ShortenInListSimplifier};
 use super::utils::*;
-use super::{
-    inlist_simplifier::InListSimplifier, or_in_list_simplifier::OrInListSimplifier,
-};
 use crate::analyzer::type_coercion::TypeCoercionRewriter;
 use crate::simplify_expressions::guarantees::GuaranteeRewriter;
 use crate::simplify_expressions::regex::simplify_regex_expr;
@@ -44,10 +42,7 @@ use datafusion_expr::{
     and, lit, or, BinaryExpr, BuiltinScalarFunction, Case, ColumnarValue, Expr, Like,
     ScalarFunctionDefinition, Volatility,
 };
-use datafusion_expr::{
-    expr::{InList, InSubquery, ScalarFunction},
-    interval_arithmetic::NullableInterval,
-};
+use datafusion_expr::{expr::ScalarFunction, interval_arithmetic::NullableInterval};
 use datafusion_physical_expr::{create_physical_expr, execution_props::ExecutionProps};
 
 /// This structure handles API for expression simplification
@@ -133,7 +128,7 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
     pub fn simplify(&self, expr: Expr) -> Result<Expr> {
         let mut simplifier = Simplifier::new(&self.info);
         let mut const_evaluator = ConstEvaluator::try_new(self.info.execution_props())?;
-        let mut or_in_list_simplifier = OrInListSimplifier::new();
+        let mut shorten_in_list_simplifier = ShortenInListSimplifier::new();
         let mut inlist_simplifier = InListSimplifier::new();
         let mut guarantee_rewriter = GuaranteeRewriter::new(&self.guarantees);
 
@@ -143,8 +138,9 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
         // https://github.com/apache/arrow-datafusion/issues/1160
         expr.rewrite(&mut const_evaluator)?
             .rewrite(&mut simplifier)?
-            .rewrite(&mut or_in_list_simplifier)?
+            // .rewrite(&mut or_in_list_simplifier)?
             .rewrite(&mut inlist_simplifier)?
+            .rewrite(&mut shorten_in_list_simplifier)?
             .rewrite(&mut guarantee_rewriter)?
             // run both passes twice to try an minimize simplifications that we missed
             .rewrite(&mut const_evaluator)?
@@ -550,88 +546,88 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
             }
             // expr IN () --> false
             // expr NOT IN () --> true
-            Expr::InList(InList {
-                expr,
-                list,
-                negated,
-            }) if list.is_empty() && *expr != Expr::Literal(ScalarValue::Null) => {
-                lit(negated)
-            }
+            // Expr::InList(InList {
+            //     expr,
+            //     list,
+            //     negated,
+            // }) if list.is_empty() && *expr != Expr::Literal(ScalarValue::Null) => {
+            //     lit(negated)
+            // }
 
-            // null in (x, y, z) --> null
-            // null not in (x, y, z) --> null
-            Expr::InList(InList {
-                expr,
-                list: _,
-                negated: _,
-            }) if is_null(&expr) => lit_bool_null(),
+            // // null in (x, y, z) --> null
+            // // null not in (x, y, z) --> null
+            // Expr::InList(InList {
+            //     expr,
+            //     list: _,
+            //     negated: _,
+            // }) if is_null(&expr) => lit_bool_null(),
 
-            // expr IN ((subquery)) -> expr IN (subquery), see ##5529
-            Expr::InList(InList {
-                expr,
-                mut list,
-                negated,
-            }) if list.len() == 1
-                && matches!(list.first(), Some(Expr::ScalarSubquery { .. })) =>
-            {
-                let Expr::ScalarSubquery(subquery) = list.remove(0) else {
-                    unreachable!()
-                };
-                Expr::InSubquery(InSubquery::new(expr, subquery, negated))
-            }
+            // // expr IN ((subquery)) -> expr IN (subquery), see ##5529
+            // Expr::InList(InList {
+            //     expr,
+            //     mut list,
+            //     negated,
+            // }) if list.len() == 1
+            //     && matches!(list.first(), Some(Expr::ScalarSubquery { .. })) =>
+            // {
+            //     let Expr::ScalarSubquery(subquery) = list.remove(0) else {
+            //         unreachable!()
+            //     };
+            //     Expr::InSubquery(InSubquery::new(expr, subquery, negated))
+            // }
 
-            // if expr is a single column reference:
-            // expr IN (A, B, ...) --> (expr = A) OR (expr = B) OR (expr = C)
-            Expr::InList(InList {
-                expr,
-                list,
-                negated,
-            }) if !list.is_empty()
-                && (
-                    // For lists with only 1 value we allow more complex expressions to be simplified
-                    // e.g SUBSTR(c1, 2, 3) IN ('1') -> SUBSTR(c1, 2, 3) = '1'
-                    // for more than one we avoid repeating this potentially expensive
-                    // expressions
-                    list.len() == 1
-                        || list.len() <= THRESHOLD_INLINE_INLIST
-                            && expr.try_into_col().is_ok()
-                ) =>
-            {
-                let first_val = list[0].clone();
-                if negated {
-                    list.into_iter().skip(1).fold(
-                        (*expr.clone()).not_eq(first_val),
-                        |acc, y| {
-                            // Note that `A and B and C and D` is a left-deep tree structure
-                            // as such we want to maintain this structure as much as possible
-                            // to avoid reordering the expression during each optimization
-                            // pass.
-                            //
-                            // Left-deep tree structure for `A and B and C and D`:
-                            // ```
-                            //        &
-                            //       / \
-                            //      &   D
-                            //     / \
-                            //    &   C
-                            //   / \
-                            //  A   B
-                            // ```
-                            //
-                            // The code below maintain the left-deep tree structure.
-                            acc.and((*expr.clone()).not_eq(y))
-                        },
-                    )
-                } else {
-                    list.into_iter().skip(1).fold(
-                        (*expr.clone()).eq(first_val),
-                        |acc, y| {
-                            // Same reasoning as above
-                            acc.or((*expr.clone()).eq(y))
-                        },
-                    )
-                }
-            }
+            // // if expr is a single column reference:
+            // // expr IN (A, B, ...) --> (expr = A) OR (expr = B) OR (expr = C)
+            // Expr::InList(InList {
+            //     expr,
+            //     list,
+            //     negated,
+            // }) if !list.is_empty()
+            //     && (
+            //         // For lists with only 1 value we allow more complex expressions to be simplified
+            //         // e.g SUBSTR(c1, 2, 3) IN ('1') -> SUBSTR(c1, 2, 3) = '1'
+            //         // for more than one we avoid repeating this potentially expensive
+            //         // expressions
+            //         list.len() == 1
+            //             || list.len() <= THRESHOLD_INLINE_INLIST
+            //                 && expr.try_into_col().is_ok()
+            //     ) =>
+            // {
+            //     let first_val = list[0].clone();
+            //     if negated {
+            //         list.into_iter().skip(1).fold(
+            //             (*expr.clone()).not_eq(first_val),
+            //             |acc, y| {
+            //                 // Note that `A and B and C and D` is a left-deep tree structure
+            //                 // as such we want to maintain this structure as much as possible
+            //                 // to avoid reordering the expression during each optimization
+            //                 // pass.
+            //                 //
+            //                 // Left-deep tree structure for `A and B and C and D`:
+            //                 // ```
+            //                 //        &
+            //                 //       / \
+            //                 //      &   D
+            //                 //     / \
+            //                 //    &   C
+            //                 //   / \
+            //                 //  A   B
+            //                 // ```
+            //                 //
+            //                 // The code below maintain the left-deep tree structure.
+            //                 acc.and((*expr.clone()).not_eq(y))
+            //             },
+            //         )
+            //     } else {
+            //         list.into_iter().skip(1).fold(
+            //             (*expr.clone()).eq(first_val),
+            //             |acc, y| {
+            //                 // Same reasoning as above
+            //                 acc.or((*expr.clone()).eq(y))
+            //             },
+            //         )
+            //     }
+            // }
             //
             // Rules for NotEq
             //
