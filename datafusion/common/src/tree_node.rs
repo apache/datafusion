@@ -41,6 +41,21 @@ macro_rules! handle_tree_recursion {
     };
 }
 
+macro_rules! handle_tree_recursion_without_stop {
+    ($TNR:expr, $NODE:expr) => {
+        match $TNR {
+            TreeNodeRecursion::Continue => {}
+            // If the recursion should skip, do not apply to its children, let
+            // the recursion continue:
+            TreeNodeRecursion::Skip => return Ok($NODE),
+            // Stop is not (yet) supported
+            TreeNodeRecursion::Stop => {
+                panic!("Stop can't be used in `TreeNode::transform()` and `TreeNode::rewrite()`")
+            }
+        }
+    };
+}
+
 /// Defines a visitable and rewriteable a tree node. This trait is
 /// implemented for plans ([`ExecutionPlan`] and [`LogicalPlan`]) as
 /// well as expression trees ([`PhysicalExpr`], [`Expr`]) in
@@ -123,7 +138,8 @@ pub trait TreeNode: Sized {
     /// f_up(ParentNode)
     /// ```
     ///
-    /// See [`TreeNodeRecursion`] for more details on how the traversal can be controlled.
+    /// See [`TreeNodeRecursion`] for more details on how the traversal can be controlled,
+    /// and please note that [`TreeNodeRecursion::Stop`] is not supported.
     ///
     /// If `f_down` or `f_up` returns [`Err`], recursion is stopped immediately.
     fn transform<FD, FU>(self, f_down: &mut FD, f_up: &mut FU) -> Result<Self>
@@ -132,15 +148,7 @@ pub trait TreeNode: Sized {
         FU: FnMut(Self) -> Result<Self>,
     {
         let (new_node, tnr) = f_down(self).map(|(t, tnr)| (t.into(), tnr))?;
-        match tnr {
-            TreeNodeRecursion::Continue => {}
-            // If the recursion should skip, do not apply to its children. And let the recursion continue
-            TreeNodeRecursion::Skip => return Ok(new_node),
-            // If the recursion should stop, do not apply to its children
-            TreeNodeRecursion::Stop => {
-                panic!("Stop can't be used in TreeNode::transform()")
-            }
-        }
+        handle_tree_recursion_without_stop!(tnr, new_node);
         let node_with_new_children =
             new_node.map_children(|node| node.transform(f_down, f_up))?;
         f_up(node_with_new_children)
@@ -212,21 +220,14 @@ pub trait TreeNode: Sized {
     /// TreeNodeRewriter::f_up(ParentNode)
     /// ```
     ///
-    /// See [`TreeNodeRecursion`] for more details on how the traversal can be controlled.
+    /// See [`TreeNodeRecursion`] for more details on how the traversal can be controlled,
+    /// and please note that [`TreeNodeRecursion::Stop`] is not supported.
     ///
     /// If [`TreeNodeRewriter::f_down()`] or [`TreeNodeRewriter::f_up()`] returns [`Err`],
     /// recursion is stopped immediately.
     fn rewrite<R: TreeNodeRewriter<Node = Self>>(self, rewriter: &mut R) -> Result<Self> {
         let (new_node, tnr) = rewriter.f_down(self)?;
-        match tnr {
-            TreeNodeRecursion::Continue => {}
-            // If the recursion should skip, do not apply to its children. And let the recursion continue
-            TreeNodeRecursion::Skip => return Ok(new_node),
-            // If the recursion should stop, do not apply to its children
-            TreeNodeRecursion::Stop => {
-                panic!("Stop can't be used in TreeNode::rewrite()")
-            }
-        }
+        handle_tree_recursion_without_stop!(tnr, new_node);
         let node_with_new_children =
             new_node.map_children(|node| node.rewrite(rewriter))?;
         rewriter.f_up(node_with_new_children)
