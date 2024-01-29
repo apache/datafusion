@@ -1099,7 +1099,6 @@ impl DataFrame {
             self.plan,
             path.into(),
             FileType::JSON,
-            options.single_file_output,
             copy_options,
         )?
         .build()?;

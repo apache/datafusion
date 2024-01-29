@@ -21,7 +21,7 @@ create table source_table(col1 integer, col2 varchar) as values (1, 'Foo'), (2, 
 
 # Copy to directory as multiple files
 query IT
-COPY source_table TO 'test_files/scratch/copy/table' (format parquet, single_file_output false, compression 'zstd(10)');
+COPY source_table TO 'test_files/scratch/copy/table' (format parquet, compression 'zstd(10)');
 ----
 2
 

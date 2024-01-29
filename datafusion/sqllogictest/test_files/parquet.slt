@@ -45,7 +45,7 @@ CREATE TABLE src_table (
 query ITID
 COPY (SELECT * FROM src_table LIMIT 3)
 TO 'test_files/scratch/parquet/test_table/0.parquet'
-(FORMAT PARQUET, SINGLE_FILE_OUTPUT true);
+(FORMAT PARQUET);
 ----
 3
 
@@ -53,7 +53,7 @@ TO 'test_files/scratch/parquet/test_table/0.parquet'
 query ITID
 COPY (SELECT * FROM src_table WHERE int_col > 3 LIMIT 3)
 TO 'test_files/scratch/parquet/test_table/1.parquet'
-(FORMAT PARQUET, SINGLE_FILE_OUTPUT true);
+(FORMAT PARQUET);
 ----
 3
 
