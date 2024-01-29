@@ -153,7 +153,9 @@ impl PhysicalExpr for ScalarFunctionExpr {
             {
                 vec![ColumnarValue::create_null_array(batch.num_rows())]
             }
-            (0, _) if self.signature.type_signature.supports_zero_argument() => {
+            // If the function supports zero argument, we pass in a null array indicating the batch size.
+            // This is for user-defined functions.
+            (0, Err(_)) if self.signature.type_signature.supports_zero_argument() => {
                 vec![ColumnarValue::create_null_array(batch.num_rows())]
             }
             _ => self
