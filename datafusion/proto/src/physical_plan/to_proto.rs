@@ -564,7 +564,7 @@ impl TryFrom<Arc<dyn PhysicalExpr>> for protobuf::PhysicalExprNode {
                 ),
                 GetFieldAccessExpr::ListRange { start, stop, stride } => {
                     Some(
-                        protobuf::physical_get_indexed_field_expr_node::Field::ListStrideExpr(Box::new(protobuf::ListStrideExpr {
+                        protobuf::physical_get_indexed_field_expr_node::Field::ListRangeExpr(Box::new(protobuf::ListRangeExpr {
                             start: Some(Box::new(start.to_owned().try_into()?)),
                             stop: Some(Box::new(stop.to_owned().try_into()?)),
                             stride: Some(Box::new(stride.to_owned().try_into()?)),

@@ -1055,20 +1055,20 @@ pub fn parse_expr(
                         )?),
                     }
                 }
-                Some(protobuf::get_indexed_field::Field::ListRange(list_stride)) => {
+                Some(protobuf::get_indexed_field::Field::ListRange(list_range)) => {
                     GetFieldAccess::ListRange {
                         start: Box::new(parse_required_expr(
-                            list_stride.start.as_deref(),
+                            list_range.start.as_deref(),
                             registry,
                             "start",
                         )?),
                         stop: Box::new(parse_required_expr(
-                            list_stride.stop.as_deref(),
+                            list_range.stop.as_deref(),
                             registry,
                             "stop",
                         )?),
                         stride: Box::new(parse_required_expr(
-                            list_stride.stride.as_deref(),
+                            list_range.stride.as_deref(),
                             registry,
                             "stride",
                         )?),
