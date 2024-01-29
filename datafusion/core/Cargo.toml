@@ -27,7 +27,7 @@ homepage = { workspace = true }
 repository = { workspace = true }
 license = { workspace = true }
 authors = { workspace = true }
-rust-version = "1.71"
+rust-version = { workspace = true }
 
 [lib]
 name = "datafusion"
