@@ -171,7 +171,14 @@ impl CommonSubexprEliminate {
         let mut expr_set = ExprSet::new();
 
         // Get all window expressions inside the consecutive window operators.
-        // At this stage all window operators should be consecutive.
+        // Consecutive window expressions may refer to same complex expression.
+        // If same complex expression is referred more than once by subsequent `WindowAggr`s,
+        // we can cache complex expression by evaluating it with a projection before the
+        // first WindowAggr.
+        // This enables us to cache complex expression "c3+c4" for following plan:
+        // WindowAggr: windowExpr=[[SUM(c9) ORDER BY [c3 + c4] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+        // --WindowAggr: windowExpr=[[SUM(c9) ORDER BY [c3 + c4] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+        // where, it is referred once by each `WindowAggr` (total of 2) in the plan.
         let mut plan = LogicalPlan::Window(window.clone());
         while let LogicalPlan::Window(window) = plan {
             let Window {
