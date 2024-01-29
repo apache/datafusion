@@ -578,7 +578,7 @@ fn roundtrip_builtin_scalar_function() -> Result<()> {
         "acos",
         fun_expr,
         vec![col("a", &schema)?],
-        DataType::Int64,
+        DataType::Float64,
         None,
         Signature::exact(vec![DataType::Int64], Volatility::Immutable),
     );
