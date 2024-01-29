@@ -1848,6 +1848,28 @@ mod tests {
                     (col_b, option_asc),
                 ],
             ),
+            // TEST CASE 8
+            (
+                vec![col_e, col_d, col_h, col_f, col_b],
+                vec![
+                    (col_e, option_desc),
+                    (col_d, option_asc),
+                    (col_h, option_desc),
+                    (col_f, option_asc),
+                    (col_b, option_asc),
+                ],
+            ),
+            // TEST CASE 9
+            (
+                vec![col_e, col_d, col_b, col_h, col_f],
+                vec![
+                    (col_e, option_desc),
+                    (col_d, option_asc),
+                    (col_b, option_asc),
+                    (col_h, option_desc),
+                    (col_f, option_asc),
+                ],
+            ),
         ];
         for (exprs, expected) in test_cases {
             let exprs = exprs.into_iter().cloned().collect::<Vec<_>>();
