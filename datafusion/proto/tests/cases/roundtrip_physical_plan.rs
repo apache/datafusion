@@ -35,6 +35,7 @@ use datafusion::logical_expr::{
     create_udf, BuiltinScalarFunction, JoinType, Operator, Volatility,
 };
 use datafusion::parquet::file::properties::WriterProperties;
+use datafusion::physical_expr::expressions::Literal;
 use datafusion::physical_expr::window::SlidingAggregateWindowExpr;
 use datafusion::physical_expr::{PhysicalSortRequirement, ScalarFunctionExpr};
 use datafusion::physical_plan::aggregates::{
@@ -750,6 +751,8 @@ fn roundtrip_get_indexed_field_list_range() -> Result<()> {
         GetFieldAccessExpr::ListRange {
             start: col_start,
             stop: col_stop,
+            stride: Arc::new(Literal::new(ScalarValue::Int64(Some(1))))
+                as Arc<dyn PhysicalExpr>,
         },
     ));
 

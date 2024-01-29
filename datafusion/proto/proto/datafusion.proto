@@ -465,6 +465,7 @@ message ListIndex {
 message ListRange {
   LogicalExprNode start = 1;
   LogicalExprNode stop = 2;
+  LogicalExprNode stride = 3;
 }
 
 message GetIndexedField {
@@ -1771,6 +1772,7 @@ message ListIndexExpr {
 message ListRangeExpr {
   PhysicalExprNode start = 1;
   PhysicalExprNode stop = 2;
+  PhysicalExprNode stride = 3;
 }
 
 message PhysicalGetIndexedFieldExprNode {

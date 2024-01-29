@@ -12506,12 +12506,18 @@ impl serde::Serialize for ListRange {
         if self.stop.is_some() {
             len += 1;
         }
+        if self.stride.is_some() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion.ListRange", len)?;
         if let Some(v) = self.start.as_ref() {
             struct_ser.serialize_field("start", v)?;
         }
         if let Some(v) = self.stop.as_ref() {
             struct_ser.serialize_field("stop", v)?;
+        }
+        if let Some(v) = self.stride.as_ref() {
+            struct_ser.serialize_field("stride", v)?;
         }
         struct_ser.end()
     }
@@ -12525,12 +12531,14 @@ impl<'de> serde::Deserialize<'de> for ListRange {
         const FIELDS: &[&str] = &[
             "start",
             "stop",
+            "stride",
         ];
 
         #[allow(clippy::enum_variant_names)]
         enum GeneratedField {
             Start,
             Stop,
+            Stride,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -12554,6 +12562,7 @@ impl<'de> serde::Deserialize<'de> for ListRange {
                         match value {
                             "start" => Ok(GeneratedField::Start),
                             "stop" => Ok(GeneratedField::Stop),
+                            "stride" => Ok(GeneratedField::Stride),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -12575,6 +12584,7 @@ impl<'de> serde::Deserialize<'de> for ListRange {
             {
                 let mut start__ = None;
                 let mut stop__ = None;
+                let mut stride__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Start => {
@@ -12589,11 +12599,18 @@ impl<'de> serde::Deserialize<'de> for ListRange {
                             }
                             stop__ = map_.next_value()?;
                         }
+                        GeneratedField::Stride => {
+                            if stride__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("stride"));
+                            }
+                            stride__ = map_.next_value()?;
+                        }
                     }
                 }
                 Ok(ListRange {
                     start: start__,
                     stop: stop__,
+                    stride: stride__,
                 })
             }
         }
@@ -12614,12 +12631,18 @@ impl serde::Serialize for ListRangeExpr {
         if self.stop.is_some() {
             len += 1;
         }
+        if self.stride.is_some() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion.ListRangeExpr", len)?;
         if let Some(v) = self.start.as_ref() {
             struct_ser.serialize_field("start", v)?;
         }
         if let Some(v) = self.stop.as_ref() {
             struct_ser.serialize_field("stop", v)?;
+        }
+        if let Some(v) = self.stride.as_ref() {
+            struct_ser.serialize_field("stride", v)?;
         }
         struct_ser.end()
     }
@@ -12633,12 +12656,14 @@ impl<'de> serde::Deserialize<'de> for ListRangeExpr {
         const FIELDS: &[&str] = &[
             "start",
             "stop",
+            "stride",
         ];
 
         #[allow(clippy::enum_variant_names)]
         enum GeneratedField {
             Start,
             Stop,
+            Stride,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -12662,6 +12687,7 @@ impl<'de> serde::Deserialize<'de> for ListRangeExpr {
                         match value {
                             "start" => Ok(GeneratedField::Start),
                             "stop" => Ok(GeneratedField::Stop),
+                            "stride" => Ok(GeneratedField::Stride),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -12683,6 +12709,7 @@ impl<'de> serde::Deserialize<'de> for ListRangeExpr {
             {
                 let mut start__ = None;
                 let mut stop__ = None;
+                let mut stride__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Start => {
@@ -12697,11 +12724,18 @@ impl<'de> serde::Deserialize<'de> for ListRangeExpr {
                             }
                             stop__ = map_.next_value()?;
                         }
+                        GeneratedField::Stride => {
+                            if stride__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("stride"));
+                            }
+                            stride__ = map_.next_value()?;
+                        }
                     }
                 }
                 Ok(ListRangeExpr {
                     start: start__,
                     stop: stop__,
+                    stride: stride__,
                 })
             }
         }
