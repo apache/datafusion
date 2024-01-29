@@ -103,8 +103,7 @@ async fn main() -> Result<()> {
         .collect()
         .await;
 
-    let expected =
-        "DataFusion error: Execution error: Unable to parse date from null/empty value";
+    let expected = "Execution error: Unable to parse date from null/empty value";
     assert_contains!(result.unwrap_err().to_string(), expected);
 
     // invalid date values will also result in an error
