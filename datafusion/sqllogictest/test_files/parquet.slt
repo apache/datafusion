@@ -128,7 +128,7 @@ SortPreservingMergeExec: [string_col@1 ASC NULLS LAST,int_col@0 ASC NULLS LAST]
 query ITID
 COPY (SELECT * FROM src_table WHERE int_col > 6 LIMIT 3)
 TO 'test_files/scratch/parquet/test_table/2.parquet'
-(FORMAT PARQUET, SINGLE_FILE_OUTPUT true);
+(FORMAT PARQUET);
 ----
 3
 
@@ -281,7 +281,7 @@ LIMIT 10;
 query ITID
 COPY (SELECT * FROM src_table WHERE int_col > 6 LIMIT 3)
 TO 'test_files/scratch/parquet/test_table/subdir/3.parquet'
-(FORMAT PARQUET, SINGLE_FILE_OUTPUT true);
+(FORMAT PARQUET);
 ----
 3
 

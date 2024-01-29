@@ -322,7 +322,6 @@ message DistinctOnNode {
 message CopyToNode {
     LogicalPlanNode input = 1;
     string output_url = 2;
-    bool single_file_output = 3;
     oneof CopyOptions {
         SQLOptions sql_options = 4;
         FileTypeWriterOptions writer_options = 5;
@@ -1266,7 +1265,6 @@ message FileSinkConfig {
   repeated string table_paths = 3;
   Schema output_schema = 4;
   repeated PartitionColumn table_partition_cols = 5;
-  bool single_file_output = 7;
   bool overwrite = 8;
   FileTypeWriterOptions file_type_writer_options = 9;
 }
