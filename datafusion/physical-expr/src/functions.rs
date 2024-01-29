@@ -81,7 +81,7 @@ pub fn create_physical_expr(
         input_phy_exprs.to_vec(),
         data_type,
         monotonicity,
-        fun.signature().clone(),
+        fun.signature().type_signature.supports_zero_argument(),
     )))
 }
 

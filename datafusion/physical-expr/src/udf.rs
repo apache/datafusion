@@ -40,7 +40,7 @@ pub fn create_physical_expr(
         input_phy_exprs.to_vec(),
         fun.return_type(&input_exprs_types)?,
         fun.monotonicity()?,
-        fun.signature().clone(),
+        fun.signature().type_signature.supports_zero_argument(),
     )))
 }
 
