@@ -213,7 +213,7 @@ impl CommonSubexprEliminate {
             let orig_window_expr = window_exprs.pop().unwrap();
             assert_eq!(new_window_expr.len(), orig_window_expr.len());
 
-            // Rename new re-written window expressions with original name (bu giving alias)
+            // Rename new re-written window expressions with original name (by giving alias)
             // Otherwise we may receive schema error, in subsequent operators.
             let new_window_expr = new_window_expr
                 .into_iter()
