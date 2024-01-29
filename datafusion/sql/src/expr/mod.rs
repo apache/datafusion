@@ -754,18 +754,47 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 operator: JsonOperator::Colon,
                 right,
             } => {
-                let start = Box::new(self.sql_expr_to_logical_expr(
-                    *left,
-                    schema,
-                    planner_context,
-                )?);
-                let stop = Box::new(self.sql_expr_to_logical_expr(
-                    *right,
-                    schema,
-                    planner_context,
-                )?);
-
-                GetFieldAccess::ListRange { start, stop }
+                let (start, stop, stride) = if let SQLExpr::JsonAccess {
+                    left: l,
+                    operator: JsonOperator::Colon,
+                    right: r,
+                } = *left
+                {
+                    let start = Box::new(self.sql_expr_to_logical_expr(
+                        *l,
+                        schema,
+                        planner_context,
+                    )?);
+                    let stop = Box::new(self.sql_expr_to_logical_expr(
+                        *r,
+                        schema,
+                        planner_context,
+                    )?);
+                    let stride = Box::new(self.sql_expr_to_logical_expr(
+                        *right,
+                        schema,
+                        planner_context,
+                    )?);
+                    (start, stop, stride)
+                } else {
+                    let start = Box::new(self.sql_expr_to_logical_expr(
+                        *left,
+                        schema,
+                        planner_context,
+                    )?);
+                    let stop = Box::new(self.sql_expr_to_logical_expr(
+                        *right,
+                        schema,
+                        planner_context,
+                    )?);
+                    let stride = Box::new(Expr::Literal(ScalarValue::Int64(Some(1))));
+                    (start, stop, stride)
+                };
+                GetFieldAccess::ListRange {
+                    start,
+                    stop,
+                    stride,
+                }
             }
             _ => GetFieldAccess::ListIndex {
                 key: Box::new(self.sql_expr_to_logical_expr(
