@@ -17,7 +17,9 @@
 
 //! DateTime expressions
 
-use crate::expressions::cast_column;
+use std::str::FromStr;
+use std::sync::Arc;
+
 use arrow::compute::cast;
 use arrow::{
     array::{Array, ArrayRef, Float64Array, OffsetSizeTrait, PrimitiveArray},
@@ -33,13 +35,17 @@ use arrow::{
     datatypes::TimeUnit,
     temporal_conversions::{as_datetime_with_timezone, timestamp_ns_to_datetime},
 };
+use arrow_array::builder::PrimitiveBuilder;
+use arrow_array::cast::AsArray;
 use arrow_array::temporal_conversions::NANOSECONDS;
 use arrow_array::timezone::Tz;
-use arrow_array::types::ArrowTimestampType;
+use arrow_array::types::{ArrowTimestampType, Date32Type, Int32Type};
 use arrow_array::GenericStringArray;
 use chrono::prelude::*;
 use chrono::LocalResult::Single;
 use chrono::{Duration, Months, NaiveDate};
+use itertools::Either;
+
 use datafusion_common::cast::{
     as_date32_array, as_date64_array, as_generic_string_array, as_primitive_array,
     as_timestamp_microsecond_array, as_timestamp_millisecond_array,
@@ -50,9 +56,8 @@ use datafusion_common::{
     ScalarValue,
 };
 use datafusion_expr::ColumnarValue;
-use itertools::Either;
-use std::str::FromStr;
-use std::sync::Arc;
+
+use crate::expressions::cast_column;
 
 /// Error message if nanosecond conversion request beyond supported interval
 const ERR_NANOSECONDS_NOT_SUPPORTED: &str = "The dates that can be represented as nanoseconds have to be between 1677-09-21T00:12:44.0 and 2262-04-11T23:47:16.854775804";
@@ -495,6 +500,99 @@ pub fn make_current_time(
 ) -> impl Fn(&[ColumnarValue]) -> Result<ColumnarValue> {
     let nano = now_ts.timestamp_nanos_opt().map(|ts| ts % 86400000000000);
     move |_arg| Ok(ColumnarValue::Scalar(ScalarValue::Time64Nanosecond(nano)))
+}
+
+/// make_date(year, month, date) SQL function implementation
+pub fn make_date(args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    if args.len() != 3 {
+        return exec_err!(
+            "make_date function requires 3 arguments, got {}",
+            args.len()
+        );
+    }
+
+    // first, identify if any of the arguments is an Array. If yes, store its `len`,
+    // as any scalar will need to be converted to an array of len `len`.
+    let len = args
+        .iter()
+        .fold(Option::<usize>::None, |acc, arg| match arg {
+            ColumnarValue::Scalar(_) => acc,
+            ColumnarValue::Array(a) => Some(a.len()),
+        });
+
+    let is_scalar = len.is_none();
+    let array_size = if is_scalar { 1 } else { len.unwrap() };
+
+    let years = cast_column(&args[0], &DataType::Int32, None)?;
+    let months = cast_column(&args[1], &DataType::Int32, None)?;
+    let days = cast_column(&args[2], &DataType::Int32, None)?;
+
+    let value_fn = |col: &ColumnarValue, pos: usize| -> Result<i32> {
+        match col {
+            ColumnarValue::Array(a) => Ok(a.as_primitive::<Int32Type>().value(pos)),
+            ColumnarValue::Scalar(s) => match s {
+                ScalarValue::Int32(i) => match i {
+                    Some(i) => Ok(*i),
+                    None => {
+                        exec_err!("Unable to parse date from null/empty value")
+                    }
+                },
+                _ => unreachable!(),
+            },
+        }
+    };
+
+    // since the epoch for the date32 datatype is the unix epoch
+    // we need to subtract the unix epoch from the current date
+    // note this can result in a negative value
+    let unix_days_from_ce = NaiveDate::from_ymd_opt(1970, 1, 1)
+        .unwrap()
+        .num_days_from_ce();
+
+    let mut builder: PrimitiveBuilder<Date32Type> = PrimitiveArray::builder(array_size);
+
+    for i in 0..array_size {
+        let y = value_fn(&years, i)?;
+        let m = u32::try_from(value_fn(&months, i)?);
+        let d = u32::try_from(value_fn(&days, i)?);
+
+        if m.is_err() {
+            return exec_err!(
+                "Month value '{:?}' is out of range",
+                value_fn(&months, i).unwrap()
+            );
+        }
+        if d.is_err() {
+            return exec_err!(
+                "Day value '{:?}' is out of range",
+                value_fn(&days, i).unwrap()
+            );
+        }
+
+        let date = NaiveDate::from_ymd_opt(y, m.unwrap(), d.unwrap());
+
+        match date {
+            Some(d) => builder.append_value(d.num_days_from_ce() - unix_days_from_ce),
+            None => {
+                return exec_err!(
+                    "Unable to parse date from {y}, {}, {}",
+                    m.unwrap(),
+                    d.unwrap()
+                )
+            }
+        };
+    }
+
+    let arr = builder.finish();
+
+    if is_scalar {
+        // If all inputs are scalar, keeps output as scalar
+        Ok(ColumnarValue::Scalar(ScalarValue::Date32(Some(
+            arr.value(0),
+        ))))
+    } else {
+        Ok(ColumnarValue::Array(Arc::new(arr)))
+    }
 }
 
 fn quarter_month<T>(date: &T) -> u32
@@ -1426,9 +1524,10 @@ mod tests {
     };
     use arrow_array::types::Int64Type;
     use arrow_array::{
-        TimestampMicrosecondArray, TimestampMillisecondArray, TimestampNanosecondArray,
-        TimestampSecondArray,
+        Date32Array, Int32Array, TimestampMicrosecondArray, TimestampMillisecondArray,
+        TimestampNanosecondArray, TimestampSecondArray, UInt32Array,
     };
+
     use datafusion_common::assert_contains;
     use datafusion_expr::ScalarFunctionImplementation;
 
@@ -2367,5 +2466,113 @@ mod tests {
             let actual = func(&string_array).unwrap_err().to_string();
             assert_contains!(actual, expected);
         }
+    }
+
+    #[test]
+    fn test_make_date() {
+        let res = make_date(&[
+            ColumnarValue::Scalar(ScalarValue::Int32(Some(2024))),
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(1))),
+            ColumnarValue::Scalar(ScalarValue::UInt32(Some(14))),
+        ])
+        .expect("that make_date parsed values without error");
+
+        if let ColumnarValue::Scalar(ScalarValue::Date32(date)) = res {
+            assert_eq!(19736, date.unwrap());
+        } else {
+            panic!("Expected a scalar value")
+        }
+
+        let res = make_date(&[
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(2024))),
+            ColumnarValue::Scalar(ScalarValue::UInt64(Some(1))),
+            ColumnarValue::Scalar(ScalarValue::UInt32(Some(14))),
+        ])
+        .expect("that make_date parsed values without error");
+
+        if let ColumnarValue::Scalar(ScalarValue::Date32(date)) = res {
+            assert_eq!(19736, date.unwrap());
+        } else {
+            panic!("Expected a scalar value")
+        }
+
+        let res = make_date(&[
+            ColumnarValue::Scalar(ScalarValue::Utf8(Some("2024".to_string()))),
+            ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some("1".to_string()))),
+            ColumnarValue::Scalar(ScalarValue::Utf8(Some("14".to_string()))),
+        ])
+        .expect("that make_date parsed values without error");
+
+        if let ColumnarValue::Scalar(ScalarValue::Date32(date)) = res {
+            assert_eq!(19736, date.unwrap());
+        } else {
+            panic!("Expected a scalar value")
+        }
+
+        let years = Arc::new((2021..2025).map(Some).collect::<Int64Array>());
+        let months = Arc::new((1..5).map(Some).collect::<Int32Array>());
+        let days = Arc::new((11..15).map(Some).collect::<UInt32Array>());
+        let res = make_date(&[
+            ColumnarValue::Array(years),
+            ColumnarValue::Array(months),
+            ColumnarValue::Array(days),
+        ])
+        .expect("that make_date parsed values without error");
+
+        if let ColumnarValue::Array(array) = res {
+            assert_eq!(array.len(), 4);
+            let mut builder = Date32Array::builder(4);
+            builder.append_value(18_638);
+            builder.append_value(19_035);
+            builder.append_value(19_429);
+            builder.append_value(19_827);
+            assert_eq!(&builder.finish() as &dyn Array, array.as_ref());
+        } else {
+            panic!("Expected a columnar array")
+        }
+
+        //
+        // Fallible test cases
+        //
+
+        // invalid number of arguments
+        let res = make_date(&[ColumnarValue::Scalar(ScalarValue::Int32(Some(1)))]);
+        assert_eq!(
+            res.err().unwrap().strip_backtrace(),
+            "Execution error: make_date function requires 3 arguments, got 1"
+        );
+
+        // invalid type
+        let res = make_date(&[
+            ColumnarValue::Scalar(ScalarValue::IntervalYearMonth(Some(1))),
+            ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
+            ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
+        ]);
+        assert_eq!(
+            res.err().unwrap().strip_backtrace(),
+            "Arrow error: Cast error: Casting from Interval(YearMonth) to Int32 not supported"
+        );
+
+        // overflow of month
+        let res = make_date(&[
+            ColumnarValue::Scalar(ScalarValue::Int32(Some(2023))),
+            ColumnarValue::Scalar(ScalarValue::UInt64(Some(u64::MAX))),
+            ColumnarValue::Scalar(ScalarValue::Int32(Some(22))),
+        ]);
+        assert_eq!(
+            res.err().unwrap().strip_backtrace(),
+            "Arrow error: Cast error: Can't cast value 18446744073709551615 to type Int32"
+        );
+
+        // overflow of day
+        let res = make_date(&[
+            ColumnarValue::Scalar(ScalarValue::Int32(Some(2023))),
+            ColumnarValue::Scalar(ScalarValue::Int32(Some(22))),
+            ColumnarValue::Scalar(ScalarValue::UInt32(Some(u32::MAX))),
+        ]);
+        assert_eq!(
+            res.err().unwrap().strip_backtrace(),
+            "Arrow error: Cast error: Can't cast value 4294967295 to type Int32"
+        );
     }
 }
