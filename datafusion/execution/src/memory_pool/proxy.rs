@@ -28,6 +28,25 @@ pub trait VecAllocExt {
     /// `accounting` by any newly allocated bytes.
     ///
     /// Note that allocation counts  capacity, not size
+    ///
+    /// # Example:
+    /// ```
+    /// # use datafusion_execution::memory_pool::proxy::VecAllocExt;
+    /// // use allocated to incrementally track how much memory is allocated in the vec
+    /// let mut allocated = 0;
+    /// let mut vec = Vec::new();
+    /// // Push data into the vec and the accounting will be updated to reflect
+    /// // memory allocation
+    /// vec.push_accounted(1, &mut allocated);
+    /// assert_eq!(allocated, 16); // space for 4 u32s
+    /// vec.push_accounted(1, &mut allocated);
+    /// assert_eq!(allocated, 16); // no new allocation needed
+    ///
+    /// // push more data into the vec
+    /// for _ in 0..10 { vec.push_accounted(1, &mut allocated); }
+    /// assert_eq!(allocated, 64); // underlying vec has space for 10 u32s
+    /// assert_eq!(vec.allocated_size(), 64);
+    /// ```
     fn push_accounted(&mut self, x: Self::T, accounting: &mut usize);
 
     /// Return the amount of memory allocated by this Vec to store elements
@@ -36,6 +55,22 @@ pub trait VecAllocExt {
     /// Note this calculation is not recursive, and does not include any heap
     /// allocations contained within the Vec's elements. Does not include the
     /// size of `self`
+    ///
+    /// # Example:
+    /// ```
+    /// # use datafusion_execution::memory_pool::proxy::VecAllocExt;
+    /// let mut vec = Vec::new();
+    /// // Push data into the vec and the accounting will be updated to reflect
+    /// // memory allocation
+    /// vec.push(1);
+    /// assert_eq!(vec.allocated_size(), 16); // space for 4 u32s
+    /// vec.push(1);
+    /// assert_eq!(vec.allocated_size(), 16); // no new allocation needed
+    ///
+    /// // push more data into the vec
+    /// for _ in 0..10 { vec.push(1); }
+    /// assert_eq!(vec.allocated_size(), 64); // space for 64 now
+    /// ```
     fn allocated_size(&self) -> usize;
 }
 
@@ -43,17 +78,14 @@ impl<T> VecAllocExt for Vec<T> {
     type T = T;
 
     fn push_accounted(&mut self, x: Self::T, accounting: &mut usize) {
-        if self.capacity() == self.len() {
-            // allocate more
-
-            // growth factor: 2, but at least 2 elements
-            let bump_elements = (self.capacity() * 2).max(2);
-            let bump_size = std::mem::size_of::<u32>() * bump_elements;
-            self.reserve(bump_elements);
+        let prev_capacty = self.capacity();
+        self.push(x);
+        let new_capacity = self.capacity();
+        if new_capacity > prev_capacty {
+            // capacity changed, so we allocated more
+            let bump_size = (new_capacity - prev_capacty) * std::mem::size_of::<T>();
             *accounting = (*accounting).checked_add(bump_size).expect("overflow");
         }
-
-        self.push(x);
     }
     fn allocated_size(&self) -> usize {
         std::mem::size_of::<T>() * self.capacity()
@@ -69,6 +101,7 @@ pub trait RawTableAllocExt {
     /// `accounting` by any newly allocated bytes.
     ///
     /// Returns the bucket where the element was inserted.
+    /// Note that allocation counts capacity, not size.
     fn insert_accounted(
         &mut self,
         x: Self::T,
