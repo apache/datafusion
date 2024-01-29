@@ -44,7 +44,7 @@ datafusion-common = { workspace = true }
 paste = "^1.0"
 sqlparser = { workspace = true }
 strum = { version = "0.25.0", features = ["derive"] }
-strum_macros = "0.25.0"
+strum_macros = "0.26.1"
 
 [dev-dependencies]
 ctor = { workspace = true }
