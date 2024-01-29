@@ -662,6 +662,21 @@ SELECT instr('foobarbar', '')
 ----
 1
 
+query I
+SELECT instr('实现这个函数', '函')
+----
+5
+
+query I
+SELECT instr('实现这,个函数', '函')
+----
+6
+
+query I
+SELECT instr('实现 这 个函数', '函')
+----
+7
+
 query T
 SELECT lower('FOObar')
 ----

@@ -1501,6 +1501,14 @@ mod tests {
         );
         test_function!(
             InStr,
+            &[lit("实现这个函数"), lit("函")],
+            Ok(Some(5)),
+            i32,
+            Int32,
+            Int32Array
+        );
+        test_function!(
+            InStr,
             &[lit("Helloworld"), lit(ScalarValue::Utf8(None))],
             Ok(None),
             i32,

@@ -303,15 +303,29 @@ pub fn instr<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
     let string_array = as_generic_string_array::<T>(&args[0])?;
     let substr_array = as_generic_string_array::<T>(&args[1])?;
 
+    fn process_instr(string: &str, substr: &str) -> Option<i64> {
+        if substr.is_empty() {
+            return Some(1); // An empty substring is found at the start
+        }
+
+        let string_chars: Vec<char> = string.chars().collect();
+        let substr_chars: Vec<char> = substr.chars().collect();
+
+        string_chars
+            .windows(substr_chars.len())
+            .position(|window| window == substr_chars.as_slice())
+            .map_or(Some(0), |index| Some(index as i64 + 1))
+    }
+
     match args[0].data_type() {
         DataType::Utf8 => {
             let result = string_array
                 .iter()
                 .zip(substr_array.iter())
-                .map(|(string, substr)| match (string, substr) {
-                    (Some(string), Some(substr)) => string
-                        .find(substr)
-                        .map_or(Some(0), |index| Some((index + 1) as i32)),
+                .map(|(string_opt, substr_opt)| match (string_opt, substr_opt) {
+                    (Some(string), Some(substr)) => {
+                        process_instr(string, substr).map(|i| i as i32)
+                    }
                     _ => None,
                 })
                 .collect::<Int32Array>();
@@ -322,10 +336,8 @@ pub fn instr<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
             let result = string_array
                 .iter()
                 .zip(substr_array.iter())
-                .map(|(string, substr)| match (string, substr) {
-                    (Some(string), Some(substr)) => string
-                        .find(substr)
-                        .map_or(Some(0), |index| Some((index + 1) as i64)),
+                .map(|(string_opt, substr_opt)| match (string_opt, substr_opt) {
+                    (Some(string), Some(substr)) => process_instr(string, substr),
                     _ => None,
                 })
                 .collect::<Int64Array>();
