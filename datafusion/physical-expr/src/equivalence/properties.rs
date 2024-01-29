@@ -730,7 +730,7 @@ impl EquivalenceProperties {
             for (PhysicalSortExpr { expr, .. }, idx) in &ordered_exprs {
                 eq_properties =
                     eq_properties.add_constants(std::iter::once(expr.clone()));
-                search_indices.remove(idx);
+                search_indices.swap_remove(idx);
             }
             // Add new ordered section to the state.
             result.extend(ordered_exprs);
