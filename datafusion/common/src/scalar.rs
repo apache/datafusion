@@ -2797,6 +2797,7 @@ impl From<String> for ScalarValue {
     }
 }
 
+// TODO: Remove this after changing to Scalar<T>
 // Wrapper for ScalarValue::Struct that checks the length of the arrays, without nulls
 impl From<(Fields, Vec<ArrayRef>)> for ScalarValue {
     fn from((fields, arrays): (Fields, Vec<ArrayRef>)) -> Self {
@@ -2804,6 +2805,7 @@ impl From<(Fields, Vec<ArrayRef>)> for ScalarValue {
     }
 }
 
+// TODO: Remove this after changing to Scalar<T>
 // Wrapper for ScalarValue::Struct that checks the length of the arrays
 impl From<(Fields, Vec<ArrayRef>, Option<NullBuffer>)> for ScalarValue {
     fn from(
