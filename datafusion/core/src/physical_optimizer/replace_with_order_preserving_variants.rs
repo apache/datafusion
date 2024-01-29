@@ -19,121 +19,78 @@
 //! order-preserving variants when it is helpful; either in terms of
 //! performance or to accommodate unbounded streams by fixing the pipeline.
 
-use std::borrow::Cow;
 use std::sync::Arc;
 
-use super::utils::is_repartition;
+use super::utils::{is_repartition, is_sort_preserving_merge};
 use crate::error::Result;
 use crate::physical_optimizer::utils::{is_coalesce_partitions, is_sort};
 use crate::physical_plan::repartition::RepartitionExec;
 use crate::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
-use crate::physical_plan::{with_new_children_if_necessary, ExecutionPlan};
 
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::tree_node::{Transformed, TreeNode};
+use datafusion_common::tree_node::Transformed;
+use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
+use datafusion_physical_plan::tree_node::PlanContext;
 use datafusion_physical_plan::unbounded_output;
+
+use itertools::izip;
 
 /// For a given `plan`, this object carries the information one needs from its
 /// descendants to decide whether it is beneficial to replace order-losing (but
 /// somewhat faster) variants of certain operators with their order-preserving
 /// (but somewhat slower) cousins.
-#[derive(Debug, Clone)]
-pub(crate) struct OrderPreservationContext {
-    pub(crate) plan: Arc<dyn ExecutionPlan>,
-    ordering_connection: bool,
-    children_nodes: Vec<Self>,
-}
+pub type OrderPreservationContext = PlanContext<bool>;
 
-impl OrderPreservationContext {
-    /// Creates an empty context tree. Each node has `false` connections.
-    pub fn new(plan: Arc<dyn ExecutionPlan>) -> Self {
-        let children = plan.children();
-        Self {
-            plan,
-            ordering_connection: false,
-            children_nodes: children.into_iter().map(Self::new).collect(),
-        }
-    }
-
-    /// Creates a new order-preservation context from those of children nodes.
-    pub fn update_children(mut self) -> Result<Self> {
-        for node in self.children_nodes.iter_mut() {
-            let plan = node.plan.clone();
-            let children = plan.children();
-            let maintains_input_order = plan.maintains_input_order();
-            let inspect_child = |idx| {
-                maintains_input_order[idx]
-                    || is_coalesce_partitions(&plan)
-                    || is_repartition(&plan)
-            };
-
-            // We cut the path towards nodes that do not maintain ordering.
-            for (idx, c) in node.children_nodes.iter_mut().enumerate() {
-                c.ordering_connection &= inspect_child(idx);
-            }
-
-            node.ordering_connection = if children.is_empty() {
-                false
-            } else if !node.children_nodes[0].ordering_connection
-                && ((is_repartition(&plan) && !maintains_input_order[0])
-                    || (is_coalesce_partitions(&plan)
-                        && children[0].output_ordering().is_some()))
-            {
-                // We either have a RepartitionExec or a CoalescePartitionsExec
-                // and they lose their input ordering, so initiate connection:
-                true
-            } else {
-                // Maintain connection if there is a child with a connection,
-                // and operator can possibly maintain that connection (either
-                // in its current form or when we replace it with the corresponding
-                // order preserving operator).
-                node.children_nodes
-                    .iter()
-                    .enumerate()
-                    .any(|(idx, c)| c.ordering_connection && inspect_child(idx))
-            }
-        }
-
-        self.plan = with_new_children_if_necessary(
-            self.plan,
-            self.children_nodes.iter().map(|c| c.plan.clone()).collect(),
-        )?
-        .into();
-        self.ordering_connection = false;
-        Ok(self)
-    }
-}
-
-impl TreeNode for OrderPreservationContext {
-    fn children_nodes(&self) -> Vec<Cow<Self>> {
-        self.children_nodes.iter().map(Cow::Borrowed).collect()
-    }
-
-    fn map_children<F>(mut self, transform: F) -> Result<Self>
-    where
-        F: FnMut(Self) -> Result<Self>,
+/// Updates order-preservation data for all children of the given node.
+pub fn update_children(opc: &mut OrderPreservationContext) {
+    for PlanContext {
+        plan,
+        children,
+        data,
+    } in opc.children.iter_mut()
     {
-        if !self.children_nodes.is_empty() {
-            self.children_nodes = self
-                .children_nodes
-                .into_iter()
-                .map(transform)
-                .collect::<Result<_>>()?;
-            self.plan = with_new_children_if_necessary(
-                self.plan,
-                self.children_nodes.iter().map(|c| c.plan.clone()).collect(),
-            )?
-            .into();
+        let maintains_input_order = plan.maintains_input_order();
+        let inspect_child = |idx| {
+            maintains_input_order[idx]
+                || is_coalesce_partitions(plan)
+                || is_repartition(plan)
+        };
+
+        // We cut the path towards nodes that do not maintain ordering.
+        for (idx, c) in children.iter_mut().enumerate() {
+            c.data &= inspect_child(idx);
         }
-        Ok(self)
+
+        let plan_children = plan.children();
+        *data = if plan_children.is_empty() {
+            false
+        } else if !children[0].data
+            && ((is_repartition(plan) && !maintains_input_order[0])
+                || (is_coalesce_partitions(plan)
+                    && plan_children[0].output_ordering().is_some()))
+        {
+            // We either have a RepartitionExec or a CoalescePartitionsExec
+            // and they lose their input ordering, so initiate connection:
+            true
+        } else {
+            // Maintain connection if there is a child with a connection,
+            // and operator can possibly maintain that connection (either
+            // in its current form or when we replace it with the corresponding
+            // order preserving operator).
+            children
+                .iter()
+                .enumerate()
+                .any(|(idx, c)| c.data && inspect_child(idx))
+        }
     }
+    opc.data = false;
 }
 
 /// Calculates the updated plan by replacing operators that lose ordering
 /// inside `sort_input` with their order-preserving variants. This will
 /// generate an alternative plan, which will be accepted or rejected later on
 /// depending on whether it helps us remove a `SortExec`.
-fn get_updated_plan(
+fn plan_with_order_preserving_variants(
     mut sort_input: OrderPreservationContext,
     // Flag indicating that it is desirable to replace `RepartitionExec`s with
     // `SortPreservingRepartitionExec`s:
@@ -142,74 +99,115 @@ fn get_updated_plan(
     // with `SortPreservingMergeExec`s:
     is_spm_better: bool,
 ) -> Result<OrderPreservationContext> {
-    let updated_children = sort_input
-        .children_nodes
-        .clone()
+    sort_input.children = sort_input
+        .children
         .into_iter()
-        .map(|item| {
-            // Update children and their descendants in the given tree if the connection is open:
-            if item.ordering_connection {
-                get_updated_plan(item, is_spr_better, is_spm_better)
+        .map(|node| {
+            // Update descendants in the given tree if there is a connection:
+            if node.data {
+                plan_with_order_preserving_variants(node, is_spr_better, is_spm_better)
             } else {
-                Ok(item)
+                Ok(node)
             }
         })
-        .collect::<Result<Vec<_>>>()?;
+        .collect::<Result<_>>()?;
+    sort_input.data = false;
 
-    sort_input.plan = sort_input
-        .plan
-        .with_new_children(updated_children.iter().map(|c| c.plan.clone()).collect())?;
-    sort_input.ordering_connection = false;
-    sort_input.children_nodes = updated_children;
-
-    // When a `RepartitionExec` doesn't preserve ordering, replace it with
-    // a sort-preserving variant if appropriate:
     if is_repartition(&sort_input.plan)
         && !sort_input.plan.maintains_input_order()[0]
         && is_spr_better
     {
-        let child = sort_input.plan.children().swap_remove(0);
-        let repartition =
-            RepartitionExec::try_new(child, sort_input.plan.output_partitioning())?
-                .with_preserve_order();
-        sort_input.plan = Arc::new(repartition) as _;
-        sort_input.children_nodes[0].ordering_connection = true;
+        // When a `RepartitionExec` doesn't preserve ordering, replace it with
+        // a sort-preserving variant if appropriate:
+        let child = sort_input.children[0].plan.clone();
+        let partitioning = sort_input.plan.output_partitioning();
+        sort_input.plan = Arc::new(
+            RepartitionExec::try_new(child, partitioning)?.with_preserve_order(),
+        ) as _;
+        sort_input.children[0].data = true;
+        return Ok(sort_input);
     } else if is_coalesce_partitions(&sort_input.plan) && is_spm_better {
-        // When the input of a `CoalescePartitionsExec` has an ordering, replace it
-        // with a `SortPreservingMergeExec` if appropriate:
-        if let Some(ordering) = sort_input.children_nodes[0]
-            .plan
-            .output_ordering()
-            .map(|o| o.to_vec())
-        {
-            // Now we can mutate `new_node.children_nodes` safely
-            let child = sort_input.children_nodes.clone().swap_remove(0);
-            sort_input.plan =
-                Arc::new(SortPreservingMergeExec::new(ordering, child.plan)) as _;
-            sort_input.children_nodes[0].ordering_connection = true;
+        let child = &sort_input.children[0].plan;
+        if let Some(ordering) = child.output_ordering().map(Vec::from) {
+            // When the input of a `CoalescePartitionsExec` has an ordering,
+            // replace it with a `SortPreservingMergeExec` if appropriate:
+            let spm = SortPreservingMergeExec::new(ordering, child.clone());
+            sort_input.plan = Arc::new(spm) as _;
+            sort_input.children[0].data = true;
+            return Ok(sort_input);
         }
     }
 
+    sort_input.update_plan_from_children()
+}
+
+/// Calculates the updated plan by replacing operators that preserve ordering
+/// inside `sort_input` with their order-breaking variants. This will restore
+/// the original plan modified by [`plan_with_order_preserving_variants`].
+fn plan_with_order_breaking_variants(
+    mut sort_input: OrderPreservationContext,
+) -> Result<OrderPreservationContext> {
+    let plan = &sort_input.plan;
+    sort_input.children = izip!(
+        sort_input.children,
+        plan.maintains_input_order(),
+        plan.required_input_ordering()
+    )
+    .map(|(node, maintains, required_ordering)| {
+        // Replace with non-order preserving variants as long as ordering is
+        // not required by intermediate operators:
+        if maintains
+            && (is_sort_preserving_merge(plan)
+                || !required_ordering.map_or(false, |required_ordering| {
+                    node.plan
+                        .equivalence_properties()
+                        .ordering_satisfy_requirement(&required_ordering)
+                }))
+        {
+            plan_with_order_breaking_variants(node)
+        } else {
+            Ok(node)
+        }
+    })
+    .collect::<Result<_>>()?;
+    sort_input.data = false;
+
+    if is_repartition(plan) && plan.maintains_input_order()[0] {
+        // When a `RepartitionExec` preserves ordering, replace it with a
+        // non-sort-preserving variant:
+        let child = sort_input.children[0].plan.clone();
+        let partitioning = plan.output_partitioning();
+        sort_input.plan = Arc::new(RepartitionExec::try_new(child, partitioning)?) as _;
+    } else if is_sort_preserving_merge(plan) {
+        // Replace `SortPreservingMergeExec` with a `CoalescePartitionsExec`:
+        let child = sort_input.children[0].plan.clone();
+        let coalesce = CoalescePartitionsExec::new(child);
+        sort_input.plan = Arc::new(coalesce) as _;
+    } else {
+        return sort_input.update_plan_from_children();
+    }
+
+    sort_input.children[0].data = false;
     Ok(sort_input)
 }
 
 /// The `replace_with_order_preserving_variants` optimizer sub-rule tries to
 /// remove `SortExec`s from the physical plan by replacing operators that do
 /// not preserve ordering with their order-preserving variants; i.e. by replacing
-/// `RepartitionExec`s with `SortPreservingRepartitionExec`s or by replacing
+/// ordinary `RepartitionExec`s with their sort-preserving variants or by replacing
 /// `CoalescePartitionsExec`s with `SortPreservingMergeExec`s.
 ///
 /// If this replacement is helpful for removing a `SortExec`, it updates the plan.
 /// Otherwise, it leaves the plan unchanged.
 ///
-/// Note: this optimizer sub-rule will only produce `SortPreservingRepartitionExec`s
-/// if the query is bounded or if the config option `bounded_order_preserving_variants`
-/// is set to `true`.
+/// NOTE: This optimizer sub-rule will only produce sort-preserving `RepartitionExec`s
+/// if the query is bounded or if the config option `prefer_existing_sort` is
+/// set to `true`.
 ///
 /// The algorithm flow is simply like this:
 /// 1. Visit nodes of the physical plan bottom-up and look for `SortExec` nodes.
-/// 1_1. During the traversal, keep track of operators that maintain ordering
-///    (or can maintain ordering when replaced by an order-preserving variant) until
+///    During the traversal, keep track of operators that maintain ordering (or
+///    can maintain ordering when replaced by an order-preserving variant) until
 ///    a `SortExec` is found.
 /// 2. When a `SortExec` is found, update the child of the `SortExec` by replacing
 ///    operators that do not preserve ordering in the tree with their order
@@ -218,57 +216,56 @@ fn get_updated_plan(
 ///    its input ordering with the output ordering it imposes. We do this because
 ///    replacing operators that lose ordering with their order-preserving variants
 ///    enables us to preserve the previously lost ordering at the input of `SortExec`.
-/// 4. If the `SortExec` in question turns out to be unnecessary, remove it and use
-///     updated plan. Otherwise, use the original plan.
-/// 5. Continue the bottom-up traversal until another `SortExec` is seen, or the traversal
-///    is complete.
+/// 4. If the `SortExec` in question turns out to be unnecessary, remove it and
+///    use updated plan. Otherwise, use the original plan.
+/// 5. Continue the bottom-up traversal until another `SortExec` is seen, or the
+///    traversal is complete.
 pub(crate) fn replace_with_order_preserving_variants(
-    requirements: OrderPreservationContext,
-    // A flag indicating that replacing `RepartitionExec`s with
-    // `SortPreservingRepartitionExec`s is desirable when it helps
-    // to remove a `SortExec` from the plan. If this flag is `false`,
-    // this replacement should only be made to fix the pipeline (streaming).
+    mut requirements: OrderPreservationContext,
+    // A flag indicating that replacing `RepartitionExec`s with sort-preserving
+    // variants is desirable when it helps to remove a `SortExec` from the plan.
+    // If this flag is `false`, this replacement should only be made to fix the
+    // pipeline (streaming).
     is_spr_better: bool,
     // A flag indicating that replacing `CoalescePartitionsExec`s with
-    // `SortPreservingMergeExec`s is desirable when it helps to remove
-    // a `SortExec` from the plan. If this flag is `false`, this replacement
+    // `SortPreservingMergeExec`s is desirable when it helps to remove a
+    // `SortExec` from the plan. If this flag is `false`, this replacement
     // should only be made to fix the pipeline (streaming).
     is_spm_better: bool,
     config: &ConfigOptions,
 ) -> Result<Transformed<OrderPreservationContext>> {
-    let mut requirements = requirements.update_children()?;
-    if !(is_sort(&requirements.plan)
-        && requirements.children_nodes[0].ordering_connection)
-    {
+    update_children(&mut requirements);
+    if !(is_sort(&requirements.plan) && requirements.children[0].data) {
         return Ok(Transformed::No(requirements));
     }
 
-    // For unbounded cases, replace with the order-preserving variant in
-    // any case, as doing so helps fix the pipeline.
-    // Also do the replacement if opted-in via config options.
+    // For unbounded cases, we replace with the order-preserving variant in any
+    // case, as doing so helps fix the pipeline. Also replace if config allows.
     let use_order_preserving_variant =
         config.optimizer.prefer_existing_sort || unbounded_output(&requirements.plan);
 
-    let mut updated_sort_input = get_updated_plan(
-        requirements.children_nodes.clone().swap_remove(0),
+    // Create an alternate plan with order-preserving variants:
+    let mut alternate_plan = plan_with_order_preserving_variants(
+        requirements.children.swap_remove(0),
         is_spr_better || use_order_preserving_variant,
         is_spm_better || use_order_preserving_variant,
     )?;
 
-    // If this sort is unnecessary, we should remove it and update the plan:
-    if updated_sort_input
+    // If the alternate plan makes this sort unnecessary, accept the alternate:
+    if alternate_plan
         .plan
         .equivalence_properties()
         .ordering_satisfy(requirements.plan.output_ordering().unwrap_or(&[]))
     {
-        for child in updated_sort_input.children_nodes.iter_mut() {
-            child.ordering_connection = false;
+        for child in alternate_plan.children.iter_mut() {
+            child.data = false;
         }
-        Ok(Transformed::Yes(updated_sort_input))
+        Ok(Transformed::Yes(alternate_plan))
     } else {
-        for child in requirements.children_nodes.iter_mut() {
-            child.ordering_connection = false;
-        }
+        // The alternate plan does not help, use faster order-breaking variants:
+        alternate_plan = plan_with_order_breaking_variants(alternate_plan)?;
+        alternate_plan.data = false;
+        requirements.children = vec![alternate_plan];
         Ok(Transformed::Yes(requirements))
     }
 }
@@ -280,6 +277,7 @@ mod tests {
     use crate::datasource::file_format::file_compression_type::FileCompressionType;
     use crate::datasource::listing::PartitionedFile;
     use crate::datasource::physical_plan::{CsvExec, FileScanConfig};
+    use crate::physical_optimizer::test_utils::check_integrity;
     use crate::physical_plan::coalesce_batches::CoalesceBatchesExec;
     use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
     use crate::physical_plan::filter::FilterExec;
@@ -287,7 +285,9 @@ mod tests {
     use crate::physical_plan::repartition::RepartitionExec;
     use crate::physical_plan::sorts::sort::SortExec;
     use crate::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
-    use crate::physical_plan::{displayable, get_plan_string, Partitioning};
+    use crate::physical_plan::{
+        displayable, get_plan_string, ExecutionPlan, Partitioning,
+    };
     use crate::prelude::SessionConfig;
     use crate::test::TestStreamPartition;
 
@@ -394,8 +394,8 @@ mod tests {
 
             // Run the rule top-down
             let config = SessionConfig::new().with_prefer_existing_sort($PREFER_EXISTING_SORT);
-            let plan_with_pipeline_fixer = OrderPreservationContext::new(physical_plan);
-            let parallel = plan_with_pipeline_fixer.transform_up(&|plan_with_pipeline_fixer| replace_with_order_preserving_variants(plan_with_pipeline_fixer, false, false, config.options()))?;
+            let plan_with_pipeline_fixer = OrderPreservationContext::new_default(physical_plan);
+            let parallel = plan_with_pipeline_fixer.transform_up(&|plan_with_pipeline_fixer| replace_with_order_preserving_variants(plan_with_pipeline_fixer, false, false, config.options())).and_then(check_integrity)?;
             let optimized_physical_plan = parallel.plan;
 
             // Get string representation of the plan

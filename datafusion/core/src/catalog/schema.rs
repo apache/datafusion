@@ -34,6 +34,12 @@ use crate::error::{DataFusionError, Result};
 /// [`CatalogProvider`]: super::CatalogProvider
 #[async_trait]
 pub trait SchemaProvider: Sync + Send {
+    /// Returns the owner of the Schema, default is None. This value is reported
+    /// as part of `information_tables.schemata
+    fn owner_name(&self) -> Option<&str> {
+        None
+    }
+
     /// Returns this `SchemaProvider` as [`Any`] so that it can be downcast to a
     /// specific implementation.
     fn as_any(&self) -> &dyn Any;

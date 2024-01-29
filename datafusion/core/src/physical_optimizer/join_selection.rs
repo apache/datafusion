@@ -27,7 +27,9 @@ use std::sync::Arc;
 
 use crate::config::ConfigOptions;
 use crate::error::Result;
-use crate::physical_optimizer::pipeline_checker::PipelineStatePropagator;
+use crate::physical_optimizer::pipeline_checker::{
+    children_unbounded, PipelineStatePropagator,
+};
 use crate::physical_optimizer::PhysicalOptimizerRule;
 use crate::physical_plan::joins::utils::{ColumnIndex, JoinFilter};
 use crate::physical_plan::joins::{
@@ -229,7 +231,7 @@ impl PhysicalOptimizerRule for JoinSelection {
         plan: Arc<dyn ExecutionPlan>,
         config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let pipeline = PipelineStatePropagator::new(plan);
+        let pipeline = PipelineStatePropagator::new_default(plan);
         // First, we make pipeline-fixing modifications to joins so as to accommodate
         // unbounded inputs. Each pipeline-fixing subrule, which is a function
         // of type `PipelineFixerSubrule`, takes a single [`PipelineStatePropagator`]
@@ -352,7 +354,7 @@ fn try_collect_left(
         )?))),
         (false, true) => {
             if supports_swap(*hash_join.join_type()) {
-                Ok(Some(swap_hash_join(hash_join, PartitionMode::CollectLeft)?))
+                swap_hash_join(hash_join, PartitionMode::CollectLeft).map(Some)
             } else {
                 Ok(None)
             }
@@ -443,10 +445,8 @@ fn statistical_join_selection_subrule(
 }
 
 /// Pipeline-fixing join selection subrule.
-pub type PipelineFixerSubrule = dyn Fn(
-    PipelineStatePropagator,
-    &ConfigOptions,
-) -> Option<Result<PipelineStatePropagator>>;
+pub type PipelineFixerSubrule =
+    dyn Fn(PipelineStatePropagator, &ConfigOptions) -> Result<PipelineStatePropagator>;
 
 /// Converts a hash join to a symmetric hash join in the case of infinite inputs on both sides.
 ///
@@ -466,16 +466,16 @@ pub type PipelineFixerSubrule = dyn Fn(
 fn hash_join_convert_symmetric_subrule(
     mut input: PipelineStatePropagator,
     config_options: &ConfigOptions,
-) -> Option<Result<PipelineStatePropagator>> {
+) -> Result<PipelineStatePropagator> {
     // Check if the current plan node is a HashJoinExec.
     if let Some(hash_join) = input.plan.as_any().downcast_ref::<HashJoinExec>() {
         // Determine if left and right children are unbounded.
-        let ub_flags = input.children_unbounded();
+        let ub_flags = children_unbounded(&input);
         let (left_unbounded, right_unbounded) = (ub_flags[0], ub_flags[1]);
         // Update the unbounded flag of the input.
-        input.unbounded = left_unbounded || right_unbounded;
+        input.data = left_unbounded || right_unbounded;
         // Process only if both left and right sides are unbounded.
-        let result = if left_unbounded && right_unbounded {
+        if left_unbounded && right_unbounded {
             // Determine the partition mode based on configuration.
             let mode = if config_options.optimizer.repartition_joins {
                 StreamJoinPartitionMode::Partitioned
@@ -519,7 +519,7 @@ fn hash_join_convert_symmetric_subrule(
                                 let name = schema.field(*index).name();
                                 let col = Arc::new(Column::new(name, *index)) as _;
                                 // Check if the column is ordered.
-                                equivalence.get_expr_ordering(col).state
+                                equivalence.get_expr_ordering(col).data
                                     != SortProperties::Unordered
                             },
                         )
@@ -539,7 +539,7 @@ fn hash_join_convert_symmetric_subrule(
             let left_order = determine_order(JoinSide::Left);
             let right_order = determine_order(JoinSide::Right);
 
-            SymmetricHashJoinExec::try_new(
+            return SymmetricHashJoinExec::try_new(
                 hash_join.left().clone(),
                 hash_join.right().clone(),
                 hash_join.on().to_vec(),
@@ -553,14 +553,10 @@ fn hash_join_convert_symmetric_subrule(
             .map(|exec| {
                 input.plan = Arc::new(exec) as _;
                 input
-            })
-        } else {
-            Ok(input)
-        };
-        Some(result)
-    } else {
-        None
+            });
+        }
     }
+    Ok(input)
 }
 
 /// This subrule will swap build/probe sides of a hash join depending on whether
@@ -607,12 +603,12 @@ fn hash_join_convert_symmetric_subrule(
 fn hash_join_swap_subrule(
     mut input: PipelineStatePropagator,
     _config_options: &ConfigOptions,
-) -> Option<Result<PipelineStatePropagator>> {
+) -> Result<PipelineStatePropagator> {
     if let Some(hash_join) = input.plan.as_any().downcast_ref::<HashJoinExec>() {
-        let ub_flags = input.children_unbounded();
+        let ub_flags = children_unbounded(&input);
         let (left_unbounded, right_unbounded) = (ub_flags[0], ub_flags[1]);
-        input.unbounded = left_unbounded || right_unbounded;
-        let result = if left_unbounded
+        input.data = left_unbounded || right_unbounded;
+        if left_unbounded
             && !right_unbounded
             && matches!(
                 *hash_join.join_type(),
@@ -620,18 +616,12 @@ fn hash_join_swap_subrule(
                     | JoinType::Left
                     | JoinType::LeftSemi
                     | JoinType::LeftAnti
-            ) {
-            swap_join_according_to_unboundedness(hash_join).map(|plan| {
-                input.plan = plan;
-                input
-            })
-        } else {
-            Ok(input)
-        };
-        Some(result)
-    } else {
-        None
+            )
+        {
+            input.plan = swap_join_according_to_unboundedness(hash_join)?;
+        }
     }
+    Ok(input)
 }
 
 /// This function swaps sides of a hash join to make it runnable even if one of
@@ -669,13 +659,11 @@ fn apply_subrules(
     config_options: &ConfigOptions,
 ) -> Result<Transformed<PipelineStatePropagator>> {
     for subrule in subrules {
-        if let Some(value) = subrule(input.clone(), config_options).transpose()? {
-            input = value;
-        }
+        input = subrule(input, config_options)?;
     }
-    let is_unbounded = input
+    input.data = input
         .plan
-        .unbounded_output(&input.children_unbounded())
+        .unbounded_output(&children_unbounded(&input))
         // Treat the case where an operator can not run on unbounded data as
         // if it can and it outputs unbounded data. Do not raise an error yet.
         // Such operators may be fixed, adjusted or replaced later on during
@@ -683,7 +671,6 @@ fn apply_subrules(
         // etc. If this doesn't happen, the final `PipelineChecker` rule will
         // catch this and raise an error anyway.
         .unwrap_or(true);
-    input.unbounded = is_unbounded;
     Ok(Transformed::Yes(input))
 }
 
@@ -693,6 +680,7 @@ mod tests_statistical {
 
     use super::*;
     use crate::{
+        physical_optimizer::test_utils::check_integrity,
         physical_plan::{
             displayable, joins::PartitionMode, ColumnStatistics, Statistics,
         },
@@ -840,26 +828,51 @@ mod tests_statistical {
         (big, medium, small)
     }
 
+    pub(crate) fn crosscheck_plans(plan: Arc<dyn ExecutionPlan>) -> Result<()> {
+        let pipeline = PipelineStatePropagator::new_default(plan);
+        let subrules: Vec<Box<PipelineFixerSubrule>> = vec![
+            Box::new(hash_join_convert_symmetric_subrule),
+            Box::new(hash_join_swap_subrule),
+        ];
+        let state = pipeline
+            .transform_up(&|p| apply_subrules(p, &subrules, &ConfigOptions::new()))
+            .and_then(check_integrity)?;
+        // TODO: End state payloads will be checked here.
+        let config = ConfigOptions::new().optimizer;
+        let collect_left_threshold = config.hash_join_single_partition_threshold;
+        let collect_threshold_num_rows = config.hash_join_single_partition_threshold_rows;
+        let _ = state.plan.transform_up(&|plan| {
+            statistical_join_selection_subrule(
+                plan,
+                collect_left_threshold,
+                collect_threshold_num_rows,
+            )
+        })?;
+        Ok(())
+    }
+
     #[tokio::test]
     async fn test_join_with_swap() {
         let (big, small) = create_big_and_small();
 
-        let join = HashJoinExec::try_new(
-            Arc::clone(&big),
-            Arc::clone(&small),
-            vec![(
-                Column::new_with_schema("big_col", &big.schema()).unwrap(),
-                Column::new_with_schema("small_col", &small.schema()).unwrap(),
-            )],
-            None,
-            &JoinType::Left,
-            PartitionMode::CollectLeft,
-            false,
-        )
-        .unwrap();
+        let join = Arc::new(
+            HashJoinExec::try_new(
+                Arc::clone(&big),
+                Arc::clone(&small),
+                vec![(
+                    Column::new_with_schema("big_col", &big.schema()).unwrap(),
+                    Column::new_with_schema("small_col", &small.schema()).unwrap(),
+                )],
+                None,
+                &JoinType::Left,
+                PartitionMode::CollectLeft,
+                false,
+            )
+            .unwrap(),
+        );
 
         let optimized_join = JoinSelection::new()
-            .optimize(Arc::new(join), &ConfigOptions::new())
+            .optimize(join.clone(), &ConfigOptions::new())
             .unwrap();
 
         let swapping_projection = optimized_join
@@ -889,28 +902,31 @@ mod tests_statistical {
             swapped_join.right().statistics().unwrap().total_byte_size,
             Precision::Inexact(2097152)
         );
+        crosscheck_plans(join.clone()).unwrap();
     }
 
     #[tokio::test]
     async fn test_left_join_with_swap() {
         let (big, small) = create_big_and_small();
         // Left out join should alway swap when the mode is PartitionMode::CollectLeft, even left side is small and right side is large
-        let join = HashJoinExec::try_new(
-            Arc::clone(&small),
-            Arc::clone(&big),
-            vec![(
-                Column::new_with_schema("small_col", &small.schema()).unwrap(),
-                Column::new_with_schema("big_col", &big.schema()).unwrap(),
-            )],
-            None,
-            &JoinType::Left,
-            PartitionMode::CollectLeft,
-            false,
-        )
-        .unwrap();
+        let join = Arc::new(
+            HashJoinExec::try_new(
+                Arc::clone(&small),
+                Arc::clone(&big),
+                vec![(
+                    Column::new_with_schema("small_col", &small.schema()).unwrap(),
+                    Column::new_with_schema("big_col", &big.schema()).unwrap(),
+                )],
+                None,
+                &JoinType::Left,
+                PartitionMode::CollectLeft,
+                false,
+            )
+            .unwrap(),
+        );
 
         let optimized_join = JoinSelection::new()
-            .optimize(Arc::new(join), &ConfigOptions::new())
+            .optimize(join.clone(), &ConfigOptions::new())
             .unwrap();
 
         let swapping_projection = optimized_join
@@ -940,6 +956,7 @@ mod tests_statistical {
             swapped_join.right().statistics().unwrap().total_byte_size,
             Precision::Inexact(8192)
         );
+        crosscheck_plans(join.clone()).unwrap();
     }
 
     #[tokio::test]
@@ -948,24 +965,26 @@ mod tests_statistical {
         for join_type in join_types {
             let (big, small) = create_big_and_small();
 
-            let join = HashJoinExec::try_new(
-                Arc::clone(&big),
-                Arc::clone(&small),
-                vec![(
-                    Column::new_with_schema("big_col", &big.schema()).unwrap(),
-                    Column::new_with_schema("small_col", &small.schema()).unwrap(),
-                )],
-                None,
-                &join_type,
-                PartitionMode::Partitioned,
-                false,
-            )
-            .unwrap();
+            let join = Arc::new(
+                HashJoinExec::try_new(
+                    Arc::clone(&big),
+                    Arc::clone(&small),
+                    vec![(
+                        Column::new_with_schema("big_col", &big.schema()).unwrap(),
+                        Column::new_with_schema("small_col", &small.schema()).unwrap(),
+                    )],
+                    None,
+                    &join_type,
+                    PartitionMode::Partitioned,
+                    false,
+                )
+                .unwrap(),
+            );
 
             let original_schema = join.schema();
 
             let optimized_join = JoinSelection::new()
-                .optimize(Arc::new(join), &ConfigOptions::new())
+                .optimize(join.clone(), &ConfigOptions::new())
                 .unwrap();
 
             let swapped_join = optimized_join
@@ -976,7 +995,6 @@ mod tests_statistical {
                 );
 
             assert_eq!(swapped_join.schema().fields().len(), 1);
-
             assert_eq!(
                 swapped_join.left().statistics().unwrap().total_byte_size,
                 Precision::Inexact(8192)
@@ -985,8 +1003,8 @@ mod tests_statistical {
                 swapped_join.right().statistics().unwrap().total_byte_size,
                 Precision::Inexact(2097152)
             );
-
             assert_eq!(original_schema, swapped_join.schema());
+            crosscheck_plans(join).unwrap();
         }
     }
 
@@ -996,18 +1014,20 @@ mod tests_statistical {
             let expected_lines =
                 $EXPECTED_LINES.iter().map(|s| *s).collect::<Vec<&str>>();
 
+            let plan = Arc::new($PLAN);
             let optimized = JoinSelection::new()
-                .optimize(Arc::new($PLAN), &ConfigOptions::new())
+                .optimize(plan.clone(), &ConfigOptions::new())
                 .unwrap();
 
-            let plan = displayable(optimized.as_ref()).indent(true).to_string();
-            let actual_lines = plan.split("\n").collect::<Vec<&str>>();
+            let plan_string = displayable(optimized.as_ref()).indent(true).to_string();
+            let actual_lines = plan_string.split("\n").collect::<Vec<&str>>();
 
             assert_eq!(
                 &expected_lines, &actual_lines,
                 "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
                 expected_lines, actual_lines
             );
+            crosscheck_plans(plan).unwrap();
         };
     }
 
@@ -1069,22 +1089,24 @@ mod tests_statistical {
     #[tokio::test]
     async fn test_join_no_swap() {
         let (big, small) = create_big_and_small();
-        let join = HashJoinExec::try_new(
-            Arc::clone(&small),
-            Arc::clone(&big),
-            vec![(
-                Column::new_with_schema("small_col", &small.schema()).unwrap(),
-                Column::new_with_schema("big_col", &big.schema()).unwrap(),
-            )],
-            None,
-            &JoinType::Inner,
-            PartitionMode::CollectLeft,
-            false,
-        )
-        .unwrap();
+        let join = Arc::new(
+            HashJoinExec::try_new(
+                Arc::clone(&small),
+                Arc::clone(&big),
+                vec![(
+                    Column::new_with_schema("small_col", &small.schema()).unwrap(),
+                    Column::new_with_schema("big_col", &big.schema()).unwrap(),
+                )],
+                None,
+                &JoinType::Inner,
+                PartitionMode::CollectLeft,
+                false,
+            )
+            .unwrap(),
+        );
 
         let optimized_join = JoinSelection::new()
-            .optimize(Arc::new(join), &ConfigOptions::new())
+            .optimize(join.clone(), &ConfigOptions::new())
             .unwrap();
 
         let swapped_join = optimized_join
@@ -1100,6 +1122,7 @@ mod tests_statistical {
             swapped_join.right().statistics().unwrap().total_byte_size,
             Precision::Inexact(2097152)
         );
+        crosscheck_plans(join).unwrap();
     }
 
     #[tokio::test]
@@ -1270,19 +1293,21 @@ mod tests_statistical {
         is_swapped: bool,
         expected_mode: PartitionMode,
     ) {
-        let join = HashJoinExec::try_new(
-            left,
-            right,
-            on,
-            None,
-            &JoinType::Inner,
-            PartitionMode::Auto,
-            false,
-        )
-        .unwrap();
+        let join = Arc::new(
+            HashJoinExec::try_new(
+                left,
+                right,
+                on,
+                None,
+                &JoinType::Inner,
+                PartitionMode::Auto,
+                false,
+            )
+            .unwrap(),
+        );
 
         let optimized_join = JoinSelection::new()
-            .optimize(Arc::new(join), &ConfigOptions::new())
+            .optimize(join.clone(), &ConfigOptions::new())
             .unwrap();
 
         if !is_swapped {
@@ -1306,6 +1331,7 @@ mod tests_statistical {
 
             assert_eq!(*swapped_join.partition_mode(), expected_mode);
         }
+        crosscheck_plans(join).unwrap();
     }
 }
 
@@ -1350,6 +1376,8 @@ mod util_tests {
 
 #[cfg(test)]
 mod hash_join_tests {
+    use self::tests_statistical::crosscheck_plans;
+
     use super::*;
     use crate::physical_optimizer::join_selection::swap_join_type;
     use crate::physical_optimizer::test_utils::SourceType;
@@ -1716,7 +1744,7 @@ mod hash_join_tests {
             2,
         )) as Arc<dyn ExecutionPlan>;
 
-        let join = HashJoinExec::try_new(
+        let join = Arc::new(HashJoinExec::try_new(
             Arc::clone(&left_exec),
             Arc::clone(&right_exec),
             vec![(
@@ -1727,29 +1755,19 @@ mod hash_join_tests {
             &t.initial_join_type,
             t.initial_mode,
             false,
-        )?;
+        )?);
 
+        let left_child = Arc::new(EmptyExec::new(Arc::new(Schema::empty())));
+        let right_child = Arc::new(EmptyExec::new(Arc::new(Schema::empty())));
         let children = vec![
-            PipelineStatePropagator {
-                plan: Arc::new(EmptyExec::new(Arc::new(Schema::empty()))),
-                unbounded: left_unbounded,
-                children: vec![],
-            },
-            PipelineStatePropagator {
-                plan: Arc::new(EmptyExec::new(Arc::new(Schema::empty()))),
-                unbounded: right_unbounded,
-                children: vec![],
-            },
+            PipelineStatePropagator::new(left_child, left_unbounded, vec![]),
+            PipelineStatePropagator::new(right_child, right_unbounded, vec![]),
         ];
-        let initial_hash_join_state = PipelineStatePropagator {
-            plan: Arc::new(join),
-            unbounded: false,
-            children,
-        };
+        let initial_hash_join_state =
+            PipelineStatePropagator::new(join.clone(), false, children);
 
         let optimized_hash_join =
-            hash_join_swap_subrule(initial_hash_join_state, &ConfigOptions::new())
-                .unwrap()?;
+            hash_join_swap_subrule(initial_hash_join_state, &ConfigOptions::new())?;
         let optimized_join_plan = optimized_hash_join.plan;
 
         // If swap did happen
@@ -1805,6 +1823,7 @@ mod hash_join_tests {
                 )
             );
         };
+        crosscheck_plans(plan).unwrap();
         Ok(())
     }
 }

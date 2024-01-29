@@ -25,30 +25,60 @@ pub mod proxy;
 
 pub use pool::*;
 
-/// The pool of memory on which [`MemoryReservation`]s record their
-/// memory reservations.
+/// Tracks and potentially limits memory use across operators during execution.
 ///
-/// DataFusion is a streaming query engine, processing most queries
-/// without buffering the entire input. However, certain operations
-/// such as sorting and grouping/joining with a large number of
-/// distinct groups/keys, can require buffering intermediate results
-/// and for large datasets this can require large amounts of memory.
+/// # Memory Management Overview
 ///
-/// In order to avoid allocating memory until the OS or the container
-/// system kills the process, DataFusion operators only allocate
-/// memory they are able to reserve from the configured
-/// [`MemoryPool`]. Once the memory tracked by the pool is exhausted,
-/// operators must either free memory by spilling to local disk or
-/// error.
+/// DataFusion is a streaming query engine, processing most queries without
+/// buffering the entire input. Most operators require a fixed amount of memory
+/// based on the schema and target batch size. However, certain operations such
+/// as sorting and grouping/joining, require buffering intermediate results,
+/// which can require memory proportional to the number of input rows.
 ///
-/// A `MemoryPool` can be shared by concurrently executing plans in
-/// the same process to control memory usage in a multi-tenant system.
+/// Rather than tracking all allocations, DataFusion takes a pragmatic approach:
+/// Intermediate memory used as data streams through the system is not accounted
+/// (it assumed to be "small") but the large consumers of memory must register
+/// and constrain their use. This design trades off the additional code
+/// complexity of memory tracking with limiting resource usage.
 ///
-/// The following memory pool implementations are available:
+/// When limiting memory with a `MemoryPool` you should typically reserve some
+/// overhead (e.g. 10%) for the "small" memory allocations that are not tracked.
 ///
-/// * [`UnboundedMemoryPool`]
-/// * [`GreedyMemoryPool`]
-/// * [`FairSpillPool`]
+/// # Memory Management Design
+///
+/// As explained above, DataFusion's design ONLY limits operators that require
+/// "large" amounts of memory (proportional to number of input rows), such as
+/// `GroupByHashExec`. It does NOT track and limit memory used internally by
+/// other operators such as `ParquetExec` or the `RecordBatch`es that flow
+/// between operators.
+///
+/// In order to avoid allocating memory until the OS or the container system
+/// kills the process, DataFusion `ExecutionPlan`s (operators) that consume
+/// large amounts of memory must first request their desired allocation from a
+/// [`MemoryPool`] before allocating more.  The request is typically managed via
+/// a  [`MemoryReservation`].
+///
+/// If the allocation is successful, the operator should proceed and allocate
+/// the desired memory. If the allocation fails, the operator must either first
+/// free memory (e.g. by spilling to local disk) and try again, or error.
+///
+/// Note that a `MemoryPool` can be shared by concurrently executing plans,
+/// which can be used to control memory usage in a multi-tenant system.
+///
+/// # Implementing `MemoryPool`
+///
+/// You can implement a custom allocation policy by implementing the
+/// [`MemoryPool`] trait and configuring a `SessionContext` appropriately.
+/// However, mDataFusion comes with the following simple memory pool implementations that
+/// handle many common cases:
+///
+/// * [`UnboundedMemoryPool`]: no memory limits (the default)
+///
+/// * [`GreedyMemoryPool`]: Limits memory usage to a fixed size using a "first
+/// come first served" policy
+///
+/// * [`FairSpillPool`]: Limits memory usage to a fixed size, allocating memory
+/// to all spilling operators fairly
 pub trait MemoryPool: Send + Sync + std::fmt::Debug {
     /// Registers a new [`MemoryConsumer`]
     ///
