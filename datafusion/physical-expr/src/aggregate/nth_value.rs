@@ -117,7 +117,7 @@ impl AggregateExpr for NthValueAgg {
     }
 
     fn expressions(&self) -> Vec<Arc<dyn PhysicalExpr>> {
-        let n = Arc::new(Literal::new(ScalarValue::Int64(Some(self.n)))) as _;
+        let n = Arc::new(Literal::new(ScalarValue::Int32(Some(self.n as i32)))) as _;
         vec![self.expr.clone(), n]
     }
 
@@ -394,7 +394,9 @@ impl NthValueAccumulator {
         for index in 0..n_to_add {
             let row = get_row_at_idx(values, index)?;
             self.values.push_back(row[0].clone());
-            self.ordering_values.push_back(row[1..].to_vec());
+            // At index 1, we have n index argument.
+            // Ordering values cover starting from 2nd index to end
+            self.ordering_values.push_back(row[2..].to_vec());
         }
         Ok(())
     }
