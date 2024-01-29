@@ -139,8 +139,7 @@ impl ScalarUDFImpl for DecodeFunc {
     }
 
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        // Put a feature flag here to make sure this is only compiled when the feature is activated
-        super::inner::decode(args)
+        decode(args)
     }
 }
 
@@ -404,7 +403,7 @@ impl FromStr for Encoding {
 /// Encodes the given data, accepts Binary, LargeBinary, Utf8 or LargeUtf8 and returns a [`ColumnarValue`].
 /// Second argument is the encoding to use.
 /// Standard encodings are base64 and hex.
-pub fn encode(args: &[ColumnarValue]) -> Result<ColumnarValue> {
+fn encode(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     if args.len() != 2 {
         return internal_err!(
             "{:?} args were supplied but encode takes exactly two arguments",
@@ -430,7 +429,7 @@ pub fn encode(args: &[ColumnarValue]) -> Result<ColumnarValue> {
 /// Decodes the given data, accepts Binary, LargeBinary, Utf8 or LargeUtf8 and returns a [`ColumnarValue`].
 /// Second argument is the encoding to use.
 /// Standard encodings are base64 and hex.
-pub fn decode(args: &[ColumnarValue]) -> Result<ColumnarValue> {
+fn decode(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     if args.len() != 2 {
         return internal_err!(
             "{:?} args were supplied but decode takes exactly two arguments",
