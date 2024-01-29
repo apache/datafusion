@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Licensed to the Apache Software Foundation (ASF) under one
 # or more contributor license agreements.  See the NOTICE file
 # distributed with this work for additional information
@@ -53,14 +53,14 @@ Examples:
 ./bench.sh data
 
 # Run the 'tpch' benchmark on the datafusion checkout in /source/arrow-datafusion
-DATAFASION_DIR=/source/arrow-datafusion ./bench.sh run tpch
+DATAFUSION_DIR=/source/arrow-datafusion ./bench.sh run tpch
 
 **********
 * Commands
 **********
-data:         Generates data needed for benchmarking
+data:         Generates or downloads data needed for benchmarking
 run:          Runs the named benchmark
-compare:      Comares results from benchmark runs
+compare:      Compares results from benchmark runs
 
 **********
 * Benchmarks
@@ -81,7 +81,7 @@ clickbench_extended:    ClickBench "inspired" queries against a single parquet (
 **********
 DATA_DIR        directory to store datasets
 CARGO_COMMAND   command that runs the benchmark binary
-DATAFASION_DIR  directory to use (default $DATAFUSION_DIR)
+DATAFUSION_DIR  directory to use (default $DATAFUSION_DIR)
 "
     exit 1
 }
@@ -238,6 +238,9 @@ main() {
             BRANCH1=$1
             BRANCH2=$2
             compare_benchmarks
+            ;;
+        "")
+            usage
             ;;
         *)
             echo "Error: unknown command: $COMMAND"
@@ -401,9 +404,9 @@ run_clickbench_1() {
     $CARGO_COMMAND --bin dfbench -- clickbench  --iterations 5 --path "${DATA_DIR}/hits.parquet" --queries-path "${SCRIPT_DIR}/queries/clickbench/queries.sql" -o ${RESULTS_FILE}
 }
 
- # Runs the clickbench benchmark with a single large parquet file
+ # Runs the clickbench benchmark with the partitioned parquet files
 run_clickbench_partitioned() {
-    RESULTS_FILE="${RESULTS_DIR}/clickbench_1.json"
+    RESULTS_FILE="${RESULTS_DIR}/clickbench_partitioned.json"
     echo "RESULTS_FILE: ${RESULTS_FILE}"
     echo "Running clickbench (partitioned, 100 files) benchmark..."
     $CARGO_COMMAND --bin dfbench -- clickbench  --iterations 5 --path "${DATA_DIR}/hits_partitioned" --queries-path "${SCRIPT_DIR}/queries/clickbench/queries.sql" -o ${RESULTS_FILE}

@@ -414,7 +414,22 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                 ));
                 Ok(expr)
             }
-            expr => Ok(expr),
+            Expr::Alias(_)
+            | Expr::Column(_)
+            | Expr::ScalarVariable(_, _)
+            | Expr::Literal(_)
+            | Expr::SimilarTo(_)
+            | Expr::IsNotNull(_)
+            | Expr::IsNull(_)
+            | Expr::Negative(_)
+            | Expr::GetIndexedField(_)
+            | Expr::Cast(_)
+            | Expr::TryCast(_)
+            | Expr::Sort(_)
+            | Expr::Wildcard { .. }
+            | Expr::GroupingSet(_)
+            | Expr::Placeholder(_)
+            | Expr::OuterReferenceColumn(_, _) => Ok(expr),
         }
     }
 }

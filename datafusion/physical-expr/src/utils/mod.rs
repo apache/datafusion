@@ -18,11 +18,12 @@
 mod guarantee;
 pub use guarantee::{Guarantee, LiteralGuarantee};
 
-use std::borrow::{Borrow, Cow};
+use std::borrow::Borrow;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use crate::expressions::{BinaryExpr, Column};
+use crate::tree_node::ExprContext;
 use crate::{PhysicalExpr, PhysicalSortExpr};
 
 use arrow::array::{make_array, Array, ArrayRef, BooleanArray, MutableArrayData};
@@ -127,49 +128,7 @@ pub fn get_indices_of_exprs_strict<T: Borrow<Arc<dyn PhysicalExpr>>>(
         .collect()
 }
 
-#[derive(Clone, Debug)]
-pub struct ExprTreeNode<T> {
-    expr: Arc<dyn PhysicalExpr>,
-    data: Option<T>,
-    child_nodes: Vec<ExprTreeNode<T>>,
-}
-
-impl<T> ExprTreeNode<T> {
-    pub fn new(expr: Arc<dyn PhysicalExpr>) -> Self {
-        let children = expr.children();
-        ExprTreeNode {
-            expr,
-            data: None,
-            child_nodes: children.into_iter().map(Self::new).collect_vec(),
-        }
-    }
-
-    pub fn expression(&self) -> &Arc<dyn PhysicalExpr> {
-        &self.expr
-    }
-
-    pub fn children(&self) -> &[ExprTreeNode<T>] {
-        &self.child_nodes
-    }
-}
-
-impl<T: Clone> TreeNode for ExprTreeNode<T> {
-    fn children_nodes(&self) -> Vec<Cow<Self>> {
-        self.children().iter().map(Cow::Borrowed).collect()
-    }
-
-    fn map_children<F>(mut self, transform: F) -> Result<Self>
-    where
-        F: FnMut(Self) -> Result<Self>,
-    {
-        self.child_nodes = self
-            .child_nodes
-            .into_iter()
-            .map(transform)
-            .collect::<Result<Vec<_>>>()?;
-        Ok(self)
-    }
-}
+pub type ExprTreeNode<T> = ExprContext<Option<T>>;
 
 /// This struct facilitates the [TreeNodeRewriter] mechanism to convert a
 /// [PhysicalExpr] tree into a DAEG (i.e. an expression DAG) by collecting
@@ -207,7 +166,7 @@ impl<'a, T, F: Fn(&ExprTreeNode<NodeIndex>) -> Result<T>> TreeNodeRewriter
             // of visited expressions and return the newly created node index.
             None => {
                 let node_idx = self.graph.add_node((self.constructor)(&node)?);
-                for expr_node in node.child_nodes.iter() {
+                for expr_node in node.children.iter() {
                     self.graph.add_edge(node_idx, expr_node.data.unwrap(), 0);
                 }
                 self.visited_plans.push((expr.clone(), node_idx));
@@ -230,7 +189,7 @@ where
     F: Fn(&ExprTreeNode<NodeIndex>) -> Result<T>,
 {
     // Create a new expression tree node from the input expression.
-    let init = ExprTreeNode::new(expr);
+    let init = ExprTreeNode::new_default(expr);
     // Create a new `PhysicalExprDAEGBuilder` instance.
     let mut builder = PhysicalExprDAEGBuilder {
         graph: StableGraph::<T, usize>::new(),
@@ -388,7 +347,7 @@ mod tests {
     }
 
     fn make_dummy_node(node: &ExprTreeNode<NodeIndex>) -> Result<PhysicalExprDummyNode> {
-        let expr = node.expression().clone();
+        let expr = node.expr.clone();
         let dummy_property = if expr.as_any().is::<BinaryExpr>() {
             "Binary"
         } else if expr.as_any().is::<Column>() {

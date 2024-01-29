@@ -1065,6 +1065,11 @@ pub fn parse_expr(
                             registry,
                             "stop",
                         )?),
+                        stride: Box::new(parse_required_expr(
+                            list_range.stride.as_deref(),
+                            registry,
+                            "stride",
+                        )?),
                     }
                 }
                 None => return Err(proto_error("Field must not be None")),

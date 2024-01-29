@@ -623,9 +623,19 @@ SELECT upper('foo')
 FOO
 
 query T
-select upper(arrow_cast('foo', 'Dictionary(Int32, Utf8)'))
+SELECT upper(arrow_cast('foo', 'Dictionary(Int32, Utf8)'))
 ----
 FOO
+
+query T
+SELECT upper('árvore ação αβγ')
+----
+ÁRVORE AÇÃO ΑΒΓ
+
+query T
+SELECT upper(arrow_cast('árvore ação αβγ', 'Dictionary(Int32, Utf8)'))
+----
+ÁRVORE AÇÃO ΑΒΓ
 
 query T
 SELECT btrim('   foo  ')
@@ -671,6 +681,16 @@ query T
 SELECT lower(arrow_cast('FOObar', 'Dictionary(Int32, Utf8)'))
 ----
 foobar
+
+query T
+SELECT lower('ÁRVORE AÇÃO ΑΒΓ')
+----
+árvore ação αβγ
+
+query T
+SELECT lower(arrow_cast('ÁRVORE AÇÃO ΑΒΓ', 'Dictionary(Int32, Utf8)'))
+----
+árvore ação αβγ
 
 query T
 SELECT ltrim('   foo')
