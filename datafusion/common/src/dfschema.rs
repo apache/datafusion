@@ -246,25 +246,40 @@ impl DFSchema {
     /// Create a new schema that contains the fields from this schema followed by the fields
     /// from the supplied schema. An error will be returned if there are duplicate field names.
     pub fn join(&self, schema: &DFSchema) -> Result<Self> {
-        let (new_field_qualifiers, new_fields) = self
-            .iter()
-            .chain(schema.iter())
-            .map(|(qualifier, field)| (qualifier.as_ref().clone(), field.clone()))
-            .unzip();
+        // let (new_field_qualifiers, new_fields) = self
+        //     .iter()
+        //     .chain(schema.iter())
+        //     .map(|(qualifier, field)| (qualifier.as_ref().clone(), field.clone()))
+        //     .unzip();
         // let (new_field_qualifiers, new_fields) = self
         //     .iter()
         //     .chain(schema.iter())
         //     .map(|(qualifier, field)| (qualifier.as_ref().clone(), field.clone()))
         //     .unzip();
 
+        let fields = self.inner.fields().clone();
+        let mut schema_builder = SchemaBuilder::new();
+        schema_builder.extend(fields.iter().map(|f| f.clone()));
+
+        let other_fields = schema.inner.fields.clone();
+        schema_builder.extend(other_fields.iter().map(|f| f.clone()));
+        let new_schema = schema_builder.finish();
+
         let mut new_metadata = self.inner.metadata.clone();
         new_metadata.extend(schema.inner.metadata.clone());
+
+        let new_schema_with_metadata = new_schema.with_metadata(new_metadata);
+
+        let mut new_qualifiers = self.field_qualifiers.clone();
+        new_qualifiers.extend_from_slice(schema.field_qualifiers.as_slice());
+
+        let combined_schema = schema_builder.finish();
         self.functional_dependencies
             .extend(schema.functional_dependencies);
 
         let new_self = Self {
-            inner: Arc::new(Schema::new_with_metadata(new_fields, new_metadata)),
-            field_qualifiers: new_field_qualifiers,
+            inner: Arc::new(new_schema_with_metadata),
+            field_qualifiers: new_qualifiers,
             functional_dependencies: self.functional_dependencies.clone(),
         };
         Ok(new_self)
@@ -439,23 +454,15 @@ impl DFSchema {
 
     /// Return all `Column`s for the schema
     pub fn columns(&self) -> Vec<Column> {
-        self.iter().map(|(q, f)| Column::new(q, f.name())).collect()
+        self.iter()
+            .map(|(q, f)| Column::new(q.map(|q| q.clone()), f.name().clone()))
+            .collect()
     }
-
-    /// Find all fields with the given name and return their fully qualified name.
-    /// This was added after making DFSchema wrap SchemaRef to facilitate the transition
-    /// for `Column`. TODO: Or maybe just make a columns_with_unqualified_name method?
-    // pub fn columns_with_unqualified_name(&self, name: &str) -> Vec<String> {
-    //     self.iter()
-    //         .filter(|(_, field)| field.name() == name)
-    //         .map(|(q, f)| qualified_name(q, f.name()))
-    //         .collect()
-    // }
 
     /// Find the field with the given name
     pub fn field_with_unqualified_name(&self, name: &str) -> Result<&Field> {
         let field = self.iter().find(|(q, f)| match q {
-            Some(q) => false,
+            Some(_) => false,
             None => name == f.name(),
         });
         match field {
@@ -475,7 +482,7 @@ impl DFSchema {
             None => false,
         });
         match qualifier_and_field {
-            Some((q, f)) => Ok(f),
+            Some((_, f)) => Ok(f),
             None => Err(DataFusionError::Internal("Field not found".to_string())),
         }
     }
@@ -732,7 +739,7 @@ impl From<DFSchema> for Schema {
     /// Convert DFSchema into a Schema
     fn from(df_schema: DFSchema) -> Self {
         let fields: Fields = df_schema.inner.fields.clone();
-        Schema::new_with_metadata(fields, df_schema.inner.metadata)
+        Schema::new_with_metadata(fields, df_schema.inner.metadata.clone())
     }
 }
 
@@ -748,9 +755,10 @@ impl From<&DFSchema> for Schema {
 impl TryFrom<Schema> for DFSchema {
     type Error = DataFusionError;
     fn try_from(schema: Schema) -> Result<Self, Self::Error> {
+        let field_count = schema.fields.len();
         let dfschema = Self {
             inner: schema.into(),
-            field_qualifiers: vec![None; schema.fields.len()],
+            field_qualifiers: vec![None; field_count],
             functional_dependencies: FunctionalDependencies::empty(),
         };
         Ok(dfschema)
@@ -804,13 +812,14 @@ impl ToDFSchema for SchemaRef {
 
 impl ToDFSchema for Vec<Field> {
     fn to_dfschema(self) -> Result<DFSchema> {
+        let field_count = self.len();
         let schema = Schema {
             fields: self.into(),
             metadata: HashMap::new(),
         };
         let dfschema = DFSchema {
             inner: schema.into(),
-            field_qualifiers: vec![None; self.len()],
+            field_qualifiers: vec![None; field_count],
             functional_dependencies: FunctionalDependencies::empty(),
         };
         Ok(dfschema)
