@@ -730,7 +730,7 @@ impl EquivalenceProperties {
             for (PhysicalSortExpr { expr, .. }, idx) in &ordered_exprs {
                 eq_properties =
                     eq_properties.add_constants(std::iter::once(expr.clone()));
-                search_indices.swap_remove(idx);
+                search_indices.shift_remove(idx);
             }
             // Add new ordered section to the state.
             result.extend(ordered_exprs);
@@ -1779,6 +1779,7 @@ mod tests {
         let col_c = &col("c", &test_schema)?;
         let col_d = &col("d", &test_schema)?;
         let col_e = &col("e", &test_schema)?;
+        let col_f = &col("f", &test_schema)?;
         let col_h = &col("h", &test_schema)?;
         // a + d
         let a_plus_d = Arc::new(BinaryExpr::new(
@@ -1795,7 +1796,7 @@ mod tests {
             descending: true,
             nulls_first: true,
         };
-        // [d ASC, h ASC] also satisfies schema.
+        // [d ASC, h DESC] also satisfies schema.
         eq_properties.add_new_orderings([vec![
             PhysicalSortExpr {
                 expr: col_d.clone(),
@@ -1835,6 +1836,17 @@ mod tests {
             (
                 vec![col_c, col_e],
                 vec![(col_c, option_asc), (col_e, option_desc)],
+            ),
+            // TEST CASE 7
+            (
+                vec![col_d, col_h, col_e, col_f, col_b],
+                vec![
+                    (col_d, option_asc),
+                    (col_e, option_desc),
+                    (col_h, option_desc),
+                    (col_f, option_asc),
+                    (col_b, option_asc),
+                ],
             ),
         ];
         for (exprs, expected) in test_cases {
