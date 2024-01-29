@@ -58,6 +58,7 @@ use crate::physical_plan::joins::{
 use crate::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use crate::physical_plan::memory::MemoryExec;
 use crate::physical_plan::projection::ProjectionExec;
+use crate::physical_plan::recursive_query::RecursiveQueryExec;
 use crate::physical_plan::repartition::RepartitionExec;
 use crate::physical_plan::sorts::sort::SortExec;
 use crate::physical_plan::union::UnionExec;
@@ -208,10 +209,15 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
                     let key = create_physical_name(key, false)?;
                     format!("{expr}[{key}]")
                 }
-                GetFieldAccess::ListRange { start, stop } => {
+                GetFieldAccess::ListRange {
+                    start,
+                    stop,
+                    stride,
+                } => {
                     let start = create_physical_name(start, false)?;
                     let stop = create_physical_name(stop, false)?;
-                    format!("{expr}[{start}:{stop}]")
+                    let stride = create_physical_name(stride, false)?;
+                    format!("{expr}[{start}:{stop}:{stride}]")
                 }
             };
 
@@ -894,7 +900,7 @@ impl DefaultPhysicalPlanner {
                     let filter = FilterExec::try_new(runtime_expr, physical_input)?;
                     Ok(Arc::new(filter.with_default_selectivity(selectivity)?))
                 }
-                LogicalPlan::Union(Union { inputs, .. }) => {
+                LogicalPlan::Union(Union { inputs, schema: _ }) => {
                     let physical_plans = self.create_initial_plan_multi(inputs.iter().map(|lp| lp.as_ref()), session_state).await?;
 
                     Ok(Arc::new(UnionExec::new(physical_plans)))
@@ -1030,15 +1036,21 @@ impl DefaultPhysicalPlanner {
                     let [physical_left, physical_right]: [Arc<dyn ExecutionPlan>; 2] = left_right.try_into().map_err(|_| DataFusionError::Internal("`create_initial_plan_multi` is broken".to_string()))?;
                     let left_df_schema = left.schema();
                     let right_df_schema = right.schema();
+                    let execution_props = session_state.execution_props();
                     let join_on = keys
                         .iter()
                         .map(|(l, r)| {
-                            let l = l.try_into_col()?;
-                            let r = r.try_into_col()?;
-                            Ok((
-                                Column::new(&l.name, left_df_schema.index_of_column(&l)?),
-                                Column::new(&r.name, right_df_schema.index_of_column(&r)?),
-                            ))
+                            let l = create_physical_expr(
+                                l,
+                                left_df_schema,
+                                execution_props
+                            )?;
+                            let r = create_physical_expr(
+                                r,
+                                right_df_schema,
+                                execution_props
+                            )?;
+                            Ok((l, r))
                         })
                         .collect::<Result<join_utils::JoinOn>>()?;
 
@@ -1288,8 +1300,10 @@ impl DefaultPhysicalPlanner {
                         Ok(plan)
                     }
                 }
-                LogicalPlan::RecursiveQuery(RecursiveQuery { name: _, static_term: _, recursive_term: _, is_distinct: _,.. }) => {
-                    not_impl_err!("Physical counterpart of RecursiveQuery is not implemented yet")
+                LogicalPlan::RecursiveQuery(RecursiveQuery { name, static_term, recursive_term, is_distinct,.. }) => {
+                    let static_term = self.create_initial_plan(static_term, session_state).await?;
+                    let recursive_term = self.create_initial_plan(recursive_term, session_state).await?;
+                    Ok(Arc::new(RecursiveQueryExec::try_new(name.clone(), static_term, recursive_term, *is_distinct)?))
                 }
             };
             exec_plan
