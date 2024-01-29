@@ -23,11 +23,12 @@ use arrow::array::{
 };
 use arrow::datatypes::DataType;
 use arrow::{array::ArrayRef, datatypes::SchemaRef, error::ArrowError};
+use arrow_schema::Schema;
 use datafusion_common::{DataFusionError, Result, ScalarValue};
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::{split_conjunction, PhysicalExpr};
 use log::{debug, trace};
-use parquet::schema::types::ColumnDescriptor;
+use parquet::schema::types::{ColumnDescriptor, SchemaDescriptor};
 use parquet::{
     arrow::arrow_reader::{RowSelection, RowSelector},
     errors::ParquetError,
@@ -41,7 +42,9 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use crate::datasource::physical_plan::parquet::parquet_to_arrow_decimal_type;
-use crate::datasource::physical_plan::parquet::statistics::from_bytes_to_i128;
+use crate::datasource::physical_plan::parquet::statistics::{
+    from_bytes_to_i128, parquet_column,
+};
 use crate::physical_optimizer::pruning::{PruningPredicate, PruningStatistics};
 
 use super::metrics::ParquetFileMetrics;
@@ -128,6 +131,8 @@ impl PagePruningPredicate {
     /// Returns a [`RowSelection`] for the given file
     pub fn prune(
         &self,
+        arrow_schema: &Schema,
+        parquet_schema: &SchemaDescriptor,
         row_groups: &[usize],
         file_metadata: &ParquetMetaData,
         file_metrics: &ParquetFileMetrics,
@@ -163,9 +168,8 @@ impl PagePruningPredicate {
 
         let mut row_selections = Vec::with_capacity(page_index_predicates.len());
         for predicate in page_index_predicates {
-            // find column index by looking in the row group metadata.
-            let col_idx = find_column_index(predicate, &groups[0]);
-
+            // find column index in the parquet schema
+            let col_idx = find_column_index(predicate, arrow_schema, parquet_schema);
             let mut selectors = Vec::with_capacity(row_groups.len());
             for r in row_groups.iter() {
                 let row_group_metadata = &groups[*r];
@@ -231,7 +235,7 @@ impl PagePruningPredicate {
     }
 }
 
-/// Returns the column index in the row group metadata for the single
+/// Returns the column index in the row parquet schema for the single
 /// column of a single column pruning predicate.
 ///
 /// For example, give the predicate `y > 5`
@@ -246,12 +250,12 @@ impl PagePruningPredicate {
 /// Panics:
 ///
 /// If the predicate contains more than one column reference (assumes
-/// that `extract_page_index_push_down_predicates` only return
+/// that `extract_page_index_push_down_predicates` only returns
 /// predicate with one col)
-///
 fn find_column_index(
     predicate: &PruningPredicate,
-    row_group_metadata: &RowGroupMetaData,
+    arrow_schema: &Schema,
+    parquet_schema: &SchemaDescriptor,
 ) -> Option<usize> {
     let mut found_required_column: Option<&Column> = None;
 
@@ -269,25 +273,12 @@ fn find_column_index(
         }
     }
 
-    let column = if let Some(found_required_column) = found_required_column.as_ref() {
-        found_required_column
-    } else {
+    let Some(column) = found_required_column.as_ref() else {
         trace!("No column references in pruning predicate");
         return None;
     };
 
-    let col_idx = row_group_metadata
-        .columns()
-        .iter()
-        .enumerate()
-        .find(|(_idx, c)| c.column_descr().name() == column.name())
-        .map(|(idx, _c)| idx);
-
-    if col_idx.is_none() {
-        trace!("Can not find column {} in row group meta", column.name());
-    }
-
-    col_idx
+    parquet_column(parquet_schema, arrow_schema, column.name()).map(|x| x.0)
 }
 
 /// Intersects the [`RowSelector`]s

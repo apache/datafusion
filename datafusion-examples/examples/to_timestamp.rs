@@ -24,7 +24,8 @@ use datafusion::error::Result;
 use datafusion::prelude::*;
 use datafusion_common::assert_contains;
 
-/// This example demonstrates how to use the to_timestamp function in the DataFrame API as well as via sql.
+/// This example demonstrates how to use the to_timestamp series
+/// of functions in the DataFrame API as well as via sql.
 #[tokio::main]
 async fn main() -> Result<()> {
     // define a schema.
@@ -61,7 +62,8 @@ async fn main() -> Result<()> {
 
     // use to_timestamp function to convert col 'a' to timestamp type using the default parsing
     let df = df.with_column("a", to_timestamp(vec![col("a")]))?;
-    // use to_timestamp_seconds function to convert col 'b' to timestamp(Seconds) type using a list of chrono formats to try
+    // use to_timestamp_seconds function to convert col 'b' to timestamp(Seconds) type using a list
+    // of chrono formats (https://docs.rs/chrono/latest/chrono/format/strftime/index.html) to try
     let df = df.with_column(
         "b",
         to_timestamp_seconds(vec![
@@ -90,19 +92,46 @@ async fn main() -> Result<()> {
     df.show().await?;
 
     // use sql to convert a static string to a timestamp using a list of chrono formats to try
-    let df = ctx.sql("select to_timestamp('01-14-2023 01:01:30+05:30', '%+', '%d-%m-%Y %H/%M/%S', '%m-%d-%Y %H:%M:%S%#z')").await?;
+    // note that one of the formats is invalid ('%q') but since DataFusion will try all the
+    // formats until it encounters one that parses the timestamp expression successfully
+    // no error will be returned
+    let df = ctx.sql("select to_timestamp_micros('01-14-2023 01:01:30+05:30', '%q', '%d-%m-%Y %H/%M/%S', '%+', '%m-%d-%Y %H:%M:%S%#z')").await?;
+
+    // print the results
+    df.show().await?;
+
+    // casting a string to TIMESTAMP will also work for RFC3339 timestamps
+    let df = ctx
+        .sql("select to_timestamp_millis(TIMESTAMP '2022-08-03T14:38:50Z')")
+        .await?;
+
+    // print the results
+    df.show().await?;
+
+    // unix timestamps (in seconds) are also supported
+    let df = ctx.sql("select to_timestamp(1926632005)").await?;
 
     // print the results
     df.show().await?;
 
     // use sql to convert a static string to a timestamp using a non-matching chrono format to try
     let result = ctx
-        .sql("select to_timestamp('01-14-2023 01/01/30', '%d-%m-%Y %H:%M:%S')")
+        .sql("select to_timestamp_nanos('01-14-2023 01/01/30', '%d-%m-%Y %H:%M:%S')")
         .await?
         .collect()
         .await;
 
     let expected = "Error parsing timestamp from '01-14-2023 01/01/30' using format '%d-%m-%Y %H:%M:%S': input contains invalid characters";
+    assert_contains!(result.unwrap_err().to_string(), expected);
+
+    // note that using arrays for the chrono formats is not supported
+    let result = ctx
+        .sql("SELECT to_timestamp('2022-08-03T14:38:50+05:30', make_array('%s', '%q', '%d-%m-%Y %H:%M:%S%#z', '%+'))")
+        .await?
+        .collect()
+        .await;
+
+    let expected = "to_timestamp function unsupported data type at index 1: List";
     assert_contains!(result.unwrap_err().to_string(), expected);
 
     Ok(())

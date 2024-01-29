@@ -41,12 +41,12 @@ use std::sync::Arc;
 
 use datafusion::arrow::array::{ArrayRef, Int64Array};
 use datafusion::common::Result;
-
 use datafusion::common::cast::as_int64_array;
+use datafusion::physical_plan::functions::columnar_values_to_array;
 
-pub fn add_one(args: &[ArrayRef]) -> Result<ArrayRef> {
+pub fn add_one(args: &[ColumnarValue]) -> Result<ArrayRef> {
     // Error handling omitted for brevity
-
+    let args = columnar_values_to_array(args)?;
     let i64s = as_int64_array(&args[0])?;
 
     let new_array = i64s
@@ -82,7 +82,6 @@ There is a lower level API with more functionality but is more complex, that is 
 
 ```rust
 use datafusion::logical_expr::{Volatility, create_udf};
-use datafusion::physical_plan::functions::make_scalar_function;
 use datafusion::arrow::datatypes::DataType;
 use std::sync::Arc;
 
@@ -91,13 +90,13 @@ let udf = create_udf(
     vec![DataType::Int64],
     Arc::new(DataType::Int64),
     Volatility::Immutable,
-    make_scalar_function(add_one),
+    Arc::new(add_one),
 );
 ```
 
 [`scalarudf`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/struct.ScalarUDF.html
 [`create_udf`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/fn.create_udf.html
-[`make_scalar_function`]: https://docs.rs/datafusion/latest/datafusion/physical_expr/functions/fn.make_scalar_function.html
+[`process_scalar_func_inputs`]: https://docs.rs/datafusion/latest/datafusion/physical_expr/functions/fn.process_scalar_func_inputs.html
 [`advanced_udf.rs`]: https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/advanced_udf.rs
 
 A few things to note:

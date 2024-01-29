@@ -1311,8 +1311,8 @@ regexp_replace(str, regexp, replacement, flags)
 - [date_part](#date_part)
 - [datepart](#datepart)
 - [extract](#extract)
-- [to_timestamp](#to_timestamp)
 - [today](#today)
+- [to_timestamp](#to_timestamp)
 - [to_timestamp_millis](#to_timestamp_millis)
 - [to_timestamp_micros](#to_timestamp_micros)
 - [to_timestamp_seconds](#to_timestamp_seconds)
@@ -1526,6 +1526,27 @@ to_timestamp(expression[, ..., format_n])
 
 [chrono format]: https://docs.rs/chrono/latest/chrono/format/strftime/index.html
 
+#### Example
+
+```
+❯ select to_timestamp('2023-01-31T09:26:56.123456789-05:00');
++-----------------------------------------------------------+
+| to_timestamp(Utf8("2023-01-31T09:26:56.123456789-05:00")) |
++-----------------------------------------------------------+
+| 2023-01-31T14:26:56.123456789                             |
++-----------------------------------------------------------+
+❯ select to_timestamp('03:59:00.123456789 05-17-2023', '%c', '%+', '%H:%M:%S%.f %m-%d-%Y');
++--------------------------------------------------------------------------------------------------------+
+| to_timestamp(Utf8("03:59:00.123456789 05-17-2023"),Utf8("%c"),Utf8("%+"),Utf8("%H:%M:%S%.f %m-%d-%Y")) |
++--------------------------------------------------------------------------------------------------------+
+| 2023-05-17T03:59:00.123456789                                                                          |
++--------------------------------------------------------------------------------------------------------+
+```
+
+Additional examples can be found [here]
+
+[here]: https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/to_timestamp.rs
+
 ### `to_timestamp_millis`
 
 Converts a value to a timestamp (`YYYY-MM-DDT00:00:00.000Z`).
@@ -1545,6 +1566,27 @@ to_timestamp_millis(expression[, ..., format_n])
 - **format_n**: Optional [Chrono format] strings to use to parse the expression. Formats will be tried in the order
   they appear with the first successful one being returned. If none of the formats successfully parse the expression
   an error will be returned.
+
+#### Example
+
+```
+❯ select to_timestamp_millis('2023-01-31T09:26:56.123456789-05:00');
++------------------------------------------------------------------+
+| to_timestamp_millis(Utf8("2023-01-31T09:26:56.123456789-05:00")) |
++------------------------------------------------------------------+
+| 2023-01-31T14:26:56.123                                          |
++------------------------------------------------------------------+
+❯ select to_timestamp_millis('03:59:00.123456789 05-17-2023', '%c', '%+', '%H:%M:%S%.f %m-%d-%Y');
++---------------------------------------------------------------------------------------------------------------+
+| to_timestamp_millis(Utf8("03:59:00.123456789 05-17-2023"),Utf8("%c"),Utf8("%+"),Utf8("%H:%M:%S%.f %m-%d-%Y")) |
++---------------------------------------------------------------------------------------------------------------+
+| 2023-05-17T03:59:00.123                                                                                       |
++---------------------------------------------------------------------------------------------------------------+
+```
+
+Additional examples can be found [here]
+
+[here]: https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/to_timestamp.rs
 
 ### `to_timestamp_micros`
 
@@ -1566,6 +1608,27 @@ to_timestamp_micros(expression[, ..., format_n])
   they appear with the first successful one being returned. If none of the formats successfully parse the expression
   an error will be returned.
 
+#### Example
+
+```
+❯ select to_timestamp_micros('2023-01-31T09:26:56.123456789-05:00');
++------------------------------------------------------------------+
+| to_timestamp_micros(Utf8("2023-01-31T09:26:56.123456789-05:00")) |
++------------------------------------------------------------------+
+| 2023-01-31T14:26:56.123456                                       |
++------------------------------------------------------------------+
+❯ select to_timestamp_micros('03:59:00.123456789 05-17-2023', '%c', '%+', '%H:%M:%S%.f %m-%d-%Y');
++---------------------------------------------------------------------------------------------------------------+
+| to_timestamp_micros(Utf8("03:59:00.123456789 05-17-2023"),Utf8("%c"),Utf8("%+"),Utf8("%H:%M:%S%.f %m-%d-%Y")) |
++---------------------------------------------------------------------------------------------------------------+
+| 2023-05-17T03:59:00.123456                                                                                    |
++---------------------------------------------------------------------------------------------------------------+
+```
+
+Additional examples can be found [here]
+
+[here]: https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/to_timestamp.rs
+
 ### `to_timestamp_nanos`
 
 Converts a value to a timestamp (`YYYY-MM-DDT00:00:00.000000000Z`).
@@ -1586,6 +1649,27 @@ to_timestamp_nanos(expression[, ..., format_n])
   they appear with the first successful one being returned. If none of the formats successfully parse the expression
   an error will be returned.
 
+#### Example
+
+```
+❯ select to_timestamp_nanos('2023-01-31T09:26:56.123456789-05:00');
++-----------------------------------------------------------------+
+| to_timestamp_nanos(Utf8("2023-01-31T09:26:56.123456789-05:00")) |
++-----------------------------------------------------------------+
+| 2023-01-31T14:26:56.123456789                                   |
++-----------------------------------------------------------------+
+❯ select to_timestamp_nanos('03:59:00.123456789 05-17-2023', '%c', '%+', '%H:%M:%S%.f %m-%d-%Y');
++--------------------------------------------------------------------------------------------------------------+
+| to_timestamp_nanos(Utf8("03:59:00.123456789 05-17-2023"),Utf8("%c"),Utf8("%+"),Utf8("%H:%M:%S%.f %m-%d-%Y")) |
++--------------------------------------------------------------------------------------------------------------+
+| 2023-05-17T03:59:00.123456789                                                                                |
++---------------------------------------------------------------------------------------------------------------+
+```
+
+Additional examples can be found [here]
+
+[here]: https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/to_timestamp.rs
+
 ### `to_timestamp_seconds`
 
 Converts a value to a timestamp (`YYYY-MM-DDT00:00:00.000Z`).
@@ -1605,6 +1689,27 @@ to_timestamp_seconds(expression[, ..., format_n])
 - **format_n**: Optional [Chrono format] strings to use to parse the expression. Formats will be tried in the order
   they appear with the first successful one being returned. If none of the formats successfully parse the expression
   an error will be returned.
+
+#### Example
+
+```
+❯ select to_timestamp_seconds('2023-01-31T09:26:56.123456789-05:00');
++-------------------------------------------------------------------+
+| to_timestamp_seconds(Utf8("2023-01-31T09:26:56.123456789-05:00")) |
++-------------------------------------------------------------------+
+| 2023-01-31T14:26:56                                               |
++-------------------------------------------------------------------+
+❯ select to_timestamp_seconds('03:59:00.123456789 05-17-2023', '%c', '%+', '%H:%M:%S%.f %m-%d-%Y');
++----------------------------------------------------------------------------------------------------------------+
+| to_timestamp_seconds(Utf8("03:59:00.123456789 05-17-2023"),Utf8("%c"),Utf8("%+"),Utf8("%H:%M:%S%.f %m-%d-%Y")) |
++----------------------------------------------------------------------------------------------------------------+
+| 2023-05-17T03:59:00                                                                                            |
++----------------------------------------------------------------------------------------------------------------+
+```
+
+Additional examples can be found [here]
+
+[here]: https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/to_timestamp.rs
 
 ### `from_unixtime`
 
@@ -2071,7 +2176,7 @@ array_pop_back(array)
 
 ### `array_position`
 
-Returns a string with an input string repeated a specified number.
+Returns the position of the first occurrence of the specified element in the array.
 
 ```
 array_position(array, element)

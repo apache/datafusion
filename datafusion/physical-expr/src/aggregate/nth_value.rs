@@ -302,7 +302,7 @@ impl Accumulator for NthValueAccumulator {
         Ok(())
     }
 
-    fn state(&self) -> Result<Vec<ScalarValue>> {
+    fn state(&mut self) -> Result<Vec<ScalarValue>> {
         let mut result = vec![self.evaluate_values()];
         if !self.ordering_req.is_empty() {
             result.push(self.evaluate_orderings());
@@ -310,7 +310,7 @@ impl Accumulator for NthValueAccumulator {
         Ok(result)
     }
 
-    fn evaluate(&self) -> Result<ScalarValue> {
+    fn evaluate(&mut self) -> Result<ScalarValue> {
         let n_required = self.n.unsigned_abs() as usize;
         let from_start = self.n > 0;
         let nth_value_idx = if from_start {

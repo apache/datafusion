@@ -212,7 +212,7 @@ impl DistinctCountAccumulator {
 }
 
 impl Accumulator for DistinctCountAccumulator {
-    fn state(&self) -> Result<Vec<ScalarValue>> {
+    fn state(&mut self) -> Result<Vec<ScalarValue>> {
         let scalars = self.values.iter().cloned().collect::<Vec<_>>();
         let arr = ScalarValue::new_list(scalars.as_slice(), &self.state_data_type);
         Ok(vec![ScalarValue::List(arr)])
@@ -249,7 +249,7 @@ impl Accumulator for DistinctCountAccumulator {
         Ok(())
     }
 
-    fn evaluate(&self) -> Result<ScalarValue> {
+    fn evaluate(&mut self) -> Result<ScalarValue> {
         Ok(ScalarValue::Int64(Some(self.values.len() as i64)))
     }
 
@@ -288,7 +288,7 @@ where
     T: ArrowPrimitiveType + Send + Debug,
     T::Native: Eq + Hash,
 {
-    fn state(&self) -> Result<Vec<ScalarValue>> {
+    fn state(&mut self) -> Result<Vec<ScalarValue>> {
         let arr = Arc::new(PrimitiveArray::<T>::from_iter_values(
             self.values.iter().cloned(),
         )) as ArrayRef;
@@ -331,7 +331,7 @@ where
         })
     }
 
-    fn evaluate(&self) -> Result<ScalarValue> {
+    fn evaluate(&mut self) -> Result<ScalarValue> {
         Ok(ScalarValue::Int64(Some(self.values.len() as i64)))
     }
 
@@ -374,7 +374,7 @@ impl<T> Accumulator for FloatDistinctCountAccumulator<T>
 where
     T: ArrowPrimitiveType + Send + Debug,
 {
-    fn state(&self) -> Result<Vec<ScalarValue>> {
+    fn state(&mut self) -> Result<Vec<ScalarValue>> {
         let arr = Arc::new(PrimitiveArray::<T>::from_iter_values(
             self.values.iter().map(|v| v.0),
         )) as ArrayRef;
@@ -418,7 +418,7 @@ where
         })
     }
 
-    fn evaluate(&self) -> Result<ScalarValue> {
+    fn evaluate(&mut self) -> Result<ScalarValue> {
         Ok(ScalarValue::Int64(Some(self.values.len() as i64)))
     }
 

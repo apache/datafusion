@@ -270,7 +270,7 @@ impl FirstValueAccumulator {
 }
 
 impl Accumulator for FirstValueAccumulator {
-    fn state(&self) -> Result<Vec<ScalarValue>> {
+    fn state(&mut self) -> Result<Vec<ScalarValue>> {
         let mut result = vec![self.first.clone()];
         result.extend(self.orderings.iter().cloned());
         result.push(ScalarValue::Boolean(Some(self.is_set)));
@@ -336,7 +336,7 @@ impl Accumulator for FirstValueAccumulator {
         Ok(())
     }
 
-    fn evaluate(&self) -> Result<ScalarValue> {
+    fn evaluate(&mut self) -> Result<ScalarValue> {
         Ok(self.first.clone())
     }
 
@@ -586,7 +586,7 @@ impl LastValueAccumulator {
 }
 
 impl Accumulator for LastValueAccumulator {
-    fn state(&self) -> Result<Vec<ScalarValue>> {
+    fn state(&mut self) -> Result<Vec<ScalarValue>> {
         let mut result = vec![self.last.clone()];
         result.extend(self.orderings.clone());
         result.push(ScalarValue::Boolean(Some(self.is_set)));
@@ -655,7 +655,7 @@ impl Accumulator for LastValueAccumulator {
         Ok(())
     }
 
-    fn evaluate(&self) -> Result<ScalarValue> {
+    fn evaluate(&mut self) -> Result<ScalarValue> {
         Ok(self.last.clone())
     }
 

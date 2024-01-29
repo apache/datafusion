@@ -3084,6 +3084,26 @@ SELECT MAX(col0) FROM empty WHERE col0=1;
 ----
 NULL
 
+query TT
+EXPLAIN SELECT MIN(col0) FROM empty;
+----
+logical_plan
+Aggregate: groupBy=[[]], aggr=[[MIN(empty.col0)]]
+--TableScan: empty projection=[col0]
+physical_plan
+ProjectionExec: expr=[NULL as MIN(empty.col0)]
+--PlaceholderRowExec
+
+query TT
+EXPLAIN SELECT MAX(col0) FROM empty;
+----
+logical_plan
+Aggregate: groupBy=[[]], aggr=[[MAX(empty.col0)]]
+--TableScan: empty projection=[col0]
+physical_plan
+ProjectionExec: expr=[NULL as MAX(empty.col0)]
+--PlaceholderRowExec
+
 statement ok
 DROP TABLE empty;
 

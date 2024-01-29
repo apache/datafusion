@@ -294,7 +294,7 @@ impl Optimizer {
                     self.optimize_recursively(rule, &new_plan, config)
                         .and_then(|plan| {
                             if let Some(plan) = &plan {
-                                assert_schema_is_the_same(rule.name(), &new_plan, plan)?;
+                                assert_schema_is_the_same(rule.name(), plan, &new_plan)?;
                             }
                             Ok(plan)
                         });
@@ -375,10 +375,10 @@ impl Optimizer {
 
         let new_inputs = result
             .into_iter()
-            .enumerate()
-            .map(|(i, o)| match o {
+            .zip(inputs)
+            .map(|(new_plan, old_plan)| match new_plan {
                 Some(plan) => plan,
-                None => (*(inputs.get(i).unwrap())).clone(),
+                None => old_plan.clone(),
             })
             .collect::<Vec<_>>();
 
@@ -501,15 +501,14 @@ mod tests {
         let err = opt.optimize(&plan, &config, &observe).unwrap_err();
         assert_eq!(
             "Optimizer rule 'get table_scan rule' failed\ncaused by\nget table_scan rule\ncaused by\n\
-             Internal error: Failed due to a difference in schemas, \
-             original schema: DFSchema { fields: [], metadata: {}, functional_dependencies: FunctionalDependencies { deps: [] } }, \
-             new schema: DFSchema { fields: [\
-             DFField { qualifier: Some(Bare { table: \"test\" }), field: Field { name: \"a\", data_type: UInt32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} } }, \
-             DFField { qualifier: Some(Bare { table: \"test\" }), field: Field { name: \"b\", data_type: UInt32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} } }, \
-             DFField { qualifier: Some(Bare { table: \"test\" }), field: Field { name: \"c\", data_type: UInt32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} } }], \
-             metadata: {}, functional_dependencies: FunctionalDependencies { deps: [] } }.\
-             \nThis was likely caused by a bug in DataFusion's code \
-             and we would welcome that you file an bug report in our issue tracker",
+            Internal error: Failed due to a difference in schemas, \
+            original schema: DFSchema { fields: [\
+            DFField { qualifier: Some(Bare { table: \"test\" }), field: Field { name: \"a\", data_type: UInt32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} } }, \
+            DFField { qualifier: Some(Bare { table: \"test\" }), field: Field { name: \"b\", data_type: UInt32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} } }, \
+            DFField { qualifier: Some(Bare { table: \"test\" }), field: Field { name: \"c\", data_type: UInt32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} } }], \
+            metadata: {}, functional_dependencies: FunctionalDependencies { deps: [] } }, \
+            new schema: DFSchema { fields: [], metadata: {}, functional_dependencies: FunctionalDependencies { deps: [] } }.\
+            \nThis was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker",
             err.strip_backtrace()
         );
     }
