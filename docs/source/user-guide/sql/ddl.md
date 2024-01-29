@@ -56,7 +56,7 @@ file system or remote object store as a named table which can be queried.
 The supported syntax is:
 
 ```
-CREATE EXTERNAL TABLE
+CREATE [UNBOUNDED] EXTERNAL TABLE
 [ IF NOT EXISTS ]
 <TABLE_NAME>[ (<column_definition>) ]
 STORED AS <file_type>
@@ -146,6 +146,16 @@ STORED AS CSV
 WITH HEADER ROW
 LOCATION '/path/to/directory/of/files';
 ```
+
+
+With `CREATE UNBOUNDED EXTERNAL TABLE` SQL statement. We can create unbounded data sources such as following:
+
+```sql
+CREATE UNBOUNDED EXTERNAL TABLE taxi
+STORED AS PARQUET
+LOCATION '/mnt/nyctaxi/tripdata.parquet';
+```
+Datafusion tries to execute queries that refer to unbounded sources in streaming fashion. If this is not possible according to query specifications, datafusion plan generation fails stating it is not possible to execute given query in streaming fashion.
 
 When creating an output from a data source that is already ordered by
 an expression, you can pre-specify the order of the data using the
