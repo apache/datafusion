@@ -138,7 +138,6 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
         // https://github.com/apache/arrow-datafusion/issues/1160
         expr.rewrite(&mut const_evaluator)?
             .rewrite(&mut simplifier)?
-            // .rewrite(&mut or_in_list_simplifier)?
             .rewrite(&mut inlist_simplifier)?
             .rewrite(&mut shorten_in_list_simplifier)?
             .rewrite(&mut guarantee_rewriter)?
