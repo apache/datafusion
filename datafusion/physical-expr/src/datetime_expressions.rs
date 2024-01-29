@@ -600,6 +600,14 @@ fn date_trunc_coarse(granularity: &str, value: i64, tz: Option<Tz>) -> Result<i6
         }
     }?;
 
+    // this case is caused by ambiguous time between "daylight saving time" and "standard time" in chrono
+    // https://github.com/apache/arrow-datafusion/issues/8899
+    if tz.is_some() && value.is_none() {
+        return not_impl_err!(
+        "date_trunc that converts ambiguous time between \"daylight saving time\" and \"standard (UTC) time\" is not yet implemented. Suggest to use UTC timezone in date_trunc."
+    );
+    }
+
     // `with_x(0)` are infallible because `0` are always a valid
     Ok(value.unwrap())
 }
