@@ -136,6 +136,9 @@ struct Args {
         default_value = "40"
     )]
     maxrows: MaxRows,
+
+    #[clap(long, help = "Enables console syntax highlighting")]
+    color: bool,
 }
 
 #[tokio::main]
@@ -169,28 +172,28 @@ async fn main_inner() -> Result<()> {
         session_config = session_config.with_batch_size(batch_size);
     };
 
-    let rn_config = RuntimeConfig::new();
-    let rn_config =
+    let rt_config = RuntimeConfig::new();
+    let rt_config =
         // set memory pool size
         if let Some(memory_limit) = args.memory_limit {
             let memory_limit = extract_memory_pool_size(&memory_limit).unwrap();
             // set memory pool type
             if let Some(mem_pool_type) = args.mem_pool_type {
                 match mem_pool_type {
-                    PoolType::Greedy => rn_config
+                    PoolType::Greedy => rt_config
                         .with_memory_pool(Arc::new(GreedyMemoryPool::new(memory_limit))),
-                    PoolType::Fair => rn_config
+                    PoolType::Fair => rt_config
                         .with_memory_pool(Arc::new(FairSpillPool::new(memory_limit))),
                 }
             } else {
-                rn_config
+                rt_config
                 .with_memory_pool(Arc::new(GreedyMemoryPool::new(memory_limit)))
             }
         } else {
-            rn_config
+            rt_config
         };
 
-    let runtime_env = create_runtime_env(rn_config.clone())?;
+    let runtime_env = create_runtime_env(rt_config.clone())?;
 
     let mut ctx =
         SessionContext::new_with_config_rt(session_config.clone(), Arc::new(runtime_env));
@@ -207,6 +210,7 @@ async fn main_inner() -> Result<()> {
         format: args.format,
         quiet: args.quiet,
         maxrows: args.maxrows,
+        color: args.color,
     };
 
     let commands = args.command;
