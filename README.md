@@ -62,9 +62,9 @@ It lets you start quickly from a fully working engine, and then customize those 
 
 ## Contributing to DataFusion
 
-Please see the [developer’s guide] for contributing and [communication] for getting in touch with us.
+Please see the [contributor guide] and [communication] pages for more information.
 
-[developer’s guide]: https://arrow.apache.org/datafusion/contributor-guide/index.html#developer-s-guide
+[contributor guide]: https://arrow.apache.org/datafusion/contributor-guide
 [communication]: https://arrow.apache.org/datafusion/contributor-guide/communication.html
 
 ## Crate features
