@@ -20,6 +20,10 @@
 statement error DataFusion error: Error during planning: table 'datafusion.information_schema.tables' not found
 SELECT * from information_schema.tables
 
+# Verify the information schema does not exit by default
+statement error DataFusion error: Error during planning: table 'datafusion.information_schema.schemata' not found
+SELECT * from information_schema.schemata
+
 statement error DataFusion error: Error during planning: SHOW \[VARIABLE\] is not supported unless information_schema is enabled
 show all
 
@@ -35,8 +39,15 @@ SELECT * from information_schema.tables;
 ----
 datafusion information_schema columns VIEW
 datafusion information_schema df_settings VIEW
+datafusion information_schema schemata VIEW
 datafusion information_schema tables VIEW
 datafusion information_schema views VIEW
+
+# Verify the information schema now does exist and is empty
+query TTTTTTT rowsort
+SELECT * from information_schema.schemata;
+----
+datafusion public NULL NULL NULL NULL NULL
 
 # Disable information_schema and verify it now errors again
 statement ok
@@ -66,6 +77,7 @@ SELECT * from information_schema.tables;
 ----
 datafusion information_schema columns VIEW
 datafusion information_schema df_settings VIEW
+datafusion information_schema schemata VIEW
 datafusion information_schema tables VIEW
 datafusion information_schema views VIEW
 datafusion public t BASE TABLE
@@ -79,6 +91,7 @@ SELECT * from information_schema.tables;
 ----
 datafusion information_schema columns VIEW
 datafusion information_schema df_settings VIEW
+datafusion information_schema schemata VIEW
 datafusion information_schema tables VIEW
 datafusion information_schema views VIEW
 datafusion public t BASE TABLE
@@ -89,6 +102,7 @@ SELECT * from information_schema.tables WHERE tables.table_schema='information_s
 ----
 datafusion information_schema columns VIEW
 datafusion information_schema df_settings VIEW
+datafusion information_schema schemata VIEW
 datafusion information_schema tables VIEW
 datafusion information_schema views VIEW
 
@@ -97,6 +111,7 @@ SELECT * from information_schema.tables WHERE information_schema.tables.table_sc
 ----
 datafusion information_schema columns VIEW
 datafusion information_schema df_settings VIEW
+datafusion information_schema schemata VIEW
 datafusion information_schema tables VIEW
 datafusion information_schema views VIEW
 
@@ -105,6 +120,7 @@ SELECT * from information_schema.tables WHERE datafusion.information_schema.tabl
 ----
 datafusion information_schema columns VIEW
 datafusion information_schema df_settings VIEW
+datafusion information_schema schemata VIEW
 datafusion information_schema tables VIEW
 datafusion information_schema views VIEW
 
@@ -391,6 +407,7 @@ SHOW TABLES
 ----
 datafusion information_schema columns VIEW
 datafusion information_schema df_settings VIEW
+datafusion information_schema schemata VIEW
 datafusion information_schema tables VIEW
 datafusion information_schema views VIEW
 

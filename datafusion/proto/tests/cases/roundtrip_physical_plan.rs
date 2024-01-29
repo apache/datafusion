@@ -35,6 +35,7 @@ use datafusion::logical_expr::{
     create_udf, BuiltinScalarFunction, JoinType, Operator, Volatility,
 };
 use datafusion::parquet::file::properties::WriterProperties;
+use datafusion::physical_expr::expressions::Literal;
 use datafusion::physical_expr::window::SlidingAggregateWindowExpr;
 use datafusion::physical_expr::{PhysicalSortRequirement, ScalarFunctionExpr};
 use datafusion::physical_plan::aggregates::{
@@ -44,7 +45,8 @@ use datafusion::physical_plan::analyze::AnalyzeExec;
 use datafusion::physical_plan::empty::EmptyExec;
 use datafusion::physical_plan::expressions::{
     binary, cast, col, in_list, like, lit, Avg, BinaryExpr, Column, DistinctCount,
-    GetFieldAccessExpr, GetIndexedFieldExpr, NotExpr, NthValue, PhysicalSortExpr, Sum,
+    GetFieldAccessExpr, GetIndexedFieldExpr, NotExpr, NthValue, PhysicalSortExpr,
+    StringAgg, Sum,
 };
 use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::insert::FileSinkExec;
@@ -328,20 +330,46 @@ fn rountrip_aggregate() -> Result<()> {
     let groups: Vec<(Arc<dyn PhysicalExpr>, String)> =
         vec![(col("a", &schema)?, "unused".to_string())];
 
-    let aggregates: Vec<Arc<dyn AggregateExpr>> = vec![Arc::new(Avg::new(
-        cast(col("b", &schema)?, &schema, DataType::Float64)?,
-        "AVG(b)".to_string(),
-        DataType::Float64,
-    ))];
+    let test_cases: Vec<Vec<Arc<dyn AggregateExpr>>> = vec![
+        // AVG
+        vec![Arc::new(Avg::new(
+            cast(col("b", &schema)?, &schema, DataType::Float64)?,
+            "AVG(b)".to_string(),
+            DataType::Float64,
+        ))],
+        // TODO: See <https://github.com/apache/arrow-datafusion/issues/9028>
+        // // NTH_VALUE
+        // vec![Arc::new(NthValueAgg::new(
+        //     col("b", &schema)?,
+        //     1,
+        //     "NTH_VALUE(b, 1)".to_string(),
+        //     DataType::Int64,
+        //     false,
+        //     Vec::new(),
+        //     Vec::new(),
+        // ))],
+        // STRING_AGG
+        vec![Arc::new(StringAgg::new(
+            cast(col("b", &schema)?, &schema, DataType::Utf8)?,
+            lit(ScalarValue::Utf8(Some(",".to_string()))),
+            "STRING_AGG(name, ',')".to_string(),
+            DataType::Utf8,
+        ))],
+    ];
 
-    roundtrip_test(Arc::new(AggregateExec::try_new(
-        AggregateMode::Final,
-        PhysicalGroupBy::new_single(groups.clone()),
-        aggregates.clone(),
-        vec![None],
-        Arc::new(EmptyExec::new(schema.clone())),
-        schema,
-    )?))
+    for aggregates in test_cases {
+        let schema = schema.clone();
+        roundtrip_test(Arc::new(AggregateExec::try_new(
+            AggregateMode::Final,
+            PhysicalGroupBy::new_single(groups.clone()),
+            aggregates,
+            vec![None],
+            Arc::new(EmptyExec::new(schema.clone())),
+            schema,
+        )?))?;
+    }
+
+    Ok(())
 }
 
 #[test]
@@ -723,6 +751,8 @@ fn roundtrip_get_indexed_field_list_range() -> Result<()> {
         GetFieldAccessExpr::ListRange {
             start: col_start,
             stop: col_stop,
+            stride: Arc::new(Literal::new(ScalarValue::Int64(Some(1))))
+                as Arc<dyn PhysicalExpr>,
         },
     ));
 

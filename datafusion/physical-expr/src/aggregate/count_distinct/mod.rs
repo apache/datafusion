@@ -15,6 +15,17 @@
 // specific language governing permissions and limitations
 // under the License.
 
+mod strings;
+
+use std::any::Any;
+use std::cmp::Eq;
+use std::collections::HashSet;
+use std::fmt::Debug;
+use std::hash::Hash;
+use std::sync::Arc;
+
+use ahash::RandomState;
+use arrow::array::{Array, ArrayRef};
 use arrow::datatypes::{DataType, Field, TimeUnit};
 use arrow_array::types::{
     ArrowPrimitiveType, Date32Type, Date64Type, Decimal128Type, Decimal256Type,
@@ -25,23 +36,15 @@ use arrow_array::types::{
 };
 use arrow_array::PrimitiveArray;
 
-use std::any::Any;
-use std::cmp::Eq;
-use std::fmt::Debug;
-use std::hash::Hash;
-use std::sync::Arc;
-
-use ahash::RandomState;
-use arrow::array::{Array, ArrayRef};
-use std::collections::HashSet;
-
-use crate::aggregate::utils::{down_cast_any_ref, Hashable};
-use crate::expressions::format_state_name;
-use crate::{AggregateExpr, PhysicalExpr};
 use datafusion_common::cast::{as_list_array, as_primitive_array};
 use datafusion_common::utils::array_into_list_array;
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::Accumulator;
+
+use crate::aggregate::count_distinct::strings::StringDistinctCountAccumulator;
+use crate::aggregate::utils::{down_cast_any_ref, Hashable};
+use crate::expressions::format_state_name;
+use crate::{AggregateExpr, PhysicalExpr};
 
 type DistinctScalarValues = ScalarValue;
 
@@ -61,10 +64,10 @@ impl DistinctCount {
     pub fn new(
         input_data_type: DataType,
         expr: Arc<dyn PhysicalExpr>,
-        name: String,
+        name: impl Into<String>,
     ) -> Self {
         Self {
-            name,
+            name: name.into(),
             state_data_type: input_data_type,
             expr,
         }
@@ -151,6 +154,9 @@ impl AggregateExpr for DistinctCount {
             Float16 => float_distinct_count_accumulator!(Float16Type),
             Float32 => float_distinct_count_accumulator!(Float32Type),
             Float64 => float_distinct_count_accumulator!(Float64Type),
+
+            Utf8 => Ok(Box::new(StringDistinctCountAccumulator::<i32>::new())),
+            LargeUtf8 => Ok(Box::new(StringDistinctCountAccumulator::<i64>::new())),
 
             _ => Ok(Box::new(DistinctCountAccumulator {
                 values: HashSet::default(),
@@ -244,7 +250,7 @@ impl Accumulator for DistinctCountAccumulator {
         assert_eq!(states.len(), 1, "array_agg states must be singleton!");
         let scalar_vec = ScalarValue::convert_array_to_scalar_vec(&states[0])?;
         for scalars in scalar_vec.into_iter() {
-            self.values.extend(scalars)
+            self.values.extend(scalars);
         }
         Ok(())
     }
@@ -440,9 +446,6 @@ where
 
 #[cfg(test)]
 mod tests {
-    use crate::expressions::NoOp;
-
-    use super::*;
     use arrow::array::{
         ArrayRef, BooleanArray, Float32Array, Float64Array, Int16Array, Int32Array,
         Int64Array, Int8Array, UInt16Array, UInt32Array, UInt64Array, UInt8Array,
@@ -454,9 +457,14 @@ mod tests {
     };
     use arrow_array::Decimal256Array;
     use arrow_buffer::i256;
+
     use datafusion_common::cast::{as_boolean_array, as_list_array, as_primitive_array};
     use datafusion_common::internal_err;
     use datafusion_common::DataFusionError;
+
+    use crate::expressions::NoOp;
+
+    use super::*;
 
     macro_rules! state_to_vec_primitive {
         ($LIST:expr, $DATA_TYPE:ident) => {{
