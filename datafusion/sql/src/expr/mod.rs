@@ -786,7 +786,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         schema,
                         planner_context,
                     )?);
-                    let stride = Box::new(Expr::Literal(ScalarValue::Int32(Some(1))));
+                    let stride = Box::new(Expr::Literal(ScalarValue::Int64(Some(1))));
                     (start, stop, stride)
                 };
                 GetFieldAccess::ListRange {
