@@ -206,7 +206,6 @@ impl WindowExpr for BuiltInWindowExpr {
             let record_batch = &partition_batch_state.record_batch;
             let num_rows = record_batch.num_rows();
             let mut row_wise_results: Vec<ScalarValue> = vec![];
-            // let mut is_causal = self.window_frame.is_causal();
             let is_causal = if evaluator.uses_window_frame() {
                 self.window_frame.is_causal()
             } else {
