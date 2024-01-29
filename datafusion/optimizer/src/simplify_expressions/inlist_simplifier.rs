@@ -40,6 +40,8 @@ impl TreeNodeRewriter for ShortenInListSimplifier {
     type N = Expr;
 
     fn mutate(&mut self, expr: Expr) -> Result<Expr> {
+        // if expr is a single column reference:
+        // expr IN (A, B, ...) --> (expr = A) OR (expr = B) OR (expr = C)
         if let Expr::InList(InList {
             expr,
             list,
@@ -125,10 +127,15 @@ fn null_simplify(expr: Expr) -> Result<Expr> {
         negated,
     }) = expr.clone()
     {
+        // expr IN () --> false
+        // expr NOT IN () --> true
         if list.is_empty() && *expr != Expr::Literal(ScalarValue::Null) {
             return Ok(lit(negated));
+        // null in (x, y, z) --> null
+        // null not in (x, y, z) --> null
         } else if is_null(&expr) {
             return Ok(lit_bool_null());
+        // expr IN ((subquery)) -> expr IN (subquery), see ##5529
         } else if list.len() == 1
             && matches!(list.first(), Some(Expr::ScalarSubquery { .. }))
         {
