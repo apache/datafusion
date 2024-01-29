@@ -1075,7 +1075,6 @@ impl DataFrame {
             self.plan,
             path.into(),
             FileType::CSV,
-            options.single_file_output,
             copy_options,
         )?
         .build()?;

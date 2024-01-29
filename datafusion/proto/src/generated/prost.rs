@@ -509,8 +509,6 @@ pub struct CopyToNode {
     pub input: ::core::option::Option<::prost::alloc::boxed::Box<LogicalPlanNode>>,
     #[prost(string, tag = "2")]
     pub output_url: ::prost::alloc::string::String,
-    #[prost(bool, tag = "3")]
-    pub single_file_output: bool,
     #[prost(string, tag = "6")]
     pub file_type: ::prost::alloc::string::String,
     #[prost(oneof = "copy_to_node::CopyOptions", tags = "4, 5")]
