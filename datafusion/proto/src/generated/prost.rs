@@ -726,7 +726,7 @@ pub struct ListIndex {
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
-pub struct ListStride {
+pub struct ListRange {
     #[prost(message, optional, boxed, tag = "1")]
     pub start: ::core::option::Option<::prost::alloc::boxed::Box<LogicalExprNode>>,
     #[prost(message, optional, boxed, tag = "2")]
@@ -752,7 +752,7 @@ pub mod get_indexed_field {
         #[prost(message, tag = "3")]
         ListIndex(::prost::alloc::boxed::Box<super::ListIndex>),
         #[prost(message, tag = "4")]
-        ListStride(::prost::alloc::boxed::Box<super::ListStride>),
+        ListRange(::prost::alloc::boxed::Box<super::ListRange>),
     }
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
@@ -2535,7 +2535,7 @@ pub struct ListIndexExpr {
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
-pub struct ListStrideExpr {
+pub struct ListRangeExpr {
     #[prost(message, optional, boxed, tag = "1")]
     pub start: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalExprNode>>,
     #[prost(message, optional, boxed, tag = "2")]
@@ -2561,7 +2561,7 @@ pub mod physical_get_indexed_field_expr_node {
         #[prost(message, tag = "3")]
         ListIndexExpr(::prost::alloc::boxed::Box<super::ListIndexExpr>),
         #[prost(message, tag = "4")]
-        ListStrideExpr(::prost::alloc::boxed::Box<super::ListStrideExpr>),
+        ListRangeExpr(::prost::alloc::boxed::Box<super::ListRangeExpr>),
     }
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]

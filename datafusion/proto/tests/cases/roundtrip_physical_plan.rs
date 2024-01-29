@@ -747,7 +747,7 @@ fn roundtrip_get_indexed_field_list_range() -> Result<()> {
     let col_stop = col("stop", &schema)?;
     let get_indexed_field_expr = Arc::new(GetIndexedFieldExpr::new(
         col_arg,
-        GetFieldAccessExpr::ListStride {
+        GetFieldAccessExpr::ListRange {
             start: col_start,
             stop: col_stop,
             stride: Arc::new(Literal::new(ScalarValue::Int64(Some(1))))

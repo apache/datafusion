@@ -1055,8 +1055,8 @@ pub fn parse_expr(
                         )?),
                     }
                 }
-                Some(protobuf::get_indexed_field::Field::ListStride(list_stride)) => {
-                    GetFieldAccess::ListStride {
+                Some(protobuf::get_indexed_field::Field::ListRange(list_stride)) => {
+                    GetFieldAccess::ListRange {
                         start: Box::new(parse_required_expr(
                             list_stride.start.as_deref(),
                             registry,

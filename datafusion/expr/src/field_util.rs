@@ -29,7 +29,7 @@ pub enum GetFieldAccessSchema {
     /// Single list index, for example: `list[i]`
     ListIndex { key_dt: DataType },
     /// List stride, for example `list[i:j:k]`
-    ListStride {
+    ListRange {
         start_dt: DataType,
         stop_dt: DataType,
         stride_dt: DataType,
@@ -86,7 +86,7 @@ impl GetFieldAccessSchema {
                     (other, _) => plan_err!("The expression to get an indexed field is only valid for `List` or `Struct` types, got {other}"),
                 }
             }
-            Self::ListStride { start_dt, stop_dt, stride_dt } => {
+            Self::ListRange { start_dt, stop_dt, stride_dt } => {
                 match (data_type, start_dt, stop_dt, stride_dt) {
                     (DataType::List(_), DataType::Int64, DataType::Int64, DataType::Int64) => Ok(Field::new("list", data_type.clone(), true)),
                     (DataType::List(_), _, _, _) => plan_err!(

@@ -45,7 +45,7 @@ pub enum GetFieldAccessExpr {
     /// Single list index, for example: `list[i]`
     ListIndex { key: Arc<dyn PhysicalExpr> },
     /// List stride, for example `list[i:j:k]`
-    ListStride {
+    ListRange {
         start: Arc<dyn PhysicalExpr>,
         stop: Arc<dyn PhysicalExpr>,
         stride: Arc<dyn PhysicalExpr>,
@@ -57,7 +57,7 @@ impl std::fmt::Display for GetFieldAccessExpr {
         match self {
             GetFieldAccessExpr::NamedStructField { name } => write!(f, "[{}]", name),
             GetFieldAccessExpr::ListIndex { key } => write!(f, "[{}]", key),
-            GetFieldAccessExpr::ListStride {
+            GetFieldAccessExpr::ListRange {
                 start,
                 stop,
                 stride,
@@ -70,7 +70,7 @@ impl std::fmt::Display for GetFieldAccessExpr {
 
 impl PartialEq<dyn Any> for GetFieldAccessExpr {
     fn eq(&self, other: &dyn Any) -> bool {
-        use GetFieldAccessExpr::{ListIndex, ListStride, NamedStructField};
+        use GetFieldAccessExpr::{ListIndex, ListRange, NamedStructField};
         down_cast_any_ref(other)
             .downcast_ref::<Self>()
             .map(|x| match (self, x) {
@@ -79,12 +79,12 @@ impl PartialEq<dyn Any> for GetFieldAccessExpr {
                 }
                 (ListIndex { key: lhs }, ListIndex { key: rhs }) => lhs.eq(rhs),
                 (
-                    ListStride {
+                    ListRange {
                         start: start_lhs,
                         stop: stop_lhs,
                         stride: stride_lhs,
                     },
-                    ListStride {
+                    ListRange {
                         start: start_rhs,
                         stop: stop_rhs,
                         stride: stride_rhs,
@@ -94,9 +94,9 @@ impl PartialEq<dyn Any> for GetFieldAccessExpr {
                         && stop_lhs.eq(stop_rhs)
                         && stride_lhs.eq(stride_rhs)
                 }
-                (NamedStructField { .. }, ListIndex { .. } | ListStride { .. }) => false,
-                (ListIndex { .. }, NamedStructField { .. } | ListStride { .. }) => false,
-                (ListStride { .. }, NamedStructField { .. } | ListIndex { .. }) => false,
+                (NamedStructField { .. }, ListIndex { .. } | ListRange { .. }) => false,
+                (ListIndex { .. }, NamedStructField { .. } | ListRange { .. }) => false,
+                (ListRange { .. }, NamedStructField { .. } | ListIndex { .. }) => false,
             })
             .unwrap_or(false)
     }
@@ -140,7 +140,7 @@ impl GetIndexedFieldExpr {
     ) -> Self {
         Self::new(
             arg,
-            GetFieldAccessExpr::ListStride {
+            GetFieldAccessExpr::ListRange {
                 start,
                 stop,
                 stride: Arc::new(Literal::new(ScalarValue::Int64(Some(1))))
@@ -158,7 +158,7 @@ impl GetIndexedFieldExpr {
     ) -> Self {
         Self::new(
             arg,
-            GetFieldAccessExpr::ListStride {
+            GetFieldAccessExpr::ListRange {
                 start,
                 stop,
                 stride,
@@ -184,11 +184,11 @@ impl GetIndexedFieldExpr {
             GetFieldAccessExpr::ListIndex { key } => GetFieldAccessSchema::ListIndex {
                 key_dt: key.data_type(input_schema)?,
             },
-            GetFieldAccessExpr::ListStride {
+            GetFieldAccessExpr::ListRange {
                 start,
                 stop,
                 stride,
-            } => GetFieldAccessSchema::ListStride {
+            } => GetFieldAccessSchema::ListRange {
                 start_dt: start.data_type(input_schema)?,
                 stop_dt: stop.data_type(input_schema)?,
                 stride_dt: stride.data_type(input_schema)?,
@@ -263,7 +263,7 @@ impl PhysicalExpr for GetIndexedFieldExpr {
                                                  with utf8 indexes. Tried {dt:?} with {key:?} index"),
                         }
                 },
-            GetFieldAccessExpr::ListStride { start, stop, stride } => {
+            GetFieldAccessExpr::ListRange { start, stop, stride } => {
                 let start = start.evaluate(batch)?.into_array(batch.num_rows())?;
                 let stop = stop.evaluate(batch)?.into_array(batch.num_rows())?;
                 let stride = stride.evaluate(batch)?.into_array(batch.num_rows())?;
