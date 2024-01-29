@@ -502,7 +502,7 @@ pub fn make_current_time(
     move |_arg| Ok(ColumnarValue::Scalar(ScalarValue::Time64Nanosecond(nano)))
 }
 
-/// make_date(year, month, date) SQL function implementation
+/// make_date(year, month, day) SQL function implementation
 pub fn make_date(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     if args.len() != 3 {
         return exec_err!(
