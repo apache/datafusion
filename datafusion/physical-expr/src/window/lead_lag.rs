@@ -196,7 +196,7 @@ impl PartitionEvaluator for WindowShiftEvaluator {
     }
 
     fn is_causal(&self) -> bool {
-        // if window shift is lagging we do not need any future rows
+        // Lagging windows are causal by definition:
         self.shift_offset > 0
     }
 
