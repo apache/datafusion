@@ -109,12 +109,12 @@ async fn run_join_test(
         let schema2 = input2[0].schema();
         let on_columns = vec![
             (
-                Column::new_with_schema("a", &schema1).unwrap(),
-                Column::new_with_schema("a", &schema2).unwrap(),
+                Arc::new(Column::new_with_schema("a", &schema1).unwrap()) as _,
+                Arc::new(Column::new_with_schema("a", &schema2).unwrap()) as _,
             ),
             (
-                Column::new_with_schema("b", &schema1).unwrap(),
-                Column::new_with_schema("b", &schema2).unwrap(),
+                Arc::new(Column::new_with_schema("b", &schema1).unwrap()) as _,
+                Arc::new(Column::new_with_schema("b", &schema2).unwrap()) as _,
             ),
         ];
 

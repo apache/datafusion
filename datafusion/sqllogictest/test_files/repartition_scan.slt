@@ -253,7 +253,16 @@ query TT
 EXPLAIN SELECT * FROM arrow_table
 ----
 logical_plan TableScan: arrow_table projection=[f0, f1, f2]
-physical_plan ArrowExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/example.arrow]]}, projection=[f0, f1, f2]
+physical_plan ArrowExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/core/tests/data/example.arrow:0..461], [WORKSPACE_ROOT/datafusion/core/tests/data/example.arrow:461..922], [WORKSPACE_ROOT/datafusion/core/tests/data/example.arrow:922..1383], [WORKSPACE_ROOT/datafusion/core/tests/data/example.arrow:1383..1842]]}, projection=[f0, f1, f2]
+
+# correct content
+query ITB
+SELECT * FROM arrow_table
+----
+1 foo true
+2 bar NULL
+3 baz false
+4 NULL true
 
 # Cleanup
 statement ok

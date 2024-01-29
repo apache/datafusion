@@ -20,18 +20,18 @@
 # DataFusion
 
 [![Crates.io][crates-badge]][crates-url]
-[![MIT licensed][mit-badge]][mit-url]
+[![Apache licensed][license-badge]][license-url]
 [![Build Status][actions-badge]][actions-url]
 [![Discord chat][discord-badge]][discord-url]
 
 [crates-badge]: https://img.shields.io/crates/v/datafusion.svg
 [crates-url]: https://crates.io/crates/datafusion
-[mit-badge]: https://img.shields.io/badge/license-MIT-blue.svg
-[mit-url]: https://github.com/apache/arrow-datafusion/blob/main/LICENSE.txt
+[license-badge]: https://img.shields.io/badge/license-Apache%20v2-blue.svg
+[license-url]: https://github.com/apache/arrow-datafusion/blob/main/LICENSE.txt
 [actions-badge]: https://github.com/apache/arrow-datafusion/actions/workflows/rust.yml/badge.svg
 [actions-url]: https://github.com/apache/arrow-datafusion/actions?query=branch%3Amain
 [discord-badge]: https://img.shields.io/discord/885562378132000778.svg?logo=discord&style=flat-square
-[discord-url]: https://discord.com/channels/885562378132000778/885562378132000781
+[discord-url]: https://discord.com/invite/Qw5gKqHxUM
 
 [Website](https://github.com/apache/arrow-datafusion) |
 [Guides](https://github.com/apache/arrow-datafusion/tree/main/docs) |
@@ -62,9 +62,9 @@ It lets you start quickly from a fully working engine, and then customize those 
 
 ## Contributing to DataFusion
 
-Please see the [developer’s guide] for contributing and [communication] for getting in touch with us.
+Please see the [contributor guide] and [communication] pages for more information.
 
-[developer’s guide]: https://arrow.apache.org/datafusion/contributor-guide/index.html#developer-s-guide
+[contributor guide]: https://arrow.apache.org/datafusion/contributor-guide
 [communication]: https://arrow.apache.org/datafusion/contributor-guide/communication.html
 
 ## Crate features

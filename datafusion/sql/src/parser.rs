@@ -366,7 +366,7 @@ impl<'a> DFParser<'a> {
             CopyToSource::Query(query)
         } else {
             // parse as table reference
-            let table_name = self.parser.parse_object_name()?;
+            let table_name = self.parser.parse_object_name(true)?;
             CopyToSource::Relation(table_name)
         };
 
@@ -465,7 +465,7 @@ impl<'a> DFParser<'a> {
 
         loop {
             if let Token::Word(_) = self.parser.peek_token().token {
-                let identifier = self.parser.parse_identifier()?;
+                let identifier = self.parser.parse_identifier(false)?;
                 partitions.push(identifier.to_string());
             } else {
                 return self.expected("partition name", self.parser.peek_token());
@@ -567,17 +567,17 @@ impl<'a> DFParser<'a> {
     }
 
     fn parse_column_def(&mut self) -> Result<ColumnDef, ParserError> {
-        let name = self.parser.parse_identifier()?;
+        let name = self.parser.parse_identifier(false)?;
         let data_type = self.parser.parse_data_type()?;
         let collation = if self.parser.parse_keyword(Keyword::COLLATE) {
-            Some(self.parser.parse_object_name()?)
+            Some(self.parser.parse_object_name(false)?)
         } else {
             None
         };
         let mut options = vec![];
         loop {
             if self.parser.parse_keyword(Keyword::CONSTRAINT) {
-                let name = Some(self.parser.parse_identifier()?);
+                let name = Some(self.parser.parse_identifier(false)?);
                 if let Some(option) = self.parser.parse_optional_column_option()? {
                     options.push(ColumnOptionDef { name, option });
                 } else {
@@ -608,7 +608,7 @@ impl<'a> DFParser<'a> {
         let if_not_exists =
             self.parser
                 .parse_keywords(&[Keyword::IF, Keyword::NOT, Keyword::EXISTS]);
-        let table_name = self.parser.parse_object_name()?;
+        let table_name = self.parser.parse_object_name(true)?;
         let (columns, constraints) = self.parse_columns()?;
 
         #[derive(Default)]
