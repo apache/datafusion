@@ -1575,9 +1575,7 @@ impl fmt::Display for Expr {
                 }
             },
             Expr::Placeholder(Placeholder { id, .. }) => write!(f, "{id}"),
-            Expr::Unnest(Unnest {
-                exprs, ..
-            }) => {
+            Expr::Unnest(Unnest { exprs }) => {
                 write!(f, "UNNEST({exprs:?})")
             }
         }
