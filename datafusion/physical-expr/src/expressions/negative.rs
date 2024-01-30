@@ -30,7 +30,7 @@ use arrow::{
     datatypes::{DataType, Schema},
     record_batch::RecordBatch,
 };
-use datafusion_common::{internal_err, DataFusionError, Result};
+use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::{
     type_coercion::{is_interval, is_null, is_signed_numeric, is_timestamp},
@@ -164,9 +164,9 @@ pub fn negative(
         && !is_interval(&data_type)
         && !is_timestamp(&data_type)
     {
-        internal_err!(
-            "Can't create negative physical expr for (- '{arg:?}'), the type of child expr is {data_type}, not signed numeric"
-        )
+        Err(DataFusionError::Plan(
+            "Negation only supports numeric, interval and timestamp types".to_string(),
+        ))
     } else {
         Ok(Arc::new(NegativeExpr::new(arg)))
     }
@@ -250,6 +250,28 @@ mod tests {
             )?,
             after_propagation
         );
+        Ok(())
+    }
+
+    #[test]
+    fn test_negation_valid_types() -> Result<()> {
+        let negatable_types = [
+            DataType::Int8,
+            DataType::Timestamp(TimeUnit::Second, None),
+            DataType::Interval(IntervalUnit::YearMonth),
+        ];
+        for negatable_type in negatable_types {
+            let schema = Schema::new(vec![Field::new("a", negatable_type, true)]);
+            let _expr = negative(col("a", &schema)?, &schema)?;
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_negation_invalid_types() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("a", DataType::Utf8, true)]);
+        let expr = negative(col("a", &schema)?, &schema).unwrap_err();
+        matches!(expr, DataFusionError::Plan(_));
         Ok(())
     }
 }
