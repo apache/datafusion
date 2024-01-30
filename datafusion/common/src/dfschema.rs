@@ -24,10 +24,7 @@ use std::fmt::{Display, Formatter};
 use std::hash::Hash;
 use std::sync::Arc;
 
-use crate::error::{
-    unqualified_field_not_found, DataFusionError, Result, SchemaError, _plan_err,
-    _schema_err,
-};
+use crate::error::{DataFusionError, Result, _plan_err};
 use crate::{
     field_not_found, Column, FunctionalDependencies, OwnedTableReference, TableReference,
 };
@@ -132,9 +129,10 @@ impl DFSchema {
         schema: &SchemaRef,
     ) -> Result<Self> {
         let qualifier = qualifier.into();
+        let owned_qualifier = qualifier.to_owned_reference();
         let new_self = Self {
             inner: schema.clone(),
-            field_qualifiers: vec![Some(qualifier.clone()); schema.fields().len()],
+            field_qualifiers: vec![Some(owned_qualifier); schema.fields().len()],
             functional_dependencies: FunctionalDependencies::empty(),
         };
         // new_self.check_names()?;
@@ -142,7 +140,7 @@ impl DFSchema {
     }
 
     /// Create a `DFSchema` from an Arrow where all fields have no qualifier.
-    pub fn from_unqualified_schema<'a>(schema: &SchemaRef) -> Result<Self> {
+    pub fn from_unqualified_schema(schema: &SchemaRef) -> Result<Self> {
         let new_self = Self {
             inner: schema.clone(),
             field_qualifiers: vec![None; schema.fields.len()],
@@ -219,9 +217,10 @@ impl DFSchema {
         schema: &Schema,
     ) -> Result<Self> {
         let qualifier = qualifier.into();
+        let owned_qualifier = qualifier.to_owned_reference();
         let schema = DFSchema {
             inner: schema.clone().into(),
-            field_qualifiers: vec![Some(qualifier); schema.fields.len()],
+            field_qualifiers: vec![Some(owned_qualifier); schema.fields.len()],
             functional_dependencies: FunctionalDependencies::empty(),
         };
         Ok(schema)
@@ -273,14 +272,13 @@ impl DFSchema {
         let mut new_qualifiers = self.field_qualifiers.clone();
         new_qualifiers.extend_from_slice(schema.field_qualifiers.as_slice());
 
-        let combined_schema = schema_builder.finish();
-        self.functional_dependencies
-            .extend(schema.functional_dependencies);
+        let mut functional_dependencies = self.functional_dependencies.clone();
+        functional_dependencies.extend(schema.functional_dependencies.clone());
 
         let new_self = Self {
             inner: Arc::new(new_schema_with_metadata),
             field_qualifiers: new_qualifiers,
-            functional_dependencies: self.functional_dependencies.clone(),
+            functional_dependencies,
         };
         Ok(new_self)
     }
@@ -291,7 +289,7 @@ impl DFSchema {
         if other_schema.inner.fields.is_empty() {
             return;
         }
-        let mut schema_builder = SchemaBuilder::from(self.inner.fields);
+        let mut schema_builder = SchemaBuilder::from(self.inner.fields.clone());
         for (qualifier, field) in other_schema.iter() {
             // skip duplicate columns
             let duplicated_field = match qualifier {
@@ -304,11 +302,12 @@ impl DFSchema {
                 schema_builder.push(field.clone())
             }
         }
+        let mut metadata = self.inner.metadata.clone();
+        metadata.extend(other_schema.inner.metadata.clone());
+
         let finished = schema_builder.finish();
-        self.inner = finished.into();
-        self.inner
-            .metadata
-            .extend(other_schema.inner.metadata.clone());
+        let finished_with_metadata = finished.with_metadata(metadata);
+        self.inner = finished_with_metadata.into();
     }
 
     /// Get a list of fields
@@ -1147,7 +1146,7 @@ mod tests {
         let arrow_schema_ref = Arc::new(arrow_schema.clone());
 
         let df_schema = DFSchema {
-            inner: arrow_schema_ref,
+            inner: arrow_schema_ref.clone(),
             field_qualifiers: vec![None; arrow_schema_ref.fields.len()],
             functional_dependencies: FunctionalDependencies::empty(),
         };
@@ -1193,7 +1192,7 @@ mod tests {
         let schema = Arc::new(Schema::new(vec![a_field, b_field]));
 
         let df_schema = DFSchema {
-            inner: schema,
+            inner: schema.clone(),
             field_qualifiers: vec![None; schema.fields.len()],
             functional_dependencies: FunctionalDependencies::empty(),
         };

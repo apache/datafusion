@@ -182,7 +182,7 @@ impl Column {
             match columns.len() {
                 0 => continue,
                 1 => {
-                    return Ok(columns[0].into());
+                    return Ok(columns[0].clone().into());
                 }
                 _ => {
                     // More than 1 fields in this schema have their names set to self.name.
@@ -203,7 +203,7 @@ impl Column {
                         // All matched fields belong to the same using column set, in orther words
                         // the same join clause. We simply pick the qualifer from the first match.
                         if all_matched {
-                            return Ok(columns[0].into());
+                            return Ok(columns[0].clone().into());
                         }
                     }
                 }
@@ -268,7 +268,7 @@ impl Column {
                 .collect::<Vec<_>>();
             match columns.len() {
                 0 => continue,
-                1 => return Ok(columns[0]),
+                1 => return Ok(columns[0].clone()),
 
                 _ => {
                     // More than 1 fields in this schema have their names set to self.name.
@@ -289,7 +289,7 @@ impl Column {
                         // All matched fields belong to the same using column set, in orther words
                         // the same join clause. We simply pick the qualifer from the first match.
                         if all_matched {
-                            return Ok(columns[0]);
+                            return Ok(columns[0].clone());
                         }
                     }
 
@@ -349,36 +349,26 @@ impl fmt::Display for Column {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::DFField;
     use arrow::datatypes::DataType;
+    use arrow_schema::{Field, SchemaBuilder};
     use std::collections::HashMap;
 
-    fn create_schema(names: &[(Option<&str>, &str)]) -> Result<DFSchema> {
-        let fields = names
-            .iter()
-            .map(|(qualifier, name)| {
-                DFField::new(
-                    qualifier.to_owned().map(|s| s.to_string()),
-                    name,
-                    DataType::Boolean,
-                    true,
-                )
-            })
-            .collect::<Vec<_>>();
-        DFSchema::new_with_metadata(fields, HashMap::new())
+    fn create_qualified_schema(qualifier: &str, names: &[&str]) -> Result<DFSchema> {
+        let mut schema_builder = SchemaBuilder::new();
+        schema_builder.extend(
+            names
+                .iter()
+                .map(|f| Field::new(f.clone(), DataType::Boolean, true)),
+        );
+        let schema = Arc::new(schema_builder.finish());
+        DFSchema::try_from_qualified_schema(qualifier, &schema)
     }
 
     #[test]
     fn test_normalize_with_schemas_and_ambiguity_check() -> Result<()> {
-        let schema1 = create_schema(&[(Some("t1"), "a"), (Some("t1"), "b")])?;
-        let schema2 = create_schema(&[(Some("t2"), "c"), (Some("t2"), "d")])?;
-        let schema3 = create_schema(&[
-            (Some("t3"), "a"),
-            (Some("t3"), "b"),
-            (Some("t3"), "c"),
-            (Some("t3"), "d"),
-            (Some("t3"), "e"),
-        ])?;
+        let schema1 = create_qualified_schema("t1", &["a", "b"])?;
+        let schema2 = create_qualified_schema("t2", &["c", "d"])?;
+        let schema3 = create_qualified_schema("t3", &["a", "b", "c", "d", "e"])?;
 
         // already normalized
         let col = Column::new(Some("t1"), "a");
