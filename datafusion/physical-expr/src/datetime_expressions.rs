@@ -556,30 +556,25 @@ pub fn make_date(args: &[ColumnarValue]) -> Result<ColumnarValue> {
         let m = u32::try_from(value_fn(&months, i)?);
         let d = u32::try_from(value_fn(&days, i)?);
 
-        if m.is_err() {
+        let Ok(m) = m else {
             return exec_err!(
                 "Month value '{:?}' is out of range",
                 value_fn(&months, i).unwrap()
             );
-        }
-        if d.is_err() {
+        };
+
+        let Ok(d) = d else {
             return exec_err!(
                 "Day value '{:?}' is out of range",
                 value_fn(&days, i).unwrap()
             );
-        }
+        };
 
-        let date = NaiveDate::from_ymd_opt(y, m.unwrap(), d.unwrap());
+        let date = NaiveDate::from_ymd_opt(y, m, d);
 
         match date {
             Some(d) => builder.append_value(d.num_days_from_ce() - unix_days_from_ce),
-            None => {
-                return exec_err!(
-                    "Unable to parse date from {y}, {}, {}",
-                    m.unwrap(),
-                    d.unwrap()
-                )
-            }
+            None => return exec_err!("Unable to parse date from {y}, {m}, {d}"),
         };
     }
 
