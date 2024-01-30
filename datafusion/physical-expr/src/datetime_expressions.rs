@@ -567,21 +567,23 @@ fn _date_trunc_coarse_with_tz(
     if let Some(value) = value {
         let local = value.naive_local();
         let truncated = _date_trunc_coarse::<NaiveDateTime>(granularity, Some(local))?;
-        let truncated = truncated.map(|truncated| match truncated.and_local_timezone(value.timezone()) {
-            LocalResult::None => {
-                // It is impossible to truncate from a time that does exist into one that doesn't.
-                panic!("date_trunc produced impossible time")
-            }
-            LocalResult::Single(datetime) => datetime,
-            LocalResult::Ambiguous(datetime1, datetime2) => {
-                // Because we are truncating from an equally or more specific time
-                // the original time must have been within the ambiguous local time
-                // period. Therefore the offset of one of these times should match the
-                // offset of the original time.
-                if datetime1.offset().fix() == value.offset().fix() {
-                    datetime1
-                } else {
-                    datetime2
+        let truncated = truncated.map(|truncated| {
+            match truncated.and_local_timezone(value.timezone()) {
+                LocalResult::None => {
+                    // It is impossible to truncate from a time that does exist into one that doesn't.
+                    panic!("date_trunc produced impossible time")
+                }
+                LocalResult::Single(datetime) => datetime,
+                LocalResult::Ambiguous(datetime1, datetime2) => {
+                    // Because we are truncating from an equally or more specific time
+                    // the original time must have been within the ambiguous local time
+                    // period. Therefore the offset of one of these times should match the
+                    // offset of the original time.
+                    if datetime1.offset().fix() == value.offset().fix() {
+                        datetime1
+                    } else {
+                        datetime2
+                    }
                 }
             }
         });
