@@ -154,7 +154,7 @@ macro_rules! assert_not_contains {
 /// Example:
 /// ```
 /// let testdata = datafusion_common::test_util::datafusion_test_data();
-/// let csvdata = format!("{}/window_1.csv.csv", testdata);
+/// let csvdata = format!("{}/window_1.csv", testdata);
 /// assert!(std::path::PathBuf::from(csvdata).exists());
 /// ```
 pub fn datafusion_test_data() -> String {
