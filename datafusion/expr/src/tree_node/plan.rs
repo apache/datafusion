@@ -89,11 +89,11 @@ impl TreeNode for LogicalPlan {
 
         // if any changes made, make a new child
         if old_children
-            .iter()
+            .into_iter()
             .zip(new_children.iter())
-            .any(|(c1, c2)| c1 != &c2)
+            .any(|(c1, c2)| c1 != c2)
         {
-            self.with_new_exprs(self.expressions(), new_children.as_slice())
+            self.with_new_exprs(self.expressions(), new_children)
         } else {
             Ok(self)
         }

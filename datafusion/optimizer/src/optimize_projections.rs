@@ -375,9 +375,9 @@ fn optimize_projections(
             // If new_input is `None`, this means child is not changed, so use
             // `old_child` during construction:
             .map(|(new_input, old_child)| new_input.unwrap_or_else(|| old_child.clone()))
-            .collect::<Vec<_>>();
-        plan.with_new_exprs(plan.expressions(), &new_inputs)
-            .map(Some)
+            .collect();
+        let exprs = plan.expressions();
+        plan.with_new_exprs(exprs, new_inputs).map(Some)
     }
 }
 
