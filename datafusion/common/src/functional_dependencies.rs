@@ -120,9 +120,7 @@ impl Constraints {
                         .iter()
                         .map(|pk| {
                             let idx = df_schema
-                                .fields()
-                                .iter()
-                                .position(|item| item.name() == &pk.value)
+                                .index_of_column_by_name(None, &pk.value)?
                                 .ok_or_else(|| {
                                     DataFusionError::Plan(
                                         "Column doesn't exist".to_string(),
