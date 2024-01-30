@@ -612,7 +612,7 @@ scalar_expr!(
     ArrayEmpty,
     array_empty,
     array,
-    "returns 1 for an empty array or 0 for a non-empty array."
+    "returns true for an empty array or false for a non-empty array."
 );
 scalar_expr!(
     ArrayHasAll,
@@ -919,6 +919,7 @@ scalar_expr!(
 scalar_expr!(CurrentDate, current_date, ,"returns current UTC date as a [`DataType::Date32`] value");
 scalar_expr!(Now, now, ,"returns current timestamp in nanoseconds, using the same value for all instances of now() in same statement");
 scalar_expr!(CurrentTime, current_time, , "returns current UTC time as a [`DataType::Time64`] value");
+scalar_expr!(MakeDate, make_date, year month day, "make a date from year, month and day component parts");
 scalar_expr!(Nanvl, nanvl, x y, "returns x if x is not NaN otherwise returns y");
 scalar_expr!(
     Isnan,

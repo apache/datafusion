@@ -722,7 +722,7 @@ pub fn from_plan(
     expr: &[Expr],
     inputs: &[LogicalPlan],
 ) -> Result<LogicalPlan> {
-    plan.with_new_exprs(expr.to_vec(), inputs)
+    plan.with_new_exprs(expr.to_vec(), inputs.to_vec())
 }
 
 /// Find all columns referenced from an aggregate query

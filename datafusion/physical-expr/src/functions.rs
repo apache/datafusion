@@ -81,6 +81,7 @@ pub fn create_physical_expr(
         input_phy_exprs.to_vec(),
         data_type,
         monotonicity,
+        fun.signature().type_signature.supports_zero_argument(),
     )))
 }
 
@@ -554,6 +555,7 @@ pub fn create_physical_fun(
                 execution_props.query_execution_start_time,
             ))
         }
+        BuiltinScalarFunction::MakeDate => Arc::new(datetime_expressions::make_date),
         BuiltinScalarFunction::ToTimestamp => {
             Arc::new(datetime_expressions::to_timestamp_invoke)
         }

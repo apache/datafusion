@@ -509,8 +509,6 @@ pub struct CopyToNode {
     pub input: ::core::option::Option<::prost::alloc::boxed::Box<LogicalPlanNode>>,
     #[prost(string, tag = "2")]
     pub output_url: ::prost::alloc::string::String,
-    #[prost(bool, tag = "3")]
-    pub single_file_output: bool,
     #[prost(string, tag = "6")]
     pub file_type: ::prost::alloc::string::String,
     #[prost(oneof = "copy_to_node::CopyOptions", tags = "4, 5")]
@@ -1740,8 +1738,6 @@ pub struct FileSinkConfig {
     pub output_schema: ::core::option::Option<Schema>,
     #[prost(message, repeated, tag = "5")]
     pub table_partition_cols: ::prost::alloc::vec::Vec<PartitionColumn>,
-    #[prost(bool, tag = "7")]
-    pub single_file_output: bool,
     #[prost(bool, tag = "8")]
     pub overwrite: bool,
     #[prost(message, optional, tag = "9")]
@@ -2768,6 +2764,7 @@ pub enum ScalarFunction {
     ArrayResize = 130,
     EndsWith = 131,
     InStr = 132,
+    MakeDate = 133,
 }
 impl ScalarFunction {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -2907,6 +2904,7 @@ impl ScalarFunction {
             ScalarFunction::ArrayResize => "ArrayResize",
             ScalarFunction::EndsWith => "EndsWith",
             ScalarFunction::InStr => "InStr",
+            ScalarFunction::MakeDate => "MakeDate",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -3043,6 +3041,7 @@ impl ScalarFunction {
             "ArrayResize" => Some(Self::ArrayResize),
             "EndsWith" => Some(Self::EndsWith),
             "InStr" => Some(Self::InStr),
+            "MakeDate" => Some(Self::MakeDate),
             _ => None,
         }
     }

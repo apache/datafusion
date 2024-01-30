@@ -36,6 +36,7 @@ use datafusion::logical_expr::{
 };
 use datafusion::parquet::file::properties::WriterProperties;
 use datafusion::physical_expr::expressions::Literal;
+use datafusion::physical_expr::expressions::NthValueAgg;
 use datafusion::physical_expr::window::SlidingAggregateWindowExpr;
 use datafusion::physical_expr::{PhysicalSortRequirement, ScalarFunctionExpr};
 use datafusion::physical_plan::aggregates::{
@@ -337,17 +338,16 @@ fn rountrip_aggregate() -> Result<()> {
             "AVG(b)".to_string(),
             DataType::Float64,
         ))],
-        // TODO: See <https://github.com/apache/arrow-datafusion/issues/9028>
-        // // NTH_VALUE
-        // vec![Arc::new(NthValueAgg::new(
-        //     col("b", &schema)?,
-        //     1,
-        //     "NTH_VALUE(b, 1)".to_string(),
-        //     DataType::Int64,
-        //     false,
-        //     Vec::new(),
-        //     Vec::new(),
-        // ))],
+        // NTH_VALUE
+        vec![Arc::new(NthValueAgg::new(
+            col("b", &schema)?,
+            1,
+            "NTH_VALUE(b, 1)".to_string(),
+            DataType::Int64,
+            false,
+            Vec::new(),
+            Vec::new(),
+        ))],
         // STRING_AGG
         vec![Arc::new(StringAgg::new(
             cast(col("b", &schema)?, &schema, DataType::Utf8)?,
@@ -578,8 +578,9 @@ fn roundtrip_builtin_scalar_function() -> Result<()> {
         "acos",
         fun_expr,
         vec![col("a", &schema)?],
-        DataType::Int64,
+        DataType::Float64,
         None,
+        false,
     );
 
     let project =
@@ -617,6 +618,7 @@ fn roundtrip_scalar_udf() -> Result<()> {
         vec![col("a", &schema)?],
         DataType::Int64,
         None,
+        false,
     );
 
     let project =
@@ -792,7 +794,6 @@ fn roundtrip_json_sink() -> Result<()> {
         table_paths: vec![ListingTableUrl::parse("file:///")?],
         output_schema: schema.clone(),
         table_partition_cols: vec![("plan_type".to_string(), DataType::Utf8)],
-        single_file_output: true,
         overwrite: true,
         file_type_writer_options: FileTypeWriterOptions::JSON(JsonWriterOptions::new(
             CompressionTypeVariant::UNCOMPRESSED,
@@ -828,7 +829,6 @@ fn roundtrip_csv_sink() -> Result<()> {
         table_paths: vec![ListingTableUrl::parse("file:///")?],
         output_schema: schema.clone(),
         table_partition_cols: vec![("plan_type".to_string(), DataType::Utf8)],
-        single_file_output: true,
         overwrite: true,
         file_type_writer_options: FileTypeWriterOptions::CSV(CsvWriterOptions::new(
             WriterBuilder::default(),
@@ -887,7 +887,6 @@ fn roundtrip_parquet_sink() -> Result<()> {
         table_paths: vec![ListingTableUrl::parse("file:///")?],
         output_schema: schema.clone(),
         table_partition_cols: vec![("plan_type".to_string(), DataType::Utf8)],
-        single_file_output: true,
         overwrite: true,
         file_type_writer_options: FileTypeWriterOptions::Parquet(
             ParquetWriterOptions::new(WriterProperties::default()),

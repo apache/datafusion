@@ -92,14 +92,14 @@ CREATE TABLE src_table_2 (
 
 query ITII
 COPY  src_table_1 TO 'test_files/scratch/csv_files/csv_partitions/1.csv'
-(FORMAT CSV, SINGLE_FILE_OUTPUT true);
+(FORMAT CSV);
 ----
 4
 
 
 query ITII
 COPY  src_table_2 TO 'test_files/scratch/csv_files/csv_partitions/2.csv'
-(FORMAT CSV, SINGLE_FILE_OUTPUT true);
+(FORMAT CSV);
 ----
 4
 
