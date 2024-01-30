@@ -209,10 +209,15 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
                     let key = create_physical_name(key, false)?;
                     format!("{expr}[{key}]")
                 }
-                GetFieldAccess::ListRange { start, stop } => {
+                GetFieldAccess::ListRange {
+                    start,
+                    stop,
+                    stride,
+                } => {
                     let start = create_physical_name(start, false)?;
                     let stop = create_physical_name(stop, false)?;
-                    format!("{expr}[{start}:{stop}]")
+                    let stride = create_physical_name(stride, false)?;
+                    format!("{expr}[{start}:{stop}:{stride}]")
                 }
             };
 
@@ -557,7 +562,6 @@ impl DefaultPhysicalPlanner {
                     input,
                     output_url,
                     file_format,
-                    single_file_output,
                     copy_options,
                 }) => {
                     let input_exec = self.create_initial_plan(input, session_state).await?;
@@ -583,7 +587,6 @@ impl DefaultPhysicalPlanner {
                         file_groups: vec![],
                         output_schema: Arc::new(schema),
                         table_partition_cols: vec![],
-                        single_file_output: *single_file_output,
                         overwrite: false,
                         file_type_writer_options
                     };
@@ -1031,15 +1034,21 @@ impl DefaultPhysicalPlanner {
                     let [physical_left, physical_right]: [Arc<dyn ExecutionPlan>; 2] = left_right.try_into().map_err(|_| DataFusionError::Internal("`create_initial_plan_multi` is broken".to_string()))?;
                     let left_df_schema = left.schema();
                     let right_df_schema = right.schema();
+                    let execution_props = session_state.execution_props();
                     let join_on = keys
                         .iter()
                         .map(|(l, r)| {
-                            let l = l.try_into_col()?;
-                            let r = r.try_into_col()?;
-                            Ok((
-                                Column::new(&l.name, left_df_schema.index_of_column(&l)?),
-                                Column::new(&r.name, right_df_schema.index_of_column(&r)?),
-                            ))
+                            let l = create_physical_expr(
+                                l,
+                                left_df_schema,
+                                execution_props
+                            )?;
+                            let r = create_physical_expr(
+                                r,
+                                right_df_schema,
+                                execution_props
+                            )?;
+                            Ok((l, r))
                         })
                         .collect::<Result<join_utils::JoinOn>>()?;
 

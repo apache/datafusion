@@ -46,11 +46,11 @@ use crate::joins::utils::{
     JoinHashMapType, JoinOn, StatefulStreamResult,
 };
 use crate::{
-    expressions::{Column, PhysicalSortExpr},
+    expressions::PhysicalSortExpr,
     joins::StreamJoinPartitionMode,
     metrics::{ExecutionPlanMetricsSet, MetricsSet},
     DisplayAs, DisplayFormatType, Distribution, EquivalenceProperties, ExecutionPlan,
-    Partitioning, PhysicalExpr, RecordBatchStream, SendableRecordBatchStream, Statistics,
+    Partitioning, RecordBatchStream, SendableRecordBatchStream, Statistics,
 };
 
 use arrow::array::{
@@ -72,7 +72,7 @@ use datafusion_physical_expr::equivalence::join_equivalence_properties;
 use datafusion_physical_expr::intervals::cp_solver::ExprIntervalGraph;
 
 use ahash::RandomState;
-use datafusion_physical_expr::PhysicalSortRequirement;
+use datafusion_physical_expr::{PhysicalExprRef, PhysicalSortRequirement};
 use futures::Stream;
 use hashbrown::HashSet;
 use parking_lot::Mutex;
@@ -171,7 +171,7 @@ pub struct SymmetricHashJoinExec {
     /// Right side stream
     pub(crate) right: Arc<dyn ExecutionPlan>,
     /// Set of common columns used to join on
-    pub(crate) on: Vec<(Column, Column)>,
+    pub(crate) on: Vec<(PhysicalExprRef, PhysicalExprRef)>,
     /// Filters applied when finding matching rows
     pub(crate) filter: Option<JoinFilter>,
     /// How the join is performed
@@ -261,7 +261,7 @@ impl SymmetricHashJoinExec {
     }
 
     /// Set of common columns used to join on
-    pub fn on(&self) -> &[(Column, Column)] {
+    pub fn on(&self) -> &[(PhysicalExprRef, PhysicalExprRef)] {
         &self.on
     }
 
@@ -367,7 +367,7 @@ impl ExecutionPlan for SymmetricHashJoinExec {
                 let (left_expr, right_expr) = self
                     .on
                     .iter()
-                    .map(|(l, r)| (Arc::new(l.clone()) as _, Arc::new(r.clone()) as _))
+                    .map(|(l, r)| (l.clone() as _, r.clone() as _))
                     .unzip();
                 vec![
                     Distribution::HashPartitioned(left_expr),
@@ -874,8 +874,8 @@ fn lookup_join_hashmap(
     build_hashmap: &PruningJoinHashMap,
     build_batch: &RecordBatch,
     probe_batch: &RecordBatch,
-    build_on: &[Column],
-    probe_on: &[Column],
+    build_on: &[PhysicalExprRef],
+    probe_on: &[PhysicalExprRef],
     random_state: &RandomState,
     null_equals_null: bool,
     hashes_buffer: &mut Vec<u64>,
@@ -952,7 +952,7 @@ pub struct OneSideHashJoiner {
     /// Input record batch buffer
     pub input_buffer: RecordBatch,
     /// Columns from the side
-    pub(crate) on: Vec<Column>,
+    pub(crate) on: Vec<PhysicalExprRef>,
     /// Hashmap
     pub(crate) hashmap: PruningJoinHashMap,
     /// Reuse the hashes buffer
@@ -979,7 +979,11 @@ impl OneSideHashJoiner {
         size += std::mem::size_of_val(&self.deleted_offset);
         size
     }
-    pub fn new(build_side: JoinSide, on: Vec<Column>, schema: SchemaRef) -> Self {
+    pub fn new(
+        build_side: JoinSide,
+        on: Vec<PhysicalExprRef>,
+        schema: SchemaRef,
+    ) -> Self {
         Self {
             build_side,
             input_buffer: RecordBatch::new_empty(schema),
@@ -1326,8 +1330,9 @@ mod tests {
     use arrow::datatypes::{DataType, Field, IntervalUnit, Schema, TimeUnit};
     use datafusion_execution::config::SessionConfig;
     use datafusion_expr::Operator;
-    use datafusion_physical_expr::expressions::{binary, col, Column};
+    use datafusion_physical_expr::expressions::{binary, col, lit, Column};
 
+    use datafusion_common::ScalarValue;
     use once_cell::sync::Lazy;
     use rstest::*;
 
@@ -1447,8 +1452,13 @@ mod tests {
         )?;
 
         let on = vec![(
-            Column::new_with_schema("lc1", left_schema)?,
-            Column::new_with_schema("rc1", right_schema)?,
+            binary(
+                col("lc1", left_schema)?,
+                Operator::Plus,
+                lit(ScalarValue::Int32(Some(1))),
+                left_schema,
+            )?,
+            Arc::new(Column::new_with_schema("rc1", right_schema)?) as _,
         )];
 
         let intermediate_schema = Schema::new(vec![
@@ -1515,8 +1525,8 @@ mod tests {
         )?;
 
         let on = vec![(
-            Column::new_with_schema("lc1", left_schema)?,
-            Column::new_with_schema("rc1", right_schema)?,
+            Arc::new(Column::new_with_schema("lc1", left_schema)?) as _,
+            Arc::new(Column::new_with_schema("rc1", right_schema)?) as _,
         )];
 
         let intermediate_schema = Schema::new(vec![
@@ -1569,8 +1579,8 @@ mod tests {
             create_memory_table(left_partition, right_partition, vec![], vec![])?;
 
         let on = vec![(
-            Column::new_with_schema("lc1", left_schema)?,
-            Column::new_with_schema("rc1", right_schema)?,
+            Arc::new(Column::new_with_schema("lc1", left_schema)?) as _,
+            Arc::new(Column::new_with_schema("rc1", right_schema)?) as _,
         )];
 
         let intermediate_schema = Schema::new(vec![
@@ -1621,8 +1631,8 @@ mod tests {
             create_memory_table(left_partition, right_partition, vec![], vec![])?;
 
         let on = vec![(
-            Column::new_with_schema("lc1", left_schema)?,
-            Column::new_with_schema("rc1", right_schema)?,
+            Arc::new(Column::new_with_schema("lc1", left_schema)?) as _,
+            Arc::new(Column::new_with_schema("rc1", right_schema)?) as _,
         )];
         experiment(left, right, None, join_type, on, task_ctx).await?;
         Ok(())
@@ -1670,8 +1680,8 @@ mod tests {
         )?;
 
         let on = vec![(
-            Column::new_with_schema("lc1", left_schema)?,
-            Column::new_with_schema("rc1", right_schema)?,
+            Arc::new(Column::new_with_schema("lc1", left_schema)?) as _,
+            Arc::new(Column::new_with_schema("rc1", right_schema)?) as _,
         )];
 
         let intermediate_schema = Schema::new(vec![
@@ -1731,8 +1741,8 @@ mod tests {
         )?;
 
         let on = vec![(
-            Column::new_with_schema("lc1", left_schema)?,
-            Column::new_with_schema("rc1", right_schema)?,
+            Arc::new(Column::new_with_schema("lc1", left_schema)?) as _,
+            Arc::new(Column::new_with_schema("rc1", right_schema)?) as _,
         )];
 
         let intermediate_schema = Schema::new(vec![
@@ -1792,8 +1802,8 @@ mod tests {
         )?;
 
         let on = vec![(
-            Column::new_with_schema("lc1", left_schema)?,
-            Column::new_with_schema("rc1", right_schema)?,
+            Arc::new(Column::new_with_schema("lc1", left_schema)?) as _,
+            Arc::new(Column::new_with_schema("rc1", right_schema)?) as _,
         )];
 
         let intermediate_schema = Schema::new(vec![
@@ -1855,8 +1865,8 @@ mod tests {
         )?;
 
         let on = vec![(
-            Column::new_with_schema("lc1", left_schema)?,
-            Column::new_with_schema("rc1", right_schema)?,
+            Arc::new(Column::new_with_schema("lc1", left_schema)?) as _,
+            Arc::new(Column::new_with_schema("rc1", right_schema)?) as _,
         )];
 
         let intermediate_schema = Schema::new(vec![
@@ -1914,8 +1924,8 @@ mod tests {
         )?;
 
         let on = vec![(
-            Column::new_with_schema("lc1", left_schema)?,
-            Column::new_with_schema("rc1", right_schema)?,
+            Arc::new(Column::new_with_schema("lc1", left_schema)?) as _,
+            Arc::new(Column::new_with_schema("rc1", right_schema)?) as _,
         )];
 
         let intermediate_schema = Schema::new(vec![
@@ -1981,8 +1991,8 @@ mod tests {
         )?;
 
         let on = vec![(
-            Column::new_with_schema("lc1", left_schema)?,
-            Column::new_with_schema("rc1", right_schema)?,
+            Arc::new(Column::new_with_schema("lc1", left_schema)?) as _,
+            Arc::new(Column::new_with_schema("rc1", right_schema)?) as _,
         )];
 
         let intermediate_schema = Schema::new(vec![
@@ -2040,8 +2050,8 @@ mod tests {
         let left_schema = &left_partition[0].schema();
         let right_schema = &right_partition[0].schema();
         let on = vec![(
-            Column::new_with_schema("lc1", left_schema)?,
-            Column::new_with_schema("rc1", right_schema)?,
+            Arc::new(Column::new_with_schema("lc1", left_schema)?) as _,
+            Arc::new(Column::new_with_schema("rc1", right_schema)?) as _,
         )];
         let left_sorted = vec![PhysicalSortExpr {
             expr: col("lt1", left_schema)?,
@@ -2124,8 +2134,8 @@ mod tests {
         let left_schema = &left_partition[0].schema();
         let right_schema = &right_partition[0].schema();
         let on = vec![(
-            Column::new_with_schema("lc1", left_schema)?,
-            Column::new_with_schema("rc1", right_schema)?,
+            Arc::new(Column::new_with_schema("lc1", left_schema)?) as _,
+            Arc::new(Column::new_with_schema("rc1", right_schema)?) as _,
         )];
         let left_sorted = vec![PhysicalSortExpr {
             expr: col("li1", left_schema)?,
@@ -2217,8 +2227,8 @@ mod tests {
         )?;
 
         let on = vec![(
-            Column::new_with_schema("lc1", left_schema)?,
-            Column::new_with_schema("rc1", right_schema)?,
+            Arc::new(Column::new_with_schema("lc1", left_schema)?) as _,
+            Arc::new(Column::new_with_schema("rc1", right_schema)?) as _,
         )];
 
         let intermediate_schema = Schema::new(vec![

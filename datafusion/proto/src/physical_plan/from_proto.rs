@@ -411,8 +411,15 @@ pub fn parse_physical_expr(
                         "stop",
                         input_schema
                     )?,
+                    stride: parse_required_physical_expr(
+                        list_range_expr.stride.as_deref(),
+                        registry,
+                        "stride",
+                        input_schema
+                    )?,
                 },
-                None =>                 return Err(proto_error(
+                None =>
+                    return Err(proto_error(
                     "Field must not be None",
                 )),
             };
@@ -794,7 +801,6 @@ impl TryFrom<&protobuf::FileSinkConfig> for FileSinkConfig {
             table_paths,
             output_schema: Arc::new(convert_required!(conf.output_schema)?),
             table_partition_cols,
-            single_file_output: conf.single_file_output,
             overwrite: conf.overwrite,
             file_type_writer_options: convert_required!(conf.file_type_writer_options)?,
         })

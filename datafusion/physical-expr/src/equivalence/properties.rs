@@ -23,11 +23,12 @@ use super::ordering::collapse_lex_ordering;
 use crate::equivalence::{
     collapse_lex_req, EquivalenceGroup, OrderingEquivalenceClass, ProjectionMapping,
 };
-use crate::expressions::{Column, Literal};
+use crate::expressions::Literal;
 use crate::sort_properties::{ExprOrdering, SortProperties};
 use crate::{
     physical_exprs_contains, LexOrdering, LexOrderingRef, LexRequirement,
-    LexRequirementRef, PhysicalExpr, PhysicalSortExpr, PhysicalSortRequirement,
+    LexRequirementRef, PhysicalExpr, PhysicalExprRef, PhysicalSortExpr,
+    PhysicalSortRequirement,
 };
 
 use arrow_schema::SchemaRef;
@@ -730,7 +731,7 @@ impl EquivalenceProperties {
             for (PhysicalSortExpr { expr, .. }, idx) in &ordered_exprs {
                 eq_properties =
                     eq_properties.add_constants(std::iter::once(expr.clone()));
-                search_indices.remove(idx);
+                search_indices.shift_remove(idx);
             }
             // Add new ordered section to the state.
             result.extend(ordered_exprs);
@@ -1099,7 +1100,7 @@ pub fn join_equivalence_properties(
     join_schema: SchemaRef,
     maintains_input_order: &[bool],
     probe_side: Option<JoinSide>,
-    on: &[(Column, Column)],
+    on: &[(PhysicalExprRef, PhysicalExprRef)],
 ) -> EquivalenceProperties {
     let left_size = left.schema.fields.len();
     let mut result = EquivalenceProperties::new(join_schema);
@@ -1779,6 +1780,7 @@ mod tests {
         let col_c = &col("c", &test_schema)?;
         let col_d = &col("d", &test_schema)?;
         let col_e = &col("e", &test_schema)?;
+        let col_f = &col("f", &test_schema)?;
         let col_h = &col("h", &test_schema)?;
         // a + d
         let a_plus_d = Arc::new(BinaryExpr::new(
@@ -1795,7 +1797,7 @@ mod tests {
             descending: true,
             nulls_first: true,
         };
-        // [d ASC, h ASC] also satisfies schema.
+        // [d ASC, h DESC] also satisfies schema.
         eq_properties.add_new_orderings([vec![
             PhysicalSortExpr {
                 expr: col_d.clone(),
@@ -1835,6 +1837,39 @@ mod tests {
             (
                 vec![col_c, col_e],
                 vec![(col_c, option_asc), (col_e, option_desc)],
+            ),
+            // TEST CASE 7
+            (
+                vec![col_d, col_h, col_e, col_f, col_b],
+                vec![
+                    (col_d, option_asc),
+                    (col_e, option_desc),
+                    (col_h, option_desc),
+                    (col_f, option_asc),
+                    (col_b, option_asc),
+                ],
+            ),
+            // TEST CASE 8
+            (
+                vec![col_e, col_d, col_h, col_f, col_b],
+                vec![
+                    (col_e, option_desc),
+                    (col_d, option_asc),
+                    (col_h, option_desc),
+                    (col_f, option_asc),
+                    (col_b, option_asc),
+                ],
+            ),
+            // TEST CASE 9
+            (
+                vec![col_e, col_d, col_b, col_h, col_f],
+                vec![
+                    (col_e, option_desc),
+                    (col_d, option_asc),
+                    (col_b, option_asc),
+                    (col_h, option_desc),
+                    (col_f, option_asc),
+                ],
             ),
         ];
         for (exprs, expected) in test_cases {

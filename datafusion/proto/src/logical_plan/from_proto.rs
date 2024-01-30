@@ -555,6 +555,7 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::Now => Self::Now,
             ScalarFunction::CurrentDate => Self::CurrentDate,
             ScalarFunction::CurrentTime => Self::CurrentTime,
+            ScalarFunction::MakeDate => Self::MakeDate,
             ScalarFunction::Uuid => Self::Uuid,
             ScalarFunction::Translate => Self::Translate,
             ScalarFunction::RegexpMatch => Self::RegexpMatch,
@@ -1066,6 +1067,11 @@ pub fn parse_expr(
                             list_range.stop.as_deref(),
                             registry,
                             "stop",
+                        )?),
+                        stride: Box::new(parse_required_expr(
+                            list_range.stride.as_deref(),
+                            registry,
+                            "stride",
                         )?),
                     }
                 }
@@ -1699,6 +1705,16 @@ pub fn parse_expr(
                     parse_expr(&args[1], registry)?,
                 )),
                 ScalarFunction::ToHex => Ok(to_hex(parse_expr(&args[0], registry)?)),
+                ScalarFunction::MakeDate => {
+                    let args: Vec<_> = args
+                        .iter()
+                        .map(|expr| parse_expr(expr, registry))
+                        .collect::<std::result::Result<_, _>>()?;
+                    Ok(Expr::ScalarFunction(expr::ScalarFunction::new(
+                        BuiltinScalarFunction::MakeDate,
+                        args,
+                    )))
+                }
                 ScalarFunction::ToTimestamp => {
                     let args: Vec<_> = args
                         .iter()

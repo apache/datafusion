@@ -562,12 +562,15 @@ impl TryFrom<Arc<dyn PhysicalExpr>> for protobuf::PhysicalExprNode {
                         key: Some(Box::new(key.to_owned().try_into()?))
                     }))
                 ),
-                GetFieldAccessExpr::ListRange{start, stop} => Some(
-                    protobuf::physical_get_indexed_field_expr_node::Field::ListRangeExpr(Box::new(protobuf::ListRangeExpr {
-                        start: Some(Box::new(start.to_owned().try_into()?)),
-                        stop: Some(Box::new(stop.to_owned().try_into()?)),
-                    }))
-                ),
+                GetFieldAccessExpr::ListRange { start, stop, stride } => {
+                    Some(
+                        protobuf::physical_get_indexed_field_expr_node::Field::ListRangeExpr(Box::new(protobuf::ListRangeExpr {
+                            start: Some(Box::new(start.to_owned().try_into()?)),
+                            stop: Some(Box::new(stop.to_owned().try_into()?)),
+                            stride: Some(Box::new(stride.to_owned().try_into()?)),
+                        }))
+                    )
+                }
             };
 
             Ok(protobuf::PhysicalExprNode {
@@ -875,7 +878,6 @@ impl TryFrom<&FileSinkConfig> for protobuf::FileSinkConfig {
             table_paths,
             output_schema: Some(conf.output_schema.as_ref().try_into()?),
             table_partition_cols,
-            single_file_output: conf.single_file_output,
             overwrite: conf.overwrite,
             file_type_writer_options: Some(file_type_writer_options.try_into()?),
         })

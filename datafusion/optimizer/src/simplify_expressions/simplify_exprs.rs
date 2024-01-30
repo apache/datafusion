@@ -122,7 +122,7 @@ impl SimplifyExpressions {
             }
         };
 
-        plan.with_new_exprs(expr, &new_inputs)
+        plan.with_new_exprs(expr, new_inputs)
     }
 }
 

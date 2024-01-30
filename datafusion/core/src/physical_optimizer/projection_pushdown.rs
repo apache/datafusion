@@ -44,10 +44,11 @@ use crate::physical_plan::{Distribution, ExecutionPlan};
 use arrow_schema::SchemaRef;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TreeNode, VisitRecursion};
-use datafusion_common::JoinSide;
+use datafusion_common::{DataFusionError, JoinSide};
 use datafusion_physical_expr::expressions::{Column, Literal};
 use datafusion_physical_expr::{
-    Partitioning, PhysicalExpr, PhysicalSortExpr, PhysicalSortRequirement,
+    Partitioning, PhysicalExpr, PhysicalExprRef, PhysicalSortExpr,
+    PhysicalSortRequirement,
 };
 use datafusion_physical_plan::streaming::StreamingTableExec;
 use datafusion_physical_plan::union::UnionExec;
@@ -1000,8 +1001,8 @@ fn join_table_borders(
 fn update_join_on(
     proj_left_exprs: &[(Column, String)],
     proj_right_exprs: &[(Column, String)],
-    hash_join_on: &[(Column, Column)],
-) -> Option<Vec<(Column, Column)>> {
+    hash_join_on: &[(PhysicalExprRef, PhysicalExprRef)],
+) -> Option<Vec<(PhysicalExprRef, PhysicalExprRef)>> {
     // TODO: Clippy wants the "map" call removed, but doing so generates
     //       a compilation error. Remove the clippy directive once this
     //       issue is fixed.
@@ -1024,17 +1025,41 @@ fn update_join_on(
 /// operation based on a set of equi-join conditions (`hash_join_on`) and a
 /// list of projection expressions (`projection_exprs`).
 fn new_columns_for_join_on(
-    hash_join_on: &[&Column],
+    hash_join_on: &[&PhysicalExprRef],
     projection_exprs: &[(Column, String)],
-) -> Option<Vec<Column>> {
+) -> Option<Vec<PhysicalExprRef>> {
     let new_columns = hash_join_on
         .iter()
         .filter_map(|on| {
-            projection_exprs
-                .iter()
-                .enumerate()
-                .find(|(_, (proj_column, _))| on.name() == proj_column.name())
-                .map(|(index, (_, alias))| Column::new(alias, index))
+            // Rewrite all columns in `on`
+            (*on)
+                .clone()
+                .transform(&|expr| {
+                    if let Some(column) = expr.as_any().downcast_ref::<Column>() {
+                        // Find the column in the projection expressions
+                        let new_column = projection_exprs
+                            .iter()
+                            .enumerate()
+                            .find(|(_, (proj_column, _))| {
+                                column.name() == proj_column.name()
+                            })
+                            .map(|(index, (_, alias))| Column::new(alias, index));
+                        if let Some(new_column) = new_column {
+                            Ok(Transformed::Yes(Arc::new(new_column)))
+                        } else {
+                            // If the column is not found in the projection expressions,
+                            // it means that the column is not projected. In this case,
+                            // we cannot push the projection down.
+                            Err(DataFusionError::Internal(format!(
+                                "Column {:?} not found in projection expressions",
+                                column
+                            )))
+                        }
+                    } else {
+                        Ok(Transformed::No(expr))
+                    }
+                })
+                .ok()
         })
         .collect::<Vec<_>>();
     (new_columns.len() == hash_join_on.len()).then_some(new_columns)
@@ -2018,7 +2043,7 @@ mod tests {
         let join: Arc<dyn ExecutionPlan> = Arc::new(SymmetricHashJoinExec::try_new(
             left_csv,
             right_csv,
-            vec![(Column::new("b", 1), Column::new("c", 2))],
+            vec![(Arc::new(Column::new("b", 1)), Arc::new(Column::new("c", 2)))],
             // b_left-(1+a_right)<=a_right+c_left
             Some(JoinFilter::new(
                 Arc::new(BinaryExpr::new(
