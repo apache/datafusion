@@ -565,11 +565,9 @@ fn _date_trunc_coarse_with_tz(
     value: Option<DateTime<Tz>>,
 ) -> Result<Option<i64>> {
     if let Some(value) = value {
-        let timezone = value.timezone();
-        let offset = value.offset().fix();
         let local = value.naive_local();
-        let value = _date_trunc_coarse::<NaiveDateTime>(granularity, Some(local))?;
-        let value = value.map(|value| match value.and_local_timezone(timezone) {
+        let truncated = _date_trunc_coarse::<NaiveDateTime>(granularity, Some(local))?;
+        let truncated = truncated.map(|truncated| match truncated.and_local_timezone(value.timezone()) {
             LocalResult::None => {
                 // It is impossible to truncate from a time that does exist into one that doesn't.
                 panic!("date_trunc produced impossible time")
@@ -580,14 +578,14 @@ fn _date_trunc_coarse_with_tz(
                 // the original time must have been within the ambiguous local time
                 // period. Therefore the offset of one of these times should match the
                 // offset of the original time.
-                if datetime1.offset().fix() == offset {
+                if datetime1.offset().fix() == value.offset().fix() {
                     datetime1
                 } else {
                     datetime2
                 }
             }
         });
-        Ok(value.and_then(|value| value.timestamp_nanos_opt()))
+        Ok(truncated.and_then(|value| value.timestamp_nanos_opt()))
     } else {
         _date_trunc_coarse::<NaiveDateTime>(granularity, None)?;
         Ok(None)
