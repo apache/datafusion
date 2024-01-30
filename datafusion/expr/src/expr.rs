@@ -1765,7 +1765,7 @@ fn create_name(e: &Expr) -> Result<String> {
                 }
             }
         }
-        Expr::Unnest(unnest) => Ok(format!("Unnest({:?})", unnest.exprs)),
+        Expr::Unnest(Unnest { exprs }) => Ok(format!("UNNEST({exprs:?})")),
         Expr::ScalarFunction(fun) => create_function_name(fun.name(), false, &fun.args),
         Expr::WindowFunction(WindowFunction {
             fun,
