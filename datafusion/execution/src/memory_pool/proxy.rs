@@ -69,6 +69,23 @@ pub trait RawTableAllocExt {
     /// `accounting` by any newly allocated bytes.
     ///
     /// Returns the bucket where the element was inserted.
+    /// Note that allocation counts  capacity, not size.
+    ///
+    /// # Example:
+    /// ```
+    /// # use datafusion_execution::memory_pool::proxy::RawTableAllocExt;
+    /// # use hashbrown::raw::RawTable;
+    /// let mut table = RawTable::new();
+    /// let mut allocated = 0;
+    /// let hash_fn = |x: &u32| (*x as u64) % 1000;
+    /// // pretend 0x3117 is the hash value for 1
+    /// table.insert_accounted(1, hash_fn, &mut allocated);
+    /// assert_eq!(allocated, 64);
+    ///
+    /// // insert more values
+    /// for i in 0..100 { table.insert_accounted(i, hash_fn, &mut allocated); }
+    /// assert_eq!(allocated, 400);
+    /// ```
     fn insert_accounted(
         &mut self,
         x: Self::T,
