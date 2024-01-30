@@ -147,7 +147,6 @@ WITH HEADER ROW
 LOCATION '/path/to/directory/of/files';
 ```
 
-
 With `CREATE UNBOUNDED EXTERNAL TABLE` SQL statement. We can create unbounded data sources such as following:
 
 ```sql
@@ -155,6 +154,7 @@ CREATE UNBOUNDED EXTERNAL TABLE taxi
 STORED AS PARQUET
 LOCATION '/mnt/nyctaxi/tripdata.parquet';
 ```
+
 Datafusion tries to execute queries that refer to unbounded sources in streaming fashion. If this is not possible according to query specifications, datafusion plan generation fails stating it is not possible to execute given query in streaming fashion. Please note that queries that can be executed with unbounded sources (e.g. in streaming mode) are a subset of the bounded sources. A query that fail with unbounded source may work in bounded source.
 
 When creating an output from a data source that is already ordered by
