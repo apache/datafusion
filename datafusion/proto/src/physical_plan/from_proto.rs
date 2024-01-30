@@ -411,8 +411,15 @@ pub fn parse_physical_expr(
                         "stop",
                         input_schema
                     )?,
+                    stride: parse_required_physical_expr(
+                        list_range_expr.stride.as_deref(),
+                        registry,
+                        "stride",
+                        input_schema
+                    )?,
                 },
-                None =>                 return Err(proto_error(
+                None =>
+                    return Err(proto_error(
                     "Field must not be None",
                 )),
             };

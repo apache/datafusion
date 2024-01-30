@@ -56,20 +56,9 @@ macro_rules! assert_metrics {
     };
 }
 
-macro_rules! test_expression {
-    ($SQL:expr, $EXPECTED:expr) => {
-        println!("Input:\n  {}\nExpected:\n  {}\n", $SQL, $EXPECTED);
-        let ctx = SessionContext::new();
-        let sql = format!("SELECT {}", $SQL);
-        let actual = execute(&ctx, sql.as_str()).await;
-        assert_eq!(actual[0][0], $EXPECTED);
-    };
-}
-
 pub mod aggregates;
 pub mod create_drop;
 pub mod explain_analyze;
-pub mod expr;
 pub mod joins;
 pub mod select;
 mod sql_api;

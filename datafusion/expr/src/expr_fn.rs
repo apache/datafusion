@@ -612,7 +612,7 @@ scalar_expr!(
     ArrayEmpty,
     array_empty,
     array,
-    "returns 1 for an empty array or 0 for a non-empty array."
+    "returns true for an empty array or false for a non-empty array."
 );
 scalar_expr!(
     ArrayHasAll,

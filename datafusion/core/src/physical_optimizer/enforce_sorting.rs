@@ -985,8 +985,8 @@ mod tests {
         let right_input = parquet_exec_sorted(&right_schema, parquet_sort_exprs);
 
         let on = vec![(
-            Column::new_with_schema("col_a", &left_schema)?,
-            Column::new_with_schema("c", &right_schema)?,
+            Arc::new(Column::new_with_schema("col_a", &left_schema)?) as _,
+            Arc::new(Column::new_with_schema("c", &right_schema)?) as _,
         )];
         let join = hash_join_exec(left_input, right_input, on, None, &JoinType::Inner)?;
         let physical_plan = sort_exec(vec![sort_expr("a", &join.schema())], join);
@@ -1639,8 +1639,9 @@ mod tests {
 
         // Join on (nullable_col == col_a)
         let join_on = vec![(
-            Column::new_with_schema("nullable_col", &left.schema()).unwrap(),
-            Column::new_with_schema("col_a", &right.schema()).unwrap(),
+            Arc::new(Column::new_with_schema("nullable_col", &left.schema()).unwrap())
+                as _,
+            Arc::new(Column::new_with_schema("col_a", &right.schema()).unwrap()) as _,
         )];
 
         let join_types = vec![
@@ -1711,8 +1712,9 @@ mod tests {
 
         // Join on (nullable_col == col_a)
         let join_on = vec![(
-            Column::new_with_schema("nullable_col", &left.schema()).unwrap(),
-            Column::new_with_schema("col_a", &right.schema()).unwrap(),
+            Arc::new(Column::new_with_schema("nullable_col", &left.schema()).unwrap())
+                as _,
+            Arc::new(Column::new_with_schema("col_a", &right.schema()).unwrap()) as _,
         )];
 
         let join_types = vec![
@@ -1785,8 +1787,9 @@ mod tests {
 
         // Join on (nullable_col == col_a)
         let join_on = vec![(
-            Column::new_with_schema("nullable_col", &left.schema()).unwrap(),
-            Column::new_with_schema("col_a", &right.schema()).unwrap(),
+            Arc::new(Column::new_with_schema("nullable_col", &left.schema()).unwrap())
+                as _,
+            Arc::new(Column::new_with_schema("col_a", &right.schema()).unwrap()) as _,
         )];
 
         let join = sort_merge_join_exec(left, right, &join_on, &JoinType::Inner);

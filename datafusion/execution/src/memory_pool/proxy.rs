@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Utilities that help with tracking of memory allocations.
+//! [`VecAllocExt`] and [`RawTableAllocExt`] to help tracking of memory allocations
 
 use hashbrown::raw::{Bucket, RawTable};
 
@@ -24,12 +24,18 @@ pub trait VecAllocExt {
     /// Item type.
     type T;
 
-    /// [Push](Vec::push) new element to vector and store additional allocated bytes in `accounting` (additive).
+    /// [Push](Vec::push) new element to vector and increase
+    /// `accounting` by any newly allocated bytes.
+    ///
+    /// Note that allocation counts  capacity, not size
     fn push_accounted(&mut self, x: Self::T, accounting: &mut usize);
 
-    /// Return the amount of memory allocated by this Vec (not
-    /// recursively counting any heap allocations contained within the
-    /// structure). Does not include the size of `self`
+    /// Return the amount of memory allocated by this Vec to store elements
+    /// (`size_of<T> * capacity`).
+    ///
+    /// Note this calculation is not recursive, and does not include any heap
+    /// allocations contained within the Vec's elements. Does not include the
+    /// size of `self`
     fn allocated_size(&self) -> usize;
 }
 
@@ -54,12 +60,15 @@ impl<T> VecAllocExt for Vec<T> {
     }
 }
 
-/// Extension trait for [`RawTable`] to account for allocations.
+/// Extension trait for hash browns [`RawTable`] to account for allocations.
 pub trait RawTableAllocExt {
     /// Item type.
     type T;
 
-    /// [Insert](RawTable::insert) new element into table and store additional allocated bytes in `accounting` (additive).
+    /// [Insert](RawTable::insert) new element into table and increase
+    /// `accounting` by any newly allocated bytes.
+    ///
+    /// Returns the bucket where the element was inserted.
     fn insert_accounted(
         &mut self,
         x: Self::T,

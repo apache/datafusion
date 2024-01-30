@@ -52,8 +52,8 @@ impl TreeNode for Expr {
                 let expr = expr.as_ref();
                 match field {
                     GetFieldAccess::ListIndex {key} => vec![key.as_ref(), expr],
-                    GetFieldAccess::ListRange {start, stop} => {
-                        vec![start.as_ref(), stop.as_ref(), expr]
+                    GetFieldAccess::ListRange {start, stop, stride} => {
+                        vec![start.as_ref(), stop.as_ref(),stride.as_ref(), expr]
                     }
                     GetFieldAccess::NamedStructField { .. } => vec![expr],
                 }
