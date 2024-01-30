@@ -1115,6 +1115,7 @@ dependencies = [
  "datafusion-common",
  "datafusion-execution",
  "datafusion-expr",
+ "datafusion-functions",
  "datafusion-optimizer",
  "datafusion-physical-expr",
  "datafusion-physical-plan",
@@ -1222,6 +1223,19 @@ dependencies = [
  "sqlparser",
  "strum 0.26.1",
  "strum_macros 0.26.1",
+]
+
+[[package]]
+name = "datafusion-functions"
+version = "35.0.0"
+dependencies = [
+ "arrow",
+ "base64",
+ "datafusion-common",
+ "datafusion-execution",
+ "datafusion-expr",
+ "hex",
+ "log",
 ]
 
 [[package]]
