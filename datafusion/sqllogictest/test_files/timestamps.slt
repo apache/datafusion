@@ -1323,12 +1323,19 @@ from timestamp_utc order by ts;
 2024-10-27T03:30:00Z 2024-10-01T00:00:00Z 2024-10-27T00:00:00Z 2024-10-27T03:00:00Z
 
 
-#  date trunc in a timezone with DST across DST boundary
-# panics with "Option::unwrap()` on a `None` value" on main
-# due to https://github.com/apache/arrow-datafusion/issues/8899
-#query PPPP
-#select ts, date_trunc('month', ts), date_trunc('day', ts), date_trunc('hour', ts)
-#from timestamp_berlin order by ts;
+# date trunc in a timezone with DST across DST boundary (note the date-trunc hour value repeats)
+# Test for https://github.com/apache/arrow-datafusion/issues/8899
+query PPPP
+select ts, date_trunc('month', ts), date_trunc('day', ts), date_trunc('hour', ts)
+from timestamp_berlin order by ts;
+----
+2024-10-27T02:00:00+02:00 2024-10-01T00:00:00+02:00 2024-10-27T00:00:00+02:00 2024-10-27T02:00:00+02:00
+2024-10-27T02:30:00+02:00 2024-10-01T00:00:00+02:00 2024-10-27T00:00:00+02:00 2024-10-27T02:00:00+02:00
+2024-10-27T02:30:00+01:00 2024-10-01T00:00:00+02:00 2024-10-27T00:00:00+02:00 2024-10-27T02:00:00+01:00
+2024-10-27T03:00:00+01:00 2024-10-01T00:00:00+02:00 2024-10-27T00:00:00+02:00 2024-10-27T03:00:00+01:00
+2024-10-27T03:30:00+01:00 2024-10-01T00:00:00+02:00 2024-10-27T00:00:00+02:00 2024-10-27T03:00:00+01:00
+2024-10-27T04:00:00+01:00 2024-10-01T00:00:00+02:00 2024-10-27T00:00:00+02:00 2024-10-27T04:00:00+01:00
+2024-10-27T04:30:00+01:00 2024-10-01T00:00:00+02:00 2024-10-27T00:00:00+02:00 2024-10-27T04:00:00+01:00
 
 statement ok
 drop table timestamp_strings;
