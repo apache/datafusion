@@ -1725,7 +1725,7 @@ mod tests {
                     "2024-10-27T00:00:00+02",
                     "2024-10-27T00:00:00+02",
                 ],
-                ),
+            ),
         ];
 
         cases.iter().for_each(|(original, tz_opt, expected)| {
@@ -1877,7 +1877,7 @@ mod tests {
                 ColumnarValue::Scalar(ScalarValue::from("hour")),
                 ColumnarValue::Array(Arc::new(input)),
             ])
-                .unwrap();
+            .unwrap();
             if let ColumnarValue::Array(result) = result {
                 assert_eq!(
                     result.data_type(),
