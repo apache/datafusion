@@ -164,9 +164,7 @@ pub fn negative(
         && !is_interval(&data_type)
         && !is_timestamp(&data_type)
     {
-        Err(DataFusionError::Plan(
-            "Negation only supports numeric, interval and timestamp types".to_string(),
-        ))
+        plan_err!("Negation only supports numeric, interval and timestamp types")
     } else {
         Ok(Arc::new(NegativeExpr::new(arg)))
     }
