@@ -44,6 +44,7 @@ use datafusion_common::{
     Constraints, DFField, DFSchema, DFSchemaRef, DataFusionError, OwnedTableReference,
     Result, ScalarValue,
 };
+use datafusion_expr::expr::{Alias, Placeholder, Unnest};
 use datafusion_expr::window_frame::{check_window_frame, regularize_window_order_by};
 use datafusion_expr::{
     abs, acos, acosh, array, array_append, array_concat, array_dims, array_distinct,
@@ -1339,6 +1340,14 @@ pub fn parse_expr(
         ExprType::Negative(negative) => Ok(Expr::Negative(Box::new(
             parse_required_expr(negative.expr.as_deref(), registry, "expr")?,
         ))),
+        ExprType::Unnest(unnest) => {
+            let exprs = unnest
+                .exprs
+                .iter()
+                .map(|e| parse_expr(e, registry))
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(Expr::Unnest(Unnest { exprs }))
+        }
         ExprType::InList(in_list) => Ok(Expr::InList(InList::new(
             Box::new(parse_required_expr(
                 in_list.expr.as_deref(),
