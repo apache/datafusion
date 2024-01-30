@@ -423,7 +423,7 @@ impl<'a> ConstEvaluator<'a> {
                 ScalarFunctionDefinition::Name(_) => false,
             },
             Expr::Literal(_)
-            | Epxr::Unnest(_)
+            | Expr::Unnest(_)
             | Expr::BinaryExpr { .. }
             | Expr::Not(_)
             | Expr::IsNotNull(_)
