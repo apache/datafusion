@@ -56,11 +56,6 @@ datafusion = { git = "https://github.com/apache/arrow-datafusion", branch = "mai
 
 More on [Cargo dependencies](https://doc.rust-lang.org/cargo/reference/specifying-dependencies.html#specifying-dependencies)
 
-```toml
-datafusion = "31"
-tokio = "1.0"
-```
-
 ## Run a SQL query against data stored in a CSV:
 
 ```rust
