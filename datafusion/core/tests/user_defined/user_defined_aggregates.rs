@@ -598,6 +598,11 @@ impl FirstSelector {
             StructArray::try_new(Self::fields(), vec![f64arr, timearr], None)?;
         Ok(ScalarValue::Struct(Arc::new(struct_arr)))
     }
+
+    /// return this selector as a single scalar (struct) value
+    fn to_scalar(&self) -> ScalarValue {
+        self.to_state().unwrap()
+    }
 }
 
 impl Accumulator for FirstSelector {
