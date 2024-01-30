@@ -1330,8 +1330,9 @@ mod tests {
     use arrow::datatypes::{DataType, Field, IntervalUnit, Schema, TimeUnit};
     use datafusion_execution::config::SessionConfig;
     use datafusion_expr::Operator;
-    use datafusion_physical_expr::expressions::{binary, col, Column};
+    use datafusion_physical_expr::expressions::{binary, col, lit, Column};
 
+    use datafusion_common::ScalarValue;
     use once_cell::sync::Lazy;
     use rstest::*;
 
@@ -1451,7 +1452,12 @@ mod tests {
         )?;
 
         let on = vec![(
-            Arc::new(Column::new_with_schema("lc1", left_schema)?) as _,
+            binary(
+                col("lc1", left_schema)?,
+                Operator::Plus,
+                lit(ScalarValue::Int32(Some(1))),
+                left_schema,
+            )?,
             Arc::new(Column::new_with_schema("rc1", right_schema)?) as _,
         )];
 

@@ -77,7 +77,7 @@ fn analyze_internal(
     plan: &LogicalPlan,
 ) -> Result<LogicalPlan> {
     // optimize child plans first
-    let new_inputs = plan
+    let mut new_inputs = plan
         .inputs()
         .iter()
         .map(|p| analyze_internal(external_schema, p))
@@ -115,9 +115,9 @@ fn analyze_internal(
     match &plan {
         LogicalPlan::Projection(_) => Ok(LogicalPlan::Projection(Projection::try_new(
             new_expr,
-            Arc::new(new_inputs[0].clone()),
+            Arc::new(new_inputs.swap_remove(0)),
         )?)),
-        _ => plan.with_new_exprs(new_expr, &new_inputs),
+        _ => plan.with_new_exprs(new_expr, new_inputs),
     }
 }
 
@@ -414,7 +414,22 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                 ));
                 Ok(expr)
             }
-            expr => Ok(expr),
+            Expr::Alias(_)
+            | Expr::Column(_)
+            | Expr::ScalarVariable(_, _)
+            | Expr::Literal(_)
+            | Expr::SimilarTo(_)
+            | Expr::IsNotNull(_)
+            | Expr::IsNull(_)
+            | Expr::Negative(_)
+            | Expr::GetIndexedField(_)
+            | Expr::Cast(_)
+            | Expr::TryCast(_)
+            | Expr::Sort(_)
+            | Expr::Wildcard { .. }
+            | Expr::GroupingSet(_)
+            | Expr::Placeholder(_)
+            | Expr::OuterReferenceColumn(_, _) => Ok(expr),
         }
     }
 }

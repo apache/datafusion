@@ -343,7 +343,7 @@ pub fn instr<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
 /// Converts the string to all lower case.
 /// lower('TOM') = 'tom'
 pub fn lower(args: &[ColumnarValue]) -> Result<ColumnarValue> {
-    handle(args, |string| string.to_ascii_lowercase(), "lower")
+    handle(args, |string| string.to_lowercase(), "lower")
 }
 
 enum TrimType {
@@ -555,7 +555,7 @@ where
 /// Converts the string to all upper case.
 /// upper('tom') = 'TOM'
 pub fn upper(args: &[ColumnarValue]) -> Result<ColumnarValue> {
-    handle(args, |string| string.to_ascii_uppercase(), "upper")
+    handle(args, |string| string.to_uppercase(), "upper")
 }
 
 /// Prints random (v4) uuid values per row
