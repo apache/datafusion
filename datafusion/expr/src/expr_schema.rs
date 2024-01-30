@@ -159,7 +159,7 @@ impl ExprSchemable for Expr {
             Expr::Like { .. } | Expr::SimilarTo { .. } => Ok(DataType::Boolean),
             Expr::Placeholder(Placeholder { data_type, .. }) => {
                 data_type.clone().ok_or_else(|| {
-                    plan_datafusion_err!("Placeholder type could not be resolved")
+                    plan_datafusion_err!("Placeholder type could not be resolved. Make sure that the placeholder is bound to a concrete type, e.g. by providing parameter values.")
                 })
             }
             Expr::Wildcard { qualifier } => {
