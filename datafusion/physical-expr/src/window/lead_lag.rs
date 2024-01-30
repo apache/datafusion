@@ -23,8 +23,7 @@ use crate::PhysicalExpr;
 use arrow::array::ArrayRef;
 use arrow::compute::cast;
 use arrow::datatypes::{DataType, Field};
-use datafusion_common::{arrow_datafusion_err, ScalarValue};
-use datafusion_common::{internal_err, DataFusionError, Result};
+use datafusion_common::{arrow_datafusion_err, DataFusionError, Result, ScalarValue};
 use datafusion_expr::PartitionEvaluator;
 use std::any::Any;
 use std::cmp::min;
@@ -236,14 +235,10 @@ fn get_default_value(
     default_value: Option<&ScalarValue>,
     dtype: &DataType,
 ) -> Result<ScalarValue> {
-    if let Some(value) = default_value {
-        if let ScalarValue::Int64(Some(val)) = value {
-            ScalarValue::try_from_string(val.to_string(), dtype)
-        } else {
-            internal_err!("Expects default value to have Int64 type")
-        }
-    } else {
-        Ok(ScalarValue::try_from(dtype)?)
+    match default_value {
+        Some(v) if !v.data_type().is_null() => v.cast_to(dtype),
+        // If None or Null datatype
+        _ => ScalarValue::try_from(dtype),
     }
 }
 

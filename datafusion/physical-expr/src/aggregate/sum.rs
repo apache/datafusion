@@ -191,7 +191,7 @@ impl<T: ArrowNumericType> SumAccumulator<T> {
 }
 
 impl<T: ArrowNumericType> Accumulator for SumAccumulator<T> {
-    fn state(&self) -> Result<Vec<ScalarValue>> {
+    fn state(&mut self) -> Result<Vec<ScalarValue>> {
         Ok(vec![self.evaluate()?])
     }
 
@@ -208,7 +208,7 @@ impl<T: ArrowNumericType> Accumulator for SumAccumulator<T> {
         self.update_batch(states)
     }
 
-    fn evaluate(&self) -> Result<ScalarValue> {
+    fn evaluate(&mut self) -> Result<ScalarValue> {
         ScalarValue::new_primitive::<T>(self.sum, &self.data_type)
     }
 
@@ -243,7 +243,7 @@ impl<T: ArrowNumericType> SlidingSumAccumulator<T> {
 }
 
 impl<T: ArrowNumericType> Accumulator for SlidingSumAccumulator<T> {
-    fn state(&self) -> Result<Vec<ScalarValue>> {
+    fn state(&mut self) -> Result<Vec<ScalarValue>> {
         Ok(vec![self.evaluate()?, self.count.into()])
     }
 
@@ -267,7 +267,7 @@ impl<T: ArrowNumericType> Accumulator for SlidingSumAccumulator<T> {
         Ok(())
     }
 
-    fn evaluate(&self) -> Result<ScalarValue> {
+    fn evaluate(&mut self) -> Result<ScalarValue> {
         let v = (self.count != 0).then_some(self.sum);
         ScalarValue::new_primitive::<T>(v, &self.data_type)
     }

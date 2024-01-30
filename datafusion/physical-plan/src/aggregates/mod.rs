@@ -1087,14 +1087,14 @@ fn create_accumulators(
 /// returns a vector of ArrayRefs, where each entry corresponds to either the
 /// final value (mode = Final, FinalPartitioned and Single) or states (mode = Partial)
 fn finalize_aggregation(
-    accumulators: &[AccumulatorItem],
+    accumulators: &mut [AccumulatorItem],
     mode: &AggregateMode,
 ) -> Result<Vec<ArrayRef>> {
     match mode {
         AggregateMode::Partial => {
             // Build the vector of states
             accumulators
-                .iter()
+                .iter_mut()
                 .map(|accumulator| {
                     accumulator.state().and_then(|e| {
                         e.iter()
@@ -1111,7 +1111,7 @@ fn finalize_aggregation(
         | AggregateMode::SinglePartitioned => {
             // Merge the state to the final value
             accumulators
-                .iter()
+                .iter_mut()
                 .map(|accumulator| accumulator.evaluate().and_then(|v| v.to_array()))
                 .collect()
         }

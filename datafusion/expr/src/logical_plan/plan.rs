@@ -1243,9 +1243,8 @@ impl LogicalPlan {
     ) -> Result<Expr> {
         expr.transform(&|expr| {
             match &expr {
-                Expr::Placeholder(Placeholder { id, data_type }) => {
-                    let value = param_values
-                        .get_placeholders_with_values(id, data_type.as_ref())?;
+                Expr::Placeholder(Placeholder { id, .. }) => {
+                    let value = param_values.get_placeholders_with_values(id)?;
                     // Replace the placeholder with the value
                     Ok(Transformed::Yes(Expr::Literal(value)))
                 }

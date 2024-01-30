@@ -218,6 +218,22 @@ fn optimize_projections(
             // Only use the absolutely necessary aggregate expressions required
             // by the parent:
             let mut new_aggr_expr = get_at_indices(&aggregate.aggr_expr, &aggregate_reqs);
+
+            // Aggregations always need at least one aggregate expression.
+            // With a nested count, we don't require any column as input, but
+            // still need to create a correct aggregate, which may be optimized
+            // out later. As an example, consider the following query:
+            //
+            // SELECT COUNT(*) FROM (SELECT COUNT(*) FROM [...])
+            //
+            // which always returns 1.
+            if new_aggr_expr.is_empty()
+                && new_group_bys.is_empty()
+                && !aggregate.aggr_expr.is_empty()
+            {
+                new_aggr_expr = vec![aggregate.aggr_expr[0].clone()];
+            }
+
             let all_exprs_iter = new_group_bys.iter().chain(new_aggr_expr.iter());
             let schema = aggregate.input.schema();
             let necessary_indices = indices_referred_by_exprs(schema, all_exprs_iter)?;
@@ -237,21 +253,6 @@ fn optimize_projections(
             let necessary_exprs = get_required_exprs(schema, &necessary_indices);
             let (aggregate_input, _) =
                 add_projection_on_top_if_helpful(aggregate_input, necessary_exprs)?;
-
-            // Aggregations always need at least one aggregate expression.
-            // With a nested count, we don't require any column as input, but
-            // still need to create a correct aggregate, which may be optimized
-            // out later. As an example, consider the following query:
-            //
-            // SELECT COUNT(*) FROM (SELECT COUNT(*) FROM [...])
-            //
-            // which always returns 1.
-            if new_aggr_expr.is_empty()
-                && new_group_bys.is_empty()
-                && !aggregate.aggr_expr.is_empty()
-            {
-                new_aggr_expr = vec![aggregate.aggr_expr[0].clone()];
-            }
 
             // Create a new aggregate plan with the updated input and only the
             // absolutely necessary fields:
@@ -867,7 +868,9 @@ fn rewrite_projection_given_requirements(
     return if let Some(input) =
         optimize_projections(&proj.input, config, &required_indices)?
     {
-        if &projection_schema(&input, &exprs_used)? == input.schema() {
+        if &projection_schema(&input, &exprs_used)? == input.schema()
+            && exprs_used.iter().all(is_expr_trivial)
+        {
             Ok(Some(input))
         } else {
             Projection::try_new(exprs_used, Arc::new(input))
@@ -899,7 +902,7 @@ mod tests {
     use datafusion_common::{Result, TableReference};
     use datafusion_expr::{
         binary_expr, col, count, lit, logical_plan::builder::LogicalPlanBuilder, not,
-        table_scan, try_cast, Expr, Like, LogicalPlan, Operator,
+        table_scan, try_cast, when, Expr, Like, LogicalPlan, Operator,
     };
 
     fn assert_optimized_plan_equal(plan: &LogicalPlan, expected: &str) -> Result<()> {
@@ -1161,6 +1164,27 @@ mod tests {
 
         let expected = "Projection: test.a BETWEEN Int32(1) AND Int32(3)\
         \n  TableScan: test projection=[a]";
+        assert_optimized_plan_equal(&plan, expected)
+    }
+
+    // Test outer projection isn't discarded despite the same schema as inner
+    // https://github.com/apache/arrow-datafusion/issues/8942
+    #[test]
+    fn test_derived_column() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .project(vec![col("a"), lit(0).alias("d")])?
+            .project(vec![
+                col("a"),
+                when(col("a").eq(lit(1)), lit(10))
+                    .otherwise(col("d"))?
+                    .alias("d"),
+            ])?
+            .build()?;
+
+        let expected = "Projection: test.a, CASE WHEN test.a = Int32(1) THEN Int32(10) ELSE d END AS d\
+        \n  Projection: test.a, Int32(0) AS d\
+        \n    TableScan: test projection=[a]";
         assert_optimized_plan_equal(&plan, expected)
     }
 }
