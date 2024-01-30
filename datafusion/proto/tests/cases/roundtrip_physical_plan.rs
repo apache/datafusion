@@ -337,7 +337,6 @@ fn rountrip_aggregate() -> Result<()> {
             "AVG(b)".to_string(),
             DataType::Float64,
         ))],
-        // TODO: See <https://github.com/apache/arrow-datafusion/issues/9028>
         // NTH_VALUE
         vec![Arc::new(NthValueAgg::new(
             col("b", &schema)?,
