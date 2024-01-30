@@ -21,7 +21,7 @@ use arrow::{
     compute::can_cast_types,
     datatypes::{DataType, TimeUnit},
 };
-use datafusion_common::utils::list_ndims;
+use datafusion_common::utils::{coerced_fixed_size_list_to_list, list_ndims};
 use datafusion_common::{
     internal_datafusion_err, internal_err, plan_err, DataFusionError, Result,
 };
@@ -141,7 +141,8 @@ fn get_valid_types(
             DataType::List(_)
             | DataType::LargeList(_)
             | DataType::FixedSizeList(_, _) => {
-                Ok(vec![vec![array_type.clone(), DataType::Int64]])
+                let array_type = coerced_fixed_size_list_to_list(array_type);
+                Ok(vec![vec![array_type, DataType::Int64]])
             }
             _ => Ok(vec![vec![]]),
         }
