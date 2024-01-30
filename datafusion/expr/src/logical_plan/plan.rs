@@ -615,12 +615,11 @@ impl LogicalPlan {
                 output_url,
                 file_format,
                 copy_options,
-                single_file_output,
             }) => Ok(LogicalPlan::Copy(CopyTo {
                 input: Arc::new(inputs.swap_remove(0)),
                 output_url: output_url.clone(),
                 file_format: file_format.clone(),
-                single_file_output: *single_file_output,
+
                 copy_options: copy_options.clone(),
             })),
             LogicalPlan::Values(Values { schema, .. }) => {
@@ -1551,7 +1550,6 @@ impl LogicalPlan {
                         input: _,
                         output_url,
                         file_format,
-                        single_file_output,
                         copy_options,
                     }) => {
                         let op_str = match copy_options {
@@ -1565,7 +1563,7 @@ impl LogicalPlan {
                             CopyOptions::WriterOptions(_) => "".into(),
                         };
 
-                        write!(f, "CopyTo: format={file_format} output_url={output_url} single_file_output={single_file_output} options: ({op_str})")
+                        write!(f, "CopyTo: format={file_format} output_url={output_url} options: ({op_str})")
                     }
                     LogicalPlan::Ddl(ddl) => {
                         write!(f, "{}", ddl.display())
