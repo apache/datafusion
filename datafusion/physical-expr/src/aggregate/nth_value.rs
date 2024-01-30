@@ -117,7 +117,7 @@ impl AggregateExpr for NthValueAgg {
     }
 
     fn expressions(&self) -> Vec<Arc<dyn PhysicalExpr>> {
-        let n = Arc::new(Literal::new(ScalarValue::Int32(Some(self.n as i32)))) as _;
+        let n = Arc::new(Literal::new(ScalarValue::Int64(Some(self.n)))) as _;
         vec![self.expr.clone(), n]
     }
 
