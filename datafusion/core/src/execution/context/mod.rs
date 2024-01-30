@@ -49,9 +49,9 @@ use datafusion_expr::{
 pub use datafusion_physical_expr::execution_props::ExecutionProps;
 use datafusion_physical_expr::var_provider::is_system_variables;
 use parking_lot::RwLock;
-use std::collections::hash_map::Entry;
 use std::string::String;
 use std::sync::Arc;
+use std::{any::Any, collections::hash_map::Entry};
 use std::{
     collections::{HashMap, HashSet},
     fmt::Debug,
@@ -1270,6 +1270,8 @@ pub struct SessionState {
     table_factories: HashMap<String, Arc<dyn TableProviderFactory>>,
     /// Runtime environment
     runtime_env: Arc<RuntimeEnv>,
+    /// User provide context that can be anything.
+    extension_context: Option<Arc<dyn Any + Send + Sync>>,
 }
 
 impl Debug for SessionState {
@@ -1356,6 +1358,7 @@ impl SessionState {
             execution_props: ExecutionProps::new(),
             runtime_env: runtime,
             table_factories,
+            extension_context: None,
         }
     }
     /// Returns new [`SessionState`] using the provided
@@ -1868,6 +1871,16 @@ impl SessionState {
     /// Return version of the cargo package that produced this query
     pub fn version(&self) -> &str {
         env!("CARGO_PKG_VERSION")
+    }
+    /// Return extension context.
+    pub fn with_extension_context(&self) -> &Option<Arc<dyn Any + Send + Sync>> {
+        &self.extension_context
+    }
+    /// Return extension context mut.
+    pub fn with_extension_context_mut(
+        &mut self,
+    ) -> &mut Option<Arc<dyn Any + Send + Sync>> {
+        &mut self.extension_context
     }
 }
 
