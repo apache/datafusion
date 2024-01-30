@@ -194,6 +194,11 @@ impl PartitionEvaluator for WindowShiftEvaluator {
         }
     }
 
+    fn is_causal(&self) -> bool {
+        // Lagging windows are causal by definition:
+        self.shift_offset > 0
+    }
+
     fn evaluate(
         &mut self,
         values: &[ArrayRef],
