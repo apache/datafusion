@@ -578,8 +578,9 @@ fn roundtrip_builtin_scalar_function() -> Result<()> {
         "acos",
         fun_expr,
         vec![col("a", &schema)?],
-        DataType::Int64,
+        DataType::Float64,
         None,
+        false,
     );
 
     let project =
@@ -617,6 +618,7 @@ fn roundtrip_scalar_udf() -> Result<()> {
         vec![col("a", &schema)?],
         DataType::Int64,
         None,
+        false,
     );
 
     let project =
