@@ -30,7 +30,7 @@ use arrow::{
     datatypes::{DataType, Schema},
     record_batch::RecordBatch,
 };
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::{plan_err, DataFusionError, Result};
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::{
     type_coercion::{is_interval, is_null, is_signed_numeric, is_timestamp},
