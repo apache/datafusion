@@ -224,17 +224,35 @@ fn criterion_benchmark(c: &mut Criterion) {
         })
     });
 
-    for q in [
+    let tpch_queries = [
         "q1", "q2", "q3", "q4", "q5", "q6", "q7", "q8", "q9", "q10", "q11", "q12", "q13",
         "q14", // "q15", q15 has multiple SQL statements which is not supported
         "q16", "q17", "q18", "q19", "q20", "q21", "q22",
-    ] {
+    ];
+
+    for q in tpch_queries {
         let sql = std::fs::read_to_string(format!("../../benchmarks/queries/{}.sql", q))
             .unwrap();
         c.bench_function(&format!("physical_plan_tpch_{}", q), |b| {
             b.iter(|| logical_plan(&ctx, &sql))
         });
     }
+
+    let all_tpch_sql_queries = tpch_queries
+        .iter()
+        .map(|q| {
+            std::fs::read_to_string(format!("../../benchmarks/queries/{}.sql", q))
+                .unwrap()
+        })
+        .collect::<Vec<_>>();
+
+    c.bench_function("physical_plan_tpch_all", |b| {
+        b.iter(|| {
+            for sql in &all_tpch_sql_queries {
+                logical_plan(&ctx, sql)
+            }
+        })
+    });
 }
 
 criterion_group!(benches, criterion_benchmark);
