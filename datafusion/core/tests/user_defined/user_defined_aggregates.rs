@@ -598,23 +598,16 @@ impl FirstSelector {
             StructArray::try_new(Self::fields(), vec![f64arr, timearr], None)?;
         Ok(ScalarValue::Struct(Arc::new(struct_arr)))
     }
-
-    /// return this selector as a single scalar (struct) value
-    fn to_scalar(&self) -> ScalarValue {
-        self.to_state().unwrap()
-    }
 }
 
 impl Accumulator for FirstSelector {
     fn state(&mut self) -> Result<Vec<ScalarValue>> {
-        let state = self.to_state().into_iter().collect::<Vec<_>>();
-
-        Ok(state)
+        self.evaluate().map(|s| vec![s])
     }
 
     /// produce the output structure
     fn evaluate(&mut self) -> Result<ScalarValue> {
-        Ok(self.to_scalar())
+        self.to_state()
     }
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
