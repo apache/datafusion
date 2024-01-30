@@ -792,7 +792,6 @@ fn roundtrip_json_sink() -> Result<()> {
         table_paths: vec![ListingTableUrl::parse("file:///")?],
         output_schema: schema.clone(),
         table_partition_cols: vec![("plan_type".to_string(), DataType::Utf8)],
-        single_file_output: true,
         overwrite: true,
         file_type_writer_options: FileTypeWriterOptions::JSON(JsonWriterOptions::new(
             CompressionTypeVariant::UNCOMPRESSED,
@@ -828,7 +827,6 @@ fn roundtrip_csv_sink() -> Result<()> {
         table_paths: vec![ListingTableUrl::parse("file:///")?],
         output_schema: schema.clone(),
         table_partition_cols: vec![("plan_type".to_string(), DataType::Utf8)],
-        single_file_output: true,
         overwrite: true,
         file_type_writer_options: FileTypeWriterOptions::CSV(CsvWriterOptions::new(
             WriterBuilder::default(),
@@ -887,7 +885,6 @@ fn roundtrip_parquet_sink() -> Result<()> {
         table_paths: vec![ListingTableUrl::parse("file:///")?],
         output_schema: schema.clone(),
         table_partition_cols: vec![("plan_type".to_string(), DataType::Utf8)],
-        single_file_output: true,
         overwrite: true,
         file_type_writer_options: FileTypeWriterOptions::Parquet(
             ParquetWriterOptions::new(WriterProperties::default()),
