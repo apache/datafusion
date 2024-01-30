@@ -19,8 +19,8 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
 use crate::parser::{
-    CopyToSource, CopyToStatement, CreateExternalTable, DFParser, DescribeTableStmt,
-    ExplainStatement, LexOrdering, Statement as DFStatement,
+    CopyToSource, CopyToStatement, CreateExternalTable, DFParser, ExplainStatement,
+    LexOrdering, Statement as DFStatement,
 };
 use crate::planner::{
     object_name_to_qualifier, ContextProvider, PlannerContext, SqlToRel,
@@ -31,9 +31,10 @@ use arrow_schema::DataType;
 use datafusion_common::file_options::StatementOptions;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{
-    not_impl_err, plan_datafusion_err, plan_err, unqualified_field_not_found, Column,
-    Constraints, DFField, DFSchema, DFSchemaRef, DataFusionError, OwnedTableReference,
-    Result, ScalarValue, SchemaReference, TableReference, ToDFSchema,
+    not_impl_err, plan_datafusion_err, plan_err, schema_err, unqualified_field_not_found,
+    Column, Constraints, DFField, DFSchema, DFSchemaRef, DataFusionError,
+    OwnedTableReference, Result, ScalarValue, SchemaError, SchemaReference,
+    TableReference, ToDFSchema,
 };
 use datafusion_expr::dml::{CopyOptions, CopyTo};
 use datafusion_expr::expr_rewriter::normalize_col_with_schemas_and_ambiguity_check;
@@ -51,9 +52,10 @@ use datafusion_expr::{
 };
 use sqlparser::ast;
 use sqlparser::ast::{
-    Assignment, ColumnDef, Expr as SQLExpr, Expr, Ident, ObjectName, ObjectType, Query,
-    SchemaName, SetExpr, ShowCreateObject, ShowStatementFilter, Statement,
-    TableConstraint, TableFactor, TableWithJoins, TransactionMode, UnaryOperator, Value,
+    Assignment, ColumnDef, CreateTableOptions, Expr as SQLExpr, Expr, Ident, ObjectName,
+    ObjectType, Query, SchemaName, SetExpr, ShowCreateObject, ShowStatementFilter,
+    Statement, TableConstraint, TableFactor, TableWithJoins, TransactionMode,
+    UnaryOperator, Value,
 };
 use sqlparser::parser::ParserError::ParserError;
 
@@ -89,18 +91,21 @@ fn calc_inline_constraints_from_columns(columns: &[ColumnDef]) -> Vec<TableConst
     for column in columns {
         for ast::ColumnOptionDef { name, option } in &column.options {
             match option {
-                ast::ColumnOption::Unique { is_primary } => {
-                    constraints.push(ast::TableConstraint::Unique {
-                        name: name.clone(),
-                        columns: vec![column.name.clone()],
-                        is_primary: *is_primary,
-                    })
-                }
+                ast::ColumnOption::Unique {
+                    is_primary,
+                    characteristics,
+                } => constraints.push(ast::TableConstraint::Unique {
+                    name: name.clone(),
+                    columns: vec![column.name.clone()],
+                    is_primary: *is_primary,
+                    characteristics: *characteristics,
+                }),
                 ast::ColumnOption::ForeignKey {
                     foreign_table,
                     referred_columns,
                     on_delete,
                     on_update,
+                    characteristics,
                 } => constraints.push(ast::TableConstraint::ForeignKey {
                     name: name.clone(),
                     columns: vec![],
@@ -108,6 +113,7 @@ fn calc_inline_constraints_from_columns(columns: &[ColumnDef]) -> Vec<TableConst
                     referred_columns: referred_columns.to_vec(),
                     on_delete: *on_delete,
                     on_update: *on_update,
+                    characteristics: *characteristics,
                 }),
                 ast::ColumnOption::Check(expr) => {
                     constraints.push(ast::TableConstraint::Check {
@@ -123,6 +129,7 @@ fn calc_inline_constraints_from_columns(columns: &[ColumnDef]) -> Vec<TableConst
                 | ast::ColumnOption::CharacterSet(_)
                 | ast::ColumnOption::Generated { .. }
                 | ast::ColumnOption::Comment(_)
+                | ast::ColumnOption::Options(_)
                 | ast::ColumnOption::OnUpdate(_) => {}
             }
         }
@@ -136,7 +143,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         match statement {
             DFStatement::CreateExternalTable(s) => self.external_table_to_plan(s),
             DFStatement::Statement(s) => self.sql_statement_to_plan(*s),
-            DFStatement::DescribeTableStmt(s) => self.describe_table_to_plan(s),
             DFStatement::CopyTo(s) => self.copy_to_plan(s),
             DFStatement::Explain(ExplainStatement {
                 verbose,
@@ -170,6 +176,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     ) -> Result<LogicalPlan> {
         let sql = Some(statement.to_string());
         match statement {
+            Statement::ExplainTable {
+                describe_alias: true, // only parse 'DESCRIBE table_name' and not 'EXPLAIN table_name'
+                table_name,
+            } => self.describe_table_to_plan(table_name),
             Statement::Explain {
                 verbose,
                 statement,
@@ -288,9 +298,22 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 name,
                 columns,
                 query,
-                with_options,
+                options: CreateTableOptions::None,
                 ..
-            } if with_options.is_empty() => {
+            } => {
+                let columns = columns
+                    .into_iter()
+                    .map(|view_column_def| {
+                        if let Some(options) = view_column_def.options {
+                            plan_err!(
+                                "Options not supported for view columns: {options:?}"
+                            )
+                        } else {
+                            Ok(view_column_def.name)
+                        }
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+
                 let mut plan = self.query_to_plan(*query, &mut PlannerContext::new())?;
                 plan = self.apply_expr_alias(plan, columns)?;
 
@@ -436,6 +459,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 on,
                 returning,
                 ignore,
+                table_alias,
+                replace_into,
+                priority,
             } => {
                 if or.is_some() {
                     plan_err!("Inserts with or clauses not supported")?;
@@ -460,6 +486,19 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 }
                 let Some(source) = source else {
                     plan_err!("Inserts without a source not supported")?
+                };
+                if let Some(table_alias) = table_alias {
+                    plan_err!(
+                        "Inserts with a table alias not supported: {table_alias:?}"
+                    )?
+                };
+                if replace_into {
+                    plan_err!("Inserts with a `REPLACE INTO` clause not supported")?
+                };
+                if let Some(priority) = priority {
+                    plan_err!(
+                        "Inserts with a `PRIORITY` clause not supported: {priority:?}"
+                    )?
                 };
                 let _ = into; // optional keyword doesn't change behavior
                 self.insert_to_plan(table_name, columns, source, overwrite)
@@ -513,7 +552,13 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             Statement::StartTransaction {
                 modes,
                 begin: false,
+                modifier,
             } => {
+                if let Some(modifier) = modifier {
+                    return not_impl_err!(
+                        "Transaction modifier not supported: {modifier}"
+                    );
+                }
                 let isolation_level: ast::TransactionIsolationLevel = modes
                     .iter()
                     .filter_map(|m: &ast::TransactionMode| match m {
@@ -629,11 +674,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         }
     }
 
-    fn describe_table_to_plan(
-        &self,
-        statement: DescribeTableStmt,
-    ) -> Result<LogicalPlan> {
-        let DescribeTableStmt { table_name } = statement;
+    fn describe_table_to_plan(&self, table_name: ObjectName) -> Result<LogicalPlan> {
         let table_ref = self.object_name_to_table_reference(table_name)?;
 
         let table_source = self.context_provider.get_table_source(table_ref)?;
@@ -677,11 +718,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
         let mut statement_options = StatementOptions::new(options);
         let file_format = statement_options.try_infer_file_type(&statement.target)?;
-        let single_file_output =
-            statement_options.take_bool_option("single_file_output")?;
-
-        // COPY defaults to outputting a single file if not otherwise specified
-        let single_file_output = single_file_output.unwrap_or(true);
 
         let copy_options = CopyOptions::SQLOptions(statement_options);
 
@@ -689,7 +725,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             input: Arc::new(input),
             output_url: statement.target,
             file_format,
-            single_file_output,
             copy_options,
         }))
     }
@@ -1133,11 +1168,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         .index_of_column_by_name(None, &c)?
                         .ok_or_else(|| unqualified_field_not_found(&c, &table_schema))?;
                     if value_indices[column_index].is_some() {
-                        return Err(DataFusionError::SchemaError(
-                            datafusion_common::SchemaError::DuplicateUnqualifiedField {
-                                name: c,
-                            },
-                        ));
+                        return schema_err!(SchemaError::DuplicateUnqualifiedField {
+                            name: c,
+                        });
                     } else {
                         value_indices[column_index] = Some(i);
                     }

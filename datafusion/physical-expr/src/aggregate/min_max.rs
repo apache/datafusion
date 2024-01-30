@@ -22,7 +22,7 @@ use std::convert::TryFrom;
 use std::sync::Arc;
 
 use crate::aggregate::groups_accumulator::prim_op::PrimitiveGroupsAccumulator;
-use crate::{AggregateExpr, GroupsAccumulator, PhysicalExpr};
+use crate::{AggregateExpr, PhysicalExpr};
 use arrow::compute;
 use arrow::datatypes::{
     DataType, Date32Type, Date64Type, Time32MillisecondType, Time32SecondType,
@@ -47,7 +47,7 @@ use arrow_array::types::{
 use datafusion_common::internal_err;
 use datafusion_common::ScalarValue;
 use datafusion_common::{downcast_value, DataFusionError, Result};
-use datafusion_expr::Accumulator;
+use datafusion_expr::{Accumulator, GroupsAccumulator};
 
 use crate::aggregate::utils::down_cast_any_ref;
 use crate::expressions::format_state_name;
@@ -764,11 +764,11 @@ impl Accumulator for MaxAccumulator {
         self.update_batch(states)
     }
 
-    fn state(&self) -> Result<Vec<ScalarValue>> {
+    fn state(&mut self) -> Result<Vec<ScalarValue>> {
         Ok(vec![self.max.clone()])
     }
 
-    fn evaluate(&self) -> Result<ScalarValue> {
+    fn evaluate(&mut self) -> Result<ScalarValue> {
         Ok(self.max.clone())
     }
 
@@ -820,11 +820,11 @@ impl Accumulator for SlidingMaxAccumulator {
         self.update_batch(states)
     }
 
-    fn state(&self) -> Result<Vec<ScalarValue>> {
+    fn state(&mut self) -> Result<Vec<ScalarValue>> {
         Ok(vec![self.max.clone()])
     }
 
-    fn evaluate(&self) -> Result<ScalarValue> {
+    fn evaluate(&mut self) -> Result<ScalarValue> {
         Ok(self.max.clone())
     }
 
@@ -1016,7 +1016,7 @@ impl MinAccumulator {
 }
 
 impl Accumulator for MinAccumulator {
-    fn state(&self) -> Result<Vec<ScalarValue>> {
+    fn state(&mut self) -> Result<Vec<ScalarValue>> {
         Ok(vec![self.min.clone()])
     }
 
@@ -1031,7 +1031,7 @@ impl Accumulator for MinAccumulator {
         self.update_batch(states)
     }
 
-    fn evaluate(&self) -> Result<ScalarValue> {
+    fn evaluate(&mut self) -> Result<ScalarValue> {
         Ok(self.min.clone())
     }
 
@@ -1058,7 +1058,7 @@ impl SlidingMinAccumulator {
 }
 
 impl Accumulator for SlidingMinAccumulator {
-    fn state(&self) -> Result<Vec<ScalarValue>> {
+    fn state(&mut self) -> Result<Vec<ScalarValue>> {
         Ok(vec![self.min.clone()])
     }
 
@@ -1092,7 +1092,7 @@ impl Accumulator for SlidingMinAccumulator {
         self.update_batch(states)
     }
 
-    fn evaluate(&self) -> Result<ScalarValue> {
+    fn evaluate(&mut self) -> Result<ScalarValue> {
         Ok(self.min.clone())
     }
 

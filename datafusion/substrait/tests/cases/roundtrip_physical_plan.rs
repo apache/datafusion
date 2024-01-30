@@ -49,7 +49,6 @@ async fn parquet_exec() -> Result<()> {
         limit: None,
         table_partition_cols: vec![],
         output_ordering: vec![],
-        infinite_source: false,
     };
     let parquet_exec: Arc<dyn ExecutionPlan> =
         Arc::new(ParquetExec::new(scan_config, None, None));

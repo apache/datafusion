@@ -15,17 +15,17 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Expr module contains core type definition for `Expr`.
+//! Logical Expressions: [`Expr`]
 
 use crate::expr_fn::binary_expr;
 use crate::logical_plan::Subquery;
-use crate::udaf;
 use crate::utils::{expr_to_columns, find_out_reference_exprs};
 use crate::window_frame;
-use crate::window_function;
+
 use crate::Operator;
 use crate::{aggregate_function, ExprSchemable};
 use crate::{built_in_function, BuiltinScalarFunction};
+use crate::{built_in_window_function, udaf};
 use arrow::datatypes::DataType;
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{internal_err, DFSchema, OwnedTableReference};
@@ -34,7 +34,10 @@ use std::collections::HashSet;
 use std::fmt;
 use std::fmt::{Display, Formatter, Write};
 use std::hash::{BuildHasher, Hash, Hasher};
+use std::str::FromStr;
 use std::sync::Arc;
+
+use crate::Signature;
 
 /// `Expr` is a central struct of DataFusion's query API, and
 /// represent logical expressions such as `A + 1`, or `CAST(c1 AS
@@ -418,8 +421,12 @@ pub enum GetFieldAccess {
     NamedStructField { name: ScalarValue },
     /// Single list index, for example: `list[i]`
     ListIndex { key: Box<Expr> },
-    /// List range, for example `list[i:j]`
-    ListRange { start: Box<Expr>, stop: Box<Expr> },
+    /// List stride, for example `list[i:j:k]`
+    ListRange {
+        start: Box<Expr>,
+        stop: Box<Expr>,
+        stride: Box<Expr>,
+    },
 }
 
 /// Returns the field of a [`arrow::array::ListArray`] or
@@ -566,11 +573,64 @@ impl AggregateFunction {
     }
 }
 
+/// WindowFunction
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+/// Defines which implementation of an aggregate function DataFusion should call.
+pub enum WindowFunctionDefinition {
+    /// A built in aggregate function that leverages an aggregate function
+    AggregateFunction(aggregate_function::AggregateFunction),
+    /// A a built-in window function
+    BuiltInWindowFunction(built_in_window_function::BuiltInWindowFunction),
+    /// A user defined aggregate function
+    AggregateUDF(Arc<crate::AggregateUDF>),
+    /// A user defined aggregate function
+    WindowUDF(Arc<crate::WindowUDF>),
+}
+
+impl WindowFunctionDefinition {
+    /// Returns the datatype of the window function
+    pub fn return_type(&self, input_expr_types: &[DataType]) -> Result<DataType> {
+        match self {
+            WindowFunctionDefinition::AggregateFunction(fun) => {
+                fun.return_type(input_expr_types)
+            }
+            WindowFunctionDefinition::BuiltInWindowFunction(fun) => {
+                fun.return_type(input_expr_types)
+            }
+            WindowFunctionDefinition::AggregateUDF(fun) => {
+                fun.return_type(input_expr_types)
+            }
+            WindowFunctionDefinition::WindowUDF(fun) => fun.return_type(input_expr_types),
+        }
+    }
+
+    /// the signatures supported by the function `fun`.
+    pub fn signature(&self) -> Signature {
+        match self {
+            WindowFunctionDefinition::AggregateFunction(fun) => fun.signature(),
+            WindowFunctionDefinition::BuiltInWindowFunction(fun) => fun.signature(),
+            WindowFunctionDefinition::AggregateUDF(fun) => fun.signature().clone(),
+            WindowFunctionDefinition::WindowUDF(fun) => fun.signature().clone(),
+        }
+    }
+}
+
+impl fmt::Display for WindowFunctionDefinition {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            WindowFunctionDefinition::AggregateFunction(fun) => fun.fmt(f),
+            WindowFunctionDefinition::BuiltInWindowFunction(fun) => fun.fmt(f),
+            WindowFunctionDefinition::AggregateUDF(fun) => std::fmt::Debug::fmt(fun, f),
+            WindowFunctionDefinition::WindowUDF(fun) => fun.fmt(f),
+        }
+    }
+}
+
 /// Window function
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct WindowFunction {
     /// Name of the function
-    pub fun: window_function::WindowFunction,
+    pub fun: WindowFunctionDefinition,
     /// List of expressions to feed to the functions as arguments
     pub args: Vec<Expr>,
     /// List of partition by expressions
@@ -584,7 +644,7 @@ pub struct WindowFunction {
 impl WindowFunction {
     /// Create a new Window expression
     pub fn new(
-        fun: window_function::WindowFunction,
+        fun: WindowFunctionDefinition,
         args: Vec<Expr>,
         partition_by: Vec<Expr>,
         order_by: Vec<Expr>,
@@ -598,6 +658,50 @@ impl WindowFunction {
             window_frame,
         }
     }
+}
+
+/// Find DataFusion's built-in window function by name.
+pub fn find_df_window_func(name: &str) -> Option<WindowFunctionDefinition> {
+    let name = name.to_lowercase();
+    // Code paths for window functions leveraging ordinary aggregators and
+    // built-in window functions are quite different, and the same function
+    // may have different implementations for these cases. If the sought
+    // function is not found among built-in window functions, we search for
+    // it among aggregate functions.
+    if let Ok(built_in_function) =
+        built_in_window_function::BuiltInWindowFunction::from_str(name.as_str())
+    {
+        Some(WindowFunctionDefinition::BuiltInWindowFunction(
+            built_in_function,
+        ))
+    } else if let Ok(aggregate) =
+        aggregate_function::AggregateFunction::from_str(name.as_str())
+    {
+        Some(WindowFunctionDefinition::AggregateFunction(aggregate))
+    } else {
+        None
+    }
+}
+
+/// Returns the datatype of the window function
+#[deprecated(
+    since = "27.0.0",
+    note = "please use `WindowFunction::return_type` instead"
+)]
+pub fn return_type(
+    fun: &WindowFunctionDefinition,
+    input_expr_types: &[DataType],
+) -> Result<DataType> {
+    fun.return_type(input_expr_types)
+}
+
+/// the signatures supported by the function `fun`.
+#[deprecated(
+    since = "27.0.0",
+    note = "please use `WindowFunction::signature` instead"
+)]
+pub fn signature(fun: &WindowFunctionDefinition) -> Signature {
+    fun.signature()
 }
 
 // Exists expression.
@@ -956,7 +1060,7 @@ impl Expr {
     /// Remove an alias from an expression if one exists.
     pub fn unalias(self) -> Expr {
         match self {
-            Expr::Alias(alias) => alias.expr.as_ref().clone(),
+            Expr::Alias(alias) => *alias.expr,
             _ => self,
         }
     }
@@ -1109,7 +1213,7 @@ impl Expr {
     /// # use datafusion_expr::{lit, col};
     /// let expr = col("c1")
     ///    .range(lit(2), lit(4));
-    /// assert_eq!(expr.display_name().unwrap(), "c1[Int32(2):Int32(4)]");
+    /// assert_eq!(expr.display_name().unwrap(), "c1[Int32(2):Int32(4):Int64(1)]");
     /// ```
     pub fn range(self, start: Expr, stop: Expr) -> Self {
         Expr::GetIndexedField(GetIndexedField {
@@ -1117,6 +1221,7 @@ impl Expr {
             field: GetFieldAccess::ListRange {
                 start: Box::new(start),
                 stop: Box::new(stop),
+                stride: Box::new(Expr::Literal(ScalarValue::Int64(Some(1)))),
             },
         })
     }
@@ -1165,6 +1270,54 @@ impl Expr {
             }
             Ok(Transformed::Yes(expr))
         })
+    }
+
+    /// Returns true if some of this `exprs` subexpressions may not be evaluated
+    /// and thus any side effects (like divide by zero) may not be encountered
+    pub fn short_circuits(&self) -> bool {
+        match self {
+            Expr::ScalarFunction(ScalarFunction { func_def, .. }) => {
+                matches!(func_def, ScalarFunctionDefinition::BuiltIn(fun) if *fun == BuiltinScalarFunction::Coalesce)
+            }
+            Expr::BinaryExpr(BinaryExpr { op, .. }) => {
+                matches!(op, Operator::And | Operator::Or)
+            }
+            Expr::Case { .. } => true,
+            // Use explicit pattern match instead of a default
+            // implementation, so that in the future if someone adds
+            // new Expr types, they will check here as well
+            Expr::AggregateFunction(..)
+            | Expr::Alias(..)
+            | Expr::Between(..)
+            | Expr::Cast(..)
+            | Expr::Column(..)
+            | Expr::Exists(..)
+            | Expr::GetIndexedField(..)
+            | Expr::GroupingSet(..)
+            | Expr::InList(..)
+            | Expr::InSubquery(..)
+            | Expr::IsFalse(..)
+            | Expr::IsNotFalse(..)
+            | Expr::IsNotNull(..)
+            | Expr::IsNotTrue(..)
+            | Expr::IsNotUnknown(..)
+            | Expr::IsNull(..)
+            | Expr::IsTrue(..)
+            | Expr::IsUnknown(..)
+            | Expr::Like(..)
+            | Expr::ScalarSubquery(..)
+            | Expr::ScalarVariable(_, _)
+            | Expr::SimilarTo(..)
+            | Expr::Not(..)
+            | Expr::Negative(..)
+            | Expr::OuterReferenceColumn(_, _)
+            | Expr::TryCast(..)
+            | Expr::Wildcard { .. }
+            | Expr::WindowFunction(..)
+            | Expr::Literal(..)
+            | Expr::Sort(..)
+            | Expr::Placeholder(..) => false,
+        }
     }
 }
 
@@ -1382,8 +1535,12 @@ impl fmt::Display for Expr {
                     write!(f, "({expr})[{name}]")
                 }
                 GetFieldAccess::ListIndex { key } => write!(f, "({expr})[{key}]"),
-                GetFieldAccess::ListRange { start, stop } => {
-                    write!(f, "({expr})[{start}:{stop}]")
+                GetFieldAccess::ListRange {
+                    start,
+                    stop,
+                    stride,
+                } => {
+                    write!(f, "({expr})[{start}:{stop}:{stride}]")
                 }
             },
             Expr::GroupingSet(grouping_sets) => match grouping_sets {
@@ -1584,10 +1741,15 @@ fn create_name(e: &Expr) -> Result<String> {
                     let key = create_name(key)?;
                     Ok(format!("{expr}[{key}]"))
                 }
-                GetFieldAccess::ListRange { start, stop } => {
+                GetFieldAccess::ListRange {
+                    start,
+                    stop,
+                    stride,
+                } => {
                     let start = create_name(start)?;
                     let stop = create_name(stop)?;
-                    Ok(format!("{expr}[{start}:{stop}]"))
+                    let stride = create_name(stride)?;
+                    Ok(format!("{expr}[{start}:{stop}:{stride}]"))
                 }
             }
         }
@@ -1724,13 +1886,13 @@ mod test {
     use crate::expr::Cast;
     use crate::expr_fn::col;
     use crate::{
-        case, lit, BuiltinScalarFunction, ColumnarValue, Expr, ReturnTypeFunction,
-        ScalarFunctionDefinition, ScalarFunctionImplementation, ScalarUDF, Signature,
-        Volatility,
+        case, lit, BuiltinScalarFunction, ColumnarValue, Expr, ScalarFunctionDefinition,
+        ScalarUDF, ScalarUDFImpl, Signature, Volatility,
     };
     use arrow::datatypes::DataType;
     use datafusion_common::Column;
     use datafusion_common::{Result, ScalarValue};
+    use std::any::Any;
     use std::sync::Arc;
 
     #[test]
@@ -1769,10 +1931,14 @@ mod test {
         let exp2 = col("a") + lit(2);
         let exp3 = !(col("a") + lit(2));
 
-        assert!(exp1 < exp2);
-        assert!(exp2 > exp1);
-        assert!(exp2 > exp3);
-        assert!(exp3 < exp2);
+        // Since comparisons are done using hash value of the expression
+        // expr < expr2 may return false, or true. There is no guaranteed result.
+        // The only guarantee is "<" operator should have the opposite result of ">=" operator
+        let greater_or_equal = exp1 >= exp2;
+        assert_eq!(exp1 < exp2, !greater_or_equal);
+
+        let greater_or_equal = exp3 >= exp2;
+        assert_eq!(exp3 < exp2, !greater_or_equal);
     }
 
     #[test]
@@ -1848,29 +2014,230 @@ mod test {
         );
 
         // UDF
-        let return_type: ReturnTypeFunction =
-            Arc::new(move |_| Ok(Arc::new(DataType::Utf8)));
-        let fun: ScalarFunctionImplementation =
-            Arc::new(move |_| Ok(ColumnarValue::Scalar(ScalarValue::new_utf8("a"))));
-        let udf = Arc::new(ScalarUDF::new(
-            "TestScalarUDF",
-            &Signature::uniform(1, vec![DataType::Float32], Volatility::Stable),
-            &return_type,
-            &fun,
-        ));
+        #[derive(Debug)]
+        struct TestScalarUDF {
+            signature: Signature,
+        }
+        impl ScalarUDFImpl for TestScalarUDF {
+            fn as_any(&self) -> &dyn Any {
+                self
+            }
+            fn name(&self) -> &str {
+                "TestScalarUDF"
+            }
+
+            fn signature(&self) -> &Signature {
+                &self.signature
+            }
+
+            fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+                Ok(DataType::Utf8)
+            }
+
+            fn invoke(&self, _args: &[ColumnarValue]) -> Result<ColumnarValue> {
+                Ok(ColumnarValue::Scalar(ScalarValue::from("a")))
+            }
+        }
+        let udf = Arc::new(ScalarUDF::from(TestScalarUDF {
+            signature: Signature::uniform(1, vec![DataType::Float32], Volatility::Stable),
+        }));
         assert!(!ScalarFunctionDefinition::UDF(udf).is_volatile().unwrap());
 
-        let udf = Arc::new(ScalarUDF::new(
-            "TestScalarUDF",
-            &Signature::uniform(1, vec![DataType::Float32], Volatility::Volatile),
-            &return_type,
-            &fun,
-        ));
+        let udf = Arc::new(ScalarUDF::from(TestScalarUDF {
+            signature: Signature::uniform(
+                1,
+                vec![DataType::Float32],
+                Volatility::Volatile,
+            ),
+        }));
         assert!(ScalarFunctionDefinition::UDF(udf).is_volatile().unwrap());
 
         // Unresolved function
         ScalarFunctionDefinition::Name(Arc::from("UnresolvedFunc"))
             .is_volatile()
             .expect_err("Shouldn't determine volatility of unresolved function");
+    }
+
+    use super::*;
+
+    #[test]
+    fn test_count_return_type() -> Result<()> {
+        let fun = find_df_window_func("count").unwrap();
+        let observed = fun.return_type(&[DataType::Utf8])?;
+        assert_eq!(DataType::Int64, observed);
+
+        let observed = fun.return_type(&[DataType::UInt64])?;
+        assert_eq!(DataType::Int64, observed);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_first_value_return_type() -> Result<()> {
+        let fun = find_df_window_func("first_value").unwrap();
+        let observed = fun.return_type(&[DataType::Utf8])?;
+        assert_eq!(DataType::Utf8, observed);
+
+        let observed = fun.return_type(&[DataType::UInt64])?;
+        assert_eq!(DataType::UInt64, observed);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_last_value_return_type() -> Result<()> {
+        let fun = find_df_window_func("last_value").unwrap();
+        let observed = fun.return_type(&[DataType::Utf8])?;
+        assert_eq!(DataType::Utf8, observed);
+
+        let observed = fun.return_type(&[DataType::Float64])?;
+        assert_eq!(DataType::Float64, observed);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_lead_return_type() -> Result<()> {
+        let fun = find_df_window_func("lead").unwrap();
+        let observed = fun.return_type(&[DataType::Utf8])?;
+        assert_eq!(DataType::Utf8, observed);
+
+        let observed = fun.return_type(&[DataType::Float64])?;
+        assert_eq!(DataType::Float64, observed);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_lag_return_type() -> Result<()> {
+        let fun = find_df_window_func("lag").unwrap();
+        let observed = fun.return_type(&[DataType::Utf8])?;
+        assert_eq!(DataType::Utf8, observed);
+
+        let observed = fun.return_type(&[DataType::Float64])?;
+        assert_eq!(DataType::Float64, observed);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_nth_value_return_type() -> Result<()> {
+        let fun = find_df_window_func("nth_value").unwrap();
+        let observed = fun.return_type(&[DataType::Utf8, DataType::UInt64])?;
+        assert_eq!(DataType::Utf8, observed);
+
+        let observed = fun.return_type(&[DataType::Float64, DataType::UInt64])?;
+        assert_eq!(DataType::Float64, observed);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_percent_rank_return_type() -> Result<()> {
+        let fun = find_df_window_func("percent_rank").unwrap();
+        let observed = fun.return_type(&[])?;
+        assert_eq!(DataType::Float64, observed);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_cume_dist_return_type() -> Result<()> {
+        let fun = find_df_window_func("cume_dist").unwrap();
+        let observed = fun.return_type(&[])?;
+        assert_eq!(DataType::Float64, observed);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_ntile_return_type() -> Result<()> {
+        let fun = find_df_window_func("ntile").unwrap();
+        let observed = fun.return_type(&[DataType::Int16])?;
+        assert_eq!(DataType::UInt64, observed);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_window_function_case_insensitive() -> Result<()> {
+        let names = vec![
+            "row_number",
+            "rank",
+            "dense_rank",
+            "percent_rank",
+            "cume_dist",
+            "ntile",
+            "lag",
+            "lead",
+            "first_value",
+            "last_value",
+            "nth_value",
+            "min",
+            "max",
+            "count",
+            "avg",
+            "sum",
+        ];
+        for name in names {
+            let fun = find_df_window_func(name).unwrap();
+            let fun2 = find_df_window_func(name.to_uppercase().as_str()).unwrap();
+            assert_eq!(fun, fun2);
+            assert_eq!(fun.to_string(), name.to_uppercase());
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_find_df_window_function() {
+        assert_eq!(
+            find_df_window_func("max"),
+            Some(WindowFunctionDefinition::AggregateFunction(
+                aggregate_function::AggregateFunction::Max
+            ))
+        );
+        assert_eq!(
+            find_df_window_func("min"),
+            Some(WindowFunctionDefinition::AggregateFunction(
+                aggregate_function::AggregateFunction::Min
+            ))
+        );
+        assert_eq!(
+            find_df_window_func("avg"),
+            Some(WindowFunctionDefinition::AggregateFunction(
+                aggregate_function::AggregateFunction::Avg
+            ))
+        );
+        assert_eq!(
+            find_df_window_func("cume_dist"),
+            Some(WindowFunctionDefinition::BuiltInWindowFunction(
+                built_in_window_function::BuiltInWindowFunction::CumeDist
+            ))
+        );
+        assert_eq!(
+            find_df_window_func("first_value"),
+            Some(WindowFunctionDefinition::BuiltInWindowFunction(
+                built_in_window_function::BuiltInWindowFunction::FirstValue
+            ))
+        );
+        assert_eq!(
+            find_df_window_func("LAST_value"),
+            Some(WindowFunctionDefinition::BuiltInWindowFunction(
+                built_in_window_function::BuiltInWindowFunction::LastValue
+            ))
+        );
+        assert_eq!(
+            find_df_window_func("LAG"),
+            Some(WindowFunctionDefinition::BuiltInWindowFunction(
+                built_in_window_function::BuiltInWindowFunction::Lag
+            ))
+        );
+        assert_eq!(
+            find_df_window_func("LEAD"),
+            Some(WindowFunctionDefinition::BuiltInWindowFunction(
+                built_in_window_function::BuiltInWindowFunction::Lead
+            ))
+        );
+        assert_eq!(find_df_window_func("not_exist"), None)
     }
 }

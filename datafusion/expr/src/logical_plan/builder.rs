@@ -55,6 +55,8 @@ use datafusion_common::{
     ScalarValue, TableReference, ToDFSchema, UnnestOptions,
 };
 
+use super::plan::RecursiveQuery;
+
 /// Default table name for unnamed table
 pub const UNNAMED_TABLE: &str = "?table?";
 
@@ -119,6 +121,28 @@ impl LogicalPlanBuilder {
             produce_one_row,
             schema: DFSchemaRef::new(DFSchema::empty()),
         }))
+    }
+
+    /// Convert a regular plan into a recursive query.
+    /// `is_distinct` indicates whether the recursive term should be de-duplicated (`UNION`) after each iteration or not (`UNION ALL`).
+    pub fn to_recursive_query(
+        &self,
+        name: String,
+        recursive_term: LogicalPlan,
+        is_distinct: bool,
+    ) -> Result<Self> {
+        // TODO: we need to do a bunch of validation here. Maybe more.
+        if is_distinct {
+            return Err(DataFusionError::NotImplemented(
+                "Recursive queries with a distinct 'UNION' (in which the previous iteration's results will be de-duplicated) is not supported".to_string(),
+            ));
+        }
+        Ok(Self::from(LogicalPlan::RecursiveQuery(RecursiveQuery {
+            name,
+            static_term: Arc::new(self.plan.clone()),
+            recursive_term: Arc::new(recursive_term),
+            is_distinct,
+        })))
     }
 
     /// Create a values list based relation, and the schema is inferred from data, consuming
@@ -239,14 +263,12 @@ impl LogicalPlanBuilder {
         input: LogicalPlan,
         output_url: String,
         file_format: FileType,
-        single_file_output: bool,
         copy_options: CopyOptions,
     ) -> Result<Self> {
         Ok(Self::from(LogicalPlan::Copy(CopyTo {
             input: Arc::new(input),
             output_url,
             file_format,
-            single_file_output,
             copy_options,
         })))
     }
@@ -292,7 +314,7 @@ impl LogicalPlanBuilder {
         window_exprs: Vec<Expr>,
     ) -> Result<LogicalPlan> {
         let mut plan = input;
-        let mut groups = group_window_expr_by_sort_keys(&window_exprs)?;
+        let mut groups = group_window_expr_by_sort_keys(window_exprs)?;
         // To align with the behavior of PostgreSQL, we want the sort_keys sorted as same rule as PostgreSQL that first
         // we compare the sort key themselves and if one window's sort keys are a prefix of another
         // put the window with more sort keys first. so more deeply sorted plans gets nested further down as children.
@@ -314,7 +336,7 @@ impl LogicalPlanBuilder {
             key_b.len().cmp(&key_a.len())
         });
         for (_, exprs) in groups {
-            let window_exprs = exprs.into_iter().cloned().collect::<Vec<_>>();
+            let window_exprs = exprs.into_iter().collect::<Vec<_>>();
             // Partition and sorting is done at physical level, see the EnforceDistribution
             // and EnforceSorting rules.
             plan = LogicalPlanBuilder::from(plan)
@@ -445,7 +467,7 @@ impl LogicalPlanBuilder {
                         )
                     })
                     .collect::<Result<Vec<_>>>()?;
-                curr_plan.with_new_inputs(&new_inputs)
+                curr_plan.with_new_exprs(curr_plan.expressions(), new_inputs)
             }
         }
     }
@@ -904,27 +926,11 @@ impl LogicalPlanBuilder {
         group_expr: impl IntoIterator<Item = impl Into<Expr>>,
         aggr_expr: impl IntoIterator<Item = impl Into<Expr>>,
     ) -> Result<Self> {
-        let mut group_expr = normalize_cols(group_expr, &self.plan)?;
+        let group_expr = normalize_cols(group_expr, &self.plan)?;
         let aggr_expr = normalize_cols(aggr_expr, &self.plan)?;
 
-        // Rewrite groupby exprs according to functional dependencies
-        let group_by_expr_names = group_expr
-            .iter()
-            .map(|group_by_expr| group_by_expr.display_name())
-            .collect::<Result<Vec<_>>>()?;
-        let schema = self.plan.schema();
-        if let Some(target_indices) =
-            get_target_functional_dependencies(schema, &group_by_expr_names)
-        {
-            for idx in target_indices {
-                let field = schema.field(idx);
-                let expr =
-                    Expr::Column(Column::new(field.qualifier().cloned(), field.name()));
-                if !group_expr.contains(&expr) {
-                    group_expr.push(expr);
-                }
-            }
-        }
+        let group_expr =
+            add_group_by_exprs_from_dependencies(group_expr, self.plan.schema())?;
         Aggregate::try_new(Arc::new(self.plan), group_expr, aggr_expr)
             .map(LogicalPlan::Aggregate)
             .map(Self::from)
@@ -1189,6 +1195,42 @@ pub fn build_join_schema(
     schema.with_functional_dependencies(func_dependencies)
 }
 
+/// Add additional "synthetic" group by expressions based on functional
+/// dependencies.
+///
+/// For example, if we are grouping on `[c1]`, and we know from
+/// functional dependencies that column `c1` determines `c2`, this function
+/// adds `c2` to the group by list.
+///
+/// This allows MySQL style selects like
+/// `SELECT col FROM t WHERE pk = 5` if col is unique
+fn add_group_by_exprs_from_dependencies(
+    mut group_expr: Vec<Expr>,
+    schema: &DFSchemaRef,
+) -> Result<Vec<Expr>> {
+    // Names of the fields produced by the GROUP BY exprs for example, `GROUP BY
+    // c1 + 1` produces an output field named `"c1 + 1"`
+    let mut group_by_field_names = group_expr
+        .iter()
+        .map(|e| e.display_name())
+        .collect::<Result<Vec<_>>>()?;
+
+    if let Some(target_indices) =
+        get_target_functional_dependencies(schema, &group_by_field_names)
+    {
+        for idx in target_indices {
+            let field = schema.field(idx);
+            let expr =
+                Expr::Column(Column::new(field.qualifier().cloned(), field.name()));
+            let expr_name = expr.display_name()?;
+            if !group_by_field_names.contains(&expr_name) {
+                group_by_field_names.push(expr_name);
+                group_expr.push(expr);
+            }
+        }
+    }
+    Ok(group_expr)
+}
 /// Errors if one or more expressions have equal names.
 pub(crate) fn validate_unique_names<'a>(
     node_name: &str,
@@ -1825,13 +1867,16 @@ mod tests {
         .project(vec![col("id"), col("first_name").alias("id")]);
 
         match plan {
-            Err(DataFusionError::SchemaError(SchemaError::AmbiguousReference {
-                field:
-                    Column {
-                        relation: Some(OwnedTableReference::Bare { table }),
-                        name,
-                    },
-            })) => {
+            Err(DataFusionError::SchemaError(
+                SchemaError::AmbiguousReference {
+                    field:
+                        Column {
+                            relation: Some(OwnedTableReference::Bare { table }),
+                            name,
+                        },
+                },
+                _,
+            )) => {
                 assert_eq!("employee_csv", table);
                 assert_eq!("id", &name);
                 Ok(())
@@ -1852,13 +1897,16 @@ mod tests {
         .aggregate(vec![col("state")], vec![sum(col("salary")).alias("state")]);
 
         match plan {
-            Err(DataFusionError::SchemaError(SchemaError::AmbiguousReference {
-                field:
-                    Column {
-                        relation: Some(OwnedTableReference::Bare { table }),
-                        name,
-                    },
-            })) => {
+            Err(DataFusionError::SchemaError(
+                SchemaError::AmbiguousReference {
+                    field:
+                        Column {
+                            relation: Some(OwnedTableReference::Bare { table }),
+                            name,
+                        },
+                },
+                _,
+            )) => {
                 assert_eq!("employee_csv", table);
                 assert_eq!("state", &name);
                 Ok(())

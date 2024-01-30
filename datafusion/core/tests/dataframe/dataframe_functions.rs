@@ -31,6 +31,7 @@ use datafusion::prelude::*;
 use datafusion::execution::context::SessionContext;
 
 use datafusion::assert_batches_eq;
+use datafusion_expr::expr::Alias;
 use datafusion_expr::{approx_median, cast};
 
 async fn create_test_table() -> Result<DataFrame> {
@@ -186,6 +187,25 @@ async fn test_fn_approx_percentile_cont() -> Result<()> {
 
     assert_batches_eq!(expected, &batches);
 
+    // the arg2 parameter is a complex expr, but it can be evaluated to the literal value
+    let alias_expr = Expr::Alias(Alias::new(
+        cast(lit(0.5), DataType::Float32),
+        None::<&str>,
+        "arg_2".to_string(),
+    ));
+    let expr = approx_percentile_cont(col("b"), alias_expr);
+    let df = create_test_table().await?;
+    let expected = [
+        "+--------------------------------------+",
+        "| APPROX_PERCENTILE_CONT(test.b,arg_2) |",
+        "+--------------------------------------+",
+        "| 10                                   |",
+        "+--------------------------------------+",
+    ];
+    let batches = df.aggregate(vec![], vec![expr]).unwrap().collect().await?;
+
+    assert_batches_eq!(expected, &batches);
+
     Ok(())
 }
 
@@ -240,6 +260,26 @@ async fn test_fn_initcap() -> Result<()> {
         "| Cbadef          |",
         "| 123abcdef       |",
         "+-----------------+",
+    ];
+
+    assert_fn_batches!(expr, expected);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_fn_instr() -> Result<()> {
+    let expr = instr(col("a"), lit("b"));
+
+    let expected = [
+        "+-------------------------+",
+        "| instr(test.a,Utf8(\"b\")) |",
+        "+-------------------------+",
+        "| 2                       |",
+        "| 2                       |",
+        "| 0                       |",
+        "| 5                       |",
+        "+-------------------------+",
     ];
 
     assert_fn_batches!(expr, expected);
@@ -607,6 +647,26 @@ async fn test_fn_starts_with() -> Result<()> {
         "| false                           |",
         "| false                           |",
         "+---------------------------------+",
+    ];
+
+    assert_fn_batches!(expr, expected);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_fn_ends_with() -> Result<()> {
+    let expr = ends_with(col("a"), lit("DEF"));
+
+    let expected = [
+        "+-------------------------------+",
+        "| ends_with(test.a,Utf8(\"DEF\")) |",
+        "+-------------------------------+",
+        "| true                          |",
+        "| false                         |",
+        "| false                         |",
+        "| false                         |",
+        "+-------------------------------+",
     ];
 
     assert_fn_batches!(expr, expected);

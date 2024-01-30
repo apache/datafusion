@@ -15,15 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::{ops::Neg, sync::Arc};
+use std::ops::Neg;
+
+use crate::tree_node::ExprContext;
 
 use arrow_schema::SortOptions;
 
-use crate::PhysicalExpr;
-use datafusion_common::tree_node::{TreeNode, VisitRecursion};
-use datafusion_common::Result;
-
-/// To propagate [`SortOptions`] across the [`PhysicalExpr`], it is insufficient
+/// To propagate [`SortOptions`] across the `PhysicalExpr`, it is insufficient
 /// to simply use `Option<SortOptions>`: There must be a differentiation between
 /// unordered columns and literal values, since literals may not break the ordering
 /// when they are used as a child of some binary expression when the other child has
@@ -138,68 +136,13 @@ impl Neg for SortProperties {
 }
 
 /// The `ExprOrdering` struct is designed to aid in the determination of ordering (represented
-/// by [`SortProperties`]) for a given [`PhysicalExpr`]. When analyzing the orderings
-/// of a [`PhysicalExpr`], the process begins by assigning the ordering of its leaf nodes.
+/// by [`SortProperties`]) for a given `PhysicalExpr`. When analyzing the orderings
+/// of a `PhysicalExpr`, the process begins by assigning the ordering of its leaf nodes.
 /// By propagating these leaf node orderings upwards in the expression tree, the overall
-/// ordering of the entire [`PhysicalExpr`] can be derived.
+/// ordering of the entire `PhysicalExpr` can be derived.
 ///
-/// This struct holds the necessary state information for each expression in the [`PhysicalExpr`].
-/// It encapsulates the orderings (`state`) associated with the expression (`expr`), and
-/// orderings of the children expressions (`children_states`). The [`ExprOrdering`] of a parent
+/// This struct holds the necessary state information for each expression in the `PhysicalExpr`.
+/// It encapsulates the orderings (`data`) associated with the expression (`expr`), and
+/// orderings of the children expressions (`children`). The [`ExprOrdering`] of a parent
 /// expression is determined based on the [`ExprOrdering`] states of its children expressions.
-#[derive(Debug)]
-pub struct ExprOrdering {
-    pub expr: Arc<dyn PhysicalExpr>,
-    pub state: SortProperties,
-    pub children: Vec<ExprOrdering>,
-}
-
-impl ExprOrdering {
-    /// Creates a new [`ExprOrdering`] with [`SortProperties::Unordered`] states
-    /// for `expr` and its children.
-    pub fn new(expr: Arc<dyn PhysicalExpr>) -> Self {
-        let children = expr.children();
-        Self {
-            expr,
-            state: Default::default(),
-            children: children.into_iter().map(Self::new).collect(),
-        }
-    }
-
-    /// Get a reference to each child state.
-    pub fn children_state(&self) -> Vec<SortProperties> {
-        self.children.iter().map(|c| c.state).collect()
-    }
-}
-
-impl TreeNode for ExprOrdering {
-    fn apply_children<F>(&self, op: &mut F) -> Result<VisitRecursion>
-    where
-        F: FnMut(&Self) -> Result<VisitRecursion>,
-    {
-        for child in &self.children {
-            match op(child)? {
-                VisitRecursion::Continue => {}
-                VisitRecursion::Skip => return Ok(VisitRecursion::Continue),
-                VisitRecursion::Stop => return Ok(VisitRecursion::Stop),
-            }
-        }
-        Ok(VisitRecursion::Continue)
-    }
-
-    fn map_children<F>(mut self, transform: F) -> Result<Self>
-    where
-        F: FnMut(Self) -> Result<Self>,
-    {
-        if self.children.is_empty() {
-            Ok(self)
-        } else {
-            self.children = self
-                .children
-                .into_iter()
-                .map(transform)
-                .collect::<Result<Vec<_>>>()?;
-            Ok(self)
-        }
-    }
-}
+pub type ExprOrdering = ExprContext<SortProperties>;

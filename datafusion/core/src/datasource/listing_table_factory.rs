@@ -36,7 +36,7 @@ use crate::execution::context::SessionState;
 
 use arrow::datatypes::{DataType, SchemaRef};
 use datafusion_common::file_options::{FileTypeWriterOptions, StatementOptions};
-use datafusion_common::{plan_err, DataFusionError, FileType};
+use datafusion_common::{arrow_datafusion_err, plan_err, DataFusionError, FileType};
 use datafusion_expr::CreateExternalTable;
 
 use async_trait::async_trait;
@@ -114,7 +114,7 @@ impl TableProviderFactory for ListingTableFactory {
                 .map(|col| {
                     schema
                         .field_with_name(col)
-                        .map_err(DataFusionError::ArrowError)
+                        .map_err(|e| arrow_datafusion_err!(e))
                 })
                 .collect::<datafusion_common::Result<Vec<_>>>()?
                 .into_iter()
@@ -133,32 +133,17 @@ impl TableProviderFactory for ListingTableFactory {
             (Some(schema), table_partition_cols)
         };
 
-        // look for 'infinite' as an option
-        let infinite_source = cmd.unbounded;
-
         let mut statement_options = StatementOptions::from(&cmd.options);
 
-        // Extract ListingTable specific options if present or set default
-        let unbounded = if infinite_source {
-            statement_options.take_str_option("unbounded");
-            infinite_source
-        } else {
-            statement_options
-                .take_bool_option("unbounded")?
-                .unwrap_or(false)
-        };
-
-        let single_file = statement_options
-            .take_bool_option("single_file")?
-            .unwrap_or(false);
-
-        // Backwards compatibility (#8547)
+        // Backwards compatibility (#8547), discard deprecated options
+        statement_options.take_bool_option("single_file")?;
         if let Some(s) = statement_options.take_str_option("insert_mode") {
             if !s.eq_ignore_ascii_case("append_new_files") {
                 return plan_err!("Unknown or unsupported insert mode {s}. Only append_new_files supported");
             }
         }
         statement_options.take_bool_option("create_local_path")?;
+        statement_options.take_str_option("unbounded");
 
         let file_type = file_format.file_type();
 
@@ -206,9 +191,7 @@ impl TableProviderFactory for ListingTableFactory {
             .with_target_partitions(state.config().target_partitions())
             .with_table_partition_cols(table_partition_cols)
             .with_file_sort_order(cmd.order_exprs.clone())
-            .with_single_file(single_file)
-            .with_write_options(file_type_writer_options)
-            .with_infinite_source(unbounded);
+            .with_write_options(file_type_writer_options);
 
         let resolved_schema = match provided_schema {
             None => options.infer_schema(state, &table_path).await?,

@@ -61,6 +61,7 @@ pub mod metrics;
 mod ordering;
 pub mod placeholder_row;
 pub mod projection;
+pub mod recursive_query;
 pub mod repartition;
 pub mod sorts;
 pub mod stream;
@@ -71,6 +72,7 @@ pub mod union;
 pub mod unnest;
 pub mod values;
 pub mod windows;
+pub mod work_table;
 
 pub use crate::display::{DefaultDisplay, DisplayAs, DisplayFormatType, VerboseDisplay};
 pub use crate::metrics::Metric;
@@ -288,6 +290,24 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     /// [`TryStreamExt`]: futures::stream::TryStreamExt
     /// [`RecordBatchStreamAdapter`]: crate::stream::RecordBatchStreamAdapter
     ///
+    /// # Cancellation / Aborting Execution
+    ///
+    /// The [`Stream`] that is returned must ensure that any allocated resources
+    /// are freed when the stream itself is dropped. This is particularly
+    /// important for [`spawn`]ed tasks or threads. Unless care is taken to
+    /// "abort" such tasks, they may continue to consume resources even after
+    /// the plan is dropped, generating intermediate results that are never
+    /// used.
+    ///
+    /// See [`AbortOnDropSingle`], [`AbortOnDropMany`] and
+    /// [`RecordBatchReceiverStreamBuilder`] for structures to help ensure all
+    /// background tasks are cancelled.
+    ///
+    /// [`spawn`]: tokio::task::spawn
+    /// [`AbortOnDropSingle`]: crate::common::AbortOnDropSingle
+    /// [`AbortOnDropMany`]: crate::common::AbortOnDropMany
+    /// [`RecordBatchReceiverStreamBuilder`]: crate::stream::RecordBatchReceiverStreamBuilder
+    ///
     /// # Implementation Examples
     ///
     /// While `async` `Stream`s have a non trivial learning curve, the
@@ -491,7 +511,12 @@ pub async fn collect(
     common::collect(stream).await
 }
 
-/// Execute the [ExecutionPlan] and return a single stream of results
+/// Execute the [ExecutionPlan] and return a single stream of results.
+///
+/// # Aborting Execution
+///
+/// Dropping the stream will abort the execution of the query, and free up
+/// any allocated resources
 pub fn execute_stream(
     plan: Arc<dyn ExecutionPlan>,
     context: Arc<TaskContext>,
@@ -549,7 +574,13 @@ pub async fn collect_partitioned(
     Ok(batches)
 }
 
-/// Execute the [ExecutionPlan] and return a vec with one stream per output partition
+/// Execute the [ExecutionPlan] and return a vec with one stream per output
+/// partition
+///
+/// # Aborting Execution
+///
+/// Dropping the stream will abort the execution of the query, and free up
+/// any allocated resources
 pub fn execute_stream_partitioned(
     plan: Arc<dyn ExecutionPlan>,
     context: Arc<TaskContext>,
@@ -581,4 +612,7 @@ pub fn get_plan_string(plan: &Arc<dyn ExecutionPlan>) -> Vec<String> {
 }
 
 #[cfg(test)]
+#[allow(clippy::single_component_path_imports)]
+use rstest_reuse;
+
 pub mod test;

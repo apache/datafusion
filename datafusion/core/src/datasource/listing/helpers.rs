@@ -285,7 +285,7 @@ async fn prune_partitions(
 
     // Applies `filter` to `batch` returning `None` on error
     let do_filter = |filter| -> Option<ArrayRef> {
-        let expr = create_physical_expr(filter, &df_schema, &schema, &props).ok()?;
+        let expr = create_physical_expr(filter, &df_schema, &props).ok()?;
         expr.evaluate(&batch)
             .ok()?
             .into_array(partitions.len())
@@ -375,10 +375,10 @@ pub async fn pruned_partition_list<'a>(
                     store.list(Some(&partition.path)).try_collect().await?
                 }
             };
-
             let files = files.into_iter().filter(move |o| {
                 let extension_match = o.location.as_ref().ends_with(file_extension);
-                let glob_match = table_path.contains(&o.location);
+                // here need to scan subdirectories(`listing_table_ignore_subdirectory` = false)
+                let glob_match = table_path.contains(&o.location, false);
                 extension_match && glob_match
             });
 

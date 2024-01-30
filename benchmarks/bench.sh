@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Licensed to the Apache Software Foundation (ASF) under one
 # or more contributor license agreements.  See the NOTICE file
 # distributed with this work for additional information
@@ -53,14 +53,14 @@ Examples:
 ./bench.sh data
 
 # Run the 'tpch' benchmark on the datafusion checkout in /source/arrow-datafusion
-DATAFASION_DIR=/source/arrow-datafusion ./bench.sh run tpch
+DATAFUSION_DIR=/source/arrow-datafusion ./bench.sh run tpch
 
 **********
 * Commands
 **********
-data:         Generates data needed for benchmarking
+data:         Generates or downloads data needed for benchmarking
 run:          Runs the named benchmark
-compare:      Comares results from benchmark runs
+compare:      Compares results from benchmark runs
 
 **********
 * Benchmarks
@@ -74,13 +74,14 @@ parquet:                Benchmark of parquet reader's filtering speed
 sort:                   Benchmark of sorting speed
 clickbench_1:           ClickBench queries against a single parquet file
 clickbench_partitioned: ClickBench queries against a partitioned (100 files) parquet
+clickbench_extended:    ClickBench "inspired" queries against a single parquet (DataFusion specific)
 
 **********
 * Supported Configuration (Environment Variables)
 **********
 DATA_DIR        directory to store datasets
 CARGO_COMMAND   command that runs the benchmark binary
-DATAFASION_DIR  directory to use (default $DATAFUSION_DIR)
+DATAFUSION_DIR  directory to use (default $DATAFUSION_DIR)
 "
     exit 1
 }
@@ -155,6 +156,9 @@ main() {
                 clickbench_partitioned)
                     data_clickbench_partitioned
                     ;;
+                clickbench_extended)
+                    data_clickbench_1
+                    ;;
                 *)
                     echo "Error: unknown benchmark '$BENCHMARK' for data generation"
                     usage
@@ -193,6 +197,7 @@ main() {
                     run_sort
                     run_clickbench_1
                     run_clickbench_partitioned
+                    run_clickbench_extended
                     ;;
                 tpch)
                     run_tpch "1"
@@ -218,6 +223,9 @@ main() {
                 clickbench_partitioned)
                     run_clickbench_partitioned
                     ;;
+                clickbench_extended)
+                    run_clickbench_extended
+                    ;;
                 *)
                     echo "Error: unknown benchmark '$BENCHMARK' for run"
                     usage
@@ -230,6 +238,9 @@ main() {
             BRANCH1=$1
             BRANCH2=$2
             compare_benchmarks
+            ;;
+        "")
+            usage
             ;;
         *)
             echo "Error: unknown command: $COMMAND"
@@ -393,13 +404,22 @@ run_clickbench_1() {
     $CARGO_COMMAND --bin dfbench -- clickbench  --iterations 5 --path "${DATA_DIR}/hits.parquet" --queries-path "${SCRIPT_DIR}/queries/clickbench/queries.sql" -o ${RESULTS_FILE}
 }
 
- # Runs the clickbench benchmark with a single large parquet file
+ # Runs the clickbench benchmark with the partitioned parquet files
 run_clickbench_partitioned() {
-    RESULTS_FILE="${RESULTS_DIR}/clickbench_1.json"
+    RESULTS_FILE="${RESULTS_DIR}/clickbench_partitioned.json"
     echo "RESULTS_FILE: ${RESULTS_FILE}"
     echo "Running clickbench (partitioned, 100 files) benchmark..."
     $CARGO_COMMAND --bin dfbench -- clickbench  --iterations 5 --path "${DATA_DIR}/hits_partitioned" --queries-path "${SCRIPT_DIR}/queries/clickbench/queries.sql" -o ${RESULTS_FILE}
 }
+
+# Runs the clickbench "extended" benchmark with a single large parquet file
+run_clickbench_extended() {
+    RESULTS_FILE="${RESULTS_DIR}/clickbench_extended.json"
+    echo "RESULTS_FILE: ${RESULTS_FILE}"
+    echo "Running clickbench (1 file) extended benchmark..."
+    $CARGO_COMMAND --bin dfbench -- clickbench  --iterations 5 --path "${DATA_DIR}/hits.parquet" --queries-path "${SCRIPT_DIR}/queries/clickbench/extended.sql" -o ${RESULTS_FILE}
+}
+
 
 compare_benchmarks() {
     BASE_RESULTS_DIR="${SCRIPT_DIR}/results"

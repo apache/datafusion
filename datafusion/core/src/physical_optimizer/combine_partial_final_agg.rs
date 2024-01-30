@@ -257,7 +257,6 @@ mod tests {
                 limit: None,
                 table_partition_cols: vec![],
                 output_ordering: vec![],
-                infinite_source: false,
             },
             None,
             None,
@@ -270,12 +269,13 @@ mod tests {
         aggr_expr: Vec<Arc<dyn AggregateExpr>>,
     ) -> Arc<dyn ExecutionPlan> {
         let schema = input.schema();
+        let n_aggr = aggr_expr.len();
         Arc::new(
             AggregateExec::try_new(
                 AggregateMode::Partial,
                 group_by,
                 aggr_expr,
-                vec![],
+                vec![None; n_aggr],
                 input,
                 schema,
             )
@@ -289,12 +289,13 @@ mod tests {
         aggr_expr: Vec<Arc<dyn AggregateExpr>>,
     ) -> Arc<dyn ExecutionPlan> {
         let schema = input.schema();
+        let n_aggr = aggr_expr.len();
         Arc::new(
             AggregateExec::try_new(
                 AggregateMode::Final,
                 group_by,
                 aggr_expr,
-                vec![],
+                vec![None; n_aggr],
                 input,
                 schema,
             )

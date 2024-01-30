@@ -41,12 +41,12 @@ use std::sync::Arc;
 
 use datafusion::arrow::array::{ArrayRef, Int64Array};
 use datafusion::common::Result;
-
 use datafusion::common::cast::as_int64_array;
+use datafusion::physical_plan::functions::columnar_values_to_array;
 
-pub fn add_one(args: &[ArrayRef]) -> Result<ArrayRef> {
+pub fn add_one(args: &[ColumnarValue]) -> Result<ArrayRef> {
     // Error handling omitted for brevity
-
+    let args = columnar_values_to_array(args)?;
     let i64s = as_int64_array(&args[0])?;
 
     let new_array = i64s
@@ -76,11 +76,12 @@ The challenge however is that DataFusion doesn't know about this function. We ne
 
 ### Registering a Scalar UDF
 
-To register a Scalar UDF, you need to wrap the function implementation in a `ScalarUDF` struct and then register it with the `SessionContext`. DataFusion provides the `create_udf` and `make_scalar_function` helper functions to make this easier.
+To register a Scalar UDF, you need to wrap the function implementation in a [`ScalarUDF`] struct and then register it with the `SessionContext`.
+DataFusion provides the [`create_udf`] and helper functions to make this easier.
+There is a lower level API with more functionality but is more complex, that is documented in [`advanced_udf.rs`].
 
 ```rust
 use datafusion::logical_expr::{Volatility, create_udf};
-use datafusion::physical_plan::functions::make_scalar_function;
 use datafusion::arrow::datatypes::DataType;
 use std::sync::Arc;
 
@@ -89,9 +90,14 @@ let udf = create_udf(
     vec![DataType::Int64],
     Arc::new(DataType::Int64),
     Volatility::Immutable,
-    make_scalar_function(add_one),
+    Arc::new(add_one),
 );
 ```
+
+[`scalarudf`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/struct.ScalarUDF.html
+[`create_udf`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/fn.create_udf.html
+[`process_scalar_func_inputs`]: https://docs.rs/datafusion/latest/datafusion/physical_expr/functions/fn.process_scalar_func_inputs.html
+[`advanced_udf.rs`]: https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/advanced_udf.rs
 
 A few things to note:
 
@@ -194,7 +200,8 @@ fn make_partition_evaluator() -> Result<Box<dyn PartitionEvaluator>> {
 
 ### Registering a Window UDF
 
-To register a Window UDF, you need to wrap the function implementation in a `WindowUDF` struct and then register it with the `SessionContext`. DataFusion provides the `create_udwf` helper functions to make this easier.
+To register a Window UDF, you need to wrap the function implementation in a [`WindowUDF`] struct and then register it with the `SessionContext`. DataFusion provides the [`create_udwf`] helper functions to make this easier.
+There is a lower level API with more functionality but is more complex, that is documented in [`advanced_udwf.rs`].
 
 ```rust
 use datafusion::logical_expr::{Volatility, create_udwf};
@@ -210,6 +217,10 @@ let smooth_it = create_udwf(
     Arc::new(make_partition_evaluator),
 );
 ```
+
+[`windowudf`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/struct.WindowUDF.html
+[`create_udwf`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/fn.create_udwf.html
+[`advanced_udwf.rs`]: https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/advanced_udwf.rs
 
 The `create_udwf` has five arguments to check:
 
@@ -386,7 +397,8 @@ impl Accumulator for GeometricMean {
 
 ### registering an Aggregate UDF
 
-To register a Aggreate UDF, you need to wrap the function implementation in a `AggregateUDF` struct and then register it with the `SessionContext`. DataFusion provides the `create_udaf` helper functions to make this easier.
+To register a Aggreate UDF, you need to wrap the function implementation in a [`AggregateUDF`] struct and then register it with the `SessionContext`. DataFusion provides the [`create_udaf`] helper functions to make this easier.
+There is a lower level API with more functionality but is more complex, that is documented in [`advanced_udaf.rs`].
 
 ```rust
 use datafusion::logical_expr::{Volatility, create_udaf};
@@ -408,6 +420,10 @@ let geometric_mean = create_udaf(
     Arc::new(vec![DataType::Float64, DataType::UInt32]),
 );
 ```
+
+[`aggregateudf`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/struct.AggregateUDF.html
+[`create_udaf`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/fn.create_udaf.html
+[`advanced_udaf.rs`]: https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/advanced_udaf.rs
 
 The `create_udaf` has six arguments to check:
 

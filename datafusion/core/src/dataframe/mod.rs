@@ -802,6 +802,7 @@ impl DataFrame {
 
     /// Executes this DataFrame and returns a stream over a single partition
     ///
+    /// # Example
     /// ```
     /// # use datafusion::prelude::*;
     /// # use datafusion::error::Result;
@@ -813,6 +814,11 @@ impl DataFrame {
     /// # Ok(())
     /// # }
     /// ```
+    ///
+    /// # Aborting Execution
+    ///
+    /// Dropping the stream will abort the execution of the query, and free up
+    /// any allocated resources
     pub async fn execute_stream(self) -> Result<SendableRecordBatchStream> {
         let task_ctx = Arc::new(self.task_ctx());
         let plan = self.create_physical_plan().await?;
@@ -841,6 +847,7 @@ impl DataFrame {
 
     /// Executes this DataFrame and returns one stream per partition.
     ///
+    /// # Example
     /// ```
     /// # use datafusion::prelude::*;
     /// # use datafusion::error::Result;
@@ -852,6 +859,10 @@ impl DataFrame {
     /// # Ok(())
     /// # }
     /// ```
+    /// # Aborting Execution
+    ///
+    /// Dropping the stream will abort the execution of the query, and free up
+    /// any allocated resources
     pub async fn execute_stream_partitioned(
         self,
     ) -> Result<Vec<SendableRecordBatchStream>> {
@@ -1064,7 +1075,6 @@ impl DataFrame {
             self.plan,
             path.into(),
             FileType::CSV,
-            options.single_file_output,
             copy_options,
         )?
         .build()?;
@@ -1089,7 +1099,6 @@ impl DataFrame {
             self.plan,
             path.into(),
             FileType::JSON,
-            options.single_file_output,
             copy_options,
         )?
         .build()?;
@@ -1145,6 +1154,11 @@ impl DataFrame {
     /// Rename one column by applying a new projection. This is a no-op if the column to be
     /// renamed does not exist.
     ///
+    /// The method supports case sensitive rename with wrapping column name into one of following symbols (  "  or  '  or  `  )
+    ///
+    /// Alternatively setting Datafusion param `datafusion.sql_parser.enable_ident_normalization` to `false` will enable  
+    /// case sensitive rename without need to wrap column name into special symbols
+    ///
     /// ```
     /// # use datafusion::prelude::*;
     /// # use datafusion::error::Result;
@@ -1153,6 +1167,7 @@ impl DataFrame {
     /// let ctx = SessionContext::new();
     /// let df = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?;
     /// let df = df.with_column_renamed("ab_sum", "total")?;
+    ///
     /// # Ok(())
     /// # }
     /// ```
@@ -1175,7 +1190,7 @@ impl DataFrame {
         let field_to_rename = match self.plan.schema().field_from_column(&old_column) {
             Ok(field) => field,
             // no-op if field not found
-            Err(DataFusionError::SchemaError(SchemaError::FieldNotFound { .. })) => {
+            Err(DataFusionError::SchemaError(SchemaError::FieldNotFound { .. }, _)) => {
                 return Ok(self)
             }
             Err(err) => return Err(err),
@@ -1356,14 +1371,29 @@ mod tests {
 
     use arrow::array::{self, Int32Array};
     use arrow::datatypes::DataType;
-    use datafusion_common::{Constraint, Constraints, ScalarValue};
+    use datafusion_common::{Constraint, Constraints};
     use datafusion_expr::{
         avg, cast, count, count_distinct, create_udf, expr, lit, max, min, sum,
-        BinaryExpr, BuiltInWindowFunction, Operator, ScalarFunctionImplementation,
-        Volatility, WindowFrame, WindowFunction,
+        BuiltInWindowFunction, ScalarFunctionImplementation, Volatility, WindowFrame,
+        WindowFunctionDefinition,
     };
     use datafusion_physical_expr::expressions::Column;
     use datafusion_physical_plan::get_plan_string;
+
+    // Get string representation of the plan
+    async fn assert_physical_plan(df: &DataFrame, expected: Vec<&str>) {
+        let physical_plan = df
+            .clone()
+            .create_physical_plan()
+            .await
+            .expect("Error creating physical plan");
+
+        let actual = get_plan_string(&physical_plan);
+        assert_eq!(
+            expected, actual,
+            "\n**Optimized Plan Mismatch\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+        );
+    }
 
     pub fn table_with_constraints() -> Arc<dyn TableProvider> {
         let dual_schema = Arc::new(Schema::new(vec![
@@ -1510,11 +1540,13 @@ mod tests {
         // build plan using Table API
         let t = test_table().await?;
         let first_row = Expr::WindowFunction(expr::WindowFunction::new(
-            WindowFunction::BuiltInWindowFunction(BuiltInWindowFunction::FirstValue),
+            WindowFunctionDefinition::BuiltInWindowFunction(
+                BuiltInWindowFunction::FirstValue,
+            ),
             vec![col("aggregate_test_100.c1")],
             vec![col("aggregate_test_100.c2")],
             vec![],
-            WindowFrame::new(false),
+            WindowFrame::new(None),
         ));
         let t2 = t.select(vec![col("c1"), first_row])?;
         let plan = t2.plan.clone();
@@ -1587,47 +1619,36 @@ mod tests {
         let config = SessionConfig::new().with_target_partitions(1);
         let ctx = SessionContext::new_with_config(config);
 
-        let table1 = table_with_constraints();
-        let df = ctx.read_table(table1)?;
-        let col_id = Expr::Column(datafusion_common::Column {
-            relation: None,
-            name: "id".to_string(),
-        });
-        let col_name = Expr::Column(datafusion_common::Column {
-            relation: None,
-            name: "name".to_string(),
-        });
+        let df = ctx.read_table(table_with_constraints())?;
 
-        // group by contains id column
-        let group_expr = vec![col_id.clone()];
+        // GROUP BY id
+        let group_expr = vec![col("id")];
         let aggr_expr = vec![];
         let df = df.aggregate(group_expr, aggr_expr)?;
 
-        // expr list contains id, name
-        let expr_list = vec![col_id, col_name];
-        let df = df.select(expr_list)?;
-        let physical_plan = df.clone().create_physical_plan().await?;
-        let expected = vec![
-            "AggregateExec: mode=Single, gby=[id@0 as id, name@1 as name], aggr=[]",
-            "  MemoryExec: partitions=1, partition_sizes=[1]",
-        ];
-        // Get string representation of the plan
-        let actual = get_plan_string(&physical_plan);
-        assert_eq!(
-            expected, actual,
-            "\n**Optimized Plan Mismatch\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
-        );
-        // Since id and name are functionally dependant, we can use name among expression
-        // even if it is not part of the group by expression.
-        let df_results = collect(physical_plan, ctx.task_ctx()).await?;
+        // Since id and name are functionally dependant, we can use name among
+        // expression even if it is not part of the group by expression and can
+        // select "name" column even though it wasn't explicitly grouped
+        let df = df.select(vec![col("id"), col("name")])?;
+        assert_physical_plan(
+            &df,
+            vec![
+                "AggregateExec: mode=Single, gby=[id@0 as id, name@1 as name], aggr=[]",
+                "  MemoryExec: partitions=1, partition_sizes=[1]",
+            ],
+        )
+        .await;
+
+        let df_results = df.collect().await?;
 
         #[rustfmt::skip]
-        assert_batches_sorted_eq!(
-            ["+----+------+",
+        assert_batches_sorted_eq!([
+             "+----+------+",
              "| id | name |",
              "+----+------+",
              "| 1  | a    |",
-             "+----+------+",],
+             "+----+------+"
+            ],
             &df_results
         );
 
@@ -1640,57 +1661,31 @@ mod tests {
         let config = SessionConfig::new().with_target_partitions(1);
         let ctx = SessionContext::new_with_config(config);
 
-        let table1 = table_with_constraints();
-        let df = ctx.read_table(table1)?;
-        let col_id = Expr::Column(datafusion_common::Column {
-            relation: None,
-            name: "id".to_string(),
-        });
-        let col_name = Expr::Column(datafusion_common::Column {
-            relation: None,
-            name: "name".to_string(),
-        });
+        let df = ctx.read_table(table_with_constraints())?;
 
-        // group by contains id column
-        let group_expr = vec![col_id.clone()];
+        // GROUP BY id
+        let group_expr = vec![col("id")];
         let aggr_expr = vec![];
         let df = df.aggregate(group_expr, aggr_expr)?;
 
-        let condition1 = Expr::BinaryExpr(BinaryExpr::new(
-            Box::new(col_id.clone()),
-            Operator::Eq,
-            Box::new(Expr::Literal(ScalarValue::Int32(Some(1)))),
-        ));
-        let condition2 = Expr::BinaryExpr(BinaryExpr::new(
-            Box::new(col_name),
-            Operator::Eq,
-            Box::new(Expr::Literal(ScalarValue::Utf8(Some("a".to_string())))),
-        ));
-        // Predicate refers to id, and name fields
-        let predicate = Expr::BinaryExpr(BinaryExpr::new(
-            Box::new(condition1),
-            Operator::And,
-            Box::new(condition2),
-        ));
+        // Predicate refers to id, and name fields:
+        // id = 1 AND name = 'a'
+        let predicate = col("id").eq(lit(1i32)).and(col("name").eq(lit("a")));
         let df = df.filter(predicate)?;
-        let physical_plan = df.clone().create_physical_plan().await?;
-
-        let expected = vec![
+        assert_physical_plan(
+            &df,
+            vec![
             "CoalesceBatchesExec: target_batch_size=8192",
             "  FilterExec: id@0 = 1 AND name@1 = a",
             "    AggregateExec: mode=Single, gby=[id@0 as id, name@1 as name], aggr=[]",
             "      MemoryExec: partitions=1, partition_sizes=[1]",
-        ];
-        // Get string representation of the plan
-        let actual = get_plan_string(&physical_plan);
-        assert_eq!(
-            expected, actual,
-            "\n**Optimized Plan Mismatch\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
-        );
+        ],
+        )
+        .await;
 
         // Since id and name are functionally dependant, we can use name among expression
         // even if it is not part of the group by expression.
-        let df_results = collect(physical_plan, ctx.task_ctx()).await?;
+        let df_results = df.collect().await?;
 
         #[rustfmt::skip]
         assert_batches_sorted_eq!(
@@ -1711,53 +1706,35 @@ mod tests {
         let config = SessionConfig::new().with_target_partitions(1);
         let ctx = SessionContext::new_with_config(config);
 
-        let table1 = table_with_constraints();
-        let df = ctx.read_table(table1)?;
-        let col_id = Expr::Column(datafusion_common::Column {
-            relation: None,
-            name: "id".to_string(),
-        });
-        let col_name = Expr::Column(datafusion_common::Column {
-            relation: None,
-            name: "name".to_string(),
-        });
+        let df = ctx.read_table(table_with_constraints())?;
 
-        // group by contains id column
-        let group_expr = vec![col_id.clone()];
+        // GROUP BY id
+        let group_expr = vec![col("id")];
         let aggr_expr = vec![];
         // group by id,
         let df = df.aggregate(group_expr, aggr_expr)?;
 
-        let condition1 = Expr::BinaryExpr(BinaryExpr::new(
-            Box::new(col_id.clone()),
-            Operator::Eq,
-            Box::new(Expr::Literal(ScalarValue::Int32(Some(1)))),
-        ));
         // Predicate refers to id field
-        let predicate = condition1;
-        // id=0
+        // id = 1
+        let predicate = col("id").eq(lit(1i32));
         let df = df.filter(predicate)?;
         // Select expression refers to id, and name columns.
         // id, name
-        let df = df.select(vec![col_id.clone(), col_name.clone()])?;
-        let physical_plan = df.clone().create_physical_plan().await?;
-
-        let expected = vec![
+        let df = df.select(vec![col("id"), col("name")])?;
+        assert_physical_plan(
+            &df,
+            vec![
             "CoalesceBatchesExec: target_batch_size=8192",
             "  FilterExec: id@0 = 1",
             "    AggregateExec: mode=Single, gby=[id@0 as id, name@1 as name], aggr=[]",
             "      MemoryExec: partitions=1, partition_sizes=[1]",
-        ];
-        // Get string representation of the plan
-        let actual = get_plan_string(&physical_plan);
-        assert_eq!(
-            expected, actual,
-            "\n**Optimized Plan Mismatch\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
-        );
+        ],
+        )
+        .await;
 
         // Since id and name are functionally dependant, we can use name among expression
         // even if it is not part of the group by expression.
-        let df_results = collect(physical_plan, ctx.task_ctx()).await?;
+        let df_results = df.collect().await?;
 
         #[rustfmt::skip]
         assert_batches_sorted_eq!(
@@ -1778,59 +1755,75 @@ mod tests {
         let config = SessionConfig::new().with_target_partitions(1);
         let ctx = SessionContext::new_with_config(config);
 
-        let table1 = table_with_constraints();
-        let df = ctx.read_table(table1)?;
-        let col_id = Expr::Column(datafusion_common::Column {
-            relation: None,
-            name: "id".to_string(),
-        });
+        let df = ctx.read_table(table_with_constraints())?;
 
-        // group by contains id column
-        let group_expr = vec![col_id.clone()];
+        // GROUP BY id
+        let group_expr = vec![col("id")];
         let aggr_expr = vec![];
-        // group by id,
         let df = df.aggregate(group_expr, aggr_expr)?;
 
-        let condition1 = Expr::BinaryExpr(BinaryExpr::new(
-            Box::new(col_id.clone()),
-            Operator::Eq,
-            Box::new(Expr::Literal(ScalarValue::Int32(Some(1)))),
-        ));
         // Predicate refers to id field
-        let predicate = condition1;
-        // id=1
+        // id = 1
+        let predicate = col("id").eq(lit(1i32));
         let df = df.filter(predicate)?;
         // Select expression refers to id column.
         // id
-        let df = df.select(vec![col_id.clone()])?;
-        let physical_plan = df.clone().create_physical_plan().await?;
+        let df = df.select(vec![col("id")])?;
 
         // In this case aggregate shouldn't be expanded, since these
         // columns are not used.
-        let expected = vec![
-            "CoalesceBatchesExec: target_batch_size=8192",
-            "  FilterExec: id@0 = 1",
-            "    AggregateExec: mode=Single, gby=[id@0 as id], aggr=[]",
-            "      MemoryExec: partitions=1, partition_sizes=[1]",
-        ];
-        // Get string representation of the plan
-        let actual = get_plan_string(&physical_plan);
-        assert_eq!(
-            expected, actual,
-            "\n**Optimized Plan Mismatch\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
-        );
+        assert_physical_plan(
+            &df,
+            vec![
+                "CoalesceBatchesExec: target_batch_size=8192",
+                "  FilterExec: id@0 = 1",
+                "    AggregateExec: mode=Single, gby=[id@0 as id], aggr=[]",
+                "      MemoryExec: partitions=1, partition_sizes=[1]",
+            ],
+        )
+        .await;
 
-        // Since id and name are functionally dependant, we can use name among expression
-        // even if it is not part of the group by expression.
-        let df_results = collect(physical_plan, ctx.task_ctx()).await?;
+        let df_results = df.collect().await?;
 
         #[rustfmt::skip]
-        assert_batches_sorted_eq!(
-            [    "+----+",
+        assert_batches_sorted_eq!([
+                "+----+",
                 "| id |",
                 "+----+",
                 "| 1  |",
                 "+----+",],
+            &df_results
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_aggregate_alias() -> Result<()> {
+        let df = test_table().await?;
+
+        let df = df
+            // GROUP BY `c2 + 1`
+            .aggregate(vec![col("c2") + lit(1)], vec![])?
+            // SELECT `c2 + 1` as c2
+            .select(vec![(col("c2") + lit(1)).alias("c2")])?
+            // GROUP BY c2 as "c2" (alias in expr is not supported by SQL)
+            .aggregate(vec![col("c2").alias("c2")], vec![])?;
+
+        let df_results = df.collect().await?;
+
+        #[rustfmt::skip]
+        assert_batches_sorted_eq!([
+                "+----+",
+                "| c2 |",
+                "+----+",
+                "| 2  |",
+                "| 3  |",
+                "| 4  |",
+                "| 5  |",
+                "| 6  |",
+                "+----+",
+            ],
             &df_results
         );
 

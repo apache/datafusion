@@ -297,7 +297,7 @@ pub struct ParquetMetadataFunc {}
 
 impl TableFunctionImpl for ParquetMetadataFunc {
     fn call(&self, exprs: &[Expr]) -> Result<Arc<dyn TableProvider>> {
-        let filename = match exprs.get(0) {
+        let filename = match exprs.first() {
             Some(Expr::Literal(ScalarValue::Utf8(Some(s)))) => s, // single quote: parquet_metadata('x.parquet')
             Some(Expr::Column(Column { name, .. })) => name, // double quote: parquet_metadata("x.parquet")
             _ => {

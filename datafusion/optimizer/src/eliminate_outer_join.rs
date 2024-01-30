@@ -106,8 +106,8 @@ impl OptimizerRule for EliminateOuterJoin {
                         schema: join.schema.clone(),
                         null_equals_null: join.null_equals_null,
                     });
-                    let new_plan = plan.with_new_inputs(&[new_join])?;
-                    Ok(Some(new_plan))
+                    let exprs = plan.expressions();
+                    plan.with_new_exprs(exprs, vec![new_join]).map(Some)
                 }
                 _ => Ok(None),
             },

@@ -396,7 +396,7 @@ LeftSemi Join: t1.t1_id = __correlated_sq_1.t1_int
 --TableScan: t1 projection=[t1_id, t1_name, t1_int]
 --SubqueryAlias: __correlated_sq_1
 ----Projection: t1.t1_int
-------Filter: t1.t1_id > t1.t1_int
+------Filter: t1.t1_int < t1.t1_id
 --------TableScan: t1 projection=[t1_id, t1_int]
 
 #in_subquery_nested_exist_subquery

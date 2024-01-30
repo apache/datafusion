@@ -115,6 +115,7 @@ impl Constraints {
                     on_delete: _,
                     on_update: _,
                     referred_columns,
+                    characteristics: _,
                 } => {
                     let column_indices = columns
                         .iter()

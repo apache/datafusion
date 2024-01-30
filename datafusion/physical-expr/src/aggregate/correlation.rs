@@ -149,7 +149,7 @@ impl CorrelationAccumulator {
 }
 
 impl Accumulator for CorrelationAccumulator {
-    fn state(&self) -> Result<Vec<ScalarValue>> {
+    fn state(&mut self) -> Result<Vec<ScalarValue>> {
         Ok(vec![
             ScalarValue::from(self.covar.get_count()),
             ScalarValue::from(self.covar.get_mean1()),
@@ -215,7 +215,7 @@ impl Accumulator for CorrelationAccumulator {
         Ok(())
     }
 
-    fn evaluate(&self) -> Result<ScalarValue> {
+    fn evaluate(&mut self) -> Result<ScalarValue> {
         let covar = self.covar.evaluate()?;
         let stddev1 = self.stddev1.evaluate()?;
         let stddev2 = self.stddev2.evaluate()?;
@@ -519,7 +519,7 @@ mod tests {
             .collect::<Result<Vec<_>>>()?;
         accum1.update_batch(&values1)?;
         accum2.update_batch(&values2)?;
-        let state2 = get_accum_scalar_values_as_arrays(accum2.as_ref())?;
+        let state2 = get_accum_scalar_values_as_arrays(accum2.as_mut())?;
         accum1.merge_batch(&state2)?;
         accum1.evaluate()
     }

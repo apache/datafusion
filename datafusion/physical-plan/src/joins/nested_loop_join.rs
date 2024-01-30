@@ -28,9 +28,9 @@ use crate::coalesce_batches::concat_batches;
 use crate::joins::utils::{
     append_right_indices, apply_join_filter_to_indices, build_batch_from_indices,
     build_join_schema, check_join_is_valid, estimate_join_statistics, get_anti_indices,
-    get_anti_u64_indices, get_final_indices_from_bit_map, get_semi_indices,
-    get_semi_u64_indices, partitioned_join_output_partitioning, BuildProbeJoinMetrics,
-    ColumnIndex, JoinFilter, OnceAsync, OnceFut,
+    get_final_indices_from_bit_map, get_semi_indices,
+    partitioned_join_output_partitioning, BuildProbeJoinMetrics, ColumnIndex, JoinFilter,
+    OnceAsync, OnceFut,
 };
 use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::{
@@ -649,20 +649,20 @@ fn adjust_indices_by_join_type(
             // matched
             // unmatched left row will be produced in this batch
             let left_unmatched_indices =
-                get_anti_u64_indices(count_left_batch, &left_indices);
+                get_anti_indices(0..count_left_batch, &left_indices);
             // combine the matched and unmatched left result together
             append_left_indices(left_indices, right_indices, left_unmatched_indices)
         }
         JoinType::LeftSemi => {
             // need to remove the duplicated record in the left side
-            let left_indices = get_semi_u64_indices(count_left_batch, &left_indices);
+            let left_indices = get_semi_indices(0..count_left_batch, &left_indices);
             // the right_indices will not be used later for the `left semi` join
             (left_indices, right_indices)
         }
         JoinType::LeftAnti => {
             // need to remove the duplicated record in the left side
             // get the anti index for the left side
-            let left_indices = get_anti_u64_indices(count_left_batch, &left_indices);
+            let left_indices = get_anti_indices(0..count_left_batch, &left_indices);
             // the right_indices will not be used later for the `left anti` join
             (left_indices, right_indices)
         }
@@ -671,20 +671,20 @@ fn adjust_indices_by_join_type(
             // matched
             // unmatched right row will be produced in this batch
             let right_unmatched_indices =
-                get_anti_indices(count_right_batch, &right_indices);
+                get_anti_indices(0..count_right_batch, &right_indices);
             // combine the matched and unmatched right result together
             append_right_indices(left_indices, right_indices, right_unmatched_indices)
         }
         JoinType::RightSemi => {
             // need to remove the duplicated record in the right side
-            let right_indices = get_semi_indices(count_right_batch, &right_indices);
+            let right_indices = get_semi_indices(0..count_right_batch, &right_indices);
             // the left_indices will not be used later for the `right semi` join
             (left_indices, right_indices)
         }
         JoinType::RightAnti => {
             // need to remove the duplicated record in the right side
             // get the anti index for the right side
-            let right_indices = get_anti_indices(count_right_batch, &right_indices);
+            let right_indices = get_anti_indices(0..count_right_batch, &right_indices);
             // the left_indices will not be used later for the `right anti` join
             (left_indices, right_indices)
         }

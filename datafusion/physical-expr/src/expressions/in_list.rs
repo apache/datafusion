@@ -349,17 +349,18 @@ impl PhysicalExpr for InListExpr {
     }
 
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
+        let num_rows = batch.num_rows();
         let value = self.expr.evaluate(batch)?;
         let r = match &self.static_filter {
-            Some(f) => f.contains(value.into_array(1)?.as_ref(), self.negated)?,
+            Some(f) => f.contains(value.into_array(num_rows)?.as_ref(), self.negated)?,
             None => {
-                let value = value.into_array(batch.num_rows())?;
+                let value = value.into_array(num_rows)?;
                 let found = self.list.iter().map(|expr| expr.evaluate(batch)).try_fold(
-                    BooleanArray::new(BooleanBuffer::new_unset(batch.num_rows()), None),
+                    BooleanArray::new(BooleanBuffer::new_unset(num_rows), None),
                     |result, expr| -> Result<BooleanArray> {
                         Ok(or_kleene(
                             &result,
-                            &eq(&value, &expr?.into_array(batch.num_rows())?)?,
+                            &eq(&value, &expr?.into_array(num_rows)?)?,
                         )?)
                     },
                 )?;
@@ -1264,6 +1265,54 @@ mod tests {
 
         let list = vec![c2_non_nullable.clone(), c2_non_nullable.clone()];
         test_nullable!(c2_non_nullable.clone(), list.clone(), &schema, false);
+
+        Ok(())
+    }
+
+    #[test]
+    fn in_list_no_cols() -> Result<()> {
+        // test logic when the in_list expression doesn't have any columns
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, true)]);
+        let a = Int32Array::from(vec![Some(1), Some(2), None]);
+        let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::new(a)])?;
+
+        let list = vec![lit(ScalarValue::from(1i32)), lit(ScalarValue::from(6i32))];
+
+        // 1 IN (1, 6)
+        let expr = lit(ScalarValue::Int32(Some(1)));
+        in_list!(
+            batch,
+            list.clone(),
+            &false,
+            // should have three outputs, as the input batch has three rows
+            vec![Some(true), Some(true), Some(true)],
+            expr,
+            &schema
+        );
+
+        // 2 IN (1, 6)
+        let expr = lit(ScalarValue::Int32(Some(2)));
+        in_list!(
+            batch,
+            list.clone(),
+            &false,
+            // should have three outputs, as the input batch has three rows
+            vec![Some(false), Some(false), Some(false)],
+            expr,
+            &schema
+        );
+
+        // NULL IN (1, 6)
+        let expr = lit(ScalarValue::Int32(None));
+        in_list!(
+            batch,
+            list.clone(),
+            &false,
+            // should have three outputs, as the input batch has three rows
+            vec![None, None, None],
+            expr,
+            &schema
+        );
 
         Ok(())
     }

@@ -34,8 +34,8 @@ use arrow::datatypes::Schema;
 use arrow_schema::{DataType, Field, SchemaRef};
 use datafusion_common::{exec_err, DataFusionError, Result, ScalarValue};
 use datafusion_expr::{
-    window_function::{BuiltInWindowFunction, WindowFunction},
-    PartitionEvaluator, WindowFrame, WindowUDF,
+    BuiltInWindowFunction, PartitionEvaluator, WindowFrame, WindowFunctionDefinition,
+    WindowUDF,
 };
 use datafusion_physical_expr::equivalence::collapse_lex_req;
 use datafusion_physical_expr::{
@@ -56,7 +56,7 @@ pub use datafusion_physical_expr::window::{
 
 /// Create a physical expression for window function
 pub fn create_window_expr(
-    fun: &WindowFunction,
+    fun: &WindowFunctionDefinition,
     name: String,
     args: &[Arc<dyn PhysicalExpr>],
     partition_by: &[Arc<dyn PhysicalExpr>],
@@ -65,7 +65,7 @@ pub fn create_window_expr(
     input_schema: &Schema,
 ) -> Result<Arc<dyn WindowExpr>> {
     Ok(match fun {
-        WindowFunction::AggregateFunction(fun) => {
+        WindowFunctionDefinition::AggregateFunction(fun) => {
             let aggregate = aggregates::create_aggregate_expr(
                 fun,
                 false,
@@ -81,13 +81,15 @@ pub fn create_window_expr(
                 aggregate,
             )
         }
-        WindowFunction::BuiltInWindowFunction(fun) => Arc::new(BuiltInWindowExpr::new(
-            create_built_in_window_expr(fun, args, input_schema, name)?,
-            partition_by,
-            order_by,
-            window_frame,
-        )),
-        WindowFunction::AggregateUDF(fun) => {
+        WindowFunctionDefinition::BuiltInWindowFunction(fun) => {
+            Arc::new(BuiltInWindowExpr::new(
+                create_built_in_window_expr(fun, args, input_schema, name)?,
+                partition_by,
+                order_by,
+                window_frame,
+            ))
+        }
+        WindowFunctionDefinition::AggregateUDF(fun) => {
             let aggregate =
                 udaf::create_aggregate_expr(fun.as_ref(), args, input_schema, name)?;
             window_expr_from_aggregate_expr(
@@ -97,7 +99,7 @@ pub fn create_window_expr(
                 aggregate,
             )
         }
-        WindowFunction::WindowUDF(fun) => Arc::new(BuiltInWindowExpr::new(
+        WindowFunctionDefinition::WindowUDF(fun) => Arc::new(BuiltInWindowExpr::new(
             create_udwf_window_expr(fun, args, input_schema, name)?,
             partition_by,
             order_by,
@@ -158,12 +160,20 @@ fn create_built_in_window_expr(
     input_schema: &Schema,
     name: String,
 ) -> Result<Arc<dyn BuiltInWindowFunctionExpr>> {
+    // need to get the types into an owned vec for some reason
+    let input_types: Vec<_> = args
+        .iter()
+        .map(|arg| arg.data_type(input_schema))
+        .collect::<Result<_>>()?;
+
+    // figure out the output type
+    let data_type = &fun.return_type(&input_types)?;
     Ok(match fun {
-        BuiltInWindowFunction::RowNumber => Arc::new(RowNumber::new(name)),
-        BuiltInWindowFunction::Rank => Arc::new(rank(name)),
-        BuiltInWindowFunction::DenseRank => Arc::new(dense_rank(name)),
-        BuiltInWindowFunction::PercentRank => Arc::new(percent_rank(name)),
-        BuiltInWindowFunction::CumeDist => Arc::new(cume_dist(name)),
+        BuiltInWindowFunction::RowNumber => Arc::new(RowNumber::new(name, data_type)),
+        BuiltInWindowFunction::Rank => Arc::new(rank(name, data_type)),
+        BuiltInWindowFunction::DenseRank => Arc::new(dense_rank(name, data_type)),
+        BuiltInWindowFunction::PercentRank => Arc::new(percent_rank(name, data_type)),
+        BuiltInWindowFunction::CumeDist => Arc::new(cume_dist(name, data_type)),
         BuiltInWindowFunction::Ntile => {
             let n = get_scalar_value_from_args(args, 0)?.ok_or_else(|| {
                 DataFusionError::Execution(
@@ -177,32 +187,42 @@ fn create_built_in_window_expr(
 
             if n.is_unsigned() {
                 let n: u64 = n.try_into()?;
-                Arc::new(Ntile::new(name, n))
+                Arc::new(Ntile::new(name, n, data_type))
             } else {
                 let n: i64 = n.try_into()?;
                 if n <= 0 {
                     return exec_err!("NTILE requires a positive integer");
                 }
-                Arc::new(Ntile::new(name, n as u64))
+                Arc::new(Ntile::new(name, n as u64, data_type))
             }
         }
         BuiltInWindowFunction::Lag => {
             let arg = args[0].clone();
-            let data_type = args[0].data_type(input_schema)?;
             let shift_offset = get_scalar_value_from_args(args, 1)?
                 .map(|v| v.try_into())
                 .and_then(|v| v.ok());
             let default_value = get_scalar_value_from_args(args, 2)?;
-            Arc::new(lag(name, data_type, arg, shift_offset, default_value))
+            Arc::new(lag(
+                name,
+                data_type.clone(),
+                arg,
+                shift_offset,
+                default_value,
+            ))
         }
         BuiltInWindowFunction::Lead => {
             let arg = args[0].clone();
-            let data_type = args[0].data_type(input_schema)?;
             let shift_offset = get_scalar_value_from_args(args, 1)?
                 .map(|v| v.try_into())
                 .and_then(|v| v.ok());
             let default_value = get_scalar_value_from_args(args, 2)?;
-            Arc::new(lead(name, data_type, arg, shift_offset, default_value))
+            Arc::new(lead(
+                name,
+                data_type.clone(),
+                arg,
+                shift_offset,
+                default_value,
+            ))
         }
         BuiltInWindowFunction::NthValue => {
             let arg = args[0].clone();
@@ -212,18 +232,15 @@ fn create_built_in_window_expr(
                 .try_into()
                 .map_err(|e| DataFusionError::Execution(format!("{e:?}")))?;
             let n: u32 = n as u32;
-            let data_type = args[0].data_type(input_schema)?;
-            Arc::new(NthValue::nth(name, arg, data_type, n)?)
+            Arc::new(NthValue::nth(name, arg, data_type.clone(), n)?)
         }
         BuiltInWindowFunction::FirstValue => {
             let arg = args[0].clone();
-            let data_type = args[0].data_type(input_schema)?;
-            Arc::new(NthValue::first(name, arg, data_type))
+            Arc::new(NthValue::first(name, arg, data_type.clone()))
         }
         BuiltInWindowFunction::LastValue => {
             let arg = args[0].clone();
-            let data_type = args[0].data_type(input_schema)?;
-            Arc::new(NthValue::last(name, arg, data_type))
+            Arc::new(NthValue::last(name, arg, data_type.clone()))
         }
     })
 }
@@ -647,12 +664,12 @@ mod tests {
         let refs = blocking_exec.refs();
         let window_agg_exec = Arc::new(WindowAggExec::try_new(
             vec![create_window_expr(
-                &WindowFunction::AggregateFunction(AggregateFunction::Count),
+                &WindowFunctionDefinition::AggregateFunction(AggregateFunction::Count),
                 "count".to_owned(),
                 &[col("a", &schema)?],
                 &[],
                 &[],
-                Arc::new(WindowFrame::new(false)),
+                Arc::new(WindowFrame::new(None)),
                 schema.as_ref(),
             )?],
             blocking_exec,

@@ -21,6 +21,7 @@
 
 //! The Union operator combines multiple inputs with the same schema
 
+use std::borrow::Borrow;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 use std::{any::Any, sync::Arc};
@@ -336,7 +337,7 @@ impl InterleaveExec {
     pub fn try_new(inputs: Vec<Arc<dyn ExecutionPlan>>) -> Result<Self> {
         let schema = union_schema(&inputs);
 
-        if !can_interleave(&inputs) {
+        if !can_interleave(inputs.iter()) {
             return internal_err!(
                 "Not all InterleaveExec children have a consistent hash partitioning"
             );
@@ -474,17 +475,18 @@ impl ExecutionPlan for InterleaveExec {
 /// It might be too strict here in the case that the input partition specs are compatible but not exactly the same.
 /// For example one input partition has the partition spec Hash('a','b','c') and
 /// other has the partition spec Hash('a'), It is safe to derive the out partition with the spec Hash('a','b','c').
-pub fn can_interleave(inputs: &[Arc<dyn ExecutionPlan>]) -> bool {
-    if inputs.is_empty() {
+pub fn can_interleave<T: Borrow<Arc<dyn ExecutionPlan>>>(
+    mut inputs: impl Iterator<Item = T>,
+) -> bool {
+    let Some(first) = inputs.next() else {
         return false;
-    }
+    };
 
-    let first_input_partition = inputs[0].output_partitioning();
-    matches!(first_input_partition, Partitioning::Hash(_, _))
+    let reference = first.borrow().output_partitioning();
+    matches!(reference, Partitioning::Hash(_, _))
         && inputs
-            .iter()
-            .map(|plan| plan.output_partitioning())
-            .all(|partition| partition == first_input_partition)
+            .map(|plan| plan.borrow().output_partitioning())
+            .all(|partition| partition == reference)
 }
 
 fn union_schema(inputs: &[Arc<dyn ExecutionPlan>]) -> SchemaRef {

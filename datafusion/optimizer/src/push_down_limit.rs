@@ -17,14 +17,17 @@
 
 //! Optimizer rule to push down LIMIT in the query plan
 //! It will push down through projection, limits (taking the smaller limit)
+
+use std::sync::Arc;
+
 use crate::optimizer::ApplyOrder;
 use crate::{OptimizerConfig, OptimizerRule};
+
 use datafusion_common::Result;
-use datafusion_expr::{
-    logical_plan::{Join, JoinType, Limit, LogicalPlan, Sort, TableScan, Union},
-    CrossJoin,
+use datafusion_expr::logical_plan::{
+    Join, JoinType, Limit, LogicalPlan, Sort, TableScan, Union,
 };
-use std::sync::Arc;
+use datafusion_expr::CrossJoin;
 
 /// Optimization rule that tries to push down LIMIT.
 #[derive(Default)]
@@ -46,9 +49,8 @@ impl OptimizerRule for PushDownLimit {
     ) -> Result<Option<LogicalPlan>> {
         use std::cmp::min;
 
-        let limit = match plan {
-            LogicalPlan::Limit(limit) => limit,
-            _ => return Ok(None),
+        let LogicalPlan::Limit(limit) = plan else {
+            return Ok(None);
         };
 
         if let LogicalPlan::Limit(child) = &*limit.input {
@@ -96,27 +98,22 @@ impl OptimizerRule for PushDownLimit {
                 fetch: new_fetch,
                 input: Arc::new((*child.input).clone()),
             });
-            return {
-                match self.try_optimize(&plan, _config)? {
-                    Some(new_plan) => Ok(Some(new_plan)),
-                    None => Ok(Some(plan)),
-                }
-            };
+            return self
+                .try_optimize(&plan, _config)
+                .map(|opt_plan| opt_plan.or_else(|| Some(plan)));
         }
 
-        let fetch = match limit.fetch {
-            Some(fetch) => fetch,
-            None => return Ok(None),
+        let Some(fetch) = limit.fetch else {
+            return Ok(None);
         };
         let skip = limit.skip;
-        let child_plan = &*limit.input;
 
-        let plan = match child_plan {
+        match limit.input.as_ref() {
             LogicalPlan::TableScan(scan) => {
                 let limit = if fetch != 0 { fetch + skip } else { 0 };
                 let new_fetch = scan.fetch.map(|x| min(x, limit)).or(Some(limit));
                 if new_fetch == scan.fetch {
-                    None
+                    Ok(None)
                 } else {
                     let new_input = LogicalPlan::TableScan(TableScan {
                         table_name: scan.table_name.clone(),
@@ -126,7 +123,8 @@ impl OptimizerRule for PushDownLimit {
                         fetch: scan.fetch.map(|x| min(x, limit)).or(Some(limit)),
                         projected_schema: scan.projected_schema.clone(),
                     });
-                    Some(plan.with_new_inputs(&[new_input])?)
+                    plan.with_new_exprs(plan.expressions(), vec![new_input])
+                        .map(Some)
                 }
             }
             LogicalPlan::Union(union) => {
@@ -137,7 +135,7 @@ impl OptimizerRule for PushDownLimit {
                         Ok(Arc::new(LogicalPlan::Limit(Limit {
                             skip: 0,
                             fetch: Some(fetch + skip),
-                            input: Arc::new((**x).clone()),
+                            input: x.clone(),
                         })))
                     })
                     .collect::<Result<_>>()?;
@@ -145,37 +143,36 @@ impl OptimizerRule for PushDownLimit {
                     inputs: new_inputs,
                     schema: union.schema.clone(),
                 });
-                Some(plan.with_new_inputs(&[union])?)
+                plan.with_new_exprs(plan.expressions(), vec![union])
+                    .map(Some)
             }
 
             LogicalPlan::CrossJoin(cross_join) => {
-                let left = &*cross_join.left;
-                let right = &*cross_join.right;
                 let new_left = LogicalPlan::Limit(Limit {
                     skip: 0,
                     fetch: Some(fetch + skip),
-                    input: Arc::new(left.clone()),
+                    input: cross_join.left.clone(),
                 });
                 let new_right = LogicalPlan::Limit(Limit {
                     skip: 0,
                     fetch: Some(fetch + skip),
-                    input: Arc::new(right.clone()),
+                    input: cross_join.right.clone(),
                 });
                 let new_cross_join = LogicalPlan::CrossJoin(CrossJoin {
                     left: Arc::new(new_left),
                     right: Arc::new(new_right),
                     schema: plan.schema().clone(),
                 });
-                Some(plan.with_new_inputs(&[new_cross_join])?)
+                plan.with_new_exprs(plan.expressions(), vec![new_cross_join])
+                    .map(Some)
             }
 
             LogicalPlan::Join(join) => {
-                let new_join = push_down_join(join, fetch + skip);
-                match new_join {
-                    Some(new_join) => {
-                        Some(plan.with_new_inputs(&[LogicalPlan::Join(new_join)])?)
-                    }
-                    None => None,
+                if let Some(new_join) = push_down_join(join, fetch + skip) {
+                    let inputs = vec![LogicalPlan::Join(new_join)];
+                    plan.with_new_exprs(plan.expressions(), inputs).map(Some)
+                } else {
+                    Ok(None)
                 }
             }
 
@@ -185,26 +182,29 @@ impl OptimizerRule for PushDownLimit {
                     Some(sort.fetch.map(|f| f.min(sort_fetch)).unwrap_or(sort_fetch))
                 };
                 if new_fetch == sort.fetch {
-                    None
+                    Ok(None)
                 } else {
                     let new_sort = LogicalPlan::Sort(Sort {
                         expr: sort.expr.clone(),
-                        input: Arc::new((*sort.input).clone()),
+                        input: sort.input.clone(),
                         fetch: new_fetch,
                     });
-                    Some(plan.with_new_inputs(&[new_sort])?)
+                    plan.with_new_exprs(plan.expressions(), vec![new_sort])
+                        .map(Some)
                 }
             }
-            LogicalPlan::Projection(_) | LogicalPlan::SubqueryAlias(_) => {
+            child_plan @ (LogicalPlan::Projection(_) | LogicalPlan::SubqueryAlias(_)) => {
                 // commute
-                let new_limit =
-                    plan.with_new_inputs(&[child_plan.inputs()[0].clone()])?;
-                Some(child_plan.with_new_inputs(&[new_limit])?)
+                let new_limit = plan.with_new_exprs(
+                    plan.expressions(),
+                    vec![child_plan.inputs()[0].clone()],
+                )?;
+                child_plan
+                    .with_new_exprs(child_plan.expressions(), vec![new_limit])
+                    .map(Some)
             }
-            _ => None,
-        };
-
-        Ok(plan)
+            _ => Ok(None),
+        }
     }
 
     fn name(&self) -> &str {
@@ -242,24 +242,24 @@ fn push_down_join(join: &Join, limit: usize) -> Option<Join> {
         (None, None) => None,
         _ => {
             let left = match left_limit {
-                Some(limit) => LogicalPlan::Limit(Limit {
+                Some(limit) => Arc::new(LogicalPlan::Limit(Limit {
                     skip: 0,
                     fetch: Some(limit),
-                    input: Arc::new((*join.left).clone()),
-                }),
-                None => (*join.left).clone(),
+                    input: join.left.clone(),
+                })),
+                None => join.left.clone(),
             };
             let right = match right_limit {
-                Some(limit) => LogicalPlan::Limit(Limit {
+                Some(limit) => Arc::new(LogicalPlan::Limit(Limit {
                     skip: 0,
                     fetch: Some(limit),
-                    input: Arc::new((*join.right).clone()),
-                }),
-                None => (*join.right).clone(),
+                    input: join.right.clone(),
+                })),
+                None => join.right.clone(),
             };
             Some(Join {
-                left: Arc::new(left),
-                right: Arc::new(right),
+                left,
+                right,
                 on: join.on.clone(),
                 filter: join.filter.clone(),
                 join_type: join.join_type,
@@ -277,6 +277,7 @@ mod test {
 
     use super::*;
     use crate::test::*;
+
     use datafusion_expr::{
         col, exists,
         logical_plan::{builder::LogicalPlanBuilder, JoinType, LogicalPlan},

@@ -20,6 +20,7 @@ use std::fs;
 use crate::datasource::object_store::ObjectStoreUrl;
 use crate::execution::context::SessionState;
 use datafusion_common::{DataFusionError, Result};
+use datafusion_optimizer::OptimizerConfig;
 use futures::stream::BoxStream;
 use futures::{StreamExt, TryStreamExt};
 use glob::Pattern;
@@ -102,12 +103,14 @@ impl ListingTableUrl {
         let s = s.as_ref();
 
         // This is necessary to handle the case of a path starting with a drive letter
+        #[cfg(not(target_arch = "wasm32"))]
         if std::path::Path::new(s).is_absolute() {
             return Self::parse_path(s);
         }
 
         match Url::parse(s) {
             Ok(url) => Self::try_new(url, None),
+            #[cfg(not(target_arch = "wasm32"))]
             Err(url::ParseError::RelativeUrlWithoutBase) => Self::parse_path(s),
             Err(e) => Err(DataFusionError::External(Box::new(e))),
         }
@@ -145,6 +148,7 @@ impl ListingTableUrl {
     }
 
     /// Creates a new [`ListingTableUrl`] interpreting `s` as a filesystem path
+    #[cfg(not(target_arch = "wasm32"))]
     fn parse_path(s: &str) -> Result<Self> {
         let (path, glob) = match split_glob_expression(s) {
             Some((prefix, glob)) => {
@@ -184,14 +188,27 @@ impl ListingTableUrl {
     }
 
     /// Returns `true` if `path` matches this [`ListingTableUrl`]
-    pub fn contains(&self, path: &Path) -> bool {
+    pub fn contains(&self, path: &Path, ignore_subdirectory: bool) -> bool {
         match self.strip_prefix(path) {
             Some(mut segments) => match &self.glob {
                 Some(glob) => {
-                    let stripped = segments.join("/");
-                    glob.matches(&stripped)
+                    if ignore_subdirectory {
+                        segments
+                            .next()
+                            .map_or(false, |file_name| glob.matches(file_name))
+                    } else {
+                        let stripped = segments.join("/");
+                        glob.matches(&stripped)
+                    }
                 }
-                None => true,
+                None => {
+                    if ignore_subdirectory {
+                        let has_subdirectory = segments.collect::<Vec<_>>().len() > 1;
+                        !has_subdirectory
+                    } else {
+                        true
+                    }
+                }
             },
             None => false,
         }
@@ -223,6 +240,8 @@ impl ListingTableUrl {
         store: &'a dyn ObjectStore,
         file_extension: &'a str,
     ) -> Result<BoxStream<'a, Result<ObjectMeta>>> {
+        let exec_options = &ctx.options().execution;
+        let ignore_subdirectory = exec_options.listing_table_ignore_subdirectory;
         // If the prefix is a file, use a head request, otherwise list
         let list = match self.is_collection() {
             true => match ctx.runtime_env().cache_manager.get_list_files_cache() {
@@ -246,7 +265,7 @@ impl ListingTableUrl {
             .try_filter(move |meta| {
                 let path = &meta.location;
                 let extension_match = path.as_ref().ends_with(file_extension);
-                let glob_match = self.contains(path);
+                let glob_match = self.contains(path, ignore_subdirectory);
                 futures::future::ready(extension_match && glob_match)
             })
             .map_err(DataFusionError::ObjectStore)
@@ -266,6 +285,7 @@ impl ListingTableUrl {
 }
 
 /// Creates a file URL from a potentially relative filesystem path
+#[cfg(not(target_arch = "wasm32"))]
 fn url_from_filesystem_path(s: &str) -> Option<Url> {
     let path = std::path::Path::new(s);
     let is_dir = match path.exists() {

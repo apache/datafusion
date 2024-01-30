@@ -112,7 +112,6 @@ pub async fn from_substrait_rel(
                         limit: None,
                         table_partition_cols: vec![],
                         output_ordering: vec![],
-                        infinite_source: false,
                     };
 
                     if let Some(MaskExpression { select, .. }) = &read.projection {

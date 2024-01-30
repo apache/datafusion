@@ -22,11 +22,11 @@ use datafusion_common::cast::as_list_array;
 use std::any::Any;
 use std::sync::Arc;
 
-use crate::{AggregateExpr, GroupsAccumulator, PhysicalExpr};
+use crate::{AggregateExpr, PhysicalExpr};
 use arrow::datatypes::DataType;
 use arrow::{array::ArrayRef, datatypes::Field};
 use datafusion_common::{not_impl_err, DataFusionError, Result, ScalarValue};
-use datafusion_expr::Accumulator;
+use datafusion_expr::{Accumulator, GroupsAccumulator};
 use std::collections::HashSet;
 
 use crate::aggregate::groups_accumulator::prim_op::PrimitiveGroupsAccumulator;
@@ -190,11 +190,11 @@ where
         self.update_batch(states)
     }
 
-    fn state(&self) -> Result<Vec<ScalarValue>> {
+    fn state(&mut self) -> Result<Vec<ScalarValue>> {
         Ok(vec![self.evaluate()?])
     }
 
-    fn evaluate(&self) -> Result<ScalarValue> {
+    fn evaluate(&mut self) -> Result<ScalarValue> {
         ScalarValue::new_primitive::<T>(self.value, &T::DATA_TYPE)
     }
 
@@ -339,7 +339,7 @@ impl<T: ArrowNumericType> Accumulator for BitOrAccumulator<T>
 where
     T::Native: std::ops::BitOr<Output = T::Native>,
 {
-    fn state(&self) -> Result<Vec<ScalarValue>> {
+    fn state(&mut self) -> Result<Vec<ScalarValue>> {
         Ok(vec![self.evaluate()?])
     }
 
@@ -355,7 +355,7 @@ where
         self.update_batch(states)
     }
 
-    fn evaluate(&self) -> Result<ScalarValue> {
+    fn evaluate(&mut self) -> Result<ScalarValue> {
         ScalarValue::new_primitive::<T>(self.value, &T::DATA_TYPE)
     }
 
@@ -500,7 +500,7 @@ impl<T: ArrowNumericType> Accumulator for BitXorAccumulator<T>
 where
     T::Native: std::ops::BitXor<Output = T::Native>,
 {
-    fn state(&self) -> Result<Vec<ScalarValue>> {
+    fn state(&mut self) -> Result<Vec<ScalarValue>> {
         Ok(vec![self.evaluate()?])
     }
 
@@ -516,7 +516,7 @@ where
         self.update_batch(states)
     }
 
-    fn evaluate(&self) -> Result<ScalarValue> {
+    fn evaluate(&mut self) -> Result<ScalarValue> {
         ScalarValue::new_primitive::<T>(self.value, &T::DATA_TYPE)
     }
 
@@ -634,7 +634,7 @@ impl<T: ArrowNumericType> Accumulator for DistinctBitXorAccumulator<T>
 where
     T::Native: std::ops::BitXor<Output = T::Native> + std::hash::Hash + Eq,
 {
-    fn state(&self) -> Result<Vec<ScalarValue>> {
+    fn state(&mut self) -> Result<Vec<ScalarValue>> {
         // 1. Stores aggregate state in `ScalarValue::List`
         // 2. Constructs `ScalarValue::List` state from distinct numeric stored in hash set
         let state_out = {
@@ -679,7 +679,7 @@ where
         Ok(())
     }
 
-    fn evaluate(&self) -> Result<ScalarValue> {
+    fn evaluate(&mut self) -> Result<ScalarValue> {
         let mut acc = T::Native::usize_as(0);
         for distinct_value in self.values.iter() {
             acc = acc ^ *distinct_value;

@@ -25,11 +25,11 @@ use arrow::array::{Array, ArrayRef};
 use arrow_array::cast::AsArray;
 use arrow_array::types::*;
 use arrow_array::{ArrowNativeTypeOp, ArrowPrimitiveType};
-use arrow_buffer::{ArrowNativeType, ToByteSlice};
+use arrow_buffer::ArrowNativeType;
 use std::collections::HashSet;
 
 use crate::aggregate::sum::downcast_sum;
-use crate::aggregate::utils::down_cast_any_ref;
+use crate::aggregate::utils::{down_cast_any_ref, Hashable};
 use crate::{AggregateExpr, PhysicalExpr};
 use datafusion_common::{not_impl_err, DataFusionError, Result, ScalarValue};
 use datafusion_expr::type_coercion::aggregates::sum_return_type;
@@ -119,24 +119,6 @@ impl PartialEq<dyn Any> for DistinctSum {
     }
 }
 
-/// A wrapper around a type to provide hash for floats
-#[derive(Copy, Clone)]
-struct Hashable<T>(T);
-
-impl<T: ToByteSlice> std::hash::Hash for Hashable<T> {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.0.to_byte_slice().hash(state)
-    }
-}
-
-impl<T: ArrowNativeTypeOp> PartialEq for Hashable<T> {
-    fn eq(&self, other: &Self) -> bool {
-        self.0.is_eq(other.0)
-    }
-}
-
-impl<T: ArrowNativeTypeOp> Eq for Hashable<T> {}
-
 struct DistinctSumAccumulator<T: ArrowPrimitiveType> {
     values: HashSet<Hashable<T::Native>, RandomState>,
     data_type: DataType,
@@ -158,7 +140,7 @@ impl<T: ArrowPrimitiveType> DistinctSumAccumulator<T> {
 }
 
 impl<T: ArrowPrimitiveType> Accumulator for DistinctSumAccumulator<T> {
-    fn state(&self) -> Result<Vec<ScalarValue>> {
+    fn state(&mut self) -> Result<Vec<ScalarValue>> {
         // 1. Stores aggregate state in `ScalarValue::List`
         // 2. Constructs `ScalarValue::List` state from distinct numeric stored in hash set
         let state_out = {
@@ -204,7 +186,7 @@ impl<T: ArrowPrimitiveType> Accumulator for DistinctSumAccumulator<T> {
         Ok(())
     }
 
-    fn evaluate(&self) -> Result<ScalarValue> {
+    fn evaluate(&mut self) -> Result<ScalarValue> {
         let mut acc = T::Native::usize_as(0);
         for distinct_value in self.values.iter() {
             acc = acc.add_wrapping(distinct_value.0)

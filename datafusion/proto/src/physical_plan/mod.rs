@@ -21,13 +21,17 @@ use std::sync::Arc;
 
 use datafusion::arrow::compute::SortOptions;
 use datafusion::arrow::datatypes::SchemaRef;
+use datafusion::datasource::file_format::csv::CsvSink;
 use datafusion::datasource::file_format::file_compression_type::FileCompressionType;
 use datafusion::datasource::file_format::json::JsonSink;
+#[cfg(feature = "parquet")]
+use datafusion::datasource::file_format::parquet::ParquetSink;
 #[cfg(feature = "parquet")]
 use datafusion::datasource::physical_plan::ParquetExec;
 use datafusion::datasource::physical_plan::{AvroExec, CsvExec};
 use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::execution::FunctionRegistry;
+use datafusion::physical_expr::PhysicalExprRef;
 use datafusion::physical_plan::aggregates::{create_aggregate_expr, AggregateMode};
 use datafusion::physical_plan::aggregates::{AggregateExec, PhysicalGroupBy};
 use datafusion::physical_plan::analyze::AnalyzeExec;
@@ -35,7 +39,7 @@ use datafusion::physical_plan::coalesce_batches::CoalesceBatchesExec;
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::empty::EmptyExec;
 use datafusion::physical_plan::explain::ExplainExec;
-use datafusion::physical_plan::expressions::{Column, PhysicalSortExpr};
+use datafusion::physical_plan::expressions::PhysicalSortExpr;
 use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::insert::FileSinkExec;
 use datafusion::physical_plan::joins::utils::{ColumnIndex, JoinFilter};
@@ -61,8 +65,10 @@ use prost::Message;
 
 use crate::common::str_to_byte;
 use crate::common::{byte_to_string, proto_error};
+use crate::convert_required;
 use crate::physical_plan::from_proto::{
-    parse_physical_expr, parse_physical_sort_expr, parse_protobuf_file_scan_config,
+    parse_physical_expr, parse_physical_sort_expr, parse_physical_sort_exprs,
+    parse_protobuf_file_scan_config,
 };
 use crate::protobuf::physical_aggregate_expr_node::AggregateFunction;
 use crate::protobuf::physical_expr_node::ExprType;
@@ -71,7 +77,6 @@ use crate::protobuf::repartition_exec_node::PartitionMethod;
 use crate::protobuf::{
     self, window_agg_exec_node, PhysicalPlanNode, PhysicalSortExprNodeCollection,
 };
-use crate::{convert_required, into_required};
 
 use self::from_proto::parse_physical_window_expr;
 
@@ -486,7 +491,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
                     physical_aggr_expr,
                     physical_filter_expr,
                     input,
-                    Arc::new(input_schema.try_into()?),
+                    physical_schema,
                 )?))
             }
             PhysicalPlanType::HashJoin(hashjoin) => {
@@ -502,12 +507,22 @@ impl AsExecutionPlan for PhysicalPlanNode {
                     runtime,
                     extension_codec,
                 )?;
-                let on: Vec<(Column, Column)> = hashjoin
+                let left_schema = left.schema();
+                let right_schema = right.schema();
+                let on: Vec<(PhysicalExprRef, PhysicalExprRef)> = hashjoin
                     .on
                     .iter()
                     .map(|col| {
-                        let left = into_required!(col.left)?;
-                        let right = into_required!(col.right)?;
+                        let left = parse_physical_expr(
+                            &col.left.clone().unwrap(),
+                            registry,
+                            left_schema.as_ref(),
+                        )?;
+                        let right = parse_physical_expr(
+                            &col.right.clone().unwrap(),
+                            registry,
+                            right_schema.as_ref(),
+                        )?;
                         Ok((left, right))
                     })
                     .collect::<Result<_>>()?;
@@ -591,12 +606,22 @@ impl AsExecutionPlan for PhysicalPlanNode {
                     runtime,
                     extension_codec,
                 )?;
+                let left_schema = left.schema();
+                let right_schema = right.schema();
                 let on = sym_join
                     .on
                     .iter()
                     .map(|col| {
-                        let left = into_required!(col.left)?;
-                        let right = into_required!(col.right)?;
+                        let left = parse_physical_expr(
+                            &col.left.clone().unwrap(),
+                            registry,
+                            left_schema.as_ref(),
+                        )?;
+                        let right = parse_physical_expr(
+                            &col.right.clone().unwrap(),
+                            registry,
+                            right_schema.as_ref(),
+                        )?;
                         Ok((left, right))
                     })
                     .collect::<Result<_>>()?;
@@ -643,6 +668,28 @@ impl AsExecutionPlan for PhysicalPlanNode {
                     })
                     .map_or(Ok(None), |v: Result<JoinFilter>| v.map(Some))?;
 
+                let left_sort_exprs = parse_physical_sort_exprs(
+                    &sym_join.left_sort_exprs,
+                    registry,
+                    &left_schema,
+                )?;
+                let left_sort_exprs = if left_sort_exprs.is_empty() {
+                    None
+                } else {
+                    Some(left_sort_exprs)
+                };
+
+                let right_sort_exprs = parse_physical_sort_exprs(
+                    &sym_join.right_sort_exprs,
+                    registry,
+                    &right_schema,
+                )?;
+                let right_sort_exprs = if right_sort_exprs.is_empty() {
+                    None
+                } else {
+                    Some(right_sort_exprs)
+                };
+
                 let partition_mode =
                     protobuf::StreamPartitionMode::try_from(sym_join.partition_mode).map_err(|_| {
                         proto_error(format!(
@@ -665,6 +712,8 @@ impl AsExecutionPlan for PhysicalPlanNode {
                     filter,
                     &join_type.into(),
                     sym_join.null_equals_null,
+                    left_sort_exprs,
+                    right_sort_exprs,
                     partition_mode,
                 )
                 .map(|e| Arc::new(e) as _)
@@ -921,6 +970,68 @@ impl AsExecutionPlan for PhysicalPlanNode {
                     sort_order,
                 )))
             }
+            PhysicalPlanType::CsvSink(sink) => {
+                let input =
+                    into_physical_plan(&sink.input, registry, runtime, extension_codec)?;
+
+                let data_sink: CsvSink = sink
+                    .sink
+                    .as_ref()
+                    .ok_or_else(|| proto_error("Missing required field in protobuf"))?
+                    .try_into()?;
+                let sink_schema = convert_required!(sink.sink_schema)?;
+                let sort_order = sink
+                    .sort_order
+                    .as_ref()
+                    .map(|collection| {
+                        collection
+                            .physical_sort_expr_nodes
+                            .iter()
+                            .map(|proto| {
+                                parse_physical_sort_expr(proto, registry, &sink_schema)
+                                    .map(Into::into)
+                            })
+                            .collect::<Result<Vec<_>>>()
+                    })
+                    .transpose()?;
+                Ok(Arc::new(FileSinkExec::new(
+                    input,
+                    Arc::new(data_sink),
+                    Arc::new(sink_schema),
+                    sort_order,
+                )))
+            }
+            PhysicalPlanType::ParquetSink(sink) => {
+                let input =
+                    into_physical_plan(&sink.input, registry, runtime, extension_codec)?;
+
+                let data_sink: ParquetSink = sink
+                    .sink
+                    .as_ref()
+                    .ok_or_else(|| proto_error("Missing required field in protobuf"))?
+                    .try_into()?;
+                let sink_schema = convert_required!(sink.sink_schema)?;
+                let sort_order = sink
+                    .sort_order
+                    .as_ref()
+                    .map(|collection| {
+                        collection
+                            .physical_sort_expr_nodes
+                            .iter()
+                            .map(|proto| {
+                                parse_physical_sort_expr(proto, registry, &sink_schema)
+                                    .map(Into::into)
+                            })
+                            .collect::<Result<Vec<_>>>()
+                    })
+                    .transpose()?;
+                Ok(Arc::new(FileSinkExec::new(
+                    input,
+                    Arc::new(data_sink),
+                    Arc::new(sink_schema),
+                    sort_order,
+                )))
+            }
         }
     }
 
@@ -1052,17 +1163,15 @@ impl AsExecutionPlan for PhysicalPlanNode {
             let on: Vec<protobuf::JoinOn> = exec
                 .on()
                 .iter()
-                .map(|tuple| protobuf::JoinOn {
-                    left: Some(protobuf::PhysicalColumn {
-                        name: tuple.0.name().to_string(),
-                        index: tuple.0.index() as u32,
-                    }),
-                    right: Some(protobuf::PhysicalColumn {
-                        name: tuple.1.name().to_string(),
-                        index: tuple.1.index() as u32,
-                    }),
+                .map(|tuple| {
+                    let l = tuple.0.to_owned().try_into()?;
+                    let r = tuple.1.to_owned().try_into()?;
+                    Ok::<_, DataFusionError>(protobuf::JoinOn {
+                        left: Some(l),
+                        right: Some(r),
+                    })
                 })
-                .collect();
+                .collect::<Result<_>>()?;
             let join_type: protobuf::JoinType = exec.join_type().to_owned().into();
             let filter = exec
                 .filter()
@@ -1122,17 +1231,15 @@ impl AsExecutionPlan for PhysicalPlanNode {
             let on = exec
                 .on()
                 .iter()
-                .map(|tuple| protobuf::JoinOn {
-                    left: Some(protobuf::PhysicalColumn {
-                        name: tuple.0.name().to_string(),
-                        index: tuple.0.index() as u32,
-                    }),
-                    right: Some(protobuf::PhysicalColumn {
-                        name: tuple.1.name().to_string(),
-                        index: tuple.1.index() as u32,
-                    }),
+                .map(|tuple| {
+                    let l = tuple.0.to_owned().try_into()?;
+                    let r = tuple.1.to_owned().try_into()?;
+                    Ok::<_, DataFusionError>(protobuf::JoinOn {
+                        left: Some(l),
+                        right: Some(r),
+                    })
                 })
-                .collect();
+                .collect::<Result<_>>()?;
             let join_type: protobuf::JoinType = exec.join_type().to_owned().into();
             let filter = exec
                 .filter()
@@ -1168,6 +1275,40 @@ impl AsExecutionPlan for PhysicalPlanNode {
                 }
             };
 
+            let left_sort_exprs = exec
+                .left_sort_exprs()
+                .map(|exprs| {
+                    exprs
+                        .iter()
+                        .map(|expr| {
+                            Ok(protobuf::PhysicalSortExprNode {
+                                expr: Some(Box::new(expr.expr.to_owned().try_into()?)),
+                                asc: !expr.options.descending,
+                                nulls_first: expr.options.nulls_first,
+                            })
+                        })
+                        .collect::<Result<Vec<_>>>()
+                })
+                .transpose()?
+                .unwrap_or(vec![]);
+
+            let right_sort_exprs = exec
+                .right_sort_exprs()
+                .map(|exprs| {
+                    exprs
+                        .iter()
+                        .map(|expr| {
+                            Ok(protobuf::PhysicalSortExprNode {
+                                expr: Some(Box::new(expr.expr.to_owned().try_into()?)),
+                                asc: !expr.options.descending,
+                                nulls_first: expr.options.nulls_first,
+                            })
+                        })
+                        .collect::<Result<Vec<_>>>()
+                })
+                .transpose()?
+                .unwrap_or(vec![]);
+
             return Ok(protobuf::PhysicalPlanNode {
                 physical_plan_type: Some(PhysicalPlanType::SymmetricHashJoin(Box::new(
                     protobuf::SymmetricHashJoinExecNode {
@@ -1177,6 +1318,8 @@ impl AsExecutionPlan for PhysicalPlanNode {
                         join_type: join_type.into(),
                         partition_mode: partition_mode.into(),
                         null_equals_null: exec.null_equals_null(),
+                        left_sort_exprs,
+                        right_sort_exprs,
                         filter,
                     },
                 ))),
@@ -1669,6 +1812,32 @@ impl AsExecutionPlan for PhysicalPlanNode {
                 return Ok(protobuf::PhysicalPlanNode {
                     physical_plan_type: Some(PhysicalPlanType::JsonSink(Box::new(
                         protobuf::JsonSinkExecNode {
+                            input: Some(Box::new(input)),
+                            sink: Some(sink.try_into()?),
+                            sink_schema: Some(exec.schema().as_ref().try_into()?),
+                            sort_order,
+                        },
+                    ))),
+                });
+            }
+
+            if let Some(sink) = exec.sink().as_any().downcast_ref::<CsvSink>() {
+                return Ok(protobuf::PhysicalPlanNode {
+                    physical_plan_type: Some(PhysicalPlanType::CsvSink(Box::new(
+                        protobuf::CsvSinkExecNode {
+                            input: Some(Box::new(input)),
+                            sink: Some(sink.try_into()?),
+                            sink_schema: Some(exec.schema().as_ref().try_into()?),
+                            sort_order,
+                        },
+                    ))),
+                });
+            }
+
+            if let Some(sink) = exec.sink().as_any().downcast_ref::<ParquetSink>() {
+                return Ok(protobuf::PhysicalPlanNode {
+                    physical_plan_type: Some(PhysicalPlanType::ParquetSink(Box::new(
+                        protobuf::ParquetSinkExecNode {
                             input: Some(Box::new(input)),
                             sink: Some(sink.try_into()?),
                             sink_schema: Some(exec.schema().as_ref().try_into()?),

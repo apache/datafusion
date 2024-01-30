@@ -39,6 +39,7 @@ use datafusion_expr::PartitionEvaluator;
 pub struct NthValue {
     name: String,
     expr: Arc<dyn PhysicalExpr>,
+    /// Output data type
     data_type: DataType,
     kind: NthValueKind,
 }

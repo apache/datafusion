@@ -15,7 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use clap::Parser;
+use std::collections::HashMap;
+use std::env;
+use std::path::Path;
+use std::process::ExitCode;
+use std::str::FromStr;
+use std::sync::{Arc, OnceLock};
+
 use datafusion::error::{DataFusionError, Result};
 use datafusion::execution::context::SessionConfig;
 use datafusion::execution::memory_pool::{FairSpillPool, GreedyMemoryPool};
@@ -29,12 +35,9 @@ use datafusion_cli::{
     print_options::{MaxRows, PrintOptions},
     DATAFUSION_CLI_VERSION,
 };
+
+use clap::Parser;
 use mimalloc::MiMalloc;
-use std::collections::HashMap;
-use std::env;
-use std::path::Path;
-use std::str::FromStr;
-use std::sync::{Arc, OnceLock};
 
 #[global_allocator]
 static GLOBAL: MiMalloc = MiMalloc;
@@ -111,7 +114,7 @@ struct Args {
     )]
     rc: Option<Vec<String>>,
 
-    #[clap(long, arg_enum, default_value_t = PrintFormat::Table)]
+    #[clap(long, arg_enum, default_value_t = PrintFormat::Automatic)]
     format: PrintFormat,
 
     #[clap(
@@ -133,10 +136,24 @@ struct Args {
         default_value = "40"
     )]
     maxrows: MaxRows,
+
+    #[clap(long, help = "Enables console syntax highlighting")]
+    color: bool,
 }
 
 #[tokio::main]
-pub async fn main() -> Result<()> {
+/// Calls [`main_inner`], then handles printing errors and returning the correct exit code
+pub async fn main() -> ExitCode {
+    if let Err(e) = main_inner().await {
+        println!("Error: {e}");
+        return ExitCode::FAILURE;
+    }
+
+    ExitCode::SUCCESS
+}
+
+/// Main CLI entrypoint
+async fn main_inner() -> Result<()> {
     env_logger::init();
     let args = Args::parse();
 
@@ -155,28 +172,28 @@ pub async fn main() -> Result<()> {
         session_config = session_config.with_batch_size(batch_size);
     };
 
-    let rn_config = RuntimeConfig::new();
-    let rn_config =
+    let rt_config = RuntimeConfig::new();
+    let rt_config =
         // set memory pool size
         if let Some(memory_limit) = args.memory_limit {
             let memory_limit = extract_memory_pool_size(&memory_limit).unwrap();
             // set memory pool type
             if let Some(mem_pool_type) = args.mem_pool_type {
                 match mem_pool_type {
-                    PoolType::Greedy => rn_config
+                    PoolType::Greedy => rt_config
                         .with_memory_pool(Arc::new(GreedyMemoryPool::new(memory_limit))),
-                    PoolType::Fair => rn_config
+                    PoolType::Fair => rt_config
                         .with_memory_pool(Arc::new(FairSpillPool::new(memory_limit))),
                 }
             } else {
-                rn_config
+                rt_config
                 .with_memory_pool(Arc::new(GreedyMemoryPool::new(memory_limit)))
             }
         } else {
-            rn_config
+            rt_config
         };
 
-    let runtime_env = create_runtime_env(rn_config.clone())?;
+    let runtime_env = create_runtime_env(rt_config.clone())?;
 
     let mut ctx =
         SessionContext::new_with_config_rt(session_config.clone(), Arc::new(runtime_env));
@@ -193,6 +210,7 @@ pub async fn main() -> Result<()> {
         format: args.format,
         quiet: args.quiet,
         maxrows: args.maxrows,
+        color: args.color,
     };
 
     let commands = args.command;
@@ -214,7 +232,7 @@ pub async fn main() -> Result<()> {
 
     if commands.is_empty() && files.is_empty() {
         if !rc.is_empty() {
-            exec::exec_from_files(rc, &mut ctx, &print_options).await
+            exec::exec_from_files(&mut ctx, rc, &print_options).await?;
         }
         // TODO maybe we can have thiserror for cli but for now let's keep it simple
         return exec::exec_from_repl(&mut ctx, &mut print_options)
@@ -223,11 +241,11 @@ pub async fn main() -> Result<()> {
     }
 
     if !files.is_empty() {
-        exec::exec_from_files(files, &mut ctx, &print_options).await;
+        exec::exec_from_files(&mut ctx, files, &print_options).await?;
     }
 
     if !commands.is_empty() {
-        exec::exec_from_commands(&mut ctx, &print_options, commands).await;
+        exec::exec_from_commands(&mut ctx, commands, &print_options).await?;
     }
 
     Ok(())
@@ -331,9 +349,8 @@ fn extract_memory_pool_size(size: &str) -> Result<usize, String> {
 
 #[cfg(test)]
 mod tests {
-    use datafusion::assert_batches_eq;
-
     use super::*;
+    use datafusion::assert_batches_eq;
 
     fn assert_conversion(input: &str, expected: Result<usize, String>) {
         let result = extract_memory_pool_size(input);

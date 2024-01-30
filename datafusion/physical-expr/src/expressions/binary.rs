@@ -20,9 +20,7 @@ mod kernels;
 use std::hash::{Hash, Hasher};
 use std::{any::Any, sync::Arc};
 
-use crate::array_expressions::{
-    array_append, array_concat, array_has_all, array_prepend,
-};
+use crate::array_expressions::array_has_all;
 use crate::expressions::datum::{apply, apply_cmp};
 use crate::intervals::cp_solver::{propagate_arithmetic, propagate_comparison};
 use crate::physical_expr::down_cast_any_ref;
@@ -30,12 +28,12 @@ use crate::sort_properties::SortProperties;
 use crate::PhysicalExpr;
 
 use arrow::array::*;
-use arrow::compute::cast;
 use arrow::compute::kernels::boolean::{and_kleene, not, or_kleene};
 use arrow::compute::kernels::cmp::*;
 use arrow::compute::kernels::comparison::regexp_is_match_utf8;
 use arrow::compute::kernels::comparison::regexp_is_match_utf8_scalar;
 use arrow::compute::kernels::concat_elements::concat_elements_utf8;
+use arrow::compute::{cast, ilike, like, nilike, nlike};
 use arrow::datatypes::*;
 use arrow::record_batch::RecordBatch;
 
@@ -283,6 +281,10 @@ impl PhysicalExpr for BinaryExpr {
             Operator::GtEq => return apply_cmp(&lhs, &rhs, gt_eq),
             Operator::IsDistinctFrom => return apply_cmp(&lhs, &rhs, distinct),
             Operator::IsNotDistinctFrom => return apply_cmp(&lhs, &rhs, not_distinct),
+            Operator::LikeMatch => return apply_cmp(&lhs, &rhs, like),
+            Operator::ILikeMatch => return apply_cmp(&lhs, &rhs, ilike),
+            Operator::NotLikeMatch => return apply_cmp(&lhs, &rhs, nlike),
+            Operator::NotILikeMatch => return apply_cmp(&lhs, &rhs, nilike),
             _ => {}
         }
 
@@ -556,7 +558,8 @@ impl BinaryExpr {
         use Operator::*;
         match &self.op {
             IsDistinctFrom | IsNotDistinctFrom | Lt | LtEq | Gt | GtEq | Eq | NotEq
-            | Plus | Minus | Multiply | Divide | Modulo => unreachable!(),
+            | Plus | Minus | Multiply | Divide | Modulo | LikeMatch | ILikeMatch
+            | NotLikeMatch | NotILikeMatch => unreachable!(),
             And => {
                 if left_data_type == &DataType::Boolean {
                     boolean_op!(&left, &right, and_kleene)
@@ -598,12 +601,7 @@ impl BinaryExpr {
             BitwiseXor => bitwise_xor_dyn(left, right),
             BitwiseShiftRight => bitwise_shift_right_dyn(left, right),
             BitwiseShiftLeft => bitwise_shift_left_dyn(left, right),
-            StringConcat => match (left_data_type, right_data_type) {
-                (DataType::List(_), DataType::List(_)) => array_concat(&[left, right]),
-                (DataType::List(_), _) => array_append(&[left, right]),
-                (_, DataType::List(_)) => array_prepend(&[left, right]),
-                _ => binary_string_array_op!(left, right, concat_elements),
-            },
+            StringConcat => binary_string_array_op!(left, right, concat_elements),
             AtArrow => array_has_all(&[left, right]),
             ArrowAt => array_has_all(&[right, left]),
         }
@@ -629,8 +627,7 @@ mod tests {
     use arrow::datatypes::{
         ArrowNumericType, Decimal128Type, Field, Int32Type, SchemaRef,
     };
-    use arrow_schema::ArrowError;
-    use datafusion_common::Result;
+    use datafusion_common::{plan_datafusion_err, Result};
     use datafusion_expr::type_coercion::binary::get_input_types;
 
     /// Performs a binary operation, applying any type coercion necessary
@@ -977,6 +974,102 @@ mod tests {
             BooleanArray,
             DataType::Boolean,
             [false, false, false, false, true],
+        );
+        test_coercion!(
+            StringArray,
+            DataType::Utf8,
+            vec!["abc"; 5],
+            StringArray,
+            DataType::Utf8,
+            vec!["a__", "A%BC", "A_BC", "abc", "a%C"],
+            Operator::LikeMatch,
+            BooleanArray,
+            DataType::Boolean,
+            [true, false, false, true, false],
+        );
+        test_coercion!(
+            StringArray,
+            DataType::Utf8,
+            vec!["abc"; 5],
+            StringArray,
+            DataType::Utf8,
+            vec!["a__", "A%BC", "A_BC", "abc", "a%C"],
+            Operator::ILikeMatch,
+            BooleanArray,
+            DataType::Boolean,
+            [true, true, false, true, true],
+        );
+        test_coercion!(
+            StringArray,
+            DataType::Utf8,
+            vec!["abc"; 5],
+            StringArray,
+            DataType::Utf8,
+            vec!["a__", "A%BC", "A_BC", "abc", "a%C"],
+            Operator::NotLikeMatch,
+            BooleanArray,
+            DataType::Boolean,
+            [false, true, true, false, true],
+        );
+        test_coercion!(
+            StringArray,
+            DataType::Utf8,
+            vec!["abc"; 5],
+            StringArray,
+            DataType::Utf8,
+            vec!["a__", "A%BC", "A_BC", "abc", "a%C"],
+            Operator::NotILikeMatch,
+            BooleanArray,
+            DataType::Boolean,
+            [false, false, true, false, false],
+        );
+        test_coercion!(
+            LargeStringArray,
+            DataType::LargeUtf8,
+            vec!["abc"; 5],
+            LargeStringArray,
+            DataType::LargeUtf8,
+            vec!["a__", "A%BC", "A_BC", "abc", "a%C"],
+            Operator::LikeMatch,
+            BooleanArray,
+            DataType::Boolean,
+            [true, false, false, true, false],
+        );
+        test_coercion!(
+            LargeStringArray,
+            DataType::LargeUtf8,
+            vec!["abc"; 5],
+            LargeStringArray,
+            DataType::LargeUtf8,
+            vec!["a__", "A%BC", "A_BC", "abc", "a%C"],
+            Operator::ILikeMatch,
+            BooleanArray,
+            DataType::Boolean,
+            [true, true, false, true, true],
+        );
+        test_coercion!(
+            LargeStringArray,
+            DataType::LargeUtf8,
+            vec!["abc"; 5],
+            LargeStringArray,
+            DataType::LargeUtf8,
+            vec!["a__", "A%BC", "A_BC", "abc", "a%C"],
+            Operator::NotLikeMatch,
+            BooleanArray,
+            DataType::Boolean,
+            [false, true, true, false, true],
+        );
+        test_coercion!(
+            LargeStringArray,
+            DataType::LargeUtf8,
+            vec!["abc"; 5],
+            LargeStringArray,
+            DataType::LargeUtf8,
+            vec!["a__", "A%BC", "A_BC", "abc", "a%C"],
+            Operator::NotILikeMatch,
+            BooleanArray,
+            DataType::Boolean,
+            [false, false, true, false, false],
         );
         test_coercion!(
             Int16Array,
@@ -3608,10 +3701,9 @@ mod tests {
         )
         .unwrap_err();
 
-        assert!(
-            matches!(err, DataFusionError::ArrowError(ArrowError::DivideByZero)),
-            "{err}"
-        );
+        let _expected = plan_datafusion_err!("Divide by zero");
+
+        assert!(matches!(err, ref _expected), "{err}");
 
         // decimal
         let schema = Arc::new(Schema::new(vec![
@@ -3633,10 +3725,7 @@ mod tests {
         )
         .unwrap_err();
 
-        assert!(
-            matches!(err, DataFusionError::ArrowError(ArrowError::DivideByZero)),
-            "{err}"
-        );
+        assert!(matches!(err, ref _expected), "{err}");
 
         Ok(())
     }

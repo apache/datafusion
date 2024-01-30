@@ -76,10 +76,10 @@ pub(crate) fn start_demuxer_task(
     partition_by: Option<Vec<(String, DataType)>>,
     base_output_path: ListingTableUrl,
     file_extension: String,
-    single_file_output: bool,
 ) -> (JoinHandle<Result<()>>, DemuxedStreamReceiver) {
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
     let context = context.clone();
+    let single_file_output = !base_output_path.is_collection();
     let task: JoinHandle<std::result::Result<(), DataFusionError>> = match partition_by {
         Some(parts) => {
             // There could be an arbitrarily large number of parallel hive style partitions being written to, so we cannot
@@ -383,7 +383,7 @@ fn compute_take_arrays(
 
 fn remove_partition_by_columns(
     parted_batch: &RecordBatch,
-    partition_by: &Vec<(String, DataType)>,
+    partition_by: &[(String, DataType)],
 ) -> Result<RecordBatch> {
     let end_idx = parted_batch.num_columns() - partition_by.len();
     let non_part_cols = &parted_batch.columns()[..end_idx];
@@ -405,7 +405,7 @@ fn remove_partition_by_columns(
 }
 
 fn compute_hive_style_file_path(
-    part_key: &Vec<String>,
+    part_key: &[String],
     partition_by: &[(String, DataType)],
     write_id: &str,
     file_extension: &str,

@@ -24,8 +24,9 @@ mod json;
 mod parquet;
 
 use crate::{
-    catalog::{CatalogList, MemoryCatalogList},
+    catalog::{CatalogProviderList, MemoryCatalogProviderList},
     datasource::{
+        cte_worktable::CteWorkTable,
         function::{TableFunction, TableFunctionImpl},
         listing::{ListingOptions, ListingTable},
         provider::TableProviderFactory,
@@ -964,14 +965,9 @@ impl SessionContext {
         sql_definition: Option<String>,
     ) -> Result<()> {
         let table_path = ListingTableUrl::parse(table_path)?;
-        let resolved_schema = match (provided_schema, options.infinite_source) {
-            (Some(s), _) => s,
-            (None, false) => options.infer_schema(&self.state(), &table_path).await?,
-            (None, true) => {
-                return plan_err!(
-                    "Schema inference for infinite data sources is not supported."
-                )
-            }
+        let resolved_schema = match provided_schema {
+            Some(s) => s,
+            None => options.infer_schema(&self.state(), &table_path).await?,
         };
         let config = ListingTableConfig::new(table_path)
             .with_listing_options(options)
@@ -1177,8 +1173,8 @@ impl SessionContext {
         Arc::downgrade(&self.state)
     }
 
-    /// Register [`CatalogList`] in [`SessionState`]
-    pub fn register_catalog_list(&mut self, catalog_list: Arc<dyn CatalogList>) {
+    /// Register [`CatalogProviderList`] in [`SessionState`]
+    pub fn register_catalog_list(&mut self, catalog_list: Arc<dyn CatalogProviderList>) {
         self.state.write().catalog_list = catalog_list;
     }
 }
@@ -1249,7 +1245,7 @@ pub struct SessionState {
     /// Responsible for planning `LogicalPlan`s, and `ExecutionPlan`
     query_planner: Arc<dyn QueryPlanner + Send + Sync>,
     /// Collection of catalogs containing schemas and ultimately TableProviders
-    catalog_list: Arc<dyn CatalogList>,
+    catalog_list: Arc<dyn CatalogProviderList>,
     /// Table Functions
     table_functions: HashMap<String, Arc<TableFunction>>,
     /// Scalar functions that are registered with the context
@@ -1289,7 +1285,8 @@ impl SessionState {
     /// Returns new [`SessionState`] using the provided
     /// [`SessionConfig`] and [`RuntimeEnv`].
     pub fn new_with_config_rt(config: SessionConfig, runtime: Arc<RuntimeEnv>) -> Self {
-        let catalog_list = Arc::new(MemoryCatalogList::new()) as Arc<dyn CatalogList>;
+        let catalog_list =
+            Arc::new(MemoryCatalogProviderList::new()) as Arc<dyn CatalogProviderList>;
         Self::new_with_config_rt_and_catalog_list(config, runtime, catalog_list)
     }
 
@@ -1301,11 +1298,11 @@ impl SessionState {
     }
 
     /// Returns new [`SessionState`] using the provided
-    /// [`SessionConfig`],  [`RuntimeEnv`], and [`CatalogList`]
+    /// [`SessionConfig`],  [`RuntimeEnv`], and [`CatalogProviderList`]
     pub fn new_with_config_rt_and_catalog_list(
         config: SessionConfig,
         runtime: Arc<RuntimeEnv>,
-        catalog_list: Arc<dyn CatalogList>,
+        catalog_list: Arc<dyn CatalogProviderList>,
     ) -> Self {
         let session_id = Uuid::new_v4().to_string();
 
@@ -1370,7 +1367,7 @@ impl SessionState {
     pub fn with_config_rt_and_catalog_list(
         config: SessionConfig,
         runtime: Arc<RuntimeEnv>,
-        catalog_list: Arc<dyn CatalogList>,
+        catalog_list: Arc<dyn CatalogProviderList>,
     ) -> Self {
         Self::new_with_config_rt_and_catalog_list(config, runtime, catalog_list)
     }
@@ -1626,9 +1623,6 @@ impl SessionState {
                         .0
                         .insert(ObjectName(vec![Ident::from(table.name.as_str())]));
                 }
-                DFStatement::DescribeTableStmt(table) => {
-                    visitor.insert(&table.table_name)
-                }
                 DFStatement::CopyTo(CopyToStatement {
                     source,
                     target: _,
@@ -1727,7 +1721,7 @@ impl SessionState {
             let mut stringified_plans = e.stringified_plans.clone();
 
             // analyze & capture output of each rule
-            let analyzed_plan = match self.analyzer.execute_and_check(
+            let analyzer_result = self.analyzer.execute_and_check(
                 e.plan.as_ref(),
                 self.options(),
                 |analyzed_plan, analyzer| {
@@ -1735,7 +1729,8 @@ impl SessionState {
                     let plan_type = PlanType::AnalyzedLogicalPlan { analyzer_name };
                     stringified_plans.push(analyzed_plan.to_stringified(plan_type));
                 },
-            ) {
+            );
+            let analyzed_plan = match analyzer_result {
                 Ok(plan) => plan,
                 Err(DataFusionError::Context(analyzer_name, err)) => {
                     let plan_type = PlanType::AnalyzedLogicalPlan { analyzer_name };
@@ -1758,7 +1753,7 @@ impl SessionState {
                 .push(analyzed_plan.to_stringified(PlanType::FinalAnalyzedLogicalPlan));
 
             // optimize the child plan, capturing the output of each optimizer
-            let (plan, logical_optimization_succeeded) = match self.optimizer.optimize(
+            let optimized_plan = self.optimizer.optimize(
                 &analyzed_plan,
                 self,
                 |optimized_plan, optimizer| {
@@ -1766,7 +1761,8 @@ impl SessionState {
                     let plan_type = PlanType::OptimizedLogicalPlan { optimizer_name };
                     stringified_plans.push(optimized_plan.to_stringified(plan_type));
                 },
-            ) {
+            );
+            let (plan, logical_optimization_succeeded) = match optimized_plan {
                 Ok(plan) => (Arc::new(plan), true),
                 Err(DataFusionError::Context(optimizer_name, err)) => {
                     let plan_type = PlanType::OptimizedLogicalPlan { optimizer_name };
@@ -1845,7 +1841,7 @@ impl SessionState {
     }
 
     /// Return catalog list
-    pub fn catalog_list(&self) -> Arc<dyn CatalogList> {
+    pub fn catalog_list(&self) -> Arc<dyn CatalogProviderList> {
         self.catalog_list.clone()
     }
 
@@ -1903,6 +1899,18 @@ impl<'a> ContextProvider for SessionContextProvider<'a> {
         let provider = tbl_func.create_table_provider(&args)?;
 
         Ok(provider_as_source(provider))
+    }
+
+    /// Create a new CTE work table for a recursive CTE logical plan
+    /// This table will be used in conjunction with a Worktable physical plan
+    /// to read and write each iteration of a recursive CTE
+    fn create_cte_work_table(
+        &self,
+        name: &str,
+        schema: SchemaRef,
+    ) -> Result<Arc<dyn TableSource>> {
+        let table = Arc::new(CteWorkTable::new(name, schema));
+        Ok(provider_as_source(table))
     }
 
     fn get_function_meta(&self, name: &str) -> Option<Arc<ScalarUDF>> {
@@ -2130,7 +2138,6 @@ mod tests {
     use crate::test;
     use crate::test_util::{plan_and_collect, populate_csv_partitions};
     use crate::variable::VarType;
-    use arrow_schema::Schema;
     use async_trait::async_trait;
     use datafusion_expr::Expr;
     use std::env;
@@ -2510,7 +2517,6 @@ mod tests {
             &self,
             _expr: &Expr,
             _input_dfschema: &crate::common::DFSchema,
-            _input_schema: &Schema,
             _session_state: &SessionState,
         ) -> Result<Arc<dyn crate::physical_plan::PhysicalExpr>> {
             unimplemented!()

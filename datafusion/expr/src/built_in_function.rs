@@ -187,6 +187,8 @@ pub enum BuiltinScalarFunction {
     ArrayExcept,
     /// cardinality
     Cardinality,
+    /// array_resize
+    ArrayResize,
     /// construct an array from columns
     MakeArray,
     /// Flatten
@@ -219,8 +221,12 @@ pub enum BuiltinScalarFunction {
     DateTrunc,
     /// date_bin
     DateBin,
+    /// ends_with
+    EndsWith,
     /// initcap
     InitCap,
+    /// InStr
+    InStr,
     /// left
     Left,
     /// lpad
@@ -289,6 +295,8 @@ pub enum BuiltinScalarFunction {
     CurrentDate,
     /// current_time
     CurrentTime,
+    /// make_date
+    MakeDate,
     /// translate
     Translate,
     /// trim
@@ -430,6 +438,7 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::ArrayToString => Volatility::Immutable,
             BuiltinScalarFunction::ArrayIntersect => Volatility::Immutable,
             BuiltinScalarFunction::ArrayUnion => Volatility::Immutable,
+            BuiltinScalarFunction::ArrayResize => Volatility::Immutable,
             BuiltinScalarFunction::Range => Volatility::Immutable,
             BuiltinScalarFunction::Cardinality => Volatility::Immutable,
             BuiltinScalarFunction::MakeArray => Volatility::Immutable,
@@ -443,7 +452,9 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::DatePart => Volatility::Immutable,
             BuiltinScalarFunction::DateTrunc => Volatility::Immutable,
             BuiltinScalarFunction::DateBin => Volatility::Immutable,
+            BuiltinScalarFunction::EndsWith => Volatility::Immutable,
             BuiltinScalarFunction::InitCap => Volatility::Immutable,
+            BuiltinScalarFunction::InStr => Volatility::Immutable,
             BuiltinScalarFunction::Left => Volatility::Immutable,
             BuiltinScalarFunction::Lpad => Volatility::Immutable,
             BuiltinScalarFunction::Lower => Volatility::Immutable,
@@ -475,6 +486,7 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::ToTimestampMicros => Volatility::Immutable,
             BuiltinScalarFunction::ToTimestampNanos => Volatility::Immutable,
             BuiltinScalarFunction::ToTimestampSeconds => Volatility::Immutable,
+            BuiltinScalarFunction::MakeDate => Volatility::Immutable,
             BuiltinScalarFunction::Translate => Volatility::Immutable,
             BuiltinScalarFunction::Trim => Volatility::Immutable,
             BuiltinScalarFunction::Upper => Volatility::Immutable,
@@ -591,8 +603,9 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::ArrayDistinct => Ok(input_expr_types[0].clone()),
             BuiltinScalarFunction::ArrayElement => match &input_expr_types[0] {
                 List(field) => Ok(field.data_type().clone()),
+                LargeList(field) => Ok(field.data_type().clone()),
                 _ => plan_err!(
-                    "The {self} function can only accept list as the first argument"
+                    "The {self} function can only accept list or largelist as the first argument"
                 ),
             },
             BuiltinScalarFunction::ArrayLength => Ok(UInt64),
@@ -616,8 +629,20 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::ArrayReplaceN => Ok(input_expr_types[0].clone()),
             BuiltinScalarFunction::ArrayReplaceAll => Ok(input_expr_types[0].clone()),
             BuiltinScalarFunction::ArraySlice => Ok(input_expr_types[0].clone()),
+            BuiltinScalarFunction::ArrayResize => Ok(input_expr_types[0].clone()),
             BuiltinScalarFunction::ArrayToString => Ok(Utf8),
-            BuiltinScalarFunction::ArrayUnion | BuiltinScalarFunction::ArrayIntersect => {
+            BuiltinScalarFunction::ArrayIntersect => {
+                match (input_expr_types[0].clone(), input_expr_types[1].clone()) {
+                    (DataType::Null, DataType::Null) | (DataType::Null, _) => {
+                        Ok(DataType::Null)
+                    }
+                    (_, DataType::Null) => {
+                        Ok(List(Arc::new(Field::new("item", Null, true))))
+                    }
+                    (dt, _) => Ok(dt),
+                }
+            }
+            BuiltinScalarFunction::ArrayUnion => {
                 match (input_expr_types[0].clone(), input_expr_types[1].clone()) {
                     (DataType::Null, dt) => Ok(dt),
                     (dt, DataType::Null) => Ok(dt),
@@ -691,6 +716,9 @@ impl BuiltinScalarFunction {
             }
             BuiltinScalarFunction::InitCap => {
                 utf8_to_str_type(&input_expr_types[0], "initcap")
+            }
+            BuiltinScalarFunction::InStr => {
+                utf8_to_int_type(&input_expr_types[0], "instr")
             }
             BuiltinScalarFunction::Left => utf8_to_str_type(&input_expr_types[0], "left"),
             BuiltinScalarFunction::Lower => {
@@ -779,6 +807,7 @@ impl BuiltinScalarFunction {
                 true,
             )))),
             BuiltinScalarFunction::StartsWith => Ok(Boolean),
+            BuiltinScalarFunction::EndsWith => Ok(Boolean),
             BuiltinScalarFunction::Strpos => {
                 utf8_to_int_type(&input_expr_types[0], "strpos")
             }
@@ -808,6 +837,7 @@ impl BuiltinScalarFunction {
             }
             BuiltinScalarFunction::CurrentDate => Ok(Date32),
             BuiltinScalarFunction::CurrentTime => Ok(Time64(Nanosecond)),
+            BuiltinScalarFunction::MakeDate => Ok(Date32),
             BuiltinScalarFunction::Translate => {
                 utf8_to_str_type(&input_expr_types[0], "translate")
             }
@@ -915,9 +945,16 @@ impl BuiltinScalarFunction {
 
         // for now, the list is small, as we do not have many built-in functions.
         match self {
-            BuiltinScalarFunction::ArrayAppend => Signature::any(2, self.volatility()),
             BuiltinScalarFunction::ArraySort => {
                 Signature::variadic_any(self.volatility())
+            }
+            BuiltinScalarFunction::ArrayAppend => Signature {
+                type_signature: ArrayAndElement,
+                volatility: self.volatility(),
+            },
+            BuiltinScalarFunction::MakeArray => {
+                // 0 or more arguments of arbitrary type
+                Signature::one_of(vec![VariadicEqual, Any(0)], self.volatility())
             }
             BuiltinScalarFunction::ArrayPopFront => Signature::any(1, self.volatility()),
             BuiltinScalarFunction::ArrayPopBack => Signature::any(1, self.volatility()),
@@ -941,7 +978,10 @@ impl BuiltinScalarFunction {
                 Signature::variadic_any(self.volatility())
             }
             BuiltinScalarFunction::ArrayPositions => Signature::any(2, self.volatility()),
-            BuiltinScalarFunction::ArrayPrepend => Signature::any(2, self.volatility()),
+            BuiltinScalarFunction::ArrayPrepend => Signature {
+                type_signature: ElementAndArray,
+                volatility: self.volatility(),
+            },
             BuiltinScalarFunction::ArrayRepeat => Signature::any(2, self.volatility()),
             BuiltinScalarFunction::ArrayRemove => Signature::any(2, self.volatility()),
             BuiltinScalarFunction::ArrayRemoveN => Signature::any(3, self.volatility()),
@@ -951,17 +991,20 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::ArrayReplaceAll => {
                 Signature::any(3, self.volatility())
             }
-            BuiltinScalarFunction::ArraySlice => Signature::any(3, self.volatility()),
+            BuiltinScalarFunction::ArraySlice => {
+                Signature::variadic_any(self.volatility())
+            }
+
             BuiltinScalarFunction::ArrayToString => {
                 Signature::variadic_any(self.volatility())
             }
             BuiltinScalarFunction::ArrayIntersect => Signature::any(2, self.volatility()),
             BuiltinScalarFunction::ArrayUnion => Signature::any(2, self.volatility()),
             BuiltinScalarFunction::Cardinality => Signature::any(1, self.volatility()),
-            BuiltinScalarFunction::MakeArray => {
-                // 0 or more arguments of arbitrary type
-                Signature::one_of(vec![VariadicAny, Any(0)], self.volatility())
+            BuiltinScalarFunction::ArrayResize => {
+                Signature::variadic_any(self.volatility())
             }
+
             BuiltinScalarFunction::Range => Signature::one_of(
                 vec![
                     Exact(vec![Int64]),
@@ -1027,67 +1070,13 @@ impl BuiltinScalarFunction {
                 vec![Exact(vec![Utf8, Int64]), Exact(vec![LargeUtf8, Int64])],
                 self.volatility(),
             ),
-            BuiltinScalarFunction::ToTimestamp => Signature::uniform(
-                1,
-                vec![
-                    Int64,
-                    Float64,
-                    Timestamp(Nanosecond, None),
-                    Timestamp(Microsecond, None),
-                    Timestamp(Millisecond, None),
-                    Timestamp(Second, None),
-                    Utf8,
-                ],
-                self.volatility(),
-            ),
-            BuiltinScalarFunction::ToTimestampMillis => Signature::uniform(
-                1,
-                vec![
-                    Int64,
-                    Timestamp(Nanosecond, None),
-                    Timestamp(Microsecond, None),
-                    Timestamp(Millisecond, None),
-                    Timestamp(Second, None),
-                    Utf8,
-                ],
-                self.volatility(),
-            ),
-            BuiltinScalarFunction::ToTimestampMicros => Signature::uniform(
-                1,
-                vec![
-                    Int64,
-                    Timestamp(Nanosecond, None),
-                    Timestamp(Microsecond, None),
-                    Timestamp(Millisecond, None),
-                    Timestamp(Second, None),
-                    Utf8,
-                ],
-                self.volatility(),
-            ),
-            BuiltinScalarFunction::ToTimestampNanos => Signature::uniform(
-                1,
-                vec![
-                    Int64,
-                    Timestamp(Nanosecond, None),
-                    Timestamp(Microsecond, None),
-                    Timestamp(Millisecond, None),
-                    Timestamp(Second, None),
-                    Utf8,
-                ],
-                self.volatility(),
-            ),
-            BuiltinScalarFunction::ToTimestampSeconds => Signature::uniform(
-                1,
-                vec![
-                    Int64,
-                    Timestamp(Nanosecond, None),
-                    Timestamp(Microsecond, None),
-                    Timestamp(Millisecond, None),
-                    Timestamp(Second, None),
-                    Utf8,
-                ],
-                self.volatility(),
-            ),
+            BuiltinScalarFunction::ToTimestamp
+            | BuiltinScalarFunction::ToTimestampSeconds
+            | BuiltinScalarFunction::ToTimestampMillis
+            | BuiltinScalarFunction::ToTimestampMicros
+            | BuiltinScalarFunction::ToTimestampNanos => {
+                Signature::variadic_any(self.volatility())
+            }
             BuiltinScalarFunction::FromUnixtime => {
                 Signature::uniform(1, vec![Int64], self.volatility())
             }
@@ -1236,17 +1225,19 @@ impl BuiltinScalarFunction {
                 ],
                 self.volatility(),
             ),
-            BuiltinScalarFunction::Strpos | BuiltinScalarFunction::StartsWith => {
-                Signature::one_of(
-                    vec![
-                        Exact(vec![Utf8, Utf8]),
-                        Exact(vec![Utf8, LargeUtf8]),
-                        Exact(vec![LargeUtf8, Utf8]),
-                        Exact(vec![LargeUtf8, LargeUtf8]),
-                    ],
-                    self.volatility(),
-                )
-            }
+
+            BuiltinScalarFunction::EndsWith
+            | BuiltinScalarFunction::InStr
+            | BuiltinScalarFunction::Strpos
+            | BuiltinScalarFunction::StartsWith => Signature::one_of(
+                vec![
+                    Exact(vec![Utf8, Utf8]),
+                    Exact(vec![Utf8, LargeUtf8]),
+                    Exact(vec![LargeUtf8, Utf8]),
+                    Exact(vec![LargeUtf8, LargeUtf8]),
+                ],
+                self.volatility(),
+            ),
 
             BuiltinScalarFunction::Substr => Signature::one_of(
                 vec![
@@ -1392,6 +1383,11 @@ impl BuiltinScalarFunction {
             | BuiltinScalarFunction::CurrentTime => {
                 Signature::uniform(0, vec![], self.volatility())
             }
+            BuiltinScalarFunction::MakeDate => Signature::uniform(
+                3,
+                vec![Int32, Int64, UInt32, UInt64, Utf8],
+                self.volatility(),
+            ),
             BuiltinScalarFunction::Isnan | BuiltinScalarFunction::Iszero => {
                 Signature::one_of(
                     vec![Exact(vec![Float32]), Exact(vec![Float64])],
@@ -1498,7 +1494,9 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Concat => &["concat"],
             BuiltinScalarFunction::ConcatWithSeparator => &["concat_ws"],
             BuiltinScalarFunction::Chr => &["chr"],
+            BuiltinScalarFunction::EndsWith => &["ends_with"],
             BuiltinScalarFunction::InitCap => &["initcap"],
+            BuiltinScalarFunction::InStr => &["instr"],
             BuiltinScalarFunction::Left => &["left"],
             BuiltinScalarFunction::Lower => &["lower"],
             BuiltinScalarFunction::Lpad => &["lpad"],
@@ -1534,6 +1532,7 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Now => &["now"],
             BuiltinScalarFunction::CurrentDate => &["current_date", "today"],
             BuiltinScalarFunction::CurrentTime => &["current_time"],
+            BuiltinScalarFunction::MakeDate => &["make_date"],
             BuiltinScalarFunction::DateBin => &["date_bin"],
             BuiltinScalarFunction::DateTrunc => &["date_trunc", "datetrunc"],
             BuiltinScalarFunction::DatePart => &["date_part", "datepart"],
@@ -1629,6 +1628,7 @@ impl BuiltinScalarFunction {
             ],
             BuiltinScalarFunction::ArrayUnion => &["array_union", "list_union"],
             BuiltinScalarFunction::Cardinality => &["cardinality"],
+            BuiltinScalarFunction::ArrayResize => &["array_resize", "list_resize"],
             BuiltinScalarFunction::MakeArray => &["make_array", "make_list"],
             BuiltinScalarFunction::ArrayIntersect => {
                 &["array_intersect", "list_intersect"]

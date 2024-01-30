@@ -27,6 +27,7 @@
 
 mod accumulator;
 mod built_in_function;
+mod built_in_window_function;
 mod columnar_value;
 mod literal;
 mod nullif;
@@ -39,7 +40,6 @@ mod udf;
 mod udwf;
 
 pub mod aggregate_function;
-pub mod array_expressions;
 pub mod conditional_expressions;
 pub mod expr;
 pub mod expr_fn;
@@ -47,22 +47,23 @@ pub mod expr_rewriter;
 pub mod expr_schema;
 pub mod field_util;
 pub mod function;
+pub mod groups_accumulator;
 pub mod interval_arithmetic;
 pub mod logical_plan;
 pub mod tree_node;
 pub mod type_coercion;
 pub mod utils;
 pub mod window_frame;
-pub mod window_function;
 pub mod window_state;
 
 pub use accumulator::Accumulator;
 pub use aggregate_function::AggregateFunction;
 pub use built_in_function::BuiltinScalarFunction;
+pub use built_in_window_function::BuiltInWindowFunction;
 pub use columnar_value::ColumnarValue;
 pub use expr::{
     Between, BinaryExpr, Case, Cast, Expr, GetFieldAccess, GetIndexedField, GroupingSet,
-    Like, ScalarFunctionDefinition, TryCast,
+    Like, ScalarFunctionDefinition, TryCast, WindowFunctionDefinition,
 };
 pub use expr_fn::*;
 pub use expr_schema::ExprSchemable;
@@ -70,6 +71,7 @@ pub use function::{
     AccumulatorFactoryFunction, PartitionEvaluatorFactory, ReturnTypeFunction,
     ScalarFunctionImplementation, StateTypeFunction,
 };
+pub use groups_accumulator::{EmitTo, GroupsAccumulator};
 pub use literal::{lit, lit_timestamp_nano, Literal, TimestampLiteral};
 pub use logical_plan::*;
 pub use nullif::SUPPORTED_NULLIF_TYPES;
@@ -79,11 +81,10 @@ pub use signature::{
     FuncMonotonicity, Signature, TypeSignature, Volatility, TIMEZONE_WILDCARD,
 };
 pub use table_source::{TableProviderFilterPushDown, TableSource, TableType};
-pub use udaf::AggregateUDF;
-pub use udf::ScalarUDF;
-pub use udwf::WindowUDF;
+pub use udaf::{AggregateUDF, AggregateUDFImpl};
+pub use udf::{ScalarUDF, ScalarUDFImpl};
+pub use udwf::{WindowUDF, WindowUDFImpl};
 pub use window_frame::{WindowFrame, WindowFrameBound, WindowFrameUnits};
-pub use window_function::{BuiltInWindowFunction, WindowFunction};
 
 #[cfg(test)]
 #[ctor::ctor]

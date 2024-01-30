@@ -17,14 +17,15 @@
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use datafusion_common::{
-    not_impl_err, plan_datafusion_err, plan_err, DFSchema, DataFusionError, Result,
+    not_impl_err, plan_datafusion_err, plan_err, DFSchema, DataFusionError, Dependency,
+    Result,
 };
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::function::suggest_valid_function;
 use datafusion_expr::window_frame::{check_window_frame, regularize_window_order_by};
 use datafusion_expr::{
-    expr, window_function, AggregateFunction, BuiltinScalarFunction, Expr, WindowFrame,
-    WindowFunction,
+    expr, AggregateFunction, BuiltinScalarFunction, Expr, WindowFrame,
+    WindowFunctionDefinition,
 };
 use sqlparser::ast::{
     Expr as SQLExpr, Function as SQLFunction, FunctionArg, FunctionArgExpr, WindowType,
@@ -90,6 +91,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             let partition_by = window
                 .partition_by
                 .into_iter()
+                // ignore window spec PARTITION BY for scalar values
+                // as they do not change and thus do not generate new partitions
+                .filter(|e| !matches!(e, sqlparser::ast::Expr::Value { .. },))
                 .map(|e| self.sql_expr_to_logical_expr(e, schema, planner_context))
                 .collect::<Result<Vec<_>>>()?;
             let mut order_by = self.order_by_to_sort_expr(
@@ -99,6 +103,22 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 // Numeric literals in window function ORDER BY are treated as constants
                 false,
             )?;
+
+            let func_deps = schema.functional_dependencies();
+            // Find whether ties are possible in the given ordering:
+            let is_ordering_strict = order_by.iter().any(|orderby_expr| {
+                if let Expr::Sort(sort_expr) = orderby_expr {
+                    if let Expr::Column(col) = sort_expr.expr.as_ref() {
+                        let idx = schema.index_of_column(col).unwrap();
+                        return func_deps.iter().any(|dep| {
+                            dep.source_indices == vec![idx]
+                                && dep.mode == Dependency::Single
+                        });
+                    }
+                }
+                false
+            });
+
             let window_frame = window
                 .window_frame
                 .as_ref()
@@ -112,18 +132,20 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             let window_frame = if let Some(window_frame) = window_frame {
                 regularize_window_order_by(&window_frame, &mut order_by)?;
                 window_frame
+            } else if is_ordering_strict {
+                WindowFrame::new(Some(true))
             } else {
-                WindowFrame::new(!order_by.is_empty())
+                WindowFrame::new((!order_by.is_empty()).then_some(false))
             };
 
             if let Ok(fun) = self.find_window_func(&name) {
                 let expr = match fun {
-                    WindowFunction::AggregateFunction(aggregate_fun) => {
+                    WindowFunctionDefinition::AggregateFunction(aggregate_fun) => {
                         let args =
                             self.function_args_to_expr(args, schema, planner_context)?;
 
                         Expr::WindowFunction(expr::WindowFunction::new(
-                            WindowFunction::AggregateFunction(aggregate_fun),
+                            WindowFunctionDefinition::AggregateFunction(aggregate_fun),
                             args,
                             partition_by,
                             order_by,
@@ -188,19 +210,22 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         Ok(Expr::ScalarFunction(ScalarFunction::new(fun, args)))
     }
 
-    pub(super) fn find_window_func(&self, name: &str) -> Result<WindowFunction> {
-        window_function::find_df_window_func(name)
+    pub(super) fn find_window_func(
+        &self,
+        name: &str,
+    ) -> Result<WindowFunctionDefinition> {
+        expr::find_df_window_func(name)
             // next check user defined aggregates
             .or_else(|| {
                 self.context_provider
                     .get_aggregate_meta(name)
-                    .map(WindowFunction::AggregateUDF)
+                    .map(WindowFunctionDefinition::AggregateUDF)
             })
             // next check user defined window functions
             .or_else(|| {
                 self.context_provider
                     .get_window_meta(name)
-                    .map(WindowFunction::WindowUDF)
+                    .map(WindowFunctionDefinition::WindowUDF)
             })
             .ok_or_else(|| {
                 plan_datafusion_err!("There is no window function named {name}")

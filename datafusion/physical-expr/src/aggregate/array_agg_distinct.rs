@@ -129,7 +129,7 @@ impl DistinctArrayAggAccumulator {
 }
 
 impl Accumulator for DistinctArrayAggAccumulator {
-    fn state(&self) -> Result<Vec<ScalarValue>> {
+    fn state(&mut self) -> Result<Vec<ScalarValue>> {
         Ok(vec![self.evaluate()?])
     }
 
@@ -163,7 +163,7 @@ impl Accumulator for DistinctArrayAggAccumulator {
         Ok(())
     }
 
-    fn evaluate(&self) -> Result<ScalarValue> {
+    fn evaluate(&mut self) -> Result<ScalarValue> {
         let values: Vec<ScalarValue> = self.values.iter().cloned().collect();
         let arr = ScalarValue::new_list(&values, &self.datatype);
         Ok(ScalarValue::List(arr))
@@ -186,7 +186,6 @@ mod tests {
     use arrow::array::{ArrayRef, Int32Array};
     use arrow::datatypes::{DataType, Schema};
     use arrow::record_batch::RecordBatch;
-    use arrow_array::cast::as_list_array;
     use arrow_array::types::Int32Type;
     use arrow_array::{Array, ListArray};
     use arrow_buffer::OffsetBuffer;
@@ -196,10 +195,7 @@ mod tests {
     // arrow::compute::sort cann't sort ListArray directly, so we need to sort the inner primitive array and wrap it back into ListArray.
     fn sort_list_inner(arr: ScalarValue) -> ScalarValue {
         let arr = match arr {
-            ScalarValue::List(arr) => {
-                let list_arr = as_list_array(&arr);
-                list_arr.value(0)
-            }
+            ScalarValue::List(arr) => arr.value(0),
             _ => {
                 panic!("Expected ScalarValue::List, got {:?}", arr)
             }

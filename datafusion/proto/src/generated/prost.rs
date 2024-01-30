@@ -38,7 +38,7 @@ pub struct DfSchema {
 pub struct LogicalPlanNode {
     #[prost(
         oneof = "logical_plan_node::LogicalPlanType",
-        tags = "1, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28"
+        tags = "1, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29"
     )]
     pub logical_plan_type: ::core::option::Option<logical_plan_node::LogicalPlanType>,
 }
@@ -101,6 +101,8 @@ pub mod logical_plan_node {
         DropView(super::DropViewNode),
         #[prost(message, tag = "28")]
         DistinctOn(::prost::alloc::boxed::Box<super::DistinctOnNode>),
+        #[prost(message, tag = "29")]
+        CopyTo(::prost::alloc::boxed::Box<super::CopyToNode>),
     }
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
@@ -359,8 +361,8 @@ pub struct CreateExternalTableNode {
     pub delimiter: ::prost::alloc::string::String,
     #[prost(string, tag = "9")]
     pub definition: ::prost::alloc::string::String,
-    #[prost(string, tag = "10")]
-    pub file_compression_type: ::prost::alloc::string::String,
+    #[prost(enumeration = "CompressionTypeVariant", tag = "17")]
+    pub file_compression_type: i32,
     #[prost(message, repeated, tag = "13")]
     pub order_exprs: ::prost::alloc::vec::Vec<LogicalExprNodeCollection>,
     #[prost(bool, tag = "14")]
@@ -514,6 +516,43 @@ pub struct DistinctOnNode {
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
+pub struct CopyToNode {
+    #[prost(message, optional, boxed, tag = "1")]
+    pub input: ::core::option::Option<::prost::alloc::boxed::Box<LogicalPlanNode>>,
+    #[prost(string, tag = "2")]
+    pub output_url: ::prost::alloc::string::String,
+    #[prost(string, tag = "6")]
+    pub file_type: ::prost::alloc::string::String,
+    #[prost(oneof = "copy_to_node::CopyOptions", tags = "4, 5")]
+    pub copy_options: ::core::option::Option<copy_to_node::CopyOptions>,
+}
+/// Nested message and enum types in `CopyToNode`.
+pub mod copy_to_node {
+    #[allow(clippy::derive_partial_eq_without_eq)]
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    pub enum CopyOptions {
+        #[prost(message, tag = "4")]
+        SqlOptions(super::SqlOptions),
+        #[prost(message, tag = "5")]
+        WriterOptions(super::FileTypeWriterOptions),
+    }
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct SqlOptions {
+    #[prost(message, repeated, tag = "1")]
+    pub option: ::prost::alloc::vec::Vec<SqlOption>,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct SqlOption {
+    #[prost(string, tag = "1")]
+    pub key: ::prost::alloc::string::String,
+    #[prost(string, tag = "2")]
+    pub value: ::prost::alloc::string::String,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct UnionNode {
     #[prost(message, repeated, tag = "1")]
     pub inputs: ::prost::alloc::vec::Vec<LogicalPlanNode>,
@@ -648,8 +687,8 @@ pub mod logical_expr_node {
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Wildcard {
-    #[prost(string, optional, tag = "1")]
-    pub qualifier: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(string, tag = "1")]
+    pub qualifier: ::prost::alloc::string::String,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -702,6 +741,8 @@ pub struct ListRange {
     pub start: ::core::option::Option<::prost::alloc::boxed::Box<LogicalExprNode>>,
     #[prost(message, optional, boxed, tag = "2")]
     pub stop: ::core::option::Option<::prost::alloc::boxed::Box<LogicalExprNode>>,
+    #[prost(message, optional, boxed, tag = "3")]
+    pub stride: ::core::option::Option<::prost::alloc::boxed::Box<LogicalExprNode>>,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -1537,7 +1578,7 @@ pub mod owned_table_reference {
 pub struct PhysicalPlanNode {
     #[prost(
         oneof = "physical_plan_node::PhysicalPlanType",
-        tags = "1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27"
+        tags = "1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29"
     )]
     pub physical_plan_type: ::core::option::Option<physical_plan_node::PhysicalPlanType>,
 }
@@ -1600,6 +1641,10 @@ pub mod physical_plan_node {
         Interleave(super::InterleaveExecNode),
         #[prost(message, tag = "27")]
         PlaceholderRow(super::PlaceholderRowExecNode),
+        #[prost(message, tag = "28")]
+        CsvSink(::prost::alloc::boxed::Box<super::CsvSinkExecNode>),
+        #[prost(message, tag = "29")]
+        ParquetSink(::prost::alloc::boxed::Box<super::ParquetSinkExecNode>),
     }
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
@@ -1613,7 +1658,7 @@ pub struct PartitionColumn {
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct FileTypeWriterOptions {
-    #[prost(oneof = "file_type_writer_options::FileType", tags = "1")]
+    #[prost(oneof = "file_type_writer_options::FileType", tags = "1, 2, 3, 4")]
     pub file_type: ::core::option::Option<file_type_writer_options::FileType>,
 }
 /// Nested message and enum types in `FileTypeWriterOptions`.
@@ -1623,6 +1668,12 @@ pub mod file_type_writer_options {
     pub enum FileType {
         #[prost(message, tag = "1")]
         JsonOptions(super::JsonWriterOptions),
+        #[prost(message, tag = "2")]
+        ParquetOptions(super::ParquetWriterOptions),
+        #[prost(message, tag = "3")]
+        CsvOptions(super::CsvWriterOptions),
+        #[prost(message, tag = "4")]
+        ArrowOptions(super::ArrowWriterOptions),
     }
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
@@ -1630,6 +1681,61 @@ pub mod file_type_writer_options {
 pub struct JsonWriterOptions {
     #[prost(enumeration = "CompressionTypeVariant", tag = "1")]
     pub compression: i32,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ParquetWriterOptions {
+    #[prost(message, optional, tag = "1")]
+    pub writer_properties: ::core::option::Option<WriterProperties>,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct CsvWriterOptions {
+    /// Compression type
+    #[prost(enumeration = "CompressionTypeVariant", tag = "1")]
+    pub compression: i32,
+    /// Optional column delimiter. Defaults to `b','`
+    #[prost(string, tag = "2")]
+    pub delimiter: ::prost::alloc::string::String,
+    /// Whether to write column names as file headers. Defaults to `true`
+    #[prost(bool, tag = "3")]
+    pub has_header: bool,
+    /// Optional date format for date arrays
+    #[prost(string, tag = "4")]
+    pub date_format: ::prost::alloc::string::String,
+    /// Optional datetime format for datetime arrays
+    #[prost(string, tag = "5")]
+    pub datetime_format: ::prost::alloc::string::String,
+    /// Optional timestamp format for timestamp arrays
+    #[prost(string, tag = "6")]
+    pub timestamp_format: ::prost::alloc::string::String,
+    /// Optional time format for time arrays
+    #[prost(string, tag = "7")]
+    pub time_format: ::prost::alloc::string::String,
+    /// Optional value to represent null
+    #[prost(string, tag = "8")]
+    pub null_value: ::prost::alloc::string::String,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ArrowWriterOptions {}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct WriterProperties {
+    #[prost(uint64, tag = "1")]
+    pub data_page_size_limit: u64,
+    #[prost(uint64, tag = "2")]
+    pub dictionary_page_size_limit: u64,
+    #[prost(uint64, tag = "3")]
+    pub data_page_row_count_limit: u64,
+    #[prost(uint64, tag = "4")]
+    pub write_batch_size: u64,
+    #[prost(uint64, tag = "5")]
+    pub max_row_group_size: u64,
+    #[prost(string, tag = "6")]
+    pub writer_version: ::prost::alloc::string::String,
+    #[prost(string, tag = "7")]
+    pub created_by: ::prost::alloc::string::String,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -1644,13 +1750,9 @@ pub struct FileSinkConfig {
     pub output_schema: ::core::option::Option<Schema>,
     #[prost(message, repeated, tag = "5")]
     pub table_partition_cols: ::prost::alloc::vec::Vec<PartitionColumn>,
-    #[prost(bool, tag = "7")]
-    pub single_file_output: bool,
     #[prost(bool, tag = "8")]
-    pub unbounded_input: bool,
-    #[prost(bool, tag = "9")]
     pub overwrite: bool,
-    #[prost(message, optional, tag = "10")]
+    #[prost(message, optional, tag = "9")]
     pub file_type_writer_options: ::core::option::Option<FileTypeWriterOptions>,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
@@ -1666,6 +1768,42 @@ pub struct JsonSinkExecNode {
     pub input: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalPlanNode>>,
     #[prost(message, optional, tag = "2")]
     pub sink: ::core::option::Option<JsonSink>,
+    #[prost(message, optional, tag = "3")]
+    pub sink_schema: ::core::option::Option<Schema>,
+    #[prost(message, optional, tag = "4")]
+    pub sort_order: ::core::option::Option<PhysicalSortExprNodeCollection>,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct CsvSink {
+    #[prost(message, optional, tag = "1")]
+    pub config: ::core::option::Option<FileSinkConfig>,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct CsvSinkExecNode {
+    #[prost(message, optional, boxed, tag = "1")]
+    pub input: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalPlanNode>>,
+    #[prost(message, optional, tag = "2")]
+    pub sink: ::core::option::Option<CsvSink>,
+    #[prost(message, optional, tag = "3")]
+    pub sink_schema: ::core::option::Option<Schema>,
+    #[prost(message, optional, tag = "4")]
+    pub sort_order: ::core::option::Option<PhysicalSortExprNodeCollection>,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ParquetSink {
+    #[prost(message, optional, tag = "1")]
+    pub config: ::core::option::Option<FileSinkConfig>,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ParquetSinkExecNode {
+    #[prost(message, optional, boxed, tag = "1")]
+    pub input: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalPlanNode>>,
+    #[prost(message, optional, tag = "2")]
+    pub sink: ::core::option::Option<ParquetSink>,
     #[prost(message, optional, tag = "3")]
     pub sink_schema: ::core::option::Option<Schema>,
     #[prost(message, optional, tag = "4")]
@@ -2055,6 +2193,10 @@ pub struct SymmetricHashJoinExecNode {
     pub null_equals_null: bool,
     #[prost(message, optional, tag = "8")]
     pub filter: ::core::option::Option<JoinFilter>,
+    #[prost(message, repeated, tag = "9")]
+    pub left_sort_exprs: ::prost::alloc::vec::Vec<PhysicalSortExprNode>,
+    #[prost(message, repeated, tag = "10")]
+    pub right_sort_exprs: ::prost::alloc::vec::Vec<PhysicalSortExprNode>,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -2110,9 +2252,9 @@ pub struct PhysicalColumn {
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct JoinOn {
     #[prost(message, optional, tag = "1")]
-    pub left: ::core::option::Option<PhysicalColumn>,
+    pub left: ::core::option::Option<PhysicalExprNode>,
     #[prost(message, optional, tag = "2")]
-    pub right: ::core::option::Option<PhysicalColumn>,
+    pub right: ::core::option::Option<PhysicalExprNode>,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -2406,6 +2548,8 @@ pub struct ListRangeExpr {
     pub start: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalExprNode>>,
     #[prost(message, optional, boxed, tag = "2")]
     pub stop: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalExprNode>>,
+    #[prost(message, optional, boxed, tag = "3")]
+    pub stride: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalExprNode>>,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -2631,6 +2775,10 @@ pub enum ScalarFunction {
     FindInSet = 127,
     ArraySort = 128,
     ArrayDistinct = 129,
+    ArrayResize = 130,
+    EndsWith = 131,
+    InStr = 132,
+    MakeDate = 133,
 }
 impl ScalarFunction {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -2769,6 +2917,10 @@ impl ScalarFunction {
             ScalarFunction::FindInSet => "FindInSet",
             ScalarFunction::ArraySort => "ArraySort",
             ScalarFunction::ArrayDistinct => "ArrayDistinct",
+            ScalarFunction::ArrayResize => "ArrayResize",
+            ScalarFunction::EndsWith => "EndsWith",
+            ScalarFunction::InStr => "InStr",
+            ScalarFunction::MakeDate => "MakeDate",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -2904,6 +3056,10 @@ impl ScalarFunction {
             "FindInSet" => Some(Self::FindInSet),
             "ArraySort" => Some(Self::ArraySort),
             "ArrayDistinct" => Some(Self::ArrayDistinct),
+            "ArrayResize" => Some(Self::ArrayResize),
+            "EndsWith" => Some(Self::EndsWith),
+            "InStr" => Some(Self::InStr),
+            "MakeDate" => Some(Self::MakeDate),
             _ => None,
         }
     }
@@ -2949,6 +3105,7 @@ pub enum AggregateFunction {
     RegrSyy = 33,
     RegrSxy = 34,
     StringAgg = 35,
+    NthValueAgg = 36,
 }
 impl AggregateFunction {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -2995,6 +3152,7 @@ impl AggregateFunction {
             AggregateFunction::RegrSyy => "REGR_SYY",
             AggregateFunction::RegrSxy => "REGR_SXY",
             AggregateFunction::StringAgg => "STRING_AGG",
+            AggregateFunction::NthValueAgg => "NTH_VALUE_AGG",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -3038,6 +3196,7 @@ impl AggregateFunction {
             "REGR_SYY" => Some(Self::RegrSyy),
             "REGR_SXY" => Some(Self::RegrSxy),
             "STRING_AGG" => Some(Self::StringAgg),
+            "NTH_VALUE_AGG" => Some(Self::NthValueAgg),
             _ => None,
         }
     }

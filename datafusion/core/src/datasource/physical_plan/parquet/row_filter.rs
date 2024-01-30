@@ -21,7 +21,7 @@ use arrow::error::{ArrowError, Result as ArrowResult};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::cast::as_boolean_array;
 use datafusion_common::tree_node::{RewriteRecursion, TreeNode, TreeNodeRewriter};
-use datafusion_common::{DataFusionError, Result, ScalarValue};
+use datafusion_common::{arrow_err, DataFusionError, Result, ScalarValue};
 use datafusion_physical_expr::expressions::{Column, Literal};
 use datafusion_physical_expr::utils::reassign_predicate_columns;
 use std::collections::BTreeSet;
@@ -243,7 +243,7 @@ impl<'a> TreeNodeRewriter for FilterCandidateBuilder<'a> {
                     }
                     Err(e) => {
                         // If the column is not in the table schema, should throw the error
-                        Err(DataFusionError::ArrowError(e))
+                        arrow_err!(e)
                     }
                 };
             }
@@ -487,6 +487,6 @@ mod test {
     fn logical2physical(expr: &Expr, schema: &Schema) -> Arc<dyn PhysicalExpr> {
         let df_schema = schema.clone().to_dfschema().unwrap();
         let execution_props = ExecutionProps::new();
-        create_physical_expr(expr, &df_schema, schema, &execution_props).unwrap()
+        create_physical_expr(expr, &df_schema, &execution_props).unwrap()
     }
 }

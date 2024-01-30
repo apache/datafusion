@@ -17,15 +17,17 @@
 
 //! This module provides the bisect function, which implements binary search.
 
-use crate::error::_internal_err;
-use crate::{DataFusionError, Result, ScalarValue};
+use crate::error::{_internal_datafusion_err, _internal_err};
+use crate::{arrow_datafusion_err, DataFusionError, Result, ScalarValue};
 use arrow::array::{ArrayRef, PrimitiveArray};
 use arrow::buffer::OffsetBuffer;
 use arrow::compute;
 use arrow::compute::{partition, SortColumn, SortOptions};
 use arrow::datatypes::{Field, SchemaRef, UInt32Type};
 use arrow::record_batch::RecordBatch;
-use arrow_array::{Array, LargeListArray, ListArray, RecordBatchOptions};
+use arrow_array::{
+    Array, FixedSizeListArray, LargeListArray, ListArray, RecordBatchOptions,
+};
 use arrow_schema::DataType;
 use sqlparser::ast::Ident;
 use sqlparser::dialect::GenericDialect;
@@ -95,7 +97,7 @@ pub fn get_record_batch_at_indices(
         new_columns,
         &RecordBatchOptions::new().with_row_count(Some(indices.len())),
     )
-    .map_err(DataFusionError::ArrowError)
+    .map_err(|e| arrow_datafusion_err!(e))
 }
 
 /// This function compares two tuples depending on the given sort options.
@@ -117,7 +119,7 @@ pub fn compare_rows(
                 lhs.partial_cmp(rhs)
             }
             .ok_or_else(|| {
-                DataFusionError::Internal("Column array shouldn't be empty".to_string())
+                _internal_datafusion_err!("Column array shouldn't be empty")
             })?,
             (true, true, _) => continue,
         };
@@ -291,7 +293,7 @@ pub fn get_arrayref_at_indices(
                 indices,
                 None, // None: no index check
             )
-            .map_err(DataFusionError::ArrowError)
+            .map_err(|e| arrow_datafusion_err!(e))
         })
         .collect()
 }
@@ -342,6 +344,8 @@ pub fn longest_consecutive_prefix<T: Borrow<usize>>(
     count
 }
 
+/// Array Utils
+
 /// Wrap an array into a single element `ListArray`.
 /// For example `[1, 2, 3]` would be converted into `[[1, 2, 3]]`
 pub fn array_into_list_array(arr: ArrayRef) -> ListArray {
@@ -361,6 +365,19 @@ pub fn array_into_large_list_array(arr: ArrayRef) -> LargeListArray {
     LargeListArray::new(
         Arc::new(Field::new("item", arr.data_type().to_owned(), true)),
         offsets,
+        arr,
+        None,
+    )
+}
+
+pub fn array_into_fixed_size_list_array(
+    arr: ArrayRef,
+    list_size: usize,
+) -> FixedSizeListArray {
+    let list_size = list_size as i32;
+    FixedSizeListArray::new(
+        Arc::new(Field::new("item", arr.data_type().to_owned(), true)),
+        list_size,
         arr,
         None,
     )
@@ -422,19 +439,71 @@ pub fn arrays_into_list_array(
 /// assert_eq!(base_type(&data_type), DataType::Int32);
 /// ```
 pub fn base_type(data_type: &DataType) -> DataType {
-    if let DataType::List(field) = data_type {
-        base_type(field.data_type())
-    } else {
-        data_type.to_owned()
+    match data_type {
+        DataType::List(field) | DataType::LargeList(field) => {
+            base_type(field.data_type())
+        }
+        _ => data_type.to_owned(),
+    }
+}
+
+/// A helper function to coerce base type in List.
+///
+/// Example
+/// ```
+/// use arrow::datatypes::{DataType, Field};
+/// use datafusion_common::utils::coerced_type_with_base_type_only;
+/// use std::sync::Arc;
+///
+/// let data_type = DataType::List(Arc::new(Field::new("item", DataType::Int32, true)));
+/// let base_type = DataType::Float64;
+/// let coerced_type = coerced_type_with_base_type_only(&data_type, &base_type);
+/// assert_eq!(coerced_type, DataType::List(Arc::new(Field::new("item", DataType::Float64, true))));
+pub fn coerced_type_with_base_type_only(
+    data_type: &DataType,
+    base_type: &DataType,
+) -> DataType {
+    match data_type {
+        DataType::List(field) => {
+            let data_type = match field.data_type() {
+                DataType::List(_) => {
+                    coerced_type_with_base_type_only(field.data_type(), base_type)
+                }
+                _ => base_type.to_owned(),
+            };
+
+            DataType::List(Arc::new(Field::new(
+                field.name(),
+                data_type,
+                field.is_nullable(),
+            )))
+        }
+        DataType::LargeList(field) => {
+            let data_type = match field.data_type() {
+                DataType::LargeList(_) => {
+                    coerced_type_with_base_type_only(field.data_type(), base_type)
+                }
+                _ => base_type.to_owned(),
+            };
+
+            DataType::LargeList(Arc::new(Field::new(
+                field.name(),
+                data_type,
+                field.is_nullable(),
+            )))
+        }
+
+        _ => base_type.clone(),
     }
 }
 
 /// Compute the number of dimensions in a list data type.
 pub fn list_ndims(data_type: &DataType) -> u64 {
-    if let DataType::List(field) = data_type {
-        1 + list_ndims(field.data_type())
-    } else {
-        0
+    match data_type {
+        DataType::List(field) | DataType::LargeList(field) => {
+            1 + list_ndims(field.data_type())
+        }
+        _ => 0,
     }
 }
 

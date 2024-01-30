@@ -23,8 +23,7 @@ use crate::PhysicalExpr;
 use arrow::array::ArrayRef;
 use arrow::compute::cast;
 use arrow::datatypes::{DataType, Field};
-use datafusion_common::ScalarValue;
-use datafusion_common::{internal_err, DataFusionError, Result};
+use datafusion_common::{arrow_datafusion_err, DataFusionError, Result, ScalarValue};
 use datafusion_expr::PartitionEvaluator;
 use std::any::Any;
 use std::cmp::min;
@@ -35,6 +34,7 @@ use std::sync::Arc;
 #[derive(Debug)]
 pub struct WindowShift {
     name: String,
+    /// Output data type
     data_type: DataType,
     shift_offset: i64,
     expr: Arc<dyn PhysicalExpr>,
@@ -142,7 +142,7 @@ fn create_empty_array(
         .transpose()?
         .unwrap_or_else(|| new_null_array(data_type, size));
     if array.data_type() != data_type {
-        cast(&array, data_type).map_err(DataFusionError::ArrowError)
+        cast(&array, data_type).map_err(|e| arrow_datafusion_err!(e))
     } else {
         Ok(array)
     }
@@ -172,10 +172,10 @@ fn shift_with_default_value(
         // Concatenate both arrays, add nulls after if shift > 0 else before
         if offset > 0 {
             concat(&[default_values.as_ref(), slice.as_ref()])
-                .map_err(DataFusionError::ArrowError)
+                .map_err(|e| arrow_datafusion_err!(e))
         } else {
             concat(&[slice.as_ref(), default_values.as_ref()])
-                .map_err(DataFusionError::ArrowError)
+                .map_err(|e| arrow_datafusion_err!(e))
         }
     }
 }
@@ -192,6 +192,11 @@ impl PartitionEvaluator for WindowShiftEvaluator {
             let end = min(idx + offset, n_rows);
             Ok(Range { start: idx, end })
         }
+    }
+
+    fn is_causal(&self) -> bool {
+        // Lagging windows are causal by definition:
+        self.shift_offset > 0
     }
 
     fn evaluate(
@@ -235,14 +240,10 @@ fn get_default_value(
     default_value: Option<&ScalarValue>,
     dtype: &DataType,
 ) -> Result<ScalarValue> {
-    if let Some(value) = default_value {
-        if let ScalarValue::Int64(Some(val)) = value {
-            ScalarValue::try_from_string(val.to_string(), dtype)
-        } else {
-            internal_err!("Expects default value to have Int64 type")
-        }
-    } else {
-        Ok(ScalarValue::try_from(dtype)?)
+    match default_value {
+        Some(v) if !v.data_type().is_null() => v.cast_to(dtype),
+        // If None or Null datatype
+        _ => ScalarValue::try_from(dtype),
     }
 }
 

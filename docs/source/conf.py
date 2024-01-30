@@ -33,9 +33,9 @@
 
 # -- Project information -----------------------------------------------------
 
-project = 'Arrow DataFusion'
-copyright = '2023, Apache Software Foundation'
-author = 'Arrow DataFusion Authors'
+project = 'Apache Arrow DataFusion'
+copyright = '2019-2024, Apache Software Foundation'
+author = 'Apache Software Foundation'
 
 
 # -- General configuration ---------------------------------------------------

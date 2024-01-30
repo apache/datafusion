@@ -17,105 +17,33 @@
 
 //! Collection of utility functions that are leveraged by the query optimizer rules
 
-use std::fmt;
-use std::fmt::Formatter;
 use std::sync::Arc;
 
 use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
-use crate::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use crate::physical_plan::repartition::RepartitionExec;
 use crate::physical_plan::sorts::sort::SortExec;
 use crate::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use crate::physical_plan::union::UnionExec;
 use crate::physical_plan::windows::{BoundedWindowAggExec, WindowAggExec};
-use crate::physical_plan::{get_plan_string, ExecutionPlan};
+use crate::physical_plan::ExecutionPlan;
 
-use datafusion_physical_expr::{LexRequirementRef, PhysicalSortRequirement};
-
-/// This object implements a tree that we use while keeping track of paths
-/// leading to [`SortExec`]s.
-#[derive(Debug, Clone)]
-pub(crate) struct ExecTree {
-    /// The `ExecutionPlan` associated with this node
-    pub plan: Arc<dyn ExecutionPlan>,
-    /// Child index of the plan in its parent
-    pub idx: usize,
-    /// Children of the plan that would need updating if we remove leaf executors
-    pub children: Vec<ExecTree>,
-}
-
-impl fmt::Display for ExecTree {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        let plan_string = get_plan_string(&self.plan);
-        write!(f, "\nidx: {:?}", self.idx)?;
-        write!(f, "\nplan: {:?}", plan_string)?;
-        for child in self.children.iter() {
-            write!(f, "\nexec_tree:{}", child)?;
-        }
-        writeln!(f)
-    }
-}
-
-impl ExecTree {
-    /// Create new Exec tree
-    pub fn new(
-        plan: Arc<dyn ExecutionPlan>,
-        idx: usize,
-        children: Vec<ExecTree>,
-    ) -> Self {
-        ExecTree {
-            plan,
-            idx,
-            children,
-        }
-    }
-}
-
-/// Get `ExecTree` for each child of the plan if they are tracked.
-/// # Arguments
-///
-/// * `n_children` - Children count of the plan of interest
-/// * `onward` - Contains `Some(ExecTree)` of the plan tracked.
-///            - Contains `None` is plan is not tracked.
-///
-/// # Returns
-///
-/// A `Vec<Option<ExecTree>>` that contains tracking information of each child.
-/// If a child is `None`, it is not tracked. If `Some(ExecTree)` child is tracked also.
-pub(crate) fn get_children_exectrees(
-    n_children: usize,
-    onward: &Option<ExecTree>,
-) -> Vec<Option<ExecTree>> {
-    let mut children_onward = vec![None; n_children];
-    if let Some(exec_tree) = &onward {
-        for child in &exec_tree.children {
-            children_onward[child.idx] = Some(child.clone());
-        }
-    }
-    children_onward
-}
+use datafusion_physical_expr::{LexRequirement, PhysicalSortRequirement};
+use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
+use datafusion_physical_plan::tree_node::PlanContext;
 
 /// This utility function adds a `SortExec` above an operator according to the
 /// given ordering requirements while preserving the original partitioning.
-pub fn add_sort_above(
-    node: &mut Arc<dyn ExecutionPlan>,
-    sort_requirement: LexRequirementRef,
+pub fn add_sort_above<T: Clone + Default>(
+    node: PlanContext<T>,
+    sort_requirements: LexRequirement,
     fetch: Option<usize>,
-) {
-    // If the ordering requirement is already satisfied, do not add a sort.
-    if !node
-        .equivalence_properties()
-        .ordering_satisfy_requirement(sort_requirement)
-    {
-        let sort_expr = PhysicalSortRequirement::to_sort_exprs(sort_requirement.to_vec());
-        let new_sort = SortExec::new(sort_expr, node.clone()).with_fetch(fetch);
-
-        *node = Arc::new(if node.output_partitioning().partition_count() > 1 {
-            new_sort.with_preserve_partitioning(true)
-        } else {
-            new_sort
-        }) as _
+) -> PlanContext<T> {
+    let sort_expr = PhysicalSortRequirement::to_sort_exprs(sort_requirements);
+    let mut new_sort = SortExec::new(sort_expr, node.plan.clone()).with_fetch(fetch);
+    if node.plan.output_partitioning().partition_count() > 1 {
+        new_sort = new_sort.with_preserve_partitioning(true);
     }
+    PlanContext::new(Arc::new(new_sort), T::default(), vec![node])
 }
 
 /// Checks whether the given operator is a limit;

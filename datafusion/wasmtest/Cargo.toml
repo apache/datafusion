@@ -28,7 +28,7 @@ authors = { workspace = true }
 rust-version = "1.70"
 
 [lib]
-crate-type = ["cdylib", "rlib",]
+crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 
@@ -37,11 +37,14 @@ crate-type = ["cdylib", "rlib",]
 # all the `std::fmt` and `std::panicking` infrastructure, so isn't great for
 # code size when deploying.
 console_error_panic_hook = { version = "0.1.1", optional = true }
+datafusion = { path = "../core", default-features = false }
 
 datafusion-common = { workspace = true }
+datafusion-execution = { workspace = true }
 datafusion-expr = { workspace = true }
 datafusion-optimizer = { workspace = true }
 datafusion-physical-expr = { workspace = true }
+datafusion-physical-plan = { workspace = true }
 datafusion-sql = { workspace = true }
 
 # getrandom must be compiled with js feature
