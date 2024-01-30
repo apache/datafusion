@@ -124,7 +124,9 @@ fn physical_name(e: &Expr) -> Result<String> {
 
 fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
     match e {
-        Expr::Unnest(_) => unimplemented!("Unnest is converted to a logical plan node"),
+        Expr::Unnest(_) => {
+            internal_err!("Expr::Unnest should have been converted to LogicalPlan::Unest")
+        }
         Expr::Column(c) => {
             if is_first_expr {
                 Ok(c.name.clone())
