@@ -295,6 +295,8 @@ pub enum BuiltinScalarFunction {
     CurrentDate,
     /// current_time
     CurrentTime,
+    /// make_date
+    MakeDate,
     /// translate
     Translate,
     /// trim
@@ -484,6 +486,7 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::ToTimestampMicros => Volatility::Immutable,
             BuiltinScalarFunction::ToTimestampNanos => Volatility::Immutable,
             BuiltinScalarFunction::ToTimestampSeconds => Volatility::Immutable,
+            BuiltinScalarFunction::MakeDate => Volatility::Immutable,
             BuiltinScalarFunction::Translate => Volatility::Immutable,
             BuiltinScalarFunction::Trim => Volatility::Immutable,
             BuiltinScalarFunction::Upper => Volatility::Immutable,
@@ -834,6 +837,7 @@ impl BuiltinScalarFunction {
             }
             BuiltinScalarFunction::CurrentDate => Ok(Date32),
             BuiltinScalarFunction::CurrentTime => Ok(Time64(Nanosecond)),
+            BuiltinScalarFunction::MakeDate => Ok(Date32),
             BuiltinScalarFunction::Translate => {
                 utf8_to_str_type(&input_expr_types[0], "translate")
             }
@@ -1379,6 +1383,11 @@ impl BuiltinScalarFunction {
             | BuiltinScalarFunction::CurrentTime => {
                 Signature::uniform(0, vec![], self.volatility())
             }
+            BuiltinScalarFunction::MakeDate => Signature::uniform(
+                3,
+                vec![Int32, Int64, UInt32, UInt64, Utf8],
+                self.volatility(),
+            ),
             BuiltinScalarFunction::Isnan | BuiltinScalarFunction::Iszero => {
                 Signature::one_of(
                     vec![Exact(vec![Float32]), Exact(vec![Float64])],
@@ -1523,6 +1532,7 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Now => &["now"],
             BuiltinScalarFunction::CurrentDate => &["current_date", "today"],
             BuiltinScalarFunction::CurrentTime => &["current_time"],
+            BuiltinScalarFunction::MakeDate => &["make_date"],
             BuiltinScalarFunction::DateBin => &["date_bin"],
             BuiltinScalarFunction::DateTrunc => &["date_trunc", "datetrunc"],
             BuiltinScalarFunction::DatePart => &["date_part", "datepart"],
