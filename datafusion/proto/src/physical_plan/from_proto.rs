@@ -340,21 +340,17 @@ pub fn parse_physical_expr(
             // TODO Do not create new the ExecutionProps
             let execution_props = ExecutionProps::new();
 
-            let fun_expr = functions::create_physical_fun(
+            functions::create_physical_expr(
                 &(&scalar_function).into(),
+                &args,
+                input_schema,
                 &execution_props,
-            )?;
-
-            Arc::new(ScalarFunctionExpr::new(
-                &e.name,
-                fun_expr,
-                args,
-                convert_required!(e.return_type)?,
-                None,
-            ))
+            )?
         }
         ExprType::ScalarUdf(e) => {
-            let scalar_fun = registry.udf(e.name.as_str())?.fun().clone();
+            let udf = registry.udf(e.name.as_str())?;
+            let signature = udf.signature();
+            let scalar_fun = udf.fun().clone();
 
             let args = e
                 .args
@@ -368,6 +364,7 @@ pub fn parse_physical_expr(
                 args,
                 convert_required!(e.return_type)?,
                 None,
+                signature.type_signature.supports_zero_argument(),
             ))
         }
         ExprType::LikeExpr(like_expr) => Arc::new(LikeExpr::new(

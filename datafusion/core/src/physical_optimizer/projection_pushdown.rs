@@ -1270,6 +1270,7 @@ mod tests {
                 ],
                 DataType::Int32,
                 None,
+                false,
             )),
             Arc::new(CaseExpr::try_new(
                 Some(Arc::new(Column::new("d", 2))),
@@ -1336,6 +1337,7 @@ mod tests {
                 ],
                 DataType::Int32,
                 None,
+                false,
             )),
             Arc::new(CaseExpr::try_new(
                 Some(Arc::new(Column::new("d", 3))),
@@ -1405,6 +1407,7 @@ mod tests {
                 ],
                 DataType::Int32,
                 None,
+                false,
             )),
             Arc::new(CaseExpr::try_new(
                 Some(Arc::new(Column::new("d", 2))),
@@ -1471,6 +1474,7 @@ mod tests {
                 ],
                 DataType::Int32,
                 None,
+                false,
             )),
             Arc::new(CaseExpr::try_new(
                 Some(Arc::new(Column::new("d_new", 3))),
