@@ -1741,97 +1741,33 @@ mod tests {
 
     #[test]
     fn test_date_trunc_timezones_with_error() {
-        let cases: Vec<(Vec<&str>, Option<Arc<str>>, &str)> = vec![
+        let cases = vec![
             // daylight saving time ends at 2023-10-29T01:00:00+00:00 in Europe/Berlin
-            (
-                vec!["2023-10-29T00:00:00+00:00"],
-                Some("Europe/Berlin".into()),
-                "second",
-            ),
-            (
-                vec!["2023-10-29T00:00:00+00:00"],
-                Some("Europe/Berlin".into()),
-                "minute",
-            ),
-            (
-                vec!["2023-10-29T00:00:00+00:00"],
-                Some("Europe/Berlin".into()),
-                "hour",
-            ),
-            (
-                vec!["2023-10-29T00:00:00+00:00"],
-                Some("Europe/Berlin".into()),
-                "day",
-            ),
-            (
-                vec!["2023-10-29T00:00:00+00:00"],
-                Some("Europe/Berlin".into()),
-                "week",
-            ),
-            (
-                vec!["2023-10-29T00:00:00+00:00"],
-                Some("Europe/Berlin".into()),
-                "month",
-            ),
-            (
-                vec!["2023-10-29T00:00:00+00:00"],
-                Some("Europe/Berlin".into()),
-                "quarter",
-            ),
-            (
-                vec!["2023-10-29T00:00:00+00:00"],
-                Some("Europe/Berlin".into()),
-                "year",
-            ),
+            (vec!["2023-10-29T00:00:00+00:00"], "second"),
+            (vec!["2023-10-29T00:00:00+00:00"], "minute"),
+            (vec!["2023-10-29T00:00:00+00:00"], "hour"),
+            (vec!["2023-10-29T00:00:00+00:00"], "day"),
+            (vec!["2023-10-29T00:00:00+00:00"], "week"),
+            (vec!["2023-10-29T00:00:00+00:00"], "month"),
+            (vec!["2023-10-29T00:00:00+00:00"], "quarter"),
+            (vec!["2023-10-29T00:00:00+00:00"], "year"),
             // daylight saving time ends at 2024-10-27T01:00:00+00:00 in Europe/Berlin
-            (
-                vec!["2024-10-27T00:00:00+00:00"],
-                Some("Europe/Berlin".into()),
-                "second",
-            ),
-            (
-                vec!["2024-10-27T00:00:00+00:00"],
-                Some("Europe/Berlin".into()),
-                "minute",
-            ),
-            (
-                vec!["2024-10-27T00:00:00+00:00"],
-                Some("Europe/Berlin".into()),
-                "hour",
-            ),
-            (
-                vec!["2024-10-27T00:00:00+00:00"],
-                Some("Europe/Berlin".into()),
-                "day",
-            ),
-            (
-                vec!["2024-10-27T00:00:00+00:00"],
-                Some("Europe/Berlin".into()),
-                "week",
-            ),
-            (
-                vec!["2024-10-27T00:00:00+00:00"],
-                Some("Europe/Berlin".into()),
-                "month",
-            ),
-            (
-                vec!["2024-10-27T00:00:00+00:00"],
-                Some("Europe/Berlin".into()),
-                "quarter",
-            ),
-            (
-                vec!["2024-10-27T00:00:00+00:00"],
-                Some("Europe/Berlin".into()),
-                "year",
-            ),
+            (vec!["2024-10-27T00:00:00+00:00"], "second"),
+            (vec!["2024-10-27T00:00:00+00:00"], "minute"),
+            (vec!["2024-10-27T00:00:00+00:00"], "hour"),
+            (vec!["2024-10-27T00:00:00+00:00"], "day"),
+            (vec!["2024-10-27T00:00:00+00:00"], "week"),
+            (vec!["2024-10-27T00:00:00+00:00"], "month"),
+            (vec!["2024-10-27T00:00:00+00:00"], "quarter"),
+            (vec!["2024-10-27T00:00:00+00:00"], "year"),
         ];
 
-        cases.iter().for_each(|(original, tz_opt, granularity)| {
+        cases.iter().for_each(|(original, granularity)| {
             let input = original
                 .iter()
                 .map(|s| Some(string_to_timestamp_nanos(s).unwrap()))
                 .collect::<TimestampNanosecondArray>()
-                .with_timezone_opt(tz_opt.clone());
+                .with_timezone_opt("Europe/Berlin".into());
             let result = date_trunc(&[
                 ColumnarValue::Scalar(ScalarValue::from(*granularity)),
                 ColumnarValue::Array(Arc::new(input)),
