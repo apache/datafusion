@@ -36,6 +36,7 @@ use datafusion::logical_expr::{
 };
 use datafusion::parquet::file::properties::WriterProperties;
 use datafusion::physical_expr::expressions::Literal;
+use datafusion::physical_expr::expressions::NthValueAgg;
 use datafusion::physical_expr::window::SlidingAggregateWindowExpr;
 use datafusion::physical_expr::{PhysicalSortRequirement, ScalarFunctionExpr};
 use datafusion::physical_plan::aggregates::{
@@ -337,17 +338,16 @@ fn rountrip_aggregate() -> Result<()> {
             "AVG(b)".to_string(),
             DataType::Float64,
         ))],
-        // TODO: See <https://github.com/apache/arrow-datafusion/issues/9028>
-        // // NTH_VALUE
-        // vec![Arc::new(NthValueAgg::new(
-        //     col("b", &schema)?,
-        //     1,
-        //     "NTH_VALUE(b, 1)".to_string(),
-        //     DataType::Int64,
-        //     false,
-        //     Vec::new(),
-        //     Vec::new(),
-        // ))],
+        // NTH_VALUE
+        vec![Arc::new(NthValueAgg::new(
+            col("b", &schema)?,
+            1,
+            "NTH_VALUE(b, 1)".to_string(),
+            DataType::Int64,
+            false,
+            Vec::new(),
+            Vec::new(),
+        ))],
         // STRING_AGG
         vec![Arc::new(StringAgg::new(
             cast(col("b", &schema)?, &schema, DataType::Utf8)?,
