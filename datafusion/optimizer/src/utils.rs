@@ -48,7 +48,8 @@ pub fn optimize_children(
         new_inputs.push(new_input.unwrap_or_else(|| input.clone()))
     }
     if plan_is_changed {
-        Ok(Some(plan.with_new_exprs(plan.expressions(), &new_inputs)?))
+        let exprs = plan.expressions();
+        plan.with_new_exprs(exprs, new_inputs).map(Some)
     } else {
         Ok(None)
     }
