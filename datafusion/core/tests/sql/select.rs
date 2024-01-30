@@ -251,3 +251,29 @@ async fn test_parameter_invalid_types() -> Result<()> {
 );
     Ok(())
 }
+
+#[tokio::test]
+async fn test_parameter_empty_table_with_param_values() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    let df = ctx
+        .read_empty()
+        .unwrap()
+        .with_column("a", lit(1))
+        .unwrap()
+        .filter(col("a").eq(placeholder("$0")))
+        .unwrap()
+        .with_param_values(vec![("0", ScalarValue::from(3i32))])
+        .unwrap();
+
+    let logical_plan = df.logical_plan();
+    assert_eq!(
+        "Filter: a = Int32(3)\n  Projection: Int32(1) AS a\n    EmptyRelation",
+        logical_plan.display_indent().to_string()
+    );
+
+    let optimized_plan = ctx.state().optimize(logical_plan).unwrap();
+    assert_eq!("EmptyRelation", optimized_plan.display_indent().to_string());
+
+    Ok(())
+}
