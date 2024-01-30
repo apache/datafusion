@@ -20,7 +20,7 @@ use datafusion_common::{
     not_impl_err, plan_datafusion_err, plan_err, DFSchema, DataFusionError, Dependency,
     Result,
 };
-use datafusion_expr::expr::ScalarFunction;
+use datafusion_expr::expr::{ScalarFunction, Unnest};
 use datafusion_expr::function::suggest_valid_function;
 use datafusion_expr::window_frame::{check_window_frame, regularize_window_order_by};
 use datafusion_expr::{
@@ -68,6 +68,13 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         if let Some(fm) = self.context_provider.get_function_meta(&name) {
             let args = self.function_args_to_expr(args, schema, planner_context)?;
             return Ok(Expr::ScalarFunction(ScalarFunction::new_udf(fm, args)));
+        }
+
+        // Build Unnest expression
+        if name.eq("unnest") {
+            let exprs =
+                self.function_args_to_expr(args.clone(), schema, planner_context)?;
+            return Ok(Expr::Unnest(Unnest { exprs }));
         }
 
         // next, scalar built-in

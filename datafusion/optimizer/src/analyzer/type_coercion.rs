@@ -134,6 +134,7 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
 
     fn mutate(&mut self, expr: Expr) -> Result<Expr> {
         match expr {
+            Expr::Unnest(_) => todo!("NYI"),
             Expr::ScalarSubquery(Subquery {
                 subquery,
                 outer_ref_columns,

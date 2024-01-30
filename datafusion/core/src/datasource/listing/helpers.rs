@@ -90,6 +90,11 @@ pub fn expr_applicable_for_cols(col_names: &[String], expr: &Expr) -> bool {
             | Expr::GroupingSet(_)
             | Expr::Case { .. } => Ok(VisitRecursion::Continue),
 
+            Expr::Unnest(_) => {
+                is_applicable = false;
+                Ok(VisitRecursion::Stop)
+            }
+
             Expr::ScalarFunction(scalar_function) => {
                 match &scalar_function.func_def {
                     ScalarFunctionDefinition::BuiltIn(fun) => {
