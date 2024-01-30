@@ -581,7 +581,7 @@ fn _date_trunc_coarse_without_tz(
 /// account that some granularities are not uniform durations of time
 /// (e.g. months are not always the same lengths, leap seconds, etc)
 fn date_trunc_coarse(granularity: &str, value: i64, tz: Option<Tz>) -> Result<i64> {
-    let value = match tz {
+    let value: Option<i64> = match tz {
         Some(tz) => {
             // Use chrono DateTime<Tz> to clear the various fields because need to clear per timezone,
             // and NaiveDateTime (ISO 8601) has no concept of timezones
@@ -1693,6 +1693,21 @@ mod tests {
                     "2020-09-08T00:00:00+08",
                 ],
             ),
+            (
+                vec![
+                    "2023-10-28T23:00:00+00:00",
+                    "2023-10-29T02:00:00+00:00",
+                    "2024-10-26T23:00:00+00:00",
+                    "2024-10-27T02:00:00+00:00",
+                ],
+                Some("Europe/Berlin".into()),
+                vec![
+                    "2023-10-29T00:00:00+02:00",
+                    "2023-10-29T00:00:00+02:00",
+                    "2024-10-27T00:00:00+02:00",
+                    "2024-10-27T00:00:00+02:00",
+                ],
+            ),
         ];
 
         cases.iter().for_each(|(original, tz_opt, expected)| {
@@ -1721,6 +1736,112 @@ mod tests {
             } else {
                 panic!("unexpected column type");
             }
+        });
+    }
+
+    #[test]
+    fn test_date_trunc_timezones_with_error() {
+        let cases: Vec<(Vec<&str>, Option<Arc<str>>, &str)> = vec![
+            // daylight saving time ends at 2023-10-29T01:00:00+00:00 in Europe/Berlin
+            (
+                vec!["2023-10-29T00:00:00+00:00"],
+                Some("Europe/Berlin".into()),
+                "second",
+            ),
+            (
+                vec!["2023-10-29T00:00:00+00:00"],
+                Some("Europe/Berlin".into()),
+                "minute",
+            ),
+            (
+                vec!["2023-10-29T00:00:00+00:00"],
+                Some("Europe/Berlin".into()),
+                "hour",
+            ),
+            (
+                vec!["2023-10-29T00:00:00+00:00"],
+                Some("Europe/Berlin".into()),
+                "day",
+            ),
+            (
+                vec!["2023-10-29T00:00:00+00:00"],
+                Some("Europe/Berlin".into()),
+                "week",
+            ),
+            (
+                vec!["2023-10-29T00:00:00+00:00"],
+                Some("Europe/Berlin".into()),
+                "month",
+            ),
+            (
+                vec!["2023-10-29T00:00:00+00:00"],
+                Some("Europe/Berlin".into()),
+                "quarter",
+            ),
+            (
+                vec!["2023-10-29T00:00:00+00:00"],
+                Some("Europe/Berlin".into()),
+                "year",
+            ),
+            // daylight saving time ends at 2024-10-27T01:00:00+00:00 in Europe/Berlin
+            (
+                vec!["2024-10-27T00:00:00+00:00"],
+                Some("Europe/Berlin".into()),
+                "second",
+            ),
+            (
+                vec!["2024-10-27T00:00:00+00:00"],
+                Some("Europe/Berlin".into()),
+                "minute",
+            ),
+            (
+                vec!["2024-10-27T00:00:00+00:00"],
+                Some("Europe/Berlin".into()),
+                "hour",
+            ),
+            (
+                vec!["2024-10-27T00:00:00+00:00"],
+                Some("Europe/Berlin".into()),
+                "day",
+            ),
+            (
+                vec!["2024-10-27T00:00:00+00:00"],
+                Some("Europe/Berlin".into()),
+                "week",
+            ),
+            (
+                vec!["2024-10-27T00:00:00+00:00"],
+                Some("Europe/Berlin".into()),
+                "month",
+            ),
+            (
+                vec!["2024-10-27T00:00:00+00:00"],
+                Some("Europe/Berlin".into()),
+                "quarter",
+            ),
+            (
+                vec!["2024-10-27T00:00:00+00:00"],
+                Some("Europe/Berlin".into()),
+                "year",
+            ),
+        ];
+
+        cases.iter().for_each(|(original, tz_opt, granularity)| {
+            let input = original
+                .iter()
+                .map(|s| Some(string_to_timestamp_nanos(s).unwrap()))
+                .collect::<TimestampNanosecondArray>()
+                .with_timezone_opt(tz_opt.clone());
+            let result = date_trunc(&[
+                ColumnarValue::Scalar(ScalarValue::from(*granularity)),
+                ColumnarValue::Array(Arc::new(input)),
+            ]);
+            assert!(result.is_err());
+
+            assert!(matches!(
+                result.unwrap_err(),
+                DataFusionError::NotImplemented(_)
+            ));
         });
     }
 
