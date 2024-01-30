@@ -17,6 +17,7 @@
 
 //! Execution functions
 
+use std::collections::HashMap;
 use std::io::prelude::*;
 use std::io::BufReader;
 use std::time::Instant;
@@ -237,6 +238,14 @@ async fn exec_and_print(
             create_external_table(ctx, cmd).await?;
         }
 
+        if let LogicalPlan::Copy(copy_to) = &mut plan {
+            let url = ListingTableUrl::parse(copy_to.output_url.as_str())?;
+            let store =
+                get_object_store(ctx, &mut HashMap::new(), url.scheme(), url.as_ref())
+                    .await?;
+            ctx.runtime_env().register_object_store(url.as_ref(), store);
+        }
+
         let df = ctx.execute_logical_plan(plan).await?;
         let physical_plan = df.create_physical_plan().await?;
 
@@ -268,17 +277,30 @@ async fn create_external_table(
     let url: &Url = table_path.as_ref();
 
     // registering the cloud object store dynamically using cmd.options
+    let store = get_object_store(ctx, &mut cmd.options, scheme, url).await?;
+
+    ctx.runtime_env().register_object_store(url, store);
+
+    Ok(())
+}
+
+async fn get_object_store(
+    ctx: &SessionContext,
+    options: &mut HashMap<String, String>,
+    scheme: &str,
+    url: &Url,
+) -> Result<Arc<dyn ObjectStore>, DataFusionError> {
     let store = match scheme {
         "s3" => {
-            let builder = get_s3_object_store_builder(url, cmd).await?;
+            let builder = get_s3_object_store_builder(url, options).await?;
             Arc::new(builder.build()?) as Arc<dyn ObjectStore>
         }
         "oss" => {
-            let builder = get_oss_object_store_builder(url, cmd)?;
+            let builder = get_oss_object_store_builder(url, options)?;
             Arc::new(builder.build()?) as Arc<dyn ObjectStore>
         }
         "gs" | "gcs" => {
-            let builder = get_gcs_object_store_builder(url, cmd)?;
+            let builder = get_gcs_object_store_builder(url, options)?;
             Arc::new(builder.build()?) as Arc<dyn ObjectStore>
         }
         _ => {
@@ -291,10 +313,7 @@ async fn create_external_table(
                 })?
         }
     };
-
-    ctx.runtime_env().register_object_store(url, store);
-
-    Ok(())
+    Ok(store)
 }
 
 #[cfg(test)]
