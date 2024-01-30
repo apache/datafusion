@@ -1262,6 +1262,82 @@ SELECT DATE_TRUNC('day', arrow_cast(TIMESTAMP '2023-08-03 14:38:50Z', 'Timestamp
 2023-08-03T14:38:50
 2023-08-03T14:38:50
 
+# date_trunc with data with timezones
+statement ok
+CREATE TABLE timestamp_strings(ts varchar)
+AS VALUES
+('2024-10-27 00:00:00'),
+('2024-10-27 00:30:00'),
+('2024-10-27 01:30:00'),
+('2024-10-27 02:00:00'), -- Daylight Savings Time happens here in Berlin
+('2024-10-27 02:30:00'),
+('2024-10-27 03:00:00'),
+('2024-10-27 03:30:00')
+;
+
+statement ok
+create view timestamp_utc as
+select
+  arrow_cast(ts, 'Timestamp(Nanosecond, Some("UTC"))') as ts
+from timestamp_strings;
+
+statement ok
+create view timestamp_berlin as
+select
+  arrow_cast(ts, 'Timestamp(Nanosecond, Some("Europe/Berlin"))') as ts
+from timestamp_utc; -- have to convert to utc prior to converting to berlin
+
+query PT
+select ts, arrow_typeof(ts) from timestamp_utc order by ts;
+----
+2024-10-27T00:00:00Z Timestamp(Nanosecond, Some("UTC"))
+2024-10-27T00:30:00Z Timestamp(Nanosecond, Some("UTC"))
+2024-10-27T01:30:00Z Timestamp(Nanosecond, Some("UTC"))
+2024-10-27T02:00:00Z Timestamp(Nanosecond, Some("UTC"))
+2024-10-27T02:30:00Z Timestamp(Nanosecond, Some("UTC"))
+2024-10-27T03:00:00Z Timestamp(Nanosecond, Some("UTC"))
+2024-10-27T03:30:00Z Timestamp(Nanosecond, Some("UTC"))
+
+query PT
+select ts, arrow_typeof(ts) from timestamp_berlin order by ts;
+----
+2024-10-27T02:00:00+02:00 Timestamp(Nanosecond, Some("Europe/Berlin"))
+2024-10-27T02:30:00+02:00 Timestamp(Nanosecond, Some("Europe/Berlin"))
+2024-10-27T02:30:00+01:00 Timestamp(Nanosecond, Some("Europe/Berlin"))
+2024-10-27T03:00:00+01:00 Timestamp(Nanosecond, Some("Europe/Berlin"))
+2024-10-27T03:30:00+01:00 Timestamp(Nanosecond, Some("Europe/Berlin"))
+2024-10-27T04:00:00+01:00 Timestamp(Nanosecond, Some("Europe/Berlin"))
+2024-10-27T04:30:00+01:00 Timestamp(Nanosecond, Some("Europe/Berlin"))
+
+#  date trunc in utc with DST
+query PPPP
+select ts, date_trunc('month', ts), date_trunc('day', ts), date_trunc('hour', ts)
+from timestamp_utc order by ts;
+----
+2024-10-27T00:00:00Z 2024-10-01T00:00:00Z 2024-10-27T00:00:00Z 2024-10-27T00:00:00Z
+2024-10-27T00:30:00Z 2024-10-01T00:00:00Z 2024-10-27T00:00:00Z 2024-10-27T00:00:00Z
+2024-10-27T01:30:00Z 2024-10-01T00:00:00Z 2024-10-27T00:00:00Z 2024-10-27T01:00:00Z
+2024-10-27T02:00:00Z 2024-10-01T00:00:00Z 2024-10-27T00:00:00Z 2024-10-27T02:00:00Z
+2024-10-27T02:30:00Z 2024-10-01T00:00:00Z 2024-10-27T00:00:00Z 2024-10-27T02:00:00Z
+2024-10-27T03:00:00Z 2024-10-01T00:00:00Z 2024-10-27T00:00:00Z 2024-10-27T03:00:00Z
+2024-10-27T03:30:00Z 2024-10-01T00:00:00Z 2024-10-27T00:00:00Z 2024-10-27T03:00:00Z
+
+
+#  date trunc in a timezone with DST across DST boundary
+# panics with "Option::unwrap()` on a `None` value" on main
+# due to https://github.com/apache/arrow-datafusion/issues/8899
+#query PPPP
+#select ts, date_trunc('month', ts), date_trunc('day', ts), date_trunc('hour', ts)
+#from timestamp_berlin order by ts;
+
+statement ok
+drop table timestamp_strings;
+
+statement ok
+drop view timestamp_utc;
+
+statement ok
+drop view timestamp_berlin;
 
 # Demonstrate that strings are automatically coerced to timestamps (don't use TIMESTAMP)
 
@@ -2232,5 +2308,3 @@ SELECT val, ts1 - ts2 AS ts_diff FROM table_a ORDER BY ts2 - ts1
 ----
 1 0 days -1 hours 0 mins 0.000000000 secs
 2 0 days -1 hours 0 mins 0.000000000 secs
-
-
