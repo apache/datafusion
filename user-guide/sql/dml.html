@@ -432,7 +432,7 @@ COPY { <i><b>table_name</i></b> | <i><b>query</i></b> } TO '<i><b>file_name</i><
 </div>
 <p>Copy the contents of <code class="docutils literal notranslate"><span class="pre">source_table</span></code> to one or more Parquet formatted
 files in the <code class="docutils literal notranslate"><span class="pre">dir_name</span></code> directory:</p>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">COPY</span><span class="w"> </span><span class="n">source_table</span><span class="w"> </span><span class="k">TO</span><span class="w"> </span><span class="s1">&#39;dir_name&#39;</span><span class="w"> </span><span class="p">(</span><span class="n">FORMAT</span><span class="w"> </span><span class="n">parquet</span><span class="p">,</span><span class="w"> </span><span class="n">SINGLE_FILE_OUTPUT</span><span class="w"> </span><span class="k">false</span><span class="p">);</span>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">COPY</span><span class="w"> </span><span class="n">source_table</span><span class="w"> </span><span class="k">TO</span><span class="w"> </span><span class="s1">&#39;dir_name&#39;</span><span class="w"> </span><span class="p">(</span><span class="n">FORMAT</span><span class="w"> </span><span class="n">parquet</span><span class="p">);</span>
 <span class="o">+</span><span class="c1">-------+</span>
 <span class="o">|</span><span class="w"> </span><span class="k">count</span><span class="w"> </span><span class="o">|</span>
 <span class="o">+</span><span class="c1">-------+</span>

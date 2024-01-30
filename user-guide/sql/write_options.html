@@ -455,18 +455,17 @@
 <span class="p">);</span>
 </pre></div>
 </div>
-<p>When running <code class="docutils literal notranslate"><span class="pre">INSERT</span> <span class="pre">INTO</span> <span class="pre">my_table</span> <span class="pre">...</span></code>, the options from the <code class="docutils literal notranslate"><span class="pre">CREATE</span> <span class="pre">TABLE</span></code> will be respected (gzip compression, special delimiter, and header row included). Note that compression, header, and delimiter settings can also be specified within the <code class="docutils literal notranslate"><span class="pre">OPTIONS</span></code> tuple list. Dedicated syntax within the SQL statement always takes precedence over arbitrary option tuples, so if both are specified the <code class="docutils literal notranslate"><span class="pre">OPTIONS</span></code> setting will be ignored. NULL_VALUE is a CSV format specific option that determines how null values should be encoded within the CSV file.</p>
+<p>When running <code class="docutils literal notranslate"><span class="pre">INSERT</span> <span class="pre">INTO</span> <span class="pre">my_table</span> <span class="pre">...</span></code>, the options from the <code class="docutils literal notranslate"><span class="pre">CREATE</span> <span class="pre">TABLE</span></code> will be respected (gzip compression, special delimiter, and header row included). There will be a single output file if the output path doesn’t have folder format, i.e. ending with a <code class="docutils literal notranslate"><span class="pre">\</span></code>. Note that compression, header, and delimiter settings can also be specified within the <code class="docutils literal notranslate"><span class="pre">OPTIONS</span></code> tuple list. Dedicated syntax within the SQL statement always takes precedence over arbitrary option tuples, so if both are specified the <code class="docutils literal notranslate"><span class="pre">OPTIONS</span></code> setting will be ignored. NULL_VALUE is a CSV format specific option that determines how null values should be encoded within the CSV file.</p>
 <p>Finally, options can be passed when running a <code class="docutils literal notranslate"><span class="pre">COPY</span></code> command.</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">COPY</span><span class="w"> </span><span class="n">source_table</span>
 <span class="k">TO</span><span class="w"> </span><span class="s1">&#39;test/table_with_options&#39;</span>
 <span class="p">(</span><span class="n">format</span><span class="w"> </span><span class="n">parquet</span><span class="p">,</span>
-<span class="n">single_file_output</span><span class="w"> </span><span class="k">false</span><span class="p">,</span>
 <span class="n">compression</span><span class="w"> </span><span class="n">snappy</span><span class="p">,</span>
 <span class="s1">&#39;compression::col1&#39;</span><span class="w"> </span><span class="s1">&#39;zstd(5)&#39;</span><span class="p">,</span>
 <span class="p">)</span>
 </pre></div>
 </div>
-<p>In this example, we write the entirety of <code class="docutils literal notranslate"><span class="pre">source_table</span></code> out to a folder of parquet files. The option <code class="docutils literal notranslate"><span class="pre">single_file_output</span></code> set to false, indicates that the destination path should be interpreted as a folder to which the query will output multiple files. One parquet file will be written in parallel to the folder for each partition in the query. The next option <code class="docutils literal notranslate"><span class="pre">compression</span></code> set to <code class="docutils literal notranslate"><span class="pre">snappy</span></code> indicates that unless otherwise specified all columns should use the snappy compression codec. The option <code class="docutils literal notranslate"><span class="pre">compression::col1</span></code> sets an override, so that the column <code class="docutils literal notranslate"><span class="pre">col1</span></code> in the parquet file will use <code class="docutils literal notranslate"><span class="pre">ZSTD</span></code> compression codec with compression level <code class="docutils literal notranslate"><span class="pre">5</span></code>. In general, parquet options which support column specific settings can be specified with the syntax <code class="docutils literal notranslate"><span class="pre">OPTION::COLUMN.NESTED.PATH</span></code>.</p>
+<p>In this example, we write the entirety of <code class="docutils literal notranslate"><span class="pre">source_table</span></code> out to a folder of parquet files. One parquet file will be written in parallel to the folder for each partition in the query. The next option <code class="docutils literal notranslate"><span class="pre">compression</span></code> set to <code class="docutils literal notranslate"><span class="pre">snappy</span></code> indicates that unless otherwise specified all columns should use the snappy compression codec. The option <code class="docutils literal notranslate"><span class="pre">compression::col1</span></code> sets an override, so that the column <code class="docutils literal notranslate"><span class="pre">col1</span></code> in the parquet file will use <code class="docutils literal notranslate"><span class="pre">ZSTD</span></code> compression codec with compression level <code class="docutils literal notranslate"><span class="pre">5</span></code>. In general, parquet options which support column specific settings can be specified with the syntax <code class="docutils literal notranslate"><span class="pre">OPTION::COLUMN.NESTED.PATH</span></code>.</p>
 </section>
 <section id="available-options">
 <h2>Available Options<a class="headerlink" href="#available-options" title="Link to this heading">¶</a></h2>
@@ -481,12 +480,8 @@
 </tr>
 </thead>
 <tbody>
-<tr class="row-even"><td><p>SINGLE_FILE_OUTPUT</p></td>
-<td><p>If true, COPY query will write output to a single file. Otherwise, multiple files will be written to a directory in parallel.</p></td>
-<td><p>true</p></td>
-</tr>
-<tr class="row-odd"><td><p>FORMAT</p></td>
-<td><p>Specifies the file format COPY query will write out. If single_file_output is false or the format cannot be inferred from the file extension, then FORMAT must be specified.</p></td>
+<tr class="row-even"><td><p>FORMAT</p></td>
+<td><p>Specifies the file format COPY query will write out. If there’re more than one output file or the format cannot be inferred from the file extension, then FORMAT must be specified.</p></td>
 <td><p>N/A</p></td>
 </tr>
 </tbody>
