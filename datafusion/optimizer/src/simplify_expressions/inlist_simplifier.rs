@@ -112,122 +112,104 @@ impl TreeNodeRewriter for InListSimplifier {
     type N = Expr;
 
     fn mutate(&mut self, expr: Expr) -> Result<Expr> {
-        let mut new_expr = null_simplify(expr)?;
-        new_expr = or_inlist_simplify(new_expr)?;
-        new_expr = simplify(new_expr)?;
-
-        Ok(new_expr)
-    }
-}
-
-fn null_simplify(expr: Expr) -> Result<Expr> {
-    if let Expr::InList(InList {
-        expr,
-        mut list,
-        negated,
-    }) = expr.clone()
-    {
-        // expr IN () --> false
-        // expr NOT IN () --> true
-        if list.is_empty() && *expr != Expr::Literal(ScalarValue::Null) {
-            return Ok(lit(negated));
-        // null in (x, y, z) --> null
-        // null not in (x, y, z) --> null
-        } else if is_null(&expr) {
-            return Ok(lit_bool_null());
-        // expr IN ((subquery)) -> expr IN (subquery), see ##5529
-        } else if list.len() == 1
-            && matches!(list.first(), Some(Expr::ScalarSubquery { .. }))
+        if let Expr::InList(InList {
+            expr,
+            mut list,
+            negated,
+        }) = expr.clone()
         {
-            let Expr::ScalarSubquery(subquery) = list.remove(0) else {
-                unreachable!()
-            };
-            return Ok(Expr::InSubquery(InSubquery::new(expr, subquery, negated)));
+            // expr IN () --> false
+            // expr NOT IN () --> true
+            if list.is_empty() && *expr != Expr::Literal(ScalarValue::Null) {
+                return Ok(lit(negated));
+            // null in (x, y, z) --> null
+            // null not in (x, y, z) --> null
+            } else if is_null(&expr) {
+                return Ok(lit_bool_null());
+            // expr IN ((subquery)) -> expr IN (subquery), see ##5529
+            } else if list.len() == 1
+                && matches!(list.first(), Some(Expr::ScalarSubquery { .. }))
+            {
+                let Expr::ScalarSubquery(subquery) = list.remove(0) else {
+                    unreachable!()
+                };
+                return Ok(Expr::InSubquery(InSubquery::new(expr, subquery, negated)));
+            }
         }
-    }
+        // Combine multiple OR expressions into a single IN list expression if possible
+        //
+        // i.e. `a = 1 OR a = 2 OR a = 3` -> `a IN (1, 2, 3)`
+        if let Expr::BinaryExpr(BinaryExpr { left, op, right }) = &expr {
+            if *op == Operator::Or {
+                let left = as_inlist(left);
+                let right = as_inlist(right);
+                if let (Some(lhs), Some(rhs)) = (left, right) {
+                    if lhs.expr.try_into_col().is_ok()
+                        && rhs.expr.try_into_col().is_ok()
+                        && lhs.expr == rhs.expr
+                        && !lhs.negated
+                        && !rhs.negated
+                    {
+                        let lhs = lhs.into_owned();
+                        let rhs = rhs.into_owned();
+                        let mut seen: HashSet<Expr> = HashSet::new();
+                        let list = lhs
+                            .list
+                            .into_iter()
+                            .chain(rhs.list)
+                            .filter(|e| seen.insert(e.to_owned()))
+                            .collect::<Vec<_>>();
 
-    Ok(expr)
-}
-
-/// Combine multiple OR expressions into a single IN list expression if possible
-///
-/// i.e. `a = 1 OR a = 2 OR a = 3` -> `a IN (1, 2, 3)`
-fn or_inlist_simplify(expr: Expr) -> Result<Expr> {
-    if let Expr::BinaryExpr(BinaryExpr { left, op, right }) = &expr {
-        if *op == Operator::Or {
-            let left = as_inlist(left);
-            let right = as_inlist(right);
-            if let (Some(lhs), Some(rhs)) = (left, right) {
-                if lhs.expr.try_into_col().is_ok()
-                    && rhs.expr.try_into_col().is_ok()
-                    && lhs.expr == rhs.expr
-                    && !lhs.negated
-                    && !rhs.negated
-                {
-                    let lhs = lhs.into_owned();
-                    let rhs = rhs.into_owned();
-                    let mut seen: HashSet<Expr> = HashSet::new();
-                    let list = lhs
-                        .list
-                        .into_iter()
-                        .chain(rhs.list)
-                        .filter(|e| seen.insert(e.to_owned()))
-                        .collect::<Vec<_>>();
-
-                    let merged_inlist = InList {
-                        expr: lhs.expr,
-                        list,
-                        negated: false,
-                    };
-                    return Ok(Expr::InList(merged_inlist));
+                        let merged_inlist = InList {
+                            expr: lhs.expr,
+                            list,
+                            negated: false,
+                        };
+                        return Ok(Expr::InList(merged_inlist));
+                    }
                 }
             }
         }
-    }
-
-    Ok(expr)
-}
-
-/// Simplify expressions that is guaranteed to be true or false to a literal boolean expression
-///
-/// Rules:
-/// If both expressions are `IN` or `NOT IN`, then we can apply intersection or union on both lists
-///   Intersection:
-///     1. `a in (1,2,3) AND a in (4,5) -> a in (), which is false`
-///     2. `a in (1,2,3) AND a in (2,3,4) -> a in (2,3)`
-///     3. `a not in (1,2,3) OR a not in (3,4,5,6) -> a not in (3)`
-///   Union:
-///     4. `a not int (1,2,3) AND a not in (4,5,6) -> a not in (1,2,3,4,5,6)`
-///     # This rule is handled by `or_in_list_simplifier.rs`
-///     5. `a in (1,2,3) OR a in (4,5,6) -> a in (1,2,3,4,5,6)`
-/// If one of the expressions is `IN` and another one is `NOT IN`, then we apply exception on `In` expression
-///     6. `a in (1,2,3,4) AND a not in (1,2,3,4,5) -> a in (), which is false`
-///     7. `a not in (1,2,3,4) AND a in (1,2,3,4,5) -> a = 5`
-///     8. `a in (1,2,3,4) AND a not in (5,6,7,8) -> a in (1,2,3,4)`
-fn simplify(expr: Expr) -> Result<Expr> {
-    if let Expr::BinaryExpr(BinaryExpr { left, op, right }) = &expr {
-        if let (Expr::InList(l1), Operator::And, Expr::InList(l2)) =
-            (left.as_ref(), op, right.as_ref())
-        {
-            if l1.expr == l2.expr && !l1.negated && !l2.negated {
-                return inlist_intersection(l1, l2, false);
-            } else if l1.expr == l2.expr && l1.negated && l2.negated {
-                return inlist_union(l1, l2, true);
-            } else if l1.expr == l2.expr && !l1.negated && l2.negated {
-                return inlist_except(l1, l2);
-            } else if l1.expr == l2.expr && l1.negated && !l2.negated {
-                return inlist_except(l2, l1);
-            }
-        } else if let (Expr::InList(l1), Operator::Or, Expr::InList(l2)) =
-            (left.as_ref(), op, right.as_ref())
-        {
-            if l1.expr == l2.expr && l1.negated && l2.negated {
-                return inlist_intersection(l1, l2, true);
+        // Simplify expressions that is guaranteed to be true or false to a literal boolean expression
+        //
+        // Rules:
+        // If both expressions are `IN` or `NOT IN`, then we can apply intersection or union on both lists
+        //   Intersection:
+        //     1. `a in (1,2,3) AND a in (4,5) -> a in (), which is false`
+        //     2. `a in (1,2,3) AND a in (2,3,4) -> a in (2,3)`
+        //     3. `a not in (1,2,3) OR a not in (3,4,5,6) -> a not in (3)`
+        //   Union:
+        //     4. `a not int (1,2,3) AND a not in (4,5,6) -> a not in (1,2,3,4,5,6)`
+        //     # This rule is handled by `or_in_list_simplifier.rs`
+        //     5. `a in (1,2,3) OR a in (4,5,6) -> a in (1,2,3,4,5,6)`
+        // If one of the expressions is `IN` and another one is `NOT IN`, then we apply exception on `In` expression
+        //     6. `a in (1,2,3,4) AND a not in (1,2,3,4,5) -> a in (), which is false`
+        //     7. `a not in (1,2,3,4) AND a in (1,2,3,4,5) -> a = 5`
+        //     8. `a in (1,2,3,4) AND a not in (5,6,7,8) -> a in (1,2,3,4)`
+        if let Expr::BinaryExpr(BinaryExpr { left, op, right }) = &expr {
+            if let (Expr::InList(l1), Operator::And, Expr::InList(l2)) =
+                (left.as_ref(), op, right.as_ref())
+            {
+                if l1.expr == l2.expr && !l1.negated && !l2.negated {
+                    return inlist_intersection(l1, l2, false);
+                } else if l1.expr == l2.expr && l1.negated && l2.negated {
+                    return inlist_union(l1, l2, true);
+                } else if l1.expr == l2.expr && !l1.negated && l2.negated {
+                    return inlist_except(l1, l2);
+                } else if l1.expr == l2.expr && l1.negated && !l2.negated {
+                    return inlist_except(l2, l1);
+                }
+            } else if let (Expr::InList(l1), Operator::Or, Expr::InList(l2)) =
+                (left.as_ref(), op, right.as_ref())
+            {
+                if l1.expr == l2.expr && l1.negated && l2.negated {
+                    return inlist_intersection(l1, l2, true);
+                }
             }
         }
-    }
 
-    Ok(expr)
+        Ok(expr)
+    }
 }
 
 /// Try to convert an expression to an in-list expression
