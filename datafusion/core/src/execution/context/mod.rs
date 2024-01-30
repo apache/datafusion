@@ -1872,10 +1872,12 @@ impl SessionState {
     pub fn version(&self) -> &str {
         env!("CARGO_PKG_VERSION")
     }
+
     /// Return extension context.
     pub fn with_extension_context(&self) -> Option<Arc<dyn Any + Send + Sync>> {
         self.extension_context.clone()
     }
+
     /// Return extension context mut.
     pub fn with_extension_context_mut(
         &mut self,
