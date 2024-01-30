@@ -1033,14 +1033,17 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                             },
                         ))
                     }
-                    GetFieldAccess::ListRange { start, stop } => {
-                        protobuf::get_indexed_field::Field::ListRange(Box::new(
-                            protobuf::ListRange {
-                                start: Some(Box::new(start.as_ref().try_into()?)),
-                                stop: Some(Box::new(stop.as_ref().try_into()?)),
-                            },
-                        ))
-                    }
+                    GetFieldAccess::ListRange {
+                        start,
+                        stop,
+                        stride,
+                    } => protobuf::get_indexed_field::Field::ListRange(Box::new(
+                        protobuf::ListRange {
+                            start: Some(Box::new(start.as_ref().try_into()?)),
+                            stop: Some(Box::new(stop.as_ref().try_into()?)),
+                            stride: Some(Box::new(stride.as_ref().try_into()?)),
+                        },
+                    )),
                 };
 
                 Self {
@@ -1550,6 +1553,7 @@ impl TryFrom<&BuiltinScalarFunction> for protobuf::ScalarFunction {
             BuiltinScalarFunction::Now => Self::Now,
             BuiltinScalarFunction::CurrentDate => Self::CurrentDate,
             BuiltinScalarFunction::CurrentTime => Self::CurrentTime,
+            BuiltinScalarFunction::MakeDate => Self::MakeDate,
             BuiltinScalarFunction::Translate => Self::Translate,
             BuiltinScalarFunction::RegexpMatch => Self::RegexpMatch,
             BuiltinScalarFunction::Coalesce => Self::Coalesce,

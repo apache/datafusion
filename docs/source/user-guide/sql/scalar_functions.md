@@ -1312,6 +1312,7 @@ regexp_replace(str, regexp, replacement, flags)
 - [datepart](#datepart)
 - [extract](#extract)
 - [today](#today)
+- [make_date](#make_date)
 - [to_timestamp](#to_timestamp)
 - [to_timestamp_millis](#to_timestamp_millis)
 - [to_timestamp_micros](#to_timestamp_micros)
@@ -1499,6 +1500,44 @@ extract(field FROM source)
 
 - **source**: Source time expression to operate on.
   Can be a constant, column, or function.
+
+### `make_date`
+
+Make a date from year/month/day component parts.
+
+```
+make_date(year, month, day)
+```
+
+#### Arguments
+
+- **year**: Year to use when making the date.
+  Can be a constant, column or function, and any combination of arithmetic operators.
+- **month**: Month to use when making the date.
+  Can be a constant, column or function, and any combination of arithmetic operators.
+- **day**: Day to use when making the date.
+  Can be a constant, column or function, and any combination of arithmetic operators.
+
+#### Example
+
+```
+❯ select make_date(2023, 1, 31);
++-------------------------------------------+
+| make_date(Int64(2023),Int64(1),Int64(31)) |
++-------------------------------------------+
+| 2023-01-31                                |
++-------------------------------------------+
+❯ select make_date('2023', '01', '31');
++-----------------------------------------------+
+| make_date(Utf8("2023"),Utf8("01"),Utf8("31")) |
++-----------------------------------------------+
+| 2023-01-31                                    |
++-----------------------------------------------+
+```
+
+Additional examples can be found [here]
+
+[here]: https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/make_date.rs
 
 ### `to_timestamp`
 
@@ -1765,11 +1804,16 @@ from_unixtime(expression)
 - [list_dims](#list_dims)
 - [list_element](#list_element)
 - [list_extract](#list_extract)
+- [list_has](#list_has)
+- [list_has_all](#list_has_all)
+- [list_has_any](#list_has_any)
 - [list_indexof](#list_indexof)
 - [list_join](#list_join)
 - [list_length](#list_length)
 - [list_ndims](#list_ndims)
 - [list_prepend](#list_prepend)
+- [list_pop_back](#list_pop_back)
+- [list_pop_front](#list_pop_front)
 - [list_position](#list_position)
 - [list_positions](#list_positions)
 - [list_push_back](#list_push_back)
@@ -1901,6 +1945,10 @@ array_has(array, element)
 - **element**: Scalar or Array expression.
   Can be a constant, column, or function, and any combination of array operators.
 
+#### Aliases
+
+- list_has
+
 ### `array_has_all`
 
 Returns true if all elements of sub-array exist in array
@@ -1916,6 +1964,10 @@ array_has_all(array, sub-array)
 - **sub-array**: Array expression.
   Can be a constant, column, or function, and any combination of array operators.
 
+#### Aliases
+
+- list_has_all
+
 ### `array_has_any`
 
 Returns true if any elements exist in both arrays
@@ -1930,6 +1982,10 @@ array_has_any(array, sub-array)
   Can be a constant, column, or function, and any combination of array operators.
 - **sub-array**: Array expression.
   Can be a constant, column, or function, and any combination of array operators.
+
+#### Aliases
+
+- list_has_any
 
 ### `array_dims`
 
@@ -1989,8 +2045,6 @@ array_element(array, index)
 - array_extract
 - list_element
 - list_extract
-
-### `array_empty`
 
 ### `array_extract`
 
@@ -2150,6 +2204,10 @@ array_pop_front(array)
 +-------------------------------+
 ```
 
+#### Aliases
+
+- list_pop_front
+
 ### `array_pop_back`
 
 Returns the array without the last element.
@@ -2173,6 +2231,10 @@ array_pop_back(array)
 | [1, 2]                        |
 +-------------------------------+
 ```
+
+#### Aliases
+
+- list_pop_back
 
 ### `array_position`
 
@@ -2277,6 +2339,10 @@ array_repeat(element, count)
 | [[1, 2], [1, 2]]                   |
 +------------------------------------+
 ```
+
+#### Aliases
+
+- list_repeat
 
 ### `array_remove`
 
@@ -2459,11 +2525,21 @@ array_replace_all(array, from, to)
 
 ### `array_slice`
 
-Returns a slice of the array.
+Returns a slice of the array based on 1-indexed start and end positions.
 
 ```
 array_slice(array, begin, end)
 ```
+
+#### Arguments
+
+- **array**: Array expression.
+  Can be a constant, column, or function, and any combination of array operators.
+- **begin**: Index of the first element.
+  If negative, it counts backward from the end of the array.
+- **end**: Index of the last element.
+  If negative, it counts backward from the end of the array.
+- **stride**: Stride of the array slice. The default is 1.
 
 #### Example
 
@@ -2663,6 +2739,18 @@ _Alias of [array_element](#array_element)._
 
 _Alias of [array_element](#array_element)._
 
+### `list_has`
+
+_Alias of [array_has](#array_has)._
+
+### `list_has_all`
+
+_Alias of [array_has_all](#array_has_all)._
+
+### `list_has_any`
+
+_Alias of [array_has_any](#array_has_any)._
+
 ### `list_indexof`
 
 _Alias of [array_position](#array_position)._
@@ -2682,6 +2770,14 @@ _Alias of [array_ndims](#array_ndims)._
 ### `list_prepend`
 
 _Alias of [array_prepend](#array_prepend)._
+
+### `list_pop_back`
+
+_Alias of [array_pop_back](#array_pop_back)._
+
+### `list_pop_front`
+
+_Alias of [array_pop_front](#array_pop_front)._
 
 ### `list_position`
 

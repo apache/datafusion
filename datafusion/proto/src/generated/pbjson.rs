@@ -3792,9 +3792,6 @@ impl serde::Serialize for CopyToNode {
         if !self.output_url.is_empty() {
             len += 1;
         }
-        if self.single_file_output {
-            len += 1;
-        }
         if !self.file_type.is_empty() {
             len += 1;
         }
@@ -3807,9 +3804,6 @@ impl serde::Serialize for CopyToNode {
         }
         if !self.output_url.is_empty() {
             struct_ser.serialize_field("outputUrl", &self.output_url)?;
-        }
-        if self.single_file_output {
-            struct_ser.serialize_field("singleFileOutput", &self.single_file_output)?;
         }
         if !self.file_type.is_empty() {
             struct_ser.serialize_field("fileType", &self.file_type)?;
@@ -3837,8 +3831,6 @@ impl<'de> serde::Deserialize<'de> for CopyToNode {
             "input",
             "output_url",
             "outputUrl",
-            "single_file_output",
-            "singleFileOutput",
             "file_type",
             "fileType",
             "sql_options",
@@ -3851,7 +3843,6 @@ impl<'de> serde::Deserialize<'de> for CopyToNode {
         enum GeneratedField {
             Input,
             OutputUrl,
-            SingleFileOutput,
             FileType,
             SqlOptions,
             WriterOptions,
@@ -3878,7 +3869,6 @@ impl<'de> serde::Deserialize<'de> for CopyToNode {
                         match value {
                             "input" => Ok(GeneratedField::Input),
                             "outputUrl" | "output_url" => Ok(GeneratedField::OutputUrl),
-                            "singleFileOutput" | "single_file_output" => Ok(GeneratedField::SingleFileOutput),
                             "fileType" | "file_type" => Ok(GeneratedField::FileType),
                             "sqlOptions" | "sql_options" => Ok(GeneratedField::SqlOptions),
                             "writerOptions" | "writer_options" => Ok(GeneratedField::WriterOptions),
@@ -3903,7 +3893,6 @@ impl<'de> serde::Deserialize<'de> for CopyToNode {
             {
                 let mut input__ = None;
                 let mut output_url__ = None;
-                let mut single_file_output__ = None;
                 let mut file_type__ = None;
                 let mut copy_options__ = None;
                 while let Some(k) = map_.next_key()? {
@@ -3919,12 +3908,6 @@ impl<'de> serde::Deserialize<'de> for CopyToNode {
                                 return Err(serde::de::Error::duplicate_field("outputUrl"));
                             }
                             output_url__ = Some(map_.next_value()?);
-                        }
-                        GeneratedField::SingleFileOutput => {
-                            if single_file_output__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("singleFileOutput"));
-                            }
-                            single_file_output__ = Some(map_.next_value()?);
                         }
                         GeneratedField::FileType => {
                             if file_type__.is_some() {
@@ -3951,7 +3934,6 @@ impl<'de> serde::Deserialize<'de> for CopyToNode {
                 Ok(CopyToNode {
                     input: input__,
                     output_url: output_url__.unwrap_or_default(),
-                    single_file_output: single_file_output__.unwrap_or_default(),
                     file_type: file_type__.unwrap_or_default(),
                     copy_options: copy_options__,
                 })
@@ -8208,9 +8190,6 @@ impl serde::Serialize for FileSinkConfig {
         if !self.table_partition_cols.is_empty() {
             len += 1;
         }
-        if self.single_file_output {
-            len += 1;
-        }
         if self.overwrite {
             len += 1;
         }
@@ -8232,9 +8211,6 @@ impl serde::Serialize for FileSinkConfig {
         }
         if !self.table_partition_cols.is_empty() {
             struct_ser.serialize_field("tablePartitionCols", &self.table_partition_cols)?;
-        }
-        if self.single_file_output {
-            struct_ser.serialize_field("singleFileOutput", &self.single_file_output)?;
         }
         if self.overwrite {
             struct_ser.serialize_field("overwrite", &self.overwrite)?;
@@ -8262,8 +8238,6 @@ impl<'de> serde::Deserialize<'de> for FileSinkConfig {
             "outputSchema",
             "table_partition_cols",
             "tablePartitionCols",
-            "single_file_output",
-            "singleFileOutput",
             "overwrite",
             "file_type_writer_options",
             "fileTypeWriterOptions",
@@ -8276,7 +8250,6 @@ impl<'de> serde::Deserialize<'de> for FileSinkConfig {
             TablePaths,
             OutputSchema,
             TablePartitionCols,
-            SingleFileOutput,
             Overwrite,
             FileTypeWriterOptions,
         }
@@ -8305,7 +8278,6 @@ impl<'de> serde::Deserialize<'de> for FileSinkConfig {
                             "tablePaths" | "table_paths" => Ok(GeneratedField::TablePaths),
                             "outputSchema" | "output_schema" => Ok(GeneratedField::OutputSchema),
                             "tablePartitionCols" | "table_partition_cols" => Ok(GeneratedField::TablePartitionCols),
-                            "singleFileOutput" | "single_file_output" => Ok(GeneratedField::SingleFileOutput),
                             "overwrite" => Ok(GeneratedField::Overwrite),
                             "fileTypeWriterOptions" | "file_type_writer_options" => Ok(GeneratedField::FileTypeWriterOptions),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
@@ -8332,7 +8304,6 @@ impl<'de> serde::Deserialize<'de> for FileSinkConfig {
                 let mut table_paths__ = None;
                 let mut output_schema__ = None;
                 let mut table_partition_cols__ = None;
-                let mut single_file_output__ = None;
                 let mut overwrite__ = None;
                 let mut file_type_writer_options__ = None;
                 while let Some(k) = map_.next_key()? {
@@ -8367,12 +8338,6 @@ impl<'de> serde::Deserialize<'de> for FileSinkConfig {
                             }
                             table_partition_cols__ = Some(map_.next_value()?);
                         }
-                        GeneratedField::SingleFileOutput => {
-                            if single_file_output__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("singleFileOutput"));
-                            }
-                            single_file_output__ = Some(map_.next_value()?);
-                        }
                         GeneratedField::Overwrite => {
                             if overwrite__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("overwrite"));
@@ -8393,7 +8358,6 @@ impl<'de> serde::Deserialize<'de> for FileSinkConfig {
                     table_paths: table_paths__.unwrap_or_default(),
                     output_schema: output_schema__,
                     table_partition_cols: table_partition_cols__.unwrap_or_default(),
-                    single_file_output: single_file_output__.unwrap_or_default(),
                     overwrite: overwrite__.unwrap_or_default(),
                     file_type_writer_options: file_type_writer_options__,
                 })
@@ -12542,12 +12506,18 @@ impl serde::Serialize for ListRange {
         if self.stop.is_some() {
             len += 1;
         }
+        if self.stride.is_some() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion.ListRange", len)?;
         if let Some(v) = self.start.as_ref() {
             struct_ser.serialize_field("start", v)?;
         }
         if let Some(v) = self.stop.as_ref() {
             struct_ser.serialize_field("stop", v)?;
+        }
+        if let Some(v) = self.stride.as_ref() {
+            struct_ser.serialize_field("stride", v)?;
         }
         struct_ser.end()
     }
@@ -12561,12 +12531,14 @@ impl<'de> serde::Deserialize<'de> for ListRange {
         const FIELDS: &[&str] = &[
             "start",
             "stop",
+            "stride",
         ];
 
         #[allow(clippy::enum_variant_names)]
         enum GeneratedField {
             Start,
             Stop,
+            Stride,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -12590,6 +12562,7 @@ impl<'de> serde::Deserialize<'de> for ListRange {
                         match value {
                             "start" => Ok(GeneratedField::Start),
                             "stop" => Ok(GeneratedField::Stop),
+                            "stride" => Ok(GeneratedField::Stride),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -12611,6 +12584,7 @@ impl<'de> serde::Deserialize<'de> for ListRange {
             {
                 let mut start__ = None;
                 let mut stop__ = None;
+                let mut stride__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Start => {
@@ -12625,11 +12599,18 @@ impl<'de> serde::Deserialize<'de> for ListRange {
                             }
                             stop__ = map_.next_value()?;
                         }
+                        GeneratedField::Stride => {
+                            if stride__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("stride"));
+                            }
+                            stride__ = map_.next_value()?;
+                        }
                     }
                 }
                 Ok(ListRange {
                     start: start__,
                     stop: stop__,
+                    stride: stride__,
                 })
             }
         }
@@ -12650,12 +12631,18 @@ impl serde::Serialize for ListRangeExpr {
         if self.stop.is_some() {
             len += 1;
         }
+        if self.stride.is_some() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion.ListRangeExpr", len)?;
         if let Some(v) = self.start.as_ref() {
             struct_ser.serialize_field("start", v)?;
         }
         if let Some(v) = self.stop.as_ref() {
             struct_ser.serialize_field("stop", v)?;
+        }
+        if let Some(v) = self.stride.as_ref() {
+            struct_ser.serialize_field("stride", v)?;
         }
         struct_ser.end()
     }
@@ -12669,12 +12656,14 @@ impl<'de> serde::Deserialize<'de> for ListRangeExpr {
         const FIELDS: &[&str] = &[
             "start",
             "stop",
+            "stride",
         ];
 
         #[allow(clippy::enum_variant_names)]
         enum GeneratedField {
             Start,
             Stop,
+            Stride,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -12698,6 +12687,7 @@ impl<'de> serde::Deserialize<'de> for ListRangeExpr {
                         match value {
                             "start" => Ok(GeneratedField::Start),
                             "stop" => Ok(GeneratedField::Stop),
+                            "stride" => Ok(GeneratedField::Stride),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -12719,6 +12709,7 @@ impl<'de> serde::Deserialize<'de> for ListRangeExpr {
             {
                 let mut start__ = None;
                 let mut stop__ = None;
+                let mut stride__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Start => {
@@ -12733,11 +12724,18 @@ impl<'de> serde::Deserialize<'de> for ListRangeExpr {
                             }
                             stop__ = map_.next_value()?;
                         }
+                        GeneratedField::Stride => {
+                            if stride__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("stride"));
+                            }
+                            stride__ = map_.next_value()?;
+                        }
                     }
                 }
                 Ok(ListRangeExpr {
                     start: start__,
                     stop: stop__,
+                    stride: stride__,
                 })
             }
         }
@@ -22425,6 +22423,7 @@ impl serde::Serialize for ScalarFunction {
             Self::ArrayResize => "ArrayResize",
             Self::EndsWith => "EndsWith",
             Self::InStr => "InStr",
+            Self::MakeDate => "MakeDate",
         };
         serializer.serialize_str(variant)
     }
@@ -22569,6 +22568,7 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
             "ArrayResize",
             "EndsWith",
             "InStr",
+            "MakeDate",
         ];
 
         struct GeneratedVisitor;
@@ -22742,6 +22742,7 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
                     "ArrayResize" => Ok(ScalarFunction::ArrayResize),
                     "EndsWith" => Ok(ScalarFunction::EndsWith),
                     "InStr" => Ok(ScalarFunction::InStr),
+                    "MakeDate" => Ok(ScalarFunction::MakeDate),
                     _ => Err(serde::de::Error::unknown_variant(value, FIELDS)),
                 }
             }

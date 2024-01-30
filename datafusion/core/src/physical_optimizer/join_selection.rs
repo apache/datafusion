@@ -690,7 +690,7 @@ mod tests_statistical {
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::{stats::Precision, JoinType, ScalarValue};
     use datafusion_physical_expr::expressions::Column;
-    use datafusion_physical_expr::PhysicalExpr;
+    use datafusion_physical_expr::{PhysicalExpr, PhysicalExprRef};
 
     /// Return statistcs for empty table
     fn empty_statistics() -> Statistics {
@@ -860,8 +860,10 @@ mod tests_statistical {
                 Arc::clone(&big),
                 Arc::clone(&small),
                 vec![(
-                    Column::new_with_schema("big_col", &big.schema()).unwrap(),
-                    Column::new_with_schema("small_col", &small.schema()).unwrap(),
+                    Arc::new(Column::new_with_schema("big_col", &big.schema()).unwrap()),
+                    Arc::new(
+                        Column::new_with_schema("small_col", &small.schema()).unwrap(),
+                    ),
                 )],
                 None,
                 &JoinType::Left,
@@ -914,8 +916,10 @@ mod tests_statistical {
                 Arc::clone(&small),
                 Arc::clone(&big),
                 vec![(
-                    Column::new_with_schema("small_col", &small.schema()).unwrap(),
-                    Column::new_with_schema("big_col", &big.schema()).unwrap(),
+                    Arc::new(
+                        Column::new_with_schema("small_col", &small.schema()).unwrap(),
+                    ),
+                    Arc::new(Column::new_with_schema("big_col", &big.schema()).unwrap()),
                 )],
                 None,
                 &JoinType::Left,
@@ -970,8 +974,13 @@ mod tests_statistical {
                     Arc::clone(&big),
                     Arc::clone(&small),
                     vec![(
-                        Column::new_with_schema("big_col", &big.schema()).unwrap(),
-                        Column::new_with_schema("small_col", &small.schema()).unwrap(),
+                        Arc::new(
+                            Column::new_with_schema("big_col", &big.schema()).unwrap(),
+                        ),
+                        Arc::new(
+                            Column::new_with_schema("small_col", &small.schema())
+                                .unwrap(),
+                        ),
                     )],
                     None,
                     &join_type,
@@ -1040,8 +1049,8 @@ mod tests_statistical {
             Arc::clone(&big),
             Arc::clone(&small),
             vec![(
-                Column::new_with_schema("big_col", &big.schema()).unwrap(),
-                Column::new_with_schema("small_col", &small.schema()).unwrap(),
+                Arc::new(Column::new_with_schema("big_col", &big.schema()).unwrap()),
+                Arc::new(Column::new_with_schema("small_col", &small.schema()).unwrap()),
             )],
             None,
             &JoinType::Inner,
@@ -1056,8 +1065,10 @@ mod tests_statistical {
             Arc::clone(&medium),
             Arc::new(child_join),
             vec![(
-                Column::new_with_schema("medium_col", &medium.schema()).unwrap(),
-                Column::new_with_schema("small_col", &child_schema).unwrap(),
+                Arc::new(
+                    Column::new_with_schema("medium_col", &medium.schema()).unwrap(),
+                ),
+                Arc::new(Column::new_with_schema("small_col", &child_schema).unwrap()),
             )],
             None,
             &JoinType::Left,
@@ -1094,8 +1105,10 @@ mod tests_statistical {
                 Arc::clone(&small),
                 Arc::clone(&big),
                 vec![(
-                    Column::new_with_schema("small_col", &small.schema()).unwrap(),
-                    Column::new_with_schema("big_col", &big.schema()).unwrap(),
+                    Arc::new(
+                        Column::new_with_schema("small_col", &small.schema()).unwrap(),
+                    ),
+                    Arc::new(Column::new_with_schema("big_col", &big.schema()).unwrap()),
                 )],
                 None,
                 &JoinType::Inner,
@@ -1178,8 +1191,8 @@ mod tests_statistical {
         ));
 
         let join_on = vec![(
-            Column::new_with_schema("small_col", &small.schema()).unwrap(),
-            Column::new_with_schema("big_col", &big.schema()).unwrap(),
+            Arc::new(Column::new_with_schema("small_col", &small.schema()).unwrap()) as _,
+            Arc::new(Column::new_with_schema("big_col", &big.schema()).unwrap()) as _,
         )];
         check_join_partition_mode(
             small.clone(),
@@ -1190,8 +1203,8 @@ mod tests_statistical {
         );
 
         let join_on = vec![(
-            Column::new_with_schema("big_col", &big.schema()).unwrap(),
-            Column::new_with_schema("small_col", &small.schema()).unwrap(),
+            Arc::new(Column::new_with_schema("big_col", &big.schema()).unwrap()) as _,
+            Arc::new(Column::new_with_schema("small_col", &small.schema()).unwrap()) as _,
         )];
         check_join_partition_mode(
             big.clone(),
@@ -1202,8 +1215,8 @@ mod tests_statistical {
         );
 
         let join_on = vec![(
-            Column::new_with_schema("small_col", &small.schema()).unwrap(),
-            Column::new_with_schema("empty_col", &empty.schema()).unwrap(),
+            Arc::new(Column::new_with_schema("small_col", &small.schema()).unwrap()) as _,
+            Arc::new(Column::new_with_schema("empty_col", &empty.schema()).unwrap()) as _,
         )];
         check_join_partition_mode(
             small.clone(),
@@ -1214,8 +1227,8 @@ mod tests_statistical {
         );
 
         let join_on = vec![(
-            Column::new_with_schema("empty_col", &empty.schema()).unwrap(),
-            Column::new_with_schema("small_col", &small.schema()).unwrap(),
+            Arc::new(Column::new_with_schema("empty_col", &empty.schema()).unwrap()) as _,
+            Arc::new(Column::new_with_schema("small_col", &small.schema()).unwrap()) as _,
         )];
         check_join_partition_mode(
             empty.clone(),
@@ -1244,8 +1257,9 @@ mod tests_statistical {
         ));
 
         let join_on = vec![(
-            Column::new_with_schema("big_col", &big.schema()).unwrap(),
-            Column::new_with_schema("bigger_col", &bigger.schema()).unwrap(),
+            Arc::new(Column::new_with_schema("big_col", &big.schema()).unwrap()) as _,
+            Arc::new(Column::new_with_schema("bigger_col", &bigger.schema()).unwrap())
+                as _,
         )];
         check_join_partition_mode(
             big.clone(),
@@ -1256,8 +1270,9 @@ mod tests_statistical {
         );
 
         let join_on = vec![(
-            Column::new_with_schema("bigger_col", &bigger.schema()).unwrap(),
-            Column::new_with_schema("big_col", &big.schema()).unwrap(),
+            Arc::new(Column::new_with_schema("bigger_col", &bigger.schema()).unwrap())
+                as _,
+            Arc::new(Column::new_with_schema("big_col", &big.schema()).unwrap()) as _,
         )];
         check_join_partition_mode(
             bigger.clone(),
@@ -1268,8 +1283,8 @@ mod tests_statistical {
         );
 
         let join_on = vec![(
-            Column::new_with_schema("empty_col", &empty.schema()).unwrap(),
-            Column::new_with_schema("big_col", &big.schema()).unwrap(),
+            Arc::new(Column::new_with_schema("empty_col", &empty.schema()).unwrap()) as _,
+            Arc::new(Column::new_with_schema("big_col", &big.schema()).unwrap()) as _,
         )];
         check_join_partition_mode(
             empty.clone(),
@@ -1280,8 +1295,8 @@ mod tests_statistical {
         );
 
         let join_on = vec![(
-            Column::new_with_schema("big_col", &big.schema()).unwrap(),
-            Column::new_with_schema("empty_col", &empty.schema()).unwrap(),
+            Arc::new(Column::new_with_schema("big_col", &big.schema()).unwrap()) as _,
+            Arc::new(Column::new_with_schema("empty_col", &empty.schema()).unwrap()) as _,
         )];
         check_join_partition_mode(big, empty, join_on, false, PartitionMode::Partitioned);
     }
@@ -1289,7 +1304,7 @@ mod tests_statistical {
     fn check_join_partition_mode(
         left: Arc<StatisticsExec>,
         right: Arc<StatisticsExec>,
-        on: Vec<(Column, Column)>,
+        on: Vec<(PhysicalExprRef, PhysicalExprRef)>,
         is_swapped: bool,
         expected_mode: PartitionMode,
     ) {
@@ -1748,8 +1763,8 @@ mod hash_join_tests {
             Arc::clone(&left_exec),
             Arc::clone(&right_exec),
             vec![(
-                Column::new_with_schema("a", &left_exec.schema())?,
-                Column::new_with_schema("b", &right_exec.schema())?,
+                Arc::new(Column::new_with_schema("a", &left_exec.schema())?),
+                Arc::new(Column::new_with_schema("b", &right_exec.schema())?),
             )],
             None,
             &t.initial_join_type,

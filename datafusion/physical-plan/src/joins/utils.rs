@@ -45,11 +45,12 @@ use datafusion_common::{
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_physical_expr::equivalence::add_offset_to_expr;
 use datafusion_physical_expr::expressions::Column;
-use datafusion_physical_expr::utils::merge_vectors;
+use datafusion_physical_expr::utils::{collect_columns, merge_vectors};
 use datafusion_physical_expr::{
-    LexOrdering, LexOrderingRef, PhysicalExpr, PhysicalSortExpr,
+    LexOrdering, LexOrderingRef, PhysicalExpr, PhysicalExprRef, PhysicalSortExpr,
 };
 
+use datafusion_common::tree_node::{Transformed, TreeNode};
 use futures::future::{BoxFuture, Shared};
 use futures::{ready, FutureExt};
 use hashbrown::raw::RawTable;
@@ -377,9 +378,9 @@ impl fmt::Debug for JoinHashMap {
 }
 
 /// The on clause of the join, as vector of (left, right) columns.
-pub type JoinOn = Vec<(Column, Column)>;
+pub type JoinOn = Vec<(PhysicalExprRef, PhysicalExprRef)>;
 /// Reference for JoinOn.
-pub type JoinOnRef<'a> = &'a [(Column, Column)];
+pub type JoinOnRef<'a> = &'a [(PhysicalExprRef, PhysicalExprRef)];
 
 /// Checks whether the schemas "left" and "right" and columns "on" represent a valid join.
 /// They are valid whenever their columns' intersection equals the set `on`
@@ -405,12 +406,18 @@ pub fn check_join_is_valid(left: &Schema, right: &Schema, on: JoinOnRef) -> Resu
 fn check_join_set_is_valid(
     left: &HashSet<Column>,
     right: &HashSet<Column>,
-    on: &[(Column, Column)],
+    on: &[(PhysicalExprRef, PhysicalExprRef)],
 ) -> Result<()> {
-    let on_left = &on.iter().map(|on| on.0.clone()).collect::<HashSet<_>>();
+    let on_left = &on
+        .iter()
+        .flat_map(|on| collect_columns(&on.0))
+        .collect::<HashSet<_>>();
     let left_missing = on_left.difference(left).collect::<HashSet<_>>();
 
-    let on_right = &on.iter().map(|on| on.1.clone()).collect::<HashSet<_>>();
+    let on_right = &on
+        .iter()
+        .flat_map(|on| collect_columns(&on.1))
+        .collect::<HashSet<_>>();
     let right_missing = on_right.difference(right).collect::<HashSet<_>>();
 
     if !left_missing.is_empty() | !right_missing.is_empty() {
@@ -466,20 +473,40 @@ pub fn adjust_right_output_partitioning(
 /// Replaces the right column (first index in the `on_column` tuple) with
 /// the left column (zeroth index in the tuple) inside `right_ordering`.
 fn replace_on_columns_of_right_ordering(
-    on_columns: &[(Column, Column)],
+    on_columns: &[(PhysicalExprRef, PhysicalExprRef)],
     right_ordering: &mut [PhysicalSortExpr],
-    left_columns_len: usize,
-) {
+) -> Result<()> {
     for (left_col, right_col) in on_columns {
-        let right_col =
-            Column::new(right_col.name(), right_col.index() + left_columns_len);
         for item in right_ordering.iter_mut() {
-            if let Some(col) = item.expr.as_any().downcast_ref::<Column>() {
-                if right_col.eq(col) {
-                    item.expr = Arc::new(left_col.clone()) as _;
+            let new_expr = item.expr.clone().transform(&|e| {
+                if e.eq(right_col) {
+                    Ok(Transformed::Yes(left_col.clone()))
+                } else {
+                    Ok(Transformed::No(e))
                 }
-            }
+            })?;
+            item.expr = new_expr;
         }
+    }
+    Ok(())
+}
+
+fn offset_ordering(
+    ordering: LexOrderingRef,
+    join_type: &JoinType,
+    offset: usize,
+) -> Vec<PhysicalSortExpr> {
+    match join_type {
+        // In the case below, right ordering should be offseted with the left
+        // side length, since we append the right table to the left table.
+        JoinType::Inner | JoinType::Left | JoinType::Full | JoinType::Right => ordering
+            .iter()
+            .map(|sort_expr| PhysicalSortExpr {
+                expr: add_offset_to_expr(sort_expr.expr.clone(), offset),
+                options: sort_expr.options,
+            })
+            .collect(),
+        _ => ordering.to_vec(),
     }
 }
 
@@ -488,35 +515,24 @@ pub fn calculate_join_output_ordering(
     left_ordering: LexOrderingRef,
     right_ordering: LexOrderingRef,
     join_type: JoinType,
-    on_columns: &[(Column, Column)],
+    on_columns: &[(PhysicalExprRef, PhysicalExprRef)],
     left_columns_len: usize,
     maintains_input_order: &[bool],
     probe_side: Option<JoinSide>,
 ) -> Option<LexOrdering> {
-    let mut right_ordering = match join_type {
-        // In the case below, right ordering should be offseted with the left
-        // side length, since we append the right table to the left table.
-        JoinType::Inner | JoinType::Left | JoinType::Right | JoinType::Full => {
-            right_ordering
-                .iter()
-                .map(|sort_expr| PhysicalSortExpr {
-                    expr: add_offset_to_expr(sort_expr.expr.clone(), left_columns_len),
-                    options: sort_expr.options,
-                })
-                .collect()
-        }
-        _ => right_ordering.to_vec(),
-    };
     let output_ordering = match maintains_input_order {
         [true, false] => {
             // Special case, we can prefix ordering of right side with the ordering of left side.
             if join_type == JoinType::Inner && probe_side == Some(JoinSide::Left) {
                 replace_on_columns_of_right_ordering(
                     on_columns,
-                    &mut right_ordering,
-                    left_columns_len,
-                );
-                merge_vectors(left_ordering, &right_ordering)
+                    &mut right_ordering.to_vec(),
+                )
+                .ok()?;
+                merge_vectors(
+                    left_ordering,
+                    &offset_ordering(right_ordering, &join_type, left_columns_len),
+                )
             } else {
                 left_ordering.to_vec()
             }
@@ -526,12 +542,15 @@ pub fn calculate_join_output_ordering(
             if join_type == JoinType::Inner && probe_side == Some(JoinSide::Right) {
                 replace_on_columns_of_right_ordering(
                     on_columns,
-                    &mut right_ordering,
-                    left_columns_len,
-                );
-                merge_vectors(&right_ordering, left_ordering)
+                    &mut right_ordering.to_vec(),
+                )
+                .ok()?;
+                merge_vectors(
+                    &offset_ordering(right_ordering, &join_type, left_columns_len),
+                    left_ordering,
+                )
             } else {
-                right_ordering.to_vec()
+                offset_ordering(right_ordering, &join_type, left_columns_len)
             }
         }
         // Doesn't maintain ordering, output ordering is None.
@@ -810,10 +829,19 @@ fn estimate_join_cardinality(
             let (left_col_stats, right_col_stats) = on
                 .iter()
                 .map(|(left, right)| {
-                    (
-                        left_stats.column_statistics[left.index()].clone(),
-                        right_stats.column_statistics[right.index()].clone(),
-                    )
+                    match (
+                        left.as_any().downcast_ref::<Column>(),
+                        right.as_any().downcast_ref::<Column>(),
+                    ) {
+                        (Some(left), Some(right)) => (
+                            left_stats.column_statistics[left.index()].clone(),
+                            right_stats.column_statistics[right.index()].clone(),
+                        ),
+                        _ => (
+                            ColumnStatistics::new_unknown(),
+                            ColumnStatistics::new_unknown(),
+                        ),
+                    }
                 })
                 .unzip::<_, _, Vec<_>, Vec<_>>();
 
@@ -1476,7 +1504,11 @@ mod tests {
     use datafusion_common::stats::Precision::{Absent, Exact, Inexact};
     use datafusion_common::{arrow_datafusion_err, arrow_err, ScalarValue};
 
-    fn check(left: &[Column], right: &[Column], on: &[(Column, Column)]) -> Result<()> {
+    fn check(
+        left: &[Column],
+        right: &[Column],
+        on: &[(PhysicalExprRef, PhysicalExprRef)],
+    ) -> Result<()> {
         let left = left
             .iter()
             .map(|x| x.to_owned())
@@ -1492,7 +1524,10 @@ mod tests {
     fn check_valid() -> Result<()> {
         let left = vec![Column::new("a", 0), Column::new("b1", 1)];
         let right = vec![Column::new("a", 0), Column::new("b2", 1)];
-        let on = &[(Column::new("a", 0), Column::new("a", 0))];
+        let on = &[(
+            Arc::new(Column::new("a", 0)) as _,
+            Arc::new(Column::new("a", 0)) as _,
+        )];
 
         check(&left, &right, on)?;
         Ok(())
@@ -1502,7 +1537,10 @@ mod tests {
     fn check_not_in_right() {
         let left = vec![Column::new("a", 0), Column::new("b", 1)];
         let right = vec![Column::new("b", 0)];
-        let on = &[(Column::new("a", 0), Column::new("a", 0))];
+        let on = &[(
+            Arc::new(Column::new("a", 0)) as _,
+            Arc::new(Column::new("a", 0)) as _,
+        )];
 
         assert!(check(&left, &right, on).is_err());
     }
@@ -1544,7 +1582,10 @@ mod tests {
     fn check_not_in_left() {
         let left = vec![Column::new("b", 0)];
         let right = vec![Column::new("a", 0)];
-        let on = &[(Column::new("a", 0), Column::new("a", 0))];
+        let on = &[(
+            Arc::new(Column::new("a", 0)) as _,
+            Arc::new(Column::new("a", 0)) as _,
+        )];
 
         assert!(check(&left, &right, on).is_err());
     }
@@ -1554,7 +1595,10 @@ mod tests {
         // column "a" would appear both in left and right
         let left = vec![Column::new("a", 0), Column::new("c", 1)];
         let right = vec![Column::new("a", 0), Column::new("b", 1)];
-        let on = &[(Column::new("a", 0), Column::new("b", 1))];
+        let on = &[(
+            Arc::new(Column::new("a", 0)) as _,
+            Arc::new(Column::new("b", 1)) as _,
+        )];
 
         assert!(check(&left, &right, on).is_ok());
     }
@@ -1563,7 +1607,10 @@ mod tests {
     fn check_in_right() {
         let left = vec![Column::new("a", 0), Column::new("c", 1)];
         let right = vec![Column::new("b", 0)];
-        let on = &[(Column::new("a", 0), Column::new("b", 0))];
+        let on = &[(
+            Arc::new(Column::new("a", 0)) as _,
+            Arc::new(Column::new("b", 0)) as _,
+        )];
 
         assert!(check(&left, &right, on).is_ok());
     }
@@ -1835,7 +1882,10 @@ mod tests {
 
             // We should also be able to use join_cardinality to get the same results
             let join_type = JoinType::Inner;
-            let join_on = vec![(Column::new("a", 0), Column::new("b", 0))];
+            let join_on = vec![(
+                Arc::new(Column::new("a", 0)) as _,
+                Arc::new(Column::new("b", 0)) as _,
+            )];
             let partial_join_stats = estimate_join_cardinality(
                 &join_type,
                 create_stats(Some(left_num_rows), left_col_stats.clone(), false),
@@ -1957,8 +2007,14 @@ mod tests {
 
         for (join_type, expected_num_rows) in cases {
             let join_on = vec![
-                (Column::new("a", 0), Column::new("c", 0)),
-                (Column::new("b", 1), Column::new("d", 1)),
+                (
+                    Arc::new(Column::new("a", 0)) as _,
+                    Arc::new(Column::new("c", 0)) as _,
+                ),
+                (
+                    Arc::new(Column::new("b", 1)) as _,
+                    Arc::new(Column::new("d", 1)) as _,
+                ),
             ];
 
             let partial_join_stats = estimate_join_cardinality(
@@ -2005,8 +2061,14 @@ mod tests {
         ];
 
         let join_on = vec![
-            (Column::new("a", 0), Column::new("c", 0)),
-            (Column::new("x", 2), Column::new("y", 2)),
+            (
+                Arc::new(Column::new("a", 0)) as _,
+                Arc::new(Column::new("c", 0)) as _,
+            ),
+            (
+                Arc::new(Column::new("x", 2)) as _,
+                Arc::new(Column::new("y", 2)) as _,
+            ),
         ];
 
         let cases = vec![
@@ -2071,7 +2133,10 @@ mod tests {
             },
         ];
         let join_type = JoinType::Inner;
-        let on_columns = [(Column::new("b", 1), Column::new("x", 0))];
+        let on_columns = [(
+            Arc::new(Column::new("b", 1)) as _,
+            Arc::new(Column::new("x", 0)) as _,
+        )];
         let left_columns_len = 5;
         let maintains_input_orders = [[true, false], [false, true]];
         let probe_sides = [Some(JoinSide::Left), Some(JoinSide::Right)];
