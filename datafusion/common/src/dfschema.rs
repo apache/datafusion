@@ -26,7 +26,8 @@ use std::sync::Arc;
 
 use crate::error::{DataFusionError, Result, _plan_err};
 use crate::{
-    field_not_found, Column, FunctionalDependencies, OwnedTableReference, TableReference,
+    field_not_found, unqualified_field_not_found, Column, FunctionalDependencies,
+    OwnedTableReference, TableReference,
 };
 
 use arrow::compute::can_cast_types;
@@ -245,17 +246,6 @@ impl DFSchema {
     /// Create a new schema that contains the fields from this schema followed by the fields
     /// from the supplied schema. An error will be returned if there are duplicate field names.
     pub fn join(&self, schema: &DFSchema) -> Result<Self> {
-        // let (new_field_qualifiers, new_fields) = self
-        //     .iter()
-        //     .chain(schema.iter())
-        //     .map(|(qualifier, field)| (qualifier.as_ref().clone(), field.clone()))
-        //     .unzip();
-        // let (new_field_qualifiers, new_fields) = self
-        //     .iter()
-        //     .chain(schema.iter())
-        //     .map(|(qualifier, field)| (qualifier.as_ref().clone(), field.clone()))
-        //     .unzip();
-
         let fields = self.inner.fields().clone();
         let mut schema_builder = SchemaBuilder::new();
         schema_builder.extend(fields.iter().map(|f| f.clone()));
@@ -355,7 +345,7 @@ impl DFSchema {
         let mut matches = self
             .iter()
             .enumerate()
-            .filter(|(i, (q, f))| match (qualifier, q) {
+            .filter(|(_, (q, f))| match (qualifier, q) {
                 // field to lookup is qualified.
                 // current field is qualified and not shared between relations, compare both
                 // qualifier and name.
@@ -409,7 +399,7 @@ impl DFSchema {
     pub fn fields_with_qualified(&self, qualifier: &TableReference) -> Vec<&Field> {
         let fields: Vec<&Field> = self
             .iter()
-            .filter(|(q, f)| q.map(|q| q == qualifier).unwrap_or(false))
+            .filter(|(q, _)| q.map(|q| q == qualifier).unwrap_or(false))
             .map(|(_, f)| f.as_ref())
             .collect();
         fields
@@ -443,6 +433,17 @@ impl DFSchema {
             .collect()
     }
 
+    /// Find all fields that match the given name and return them with their qualifier
+    pub fn fields_and_qualifiers_with_unqualified_name(
+        &self,
+        name: &str,
+    ) -> Vec<(Option<&TableReference>, &Field)> {
+        self.iter()
+            .filter(|(_, field)| field.name() == name)
+            .map(|(q, f)| (q, f.as_ref()))
+            .collect()
+    }
+
     /// Find all fields that match the given name and convert to column
     pub fn columns_with_unqualified_name(&self, name: &str) -> Vec<Column> {
         self.iter()
@@ -460,14 +461,37 @@ impl DFSchema {
 
     /// Find the field with the given name
     pub fn field_with_unqualified_name(&self, name: &str) -> Result<&Field> {
-        let field = self.iter().find(|(q, f)| match q {
-            Some(_) => false,
-            None => name == f.name(),
-        });
-        match field {
-            Some((_, f)) => Ok(f),
-            None => Err(DataFusionError::Internal("Field not found".to_string())),
+        let matches = self.fields_and_qualifiers_with_unqualified_name(name);
+        match matches.len() {
+            0 => Err(unqualified_field_not_found(name, self)),
+            1 => Ok(matches[0].1),
+            _ => {
+                let fields_without_qualifier = matches
+                    .iter()
+                    .filter(|(q, _)| q.is_none())
+                    .collect::<Vec<_>>();
+                if fields_without_qualifier.len() == 1 {
+                    Ok(fields_without_qualifier[0].1)
+                } else {
+                    Err(DataFusionError::Internal("Field not found".to_string()))
+                    // _schema_err!(SchemaError::AmbiguousReference {
+                    //     field: Column {
+                    //         relation: None,
+                    //         name: name.to_string(),
+                    //     },
+                    // })
+                }
+            }
         }
+        // let field = self.iter().find(|(_, f)| name == f.name());
+        // let field = self.iter().find(|(q, f)| match q {
+        //     Some(_) => false,
+        //     None => name == f.name(),
+        // });
+        // match field {
+        //     Some((_, f)) => Ok(f),
+        //     None => Err(DataFusionError::Internal("Field not found".to_string())),
+        // }
     }
 
     /// Find the field with the given qualified name

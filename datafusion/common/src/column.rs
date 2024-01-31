@@ -351,7 +351,6 @@ mod tests {
     use super::*;
     use arrow::datatypes::DataType;
     use arrow_schema::{Field, SchemaBuilder};
-    use std::collections::HashMap;
 
     fn create_qualified_schema(qualifier: &str, names: &[&str]) -> Result<DFSchema> {
         let mut schema_builder = SchemaBuilder::new();
