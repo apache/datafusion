@@ -18,7 +18,6 @@
 use datafusion::common::test_util::datafusion_test_data;
 use datafusion::error::Result;
 use datafusion::prelude::*;
-use datafusion_expr::expr::Sort;
 
 /// This example demonstrates executing a simple query against an Arrow data source (CSV) and
 /// fetching results with streaming aggregation and streaming window
@@ -29,10 +28,10 @@ async fn main() -> Result<()> {
 
     let testdata = datafusion_test_data();
 
-    // Register a table source and tell DataFusion the file is ordered by `ts ASC`. 
+    // Register a table source and tell DataFusion the file is ordered by `ts ASC`.
     // Note it is the responsibility of the user to make sure
     // that file indeed satisfies this condition or else incorrect answers may be produced.
-    let asc  = true;
+    let asc = true;
     let nulls_first = true;
     let sort_expr = vec![col("ts").sort(asc, nulls_first)];
     // register csv file with the execution context
@@ -48,7 +47,7 @@ async fn main() -> Result<()> {
     // already ordered at the source.
     //
     // Unbounded sources means that if the input came from a "never ending" source (such as a FIFO
-    // file on unix) the query could produce results incrementally as data was read. 
+    // file on unix) the query could produce results incrementally as data was read.
     let df = ctx
         .sql(
             "SELECT ts, MIN(inc_col), MAX(inc_col) \
