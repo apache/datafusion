@@ -117,7 +117,7 @@ impl SimplifyExpressions {
             })
             .collect::<Result<Vec<_>>>()?;
 
-        plan.with_new_exprs(exprs, &new_inputs)
+        plan.with_new_exprs(exprs, new_inputs)
     }
 }
 

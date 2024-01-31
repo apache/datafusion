@@ -128,6 +128,7 @@ pub async fn exec_from_repl(
     let mut rl = Editor::new()?;
     rl.set_helper(Some(CliHelper::new(
         &ctx.task_ctx().session_config().options().sql_parser.dialect,
+        print_options.color,
     )));
     rl.load_history(".history").ok();
 

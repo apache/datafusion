@@ -29,7 +29,6 @@ SELECT COUNT(DISTINCT "SearchPhrase"), COUNT(DISTINCT "MobilePhone"), COUNT(DIST
 FROM hits;
 ```
 
-
 ### Q1: Data Exploration
 
 **Question**: "How many distinct "hit color", "browser country" and "language" are there in the dataset?"
@@ -42,7 +41,7 @@ SELECT COUNT(DISTINCT "HitColor"), COUNT(DISTINCT "BrowserCountry"), COUNT(DISTI
 FROM hits;
 ```
 
-### Q2: Top 10 anaylsis
+### Q2: Top 10 analysis
 
 **Question**: "Find the top 10 "browser country" by number of distinct "social network"s, 
 including the distinct counts of  "hit color", "browser language",

@@ -61,6 +61,7 @@ pub mod metrics;
 mod ordering;
 pub mod placeholder_row;
 pub mod projection;
+pub mod recursive_query;
 pub mod repartition;
 pub mod sorts;
 pub mod stream;
@@ -71,6 +72,7 @@ pub mod union;
 pub mod unnest;
 pub mod values;
 pub mod windows;
+pub mod work_table;
 
 pub use crate::display::{DefaultDisplay, DisplayAs, DisplayFormatType, VerboseDisplay};
 pub use crate::metrics::Metric;

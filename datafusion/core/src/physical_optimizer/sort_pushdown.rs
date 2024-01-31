@@ -15,11 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::borrow::Cow;
 use std::sync::Arc;
 
+use super::utils::add_sort_above;
 use crate::physical_optimizer::utils::{
-    add_sort_above, is_limit, is_sort_preserving_merge, is_union, is_window,
+    is_limit, is_sort_preserving_merge, is_union, is_window,
 };
 use crate::physical_plan::filter::FilterExec;
 use crate::physical_plan::joins::utils::calculate_join_output_ordering;
@@ -27,9 +27,10 @@ use crate::physical_plan::joins::{HashJoinExec, SortMergeJoinExec};
 use crate::physical_plan::projection::ProjectionExec;
 use crate::physical_plan::repartition::RepartitionExec;
 use crate::physical_plan::sorts::sort::SortExec;
-use crate::physical_plan::{with_new_children_if_necessary, ExecutionPlan};
+use crate::physical_plan::tree_node::PlanContext;
+use crate::physical_plan::ExecutionPlan;
 
-use datafusion_common::tree_node::{Transformed, TreeNode};
+use datafusion_common::tree_node::Transformed;
 use datafusion_common::{plan_err, DataFusionError, JoinSide, Result};
 use datafusion_expr::JoinType;
 use datafusion_physical_expr::expressions::Column;
@@ -39,60 +40,17 @@ use datafusion_physical_expr::{
 
 /// This is a "data class" we use within the [`EnforceSorting`] rule to push
 /// down [`SortExec`] in the plan. In some cases, we can reduce the total
-/// computational cost by pushing down `SortExec`s through some executors.
+/// computational cost by pushing down `SortExec`s through some executors. The
+/// object carries the parent required ordering as its data.
 ///
 /// [`EnforceSorting`]: crate::physical_optimizer::enforce_sorting::EnforceSorting
-#[derive(Debug, Clone)]
-pub(crate) struct SortPushDown {
-    /// Current plan
-    pub plan: Arc<dyn ExecutionPlan>,
-    /// Parent required sort ordering
-    required_ordering: Option<Vec<PhysicalSortRequirement>>,
-    children_nodes: Vec<Self>,
-}
+pub type SortPushDown = PlanContext<Option<Vec<PhysicalSortRequirement>>>;
 
-impl SortPushDown {
-    /// Creates an empty tree with empty `required_ordering`'s.
-    pub fn new(plan: Arc<dyn ExecutionPlan>) -> Self {
-        let children = plan.children();
-        Self {
-            plan,
-            required_ordering: None,
-            children_nodes: children.into_iter().map(Self::new).collect(),
-        }
-    }
-
-    /// Assigns the ordering requirement of the root node to the its children.
-    pub fn assign_initial_requirements(&mut self) {
-        let reqs = self.plan.required_input_ordering();
-        for (child, requirement) in self.children_nodes.iter_mut().zip(reqs) {
-            child.required_ordering = requirement;
-        }
-    }
-}
-
-impl TreeNode for SortPushDown {
-    fn children_nodes(&self) -> Vec<Cow<Self>> {
-        self.children_nodes.iter().map(Cow::Borrowed).collect()
-    }
-
-    fn map_children<F>(mut self, transform: F) -> Result<Self>
-    where
-        F: FnMut(Self) -> Result<Self>,
-    {
-        if !self.children_nodes.is_empty() {
-            self.children_nodes = self
-                .children_nodes
-                .into_iter()
-                .map(transform)
-                .collect::<Result<_>>()?;
-            self.plan = with_new_children_if_necessary(
-                self.plan,
-                self.children_nodes.iter().map(|c| c.plan.clone()).collect(),
-            )?
-            .into();
-        }
-        Ok(self)
+/// Assigns the ordering requirement of the root node to the its children.
+pub fn assign_initial_requirements(node: &mut SortPushDown) {
+    let reqs = node.plan.required_input_ordering();
+    for (child, requirement) in node.children.iter_mut().zip(reqs) {
+        child.data = requirement;
     }
 }
 
@@ -100,71 +58,61 @@ pub(crate) fn pushdown_sorts(
     mut requirements: SortPushDown,
 ) -> Result<Transformed<SortPushDown>> {
     let plan = &requirements.plan;
-    let parent_required = requirements.required_ordering.as_deref().unwrap_or(&[]);
+    let parent_reqs = requirements.data.as_deref().unwrap_or(&[]);
+    let satisfy_parent = plan
+        .equivalence_properties()
+        .ordering_satisfy_requirement(parent_reqs);
 
     if let Some(sort_exec) = plan.as_any().downcast_ref::<SortExec>() {
-        if !plan
-            .equivalence_properties()
-            .ordering_satisfy_requirement(parent_required)
-        {
-            // If the current plan is a SortExec, modify it to satisfy parent requirements:
-            let mut new_plan = sort_exec.input().clone();
-            add_sort_above(&mut new_plan, parent_required, sort_exec.fetch());
-            requirements.plan = new_plan;
-        };
-
-        let required_ordering = requirements
-            .plan
+        let required_ordering = plan
             .output_ordering()
             .map(PhysicalSortRequirement::from_sort_exprs)
             .unwrap_or_default();
-        // Since new_plan is a SortExec, we can safely get the 0th index.
-        let mut child = requirements.children_nodes.swap_remove(0);
+
+        if !satisfy_parent {
+            // Make sure this `SortExec` satisfies parent requirements:
+            let fetch = sort_exec.fetch();
+            let sort_reqs = requirements.data.unwrap_or_default();
+            requirements = requirements.children.swap_remove(0);
+            requirements = add_sort_above(requirements, sort_reqs, fetch);
+        };
+
+        // We can safely get the 0th index as we are dealing with a `SortExec`.
+        let mut child = requirements.children.swap_remove(0);
         if let Some(adjusted) =
             pushdown_requirement_to_children(&child.plan, &required_ordering)?
         {
-            for (c, o) in child.children_nodes.iter_mut().zip(adjusted) {
-                c.required_ordering = o;
+            for (grand_child, order) in child.children.iter_mut().zip(adjusted) {
+                grand_child.data = order;
             }
             // Can push down requirements
-            child.required_ordering = None;
-            Ok(Transformed::Yes(child))
+            child.data = None;
+            return Ok(Transformed::Yes(child));
         } else {
             // Can not push down requirements
-            let mut empty_node = SortPushDown::new(requirements.plan);
-            empty_node.assign_initial_requirements();
-            Ok(Transformed::Yes(empty_node))
+            requirements.children = vec![child];
+            assign_initial_requirements(&mut requirements);
         }
+    } else if satisfy_parent {
+        // For non-sort operators, immediately return if parent requirements are met:
+        let reqs = plan.required_input_ordering();
+        for (child, order) in requirements.children.iter_mut().zip(reqs) {
+            child.data = order;
+        }
+    } else if let Some(adjusted) = pushdown_requirement_to_children(plan, parent_reqs)? {
+        // Can not satisfy the parent requirements, check whether we can push
+        // requirements down:
+        for (child, order) in requirements.children.iter_mut().zip(adjusted) {
+            child.data = order;
+        }
+        requirements.data = None;
     } else {
-        // Executors other than SortExec
-        if plan
-            .equivalence_properties()
-            .ordering_satisfy_requirement(parent_required)
-        {
-            // Satisfies parent requirements, immediately return.
-            let reqs = requirements.plan.required_input_ordering();
-            for (child, order) in requirements.children_nodes.iter_mut().zip(reqs) {
-                child.required_ordering = order;
-            }
-            return Ok(Transformed::Yes(requirements));
-        }
-        // Can not satisfy the parent requirements, check whether the requirements can be pushed down:
-        if let Some(adjusted) = pushdown_requirement_to_children(plan, parent_required)? {
-            for (c, o) in requirements.children_nodes.iter_mut().zip(adjusted) {
-                c.required_ordering = o;
-            }
-            requirements.required_ordering = None;
-            Ok(Transformed::Yes(requirements))
-        } else {
-            // Can not push down requirements, add new SortExec:
-            let mut new_plan = requirements.plan;
-            add_sort_above(&mut new_plan, parent_required, None);
-            let mut new_empty = SortPushDown::new(new_plan);
-            new_empty.assign_initial_requirements();
-            // Can not push down requirements
-            Ok(Transformed::Yes(new_empty))
-        }
+        // Can not push down requirements, add new `SortExec`:
+        let sort_reqs = requirements.data.clone().unwrap_or_default();
+        requirements = add_sort_above(requirements, sort_reqs, None);
+        assign_initial_requirements(&mut requirements);
     }
+    Ok(Transformed::Yes(requirements))
 }
 
 fn pushdown_requirement_to_children(
@@ -178,11 +126,7 @@ fn pushdown_requirement_to_children(
         let child_plan = plan.children().swap_remove(0);
         match determine_children_requirement(parent_required, request_child, child_plan) {
             RequirementsCompatibility::Satisfy => {
-                let req = if request_child.is_empty() {
-                    None
-                } else {
-                    Some(request_child.to_vec())
-                };
+                let req = (!request_child.is_empty()).then(|| request_child.to_vec());
                 Ok(Some(vec![req]))
             }
             RequirementsCompatibility::Compatible(adjusted) => Ok(Some(vec![adjusted])),
@@ -191,20 +135,14 @@ fn pushdown_requirement_to_children(
     } else if is_union(plan) {
         // UnionExec does not have real sort requirements for its input. Here we change the adjusted_request_ordering to UnionExec's output ordering and
         // propagate the sort requirements down to correct the unnecessary descendant SortExec under the UnionExec
-        let req = if parent_required.is_empty() {
-            None
-        } else {
-            Some(parent_required.to_vec())
-        };
+        let req = (!parent_required.is_empty()).then(|| parent_required.to_vec());
         Ok(Some(vec![req; plan.children().len()]))
     } else if let Some(smj) = plan.as_any().downcast_ref::<SortMergeJoinExec>() {
         // If the current plan is SortMergeJoinExec
         let left_columns_len = smj.left().schema().fields().len();
         let parent_required_expr =
             PhysicalSortRequirement::to_sort_exprs(parent_required.iter().cloned());
-        let expr_source_side =
-            expr_source_sides(&parent_required_expr, smj.join_type(), left_columns_len);
-        match expr_source_side {
+        match expr_source_side(&parent_required_expr, smj.join_type(), left_columns_len) {
             Some(JoinSide::Left) => try_pushdown_requirements_to_join(
                 smj,
                 parent_required,
@@ -256,11 +194,7 @@ fn pushdown_requirement_to_children(
         } else {
             // Can push-down through SortPreservingMergeExec, because parent requirement is finer
             // than SortPreservingMergeExec output ordering.
-            let req = if parent_required.is_empty() {
-                None
-            } else {
-                Some(parent_required.to_vec())
-            };
+            let req = (!parent_required.is_empty()).then(|| parent_required.to_vec());
             Ok(Some(vec![req]))
         }
     } else {
@@ -268,11 +202,8 @@ fn pushdown_requirement_to_children(
             maintains_input_order
                 .into_iter()
                 .map(|flag| {
-                    if flag && !parent_required.is_empty() {
-                        Some(parent_required.to_vec())
-                    } else {
-                        None
-                    }
+                    (flag && !parent_required.is_empty())
+                        .then(|| parent_required.to_vec())
                 })
                 .collect(),
         ))
@@ -350,7 +281,7 @@ fn try_pushdown_requirements_to_join(
     }))
 }
 
-fn expr_source_sides(
+fn expr_source_side(
     required_exprs: &[PhysicalSortExpr],
     join_type: JoinType,
     left_columns_len: usize,
@@ -402,18 +333,14 @@ fn shift_right_required(
     parent_required: LexRequirementRef,
     left_columns_len: usize,
 ) -> Result<Vec<PhysicalSortRequirement>> {
-    let new_right_required: Vec<PhysicalSortRequirement> = parent_required
+    let new_right_required = parent_required
         .iter()
         .filter_map(|r| {
             let col = r.expr.as_any().downcast_ref::<Column>()?;
-
-            if col.index() < left_columns_len {
-                return None;
-            }
-
-            let new_col =
-                Arc::new(Column::new(col.name(), col.index() - left_columns_len));
-            Some(r.clone().with_expr(new_col))
+            col.index().checked_sub(left_columns_len).map(|offset| {
+                r.clone()
+                    .with_expr(Arc::new(Column::new(col.name(), offset)))
+            })
         })
         .collect::<Vec<_>>();
     if new_right_required.len() == parent_required.len() {

@@ -81,27 +81,8 @@ pub fn create_physical_expr(
         input_phy_exprs.to_vec(),
         data_type,
         monotonicity,
+        fun.signature().type_signature.supports_zero_argument(),
     )))
-}
-
-#[cfg(feature = "encoding_expressions")]
-macro_rules! invoke_if_encoding_expressions_feature_flag {
-    ($FUNC:ident, $NAME:expr) => {{
-        use crate::encoding_expressions;
-        encoding_expressions::$FUNC
-    }};
-}
-
-#[cfg(not(feature = "encoding_expressions"))]
-macro_rules! invoke_if_encoding_expressions_feature_flag {
-    ($FUNC:ident, $NAME:expr) => {
-        |_: &[ColumnarValue]| -> Result<ColumnarValue> {
-            internal_err!(
-                "function {} requires compilation with feature flag: encoding_expressions.",
-                $NAME
-            )
-        }
-    };
 }
 
 #[cfg(feature = "crypto_expressions")]
@@ -464,6 +445,9 @@ pub fn create_physical_fun(
         BuiltinScalarFunction::ArrayReplaceAll => Arc::new(|args| {
             make_scalar_function_inner(array_expressions::array_replace_all)(args)
         }),
+        BuiltinScalarFunction::ArrayReverse => Arc::new(|args| {
+            make_scalar_function_inner(array_expressions::array_reverse)(args)
+        }),
         BuiltinScalarFunction::ArraySlice => Arc::new(|args| {
             make_scalar_function_inner(array_expressions::array_slice)(args)
         }),
@@ -574,6 +558,7 @@ pub fn create_physical_fun(
                 execution_props.query_execution_start_time,
             ))
         }
+        BuiltinScalarFunction::MakeDate => Arc::new(datetime_expressions::make_date),
         BuiltinScalarFunction::ToTimestamp => {
             Arc::new(datetime_expressions::to_timestamp_invoke)
         }
@@ -650,12 +635,6 @@ pub fn create_physical_fun(
         BuiltinScalarFunction::Digest => {
             Arc::new(invoke_if_crypto_expressions_feature_flag!(digest, "digest"))
         }
-        BuiltinScalarFunction::Decode => Arc::new(
-            invoke_if_encoding_expressions_feature_flag!(decode, "decode"),
-        ),
-        BuiltinScalarFunction::Encode => Arc::new(
-            invoke_if_encoding_expressions_feature_flag!(encode, "encode"),
-        ),
         BuiltinScalarFunction::NullIf => Arc::new(nullif_func),
         BuiltinScalarFunction::OctetLength => Arc::new(|args| match &args[0] {
             ColumnarValue::Array(v) => Ok(ColumnarValue::Array(length(v.as_ref())?)),
