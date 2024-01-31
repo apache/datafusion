@@ -1033,17 +1033,18 @@ catan-prod1-daily success catan-prod1-daily high
 #3
 #4
 
+statement ok
+DROP TABLE t1;
+
+statement ok
+DROP TABLE t2;
+
 #
 # Tests for NOT IN with a nullable subquery expression
 #
 statement ok
 set datafusion.explain.logical_plan_only = false;
 
-statement ok
-DROP TABLE t1;
-
-statement ok
-DROP TABLE t2;
 
 statement ok
 CREATE TABLE t1(t1_id INT NOT NULL, t1_name TEXT, t1_int INT NOT NULL);
@@ -1253,6 +1254,15 @@ select 'qualified filter' where null NOT IN (select * from (values (1), (2)) my_
 ----
 
 statement ok
+DROP TABLE t1;
+
+statement ok
+DROP TABLE t2;
+
+statement ok
+set datafusion.explain.logical_plan_only = true;
+
+statement ok
 create table t(a bigint);
 
 # Result of query below shouldn't depend on
@@ -1268,10 +1278,6 @@ logical_plan
 Projection: t.a / Int64(2)Int64(2)t.a AS t.a / Int64(2), t.a / Int64(2)Int64(2)t.a AS t.a / Int64(2) + Int64(1)
 --Projection: t.a / Int64(2) AS t.a / Int64(2)Int64(2)t.a
 ----TableScan: t projection=[a]
-physical_plan
-ProjectionExec: expr=[t.a / Int64(2)Int64(2)t.a@0 as t.a / Int64(2), t.a / Int64(2)Int64(2)t.a@0 + 1 as t.a / Int64(2) + Int64(1)]
---ProjectionExec: expr=[a@0 / 2 as t.a / Int64(2)Int64(2)t.a]
-----MemoryExec: partitions=1, partition_sizes=[0]
 
 statement ok
 set datafusion.optimizer.max_passes = 3;
@@ -1283,7 +1289,6 @@ logical_plan
 Projection: t.a / Int64(2)Int64(2)t.a AS t.a / Int64(2), t.a / Int64(2)Int64(2)t.a AS t.a / Int64(2) + Int64(1)
 --Projection: t.a / Int64(2) AS t.a / Int64(2)Int64(2)t.a
 ----TableScan: t projection=[a]
-physical_plan
-ProjectionExec: expr=[t.a / Int64(2)Int64(2)t.a@0 as t.a / Int64(2), t.a / Int64(2)Int64(2)t.a@0 + 1 as t.a / Int64(2) + Int64(1)]
---ProjectionExec: expr=[a@0 / 2 as t.a / Int64(2)Int64(2)t.a]
-----MemoryExec: partitions=1, partition_sizes=[0]
+
+statement ok
+DROP TABLE t;
