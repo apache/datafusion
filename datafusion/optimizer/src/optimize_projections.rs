@@ -868,9 +868,7 @@ fn rewrite_projection_given_requirements(
     return if let Some(input) =
         optimize_projections(&proj.input, config, &required_indices)?
     {
-        if &projection_schema(&input, &exprs_used)? == input.schema()
-            && exprs_used.iter().all(is_expr_trivial)
-        {
+        if is_projection_unnecessary(&input, &exprs_used)? {
             Ok(Some(input))
         } else {
             Projection::try_new(exprs_used, Arc::new(input))
@@ -880,7 +878,7 @@ fn rewrite_projection_given_requirements(
         // Projection expression used is different than the existing projection.
         // In this case, even if the child doesn't change, we should update the
         // projection to use fewer columns:
-        if &projection_schema(&proj.input, &exprs_used)? == proj.input.schema() {
+        if is_projection_unnecessary(&proj.input, &exprs_used)? {
             Ok(Some(proj.input.as_ref().clone()))
         } else {
             Projection::try_new(exprs_used, proj.input.clone())
@@ -890,6 +888,14 @@ fn rewrite_projection_given_requirements(
         // Projection doesn't change.
         Ok(None)
     };
+}
+
+/// Projection is unnecessary, when
+/// - input schema of the projection, output schema of the projection are same, and
+/// - all projection expressions are either Column or Literal
+fn is_projection_unnecessary(input: &LogicalPlan, proj_exprs: &[Expr]) -> Result<bool> {
+    Ok(&projection_schema(input, proj_exprs)? == input.schema()
+        && proj_exprs.iter().all(is_expr_trivial))
 }
 
 #[cfg(test)]
