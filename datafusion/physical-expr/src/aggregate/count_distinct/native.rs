@@ -34,7 +34,7 @@ use datafusion_expr::Accumulator;
 use crate::aggregate::utils::Hashable;
 
 #[derive(Debug)]
-pub(super) struct NativeDistinctCountAccumulator<T>
+pub(super) struct PrimitiveDistinctCountAccumulator<T>
 where
     T: ArrowPrimitiveType + Send,
     T::Native: Eq + Hash,
@@ -42,7 +42,7 @@ where
     values: HashSet<T::Native, RandomState>,
 }
 
-impl<T> NativeDistinctCountAccumulator<T>
+impl<T> PrimitiveDistinctCountAccumulator<T>
 where
     T: ArrowPrimitiveType + Send,
     T::Native: Eq + Hash,
@@ -54,7 +54,7 @@ where
     }
 }
 
-impl<T> Accumulator for NativeDistinctCountAccumulator<T>
+impl<T> Accumulator for PrimitiveDistinctCountAccumulator<T>
 where
     T: ArrowPrimitiveType + Send + Debug,
     T::Native: Eq + Hash,
