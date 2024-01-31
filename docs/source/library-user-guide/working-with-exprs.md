@@ -17,7 +17,7 @@
   under the License.
 -->
 
-# Working with Exprs
+# Working with `Expr`s
 
 <!-- https://github.com/apache/arrow-datafusion/issues/7304 -->
 
@@ -48,12 +48,11 @@ As another example, the SQL expression `a + b * c` would be represented as an `E
                     └────────────────────┘  └────────────────────┘
 ```
 
-As the writer of a library, you may want to use or create `Expr`s to represent computations that you want to perform. This guide will walk you through how to make your own scalar UDF as an `Expr` and how to rewrite `Expr`s to inline the simple UDF.
+As the writer of a library, you can use `Expr`s to represent computations that you want to perform. This guide will walk you through how to make your own scalar UDF as an `Expr` and how to rewrite `Expr`s to inline the simple UDF.
 
-There are also executable examples for working with `Expr`s:
+## Creating and Evaluating `Expr`s
 
-- [rewrite_expr.rs](https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/rewrite_expr.rs)
-- [expr_api.rs](https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/expr_api.rs)
+Please see [expr_api.rs](https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/expr_api.rs) for well commented code for creating, evaluating, simplifying, and analyzing `Expr`s.
 
 ## A Scalar UDF Example
 
@@ -79,7 +78,9 @@ let expr = add_one_udf.call(vec![col("my_column")]);
 
 If you'd like to learn more about `Expr`s, before we get into the details of creating and rewriting them, you can read the [expression user-guide](./../user-guide/expressions.md).
 
-## Rewriting Exprs
+## Rewriting `Expr`s
+
+[rewrite_expr.rs](https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/rewrite_expr.rs) contains example code for rewriting `Expr`s.
 
 Rewriting Expressions is the process of taking an `Expr` and transforming it into another `Expr`. This is useful for a number of reasons, including:
 

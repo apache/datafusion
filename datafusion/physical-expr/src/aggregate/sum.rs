@@ -23,7 +23,7 @@ use std::sync::Arc;
 use super::groups_accumulator::prim_op::PrimitiveGroupsAccumulator;
 use crate::aggregate::utils::down_cast_any_ref;
 use crate::expressions::format_state_name;
-use crate::{AggregateExpr, GroupsAccumulator, PhysicalExpr};
+use crate::{AggregateExpr, PhysicalExpr};
 use arrow::compute::sum;
 use arrow::datatypes::DataType;
 use arrow::{array::ArrayRef, datatypes::Field};
@@ -35,7 +35,7 @@ use arrow_array::{Array, ArrowNativeTypeOp, ArrowNumericType};
 use arrow_buffer::ArrowNativeType;
 use datafusion_common::{not_impl_err, DataFusionError, Result, ScalarValue};
 use datafusion_expr::type_coercion::aggregates::sum_return_type;
-use datafusion_expr::Accumulator;
+use datafusion_expr::{Accumulator, GroupsAccumulator};
 
 /// SUM aggregate expression
 #[derive(Debug, Clone)]
@@ -191,7 +191,7 @@ impl<T: ArrowNumericType> SumAccumulator<T> {
 }
 
 impl<T: ArrowNumericType> Accumulator for SumAccumulator<T> {
-    fn state(&self) -> Result<Vec<ScalarValue>> {
+    fn state(&mut self) -> Result<Vec<ScalarValue>> {
         Ok(vec![self.evaluate()?])
     }
 
@@ -208,7 +208,7 @@ impl<T: ArrowNumericType> Accumulator for SumAccumulator<T> {
         self.update_batch(states)
     }
 
-    fn evaluate(&self) -> Result<ScalarValue> {
+    fn evaluate(&mut self) -> Result<ScalarValue> {
         ScalarValue::new_primitive::<T>(self.sum, &self.data_type)
     }
 
@@ -243,7 +243,7 @@ impl<T: ArrowNumericType> SlidingSumAccumulator<T> {
 }
 
 impl<T: ArrowNumericType> Accumulator for SlidingSumAccumulator<T> {
-    fn state(&self) -> Result<Vec<ScalarValue>> {
+    fn state(&mut self) -> Result<Vec<ScalarValue>> {
         Ok(vec![self.evaluate()?, self.count.into()])
     }
 
@@ -267,7 +267,7 @@ impl<T: ArrowNumericType> Accumulator for SlidingSumAccumulator<T> {
         Ok(())
     }
 
-    fn evaluate(&self) -> Result<ScalarValue> {
+    fn evaluate(&mut self) -> Result<ScalarValue> {
         let v = (self.count != 0).then_some(self.sum);
         ScalarValue::new_primitive::<T>(v, &self.data_type)
     }

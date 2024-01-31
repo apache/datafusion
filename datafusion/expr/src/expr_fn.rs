@@ -22,15 +22,17 @@ use crate::expr::{
     Placeholder, ScalarFunction, TryCast,
 };
 use crate::function::PartitionEvaluatorFactory;
-use crate::WindowUDF;
 use crate::{
     aggregate_function, built_in_function, conditional_expressions::CaseBuilder,
     logical_plan::Subquery, AccumulatorFactoryFunction, AggregateUDF,
-    BuiltinScalarFunction, Expr, LogicalPlan, Operator, ReturnTypeFunction,
-    ScalarFunctionImplementation, ScalarUDF, Signature, StateTypeFunction, Volatility,
+    BuiltinScalarFunction, Expr, LogicalPlan, Operator, ScalarFunctionImplementation,
+    ScalarUDF, Signature, Volatility,
 };
+use crate::{AggregateUDFImpl, ColumnarValue, ScalarUDFImpl, WindowUDF, WindowUDFImpl};
 use arrow::datatypes::DataType;
 use datafusion_common::{Column, Result};
+use std::any::Any;
+use std::fmt::Debug;
 use std::ops::Not;
 use std::sync::Arc;
 
@@ -494,7 +496,7 @@ pub fn is_not_unknown(expr: Expr) -> Expr {
 
 macro_rules! scalar_expr {
     ($ENUM:ident, $FUNC:ident, $($arg:ident)*, $DOC:expr) => {
-        #[doc = $DOC ]
+        #[doc = $DOC]
         pub fn $FUNC($($arg: Expr),*) -> Expr {
             Expr::ScalarFunction(ScalarFunction::new(
                 built_in_function::BuiltinScalarFunction::$ENUM,
@@ -583,6 +585,8 @@ scalar_expr!(
     "appends an element to the end of an array."
 );
 
+scalar_expr!(ArraySort, array_sort, array desc null_first, "returns sorted array.");
+
 scalar_expr!(
     ArrayPopBack,
     array_pop_back,
@@ -608,7 +612,7 @@ scalar_expr!(
     ArrayEmpty,
     array_empty,
     array,
-    "returns 1 for an empty array or 0 for a non-empty array."
+    "returns true for an empty array or false for a non-empty array."
 );
 scalar_expr!(
     ArrayHasAll,
@@ -657,6 +661,12 @@ scalar_expr!(
     array_ndims,
     array,
     "returns the number of dimensions of the array."
+);
+scalar_expr!(
+    ArrayDistinct,
+    array_distinct,
+    array,
+    "return distinct values from the array after removing duplicates."
 );
 scalar_expr!(
     ArrayPosition,
@@ -719,9 +729,15 @@ scalar_expr!(
     "replaces all occurrences of the specified element with another specified element."
 );
 scalar_expr!(
+    ArrayReverse,
+    array_reverse,
+    array,
+    "reverses the order of elements in the array."
+);
+scalar_expr!(
     ArraySlice,
     array_slice,
-    array offset length,
+    array begin end stride,
     "returns a slice of the array."
 );
 scalar_expr!(
@@ -738,6 +754,14 @@ scalar_expr!(
     array,
     "returns the total number of elements in the array."
 );
+
+scalar_expr!(
+    ArrayResize,
+    array_resize,
+    array size value,
+    "returns an array with the specified size filled with the given value."
+);
+
 nary_scalar_expr!(
     MakeArray,
     array,
@@ -777,9 +801,8 @@ scalar_expr!(
     "converts the Unicode code point to a UTF8 character"
 );
 scalar_expr!(Digest, digest, input algorithm, "compute the binary hash of `input`, using the `algorithm`");
-scalar_expr!(Encode, encode, input encoding, "encode the `input`, using the `encoding`. encoding can be base64 or hex");
-scalar_expr!(Decode, decode, input encoding, "decode the`input`, using the `encoding`. encoding can be base64 or hex");
 scalar_expr!(InitCap, initcap, string, "converts the first letter of each word in `string` in uppercase and the remaining characters in lowercase");
+scalar_expr!(InStr, instr, string substring, "returns the position of the first occurrence of `substring` in `string`");
 scalar_expr!(Left, left, string n, "returns the first `n` characters in the `string`");
 scalar_expr!(Lower, lower, string, "convert the string to lower case");
 scalar_expr!(
@@ -812,6 +835,7 @@ scalar_expr!(SHA512, sha512, string, "SHA-512 hash");
 scalar_expr!(SplitPart, split_part, string delimiter index, "splits a string based on a delimiter and picks out the desired field based on the index.");
 scalar_expr!(StringToArray, string_to_array, string delimiter null_string, "splits a `string` based on a `delimiter` and returns an array of parts. Any parts matching the optional `null_string` will be replaced with `NULL`");
 scalar_expr!(StartsWith, starts_with, string prefix, "whether the `string` starts with the `prefix`");
+scalar_expr!(EndsWith, ends_with, string suffix, "whether the `string` ends with the `suffix`");
 scalar_expr!(Strpos, strpos, string substring, "finds the position from where the `substring` matches the `string`");
 scalar_expr!(Substr, substr, string position, "substring from the `position` to the end");
 scalar_expr!(Substr, substring, string position length, "substring from the `position` with `length` characters");
@@ -867,29 +891,30 @@ nary_scalar_expr!(
 scalar_expr!(DatePart, date_part, part date, "extracts a subfield from the date");
 scalar_expr!(DateTrunc, date_trunc, part date, "truncates the date to a specified level of precision");
 scalar_expr!(DateBin, date_bin, stride source origin, "coerces an arbitrary timestamp to the start of the nearest specified interval");
-scalar_expr!(
+nary_scalar_expr!(
+    ToTimestamp,
+    to_timestamp,
+    "converts a string and optional formats to a `Timestamp(Nanoseconds, None)`"
+);
+nary_scalar_expr!(
     ToTimestampMillis,
     to_timestamp_millis,
-    date,
-    "converts a string to a `Timestamp(Milliseconds, None)`"
+    "converts a string and optional formats  to a `Timestamp(Milliseconds, None)`"
 );
-scalar_expr!(
+nary_scalar_expr!(
     ToTimestampMicros,
     to_timestamp_micros,
-    date,
-    "converts a string to a `Timestamp(Microseconds, None)`"
+    "converts a string and optional formats  to a `Timestamp(Microseconds, None)`"
 );
-scalar_expr!(
+nary_scalar_expr!(
     ToTimestampNanos,
     to_timestamp_nanos,
-    date,
-    "converts a string to a `Timestamp(Nanoseconds, None)`"
+    "converts a string and optional formats  to a `Timestamp(Nanoseconds, None)`"
 );
-scalar_expr!(
+nary_scalar_expr!(
     ToTimestampSeconds,
     to_timestamp_seconds,
-    date,
-    "converts a string to a `Timestamp(Seconds, None)`"
+    "converts a string and optional formats  to a `Timestamp(Seconds, None)`"
 );
 scalar_expr!(
     FromUnixtime,
@@ -900,6 +925,7 @@ scalar_expr!(
 scalar_expr!(CurrentDate, current_date, ,"returns current UTC date as a [`DataType::Date32`] value");
 scalar_expr!(Now, now, ,"returns current timestamp in nanoseconds, using the same value for all instances of now() in same statement");
 scalar_expr!(CurrentTime, current_time, , "returns current UTC time as a [`DataType::Time64`] value");
+scalar_expr!(MakeDate, make_date, year month day, "make a date from year, month and day component parts");
 scalar_expr!(Nanvl, nanvl, x y, "returns x if x is not NaN otherwise returns y");
 scalar_expr!(
     Isnan,
@@ -916,6 +942,8 @@ scalar_expr!(
 
 scalar_expr!(ArrowTypeof, arrow_typeof, val, "data type");
 scalar_expr!(Levenshtein, levenshtein, string1 string2, "Returns the Levenshtein distance between the two given strings");
+scalar_expr!(SubstrIndex, substr_index, string delimiter count, "Returns the substring from str before count occurrences of the delimiter");
+scalar_expr!(FindInSet, find_in_set, str strlist, "Returns a value in the range of 1 to N if the string str is in the string list strlist consisting of N substrings");
 
 scalar_expr!(
     Struct,
@@ -934,11 +962,18 @@ pub fn when(when: Expr, then: Expr) -> CaseBuilder {
     CaseBuilder::new(None, vec![when], vec![then], None)
 }
 
-/// Creates a new UDF with a specific signature and specific return type.
-/// This is a helper function to create a new UDF.
-/// The function `create_udf` returns a subset of all possible `ScalarFunction`:
-/// * the UDF has a fixed return type
-/// * the UDF has a fixed signature (e.g. [f64, f64])
+/// Convenience method to create a new user defined scalar function (UDF) with a
+/// specific signature and specific return type.
+///
+/// Note this function does not expose all available features of [`ScalarUDF`],
+/// such as
+///
+/// * computing return types based on input types
+/// * multiple [`Signature`]s
+/// * aliases
+///
+/// See [`ScalarUDF`] for details and examples on how to use the full
+/// functionality.
 pub fn create_udf(
     name: &str,
     input_types: Vec<DataType>,
@@ -946,13 +981,76 @@ pub fn create_udf(
     volatility: Volatility,
     fun: ScalarFunctionImplementation,
 ) -> ScalarUDF {
-    let return_type: ReturnTypeFunction = Arc::new(move |_| Ok(return_type.clone()));
-    ScalarUDF::new(
+    let return_type = Arc::try_unwrap(return_type).unwrap_or_else(|t| t.as_ref().clone());
+    ScalarUDF::from(SimpleScalarUDF::new(
         name,
-        &Signature::exact(input_types, volatility),
-        &return_type,
-        &fun,
-    )
+        input_types,
+        return_type,
+        volatility,
+        fun,
+    ))
+}
+
+/// Implements [`ScalarUDFImpl`] for functions that have a single signature and
+/// return type.
+pub struct SimpleScalarUDF {
+    name: String,
+    signature: Signature,
+    return_type: DataType,
+    fun: ScalarFunctionImplementation,
+}
+
+impl Debug for SimpleScalarUDF {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.debug_struct("ScalarUDF")
+            .field("name", &self.name)
+            .field("signature", &self.signature)
+            .field("fun", &"<FUNC>")
+            .finish()
+    }
+}
+
+impl SimpleScalarUDF {
+    /// Create a new `SimpleScalarUDF` from a name, input types, return type and
+    /// implementation. Implementing [`ScalarUDFImpl`] allows more flexibility
+    pub fn new(
+        name: impl Into<String>,
+        input_types: Vec<DataType>,
+        return_type: DataType,
+        volatility: Volatility,
+        fun: ScalarFunctionImplementation,
+    ) -> Self {
+        let name = name.into();
+        let signature = Signature::exact(input_types, volatility);
+        Self {
+            name,
+            signature,
+            return_type,
+            fun,
+        }
+    }
+}
+
+impl ScalarUDFImpl for SimpleScalarUDF {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        Ok(self.return_type.clone())
+    }
+
+    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+        (self.fun)(args)
+    }
 }
 
 /// Creates a new UDAF with a specific signature, state type and return type.
@@ -965,15 +1063,102 @@ pub fn create_udaf(
     accumulator: AccumulatorFactoryFunction,
     state_type: Arc<Vec<DataType>>,
 ) -> AggregateUDF {
-    let return_type: ReturnTypeFunction = Arc::new(move |_| Ok(return_type.clone()));
-    let state_type: StateTypeFunction = Arc::new(move |_| Ok(state_type.clone()));
-    AggregateUDF::new(
+    let return_type = Arc::try_unwrap(return_type).unwrap_or_else(|t| t.as_ref().clone());
+    let state_type = Arc::try_unwrap(state_type).unwrap_or_else(|t| t.as_ref().clone());
+    AggregateUDF::from(SimpleAggregateUDF::new(
         name,
-        &Signature::exact(input_type, volatility),
-        &return_type,
-        &accumulator,
-        &state_type,
-    )
+        input_type,
+        return_type,
+        volatility,
+        accumulator,
+        state_type,
+    ))
+}
+
+/// Implements [`AggregateUDFImpl`] for functions that have a single signature and
+/// return type.
+pub struct SimpleAggregateUDF {
+    name: String,
+    signature: Signature,
+    return_type: DataType,
+    accumulator: AccumulatorFactoryFunction,
+    state_type: Vec<DataType>,
+}
+
+impl Debug for SimpleAggregateUDF {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.debug_struct("AggregateUDF")
+            .field("name", &self.name)
+            .field("signature", &self.signature)
+            .field("fun", &"<FUNC>")
+            .finish()
+    }
+}
+
+impl SimpleAggregateUDF {
+    /// Create a new `AggregateUDFImpl` from a name, input types, return type, state type and
+    /// implementation. Implementing [`AggregateUDFImpl`] allows more flexibility
+    pub fn new(
+        name: impl Into<String>,
+        input_type: Vec<DataType>,
+        return_type: DataType,
+        volatility: Volatility,
+        accumulator: AccumulatorFactoryFunction,
+        state_type: Vec<DataType>,
+    ) -> Self {
+        let name = name.into();
+        let signature = Signature::exact(input_type, volatility);
+        Self {
+            name,
+            signature,
+            return_type,
+            accumulator,
+            state_type,
+        }
+    }
+
+    pub fn new_with_signature(
+        name: impl Into<String>,
+        signature: Signature,
+        return_type: DataType,
+        accumulator: AccumulatorFactoryFunction,
+        state_type: Vec<DataType>,
+    ) -> Self {
+        let name = name.into();
+        Self {
+            name,
+            signature,
+            return_type,
+            accumulator,
+            state_type,
+        }
+    }
+}
+
+impl AggregateUDFImpl for SimpleAggregateUDF {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        Ok(self.return_type.clone())
+    }
+
+    fn accumulator(&self, arg: &DataType) -> Result<Box<dyn crate::Accumulator>> {
+        (self.accumulator)(arg)
+    }
+
+    fn state_type(&self, _return_type: &DataType) -> Result<Vec<DataType>> {
+        Ok(self.state_type.clone())
+    }
 }
 
 /// Creates a new UDWF with a specific signature, state type and return type.
@@ -988,13 +1173,77 @@ pub fn create_udwf(
     volatility: Volatility,
     partition_evaluator_factory: PartitionEvaluatorFactory,
 ) -> WindowUDF {
-    let return_type: ReturnTypeFunction = Arc::new(move |_| Ok(return_type.clone()));
-    WindowUDF::new(
+    let return_type = Arc::try_unwrap(return_type).unwrap_or_else(|t| t.as_ref().clone());
+    WindowUDF::from(SimpleWindowUDF::new(
         name,
-        &Signature::exact(vec![input_type], volatility),
-        &return_type,
-        &partition_evaluator_factory,
-    )
+        input_type,
+        return_type,
+        volatility,
+        partition_evaluator_factory,
+    ))
+}
+
+/// Implements [`WindowUDFImpl`] for functions that have a single signature and
+/// return type.
+pub struct SimpleWindowUDF {
+    name: String,
+    signature: Signature,
+    return_type: DataType,
+    partition_evaluator_factory: PartitionEvaluatorFactory,
+}
+
+impl Debug for SimpleWindowUDF {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.debug_struct("WindowUDF")
+            .field("name", &self.name)
+            .field("signature", &self.signature)
+            .field("return_type", &"<func>")
+            .field("partition_evaluator_factory", &"<FUNC>")
+            .finish()
+    }
+}
+
+impl SimpleWindowUDF {
+    /// Create a new `SimpleWindowUDF` from a name, input types, return type and
+    /// implementation. Implementing [`WindowUDFImpl`] allows more flexibility
+    pub fn new(
+        name: impl Into<String>,
+        input_type: DataType,
+        return_type: DataType,
+        volatility: Volatility,
+        partition_evaluator_factory: PartitionEvaluatorFactory,
+    ) -> Self {
+        let name = name.into();
+        let signature = Signature::exact([input_type].to_vec(), volatility);
+        Self {
+            name,
+            signature,
+            return_type,
+            partition_evaluator_factory,
+        }
+    }
+}
+
+impl WindowUDFImpl for SimpleWindowUDF {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        Ok(self.return_type.clone())
+    }
+
+    fn partition_evaluator(&self) -> Result<Box<dyn crate::PartitionEvaluator>> {
+        (self.partition_evaluator_factory)()
+    }
 }
 
 /// Calls a named built in function
@@ -1014,7 +1263,7 @@ pub fn call_fn(name: impl AsRef<str>, args: Vec<Expr>) -> Result<Expr> {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::lit;
+    use crate::{lit, ScalarFunctionDefinition};
 
     #[test]
     fn filter_is_null_and_is_not_null() {
@@ -1029,8 +1278,10 @@ mod test {
 
     macro_rules! test_unary_scalar_expr {
         ($ENUM:ident, $FUNC:ident) => {{
-            if let Expr::ScalarFunction(ScalarFunction { fun, args }) =
-                $FUNC(col("tableA.a"))
+            if let Expr::ScalarFunction(ScalarFunction {
+                func_def: ScalarFunctionDefinition::BuiltIn(fun),
+                args,
+            }) = $FUNC(col("tableA.a"))
             {
                 let name = built_in_function::BuiltinScalarFunction::$ENUM;
                 assert_eq!(name, fun);
@@ -1042,42 +1293,42 @@ mod test {
     }
 
     macro_rules! test_scalar_expr {
-        ($ENUM:ident, $FUNC:ident, $($arg:ident),*) => {
-            let expected = [$(stringify!($arg)),*];
-            let result = $FUNC(
+    ($ENUM:ident, $FUNC:ident, $($arg:ident),*) => {
+        let expected = [$(stringify!($arg)),*];
+        let result = $FUNC(
+            $(
+                col(stringify!($arg.to_string()))
+            ),*
+        );
+        if let Expr::ScalarFunction(ScalarFunction { func_def: ScalarFunctionDefinition::BuiltIn(fun), args }) = result {
+            let name = built_in_function::BuiltinScalarFunction::$ENUM;
+            assert_eq!(name, fun);
+            assert_eq!(expected.len(), args.len());
+        } else {
+            assert!(false, "unexpected: {:?}", result);
+        }
+    };
+}
+
+    macro_rules! test_nary_scalar_expr {
+    ($ENUM:ident, $FUNC:ident, $($arg:ident),*) => {
+        let expected = [$(stringify!($arg)),*];
+        let result = $FUNC(
+            vec![
                 $(
                     col(stringify!($arg.to_string()))
                 ),*
-            );
-            if let Expr::ScalarFunction(ScalarFunction { fun, args }) = result {
-                let name = built_in_function::BuiltinScalarFunction::$ENUM;
-                assert_eq!(name, fun);
-                assert_eq!(expected.len(), args.len());
-            } else {
-                assert!(false, "unexpected: {:?}", result);
-            }
-        };
-    }
-
-    macro_rules! test_nary_scalar_expr {
-        ($ENUM:ident, $FUNC:ident, $($arg:ident),*) => {
-            let expected = [$(stringify!($arg)),*];
-            let result = $FUNC(
-                vec![
-                    $(
-                        col(stringify!($arg.to_string()))
-                    ),*
-                ]
-            );
-            if let Expr::ScalarFunction(ScalarFunction { fun, args }) = result {
-                let name = built_in_function::BuiltinScalarFunction::$ENUM;
-                assert_eq!(name, fun);
-                assert_eq!(expected.len(), args.len());
-            } else {
-                assert!(false, "unexpected: {:?}", result);
-            }
-        };
-    }
+            ]
+        );
+        if let Expr::ScalarFunction(ScalarFunction { func_def: ScalarFunctionDefinition::BuiltIn(fun), args }) = result {
+            let name = built_in_function::BuiltinScalarFunction::$ENUM;
+            assert_eq!(name, fun);
+            assert_eq!(expected.len(), args.len());
+        } else {
+            assert!(false, "unexpected: {:?}", result);
+        }
+    };
+}
 
     #[test]
     fn scalar_function_definitions() {
@@ -1123,11 +1374,10 @@ mod test {
         test_scalar_expr!(CharacterLength, character_length, string);
         test_scalar_expr!(Chr, chr, string);
         test_scalar_expr!(Digest, digest, string, algorithm);
-        test_scalar_expr!(Encode, encode, string, encoding);
-        test_scalar_expr!(Decode, decode, string, encoding);
         test_scalar_expr!(Gcd, gcd, arg_1, arg_2);
         test_scalar_expr!(Lcm, lcm, arg_1, arg_2);
         test_scalar_expr!(InitCap, initcap, string);
+        test_scalar_expr!(InStr, instr, string, substring);
         test_scalar_expr!(Left, left, string, count);
         test_scalar_expr!(Lower, lower, string);
         test_nary_scalar_expr!(Lpad, lpad, string, count);
@@ -1166,6 +1416,7 @@ mod test {
         test_scalar_expr!(SplitPart, split_part, expr, delimiter, index);
         test_scalar_expr!(StringToArray, string_to_array, expr, delimiter, null_value);
         test_scalar_expr!(StartsWith, starts_with, string, characters);
+        test_scalar_expr!(EndsWith, ends_with, string, characters);
         test_scalar_expr!(Strpos, strpos, string, substring);
         test_scalar_expr!(Substr, substr, string, position);
         test_scalar_expr!(Substr, substring, string, position, count);
@@ -1180,6 +1431,7 @@ mod test {
         test_scalar_expr!(FromUnixtime, from_unixtime, unixtime);
 
         test_scalar_expr!(ArrayAppend, array_append, array, element);
+        test_scalar_expr!(ArraySort, array_sort, array, desc, null_first);
         test_scalar_expr!(ArrayPopFront, array_pop_front, array);
         test_scalar_expr!(ArrayPopBack, array_pop_back, array);
         test_unary_scalar_expr!(ArrayDims, array_dims);
@@ -1203,11 +1455,17 @@ mod test {
         test_nary_scalar_expr!(OverLay, overlay, string, characters, position, len);
         test_nary_scalar_expr!(OverLay, overlay, string, characters, position);
         test_scalar_expr!(Levenshtein, levenshtein, string1, string2);
+        test_scalar_expr!(SubstrIndex, substr_index, string, delimiter, count);
+        test_scalar_expr!(FindInSet, find_in_set, string, stringlist);
     }
 
     #[test]
     fn uuid_function_definitions() {
-        if let Expr::ScalarFunction(ScalarFunction { fun, args }) = uuid() {
+        if let Expr::ScalarFunction(ScalarFunction {
+            func_def: ScalarFunctionDefinition::BuiltIn(fun),
+            args,
+        }) = uuid()
+        {
             let name = BuiltinScalarFunction::Uuid;
             assert_eq!(name, fun);
             assert_eq!(0, args.len());
@@ -1218,36 +1476,12 @@ mod test {
 
     #[test]
     fn digest_function_definitions() {
-        if let Expr::ScalarFunction(ScalarFunction { fun, args }) =
-            digest(col("tableA.a"), lit("md5"))
+        if let Expr::ScalarFunction(ScalarFunction {
+            func_def: ScalarFunctionDefinition::BuiltIn(fun),
+            args,
+        }) = digest(col("tableA.a"), lit("md5"))
         {
             let name = BuiltinScalarFunction::Digest;
-            assert_eq!(name, fun);
-            assert_eq!(2, args.len());
-        } else {
-            unreachable!();
-        }
-    }
-
-    #[test]
-    fn encode_function_definitions() {
-        if let Expr::ScalarFunction(ScalarFunction { fun, args }) =
-            encode(col("tableA.a"), lit("base64"))
-        {
-            let name = BuiltinScalarFunction::Encode;
-            assert_eq!(name, fun);
-            assert_eq!(2, args.len());
-        } else {
-            unreachable!();
-        }
-    }
-
-    #[test]
-    fn decode_function_definitions() {
-        if let Expr::ScalarFunction(ScalarFunction { fun, args }) =
-            decode(col("tableA.a"), lit("hex"))
-        {
-            let name = BuiltinScalarFunction::Decode;
             assert_eq!(name, fun);
             assert_eq!(2, args.len());
         } else {

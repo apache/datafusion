@@ -36,7 +36,6 @@ use crate::datasource::provider::TableProviderFactory;
 use crate::datasource::{empty::EmptyTable, provider_as_source, TableProvider};
 use crate::error::Result;
 use crate::execution::context::{SessionState, TaskContext};
-use crate::execution::options::ReadOptions;
 use crate::logical_expr::{LogicalPlanBuilder, UNNAMED_TABLE};
 use crate::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, RecordBatchStream,
@@ -58,6 +57,7 @@ use futures::Stream;
 pub use datafusion_common::test_util::parquet_test_data;
 pub use datafusion_common::test_util::{arrow_test_data, get_data_dir};
 
+use crate::datasource::stream::{StreamConfig, StreamTable};
 pub use datafusion_common::{assert_batches_eq, assert_batches_sorted_eq};
 
 /// Scan an empty data source, mainly used in tests
@@ -342,30 +342,17 @@ impl RecordBatchStream for UnboundedStream {
 }
 
 /// This function creates an unbounded sorted file for testing purposes.
-pub async fn register_unbounded_file_with_ordering(
+pub fn register_unbounded_file_with_ordering(
     ctx: &SessionContext,
     schema: SchemaRef,
     file_path: &Path,
     table_name: &str,
     file_sort_order: Vec<Vec<Expr>>,
-    with_unbounded_execution: bool,
 ) -> Result<()> {
-    // Mark infinite and provide schema:
-    let fifo_options = CsvReadOptions::new()
-        .schema(schema.as_ref())
-        .mark_infinite(with_unbounded_execution);
-    // Get listing options:
-    let options_sort = fifo_options
-        .to_listing_options(&ctx.copied_config())
-        .with_file_sort_order(file_sort_order);
+    let config =
+        StreamConfig::new_file(schema, file_path.into()).with_order(file_sort_order);
+
     // Register table:
-    ctx.register_listing_table(
-        table_name,
-        file_path.as_os_str().to_str().unwrap(),
-        options_sort,
-        Some(schema),
-        None,
-    )
-    .await?;
+    ctx.register_table(table_name, Arc::new(StreamTable::new(Arc::new(config))))?;
     Ok(())
 }

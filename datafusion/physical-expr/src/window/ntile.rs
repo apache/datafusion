@@ -35,11 +35,17 @@ use std::sync::Arc;
 pub struct Ntile {
     name: String,
     n: u64,
+    /// Output data type
+    data_type: DataType,
 }
 
 impl Ntile {
-    pub fn new(name: String, n: u64) -> Self {
-        Self { name, n }
+    pub fn new(name: String, n: u64, data_type: &DataType) -> Self {
+        Self {
+            name,
+            n,
+            data_type: data_type.clone(),
+        }
     }
 
     pub fn get_n(&self) -> u64 {
@@ -54,8 +60,7 @@ impl BuiltInWindowFunctionExpr for Ntile {
 
     fn field(&self) -> Result<Field> {
         let nullable = false;
-        let data_type = DataType::UInt64;
-        Ok(Field::new(self.name(), data_type, nullable))
+        Ok(Field::new(self.name(), self.data_type.clone(), nullable))
     }
 
     fn expressions(&self) -> Vec<Arc<dyn PhysicalExpr>> {
@@ -96,8 +101,9 @@ impl PartitionEvaluator for NtileEvaluator {
     ) -> Result<ArrayRef> {
         let num_rows = num_rows as u64;
         let mut vec: Vec<u64> = Vec::new();
+        let n = u64::min(self.n, num_rows);
         for i in 0..num_rows {
-            let res = i * self.n / num_rows;
+            let res = i * n / num_rows;
             vec.push(res + 1)
         }
         Ok(Arc::new(UInt64Array::from(vec)))

@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! EmptyRelation execution plan
+//! EmptyRelation with produce_one_row=false execution plan
 
 use std::any::Any;
 use std::sync::Arc;
@@ -24,19 +24,16 @@ use super::expressions::PhysicalSortExpr;
 use super::{common, DisplayAs, SendableRecordBatchStream, Statistics};
 use crate::{memory::MemoryStream, DisplayFormatType, ExecutionPlan, Partitioning};
 
-use arrow::array::{ArrayRef, NullArray};
-use arrow::datatypes::{DataType, Field, Fields, Schema, SchemaRef};
+use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{internal_err, DataFusionError, Result};
 use datafusion_execution::TaskContext;
 
 use log::trace;
 
-/// Execution plan for empty relation (produces no rows)
+/// Execution plan for empty relation with produce_one_row=false
 #[derive(Debug)]
 pub struct EmptyExec {
-    /// Specifies whether this exec produces a row or not
-    produce_one_row: bool,
     /// The schema for the produced row
     schema: SchemaRef,
     /// Number of partitions
@@ -45,9 +42,8 @@ pub struct EmptyExec {
 
 impl EmptyExec {
     /// Create a new EmptyExec
-    pub fn new(produce_one_row: bool, schema: SchemaRef) -> Self {
+    pub fn new(schema: SchemaRef) -> Self {
         EmptyExec {
-            produce_one_row,
             schema,
             partitions: 1,
         }
@@ -59,36 +55,8 @@ impl EmptyExec {
         self
     }
 
-    /// Specifies whether this exec produces a row or not
-    pub fn produce_one_row(&self) -> bool {
-        self.produce_one_row
-    }
-
     fn data(&self) -> Result<Vec<RecordBatch>> {
-        let batch = if self.produce_one_row {
-            let n_field = self.schema.fields.len();
-            // hack for https://github.com/apache/arrow-datafusion/pull/3242
-            let n_field = if n_field == 0 { 1 } else { n_field };
-            vec![RecordBatch::try_new(
-                Arc::new(Schema::new(
-                    (0..n_field)
-                        .map(|i| {
-                            Field::new(format!("placeholder_{i}"), DataType::Null, true)
-                        })
-                        .collect::<Fields>(),
-                )),
-                (0..n_field)
-                    .map(|_i| {
-                        let ret: ArrayRef = Arc::new(NullArray::new(1));
-                        ret
-                    })
-                    .collect(),
-            )?]
-        } else {
-            vec![]
-        };
-
-        Ok(batch)
+        Ok(vec![])
     }
 }
 
@@ -100,7 +68,7 @@ impl DisplayAs for EmptyExec {
     ) -> std::fmt::Result {
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
-                write!(f, "EmptyExec: produce_one_row={}", self.produce_one_row)
+                write!(f, "EmptyExec")
             }
         }
     }
@@ -133,10 +101,7 @@ impl ExecutionPlan for EmptyExec {
         self: Arc<Self>,
         _: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(Arc::new(EmptyExec::new(
-            self.produce_one_row,
-            self.schema.clone(),
-        )))
+        Ok(Arc::new(EmptyExec::new(self.schema.clone())))
     }
 
     fn execute(
@@ -184,7 +149,7 @@ mod tests {
         let task_ctx = Arc::new(TaskContext::default());
         let schema = test::aggr_test_schema();
 
-        let empty = EmptyExec::new(false, schema.clone());
+        let empty = EmptyExec::new(schema.clone());
         assert_eq!(empty.schema(), schema);
 
         // we should have no results
@@ -198,15 +163,10 @@ mod tests {
     #[test]
     fn with_new_children() -> Result<()> {
         let schema = test::aggr_test_schema();
-        let empty = Arc::new(EmptyExec::new(false, schema.clone()));
-        let empty_with_row = Arc::new(EmptyExec::new(true, schema));
+        let empty = Arc::new(EmptyExec::new(schema.clone()));
 
         let empty2 = with_new_children_if_necessary(empty.clone(), vec![])?.into();
         assert_eq!(empty.schema(), empty2.schema());
-
-        let empty_with_row_2 =
-            with_new_children_if_necessary(empty_with_row.clone(), vec![])?.into();
-        assert_eq!(empty_with_row.schema(), empty_with_row_2.schema());
 
         let too_many_kids = vec![empty2];
         assert!(
@@ -220,44 +180,11 @@ mod tests {
     async fn invalid_execute() -> Result<()> {
         let task_ctx = Arc::new(TaskContext::default());
         let schema = test::aggr_test_schema();
-        let empty = EmptyExec::new(false, schema);
+        let empty = EmptyExec::new(schema);
 
         // ask for the wrong partition
         assert!(empty.execute(1, task_ctx.clone()).is_err());
         assert!(empty.execute(20, task_ctx).is_err());
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn produce_one_row() -> Result<()> {
-        let task_ctx = Arc::new(TaskContext::default());
-        let schema = test::aggr_test_schema();
-        let empty = EmptyExec::new(true, schema);
-
-        let iter = empty.execute(0, task_ctx)?;
-        let batches = common::collect(iter).await?;
-
-        // should have one item
-        assert_eq!(batches.len(), 1);
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn produce_one_row_multiple_partition() -> Result<()> {
-        let task_ctx = Arc::new(TaskContext::default());
-        let schema = test::aggr_test_schema();
-        let partitions = 3;
-        let empty = EmptyExec::new(true, schema).with_partitions(partitions);
-
-        for n in 0..partitions {
-            let iter = empty.execute(n, task_ctx.clone())?;
-            let batches = common::collect(iter).await?;
-
-            // should have one item
-            assert_eq!(batches.len(), 1);
-        }
-
         Ok(())
     }
 }

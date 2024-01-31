@@ -24,8 +24,10 @@ mod json;
 mod parquet;
 
 use crate::{
-    catalog::{CatalogList, MemoryCatalogList},
+    catalog::{CatalogProviderList, MemoryCatalogProviderList},
     datasource::{
+        cte_worktable::CteWorkTable,
+        function::{TableFunction, TableFunctionImpl},
         listing::{ListingOptions, ListingTable},
         provider::TableProviderFactory,
     },
@@ -42,7 +44,7 @@ use datafusion_common::{
 use datafusion_execution::registry::SerializerRegistry;
 use datafusion_expr::{
     logical_plan::{DdlStatement, Statement},
-    StringifiedPlan, UserDefinedLogicalNode, WindowUDF,
+    Expr, StringifiedPlan, UserDefinedLogicalNode, WindowUDF,
 };
 pub use datafusion_physical_expr::execution_props::ExecutionProps;
 use datafusion_physical_expr::var_provider::is_system_variables;
@@ -529,6 +531,7 @@ impl SessionContext {
             if_not_exists,
             or_replace,
             constraints,
+            column_defaults,
         } = cmd;
 
         let input = Arc::try_unwrap(input).unwrap_or_else(|e| e.as_ref().clone());
@@ -542,7 +545,12 @@ impl SessionContext {
                 let physical = DataFrame::new(self.state(), input);
 
                 let batches: Vec<_> = physical.collect_partitioned().await?;
-                let table = Arc::new(MemTable::try_new(schema, batches)?);
+                let table = Arc::new(
+                    // pass constraints and column defaults to the mem table.
+                    MemTable::try_new(schema, batches)?
+                        .with_constraints(constraints)
+                        .with_column_defaults(column_defaults.into_iter().collect()),
+                );
 
                 self.register_table(&name, table)?;
                 self.return_empty_dataframe()
@@ -557,8 +565,10 @@ impl SessionContext {
 
                 let batches: Vec<_> = physical.collect_partitioned().await?;
                 let table = Arc::new(
-                    // pass constraints to the mem table.
-                    MemTable::try_new(schema, batches)?.with_constraints(constraints),
+                    // pass constraints and column defaults to the mem table.
+                    MemTable::try_new(schema, batches)?
+                        .with_constraints(constraints)
+                        .with_column_defaults(column_defaults.into_iter().collect()),
                 );
 
                 self.register_table(&name, table)?;
@@ -795,6 +805,14 @@ impl SessionContext {
             .add_var_provider(variable_type, provider);
     }
 
+    /// Register a table UDF with this context
+    pub fn register_udtf(&self, name: &str, fun: Arc<dyn TableFunctionImpl>) {
+        self.state.write().table_functions.insert(
+            name.to_owned(),
+            Arc::new(TableFunction::new(name.to_owned(), fun)),
+        );
+    }
+
     /// Registers a scalar UDF within this context.
     ///
     /// Note in SQL queries, function names are looked up using
@@ -802,9 +820,16 @@ impl SessionContext {
     ///
     /// - `SELECT MY_FUNC(x)...` will look for a function named `"my_func"`
     /// - `SELECT "my_FUNC"(x)` will look for a function named `"my_FUNC"`
+    /// Any functions registered with the udf name or its aliases will be overwritten with this new function
     pub fn register_udf(&self, f: ScalarUDF) {
-        self.state
-            .write()
+        let mut state = self.state.write();
+        let aliases = f.aliases();
+        for alias in aliases {
+            state
+                .scalar_functions
+                .insert(alias.to_string(), Arc::new(f.clone()));
+        }
+        state
             .scalar_functions
             .insert(f.name().to_string(), Arc::new(f));
     }
@@ -858,10 +883,12 @@ impl SessionContext {
 
         // check if the file extension matches the expected extension
         for path in &table_paths {
-            let file_name = path.prefix().filename().unwrap_or_default();
-            if !path.as_str().ends_with(&option_extension) && file_name.contains('.') {
+            let file_path = path.as_str();
+            if !file_path.ends_with(option_extension.clone().as_str())
+                && !path.is_collection()
+            {
                 return exec_err!(
-                    "File '{file_name}' does not match the expected extension '{option_extension}'"
+                    "File path '{file_path}' does not match the expected extension '{option_extension}'"
                 );
             }
         }
@@ -938,14 +965,9 @@ impl SessionContext {
         sql_definition: Option<String>,
     ) -> Result<()> {
         let table_path = ListingTableUrl::parse(table_path)?;
-        let resolved_schema = match (provided_schema, options.infinite_source) {
-            (Some(s), _) => s,
-            (None, false) => options.infer_schema(&self.state(), &table_path).await?,
-            (None, true) => {
-                return plan_err!(
-                    "Schema inference for infinite data sources is not supported."
-                )
-            }
+        let resolved_schema = match provided_schema {
+            Some(s) => s,
+            None => options.infer_schema(&self.state(), &table_path).await?,
         };
         let config = ListingTableConfig::new(table_path)
             .with_listing_options(options)
@@ -1151,8 +1173,8 @@ impl SessionContext {
         Arc::downgrade(&self.state)
     }
 
-    /// Register [`CatalogList`] in [`SessionState`]
-    pub fn register_catalog_list(&mut self, catalog_list: Arc<dyn CatalogList>) {
+    /// Register [`CatalogProviderList`] in [`SessionState`]
+    pub fn register_catalog_list(&mut self, catalog_list: Arc<dyn CatalogProviderList>) {
         self.state.write().catalog_list = catalog_list;
     }
 }
@@ -1223,7 +1245,9 @@ pub struct SessionState {
     /// Responsible for planning `LogicalPlan`s, and `ExecutionPlan`
     query_planner: Arc<dyn QueryPlanner + Send + Sync>,
     /// Collection of catalogs containing schemas and ultimately TableProviders
-    catalog_list: Arc<dyn CatalogList>,
+    catalog_list: Arc<dyn CatalogProviderList>,
+    /// Table Functions
+    table_functions: HashMap<String, Arc<TableFunction>>,
     /// Scalar functions that are registered with the context
     scalar_functions: HashMap<String, Arc<ScalarUDF>>,
     /// Aggregate functions registered in the context
@@ -1261,7 +1285,8 @@ impl SessionState {
     /// Returns new [`SessionState`] using the provided
     /// [`SessionConfig`] and [`RuntimeEnv`].
     pub fn new_with_config_rt(config: SessionConfig, runtime: Arc<RuntimeEnv>) -> Self {
-        let catalog_list = Arc::new(MemoryCatalogList::new()) as Arc<dyn CatalogList>;
+        let catalog_list =
+            Arc::new(MemoryCatalogProviderList::new()) as Arc<dyn CatalogProviderList>;
         Self::new_with_config_rt_and_catalog_list(config, runtime, catalog_list)
     }
 
@@ -1273,11 +1298,11 @@ impl SessionState {
     }
 
     /// Returns new [`SessionState`] using the provided
-    /// [`SessionConfig`],  [`RuntimeEnv`], and [`CatalogList`]
+    /// [`SessionConfig`],  [`RuntimeEnv`], and [`CatalogProviderList`]
     pub fn new_with_config_rt_and_catalog_list(
         config: SessionConfig,
         runtime: Arc<RuntimeEnv>,
-        catalog_list: Arc<dyn CatalogList>,
+        catalog_list: Arc<dyn CatalogProviderList>,
     ) -> Self {
         let session_id = Uuid::new_v4().to_string();
 
@@ -1315,13 +1340,14 @@ impl SessionState {
             );
         }
 
-        SessionState {
+        let mut new_self = SessionState {
             session_id,
             analyzer: Analyzer::new(),
             optimizer: Optimizer::new(),
             physical_optimizers: PhysicalOptimizer::new(),
             query_planner: Arc::new(DefaultQueryPlanner {}),
             catalog_list,
+            table_functions: HashMap::new(),
             scalar_functions: HashMap::new(),
             aggregate_functions: HashMap::new(),
             window_functions: HashMap::new(),
@@ -1330,7 +1356,13 @@ impl SessionState {
             execution_props: ExecutionProps::new(),
             runtime_env: runtime,
             table_factories,
-        }
+        };
+
+        // register built in functions
+        datafusion_functions::register_all(&mut new_self)
+            .expect("can not register built in functions");
+
+        new_self
     }
     /// Returns new [`SessionState`] using the provided
     /// [`SessionConfig`] and [`RuntimeEnv`].
@@ -1341,7 +1373,7 @@ impl SessionState {
     pub fn with_config_rt_and_catalog_list(
         config: SessionConfig,
         runtime: Arc<RuntimeEnv>,
-        catalog_list: Arc<dyn CatalogList>,
+        catalog_list: Arc<dyn CatalogProviderList>,
     ) -> Self {
         Self::new_with_config_rt_and_catalog_list(config, runtime, catalog_list)
     }
@@ -1597,9 +1629,6 @@ impl SessionState {
                         .0
                         .insert(ObjectName(vec![Ident::from(table.name.as_str())]));
                 }
-                DFStatement::DescribeTableStmt(table) => {
-                    visitor.insert(&table.table_name)
-                }
                 DFStatement::CopyTo(CopyToStatement {
                     source,
                     target: _,
@@ -1698,7 +1727,7 @@ impl SessionState {
             let mut stringified_plans = e.stringified_plans.clone();
 
             // analyze & capture output of each rule
-            let analyzed_plan = match self.analyzer.execute_and_check(
+            let analyzer_result = self.analyzer.execute_and_check(
                 e.plan.as_ref(),
                 self.options(),
                 |analyzed_plan, analyzer| {
@@ -1706,7 +1735,8 @@ impl SessionState {
                     let plan_type = PlanType::AnalyzedLogicalPlan { analyzer_name };
                     stringified_plans.push(analyzed_plan.to_stringified(plan_type));
                 },
-            ) {
+            );
+            let analyzed_plan = match analyzer_result {
                 Ok(plan) => plan,
                 Err(DataFusionError::Context(analyzer_name, err)) => {
                     let plan_type = PlanType::AnalyzedLogicalPlan { analyzer_name };
@@ -1729,7 +1759,7 @@ impl SessionState {
                 .push(analyzed_plan.to_stringified(PlanType::FinalAnalyzedLogicalPlan));
 
             // optimize the child plan, capturing the output of each optimizer
-            let (plan, logical_optimization_succeeded) = match self.optimizer.optimize(
+            let optimized_plan = self.optimizer.optimize(
                 &analyzed_plan,
                 self,
                 |optimized_plan, optimizer| {
@@ -1737,7 +1767,8 @@ impl SessionState {
                     let plan_type = PlanType::OptimizedLogicalPlan { optimizer_name };
                     stringified_plans.push(optimized_plan.to_stringified(plan_type));
                 },
-            ) {
+            );
+            let (plan, logical_optimization_succeeded) = match optimized_plan {
                 Ok(plan) => (Arc::new(plan), true),
                 Err(DataFusionError::Context(optimizer_name, err)) => {
                     let plan_type = PlanType::OptimizedLogicalPlan { optimizer_name };
@@ -1816,7 +1847,7 @@ impl SessionState {
     }
 
     /// Return catalog list
-    pub fn catalog_list(&self) -> Arc<dyn CatalogList> {
+    pub fn catalog_list(&self) -> Arc<dyn CatalogProviderList> {
         self.catalog_list.clone()
     }
 
@@ -1858,6 +1889,34 @@ impl<'a> ContextProvider for SessionContextProvider<'a> {
             .get(&name)
             .cloned()
             .ok_or_else(|| plan_datafusion_err!("table '{name}' not found"))
+    }
+
+    fn get_table_function_source(
+        &self,
+        name: &str,
+        args: Vec<Expr>,
+    ) -> Result<Arc<dyn TableSource>> {
+        let tbl_func = self
+            .state
+            .table_functions
+            .get(name)
+            .cloned()
+            .ok_or_else(|| plan_datafusion_err!("table function '{name}' not found"))?;
+        let provider = tbl_func.create_table_provider(&args)?;
+
+        Ok(provider_as_source(provider))
+    }
+
+    /// Create a new CTE work table for a recursive CTE logical plan
+    /// This table will be used in conjunction with a Worktable physical plan
+    /// to read and write each iteration of a recursive CTE
+    fn create_cte_work_table(
+        &self,
+        name: &str,
+        schema: SchemaRef,
+    ) -> Result<Arc<dyn TableSource>> {
+        let table = Arc::new(CteWorkTable::new(name, schema));
+        Ok(provider_as_source(table))
     }
 
     fn get_function_meta(&self, name: &str) -> Option<Arc<ScalarUDF>> {
@@ -1922,6 +1981,10 @@ impl FunctionRegistry for SessionState {
         result.cloned().ok_or_else(|| {
             plan_datafusion_err!("There is no UDWF named \"{name}\" in the registry")
         })
+    }
+
+    fn register_udf(&mut self, udf: Arc<ScalarUDF>) -> Result<Option<Arc<ScalarUDF>>> {
+        Ok(self.scalar_functions.insert(udf.name().into(), udf))
     }
 }
 
@@ -2085,7 +2148,6 @@ mod tests {
     use crate::test;
     use crate::test_util::{plan_and_collect, populate_csv_partitions};
     use crate::variable::VarType;
-    use arrow_schema::Schema;
     use async_trait::async_trait;
     use datafusion_expr::Expr;
     use std::env;
@@ -2465,7 +2527,6 @@ mod tests {
             &self,
             _expr: &Expr,
             _input_dfschema: &crate::common::DFSchema,
-            _input_schema: &Schema,
             _session_state: &SessionState,
         ) -> Result<Arc<dyn crate::physical_plan::PhysicalExpr>> {
             unimplemented!()

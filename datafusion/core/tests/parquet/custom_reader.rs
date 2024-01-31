@@ -85,7 +85,6 @@ async fn route_data_access_ops_to_parquet_file_reader_factory() {
             limit: None,
             table_partition_cols: vec![],
             output_ordering: vec![],
-            infinite_source: false,
         },
         None,
         None,

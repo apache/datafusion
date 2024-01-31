@@ -21,6 +21,7 @@ use crate::PhysicalExpr;
 use datafusion_common::exec_err;
 
 use crate::array_expressions::{array_element, array_slice};
+use crate::expressions::Literal;
 use crate::physical_expr::down_cast_any_ref;
 use arrow::{
     array::{Array, Scalar, StringArray},
@@ -43,10 +44,11 @@ pub enum GetFieldAccessExpr {
     NamedStructField { name: ScalarValue },
     /// Single list index, for example: `list[i]`
     ListIndex { key: Arc<dyn PhysicalExpr> },
-    /// List range, for example `list[i:j]`
+    /// List stride, for example `list[i:j:k]`
     ListRange {
         start: Arc<dyn PhysicalExpr>,
         stop: Arc<dyn PhysicalExpr>,
+        stride: Arc<dyn PhysicalExpr>,
     },
 }
 
@@ -55,8 +57,12 @@ impl std::fmt::Display for GetFieldAccessExpr {
         match self {
             GetFieldAccessExpr::NamedStructField { name } => write!(f, "[{}]", name),
             GetFieldAccessExpr::ListIndex { key } => write!(f, "[{}]", key),
-            GetFieldAccessExpr::ListRange { start, stop } => {
-                write!(f, "[{}:{}]", start, stop)
+            GetFieldAccessExpr::ListRange {
+                start,
+                stop,
+                stride,
+            } => {
+                write!(f, "[{}:{}:{}]", start, stop, stride)
             }
         }
     }
@@ -76,12 +82,18 @@ impl PartialEq<dyn Any> for GetFieldAccessExpr {
                     ListRange {
                         start: start_lhs,
                         stop: stop_lhs,
+                        stride: stride_lhs,
                     },
                     ListRange {
                         start: start_rhs,
                         stop: stop_rhs,
+                        stride: stride_rhs,
                     },
-                ) => start_lhs.eq(start_rhs) && stop_lhs.eq(stop_rhs),
+                ) => {
+                    start_lhs.eq(start_rhs)
+                        && stop_lhs.eq(stop_rhs)
+                        && stride_lhs.eq(stride_rhs)
+                }
                 (NamedStructField { .. }, ListIndex { .. } | ListRange { .. }) => false,
                 (ListIndex { .. }, NamedStructField { .. } | ListRange { .. }) => false,
                 (ListRange { .. }, NamedStructField { .. } | ListIndex { .. }) => false,
@@ -110,7 +122,7 @@ impl GetIndexedFieldExpr {
         Self::new(
             arg,
             GetFieldAccessExpr::NamedStructField {
-                name: ScalarValue::Utf8(Some(name.into())),
+                name: ScalarValue::from(name.into()),
             },
         )
     }
@@ -126,7 +138,32 @@ impl GetIndexedFieldExpr {
         start: Arc<dyn PhysicalExpr>,
         stop: Arc<dyn PhysicalExpr>,
     ) -> Self {
-        Self::new(arg, GetFieldAccessExpr::ListRange { start, stop })
+        Self::new(
+            arg,
+            GetFieldAccessExpr::ListRange {
+                start,
+                stop,
+                stride: Arc::new(Literal::new(ScalarValue::Int64(Some(1))))
+                    as Arc<dyn PhysicalExpr>,
+            },
+        )
+    }
+
+    /// Create a new [`GetIndexedFieldExpr`] for accessing the stride
+    pub fn new_stride(
+        arg: Arc<dyn PhysicalExpr>,
+        start: Arc<dyn PhysicalExpr>,
+        stop: Arc<dyn PhysicalExpr>,
+        stride: Arc<dyn PhysicalExpr>,
+    ) -> Self {
+        Self::new(
+            arg,
+            GetFieldAccessExpr::ListRange {
+                start,
+                stop,
+                stride,
+            },
+        )
     }
 
     /// Get the description of what field should be accessed
@@ -147,12 +184,15 @@ impl GetIndexedFieldExpr {
             GetFieldAccessExpr::ListIndex { key } => GetFieldAccessSchema::ListIndex {
                 key_dt: key.data_type(input_schema)?,
             },
-            GetFieldAccessExpr::ListRange { start, stop } => {
-                GetFieldAccessSchema::ListRange {
-                    start_dt: start.data_type(input_schema)?,
-                    stop_dt: stop.data_type(input_schema)?,
-                }
-            }
+            GetFieldAccessExpr::ListRange {
+                start,
+                stop,
+                stride,
+            } => GetFieldAccessSchema::ListRange {
+                start_dt: start.data_type(input_schema)?,
+                stop_dt: stop.data_type(input_schema)?,
+                stride_dt: stride.data_type(input_schema)?,
+            },
         })
     }
 }
@@ -223,21 +263,24 @@ impl PhysicalExpr for GetIndexedFieldExpr {
                                                  with utf8 indexes. Tried {dt:?} with {key:?} index"),
                         }
                 },
-            GetFieldAccessExpr::ListRange{start, stop} => {
+            GetFieldAccessExpr::ListRange { start, stop, stride } => {
                 let start = start.evaluate(batch)?.into_array(batch.num_rows())?;
                 let stop = stop.evaluate(batch)?.into_array(batch.num_rows())?;
-                match (array.data_type(), start.data_type(), stop.data_type()) {
-                    (DataType::List(_), DataType::Int64, DataType::Int64) => Ok(ColumnarValue::Array(array_slice(&[
-                        array, start, stop
-                    ])?)),
-                    (DataType::List(_), start, stop) => exec_err!(
+                let stride = stride.evaluate(batch)?.into_array(batch.num_rows())?;
+                match (array.data_type(), start.data_type(), stop.data_type(), stride.data_type()) {
+                    (DataType::List(_), DataType::Int64, DataType::Int64, DataType::Int64) => {
+                        Ok(ColumnarValue::Array((array_slice(&[
+                            array, start, stop, stride
+                        ]))?))
+                    },
+                    (DataType::List(_), start, stop, stride) => exec_err!(
                         "get indexed field is only possible on lists with int64 indexes. \
-                                 Tried with {start:?} and {stop:?} indices"),
-                    (dt, start, stop) => exec_err!(
+                                 Tried with {start:?}, {stop:?} and {stride:?} indices"),
+                    (dt, start, stop, stride) => exec_err!(
                         "get indexed field is only possible on lists with int64 indexes or struct \
-                                 with utf8 indexes. Tried {dt:?} with {start:?} and {stop:?} indices"),
+                                 with utf8 indexes. Tried {dt:?} with {start:?}, {stop:?} and {stride:?} indices"),
                 }
-            },
+            }
         }
     }
 
@@ -453,7 +496,7 @@ mod tests {
             .evaluate(&batch)?
             .into_array(batch.num_rows())
             .expect("Failed to convert to array");
-        assert!(result.is_null(0));
+        assert!(result.is_empty());
         Ok(())
     }
 

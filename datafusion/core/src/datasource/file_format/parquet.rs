@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Parquet format abstractions
+//! [`ParquetFormat`]: Parquet [`FileFormat`] abstractions
 
 use arrow_array::RecordBatch;
 use async_trait::async_trait;
@@ -29,7 +29,6 @@ use parquet::file::writer::SerializedFileWriter;
 use std::any::Any;
 use std::fmt;
 use std::fmt::Debug;
-use std::io::Write;
 use std::sync::Arc;
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 use tokio::sync::mpsc::{self, Receiver, Sender};
@@ -56,7 +55,7 @@ use parquet::file::properties::WriterProperties;
 use parquet::file::statistics::Statistics as ParquetStatistics;
 
 use super::write::demux::start_demuxer_task;
-use super::write::{create_writer, AbortableWrite};
+use super::write::{create_writer, AbortableWrite, SharedBuffer};
 use super::{FileFormat, FileScanConfig};
 use crate::arrow::array::{
     BooleanArray, Float32Array, Float64Array, Int32Array, Int64Array,
@@ -75,6 +74,17 @@ use crate::physical_plan::{
     Accumulator, DisplayAs, DisplayFormatType, ExecutionPlan, SendableRecordBatchStream,
     Statistics,
 };
+
+/// Size of the buffer for [`AsyncArrowWriter`].
+const PARQUET_WRITER_BUFFER_SIZE: usize = 10485760;
+
+/// Initial writing buffer size. Note this is just a size hint for efficiency. It
+/// will grow beyond the set value if needed.
+const INITIAL_BUFFER_BYTES: usize = 1048576;
+
+/// When writing parquet files in parallel, if the buffered Parquet data exceeds
+/// this size, it is flushed to object store
+const BUFFER_FLUSH_BYTES: usize = 1024000;
 
 /// The Apache Parquet `FileFormat` implementation
 ///
@@ -164,6 +174,16 @@ fn clear_metadata(
     })
 }
 
+async fn fetch_schema_with_location(
+    store: &dyn ObjectStore,
+    file: &ObjectMeta,
+    metadata_size_hint: Option<usize>,
+) -> Result<(Path, Schema)> {
+    let loc_path = file.location.clone();
+    let schema = fetch_schema(store, file, metadata_size_hint).await?;
+    Ok((loc_path, schema))
+}
+
 #[async_trait]
 impl FileFormat for ParquetFormat {
     fn as_any(&self) -> &dyn Any {
@@ -176,12 +196,31 @@ impl FileFormat for ParquetFormat {
         store: &Arc<dyn ObjectStore>,
         objects: &[ObjectMeta],
     ) -> Result<SchemaRef> {
-        let schemas: Vec<_> = futures::stream::iter(objects)
-            .map(|object| fetch_schema(store.as_ref(), object, self.metadata_size_hint))
+        let mut schemas: Vec<_> = futures::stream::iter(objects)
+            .map(|object| {
+                fetch_schema_with_location(
+                    store.as_ref(),
+                    object,
+                    self.metadata_size_hint,
+                )
+            })
             .boxed() // Workaround https://github.com/rust-lang/rust/issues/64552
             .buffered(state.config_options().execution.meta_fetch_concurrency)
             .try_collect()
             .await?;
+
+        // Schema inference adds fields based the order they are seen
+        // which depends on the order the files are processed. For some
+        // object stores (like local file systems) the order returned from list
+        // is not deterministic. Thus, to ensure deterministic schema inference
+        // sort the files first.
+        // https://github.com/apache/arrow-datafusion/pull/6629
+        schemas.sort_by(|(location1, _), (location2, _)| location1.cmp(location2));
+
+        let schemas = schemas
+            .into_iter()
+            .map(|(_, schema)| schema)
+            .collect::<Vec<_>>();
 
         let schema = if self.skip_metadata(state.config_options()) {
             Schema::try_merge(clear_metadata(schemas))
@@ -582,7 +621,7 @@ async fn fetch_statistics(
 }
 
 /// Implements [`DataSink`] for writing to a parquet file.
-struct ParquetSink {
+pub struct ParquetSink {
     /// Config options for writing data
     config: FileSinkConfig,
 }
@@ -606,10 +645,15 @@ impl DisplayAs for ParquetSink {
 }
 
 impl ParquetSink {
-    fn new(config: FileSinkConfig) -> Self {
+    /// Create from config.
+    pub fn new(config: FileSinkConfig) -> Self {
         Self { config }
     }
 
+    /// Retrieve the inner [`FileSinkConfig`].
+    pub fn config(&self) -> &FileSinkConfig {
+        &self.config
+    }
     /// Converts table schema to writer schema, which may differ in the case
     /// of hive style partitioning where some columns are removed from the
     /// underlying files.
@@ -652,7 +696,7 @@ impl ParquetSink {
         let writer = AsyncArrowWriter::try_new(
             multipart_writer,
             self.get_writer_schema(),
-            10485760,
+            PARQUET_WRITER_BUFFER_SIZE,
             Some(parquet_props),
         )?;
         Ok(writer)
@@ -705,7 +749,6 @@ impl DataSink for ParquetSink {
             part_col,
             self.config.table_paths[0].clone(),
             "parquet".into(),
-            self.config.single_file_output,
         );
 
         let mut file_write_tasks: JoinSet<std::result::Result<usize, DataFusionError>> =
@@ -841,16 +884,17 @@ async fn send_arrays_to_col_writers(
     rb: &RecordBatch,
     schema: Arc<Schema>,
 ) -> Result<()> {
-    for (tx, array, field) in col_array_channels
-        .iter()
-        .zip(rb.columns())
-        .zip(schema.fields())
-        .map(|((a, b), c)| (a, b, c))
-    {
+    // Each leaf column has its own channel, increment next_channel for each leaf column sent.
+    let mut next_channel = 0;
+    for (array, field) in rb.columns().iter().zip(schema.fields()) {
         for c in compute_leaves(field, array)? {
-            tx.send(c).await.map_err(|_| {
-                DataFusionError::Internal("Unable to send array to writer!".into())
-            })?;
+            col_array_channels[next_channel]
+                .send(c)
+                .await
+                .map_err(|_| {
+                    DataFusionError::Internal("Unable to send array to writer!".into())
+                })?;
+            next_channel += 1;
         }
     }
 
@@ -858,7 +902,7 @@ async fn send_arrays_to_col_writers(
 }
 
 /// Spawns a tokio task which joins the parallel column writer tasks,
-/// and finalizes the row group.
+/// and finalizes the row group
 fn spawn_rg_join_and_finalize_task(
     column_writer_handles: Vec<JoinHandle<Result<ArrowColumnWriter>>>,
     rg_rows: usize,
@@ -976,7 +1020,7 @@ async fn concatenate_parallel_row_groups(
     writer_props: Arc<WriterProperties>,
     mut object_store_writer: AbortableWrite<Box<dyn AsyncWrite + Send + Unpin>>,
 ) -> Result<usize> {
-    let merged_buff = SharedBuffer::new(1048576);
+    let merged_buff = SharedBuffer::new(INITIAL_BUFFER_BYTES);
 
     let schema_desc = arrow_to_parquet_schema(schema.as_ref())?;
     let mut parquet_writer = SerializedFileWriter::new(
@@ -997,7 +1041,7 @@ async fn concatenate_parallel_row_groups(
                 for chunk in serialized_columns {
                     chunk.append_to_row_group(&mut rg_out)?;
                     let mut buff_to_flush = merged_buff.buffer.try_lock().unwrap();
-                    if buff_to_flush.len() > 1024000 {
+                    if buff_to_flush.len() > BUFFER_FLUSH_BYTES {
                         object_store_writer
                             .write_all(buff_to_flush.as_slice())
                             .await?;
@@ -1072,37 +1116,6 @@ async fn output_single_parquet_file_parallelized(
     Ok(row_count)
 }
 
-/// A buffer with interior mutability shared by the SerializedFileWriter and
-/// ObjectStore writer
-#[derive(Clone)]
-struct SharedBuffer {
-    /// The inner buffer for reading and writing
-    ///
-    /// The lock is used to obtain internal mutability, so no worry about the
-    /// lock contention.
-    buffer: Arc<futures::lock::Mutex<Vec<u8>>>,
-}
-
-impl SharedBuffer {
-    pub fn new(capacity: usize) -> Self {
-        Self {
-            buffer: Arc::new(futures::lock::Mutex::new(Vec::with_capacity(capacity))),
-        }
-    }
-}
-
-impl Write for SharedBuffer {
-    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        let mut buffer = self.buffer.try_lock().unwrap();
-        Write::write(&mut *buffer, buf)
-    }
-
-    fn flush(&mut self) -> std::io::Result<()> {
-        let mut buffer = self.buffer.try_lock().unwrap();
-        Write::flush(&mut *buffer)
-    }
-}
-
 #[cfg(test)]
 pub(crate) mod test_util {
     use super::*;
@@ -1124,12 +1137,21 @@ pub(crate) mod test_util {
         batches: Vec<RecordBatch>,
         multi_page: bool,
     ) -> Result<(Vec<ObjectMeta>, Vec<NamedTempFile>)> {
+        // we need the tmp files to be sorted as some tests rely on the how the returning files are ordered
+        // https://github.com/apache/arrow-datafusion/pull/6629
+        let tmp_files = {
+            let mut tmp_files: Vec<_> = (0..batches.len())
+                .map(|_| NamedTempFile::new().expect("creating temp file"))
+                .collect();
+            tmp_files.sort_by(|a, b| a.path().cmp(b.path()));
+            tmp_files
+        };
+
         // Each batch writes to their own file
         let files: Vec<_> = batches
             .into_iter()
-            .map(|batch| {
-                let mut output = NamedTempFile::new().expect("creating temp file");
-
+            .zip(tmp_files.into_iter())
+            .map(|(batch, mut output)| {
                 let builder = WriterProperties::builder();
                 let props = if multi_page {
                     builder.set_data_page_row_count_limit(ROWS_PER_PAGE)
@@ -1155,6 +1177,7 @@ pub(crate) mod test_util {
             .collect();
 
         let meta: Vec<_> = files.iter().map(local_unpartitioned_file).collect();
+
         Ok((meta, files))
     }
 
@@ -1250,6 +1273,42 @@ mod tests {
             c2_stats.min_value,
             Precision::Exact(ScalarValue::Int64(Some(1)))
         );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn is_schema_stable() -> Result<()> {
+        let c1: ArrayRef =
+            Arc::new(StringArray::from(vec![Some("Foo"), None, Some("bar")]));
+
+        let c2: ArrayRef = Arc::new(Int64Array::from(vec![Some(1), Some(2), None]));
+
+        let batch1 =
+            RecordBatch::try_from_iter(vec![("a", c1.clone()), ("b", c1.clone())])
+                .unwrap();
+        let batch2 =
+            RecordBatch::try_from_iter(vec![("c", c2.clone()), ("d", c2.clone())])
+                .unwrap();
+
+        let store = Arc::new(LocalFileSystem::new()) as _;
+        let (meta, _files) = store_parquet(vec![batch1, batch2], false).await?;
+
+        let session = SessionContext::new();
+        let ctx = session.state();
+        let format = ParquetFormat::default();
+        let schema = format.infer_schema(&ctx, &store, &meta).await.unwrap();
+
+        let order: Vec<_> = ["a", "b", "c", "d"]
+            .into_iter()
+            .map(|i| i.to_string())
+            .collect();
+        let coll: Vec<_> = schema
+            .all_fields()
+            .into_iter()
+            .map(|i| i.name().to_string())
+            .collect();
+        assert_eq!(coll, order);
 
         Ok(())
     }
@@ -1803,8 +1862,8 @@ mod tests {
         // there is only one row group in one file.
         assert_eq!(page_index.len(), 1);
         assert_eq!(offset_index.len(), 1);
-        let page_index = page_index.get(0).unwrap();
-        let offset_index = offset_index.get(0).unwrap();
+        let page_index = page_index.first().unwrap();
+        let offset_index = offset_index.first().unwrap();
 
         // 13 col in one row group
         assert_eq!(page_index.len(), 13);

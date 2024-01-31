@@ -22,13 +22,16 @@ use std::sync::Arc;
 
 use arrow::compute::SortOptions;
 use datafusion::arrow::datatypes::Schema;
+use datafusion::datasource::file_format::csv::CsvSink;
 use datafusion::datasource::file_format::json::JsonSink;
+#[cfg(feature = "parquet")]
+use datafusion::datasource::file_format::parquet::ParquetSink;
 use datafusion::datasource::listing::{FileRange, ListingTableUrl, PartitionedFile};
 use datafusion::datasource::object_store::ObjectStoreUrl;
 use datafusion::datasource::physical_plan::{FileScanConfig, FileSinkConfig};
 use datafusion::execution::context::ExecutionProps;
 use datafusion::execution::FunctionRegistry;
-use datafusion::logical_expr::window_function::WindowFunction;
+use datafusion::logical_expr::WindowFunctionDefinition;
 use datafusion::physical_expr::{PhysicalSortExpr, ScalarFunctionExpr};
 use datafusion::physical_plan::expressions::{
     in_list, BinaryExpr, CaseExpr, CastExpr, Column, IsNotNullExpr, IsNullExpr, LikeExpr,
@@ -39,7 +42,10 @@ use datafusion::physical_plan::windows::create_window_expr;
 use datafusion::physical_plan::{
     functions, ColumnStatistics, Partitioning, PhysicalExpr, Statistics, WindowExpr,
 };
+use datafusion_common::file_options::arrow_writer::ArrowWriterOptions;
+use datafusion_common::file_options::csv_writer::CsvWriterOptions;
 use datafusion_common::file_options::json_writer::JsonWriterOptions;
+use datafusion_common::file_options::parquet_writer::ParquetWriterOptions;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::stats::Precision;
 use datafusion_common::{
@@ -52,6 +58,7 @@ use crate::logical_plan;
 use crate::protobuf;
 use crate::protobuf::physical_expr_node::ExprType;
 
+use crate::logical_plan::{csv_writer_options_from_proto, writer_properties_from_proto};
 use chrono::{TimeZone, Utc};
 use object_store::path::Path;
 use object_store::ObjectMeta;
@@ -85,6 +92,36 @@ pub fn parse_physical_sort_expr(
     } else {
         Err(proto_error("Unexpected empty physical expression"))
     }
+}
+
+/// Parses a physical sort expressions from a protobuf.
+///
+/// # Arguments
+///
+/// * `proto` - Input proto with vector of physical sort expression node
+/// * `registry` - A registry knows how to build logical expressions out of user-defined function' names
+/// * `input_schema` - The Arrow schema for the input, used for determining expression data types
+///                    when performing type coercion.
+pub fn parse_physical_sort_exprs(
+    proto: &[protobuf::PhysicalSortExprNode],
+    registry: &dyn FunctionRegistry,
+    input_schema: &Schema,
+) -> Result<Vec<PhysicalSortExpr>> {
+    proto
+        .iter()
+        .map(|sort_expr| {
+            if let Some(expr) = &sort_expr.expr {
+                let expr = parse_physical_expr(expr.as_ref(), registry, input_schema)?;
+                let options = SortOptions {
+                    descending: !sort_expr.asc,
+                    nulls_first: sort_expr.nulls_first,
+                };
+                Ok(PhysicalSortExpr { expr, options })
+            } else {
+                Err(proto_error("Unexpected empty physical expression"))
+            }
+        })
+        .collect::<Result<Vec<_>>>()
 }
 
 /// Parses a physical window expr from a protobuf.
@@ -303,21 +340,17 @@ pub fn parse_physical_expr(
             // TODO Do not create new the ExecutionProps
             let execution_props = ExecutionProps::new();
 
-            let fun_expr = functions::create_physical_fun(
+            functions::create_physical_expr(
                 &(&scalar_function).into(),
+                &args,
+                input_schema,
                 &execution_props,
-            )?;
-
-            Arc::new(ScalarFunctionExpr::new(
-                &e.name,
-                fun_expr,
-                args,
-                convert_required!(e.return_type)?,
-                None,
-            ))
+            )?
         }
         ExprType::ScalarUdf(e) => {
-            let scalar_fun = registry.udf(e.name.as_str())?.fun().clone();
+            let udf = registry.udf(e.name.as_str())?;
+            let signature = udf.signature();
+            let scalar_fun = udf.fun().clone();
 
             let args = e
                 .args
@@ -331,6 +364,7 @@ pub fn parse_physical_expr(
                 args,
                 convert_required!(e.return_type)?,
                 None,
+                signature.type_signature.supports_zero_argument(),
             ))
         }
         ExprType::LikeExpr(like_expr) => Arc::new(LikeExpr::new(
@@ -374,8 +408,15 @@ pub fn parse_physical_expr(
                         "stop",
                         input_schema
                     )?,
+                    stride: parse_required_physical_expr(
+                        list_range_expr.stride.as_deref(),
+                        registry,
+                        "stride",
+                        input_schema
+                    )?,
                 },
-                None =>                 return Err(proto_error(
+                None =>
+                    return Err(proto_error(
                     "Field must not be None",
                 )),
             };
@@ -408,7 +449,9 @@ fn parse_required_physical_expr(
         })
 }
 
-impl TryFrom<&protobuf::physical_window_expr_node::WindowFunction> for WindowFunction {
+impl TryFrom<&protobuf::physical_window_expr_node::WindowFunction>
+    for WindowFunctionDefinition
+{
     type Error = DataFusionError;
 
     fn try_from(
@@ -422,7 +465,7 @@ impl TryFrom<&protobuf::physical_window_expr_node::WindowFunction> for WindowFun
                     ))
                 })?;
 
-                Ok(WindowFunction::AggregateFunction(f.into()))
+                Ok(WindowFunctionDefinition::AggregateFunction(f.into()))
             }
             protobuf::physical_window_expr_node::WindowFunction::BuiltInFunction(n) => {
                 let f = protobuf::BuiltInWindowFunction::try_from(*n).map_err(|_| {
@@ -431,7 +474,7 @@ impl TryFrom<&protobuf::physical_window_expr_node::WindowFunction> for WindowFun
                     ))
                 })?;
 
-                Ok(WindowFunction::BuiltInWindowFunction(f.into()))
+                Ok(WindowFunctionDefinition::BuiltInWindowFunction(f.into()))
             }
         }
     }
@@ -526,7 +569,6 @@ pub fn parse_protobuf_file_scan_config(
         limit: proto.limit.as_ref().map(|sl| sl.limit as usize),
         table_partition_cols,
         output_ordering,
-        infinite_source: false,
     })
 }
 
@@ -711,6 +753,23 @@ impl TryFrom<&protobuf::JsonSink> for JsonSink {
     }
 }
 
+#[cfg(feature = "parquet")]
+impl TryFrom<&protobuf::ParquetSink> for ParquetSink {
+    type Error = DataFusionError;
+
+    fn try_from(value: &protobuf::ParquetSink) -> Result<Self, Self::Error> {
+        Ok(Self::new(convert_required!(value.config)?))
+    }
+}
+
+impl TryFrom<&protobuf::CsvSink> for CsvSink {
+    type Error = DataFusionError;
+
+    fn try_from(value: &protobuf::CsvSink) -> Result<Self, Self::Error> {
+        Ok(Self::new(convert_required!(value.config)?))
+    }
+}
+
 impl TryFrom<&protobuf::FileSinkConfig> for FileSinkConfig {
     type Error = DataFusionError;
 
@@ -739,8 +798,6 @@ impl TryFrom<&protobuf::FileSinkConfig> for FileSinkConfig {
             table_paths,
             output_schema: Arc::new(convert_required!(conf.output_schema)?),
             table_partition_cols,
-            single_file_output: conf.single_file_output,
-            unbounded_input: conf.unbounded_input,
             overwrite: conf.overwrite,
             file_type_writer_options: convert_required!(conf.file_type_writer_options)?,
         })
@@ -759,6 +816,18 @@ impl From<protobuf::CompressionTypeVariant> for CompressionTypeVariant {
     }
 }
 
+impl From<CompressionTypeVariant> for protobuf::CompressionTypeVariant {
+    fn from(value: CompressionTypeVariant) -> Self {
+        match value {
+            CompressionTypeVariant::GZIP => Self::Gzip,
+            CompressionTypeVariant::BZIP2 => Self::Bzip2,
+            CompressionTypeVariant::XZ => Self::Xz,
+            CompressionTypeVariant::ZSTD => Self::Zstd,
+            CompressionTypeVariant::UNCOMPRESSED => Self::Uncompressed,
+        }
+    }
+}
+
 impl TryFrom<&protobuf::FileTypeWriterOptions> for FileTypeWriterOptions {
     type Error = DataFusionError;
 
@@ -766,11 +835,27 @@ impl TryFrom<&protobuf::FileTypeWriterOptions> for FileTypeWriterOptions {
         let file_type = value
             .file_type
             .as_ref()
-            .ok_or_else(|| proto_error("Missing required field in protobuf"))?;
+            .ok_or_else(|| proto_error("Missing required file_type field in protobuf"))?;
+
         match file_type {
-            protobuf::file_type_writer_options::FileType::JsonOptions(opts) => Ok(
-                Self::JSON(JsonWriterOptions::new(opts.compression().into())),
-            ),
+            protobuf::file_type_writer_options::FileType::ArrowOptions(_) => {
+                Ok(Self::Arrow(ArrowWriterOptions::new()))
+            }
+
+            protobuf::file_type_writer_options::FileType::JsonOptions(opts) => {
+                let compression: CompressionTypeVariant = opts.compression().into();
+                Ok(Self::JSON(JsonWriterOptions::new(compression)))
+            }
+            protobuf::file_type_writer_options::FileType::CsvOptions(opts) => {
+                let write_options = csv_writer_options_from_proto(opts)?;
+                let compression: CompressionTypeVariant = opts.compression().into();
+                Ok(Self::CSV(CsvWriterOptions::new(write_options, compression)))
+            }
+            protobuf::file_type_writer_options::FileType::ParquetOptions(opt) => {
+                let props = opt.writer_properties.clone().unwrap_or_default();
+                let writer_properties = writer_properties_from_proto(&props)?;
+                Ok(Self::Parquet(ParquetWriterOptions::new(writer_properties)))
+            }
         }
     }
 }

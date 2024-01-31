@@ -23,7 +23,7 @@ use std::ops::BitAnd;
 use std::sync::Arc;
 
 use crate::aggregate::utils::down_cast_any_ref;
-use crate::{AggregateExpr, GroupsAccumulator, PhysicalExpr};
+use crate::{AggregateExpr, PhysicalExpr};
 use arrow::array::{Array, Int64Array};
 use arrow::compute;
 use arrow::datatypes::DataType;
@@ -34,12 +34,11 @@ use arrow_array::PrimitiveArray;
 use arrow_buffer::BooleanBuffer;
 use datafusion_common::{downcast_value, ScalarValue};
 use datafusion_common::{DataFusionError, Result};
-use datafusion_expr::Accumulator;
+use datafusion_expr::{Accumulator, EmitTo, GroupsAccumulator};
 
 use crate::expressions::format_state_name;
 
 use super::groups_accumulator::accumulate::accumulate_indices;
-use super::groups_accumulator::EmitTo;
 
 /// COUNT aggregate expression
 /// Returns the amount of non-null values of the given expression.
@@ -123,7 +122,7 @@ impl GroupsAccumulator for CountGroupsAccumulator {
         self.counts.resize(total_num_groups, 0);
         accumulate_indices(
             group_indices,
-            values.nulls(), // ignore values
+            values.logical_nulls().as_ref(),
             opt_filter,
             |group_index| {
                 self.counts[group_index] += 1;
@@ -198,16 +197,18 @@ fn null_count_for_multiple_cols(values: &[ArrayRef]) -> usize {
     if values.len() > 1 {
         let result_bool_buf: Option<BooleanBuffer> = values
             .iter()
-            .map(|a| a.nulls())
+            .map(|a| a.logical_nulls())
             .fold(None, |acc, b| match (acc, b) {
                 (Some(acc), Some(b)) => Some(acc.bitand(b.inner())),
                 (Some(acc), None) => Some(acc),
-                (None, Some(b)) => Some(b.inner().clone()),
+                (None, Some(b)) => Some(b.into_inner()),
                 _ => None,
             });
         result_bool_buf.map_or(0, |b| values[0].len() - b.count_set_bits())
     } else {
-        values[0].null_count()
+        values[0]
+            .logical_nulls()
+            .map_or(0, |nulls| nulls.null_count())
     }
 }
 
@@ -293,7 +294,7 @@ impl CountAccumulator {
 }
 
 impl Accumulator for CountAccumulator {
-    fn state(&self) -> Result<Vec<ScalarValue>> {
+    fn state(&mut self) -> Result<Vec<ScalarValue>> {
         Ok(vec![ScalarValue::Int64(Some(self.count))])
     }
 
@@ -318,7 +319,7 @@ impl Accumulator for CountAccumulator {
         Ok(())
     }
 
-    fn evaluate(&self) -> Result<ScalarValue> {
+    fn evaluate(&mut self) -> Result<ScalarValue> {
         Ok(ScalarValue::Int64(Some(self.count)))
     }
 

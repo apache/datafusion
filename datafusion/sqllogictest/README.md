@@ -240,7 +240,7 @@ query <type_string> <sort_mode>
   - NULL values are rendered as `NULL`,
   - empty strings are rendered as `(empty)`,
   - boolean values are rendered as `true`/`false`,
-  - this list can be not exhaustive, check the `datafusion/core/tests/sqllogictests/src/engines/conversion.rs` for
+  - this list can be not exhaustive, check the `datafusion/sqllogictest/src/engines/conversion.rs` for
     details.
 - `sort_mode`: If included, it must be one of `nosort` (**default**), `rowsort`, or `valuesort`. In `nosort` mode, the
   results appear in exactly the order in which they were received from the database engine. The `nosort` mode should

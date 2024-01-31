@@ -93,10 +93,9 @@ async fn setup_files(store: Arc<dyn ObjectStore>) {
         for partition in 0..TABLE_PARTITIONS {
             for file in 0..PARTITION_FILES {
                 let data = create_parquet_file(&mut rng, file * FILE_ROWS);
-                let location = Path::try_from(format!(
+                let location = Path::from(format!(
                     "{table_name}/partition={partition}/{file}.parquet"
-                ))
-                .unwrap();
+                ));
                 store.put(&location, data).await.unwrap();
             }
         }

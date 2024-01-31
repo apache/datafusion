@@ -22,7 +22,6 @@ use super::optimizer::PhysicalOptimizerRule;
 use crate::config::ConfigOptions;
 use crate::error::Result;
 use crate::physical_plan::aggregates::AggregateExec;
-use crate::physical_plan::empty::EmptyExec;
 use crate::physical_plan::projection::ProjectionExec;
 use crate::physical_plan::{expressions, AggregateExpr, ExecutionPlan, Statistics};
 use crate::scalar::ScalarValue;
@@ -30,6 +29,7 @@ use crate::scalar::ScalarValue;
 use datafusion_common::stats::Precision;
 use datafusion_common::tree_node::TreeNode;
 use datafusion_expr::utils::COUNT_STAR_EXPANSION;
+use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
 
 /// Optimizer that uses available statistics for aggregate functions
 #[derive(Default)]
@@ -82,7 +82,7 @@ impl PhysicalOptimizerRule for AggregateStatistics {
                 // input can be entirely removed
                 Ok(Arc::new(ProjectionExec::try_new(
                     projections,
-                    Arc::new(EmptyExec::new(true, plan.schema())),
+                    Arc::new(PlaceholderRowExec::new(plan.schema())),
                 )?))
             } else {
                 plan.map_children(|child| self.optimize(child, _config))
@@ -197,20 +197,46 @@ fn take_optimizable_min(
     agg_expr: &dyn AggregateExpr,
     stats: &Statistics,
 ) -> Option<(ScalarValue, String)> {
-    let col_stats = &stats.column_statistics;
-    if let Some(casted_expr) = agg_expr.as_any().downcast_ref::<expressions::Min>() {
-        if casted_expr.expressions().len() == 1 {
-            // TODO optimize with exprs other than Column
-            if let Some(col_expr) = casted_expr.expressions()[0]
-                .as_any()
-                .downcast_ref::<expressions::Column>()
-            {
-                if let Precision::Exact(val) = &col_stats[col_expr.index()].min_value {
-                    if !val.is_null() {
-                        return Some((val.clone(), casted_expr.name().to_string()));
+    if let Precision::Exact(num_rows) = &stats.num_rows {
+        match *num_rows {
+            0 => {
+                // MIN/MAX with 0 rows is always null
+                if let Some(casted_expr) =
+                    agg_expr.as_any().downcast_ref::<expressions::Min>()
+                {
+                    if let Ok(min_data_type) =
+                        ScalarValue::try_from(casted_expr.field().unwrap().data_type())
+                    {
+                        return Some((min_data_type, casted_expr.name().to_string()));
                     }
                 }
             }
+            value if value > 0 => {
+                let col_stats = &stats.column_statistics;
+                if let Some(casted_expr) =
+                    agg_expr.as_any().downcast_ref::<expressions::Min>()
+                {
+                    if casted_expr.expressions().len() == 1 {
+                        // TODO optimize with exprs other than Column
+                        if let Some(col_expr) = casted_expr.expressions()[0]
+                            .as_any()
+                            .downcast_ref::<expressions::Column>()
+                        {
+                            if let Precision::Exact(val) =
+                                &col_stats[col_expr.index()].min_value
+                            {
+                                if !val.is_null() {
+                                    return Some((
+                                        val.clone(),
+                                        casted_expr.name().to_string(),
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            _ => {}
         }
     }
     None
@@ -221,20 +247,46 @@ fn take_optimizable_max(
     agg_expr: &dyn AggregateExpr,
     stats: &Statistics,
 ) -> Option<(ScalarValue, String)> {
-    let col_stats = &stats.column_statistics;
-    if let Some(casted_expr) = agg_expr.as_any().downcast_ref::<expressions::Max>() {
-        if casted_expr.expressions().len() == 1 {
-            // TODO optimize with exprs other than Column
-            if let Some(col_expr) = casted_expr.expressions()[0]
-                .as_any()
-                .downcast_ref::<expressions::Column>()
-            {
-                if let Precision::Exact(val) = &col_stats[col_expr.index()].max_value {
-                    if !val.is_null() {
-                        return Some((val.clone(), casted_expr.name().to_string()));
+    if let Precision::Exact(num_rows) = &stats.num_rows {
+        match *num_rows {
+            0 => {
+                // MIN/MAX with 0 rows is always null
+                if let Some(casted_expr) =
+                    agg_expr.as_any().downcast_ref::<expressions::Max>()
+                {
+                    if let Ok(max_data_type) =
+                        ScalarValue::try_from(casted_expr.field().unwrap().data_type())
+                    {
+                        return Some((max_data_type, casted_expr.name().to_string()));
                     }
                 }
             }
+            value if value > 0 => {
+                let col_stats = &stats.column_statistics;
+                if let Some(casted_expr) =
+                    agg_expr.as_any().downcast_ref::<expressions::Max>()
+                {
+                    if casted_expr.expressions().len() == 1 {
+                        // TODO optimize with exprs other than Column
+                        if let Some(col_expr) = casted_expr.expressions()[0]
+                            .as_any()
+                            .downcast_ref::<expressions::Column>()
+                        {
+                            if let Precision::Exact(val) =
+                                &col_stats[col_expr.index()].max_value
+                            {
+                                if !val.is_null() {
+                                    return Some((
+                                        val.clone(),
+                                        casted_expr.name().to_string(),
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            _ => {}
         }
     }
     None
@@ -397,7 +449,6 @@ pub(crate) mod tests {
             PhysicalGroupBy::default(),
             vec![agg.count_expr()],
             vec![None],
-            vec![None],
             source,
             Arc::clone(&schema),
         )?;
@@ -406,7 +457,6 @@ pub(crate) mod tests {
             AggregateMode::Final,
             PhysicalGroupBy::default(),
             vec![agg.count_expr()],
-            vec![None],
             vec![None],
             Arc::new(partial_agg),
             Arc::clone(&schema),
@@ -429,7 +479,6 @@ pub(crate) mod tests {
             PhysicalGroupBy::default(),
             vec![agg.count_expr()],
             vec![None],
-            vec![None],
             source,
             Arc::clone(&schema),
         )?;
@@ -438,7 +487,6 @@ pub(crate) mod tests {
             AggregateMode::Final,
             PhysicalGroupBy::default(),
             vec![agg.count_expr()],
-            vec![None],
             vec![None],
             Arc::new(partial_agg),
             Arc::clone(&schema),
@@ -460,7 +508,6 @@ pub(crate) mod tests {
             PhysicalGroupBy::default(),
             vec![agg.count_expr()],
             vec![None],
-            vec![None],
             source,
             Arc::clone(&schema),
         )?;
@@ -472,7 +519,6 @@ pub(crate) mod tests {
             AggregateMode::Final,
             PhysicalGroupBy::default(),
             vec![agg.count_expr()],
-            vec![None],
             vec![None],
             Arc::new(coalesce),
             Arc::clone(&schema),
@@ -494,7 +540,6 @@ pub(crate) mod tests {
             PhysicalGroupBy::default(),
             vec![agg.count_expr()],
             vec![None],
-            vec![None],
             source,
             Arc::clone(&schema),
         )?;
@@ -506,7 +551,6 @@ pub(crate) mod tests {
             AggregateMode::Final,
             PhysicalGroupBy::default(),
             vec![agg.count_expr()],
-            vec![None],
             vec![None],
             Arc::new(coalesce),
             Arc::clone(&schema),
@@ -539,7 +583,6 @@ pub(crate) mod tests {
             PhysicalGroupBy::default(),
             vec![agg.count_expr()],
             vec![None],
-            vec![None],
             filter,
             Arc::clone(&schema),
         )?;
@@ -548,7 +591,6 @@ pub(crate) mod tests {
             AggregateMode::Final,
             PhysicalGroupBy::default(),
             vec![agg.count_expr()],
-            vec![None],
             vec![None],
             Arc::new(partial_agg),
             Arc::clone(&schema),
@@ -586,7 +628,6 @@ pub(crate) mod tests {
             PhysicalGroupBy::default(),
             vec![agg.count_expr()],
             vec![None],
-            vec![None],
             filter,
             Arc::clone(&schema),
         )?;
@@ -595,7 +636,6 @@ pub(crate) mod tests {
             AggregateMode::Final,
             PhysicalGroupBy::default(),
             vec![agg.count_expr()],
-            vec![None],
             vec![None],
             Arc::new(partial_agg),
             Arc::clone(&schema),

@@ -79,7 +79,8 @@ impl Command {
                             filename, e
                         ))
                     })?;
-                    exec_from_lines(ctx, &mut BufReader::new(file), print_options).await;
+                    exec_from_lines(ctx, &mut BufReader::new(file), print_options)
+                        .await?;
                     Ok(())
                 } else {
                     exec_err!("Required filename argument is missing")

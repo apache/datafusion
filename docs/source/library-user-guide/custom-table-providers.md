@@ -25,7 +25,7 @@ This section will also touch on how to have DataFusion use the new `TableProvide
 
 ## Table Provider and Scan
 
-The `scan` method on the `TableProvider` is likely its most important. It returns an `ExecutionPlan` that DataFusion will use to read the actual data during execution o the query.
+The `scan` method on the `TableProvider` is likely its most important. It returns an `ExecutionPlan` that DataFusion will use to read the actual data during execution of the query.
 
 ### Scan
 

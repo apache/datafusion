@@ -21,12 +21,13 @@ use std::path::{Path, PathBuf};
 #[cfg(target_family = "windows")]
 use std::thread;
 
+use clap::Parser;
 use datafusion_sqllogictest::{DataFusion, TestContext};
 use futures::stream::StreamExt;
 use log::info;
 use sqllogictest::strict_column_validator;
 
-use datafusion_common::{exec_err, DataFusionError, Result};
+use datafusion_common::{exec_datafusion_err, exec_err, DataFusionError, Result};
 
 const TEST_DIRECTORY: &str = "test_files/";
 const PG_COMPAT_FILE_PREFIX: &str = "pg_compat_";
@@ -77,18 +78,19 @@ async fn run_tests() -> Result<()> {
     // Enable logging (e.g. set RUST_LOG=debug to see debug logs)
     env_logger::init();
 
-    let options = Options::new();
+    let options: Options = clap::Parser::parse();
+    options.warn_on_ignored();
 
     // Run all tests in parallel, reporting failures at the end
     //
     // Doing so is safe because each slt file runs with its own
     // `SessionContext` and should not have side effects (like
     // modifying shared state like `/tmp/`)
-    let errors: Vec<_> = futures::stream::iter(read_test_files(&options))
+    let errors: Vec<_> = futures::stream::iter(read_test_files(&options)?)
         .map(|test_file| {
             tokio::task::spawn(async move {
                 println!("Running {:?}", test_file.relative_path);
-                if options.complete_mode {
+                if options.complete {
                     run_complete_file(test_file).await?;
                 } else if options.postgres_runner {
                     run_test_file_with_postgres(test_file).await?;
@@ -159,6 +161,7 @@ async fn run_test_file_with_postgres(test_file: TestFile) -> Result<()> {
         relative_path,
     } = test_file;
     info!("Running with Postgres runner: {}", path.display());
+    setup_scratch_dir(&relative_path)?;
     let mut runner =
         sqllogictest::Runner::new(|| Postgres::connect(relative_path.clone()));
     runner.with_column_validator(strict_column_validator);
@@ -188,6 +191,7 @@ async fn run_complete_file(test_file: TestFile) -> Result<()> {
         info!("Skipping: {}", path.display());
         return Ok(());
     };
+    setup_scratch_dir(&relative_path)?;
     let mut runner = sqllogictest::Runner::new(|| async {
         Ok(DataFusion::new(
             test_ctx.session_ctx().clone(),
@@ -245,76 +249,96 @@ impl TestFile {
     }
 }
 
-fn read_test_files<'a>(options: &'a Options) -> Box<dyn Iterator<Item = TestFile> + 'a> {
-    Box::new(
-        read_dir_recursive(TEST_DIRECTORY)
+fn read_test_files<'a>(
+    options: &'a Options,
+) -> Result<Box<dyn Iterator<Item = TestFile> + 'a>> {
+    Ok(Box::new(
+        read_dir_recursive(TEST_DIRECTORY)?
+            .into_iter()
             .map(TestFile::new)
             .filter(|f| options.check_test_file(&f.relative_path))
             .filter(|f| f.is_slt_file())
             .filter(|f| f.check_tpch(options))
             .filter(|f| options.check_pg_compat_file(f.path.as_path())),
-    )
+    ))
 }
 
-fn read_dir_recursive<P: AsRef<Path>>(path: P) -> Box<dyn Iterator<Item = PathBuf>> {
-    Box::new(
-        std::fs::read_dir(path)
-            .expect("Readable directory")
-            .map(|path| path.expect("Readable entry").path())
-            .flat_map(|path| {
-                if path.is_dir() {
-                    read_dir_recursive(path)
-                } else {
-                    Box::new(std::iter::once(path))
-                }
-            }),
-    )
+fn read_dir_recursive<P: AsRef<Path>>(path: P) -> Result<Vec<PathBuf>> {
+    let mut dst = vec![];
+    read_dir_recursive_impl(&mut dst, path.as_ref())?;
+    Ok(dst)
 }
 
-/// Parsed command line options
-struct Options {
-    // regex like
-    /// arguments passed to the program which are treated as
-    /// cargo test filter (substring match on filenames)
-    filters: Vec<String>,
+/// Append all paths recursively to dst
+fn read_dir_recursive_impl(dst: &mut Vec<PathBuf>, path: &Path) -> Result<()> {
+    let entries = std::fs::read_dir(path)
+        .map_err(|e| exec_datafusion_err!("Error reading directory {path:?}: {e}"))?;
+    for entry in entries {
+        let path = entry
+            .map_err(|e| {
+                exec_datafusion_err!("Error reading entry in directory {path:?}: {e}")
+            })?
+            .path();
 
-    /// Auto complete mode to fill out expected results
-    complete_mode: bool,
-
-    /// Run Postgres compatibility tests with Postgres runner
-    postgres_runner: bool,
-
-    /// Include tpch files
-    include_tpch: bool,
-}
-
-impl Options {
-    fn new() -> Self {
-        let args: Vec<_> = std::env::args().collect();
-
-        let complete_mode = args.iter().any(|a| a == "--complete");
-        let postgres_runner = std::env::var("PG_COMPAT").map_or(false, |_| true);
-        let include_tpch = std::env::var("INCLUDE_TPCH").map_or(false, |_| true);
-
-        // treat args after the first as filters to run (substring matching)
-        let filters = if !args.is_empty() {
-            args.into_iter()
-                .skip(1)
-                // ignore command line arguments like `--complete`
-                .filter(|arg| !arg.as_str().starts_with("--"))
-                .collect::<Vec<_>>()
+        if path.is_dir() {
+            read_dir_recursive_impl(dst, &path)?;
         } else {
-            vec![]
-        };
-
-        Self {
-            filters,
-            complete_mode,
-            postgres_runner,
-            include_tpch,
+            dst.push(path);
         }
     }
 
+    Ok(())
+}
+
+/// Parsed command line options
+///
+/// This structure attempts to mimic the command line options
+/// accepted by IDEs such as CLion that pass arguments
+///
+/// See <https://github.com/apache/arrow-datafusion/issues/8287> for more details
+#[derive(Parser, Debug)]
+#[clap(author, version, about, long_about= None)]
+struct Options {
+    #[clap(long, help = "Auto complete mode to fill out expected results")]
+    complete: bool,
+
+    #[clap(
+        long,
+        env = "PG_COMPAT",
+        help = "Run Postgres compatibility tests with Postgres runner"
+    )]
+    postgres_runner: bool,
+
+    #[clap(long, env = "INCLUDE_TPCH", help = "Include tpch files")]
+    include_tpch: bool,
+
+    #[clap(
+        action,
+        help = "regex like arguments passed to the program which are treated as cargo test filter (substring match on filenames)"
+    )]
+    filters: Vec<String>,
+
+    #[clap(
+        long,
+        help = "IGNORED (for compatibility with built in rust test runner)"
+    )]
+    format: Option<String>,
+
+    #[clap(
+        short = 'Z',
+        long,
+        help = "IGNORED (for compatibility with built in rust test runner)"
+    )]
+    z_options: Option<String>,
+
+    #[clap(
+        long,
+        help = "IGNORED (for compatibility with built in rust test runner)"
+    )]
+    show_output: bool,
+}
+
+impl Options {
     /// Because this test can be run as a cargo test, commands like
     ///
     /// ```shell
@@ -341,5 +365,20 @@ impl Options {
     fn check_pg_compat_file(&self, path: &Path) -> bool {
         let file_name = path.file_name().unwrap().to_str().unwrap().to_string();
         !self.postgres_runner || file_name.starts_with(PG_COMPAT_FILE_PREFIX)
+    }
+
+    /// Logs warning messages to stdout if any ignored options are passed
+    fn warn_on_ignored(&self) {
+        if self.format.is_some() {
+            println!("WARNING: Ignoring `--format` compatibility option");
+        }
+
+        if self.z_options.is_some() {
+            println!("WARNING: Ignoring `-Z` compatibility option");
+        }
+
+        if self.show_output {
+            println!("WARNING: Ignoring `--show-output` compatibility option");
+        }
     }
 }

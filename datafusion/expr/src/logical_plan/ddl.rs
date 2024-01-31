@@ -194,6 +194,8 @@ pub struct CreateExternalTable {
     pub options: HashMap<String, String>,
     /// The list of constraints in the schema, such as primary key, unique, etc.
     pub constraints: Constraints,
+    /// Default values for columns
+    pub column_defaults: HashMap<String, Expr>,
 }
 
 // Hashing refers to a subset of fields considered in PartialEq.
@@ -228,6 +230,8 @@ pub struct CreateMemoryTable {
     pub if_not_exists: bool,
     /// Option to replace table content if table already exists
     pub or_replace: bool,
+    /// Default values for columns
+    pub column_defaults: Vec<(String, Expr)>,
 }
 
 /// Creates a view.

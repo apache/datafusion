@@ -19,8 +19,8 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
 use crate::parser::{
-    CopyToSource, CopyToStatement, CreateExternalTable, DFParser, DescribeTableStmt,
-    ExplainStatement, LexOrdering, Statement as DFStatement,
+    CopyToSource, CopyToStatement, CreateExternalTable, DFParser, ExplainStatement,
+    LexOrdering, Statement as DFStatement,
 };
 use crate::planner::{
     object_name_to_qualifier, ContextProvider, PlannerContext, SqlToRel,
@@ -31,9 +31,10 @@ use arrow_schema::DataType;
 use datafusion_common::file_options::StatementOptions;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{
-    not_impl_err, plan_datafusion_err, plan_err, unqualified_field_not_found, Column,
-    Constraints, DFField, DFSchema, DFSchemaRef, DataFusionError, OwnedTableReference,
-    Result, ScalarValue, SchemaReference, TableReference, ToDFSchema,
+    not_impl_err, plan_datafusion_err, plan_err, schema_err, unqualified_field_not_found,
+    Column, Constraints, DFField, DFSchema, DFSchemaRef, DataFusionError,
+    OwnedTableReference, Result, ScalarValue, SchemaError, SchemaReference,
+    TableReference, ToDFSchema,
 };
 use datafusion_expr::dml::{CopyOptions, CopyTo};
 use datafusion_expr::expr_rewriter::normalize_col_with_schemas_and_ambiguity_check;
@@ -51,9 +52,10 @@ use datafusion_expr::{
 };
 use sqlparser::ast;
 use sqlparser::ast::{
-    Assignment, ColumnDef, Expr as SQLExpr, Expr, Ident, ObjectName, ObjectType, Query,
-    SchemaName, SetExpr, ShowCreateObject, ShowStatementFilter, Statement,
-    TableConstraint, TableFactor, TableWithJoins, TransactionMode, UnaryOperator, Value,
+    Assignment, ColumnDef, CreateTableOptions, Expr as SQLExpr, Expr, Ident, ObjectName,
+    ObjectType, Query, SchemaName, SetExpr, ShowCreateObject, ShowStatementFilter,
+    Statement, TableConstraint, TableFactor, TableWithJoins, TransactionMode,
+    UnaryOperator, Value,
 };
 use sqlparser::parser::ParserError::ParserError;
 
@@ -89,18 +91,21 @@ fn calc_inline_constraints_from_columns(columns: &[ColumnDef]) -> Vec<TableConst
     for column in columns {
         for ast::ColumnOptionDef { name, option } in &column.options {
             match option {
-                ast::ColumnOption::Unique { is_primary } => {
-                    constraints.push(ast::TableConstraint::Unique {
-                        name: name.clone(),
-                        columns: vec![column.name.clone()],
-                        is_primary: *is_primary,
-                    })
-                }
+                ast::ColumnOption::Unique {
+                    is_primary,
+                    characteristics,
+                } => constraints.push(ast::TableConstraint::Unique {
+                    name: name.clone(),
+                    columns: vec![column.name.clone()],
+                    is_primary: *is_primary,
+                    characteristics: *characteristics,
+                }),
                 ast::ColumnOption::ForeignKey {
                     foreign_table,
                     referred_columns,
                     on_delete,
                     on_update,
+                    characteristics,
                 } => constraints.push(ast::TableConstraint::ForeignKey {
                     name: name.clone(),
                     columns: vec![],
@@ -108,6 +113,7 @@ fn calc_inline_constraints_from_columns(columns: &[ColumnDef]) -> Vec<TableConst
                     referred_columns: referred_columns.to_vec(),
                     on_delete: *on_delete,
                     on_update: *on_update,
+                    characteristics: *characteristics,
                 }),
                 ast::ColumnOption::Check(expr) => {
                     constraints.push(ast::TableConstraint::Check {
@@ -123,6 +129,7 @@ fn calc_inline_constraints_from_columns(columns: &[ColumnDef]) -> Vec<TableConst
                 | ast::ColumnOption::CharacterSet(_)
                 | ast::ColumnOption::Generated { .. }
                 | ast::ColumnOption::Comment(_)
+                | ast::ColumnOption::Options(_)
                 | ast::ColumnOption::OnUpdate(_) => {}
             }
         }
@@ -136,7 +143,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         match statement {
             DFStatement::CreateExternalTable(s) => self.external_table_to_plan(s),
             DFStatement::Statement(s) => self.sql_statement_to_plan(*s),
-            DFStatement::DescribeTableStmt(s) => self.describe_table_to_plan(s),
             DFStatement::CopyTo(s) => self.copy_to_plan(s),
             DFStatement::Explain(ExplainStatement {
                 verbose,
@@ -170,6 +176,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     ) -> Result<LogicalPlan> {
         let sql = Some(statement.to_string());
         match statement {
+            Statement::ExplainTable {
+                describe_alias: true, // only parse 'DESCRIBE table_name' and not 'EXPLAIN table_name'
+                table_name,
+            } => self.describe_table_to_plan(table_name),
             Statement::Explain {
                 verbose,
                 statement,
@@ -204,6 +214,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 let mut all_constraints = constraints;
                 let inline_constraints = calc_inline_constraints_from_columns(&columns);
                 all_constraints.extend(inline_constraints);
+                // Build column default values
+                let column_defaults =
+                    self.build_column_defaults(&columns, planner_context)?;
                 match query {
                     Some(query) => {
                         let plan = self.query_to_plan(*query, planner_context)?;
@@ -250,6 +263,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                                 input: Arc::new(plan),
                                 if_not_exists,
                                 or_replace,
+                                column_defaults,
                             },
                         )))
                     }
@@ -272,6 +286,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                                 input: Arc::new(plan),
                                 if_not_exists,
                                 or_replace,
+                                column_defaults,
                             },
                         )))
                     }
@@ -283,9 +298,22 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 name,
                 columns,
                 query,
-                with_options,
+                options: CreateTableOptions::None,
                 ..
-            } if with_options.is_empty() => {
+            } => {
+                let columns = columns
+                    .into_iter()
+                    .map(|view_column_def| {
+                        if let Some(options) = view_column_def.options {
+                            plan_err!(
+                                "Options not supported for view columns: {options:?}"
+                            )
+                        } else {
+                            Ok(view_column_def.name)
+                        }
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+
                 let mut plan = self.query_to_plan(*query, &mut PlannerContext::new())?;
                 plan = self.apply_expr_alias(plan, columns)?;
 
@@ -431,6 +459,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 on,
                 returning,
                 ignore,
+                table_alias,
+                replace_into,
+                priority,
             } => {
                 if or.is_some() {
                     plan_err!("Inserts with or clauses not supported")?;
@@ -453,6 +484,22 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 if ignore {
                     plan_err!("Insert-ignore clause not supported")?;
                 }
+                let Some(source) = source else {
+                    plan_err!("Inserts without a source not supported")?
+                };
+                if let Some(table_alias) = table_alias {
+                    plan_err!(
+                        "Inserts with a table alias not supported: {table_alias:?}"
+                    )?
+                };
+                if replace_into {
+                    plan_err!("Inserts with a `REPLACE INTO` clause not supported")?
+                };
+                if let Some(priority) = priority {
+                    plan_err!(
+                        "Inserts with a `PRIORITY` clause not supported: {priority:?}"
+                    )?
+                };
                 let _ = into; // optional keyword doesn't change behavior
                 self.insert_to_plan(table_name, columns, source, overwrite)
             }
@@ -505,7 +552,13 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             Statement::StartTransaction {
                 modes,
                 begin: false,
+                modifier,
             } => {
+                if let Some(modifier) = modifier {
+                    return not_impl_err!(
+                        "Transaction modifier not supported: {modifier}"
+                    );
+                }
                 let isolation_level: ast::TransactionIsolationLevel = modes
                     .iter()
                     .filter_map(|m: &ast::TransactionMode| match m {
@@ -561,7 +614,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 });
                 Ok(LogicalPlan::Statement(statement))
             }
-            Statement::Rollback { chain } => {
+            Statement::Rollback { chain, savepoint } => {
+                if savepoint.is_some() {
+                    plan_err!("Savepoints not supported")?;
+                }
                 let statement = PlanStatement::TransactionEnd(TransactionEnd {
                     conclusion: TransactionConclusion::Rollback,
                     chain,
@@ -618,11 +674,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         }
     }
 
-    fn describe_table_to_plan(
-        &self,
-        statement: DescribeTableStmt,
-    ) -> Result<LogicalPlan> {
-        let DescribeTableStmt { table_name } = statement;
+    fn describe_table_to_plan(&self, table_name: ObjectName) -> Result<LogicalPlan> {
         let table_ref = self.object_name_to_table_reference(table_name)?;
 
         let table_source = self.context_provider.get_table_source(table_ref)?;
@@ -666,11 +718,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
         let mut statement_options = StatementOptions::new(options);
         let file_format = statement_options.try_infer_file_type(&statement.target)?;
-        let single_file_output =
-            statement_options.take_bool_option("single_file_output")?;
-
-        // COPY defaults to outputting a single file if not otherwise specified
-        let single_file_output = single_file_output.unwrap_or(true);
 
         let copy_options = CopyOptions::SQLOptions(statement_options);
 
@@ -678,7 +725,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             input: Arc::new(input),
             output_url: statement.target,
             file_format,
-            single_file_output,
             copy_options,
         }))
     }
@@ -699,7 +745,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let mut all_results = vec![];
         for expr in order_exprs {
             // Convert each OrderByExpr to a SortExpr:
-            let expr_vec = self.order_by_to_sort_expr(&expr, schema, planner_context)?;
+            let expr_vec =
+                self.order_by_to_sort_expr(&expr, schema, planner_context, true)?;
             // Verify that columns of all SortExprs exist in the schema:
             for expr in expr_vec.iter() {
                 for column in expr.to_columns()?.iter() {
@@ -750,11 +797,18 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             )?;
         }
 
+        let mut planner_context = PlannerContext::new();
+
+        let column_defaults = self
+            .build_column_defaults(&columns, &mut planner_context)?
+            .into_iter()
+            .collect();
+
         let schema = self.build_schema(columns)?;
         let df_schema = schema.to_dfschema_ref()?;
 
         let ordered_exprs =
-            self.build_order_by(order_exprs, &df_schema, &mut PlannerContext::new())?;
+            self.build_order_by(order_exprs, &df_schema, &mut planner_context)?;
 
         // External tables do not support schemas at the moment, so the name is just a table name
         let name = OwnedTableReference::bare(name);
@@ -776,6 +830,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 unbounded,
                 options,
                 constraints,
+                column_defaults,
             },
         )))
     }
@@ -1113,11 +1168,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         .index_of_column_by_name(None, &c)?
                         .ok_or_else(|| unqualified_field_not_found(&c, &table_schema))?;
                     if value_indices[column_index].is_some() {
-                        return Err(DataFusionError::SchemaError(
-                            datafusion_common::SchemaError::DuplicateUnqualifiedField {
-                                name: c,
-                            },
-                        ));
+                        return schema_err!(SchemaError::DuplicateUnqualifiedField {
+                            name: c,
+                        });
                     } else {
                         value_indices[column_index] = Some(i);
                     }
@@ -1170,8 +1223,14 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         datafusion_expr::Expr::Column(source_field.qualified_column())
                             .cast_to(target_field.data_type(), source.schema())?
                     }
-                    // Fill the default value for the column, currently only supports NULL.
-                    None => datafusion_expr::Expr::Literal(ScalarValue::Null)
+                    // The value is not specified. Fill in the default value for the column.
+                    None => table_source
+                        .get_column_default(target_field.name())
+                        .cloned()
+                        .unwrap_or_else(|| {
+                            // If there is no default for the column, then the default is NULL
+                            datafusion_expr::Expr::Literal(ScalarValue::Null)
+                        })
                         .cast_to(target_field.data_type(), &DFSchema::empty())?,
                 };
                 Ok(expr.alias(target_field.name()))

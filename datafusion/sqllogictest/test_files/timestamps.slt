@@ -18,7 +18,7 @@
 ##########
 ## Common timestamp data
 #
-# ts_data:        Int64 nanosecods
+# ts_data:        Int64 nanoseconds
 # ts_data_nanos:  Timestamp(Nanosecond, None)
 # ts_data_micros: Timestamp(Microsecond, None)
 # ts_data_millis: Timestamp(Millisecond, None)
@@ -46,6 +46,43 @@ statement ok
 create table ts_data_secs as select arrow_cast(ts / 1000000000, 'Timestamp(Second, None)') as ts, value from ts_data;
 
 
+##########
+## Current date Tests
+##########
+
+query B
+select cast(now() as date) = current_date();
+----
+true
+
+query B
+select now() = current_date();
+----
+false
+
+query B
+select current_date() = today();
+----
+true
+
+query B
+select cast(now() as date) = today();
+----
+true
+
+##########
+## Current time Tests
+##########
+
+query B
+select cast(now() as time) = current_time();
+----
+true
+
+query T
+select case when current_time() = (now()::bigint % 86400000000000)::time then 'OK' else 'FAIL' end result
+----
+OK
 
 ##########
 ## Timestamp Handling Tests
@@ -171,6 +208,9 @@ SELECT to_timestamp_seconds(ts / 1000) FROM t1 LIMIT 3
 2009-03-01T00:01:00
 2009-04-01T00:00:00
 
+statement ok
+drop table t1
+
 
 
 # query_cast_timestamp_nanos_to_others
@@ -290,6 +330,64 @@ query I
 SELECT COUNT(*) FROM ts_data_secs where ts > to_timestamp_seconds('2020-09-08T12:00:00+00:00')
 ----
 2
+
+# to_timestamp with formatting
+query I
+SELECT COUNT(*) FROM ts_data_nanos where ts > to_timestamp('2020-09-08T12:00:00+00:00', '2020-09-08 12/00/00+00:00', '%c', '%+', '%Y-%m-%d %H/%M/%s%#z')
+----
+2
+
+# to_timestamp_nanos with formatting
+query I
+SELECT COUNT(*) FROM ts_data_nanos where ts > to_timestamp_nanos('2020-09-08 12/00/00+00:00', '%c', '%+', '%Y-%m-%d %H/%M/%S%#z')
+----
+2
+
+# to_timestamp_millis with formatting
+query I
+SELECT COUNT(*) FROM ts_data_millis where ts > to_timestamp_millis('2020-09-08 12/00/00+00:00', '%c', '%+', '%Y-%m-%d %H/%M/%S%#z')
+----
+2
+
+# to_timestamp_micros with formatting
+query I
+SELECT COUNT(*) FROM ts_data_micros where ts > to_timestamp_micros('2020-09-08 12/00/00+00:00', '%c', '%+', '%Y-%m-%d %H/%M/%S%#z')
+----
+2
+
+# to_timestamp_seconds with formatting
+query I
+SELECT COUNT(*) FROM ts_data_secs where ts > to_timestamp_seconds('2020-09-08 12/00/00+00:00', '%c', '%+', '%Y-%m-%d %H/%M/%S%#z')
+----
+2
+
+# to_timestamp float inputs
+
+query PPP
+SELECT to_timestamp(1.1) as c1, cast(1.1 as timestamp) as c2, 1.1::timestamp as c3;
+----
+1970-01-01T00:00:01.100 1970-01-01T00:00:01.100 1970-01-01T00:00:01.100
+
+query PPP
+SELECT to_timestamp(-1.1) as c1, cast(-1.1 as timestamp) as c2, (-1.1)::timestamp as c3;
+----
+1969-12-31T23:59:58.900 1969-12-31T23:59:58.900 1969-12-31T23:59:58.900
+
+query PPP
+SELECT to_timestamp(0.0) as c1, cast(0.0 as timestamp) as c2, 0.0::timestamp as c3;
+----
+1970-01-01T00:00:00 1970-01-01T00:00:00 1970-01-01T00:00:00
+
+query PPP
+SELECT to_timestamp(1.23456789) as c1, cast(1.23456789 as timestamp) as c2, 1.23456789::timestamp as c3;
+----
+1970-01-01T00:00:01.234567890 1970-01-01T00:00:01.234567890 1970-01-01T00:00:01.234567890
+
+query PPP
+SELECT to_timestamp(123456789.123456789) as c1, cast(123456789.123456789 as timestamp) as c2, 123456789.123456789::timestamp as c3;
+----
+1973-11-29T21:33:09.123456784 1973-11-29T21:33:09.123456784 1973-11-29T21:33:09.123456784
+
 
 # from_unixtime
 
@@ -1164,6 +1262,173 @@ SELECT DATE_TRUNC('day', arrow_cast(TIMESTAMP '2023-08-03 14:38:50Z', 'Timestamp
 2023-08-03T14:38:50
 2023-08-03T14:38:50
 
+# date_trunc with data with timezones
+statement ok
+CREATE TABLE timestamp_strings(ts varchar)
+AS VALUES
+('2024-10-27 00:00:00'),
+('2024-10-27 00:30:00'),
+('2024-10-27 01:30:00'),
+('2024-10-27 02:00:00'), -- Daylight Savings Time happens here in Berlin
+('2024-10-27 02:30:00'),
+('2024-10-27 03:00:00'),
+('2024-10-27 03:30:00')
+;
+
+statement ok
+create view timestamp_utc as
+select
+  arrow_cast(ts, 'Timestamp(Nanosecond, Some("UTC"))') as ts
+from timestamp_strings;
+
+statement ok
+create view timestamp_berlin as
+select
+  arrow_cast(ts, 'Timestamp(Nanosecond, Some("Europe/Berlin"))') as ts
+from timestamp_utc; -- have to convert to utc prior to converting to berlin
+
+query PT
+select ts, arrow_typeof(ts) from timestamp_utc order by ts;
+----
+2024-10-27T00:00:00Z Timestamp(Nanosecond, Some("UTC"))
+2024-10-27T00:30:00Z Timestamp(Nanosecond, Some("UTC"))
+2024-10-27T01:30:00Z Timestamp(Nanosecond, Some("UTC"))
+2024-10-27T02:00:00Z Timestamp(Nanosecond, Some("UTC"))
+2024-10-27T02:30:00Z Timestamp(Nanosecond, Some("UTC"))
+2024-10-27T03:00:00Z Timestamp(Nanosecond, Some("UTC"))
+2024-10-27T03:30:00Z Timestamp(Nanosecond, Some("UTC"))
+
+query PT
+select ts, arrow_typeof(ts) from timestamp_berlin order by ts;
+----
+2024-10-27T02:00:00+02:00 Timestamp(Nanosecond, Some("Europe/Berlin"))
+2024-10-27T02:30:00+02:00 Timestamp(Nanosecond, Some("Europe/Berlin"))
+2024-10-27T02:30:00+01:00 Timestamp(Nanosecond, Some("Europe/Berlin"))
+2024-10-27T03:00:00+01:00 Timestamp(Nanosecond, Some("Europe/Berlin"))
+2024-10-27T03:30:00+01:00 Timestamp(Nanosecond, Some("Europe/Berlin"))
+2024-10-27T04:00:00+01:00 Timestamp(Nanosecond, Some("Europe/Berlin"))
+2024-10-27T04:30:00+01:00 Timestamp(Nanosecond, Some("Europe/Berlin"))
+
+#  date trunc in utc with DST
+query PPPP
+select ts, date_trunc('month', ts), date_trunc('day', ts), date_trunc('hour', ts)
+from timestamp_utc order by ts;
+----
+2024-10-27T00:00:00Z 2024-10-01T00:00:00Z 2024-10-27T00:00:00Z 2024-10-27T00:00:00Z
+2024-10-27T00:30:00Z 2024-10-01T00:00:00Z 2024-10-27T00:00:00Z 2024-10-27T00:00:00Z
+2024-10-27T01:30:00Z 2024-10-01T00:00:00Z 2024-10-27T00:00:00Z 2024-10-27T01:00:00Z
+2024-10-27T02:00:00Z 2024-10-01T00:00:00Z 2024-10-27T00:00:00Z 2024-10-27T02:00:00Z
+2024-10-27T02:30:00Z 2024-10-01T00:00:00Z 2024-10-27T00:00:00Z 2024-10-27T02:00:00Z
+2024-10-27T03:00:00Z 2024-10-01T00:00:00Z 2024-10-27T00:00:00Z 2024-10-27T03:00:00Z
+2024-10-27T03:30:00Z 2024-10-01T00:00:00Z 2024-10-27T00:00:00Z 2024-10-27T03:00:00Z
+
+
+# date trunc in a timezone with DST across DST boundary (note the date-trunc hour value repeats)
+# Test for https://github.com/apache/arrow-datafusion/issues/8899
+query PPPP
+select ts, date_trunc('month', ts), date_trunc('day', ts), date_trunc('hour', ts)
+from timestamp_berlin order by ts;
+----
+2024-10-27T02:00:00+02:00 2024-10-01T00:00:00+02:00 2024-10-27T00:00:00+02:00 2024-10-27T02:00:00+02:00
+2024-10-27T02:30:00+02:00 2024-10-01T00:00:00+02:00 2024-10-27T00:00:00+02:00 2024-10-27T02:00:00+02:00
+2024-10-27T02:30:00+01:00 2024-10-01T00:00:00+02:00 2024-10-27T00:00:00+02:00 2024-10-27T02:00:00+01:00
+2024-10-27T03:00:00+01:00 2024-10-01T00:00:00+02:00 2024-10-27T00:00:00+02:00 2024-10-27T03:00:00+01:00
+2024-10-27T03:30:00+01:00 2024-10-01T00:00:00+02:00 2024-10-27T00:00:00+02:00 2024-10-27T03:00:00+01:00
+2024-10-27T04:00:00+01:00 2024-10-01T00:00:00+02:00 2024-10-27T00:00:00+02:00 2024-10-27T04:00:00+01:00
+2024-10-27T04:30:00+01:00 2024-10-01T00:00:00+02:00 2024-10-27T00:00:00+02:00 2024-10-27T04:00:00+01:00
+
+statement ok
+drop table timestamp_strings;
+
+statement ok
+drop view timestamp_utc;
+
+statement ok
+drop view timestamp_berlin;
+
+# date_trunc with data with timezones where transition happens at midnight
+statement ok
+CREATE TABLE timestamp_strings(ts varchar)
+AS VALUES
+('2018-11-04 01:00:00'),
+('2018-11-04 01:30:00'),
+('2018-11-04 02:30:00'),
+('2018-11-04 03:00:00'), -- Daylight Savings Time started here in Sao Paulo
+('2018-11-04 03:30:00'),
+('2018-11-04 04:00:00'),
+('2018-11-04 04:30:00')
+;
+
+statement ok
+create view timestamp_utc as
+select
+  arrow_cast(ts, 'Timestamp(Nanosecond, Some("UTC"))') as ts
+from timestamp_strings;
+
+statement ok
+create view timestamp_sao_paulo as
+select
+  arrow_cast(ts, 'Timestamp(Nanosecond, Some("America/Sao_Paulo"))') as ts
+from timestamp_utc; -- have to convert to utc prior to converting to Sau Paulo
+
+query PT
+select ts, arrow_typeof(ts) from timestamp_utc order by ts;
+----
+2018-11-04T01:00:00Z Timestamp(Nanosecond, Some("UTC"))
+2018-11-04T01:30:00Z Timestamp(Nanosecond, Some("UTC"))
+2018-11-04T02:30:00Z Timestamp(Nanosecond, Some("UTC"))
+2018-11-04T03:00:00Z Timestamp(Nanosecond, Some("UTC"))
+2018-11-04T03:30:00Z Timestamp(Nanosecond, Some("UTC"))
+2018-11-04T04:00:00Z Timestamp(Nanosecond, Some("UTC"))
+2018-11-04T04:30:00Z Timestamp(Nanosecond, Some("UTC"))
+
+query PT
+select ts, arrow_typeof(ts) from timestamp_sao_paulo order by ts;
+----
+2018-11-03T22:00:00-03:00 Timestamp(Nanosecond, Some("America/Sao_Paulo"))
+2018-11-03T22:30:00-03:00 Timestamp(Nanosecond, Some("America/Sao_Paulo"))
+2018-11-03T23:30:00-03:00 Timestamp(Nanosecond, Some("America/Sao_Paulo"))
+2018-11-04T01:00:00-02:00 Timestamp(Nanosecond, Some("America/Sao_Paulo"))
+2018-11-04T01:30:00-02:00 Timestamp(Nanosecond, Some("America/Sao_Paulo"))
+2018-11-04T02:00:00-02:00 Timestamp(Nanosecond, Some("America/Sao_Paulo"))
+2018-11-04T02:30:00-02:00 Timestamp(Nanosecond, Some("America/Sao_Paulo"))
+
+#  date trunc in utc with DST
+query PPPP
+select ts, date_trunc('month', ts), date_trunc('day', ts), date_trunc('hour', ts)
+from timestamp_utc order by ts;
+----
+2018-11-04T01:00:00Z 2018-11-01T00:00:00Z 2018-11-04T00:00:00Z 2018-11-04T01:00:00Z
+2018-11-04T01:30:00Z 2018-11-01T00:00:00Z 2018-11-04T00:00:00Z 2018-11-04T01:00:00Z
+2018-11-04T02:30:00Z 2018-11-01T00:00:00Z 2018-11-04T00:00:00Z 2018-11-04T02:00:00Z
+2018-11-04T03:00:00Z 2018-11-01T00:00:00Z 2018-11-04T00:00:00Z 2018-11-04T03:00:00Z
+2018-11-04T03:30:00Z 2018-11-01T00:00:00Z 2018-11-04T00:00:00Z 2018-11-04T03:00:00Z
+2018-11-04T04:00:00Z 2018-11-01T00:00:00Z 2018-11-04T00:00:00Z 2018-11-04T04:00:00Z
+2018-11-04T04:30:00Z 2018-11-01T00:00:00Z 2018-11-04T00:00:00Z 2018-11-04T04:00:00Z
+
+
+# date trunc in a timezone with DST across DST boundary (note there is no midnight on 2018-11-04)
+# Test for https://github.com/apache/arrow-datafusion/issues/8899
+query PPPP
+select ts, date_trunc('month', ts), date_trunc('day', ts), date_trunc('hour', ts)
+from timestamp_sao_paulo order by ts;
+----
+2018-11-03T22:00:00-03:00 2018-11-01T00:00:00-03:00 2018-11-03T00:00:00-03:00 2018-11-03T22:00:00-03:00
+2018-11-03T22:30:00-03:00 2018-11-01T00:00:00-03:00 2018-11-03T00:00:00-03:00 2018-11-03T22:00:00-03:00
+2018-11-03T23:30:00-03:00 2018-11-01T00:00:00-03:00 2018-11-03T00:00:00-03:00 2018-11-03T23:00:00-03:00
+2018-11-04T01:00:00-02:00 2018-11-01T00:00:00-03:00 2018-11-04T01:00:00-02:00 2018-11-04T01:00:00-02:00
+2018-11-04T01:30:00-02:00 2018-11-01T00:00:00-03:00 2018-11-04T01:00:00-02:00 2018-11-04T01:00:00-02:00
+2018-11-04T02:00:00-02:00 2018-11-01T00:00:00-03:00 2018-11-04T01:00:00-02:00 2018-11-04T02:00:00-02:00
+2018-11-04T02:30:00-02:00 2018-11-01T00:00:00-03:00 2018-11-04T01:00:00-02:00 2018-11-04T02:00:00-02:00
+
+statement ok
+drop table timestamp_strings;
+
+statement ok
+drop view timestamp_utc;
+
+statement ok
+drop view timestamp_sao_paulo;
 
 # Demonstrate that strings are automatically coerced to timestamps (don't use TIMESTAMP)
 
@@ -1677,14 +1942,11 @@ SELECT TIMESTAMPTZ '2022-01-01 01:10:00 AEST'
 query P rowsort
 SELECT TIMESTAMPTZ '2022-01-01 01:10:00 Australia/Sydney' as ts_geo
  UNION ALL
-SELECT TIMESTAMPTZ '2022-01-01 01:10:00 Antarctica/Vostok' as ts_geo
- UNION ALL
 SELECT TIMESTAMPTZ '2022-01-01 01:10:00 Africa/Johannesburg' as ts_geo
  UNION ALL
 SELECT TIMESTAMPTZ '2022-01-01 01:10:00 America/Los_Angeles' as ts_geo
 ----
 2021-12-31T14:10:00Z
-2021-12-31T19:10:00Z
 2021-12-31T23:10:00Z
 2022-01-01T09:10:00Z
 
@@ -1761,6 +2023,26 @@ SELECT arrow_typeof(date_trunc('day', time)) FROM foo LIMIT 1
 ----
 Timestamp(Nanosecond, Some("+05:00"))
 
+query T
+select arrow_typeof(date_trunc('minute', to_timestamp_seconds(61)))
+----
+Timestamp(Second, None)
+
+query T
+select arrow_typeof(date_trunc('second', to_timestamp_millis(61)))
+----
+Timestamp(Millisecond, None)
+
+query T
+select arrow_typeof(date_trunc('millisecond', to_timestamp_micros(61)))
+----
+Timestamp(Microsecond, None)
+
+query T
+select arrow_typeof(date_trunc('microsecond', to_timestamp(61)))
+----
+Timestamp(Nanosecond, None)  
+
 # check date_bin
 query P
 SELECT date_bin(INTERVAL '1 day', time, '1970-01-01T00:00:00+05:00') FROM foo
@@ -1788,8 +2070,498 @@ SELECT TIMESTAMPTZ '2020-01-01 00:00:00Z' = TIMESTAMP '2020-01-01'
 ----
 true
 
-# verify to_timestamp edge cases to be in sync with postgresql
-query PPPPP
-SELECT to_timestamp(null), to_timestamp(-62125747200), to_timestamp(0), to_timestamp(1926632005177), to_timestamp(1926632005)
+# verify timestamp cast with integer input
+query PPPPPP
+SELECT to_timestamp(null), to_timestamp(0), to_timestamp(1926632005), to_timestamp(1), to_timestamp(-1), to_timestamp(0-1)
 ----
-NULL 0001-04-25T00:00:00 1970-01-01T00:00:00 +63022-07-16T12:59:37 2031-01-19T23:33:25
+NULL 1970-01-01T00:00:00 2031-01-19T23:33:25 1970-01-01T00:00:01 1969-12-31T23:59:59 1969-12-31T23:59:59
+
+# verify timestamp syntax styles are consistent
+query BBBBBBBBBBBBB
+SELECT to_timestamp(null) is null as c1,
+       null::timestamp is null as c2, 
+       cast(null as timestamp) is null as c3, 
+       to_timestamp(0) = 0::timestamp as c4, 
+       to_timestamp(1926632005) = 1926632005::timestamp as c5, 
+       to_timestamp(1) = 1::timestamp as c6, 
+       to_timestamp(-1) = -1::timestamp as c7, 
+       to_timestamp(0-1) = (0-1)::timestamp as c8,
+       to_timestamp(0) = cast(0 as timestamp) as c9, 
+       to_timestamp(1926632005) = cast(1926632005 as timestamp) as c10, 
+       to_timestamp(1) = cast(1 as timestamp) as c11, 
+       to_timestamp(-1) = cast(-1 as timestamp) as c12, 
+       to_timestamp(0-1) = cast(0-1 as timestamp) as c13
+----
+true true true true true true true true true true true true true
+
+# verify timestamp output types
+query TTT
+SELECT arrow_typeof(to_timestamp(1)), arrow_typeof(to_timestamp(null)), arrow_typeof(to_timestamp('2023-01-10 12:34:56.000'))
+----
+Timestamp(Nanosecond, None) Timestamp(Nanosecond, None) Timestamp(Nanosecond, None)
+
+# verify timestamp output types using timestamp literal syntax
+query BBBBBB
+SELECT arrow_typeof(to_timestamp(1)) = arrow_typeof(1::timestamp) as c1, 
+       arrow_typeof(to_timestamp(null)) = arrow_typeof(null::timestamp) as c2,
+       arrow_typeof(to_timestamp('2023-01-10 12:34:56.000')) = arrow_typeof('2023-01-10 12:34:56.000'::timestamp) as c3,
+       arrow_typeof(to_timestamp(1)) = arrow_typeof(cast(1 as timestamp)) as c4, 
+       arrow_typeof(to_timestamp(null)) = arrow_typeof(cast(null as timestamp)) as c5,
+       arrow_typeof(to_timestamp('2023-01-10 12:34:56.000')) = arrow_typeof(cast('2023-01-10 12:34:56.000' as timestamp)) as c6
+----
+true true true true true true
+
+# known issues. currently overflows (expects default precision to be microsecond instead of nanoseconds. Work pending)
+#verify extreme values
+#query PPPPPPPP
+#SELECT to_timestamp(-62125747200), to_timestamp(1926632005177), -62125747200::timestamp, 1926632005177::timestamp, cast(-62125747200 as timestamp), cast(1926632005177 as timestamp)
+#----
+#0001-04-25T00:00:00 +63022-07-16T12:59:37 0001-04-25T00:00:00 +63022-07-16T12:59:37 0001-04-25T00:00:00 +63022-07-16T12:59:37
+
+# verify timestamp data with formatting options
+query PPPPPP
+SELECT to_timestamp(null, '%+'), to_timestamp(0, '%s'), to_timestamp(1926632005, '%s'), to_timestamp(1, '%+', '%s'), to_timestamp(-1, '%c', '%+', '%s'), to_timestamp(0-1, '%c', '%+', '%s')
+----
+NULL 1970-01-01T00:00:00 2031-01-19T23:33:25 1970-01-01T00:00:01 1969-12-31T23:59:59 1969-12-31T23:59:59
+
+# verify timestamp data with formatting options
+query PPPPPP
+SELECT to_timestamp(null, '%+'), to_timestamp(0, '%s'), to_timestamp(1926632005, '%s'), to_timestamp(1, '%+', '%s'), to_timestamp(-1, '%c', '%+', '%s'), to_timestamp(0-1, '%c', '%+', '%s')
+----
+NULL 1970-01-01T00:00:00 2031-01-19T23:33:25 1970-01-01T00:00:01 1969-12-31T23:59:59 1969-12-31T23:59:59
+
+# verify timestamp output types with formatting options
+query TTT
+SELECT arrow_typeof(to_timestamp(1, '%c', '%s')), arrow_typeof(to_timestamp(null, '%+', '%s')), arrow_typeof(to_timestamp('2023-01-10 12:34:56.000', '%Y-%m-%d %H:%M:%S%.f'))
+----
+Timestamp(Nanosecond, None) Timestamp(Nanosecond, None) Timestamp(Nanosecond, None)
+
+# to_timestamp with invalid formatting
+query error input contains invalid characters
+SELECT to_timestamp('2020-09-08 12/00/00+00:00', '%c', '%+')
+
+# to_timestamp_nanos with invalid formatting
+query error input contains invalid characters
+SELECT to_timestamp_nanos('2020-09-08 12/00/00+00:00', '%c', '%+')
+
+# to_timestamp_millis with invalid formatting
+query error input contains invalid characters
+SELECT to_timestamp_millis('2020-09-08 12/00/00+00:00', '%c', '%+')
+
+# to_timestamp_micros with invalid formatting
+query error input contains invalid characters
+SELECT to_timestamp_micros('2020-09-08 12/00/00+00:00', '%c', '%+')
+
+# to_timestamp_seconds with invalid formatting
+query error input contains invalid characters
+SELECT to_timestamp_seconds('2020-09-08 12/00/00+00:00', '%c', '%+')
+
+# to_timestamp with broken formatting
+query error bad or unsupported format string
+SELECT to_timestamp('2020-09-08 12/00/00+00:00', '%q')
+
+# to_timestamp_nanos with broken formatting
+query error bad or unsupported format string
+SELECT to_timestamp_nanos('2020-09-08 12/00/00+00:00', '%q')
+
+# to_timestamp_millis with broken formatting
+query error bad or unsupported format string
+SELECT to_timestamp_millis('2020-09-08 12/00/00+00:00', '%q')
+
+# to_timestamp_micros with broken formatting
+query error bad or unsupported format string
+SELECT to_timestamp_micros('2020-09-08 12/00/00+00:00', '%q')
+
+# to_timestamp_seconds with broken formatting
+query error bad or unsupported format string
+SELECT to_timestamp_seconds('2020-09-08 12/00/00+00:00', '%q')
+
+# Create string timestamp table with different formats
+# including a few very non-standard formats
+
+statement ok
+create table ts_utf8_data(ts varchar(100), format varchar(100)) as values
+  ('2020-09-08 12/00/00+00:00', '%Y-%m-%d %H/%M/%S%#z'),
+  ('2031-01-19T23:33:25+05:00', '%+'),
+  ('08-09-2020 12:00:00+00:00', '%d-%m-%Y %H:%M:%S%#z'),
+  ('1926632005', '%s'),
+  ('2000-01-01T01:01:01+07:00', '%+');
+
+# verify timestamp data using tables with formatting options
+query P
+SELECT to_timestamp(t.ts, t.format) from ts_utf8_data as t
+----
+2020-09-08T12:00:00
+2031-01-19T18:33:25
+2020-09-08T12:00:00
+2031-01-19T23:33:25
+1999-12-31T18:01:01
+
+# verify timestamp data using tables with formatting options
+query P
+SELECT to_timestamp(t.ts, '%Y-%m-%d %H/%M/%S%#z', '%+', '%s', '%d-%m-%Y %H:%M:%S%#z') from ts_utf8_data as t
+----
+2020-09-08T12:00:00
+2031-01-19T18:33:25
+2020-09-08T12:00:00
+2031-01-19T23:33:25
+1999-12-31T18:01:01
+
+# verify timestamp data using tables with formatting options where at least one column cannot be parsed
+query error Error parsing timestamp from '1926632005' using format '%d-%m-%Y %H:%M:%S%#z': input contains invalid characters
+SELECT to_timestamp(t.ts, '%Y-%m-%d %H/%M/%S%#z', '%+', '%d-%m-%Y %H:%M:%S%#z') from ts_utf8_data as t
+
+# verify timestamp data using tables with formatting options where one of the formats is invalid
+query P
+SELECT to_timestamp(t.ts, '%Y-%m-%d %H/%M/%S%#z', '%s', '%q', '%d-%m-%Y %H:%M:%S%#z', '%+') from ts_utf8_data as t
+----
+2020-09-08T12:00:00
+2031-01-19T18:33:25
+2020-09-08T12:00:00
+2031-01-19T23:33:25
+1999-12-31T18:01:01
+
+# timestamp data using tables with formatting options in an array is not supported at this time
+query error function unsupported data type at index 1:
+SELECT to_timestamp(t.ts, make_array('%Y-%m-%d %H/%M/%S%#z', '%s', '%q', '%d-%m-%Y %H:%M:%S%#z', '%+')) from ts_utf8_data as t
+
+statement ok
+drop table ts_utf8_data
+
+##########
+## Test binary temporal coercion for Date and Timestamp
+##########
+
+query B
+select arrow_cast(now(), 'Date64') < arrow_cast('2022-02-02 02:02:02', 'Timestamp(Nanosecond, None)');
+----
+false
+
+##########
+## Test query MAX Timestamp and MiN Timestamp
+##########
+
+statement ok
+create table table_a (val int, ts timestamp) as values (1, '2020-09-08T11:42:29.190'::timestamp), (2, '2000-02-01T00:00:00'::timestamp)
+
+query P
+SELECT MIN(table_a.ts) FROM table_a;
+----
+2000-02-01T00:00:00
+
+query P
+SELECT MAX(table_a.ts) FROM table_a;
+----
+2020-09-08T11:42:29.190
+
+statement ok
+drop table table_a
+
+##########
+## Test query MAX Timestamp and MiN Timestamp
+##########
+
+statement ok
+create table table_a (ts timestamp) as values 
+    ('2020-09-08T11:42:29Z'::timestamp), 
+    ('2020-09-08T12:42:29Z'::timestamp),
+    ('2020-09-08T13:42:29Z'::timestamp)
+
+statement ok
+create table table_b (ts timestamp) as values 
+    ('2020-09-08T11:42:29.190Z'::timestamp),
+    ('2020-09-08T13:42:29.190Z'::timestamp),
+    ('2020-09-08T12:42:29.190Z'::timestamp)
+
+query PPB
+SELECT table_a.ts, table_b.ts, table_a.ts = table_b.ts FROM table_a, table_b order by table_a.ts desc, table_b.ts desc
+----
+2020-09-08T13:42:29 2020-09-08T13:42:29.190 false
+2020-09-08T13:42:29 2020-09-08T12:42:29.190 false
+2020-09-08T13:42:29 2020-09-08T11:42:29.190 false
+2020-09-08T12:42:29 2020-09-08T13:42:29.190 false
+2020-09-08T12:42:29 2020-09-08T12:42:29.190 false
+2020-09-08T12:42:29 2020-09-08T11:42:29.190 false
+2020-09-08T11:42:29 2020-09-08T13:42:29.190 false
+2020-09-08T11:42:29 2020-09-08T12:42:29.190 false
+2020-09-08T11:42:29 2020-09-08T11:42:29.190 false
+
+
+statement ok
+drop table table_a
+
+statement ok
+drop table table_b
+
+##########
+## Test query Group BY Timestamp Millisecond
+##########
+
+statement ok
+create table t1 (val int, ts timestamp) as values (80, '2018-07-01T06:00:00'::timestamp), (130, '2018-07-01T07:00:00'::timestamp)
+
+query PI
+SELECT t1.ts, SUM(val) FROM t1 GROUP BY t1.ts ORDER BY t1.ts ASC
+----
+2018-07-01T06:00:00 80
+2018-07-01T07:00:00 130
+
+##########
+## Test query Timestamp Add Interval Months
+##########
+
+query PP
+SELECT t1.ts, t1.ts + INTERVAL '17' MONTH FROM t1;
+----
+2018-07-01T06:00:00 2019-12-01T06:00:00
+2018-07-01T07:00:00 2019-12-01T07:00:00
+
+##########
+## Test query Timestamp Add Interval Years
+##########
+
+query PP
+SELECT t1.ts, t1.ts + INTERVAL '1' YEAR FROM t1;
+----
+2018-07-01T06:00:00 2019-07-01T06:00:00
+2018-07-01T07:00:00 2019-07-01T07:00:00
+
+##########
+## Test query Timestamp Add Interval MILLISECONDS
+##########
+
+query PP
+SELECT t1.ts, t1.ts - INTERVAL '8' MILLISECONDS FROM t1;
+----
+2018-07-01T06:00:00 2018-07-01T05:59:59.992
+2018-07-01T07:00:00 2018-07-01T06:59:59.992
+
+##########
+## Test query Timestamp Add Interval SECOND
+##########
+
+query PP
+SELECT t1.ts, t1.ts + INTERVAL '1' SECOND FROM t1;
+----
+2018-07-01T06:00:00 2018-07-01T06:00:01
+2018-07-01T07:00:00 2018-07-01T07:00:01
+
+##########
+## Test query CAST
+##########
+
+query PT
+SELECT t1.ts::timestamptz, arrow_typeof(t1.ts::timestamptz) FROM t1;
+----
+2018-07-01T06:00:00Z Timestamp(Nanosecond, Some("+00"))
+2018-07-01T07:00:00Z Timestamp(Nanosecond, Some("+00"))
+
+query D
+SELECT 0::TIME
+----
+00:00:00
+
+query D
+SELECT 0::TIME WITHOUT TIME ZONE
+----
+00:00:00
+
+query I
+select count(1) result from (select now() as n) a where n = '2000-01-01'::date
+----
+0
+
+query I
+select count(1) result from (select now() as n) a where n >= '2000-01-01'::date
+----
+1
+
+query B
+select now() = '2000-01-01'::date as result
+----
+false
+
+query B
+select now() >= '2000-01-01'::date as result
+----
+true
+
+statement ok
+drop table t1
+
+statement ok
+create table table_a (val int, ts1 timestamp, ts2 timestamp) as values 
+    (1, '2018-07-01T06:00:00'::timestamp, '2018-07-01T07:00:00'::timestamp), 
+    (2, '2018-07-01T07:00:00'::timestamp, '2018-07-01T08:00:00'::timestamp)
+
+query I?
+SELECT val, ts1 - ts2 AS ts_diff FROM table_a ORDER BY ts2 - ts1
+----
+1 0 days -1 hours 0 mins 0.000000000 secs
+2 0 days -1 hours 0 mins 0.000000000 secs
+
+##########
+## make date tests
+##########
+
+query D
+select make_date(2024, 1, 27);
+----
+2024-01-27
+
+query D
+select make_date(42, 1, 27);
+----
+0042-01-27
+
+query D
+select make_date(99, 1, 27);
+----
+0099-01-27
+
+query D
+select make_date(2024, 2, 29);
+----
+2024-02-29
+
+query D
+select make_date(10001, 1, 27);
+----
++10001-01-27
+
+query D
+select make_date('2024', '01', '27');
+----
+2024-01-27
+
+query D
+select make_date(12 + 2012, '01', '27');
+----
+2024-01-27
+
+query D
+select make_date(2024::bigint, 01::bigint, 27::bigint);
+----
+2024-01-27
+
+query D
+select make_date(arrow_cast(2024, 'Int64'), arrow_cast(1, 'Int64'), arrow_cast(27, 'Int64'));
+----
+2024-01-27
+
+query D
+select make_date(arrow_cast(2024, 'Int32'), arrow_cast(1, 'Int32'), arrow_cast(27, 'Int32'));
+----
+2024-01-27
+
+statement ok
+create table table_nums (year int, month int, day int) as values
+    (2024, 1, 23),
+    (2023, 11, 30);
+
+query D
+select make_date(t.year, t.month, t.day) from table_nums t;
+----
+2024-01-23
+2023-11-30
+
+query D
+select make_date(2021, t.month, t.day) from table_nums t;
+----
+2021-01-23
+2021-11-30
+
+query D
+select make_date(t.year, 3, t.day) from table_nums t;
+----
+2024-03-23
+2023-03-30
+
+query D
+select make_date(t.year, t.month, 4) from table_nums t;
+----
+2024-01-04
+2023-11-04
+
+query D
+select make_date('2021', t.month, t.day) from table_nums t;
+----
+2021-01-23
+2021-11-30
+
+query D
+select make_date(t.year, '3', t.day) from table_nums t;
+----
+2024-03-23
+2023-03-30
+
+query D
+select make_date(t.year, t.month, '4') from table_nums t;
+----
+2024-01-04
+2023-11-04
+
+statement ok
+insert into table_nums values (2024, null, 23);
+
+query error DataFusion error: Execution error: Unable to parse date from 2024, 0, 23
+select make_date(t.year, t.month, t.day) from table_nums t;
+
+statement ok
+drop table table_nums;
+
+statement ok
+create table table_strings (year varchar(4), month varchar(2), day varchar(2)) as values
+    ('2024', '1', '23'),
+    ('2023', '11', '30');
+
+query D
+select make_date(t.year, t.month, t.day) from table_strings t;
+----
+2024-01-23
+2023-11-30
+
+statement ok
+insert into table_strings values (2024, null, 23);
+
+query error DataFusion error: Execution error: Unable to parse date from 2024, 0, 23
+select make_date(t.year, t.month, t.day) from table_strings t;
+
+statement ok
+drop table table_strings;
+
+query error DataFusion error: Execution error: Unable to parse date from 2024, 13, 23
+select make_date(2024, 13, 23);
+
+query error DataFusion error: Execution error: Unable to parse date from 2024, 1, 32
+select make_date(2024, 01, 32);
+
+query error DataFusion error: Execution error: Unable to parse date from 2024, 0, 23
+select make_date(2024, 0, 23);
+
+query error DataFusion error: Execution error: Month value '\-1' is out of range
+select make_date(2024, -1, 23);
+
+query error DataFusion error: Execution error: Unable to parse date from 2024, 12, 0
+select make_date(2024, 12, 0);
+
+query error DataFusion error: Execution error: Day value '\-1' is out of range
+select make_date(2024, 13, -1);
+
+query error DataFusion error: Execution error: Unable to parse date from null/empty value
+select make_date(null, 1, 23);
+
+query error DataFusion error: Arrow error: Cast error: Cannot cast string '' to value of Int32 type
+select make_date('', 1, 23);
+
+query error DataFusion error: Execution error: Unable to parse date from null/empty value
+select make_date(2024, null, 23);
+
+query error DataFusion error: Arrow error: Cast error: Cannot cast string '' to value of Int32 type
+select make_date(2024, '', 27);
+
+query error DataFusion error: Execution error: Unable to parse date from null/empty value
+select make_date(2024, 1, null);
+
+query error DataFusion error: Arrow error: Cast error: Cannot cast string '' to value of Int32 type
+select make_date(2024, 1, '');

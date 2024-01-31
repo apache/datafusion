@@ -22,8 +22,6 @@ pub mod conditional_expressions;
 #[cfg(feature = "crypto_expressions")]
 pub mod crypto_expressions;
 pub mod datetime_expressions;
-#[cfg(feature = "encoding_expressions")]
-pub mod encoding_expressions;
 pub mod equivalence;
 pub mod execution_props;
 pub mod expressions;
@@ -48,9 +46,7 @@ pub mod utils;
 pub mod var_provider;
 pub mod window;
 
-pub use aggregate::groups_accumulator::{
-    EmitTo, GroupsAccumulator, GroupsAccumulatorAdapter,
-};
+pub use aggregate::groups_accumulator::{GroupsAccumulatorAdapter, NullState};
 pub use aggregate::AggregateExpr;
 pub use analysis::{analyze, AnalysisContext, ExprBoundaries};
 pub use equivalence::EquivalenceProperties;

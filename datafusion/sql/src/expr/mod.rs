@@ -29,10 +29,12 @@ mod value;
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use arrow_schema::DataType;
+use arrow_schema::TimeUnit;
 use datafusion_common::{
     internal_err, not_impl_err, plan_err, Column, DFSchema, DataFusionError, Result,
     ScalarValue,
 };
+use datafusion_expr::expr::AggregateFunctionDefinition;
 use datafusion_expr::expr::InList;
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::{
@@ -96,11 +98,13 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 StackEntry::Operator(op) => {
                     let right = eval_stack.pop().unwrap();
                     let left = eval_stack.pop().unwrap();
+
                     let expr = Expr::BinaryExpr(BinaryExpr::new(
                         Box::new(left),
                         op,
                         Box::new(right),
                     ));
+
                     eval_stack.push(expr);
                 }
             }
@@ -169,7 +173,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 Ok(Expr::ScalarFunction(ScalarFunction::new(
                     BuiltinScalarFunction::DatePart,
                     vec![
-                        Expr::Literal(ScalarValue::Utf8(Some(format!("{field}")))),
+                        Expr::Literal(ScalarValue::from(format!("{field}"))),
                         self.sql_expr_to_logical_expr(*expr, schema, planner_context)?,
                     ],
                 )))
@@ -224,14 +228,27 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
             SQLExpr::Cast {
                 expr, data_type, ..
-            } => Ok(Expr::Cast(Cast::new(
-                Box::new(self.sql_expr_to_logical_expr(
-                    *expr,
-                    schema,
-                    planner_context,
-                )?),
-                self.convert_data_type(&data_type)?,
-            ))),
+            } => {
+                let dt = self.convert_data_type(&data_type)?;
+                let expr =
+                    self.sql_expr_to_logical_expr(*expr, schema, planner_context)?;
+
+                // numeric constants are treated as seconds (rather as nanoseconds)
+                // to align with postgres / duckdb semantics
+                let expr = match &dt {
+                    DataType::Timestamp(TimeUnit::Nanosecond, tz)
+                        if expr.get_type(schema)? == DataType::Int64 =>
+                    {
+                        Expr::Cast(Cast::new(
+                            Box::new(expr),
+                            DataType::Timestamp(TimeUnit::Second, tz.clone()),
+                        ))
+                    }
+                    _ => expr,
+                };
+
+                Ok(Expr::Cast(Cast::new(Box::new(expr), dt)))
+            }
 
             SQLExpr::TryCast {
                 expr, data_type, ..
@@ -540,7 +557,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         } = array_agg;
 
         let order_by = if let Some(order_by) = order_by {
-            Some(self.order_by_to_sort_expr(&order_by, input_schema, planner_context)?)
+            Some(self.order_by_to_sort_expr(
+                &order_by,
+                input_schema,
+                planner_context,
+                true,
+            )?)
         } else {
             None
         };
@@ -692,7 +714,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     ) -> Result<Expr> {
         match self.sql_expr_to_logical_expr(expr, schema, planner_context)? {
             Expr::AggregateFunction(expr::AggregateFunction {
-                fun,
+                func_def: AggregateFunctionDefinition::BuiltIn(fun),
                 args,
                 distinct,
                 order_by,
@@ -724,25 +746,54 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             SQLExpr::Value(
                 Value::SingleQuotedString(s) | Value::DoubleQuotedString(s),
             ) => GetFieldAccess::NamedStructField {
-                name: ScalarValue::Utf8(Some(s)),
+                name: ScalarValue::from(s),
             },
             SQLExpr::JsonAccess {
                 left,
                 operator: JsonOperator::Colon,
                 right,
             } => {
-                let start = Box::new(self.sql_expr_to_logical_expr(
-                    *left,
-                    schema,
-                    planner_context,
-                )?);
-                let stop = Box::new(self.sql_expr_to_logical_expr(
-                    *right,
-                    schema,
-                    planner_context,
-                )?);
-
-                GetFieldAccess::ListRange { start, stop }
+                let (start, stop, stride) = if let SQLExpr::JsonAccess {
+                    left: l,
+                    operator: JsonOperator::Colon,
+                    right: r,
+                } = *left
+                {
+                    let start = Box::new(self.sql_expr_to_logical_expr(
+                        *l,
+                        schema,
+                        planner_context,
+                    )?);
+                    let stop = Box::new(self.sql_expr_to_logical_expr(
+                        *r,
+                        schema,
+                        planner_context,
+                    )?);
+                    let stride = Box::new(self.sql_expr_to_logical_expr(
+                        *right,
+                        schema,
+                        planner_context,
+                    )?);
+                    (start, stop, stride)
+                } else {
+                    let start = Box::new(self.sql_expr_to_logical_expr(
+                        *left,
+                        schema,
+                        planner_context,
+                    )?);
+                    let stop = Box::new(self.sql_expr_to_logical_expr(
+                        *right,
+                        schema,
+                        planner_context,
+                    )?);
+                    let stride = Box::new(Expr::Literal(ScalarValue::Int64(Some(1))));
+                    (start, stop, stride)
+                };
+                GetFieldAccess::ListRange {
+                    start,
+                    stop,
+                    stride,
+                }
             }
             _ => GetFieldAccess::ListIndex {
                 key: Box::new(self.sql_expr_to_logical_expr(

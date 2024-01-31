@@ -19,17 +19,40 @@
 
 # Introduction
 
-We welcome and encourage contributions of all kinds, such as:
+We welcome and encourage contributions of all kinds, from all levels, such as:
 
-1. Tickets with issue reports of feature requests
-2. Documentation improvements
-3. Code, both PR and (especially) PR Review.
+1. Tickets with issue reports or feature requests
+2. Discussions
+3. Documentation improvements
+4. Code, both PR and (especially) PR Review.
 
-In addition to submitting new PRs, we have a healthy tradition of community members reviewing each other's PRs. Doing so is a great way to help the community as well as get more familiar with Rust and the relevant codebases.
+In addition to submitting new PRs, we have a healthy tradition of community
+members reviewing each other's PRs. Doing so is a great way to help the
+community as well as get more familiar with Rust and the relevant codebases.
 
-You can find a curated
-[good-first-issue](https://github.com/apache/arrow-datafusion/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22)
-list to help you get started.
+## Finding and Creating Issues to Work On
+
+You can find a curated [good-first-issue] list to help you get started.
+
+DataFusion is an open contribution project, and thus there is no particular
+project imposed deadline for completing any issue or any restriction on who can
+work on an issue, nor how many people can work on an issue at the same time.
+
+Contributors drive the project forward based on their own priorities and
+interests and thus you are free to work on any issue that interests you.
+
+If someone is already working on an issue that you want or need but hasn't
+been able to finish it yet, you should feel free to work on it as well. In
+general it is both polite and will help avoid unnecessary duplication of work if
+you leave a note on an issue when you start working on it.
+
+If you plan to work on a new feature that doesn't have an existing ticket, it is
+a good idea to open a ticket to discuss the feature. Advanced discussion often
+helps avoid wasted effort by determining early if the feature is a good fit for
+DataFusion before too much time is invested. It also often helps to discuss your
+ideas with the community to get feedback on implementation.
+
+[good-first-issue]: https://github.com/apache/arrow-datafusion/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22
 
 # Developer's guide
 
@@ -95,9 +118,16 @@ Compiling DataFusion from sources requires an installed version of the protobuf 
 On most platforms this can be installed from your system's package manager
 
 ```
-$ apt install -y protobuf-compiler
+# Ubuntu
+$ sudo apt install -y protobuf-compiler
+
+# Fedora
 $ dnf install -y protobuf-devel
+
+# Arch Linux
 $ pacman -S protobuf
+
+# macOS
 $ brew install protobuf
 ```
 
@@ -151,7 +181,7 @@ Tests for code in an individual module are defined in the same source file with 
 
 ### sqllogictests Tests
 
-DataFusion's SQL implementation is tested using [sqllogictest](https://github.com/apache/arrow-datafusion/tree/main/datafusion/core/tests/sqllogictests) which are run like any other Rust test using `cargo test --test sqllogictests`.
+DataFusion's SQL implementation is tested using [sqllogictest](https://github.com/apache/arrow-datafusion/tree/main/datafusion/sqllogictest) which are run like any other Rust test using `cargo test --test sqllogictests`.
 
 `sqllogictests` tests may be less convenient for new contributors who are familiar with writing `.rs` tests as they require learning another tool. However, `sqllogictest` based tests are much easier to develop and maintain as they 1) do not require a slow recompile/link cycle and 2) can be automatically updated via `cargo test --test sqllogictests -- --complete`.
 
@@ -243,8 +273,8 @@ Below is a checklist of what you need to do to add a new aggregate function to D
   - a new line in `signature` with the signature of the function (number and types of its arguments)
   - a new line in `create_aggregate_expr` mapping the built-in to the implementation
   - tests to the function.
-- In [core/tests/sqllogictests/test_files](../../../datafusion/core/tests/sqllogictests/test_files), add new `sqllogictest` integration tests where the function is called through SQL against well known data and returns the expected result.
-  - Documentation for `sqllogictest` [here](../../../datafusion/core/tests/sqllogictests/README.md)
+- In [sqllogictest/test_files](../../../datafusion/sqllogictest/test_files), add new `sqllogictest` integration tests where the function is called through SQL against well known data and returns the expected result.
+  - Documentation for `sqllogictest` [here](../../../datafusion/sqllogictest/README.md)
 - Add SQL reference documentation [here](../../../docs/source/user-guide/sql/aggregate_functions.md)
 
 ### How to display plans graphically

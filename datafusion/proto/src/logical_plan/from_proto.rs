@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::sync::Arc;
+
 use crate::protobuf::{
     self,
     plan_type::PlanTypeEnum::{
@@ -26,7 +28,9 @@ use crate::protobuf::{
     AnalyzedLogicalPlanType, CubeNode, GroupingSetNode, OptimizedLogicalPlanType,
     OptimizedPhysicalPlanType, PlaceholderNode, RollupNode,
 };
+
 use arrow::{
+    array::AsArray,
     buffer::Buffer,
     datatypes::{
         i256, DataType, Field, IntervalMonthDayNanoType, IntervalUnit, Schema, TimeUnit,
@@ -36,40 +40,41 @@ use arrow::{
 };
 use datafusion::execution::registry::FunctionRegistry;
 use datafusion_common::{
-    internal_err, plan_datafusion_err, Column, Constraint, Constraints, DFField,
-    DFSchema, DFSchemaRef, DataFusionError, OwnedTableReference, Result, ScalarValue,
+    arrow_datafusion_err, internal_err, plan_datafusion_err, Column, Constraint,
+    Constraints, DFField, DFSchema, DFSchemaRef, DataFusionError, OwnedTableReference,
+    Result, ScalarValue,
 };
+use datafusion_expr::window_frame::{check_window_frame, regularize_window_order_by};
 use datafusion_expr::{
-    abs, acos, acosh, array, array_append, array_concat, array_dims, array_element,
-    array_except, array_has, array_has_all, array_has_any, array_intersect, array_length,
-    array_ndims, array_position, array_positions, array_prepend, array_remove,
-    array_remove_all, array_remove_n, array_repeat, array_replace, array_replace_all,
-    array_replace_n, array_slice, array_to_string, arrow_typeof, ascii, asin, asinh,
-    atan, atan2, atanh, bit_length, btrim, cardinality, cbrt, ceil, character_length,
-    chr, coalesce, concat_expr, concat_ws_expr, cos, cosh, cot, current_date,
-    current_time, date_bin, date_part, date_trunc, decode, degrees, digest, encode, exp,
+    abs, acos, acosh, array, array_append, array_concat, array_dims, array_distinct,
+    array_element, array_empty, array_except, array_has, array_has_all, array_has_any,
+    array_intersect, array_length, array_ndims, array_pop_back, array_pop_front,
+    array_position, array_positions, array_prepend, array_remove, array_remove_all,
+    array_remove_n, array_repeat, array_replace, array_replace_all, array_replace_n,
+    array_resize, array_slice, array_sort, array_to_string, array_union, arrow_typeof,
+    ascii, asin, asinh, atan, atan2, atanh, bit_length, btrim, cardinality, cbrt, ceil,
+    character_length, chr, coalesce, concat_expr, concat_ws_expr, cos, cosh, cot,
+    current_date, current_time, date_bin, date_part, date_trunc, degrees, digest,
+    ends_with, exp,
     expr::{self, InList, Sort, WindowFunction},
-    factorial, flatten, floor, from_unixtime, gcd, gen_range, isnan, iszero, lcm, left,
-    levenshtein, ln, log, log10, log2,
+    factorial, find_in_set, flatten, floor, from_unixtime, gcd, gen_range, initcap,
+    instr, isnan, iszero, lcm, left, levenshtein, ln, log, log10, log2,
     logical_plan::{PlanType, StringifiedPlan},
     lower, lpad, ltrim, md5, nanvl, now, nullif, octet_length, overlay, pi, power,
     radians, random, regexp_match, regexp_replace, repeat, replace, reverse, right,
     round, rpad, rtrim, sha224, sha256, sha384, sha512, signum, sin, sinh, split_part,
-    sqrt, starts_with, string_to_array, strpos, struct_fun, substr, substring, tan, tanh,
-    to_hex, to_timestamp_micros, to_timestamp_millis, to_timestamp_nanos,
-    to_timestamp_seconds, translate, trim, trunc, upper, uuid,
-    window_frame::regularize,
-    AggregateFunction, Between, BinaryExpr, BuiltInWindowFunction, BuiltinScalarFunction,
-    Case, Cast, Expr, GetFieldAccess, GetIndexedField, GroupingSet,
+    sqrt, starts_with, string_to_array, strpos, struct_fun, substr, substr_index,
+    substring, tan, tanh, to_hex, translate, trim, trunc, upper, uuid, AggregateFunction,
+    Between, BinaryExpr, BuiltInWindowFunction, BuiltinScalarFunction, Case, Cast, Expr,
+    GetFieldAccess, GetIndexedField, GroupingSet,
     GroupingSet::GroupingSets,
     JoinConstraint, JoinType, Like, Operator, TryCast, WindowFrame, WindowFrameBound,
     WindowFrameUnits,
 };
 use datafusion_expr::{
-    array_empty, array_pop_back, array_pop_front,
+    array_reverse,
     expr::{Alias, Placeholder},
 };
-use std::sync::Arc;
 
 #[derive(Debug)]
 pub enum Error {
@@ -376,8 +381,20 @@ impl TryFrom<&protobuf::Field> for Field {
     type Error = Error;
     fn try_from(field: &protobuf::Field) -> Result<Self, Self::Error> {
         let datatype = field.arrow_type.as_deref().required("arrow_type")?;
-        Ok(Self::new(field.name.as_str(), datatype, field.nullable)
-            .with_metadata(field.metadata.clone()))
+        let field = if field.dict_id != 0 {
+            Self::new_dict(
+                field.name.as_str(),
+                datatype,
+                field.nullable,
+                field.dict_id,
+                field.dict_ordered,
+            )
+            .with_metadata(field.metadata.clone())
+        } else {
+            Self::new(field.name.as_str(), datatype, field.nullable)
+                .with_metadata(field.metadata.clone())
+        };
+        Ok(field)
     }
 }
 
@@ -461,8 +478,8 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::Trim => Self::Trim,
             ScalarFunction::Ltrim => Self::Ltrim,
             ScalarFunction::Rtrim => Self::Rtrim,
-            ScalarFunction::ToTimestamp => Self::ToTimestamp,
             ScalarFunction::ArrayAppend => Self::ArrayAppend,
+            ScalarFunction::ArraySort => Self::ArraySort,
             ScalarFunction::ArrayConcat => Self::ArrayConcat,
             ScalarFunction::ArrayEmpty => Self::ArrayEmpty,
             ScalarFunction::ArrayExcept => Self::ArrayExcept,
@@ -470,6 +487,7 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::ArrayHasAny => Self::ArrayHasAny,
             ScalarFunction::ArrayHas => Self::ArrayHas,
             ScalarFunction::ArrayDims => Self::ArrayDims,
+            ScalarFunction::ArrayDistinct => Self::ArrayDistinct,
             ScalarFunction::ArrayElement => Self::ArrayElement,
             ScalarFunction::Flatten => Self::Flatten,
             ScalarFunction::ArrayLength => Self::ArrayLength,
@@ -486,10 +504,12 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::ArrayReplace => Self::ArrayReplace,
             ScalarFunction::ArrayReplaceN => Self::ArrayReplaceN,
             ScalarFunction::ArrayReplaceAll => Self::ArrayReplaceAll,
+            ScalarFunction::ArrayReverse => Self::ArrayReverse,
             ScalarFunction::ArraySlice => Self::ArraySlice,
             ScalarFunction::ArrayToString => Self::ArrayToString,
             ScalarFunction::ArrayIntersect => Self::ArrayIntersect,
             ScalarFunction::ArrayUnion => Self::ArrayUnion,
+            ScalarFunction::ArrayResize => Self::ArrayResize,
             ScalarFunction::Range => Self::Range,
             ScalarFunction::Cardinality => Self::Cardinality,
             ScalarFunction::Array => Self::MakeArray,
@@ -503,9 +523,6 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::Sha384 => Self::SHA384,
             ScalarFunction::Sha512 => Self::SHA512,
             ScalarFunction::Digest => Self::Digest,
-            ScalarFunction::Encode => Self::Encode,
-            ScalarFunction::Decode => Self::Decode,
-            ScalarFunction::ToTimestampMillis => Self::ToTimestampMillis,
             ScalarFunction::Log2 => Self::Log2,
             ScalarFunction::Signum => Self::Signum,
             ScalarFunction::Ascii => Self::Ascii,
@@ -514,7 +531,9 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::CharacterLength => Self::CharacterLength,
             ScalarFunction::Chr => Self::Chr,
             ScalarFunction::ConcatWithSeparator => Self::ConcatWithSeparator,
+            ScalarFunction::EndsWith => Self::EndsWith,
             ScalarFunction::InitCap => Self::InitCap,
+            ScalarFunction::InStr => Self::InStr,
             ScalarFunction::Left => Self::Left,
             ScalarFunction::Lpad => Self::Lpad,
             ScalarFunction::Random => Self::Random,
@@ -530,12 +549,15 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::Strpos => Self::Strpos,
             ScalarFunction::Substr => Self::Substr,
             ScalarFunction::ToHex => Self::ToHex,
+            ScalarFunction::ToTimestamp => Self::ToTimestamp,
+            ScalarFunction::ToTimestampMillis => Self::ToTimestampMillis,
             ScalarFunction::ToTimestampMicros => Self::ToTimestampMicros,
             ScalarFunction::ToTimestampNanos => Self::ToTimestampNanos,
             ScalarFunction::ToTimestampSeconds => Self::ToTimestampSeconds,
             ScalarFunction::Now => Self::Now,
             ScalarFunction::CurrentDate => Self::CurrentDate,
             ScalarFunction::CurrentTime => Self::CurrentTime,
+            ScalarFunction::MakeDate => Self::MakeDate,
             ScalarFunction::Uuid => Self::Uuid,
             ScalarFunction::Translate => Self::Translate,
             ScalarFunction::RegexpMatch => Self::RegexpMatch,
@@ -551,6 +573,8 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::ArrowTypeof => Self::ArrowTypeof,
             ScalarFunction::OverLay => Self::OverLay,
             ScalarFunction::Levenshtein => Self::Levenshtein,
+            ScalarFunction::SubstrIndex => Self::SubstrIndex,
+            ScalarFunction::FindInSet => Self::FindInSet,
         }
     }
 }
@@ -597,6 +621,7 @@ impl From<protobuf::AggregateFunction> for AggregateFunction {
             protobuf::AggregateFunction::Median => Self::Median,
             protobuf::AggregateFunction::FirstValueAgg => Self::FirstValue,
             protobuf::AggregateFunction::LastValueAgg => Self::LastValue,
+            protobuf::AggregateFunction::NthValueAgg => Self::NthValue,
             protobuf::AggregateFunction::StringAgg => Self::StringAgg,
         }
     }
@@ -660,7 +685,9 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
             Value::Float64Value(v) => Self::Float64(Some(*v)),
             Value::Date32Value(v) => Self::Date32(Some(*v)),
             // ScalarValue::List is serialized using arrow IPC format
-            Value::ListValue(scalar_list) | Value::FixedSizeListValue(scalar_list) => {
+            Value::ListValue(scalar_list)
+            | Value::FixedSizeListValue(scalar_list)
+            | Value::LargeListValue(scalar_list) => {
                 let protobuf::ScalarListValue {
                     ipc_message,
                     arrow_data,
@@ -698,12 +725,19 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
                     None,
                     &message.version(),
                 )
-                .map_err(DataFusionError::ArrowError)
+                .map_err(|e| arrow_datafusion_err!(e))
                 .map_err(|e| e.context("Decoding ScalarValue::List Value"))?;
                 let arr = record_batch.column(0);
                 match value {
-                    Value::ListValue(_) => Self::List(arr.to_owned()),
-                    Value::FixedSizeListValue(_) => Self::FixedSizeList(arr.to_owned()),
+                    Value::ListValue(_) => {
+                        Self::List(arr.as_list::<i32>().to_owned().into())
+                    }
+                    Value::LargeListValue(_) => {
+                        Self::LargeList(arr.as_list::<i64>().to_owned().into())
+                    }
+                    Value::FixedSizeListValue(_) => {
+                        Self::FixedSizeList(arr.as_fixed_size_list().to_owned().into())
+                    }
                     _ => unreachable!(),
                 }
             }
@@ -850,11 +884,7 @@ impl TryFrom<protobuf::WindowFrame> for WindowFrame {
             })
             .transpose()?
             .unwrap_or(WindowFrameBound::CurrentRow);
-        Ok(Self {
-            units,
-            start_bound,
-            end_bound,
-        })
+        Ok(WindowFrame::new_bounds(units, start_bound, end_bound))
     }
 }
 
@@ -1040,6 +1070,11 @@ pub fn parse_expr(
                             registry,
                             "stop",
                         )?),
+                        stride: Box::new(parse_required_expr(
+                            list_range.stride.as_deref(),
+                            registry,
+                            "stride",
+                        )?),
                     }
                 }
                 None => return Err(proto_error("Field must not be None")),
@@ -1065,7 +1100,7 @@ pub fn parse_expr(
                 .iter()
                 .map(|e| parse_expr(e, registry))
                 .collect::<Result<Vec<_>, _>>()?;
-            let order_by = expr
+            let mut order_by = expr
                 .order_by
                 .iter()
                 .map(|e| parse_expr(e, registry))
@@ -1075,7 +1110,8 @@ pub fn parse_expr(
                 .as_ref()
                 .map::<Result<WindowFrame, _>, _>(|window_frame| {
                     let window_frame = window_frame.clone().try_into()?;
-                    regularize(window_frame, order_by.len())
+                    check_window_frame(&window_frame, order_by.len())
+                        .map(|_| window_frame)
                 })
                 .transpose()?
                 .ok_or_else(|| {
@@ -1083,13 +1119,14 @@ pub fn parse_expr(
                         "missing window frame during deserialization".to_string(),
                     )
                 })?;
+            regularize_window_order_by(&window_frame, &mut order_by)?;
 
             match window_function {
                 window_expr_node::WindowFunction::AggrFunction(i) => {
                     let aggr_function = parse_i32_to_aggregate_function(i)?;
 
                     Ok(Expr::WindowFunction(WindowFunction::new(
-                        datafusion_expr::window_function::WindowFunction::AggregateFunction(
+                        datafusion_expr::expr::WindowFunctionDefinition::AggregateFunction(
                             aggr_function,
                         ),
                         vec![parse_required_expr(expr.expr.as_deref(), registry, "expr")?],
@@ -1108,7 +1145,7 @@ pub fn parse_expr(
                         .unwrap_or_else(Vec::new);
 
                     Ok(Expr::WindowFunction(WindowFunction::new(
-                        datafusion_expr::window_function::WindowFunction::BuiltInWindowFunction(
+                        datafusion_expr::expr::WindowFunctionDefinition::BuiltInWindowFunction(
                             built_in_function,
                         ),
                         args,
@@ -1123,7 +1160,7 @@ pub fn parse_expr(
                         .map(|e| vec![e])
                         .unwrap_or_else(Vec::new);
                     Ok(Expr::WindowFunction(WindowFunction::new(
-                        datafusion_expr::window_function::WindowFunction::AggregateUDF(
+                        datafusion_expr::expr::WindowFunctionDefinition::AggregateUDF(
                             udaf_function,
                         ),
                         args,
@@ -1138,7 +1175,7 @@ pub fn parse_expr(
                         .map(|e| vec![e])
                         .unwrap_or_else(Vec::new);
                     Ok(Expr::WindowFunction(WindowFunction::new(
-                        datafusion_expr::window_function::WindowFunction::WindowUDF(
+                        datafusion_expr::expr::WindowFunctionDefinition::WindowUDF(
                             udwf_function,
                         ),
                         args,
@@ -1316,7 +1353,11 @@ pub fn parse_expr(
             in_list.negated,
         ))),
         ExprType::Wildcard(protobuf::Wildcard { qualifier }) => Ok(Expr::Wildcard {
-            qualifier: qualifier.clone(),
+            qualifier: if qualifier.is_empty() {
+                None
+            } else {
+                Some(qualifier.clone())
+            },
         }),
         ExprType::ScalarFunction(expr) => {
             let scalar_function = protobuf::ScalarFunction::try_from(expr.fun)
@@ -1337,6 +1378,11 @@ pub fn parse_expr(
                 ScalarFunction::ArrayAppend => Ok(array_append(
                     parse_expr(&args[0], registry)?,
                     parse_expr(&args[1], registry)?,
+                )),
+                ScalarFunction::ArraySort => Ok(array_sort(
+                    parse_expr(&args[0], registry)?,
+                    parse_expr(&args[1], registry)?,
+                    parse_expr(&args[2], registry)?,
                 )),
                 ScalarFunction::ArrayPopFront => {
                     Ok(array_pop_front(parse_expr(&args[0], registry)?))
@@ -1416,10 +1462,14 @@ pub fn parse_expr(
                     parse_expr(&args[1], registry)?,
                     parse_expr(&args[2], registry)?,
                 )),
+                ScalarFunction::ArrayReverse => {
+                    Ok(array_reverse(parse_expr(&args[0], registry)?))
+                }
                 ScalarFunction::ArraySlice => Ok(array_slice(
                     parse_expr(&args[0], registry)?,
                     parse_expr(&args[1], registry)?,
                     parse_expr(&args[2], registry)?,
+                    parse_expr(&args[3], registry)?,
                 )),
                 ScalarFunction::ArrayToString => Ok(array_to_string(
                     parse_expr(&args[0], registry)?,
@@ -1441,6 +1491,9 @@ pub fn parse_expr(
                 ScalarFunction::ArrayDims => {
                     Ok(array_dims(parse_expr(&args[0], registry)?))
                 }
+                ScalarFunction::ArrayDistinct => {
+                    Ok(array_distinct(parse_expr(&args[0], registry)?))
+                }
                 ScalarFunction::ArrayElement => Ok(array_element(
                     parse_expr(&args[0], registry)?,
                     parse_expr(&args[1], registry)?,
@@ -1451,11 +1504,14 @@ pub fn parse_expr(
                 ScalarFunction::ArrayNdims => {
                     Ok(array_ndims(parse_expr(&args[0], registry)?))
                 }
-                ScalarFunction::ArrayUnion => Ok(array(
-                    args.to_owned()
-                        .iter()
-                        .map(|expr| parse_expr(expr, registry))
-                        .collect::<Result<Vec<_>, _>>()?,
+                ScalarFunction::ArrayUnion => Ok(array_union(
+                    parse_expr(&args[0], registry)?,
+                    parse_expr(&args[1], registry)?,
+                )),
+                ScalarFunction::ArrayResize => Ok(array_resize(
+                    parse_expr(&args[0], registry)?,
+                    parse_expr(&args[1], registry)?,
+                    parse_expr(&args[2], registry)?,
                 )),
                 ScalarFunction::Sqrt => Ok(sqrt(parse_expr(&args[0], registry)?)),
                 ScalarFunction::Cbrt => Ok(cbrt(parse_expr(&args[0], registry)?)),
@@ -1518,14 +1574,6 @@ pub fn parse_expr(
                 ScalarFunction::Sha384 => Ok(sha384(parse_expr(&args[0], registry)?)),
                 ScalarFunction::Sha512 => Ok(sha512(parse_expr(&args[0], registry)?)),
                 ScalarFunction::Md5 => Ok(md5(parse_expr(&args[0], registry)?)),
-                ScalarFunction::Encode => Ok(encode(
-                    parse_expr(&args[0], registry)?,
-                    parse_expr(&args[1], registry)?,
-                )),
-                ScalarFunction::Decode => Ok(decode(
-                    parse_expr(&args[0], registry)?,
-                    parse_expr(&args[1], registry)?,
-                )),
                 ScalarFunction::NullIf => Ok(nullif(
                     parse_expr(&args[0], registry)?,
                     parse_expr(&args[1], registry)?,
@@ -1542,7 +1590,11 @@ pub fn parse_expr(
                     Ok(character_length(parse_expr(&args[0], registry)?))
                 }
                 ScalarFunction::Chr => Ok(chr(parse_expr(&args[0], registry)?)),
-                ScalarFunction::InitCap => Ok(ascii(parse_expr(&args[0], registry)?)),
+                ScalarFunction::InitCap => Ok(initcap(parse_expr(&args[0], registry)?)),
+                ScalarFunction::InStr => Ok(instr(
+                    parse_expr(&args[0], registry)?,
+                    parse_expr(&args[1], registry)?,
+                )),
                 ScalarFunction::Gcd => Ok(gcd(
                     parse_expr(&args[0], registry)?,
                     parse_expr(&args[1], registry)?,
@@ -1622,6 +1674,10 @@ pub fn parse_expr(
                     parse_expr(&args[0], registry)?,
                     parse_expr(&args[1], registry)?,
                 )),
+                ScalarFunction::EndsWith => Ok(ends_with(
+                    parse_expr(&args[0], registry)?,
+                    parse_expr(&args[1], registry)?,
+                )),
                 ScalarFunction::Strpos => Ok(strpos(
                     parse_expr(&args[0], registry)?,
                     parse_expr(&args[1], registry)?,
@@ -1646,17 +1702,65 @@ pub fn parse_expr(
                     parse_expr(&args[1], registry)?,
                 )),
                 ScalarFunction::ToHex => Ok(to_hex(parse_expr(&args[0], registry)?)),
+                ScalarFunction::MakeDate => {
+                    let args: Vec<_> = args
+                        .iter()
+                        .map(|expr| parse_expr(expr, registry))
+                        .collect::<std::result::Result<_, _>>()?;
+                    Ok(Expr::ScalarFunction(expr::ScalarFunction::new(
+                        BuiltinScalarFunction::MakeDate,
+                        args,
+                    )))
+                }
+                ScalarFunction::ToTimestamp => {
+                    let args: Vec<_> = args
+                        .iter()
+                        .map(|expr| parse_expr(expr, registry))
+                        .collect::<std::result::Result<_, _>>()?;
+                    Ok(Expr::ScalarFunction(expr::ScalarFunction::new(
+                        BuiltinScalarFunction::ToTimestamp,
+                        args,
+                    )))
+                }
                 ScalarFunction::ToTimestampMillis => {
-                    Ok(to_timestamp_millis(parse_expr(&args[0], registry)?))
+                    let args: Vec<_> = args
+                        .iter()
+                        .map(|expr| parse_expr(expr, registry))
+                        .collect::<Result<_, _>>()?;
+                    Ok(Expr::ScalarFunction(expr::ScalarFunction::new(
+                        BuiltinScalarFunction::ToTimestampMillis,
+                        args,
+                    )))
                 }
                 ScalarFunction::ToTimestampMicros => {
-                    Ok(to_timestamp_micros(parse_expr(&args[0], registry)?))
+                    let args: Vec<_> = args
+                        .iter()
+                        .map(|expr| parse_expr(expr, registry))
+                        .collect::<std::result::Result<_, _>>()?;
+                    Ok(Expr::ScalarFunction(expr::ScalarFunction::new(
+                        BuiltinScalarFunction::ToTimestampMicros,
+                        args,
+                    )))
                 }
                 ScalarFunction::ToTimestampNanos => {
-                    Ok(to_timestamp_nanos(parse_expr(&args[0], registry)?))
+                    let args: Vec<_> = args
+                        .iter()
+                        .map(|expr| parse_expr(expr, registry))
+                        .collect::<Result<_, _>>()?;
+                    Ok(Expr::ScalarFunction(expr::ScalarFunction::new(
+                        BuiltinScalarFunction::ToTimestampNanos,
+                        args,
+                    )))
                 }
                 ScalarFunction::ToTimestampSeconds => {
-                    Ok(to_timestamp_seconds(parse_expr(&args[0], registry)?))
+                    let args: Vec<_> = args
+                        .iter()
+                        .map(|expr| parse_expr(expr, registry))
+                        .collect::<std::result::Result<_, _>>()?;
+                    Ok(Expr::ScalarFunction(expr::ScalarFunction::new(
+                        BuiltinScalarFunction::ToTimestampSeconds,
+                        args,
+                    )))
                 }
                 ScalarFunction::Now => Ok(now()),
                 ScalarFunction::Translate => Ok(translate(
@@ -1698,9 +1802,6 @@ pub fn parse_expr(
                 ScalarFunction::ArrowTypeof => {
                     Ok(arrow_typeof(parse_expr(&args[0], registry)?))
                 }
-                ScalarFunction::ToTimestamp => {
-                    Ok(to_timestamp_seconds(parse_expr(&args[0], registry)?))
-                }
                 ScalarFunction::Flatten => Ok(flatten(parse_expr(&args[0], registry)?)),
                 ScalarFunction::StringToArray => Ok(string_to_array(
                     parse_expr(&args[0], registry)?,
@@ -1713,6 +1814,15 @@ pub fn parse_expr(
                         .map(|expr| parse_expr(expr, registry))
                         .collect::<Result<Vec<_>, _>>()?,
                 )),
+                ScalarFunction::SubstrIndex => Ok(substr_index(
+                    parse_expr(&args[0], registry)?,
+                    parse_expr(&args[1], registry)?,
+                    parse_expr(&args[2], registry)?,
+                )),
+                ScalarFunction::FindInSet => Ok(find_in_set(
+                    parse_expr(&args[0], registry)?,
+                    parse_expr(&args[1], registry)?,
+                )),
                 ScalarFunction::StructFun => {
                     Ok(struct_fun(parse_expr(&args[0], registry)?))
                 }
@@ -1720,7 +1830,7 @@ pub fn parse_expr(
         }
         ExprType::ScalarUdfExpr(protobuf::ScalarUdfExprNode { fun_name, args }) => {
             let scalar_fn = registry.udf(fun_name.as_str())?;
-            Ok(Expr::ScalarUDF(expr::ScalarUDF::new(
+            Ok(Expr::ScalarFunction(expr::ScalarFunction::new_udf(
                 scalar_fn,
                 args.iter()
                     .map(|expr| parse_expr(expr, registry))
@@ -1730,12 +1840,13 @@ pub fn parse_expr(
         ExprType::AggregateUdfExpr(pb) => {
             let agg_fn = registry.udaf(pb.fun_name.as_str())?;
 
-            Ok(Expr::AggregateUDF(expr::AggregateUDF::new(
+            Ok(Expr::AggregateFunction(expr::AggregateFunction::new_udf(
                 agg_fn,
                 pb.args
                     .iter()
                     .map(|expr| parse_expr(expr, registry))
                     .collect::<Result<Vec<_>, Error>>()?,
+                false,
                 parse_optional_expr(pb.filter.as_deref(), registry)?.map(Box::new),
                 parse_vec_expr(&pb.order_by, registry)?,
             )))

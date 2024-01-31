@@ -613,7 +613,9 @@ nullif(expression1, expression2)
 - [concat](#concat)
 - [concat_ws](#concat_ws)
 - [chr](#chr)
+- [ends_with](#ends_with)
 - [initcap](#initcap)
+- [instr](#instr)
 - [left](#left)
 - [length](#length)
 - [lower](#lower)
@@ -637,6 +639,8 @@ nullif(expression1, expression2)
 - [uuid](#uuid)
 - [overlay](#overlay)
 - [levenshtein](#levenshtein)
+- [substr_index](#substr_index)
+- [find_in_set](#find_in_set)
 
 ### `ascii`
 
@@ -754,6 +758,20 @@ chr(expression)
 **Related functions**:
 [ascii](#ascii)
 
+### `ends_with`
+
+Tests if a string ends with a substring.
+
+```
+ends_with(str, substr)
+```
+
+#### Arguments
+
+- **str**: String expression to test.
+  Can be a constant, column, or function, and any combination of string operators.
+- **substr**: Substring to test for.
+
 ### `initcap`
 
 Capitalizes the first character in each word in the input string.
@@ -771,6 +789,22 @@ initcap(str)
 **Related functions**:
 [lower](#lower),
 [upper](#upper)
+
+### `instr`
+
+Returns the location where substr first appeared in str (counting from 1).
+If substr does not appear in str, return 0.
+
+```
+instr(str, substr)
+```
+
+#### Arguments
+
+- **str**: String expression to operate on.
+  Can be a constant, column, or function, and any combination of string operators.
+- **substr**: Substring expression to search for.
+  Can be a constant, column, or function, and any combination of string operators.
 
 ### `left`
 
@@ -1152,6 +1186,37 @@ levenshtein(str1, str2)
 - **str1**: String expression to compute Levenshtein distance with str2.
 - **str2**: String expression to compute Levenshtein distance with str1.
 
+### `substr_index`
+
+Returns the substring from str before count occurrences of the delimiter delim.
+If count is positive, everything to the left of the final delimiter (counting from the left) is returned.
+If count is negative, everything to the right of the final delimiter (counting from the right) is returned.
+For example, `substr_index('www.apache.org', '.', 1) = www`, `substr_index('www.apache.org', '.', -1) = org`
+
+```
+substr_index(str, delim, count)
+```
+
+#### Arguments
+
+- **str**: String expression to operate on.
+- **delim**: the string to find in str to split str.
+- **count**: The number of times to search for the delimiter. Can be both a positive or negative number.
+
+### `find_in_set`
+
+Returns a value in the range of 1 to N if the string str is in the string list strlist consisting of N substrings.
+For example, `find_in_set('b', 'a,b,c,d') = 2`
+
+```
+find_in_set(str, strlist)
+```
+
+#### Arguments
+
+- **str**: String expression to find in strlist.
+- **strlist**: A string list is a string composed of substrings separated by , characters.
+
 ## Binary String Functions
 
 - [decode](#decode)
@@ -1246,6 +1311,8 @@ regexp_replace(str, regexp, replacement, flags)
 - [date_part](#date_part)
 - [datepart](#datepart)
 - [extract](#extract)
+- [today](#today)
+- [make_date](#make_date)
 - [to_timestamp](#to_timestamp)
 - [to_timestamp_millis](#to_timestamp_millis)
 - [to_timestamp_micros](#to_timestamp_micros)
@@ -1274,6 +1341,14 @@ no matter when in the query plan the function executes.
 ```
 current_date()
 ```
+
+#### Aliases
+
+- today
+
+### `today`
+
+_Alias of [current_date](#current_date)._
 
 ### `current_time`
 
@@ -1305,7 +1380,8 @@ date_bin(interval, expression, origin-timestamp)
 - **interval**: Bin interval.
 - **expression**: Time expression to operate on.
   Can be a constant, column, or function.
-- **timestamp**: Starting point used to determine bin boundaries.
+- **origin-timestamp**: Optional. Starting point used to determine bin boundaries. If not specified
+  defaults `1970-01-01T00:00:00Z` (the UNIX epoch in UTC).
 
 The following intervals are supported:
 
@@ -1368,6 +1444,7 @@ date_part(part, expression)
   The following date parts are supported:
 
   - year
+  - quarter _(emits value in inclusive range [1, 4] based on which quartile of the year the date is in)_
   - month
   - week _(week of the year)_
   - day _(day of the month)_
@@ -1379,6 +1456,7 @@ date_part(part, expression)
   - nanosecond
   - dow _(day of the week)_
   - doy _(day of the year)_
+  - epoch _(seconds since Unix epoch)_
 
 - **expression**: Time expression to operate on.
   Can be a constant, column, or function.
@@ -1406,6 +1484,7 @@ extract(field FROM source)
   The following date fields are supported:
 
   - year
+  - quarter _(emits value in inclusive range [1, 4] based on which quartile of the year the date is in)_
   - month
   - week _(week of the year)_
   - day _(day of the month)_
@@ -1417,89 +1496,259 @@ extract(field FROM source)
   - nanosecond
   - dow _(day of the week)_
   - doy _(day of the year)_
+  - epoch _(seconds since Unix epoch)_
 
 - **source**: Source time expression to operate on.
   Can be a constant, column, or function.
 
+### `make_date`
+
+Make a date from year/month/day component parts.
+
+```
+make_date(year, month, day)
+```
+
+#### Arguments
+
+- **year**: Year to use when making the date.
+  Can be a constant, column or function, and any combination of arithmetic operators.
+- **month**: Month to use when making the date.
+  Can be a constant, column or function, and any combination of arithmetic operators.
+- **day**: Day to use when making the date.
+  Can be a constant, column or function, and any combination of arithmetic operators.
+
+#### Example
+
+```
+❯ select make_date(2023, 1, 31);
++-------------------------------------------+
+| make_date(Int64(2023),Int64(1),Int64(31)) |
++-------------------------------------------+
+| 2023-01-31                                |
++-------------------------------------------+
+❯ select make_date('2023', '01', '31');
++-----------------------------------------------+
+| make_date(Utf8("2023"),Utf8("01"),Utf8("31")) |
++-----------------------------------------------+
+| 2023-01-31                                    |
++-----------------------------------------------+
+```
+
+Additional examples can be found [here]
+
+[here]: https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/make_date.rs
+
 ### `to_timestamp`
 
 Converts a value to a timestamp (`YYYY-MM-DDT00:00:00Z`).
-Supports strings, integer, and unsigned integer types as input.
-Strings are parsed as RFC3339 (e.g. '2023-07-20T05:44:00')
-Integers and unsigned integers are interpreted as seconds since the unix epoch (`1970-01-01T00:00:00Z`)
-return the corresponding timestamp.
+Supports strings, integer, unsigned integer, and double types as input.
+Strings are parsed as RFC3339 (e.g. '2023-07-20T05:44:00') if no [Chrono formats] are provided.
+Integers, unsigned integers, and doubles are interpreted as seconds since the unix epoch (`1970-01-01T00:00:00Z`).
+Returns the corresponding timestamp.
+
+Note: `to_timestamp` returns `Timestamp(Nanosecond)`. The supported range for integer input is between `-9223372037` and `9223372036`.
+Supported range for string input is between `1677-09-21T00:12:44.0` and `2262-04-11T23:47:16.0`. Please use `to_timestamp_seconds`
+for the input outside of supported bounds.
 
 ```
-to_timestamp(expression)
+to_timestamp(expression[, ..., format_n])
 ```
 
 #### Arguments
 
 - **expression**: Expression to operate on.
   Can be a constant, column, or function, and any combination of arithmetic operators.
+- **format_n**: Optional [Chrono format] strings to use to parse the expression. Formats will be tried in the order
+  they appear with the first successful one being returned. If none of the formats successfully parse the expression
+  an error will be returned.
+
+[chrono format]: https://docs.rs/chrono/latest/chrono/format/strftime/index.html
+
+#### Example
+
+```
+❯ select to_timestamp('2023-01-31T09:26:56.123456789-05:00');
++-----------------------------------------------------------+
+| to_timestamp(Utf8("2023-01-31T09:26:56.123456789-05:00")) |
++-----------------------------------------------------------+
+| 2023-01-31T14:26:56.123456789                             |
++-----------------------------------------------------------+
+❯ select to_timestamp('03:59:00.123456789 05-17-2023', '%c', '%+', '%H:%M:%S%.f %m-%d-%Y');
++--------------------------------------------------------------------------------------------------------+
+| to_timestamp(Utf8("03:59:00.123456789 05-17-2023"),Utf8("%c"),Utf8("%+"),Utf8("%H:%M:%S%.f %m-%d-%Y")) |
++--------------------------------------------------------------------------------------------------------+
+| 2023-05-17T03:59:00.123456789                                                                          |
++--------------------------------------------------------------------------------------------------------+
+```
+
+Additional examples can be found [here]
+
+[here]: https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/to_timestamp.rs
 
 ### `to_timestamp_millis`
 
 Converts a value to a timestamp (`YYYY-MM-DDT00:00:00.000Z`).
 Supports strings, integer, and unsigned integer types as input.
-Strings are parsed as RFC3339 (e.g. '2023-07-20T05:44:00')
-Integers and unsigned integers are interpreted as milliseconds since the unix epoch (`1970-01-01T00:00:00Z`)
-return the corresponding timestamp.
+Strings are parsed as RFC3339 (e.g. '2023-07-20T05:44:00') if no [Chrono format]s are provided.
+Integers and unsigned integers are interpreted as milliseconds since the unix epoch (`1970-01-01T00:00:00Z`).
+Returns the corresponding timestamp.
 
 ```
-to_timestamp_millis(expression)
+to_timestamp_millis(expression[, ..., format_n])
 ```
 
 #### Arguments
 
 - **expression**: Expression to operate on.
   Can be a constant, column, or function, and any combination of arithmetic operators.
+- **format_n**: Optional [Chrono format] strings to use to parse the expression. Formats will be tried in the order
+  they appear with the first successful one being returned. If none of the formats successfully parse the expression
+  an error will be returned.
+
+#### Example
+
+```
+❯ select to_timestamp_millis('2023-01-31T09:26:56.123456789-05:00');
++------------------------------------------------------------------+
+| to_timestamp_millis(Utf8("2023-01-31T09:26:56.123456789-05:00")) |
++------------------------------------------------------------------+
+| 2023-01-31T14:26:56.123                                          |
++------------------------------------------------------------------+
+❯ select to_timestamp_millis('03:59:00.123456789 05-17-2023', '%c', '%+', '%H:%M:%S%.f %m-%d-%Y');
++---------------------------------------------------------------------------------------------------------------+
+| to_timestamp_millis(Utf8("03:59:00.123456789 05-17-2023"),Utf8("%c"),Utf8("%+"),Utf8("%H:%M:%S%.f %m-%d-%Y")) |
++---------------------------------------------------------------------------------------------------------------+
+| 2023-05-17T03:59:00.123                                                                                       |
++---------------------------------------------------------------------------------------------------------------+
+```
+
+Additional examples can be found [here]
+
+[here]: https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/to_timestamp.rs
 
 ### `to_timestamp_micros`
 
 Converts a value to a timestamp (`YYYY-MM-DDT00:00:00.000000Z`).
 Supports strings, integer, and unsigned integer types as input.
-Strings are parsed as RFC3339 (e.g. '2023-07-20T05:44:00')
+Strings are parsed as RFC3339 (e.g. '2023-07-20T05:44:00') if no [Chrono format]s are provided.
 Integers and unsigned integers are interpreted as microseconds since the unix epoch (`1970-01-01T00:00:00Z`)
-return the corresponding timestamp.
+Returns the corresponding timestamp.
 
 ```
-to_timestamp_nanos(expression)
+to_timestamp_micros(expression[, ..., format_n])
 ```
+
+#### Arguments
+
+- **expression**: Expression to operate on.
+  Can be a constant, column, or function, and any combination of arithmetic operators.
+- **format_n**: Optional [Chrono format] strings to use to parse the expression. Formats will be tried in the order
+  they appear with the first successful one being returned. If none of the formats successfully parse the expression
+  an error will be returned.
+
+#### Example
+
+```
+❯ select to_timestamp_micros('2023-01-31T09:26:56.123456789-05:00');
++------------------------------------------------------------------+
+| to_timestamp_micros(Utf8("2023-01-31T09:26:56.123456789-05:00")) |
++------------------------------------------------------------------+
+| 2023-01-31T14:26:56.123456                                       |
++------------------------------------------------------------------+
+❯ select to_timestamp_micros('03:59:00.123456789 05-17-2023', '%c', '%+', '%H:%M:%S%.f %m-%d-%Y');
++---------------------------------------------------------------------------------------------------------------+
+| to_timestamp_micros(Utf8("03:59:00.123456789 05-17-2023"),Utf8("%c"),Utf8("%+"),Utf8("%H:%M:%S%.f %m-%d-%Y")) |
++---------------------------------------------------------------------------------------------------------------+
+| 2023-05-17T03:59:00.123456                                                                                    |
++---------------------------------------------------------------------------------------------------------------+
+```
+
+Additional examples can be found [here]
+
+[here]: https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/to_timestamp.rs
 
 ### `to_timestamp_nanos`
 
 Converts a value to a timestamp (`YYYY-MM-DDT00:00:00.000000000Z`).
 Supports strings, integer, and unsigned integer types as input.
-Strings are parsed as RFC3339 (e.g. '2023-07-20T05:44:00')
-Integers and unsigned integers are interpreted as nanoseconds since the unix epoch (`1970-01-01T00:00:00Z`)
-return the corresponding timestamp.
+Strings are parsed as RFC3339 (e.g. '2023-07-20T05:44:00') if no [Chrono format]s are provided.
+Integers and unsigned integers are interpreted as nanoseconds since the unix epoch (`1970-01-01T00:00:00Z`).
+Returns the corresponding timestamp.
 
 ```
-to_timestamp_nanos(expression)
+to_timestamp_nanos(expression[, ..., format_n])
 ```
 
 #### Arguments
 
 - **expression**: Expression to operate on.
   Can be a constant, column, or function, and any combination of arithmetic operators.
+- **format_n**: Optional [Chrono format] strings to use to parse the expression. Formats will be tried in the order
+  they appear with the first successful one being returned. If none of the formats successfully parse the expression
+  an error will be returned.
+
+#### Example
+
+```
+❯ select to_timestamp_nanos('2023-01-31T09:26:56.123456789-05:00');
++-----------------------------------------------------------------+
+| to_timestamp_nanos(Utf8("2023-01-31T09:26:56.123456789-05:00")) |
++-----------------------------------------------------------------+
+| 2023-01-31T14:26:56.123456789                                   |
++-----------------------------------------------------------------+
+❯ select to_timestamp_nanos('03:59:00.123456789 05-17-2023', '%c', '%+', '%H:%M:%S%.f %m-%d-%Y');
++--------------------------------------------------------------------------------------------------------------+
+| to_timestamp_nanos(Utf8("03:59:00.123456789 05-17-2023"),Utf8("%c"),Utf8("%+"),Utf8("%H:%M:%S%.f %m-%d-%Y")) |
++--------------------------------------------------------------------------------------------------------------+
+| 2023-05-17T03:59:00.123456789                                                                                |
++---------------------------------------------------------------------------------------------------------------+
+```
+
+Additional examples can be found [here]
+
+[here]: https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/to_timestamp.rs
 
 ### `to_timestamp_seconds`
 
 Converts a value to a timestamp (`YYYY-MM-DDT00:00:00.000Z`).
 Supports strings, integer, and unsigned integer types as input.
-Strings are parsed as RFC3339 (e.g. '2023-07-20T05:44:00')
-Integers and unsigned integers are interpreted as seconds since the unix epoch (`1970-01-01T00:00:00Z`)
-return the corresponding timestamp.
+Strings are parsed as RFC3339 (e.g. '2023-07-20T05:44:00') if no [Chrono format]s are provided.
+Integers and unsigned integers are interpreted as seconds since the unix epoch (`1970-01-01T00:00:00Z`).
+Returns the corresponding timestamp.
 
 ```
-to_timestamp_seconds(expression)
+to_timestamp_seconds(expression[, ..., format_n])
 ```
 
 #### Arguments
 
 - **expression**: Expression to operate on.
   Can be a constant, column, or function, and any combination of arithmetic operators.
+- **format_n**: Optional [Chrono format] strings to use to parse the expression. Formats will be tried in the order
+  they appear with the first successful one being returned. If none of the formats successfully parse the expression
+  an error will be returned.
+
+#### Example
+
+```
+❯ select to_timestamp_seconds('2023-01-31T09:26:56.123456789-05:00');
++-------------------------------------------------------------------+
+| to_timestamp_seconds(Utf8("2023-01-31T09:26:56.123456789-05:00")) |
++-------------------------------------------------------------------+
+| 2023-01-31T14:26:56                                               |
++-------------------------------------------------------------------+
+❯ select to_timestamp_seconds('03:59:00.123456789 05-17-2023', '%c', '%+', '%H:%M:%S%.f %m-%d-%Y');
++----------------------------------------------------------------------------------------------------------------+
+| to_timestamp_seconds(Utf8("03:59:00.123456789 05-17-2023"),Utf8("%c"),Utf8("%+"),Utf8("%H:%M:%S%.f %m-%d-%Y")) |
++----------------------------------------------------------------------------------------------------------------+
+| 2023-05-17T03:59:00                                                                                            |
++----------------------------------------------------------------------------------------------------------------+
+```
+
+Additional examples can be found [here]
+
+[here]: https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/to_timestamp.rs
 
 ### `from_unixtime`
 
@@ -1519,6 +1768,7 @@ from_unixtime(expression)
 ## Array Functions
 
 - [array_append](#array_append)
+- [array_sort](#array_sort)
 - [array_cat](#array_cat)
 - [array_concat](#array_concat)
 - [array_contains](#array_contains)
@@ -1543,21 +1793,28 @@ from_unixtime(expression)
 - [array_replace](#array_replace)
 - [array_replace_n](#array_replace_n)
 - [array_replace_all](#array_replace_all)
+- [array_reverse](#array_reverse)
 - [array_slice](#array_slice)
 - [array_to_string](#array_to_string)
 - [cardinality](#cardinality)
 - [empty](#empty)
 - [list_append](#list_append)
+- [list_sort](#list_sort)
 - [list_cat](#list_cat)
 - [list_concat](#list_concat)
 - [list_dims](#list_dims)
 - [list_element](#list_element)
 - [list_extract](#list_extract)
+- [list_has](#list_has)
+- [list_has_all](#list_has_all)
+- [list_has_any](#list_has_any)
 - [list_indexof](#list_indexof)
 - [list_join](#list_join)
 - [list_length](#list_length)
 - [list_ndims](#list_ndims)
 - [list_prepend](#list_prepend)
+- [list_pop_back](#list_pop_back)
+- [list_pop_front](#list_pop_front)
 - [list_position](#list_position)
 - [list_positions](#list_positions)
 - [list_push_back](#list_push_back)
@@ -1609,6 +1866,36 @@ array_append(array, element)
 - list_append
 - list_push_back
 
+### `array_sort`
+
+Sort array.
+
+```
+array_sort(array, desc, nulls_first)
+```
+
+#### Arguments
+
+- **array**: Array expression.
+  Can be a constant, column, or function, and any combination of array operators.
+- **desc**: Whether to sort in descending order(`ASC` or `DESC`).
+- **nulls_first**: Whether to sort nulls first(`NULLS FIRST` or `NULLS LAST`).
+
+#### Example
+
+```
+❯ select array_sort([3, 1, 2]);
++-----------------------------+
+| array_sort(List([3,1,2]))   |
++-----------------------------+
+| [1, 2, 3]                   |
++-----------------------------+
+```
+
+#### Aliases
+
+- list_sort
+
 ### `array_cat`
 
 _Alias of [array_concat](#array_concat)._
@@ -1659,6 +1946,10 @@ array_has(array, element)
 - **element**: Scalar or Array expression.
   Can be a constant, column, or function, and any combination of array operators.
 
+#### Aliases
+
+- list_has
+
 ### `array_has_all`
 
 Returns true if all elements of sub-array exist in array
@@ -1674,6 +1965,10 @@ array_has_all(array, sub-array)
 - **sub-array**: Array expression.
   Can be a constant, column, or function, and any combination of array operators.
 
+#### Aliases
+
+- list_has_all
+
 ### `array_has_any`
 
 Returns true if any elements exist in both arrays
@@ -1688,6 +1983,10 @@ array_has_any(array, sub-array)
   Can be a constant, column, or function, and any combination of array operators.
 - **sub-array**: Array expression.
   Can be a constant, column, or function, and any combination of array operators.
+
+#### Aliases
+
+- list_has_any
 
 ### `array_dims`
 
@@ -1747,8 +2046,6 @@ array_element(array, index)
 - array_extract
 - list_element
 - list_extract
-
-### `array_empty`
 
 ### `array_extract`
 
@@ -1889,7 +2186,7 @@ array_prepend(element, array)
 Returns the array without the first element.
 
 ```
-array_pop_first(array)
+array_pop_front(array)
 ```
 
 #### Arguments
@@ -1900,13 +2197,17 @@ array_pop_first(array)
 #### Example
 
 ```
-❯ select array_pop_first([1, 2, 3]);
+❯ select array_pop_front([1, 2, 3]);
 +-------------------------------+
-| array_pop_first(List([1,2,3])) |
+| array_pop_front(List([1,2,3])) |
 +-------------------------------+
 | [2, 3]                        |
 +-------------------------------+
 ```
+
+#### Aliases
+
+- list_pop_front
 
 ### `array_pop_back`
 
@@ -1932,9 +2233,13 @@ array_pop_back(array)
 +-------------------------------+
 ```
 
+#### Aliases
+
+- list_pop_back
+
 ### `array_position`
 
-Returns a string with an input string repeated a specified number.
+Returns the position of the first occurrence of the specified element in the array.
 
 ```
 array_position(array, element)
@@ -2035,6 +2340,10 @@ array_repeat(element, count)
 | [[1, 2], [1, 2]]                   |
 +------------------------------------+
 ```
+
+#### Aliases
+
+- list_repeat
 
 ### `array_remove`
 
@@ -2215,13 +2524,51 @@ array_replace_all(array, from, to)
 
 - list_replace_all
 
+### `array_reverse`
+
+Returns the array with the order of the elements reversed.
+
+```
+array_reverse(array)
+```
+
+#### Arguments
+
+- **array**: Array expression.
+  Can be a constant, column, or function, and any combination of array operators.
+
+#### Example
+
+```
+❯ select array_reverse([1, 2, 3, 4]);
++------------------------------------------------------------+
+| array_reverse(List([1, 2, 3, 4]))                          |
++------------------------------------------------------------+
+| [4, 3, 2, 1]                                               |
++------------------------------------------------------------+
+```
+
+#### Aliases
+
+- list_reverse
+
 ### `array_slice`
 
-Returns a slice of the array.
+Returns a slice of the array based on 1-indexed start and end positions.
 
 ```
 array_slice(array, begin, end)
 ```
+
+#### Arguments
+
+- **array**: Array expression.
+  Can be a constant, column, or function, and any combination of array operators.
+- **begin**: Index of the first element.
+  If negative, it counts backward from the end of the array.
+- **end**: Index of the last element.
+  If negative, it counts backward from the end of the array.
+- **stride**: Stride of the array slice. The default is 1.
 
 #### Example
 
@@ -2297,7 +2644,7 @@ array_union(array1, array2)
 +----------------------------------------------------+
 | array_union([1, 2, 3, 4], [5, 6, 7, 8]);           |
 +----------------------------------------------------+
-| [1, 2, 3, 4, 5, 6]                                 |
+| [1, 2, 3, 4, 5, 6, 7, 8]                           |
 +----------------------------------------------------+
 ```
 
@@ -2335,7 +2682,7 @@ array_except(array1, array2)
 +----------------------------------------------------+
 | array_except([1, 2, 3, 4], [3, 4, 5, 6]);           |
 +----------------------------------------------------+
-| [3, 4]                                 |
+| [1, 2]                                 |
 +----------------------------------------------------+
 ```
 
@@ -2397,6 +2744,10 @@ empty(array)
 
 _Alias of [array_append](#array_append)._
 
+### `list_sort`
+
+_Alias of [array_sort](#array_sort)._
+
 ### `list_cat`
 
 _Alias of [array_concat](#array_concat)._
@@ -2417,6 +2768,18 @@ _Alias of [array_element](#array_element)._
 
 _Alias of [array_element](#array_element)._
 
+### `list_has`
+
+_Alias of [array_has](#array_has)._
+
+### `list_has_all`
+
+_Alias of [array_has_all](#array_has_all)._
+
+### `list_has_any`
+
+_Alias of [array_has_any](#array_has_any)._
+
 ### `list_indexof`
 
 _Alias of [array_position](#array_position)._
@@ -2436,6 +2799,14 @@ _Alias of [array_ndims](#array_ndims)._
 ### `list_prepend`
 
 _Alias of [array_prepend](#array_prepend)._
+
+### `list_pop_back`
+
+_Alias of [array_pop_back](#array_pop_back)._
+
+### `list_pop_front`
+
+_Alias of [array_pop_front](#array_pop_front)._
 
 ### `list_position`
 
@@ -2480,6 +2851,10 @@ _Alias of [array_replace_n](#array_replace_n)._
 ### `list_replace_all`
 
 _Alias of [array_replace_all](#array_replace_all)._
+
+### `list_reverse`
+
+_Alias of [array_reverse](#array_reverse)._
 
 ### `list_slice`
 

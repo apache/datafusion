@@ -154,7 +154,7 @@ mod tests {
         let a = StringArray::from(vec![Some("foo"), Some("bar"), None, Some("baz")]);
         let a = ColumnarValue::Array(Arc::new(a));
 
-        let lit_array = ColumnarValue::Scalar(ScalarValue::Utf8(Some("bar".to_string())));
+        let lit_array = ColumnarValue::Scalar(ScalarValue::from("bar"));
 
         let result = nullif_func(&[a, lit_array])?;
         let result = result.into_array(0).expect("Failed to convert to array");

@@ -153,11 +153,11 @@ impl Accumulator for StringAggAccumulator {
         Ok(())
     }
 
-    fn state(&self) -> Result<Vec<ScalarValue>> {
+    fn state(&mut self) -> Result<Vec<ScalarValue>> {
         Ok(vec![self.evaluate()?])
     }
 
-    fn evaluate(&self) -> Result<ScalarValue> {
+    fn evaluate(&mut self) -> Result<ScalarValue> {
         Ok(ScalarValue::LargeUtf8(self.values.clone()))
     }
 
@@ -204,7 +204,7 @@ mod tests {
         )
         .unwrap();
 
-        let delimiter = Arc::new(Literal::new(ScalarValue::Utf8(Some(delimiter))));
+        let delimiter = Arc::new(Literal::new(ScalarValue::from(delimiter)));
         let schema = Schema::new(vec![Field::new("a", coerced[0].clone(), true)]);
         let agg = create_aggregate_expr(
             &function,

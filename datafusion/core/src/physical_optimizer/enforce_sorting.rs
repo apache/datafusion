@@ -36,31 +36,34 @@
 
 use std::sync::Arc;
 
+use super::utils::add_sort_above;
 use crate::config::ConfigOptions;
 use crate::error::Result;
 use crate::physical_optimizer::replace_with_order_preserving_variants::{
     replace_with_order_preserving_variants, OrderPreservationContext,
 };
-use crate::physical_optimizer::sort_pushdown::{pushdown_sorts, SortPushDown};
+use crate::physical_optimizer::sort_pushdown::{
+    assign_initial_requirements, pushdown_sorts, SortPushDown,
+};
 use crate::physical_optimizer::utils::{
-    add_sort_above, is_coalesce_partitions, is_limit, is_repartition, is_sort,
-    is_sort_preserving_merge, is_union, is_window, ExecTree,
+    is_coalesce_partitions, is_limit, is_repartition, is_sort, is_sort_preserving_merge,
+    is_union, is_window,
 };
 use crate::physical_optimizer::PhysicalOptimizerRule;
 use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use crate::physical_plan::sorts::sort::SortExec;
 use crate::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
+use crate::physical_plan::tree_node::PlanContext;
 use crate::physical_plan::windows::{
     get_best_fitting_window, BoundedWindowAggExec, WindowAggExec,
 };
-use crate::physical_plan::{with_new_children_if_necessary, Distribution, ExecutionPlan};
+use crate::physical_plan::{Distribution, ExecutionPlan, InputOrderMode};
 
-use datafusion_common::tree_node::{Transformed, TreeNode, VisitRecursion};
+use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{plan_err, DataFusionError};
 use datafusion_physical_expr::{PhysicalSortExpr, PhysicalSortRequirement};
-
 use datafusion_physical_plan::repartition::RepartitionExec;
-use datafusion_physical_plan::windows::PartitionSearchMode;
+
 use itertools::izip;
 
 /// This rule inspects [`SortExec`]'s in the given physical plan and removes the
@@ -76,236 +79,70 @@ impl EnforceSorting {
 }
 
 /// This object is used within the [`EnforceSorting`] rule to track the closest
-/// [`SortExec`] descendant(s) for every child of a plan.
-#[derive(Debug, Clone)]
-struct PlanWithCorrespondingSort {
-    plan: Arc<dyn ExecutionPlan>,
-    // For every child, keep a subtree of `ExecutionPlan`s starting from the
-    // child until the `SortExec`(s) -- could be multiple for n-ary plans like
-    // Union -- that determine the output ordering of the child. If the child
-    // has no connection to any sort, simply store None (and not a subtree).
-    sort_onwards: Vec<Option<ExecTree>>,
-}
+/// [`SortExec`] descendant(s) for every child of a plan. The data attribute
+/// stores whether the plan is a `SortExec` or is connected to a `SortExec`
+/// via its children.
+type PlanWithCorrespondingSort = PlanContext<bool>;
 
-impl PlanWithCorrespondingSort {
-    fn new(plan: Arc<dyn ExecutionPlan>) -> Self {
-        let length = plan.children().len();
-        PlanWithCorrespondingSort {
-            plan,
-            sort_onwards: vec![None; length],
-        }
-    }
-
-    fn new_from_children_nodes(
-        children_nodes: Vec<PlanWithCorrespondingSort>,
-        parent_plan: Arc<dyn ExecutionPlan>,
-    ) -> Result<Self> {
-        let children_plans = children_nodes
-            .iter()
-            .map(|item| item.plan.clone())
-            .collect::<Vec<_>>();
-        let sort_onwards = children_nodes
-            .into_iter()
-            .enumerate()
-            .map(|(idx, item)| {
-                let plan = &item.plan;
-                // Leaves of `sort_onwards` are `SortExec` operators, which impose
-                // an ordering. This tree collects all the intermediate executors
-                // that maintain this ordering. If we just saw a order imposing
-                // operator, we reset the tree and start accumulating.
-                if is_sort(plan) {
-                    return Some(ExecTree::new(item.plan, idx, vec![]));
-                } else if is_limit(plan) {
-                    // There is no sort linkage for this path, it starts at a limit.
-                    return None;
-                }
-                let is_spm = is_sort_preserving_merge(plan);
-                let required_orderings = plan.required_input_ordering();
-                let flags = plan.maintains_input_order();
-                let children = izip!(flags, item.sort_onwards, required_orderings)
-                    .filter_map(|(maintains, element, required_ordering)| {
-                        if (required_ordering.is_none() && maintains) || is_spm {
-                            element
-                        } else {
-                            None
-                        }
-                    })
-                    .collect::<Vec<ExecTree>>();
-                if !children.is_empty() {
-                    // Add parent node to the tree if there is at least one
-                    // child with a subtree:
-                    Some(ExecTree::new(item.plan, idx, children))
-                } else {
-                    // There is no sort linkage for this child, do nothing.
-                    None
-                }
-            })
-            .collect();
-
-        let plan = with_new_children_if_necessary(parent_plan, children_plans)?.into();
-        Ok(PlanWithCorrespondingSort { plan, sort_onwards })
-    }
-
-    fn children(&self) -> Vec<PlanWithCorrespondingSort> {
-        self.plan
-            .children()
-            .into_iter()
-            .map(PlanWithCorrespondingSort::new)
-            .collect()
-    }
-}
-
-impl TreeNode for PlanWithCorrespondingSort {
-    fn apply_children<F>(&self, op: &mut F) -> Result<VisitRecursion>
-    where
-        F: FnMut(&Self) -> Result<VisitRecursion>,
-    {
-        let children = self.children();
-        for child in children {
-            match op(&child)? {
-                VisitRecursion::Continue => {}
-                VisitRecursion::Skip => return Ok(VisitRecursion::Continue),
-                VisitRecursion::Stop => return Ok(VisitRecursion::Stop),
-            }
-        }
-
-        Ok(VisitRecursion::Continue)
-    }
-
-    fn map_children<F>(self, transform: F) -> Result<Self>
-    where
-        F: FnMut(Self) -> Result<Self>,
-    {
-        let children = self.children();
-        if children.is_empty() {
-            Ok(self)
+fn update_sort_ctx_children(
+    mut node: PlanWithCorrespondingSort,
+    data: bool,
+) -> Result<PlanWithCorrespondingSort> {
+    for child_node in node.children.iter_mut() {
+        let plan = &child_node.plan;
+        child_node.data = if is_sort(plan) {
+            // Initiate connection:
+            true
+        } else if is_limit(plan) {
+            // There is no sort linkage for this path, it starts at a limit.
+            false
         } else {
-            let children_nodes = children
-                .into_iter()
-                .map(transform)
-                .collect::<Result<Vec<_>>>()?;
-            PlanWithCorrespondingSort::new_from_children_nodes(children_nodes, self.plan)
-        }
-    }
-}
-
-/// This object is used within the [EnforceSorting] rule to track the closest
-/// [`CoalescePartitionsExec`] descendant(s) for every child of a plan.
-#[derive(Debug, Clone)]
-struct PlanWithCorrespondingCoalescePartitions {
-    plan: Arc<dyn ExecutionPlan>,
-    // For every child, keep a subtree of `ExecutionPlan`s starting from the
-    // child until the `CoalescePartitionsExec`(s) -- could be multiple for
-    // n-ary plans like Union -- that affect the output partitioning of the
-    // child. If the child has no connection to any `CoalescePartitionsExec`,
-    // simply store None (and not a subtree).
-    coalesce_onwards: Vec<Option<ExecTree>>,
-}
-
-impl PlanWithCorrespondingCoalescePartitions {
-    fn new(plan: Arc<dyn ExecutionPlan>) -> Self {
-        let length = plan.children().len();
-        PlanWithCorrespondingCoalescePartitions {
-            plan,
-            coalesce_onwards: vec![None; length],
-        }
-    }
-
-    fn new_from_children_nodes(
-        children_nodes: Vec<PlanWithCorrespondingCoalescePartitions>,
-        parent_plan: Arc<dyn ExecutionPlan>,
-    ) -> Result<Self> {
-        let children_plans = children_nodes
-            .iter()
-            .map(|item| item.plan.clone())
-            .collect();
-        let coalesce_onwards = children_nodes
-            .into_iter()
-            .enumerate()
-            .map(|(idx, item)| {
-                // Leaves of the `coalesce_onwards` tree are `CoalescePartitionsExec`
-                // operators. This tree collects all the intermediate executors that
-                // maintain a single partition. If we just saw a `CoalescePartitionsExec`
-                // operator, we reset the tree and start accumulating.
-                let plan = item.plan;
-                if plan.children().is_empty() {
-                    // Plan has no children, there is nothing to propagate.
-                    None
-                } else if is_coalesce_partitions(&plan) {
-                    Some(ExecTree::new(plan, idx, vec![]))
-                } else {
-                    let children = item
-                        .coalesce_onwards
-                        .into_iter()
-                        .flatten()
-                        .filter(|item| {
-                            // Only consider operators that don't require a
-                            // single partition.
-                            !matches!(
-                                plan.required_input_distribution()[item.idx],
-                                Distribution::SinglePartition
-                            )
-                        })
-                        .collect::<Vec<_>>();
-                    if children.is_empty() {
-                        None
-                    } else {
-                        Some(ExecTree::new(plan, idx, children))
-                    }
-                }
+            let is_spm = is_sort_preserving_merge(plan);
+            let required_orderings = plan.required_input_ordering();
+            let flags = plan.maintains_input_order();
+            // Add parent node to the tree if there is at least one child with
+            // a sort connection:
+            izip!(flags, required_orderings).any(|(maintains, required_ordering)| {
+                let propagates_ordering =
+                    (maintains && required_ordering.is_none()) || is_spm;
+                let connected_to_sort =
+                    child_node.children.iter().any(|child| child.data);
+                propagates_ordering && connected_to_sort
             })
-            .collect();
-        let plan = with_new_children_if_necessary(parent_plan, children_plans)?.into();
-        Ok(PlanWithCorrespondingCoalescePartitions {
-            plan,
-            coalesce_onwards,
+        }
+    }
+
+    node.data = data;
+    node.update_plan_from_children()
+}
+
+/// This object is used within the [`EnforceSorting`] rule to track the closest
+/// [`CoalescePartitionsExec`] descendant(s) for every child of a plan. The data
+/// attribute stores whether the plan is a `CoalescePartitionsExec` or is
+/// connected to a `CoalescePartitionsExec` via its children.
+type PlanWithCorrespondingCoalescePartitions = PlanContext<bool>;
+
+fn update_coalesce_ctx_children(
+    coalesce_context: &mut PlanWithCorrespondingCoalescePartitions,
+) {
+    let children = &coalesce_context.children;
+    coalesce_context.data = if children.is_empty() {
+        // Plan has no children, it cannot be a `CoalescePartitionsExec`.
+        false
+    } else if is_coalesce_partitions(&coalesce_context.plan) {
+        // Initiate a connection:
+        true
+    } else {
+        children.iter().enumerate().any(|(idx, node)| {
+            // Only consider operators that don't require a single partition,
+            // and connected to some `CoalescePartitionsExec`:
+            node.data
+                && !matches!(
+                    coalesce_context.plan.required_input_distribution()[idx],
+                    Distribution::SinglePartition
+                )
         })
-    }
-
-    fn children(&self) -> Vec<PlanWithCorrespondingCoalescePartitions> {
-        self.plan
-            .children()
-            .into_iter()
-            .map(PlanWithCorrespondingCoalescePartitions::new)
-            .collect()
-    }
-}
-
-impl TreeNode for PlanWithCorrespondingCoalescePartitions {
-    fn apply_children<F>(&self, op: &mut F) -> Result<VisitRecursion>
-    where
-        F: FnMut(&Self) -> Result<VisitRecursion>,
-    {
-        let children = self.children();
-        for child in children {
-            match op(&child)? {
-                VisitRecursion::Continue => {}
-                VisitRecursion::Skip => return Ok(VisitRecursion::Continue),
-                VisitRecursion::Stop => return Ok(VisitRecursion::Stop),
-            }
-        }
-
-        Ok(VisitRecursion::Continue)
-    }
-
-    fn map_children<F>(self, transform: F) -> Result<Self>
-    where
-        F: FnMut(Self) -> Result<Self>,
-    {
-        let children = self.children();
-        if children.is_empty() {
-            Ok(self)
-        } else {
-            let children_nodes = children
-                .into_iter()
-                .map(transform)
-                .collect::<Result<Vec<_>>>()?;
-            PlanWithCorrespondingCoalescePartitions::new_from_children_nodes(
-                children_nodes,
-                self.plan,
-            )
-        }
-    }
+    };
 }
 
 /// The boolean flag `repartition_sorts` defined in the config indicates
@@ -318,20 +155,21 @@ impl PhysicalOptimizerRule for EnforceSorting {
         plan: Arc<dyn ExecutionPlan>,
         config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let plan_requirements = PlanWithCorrespondingSort::new(plan);
+        let plan_requirements = PlanWithCorrespondingSort::new_default(plan);
         // Execute a bottom-up traversal to enforce sorting requirements,
         // remove unnecessary sorts, and optimize sort-sensitive operators:
         let adjusted = plan_requirements.transform_up(&ensure_sorting)?;
         let new_plan = if config.optimizer.repartition_sorts {
             let plan_with_coalesce_partitions =
-                PlanWithCorrespondingCoalescePartitions::new(adjusted.plan);
+                PlanWithCorrespondingCoalescePartitions::new_default(adjusted.plan);
             let parallel =
                 plan_with_coalesce_partitions.transform_up(&parallelize_sorts)?;
             parallel.plan
         } else {
             adjusted.plan
         };
-        let plan_with_pipeline_fixer = OrderPreservationContext::new(new_plan);
+
+        let plan_with_pipeline_fixer = OrderPreservationContext::new_default(new_plan);
         let updated_plan =
             plan_with_pipeline_fixer.transform_up(&|plan_with_pipeline_fixer| {
                 replace_with_order_preserving_variants(
@@ -344,7 +182,8 @@ impl PhysicalOptimizerRule for EnforceSorting {
 
         // Execute a top-down traversal to exploit sort push-down opportunities
         // missed by the bottom-up traversal:
-        let sort_pushdown = SortPushDown::init(updated_plan.plan);
+        let mut sort_pushdown = SortPushDown::new_default(updated_plan.plan);
+        assign_initial_requirements(&mut sort_pushdown);
         let adjusted = sort_pushdown.transform_down(&pushdown_sorts)?;
         Ok(adjusted.plan)
     }
@@ -373,363 +212,347 @@ impl PhysicalOptimizerRule for EnforceSorting {
 /// by following connections from [`CoalescePartitionsExec`]s to [`SortExec`]s.
 /// By performing sorting in parallel, we can increase performance in some scenarios.
 fn parallelize_sorts(
-    requirements: PlanWithCorrespondingCoalescePartitions,
+    mut requirements: PlanWithCorrespondingCoalescePartitions,
 ) -> Result<Transformed<PlanWithCorrespondingCoalescePartitions>> {
-    let plan = requirements.plan;
-    let mut coalesce_onwards = requirements.coalesce_onwards;
-    if plan.children().is_empty() || coalesce_onwards[0].is_none() {
-        // We only take an action when the plan is either a SortExec, a
-        // SortPreservingMergeExec or a CoalescePartitionsExec, and they
-        // all have a single child. Therefore, if the first child is `None`,
-        // we can return immediately.
-        return Ok(Transformed::No(PlanWithCorrespondingCoalescePartitions {
-            plan,
-            coalesce_onwards,
-        }));
-    } else if (is_sort(&plan) || is_sort_preserving_merge(&plan))
-        && plan.output_partitioning().partition_count() <= 1
+    update_coalesce_ctx_children(&mut requirements);
+
+    if requirements.children.is_empty() || !requirements.children[0].data {
+        // We only take an action when the plan is either a `SortExec`, a
+        // `SortPreservingMergeExec` or a `CoalescePartitionsExec`, and they
+        // all have a single child. Therefore, if the first child has no
+        // connection, we can return immediately.
+        Ok(Transformed::No(requirements))
+    } else if (is_sort(&requirements.plan)
+        || is_sort_preserving_merge(&requirements.plan))
+        && requirements.plan.output_partitioning().partition_count() <= 1
     {
-        // If there is a connection between a CoalescePartitionsExec and a
+        // Take the initial sort expressions and requirements
+        let (sort_exprs, fetch) = get_sort_exprs(&requirements.plan)?;
+        let sort_reqs = PhysicalSortRequirement::from_sort_exprs(sort_exprs);
+        let sort_exprs = sort_exprs.to_vec();
+
+        // If there is a connection between a `CoalescePartitionsExec` and a
         // global sort that satisfy the requirements (i.e. intermediate
         // executors don't require single partition), then we can replace
-        // the CoalescePartitionsExec + Sort cascade with a SortExec +
-        // SortPreservingMergeExec cascade to parallelize sorting.
-        let mut prev_layer = plan.clone();
-        update_child_to_remove_coalesce(&mut prev_layer, &mut coalesce_onwards[0])?;
-        let (sort_exprs, fetch) = get_sort_exprs(&plan)?;
-        add_sort_above(
-            &mut prev_layer,
-            &PhysicalSortRequirement::from_sort_exprs(sort_exprs),
-            fetch,
-        );
-        let spm = SortPreservingMergeExec::new(sort_exprs.to_vec(), prev_layer)
-            .with_fetch(fetch);
-        return Ok(Transformed::Yes(PlanWithCorrespondingCoalescePartitions {
-            plan: Arc::new(spm),
-            coalesce_onwards: vec![None],
-        }));
-    } else if is_coalesce_partitions(&plan) {
-        // There is an unnecessary `CoalescePartitionsExec` in the plan.
-        let mut prev_layer = plan.clone();
-        update_child_to_remove_coalesce(&mut prev_layer, &mut coalesce_onwards[0])?;
-        let new_plan = plan.with_new_children(vec![prev_layer])?;
-        return Ok(Transformed::Yes(PlanWithCorrespondingCoalescePartitions {
-            plan: new_plan,
-            coalesce_onwards: vec![None],
-        }));
-    }
+        // the `CoalescePartitionsExec` + `SortExec` cascade with a `SortExec`
+        // + `SortPreservingMergeExec` cascade to parallelize sorting.
+        requirements = remove_corresponding_coalesce_in_sub_plan(requirements)?;
+        // We also need to remove the self node since `remove_corresponding_coalesce_in_sub_plan`
+        // deals with the children and their children and so on.
+        requirements = requirements.children.swap_remove(0);
 
-    Ok(Transformed::Yes(PlanWithCorrespondingCoalescePartitions {
-        plan,
-        coalesce_onwards,
-    }))
+        if !requirements
+            .plan
+            .equivalence_properties()
+            .ordering_satisfy_requirement(&sort_reqs)
+        {
+            requirements = add_sort_above(requirements, sort_reqs, fetch);
+        }
+
+        let spm = SortPreservingMergeExec::new(sort_exprs, requirements.plan.clone());
+        Ok(Transformed::Yes(
+            PlanWithCorrespondingCoalescePartitions::new(
+                Arc::new(spm.with_fetch(fetch)),
+                false,
+                vec![requirements],
+            ),
+        ))
+    } else if is_coalesce_partitions(&requirements.plan) {
+        // There is an unnecessary `CoalescePartitionsExec` in the plan.
+        // This will handle the recursive `CoalescePartitionsExec` plans.
+        requirements = remove_corresponding_coalesce_in_sub_plan(requirements)?;
+        // For the removal of self node which is also a `CoalescePartitionsExec`.
+        requirements = requirements.children.swap_remove(0);
+
+        Ok(Transformed::Yes(
+            PlanWithCorrespondingCoalescePartitions::new(
+                Arc::new(CoalescePartitionsExec::new(requirements.plan.clone())),
+                false,
+                vec![requirements],
+            ),
+        ))
+    } else {
+        Ok(Transformed::Yes(requirements))
+    }
 }
 
 /// This function enforces sorting requirements and makes optimizations without
 /// violating these requirements whenever possible.
 fn ensure_sorting(
-    requirements: PlanWithCorrespondingSort,
+    mut requirements: PlanWithCorrespondingSort,
 ) -> Result<Transformed<PlanWithCorrespondingSort>> {
+    requirements = update_sort_ctx_children(requirements, false)?;
+
     // Perform naive analysis at the beginning -- remove already-satisfied sorts:
-    if requirements.plan.children().is_empty() {
+    if requirements.children.is_empty() {
         return Ok(Transformed::No(requirements));
     }
-    let plan = requirements.plan;
-    let mut children = plan.children();
-    let mut sort_onwards = requirements.sort_onwards;
-    if let Some(result) = analyze_immediate_sort_removal(&plan, &sort_onwards) {
-        return Ok(Transformed::Yes(result));
-    }
-    for (idx, (child, sort_onwards, required_ordering)) in izip!(
-        children.iter_mut(),
-        sort_onwards.iter_mut(),
-        plan.required_input_ordering()
-    )
-    .enumerate()
+    let maybe_requirements = analyze_immediate_sort_removal(requirements);
+    let Transformed::No(mut requirements) = maybe_requirements else {
+        return Ok(maybe_requirements);
+    };
+
+    let plan = &requirements.plan;
+    let mut updated_children = vec![];
+    for (idx, (required_ordering, mut child)) in plan
+        .required_input_ordering()
+        .into_iter()
+        .zip(requirements.children.into_iter())
+        .enumerate()
     {
-        let physical_ordering = child.output_ordering();
-        match (required_ordering, physical_ordering) {
-            (Some(required_ordering), Some(_)) => {
-                if !child
-                    .equivalence_properties()
-                    .ordering_satisfy_requirement(&required_ordering)
-                {
-                    // Make sure we preserve the ordering requirements:
-                    update_child_to_remove_unnecessary_sort(child, sort_onwards, &plan)?;
-                    add_sort_above(child, &required_ordering, None);
-                    if is_sort(child) {
-                        *sort_onwards = Some(ExecTree::new(child.clone(), idx, vec![]));
-                    } else {
-                        *sort_onwards = None;
-                    }
+        let physical_ordering = child.plan.output_ordering();
+
+        if let Some(required) = required_ordering {
+            let eq_properties = child.plan.equivalence_properties();
+            if !eq_properties.ordering_satisfy_requirement(&required) {
+                // Make sure we preserve the ordering requirements:
+                if physical_ordering.is_some() {
+                    child = update_child_to_remove_unnecessary_sort(idx, child, plan)?;
                 }
+                child = add_sort_above(child, required, None);
+                child = update_sort_ctx_children(child, true)?;
             }
-            (Some(required), None) => {
-                // Ordering requirement is not met, we should add a `SortExec` to the plan.
-                add_sort_above(child, &required, None);
-                *sort_onwards = Some(ExecTree::new(child.clone(), idx, vec![]));
-            }
-            (None, Some(_)) => {
-                // We have a `SortExec` whose effect may be neutralized by
-                // another order-imposing operator. Remove this sort.
-                if !plan.maintains_input_order()[idx] || is_union(&plan) {
-                    update_child_to_remove_unnecessary_sort(child, sort_onwards, &plan)?;
-                }
-            }
-            (None, None) => {}
+        } else if physical_ordering.is_none()
+            || !plan.maintains_input_order()[idx]
+            || is_union(plan)
+        {
+            // We have a `SortExec` whose effect may be neutralized by another
+            // order-imposing operator, remove this sort:
+            child = update_child_to_remove_unnecessary_sort(idx, child, plan)?;
         }
+        updated_children.push(child);
     }
+    requirements.children = updated_children;
     // For window expressions, we can remove some sorts when we can
     // calculate the result in reverse:
-    if is_window(&plan) {
-        if let Some(tree) = &mut sort_onwards[0] {
-            if let Some(result) = analyze_window_sort_removal(tree, &plan)? {
-                return Ok(Transformed::Yes(result));
-            }
-        }
-    } else if is_sort_preserving_merge(&plan)
-        && children[0].output_partitioning().partition_count() <= 1
+    let child_node = &requirements.children[0];
+    if is_window(plan) && child_node.data {
+        return adjust_window_sort_removal(requirements).map(Transformed::Yes);
+    } else if is_sort_preserving_merge(plan)
+        && child_node.plan.output_partitioning().partition_count() <= 1
     {
-        // This SortPreservingMergeExec is unnecessary, input already has a
+        // This `SortPreservingMergeExec` is unnecessary, input already has a
         // single partition.
-        sort_onwards.truncate(1);
-        return Ok(Transformed::Yes(PlanWithCorrespondingSort {
-            plan: children.swap_remove(0),
-            sort_onwards,
-        }));
+        let child_node = requirements.children.swap_remove(0);
+        return Ok(Transformed::Yes(child_node));
     }
-    Ok(Transformed::Yes(PlanWithCorrespondingSort {
-        plan: plan.with_new_children(children)?,
-        sort_onwards,
-    }))
+
+    update_sort_ctx_children(requirements, false).map(Transformed::Yes)
 }
 
 /// Analyzes a given [`SortExec`] (`plan`) to determine whether its input
 /// already has a finer ordering than it enforces.
 fn analyze_immediate_sort_removal(
-    plan: &Arc<dyn ExecutionPlan>,
-    sort_onwards: &[Option<ExecTree>],
-) -> Option<PlanWithCorrespondingSort> {
-    if let Some(sort_exec) = plan.as_any().downcast_ref::<SortExec>() {
-        let sort_input = sort_exec.input().clone();
-
+    mut node: PlanWithCorrespondingSort,
+) -> Transformed<PlanWithCorrespondingSort> {
+    if let Some(sort_exec) = node.plan.as_any().downcast_ref::<SortExec>() {
+        let sort_input = sort_exec.input();
         // If this sort is unnecessary, we should remove it:
         if sort_input
             .equivalence_properties()
             .ordering_satisfy(sort_exec.output_ordering().unwrap_or(&[]))
         {
-            // Since we know that a `SortExec` has exactly one child,
-            // we can use the zero index safely:
-            return Some(
-                if !sort_exec.preserve_partitioning()
-                    && sort_input.output_partitioning().partition_count() > 1
-                {
-                    // Replace the sort with a sort-preserving merge:
-                    let new_plan: Arc<dyn ExecutionPlan> =
-                        Arc::new(SortPreservingMergeExec::new(
-                            sort_exec.expr().to_vec(),
-                            sort_input,
-                        ));
-                    let new_tree = ExecTree::new(
-                        new_plan.clone(),
-                        0,
-                        sort_onwards.iter().flat_map(|e| e.clone()).collect(),
-                    );
-                    PlanWithCorrespondingSort {
-                        plan: new_plan,
-                        sort_onwards: vec![Some(new_tree)],
-                    }
-                } else {
-                    // Remove the sort:
-                    PlanWithCorrespondingSort {
-                        plan: sort_input,
-                        sort_onwards: sort_onwards.to_vec(),
-                    }
-                },
-            );
+            node.plan = if !sort_exec.preserve_partitioning()
+                && sort_input.output_partitioning().partition_count() > 1
+            {
+                // Replace the sort with a sort-preserving merge:
+                let expr = sort_exec.expr().to_vec();
+                Arc::new(SortPreservingMergeExec::new(expr, sort_input.clone())) as _
+            } else {
+                // Remove the sort:
+                node.children = node.children.swap_remove(0).children;
+                sort_input.clone()
+            };
+            for child in node.children.iter_mut() {
+                child.data = false;
+            }
+            node.data = false;
+            return Transformed::Yes(node);
         }
     }
-    None
+    Transformed::No(node)
 }
 
-/// Analyzes a [`WindowAggExec`] or a [`BoundedWindowAggExec`] to determine
+/// Adjusts a [`WindowAggExec`] or a [`BoundedWindowAggExec`] to determine
 /// whether it may allow removing a sort.
-fn analyze_window_sort_removal(
-    sort_tree: &mut ExecTree,
-    window_exec: &Arc<dyn ExecutionPlan>,
-) -> Result<Option<PlanWithCorrespondingSort>> {
-    let requires_single_partition = matches!(
-        window_exec.required_input_distribution()[sort_tree.idx],
-        Distribution::SinglePartition
-    );
-    let mut window_child =
-        remove_corresponding_sort_from_sub_plan(sort_tree, requires_single_partition)?;
-    let (window_expr, new_window) =
-        if let Some(exec) = window_exec.as_any().downcast_ref::<BoundedWindowAggExec>() {
-            (
-                exec.window_expr(),
-                get_best_fitting_window(
-                    exec.window_expr(),
-                    &window_child,
-                    &exec.partition_keys,
-                )?,
-            )
-        } else if let Some(exec) = window_exec.as_any().downcast_ref::<WindowAggExec>() {
-            (
-                exec.window_expr(),
-                get_best_fitting_window(
-                    exec.window_expr(),
-                    &window_child,
-                    &exec.partition_keys,
-                )?,
-            )
-        } else {
-            return plan_err!(
-                "Expects to receive either WindowAggExec of BoundedWindowAggExec"
-            );
-        };
-    let partitionby_exprs = window_expr[0].partition_by();
+fn adjust_window_sort_removal(
+    mut window_tree: PlanWithCorrespondingSort,
+) -> Result<PlanWithCorrespondingSort> {
+    // Window operators have a single child we need to adjust:
+    let child_node = remove_corresponding_sort_from_sub_plan(
+        window_tree.children.swap_remove(0),
+        matches!(
+            window_tree.plan.required_input_distribution()[0],
+            Distribution::SinglePartition
+        ),
+    )?;
+    window_tree.children.push(child_node);
 
-    if let Some(new_window) = new_window {
+    let plan = window_tree.plan.as_any();
+    let child_plan = &window_tree.children[0].plan;
+    let (window_expr, new_window) =
+        if let Some(exec) = plan.downcast_ref::<WindowAggExec>() {
+            let window_expr = exec.window_expr();
+            let new_window =
+                get_best_fitting_window(window_expr, child_plan, &exec.partition_keys)?;
+            (window_expr, new_window)
+        } else if let Some(exec) = plan.downcast_ref::<BoundedWindowAggExec>() {
+            let window_expr = exec.window_expr();
+            let new_window =
+                get_best_fitting_window(window_expr, child_plan, &exec.partition_keys)?;
+            (window_expr, new_window)
+        } else {
+            return plan_err!("Expected WindowAggExec or BoundedWindowAggExec");
+        };
+
+    window_tree.plan = if let Some(new_window) = new_window {
         // We were able to change the window to accommodate the input, use it:
-        Ok(Some(PlanWithCorrespondingSort::new(new_window)))
+        new_window
     } else {
         // We were unable to change the window to accommodate the input, so we
         // will insert a sort.
-        let reqs = window_exec
+        let reqs = window_tree
+            .plan
             .required_input_ordering()
             .swap_remove(0)
             .unwrap_or_default();
-        // Satisfy the ordering requirement so that the window can run:
-        add_sort_above(&mut window_child, &reqs, None);
 
-        let uses_bounded_memory = window_expr.iter().all(|e| e.uses_bounded_memory());
-        let new_window = if uses_bounded_memory {
+        // Satisfy the ordering requirement so that the window can run:
+        let mut child_node = window_tree.children.swap_remove(0);
+        child_node = add_sort_above(child_node, reqs, None);
+        let child_plan = child_node.plan.clone();
+        window_tree.children.push(child_node);
+
+        if window_expr.iter().all(|e| e.uses_bounded_memory()) {
             Arc::new(BoundedWindowAggExec::try_new(
                 window_expr.to_vec(),
-                window_child,
-                partitionby_exprs.to_vec(),
-                PartitionSearchMode::Sorted,
+                child_plan,
+                window_expr[0].partition_by().to_vec(),
+                InputOrderMode::Sorted,
             )?) as _
         } else {
             Arc::new(WindowAggExec::try_new(
                 window_expr.to_vec(),
-                window_child,
-                partitionby_exprs.to_vec(),
+                child_plan,
+                window_expr[0].partition_by().to_vec(),
             )?) as _
-        };
-        Ok(Some(PlanWithCorrespondingSort::new(new_window)))
-    }
+        }
+    };
+
+    window_tree.data = false;
+    Ok(window_tree)
 }
 
-/// Updates child to remove the unnecessary [`CoalescePartitionsExec`] below it.
-fn update_child_to_remove_coalesce(
-    child: &mut Arc<dyn ExecutionPlan>,
-    coalesce_onwards: &mut Option<ExecTree>,
-) -> Result<()> {
-    if let Some(coalesce_onwards) = coalesce_onwards {
-        *child = remove_corresponding_coalesce_in_sub_plan(coalesce_onwards, child)?;
-    }
-    Ok(())
-}
-
-/// Removes the [`CoalescePartitionsExec`] from the plan in `coalesce_onwards`.
+/// Removes the [`CoalescePartitionsExec`] from the plan in `node`.
 fn remove_corresponding_coalesce_in_sub_plan(
-    coalesce_onwards: &mut ExecTree,
-    parent: &Arc<dyn ExecutionPlan>,
-) -> Result<Arc<dyn ExecutionPlan>> {
-    Ok(if is_coalesce_partitions(&coalesce_onwards.plan) {
+    mut requirements: PlanWithCorrespondingCoalescePartitions,
+) -> Result<PlanWithCorrespondingCoalescePartitions> {
+    let plan = &requirements.plan;
+    let children = &mut requirements.children;
+    if is_coalesce_partitions(&children[0].plan) {
         // We can safely use the 0th index since we have a `CoalescePartitionsExec`.
-        let mut new_plan = coalesce_onwards.plan.children()[0].clone();
-        while new_plan.output_partitioning() == parent.output_partitioning()
-            && is_repartition(&new_plan)
-            && is_repartition(parent)
+        let mut new_child_node = children[0].children.swap_remove(0);
+        while new_child_node.plan.output_partitioning() == plan.output_partitioning()
+            && is_repartition(&new_child_node.plan)
+            && is_repartition(plan)
         {
-            new_plan = new_plan.children().swap_remove(0)
+            new_child_node = new_child_node.children.swap_remove(0)
         }
-        new_plan
+        children[0] = new_child_node;
     } else {
-        let plan = coalesce_onwards.plan.clone();
-        let mut children = plan.children();
-        for item in &mut coalesce_onwards.children {
-            children[item.idx] = remove_corresponding_coalesce_in_sub_plan(item, &plan)?;
-        }
-        plan.with_new_children(children)?
-    })
+        requirements.children = requirements
+            .children
+            .into_iter()
+            .map(|node| {
+                if node.data {
+                    remove_corresponding_coalesce_in_sub_plan(node)
+                } else {
+                    Ok(node)
+                }
+            })
+            .collect::<Result<_>>()?;
+    }
+
+    requirements.update_plan_from_children()
 }
 
 /// Updates child to remove the unnecessary sort below it.
 fn update_child_to_remove_unnecessary_sort(
-    child: &mut Arc<dyn ExecutionPlan>,
-    sort_onwards: &mut Option<ExecTree>,
+    child_idx: usize,
+    mut node: PlanWithCorrespondingSort,
     parent: &Arc<dyn ExecutionPlan>,
-) -> Result<()> {
-    if let Some(sort_onwards) = sort_onwards {
+) -> Result<PlanWithCorrespondingSort> {
+    if node.data {
         let requires_single_partition = matches!(
-            parent.required_input_distribution()[sort_onwards.idx],
+            parent.required_input_distribution()[child_idx],
             Distribution::SinglePartition
         );
-        *child = remove_corresponding_sort_from_sub_plan(
-            sort_onwards,
-            requires_single_partition,
-        )?;
+        node = remove_corresponding_sort_from_sub_plan(node, requires_single_partition)?;
     }
-    *sort_onwards = None;
-    Ok(())
+    node.data = false;
+    Ok(node)
 }
 
-/// Removes the sort from the plan in `sort_onwards`.
+/// Removes the sort from the plan in `node`.
 fn remove_corresponding_sort_from_sub_plan(
-    sort_onwards: &mut ExecTree,
+    mut node: PlanWithCorrespondingSort,
     requires_single_partition: bool,
-) -> Result<Arc<dyn ExecutionPlan>> {
+) -> Result<PlanWithCorrespondingSort> {
     // A `SortExec` is always at the bottom of the tree.
-    let mut updated_plan = if is_sort(&sort_onwards.plan) {
-        sort_onwards.plan.children().swap_remove(0)
+    if is_sort(&node.plan) {
+        node = node.children.swap_remove(0);
     } else {
-        let plan = &sort_onwards.plan;
-        let mut children = plan.children();
-        for item in &mut sort_onwards.children {
-            let requires_single_partition = matches!(
-                plan.required_input_distribution()[item.idx],
-                Distribution::SinglePartition
-            );
-            children[item.idx] =
-                remove_corresponding_sort_from_sub_plan(item, requires_single_partition)?;
+        let mut any_connection = false;
+        let required_dist = node.plan.required_input_distribution();
+        node.children = node
+            .children
+            .into_iter()
+            .enumerate()
+            .map(|(idx, child)| {
+                if child.data {
+                    any_connection = true;
+                    remove_corresponding_sort_from_sub_plan(
+                        child,
+                        matches!(required_dist[idx], Distribution::SinglePartition),
+                    )
+                } else {
+                    Ok(child)
+                }
+            })
+            .collect::<Result<_>>()?;
+        if any_connection || node.children.is_empty() {
+            node = update_sort_ctx_children(node, false)?;
         }
+
         // Replace with variants that do not preserve order.
-        if is_sort_preserving_merge(plan) {
-            children.swap_remove(0)
-        } else if let Some(repartition) = plan.as_any().downcast_ref::<RepartitionExec>()
+        if is_sort_preserving_merge(&node.plan) {
+            node.children = node.children.swap_remove(0).children;
+            node.plan = node.plan.children().swap_remove(0);
+        } else if let Some(repartition) =
+            node.plan.as_any().downcast_ref::<RepartitionExec>()
         {
-            Arc::new(
-                // By default, RepartitionExec does not preserve order
-                RepartitionExec::try_new(
-                    children.swap_remove(0),
-                    repartition.partitioning().clone(),
-                )?,
-            )
-        } else {
-            plan.clone().with_new_children(children)?
+            node.plan = Arc::new(RepartitionExec::try_new(
+                node.children[0].plan.clone(),
+                repartition.output_partitioning(),
+            )?) as _;
         }
     };
     // Deleting a merging sort may invalidate distribution requirements.
     // Ensure that we stay compliant with such requirements:
-    if requires_single_partition
-        && updated_plan.output_partitioning().partition_count() > 1
+    if requires_single_partition && node.plan.output_partitioning().partition_count() > 1
     {
-        // If there is existing ordering, to preserve ordering use SortPreservingMergeExec
-        // instead of CoalescePartitionsExec.
-        if let Some(ordering) = updated_plan.output_ordering() {
-            updated_plan = Arc::new(SortPreservingMergeExec::new(
-                ordering.to_vec(),
-                updated_plan,
-            ));
+        // If there is existing ordering, to preserve ordering use
+        // `SortPreservingMergeExec` instead of a `CoalescePartitionsExec`.
+        let plan = node.plan.clone();
+        let plan = if let Some(ordering) = plan.output_ordering() {
+            Arc::new(SortPreservingMergeExec::new(ordering.to_vec(), plan)) as _
         } else {
-            updated_plan = Arc::new(CoalescePartitionsExec::new(updated_plan));
-        }
+            Arc::new(CoalescePartitionsExec::new(plan)) as _
+        };
+        node = PlanWithCorrespondingSort::new(plan, false, vec![node]);
+        node = update_sort_ctx_children(node, false)?;
     }
-    Ok(updated_plan)
+    Ok(node)
 }
 
 /// Converts an [ExecutionPlan] trait object to a [PhysicalSortExpr] slice when possible.
@@ -738,13 +561,9 @@ fn get_sort_exprs(
 ) -> Result<(&[PhysicalSortExpr], Option<usize>)> {
     if let Some(sort_exec) = sort_any.as_any().downcast_ref::<SortExec>() {
         Ok((sort_exec.expr(), sort_exec.fetch()))
-    } else if let Some(sort_preserving_merge_exec) =
-        sort_any.as_any().downcast_ref::<SortPreservingMergeExec>()
+    } else if let Some(spm) = sort_any.as_any().downcast_ref::<SortPreservingMergeExec>()
     {
-        Ok((
-            sort_preserving_merge_exec.expr(),
-            sort_preserving_merge_exec.fetch(),
-        ))
+        Ok((spm.expr(), spm.fetch()))
     } else {
         plan_err!("Given ExecutionPlan is not a SortExec or a SortPreservingMergeExec")
     }
@@ -757,17 +576,16 @@ mod tests {
     use super::*;
     use crate::physical_optimizer::enforce_distribution::EnforceDistribution;
     use crate::physical_optimizer::test_utils::{
-        aggregate_exec, bounded_window_exec, coalesce_batches_exec,
+        aggregate_exec, bounded_window_exec, check_integrity, coalesce_batches_exec,
         coalesce_partitions_exec, filter_exec, global_limit_exec, hash_join_exec,
         limit_exec, local_limit_exec, memory_exec, parquet_exec, parquet_exec_sorted,
         repartition_exec, sort_exec, sort_expr, sort_expr_options, sort_merge_join_exec,
         sort_preserving_merge_exec, spr_repartition_exec, union_exec,
     };
-    use crate::physical_optimizer::utils::get_plan_string;
     use crate::physical_plan::repartition::RepartitionExec;
-    use crate::physical_plan::{displayable, Partitioning};
+    use crate::physical_plan::{displayable, get_plan_string, Partitioning};
     use crate::prelude::{SessionConfig, SessionContext};
-    use crate::test::csv_exec_sorted;
+    use crate::test::{csv_exec_ordered, csv_exec_sorted, stream_exec_ordered};
 
     use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
@@ -775,11 +593,12 @@ mod tests {
     use datafusion_expr::JoinType;
     use datafusion_physical_expr::expressions::{col, Column, NotExpr};
 
+    use rstest::rstest;
+
     fn create_test_schema() -> Result<SchemaRef> {
         let nullable_column = Field::new("nullable_col", DataType::Int32, true);
         let non_nullable_column = Field::new("non_nullable_col", DataType::Int32, false);
         let schema = Arc::new(Schema::new(vec![nullable_column, non_nullable_column]));
-
         Ok(schema)
     }
 
@@ -814,6 +633,50 @@ mod tests {
             let config = SessionConfig::new().with_repartition_sorts($REPARTITION_SORTS);
             let session_ctx = SessionContext::new_with_config(config);
             let state = session_ctx.state();
+
+            // This file has 4 rules that use tree node, apply these rules as in the
+            // EnforSorting::optimize implementation
+            // After these operations tree nodes should be in a consistent state.
+            // This code block makes sure that these rules doesn't violate tree node integrity.
+            {
+                let plan_requirements = PlanWithCorrespondingSort::new_default($PLAN.clone());
+                let adjusted = plan_requirements
+                    .transform_up(&ensure_sorting)
+                    .and_then(check_integrity)?;
+                // TODO: End state payloads will be checked here.
+
+                let new_plan = if state.config_options().optimizer.repartition_sorts {
+                    let plan_with_coalesce_partitions =
+                        PlanWithCorrespondingCoalescePartitions::new_default(adjusted.plan);
+                    let parallel = plan_with_coalesce_partitions
+                        .transform_up(&parallelize_sorts)
+                        .and_then(check_integrity)?;
+                    // TODO: End state payloads will be checked here.
+                    parallel.plan
+                } else {
+                    adjusted.plan
+                };
+
+                let plan_with_pipeline_fixer = OrderPreservationContext::new_default(new_plan);
+                let updated_plan = plan_with_pipeline_fixer
+                    .transform_up(&|plan_with_pipeline_fixer| {
+                        replace_with_order_preserving_variants(
+                            plan_with_pipeline_fixer,
+                            false,
+                            true,
+                            state.config_options(),
+                        )
+                    })
+                    .and_then(check_integrity)?;
+                // TODO: End state payloads will be checked here.
+
+                let mut sort_pushdown = SortPushDown::new_default(updated_plan.plan);
+                assign_initial_requirements(&mut sort_pushdown);
+                sort_pushdown
+                    .transform_down(&pushdown_sorts)
+                    .and_then(check_integrity)?;
+                // TODO: End state payloads will be checked here.
+            }
 
             let physical_plan = $PLAN;
             let formatted = displayable(physical_plan.as_ref()).indent(true).to_string();
@@ -861,6 +724,7 @@ mod tests {
             "  MemoryExec: partitions=1, partition_sizes=[0]",
         ];
         assert_optimized!(expected_input, expected_optimized, physical_plan, true);
+
         Ok(())
     }
 
@@ -920,6 +784,7 @@ mod tests {
             "        SortExec: expr=[non_nullable_col@1 DESC]",
             "          MemoryExec: partitions=1, partition_sizes=[0]"];
         assert_optimized!(expected_input, expected_optimized, physical_plan, true);
+
         Ok(())
     }
 
@@ -941,6 +806,7 @@ mod tests {
             "  MemoryExec: partitions=1, partition_sizes=[0]",
         ];
         assert_optimized!(expected_input, expected_optimized, physical_plan, true);
+
         Ok(())
     }
 
@@ -967,6 +833,7 @@ mod tests {
             "  MemoryExec: partitions=1, partition_sizes=[0]",
         ];
         assert_optimized!(expected_input, expected_optimized, physical_plan, true);
+
         Ok(())
     }
 
@@ -1006,6 +873,7 @@ mod tests {
             "    MemoryExec: partitions=1, partition_sizes=[0]",
         ];
         assert_optimized!(expected_input, expected_optimized, physical_plan, true);
+
         Ok(())
     }
 
@@ -1050,6 +918,7 @@ mod tests {
             "      MemoryExec: partitions=1, partition_sizes=[0]",
         ];
         assert_optimized!(expected_input, expected_optimized, physical_plan, true);
+
         Ok(())
     }
 
@@ -1103,6 +972,7 @@ mod tests {
             "        RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
             "          MemoryExec: partitions=1, partition_sizes=[0]"];
         assert_optimized!(expected_input, expected_optimized, physical_plan, true);
+
         Ok(())
     }
 
@@ -1115,8 +985,8 @@ mod tests {
         let right_input = parquet_exec_sorted(&right_schema, parquet_sort_exprs);
 
         let on = vec![(
-            Column::new_with_schema("col_a", &left_schema)?,
-            Column::new_with_schema("c", &right_schema)?,
+            Arc::new(Column::new_with_schema("col_a", &left_schema)?) as _,
+            Arc::new(Column::new_with_schema("c", &right_schema)?) as _,
         )];
         let join = hash_join_exec(left_input, right_input, on, None, &JoinType::Inner)?;
         let physical_plan = sort_exec(vec![sort_expr("a", &join.schema())], join);
@@ -1130,6 +1000,7 @@ mod tests {
             "  MemoryExec: partitions=1, partition_sizes=[0]",
             "  ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC]"];
         assert_optimized!(expected_input, expected_optimized, physical_plan, true);
+
         Ok(())
     }
 
@@ -1159,6 +1030,7 @@ mod tests {
             "  MemoryExec: partitions=1, partition_sizes=[0]",
         ];
         assert_optimized!(expected_input, expected_optimized, physical_plan, true);
+
         Ok(())
     }
 
@@ -1201,6 +1073,7 @@ mod tests {
             "            SortExec: expr=[nullable_col@0 ASC,non_nullable_col@1 ASC]",
             "              ParquetExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col]"];
         assert_optimized!(expected_input, expected_optimized, physical_plan, true);
+
         Ok(())
     }
 
@@ -1224,6 +1097,7 @@ mod tests {
             "  MemoryExec: partitions=1, partition_sizes=[0]",
         ];
         assert_optimized!(expected_input, expected_optimized, physical_plan, true);
+
         Ok(())
     }
 
@@ -1251,6 +1125,7 @@ mod tests {
             "  MemoryExec: partitions=1, partition_sizes=[0]",
         ];
         assert_optimized!(expected_input, expected_optimized, physical_plan, true);
+
         Ok(())
     }
 
@@ -1278,6 +1153,7 @@ mod tests {
         // should not add a sort at the output of the union, input plan should not be changed
         let expected_optimized = expected_input.clone();
         assert_optimized!(expected_input, expected_optimized, physical_plan, true);
+
         Ok(())
     }
 
@@ -1309,6 +1185,7 @@ mod tests {
         // should not add a sort at the output of the union, input plan should not be changed
         let expected_optimized = expected_input.clone();
         assert_optimized!(expected_input, expected_optimized, physical_plan, true);
+
         Ok(())
     }
 
@@ -1345,6 +1222,7 @@ mod tests {
             "    SortExec: expr=[nullable_col@0 ASC,non_nullable_col@1 ASC]",
             "      ParquetExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col]"];
         assert_optimized!(expected_input, expected_optimized, physical_plan, true);
+
         Ok(())
     }
 
@@ -1386,6 +1264,7 @@ mod tests {
             "    SortExec: expr=[nullable_col@0 ASC]",
             "      ParquetExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col]"];
         assert_optimized!(expected_input, expected_optimized, physical_plan, true);
+
         Ok(())
     }
 
@@ -1427,6 +1306,7 @@ mod tests {
             "    SortExec: expr=[nullable_col@0 ASC,non_nullable_col@1 ASC]",
             "      ParquetExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col]"];
         assert_optimized!(expected_input, expected_optimized, physical_plan, true);
+
         Ok(())
     }
 
@@ -1473,6 +1353,7 @@ mod tests {
             "    SortExec: expr=[nullable_col@0 ASC]",
             "      ParquetExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col]"];
         assert_optimized!(expected_input, expected_optimized, physical_plan, true);
+
         Ok(())
     }
 
@@ -1521,6 +1402,7 @@ mod tests {
             "      RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
             "        ParquetExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col]"];
         assert_optimized!(expected_input, expected_optimized, physical_plan, true);
+
         Ok(())
     }
 
@@ -1555,6 +1437,7 @@ mod tests {
             "    SortExec: expr=[nullable_col@0 ASC]",
             "      ParquetExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col]"];
         assert_optimized!(expected_input, expected_output, physical_plan, true);
+
         Ok(())
     }
 
@@ -1603,6 +1486,7 @@ mod tests {
             "  ParquetExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col]",
             "  ParquetExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col]"];
         assert_optimized!(expected_input, expected_optimized, physical_plan, true);
+
         Ok(())
     }
 
@@ -1652,6 +1536,7 @@ mod tests {
             "      ParquetExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], output_ordering=[nullable_col@0 ASC, non_nullable_col@1 ASC]",
             "      ParquetExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], output_ordering=[nullable_col@0 ASC]"];
         assert_optimized!(expected_input, expected_optimized, physical_plan, true);
+
         Ok(())
     }
 
@@ -1688,6 +1573,7 @@ mod tests {
             "      ParquetExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], output_ordering=[nullable_col@0 ASC]",
             "      ParquetExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], output_ordering=[nullable_col@0 ASC]"];
         assert_optimized!(expected_input, expected_optimized, physical_plan, true);
+
         Ok(())
     }
 
@@ -1739,6 +1625,7 @@ mod tests {
             "        SortExec: expr=[nullable_col@0 ASC,non_nullable_col@1 DESC NULLS LAST]",
             "          ParquetExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col]"];
         assert_optimized!(expected_input, expected_optimized, physical_plan, true);
+
         Ok(())
     }
 
@@ -1752,8 +1639,9 @@ mod tests {
 
         // Join on (nullable_col == col_a)
         let join_on = vec![(
-            Column::new_with_schema("nullable_col", &left.schema()).unwrap(),
-            Column::new_with_schema("col_a", &right.schema()).unwrap(),
+            Arc::new(Column::new_with_schema("nullable_col", &left.schema()).unwrap())
+                as _,
+            Arc::new(Column::new_with_schema("col_a", &right.schema()).unwrap()) as _,
         )];
 
         let join_types = vec![
@@ -1824,8 +1712,9 @@ mod tests {
 
         // Join on (nullable_col == col_a)
         let join_on = vec![(
-            Column::new_with_schema("nullable_col", &left.schema()).unwrap(),
-            Column::new_with_schema("col_a", &right.schema()).unwrap(),
+            Arc::new(Column::new_with_schema("nullable_col", &left.schema()).unwrap())
+                as _,
+            Arc::new(Column::new_with_schema("col_a", &right.schema()).unwrap()) as _,
         )];
 
         let join_types = vec![
@@ -1898,8 +1787,9 @@ mod tests {
 
         // Join on (nullable_col == col_a)
         let join_on = vec![(
-            Column::new_with_schema("nullable_col", &left.schema()).unwrap(),
-            Column::new_with_schema("col_a", &right.schema()).unwrap(),
+            Arc::new(Column::new_with_schema("nullable_col", &left.schema()).unwrap())
+                as _,
+            Arc::new(Column::new_with_schema("col_a", &right.schema()).unwrap()) as _,
         )];
 
         let join = sort_merge_join_exec(left, right, &join_on, &JoinType::Inner);
@@ -1982,6 +1872,7 @@ mod tests {
             "      SortExec: expr=[nullable_col@0 ASC,non_nullable_col@1 ASC]",
             "        MemoryExec: partitions=1, partition_sizes=[0]"];
         assert_optimized!(expected_input, expected_optimized, physical_plan, true);
+
         Ok(())
     }
 
@@ -2016,6 +1907,7 @@ mod tests {
             "      RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
             "        ParquetExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col]"];
         assert_optimized!(expected_input, expected_optimized, physical_plan, true);
+
         Ok(())
     }
 
@@ -2108,6 +2000,7 @@ mod tests {
             "      MemoryExec: partitions=1, partition_sizes=[0]",
         ];
         assert_optimized!(expected_input, expected_optimized, physical_plan, true);
+
         Ok(())
     }
 
@@ -2115,7 +2008,7 @@ mod tests {
     async fn test_with_lost_ordering_bounded() -> Result<()> {
         let schema = create_test_schema3()?;
         let sort_exprs = vec![sort_expr("a", &schema)];
-        let source = csv_exec_sorted(&schema, sort_exprs, false);
+        let source = csv_exec_sorted(&schema, sort_exprs);
         let repartition_rr = repartition_exec(source);
         let repartition_hash = Arc::new(RepartitionExec::try_new(
             repartition_rr,
@@ -2135,14 +2028,23 @@ mod tests {
             "      RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
             "        CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], has_header=false"];
         assert_optimized!(expected_input, expected_optimized, physical_plan, true);
+
         Ok(())
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn test_with_lost_ordering_unbounded() -> Result<()> {
+    async fn test_with_lost_ordering_unbounded_bounded(
+        #[values(false, true)] source_unbounded: bool,
+    ) -> Result<()> {
         let schema = create_test_schema3()?;
         let sort_exprs = vec![sort_expr("a", &schema)];
-        let source = csv_exec_sorted(&schema, sort_exprs, true);
+        // create either bounded or unbounded source
+        let source = if source_unbounded {
+            stream_exec_ordered(&schema, sort_exprs)
+        } else {
+            csv_exec_ordered(&schema, sort_exprs)
+        };
         let repartition_rr = repartition_exec(source);
         let repartition_hash = Arc::new(RepartitionExec::try_new(
             repartition_rr,
@@ -2151,49 +2053,72 @@ mod tests {
         let coalesce_partitions = coalesce_partitions_exec(repartition_hash);
         let physical_plan = sort_exec(vec![sort_expr("a", &schema)], coalesce_partitions);
 
-        let expected_input = [
+        // Expected inputs unbounded and bounded
+        let expected_input_unbounded = vec![
             "SortExec: expr=[a@0 ASC]",
             "  CoalescePartitionsExec",
             "    RepartitionExec: partitioning=Hash([c@2], 10), input_partitions=10",
             "      RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
-            "        CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], infinite_source=true, output_ordering=[a@0 ASC], has_header=false"
+            "        StreamingTableExec: partition_sizes=1, projection=[a, b, c, d, e], infinite_source=true, output_ordering=[a@0 ASC]",
         ];
-        let expected_optimized = [
-            "SortPreservingMergeExec: [a@0 ASC]",
-            "  SortPreservingRepartitionExec: partitioning=Hash([c@2], 10), input_partitions=10, sort_exprs=a@0 ASC",
-            "    RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
-            "      CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], infinite_source=true, output_ordering=[a@0 ASC], has_header=false",
-        ];
-        assert_optimized!(expected_input, expected_optimized, physical_plan, true);
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_with_lost_ordering_unbounded_parallelize_off() -> Result<()> {
-        let schema = create_test_schema3()?;
-        let sort_exprs = vec![sort_expr("a", &schema)];
-        let source = csv_exec_sorted(&schema, sort_exprs, true);
-        let repartition_rr = repartition_exec(source);
-        let repartition_hash = Arc::new(RepartitionExec::try_new(
-            repartition_rr,
-            Partitioning::Hash(vec![col("c", &schema).unwrap()], 10),
-        )?) as _;
-        let coalesce_partitions = coalesce_partitions_exec(repartition_hash);
-        let physical_plan = sort_exec(vec![sort_expr("a", &schema)], coalesce_partitions);
-
-        let expected_input = ["SortExec: expr=[a@0 ASC]",
+        let expected_input_bounded = vec![
+            "SortExec: expr=[a@0 ASC]",
             "  CoalescePartitionsExec",
             "    RepartitionExec: partitioning=Hash([c@2], 10), input_partitions=10",
             "      RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
-            "        CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], infinite_source=true, output_ordering=[a@0 ASC], has_header=false"
+            "        CsvExec: file_groups={1 group: [[file_path]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], has_header=true",
         ];
-        let expected_optimized = [
+
+        // Expected unbounded result (same for with and without flag)
+        let expected_optimized_unbounded = vec![
             "SortPreservingMergeExec: [a@0 ASC]",
-            "  SortPreservingRepartitionExec: partitioning=Hash([c@2], 10), input_partitions=10, sort_exprs=a@0 ASC",
+            "  RepartitionExec: partitioning=Hash([c@2], 10), input_partitions=10, preserve_order=true, sort_exprs=a@0 ASC",
             "    RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
-            "      CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], infinite_source=true, output_ordering=[a@0 ASC], has_header=false",
+            "      StreamingTableExec: partition_sizes=1, projection=[a, b, c, d, e], infinite_source=true, output_ordering=[a@0 ASC]",
         ];
-        assert_optimized!(expected_input, expected_optimized, physical_plan, false);
+
+        // Expected bounded results with and without flag
+        let expected_optimized_bounded = vec![
+            "SortExec: expr=[a@0 ASC]",
+            "  CoalescePartitionsExec",
+            "    RepartitionExec: partitioning=Hash([c@2], 10), input_partitions=10",
+            "      RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
+            "        CsvExec: file_groups={1 group: [[file_path]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], has_header=true",
+        ];
+        let expected_optimized_bounded_parallelize_sort = vec![
+            "SortPreservingMergeExec: [a@0 ASC]",
+            "  SortExec: expr=[a@0 ASC]",
+            "    RepartitionExec: partitioning=Hash([c@2], 10), input_partitions=10",
+            "      RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
+            "        CsvExec: file_groups={1 group: [[file_path]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], has_header=true",
+        ];
+        let (expected_input, expected_optimized, expected_optimized_sort_parallelize) =
+            if source_unbounded {
+                (
+                    expected_input_unbounded,
+                    expected_optimized_unbounded.clone(),
+                    expected_optimized_unbounded,
+                )
+            } else {
+                (
+                    expected_input_bounded,
+                    expected_optimized_bounded,
+                    expected_optimized_bounded_parallelize_sort,
+                )
+            };
+        assert_optimized!(
+            expected_input,
+            expected_optimized,
+            physical_plan.clone(),
+            false
+        );
+        assert_optimized!(
+            expected_input,
+            expected_optimized_sort_parallelize,
+            physical_plan,
+            true
+        );
+
         Ok(())
     }
 
@@ -2201,7 +2126,7 @@ mod tests {
     async fn test_do_not_pushdown_through_spm() -> Result<()> {
         let schema = create_test_schema3()?;
         let sort_exprs = vec![sort_expr("a", &schema), sort_expr("b", &schema)];
-        let source = csv_exec_sorted(&schema, sort_exprs.clone(), false);
+        let source = csv_exec_sorted(&schema, sort_exprs.clone());
         let repartition_rr = repartition_exec(source);
         let spm = sort_preserving_merge_exec(sort_exprs, repartition_rr);
         let physical_plan = sort_exec(vec![sort_expr("b", &schema)], spm);
@@ -2215,6 +2140,7 @@ mod tests {
             "    RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
             "      CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC, b@1 ASC], has_header=false",];
         assert_optimized!(expected_input, expected_optimized, physical_plan, false);
+
         Ok(())
     }
 
@@ -2222,7 +2148,7 @@ mod tests {
     async fn test_pushdown_through_spm() -> Result<()> {
         let schema = create_test_schema3()?;
         let sort_exprs = vec![sort_expr("a", &schema), sort_expr("b", &schema)];
-        let source = csv_exec_sorted(&schema, sort_exprs.clone(), false);
+        let source = csv_exec_sorted(&schema, sort_exprs.clone());
         let repartition_rr = repartition_exec(source);
         let spm = sort_preserving_merge_exec(sort_exprs, repartition_rr);
         let physical_plan = sort_exec(
@@ -2243,6 +2169,7 @@ mod tests {
             "    RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
             "      CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC, b@1 ASC], has_header=false",];
         assert_optimized!(expected_input, expected_optimized, physical_plan, false);
+
         Ok(())
     }
 
@@ -2250,7 +2177,7 @@ mod tests {
     async fn test_window_multi_layer_requirement() -> Result<()> {
         let schema = create_test_schema3()?;
         let sort_exprs = vec![sort_expr("a", &schema), sort_expr("b", &schema)];
-        let source = csv_exec_sorted(&schema, vec![], false);
+        let source = csv_exec_sorted(&schema, vec![]);
         let sort = sort_exec(sort_exprs.clone(), source);
         let repartition = repartition_exec(sort);
         let repartition = spr_repartition_exec(repartition);
@@ -2261,7 +2188,7 @@ mod tests {
         let expected_input = [
             "BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow }], mode=[Sorted]",
             "  SortPreservingMergeExec: [a@0 ASC,b@1 ASC]",
-            "    SortPreservingRepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=10, sort_exprs=a@0 ASC,b@1 ASC",
+            "    RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=10, preserve_order=true, sort_exprs=a@0 ASC,b@1 ASC",
             "      RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
             "        SortExec: expr=[a@0 ASC,b@1 ASC]",
             "          CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], has_header=false",
@@ -2275,6 +2202,7 @@ mod tests {
             "          CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], has_header=false",
         ];
         assert_optimized!(expected_input, expected_optimized, physical_plan, false);
+
         Ok(())
     }
 }

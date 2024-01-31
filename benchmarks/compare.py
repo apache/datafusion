@@ -109,7 +109,6 @@ def compare(
     noise_threshold: float,
 ) -> None:
     baseline = BenchmarkRun.load_from_file(baseline_path)
-
     comparison = BenchmarkRun.load_from_file(comparison_path)
 
     console = Console()
@@ -124,27 +123,57 @@ def compare(
     table.add_column(comparison_header, justify="right", style="dim")
     table.add_column("Change", justify="right", style="dim")
 
+    faster_count = 0
+    slower_count = 0
+    no_change_count = 0
+    total_baseline_time = 0
+    total_comparison_time = 0
+
     for baseline_result, comparison_result in zip(baseline.queries, comparison.queries):
         assert baseline_result.query == comparison_result.query
+
+        total_baseline_time += baseline_result.execution_time
+        total_comparison_time += comparison_result.execution_time
 
         change = comparison_result.execution_time / baseline_result.execution_time
 
         if (1.0 - noise_threshold) <= change <= (1.0 + noise_threshold):
-            change = "no change"
+            change_text = "no change"
+            no_change_count += 1
         elif change < 1.0:
-            change = f"+{(1 / change):.2f}x faster"
+            change_text = f"+{(1 / change):.2f}x faster"
+            faster_count += 1
         else:
-            change = f"{change:.2f}x slower"
+            change_text = f"{change:.2f}x slower"
+            slower_count += 1
 
         table.add_row(
             f"Q{baseline_result.query}",
             f"{baseline_result.execution_time:.2f}ms",
             f"{comparison_result.execution_time:.2f}ms",
-            change,
+            change_text,
         )
 
     console.print(table)
 
+    # Calculate averages
+    avg_baseline_time = total_baseline_time / len(baseline.queries)
+    avg_comparison_time = total_comparison_time / len(comparison.queries)
+
+    # Summary table
+    summary_table = Table(show_header=True, header_style="bold magenta")
+    summary_table.add_column("Benchmark Summary", justify="left", style="dim")
+    summary_table.add_column("", justify="right", style="dim")
+
+    summary_table.add_row(f"Total Time ({baseline_header})", f"{total_baseline_time:.2f}ms")
+    summary_table.add_row(f"Total Time ({comparison_header})", f"{total_comparison_time:.2f}ms")
+    summary_table.add_row(f"Average Time ({baseline_header})", f"{avg_baseline_time:.2f}ms")
+    summary_table.add_row(f"Average Time ({comparison_header})", f"{avg_comparison_time:.2f}ms")
+    summary_table.add_row("Queries Faster", str(faster_count))
+    summary_table.add_row("Queries Slower", str(slower_count))
+    summary_table.add_row("Queries with No Change", str(no_change_count))
+
+    console.print(summary_table)
 
 def main() -> None:
     parser = ArgumentParser()

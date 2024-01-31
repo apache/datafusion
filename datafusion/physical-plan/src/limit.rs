@@ -877,8 +877,7 @@ mod tests {
             AggregateMode::Final,
             build_group_by(&csv.schema().clone(), vec!["i".to_string()]),
             vec![],
-            vec![None],
-            vec![None],
+            vec![],
             csv.clone(),
             csv.schema().clone(),
         )?;

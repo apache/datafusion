@@ -74,6 +74,7 @@ message LogicalPlanNode {
     PrepareNode prepare = 26;
     DropViewNode drop_view = 27;
     DistinctOnNode distinct_on = 28;
+    CopyToNode copy_to = 29;
   }
 }
 
@@ -211,11 +212,13 @@ message CreateExternalTableNode {
   bool if_not_exists = 7;
   string delimiter = 8;
   string definition = 9;
-  string file_compression_type = 10;
+  reserved 10; // was string file_compression_type
+  CompressionTypeVariant file_compression_type = 17;
   repeated LogicalExprNodeCollection order_exprs = 13;
   bool unbounded = 14;
   map<string, string> options = 11;
   Constraints constraints = 15;
+  map<string, LogicalExprNode> column_defaults = 16;
 }
 
 message PrepareNode {
@@ -316,6 +319,25 @@ message DistinctOnNode {
   LogicalPlanNode input = 4;
 }
 
+message CopyToNode {
+    LogicalPlanNode input = 1;
+    string output_url = 2;
+    oneof CopyOptions {
+        SQLOptions sql_options = 4;
+        FileTypeWriterOptions writer_options = 5;
+    }
+    string file_type = 6;
+}
+
+message SQLOptions {
+  repeated SQLOption option = 1;
+}
+
+message SQLOption {
+    string key = 1;
+    string value = 2;
+}
+
 message UnionNode {
   repeated LogicalPlanNode inputs = 1;
 }
@@ -408,7 +430,7 @@ message LogicalExprNode {
 }
 
 message Wildcard {
-  optional string qualifier = 1;
+  string qualifier = 1;
 }
 
 message PlaceholderNode {
@@ -443,6 +465,7 @@ message ListIndex {
 message ListRange {
   LogicalExprNode start = 1;
   LogicalExprNode stop = 2;
+  LogicalExprNode stride = 3;
 }
 
 message GetIndexedField {
@@ -616,8 +639,6 @@ enum ScalarFunction {
   Cardinality = 98;
   ArrayElement = 99;
   ArraySlice = 100;
-  Encode = 101;
-  Decode = 102;
   Cot = 103;
   ArrayHas = 104;
   ArrayHasAny = 105;
@@ -641,6 +662,15 @@ enum ScalarFunction {
   ArrayExcept = 123;
   ArrayPopFront = 124;
   Levenshtein = 125;
+  SubstrIndex = 126;
+  FindInSet = 127;
+  ArraySort = 128;
+  ArrayDistinct = 129;
+  ArrayResize = 130;
+  EndsWith = 131;
+  InStr = 132;
+  MakeDate = 133;
+  ArrayReverse = 134;
 }
 
 message ScalarFunctionNode {
@@ -687,6 +717,7 @@ enum AggregateFunction {
   REGR_SYY = 33;
   REGR_SXY = 34;
   STRING_AGG = 35;
+  NTH_VALUE_AGG = 36;
 }
 
 message AggregateExprNode {
@@ -836,6 +867,8 @@ message Field {
   // for complex data types like structs, unions
   repeated Field children = 4;
   map<string, string> metadata = 5;
+  int64 dict_id = 6;
+  bool dict_ordered = 7;
 }
 
 message FixedSizeBinary{
@@ -984,6 +1017,7 @@ message ScalarValue{
     // Literal Date32 value always has a unit of day
     int32  date_32_value = 14;
     ScalarTime32Value time32_value = 15;
+    ScalarListValue large_list_value = 16;
     ScalarListValue list_value = 17;
     ScalarListValue fixed_size_list_value = 18;
 
@@ -1155,6 +1189,11 @@ message PhysicalPlanNode {
     NestedLoopJoinExecNode nested_loop_join = 22;
     AnalyzeExecNode analyze = 23;
     JsonSinkExecNode json_sink = 24;
+    SymmetricHashJoinExecNode symmetric_hash_join = 25;
+    InterleaveExecNode  interleave = 26;
+    PlaceholderRowExecNode placeholder_row = 27;
+    CsvSinkExecNode csv_sink = 28;
+    ParquetSinkExecNode parquet_sink = 29;
   }
 }
 
@@ -1174,11 +1213,49 @@ message PartitionColumn {
 message FileTypeWriterOptions {
   oneof FileType {
     JsonWriterOptions json_options = 1;
+    ParquetWriterOptions parquet_options = 2;
+    CsvWriterOptions csv_options = 3;
+    ArrowWriterOptions arrow_options = 4;
   }
 }
 
 message JsonWriterOptions {
   CompressionTypeVariant compression = 1;
+}
+
+message ParquetWriterOptions {
+    WriterProperties writer_properties = 1;
+}
+
+message CsvWriterOptions {
+  // Compression type
+  CompressionTypeVariant compression = 1;
+  // Optional column delimiter. Defaults to `b','`
+  string delimiter = 2;
+  // Whether to write column names as file headers. Defaults to `true`
+  bool has_header = 3;
+  // Optional date format for date arrays
+  string date_format = 4;
+  // Optional datetime format for datetime arrays
+  string datetime_format = 5;
+  // Optional timestamp format for timestamp arrays
+  string timestamp_format = 6;
+  // Optional time format for time arrays
+  string time_format = 7;
+  // Optional value to represent null
+  string null_value = 8;
+}
+
+message ArrowWriterOptions {}
+
+message WriterProperties {
+  uint64 data_page_size_limit = 1;
+  uint64 dictionary_page_size_limit = 2;
+  uint64 data_page_row_count_limit = 3;
+  uint64 write_batch_size = 4;
+  uint64 max_row_group_size = 5;
+  string writer_version = 6;
+  string created_by = 7;
 }
 
 message FileSinkConfig {
@@ -1189,10 +1266,8 @@ message FileSinkConfig {
   repeated string table_paths = 3;
   Schema output_schema = 4;
   repeated PartitionColumn table_partition_cols = 5;
-  bool single_file_output = 7;
-  bool unbounded_input = 8;
-  bool overwrite = 9;
-  FileTypeWriterOptions file_type_writer_options = 10;
+  bool overwrite = 8;
+  FileTypeWriterOptions file_type_writer_options = 9;
 }
 
 message JsonSink {
@@ -1202,6 +1277,28 @@ message JsonSink {
 message JsonSinkExecNode {
   PhysicalPlanNode input = 1;
   JsonSink sink = 2;
+  Schema sink_schema = 3;
+  PhysicalSortExprNodeCollection sort_order = 4;
+}
+
+message CsvSink {
+  FileSinkConfig config = 1;
+}
+
+message CsvSinkExecNode {
+  PhysicalPlanNode input = 1;
+  CsvSink sink = 2;
+  Schema sink_schema = 3;
+  PhysicalSortExprNodeCollection sort_order = 4;
+}
+
+message ParquetSink {
+  FileSinkConfig config = 1;
+}
+
+message ParquetSinkExecNode {
+  PhysicalPlanNode input = 1;
+  ParquetSink sink = 2;
   Schema sink_schema = 3;
   PhysicalSortExprNodeCollection sort_order = 4;
 }
@@ -1364,6 +1461,7 @@ message PhysicalNegativeNode {
 message FilterExecNode {
   PhysicalPlanNode input = 1;
   PhysicalExprNode expr = 2;
+  uint32 default_filter_selectivity = 3;
 }
 
 message FileGroup {
@@ -1432,6 +1530,27 @@ message HashJoinExecNode {
   JoinFilter filter = 8;
 }
 
+enum StreamPartitionMode {
+  SINGLE_PARTITION = 0;
+  PARTITIONED_EXEC = 1;
+}
+
+message SymmetricHashJoinExecNode {
+  PhysicalPlanNode left = 1;
+  PhysicalPlanNode right = 2;
+  repeated JoinOn on = 3;
+  JoinType join_type = 4;
+  StreamPartitionMode partition_mode = 6;
+  bool null_equals_null = 7;
+  JoinFilter filter = 8;
+  repeated PhysicalSortExprNode left_sort_exprs = 9;
+  repeated PhysicalSortExprNode right_sort_exprs = 10;
+}
+
+message InterleaveExecNode {
+  repeated PhysicalPlanNode inputs = 1;
+}
+
 message UnionExecNode {
   repeated PhysicalPlanNode inputs = 1;
 }
@@ -1460,13 +1579,16 @@ message PhysicalColumn {
 }
 
 message JoinOn {
-  PhysicalColumn left = 1;
-  PhysicalColumn right = 2;
+  PhysicalExprNode left = 1;
+  PhysicalExprNode right = 2;
 }
 
 message EmptyExecNode {
-  bool produce_one_row = 1;
-  Schema schema = 2;
+  Schema schema = 1;
+}
+
+message PlaceholderRowExecNode {
+  Schema schema = 1;
 }
 
 message ProjectionExecNode {
@@ -1483,7 +1605,7 @@ enum AggregateMode {
   SINGLE_PARTITIONED = 4;
 }
 
-message PartiallySortedPartitionSearchMode {
+message PartiallySortedInputOrderMode {
   repeated uint64 columns = 6;
 }
 
@@ -1492,9 +1614,9 @@ message WindowAggExecNode {
   repeated PhysicalWindowExprNode window_expr = 2;
   repeated PhysicalExprNode partition_keys = 5;
   // Set optional to `None` for `BoundedWindowAggExec`.
-  oneof partition_search_mode {
+  oneof input_order_mode {
     EmptyMessage linear = 7;
-    PartiallySortedPartitionSearchMode partially_sorted = 8;
+    PartiallySortedInputOrderMode partially_sorted = 8;
     EmptyMessage sorted = 9;
   }
 }
@@ -1519,7 +1641,6 @@ message AggregateExecNode {
   repeated PhysicalExprNode null_expr = 8;
   repeated bool groups = 9;
   repeated MaybeFilter filter_expr = 10;
-  repeated MaybePhysicalSortExprs order_by_expr = 11;
 }
 
 message GlobalLimitExecNode {
@@ -1651,6 +1772,7 @@ message ListIndexExpr {
 message ListRangeExpr {
   PhysicalExprNode start = 1;
   PhysicalExprNode stop = 2;
+  PhysicalExprNode stride = 3;
 }
 
 message PhysicalGetIndexedFieldExprNode {

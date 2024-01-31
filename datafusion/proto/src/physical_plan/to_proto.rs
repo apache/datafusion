@@ -27,11 +27,16 @@ use crate::protobuf::{
     physical_aggregate_expr_node, PhysicalSortExprNode, PhysicalSortExprNodeCollection,
     ScalarValue,
 };
+
+#[cfg(feature = "parquet")]
+use datafusion::datasource::file_format::parquet::ParquetSink;
+
+use crate::logical_plan::{csv_writer_options_to_proto, writer_properties_to_proto};
 use datafusion::datasource::{
-    file_format::json::JsonSink, physical_plan::FileScanConfig,
-};
-use datafusion::datasource::{
+    file_format::csv::CsvSink,
+    file_format::json::JsonSink,
     listing::{FileRange, PartitionedFile},
+    physical_plan::FileScanConfig,
     physical_plan::FileSinkConfig,
 };
 use datafusion::logical_expr::BuiltinScalarFunction;
@@ -44,9 +49,9 @@ use datafusion::physical_plan::expressions::{
     CastExpr, Column, Correlation, Count, Covariance, CovariancePop, CumeDist,
     DistinctArrayAgg, DistinctBitXor, DistinctCount, DistinctSum, FirstValue, Grouping,
     InListExpr, IsNotNullExpr, IsNullExpr, LastValue, LikeExpr, Literal, Max, Median,
-    Min, NegativeExpr, NotExpr, NthValue, Ntile, OrderSensitiveArrayAgg, Rank, RankType,
-    Regr, RegrType, RowNumber, Stddev, StddevPop, Sum, TryCastExpr, Variance,
-    VariancePop, WindowShift,
+    Min, NegativeExpr, NotExpr, NthValue, NthValueAgg, Ntile, OrderSensitiveArrayAgg,
+    Rank, RankType, Regr, RegrType, RowNumber, Stddev, StddevPop, StringAgg, Sum,
+    TryCastExpr, Variance, VariancePop, WindowShift,
 };
 use datafusion::physical_plan::udaf::AggregateFunctionExpr;
 use datafusion::physical_plan::windows::{BuiltInWindowExpr, PlainAggregateWindowExpr};
@@ -180,7 +185,7 @@ impl TryFrom<Arc<dyn WindowExpr>> for protobuf::PhysicalWindowExprNode {
                         args.insert(
                             1,
                             Arc::new(Literal::new(
-                                datafusion_common::ScalarValue::Int64(Some(n as i64)),
+                                datafusion_common::ScalarValue::Int64(Some(n)),
                             )),
                         );
                         protobuf::BuiltInWindowFunction::NthValue
@@ -358,6 +363,10 @@ fn aggr_expr_to_aggr_fn(expr: &dyn AggregateExpr) -> Result<AggrFn> {
         protobuf::AggregateFunction::FirstValueAgg
     } else if aggr_expr.downcast_ref::<LastValue>().is_some() {
         protobuf::AggregateFunction::LastValueAgg
+    } else if aggr_expr.downcast_ref::<StringAgg>().is_some() {
+        protobuf::AggregateFunction::StringAgg
+    } else if aggr_expr.downcast_ref::<NthValueAgg>().is_some() {
+        protobuf::AggregateFunction::NthValueAgg
     } else {
         return not_impl_err!("Aggregate function not supported: {expr:?}");
     };
@@ -553,12 +562,15 @@ impl TryFrom<Arc<dyn PhysicalExpr>> for protobuf::PhysicalExprNode {
                         key: Some(Box::new(key.to_owned().try_into()?))
                     }))
                 ),
-                GetFieldAccessExpr::ListRange{start, stop} => Some(
-                    protobuf::physical_get_indexed_field_expr_node::Field::ListRangeExpr(Box::new(protobuf::ListRangeExpr {
-                        start: Some(Box::new(start.to_owned().try_into()?)),
-                        stop: Some(Box::new(stop.to_owned().try_into()?)),
-                    }))
-                ),
+                GetFieldAccessExpr::ListRange { start, stop, stride } => {
+                    Some(
+                        protobuf::physical_get_indexed_field_expr_node::Field::ListRangeExpr(Box::new(protobuf::ListRangeExpr {
+                            start: Some(Box::new(start.to_owned().try_into()?)),
+                            stop: Some(Box::new(stop.to_owned().try_into()?)),
+                            stride: Some(Box::new(stride.to_owned().try_into()?)),
+                        }))
+                    )
+                }
             };
 
             Ok(protobuf::PhysicalExprNode {
@@ -814,6 +826,27 @@ impl TryFrom<&JsonSink> for protobuf::JsonSink {
     }
 }
 
+impl TryFrom<&CsvSink> for protobuf::CsvSink {
+    type Error = DataFusionError;
+
+    fn try_from(value: &CsvSink) -> Result<Self, Self::Error> {
+        Ok(Self {
+            config: Some(value.config().try_into()?),
+        })
+    }
+}
+
+#[cfg(feature = "parquet")]
+impl TryFrom<&ParquetSink> for protobuf::ParquetSink {
+    type Error = DataFusionError;
+
+    fn try_from(value: &ParquetSink) -> Result<Self, Self::Error> {
+        Ok(Self {
+            config: Some(value.config().try_into()?),
+        })
+    }
+}
+
 impl TryFrom<&FileSinkConfig> for protobuf::FileSinkConfig {
     type Error = DataFusionError;
 
@@ -845,8 +878,6 @@ impl TryFrom<&FileSinkConfig> for protobuf::FileSinkConfig {
             table_paths,
             output_schema: Some(conf.output_schema.as_ref().try_into()?),
             table_partition_cols,
-            single_file_output: conf.single_file_output,
-            unbounded_input: conf.unbounded_input,
             overwrite: conf.overwrite,
             file_type_writer_options: Some(file_type_writer_options.try_into()?),
         })
@@ -871,13 +902,21 @@ impl TryFrom<&FileTypeWriterOptions> for protobuf::FileTypeWriterOptions {
     fn try_from(opts: &FileTypeWriterOptions) -> Result<Self, Self::Error> {
         let file_type = match opts {
             #[cfg(feature = "parquet")]
-            FileTypeWriterOptions::Parquet(ParquetWriterOptions {
-                writer_options: _,
-            }) => return not_impl_err!("Parquet file sink protobuf serialization"),
+            FileTypeWriterOptions::Parquet(ParquetWriterOptions { writer_options }) => {
+                protobuf::file_type_writer_options::FileType::ParquetOptions(
+                    protobuf::ParquetWriterOptions {
+                        writer_properties: Some(writer_properties_to_proto(
+                            writer_options,
+                        )),
+                    },
+                )
+            }
             FileTypeWriterOptions::CSV(CsvWriterOptions {
-                writer_options: _,
-                compression: _,
-            }) => return not_impl_err!("CSV file sink protobuf serialization"),
+                writer_options,
+                compression,
+            }) => protobuf::file_type_writer_options::FileType::CsvOptions(
+                csv_writer_options_to_proto(writer_options, compression),
+            ),
             FileTypeWriterOptions::JSON(JsonWriterOptions { compression }) => {
                 let compression: protobuf::CompressionTypeVariant = compression.into();
                 protobuf::file_type_writer_options::FileType::JsonOptions(

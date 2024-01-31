@@ -58,5 +58,16 @@ select struct(a, b, c) from values;
 {c0: 2, c1: 2.2, c2: b}
 {c0: 3, c1: 3.3, c2: c}
 
+# explain struct scalar function with columns #1
+query TT
+explain select struct(a, b, c) from values;
+----
+logical_plan
+Projection: struct(values.a, values.b, values.c)
+--TableScan: values projection=[a, b, c]
+physical_plan
+ProjectionExec: expr=[struct(a@0, b@1, c@2) as struct(values.a,values.b,values.c)]
+--MemoryExec: partitions=1, partition_sizes=[1]
+
 statement ok
 drop table values;

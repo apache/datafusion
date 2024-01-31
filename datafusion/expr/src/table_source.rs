@@ -103,4 +103,9 @@ pub trait TableSource: Sync + Send {
     fn get_logical_plan(&self) -> Option<&LogicalPlan> {
         None
     }
+
+    /// Get the default value for a column, if available.
+    fn get_column_default(&self, _column: &str) -> Option<&Expr> {
+        None
+    }
 }

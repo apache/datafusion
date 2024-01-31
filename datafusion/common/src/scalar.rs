@@ -19,39 +19,86 @@
 
 use std::borrow::Borrow;
 use std::cmp::Ordering;
-use std::collections::HashSet;
-use std::convert::{Infallible, TryInto};
+use std::collections::{HashSet, VecDeque};
+use std::convert::{Infallible, TryFrom, TryInto};
+use std::fmt;
+use std::hash::Hash;
+use std::iter::repeat;
 use std::str::FromStr;
-use std::{convert::TryFrom, fmt, iter::repeat, sync::Arc};
+use std::sync::Arc;
 
+use crate::arrow_datafusion_err;
 use crate::cast::{
     as_decimal128_array, as_decimal256_array, as_dictionary_array,
     as_fixed_size_binary_array, as_fixed_size_list_array, as_struct_array,
 };
 use crate::error::{DataFusionError, Result, _internal_err, _not_impl_err};
 use crate::hash_utils::create_hashes;
-use crate::utils::array_into_list_array;
-use arrow::buffer::{NullBuffer, OffsetBuffer};
+use crate::utils::{
+    array_into_fixed_size_list_array, array_into_large_list_array, array_into_list_array,
+};
 use arrow::compute::kernels::numeric::*;
-use arrow::datatypes::{i256, Fields, SchemaBuilder};
+use arrow::util::display::{ArrayFormatter, FormatOptions};
 use arrow::{
     array::*,
     compute::kernels::cast::{cast_with_options, CastOptions},
     datatypes::{
-        ArrowDictionaryKeyType, ArrowNativeType, DataType, Field, Float32Type,
-        Float64Type, Int16Type, Int32Type, Int64Type, Int8Type, IntervalDayTimeType,
-        IntervalMonthDayNanoType, IntervalUnit, IntervalYearMonthType, TimeUnit,
-        TimestampMicrosecondType, TimestampMillisecondType, TimestampNanosecondType,
-        TimestampSecondType, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
-        DECIMAL128_MAX_PRECISION,
+        i256, ArrowDictionaryKeyType, ArrowNativeType, ArrowTimestampType, DataType,
+        Field, Fields, Float32Type, Int16Type, Int32Type, Int64Type, Int8Type,
+        IntervalDayTimeType, IntervalMonthDayNanoType, IntervalUnit,
+        IntervalYearMonthType, SchemaBuilder, TimeUnit, TimestampMicrosecondType,
+        TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType,
+        UInt16Type, UInt32Type, UInt64Type, UInt8Type, DECIMAL128_MAX_PRECISION,
     },
 };
 use arrow_array::cast::as_list_array;
-use arrow_array::{ArrowNativeTypeOp, Scalar};
 
-/// Represents a dynamically typed, nullable single value.
-/// This is the single-valued counter-part to arrow's [`Array`].
+/// A dynamically typed, nullable single value, (the single-valued counter-part
+/// to arrow's [`Array`])
 ///
+/// # Performance
+///
+/// In general, please use arrow [`Array`]s rather than [`ScalarValue`] whenever
+/// possible, as it is far more efficient for multiple values.
+///
+/// # Example
+/// ```
+/// # use datafusion_common::ScalarValue;
+/// // Create single scalar value for an Int32 value
+/// let s1 = ScalarValue::Int32(Some(10));
+///
+/// // You can also create values using the From impl:
+/// let s2 = ScalarValue::from(10i32);
+/// assert_eq!(s1, s2);
+/// ```
+///
+/// # Null Handling
+///
+/// `ScalarValue` represents null values in the same way as Arrow. Nulls are
+/// "typed" in the sense that a null value in an [`Int32Array`] is different
+/// than a null value in a [`Float64Array`], and is different than the values in
+/// a [`NullArray`].
+///
+/// ```
+/// # fn main() -> datafusion_common::Result<()> {
+/// # use std::collections::hash_set::Difference;
+/// # use datafusion_common::ScalarValue;
+/// # use arrow::datatypes::DataType;
+/// // You can create a 'null' Int32 value directly:
+/// let s1 = ScalarValue::Int32(None);
+///
+/// // You can also create a null value for a given datatype:
+/// let s2 = ScalarValue::try_from(&DataType::Int32)?;
+/// assert_eq!(s1, s2);
+///
+/// // Note that this is DIFFERENT than a `ScalarValue::Null`
+/// let s3 = ScalarValue::Null;
+/// assert_ne!(s1, s3);
+/// # Ok(())
+/// # }
+/// ```
+///
+/// # Further Reading
 /// See [datatypes](https://arrow.apache.org/docs/python/api/datatypes.html) for
 /// details on datatypes and the [format](https://github.com/apache/arrow/blob/master/format/Schema.fbs#L354-L375)
 /// for the definitive reference.
@@ -98,11 +145,13 @@ pub enum ScalarValue {
     /// Fixed size list scalar.
     ///
     /// The array must be a FixedSizeListArray with length 1.
-    FixedSizeList(ArrayRef),
+    FixedSizeList(Arc<FixedSizeListArray>),
     /// Represents a single element of a [`ListArray`] as an [`ArrayRef`]
     ///
     /// The array must be a ListArray with length 1.
-    List(ArrayRef),
+    List(Arc<ListArray>),
+    /// The array must be a LargeListArray with length 1.
+    LargeList(Arc<LargeListArray>),
     /// Date stored as a signed 32bit int days since UNIX epoch 1970-01-01
     Date32(Option<i32>),
     /// Date stored as a signed 64bit int milliseconds since UNIX epoch 1970-01-01
@@ -204,6 +253,8 @@ impl PartialEq for ScalarValue {
             (FixedSizeList(_), _) => false,
             (List(v1), List(v2)) => v1.eq(v2),
             (List(_), _) => false,
+            (LargeList(v1), LargeList(v2)) => v1.eq(v2),
+            (LargeList(_), _) => false,
             (Date32(v1), Date32(v2)) => v1.eq(v2),
             (Date32(_), _) => false,
             (Date64(v1), Date64(v2)) => v1.eq(v2),
@@ -312,38 +363,15 @@ impl PartialOrd for ScalarValue {
             (FixedSizeBinary(_, _), _) => None,
             (LargeBinary(v1), LargeBinary(v2)) => v1.partial_cmp(v2),
             (LargeBinary(_), _) => None,
-            (List(arr1), List(arr2)) | (FixedSizeList(arr1), FixedSizeList(arr2)) => {
-                if arr1.data_type() == arr2.data_type() {
-                    let list_arr1 = as_list_array(arr1);
-                    let list_arr2 = as_list_array(arr2);
-                    if list_arr1.len() != list_arr2.len() {
-                        return None;
-                    }
-                    for i in 0..list_arr1.len() {
-                        let arr1 = list_arr1.value(i);
-                        let arr2 = list_arr2.value(i);
-
-                        let lt_res =
-                            arrow::compute::kernels::cmp::lt(&arr1, &arr2).ok()?;
-                        let eq_res =
-                            arrow::compute::kernels::cmp::eq(&arr1, &arr2).ok()?;
-
-                        for j in 0..lt_res.len() {
-                            if lt_res.is_valid(j) && lt_res.value(j) {
-                                return Some(Ordering::Less);
-                            }
-                            if eq_res.is_valid(j) && !eq_res.value(j) {
-                                return Some(Ordering::Greater);
-                            }
-                        }
-                    }
-                    Some(Ordering::Equal)
-                } else {
-                    None
-                }
+            // ScalarValue::List / ScalarValue::FixedSizeList / ScalarValue::LargeList are ensure to have length 1
+            (List(arr1), List(arr2)) => partial_cmp_list(arr1.as_ref(), arr2.as_ref()),
+            (FixedSizeList(arr1), FixedSizeList(arr2)) => {
+                partial_cmp_list(arr1.as_ref(), arr2.as_ref())
             }
-            (List(_), _) => None,
-            (FixedSizeList(_), _) => None,
+            (LargeList(arr1), LargeList(arr2)) => {
+                partial_cmp_list(arr1.as_ref(), arr2.as_ref())
+            }
+            (List(_), _) | (LargeList(_), _) | (FixedSizeList(_), _) => None,
             (Date32(v1), Date32(v2)) => v1.partial_cmp(v2),
             (Date32(_), _) => None,
             (Date64(v1), Date64(v2)) => v1.partial_cmp(v2),
@@ -407,6 +435,44 @@ impl PartialOrd for ScalarValue {
     }
 }
 
+/// List/LargeList/FixedSizeList scalars always have a single element
+/// array. This function returns that array
+fn first_array_for_list(arr: &dyn Array) -> ArrayRef {
+    assert_eq!(arr.len(), 1);
+    if let Some(arr) = arr.as_list_opt::<i32>() {
+        arr.value(0)
+    } else if let Some(arr) = arr.as_list_opt::<i64>() {
+        arr.value(0)
+    } else if let Some(arr) = arr.as_fixed_size_list_opt() {
+        arr.value(0)
+    } else {
+        unreachable!("Since only List / LargeList / FixedSizeList are supported, this should never happen")
+    }
+}
+
+/// Compares two List/LargeList/FixedSizeList scalars
+fn partial_cmp_list(arr1: &dyn Array, arr2: &dyn Array) -> Option<Ordering> {
+    if arr1.data_type() != arr2.data_type() {
+        return None;
+    }
+    let arr1 = first_array_for_list(arr1);
+    let arr2 = first_array_for_list(arr2);
+
+    let lt_res = arrow::compute::kernels::cmp::lt(&arr1, &arr2).ok()?;
+    let eq_res = arrow::compute::kernels::cmp::eq(&arr1, &arr2).ok()?;
+
+    for j in 0..lt_res.len() {
+        if lt_res.is_valid(j) && lt_res.value(j) {
+            return Some(Ordering::Less);
+        }
+        if eq_res.is_valid(j) && !eq_res.value(j) {
+            return Some(Ordering::Greater);
+        }
+    }
+
+    Some(Ordering::Equal)
+}
+
 impl Eq for ScalarValue {}
 
 //Float wrapper over f32/f64. Just because we cannot build std::hash::Hash for floats directly we have to do it through type wrapper
@@ -460,14 +526,14 @@ impl std::hash::Hash for ScalarValue {
             Binary(v) => v.hash(state),
             FixedSizeBinary(_, v) => v.hash(state),
             LargeBinary(v) => v.hash(state),
-            List(arr) | FixedSizeList(arr) => {
-                let arrays = vec![arr.to_owned()];
-                let hashes_buffer = &mut vec![0; arr.len()];
-                let random_state = ahash::RandomState::with_seeds(0, 0, 0, 0);
-                let hashes =
-                    create_hashes(&arrays, &random_state, hashes_buffer).unwrap();
-                // Hash back to std::hash::Hasher
-                hashes.hash(state);
+            List(arr) => {
+                hash_list(arr.to_owned() as ArrayRef, state);
+            }
+            LargeList(arr) => {
+                hash_list(arr.to_owned() as ArrayRef, state);
+            }
+            FixedSizeList(arr) => {
+                hash_list(arr.to_owned() as ArrayRef, state);
             }
             Date32(v) => v.hash(state),
             Date64(v) => v.hash(state),
@@ -498,6 +564,15 @@ impl std::hash::Hash for ScalarValue {
             Null => 1.hash(state),
         }
     }
+}
+
+fn hash_list<H: std::hash::Hasher>(arr: ArrayRef, state: &mut H) {
+    let arrays = vec![arr.to_owned()];
+    let hashes_buffer = &mut vec![0; arr.len()];
+    let random_state = ahash::RandomState::with_seeds(0, 0, 0, 0);
+    let hashes = create_hashes(&arrays, &random_state, hashes_buffer).unwrap();
+    // Hash back to std::hash::Hasher
+    hashes.hash(state);
 }
 
 /// Return a reference to the values array and the index into it for a
@@ -695,7 +770,7 @@ impl ScalarValue {
 
     /// Returns a [`ScalarValue::Utf8`] representing `val`
     pub fn new_utf8(val: impl Into<String>) -> Self {
-        ScalarValue::Utf8(Some(val.into()))
+        ScalarValue::from(val.into())
     }
 
     /// Returns a [`ScalarValue::IntervalYearMonth`] representing
@@ -719,9 +794,22 @@ impl ScalarValue {
         ScalarValue::IntervalMonthDayNano(Some(val))
     }
 
+    /// Returns a [`ScalarValue`] representing
+    /// `value` and `tz_opt` timezone
+    pub fn new_timestamp<T: ArrowTimestampType>(
+        value: Option<i64>,
+        tz_opt: Option<Arc<str>>,
+    ) -> Self {
+        match T::UNIT {
+            TimeUnit::Second => ScalarValue::TimestampSecond(value, tz_opt),
+            TimeUnit::Millisecond => ScalarValue::TimestampMillisecond(value, tz_opt),
+            TimeUnit::Microsecond => ScalarValue::TimestampMicrosecond(value, tz_opt),
+            TimeUnit::Nanosecond => ScalarValue::TimestampNanosecond(value, tz_opt),
+        }
+    }
+
     /// Create a zero value in the given type.
     pub fn new_zero(datatype: &DataType) -> Result<ScalarValue> {
-        assert!(datatype.is_primitive());
         Ok(match datatype {
             DataType::Boolean => ScalarValue::Boolean(Some(false)),
             DataType::Int8 => ScalarValue::Int8(Some(0)),
@@ -871,9 +959,9 @@ impl ScalarValue {
             ScalarValue::Binary(_) => DataType::Binary,
             ScalarValue::FixedSizeBinary(sz, _) => DataType::FixedSizeBinary(*sz),
             ScalarValue::LargeBinary(_) => DataType::LargeBinary,
-            ScalarValue::List(arr) | ScalarValue::FixedSizeList(arr) => {
-                arr.data_type().to_owned()
-            }
+            ScalarValue::List(arr) => arr.data_type().to_owned(),
+            ScalarValue::LargeList(arr) => arr.data_type().to_owned(),
+            ScalarValue::FixedSizeList(arr) => arr.data_type().to_owned(),
             ScalarValue::Date32(_) => DataType::Date32,
             ScalarValue::Date64(_) => DataType::Date64,
             ScalarValue::Time32Second(_) => DataType::Time32(TimeUnit::Second),
@@ -947,6 +1035,18 @@ impl ScalarValue {
             ScalarValue::Decimal256(Some(v), precision, scale) => Ok(
                 ScalarValue::Decimal256(Some(v.neg_wrapping()), *precision, *scale),
             ),
+            ScalarValue::TimestampSecond(Some(v), tz) => {
+                Ok(ScalarValue::TimestampSecond(Some(-v), tz.clone()))
+            }
+            ScalarValue::TimestampNanosecond(Some(v), tz) => {
+                Ok(ScalarValue::TimestampNanosecond(Some(-v), tz.clone()))
+            }
+            ScalarValue::TimestampMicrosecond(Some(v), tz) => {
+                Ok(ScalarValue::TimestampMicrosecond(Some(-v), tz.clone()))
+            }
+            ScalarValue::TimestampMillisecond(Some(v), tz) => {
+                Ok(ScalarValue::TimestampMillisecond(Some(-v), tz.clone()))
+            }
             value => _internal_err!(
                 "Can not run arithmetic negative on scalar value {value:?}"
             ),
@@ -988,6 +1088,48 @@ impl ScalarValue {
         Self::try_from_array(r.as_ref(), 0)
     }
 
+    /// Wrapping multiplication of `ScalarValue`
+    ///
+    /// NB: operating on `ScalarValue` directly is not efficient, performance sensitive code
+    /// should operate on Arrays directly, using vectorized array kernels.
+    pub fn mul<T: Borrow<ScalarValue>>(&self, other: T) -> Result<ScalarValue> {
+        let r = mul_wrapping(&self.to_scalar()?, &other.borrow().to_scalar()?)?;
+        Self::try_from_array(r.as_ref(), 0)
+    }
+
+    /// Checked multiplication of `ScalarValue`
+    ///
+    /// NB: operating on `ScalarValue` directly is not efficient, performance sensitive code
+    /// should operate on Arrays directly, using vectorized array kernels.
+    pub fn mul_checked<T: Borrow<ScalarValue>>(&self, other: T) -> Result<ScalarValue> {
+        let r = mul(&self.to_scalar()?, &other.borrow().to_scalar()?)?;
+        Self::try_from_array(r.as_ref(), 0)
+    }
+
+    /// Performs `lhs / rhs`
+    ///
+    /// Overflow or division by zero will result in an error, with exception to
+    /// floating point numbers, which instead follow the IEEE 754 rules.
+    ///
+    /// NB: operating on `ScalarValue` directly is not efficient, performance sensitive code
+    /// should operate on Arrays directly, using vectorized array kernels.
+    pub fn div<T: Borrow<ScalarValue>>(&self, other: T) -> Result<ScalarValue> {
+        let r = div(&self.to_scalar()?, &other.borrow().to_scalar()?)?;
+        Self::try_from_array(r.as_ref(), 0)
+    }
+
+    /// Performs `lhs % rhs`
+    ///
+    /// Overflow or division by zero will result in an error, with exception to
+    /// floating point numbers, which instead follow the IEEE 754 rules.
+    ///
+    /// NB: operating on `ScalarValue` directly is not efficient, performance sensitive code
+    /// should operate on Arrays directly, using vectorized array kernels.
+    pub fn rem<T: Borrow<ScalarValue>>(&self, other: T) -> Result<ScalarValue> {
+        let r = rem(&self.to_scalar()?, &other.borrow().to_scalar()?)?;
+        Self::try_from_array(r.as_ref(), 0)
+    }
+
     pub fn is_unsigned(&self) -> bool {
         matches!(
             self,
@@ -1022,9 +1164,9 @@ impl ScalarValue {
             ScalarValue::LargeBinary(v) => v.is_none(),
             // arr.len() should be 1 for a list scalar, but we don't seem to
             // enforce that anywhere, so we still check against array length.
-            ScalarValue::List(arr) | ScalarValue::FixedSizeList(arr) => {
-                arr.len() == arr.null_count()
-            }
+            ScalarValue::List(arr) => arr.len() == arr.null_count(),
+            ScalarValue::LargeList(arr) => arr.len() == arr.null_count(),
+            ScalarValue::FixedSizeList(arr) => arr.len() == arr.null_count(),
             ScalarValue::Date32(v) => v.is_none(),
             ScalarValue::Date64(v) => v.is_none(),
             ScalarValue::Time32Second(v) => v.is_none(),
@@ -1235,70 +1377,36 @@ impl ScalarValue {
             }};
         }
 
-        macro_rules! build_array_list_primitive {
-            ($ARRAY_TY:ident, $SCALAR_TY:ident, $NATIVE_TYPE:ident) => {{
-                Ok::<ArrayRef, DataFusionError>(Arc::new(ListArray::from_iter_primitive::<$ARRAY_TY, _, _>(
-                    scalars.into_iter().map(|x| match x {
-                        ScalarValue::List(arr) => {
-                            // `ScalarValue::List` contains a single element `ListArray`.
-                            let list_arr = as_list_array(&arr);
-                            if list_arr.is_null(0) {
-                                Ok(None)
-                            } else {
-                                let primitive_arr =
-                                    list_arr.values().as_primitive::<$ARRAY_TY>();
-                                Ok(Some(
-                                    primitive_arr.into_iter().collect::<Vec<Option<_>>>(),
-                                ))
-                            }
-                        }
-                        sv => _internal_err!(
-                            "Inconsistent types in ScalarValue::iter_to_array. \
-                                Expected {:?}, got {:?}",
-                            data_type, sv
-                        ),
-                    })
-                    .collect::<Result<Vec<_>>>()?,
-                )))
-            }};
-        }
+        fn build_list_array(
+            scalars: impl IntoIterator<Item = ScalarValue>,
+        ) -> Result<ArrayRef> {
+            let arrays = scalars
+                .into_iter()
+                .map(|s| s.to_array())
+                .collect::<Result<Vec<_>>>()?;
 
-        macro_rules! build_array_list_string {
-            ($BUILDER:ident, $STRING_ARRAY:ident) => {{
-                let mut builder = ListBuilder::new($BUILDER::new());
-                for scalar in scalars.into_iter() {
-                    match scalar {
-                        ScalarValue::List(arr) => {
-                            // `ScalarValue::List` contains a single element `ListArray`.
-                            let list_arr = as_list_array(&arr);
+            let capacity = Capacities::Array(arrays.iter().map(|arr| arr.len()).sum());
+            // ScalarValue::List contains a single element ListArray.
+            let nulls = arrays
+                .iter()
+                .map(|arr| arr.is_null(0))
+                .collect::<Vec<bool>>();
+            let arrays_data = arrays.iter().map(|arr| arr.to_data()).collect::<Vec<_>>();
 
-                            if list_arr.is_null(0) {
-                                builder.append(false);
-                                continue;
-                            }
+            let arrays_ref = arrays_data.iter().collect::<Vec<_>>();
+            let mut mutable =
+                MutableArrayData::with_capacities(arrays_ref, true, capacity);
 
-                            let string_arr = $STRING_ARRAY(list_arr.values());
-
-                            for v in string_arr.iter() {
-                                if let Some(v) = v {
-                                    builder.values().append_value(v);
-                                } else {
-                                    builder.values().append_null();
-                                }
-                            }
-                            builder.append(true);
-                        }
-                        sv => {
-                            return _internal_err!(
-                                "Inconsistent types in ScalarValue::iter_to_array. \
-                                    Expected List, got {:?}",
-                                sv
-                            )
-                        }
-                    }
+            // ScalarValue::List contains a single element ListArray.
+            for (index, is_null) in (0..arrays.len()).zip(nulls.into_iter()) {
+                if is_null {
+                    mutable.extend_nulls(1)
+                } else {
+                    mutable.extend(index, 0, 1);
                 }
-                Arc::new(builder.finish())
-            }};
+            }
+            let data = mutable.freeze();
+            Ok(arrow_array::make_array(data))
         }
 
         let array: ArrayRef = match &data_type {
@@ -1375,47 +1483,7 @@ impl ScalarValue {
             DataType::Interval(IntervalUnit::MonthDayNano) => {
                 build_array_primitive!(IntervalMonthDayNanoArray, IntervalMonthDayNano)
             }
-            DataType::List(fields) if fields.data_type() == &DataType::Int8 => {
-                build_array_list_primitive!(Int8Type, Int8, i8)?
-            }
-            DataType::List(fields) if fields.data_type() == &DataType::Int16 => {
-                build_array_list_primitive!(Int16Type, Int16, i16)?
-            }
-            DataType::List(fields) if fields.data_type() == &DataType::Int32 => {
-                build_array_list_primitive!(Int32Type, Int32, i32)?
-            }
-            DataType::List(fields) if fields.data_type() == &DataType::Int64 => {
-                build_array_list_primitive!(Int64Type, Int64, i64)?
-            }
-            DataType::List(fields) if fields.data_type() == &DataType::UInt8 => {
-                build_array_list_primitive!(UInt8Type, UInt8, u8)?
-            }
-            DataType::List(fields) if fields.data_type() == &DataType::UInt16 => {
-                build_array_list_primitive!(UInt16Type, UInt16, u16)?
-            }
-            DataType::List(fields) if fields.data_type() == &DataType::UInt32 => {
-                build_array_list_primitive!(UInt32Type, UInt32, u32)?
-            }
-            DataType::List(fields) if fields.data_type() == &DataType::UInt64 => {
-                build_array_list_primitive!(UInt64Type, UInt64, u64)?
-            }
-            DataType::List(fields) if fields.data_type() == &DataType::Float32 => {
-                build_array_list_primitive!(Float32Type, Float32, f32)?
-            }
-            DataType::List(fields) if fields.data_type() == &DataType::Float64 => {
-                build_array_list_primitive!(Float64Type, Float64, f64)?
-            }
-            DataType::List(fields) if fields.data_type() == &DataType::Utf8 => {
-                build_array_list_string!(StringBuilder, as_string_array)
-            }
-            DataType::List(fields) if fields.data_type() == &DataType::LargeUtf8 => {
-                build_array_list_string!(LargeStringBuilder, as_largestring_array)
-            }
-            DataType::List(_) => {
-                // Fallback case handling homogeneous lists with any ScalarValue element type
-                let list_array = ScalarValue::iter_to_array_list(scalars)?;
-                Arc::new(list_array)
-            }
+            DataType::List(_) | DataType::LargeList(_) => build_list_array(scalars)?,
             DataType::Struct(fields) => {
                 // Initialize a Vector to store the ScalarValues for each column
                 let mut columns: Vec<Vec<ScalarValue>> =
@@ -1528,7 +1596,6 @@ impl ScalarValue {
             | DataType::Time64(TimeUnit::Millisecond)
             | DataType::Duration(_)
             | DataType::FixedSizeList(_, _)
-            | DataType::LargeList(_)
             | DataType::Union(_, _)
             | DataType::Map(_, _)
             | DataType::RunEndEncoded(_, _) => {
@@ -1596,61 +1663,6 @@ impl ScalarValue {
         Ok(array)
     }
 
-    /// This function build with nulls with nulls buffer.
-    fn iter_to_array_list(
-        scalars: impl IntoIterator<Item = ScalarValue>,
-    ) -> Result<GenericListArray<i32>> {
-        let mut elements: Vec<ArrayRef> = vec![];
-        let mut valid = BooleanBufferBuilder::new(0);
-        let mut offsets = vec![];
-
-        for scalar in scalars {
-            if let ScalarValue::List(arr) = scalar {
-                // `ScalarValue::List` contains a single element `ListArray`.
-                let list_arr = as_list_array(&arr);
-
-                if list_arr.is_null(0) {
-                    // Repeat previous offset index
-                    offsets.push(0);
-
-                    // Element is null
-                    valid.append(false);
-                } else {
-                    let arr = list_arr.values().to_owned();
-                    offsets.push(arr.len());
-                    elements.push(arr);
-
-                    // Element is valid
-                    valid.append(true);
-                }
-            } else {
-                return _internal_err!(
-                    "Expected ScalarValue::List element. Received {scalar:?}"
-                );
-            }
-        }
-
-        // Concatenate element arrays to create single flat array
-        let element_arrays: Vec<&dyn Array> =
-            elements.iter().map(|a| a.as_ref()).collect();
-
-        let flat_array = match arrow::compute::concat(&element_arrays) {
-            Ok(flat_array) => flat_array,
-            Err(err) => return Err(DataFusionError::ArrowError(err)),
-        };
-
-        let buffer = valid.finish();
-
-        let list_array = ListArray::new(
-            Arc::new(Field::new("item", flat_array.data_type().clone(), true)),
-            OffsetBuffer::<i32>::from_lengths(offsets),
-            flat_array,
-            Some(NullBuffer::new(buffer)),
-        );
-
-        Ok(list_array)
-    }
-
     fn build_decimal_array(
         value: Option<i128>,
         precision: u8,
@@ -1660,11 +1672,11 @@ impl ScalarValue {
         match value {
             Some(val) => Decimal128Array::from(vec![val; size])
                 .with_precision_and_scale(precision, scale)
-                .map_err(DataFusionError::ArrowError),
+                .map_err(|e| arrow_datafusion_err!(e)),
             None => {
                 let mut builder = Decimal128Array::builder(size)
                     .with_precision_and_scale(precision, scale)
-                    .map_err(DataFusionError::ArrowError)?;
+                    .map_err(|e| arrow_datafusion_err!(e))?;
                 builder.append_nulls(size);
                 Ok(builder.finish())
             }
@@ -1681,7 +1693,7 @@ impl ScalarValue {
             .take(size)
             .collect::<Decimal256Array>()
             .with_precision_and_scale(precision, scale)
-            .map_err(DataFusionError::ArrowError)
+            .map_err(|e| arrow_datafusion_err!(e))
     }
 
     /// Converts `Vec<ScalarValue>` where each element has type corresponding to
@@ -1700,23 +1712,96 @@ impl ScalarValue {
     ///    ScalarValue::Int32(Some(2))
     /// ];
     ///
-    /// let array = ScalarValue::new_list(&scalars, &DataType::Int32);
-    /// let result = as_list_array(&array).unwrap();
+    /// let result = ScalarValue::new_list(&scalars, &DataType::Int32);
     ///
     /// let expected = ListArray::from_iter_primitive::<Int32Type, _, _>(
     ///     vec![
     ///        Some(vec![Some(1), None, Some(2)])
     ///     ]);
     ///
-    /// assert_eq!(result, &expected);
+    /// assert_eq!(*result, expected);
     /// ```
-    pub fn new_list(values: &[ScalarValue], data_type: &DataType) -> ArrayRef {
+    pub fn new_list(values: &[ScalarValue], data_type: &DataType) -> Arc<ListArray> {
         let values = if values.is_empty() {
             new_empty_array(data_type)
         } else {
             Self::iter_to_array(values.iter().cloned()).unwrap()
         };
         Arc::new(array_into_list_array(values))
+    }
+
+    /// Converts `IntoIterator<Item = ScalarValue>` where each element has type corresponding to
+    /// `data_type`, to a [`ListArray`].
+    ///
+    /// Example
+    /// ```
+    /// use datafusion_common::ScalarValue;
+    /// use arrow::array::{ListArray, Int32Array};
+    /// use arrow::datatypes::{DataType, Int32Type};
+    /// use datafusion_common::cast::as_list_array;
+    ///
+    /// let scalars = vec![
+    ///    ScalarValue::Int32(Some(1)),
+    ///    ScalarValue::Int32(None),
+    ///    ScalarValue::Int32(Some(2))
+    /// ];
+    ///
+    /// let result = ScalarValue::new_list_from_iter(scalars.into_iter(), &DataType::Int32);
+    ///
+    /// let expected = ListArray::from_iter_primitive::<Int32Type, _, _>(
+    ///     vec![
+    ///        Some(vec![Some(1), None, Some(2)])
+    ///     ]);
+    ///
+    /// assert_eq!(*result, expected);
+    /// ```
+    pub fn new_list_from_iter(
+        values: impl IntoIterator<Item = ScalarValue> + ExactSizeIterator,
+        data_type: &DataType,
+    ) -> Arc<ListArray> {
+        let values = if values.len() == 0 {
+            new_empty_array(data_type)
+        } else {
+            Self::iter_to_array(values).unwrap()
+        };
+        Arc::new(array_into_list_array(values))
+    }
+
+    /// Converts `Vec<ScalarValue>` where each element has type corresponding to
+    /// `data_type`, to a [`LargeListArray`].
+    ///
+    /// Example
+    /// ```
+    /// use datafusion_common::ScalarValue;
+    /// use arrow::array::{LargeListArray, Int32Array};
+    /// use arrow::datatypes::{DataType, Int32Type};
+    /// use datafusion_common::cast::as_large_list_array;
+    ///
+    /// let scalars = vec![
+    ///    ScalarValue::Int32(Some(1)),
+    ///    ScalarValue::Int32(None),
+    ///    ScalarValue::Int32(Some(2))
+    /// ];
+    ///
+    /// let result = ScalarValue::new_large_list(&scalars, &DataType::Int32);
+    ///
+    /// let expected = LargeListArray::from_iter_primitive::<Int32Type, _, _>(
+    ///     vec![
+    ///        Some(vec![Some(1), None, Some(2)])
+    ///     ]);
+    ///
+    /// assert_eq!(*result, expected);
+    /// ```
+    pub fn new_large_list(
+        values: &[ScalarValue],
+        data_type: &DataType,
+    ) -> Arc<LargeListArray> {
+        let values = if values.is_empty() {
+            new_empty_array(data_type)
+        } else {
+            Self::iter_to_array(values.iter().cloned()).unwrap()
+        };
+        Arc::new(array_into_large_list_array(values))
     }
 
     /// Converts a scalar value into an array of `size` rows.
@@ -1846,12 +1931,14 @@ impl ScalarValue {
                         .collect::<LargeBinaryArray>(),
                 ),
             },
-            ScalarValue::List(arr) | ScalarValue::FixedSizeList(arr) => {
-                let arrays = std::iter::repeat(arr.as_ref())
-                    .take(size)
-                    .collect::<Vec<_>>();
-                arrow::compute::concat(arrays.as_slice())
-                    .map_err(DataFusionError::ArrowError)?
+            ScalarValue::List(arr) => {
+                Self::list_to_array_of_size(arr.as_ref() as &dyn Array, size)?
+            }
+            ScalarValue::LargeList(arr) => {
+                Self::list_to_array_of_size(arr.as_ref() as &dyn Array, size)?
+            }
+            ScalarValue::FixedSizeList(arr) => {
+                Self::list_to_array_of_size(arr.as_ref() as &dyn Array, size)?
             }
             ScalarValue::Date32(e) => {
                 build_array_from_option!(Date32, Date32Array, e, size)
@@ -2008,6 +2095,11 @@ impl ScalarValue {
         }
     }
 
+    fn list_to_array_of_size(arr: &dyn Array, size: usize) -> Result<ArrayRef> {
+        let arrays = std::iter::repeat(arr).take(size).collect::<Vec<_>>();
+        arrow::compute::concat(arrays.as_slice()).map_err(|e| arrow_datafusion_err!(e))
+    }
+
     /// Retrieve ScalarValue for each row in `array`
     ///
     /// Example
@@ -2119,14 +2211,24 @@ impl ScalarValue {
 
                 ScalarValue::List(arr)
             }
+            DataType::LargeList(_) => {
+                let list_array = as_large_list_array(array);
+                let nested_array = list_array.value(index);
+                // Produces a single element `LargeListArray` with the value at `index`.
+                let arr = Arc::new(array_into_large_list_array(nested_array));
+
+                ScalarValue::LargeList(arr)
+            }
             // TODO: There is no test for FixedSizeList now, add it later
             DataType::FixedSizeList(_, _) => {
                 let list_array = as_fixed_size_list_array(array)?;
                 let nested_array = list_array.value(index);
                 // Produces a single element `ListArray` with the value at `index`.
-                let arr = Arc::new(array_into_list_array(nested_array));
+                let list_size = nested_array.len();
+                let arr =
+                    Arc::new(array_into_fixed_size_list_array(nested_array, list_size));
 
-                ScalarValue::List(arr)
+                ScalarValue::FixedSizeList(arr)
             }
             DataType::Date32 => typed_cast!(array, index, Date32Array, Date32)?,
             DataType::Date64 => typed_cast!(array, index, Date64Array, Date64)?,
@@ -2253,12 +2355,22 @@ impl ScalarValue {
 
     /// Try to parse `value` into a ScalarValue of type `target_type`
     pub fn try_from_string(value: String, target_type: &DataType) -> Result<Self> {
-        let value = ScalarValue::Utf8(Some(value));
+        let value = ScalarValue::from(value);
         let cast_options = CastOptions {
             safe: false,
             format_options: Default::default(),
         };
         let cast_arr = cast_with_options(&value.to_array()?, target_type, &cast_options)?;
+        ScalarValue::try_from_array(&cast_arr, 0)
+    }
+
+    /// Try to cast this value to a ScalarValue of type `data_type`
+    pub fn cast_to(&self, data_type: &DataType) -> Result<Self> {
+        let cast_options = CastOptions {
+            safe: false,
+            format_options: Default::default(),
+        };
+        let cast_arr = cast_with_options(&self.to_array()?, data_type, &cast_options)?;
         ScalarValue::try_from_array(&cast_arr, 0)
     }
 
@@ -2393,9 +2505,14 @@ impl ScalarValue {
             ScalarValue::LargeBinary(val) => {
                 eq_array_primitive!(array, index, LargeBinaryArray, val)?
             }
-            ScalarValue::List(arr) | ScalarValue::FixedSizeList(arr) => {
-                let right = array.slice(index, 1);
-                arr == &right
+            ScalarValue::List(arr) => {
+                Self::eq_array_list(&(arr.to_owned() as ArrayRef), array, index)
+            }
+            ScalarValue::LargeList(arr) => {
+                Self::eq_array_list(&(arr.to_owned() as ArrayRef), array, index)
+            }
+            ScalarValue::FixedSizeList(arr) => {
+                Self::eq_array_list(&(arr.to_owned() as ArrayRef), array, index)
             }
             ScalarValue::Date32(val) => {
                 eq_array_primitive!(array, index, Date32Array, val)?
@@ -2473,6 +2590,11 @@ impl ScalarValue {
         })
     }
 
+    fn eq_array_list(arr1: &ArrayRef, arr2: &ArrayRef, index: usize) -> bool {
+        let right = arr2.slice(index, 1);
+        arr1 == &right
+    }
+
     /// Estimate size if bytes including `Self`. For values with internal containers such as `String`
     /// includes the allocated size (`capacity`) rather than the current length (`len`)
     pub fn size(&self) -> usize {
@@ -2519,9 +2641,9 @@ impl ScalarValue {
                 | ScalarValue::LargeBinary(b) => {
                     b.as_ref().map(|b| b.capacity()).unwrap_or_default()
                 }
-                ScalarValue::List(arr) | ScalarValue::FixedSizeList(arr) => {
-                    arr.get_array_memory_size()
-                }
+                ScalarValue::List(arr) => arr.get_array_memory_size(),
+                ScalarValue::LargeList(arr) => arr.get_array_memory_size(),
+                ScalarValue::FixedSizeList(arr) => arr.get_array_memory_size(),
                 ScalarValue::Struct(vals, fields) => {
                     vals.as_ref()
                         .map(|vals| {
@@ -2550,6 +2672,18 @@ impl ScalarValue {
         std::mem::size_of_val(vec)
             + (std::mem::size_of::<ScalarValue>() * vec.capacity())
             + vec
+                .iter()
+                .map(|sv| sv.size() - std::mem::size_of_val(sv))
+                .sum::<usize>()
+    }
+
+    /// Estimates [size](Self::size) of [`VecDeque`] in bytes.
+    ///
+    /// Includes the size of the [`VecDeque`] container itself.
+    pub fn size_of_vec_deque(vec_deque: &VecDeque<Self>) -> usize {
+        std::mem::size_of_val(vec_deque)
+            + (std::mem::size_of::<ScalarValue>() * vec_deque.capacity())
+            + vec_deque
                 .iter()
                 .map(|sv| sv.size() - std::mem::size_of_val(sv))
                 .sum::<usize>()
@@ -2614,6 +2748,12 @@ impl FromStr for ScalarValue {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Ok(s.into())
+    }
+}
+
+impl From<String> for ScalarValue {
+    fn from(value: String) -> Self {
+        ScalarValue::Utf8(Some(value))
     }
 }
 
@@ -2817,14 +2957,46 @@ impl TryFrom<&DataType> for ScalarValue {
                 Box::new(value_type.as_ref().try_into()?),
             ),
             // `ScalaValue::List` contains single element `ListArray`.
-            DataType::List(field) => ScalarValue::List(new_null_array(
-                &DataType::List(Arc::new(Field::new(
-                    "item",
-                    field.data_type().clone(),
-                    true,
-                ))),
-                1,
-            )),
+            DataType::List(field) => ScalarValue::List(
+                new_null_array(
+                    &DataType::List(Arc::new(Field::new(
+                        "item",
+                        field.data_type().clone(),
+                        true,
+                    ))),
+                    1,
+                )
+                .as_list::<i32>()
+                .to_owned()
+                .into(),
+            ),
+            // 'ScalarValue::LargeList' contains single element `LargeListArray
+            DataType::LargeList(field) => ScalarValue::LargeList(
+                new_null_array(
+                    &DataType::LargeList(Arc::new(Field::new(
+                        "item",
+                        field.data_type().clone(),
+                        true,
+                    ))),
+                    1,
+                )
+                .as_list::<i64>()
+                .to_owned()
+                .into(),
+            ),
+            // `ScalaValue::FixedSizeList` contains single element `FixedSizeList`.
+            DataType::FixedSizeList(field, _) => ScalarValue::FixedSizeList(
+                new_null_array(
+                    &DataType::FixedSizeList(
+                        Arc::new(Field::new("item", field.data_type().clone(), true)),
+                        1,
+                    ),
+                    1,
+                )
+                .as_fixed_size_list()
+                .to_owned()
+                .into(),
+            ),
             DataType::Struct(fields) => ScalarValue::Struct(None, fields.clone()),
             DataType::Null => ScalarValue::Null,
             _ => {
@@ -2889,12 +3061,9 @@ impl fmt::Display for ScalarValue {
                 )?,
                 None => write!(f, "NULL")?,
             },
-            ScalarValue::List(arr) | ScalarValue::FixedSizeList(arr) => write!(
-                f,
-                "{}",
-                arrow::util::pretty::pretty_format_columns("col", &[arr.to_owned()])
-                    .unwrap()
-            )?,
+            ScalarValue::List(arr) => fmt_list(arr.to_owned() as ArrayRef, f)?,
+            ScalarValue::LargeList(arr) => fmt_list(arr.to_owned() as ArrayRef, f)?,
+            ScalarValue::FixedSizeList(arr) => fmt_list(arr.to_owned() as ArrayRef, f)?,
             ScalarValue::Date32(e) => format_option!(f, e)?,
             ScalarValue::Date64(e) => format_option!(f, e)?,
             ScalarValue::Time32Second(e) => format_option!(f, e)?,
@@ -2925,6 +3094,16 @@ impl fmt::Display for ScalarValue {
         };
         Ok(())
     }
+}
+
+fn fmt_list(arr: ArrayRef, f: &mut fmt::Formatter) -> fmt::Result {
+    // ScalarValue List, LargeList, FixedSizeList should always have a single element
+    assert_eq!(arr.len(), 1);
+    let options = FormatOptions::default().with_display_error(true);
+    let formatter =
+        ArrayFormatter::try_new(arr.as_ref() as &dyn Array, &options).unwrap();
+    let value_formatter = formatter.value(0);
+    write!(f, "{value_formatter}")
 }
 
 impl fmt::Debug for ScalarValue {
@@ -2969,8 +3148,9 @@ impl fmt::Debug for ScalarValue {
             }
             ScalarValue::LargeBinary(None) => write!(f, "LargeBinary({self})"),
             ScalarValue::LargeBinary(Some(_)) => write!(f, "LargeBinary(\"{self}\")"),
-            ScalarValue::FixedSizeList(arr) => write!(f, "FixedSizeList([{arr:?}])"),
-            ScalarValue::List(arr) => write!(f, "List([{arr:?}])"),
+            ScalarValue::FixedSizeList(_) => write!(f, "FixedSizeList({self})"),
+            ScalarValue::List(_) => write!(f, "List({self})"),
+            ScalarValue::LargeList(_) => write!(f, "LargeList({self})"),
             ScalarValue::Date32(_) => write!(f, "Date32(\"{self}\")"),
             ScalarValue::Date64(_) => write!(f, "Date64(\"{self}\")"),
             ScalarValue::Time32Second(_) => write!(f, "Time32Second(\"{self}\")"),
@@ -3064,17 +3244,16 @@ mod tests {
     use std::cmp::Ordering;
     use std::sync::Arc;
 
-    use arrow::compute::kernels;
-    use arrow::compute::{concat, is_null};
-    use arrow::datatypes::ArrowPrimitiveType;
-    use arrow::util::pretty::pretty_format_columns;
-    use arrow_array::ArrowNumericType;
-    use chrono::NaiveDate;
-    use rand::Rng;
-
+    use super::*;
     use crate::cast::{as_string_array, as_uint32_array, as_uint64_array};
 
-    use super::*;
+    use arrow::buffer::OffsetBuffer;
+    use arrow::compute::{concat, is_null, kernels};
+    use arrow::datatypes::{ArrowNumericType, ArrowPrimitiveType};
+    use arrow::util::pretty::pretty_format_columns;
+
+    use chrono::NaiveDate;
+    use rand::Rng;
 
     #[test]
     fn test_to_array_of_size_for_list() {
@@ -3122,44 +3301,92 @@ mod tests {
     #[test]
     fn test_list_to_array_string() {
         let scalars = vec![
-            ScalarValue::Utf8(Some(String::from("rust"))),
-            ScalarValue::Utf8(Some(String::from("arrow"))),
-            ScalarValue::Utf8(Some(String::from("data-fusion"))),
+            ScalarValue::from("rust"),
+            ScalarValue::from("arrow"),
+            ScalarValue::from("data-fusion"),
         ];
 
-        let array = ScalarValue::new_list(scalars.as_slice(), &DataType::Utf8);
+        let result = ScalarValue::new_list(scalars.as_slice(), &DataType::Utf8);
 
         let expected = array_into_list_array(Arc::new(StringArray::from(vec![
             "rust",
             "arrow",
             "data-fusion",
         ])));
-        let result = as_list_array(&array);
-        assert_eq!(result, &expected);
+        assert_eq!(*result, expected);
+    }
+
+    fn build_list<O: OffsetSizeTrait>(
+        values: Vec<Option<Vec<Option<i64>>>>,
+    ) -> Vec<ScalarValue> {
+        values
+            .into_iter()
+            .map(|v| {
+                let arr = if v.is_some() {
+                    Arc::new(
+                        GenericListArray::<O>::from_iter_primitive::<Int64Type, _, _>(
+                            vec![v],
+                        ),
+                    )
+                } else if O::IS_LARGE {
+                    new_null_array(
+                        &DataType::LargeList(Arc::new(Field::new(
+                            "item",
+                            DataType::Int64,
+                            true,
+                        ))),
+                        1,
+                    )
+                } else {
+                    new_null_array(
+                        &DataType::List(Arc::new(Field::new(
+                            "item",
+                            DataType::Int64,
+                            true,
+                        ))),
+                        1,
+                    )
+                };
+
+                if O::IS_LARGE {
+                    ScalarValue::LargeList(arr.as_list::<i64>().to_owned().into())
+                } else {
+                    ScalarValue::List(arr.as_list::<i32>().to_owned().into())
+                }
+            })
+            .collect()
     }
 
     #[test]
     fn iter_to_array_primitive_test() {
-        let scalars = vec![
-            ScalarValue::List(Arc::new(
-                ListArray::from_iter_primitive::<Int64Type, _, _>(vec![Some(vec![
-                    Some(1),
-                    Some(2),
-                    Some(3),
-                ])]),
-            )),
-            ScalarValue::List(Arc::new(
-                ListArray::from_iter_primitive::<Int64Type, _, _>(vec![Some(vec![
-                    Some(4),
-                    Some(5),
-                ])]),
-            )),
-        ];
+        // List[[1,2,3]], List[null], List[[4,5]]
+        let scalars = build_list::<i32>(vec![
+            Some(vec![Some(1), Some(2), Some(3)]),
+            None,
+            Some(vec![Some(4), Some(5)]),
+        ]);
 
         let array = ScalarValue::iter_to_array(scalars).unwrap();
         let list_array = as_list_array(&array);
+        // List[[1,2,3], null, [4,5]]
         let expected = ListArray::from_iter_primitive::<Int64Type, _, _>(vec![
             Some(vec![Some(1), Some(2), Some(3)]),
+            None,
+            Some(vec![Some(4), Some(5)]),
+        ]);
+        assert_eq!(list_array, &expected);
+
+        let scalars = build_list::<i64>(vec![
+            Some(vec![Some(1), Some(2), Some(3)]),
+            None,
+            Some(vec![Some(4), Some(5)]),
+        ]);
+
+        let array = ScalarValue::iter_to_array(scalars).unwrap();
+        let list_array = as_large_list_array(&array);
+        let expected = LargeListArray::from_iter_primitive::<Int64Type, _, _>(vec![
+            Some(vec![Some(1), Some(2), Some(3)]),
+            None,
             Some(vec![Some(4), Some(5)]),
         ]);
         assert_eq!(list_array, &expected);
@@ -3207,18 +3434,16 @@ mod tests {
             ]));
 
         let fsl_array: ArrayRef =
-            Arc::new(FixedSizeListArray::from_iter_primitive::<Int32Type, _, _>(
-                vec![
-                    Some(vec![Some(0), Some(1), Some(2)]),
-                    None,
-                    Some(vec![Some(3), None, Some(5)]),
-                ],
-                3,
-            ));
+            Arc::new(ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+                Some(vec![Some(0), Some(1), Some(2)]),
+                None,
+                Some(vec![Some(3), None, Some(5)]),
+            ]));
 
         for arr in [list_array, fsl_array] {
             for i in 0..arr.len() {
-                let scalar = ScalarValue::List(arr.slice(i, 1));
+                let scalar =
+                    ScalarValue::List(arr.slice(i, 1).as_list::<i32>().to_owned().into());
                 assert!(scalar.eq_array(&arr, i).unwrap());
             }
         }
@@ -3534,24 +3759,6 @@ mod tests {
                 ])]),
             ));
         assert_eq!(a.partial_cmp(&b), Some(Ordering::Less));
-
-        let a =
-            ScalarValue::List(Arc::new(
-                ListArray::from_iter_primitive::<Int64Type, _, _>(vec![
-                    Some(vec![Some(10), Some(2), Some(3)]),
-                    None,
-                    Some(vec![Some(10), Some(2), Some(3)]),
-                ]),
-            ));
-        let b =
-            ScalarValue::List(Arc::new(
-                ListArray::from_iter_primitive::<Int64Type, _, _>(vec![
-                    Some(vec![Some(10), Some(2), Some(3)]),
-                    None,
-                    Some(vec![Some(10), Some(2), Some(3)]),
-                ]),
-            ));
-        assert_eq!(a.partial_cmp(&b), Some(Ordering::Equal));
     }
 
     #[test]
@@ -3590,8 +3797,15 @@ mod tests {
 
     #[test]
     fn scalar_list_null_to_array() {
-        let list_array_ref = ScalarValue::new_list(&[], &DataType::UInt64);
-        let list_array = as_list_array(&list_array_ref);
+        let list_array = ScalarValue::new_list(&[], &DataType::UInt64);
+
+        assert_eq!(list_array.len(), 1);
+        assert_eq!(list_array.values().len(), 0);
+    }
+
+    #[test]
+    fn scalar_large_list_null_to_array() {
+        let list_array = ScalarValue::new_large_list(&[], &DataType::UInt64);
 
         assert_eq!(list_array.len(), 1);
         assert_eq!(list_array.values().len(), 0);
@@ -3604,8 +3818,27 @@ mod tests {
             ScalarValue::UInt64(None),
             ScalarValue::UInt64(Some(101)),
         ];
-        let list_array_ref = ScalarValue::new_list(&values, &DataType::UInt64);
-        let list_array = as_list_array(&list_array_ref);
+        let list_array = ScalarValue::new_list(&values, &DataType::UInt64);
+        assert_eq!(list_array.len(), 1);
+        assert_eq!(list_array.values().len(), 3);
+
+        let prim_array_ref = list_array.value(0);
+        let prim_array = as_uint64_array(&prim_array_ref)?;
+        assert_eq!(prim_array.len(), 3);
+        assert_eq!(prim_array.value(0), 100);
+        assert!(prim_array.is_null(1));
+        assert_eq!(prim_array.value(2), 101);
+        Ok(())
+    }
+
+    #[test]
+    fn scalar_large_list_to_array() -> Result<()> {
+        let values = vec![
+            ScalarValue::UInt64(Some(100)),
+            ScalarValue::UInt64(None),
+            ScalarValue::UInt64(Some(101)),
+        ];
+        let list_array = ScalarValue::new_large_list(&values, &DataType::UInt64);
         assert_eq!(list_array.len(), 1);
         assert_eq!(list_array.values().len(), 3);
 
@@ -3843,10 +4076,15 @@ mod tests {
         let data_type = &data_type;
         let scalar: ScalarValue = data_type.try_into().unwrap();
 
-        let expected = ScalarValue::List(new_null_array(
-            &DataType::List(Arc::new(Field::new("item", DataType::Int32, true))),
-            1,
-        ));
+        let expected = ScalarValue::List(
+            new_null_array(
+                &DataType::List(Arc::new(Field::new("item", DataType::Int32, true))),
+                1,
+            )
+            .as_list::<i32>()
+            .to_owned()
+            .into(),
+        );
 
         assert_eq!(expected, scalar)
     }
@@ -3861,14 +4099,19 @@ mod tests {
         let data_type = &data_type;
         let scalar: ScalarValue = data_type.try_into().unwrap();
 
-        let expected = ScalarValue::List(new_null_array(
-            &DataType::List(Arc::new(Field::new(
-                "item",
-                DataType::List(Arc::new(Field::new("item", DataType::Int32, true))),
-                true,
-            ))),
-            1,
-        ));
+        let expected = ScalarValue::List(
+            new_null_array(
+                &DataType::List(Arc::new(Field::new(
+                    "item",
+                    DataType::List(Arc::new(Field::new("item", DataType::Int32, true))),
+                    true,
+                ))),
+                1,
+            )
+            .as_list::<i32>()
+            .to_owned()
+            .into(),
+        );
 
         assert_eq!(expected, scalar)
     }
@@ -4206,6 +4449,16 @@ mod tests {
     }
 
     #[test]
+    fn test_scalar_value_from_string() {
+        let scalar = ScalarValue::from("foo");
+        assert_eq!(scalar, ScalarValue::Utf8(Some("foo".to_string())));
+        let scalar = ScalarValue::from("foo".to_string());
+        assert_eq!(scalar, ScalarValue::Utf8(Some("foo".to_string())));
+        let scalar = ScalarValue::from_str("foo").unwrap();
+        assert_eq!(scalar, ScalarValue::Utf8(Some("foo".to_string())));
+    }
+
+    #[test]
     fn test_scalar_struct() {
         let field_a = Arc::new(Field::new("A", DataType::Int32, false));
         let field_b = Arc::new(Field::new("B", DataType::Boolean, false));
@@ -4223,7 +4476,7 @@ mod tests {
             Some(vec![
                 ScalarValue::Int32(Some(23)),
                 ScalarValue::Boolean(Some(false)),
-                ScalarValue::Utf8(Some("Hello".to_string())),
+                ScalarValue::from("Hello"),
                 ScalarValue::from(vec![
                     ("e", ScalarValue::from(2i16)),
                     ("f", ScalarValue::from(3i64)),
@@ -4416,17 +4669,17 @@ mod tests {
 
         // Define struct scalars
         let s0 = ScalarValue::from(vec![
-            ("A", ScalarValue::Utf8(Some(String::from("First")))),
+            ("A", ScalarValue::from("First")),
             ("primitive_list", l0),
         ]);
 
         let s1 = ScalarValue::from(vec![
-            ("A", ScalarValue::Utf8(Some(String::from("Second")))),
+            ("A", ScalarValue::from("Second")),
             ("primitive_list", l1),
         ]);
 
         let s2 = ScalarValue::from(vec![
-            ("A", ScalarValue::Utf8(Some(String::from("Third")))),
+            ("A", ScalarValue::from("Third")),
             ("primitive_list", l2),
         ]);
 
@@ -4584,69 +4837,37 @@ mod tests {
         assert_eq!(array, &expected);
     }
 
-    #[test]
-    fn test_nested_lists() {
-        // Define inner list scalars
-        let a1 = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![Some(vec![
-            Some(1),
-            Some(2),
-            Some(3),
-        ])]);
-        let a2 = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![Some(vec![
-            Some(4),
-            Some(5),
-        ])]);
-        let l1 = ListArray::new(
-            Arc::new(Field::new(
-                "item",
-                DataType::List(Arc::new(Field::new("item", DataType::Int32, true))),
-                true,
-            )),
-            OffsetBuffer::<i32>::from_lengths([1, 1]),
-            arrow::compute::concat(&[&a1, &a2]).unwrap(),
-            None,
-        );
-
-        let a1 =
-            ListArray::from_iter_primitive::<Int32Type, _, _>(vec![Some(vec![Some(6)])]);
-        let a2 = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![Some(vec![
-            Some(7),
-            Some(8),
-        ])]);
-        let l2 = ListArray::new(
-            Arc::new(Field::new(
-                "item",
-                DataType::List(Arc::new(Field::new("item", DataType::Int32, true))),
-                true,
-            )),
-            OffsetBuffer::<i32>::from_lengths([1, 1]),
-            arrow::compute::concat(&[&a1, &a2]).unwrap(),
-            None,
-        );
-
-        let a1 =
-            ListArray::from_iter_primitive::<Int32Type, _, _>(vec![Some(vec![Some(9)])]);
-        let l3 = ListArray::new(
+    fn build_2d_list(data: Vec<Option<i32>>) -> ListArray {
+        let a1 = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![Some(data)]);
+        ListArray::new(
             Arc::new(Field::new(
                 "item",
                 DataType::List(Arc::new(Field::new("item", DataType::Int32, true))),
                 true,
             )),
             OffsetBuffer::<i32>::from_lengths([1]),
-            arrow::compute::concat(&[&a1]).unwrap(),
+            Arc::new(a1),
             None,
-        );
+        )
+    }
+
+    #[test]
+    fn test_nested_lists() {
+        // Define inner list scalars
+        let arr1 = build_2d_list(vec![Some(1), Some(2), Some(3)]);
+        let arr2 = build_2d_list(vec![Some(4), Some(5)]);
+        let arr3 = build_2d_list(vec![Some(6)]);
 
         let array = ScalarValue::iter_to_array(vec![
-            ScalarValue::List(Arc::new(l1)),
-            ScalarValue::List(Arc::new(l2)),
-            ScalarValue::List(Arc::new(l3)),
+            ScalarValue::List(Arc::new(arr1)),
+            ScalarValue::List(Arc::new(arr2)),
+            ScalarValue::List(Arc::new(arr3)),
         ])
         .unwrap();
         let array = as_list_array(&array);
 
         // Construct expected array with array builders
-        let inner_builder = Int32Array::builder(8);
+        let inner_builder = Int32Array::builder(6);
         let middle_builder = ListBuilder::new(inner_builder);
         let mut outer_builder = ListBuilder::new(middle_builder);
 
@@ -4654,6 +4875,7 @@ mod tests {
         outer_builder.values().values().append_value(2);
         outer_builder.values().values().append_value(3);
         outer_builder.values().append(true);
+        outer_builder.append(true);
 
         outer_builder.values().values().append_value(4);
         outer_builder.values().values().append_value(5);
@@ -4661,14 +4883,6 @@ mod tests {
         outer_builder.append(true);
 
         outer_builder.values().values().append_value(6);
-        outer_builder.values().append(true);
-
-        outer_builder.values().values().append_value(7);
-        outer_builder.values().values().append_value(8);
-        outer_builder.values().append(true);
-        outer_builder.append(true);
-
-        outer_builder.values().values().append_value(9);
         outer_builder.values().append(true);
         outer_builder.append(true);
 
@@ -4713,7 +4927,7 @@ mod tests {
         check_scalar_cast(ScalarValue::Float64(None), DataType::Int16);
 
         check_scalar_cast(
-            ScalarValue::Utf8(Some("foo".to_string())),
+            ScalarValue::from("foo"),
             DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
         );
 
@@ -4994,10 +5208,7 @@ mod tests {
             (ScalarValue::Int8(None), ScalarValue::Int16(Some(1))),
             (ScalarValue::Int8(Some(1)), ScalarValue::Int16(None)),
             // Unsupported types
-            (
-                ScalarValue::Utf8(Some("foo".to_string())),
-                ScalarValue::Utf8(Some("bar".to_string())),
-            ),
+            (ScalarValue::from("foo"), ScalarValue::from("bar")),
             (
                 ScalarValue::Boolean(Some(true)),
                 ScalarValue::Boolean(Some(false)),

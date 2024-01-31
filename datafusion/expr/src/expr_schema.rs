@@ -17,9 +17,9 @@
 
 use super::{Between, Expr, Like};
 use crate::expr::{
-    AggregateFunction, AggregateUDF, Alias, BinaryExpr, Cast, GetFieldAccess,
-    GetIndexedField, InList, InSubquery, Placeholder, ScalarFunction, ScalarUDF, Sort,
-    TryCast, WindowFunction,
+    AggregateFunction, AggregateFunctionDefinition, Alias, BinaryExpr, Cast,
+    GetFieldAccess, GetIndexedField, InList, InSubquery, Placeholder, ScalarFunction,
+    ScalarFunctionDefinition, Sort, TryCast, WindowFunction,
 };
 use crate::field_util::GetFieldAccessSchema;
 use crate::type_coercion::binary::get_result_type;
@@ -82,32 +82,34 @@ impl ExprSchemable for Expr {
             Expr::Case(case) => case.when_then_expr[0].1.get_type(schema),
             Expr::Cast(Cast { data_type, .. })
             | Expr::TryCast(TryCast { data_type, .. }) => Ok(data_type.clone()),
-            Expr::ScalarUDF(ScalarUDF { fun, args }) => {
-                let data_types = args
-                    .iter()
-                    .map(|e| e.get_type(schema))
-                    .collect::<Result<Vec<_>>>()?;
-                Ok(fun.return_type(&data_types)?)
-            }
-            Expr::ScalarFunction(ScalarFunction { fun, args }) => {
+            Expr::ScalarFunction(ScalarFunction { func_def, args }) => {
                 let arg_data_types = args
                     .iter()
                     .map(|e| e.get_type(schema))
                     .collect::<Result<Vec<_>>>()?;
+                match func_def {
+                    ScalarFunctionDefinition::BuiltIn(fun) => {
+                        // verify that input data types is consistent with function's `TypeSignature`
+                        data_types(&arg_data_types, &fun.signature()).map_err(|_| {
+                            plan_datafusion_err!(
+                                "{}",
+                                utils::generate_signature_error_msg(
+                                    &format!("{fun}"),
+                                    fun.signature(),
+                                    &arg_data_types,
+                                )
+                            )
+                        })?;
 
-                // verify that input data types is consistent with function's `TypeSignature`
-                data_types(&arg_data_types, &fun.signature()).map_err(|_| {
-                    plan_datafusion_err!(
-                        "{}",
-                        utils::generate_signature_error_msg(
-                            &format!("{fun}"),
-                            fun.signature(),
-                            &arg_data_types,
-                        )
-                    )
-                })?;
-
-                fun.return_type(&arg_data_types)
+                        fun.return_type(&arg_data_types)
+                    }
+                    ScalarFunctionDefinition::UDF(fun) => {
+                        Ok(fun.return_type(&arg_data_types)?)
+                    }
+                    ScalarFunctionDefinition::Name(_) => {
+                        internal_err!("Function `Expr` with name should be resolved.")
+                    }
+                }
             }
             Expr::WindowFunction(WindowFunction { fun, args, .. }) => {
                 let data_types = args
@@ -116,19 +118,22 @@ impl ExprSchemable for Expr {
                     .collect::<Result<Vec<_>>>()?;
                 fun.return_type(&data_types)
             }
-            Expr::AggregateFunction(AggregateFunction { fun, args, .. }) => {
+            Expr::AggregateFunction(AggregateFunction { func_def, args, .. }) => {
                 let data_types = args
                     .iter()
                     .map(|e| e.get_type(schema))
                     .collect::<Result<Vec<_>>>()?;
-                fun.return_type(&data_types)
-            }
-            Expr::AggregateUDF(AggregateUDF { fun, args, .. }) => {
-                let data_types = args
-                    .iter()
-                    .map(|e| e.get_type(schema))
-                    .collect::<Result<Vec<_>>>()?;
-                fun.return_type(&data_types)
+                match func_def {
+                    AggregateFunctionDefinition::BuiltIn(fun) => {
+                        fun.return_type(&data_types)
+                    }
+                    AggregateFunctionDefinition::UDF(fun) => {
+                        Ok(fun.return_type(&data_types)?)
+                    }
+                    AggregateFunctionDefinition::Name(_) => {
+                        internal_err!("Function `Expr` with name should be resolved.")
+                    }
+                }
             }
             Expr::Not(_)
             | Expr::IsNull(_)
@@ -154,7 +159,7 @@ impl ExprSchemable for Expr {
             Expr::Like { .. } | Expr::SimilarTo { .. } => Ok(DataType::Boolean),
             Expr::Placeholder(Placeholder { data_type, .. }) => {
                 data_type.clone().ok_or_else(|| {
-                    plan_datafusion_err!("Placeholder type could not be resolved")
+                    plan_datafusion_err!("Placeholder type could not be resolved. Make sure that the placeholder is bound to a concrete type, e.g. by providing parameter values.")
                 })
             }
             Expr::Wildcard { qualifier } => {
@@ -243,10 +248,8 @@ impl ExprSchemable for Expr {
             Expr::ScalarVariable(_, _)
             | Expr::TryCast { .. }
             | Expr::ScalarFunction(..)
-            | Expr::ScalarUDF(..)
             | Expr::WindowFunction { .. }
             | Expr::AggregateFunction { .. }
-            | Expr::AggregateUDF { .. }
             | Expr::Placeholder(_) => Ok(true),
             Expr::IsNull(_)
             | Expr::IsNotNull(_)
@@ -274,6 +277,13 @@ impl ExprSchemable for Expr {
                 "Wildcard expressions are not valid in a logical query plan"
             ),
             Expr::GetIndexedField(GetIndexedField { expr, field }) => {
+                // If schema is nested, check if parent is nullable
+                // if it is, return early
+                if let Expr::Column(col) = expr.as_ref() {
+                    if input_schema.nullable(col)? {
+                        return Ok(true);
+                    }
+                }
                 field_for_index(expr, field, input_schema).map(|x| x.is_nullable())
             }
             Expr::GroupingSet(_) => {
@@ -364,9 +374,14 @@ fn field_for_index<S: ExprSchema>(
         GetFieldAccess::ListIndex { key } => GetFieldAccessSchema::ListIndex {
             key_dt: key.get_type(schema)?,
         },
-        GetFieldAccess::ListRange { start, stop } => GetFieldAccessSchema::ListRange {
+        GetFieldAccess::ListRange {
+            start,
+            stop,
+            stride,
+        } => GetFieldAccessSchema::ListRange {
             start_dt: start.get_type(schema)?,
             stop_dt: stop.get_type(schema)?,
+            stride_dt: stride.get_type(schema)?,
         },
     }
     .get_accessed_field(&expr_dt)
@@ -408,8 +423,8 @@ pub fn cast_subquery(subquery: Subquery, cast_to_type: &DataType) -> Result<Subq
 mod tests {
     use super::*;
     use crate::{col, lit};
-    use arrow::datatypes::DataType;
-    use datafusion_common::{Column, ScalarValue};
+    use arrow::datatypes::{DataType, Fields};
+    use datafusion_common::{Column, ScalarValue, TableReference};
 
     macro_rules! test_is_expr_nullable {
         ($EXPR_TYPE:ident) => {{
@@ -543,6 +558,27 @@ mod tests {
 
         // verify to_field method populates metadata
         assert_eq!(&meta, expr.to_field(&schema).unwrap().metadata());
+    }
+
+    #[test]
+    fn test_nested_schema_nullability() {
+        let fields = DFField::new(
+            Some(TableReference::Bare {
+                table: "table_name".into(),
+            }),
+            "parent",
+            DataType::Struct(Fields::from(vec![Field::new(
+                "child",
+                DataType::Int64,
+                false,
+            )])),
+            true,
+        );
+
+        let schema = DFSchema::new_with_metadata(vec![fields], HashMap::new()).unwrap();
+
+        let expr = col("parent").field("child");
+        assert!(expr.nullable(&schema).unwrap());
     }
 
     #[derive(Debug)]

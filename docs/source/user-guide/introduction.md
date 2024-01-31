@@ -75,7 +75,7 @@ latency).
 
 Here are some example systems built using DataFusion:
 
-- Specialized Analytical Database systems such as [CeresDB] and more general Apache Spark like system such a [Ballista].
+- Specialized Analytical Database systems such as [HoraeDB] and more general Apache Spark like system such a [Ballista].
 - New query language engines such as [prql-query] and accelerators such as [VegaFusion]
 - Research platform for new Database Systems, such as [Flock]
 - SQL support to another library, such as [dask sql]
@@ -96,7 +96,6 @@ Here are some active projects using DataFusion:
 
 - [Arroyo](https://github.com/ArroyoSystems/arroyo) Distributed stream processing engine in Rust
 - [Ballista](https://github.com/apache/arrow-ballista) Distributed SQL Query Engine
-- [CeresDB](https://github.com/CeresDB/ceresdb) Distributed Time-Series Database
 - [CnosDB](https://github.com/cnosdb/cnosdb) Open Source Distributed Time Series Database
 - [Cube Store](https://github.com/cube-js/cube.js/tree/master/rust)
 - [Dask SQL](https://github.com/dask-contrib/dask-sql) Distributed SQL query engine in Python
@@ -104,10 +103,13 @@ Here are some active projects using DataFusion:
 - [delta-rs](https://github.com/delta-io/delta-rs) Native Rust implementation of Delta Lake
 - [GreptimeDB](https://github.com/GreptimeTeam/greptimedb) Open Source & Cloud Native Distributed Time Series Database
 - [GlareDB](https://github.com/GlareDB/glaredb) Fast SQL database for querying and analyzing distributed data.
+- [HoraeDB](https://github.com/apache/incubator-horaedb) Distributed Time-Series Database
 - [InfluxDB IOx](https://github.com/influxdata/influxdb_iox) Time Series Database
 - [Kamu](https://github.com/kamu-data/kamu-cli/) Planet-scale streaming data pipeline
+- [LakeSoul](https://github.com/lakesoul-io/LakeSoul) Open source LakeHouse framework with native IO in Rust.
 - [Lance](https://github.com/lancedb/lance) Modern columnar data format for ML
 - [Parseable](https://github.com/parseablehq/parseable) Log storage and observability platform
+- [ParadeDB](https://github.com/paradedb/paradedb) PostgreSQL for Search
 - [qv](https://github.com/timvw/qv) Quickly view your data
 - [bdt](https://github.com/andygrove/bdt) Boring Data Tool
 - [Restate](https://github.com/restatedev) Easily build resilient applications using distributed durable async/await
@@ -127,7 +129,6 @@ Here are some less active projects that used DataFusion:
 
 [ballista]: https://github.com/apache/arrow-ballista
 [blaze]: https://github.com/blaze-init/blaze
-[ceresdb]: https://github.com/CeresDB/ceresdb
 [cloudfuse buzz]: https://github.com/cloudfuse-io/buzz-rust
 [cnosdb]: https://github.com/cnosdb/cnosdb
 [cube store]: https://github.com/cube-js/cube.js/tree/master/rust
@@ -137,6 +138,7 @@ Here are some less active projects that used DataFusion:
 [flock]: https://github.com/flock-lab/flock
 [kamu]: https://github.com/kamu-data/kamu-cli
 [greptime db]: https://github.com/GreptimeTeam/greptimedb
+[horaedb]: https://github.com/apache/incubator-horaedb
 [influxdb iox]: https://github.com/influxdata/influxdb_iox
 [parseable]: https://github.com/parseablehq/parseable
 [prql-query]: https://github.com/prql/prql-query

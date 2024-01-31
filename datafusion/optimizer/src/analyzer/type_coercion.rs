@@ -28,8 +28,8 @@ use datafusion_common::{
     DataFusionError, Result, ScalarValue,
 };
 use datafusion_expr::expr::{
-    self, Between, BinaryExpr, Case, Exists, InList, InSubquery, Like, ScalarFunction,
-    ScalarUDF, WindowFunction,
+    self, AggregateFunctionDefinition, Between, BinaryExpr, Case, Exists, InList,
+    InSubquery, Like, ScalarFunction, WindowFunction,
 };
 use datafusion_expr::expr_rewriter::rewrite_preserving_name;
 use datafusion_expr::expr_schema::cast_subquery;
@@ -42,15 +42,15 @@ use datafusion_expr::type_coercion::other::{
     get_coerce_type_for_case_expression, get_coerce_type_for_list,
 };
 use datafusion_expr::type_coercion::{is_datetime, is_utf8_or_large_utf8};
+use datafusion_expr::utils::merge_schema;
 use datafusion_expr::{
-    is_false, is_not_false, is_not_true, is_not_unknown, is_true, is_unknown,
-    type_coercion, window_function, AggregateFunction, BuiltinScalarFunction, Expr,
-    LogicalPlan, Operator, Projection, WindowFrame, WindowFrameBound, WindowFrameUnits,
+    is_false, is_not_false, is_not_true, is_not_unknown, is_true, is_unknown, not,
+    type_coercion, AggregateFunction, BuiltinScalarFunction, Expr, ExprSchemable,
+    LogicalPlan, Operator, Projection, ScalarFunctionDefinition, Signature, WindowFrame,
+    WindowFrameBound, WindowFrameUnits,
 };
-use datafusion_expr::{ExprSchemable, Signature};
 
 use crate::analyzer::AnalyzerRule;
-use crate::utils::merge_schema;
 
 #[derive(Default)]
 pub struct TypeCoercion {}
@@ -77,7 +77,7 @@ fn analyze_internal(
     plan: &LogicalPlan,
 ) -> Result<LogicalPlan> {
     // optimize child plans first
-    let new_inputs = plan
+    let mut new_inputs = plan
         .inputs()
         .iter()
         .map(|p| analyze_internal(external_schema, p))
@@ -115,9 +115,9 @@ fn analyze_internal(
     match &plan {
         LogicalPlan::Projection(_) => Ok(LogicalPlan::Projection(Projection::try_new(
             new_expr,
-            Arc::new(new_inputs[0].clone()),
+            Arc::new(new_inputs.swap_remove(0)),
         )?)),
-        _ => plan.with_new_exprs(new_expr, &new_inputs),
+        _ => plan.with_new_exprs(new_expr, new_inputs),
     }
 }
 
@@ -175,6 +175,10 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                     cast_subquery(new_subquery, &common_type)?,
                     negated,
                 )))
+            }
+            Expr::Not(expr) => {
+                let expr = not(get_casted_expr_for_bool_op(&expr, &self.schema)?);
+                Ok(expr)
             }
             Expr::IsTrue(expr) => {
                 let expr = is_true(get_casted_expr_for_bool_op(&expr, &self.schema)?);
@@ -319,58 +323,66 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                 let case = coerce_case_expression(case, &self.schema)?;
                 Ok(Expr::Case(case))
             }
-            Expr::ScalarUDF(ScalarUDF { fun, args }) => {
-                let new_expr = coerce_arguments_for_signature(
-                    args.as_slice(),
-                    &self.schema,
-                    fun.signature(),
-                )?;
-                Ok(Expr::ScalarUDF(ScalarUDF::new(fun, new_expr)))
-            }
-            Expr::ScalarFunction(ScalarFunction { fun, args }) => {
-                let new_args = coerce_arguments_for_signature(
-                    args.as_slice(),
-                    &self.schema,
-                    &fun.signature(),
-                )?;
-                let new_args =
-                    coerce_arguments_for_fun(new_args.as_slice(), &self.schema, &fun)?;
-                Ok(Expr::ScalarFunction(ScalarFunction::new(fun, new_args)))
-            }
+            Expr::ScalarFunction(ScalarFunction { func_def, args }) => match func_def {
+                ScalarFunctionDefinition::BuiltIn(fun) => {
+                    let new_args = coerce_arguments_for_signature(
+                        args.as_slice(),
+                        &self.schema,
+                        &fun.signature(),
+                    )?;
+                    let new_args = coerce_arguments_for_fun(
+                        new_args.as_slice(),
+                        &self.schema,
+                        &fun,
+                    )?;
+                    Ok(Expr::ScalarFunction(ScalarFunction::new(fun, new_args)))
+                }
+                ScalarFunctionDefinition::UDF(fun) => {
+                    let new_expr = coerce_arguments_for_signature(
+                        args.as_slice(),
+                        &self.schema,
+                        fun.signature(),
+                    )?;
+                    Ok(Expr::ScalarFunction(ScalarFunction::new_udf(fun, new_expr)))
+                }
+                ScalarFunctionDefinition::Name(_) => {
+                    internal_err!("Function `Expr` with name should be resolved.")
+                }
+            },
             Expr::AggregateFunction(expr::AggregateFunction {
-                fun,
+                func_def,
                 args,
                 distinct,
                 filter,
                 order_by,
-            }) => {
-                let new_expr = coerce_agg_exprs_for_signature(
-                    &fun,
-                    &args,
-                    &self.schema,
-                    &fun.signature(),
-                )?;
-                let expr = Expr::AggregateFunction(expr::AggregateFunction::new(
-                    fun, new_expr, distinct, filter, order_by,
-                ));
-                Ok(expr)
-            }
-            Expr::AggregateUDF(expr::AggregateUDF {
-                fun,
-                args,
-                filter,
-                order_by,
-            }) => {
-                let new_expr = coerce_arguments_for_signature(
-                    args.as_slice(),
-                    &self.schema,
-                    fun.signature(),
-                )?;
-                let expr = Expr::AggregateUDF(expr::AggregateUDF::new(
-                    fun, new_expr, filter, order_by,
-                ));
-                Ok(expr)
-            }
+            }) => match func_def {
+                AggregateFunctionDefinition::BuiltIn(fun) => {
+                    let new_expr = coerce_agg_exprs_for_signature(
+                        &fun,
+                        &args,
+                        &self.schema,
+                        &fun.signature(),
+                    )?;
+                    let expr = Expr::AggregateFunction(expr::AggregateFunction::new(
+                        fun, new_expr, distinct, filter, order_by,
+                    ));
+                    Ok(expr)
+                }
+                AggregateFunctionDefinition::UDF(fun) => {
+                    let new_expr = coerce_arguments_for_signature(
+                        args.as_slice(),
+                        &self.schema,
+                        fun.signature(),
+                    )?;
+                    let expr = Expr::AggregateFunction(expr::AggregateFunction::new_udf(
+                        fun, new_expr, false, filter, order_by,
+                    ));
+                    Ok(expr)
+                }
+                AggregateFunctionDefinition::Name(_) => {
+                    internal_err!("Function `Expr` with name should be resolved.")
+                }
+            },
             Expr::WindowFunction(WindowFunction {
                 fun,
                 args,
@@ -382,7 +394,7 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                     coerce_window_frame(window_frame, &self.schema, &order_by)?;
 
                 let args = match &fun {
-                    window_function::WindowFunction::AggregateFunction(fun) => {
+                    expr::WindowFunctionDefinition::AggregateFunction(fun) => {
                         coerce_agg_exprs_for_signature(
                             fun,
                             &args,
@@ -402,7 +414,22 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                 ));
                 Ok(expr)
             }
-            expr => Ok(expr),
+            Expr::Alias(_)
+            | Expr::Column(_)
+            | Expr::ScalarVariable(_, _)
+            | Expr::Literal(_)
+            | Expr::SimilarTo(_)
+            | Expr::IsNotNull(_)
+            | Expr::IsNull(_)
+            | Expr::Negative(_)
+            | Expr::GetIndexedField(_)
+            | Expr::Cast(_)
+            | Expr::TryCast(_)
+            | Expr::Sort(_)
+            | Expr::Wildcard { .. }
+            | Expr::GroupingSet(_)
+            | Expr::Placeholder(_)
+            | Expr::OuterReferenceColumn(_, _) => Ok(expr),
         }
     }
 }
@@ -495,7 +522,10 @@ fn coerce_window_frame(
     let target_type = match window_frame.units {
         WindowFrameUnits::Range => {
             if let Some(col_type) = current_types.first() {
-                if col_type.is_numeric() || is_utf8_or_large_utf8(col_type) {
+                if col_type.is_numeric()
+                    || is_utf8_or_large_utf8(col_type)
+                    || matches!(col_type, DataType::Null)
+                {
                     col_type
                 } else if is_datetime(col_type) {
                     &DataType::Interval(IntervalUnit::MonthDayNano)
@@ -579,46 +609,12 @@ fn coerce_arguments_for_fun(
             .collect::<Result<Vec<_>>>()?;
     }
 
-    if *fun == BuiltinScalarFunction::MakeArray {
-        // Find the final data type for the function arguments
-        let current_types = expressions
-            .iter()
-            .map(|e| e.get_type(schema))
-            .collect::<Result<Vec<_>>>()?;
-
-        let new_type = current_types
-            .iter()
-            .skip(1)
-            .fold(current_types.first().unwrap().clone(), |acc, x| {
-                comparison_coercion(&acc, x).unwrap_or(acc)
-            });
-
-        return expressions
-            .iter()
-            .zip(current_types)
-            .map(|(expr, from_type)| cast_array_expr(expr, &from_type, &new_type, schema))
-            .collect();
-    }
     Ok(expressions)
 }
 
 /// Cast `expr` to the specified type, if possible
 fn cast_expr(expr: &Expr, to_type: &DataType, schema: &DFSchema) -> Result<Expr> {
     expr.clone().cast_to(to_type, schema)
-}
-
-/// Cast array `expr` to the specified type, if possible
-fn cast_array_expr(
-    expr: &Expr,
-    from_type: &DataType,
-    to_type: &DataType,
-    schema: &DFSchema,
-) -> Result<Expr> {
-    if from_type.equals_datatype(&DataType::Null) {
-        Ok(expr.clone())
-    } else {
-        cast_expr(expr, to_type, schema)
-    }
 }
 
 /// Returns the coerced exprs for each `input_exprs`.
@@ -761,7 +757,8 @@ fn coerce_case_expression(case: Case, schema: &DFSchemaRef) -> Result<Case> {
 
 #[cfg(test)]
 mod test {
-    use std::sync::Arc;
+    use std::any::Any;
+    use std::sync::{Arc, OnceLock};
 
     use arrow::array::{FixedSizeListArray, Int32Array};
     use arrow::datatypes::{DataType, TimeUnit};
@@ -773,13 +770,13 @@ mod test {
     use datafusion_expr::{
         cast, col, concat, concat_ws, create_udaf, is_true, AccumulatorFactoryFunction,
         AggregateFunction, AggregateUDF, BinaryExpr, BuiltinScalarFunction, Case,
-        ColumnarValue, ExprSchemable, Filter, Operator, StateTypeFunction, Subquery,
+        ColumnarValue, ExprSchemable, Filter, Operator, ScalarUDFImpl,
+        SimpleAggregateUDF, Subquery,
     };
     use datafusion_expr::{
         lit,
         logical_plan::{EmptyRelation, Projection},
-        Expr, LogicalPlan, ReturnTypeFunction, ScalarFunctionImplementation, ScalarUDF,
-        Signature, Volatility,
+        Expr, LogicalPlan, ScalarUDF, Signature, Volatility,
     };
     use datafusion_physical_expr::expressions::AvgAccumulator;
 
@@ -831,22 +828,37 @@ mod test {
         assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), &plan, expected)
     }
 
+    static TEST_SIGNATURE: OnceLock<Signature> = OnceLock::new();
+
+    #[derive(Debug, Clone, Default)]
+    struct TestScalarUDF {}
+    impl ScalarUDFImpl for TestScalarUDF {
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+
+        fn name(&self) -> &str {
+            "TestScalarUDF"
+        }
+        fn signature(&self) -> &Signature {
+            TEST_SIGNATURE.get_or_init(|| {
+                Signature::uniform(1, vec![DataType::Float32], Volatility::Stable)
+            })
+        }
+        fn return_type(&self, _args: &[DataType]) -> Result<DataType> {
+            Ok(DataType::Utf8)
+        }
+
+        fn invoke(&self, _args: &[ColumnarValue]) -> Result<ColumnarValue> {
+            Ok(ColumnarValue::Scalar(ScalarValue::from("a")))
+        }
+    }
+
     #[test]
     fn scalar_udf() -> Result<()> {
         let empty = empty();
-        let return_type: ReturnTypeFunction =
-            Arc::new(move |_| Ok(Arc::new(DataType::Utf8)));
-        let fun: ScalarFunctionImplementation =
-            Arc::new(move |_| Ok(ColumnarValue::Scalar(ScalarValue::new_utf8("a"))));
-        let udf = Expr::ScalarUDF(expr::ScalarUDF::new(
-            Arc::new(ScalarUDF::new(
-                "TestScalarUDF",
-                &Signature::uniform(1, vec![DataType::Float32], Volatility::Stable),
-                &return_type,
-                &fun,
-            )),
-            vec![lit(123_i32)],
-        ));
+
+        let udf = ScalarUDF::from(TestScalarUDF {}).call(vec![lit(123_i32)]);
         let plan = LogicalPlan::Projection(Projection::try_new(vec![udf], empty)?);
         let expected =
             "Projection: TestScalarUDF(CAST(Int32(123) AS Float32))\n  EmptyRelation";
@@ -856,26 +868,15 @@ mod test {
     #[test]
     fn scalar_udf_invalid_input() -> Result<()> {
         let empty = empty();
-        let return_type: ReturnTypeFunction =
-            Arc::new(move |_| Ok(Arc::new(DataType::Utf8)));
-        let fun: ScalarFunctionImplementation = Arc::new(move |_| unimplemented!());
-        let udf = Expr::ScalarUDF(expr::ScalarUDF::new(
-            Arc::new(ScalarUDF::new(
-                "TestScalarUDF",
-                &Signature::uniform(1, vec![DataType::Int32], Volatility::Stable),
-                &return_type,
-                &fun,
-            )),
-            vec![lit("Apple")],
-        ));
+        let udf = ScalarUDF::from(TestScalarUDF {}).call(vec![lit("Apple")]);
         let plan = LogicalPlan::Projection(Projection::try_new(vec![udf], empty)?);
         let err = assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), &plan, "")
             .err()
             .unwrap();
         assert_eq!(
-            "type_coercion\ncaused by\nError during planning: Coercion from [Utf8] to the signature Uniform(1, [Int32]) failed.",
-            err.strip_backtrace()
-        );
+    "type_coercion\ncaused by\nError during planning: Coercion from [Utf8] to the signature Uniform(1, [Float32]) failed.",
+    err.strip_backtrace()
+    );
         Ok(())
     }
 
@@ -906,9 +907,10 @@ mod test {
             Arc::new(|_| Ok(Box::<AvgAccumulator>::default())),
             Arc::new(vec![DataType::UInt64, DataType::Float64]),
         );
-        let udaf = Expr::AggregateUDF(expr::AggregateUDF::new(
+        let udaf = Expr::AggregateFunction(expr::AggregateFunction::new_udf(
             Arc::new(my_avg),
             vec![lit(10i64)],
+            false,
             None,
             None,
         ));
@@ -920,22 +922,21 @@ mod test {
     #[test]
     fn agg_udaf_invalid_input() -> Result<()> {
         let empty = empty();
-        let return_type: ReturnTypeFunction =
-            Arc::new(move |_| Ok(Arc::new(DataType::Float64)));
-        let state_type: StateTypeFunction =
-            Arc::new(move |_| Ok(Arc::new(vec![DataType::UInt64, DataType::Float64])));
+        let return_type = DataType::Float64;
+        let state_type = vec![DataType::UInt64, DataType::Float64];
         let accumulator: AccumulatorFactoryFunction =
             Arc::new(|_| Ok(Box::<AvgAccumulator>::default()));
-        let my_avg = AggregateUDF::new(
+        let my_avg = AggregateUDF::from(SimpleAggregateUDF::new_with_signature(
             "MY_AVG",
-            &Signature::uniform(1, vec![DataType::Float64], Volatility::Immutable),
-            &return_type,
-            &accumulator,
-            &state_type,
-        );
-        let udaf = Expr::AggregateUDF(expr::AggregateUDF::new(
+            Signature::uniform(1, vec![DataType::Float64], Volatility::Immutable),
+            return_type,
+            accumulator,
+            state_type,
+        ));
+        let udaf = Expr::AggregateFunction(expr::AggregateFunction::new_udf(
             Arc::new(my_avg),
             vec![lit("10")],
+            false,
             None,
             None,
         ));
@@ -981,7 +982,7 @@ mod test {
     }
 
     #[test]
-    fn agg_function_invalid_input() -> Result<()> {
+    fn agg_function_invalid_input_avg() -> Result<()> {
         let empty = empty();
         let fun: AggregateFunction = AggregateFunction::Avg;
         let agg_expr = Expr::AggregateFunction(expr::AggregateFunction::new(
@@ -1000,6 +1001,30 @@ mod test {
             err
         );
         Ok(())
+    }
+
+    #[test]
+    fn agg_function_invalid_input_percentile() {
+        let empty = empty();
+        let fun: AggregateFunction = AggregateFunction::ApproxPercentileCont;
+        let agg_expr = Expr::AggregateFunction(expr::AggregateFunction::new(
+            fun,
+            vec![lit(0.95), lit(42.0), lit(100.0)],
+            false,
+            None,
+            None,
+        ));
+
+        let err = Projection::try_new(vec![agg_expr], empty)
+            .err()
+            .unwrap()
+            .strip_backtrace();
+
+        let prefix = "Error during planning: No function matches the given name and argument types 'APPROX_PERCENTILE_CONT(Float64, Float64, Float64)'. You might need to add explicit type casts.\n\tCandidate functions:";
+        assert!(!err
+            .strip_prefix(prefix)
+            .unwrap()
+            .contains("APPROX_PERCENTILE_CONT(Float64, Float64, Float64)"));
     }
 
     #[test]
@@ -1246,10 +1271,10 @@ mod test {
                 None,
             ),
         )));
-        let expr = Expr::ScalarFunction(ScalarFunction {
-            fun: BuiltinScalarFunction::MakeArray,
-            args: vec![val.clone()],
-        });
+        let expr = Expr::ScalarFunction(ScalarFunction::new(
+            BuiltinScalarFunction::MakeArray,
+            vec![val.clone()],
+        ));
         let schema = Arc::new(DFSchema::new_with_metadata(
             vec![DFField::new_unqualified(
                 "item",
@@ -1278,10 +1303,10 @@ mod test {
             &schema,
         )?;
 
-        let expected = Expr::ScalarFunction(ScalarFunction {
-            fun: BuiltinScalarFunction::MakeArray,
-            args: vec![expected_casted_expr],
-        });
+        let expected = Expr::ScalarFunction(ScalarFunction::new(
+            BuiltinScalarFunction::MakeArray,
+            vec![expected_casted_expr],
+        ));
 
         assert_eq!(result, expected);
         Ok(())

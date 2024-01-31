@@ -73,6 +73,10 @@ impl TableSource for DefaultTableSource {
     fn get_logical_plan(&self) -> Option<&datafusion_expr::LogicalPlan> {
         self.table_provider.get_logical_plan()
     }
+
+    fn get_column_default(&self, column: &str) -> Option<&Expr> {
+        self.table_provider.get_column_default(column)
+    }
 }
 
 /// Wrap TableProvider in TableSource

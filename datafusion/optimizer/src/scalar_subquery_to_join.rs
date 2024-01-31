@@ -17,7 +17,7 @@
 
 use crate::decorrelate::{PullUpCorrelatedExpr, UN_MATCHED_ROW_INDICATOR};
 use crate::optimizer::ApplyOrder;
-use crate::utils::{conjunction, replace_qualified_name};
+use crate::utils::replace_qualified_name;
 use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_common::alias::AliasGenerator;
 use datafusion_common::tree_node::{
@@ -26,6 +26,7 @@ use datafusion_common::tree_node::{
 use datafusion_common::{plan_err, Column, DataFusionError, Result, ScalarValue};
 use datafusion_expr::expr_rewriter::create_col_from_scalar_expr;
 use datafusion_expr::logical_plan::{JoinType, Subquery};
+use datafusion_expr::utils::conjunction;
 use datafusion_expr::{expr, EmptyRelation, Expr, LogicalPlan, LogicalPlanBuilder};
 use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;

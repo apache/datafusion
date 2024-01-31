@@ -296,6 +296,7 @@ impl Display for FileTypeWriterOptions {
 }
 
 #[cfg(test)]
+#[cfg(feature = "parquet")]
 mod tests {
     use std::collections::HashMap;
 
@@ -506,6 +507,7 @@ mod tests {
     }
 
     #[test]
+    // for StatementOptions
     fn test_writeroptions_csv_from_statement_options() -> Result<()> {
         let mut option_map: HashMap<String, String> = HashMap::new();
         option_map.insert("header".to_owned(), "true".to_owned());
@@ -533,6 +535,7 @@ mod tests {
     }
 
     #[test]
+    // for StatementOptions
     fn test_writeroptions_json_from_statement_options() -> Result<()> {
         let mut option_map: HashMap<String, String> = HashMap::new();
         option_map.insert("compression".to_owned(), "gzip".to_owned());

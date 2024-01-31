@@ -27,15 +27,15 @@ use crate::{
         cume_dist, dense_rank, lag, lead, percent_rank, rank, Literal, NthValue, Ntile,
         PhysicalSortExpr, RowNumber,
     },
-    udaf, unbounded_output, ExecutionPlan, PhysicalExpr,
+    udaf, unbounded_output, ExecutionPlan, InputOrderMode, PhysicalExpr,
 };
 
 use arrow::datatypes::Schema;
 use arrow_schema::{DataType, Field, SchemaRef};
 use datafusion_common::{exec_err, DataFusionError, Result, ScalarValue};
 use datafusion_expr::{
-    window_function::{BuiltInWindowFunction, WindowFunction},
-    PartitionEvaluator, WindowFrame, WindowUDF,
+    BuiltInWindowFunction, PartitionEvaluator, WindowFrame, WindowFunctionDefinition,
+    WindowUDF,
 };
 use datafusion_physical_expr::equivalence::collapse_lex_req;
 use datafusion_physical_expr::{
@@ -54,33 +54,9 @@ pub use datafusion_physical_expr::window::{
     BuiltInWindowExpr, PlainAggregateWindowExpr, WindowExpr,
 };
 
-#[derive(Debug, Clone, PartialEq)]
-/// Specifies aggregation grouping and/or window partitioning properties of a
-/// set of expressions in terms of the existing ordering.
-/// For example, if the existing ordering is `[a ASC, b ASC, c ASC]`:
-/// - A `PARTITION BY b` clause will result in `Linear` mode.
-/// - A `PARTITION BY a, c` or a `PARTITION BY c, a` clause will result in
-///   `PartiallySorted([0])` or `PartiallySorted([1])` modes, respectively.
-///   The vector stores the index of `a` in the respective PARTITION BY expression.
-/// - A `PARTITION BY a, b` or a `PARTITION BY b, a` clause will result in
-///   `Sorted` mode.
-/// Note that the examples above are applicable for `GROUP BY` clauses too.
-pub enum PartitionSearchMode {
-    /// There is no partial permutation of the expressions satisfying the
-    /// existing ordering.
-    Linear,
-    /// There is a partial permutation of the expressions satisfying the
-    /// existing ordering. Indices describing the longest partial permutation
-    /// are stored in the vector.
-    PartiallySorted(Vec<usize>),
-    /// There is a (full) permutation of the expressions satisfying the
-    /// existing ordering.
-    Sorted,
-}
-
 /// Create a physical expression for window function
 pub fn create_window_expr(
-    fun: &WindowFunction,
+    fun: &WindowFunctionDefinition,
     name: String,
     args: &[Arc<dyn PhysicalExpr>],
     partition_by: &[Arc<dyn PhysicalExpr>],
@@ -89,7 +65,7 @@ pub fn create_window_expr(
     input_schema: &Schema,
 ) -> Result<Arc<dyn WindowExpr>> {
     Ok(match fun {
-        WindowFunction::AggregateFunction(fun) => {
+        WindowFunctionDefinition::AggregateFunction(fun) => {
             let aggregate = aggregates::create_aggregate_expr(
                 fun,
                 false,
@@ -105,13 +81,15 @@ pub fn create_window_expr(
                 aggregate,
             )
         }
-        WindowFunction::BuiltInWindowFunction(fun) => Arc::new(BuiltInWindowExpr::new(
-            create_built_in_window_expr(fun, args, input_schema, name)?,
-            partition_by,
-            order_by,
-            window_frame,
-        )),
-        WindowFunction::AggregateUDF(fun) => {
+        WindowFunctionDefinition::BuiltInWindowFunction(fun) => {
+            Arc::new(BuiltInWindowExpr::new(
+                create_built_in_window_expr(fun, args, input_schema, name)?,
+                partition_by,
+                order_by,
+                window_frame,
+            ))
+        }
+        WindowFunctionDefinition::AggregateUDF(fun) => {
             let aggregate =
                 udaf::create_aggregate_expr(fun.as_ref(), args, input_schema, name)?;
             window_expr_from_aggregate_expr(
@@ -121,7 +99,7 @@ pub fn create_window_expr(
                 aggregate,
             )
         }
-        WindowFunction::WindowUDF(fun) => Arc::new(BuiltInWindowExpr::new(
+        WindowFunctionDefinition::WindowUDF(fun) => Arc::new(BuiltInWindowExpr::new(
             create_udwf_window_expr(fun, args, input_schema, name)?,
             partition_by,
             order_by,
@@ -182,40 +160,69 @@ fn create_built_in_window_expr(
     input_schema: &Schema,
     name: String,
 ) -> Result<Arc<dyn BuiltInWindowFunctionExpr>> {
+    // need to get the types into an owned vec for some reason
+    let input_types: Vec<_> = args
+        .iter()
+        .map(|arg| arg.data_type(input_schema))
+        .collect::<Result<_>>()?;
+
+    // figure out the output type
+    let data_type = &fun.return_type(&input_types)?;
     Ok(match fun {
-        BuiltInWindowFunction::RowNumber => Arc::new(RowNumber::new(name)),
-        BuiltInWindowFunction::Rank => Arc::new(rank(name)),
-        BuiltInWindowFunction::DenseRank => Arc::new(dense_rank(name)),
-        BuiltInWindowFunction::PercentRank => Arc::new(percent_rank(name)),
-        BuiltInWindowFunction::CumeDist => Arc::new(cume_dist(name)),
+        BuiltInWindowFunction::RowNumber => Arc::new(RowNumber::new(name, data_type)),
+        BuiltInWindowFunction::Rank => Arc::new(rank(name, data_type)),
+        BuiltInWindowFunction::DenseRank => Arc::new(dense_rank(name, data_type)),
+        BuiltInWindowFunction::PercentRank => Arc::new(percent_rank(name, data_type)),
+        BuiltInWindowFunction::CumeDist => Arc::new(cume_dist(name, data_type)),
         BuiltInWindowFunction::Ntile => {
-            let n: i64 = get_scalar_value_from_args(args, 0)?
-                .ok_or_else(|| {
-                    DataFusionError::Execution(
-                        "NTILE requires at least 1 argument".to_string(),
-                    )
-                })?
-                .try_into()?;
-            let n: u64 = n as u64;
-            Arc::new(Ntile::new(name, n))
+            let n = get_scalar_value_from_args(args, 0)?.ok_or_else(|| {
+                DataFusionError::Execution(
+                    "NTILE requires a positive integer".to_string(),
+                )
+            })?;
+
+            if n.is_null() {
+                return exec_err!("NTILE requires a positive integer, but finds NULL");
+            }
+
+            if n.is_unsigned() {
+                let n: u64 = n.try_into()?;
+                Arc::new(Ntile::new(name, n, data_type))
+            } else {
+                let n: i64 = n.try_into()?;
+                if n <= 0 {
+                    return exec_err!("NTILE requires a positive integer");
+                }
+                Arc::new(Ntile::new(name, n as u64, data_type))
+            }
         }
         BuiltInWindowFunction::Lag => {
             let arg = args[0].clone();
-            let data_type = args[0].data_type(input_schema)?;
             let shift_offset = get_scalar_value_from_args(args, 1)?
                 .map(|v| v.try_into())
                 .and_then(|v| v.ok());
             let default_value = get_scalar_value_from_args(args, 2)?;
-            Arc::new(lag(name, data_type, arg, shift_offset, default_value))
+            Arc::new(lag(
+                name,
+                data_type.clone(),
+                arg,
+                shift_offset,
+                default_value,
+            ))
         }
         BuiltInWindowFunction::Lead => {
             let arg = args[0].clone();
-            let data_type = args[0].data_type(input_schema)?;
             let shift_offset = get_scalar_value_from_args(args, 1)?
                 .map(|v| v.try_into())
                 .and_then(|v| v.ok());
             let default_value = get_scalar_value_from_args(args, 2)?;
-            Arc::new(lead(name, data_type, arg, shift_offset, default_value))
+            Arc::new(lead(
+                name,
+                data_type.clone(),
+                arg,
+                shift_offset,
+                default_value,
+            ))
         }
         BuiltInWindowFunction::NthValue => {
             let arg = args[0].clone();
@@ -225,18 +232,15 @@ fn create_built_in_window_expr(
                 .try_into()
                 .map_err(|e| DataFusionError::Execution(format!("{e:?}")))?;
             let n: u32 = n as u32;
-            let data_type = args[0].data_type(input_schema)?;
-            Arc::new(NthValue::nth(name, arg, data_type, n)?)
+            Arc::new(NthValue::nth(name, arg, data_type.clone(), n)?)
         }
         BuiltInWindowFunction::FirstValue => {
             let arg = args[0].clone();
-            let data_type = args[0].data_type(input_schema)?;
-            Arc::new(NthValue::first(name, arg, data_type))
+            Arc::new(NthValue::first(name, arg, data_type.clone()))
         }
         BuiltInWindowFunction::LastValue => {
             let arg = args[0].clone();
-            let data_type = args[0].data_type(input_schema)?;
-            Arc::new(NthValue::last(name, arg, data_type))
+            Arc::new(NthValue::last(name, arg, data_type.clone()))
         }
     })
 }
@@ -403,17 +407,17 @@ pub fn get_best_fitting_window(
     // of the window_exprs are same.
     let partitionby_exprs = window_exprs[0].partition_by();
     let orderby_keys = window_exprs[0].order_by();
-    let (should_reverse, partition_search_mode) =
-        if let Some((should_reverse, partition_search_mode)) =
+    let (should_reverse, input_order_mode) =
+        if let Some((should_reverse, input_order_mode)) =
             get_window_mode(partitionby_exprs, orderby_keys, input)
         {
-            (should_reverse, partition_search_mode)
+            (should_reverse, input_order_mode)
         } else {
             return Ok(None);
         };
     let is_unbounded = unbounded_output(input);
-    if !is_unbounded && partition_search_mode != PartitionSearchMode::Sorted {
-        // Executor has bounded input and `partition_search_mode` is not `PartitionSearchMode::Sorted`
+    if !is_unbounded && input_order_mode != InputOrderMode::Sorted {
+        // Executor has bounded input and `input_order_mode` is not `InputOrderMode::Sorted`
         // in this case removing the sort is not helpful, return:
         return Ok(None);
     };
@@ -441,13 +445,13 @@ pub fn get_best_fitting_window(
             window_expr,
             input.clone(),
             physical_partition_keys.to_vec(),
-            partition_search_mode,
+            input_order_mode,
         )?) as _))
-    } else if partition_search_mode != PartitionSearchMode::Sorted {
+    } else if input_order_mode != InputOrderMode::Sorted {
         // For `WindowAggExec` to work correctly PARTITION BY columns should be sorted.
-        // Hence, if `partition_search_mode` is not `PartitionSearchMode::Sorted` we should convert
-        // input ordering such that it can work with PartitionSearchMode::Sorted (add `SortExec`).
-        // Effectively `WindowAggExec` works only in PartitionSearchMode::Sorted mode.
+        // Hence, if `input_order_mode` is not `Sorted` we should convert
+        // input ordering such that it can work with `Sorted` (add `SortExec`).
+        // Effectively `WindowAggExec` works only in `Sorted` mode.
         Ok(None)
     } else {
         Ok(Some(Arc::new(WindowAggExec::try_new(
@@ -463,16 +467,16 @@ pub fn get_best_fitting_window(
 /// is sufficient to run the current window operator.
 /// - A `None` return value indicates that we can not remove the sort in question
 ///   (input ordering is not sufficient to run current window executor).
-/// - A `Some((bool, PartitionSearchMode))` value indicates that the window operator
+/// - A `Some((bool, InputOrderMode))` value indicates that the window operator
 ///   can run with existing input ordering, so we can remove `SortExec` before it.
 /// The `bool` field in the return value represents whether we should reverse window
-/// operator to remove `SortExec` before it. The `PartitionSearchMode` field represents
+/// operator to remove `SortExec` before it. The `InputOrderMode` field represents
 /// the mode this window operator should work in to accommodate the existing ordering.
 pub fn get_window_mode(
     partitionby_exprs: &[Arc<dyn PhysicalExpr>],
     orderby_keys: &[PhysicalSortExpr],
     input: &Arc<dyn ExecutionPlan>,
-) -> Option<(bool, PartitionSearchMode)> {
+) -> Option<(bool, InputOrderMode)> {
     let input_eqs = input.equivalence_properties();
     let mut partition_by_reqs: Vec<PhysicalSortRequirement> = vec![];
     let (_, indices) = input_eqs.find_longest_permutation(partitionby_exprs);
@@ -493,11 +497,11 @@ pub fn get_window_mode(
         if partition_by_eqs.ordering_satisfy_requirement(&req) {
             // Window can be run with existing ordering
             let mode = if indices.len() == partitionby_exprs.len() {
-                PartitionSearchMode::Sorted
+                InputOrderMode::Sorted
             } else if indices.is_empty() {
-                PartitionSearchMode::Linear
+                InputOrderMode::Linear
             } else {
-                PartitionSearchMode::PartiallySorted(indices)
+                InputOrderMode::PartiallySorted(indices)
             };
             return Some((should_swap, mode));
         }
@@ -521,7 +525,7 @@ mod tests {
 
     use futures::FutureExt;
 
-    use PartitionSearchMode::{Linear, PartiallySorted, Sorted};
+    use InputOrderMode::{Linear, PartiallySorted, Sorted};
 
     fn create_test_schema() -> Result<SchemaRef> {
         let nullable_column = Field::new("nullable_col", DataType::Int32, true);
@@ -660,12 +664,12 @@ mod tests {
         let refs = blocking_exec.refs();
         let window_agg_exec = Arc::new(WindowAggExec::try_new(
             vec![create_window_expr(
-                &WindowFunction::AggregateFunction(AggregateFunction::Count),
+                &WindowFunctionDefinition::AggregateFunction(AggregateFunction::Count),
                 "count".to_owned(),
                 &[col("a", &schema)?],
                 &[],
                 &[],
-                Arc::new(WindowFrame::new(false)),
+                Arc::new(WindowFrame::new(None)),
                 schema.as_ref(),
             )?],
             blocking_exec,
@@ -781,11 +785,11 @@ mod tests {
         // Second field in the tuple is Vec<str> where each element in the vector represents ORDER BY columns
         // For instance, vec!["c"], corresponds to ORDER BY c ASC NULLS FIRST, (ordering is default ordering. We do not check
         // for reversibility in this test).
-        // Third field in the tuple is Option<PartitionSearchMode>, which corresponds to expected algorithm mode.
+        // Third field in the tuple is Option<InputOrderMode>, which corresponds to expected algorithm mode.
         // None represents that existing ordering is not sufficient to run executor with any one of the algorithms
         // (We need to add SortExec to be able to run it).
-        // Some(PartitionSearchMode) represents, we can run algorithm with existing ordering; and algorithm should work in
-        // PartitionSearchMode.
+        // Some(InputOrderMode) represents, we can run algorithm with existing ordering; and algorithm should work in
+        // InputOrderMode.
         let test_cases = vec![
             (vec!["a"], vec!["a"], Some(Sorted)),
             (vec!["a"], vec!["b"], Some(Sorted)),
@@ -870,7 +874,7 @@ mod tests {
             }
             let res =
                 get_window_mode(&partition_by_exprs, &order_by_exprs, &exec_unbounded);
-            // Since reversibility is not important in this test. Convert Option<(bool, PartitionSearchMode)> to Option<PartitionSearchMode>
+            // Since reversibility is not important in this test. Convert Option<(bool, InputOrderMode)> to Option<InputOrderMode>
             let res = res.map(|(_, mode)| mode);
             assert_eq!(
                 res, *expected,
@@ -901,12 +905,12 @@ mod tests {
         // Second field in the tuple is Vec<(str, bool, bool)> where each element in the vector represents ORDER BY columns
         // For instance, vec![("c", false, false)], corresponds to ORDER BY c ASC NULLS LAST,
         // similarly, vec![("c", true, true)], corresponds to ORDER BY c DESC NULLS FIRST,
-        // Third field in the tuple is Option<(bool, PartitionSearchMode)>, which corresponds to expected result.
+        // Third field in the tuple is Option<(bool, InputOrderMode)>, which corresponds to expected result.
         // None represents that existing ordering is not sufficient to run executor with any one of the algorithms
         // (We need to add SortExec to be able to run it).
-        // Some((bool, PartitionSearchMode)) represents, we can run algorithm with existing ordering. Algorithm should work in
-        // PartitionSearchMode, bool field represents whether we should reverse window expressions to run executor with existing ordering.
-        // For instance, `Some((false, PartitionSearchMode::Sorted))`, represents that we shouldn't reverse window expressions. And algorithm
+        // Some((bool, InputOrderMode)) represents, we can run algorithm with existing ordering. Algorithm should work in
+        // InputOrderMode, bool field represents whether we should reverse window expressions to run executor with existing ordering.
+        // For instance, `Some((false, InputOrderMode::Sorted))`, represents that we shouldn't reverse window expressions. And algorithm
         // should work in Sorted mode to work with existing ordering.
         let test_cases = vec![
             // PARTITION BY a, b ORDER BY c ASC NULLS LAST

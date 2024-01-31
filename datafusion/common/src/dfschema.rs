@@ -18,7 +18,7 @@
 //! DFSchema is an extended schema struct that DataFusion uses to provide support for
 //! fields with optional relation names.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::convert::TryFrom;
 use std::fmt::{Display, Formatter};
 use std::hash::Hash;
@@ -26,6 +26,7 @@ use std::sync::Arc;
 
 use crate::error::{
     unqualified_field_not_found, DataFusionError, Result, SchemaError, _plan_err,
+    _schema_err,
 };
 use crate::{
     field_not_found, Column, FunctionalDependencies, OwnedTableReference, TableReference,
@@ -134,39 +135,29 @@ impl DFSchema {
         fields: Vec<DFField>,
         metadata: HashMap<String, String>,
     ) -> Result<Self> {
-        let mut qualified_names = HashSet::new();
-        let mut unqualified_names = HashSet::new();
+        let mut qualified_names = BTreeSet::new();
+        let mut unqualified_names = BTreeSet::new();
 
         for field in &fields {
             if let Some(qualifier) = field.qualifier() {
                 qualified_names.insert((qualifier, field.name()));
             } else if !unqualified_names.insert(field.name()) {
-                return Err(DataFusionError::SchemaError(
-                    SchemaError::DuplicateUnqualifiedField {
-                        name: field.name().to_string(),
-                    },
-                ));
+                return _schema_err!(SchemaError::DuplicateUnqualifiedField {
+                    name: field.name().to_string(),
+                });
             }
         }
 
-        // check for mix of qualified and unqualified field with same unqualified name
-        // note that we need to sort the contents of the HashSet first so that errors are
-        // deterministic
-        let mut qualified_names = qualified_names
-            .iter()
-            .map(|(l, r)| (l.to_owned(), r.to_owned()))
-            .collect::<Vec<(&OwnedTableReference, &String)>>();
-        qualified_names.sort();
+        // Check for mix of qualified and unqualified fields with same unqualified name.
+        // The BTreeSet storage makes sure that errors are reported in deterministic order.
         for (qualifier, name) in &qualified_names {
             if unqualified_names.contains(name) {
-                return Err(DataFusionError::SchemaError(
-                    SchemaError::AmbiguousReference {
-                        field: Column {
-                            relation: Some((*qualifier).clone()),
-                            name: name.to_string(),
-                        },
-                    },
-                ));
+                return _schema_err!(SchemaError::AmbiguousReference {
+                    field: Column {
+                        relation: Some((*qualifier).clone()),
+                        name: name.to_string(),
+                    }
+                });
             }
         }
         Ok(Self {
@@ -199,9 +190,16 @@ impl DFSchema {
     pub fn with_functional_dependencies(
         mut self,
         functional_dependencies: FunctionalDependencies,
-    ) -> Self {
-        self.functional_dependencies = functional_dependencies;
-        self
+    ) -> Result<Self> {
+        if functional_dependencies.is_valid(self.fields.len()) {
+            self.functional_dependencies = functional_dependencies;
+            Ok(self)
+        } else {
+            _plan_err!(
+                "Invalid functional dependency: {:?}",
+                functional_dependencies
+            )
+        }
     }
 
     /// Create a new schema that contains the fields from this schema followed by the fields
@@ -220,17 +218,25 @@ impl DFSchema {
         if other_schema.fields.is_empty() {
             return;
         }
+
+        let self_fields: HashSet<&DFField> = self.fields.iter().collect();
+        let self_unqualified_names: HashSet<&str> =
+            self.fields.iter().map(|x| x.name().as_str()).collect();
+
+        let mut fields_to_add = vec![];
+
         for field in other_schema.fields() {
             // skip duplicate columns
             let duplicated_field = match field.qualifier() {
-                Some(q) => self.field_with_name(Some(q), field.name()).is_ok(),
+                Some(_) => self_fields.contains(field),
                 // for unqualified columns, check as unqualified name
-                None => self.field_with_unqualified_name(field.name()).is_ok(),
+                None => self_unqualified_names.contains(field.name().as_str()),
             };
             if !duplicated_field {
-                self.fields.push(field.clone());
+                fields_to_add.push(field.clone());
             }
         }
+        self.fields.extend(fields_to_add);
         self.metadata.extend(other_schema.metadata.clone())
     }
 
@@ -340,6 +346,22 @@ impl DFSchema {
             .collect()
     }
 
+    /// Find all fields indices having the given qualifier
+    pub fn fields_indices_with_qualified(
+        &self,
+        qualifier: &TableReference,
+    ) -> Vec<usize> {
+        self.fields
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, field)| {
+                field
+                    .qualifier()
+                    .and_then(|q| q.eq(qualifier).then_some(idx))
+            })
+            .collect()
+    }
+
     /// Find all fields match the given name
     pub fn fields_with_unqualified_name(&self, name: &str) -> Vec<&DFField> {
         self.fields
@@ -369,14 +391,12 @@ impl DFSchema {
                 if fields_without_qualifier.len() == 1 {
                     Ok(fields_without_qualifier[0])
                 } else {
-                    Err(DataFusionError::SchemaError(
-                        SchemaError::AmbiguousReference {
-                            field: Column {
-                                relation: None,
-                                name: name.to_string(),
-                            },
+                    _schema_err!(SchemaError::AmbiguousReference {
+                        field: Column {
+                            relation: None,
+                            name: name.to_string(),
                         },
-                    ))
+                    })
                 }
             }
         }
@@ -1476,8 +1496,8 @@ mod tests {
             DFSchema::new_with_metadata([a, b].to_vec(), HashMap::new()).unwrap(),
         );
         let schema: Schema = df_schema.as_ref().clone().into();
-        let a_df = df_schema.fields.get(0).unwrap().field();
-        let a_arrow = schema.fields.get(0).unwrap();
+        let a_df = df_schema.fields.first().unwrap().field();
+        let a_arrow = schema.fields.first().unwrap();
         assert_eq!(a_df.metadata(), a_arrow.metadata())
     }
 

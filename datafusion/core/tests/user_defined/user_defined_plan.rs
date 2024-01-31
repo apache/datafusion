@@ -91,6 +91,7 @@ use datafusion::{
 };
 
 use async_trait::async_trait;
+use datafusion_common::arrow_datafusion_err;
 use futures::{Stream, StreamExt};
 
 /// Execute the specified sql and return the resulting record batches
@@ -99,7 +100,7 @@ async fn exec_sql(ctx: &mut SessionContext, sql: &str) -> Result<String> {
     let df = ctx.sql(sql).await?;
     let batches = df.collect().await?;
     pretty_format_batches(&batches)
-        .map_err(DataFusionError::ArrowError)
+        .map_err(|e| arrow_datafusion_err!(e))
         .map(|d| d.to_string())
 }
 

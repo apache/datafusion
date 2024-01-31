@@ -18,44 +18,369 @@
 //! Join related functionality used both on logical and physical plans
 
 use std::collections::HashSet;
+use std::fmt::{self, Debug};
 use std::future::Future;
+use std::ops::{IndexMut, Range};
 use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::usize;
 
-use crate::joins::hash_join_utils::{build_filter_input_order, SortedFilterExpr};
 use crate::metrics::{self, ExecutionPlanMetricsSet, MetricBuilder};
 use crate::{ColumnStatistics, ExecutionPlan, Partitioning, Statistics};
 
 use arrow::array::{
     downcast_array, new_null_array, Array, BooleanBufferBuilder, UInt32Array,
-    UInt32Builder, UInt64Array,
+    UInt32BufferBuilder, UInt32Builder, UInt64Array, UInt64BufferBuilder,
 };
 use arrow::compute;
 use arrow::datatypes::{Field, Schema, SchemaBuilder};
 use arrow::record_batch::{RecordBatch, RecordBatchOptions};
+use arrow_array::{ArrowPrimitiveType, NativeAdapter, PrimitiveArray};
+use arrow_buffer::ArrowNativeType;
 use datafusion_common::cast::as_boolean_array;
 use datafusion_common::stats::Precision;
 use datafusion_common::{
-    plan_datafusion_err, plan_err, DataFusionError, JoinSide, JoinType, Result,
-    SharedResult,
+    plan_err, DataFusionError, JoinSide, JoinType, Result, SharedResult,
 };
+use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_physical_expr::equivalence::add_offset_to_expr;
 use datafusion_physical_expr::expressions::Column;
-use datafusion_physical_expr::intervals::{ExprIntervalGraph, Interval, IntervalBound};
-use datafusion_physical_expr::utils::merge_vectors;
+use datafusion_physical_expr::utils::{collect_columns, merge_vectors};
 use datafusion_physical_expr::{
-    LexOrdering, LexOrderingRef, PhysicalExpr, PhysicalSortExpr,
+    LexOrdering, LexOrderingRef, PhysicalExpr, PhysicalExprRef, PhysicalSortExpr,
 };
 
+use datafusion_common::tree_node::{Transformed, TreeNode};
 use futures::future::{BoxFuture, Shared};
 use futures::{ready, FutureExt};
+use hashbrown::raw::RawTable;
 use parking_lot::Mutex;
 
+/// Maps a `u64` hash value based on the build side ["on" values] to a list of indices with this key's value.
+///
+/// By allocating a `HashMap` with capacity for *at least* the number of rows for entries at the build side,
+/// we make sure that we don't have to re-hash the hashmap, which needs access to the key (the hash in this case) value.
+///
+/// E.g. 1 -> [3, 6, 8] indicates that the column values map to rows 3, 6 and 8 for hash value 1
+/// As the key is a hash value, we need to check possible hash collisions in the probe stage
+/// During this stage it might be the case that a row is contained the same hashmap value,
+/// but the values don't match. Those are checked in the [`equal_rows_arr`](crate::joins::hash_join::equal_rows_arr) method.
+///
+/// The indices (values) are stored in a separate chained list stored in the `Vec<u64>`.
+///
+/// The first value (+1) is stored in the hashmap, whereas the next value is stored in array at the position value.
+///
+/// The chain can be followed until the value "0" has been reached, meaning the end of the list.
+/// Also see chapter 5.3 of [Balancing vectorized query execution with bandwidth-optimized storage](https://dare.uva.nl/search?identifier=5ccbb60a-38b8-4eeb-858a-e7735dd37487)
+///
+/// # Example
+///
+/// ``` text
+/// See the example below:
+///
+/// Insert (10,1)            <-- insert hash value 10 with row index 1
+/// map:
+/// ----------
+/// | 10 | 2 |
+/// ----------
+/// next:
+/// ---------------------
+/// | 0 | 0 | 0 | 0 | 0 |
+/// ---------------------
+/// Insert (20,2)
+/// map:
+/// ----------
+/// | 10 | 2 |
+/// | 20 | 3 |
+/// ----------
+/// next:
+/// ---------------------
+/// | 0 | 0 | 0 | 0 | 0 |
+/// ---------------------
+/// Insert (10,3)           <-- collision! row index 3 has a hash value of 10 as well
+/// map:
+/// ----------
+/// | 10 | 4 |
+/// | 20 | 3 |
+/// ----------
+/// next:
+/// ---------------------
+/// | 0 | 0 | 0 | 2 | 0 |  <--- hash value 10 maps to 4,2 (which means indices values 3,1)
+/// ---------------------
+/// Insert (10,4)          <-- another collision! row index 4 ALSO has a hash value of 10
+/// map:
+/// ---------
+/// | 10 | 5 |
+/// | 20 | 3 |
+/// ---------
+/// next:
+/// ---------------------
+/// | 0 | 0 | 0 | 2 | 4 | <--- hash value 10 maps to 5,4,2 (which means indices values 4,3,1)
+/// ---------------------
+/// ```
+pub struct JoinHashMap {
+    // Stores hash value to last row index
+    map: RawTable<(u64, u64)>,
+    // Stores indices in chained list data structure
+    next: Vec<u64>,
+}
+
+impl JoinHashMap {
+    #[cfg(test)]
+    pub(crate) fn new(map: RawTable<(u64, u64)>, next: Vec<u64>) -> Self {
+        Self { map, next }
+    }
+
+    pub(crate) fn with_capacity(capacity: usize) -> Self {
+        JoinHashMap {
+            map: RawTable::with_capacity(capacity),
+            next: vec![0; capacity],
+        }
+    }
+}
+
+// Type of offsets for obtaining indices from JoinHashMap.
+pub(crate) type JoinHashMapOffset = (usize, Option<u64>);
+
+// Macro for traversing chained values with limit.
+// Early returns in case of reacing output tuples limit.
+macro_rules! chain_traverse {
+    (
+        $input_indices:ident, $match_indices:ident, $hash_values:ident, $next_chain:ident,
+        $input_idx:ident, $chain_idx:ident, $deleted_offset:ident, $remaining_output:ident
+    ) => {
+        let mut i = $chain_idx - 1;
+        loop {
+            let match_row_idx = if let Some(offset) = $deleted_offset {
+                // This arguments means that we prune the next index way before here.
+                if i < offset as u64 {
+                    // End of the list due to pruning
+                    break;
+                }
+                i - offset as u64
+            } else {
+                i
+            };
+            $match_indices.append(match_row_idx);
+            $input_indices.append($input_idx as u32);
+            $remaining_output -= 1;
+            // Follow the chain to get the next index value
+            let next = $next_chain[match_row_idx as usize];
+
+            if $remaining_output == 0 {
+                // In case current input index is the last, and no more chain values left
+                // returning None as whole input has been scanned
+                let next_offset = if $input_idx == $hash_values.len() - 1 && next == 0 {
+                    None
+                } else {
+                    Some(($input_idx, Some(next)))
+                };
+                return ($input_indices, $match_indices, next_offset);
+            }
+            if next == 0 {
+                // end of list
+                break;
+            }
+            i = next - 1;
+        }
+    };
+}
+
+// Trait defining methods that must be implemented by a hash map type to be used for joins.
+pub trait JoinHashMapType {
+    /// The type of list used to store the next list
+    type NextType: IndexMut<usize, Output = u64>;
+    /// Extend with zero
+    fn extend_zero(&mut self, len: usize);
+    /// Returns mutable references to the hash map and the next.
+    fn get_mut(&mut self) -> (&mut RawTable<(u64, u64)>, &mut Self::NextType);
+    /// Returns a reference to the hash map.
+    fn get_map(&self) -> &RawTable<(u64, u64)>;
+    /// Returns a reference to the next.
+    fn get_list(&self) -> &Self::NextType;
+
+    /// Updates hashmap from iterator of row indices & row hashes pairs.
+    fn update_from_iter<'a>(
+        &mut self,
+        iter: impl Iterator<Item = (usize, &'a u64)>,
+        deleted_offset: usize,
+    ) {
+        let (mut_map, mut_list) = self.get_mut();
+        for (row, hash_value) in iter {
+            let item = mut_map.get_mut(*hash_value, |(hash, _)| *hash_value == *hash);
+            if let Some((_, index)) = item {
+                // Already exists: add index to next array
+                let prev_index = *index;
+                // Store new value inside hashmap
+                *index = (row + 1) as u64;
+                // Update chained Vec at `row` with previous value
+                mut_list[row - deleted_offset] = prev_index;
+            } else {
+                mut_map.insert(
+                    *hash_value,
+                    // store the value + 1 as 0 value reserved for end of list
+                    (*hash_value, (row + 1) as u64),
+                    |(hash, _)| *hash,
+                );
+                // chained list at `row` is already initialized with 0
+                // meaning end of list
+            }
+        }
+    }
+
+    /// Returns all pairs of row indices matched by hash.
+    ///
+    /// This method only compares hashes, so additional further check for actual values
+    /// equality may be required.
+    fn get_matched_indices<'a>(
+        &self,
+        iter: impl Iterator<Item = (usize, &'a u64)>,
+        deleted_offset: Option<usize>,
+    ) -> (UInt32BufferBuilder, UInt64BufferBuilder) {
+        let mut input_indices = UInt32BufferBuilder::new(0);
+        let mut match_indices = UInt64BufferBuilder::new(0);
+
+        let hash_map = self.get_map();
+        let next_chain = self.get_list();
+        for (row_idx, hash_value) in iter {
+            // Get the hash and find it in the index
+            if let Some((_, index)) =
+                hash_map.get(*hash_value, |(hash, _)| *hash_value == *hash)
+            {
+                let mut i = *index - 1;
+                loop {
+                    let match_row_idx = if let Some(offset) = deleted_offset {
+                        // This arguments means that we prune the next index way before here.
+                        if i < offset as u64 {
+                            // End of the list due to pruning
+                            break;
+                        }
+                        i - offset as u64
+                    } else {
+                        i
+                    };
+                    match_indices.append(match_row_idx);
+                    input_indices.append(row_idx as u32);
+                    // Follow the chain to get the next index value
+                    let next = next_chain[match_row_idx as usize];
+                    if next == 0 {
+                        // end of list
+                        break;
+                    }
+                    i = next - 1;
+                }
+            }
+        }
+
+        (input_indices, match_indices)
+    }
+
+    /// Matches hashes with taking limit and offset into account.
+    /// Returns pairs of matched indices along with the starting point for next
+    /// matching iteration (`None` if limit has not been reached).
+    ///
+    /// This method only compares hashes, so additional further check for actual values
+    /// equality may be required.
+    fn get_matched_indices_with_limit_offset(
+        &self,
+        hash_values: &[u64],
+        deleted_offset: Option<usize>,
+        limit: usize,
+        offset: JoinHashMapOffset,
+    ) -> (
+        UInt32BufferBuilder,
+        UInt64BufferBuilder,
+        Option<JoinHashMapOffset>,
+    ) {
+        let mut input_indices = UInt32BufferBuilder::new(0);
+        let mut match_indices = UInt64BufferBuilder::new(0);
+
+        let mut remaining_output = limit;
+
+        let hash_map: &RawTable<(u64, u64)> = self.get_map();
+        let next_chain = self.get_list();
+
+        // Calculate initial `hash_values` index before iterating
+        let to_skip = match offset {
+            // None `initial_next_idx` indicates that `initial_idx` processing has'n been started
+            (initial_idx, None) => initial_idx,
+            // Zero `initial_next_idx` indicates that `initial_idx` has been processed during
+            // previous iteration, and it should be skipped
+            (initial_idx, Some(0)) => initial_idx + 1,
+            // Otherwise, process remaining `initial_idx` matches by traversing `next_chain`,
+            // to start with the next index
+            (initial_idx, Some(initial_next_idx)) => {
+                chain_traverse!(
+                    input_indices,
+                    match_indices,
+                    hash_values,
+                    next_chain,
+                    initial_idx,
+                    initial_next_idx,
+                    deleted_offset,
+                    remaining_output
+                );
+
+                initial_idx + 1
+            }
+        };
+
+        let mut row_idx = to_skip;
+        for hash_value in &hash_values[to_skip..] {
+            if let Some((_, index)) =
+                hash_map.get(*hash_value, |(hash, _)| *hash_value == *hash)
+            {
+                chain_traverse!(
+                    input_indices,
+                    match_indices,
+                    hash_values,
+                    next_chain,
+                    row_idx,
+                    index,
+                    deleted_offset,
+                    remaining_output
+                );
+            }
+            row_idx += 1;
+        }
+
+        (input_indices, match_indices, None)
+    }
+}
+
+/// Implementation of `JoinHashMapType` for `JoinHashMap`.
+impl JoinHashMapType for JoinHashMap {
+    type NextType = Vec<u64>;
+
+    // Void implementation
+    fn extend_zero(&mut self, _: usize) {}
+
+    /// Get mutable references to the hash map and the next.
+    fn get_mut(&mut self) -> (&mut RawTable<(u64, u64)>, &mut Self::NextType) {
+        (&mut self.map, &mut self.next)
+    }
+
+    /// Get a reference to the hash map.
+    fn get_map(&self) -> &RawTable<(u64, u64)> {
+        &self.map
+    }
+
+    /// Get a reference to the next.
+    fn get_list(&self) -> &Self::NextType {
+        &self.next
+    }
+}
+
+impl fmt::Debug for JoinHashMap {
+    fn fmt(&self, _f: &mut fmt::Formatter) -> fmt::Result {
+        Ok(())
+    }
+}
+
 /// The on clause of the join, as vector of (left, right) columns.
-pub type JoinOn = Vec<(Column, Column)>;
+pub type JoinOn = Vec<(PhysicalExprRef, PhysicalExprRef)>;
 /// Reference for JoinOn.
-pub type JoinOnRef<'a> = &'a [(Column, Column)];
+pub type JoinOnRef<'a> = &'a [(PhysicalExprRef, PhysicalExprRef)];
 
 /// Checks whether the schemas "left" and "right" and columns "on" represent a valid join.
 /// They are valid whenever their columns' intersection equals the set `on`
@@ -81,12 +406,18 @@ pub fn check_join_is_valid(left: &Schema, right: &Schema, on: JoinOnRef) -> Resu
 fn check_join_set_is_valid(
     left: &HashSet<Column>,
     right: &HashSet<Column>,
-    on: &[(Column, Column)],
+    on: &[(PhysicalExprRef, PhysicalExprRef)],
 ) -> Result<()> {
-    let on_left = &on.iter().map(|on| on.0.clone()).collect::<HashSet<_>>();
+    let on_left = &on
+        .iter()
+        .flat_map(|on| collect_columns(&on.0))
+        .collect::<HashSet<_>>();
     let left_missing = on_left.difference(left).collect::<HashSet<_>>();
 
-    let on_right = &on.iter().map(|on| on.1.clone()).collect::<HashSet<_>>();
+    let on_right = &on
+        .iter()
+        .flat_map(|on| collect_columns(&on.1))
+        .collect::<HashSet<_>>();
     let right_missing = on_right.difference(right).collect::<HashSet<_>>();
 
     if !left_missing.is_empty() | !right_missing.is_empty() {
@@ -142,20 +473,40 @@ pub fn adjust_right_output_partitioning(
 /// Replaces the right column (first index in the `on_column` tuple) with
 /// the left column (zeroth index in the tuple) inside `right_ordering`.
 fn replace_on_columns_of_right_ordering(
-    on_columns: &[(Column, Column)],
+    on_columns: &[(PhysicalExprRef, PhysicalExprRef)],
     right_ordering: &mut [PhysicalSortExpr],
-    left_columns_len: usize,
-) {
+) -> Result<()> {
     for (left_col, right_col) in on_columns {
-        let right_col =
-            Column::new(right_col.name(), right_col.index() + left_columns_len);
         for item in right_ordering.iter_mut() {
-            if let Some(col) = item.expr.as_any().downcast_ref::<Column>() {
-                if right_col.eq(col) {
-                    item.expr = Arc::new(left_col.clone()) as _;
+            let new_expr = item.expr.clone().transform(&|e| {
+                if e.eq(right_col) {
+                    Ok(Transformed::Yes(left_col.clone()))
+                } else {
+                    Ok(Transformed::No(e))
                 }
-            }
+            })?;
+            item.expr = new_expr;
         }
+    }
+    Ok(())
+}
+
+fn offset_ordering(
+    ordering: LexOrderingRef,
+    join_type: &JoinType,
+    offset: usize,
+) -> Vec<PhysicalSortExpr> {
+    match join_type {
+        // In the case below, right ordering should be offseted with the left
+        // side length, since we append the right table to the left table.
+        JoinType::Inner | JoinType::Left | JoinType::Full | JoinType::Right => ordering
+            .iter()
+            .map(|sort_expr| PhysicalSortExpr {
+                expr: add_offset_to_expr(sort_expr.expr.clone(), offset),
+                options: sort_expr.options,
+            })
+            .collect(),
+        _ => ordering.to_vec(),
     }
 }
 
@@ -164,35 +515,24 @@ pub fn calculate_join_output_ordering(
     left_ordering: LexOrderingRef,
     right_ordering: LexOrderingRef,
     join_type: JoinType,
-    on_columns: &[(Column, Column)],
+    on_columns: &[(PhysicalExprRef, PhysicalExprRef)],
     left_columns_len: usize,
     maintains_input_order: &[bool],
     probe_side: Option<JoinSide>,
 ) -> Option<LexOrdering> {
-    let mut right_ordering = match join_type {
-        // In the case below, right ordering should be offseted with the left
-        // side length, since we append the right table to the left table.
-        JoinType::Inner | JoinType::Left | JoinType::Right | JoinType::Full => {
-            right_ordering
-                .iter()
-                .map(|sort_expr| PhysicalSortExpr {
-                    expr: add_offset_to_expr(sort_expr.expr.clone(), left_columns_len),
-                    options: sort_expr.options,
-                })
-                .collect()
-        }
-        _ => right_ordering.to_vec(),
-    };
     let output_ordering = match maintains_input_order {
         [true, false] => {
             // Special case, we can prefix ordering of right side with the ordering of left side.
             if join_type == JoinType::Inner && probe_side == Some(JoinSide::Left) {
                 replace_on_columns_of_right_ordering(
                     on_columns,
-                    &mut right_ordering,
-                    left_columns_len,
-                );
-                merge_vectors(left_ordering, &right_ordering)
+                    &mut right_ordering.to_vec(),
+                )
+                .ok()?;
+                merge_vectors(
+                    left_ordering,
+                    &offset_ordering(right_ordering, &join_type, left_columns_len),
+                )
             } else {
                 left_ordering.to_vec()
             }
@@ -202,12 +542,15 @@ pub fn calculate_join_output_ordering(
             if join_type == JoinType::Inner && probe_side == Some(JoinSide::Right) {
                 replace_on_columns_of_right_ordering(
                     on_columns,
-                    &mut right_ordering,
-                    left_columns_len,
-                );
-                merge_vectors(&right_ordering, left_ordering)
+                    &mut right_ordering.to_vec(),
+                )
+                .ok()?;
+                merge_vectors(
+                    &offset_ordering(right_ordering, &join_type, left_columns_len),
+                    left_ordering,
+                )
             } else {
-                right_ordering.to_vec()
+                offset_ordering(right_ordering, &join_type, left_columns_len)
             }
         }
         // Doesn't maintain ordering, output ordering is None.
@@ -486,10 +829,19 @@ fn estimate_join_cardinality(
             let (left_col_stats, right_col_stats) = on
                 .iter()
                 .map(|(left, right)| {
-                    (
-                        left_stats.column_statistics[left.index()].clone(),
-                        right_stats.column_statistics[right.index()].clone(),
-                    )
+                    match (
+                        left.as_any().downcast_ref::<Column>(),
+                        right.as_any().downcast_ref::<Column>(),
+                    ) {
+                        (Some(left), Some(right)) => (
+                            left_stats.column_statistics[left.index()].clone(),
+                            right_stats.column_statistics[right.index()].clone(),
+                        ),
+                        _ => (
+                            ColumnStatistics::new_unknown(),
+                            ColumnStatistics::new_unknown(),
+                        ),
+                    }
                 })
                 .unzip::<_, _, Vec<_>, Vec<_>>();
 
@@ -584,8 +936,8 @@ fn estimate_inner_join_cardinality(
             );
         }
 
-        let left_max_distinct = max_distinct_count(&left_stats.num_rows, left_stat)?;
-        let right_max_distinct = max_distinct_count(&right_stats.num_rows, right_stat)?;
+        let left_max_distinct = max_distinct_count(&left_stats.num_rows, left_stat);
+        let right_max_distinct = max_distinct_count(&right_stats.num_rows, right_stat);
         let max_distinct = left_max_distinct.max(&right_max_distinct);
         if max_distinct.get_value().is_some() {
             // Seems like there are a few implementations of this algorithm that implement
@@ -616,48 +968,65 @@ fn estimate_inner_join_cardinality(
 }
 
 /// Estimate the number of maximum distinct values that can be present in the
-/// given column from its statistics.
-///
-/// If distinct_count is available, uses it directly. If the column numeric, and
-/// has min/max values, then they might be used as a fallback option. Otherwise,
-/// returns None.
+/// given column from its statistics. If distinct_count is available, uses it
+/// directly. Otherwise, if the column is numeric and has min/max values, it
+/// estimates the maximum distinct count from those.
 fn max_distinct_count(
     num_rows: &Precision<usize>,
     stats: &ColumnStatistics,
-) -> Option<Precision<usize>> {
-    match (
-        &stats.distinct_count,
-        stats.max_value.get_value(),
-        stats.min_value.get_value(),
-    ) {
-        (Precision::Exact(_), _, _) | (Precision::Inexact(_), _, _) => {
-            Some(stats.distinct_count.clone())
-        }
-        (_, Some(max), Some(min)) => {
-            let numeric_range = Interval::new(
-                IntervalBound::new(min.clone(), false),
-                IntervalBound::new(max.clone(), false),
-            )
-            .cardinality()
-            .ok()
-            .flatten()? as usize;
-
-            // The number can never be greater than the number of rows we have (minus
-            // the nulls, since they don't count as distinct values).
-            let ceiling =
-                num_rows.get_value()? - stats.null_count.get_value().unwrap_or(&0);
-            Some(
-                if num_rows.is_exact().unwrap_or(false)
-                    && stats.max_value.is_exact().unwrap_or(false)
-                    && stats.min_value.is_exact().unwrap_or(false)
+) -> Precision<usize> {
+    match &stats.distinct_count {
+        dc @ (Precision::Exact(_) | Precision::Inexact(_)) => dc.clone(),
+        _ => {
+            // The number can never be greater than the number of rows we have
+            // minus the nulls (since they don't count as distinct values).
+            let result = match num_rows {
+                Precision::Absent => Precision::Absent,
+                Precision::Inexact(count) => {
+                    // To safeguard against inexact number of rows (e.g. 0) being smaller than
+                    // an exact null count we need to do a checked subtraction.
+                    match count.checked_sub(*stats.null_count.get_value().unwrap_or(&0)) {
+                        None => Precision::Inexact(0),
+                        Some(non_null_count) => Precision::Inexact(non_null_count),
+                    }
+                }
+                Precision::Exact(count) => {
+                    let count = count - stats.null_count.get_value().unwrap_or(&0);
+                    if stats.null_count.is_exact().unwrap_or(false) {
+                        Precision::Exact(count)
+                    } else {
+                        Precision::Inexact(count)
+                    }
+                }
+            };
+            // Cap the estimate using the number of possible values:
+            if let (Some(min), Some(max)) =
+                (stats.min_value.get_value(), stats.max_value.get_value())
+            {
+                if let Some(range_dc) = Interval::try_new(min.clone(), max.clone())
+                    .ok()
+                    .and_then(|e| e.cardinality())
                 {
-                    Precision::Exact(numeric_range.min(ceiling))
-                } else {
-                    Precision::Inexact(numeric_range.min(ceiling))
-                },
-            )
+                    let range_dc = range_dc as usize;
+                    // Note that the `unwrap` calls in the below statement are safe.
+                    return if matches!(result, Precision::Absent)
+                        || &range_dc < result.get_value().unwrap()
+                    {
+                        if stats.min_value.is_exact().unwrap()
+                            && stats.max_value.is_exact().unwrap()
+                        {
+                            Precision::Exact(range_dc)
+                        } else {
+                            Precision::Inexact(range_dc)
+                        }
+                    } else {
+                        result
+                    };
+                }
+            }
+
+            result
         }
-        _ => None,
     }
 }
 
@@ -704,6 +1073,22 @@ impl<T: 'static> OnceFut<T> {
                 r.as_ref()
                     .map(|r| r.as_ref())
                     .map_err(|e| DataFusionError::External(Box::new(e.clone()))),
+            ),
+        }
+    }
+
+    /// Get shared reference to the result of the computation if it is ready, without consuming it
+    pub(crate) fn get_shared(&mut self, cx: &mut Context<'_>) -> Poll<Result<Arc<T>>> {
+        if let OnceFutState::Pending(fut) = &mut self.state {
+            let r = ready!(fut.poll_unpin(cx));
+            self.state = OnceFutState::Ready(r);
+        }
+
+        match &self.state {
+            OnceFutState::Pending(_) => unreachable!(),
+            OnceFutState::Ready(r) => Poll::Ready(
+                r.clone()
+                    .map_err(|e| DataFusionError::External(Box::new(e))),
             ),
         }
     }
@@ -848,7 +1233,7 @@ pub(crate) fn build_batch_from_indices(
 pub(crate) fn adjust_indices_by_join_type(
     left_indices: UInt64Array,
     right_indices: UInt32Array,
-    count_right_batch: usize,
+    adjust_range: Range<usize>,
     join_type: JoinType,
 ) -> (UInt64Array, UInt32Array) {
     match join_type {
@@ -864,21 +1249,20 @@ pub(crate) fn adjust_indices_by_join_type(
         JoinType::Right | JoinType::Full => {
             // matched
             // unmatched right row will be produced in this batch
-            let right_unmatched_indices =
-                get_anti_indices(count_right_batch, &right_indices);
+            let right_unmatched_indices = get_anti_indices(adjust_range, &right_indices);
             // combine the matched and unmatched right result together
             append_right_indices(left_indices, right_indices, right_unmatched_indices)
         }
         JoinType::RightSemi => {
             // need to remove the duplicated record in the right side
-            let right_indices = get_semi_indices(count_right_batch, &right_indices);
+            let right_indices = get_semi_indices(adjust_range, &right_indices);
             // the left_indices will not be used later for the `right semi` join
             (left_indices, right_indices)
         }
         JoinType::RightAnti => {
             // need to remove the duplicated record in the right side
             // get the anti index for the right side
-            let right_indices = get_anti_indices(count_right_batch, &right_indices);
+            let right_indices = get_anti_indices(adjust_range, &right_indices);
             // the left_indices will not be used later for the `right anti` join
             (left_indices, right_indices)
         }
@@ -920,72 +1304,62 @@ pub(crate) fn append_right_indices(
     }
 }
 
-/// Get unmatched and deduplicated indices
-pub(crate) fn get_anti_indices(
-    row_count: usize,
-    input_indices: &UInt32Array,
-) -> UInt32Array {
-    let mut bitmap = BooleanBufferBuilder::new(row_count);
-    bitmap.append_n(row_count, false);
-    input_indices.iter().flatten().for_each(|v| {
-        bitmap.set_bit(v as usize, true);
-    });
+/// Returns `range` indices which are not present in `input_indices`
+pub(crate) fn get_anti_indices<T: ArrowPrimitiveType>(
+    range: Range<usize>,
+    input_indices: &PrimitiveArray<T>,
+) -> PrimitiveArray<T>
+where
+    NativeAdapter<T>: From<<T as ArrowPrimitiveType>::Native>,
+{
+    let mut bitmap = BooleanBufferBuilder::new(range.len());
+    bitmap.append_n(range.len(), false);
+    input_indices
+        .iter()
+        .flatten()
+        .map(|v| v.as_usize())
+        .filter(|v| range.contains(v))
+        .for_each(|v| {
+            bitmap.set_bit(v - range.start, true);
+        });
+
+    let offset = range.start;
 
     // get the anti index
-    (0..row_count)
-        .filter_map(|idx| (!bitmap.get_bit(idx)).then_some(idx as u32))
-        .collect::<UInt32Array>()
+    (range)
+        .filter_map(|idx| {
+            (!bitmap.get_bit(idx - offset)).then_some(T::Native::from_usize(idx))
+        })
+        .collect::<PrimitiveArray<T>>()
 }
 
-/// Get unmatched and deduplicated indices
-pub(crate) fn get_anti_u64_indices(
-    row_count: usize,
-    input_indices: &UInt64Array,
-) -> UInt64Array {
-    let mut bitmap = BooleanBufferBuilder::new(row_count);
-    bitmap.append_n(row_count, false);
-    input_indices.iter().flatten().for_each(|v| {
-        bitmap.set_bit(v as usize, true);
-    });
+/// Returns intersection of `range` and `input_indices` omitting duplicates
+pub(crate) fn get_semi_indices<T: ArrowPrimitiveType>(
+    range: Range<usize>,
+    input_indices: &PrimitiveArray<T>,
+) -> PrimitiveArray<T>
+where
+    NativeAdapter<T>: From<<T as ArrowPrimitiveType>::Native>,
+{
+    let mut bitmap = BooleanBufferBuilder::new(range.len());
+    bitmap.append_n(range.len(), false);
+    input_indices
+        .iter()
+        .flatten()
+        .map(|v| v.as_usize())
+        .filter(|v| range.contains(v))
+        .for_each(|v| {
+            bitmap.set_bit(v - range.start, true);
+        });
 
-    // get the anti index
-    (0..row_count)
-        .filter_map(|idx| (!bitmap.get_bit(idx)).then_some(idx as u64))
-        .collect::<UInt64Array>()
-}
-
-/// Get matched and deduplicated indices
-pub(crate) fn get_semi_indices(
-    row_count: usize,
-    input_indices: &UInt32Array,
-) -> UInt32Array {
-    let mut bitmap = BooleanBufferBuilder::new(row_count);
-    bitmap.append_n(row_count, false);
-    input_indices.iter().flatten().for_each(|v| {
-        bitmap.set_bit(v as usize, true);
-    });
+    let offset = range.start;
 
     // get the semi index
-    (0..row_count)
-        .filter_map(|idx| (bitmap.get_bit(idx)).then_some(idx as u32))
-        .collect::<UInt32Array>()
-}
-
-/// Get matched and deduplicated indices
-pub(crate) fn get_semi_u64_indices(
-    row_count: usize,
-    input_indices: &UInt64Array,
-) -> UInt64Array {
-    let mut bitmap = BooleanBufferBuilder::new(row_count);
-    bitmap.append_n(row_count, false);
-    input_indices.iter().flatten().for_each(|v| {
-        bitmap.set_bit(v as usize, true);
-    });
-
-    // get the semi index
-    (0..row_count)
-        .filter_map(|idx| (bitmap.get_bit(idx)).then_some(idx as u64))
-        .collect::<UInt64Array>()
+    (range)
+        .filter_map(|idx| {
+            (bitmap.get_bit(idx - offset)).then_some(T::Native::from_usize(idx))
+        })
+        .collect::<PrimitiveArray<T>>()
 }
 
 /// Metrics for build & probe joins
@@ -1050,88 +1424,71 @@ impl BuildProbeJoinMetrics {
     }
 }
 
-/// Updates sorted filter expressions with corresponding node indices from the
-/// expression interval graph.
+/// The `handle_state` macro is designed to process the result of a state-changing
+/// operation, encountered e.g. in implementations of `EagerJoinStream`. It
+/// operates on a `StatefulStreamResult` by matching its variants and executing
+/// corresponding actions. This macro is used to streamline code that deals with
+/// state transitions, reducing boilerplate and improving readability.
 ///
-/// This function iterates through the provided sorted filter expressions,
-/// gathers the corresponding node indices from the expression interval graph,
-/// and then updates the sorted expressions with these indices. It ensures
-/// that these sorted expressions are aligned with the structure of the graph.
-fn update_sorted_exprs_with_node_indices(
-    graph: &mut ExprIntervalGraph,
-    sorted_exprs: &mut [SortedFilterExpr],
-) {
-    // Extract filter expressions from the sorted expressions:
-    let filter_exprs = sorted_exprs
-        .iter()
-        .map(|expr| expr.filter_expr().clone())
-        .collect::<Vec<_>>();
-
-    // Gather corresponding node indices for the extracted filter expressions from the graph:
-    let child_node_indices = graph.gather_node_indices(&filter_exprs);
-
-    // Iterate through the sorted expressions and the gathered node indices:
-    for (sorted_expr, (_, index)) in sorted_exprs.iter_mut().zip(child_node_indices) {
-        // Update each sorted expression with the corresponding node index:
-        sorted_expr.set_node_index(index);
-    }
-}
-
-/// Prepares and sorts expressions based on a given filter, left and right execution plans, and sort expressions.
+/// # Cases
+///
+/// - `Ok(StatefulStreamResult::Continue)`: Continues the loop, indicating the
+///   stream join operation should proceed to the next step.
+/// - `Ok(StatefulStreamResult::Ready(result))`: Returns a `Poll::Ready` with the
+///   result, either yielding a value or indicating the stream is awaiting more
+///   data.
+/// - `Err(e)`: Returns a `Poll::Ready` containing an error, signaling an issue
+///   during the stream join operation.
 ///
 /// # Arguments
 ///
-/// * `filter` - The join filter to base the sorting on.
-/// * `left` - The left execution plan.
-/// * `right` - The right execution plan.
-/// * `left_sort_exprs` - The expressions to sort on the left side.
-/// * `right_sort_exprs` - The expressions to sort on the right side.
+/// * `$match_case`: An expression that evaluates to a `Result<StatefulStreamResult<_>>`.
+#[macro_export]
+macro_rules! handle_state {
+    ($match_case:expr) => {
+        match $match_case {
+            Ok(StatefulStreamResult::Continue) => continue,
+            Ok(StatefulStreamResult::Ready(result)) => {
+                Poll::Ready(Ok(result).transpose())
+            }
+            Err(e) => Poll::Ready(Some(Err(e))),
+        }
+    };
+}
+
+/// The `handle_async_state` macro adapts the `handle_state` macro for use in
+/// asynchronous operations, particularly when dealing with `Poll` results within
+/// async traits like `EagerJoinStream`. It polls the asynchronous state-changing
+/// function using `poll_unpin` and then passes the result to `handle_state` for
+/// further processing.
 ///
-/// # Returns
+/// # Arguments
 ///
-/// * A tuple consisting of the sorted filter expression for the left and right sides, and an expression interval graph.
-pub fn prepare_sorted_exprs(
-    filter: &JoinFilter,
-    left: &Arc<dyn ExecutionPlan>,
-    right: &Arc<dyn ExecutionPlan>,
-    left_sort_exprs: &[PhysicalSortExpr],
-    right_sort_exprs: &[PhysicalSortExpr],
-) -> Result<(SortedFilterExpr, SortedFilterExpr, ExprIntervalGraph)> {
-    // Build the filter order for the left side
-    let err = || plan_datafusion_err!("Filter does not include the child order");
+/// * `$state_func`: An async function or future that returns a
+///   `Result<StatefulStreamResult<_>>`.
+/// * `$cx`: The context to be passed for polling, usually of type `&mut Context`.
+///
+#[macro_export]
+macro_rules! handle_async_state {
+    ($state_func:expr, $cx:expr) => {
+        $crate::handle_state!(ready!($state_func.poll_unpin($cx)))
+    };
+}
 
-    let left_temp_sorted_filter_expr = build_filter_input_order(
-        JoinSide::Left,
-        filter,
-        &left.schema(),
-        &left_sort_exprs[0],
-    )?
-    .ok_or_else(err)?;
-
-    // Build the filter order for the right side
-    let right_temp_sorted_filter_expr = build_filter_input_order(
-        JoinSide::Right,
-        filter,
-        &right.schema(),
-        &right_sort_exprs[0],
-    )?
-    .ok_or_else(err)?;
-
-    // Collect the sorted expressions
-    let mut sorted_exprs =
-        vec![left_temp_sorted_filter_expr, right_temp_sorted_filter_expr];
-
-    // Build the expression interval graph
-    let mut graph = ExprIntervalGraph::try_new(filter.expression().clone())?;
-
-    // Update sorted expressions with node indices
-    update_sorted_exprs_with_node_indices(&mut graph, &mut sorted_exprs);
-
-    // Swap and remove to get the final sorted filter expressions
-    let right_sorted_filter_expr = sorted_exprs.swap_remove(1);
-    let left_sorted_filter_expr = sorted_exprs.swap_remove(0);
-
-    Ok((left_sorted_filter_expr, right_sorted_filter_expr, graph))
+/// Represents the result of an operation on stateful join stream.
+///
+/// This enumueration indicates whether the state produced a result that is
+/// ready for use (`Ready`) or if the operation requires continuation (`Continue`).
+///
+/// Variants:
+/// - `Ready(T)`: Indicates that the operation is complete with a result of type `T`.
+/// - `Continue`: Indicates that the operation is not yet complete and requires further
+///   processing or more data. When this variant is returned, it typically means that the
+///   current invocation of the state did not produce a final result, and the operation
+///   should be invoked again later with more data and possibly with a different state.
+pub enum StatefulStreamResult<T> {
+    Ready(T),
+    Continue,
 }
 
 #[cfg(test)]
@@ -1144,9 +1501,14 @@ mod tests {
     use arrow::error::{ArrowError, Result as ArrowResult};
     use arrow_schema::SortOptions;
 
-    use datafusion_common::ScalarValue;
+    use datafusion_common::stats::Precision::{Absent, Exact, Inexact};
+    use datafusion_common::{arrow_datafusion_err, arrow_err, ScalarValue};
 
-    fn check(left: &[Column], right: &[Column], on: &[(Column, Column)]) -> Result<()> {
+    fn check(
+        left: &[Column],
+        right: &[Column],
+        on: &[(PhysicalExprRef, PhysicalExprRef)],
+    ) -> Result<()> {
         let left = left
             .iter()
             .map(|x| x.to_owned())
@@ -1162,7 +1524,10 @@ mod tests {
     fn check_valid() -> Result<()> {
         let left = vec![Column::new("a", 0), Column::new("b1", 1)];
         let right = vec![Column::new("a", 0), Column::new("b2", 1)];
-        let on = &[(Column::new("a", 0), Column::new("a", 0))];
+        let on = &[(
+            Arc::new(Column::new("a", 0)) as _,
+            Arc::new(Column::new("a", 0)) as _,
+        )];
 
         check(&left, &right, on)?;
         Ok(())
@@ -1172,7 +1537,10 @@ mod tests {
     fn check_not_in_right() {
         let left = vec![Column::new("a", 0), Column::new("b", 1)];
         let right = vec![Column::new("b", 0)];
-        let on = &[(Column::new("a", 0), Column::new("a", 0))];
+        let on = &[(
+            Arc::new(Column::new("a", 0)) as _,
+            Arc::new(Column::new("a", 0)) as _,
+        )];
 
         assert!(check(&left, &right, on).is_err());
     }
@@ -1180,9 +1548,7 @@ mod tests {
     #[tokio::test]
     async fn check_error_nesting() {
         let once_fut = OnceFut::<()>::new(async {
-            Err(DataFusionError::ArrowError(ArrowError::CsvError(
-                "some error".to_string(),
-            )))
+            arrow_err!(ArrowError::CsvError("some error".to_string()))
         });
 
         struct TestFut(OnceFut<()>);
@@ -1206,17 +1572,20 @@ mod tests {
         let wrapped_err = DataFusionError::from(arrow_err_from_fut);
         let root_err = wrapped_err.find_root();
 
-        assert!(matches!(
-            root_err,
-            DataFusionError::ArrowError(ArrowError::CsvError(_))
-        ))
+        let _expected =
+            arrow_datafusion_err!(ArrowError::CsvError("some error".to_owned()));
+
+        assert!(matches!(root_err, _expected))
     }
 
     #[test]
     fn check_not_in_left() {
         let left = vec![Column::new("b", 0)];
         let right = vec![Column::new("a", 0)];
-        let on = &[(Column::new("a", 0), Column::new("a", 0))];
+        let on = &[(
+            Arc::new(Column::new("a", 0)) as _,
+            Arc::new(Column::new("a", 0)) as _,
+        )];
 
         assert!(check(&left, &right, on).is_err());
     }
@@ -1226,7 +1595,10 @@ mod tests {
         // column "a" would appear both in left and right
         let left = vec![Column::new("a", 0), Column::new("c", 1)];
         let right = vec![Column::new("a", 0), Column::new("b", 1)];
-        let on = &[(Column::new("a", 0), Column::new("b", 1))];
+        let on = &[(
+            Arc::new(Column::new("a", 0)) as _,
+            Arc::new(Column::new("b", 1)) as _,
+        )];
 
         assert!(check(&left, &right, on).is_ok());
     }
@@ -1235,7 +1607,10 @@ mod tests {
     fn check_in_right() {
         let left = vec![Column::new("a", 0), Column::new("c", 1)];
         let right = vec![Column::new("b", 0)];
-        let on = &[(Column::new("a", 0), Column::new("b", 0))];
+        let on = &[(
+            Arc::new(Column::new("a", 0)) as _,
+            Arc::new(Column::new("b", 0)) as _,
+        )];
 
         assert!(check(&left, &right, on).is_ok());
     }
@@ -1313,25 +1688,26 @@ mod tests {
     }
 
     fn create_column_stats(
-        min: Option<i64>,
-        max: Option<i64>,
-        distinct_count: Option<usize>,
+        min: Precision<i64>,
+        max: Precision<i64>,
+        distinct_count: Precision<usize>,
+        null_count: Precision<usize>,
     ) -> ColumnStatistics {
         ColumnStatistics {
-            distinct_count: distinct_count
-                .map(Precision::Inexact)
-                .unwrap_or(Precision::Absent),
-            min_value: min
-                .map(|size| Precision::Inexact(ScalarValue::from(size)))
-                .unwrap_or(Precision::Absent),
-            max_value: max
-                .map(|size| Precision::Inexact(ScalarValue::from(size)))
-                .unwrap_or(Precision::Absent),
-            ..Default::default()
+            distinct_count,
+            min_value: min.map(ScalarValue::from),
+            max_value: max.map(ScalarValue::from),
+            null_count,
         }
     }
 
-    type PartialStats = (usize, Option<i64>, Option<i64>, Option<usize>);
+    type PartialStats = (
+        usize,
+        Precision<i64>,
+        Precision<i64>,
+        Precision<usize>,
+        Precision<usize>,
+    );
 
     // This is mainly for validating the all edge cases of the estimation, but
     // more advanced (and real world test cases) are below where we need some control
@@ -1348,133 +1724,156 @@ mod tests {
             //
             // distinct(left) == NaN, distinct(right) == NaN
             (
-                (10, Some(1), Some(10), None),
-                (10, Some(1), Some(10), None),
-                Some(Precision::Inexact(10)),
+                (10, Inexact(1), Inexact(10), Absent, Absent),
+                (10, Inexact(1), Inexact(10), Absent, Absent),
+                Some(Inexact(10)),
             ),
             // range(left) > range(right)
             (
-                (10, Some(6), Some(10), None),
-                (10, Some(8), Some(10), None),
-                Some(Precision::Inexact(20)),
+                (10, Inexact(6), Inexact(10), Absent, Absent),
+                (10, Inexact(8), Inexact(10), Absent, Absent),
+                Some(Inexact(20)),
             ),
             // range(right) > range(left)
             (
-                (10, Some(8), Some(10), None),
-                (10, Some(6), Some(10), None),
-                Some(Precision::Inexact(20)),
+                (10, Inexact(8), Inexact(10), Absent, Absent),
+                (10, Inexact(6), Inexact(10), Absent, Absent),
+                Some(Inexact(20)),
             ),
             // range(left) > len(left), range(right) > len(right)
             (
-                (10, Some(1), Some(15), None),
-                (20, Some(1), Some(40), None),
-                Some(Precision::Inexact(10)),
+                (10, Inexact(1), Inexact(15), Absent, Absent),
+                (20, Inexact(1), Inexact(40), Absent, Absent),
+                Some(Inexact(10)),
             ),
             // When we have distinct count.
             (
-                (10, Some(1), Some(10), Some(10)),
-                (10, Some(1), Some(10), Some(10)),
-                Some(Precision::Inexact(10)),
+                (10, Inexact(1), Inexact(10), Inexact(10), Absent),
+                (10, Inexact(1), Inexact(10), Inexact(10), Absent),
+                Some(Inexact(10)),
             ),
             // distinct(left) > distinct(right)
             (
-                (10, Some(1), Some(10), Some(5)),
-                (10, Some(1), Some(10), Some(2)),
-                Some(Precision::Inexact(20)),
+                (10, Inexact(1), Inexact(10), Inexact(5), Absent),
+                (10, Inexact(1), Inexact(10), Inexact(2), Absent),
+                Some(Inexact(20)),
             ),
             // distinct(right) > distinct(left)
             (
-                (10, Some(1), Some(10), Some(2)),
-                (10, Some(1), Some(10), Some(5)),
-                Some(Precision::Inexact(20)),
+                (10, Inexact(1), Inexact(10), Inexact(2), Absent),
+                (10, Inexact(1), Inexact(10), Inexact(5), Absent),
+                Some(Inexact(20)),
             ),
             // min(left) < 0 (range(left) > range(right))
             (
-                (10, Some(-5), Some(5), None),
-                (10, Some(1), Some(5), None),
-                Some(Precision::Inexact(10)),
+                (10, Inexact(-5), Inexact(5), Absent, Absent),
+                (10, Inexact(1), Inexact(5), Absent, Absent),
+                Some(Inexact(10)),
             ),
             // min(right) < 0, max(right) < 0 (range(right) > range(left))
             (
-                (10, Some(-25), Some(-20), None),
-                (10, Some(-25), Some(-15), None),
-                Some(Precision::Inexact(10)),
+                (10, Inexact(-25), Inexact(-20), Absent, Absent),
+                (10, Inexact(-25), Inexact(-15), Absent, Absent),
+                Some(Inexact(10)),
             ),
             // range(left) < 0, range(right) >= 0
             // (there isn't a case where both left and right ranges are negative
             //  so one of them is always going to work, this just proves negative
             //  ranges with bigger absolute values are not are not accidentally used).
             (
-                (10, Some(-10), Some(0), None),
-                (10, Some(0), Some(10), Some(5)),
-                Some(Precision::Inexact(10)),
+                (10, Inexact(-10), Inexact(0), Absent, Absent),
+                (10, Inexact(0), Inexact(10), Inexact(5), Absent),
+                Some(Inexact(10)),
             ),
             // range(left) = 1, range(right) = 1
             (
-                (10, Some(1), Some(1), None),
-                (10, Some(1), Some(1), None),
-                Some(Precision::Inexact(100)),
+                (10, Inexact(1), Inexact(1), Absent, Absent),
+                (10, Inexact(1), Inexact(1), Absent, Absent),
+                Some(Inexact(100)),
             ),
             //
             // Edge cases
             // ==========
             //
             // No column level stats.
-            ((10, None, None, None), (10, None, None, None), None),
+            (
+                (10, Absent, Absent, Absent, Absent),
+                (10, Absent, Absent, Absent, Absent),
+                None,
+            ),
             // No min or max (or both).
-            ((10, None, None, Some(3)), (10, None, None, Some(3)), None),
             (
-                (10, Some(2), None, Some(3)),
-                (10, None, Some(5), Some(3)),
+                (10, Absent, Absent, Inexact(3), Absent),
+                (10, Absent, Absent, Inexact(3), Absent),
                 None,
             ),
             (
-                (10, None, Some(3), Some(3)),
-                (10, Some(1), None, Some(3)),
+                (10, Inexact(2), Absent, Inexact(3), Absent),
+                (10, Absent, Inexact(5), Inexact(3), Absent),
                 None,
             ),
-            ((10, None, Some(3), None), (10, Some(1), None, None), None),
+            (
+                (10, Absent, Inexact(3), Inexact(3), Absent),
+                (10, Inexact(1), Absent, Inexact(3), Absent),
+                None,
+            ),
+            (
+                (10, Absent, Inexact(3), Absent, Absent),
+                (10, Inexact(1), Absent, Absent, Absent),
+                None,
+            ),
             // Non overlapping min/max (when exact=False).
             (
-                (10, Some(0), Some(10), None),
-                (10, Some(11), Some(20), None),
-                Some(Precision::Inexact(0)),
+                (10, Inexact(0), Inexact(10), Absent, Absent),
+                (10, Inexact(11), Inexact(20), Absent, Absent),
+                Some(Inexact(0)),
             ),
             (
-                (10, Some(11), Some(20), None),
-                (10, Some(0), Some(10), None),
-                Some(Precision::Inexact(0)),
+                (10, Inexact(11), Inexact(20), Absent, Absent),
+                (10, Inexact(0), Inexact(10), Absent, Absent),
+                Some(Inexact(0)),
             ),
             // distinct(left) = 0, distinct(right) = 0
             (
-                (10, Some(1), Some(10), Some(0)),
-                (10, Some(1), Some(10), Some(0)),
+                (10, Inexact(1), Inexact(10), Inexact(0), Absent),
+                (10, Inexact(1), Inexact(10), Inexact(0), Absent),
                 None,
+            ),
+            // Inexact row count < exact null count with absent distinct count
+            (
+                (0, Inexact(1), Inexact(10), Absent, Exact(5)),
+                (10, Inexact(1), Inexact(10), Absent, Absent),
+                Some(Inexact(0)),
             ),
         ];
 
         for (left_info, right_info, expected_cardinality) in cases {
             let left_num_rows = left_info.0;
-            let left_col_stats =
-                vec![create_column_stats(left_info.1, left_info.2, left_info.3)];
+            let left_col_stats = vec![create_column_stats(
+                left_info.1,
+                left_info.2,
+                left_info.3,
+                left_info.4,
+            )];
 
             let right_num_rows = right_info.0;
             let right_col_stats = vec![create_column_stats(
                 right_info.1,
                 right_info.2,
                 right_info.3,
+                right_info.4,
             )];
 
             assert_eq!(
                 estimate_inner_join_cardinality(
                     Statistics {
-                        num_rows: Precision::Inexact(left_num_rows),
-                        total_byte_size: Precision::Absent,
+                        num_rows: Inexact(left_num_rows),
+                        total_byte_size: Absent,
                         column_statistics: left_col_stats.clone(),
                     },
                     Statistics {
-                        num_rows: Precision::Inexact(right_num_rows),
-                        total_byte_size: Precision::Absent,
+                        num_rows: Inexact(right_num_rows),
+                        total_byte_size: Absent,
                         column_statistics: right_col_stats.clone(),
                     },
                 ),
@@ -1483,7 +1882,10 @@ mod tests {
 
             // We should also be able to use join_cardinality to get the same results
             let join_type = JoinType::Inner;
-            let join_on = vec![(Column::new("a", 0), Column::new("b", 0))];
+            let join_on = vec![(
+                Arc::new(Column::new("a", 0)) as _,
+                Arc::new(Column::new("b", 0)) as _,
+            )];
             let partial_join_stats = estimate_join_cardinality(
                 &join_type,
                 create_stats(Some(left_num_rows), left_col_stats.clone(), false),
@@ -1492,9 +1894,7 @@ mod tests {
             );
 
             assert_eq!(
-                partial_join_stats
-                    .clone()
-                    .map(|s| Precision::Inexact(s.num_rows)),
+                partial_join_stats.clone().map(|s| Inexact(s.num_rows)),
                 expected_cardinality.clone()
             );
             assert_eq!(
@@ -1510,13 +1910,13 @@ mod tests {
     #[test]
     fn test_inner_join_cardinality_multiple_column() -> Result<()> {
         let left_col_stats = vec![
-            create_column_stats(Some(0), Some(100), Some(100)),
-            create_column_stats(Some(100), Some(500), Some(150)),
+            create_column_stats(Inexact(0), Inexact(100), Inexact(100), Absent),
+            create_column_stats(Inexact(100), Inexact(500), Inexact(150), Absent),
         ];
 
         let right_col_stats = vec![
-            create_column_stats(Some(0), Some(100), Some(50)),
-            create_column_stats(Some(100), Some(500), Some(200)),
+            create_column_stats(Inexact(0), Inexact(100), Inexact(50), Absent),
+            create_column_stats(Inexact(100), Inexact(500), Inexact(200), Absent),
         ];
 
         // We have statistics about 4 columns, where the highest distinct
@@ -1568,7 +1968,7 @@ mod tests {
                     column_statistics: right_col_stats,
                 },
             ),
-            None
+            Some(Precision::Inexact(100))
         );
         Ok(())
     }
@@ -1594,21 +1994,27 @@ mod tests {
         ];
 
         let left_col_stats = vec![
-            create_column_stats(Some(0), Some(100), Some(100)),
-            create_column_stats(Some(0), Some(500), Some(500)),
-            create_column_stats(Some(1000), Some(10000), None),
+            create_column_stats(Inexact(0), Inexact(100), Inexact(100), Absent),
+            create_column_stats(Inexact(0), Inexact(500), Inexact(500), Absent),
+            create_column_stats(Inexact(1000), Inexact(10000), Absent, Absent),
         ];
 
         let right_col_stats = vec![
-            create_column_stats(Some(0), Some(100), Some(50)),
-            create_column_stats(Some(0), Some(2000), Some(2500)),
-            create_column_stats(Some(0), Some(100), None),
+            create_column_stats(Inexact(0), Inexact(100), Inexact(50), Absent),
+            create_column_stats(Inexact(0), Inexact(2000), Inexact(2500), Absent),
+            create_column_stats(Inexact(0), Inexact(100), Absent, Absent),
         ];
 
         for (join_type, expected_num_rows) in cases {
             let join_on = vec![
-                (Column::new("a", 0), Column::new("c", 0)),
-                (Column::new("b", 1), Column::new("d", 1)),
+                (
+                    Arc::new(Column::new("a", 0)) as _,
+                    Arc::new(Column::new("c", 0)) as _,
+                ),
+                (
+                    Arc::new(Column::new("b", 1)) as _,
+                    Arc::new(Column::new("d", 1)) as _,
+                ),
             ];
 
             let partial_join_stats = estimate_join_cardinality(
@@ -1643,20 +2049,26 @@ mod tests {
         // Join on a=c, x=y (ignores b/d) where x and y does not intersect
 
         let left_col_stats = vec![
-            create_column_stats(Some(0), Some(100), Some(100)),
-            create_column_stats(Some(0), Some(500), Some(500)),
-            create_column_stats(Some(1000), Some(10000), None),
+            create_column_stats(Inexact(0), Inexact(100), Inexact(100), Absent),
+            create_column_stats(Inexact(0), Inexact(500), Inexact(500), Absent),
+            create_column_stats(Inexact(1000), Inexact(10000), Absent, Absent),
         ];
 
         let right_col_stats = vec![
-            create_column_stats(Some(0), Some(100), Some(50)),
-            create_column_stats(Some(0), Some(2000), Some(2500)),
-            create_column_stats(Some(0), Some(100), None),
+            create_column_stats(Inexact(0), Inexact(100), Inexact(50), Absent),
+            create_column_stats(Inexact(0), Inexact(2000), Inexact(2500), Absent),
+            create_column_stats(Inexact(0), Inexact(100), Absent, Absent),
         ];
 
         let join_on = vec![
-            (Column::new("a", 0), Column::new("c", 0)),
-            (Column::new("x", 2), Column::new("y", 2)),
+            (
+                Arc::new(Column::new("a", 0)) as _,
+                Arc::new(Column::new("c", 0)) as _,
+            ),
+            (
+                Arc::new(Column::new("x", 2)) as _,
+                Arc::new(Column::new("y", 2)) as _,
+            ),
         ];
 
         let cases = vec![
@@ -1721,7 +2133,10 @@ mod tests {
             },
         ];
         let join_type = JoinType::Inner;
-        let on_columns = [(Column::new("b", 1), Column::new("x", 0))];
+        let on_columns = [(
+            Arc::new(Column::new("b", 1)) as _,
+            Arc::new(Column::new("x", 0)) as _,
+        )];
         let left_columns_len = 5;
         let maintains_input_orders = [[true, false], [false, true]];
         let probe_sides = [Some(JoinSide::Left), Some(JoinSide::Right)];

@@ -21,6 +21,7 @@ use std::sync::Arc;
 
 use crate::datasource::listing::PartitionedFile;
 use crate::datasource::physical_plan::{FileScanConfig, ParquetExec};
+use crate::datasource::stream::{StreamConfig, StreamTable};
 use crate::error::Result;
 use crate::physical_plan::aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy};
 use crate::physical_plan::coalesce_batches::CoalesceBatchesExec;
@@ -35,16 +36,18 @@ use crate::physical_plan::sorts::sort::SortExec;
 use crate::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use crate::physical_plan::union::UnionExec;
 use crate::physical_plan::windows::create_window_expr;
-use crate::physical_plan::{ExecutionPlan, Partitioning};
+use crate::physical_plan::{ExecutionPlan, InputOrderMode, Partitioning};
 use crate::prelude::{CsvReadOptions, SessionContext};
 
 use arrow_schema::{Schema, SchemaRef, SortOptions};
+use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{JoinType, Statistics};
 use datafusion_execution::object_store::ObjectStoreUrl;
-use datafusion_expr::{AggregateFunction, WindowFrame, WindowFunction};
+use datafusion_expr::{AggregateFunction, WindowFrame, WindowFunctionDefinition};
 use datafusion_physical_expr::expressions::col;
 use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
-use datafusion_physical_plan::windows::PartitionSearchMode;
+use datafusion_physical_plan::displayable;
+use datafusion_physical_plan::tree_node::PlanContext;
 
 use async_trait::async_trait;
 
@@ -55,14 +58,19 @@ async fn register_current_csv(
 ) -> Result<()> {
     let testdata = crate::test_util::arrow_test_data();
     let schema = crate::test_util::aggr_test_schema();
-    ctx.register_csv(
-        table_name,
-        &format!("{testdata}/csv/aggregate_test_100.csv"),
-        CsvReadOptions::new()
-            .schema(&schema)
-            .mark_infinite(infinite),
-    )
-    .await?;
+    let path = format!("{testdata}/csv/aggregate_test_100.csv");
+
+    match infinite {
+        true => {
+            let config = StreamConfig::new_file(schema, path.into());
+            ctx.register_table(table_name, Arc::new(StreamTable::new(Arc::new(config))))?;
+        }
+        false => {
+            ctx.register_csv(table_name, &path, CsvReadOptions::new().schema(&schema))
+                .await?;
+        }
+    }
+
     Ok(())
 }
 
@@ -229,18 +237,18 @@ pub fn bounded_window_exec(
     Arc::new(
         crate::physical_plan::windows::BoundedWindowAggExec::try_new(
             vec![create_window_expr(
-                &WindowFunction::AggregateFunction(AggregateFunction::Count),
+                &WindowFunctionDefinition::AggregateFunction(AggregateFunction::Count),
                 "count".to_owned(),
                 &[col(col_name, &schema).unwrap()],
                 &[],
                 &sort_exprs,
-                Arc::new(WindowFrame::new(true)),
+                Arc::new(WindowFrame::new(Some(false))),
                 schema.as_ref(),
             )
             .unwrap()],
             input.clone(),
             vec![],
-            PartitionSearchMode::Sorted,
+            InputOrderMode::Sorted,
         )
         .unwrap(),
     )
@@ -273,7 +281,6 @@ pub fn parquet_exec(schema: &SchemaRef) -> Arc<ParquetExec> {
             limit: None,
             table_partition_cols: vec![],
             output_ordering: vec![],
-            infinite_source: false,
         },
         None,
         None,
@@ -297,7 +304,6 @@ pub fn parquet_exec_sorted(
             limit: None,
             table_partition_cols: vec![],
             output_ordering: vec![sort_exprs],
-            infinite_source: false,
         },
         None,
         None,
@@ -340,7 +346,6 @@ pub fn aggregate_exec(input: Arc<dyn ExecutionPlan>) -> Arc<dyn ExecutionPlan> {
             PhysicalGroupBy::default(),
             vec![],
             vec![],
-            vec![],
             input,
             schema,
         )
@@ -358,4 +363,26 @@ pub fn sort_exec(
 ) -> Arc<dyn ExecutionPlan> {
     let sort_exprs = sort_exprs.into_iter().collect();
     Arc::new(SortExec::new(sort_exprs, input))
+}
+
+/// A [`PlanContext`] object is susceptible to being left in an inconsistent state after
+/// untested mutable operations. It is crucial that there be no discrepancies between a plan
+/// associated with the root node and the plan generated after traversing all nodes
+/// within the [`PlanContext`] tree. In addition to verifying the plans resulting from optimizer
+/// rules, it is essential to ensure that the overall tree structure corresponds with the plans
+/// contained within the node contexts.
+/// TODO: Once [`ExecutionPlan`] implements [`PartialEq`], string comparisons should be
+/// replaced with direct plan equality checks.
+pub fn check_integrity<T: Clone>(context: PlanContext<T>) -> Result<PlanContext<T>> {
+    context.transform_up(&|node| {
+        let children_plans = node.plan.children();
+        assert_eq!(node.children.len(), children_plans.len());
+        for (child_plan, child_node) in children_plans.iter().zip(node.children.iter()) {
+            assert_eq!(
+                displayable(child_plan.as_ref()).one_line().to_string(),
+                displayable(child_node.plan.as_ref()).one_line().to_string()
+            );
+        }
+        Ok(Transformed::No(node))
+    })
 }

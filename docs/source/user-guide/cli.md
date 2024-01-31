@@ -31,7 +31,9 @@ The easiest way to install DataFusion CLI a spin is via `cargo install datafusio
 
 ### Install and run using Homebrew (on MacOS)
 
-DataFusion CLI can also be installed via Homebrew (on MacOS). Install it as any other pre-built software like this:
+DataFusion CLI can also be installed via Homebrew (on MacOS). If you don't have Homebrew installed, you can check how to install it [here](https://docs.brew.sh/Installation).
+
+Install it as any other pre-built software like this:
 
 ```bash
 brew install datafusion
@@ -42,6 +44,34 @@ brew install datafusion
 # ######################################################################## 100.0%
 # ==> Pouring datafusion--12.0.0.big_sur.bottle.tar.gz
 # 🍺  /usr/local/Cellar/datafusion/12.0.0: 9 files, 17.4MB
+
+datafusion-cli
+```
+
+### Install and run using PyPI
+
+DataFusion CLI can also be installed via PyPI. You can check how to install PyPI [here](https://pip.pypa.io/en/latest/installation/).
+
+Install it as any other pre-built software like this:
+
+```bash
+pip3 install datafusion
+# Defaulting to user installation because normal site-packages is not writeable
+# Collecting datafusion
+#   Downloading datafusion-33.0.0-cp38-abi3-macosx_11_0_arm64.whl.metadata (9.6 kB)
+# Collecting pyarrow>=11.0.0 (from datafusion)
+#   Downloading pyarrow-14.0.1-cp39-cp39-macosx_11_0_arm64.whl.metadata (3.0 kB)
+# Requirement already satisfied: numpy>=1.16.6 in /Users/Library/Python/3.9/lib/python/site-packages (from pyarrow>=11.0.0->datafusion) (1.23.4)
+# Downloading datafusion-33.0.0-cp38-abi3-macosx_11_0_arm64.whl (13.5 MB)
+#    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 13.5/13.5 MB 3.6 MB/s eta 0:00:00
+# Downloading pyarrow-14.0.1-cp39-cp39-macosx_11_0_arm64.whl (24.0 MB)
+#    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 24.0/24.0 MB 36.4 MB/s eta 0:00:00
+# Installing collected packages: pyarrow, datafusion
+#   Attempting uninstall: pyarrow
+#     Found existing installation: pyarrow 10.0.1
+#     Uninstalling pyarrow-10.0.1:
+#       Successfully uninstalled pyarrow-10.0.1
+# Successfully installed datafusion-33.0.0 pyarrow-14.0.1
 
 datafusion-cli
 ```
@@ -80,6 +110,9 @@ OPTIONS:
 
     -c, --command <COMMAND>...
             Execute the given command string(s), then exit
+
+        --color
+            Enables console syntax highlighting
 
     -f, --file <FILE>...
             Execute commands from file(s), then exit
@@ -161,7 +194,7 @@ DataFusion CLI v16.0.0
 2 rows in set. Query took 0.007 seconds.
 ```
 
-## Creating external tables
+## Creating External Tables
 
 It is also possible to create a table backed by files by explicitly
 via `CREATE EXTERNAL TABLE` as shown below. Filemask wildcards supported
@@ -395,6 +428,13 @@ Available commands inside DataFusion CLI are:
 > \h function
 ```
 
+## Supported SQL
+
+In addition to the normal [SQL supported in DataFusion], `datafusion-cli` also
+supports additional statements and commands:
+
+[sql supported in datafusion]: sql/index.rst
+
 - Show configuration options
 
 `SHOW ALL [VERBOSE]`
@@ -436,6 +476,66 @@ Available commands inside DataFusion CLI are:
 ```SQL
 > SET datafusion.execution.batch_size to 1024;
 ```
+
+- `parquet_metadata` table function
+
+The `parquet_metadata` table function can be used to inspect detailed metadata
+about a parquet file such as statistics, sizes, and other information. This can
+be helpful to understand how parquet files are structured.
+
+For example, to see information about the `"WatchID"` column in the
+`hits.parquet` file, you can use:
+
+```sql
+SELECT path_in_schema, row_group_id, row_group_num_rows, stats_min, stats_max, total_compressed_size
+FROM parquet_metadata('hits.parquet')
+WHERE path_in_schema = '"WatchID"'
+LIMIT 3;
+
++----------------+--------------+--------------------+---------------------+---------------------+-----------------------+
+| path_in_schema | row_group_id | row_group_num_rows | stats_min           | stats_max           | total_compressed_size |
++----------------+--------------+--------------------+---------------------+---------------------+-----------------------+
+| "WatchID"      | 0            | 450560             | 4611687214012840539 | 9223369186199968220 | 3883759               |
+| "WatchID"      | 1            | 612174             | 4611689135232456464 | 9223371478009085789 | 5176803               |
+| "WatchID"      | 2            | 344064             | 4611692774829951781 | 9223363791697310021 | 3031680               |
++----------------+--------------+--------------------+---------------------+---------------------+-----------------------+
+3 rows in set. Query took 0.053 seconds.
+```
+
+The returned table has the following columns for each row for each column chunk
+in the file. Please refer to the [Parquet Documentation] for more information.
+
+[parquet documentation]: https://parquet.apache.org/
+
+| column_name             | data_type | Description                                                                                         |
+| ----------------------- | --------- | --------------------------------------------------------------------------------------------------- |
+| filename                | Utf8      | Name of the file                                                                                    |
+| row_group_id            | Int64     | Row group index the column chunk belongs to                                                         |
+| row_group_num_rows      | Int64     | Count of rows stored in the row group                                                               |
+| row_group_num_columns   | Int64     | Total number of columns in the row group (same for all row groups)                                  |
+| row_group_bytes         | Int64     | Number of bytes used to store the row group (not including metadata)                                |
+| column_id               | Int64     | ID of the column                                                                                    |
+| file_offset             | Int64     | Offset within the file that this column chunk's data begins                                         |
+| num_values              | Int64     | Total number of values in this column chunk                                                         |
+| path_in_schema          | Utf8      | "Path" (column name) of the column chunk in the schema                                              |
+| type                    | Utf8      | Parquet data type of the column chunk                                                               |
+| stats_min               | Utf8      | The minimum value for this column chunk, if stored in the statistics, cast to a string              |
+| stats_max               | Utf8      | The maximum value for this column chunk, if stored in the statistics, cast to a string              |
+| stats_null_count        | Int64     | Number of null values in this column chunk, if stored in the statistics                             |
+| stats_distinct_count    | Int64     | Number of distinct values in this column chunk, if stored in the statistics                         |
+| stats_min_value         | Utf8      | Same as `stats_min`                                                                                 |
+| stats_max_value         | Utf8      | Same as `stats_max`                                                                                 |
+| compression             | Utf8      | Block level compression (e.g. `SNAPPY`) used for this column chunk                                  |
+| encodings               | Utf8      | All block level encodings (e.g. `[PLAIN_DICTIONARY, PLAIN, RLE]`) used for this column chunk        |
+| index_page_offset       | Int64     | Offset in the file of the [`page index`], if any                                                    |
+| dictionary_page_offset  | Int64     | Offset in the file of the dictionary page, if any                                                   |
+| data_page_offset        | Int64     | Offset in the file of the first data page, if any                                                   |
+| total_compressed_size   | Int64     | Number of bytes the column chunk's data after encoding and compression (what is stored in the file) |
+| total_uncompressed_size | Int64     | Number of bytes the column chunk's data after encoding                                              |
+
++-------------------------+-----------+-------------+
+
+[`page index`]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
 
 ## Changing Configuration Options
 

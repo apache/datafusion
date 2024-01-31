@@ -40,6 +40,7 @@ datafusion = { path = "../datafusion/core", features = ["avro"] }
 datafusion-common = { path = "../datafusion/common" }
 datafusion-expr = { path = "../datafusion/expr" }
 datafusion-optimizer = { path = "../datafusion/optimizer" }
+datafusion-physical-expr = { workspace = true }
 datafusion-sql = { path = "../datafusion/sql" }
 env_logger = { workspace = true }
 futures = { workspace = true }
@@ -48,7 +49,7 @@ mimalloc = { version = "0.1", default-features = false }
 num_cpus = { workspace = true }
 object_store = { workspace = true, features = ["aws", "http"] }
 prost = { version = "0.12", default-features = false }
-prost-derive = { version = "0.11", default-features = false }
+prost-derive = { version = "0.12", default-features = false }
 serde = { version = "1.0.136", features = ["derive"] }
 serde_json = { workspace = true }
 tempfile = { workspace = true }

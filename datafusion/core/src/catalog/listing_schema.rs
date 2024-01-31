@@ -149,6 +149,7 @@ impl ListingSchemaProvider {
                             unbounded: false,
                             options: Default::default(),
                             constraints: Constraints::empty(),
+                            column_defaults: Default::default(),
                         },
                     )
                     .await?;

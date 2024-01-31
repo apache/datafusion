@@ -21,8 +21,9 @@ use std::sync::Arc;
 use std::vec;
 
 use arrow_schema::*;
-use datafusion_common::field_not_found;
-use datafusion_common::internal_err;
+use datafusion_common::{
+    field_not_found, internal_err, plan_datafusion_err, SchemaError,
+};
 use datafusion_expr::WindowUDF;
 use sqlparser::ast::TimezoneInfo;
 use sqlparser::ast::{ArrayElemTypeDef, ExactNumberInfo};
@@ -51,6 +52,28 @@ pub trait ContextProvider {
     }
     /// Getter for a datasource
     fn get_table_source(&self, name: TableReference) -> Result<Arc<dyn TableSource>>;
+    /// Getter for a table function
+    fn get_table_function_source(
+        &self,
+        _name: &str,
+        _args: Vec<Expr>,
+    ) -> Result<Arc<dyn TableSource>> {
+        not_impl_err!("Table Functions are not supported")
+    }
+
+    /// This provides a worktable (an intermediate table that is used to store the results of a CTE during execution)
+    /// We don't directly implement this in the logical plan's ['SqlToRel`]
+    /// because the sql code needs access to a table that contains execution-related types that can't be a direct dependency
+    /// of the sql crate (namely, the `CteWorktable`).
+    /// The [`ContextProvider`] provides a way to "hide" this dependency.
+    fn create_cte_work_table(
+        &self,
+        _name: &str,
+        _schema: SchemaRef,
+    ) -> Result<Arc<dyn TableSource>> {
+        not_impl_err!("Recursive CTE is not implemented")
+    }
+
     /// Getter for a UDF description
     fn get_function_meta(&self, name: &str) -> Option<Arc<ScalarUDF>>;
     /// Getter for a UDAF description
@@ -230,6 +253,42 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         Ok(Schema::new(fields))
     }
 
+    /// Returns a vector of (column_name, default_expr) pairs
+    pub(super) fn build_column_defaults(
+        &self,
+        columns: &Vec<SQLColumnDef>,
+        planner_context: &mut PlannerContext,
+    ) -> Result<Vec<(String, Expr)>> {
+        let mut column_defaults = vec![];
+        // Default expressions are restricted, column references are not allowed
+        let empty_schema = DFSchema::empty();
+        let error_desc = |e: DataFusionError| match e {
+            DataFusionError::SchemaError(SchemaError::FieldNotFound { .. }, _) => {
+                plan_datafusion_err!(
+                    "Column reference is not allowed in the DEFAULT expression : {}",
+                    e
+                )
+            }
+            _ => e,
+        };
+
+        for column in columns {
+            if let Some(default_sql_expr) =
+                column.options.iter().find_map(|o| match &o.option {
+                    ColumnOption::Default(expr) => Some(expr),
+                    _ => None,
+                })
+            {
+                let default_expr = self
+                    .sql_to_expr(default_sql_expr.clone(), &empty_schema, planner_context)
+                    .map_err(error_desc)?;
+                column_defaults
+                    .push((self.normalizer.normalize(column.name.clone()), default_expr));
+            }
+        }
+        Ok(column_defaults)
+    }
+
     /// Apply the given TableAlias to the input plan
     pub(crate) fn apply_table_alias(
         &self,
@@ -239,7 +298,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let plan = self.apply_expr_alias(plan, alias.columns)?;
 
         LogicalPlanBuilder::from(plan)
-            .alias(self.normalizer.normalize(alias.name))?
+            .alias(TableReference::bare(self.normalizer.normalize(alias.name)))?
             .build()
     }
 
@@ -406,6 +465,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             | SQLDataType::Int64
             | SQLDataType::Float64
             | SQLDataType::Struct(_)
+            | SQLDataType::JSONB
+            | SQLDataType::Unspecified
             => not_impl_err!(
                 "Unsupported SQL type {sql_type:?}"
             ),

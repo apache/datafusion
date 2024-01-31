@@ -80,7 +80,7 @@ async fn search_accounts(
 
     timeout(Duration::from_secs(10), async move {
         let result = dataframe.collect().await.unwrap();
-        let record_batch = result.get(0).unwrap();
+        let record_batch = result.first().unwrap();
 
         assert_eq!(expected_result_length, record_batch.column(1).len());
         dbg!(record_batch.columns());

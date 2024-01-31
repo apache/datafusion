@@ -15,17 +15,16 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::ops::Deref;
+
+use super::functions::can_coerce_from;
+use crate::{AggregateFunction, Signature, TypeSignature};
+
 use arrow::datatypes::{
     DataType, TimeUnit, DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE,
     DECIMAL256_MAX_PRECISION, DECIMAL256_MAX_SCALE,
 };
-
 use datafusion_common::{internal_err, plan_err, DataFusionError, Result};
-use std::ops::Deref;
-
-use crate::{AggregateFunction, Signature, TypeSignature};
-
-use super::functions::can_coerce_from;
 
 pub static STRINGS: &[DataType] = &[DataType::Utf8, DataType::LargeUtf8];
 
@@ -223,7 +222,7 @@ pub fn coerce_types(
         | AggregateFunction::RegrSXX
         | AggregateFunction::RegrSYY
         | AggregateFunction::RegrSXY => {
-            let valid_types = [NUMERICS.to_vec(), vec![DataType::Null]].concat();
+            let valid_types = [NUMERICS.to_vec(), vec![Null]].concat();
             let input_types_valid = // number of input already checked before
                 valid_types.contains(&input_types[0]) && valid_types.contains(&input_types[1]);
             if !input_types_valid {
@@ -243,15 +242,15 @@ pub fn coerce_types(
                     input_types[0]
                 );
             }
-            if input_types.len() == 3 && !is_integer_arg_type(&input_types[2]) {
+            if input_types.len() == 3 && !input_types[2].is_integer() {
                 return plan_err!(
                         "The percentile sample points count for {:?} must be integer, not {:?}.",
                         agg_fun, input_types[2]
                     );
             }
             let mut result = input_types.to_vec();
-            if can_coerce_from(&DataType::Float64, &input_types[1]) {
-                result[1] = DataType::Float64;
+            if can_coerce_from(&Float64, &input_types[1]) {
+                result[1] = Float64;
             } else {
                 return plan_err!(
                     "Could not coerce the percent argument for {:?} to Float64. Was  {:?}.",
@@ -275,7 +274,7 @@ pub fn coerce_types(
                     input_types[1]
                 );
             }
-            if !matches!(input_types[2], DataType::Float64) {
+            if !matches!(input_types[2], Float64) {
                 return plan_err!(
                     "The percentile argument for {:?} must be Float64, not {:?}.",
                     agg_fun,
@@ -297,6 +296,7 @@ pub fn coerce_types(
         AggregateFunction::Median
         | AggregateFunction::FirstValue
         | AggregateFunction::LastValue => Ok(input_types.to_vec()),
+        AggregateFunction::NthValue => Ok(input_types.to_vec()),
         AggregateFunction::Grouping => Ok(vec![input_types[0].clone()]),
         AggregateFunction::StringAgg => {
             if !is_string_agg_supported_arg_type(&input_types[0]) {
@@ -560,17 +560,7 @@ pub fn is_correlation_support_arg_type(arg_type: &DataType) -> bool {
 }
 
 pub fn is_integer_arg_type(arg_type: &DataType) -> bool {
-    matches!(
-        arg_type,
-        DataType::UInt8
-            | DataType::UInt16
-            | DataType::UInt32
-            | DataType::UInt64
-            | DataType::Int8
-            | DataType::Int16
-            | DataType::Int32
-            | DataType::Int64
-    )
+    arg_type.is_integer()
 }
 
 /// Return `true` if `arg_type` is of a [`DataType`] that the
@@ -594,6 +584,7 @@ pub fn is_string_agg_supported_arg_type(arg_type: &DataType) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
     use arrow::datatypes::DataType;
 
     #[test]

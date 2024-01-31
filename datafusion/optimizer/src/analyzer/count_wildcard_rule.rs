@@ -19,12 +19,12 @@ use crate::analyzer::AnalyzerRule;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRewriter};
 use datafusion_common::Result;
-use datafusion_expr::expr::{AggregateFunction, InSubquery};
+use datafusion_expr::expr::{AggregateFunction, AggregateFunctionDefinition, InSubquery};
 use datafusion_expr::expr_rewriter::rewrite_preserving_name;
 use datafusion_expr::utils::COUNT_STAR_EXPANSION;
 use datafusion_expr::Expr::ScalarSubquery;
 use datafusion_expr::{
-    aggregate_function, expr, lit, window_function, Aggregate, Expr, Filter, LogicalPlan,
+    aggregate_function, expr, lit, Aggregate, Expr, Filter, LogicalPlan,
     LogicalPlanBuilder, Projection, Sort, Subquery,
 };
 use std::sync::Arc;
@@ -121,7 +121,7 @@ impl TreeNodeRewriter for CountWildcardRewriter {
         let new_expr = match old_expr.clone() {
             Expr::WindowFunction(expr::WindowFunction {
                 fun:
-                    window_function::WindowFunction::AggregateFunction(
+                    expr::WindowFunctionDefinition::AggregateFunction(
                         aggregate_function::AggregateFunction::Count,
                     ),
                 args,
@@ -131,7 +131,7 @@ impl TreeNodeRewriter for CountWildcardRewriter {
             }) if args.len() == 1 => match args[0] {
                 Expr::Wildcard { qualifier: None } => {
                     Expr::WindowFunction(expr::WindowFunction {
-                        fun: window_function::WindowFunction::AggregateFunction(
+                        fun: expr::WindowFunctionDefinition::AggregateFunction(
                             aggregate_function::AggregateFunction::Count,
                         ),
                         args: vec![lit(COUNT_STAR_EXPANSION)],
@@ -144,20 +144,23 @@ impl TreeNodeRewriter for CountWildcardRewriter {
                 _ => old_expr,
             },
             Expr::AggregateFunction(AggregateFunction {
-                fun: aggregate_function::AggregateFunction::Count,
+                func_def:
+                    AggregateFunctionDefinition::BuiltIn(
+                        aggregate_function::AggregateFunction::Count,
+                    ),
                 args,
                 distinct,
                 filter,
                 order_by,
             }) if args.len() == 1 => match args[0] {
                 Expr::Wildcard { qualifier: None } => {
-                    Expr::AggregateFunction(AggregateFunction {
-                        fun: aggregate_function::AggregateFunction::Count,
-                        args: vec![lit(COUNT_STAR_EXPANSION)],
+                    Expr::AggregateFunction(AggregateFunction::new(
+                        aggregate_function::AggregateFunction::Count,
+                        vec![lit(COUNT_STAR_EXPANSION)],
                         distinct,
                         filter,
                         order_by,
-                    })
+                    ))
                 }
                 _ => old_expr,
             },
@@ -226,7 +229,7 @@ mod tests {
     use datafusion_expr::{
         col, count, exists, expr, in_subquery, lit, logical_plan::LogicalPlanBuilder,
         max, out_ref_col, scalar_subquery, wildcard, AggregateFunction, Expr,
-        WindowFrame, WindowFrameBound, WindowFrameUnits, WindowFunction,
+        WindowFrame, WindowFrameBound, WindowFrameUnits, WindowFunctionDefinition,
     };
 
     fn assert_plan_eq(plan: &LogicalPlan, expected: &str) -> Result<()> {
@@ -339,17 +342,15 @@ mod tests {
 
         let plan = LogicalPlanBuilder::from(table_scan)
             .window(vec![Expr::WindowFunction(expr::WindowFunction::new(
-                WindowFunction::AggregateFunction(AggregateFunction::Count),
+                WindowFunctionDefinition::AggregateFunction(AggregateFunction::Count),
                 vec![wildcard()],
                 vec![],
                 vec![Expr::Sort(Sort::new(Box::new(col("a")), false, true))],
-                WindowFrame {
-                    units: WindowFrameUnits::Range,
-                    start_bound: WindowFrameBound::Preceding(ScalarValue::UInt32(Some(
-                        6,
-                    ))),
-                    end_bound: WindowFrameBound::Following(ScalarValue::UInt32(Some(2))),
-                },
+                WindowFrame::new_bounds(
+                    WindowFrameUnits::Range,
+                    WindowFrameBound::Preceding(ScalarValue::UInt32(Some(6))),
+                    WindowFrameBound::Following(ScalarValue::UInt32(Some(2))),
+                ),
             ))])?
             .project(vec![count(wildcard())])?
             .build()?;

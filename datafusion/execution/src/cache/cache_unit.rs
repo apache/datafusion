@@ -228,7 +228,7 @@ mod tests {
 
         cache.put(&meta.location, vec![meta.clone()].into());
         assert_eq!(
-            cache.get(&meta.location).unwrap().get(0).unwrap().clone(),
+            cache.get(&meta.location).unwrap().first().unwrap().clone(),
             meta.clone()
         );
     }

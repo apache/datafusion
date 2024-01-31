@@ -20,6 +20,9 @@
 //! projections one by one if the operator below is amenable to this. If a
 //! projection reaches a source, it can even dissappear from the plan entirely.
 
+use std::collections::HashMap;
+use std::sync::Arc;
+
 use super::output_requirements::OutputRequirementExec;
 use super::PhysicalOptimizerRule;
 use crate::datasource::physical_plan::CsvExec;
@@ -39,18 +42,18 @@ use crate::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use crate::physical_plan::{Distribution, ExecutionPlan};
 
 use arrow_schema::SchemaRef;
-
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::tree_node::{Transformed, TreeNode};
-use datafusion_common::JoinSide;
-use datafusion_physical_expr::expressions::Column;
+use datafusion_common::tree_node::{Transformed, TreeNode, VisitRecursion};
+use datafusion_common::{DataFusionError, JoinSide};
+use datafusion_physical_expr::expressions::{Column, Literal};
 use datafusion_physical_expr::{
-    Partitioning, PhysicalExpr, PhysicalSortExpr, PhysicalSortRequirement,
+    Partitioning, PhysicalExpr, PhysicalExprRef, PhysicalSortExpr,
+    PhysicalSortRequirement,
 };
+use datafusion_physical_plan::streaming::StreamingTableExec;
 use datafusion_physical_plan::union::UnionExec;
 
 use itertools::Itertools;
-use std::sync::Arc;
 
 /// This rule inspects [`ProjectionExec`]'s in the given physical plan and tries to
 /// remove or swap with its child.
@@ -135,6 +138,8 @@ pub fn remove_unnecessary_projections(
             try_swapping_with_sort_merge_join(projection, sm_join)?
         } else if let Some(sym_join) = input.downcast_ref::<SymmetricHashJoinExec>() {
             try_swapping_with_sym_hash_join(projection, sym_join)?
+        } else if let Some(ste) = input.downcast_ref::<StreamingTableExec>() {
+            try_swapping_with_streaming_table(projection, ste)?
         } else {
             // If the input plan of the projection is not one of the above, we
             // conservatively assume that pushing the projection down may hurt.
@@ -149,8 +154,8 @@ pub fn remove_unnecessary_projections(
     Ok(maybe_modified.map_or(Transformed::No(plan), Transformed::Yes))
 }
 
-/// Tries to swap `projection` with its input (`csv`). If possible, performs
-/// the swap and returns [`CsvExec`] as the top plan. Otherwise, returns `None`.
+/// Tries to embed `projection` to its input (`csv`). If possible, returns
+/// [`CsvExec`] as the top plan. Otherwise, returns `None`.
 fn try_swapping_with_csv(
     projection: &ProjectionExec,
     csv: &CsvExec,
@@ -159,8 +164,12 @@ fn try_swapping_with_csv(
     // This process can be moved into CsvExec, but it would be an overlap of their responsibility.
     all_alias_free_columns(projection.expr()).then(|| {
         let mut file_scan = csv.base_config().clone();
-        let new_projections =
-            new_projections_for_columns(projection, &file_scan.projection);
+        let new_projections = new_projections_for_columns(
+            projection,
+            &file_scan
+                .projection
+                .unwrap_or((0..csv.schema().fields().len()).collect()),
+        );
         file_scan.projection = Some(new_projections);
 
         Arc::new(CsvExec::new(
@@ -174,8 +183,8 @@ fn try_swapping_with_csv(
     })
 }
 
-/// Tries to swap `projection` with its input (`memory`). If possible, performs
-/// the swap and returns [`MemoryExec`] as the top plan. Otherwise, returns `None`.
+/// Tries to embed `projection` to its input (`memory`). If possible, returns
+/// [`MemoryExec`] as the top plan. Otherwise, returns `None`.
 fn try_swapping_with_memory(
     projection: &ProjectionExec,
     memory: &MemoryExec,
@@ -184,8 +193,11 @@ fn try_swapping_with_memory(
     // This process can be moved into MemoryExec, but it would be an overlap of their responsibility.
     all_alias_free_columns(projection.expr())
         .then(|| {
-            let new_projections =
-                new_projections_for_columns(projection, memory.projection());
+            let all_projections = (0..memory.schema().fields().len()).collect();
+            let new_projections = new_projections_for_columns(
+                projection,
+                memory.projection().as_ref().unwrap_or(&all_projections),
+            );
 
             MemoryExec::try_new(
                 memory.partitions(),
@@ -197,15 +209,84 @@ fn try_swapping_with_memory(
         .transpose()
 }
 
+/// Tries to embed `projection` to its input (`streaming table`).
+/// If possible, returns [`StreamingTableExec`] as the top plan. Otherwise,
+/// returns `None`.
+fn try_swapping_with_streaming_table(
+    projection: &ProjectionExec,
+    streaming_table: &StreamingTableExec,
+) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+    if !all_alias_free_columns(projection.expr()) {
+        return Ok(None);
+    }
+
+    let streaming_table_projections = streaming_table
+        .projection()
+        .as_ref()
+        .map(|i| i.as_ref().to_vec());
+    let new_projections = new_projections_for_columns(
+        projection,
+        &streaming_table_projections
+            .unwrap_or((0..streaming_table.schema().fields().len()).collect()),
+    );
+
+    let mut lex_orderings = vec![];
+    for lex_ordering in streaming_table.projected_output_ordering().into_iter() {
+        let mut orderings = vec![];
+        for order in lex_ordering {
+            let Some(new_ordering) = update_expr(&order.expr, projection.expr(), false)?
+            else {
+                return Ok(None);
+            };
+            orderings.push(PhysicalSortExpr {
+                expr: new_ordering,
+                options: order.options,
+            });
+        }
+        lex_orderings.push(orderings);
+    }
+
+    StreamingTableExec::try_new(
+        streaming_table.partition_schema().clone(),
+        streaming_table.partitions().clone(),
+        Some(new_projections.as_ref()),
+        lex_orderings,
+        streaming_table.is_infinite(),
+    )
+    .map(|e| Some(Arc::new(e) as _))
+}
+
 /// Unifies `projection` with its input (which is also a [`ProjectionExec`]).
-/// Two consecutive projections can always merge into a single projection unless
-/// the [`update_expr`] function does not support one of the expression
-/// types involved in the projection.
 fn try_unifying_projections(
     projection: &ProjectionExec,
     child: &ProjectionExec,
 ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
     let mut projected_exprs = vec![];
+    let mut column_ref_map: HashMap<Column, usize> = HashMap::new();
+
+    // Collect the column references usage in the outer projection.
+    projection.expr().iter().for_each(|(expr, _)| {
+        expr.apply(&mut |expr| {
+            Ok({
+                if let Some(column) = expr.as_any().downcast_ref::<Column>() {
+                    *column_ref_map.entry(column.clone()).or_default() += 1;
+                }
+                VisitRecursion::Continue
+            })
+        })
+        .unwrap();
+    });
+
+    // Merging these projections is not beneficial, e.g
+    // If an expression is not trivial and it is referred more than 1, unifies projections will be
+    // beneficial as caching mechanism for non-trivial computations.
+    // See discussion in: https://github.com/apache/arrow-datafusion/issues/8296
+    if column_ref_map.iter().any(|(column, count)| {
+        *count > 1 && !is_expr_trivial(&child.expr()[column.index()].0.clone())
+    }) {
+        return Ok(None);
+    }
+
     for (expr, alias) in projection.expr() {
         // If there is no match in the input projection, we cannot unify these
         // projections. This case will arise if the projection expression contains
@@ -218,6 +299,13 @@ fn try_unifying_projections(
 
     ProjectionExec::try_new(projected_exprs, child.input().clone())
         .map(|e| Some(Arc::new(e) as _))
+}
+
+/// Checks if the given expression is trivial.
+/// An expression is considered trivial if it is either a `Column` or a `Literal`.
+fn is_expr_trivial(expr: &Arc<dyn PhysicalExpr>) -> bool {
+    expr.as_any().downcast_ref::<Column>().is_some()
+        || expr.as_any().downcast_ref::<Literal>().is_some()
 }
 
 /// Tries to swap `projection` with its input (`output_req`). If possible,
@@ -303,6 +391,10 @@ fn try_swapping_with_filter(
     };
 
     FilterExec::try_new(new_predicate, make_with_child(projection, filter.input())?)
+        .and_then(|e| {
+            let selectivity = filter.default_selectivity();
+            e.with_default_selectivity(selectivity)
+        })
         .map(|e| Some(Arc::new(e) as _))
 }
 
@@ -373,7 +465,8 @@ fn try_swapping_with_sort(
 
     Ok(Some(Arc::new(
         SortExec::new(updated_exprs, make_with_child(projection, sort.input())?)
-            .with_fetch(sort.fetch()),
+            .with_fetch(sort.fetch())
+            .with_preserve_partitioning(sort.preserve_partitioning()),
     )))
 }
 
@@ -713,6 +806,8 @@ fn try_swapping_with_sym_hash_join(
         new_filter,
         sym_join.join_type(),
         sym_join.null_equals_null(),
+        sym_join.right().output_ordering().map(|p| p.to_vec()),
+        sym_join.left().output_ordering().map(|p| p.to_vec()),
         sym_join.partition_mode(),
     )?)))
 }
@@ -749,7 +844,7 @@ fn all_alias_free_columns(exprs: &[(Arc<dyn PhysicalExpr>, String)]) -> bool {
 /// ensure that all expressions are `Column` expressions without aliases.
 fn new_projections_for_columns(
     projection: &ProjectionExec,
-    source: &Option<Vec<usize>>,
+    source: &[usize],
 ) -> Vec<usize> {
     projection
         .expr()
@@ -757,7 +852,7 @@ fn new_projections_for_columns(
         .filter_map(|(expr, _)| {
             expr.as_any()
                 .downcast_ref::<Column>()
-                .and_then(|expr| source.as_ref().map(|proj| proj[expr.index()]))
+                .map(|expr| source[expr.index()])
         })
         .collect()
 }
@@ -779,10 +874,6 @@ fn new_projections_for_columns(
 ///    given the expressions `c@0`, `a@1` and `b@2`, and the [`ProjectionExec`] with
 ///    an output schema of `a, c_new`, then `c@0` becomes `c_new@1`, `a@1` becomes
 ///    `a@0`, but `b@2` results in `None` since the projection does not include `b`.
-///
-/// If the expression contains a `PhysicalExpr` variant that this function does
-/// not support, it will return `None`. An error can only be introduced if
-/// `CaseExpr::try_new` returns an error.
 fn update_expr(
     expr: &Arc<dyn PhysicalExpr>,
     projected_exprs: &[(Arc<dyn PhysicalExpr>, String)],
@@ -910,8 +1001,12 @@ fn join_table_borders(
 fn update_join_on(
     proj_left_exprs: &[(Column, String)],
     proj_right_exprs: &[(Column, String)],
-    hash_join_on: &[(Column, Column)],
-) -> Option<Vec<(Column, Column)>> {
+    hash_join_on: &[(PhysicalExprRef, PhysicalExprRef)],
+) -> Option<Vec<(PhysicalExprRef, PhysicalExprRef)>> {
+    // TODO: Clippy wants the "map" call removed, but doing so generates
+    //       a compilation error. Remove the clippy directive once this
+    //       issue is fixed.
+    #[allow(clippy::map_identity)]
     let (left_idx, right_idx): (Vec<_>, Vec<_>) = hash_join_on
         .iter()
         .map(|(left, right)| (left, right))
@@ -930,17 +1025,41 @@ fn update_join_on(
 /// operation based on a set of equi-join conditions (`hash_join_on`) and a
 /// list of projection expressions (`projection_exprs`).
 fn new_columns_for_join_on(
-    hash_join_on: &[&Column],
+    hash_join_on: &[&PhysicalExprRef],
     projection_exprs: &[(Column, String)],
-) -> Option<Vec<Column>> {
+) -> Option<Vec<PhysicalExprRef>> {
     let new_columns = hash_join_on
         .iter()
         .filter_map(|on| {
-            projection_exprs
-                .iter()
-                .enumerate()
-                .find(|(_, (proj_column, _))| on.name() == proj_column.name())
-                .map(|(index, (_, alias))| Column::new(alias, index))
+            // Rewrite all columns in `on`
+            (*on)
+                .clone()
+                .transform(&|expr| {
+                    if let Some(column) = expr.as_any().downcast_ref::<Column>() {
+                        // Find the column in the projection expressions
+                        let new_column = projection_exprs
+                            .iter()
+                            .enumerate()
+                            .find(|(_, (proj_column, _))| {
+                                column.name() == proj_column.name()
+                            })
+                            .map(|(index, (_, alias))| Column::new(alias, index));
+                        if let Some(new_column) = new_column {
+                            Ok(Transformed::Yes(Arc::new(new_column)))
+                        } else {
+                            // If the column is not found in the projection expressions,
+                            // it means that the column is not projected. In this case,
+                            // we cannot push the projection down.
+                            Err(DataFusionError::Internal(format!(
+                                "Column {:?} not found in projection expressions",
+                                column
+                            )))
+                        }
+                    } else {
+                        Ok(Transformed::No(expr))
+                    }
+                })
+                .ok()
         })
         .collect::<Vec<_>>();
     (new_columns.len() == hash_join_on.len()).then_some(new_columns)
@@ -1089,7 +1208,6 @@ mod tests {
     use crate::physical_optimizer::projection_pushdown::{
         join_table_borders, update_expr, ProjectionPushdown,
     };
-    use crate::physical_optimizer::utils::get_plan_string;
     use crate::physical_optimizer::PhysicalOptimizerRule;
     use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
     use crate::physical_plan::filter::FilterExec;
@@ -1100,12 +1218,13 @@ mod tests {
     use crate::physical_plan::repartition::RepartitionExec;
     use crate::physical_plan::sorts::sort::SortExec;
     use crate::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
-    use crate::physical_plan::ExecutionPlan;
+    use crate::physical_plan::{get_plan_string, ExecutionPlan};
 
-    use arrow_schema::{DataType, Field, Schema, SortOptions};
+    use arrow_schema::{DataType, Field, Schema, SchemaRef, SortOptions};
     use datafusion_common::config::ConfigOptions;
     use datafusion_common::{JoinSide, JoinType, Result, ScalarValue, Statistics};
     use datafusion_execution::object_store::ObjectStoreUrl;
+    use datafusion_execution::{SendableRecordBatchStream, TaskContext};
     use datafusion_expr::{ColumnarValue, Operator};
     use datafusion_physical_expr::expressions::{
         BinaryExpr, CaseExpr, CastExpr, Column, Literal, NegativeExpr,
@@ -1115,7 +1234,10 @@ mod tests {
         PhysicalSortRequirement, ScalarFunctionExpr,
     };
     use datafusion_physical_plan::joins::SymmetricHashJoinExec;
+    use datafusion_physical_plan::streaming::{PartitionStream, StreamingTableExec};
     use datafusion_physical_plan::union::UnionExec;
+
+    use itertools::Itertools;
 
     #[test]
     fn test_update_matching_exprs() -> Result<()> {
@@ -1148,6 +1270,7 @@ mod tests {
                 ],
                 DataType::Int32,
                 None,
+                false,
             )),
             Arc::new(CaseExpr::try_new(
                 Some(Arc::new(Column::new("d", 2))),
@@ -1214,6 +1337,7 @@ mod tests {
                 ],
                 DataType::Int32,
                 None,
+                false,
             )),
             Arc::new(CaseExpr::try_new(
                 Some(Arc::new(Column::new("d", 3))),
@@ -1283,6 +1407,7 @@ mod tests {
                 ],
                 DataType::Int32,
                 None,
+                false,
             )),
             Arc::new(CaseExpr::try_new(
                 Some(Arc::new(Column::new("d", 2))),
@@ -1349,6 +1474,7 @@ mod tests {
                 ],
                 DataType::Int32,
                 None,
+                false,
             )),
             Arc::new(CaseExpr::try_new(
                 Some(Arc::new(Column::new("d_new", 3))),
@@ -1460,7 +1586,6 @@ mod tests {
                 limit: None,
                 table_partition_cols: vec![],
                 output_ordering: vec![vec![]],
-                infinite_source: false,
             },
             false,
             0,
@@ -1487,7 +1612,6 @@ mod tests {
                 limit: None,
                 table_partition_cols: vec![],
                 output_ordering: vec![vec![]],
-                infinite_source: false,
             },
             false,
             0,
@@ -1571,6 +1695,119 @@ mod tests {
                 .unwrap(),
             vec![3, 4, 0]
         );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_streaming_table_after_projection() -> Result<()> {
+        struct DummyStreamPartition {
+            schema: SchemaRef,
+        }
+        impl PartitionStream for DummyStreamPartition {
+            fn schema(&self) -> &SchemaRef {
+                &self.schema
+            }
+            fn execute(&self, _ctx: Arc<TaskContext>) -> SendableRecordBatchStream {
+                unreachable!()
+            }
+        }
+
+        let streaming_table = StreamingTableExec::try_new(
+            Arc::new(Schema::new(vec![
+                Field::new("a", DataType::Int32, true),
+                Field::new("b", DataType::Int32, true),
+                Field::new("c", DataType::Int32, true),
+                Field::new("d", DataType::Int32, true),
+                Field::new("e", DataType::Int32, true),
+            ])),
+            vec![Arc::new(DummyStreamPartition {
+                schema: Arc::new(Schema::new(vec![
+                    Field::new("a", DataType::Int32, true),
+                    Field::new("b", DataType::Int32, true),
+                    Field::new("c", DataType::Int32, true),
+                    Field::new("d", DataType::Int32, true),
+                    Field::new("e", DataType::Int32, true),
+                ])),
+            }) as _],
+            Some(&vec![0_usize, 2, 4, 3]),
+            vec![
+                vec![
+                    PhysicalSortExpr {
+                        expr: Arc::new(Column::new("e", 2)),
+                        options: SortOptions::default(),
+                    },
+                    PhysicalSortExpr {
+                        expr: Arc::new(Column::new("a", 0)),
+                        options: SortOptions::default(),
+                    },
+                ],
+                vec![PhysicalSortExpr {
+                    expr: Arc::new(Column::new("d", 3)),
+                    options: SortOptions::default(),
+                }],
+            ]
+            .into_iter(),
+            true,
+        )?;
+        let projection = Arc::new(ProjectionExec::try_new(
+            vec![
+                (Arc::new(Column::new("d", 3)), "d".to_string()),
+                (Arc::new(Column::new("e", 2)), "e".to_string()),
+                (Arc::new(Column::new("a", 0)), "a".to_string()),
+            ],
+            Arc::new(streaming_table) as _,
+        )?) as _;
+
+        let after_optimize =
+            ProjectionPushdown::new().optimize(projection, &ConfigOptions::new())?;
+
+        let result = after_optimize
+            .as_any()
+            .downcast_ref::<StreamingTableExec>()
+            .unwrap();
+        assert_eq!(
+            result.partition_schema(),
+            &Arc::new(Schema::new(vec![
+                Field::new("a", DataType::Int32, true),
+                Field::new("b", DataType::Int32, true),
+                Field::new("c", DataType::Int32, true),
+                Field::new("d", DataType::Int32, true),
+                Field::new("e", DataType::Int32, true),
+            ]))
+        );
+        assert_eq!(
+            result.projection().clone().unwrap().to_vec(),
+            vec![3_usize, 4, 0]
+        );
+        assert_eq!(
+            result.projected_schema(),
+            &Schema::new(vec![
+                Field::new("d", DataType::Int32, true),
+                Field::new("e", DataType::Int32, true),
+                Field::new("a", DataType::Int32, true),
+            ])
+        );
+        assert_eq!(
+            result.projected_output_ordering().into_iter().collect_vec(),
+            vec![
+                vec![
+                    PhysicalSortExpr {
+                        expr: Arc::new(Column::new("e", 1)),
+                        options: SortOptions::default(),
+                    },
+                    PhysicalSortExpr {
+                        expr: Arc::new(Column::new("a", 2)),
+                        options: SortOptions::default(),
+                    },
+                ],
+                vec![PhysicalSortExpr {
+                    expr: Arc::new(Column::new("d", 0)),
+                    options: SortOptions::default(),
+                }],
+            ]
+        );
+        assert!(result.is_infinite());
 
         Ok(())
     }
@@ -1810,7 +2047,7 @@ mod tests {
         let join: Arc<dyn ExecutionPlan> = Arc::new(SymmetricHashJoinExec::try_new(
             left_csv,
             right_csv,
-            vec![(Column::new("b", 1), Column::new("c", 2))],
+            vec![(Arc::new(Column::new("b", 1)), Arc::new(Column::new("c", 2)))],
             // b_left-(1+a_right)<=a_right+c_left
             Some(JoinFilter::new(
                 Arc::new(BinaryExpr::new(
@@ -1852,6 +2089,8 @@ mod tests {
             )),
             &JoinType::Inner,
             true,
+            None,
+            None,
             StreamJoinPartitionMode::SinglePartition,
         )?);
         let projection: Arc<dyn ExecutionPlan> = Arc::new(ProjectionExec::try_new(

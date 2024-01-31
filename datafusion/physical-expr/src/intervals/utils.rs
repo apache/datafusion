@@ -19,14 +19,16 @@
 
 use std::sync::Arc;
 
-use super::{Interval, IntervalBound};
 use crate::{
     expressions::{BinaryExpr, CastExpr, Column, Literal, NegativeExpr},
     PhysicalExpr,
 };
 
 use arrow_schema::{DataType, SchemaRef};
-use datafusion_common::{DataFusionError, Result, ScalarValue};
+use datafusion_common::{
+    internal_datafusion_err, internal_err, DataFusionError, Result, ScalarValue,
+};
+use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::Operator;
 
 const MDN_DAY_MASK: i128 = 0xFFFF_FFFF_0000_0000_0000_0000;
@@ -66,11 +68,13 @@ pub fn check_support(expr: &Arc<dyn PhysicalExpr>, schema: &SchemaRef) -> bool {
 }
 
 // This function returns the inverse operator of the given operator.
-pub fn get_inverse_op(op: Operator) -> Operator {
+pub fn get_inverse_op(op: Operator) -> Result<Operator> {
     match op {
-        Operator::Plus => Operator::Minus,
-        Operator::Minus => Operator::Plus,
-        _ => unreachable!(),
+        Operator::Plus => Ok(Operator::Minus),
+        Operator::Minus => Ok(Operator::Plus),
+        Operator::Multiply => Ok(Operator::Divide),
+        Operator::Divide => Ok(Operator::Multiply),
+        _ => internal_err!("Interval arithmetic does not support the operator {}", op),
     }
 }
 
@@ -86,6 +90,8 @@ pub fn is_operator_supported(op: &Operator) -> bool {
             | &Operator::Lt
             | &Operator::LtEq
             | &Operator::Eq
+            | &Operator::Multiply
+            | &Operator::Divide
     )
 }
 
@@ -109,36 +115,26 @@ pub fn is_datatype_supported(data_type: &DataType) -> bool {
 /// Converts an [`Interval`] of time intervals to one of `Duration`s, if applicable. Otherwise, returns [`None`].
 pub fn convert_interval_type_to_duration(interval: &Interval) -> Option<Interval> {
     if let (Some(lower), Some(upper)) = (
-        convert_interval_bound_to_duration(&interval.lower),
-        convert_interval_bound_to_duration(&interval.upper),
+        convert_interval_bound_to_duration(interval.lower()),
+        convert_interval_bound_to_duration(interval.upper()),
     ) {
-        Some(Interval::new(lower, upper))
+        Interval::try_new(lower, upper).ok()
     } else {
         None
     }
 }
 
-/// Converts an [`IntervalBound`] containing a time interval to one containing a `Duration`, if applicable. Otherwise, returns [`None`].
+/// Converts an [`ScalarValue`] containing a time interval to one containing a `Duration`, if applicable. Otherwise, returns [`None`].
 fn convert_interval_bound_to_duration(
-    interval_bound: &IntervalBound,
-) -> Option<IntervalBound> {
-    match interval_bound.value {
-        ScalarValue::IntervalMonthDayNano(Some(mdn)) => {
-            interval_mdn_to_duration_ns(&mdn).ok().map(|duration| {
-                IntervalBound::new(
-                    ScalarValue::DurationNanosecond(Some(duration)),
-                    interval_bound.open,
-                )
-            })
-        }
-        ScalarValue::IntervalDayTime(Some(dt)) => {
-            interval_dt_to_duration_ms(&dt).ok().map(|duration| {
-                IntervalBound::new(
-                    ScalarValue::DurationMillisecond(Some(duration)),
-                    interval_bound.open,
-                )
-            })
-        }
+    interval_bound: &ScalarValue,
+) -> Option<ScalarValue> {
+    match interval_bound {
+        ScalarValue::IntervalMonthDayNano(Some(mdn)) => interval_mdn_to_duration_ns(mdn)
+            .ok()
+            .map(|duration| ScalarValue::DurationNanosecond(Some(duration))),
+        ScalarValue::IntervalDayTime(Some(dt)) => interval_dt_to_duration_ms(dt)
+            .ok()
+            .map(|duration| ScalarValue::DurationMillisecond(Some(duration))),
         _ => None,
     }
 }
@@ -146,28 +142,32 @@ fn convert_interval_bound_to_duration(
 /// Converts an [`Interval`] of `Duration`s to one of time intervals, if applicable. Otherwise, returns [`None`].
 pub fn convert_duration_type_to_interval(interval: &Interval) -> Option<Interval> {
     if let (Some(lower), Some(upper)) = (
-        convert_duration_bound_to_interval(&interval.lower),
-        convert_duration_bound_to_interval(&interval.upper),
+        convert_duration_bound_to_interval(interval.lower()),
+        convert_duration_bound_to_interval(interval.upper()),
     ) {
-        Some(Interval::new(lower, upper))
+        Interval::try_new(lower, upper).ok()
     } else {
         None
     }
 }
 
-/// Converts an [`IntervalBound`] containing a `Duration` to one containing a time interval, if applicable. Otherwise, returns [`None`].
+/// Converts a [`ScalarValue`] containing a `Duration` to one containing a time interval, if applicable. Otherwise, returns [`None`].
 fn convert_duration_bound_to_interval(
-    interval_bound: &IntervalBound,
-) -> Option<IntervalBound> {
-    match interval_bound.value {
-        ScalarValue::DurationNanosecond(Some(duration)) => Some(IntervalBound::new(
-            ScalarValue::new_interval_mdn(0, 0, duration),
-            interval_bound.open,
-        )),
-        ScalarValue::DurationMillisecond(Some(duration)) => Some(IntervalBound::new(
-            ScalarValue::new_interval_dt(0, duration as i32),
-            interval_bound.open,
-        )),
+    interval_bound: &ScalarValue,
+) -> Option<ScalarValue> {
+    match interval_bound {
+        ScalarValue::DurationNanosecond(Some(duration)) => {
+            Some(ScalarValue::new_interval_mdn(0, 0, *duration))
+        }
+        ScalarValue::DurationMicrosecond(Some(duration)) => {
+            Some(ScalarValue::new_interval_mdn(0, 0, *duration * 1000))
+        }
+        ScalarValue::DurationMillisecond(Some(duration)) => {
+            Some(ScalarValue::new_interval_dt(0, *duration as i32))
+        }
+        ScalarValue::DurationSecond(Some(duration)) => {
+            Some(ScalarValue::new_interval_dt(0, *duration as i32 * 1000))
+        }
         _ => None,
     }
 }
@@ -180,14 +180,13 @@ fn interval_mdn_to_duration_ns(mdn: &i128) -> Result<i64> {
     let nanoseconds = mdn & MDN_NS_MASK;
 
     if months == 0 && days == 0 {
-        nanoseconds.try_into().map_err(|_| {
-            DataFusionError::Internal("Resulting duration exceeds i64::MAX".to_string())
-        })
+        nanoseconds
+            .try_into()
+            .map_err(|_| internal_datafusion_err!("Resulting duration exceeds i64::MAX"))
     } else {
-        Err(DataFusionError::Internal(
+        internal_err!(
             "The interval cannot have a non-zero month or day value for duration convertibility"
-                .to_string(),
-        ))
+        )
     }
 }
 
@@ -200,9 +199,8 @@ fn interval_dt_to_duration_ms(dt: &i64) -> Result<i64> {
     if days == 0 {
         Ok(milliseconds)
     } else {
-        Err(DataFusionError::Internal(
+        internal_err!(
             "The interval cannot have a non-zero day value for duration convertibility"
-                .to_string(),
-        ))
+        )
     }
 }

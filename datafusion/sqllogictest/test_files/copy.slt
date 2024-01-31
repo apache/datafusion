@@ -21,15 +21,15 @@ create table source_table(col1 integer, col2 varchar) as values (1, 'Foo'), (2, 
 
 # Copy to directory as multiple files
 query IT
-COPY source_table TO 'test_files/scratch/copy/table' (format parquet, single_file_output false, compression 'zstd(10)');
+COPY source_table TO 'test_files/scratch/copy/table/' (format parquet, compression 'zstd(10)');
 ----
 2
 
 query TT
-EXPLAIN COPY source_table TO 'test_files/scratch/copy/table' (format parquet, single_file_output false, compression 'zstd(10)');
+EXPLAIN COPY source_table TO 'test_files/scratch/copy/table/' (format parquet, compression 'zstd(10)');
 ----
 logical_plan
-CopyTo: format=parquet output_url=test_files/scratch/copy/table single_file_output=false options: (compression 'zstd(10)')
+CopyTo: format=parquet output_url=test_files/scratch/copy/table/ options: (compression 'zstd(10)')
 --TableScan: source_table projection=[col1, col2]
 physical_plan
 FileSinkExec: sink=ParquetSink(file_groups=[])
@@ -37,16 +37,16 @@ FileSinkExec: sink=ParquetSink(file_groups=[])
 
 # Error case
 query error DataFusion error: Invalid or Unsupported Configuration: Format not explicitly set and unable to get file extension!
-EXPLAIN COPY source_table to 'test_files/scratch/copy/table'
+EXPLAIN COPY source_table to 'test_files/scratch/copy/table/'
 
 query error DataFusion error: SQL error: ParserError\("Expected end of statement, found: query"\)
-EXPLAIN COPY source_table to 'test_files/scratch/copy/table' (format parquet, single_file_output false)
+EXPLAIN COPY source_table to 'test_files/scratch/copy/table/' (format parquet)
 query TT
-EXPLAIN COPY source_table to 'test_files/scratch/copy/table' (format parquet, per_thread_output true)
+EXPLAIN COPY source_table to 'test_files/scratch/copy/table/' (format parquet, per_thread_output true)
 
 # Copy more files to directory via query
 query IT
-COPY (select * from source_table UNION ALL select * from source_table) to 'test_files/scratch/copy/table' (format parquet, single_file_output false);
+COPY (select * from source_table UNION ALL select * from source_table) to 'test_files/scratch/copy/table/' (format parquet);
 ----
 4
 
@@ -64,12 +64,80 @@ select * from validate_parquet;
 1 Foo
 2 Bar
 
+query ?
+copy (values (struct(timestamp '2021-01-01 01:00:01', 1)), (struct(timestamp '2022-01-01 01:00:01', 2)), 
+(struct(timestamp '2023-01-03 01:00:01', 3)), (struct(timestamp '2024-01-01 01:00:01', 4)))
+to 'test_files/scratch/copy/table_nested2/' (format parquet);
+----
+4
+
+statement ok
+CREATE EXTERNAL TABLE validate_parquet_nested2 STORED AS PARQUET LOCATION 'test_files/scratch/copy/table_nested2/';
+
+query ?
+select * from validate_parquet_nested2;
+----
+{c0: 2021-01-01T01:00:01, c1: 1}
+{c0: 2022-01-01T01:00:01, c1: 2}
+{c0: 2023-01-03T01:00:01, c1: 3}
+{c0: 2024-01-01T01:00:01, c1: 4}
+
+query ??
+COPY 
+(values (struct ('foo', (struct ('foo', make_array(struct('a',1), struct('b',2))))), make_array(timestamp '2023-01-01 01:00:01',timestamp '2023-01-01 01:00:01')), 
+(struct('bar', (struct ('foo', make_array(struct('aa',10), struct('bb',20))))), make_array(timestamp '2024-01-01 01:00:01', timestamp '2024-01-01 01:00:01'))) 
+to 'test_files/scratch/copy/table_nested/' (format parquet);
+----
+2
+
+statement ok
+CREATE EXTERNAL TABLE validate_parquet_nested STORED AS PARQUET 
+LOCATION 'test_files/scratch/copy/table_nested/';
+
+query ??
+select * from validate_parquet_nested;
+----
+{c0: foo, c1: {c0: foo, c1: [{c0: a, c1: 1}, {c0: b, c1: 2}]}} [2023-01-01T01:00:01, 2023-01-01T01:00:01]
+{c0: bar, c1: {c0: foo, c1: [{c0: aa, c1: 10}, {c0: bb, c1: 20}]}} [2024-01-01T01:00:01, 2024-01-01T01:00:01]
+
+query ?
+copy (values ([struct('foo', 1), struct('bar', 2)])) 
+to 'test_files/scratch/copy/array_of_struct/'
+(format parquet);
+----
+1
+
+statement ok
+CREATE EXTERNAL TABLE validate_array_of_struct 
+STORED AS PARQUET LOCATION 'test_files/scratch/copy/array_of_struct/';
+
+query ?
+select * from validate_array_of_struct;
+----
+[{c0: foo, c1: 1}, {c0: bar, c1: 2}]
+
+query ?
+copy (values (struct('foo', [1,2,3], struct('bar', [2,3,4])))) 
+to 'test_files/scratch/copy/struct_with_array/'
+(format parquet);
+----
+1
+
+statement ok
+CREATE EXTERNAL TABLE validate_struct_with_array
+STORED AS PARQUET LOCATION 'test_files/scratch/copy/struct_with_array/';
+
+query ?
+select * from validate_struct_with_array;
+----
+{c0: foo, c1: [1, 2, 3], c2: {c0: bar, c1: [2, 3, 4]}}
+
+
 # Copy parquet with all supported statment overrides
 query IT
 COPY source_table
-TO 'test_files/scratch/copy/table_with_options'
+TO 'test_files/scratch/copy/table_with_options/'
 (format parquet,
-single_file_output false,
 compression snappy,
 'compression::col1' 'zstd(5)',
 'compression::col2' snappy,
@@ -126,7 +194,7 @@ select * from validate_parquet_single;
 
 # copy from table to folder of compressed json files
 query IT
-COPY source_table  to 'test_files/scratch/copy/table_json_gz' (format json, single_file_output false, compression 'gzip');
+COPY source_table  to 'test_files/scratch/copy/table_json_gz' (format json, compression 'gzip');
 ----
 2
 
@@ -142,7 +210,7 @@ select * from validate_json_gz;
 
 # copy from table to folder of compressed csv files
 query IT
-COPY source_table  to 'test_files/scratch/copy/table_csv' (format csv, single_file_output false, header false, compression 'gzip');
+COPY source_table  to 'test_files/scratch/copy/table_csv' (format csv, header false, compression 'gzip');
 ----
 2
 
@@ -174,7 +242,7 @@ select * from validate_single_csv;
 
 # Copy from table to folder of json
 query IT
-COPY source_table to 'test_files/scratch/copy/table_json' (format json, single_file_output false);
+COPY source_table to 'test_files/scratch/copy/table_json' (format json);
 ----
 2
 
@@ -209,7 +277,6 @@ query IT
 COPY source_table
 to 'test_files/scratch/copy/table_csv_with_options'
 (format csv,
-single_file_output false,
 header false,
 compression 'uncompressed',
 datetime_format '%FT%H:%M:%S.%9f',
@@ -229,6 +296,62 @@ select * from validate_csv_with_options;
 ----
 1;Foo
 2;Bar
+
+# Copy from table to single arrow file
+query IT
+COPY source_table to 'test_files/scratch/copy/table.arrow';
+----
+2
+
+# Validate single csv output
+statement ok
+CREATE EXTERNAL TABLE validate_arrow_file
+STORED AS arrow
+LOCATION 'test_files/scratch/copy/table.arrow';
+
+query IT
+select * from validate_arrow_file;
+----
+1 Foo
+2 Bar
+
+# Copy from dict encoded values to single arrow file
+query T?
+COPY (values 
+('c', arrow_cast('foo', 'Dictionary(Int32, Utf8)')), ('d', arrow_cast('bar', 'Dictionary(Int32, Utf8)'))) 
+to 'test_files/scratch/copy/table_dict.arrow';
+----
+2
+
+# Validate single csv output
+statement ok
+CREATE EXTERNAL TABLE validate_arrow_file_dict
+STORED AS arrow
+LOCATION 'test_files/scratch/copy/table_dict.arrow';
+
+query T?
+select * from validate_arrow_file_dict;
+----
+c foo
+d bar
+
+
+# Copy from table to folder of json
+query IT
+COPY source_table to 'test_files/scratch/copy/table_arrow' (format arrow);
+----
+2
+
+# Validate json output
+statement ok
+CREATE EXTERNAL TABLE validate_arrow STORED AS arrow LOCATION 'test_files/scratch/copy/table_arrow';
+
+query IT
+select * from validate_arrow;
+----
+1 Foo
+2 Bar
+
 
 # Error cases:
 

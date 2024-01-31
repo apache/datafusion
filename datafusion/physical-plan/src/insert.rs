@@ -219,24 +219,17 @@ impl ExecutionPlan for FileSinkExec {
     }
 
     fn required_input_ordering(&self) -> Vec<Option<Vec<PhysicalSortRequirement>>> {
-        // The input order is either exlicitly set (such as by a ListingTable),
-        // or require that the [FileSinkExec] gets the data in the order the
-        // input produced it (otherwise the optimizer may chose to reorder
-        // the input which could result in unintended / poor UX)
-        //
-        // More rationale:
-        // https://github.com/apache/arrow-datafusion/pull/6354#discussion_r1195284178
-        match &self.sort_order {
-            Some(requirements) => vec![Some(requirements.clone())],
-            None => vec![self
-                .input
-                .output_ordering()
-                .map(PhysicalSortRequirement::from_sort_exprs)],
-        }
+        // The required input ordering is set externally (e.g. by a `ListingTable`).
+        // Otherwise, there is no specific requirement (i.e. `sort_expr` is `None`).
+        vec![self.sort_order.as_ref().cloned()]
     }
 
     fn maintains_input_order(&self) -> Vec<bool> {
-        vec![false]
+        // Maintains ordering in the sense that the written file will reflect
+        // the ordering of the input. For more context, see:
+        //
+        // https://github.com/apache/arrow-datafusion/pull/6354#discussion_r1195284178
+        vec![true]
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {

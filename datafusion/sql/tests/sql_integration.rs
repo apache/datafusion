@@ -22,11 +22,11 @@ use std::{sync::Arc, vec};
 use arrow_schema::*;
 use sqlparser::dialect::{Dialect, GenericDialect, HiveDialect, MySqlDialect};
 
-use datafusion_common::plan_err;
 use datafusion_common::{
     assert_contains, config::ConfigOptions, DataFusionError, Result, ScalarValue,
     TableReference,
 };
+use datafusion_common::{plan_err, ParamValues};
 use datafusion_expr::{
     logical_plan::{LogicalPlan, Prepare},
     AggregateUDF, ScalarUDF, TableSource, WindowUDF,
@@ -386,7 +386,7 @@ fn plan_rollback_transaction_chained() {
 fn plan_copy_to() {
     let sql = "COPY test_decimal to 'output.csv'";
     let plan = r#"
-CopyTo: format=csv output_url=output.csv single_file_output=true options: ()
+CopyTo: format=csv output_url=output.csv options: ()
   TableScan: test_decimal
     "#
     .trim();
@@ -398,7 +398,7 @@ fn plan_explain_copy_to() {
     let sql = "EXPLAIN COPY test_decimal to 'output.csv'";
     let plan = r#"
 Explain
-  CopyTo: format=csv output_url=output.csv single_file_output=true options: ()
+  CopyTo: format=csv output_url=output.csv options: ()
     TableScan: test_decimal
     "#
     .trim();
@@ -409,7 +409,7 @@ Explain
 fn plan_copy_to_query() {
     let sql = "COPY (select * from test_decimal limit 10) to 'output.csv'";
     let plan = r#"
-CopyTo: format=csv output_url=output.csv single_file_output=true options: ()
+CopyTo: format=csv output_url=output.csv options: ()
   Limit: skip=0, fetch=10
     Projection: test_decimal.id, test_decimal.price
       TableScan: test_decimal
@@ -451,10 +451,6 @@ Dml: op=[Insert Into] table=[test_decimal]
     "INSERT INTO test_decimal (nonexistent, price) VALUES (1, 2), (4, 5)",
     "Schema error: No field named nonexistent. Valid fields are id, price."
 )]
-#[case::type_mismatch(
-    "INSERT INTO test_decimal SELECT '2022-01-01', to_timestamp('2022-01-01T12:00:00')",
-    "Error during planning: Cannot automatically convert Timestamp(Nanosecond, None) to Decimal128(10, 2)"
-)]
 #[case::target_column_count_mismatch(
     "INSERT INTO person (id, first_name, last_name) VALUES ($1, $2)",
     "Error during planning: Column count doesn't match insert query!"
@@ -469,7 +465,11 @@ Dml: op=[Insert Into] table=[test_decimal]
 )]
 #[case::placeholder_type_unresolved(
     "INSERT INTO person (id, first_name, last_name) VALUES ($2, $4, $6)",
-    "Error during planning: Placeholder type could not be resolved"
+    "Error during planning: Placeholder type could not be resolved. Make sure that the placeholder is bound to a concrete type, e.g. by providing parameter values."
+)]
+#[case::placeholder_type_unresolved(
+    "INSERT INTO person (id, first_name, last_name) VALUES ($id, $first_name, $last_name)",
+    "Error during planning: Can't parse placeholder: $id"
 )]
 #[test]
 fn test_insert_schema_errors(#[case] sql: &str, #[case] error: &str) {
@@ -606,11 +606,9 @@ fn select_compound_filter() {
 #[test]
 fn test_timestamp_filter() {
     let sql = "SELECT state FROM person WHERE birth_date < CAST (158412331400600000 as timestamp)";
-
     let expected = "Projection: person.state\
-            \n  Filter: person.birth_date < CAST(Int64(158412331400600000) AS Timestamp(Nanosecond, None))\
+            \n  Filter: person.birth_date < CAST(CAST(Int64(158412331400600000) AS Timestamp(Second, None)) AS Timestamp(Nanosecond, None))\
             \n    TableScan: person";
-
     quick_test(sql, expected);
 }
 
@@ -754,9 +752,11 @@ fn join_with_ambiguous_column() {
 #[test]
 fn where_selection_with_ambiguous_column() {
     let sql = "SELECT * FROM person a, person b WHERE id = id + 1";
-    let err = logical_plan(sql).expect_err("query should have failed");
+    let err = logical_plan(sql)
+        .expect_err("query should have failed")
+        .strip_backtrace();
     assert_eq!(
-        "SchemaError(AmbiguousReference { field: Column { relation: None, name: \"id\" } })",
+        "\"Schema error: Ambiguous reference to unqualified field id\"",
         format!("{err:?}")
     );
 }
@@ -1384,18 +1384,6 @@ fn select_interval_out_of_range() {
 }
 
 #[test]
-fn select_array_no_common_type() {
-    let sql = "SELECT [1, true, null]";
-    let err = logical_plan(sql).expect_err("query should have failed");
-
-    // HashSet doesn't guarantee order
-    assert_contains!(
-        err.strip_backtrace(),
-        "This feature is not implemented: Arrays with different types are not supported: "
-    );
-}
-
-#[test]
 fn recursive_ctes() {
     let sql = "
         WITH RECURSIVE numbers AS (
@@ -1406,18 +1394,43 @@ fn recursive_ctes() {
         select * from numbers;";
     let err = logical_plan(sql).expect_err("query should have failed");
     assert_eq!(
-        "This feature is not implemented: Recursive CTEs are not supported",
+        "This feature is not implemented: Recursive CTEs are not enabled",
         err.strip_backtrace()
     );
 }
 
 #[test]
-fn select_array_non_literal_type() {
-    let sql = "SELECT [now()]";
-    let err = logical_plan(sql).expect_err("query should have failed");
+fn recursive_ctes_enabled() {
+    let sql = "
+        WITH RECURSIVE numbers AS (
+              select 1 as n
+            UNION ALL
+              select n + 1 FROM numbers WHERE N < 10
+        )
+        select * from numbers;";
+
+    // manually setting up test here so that we can enable recursive ctes
+    let mut context = MockContextProvider::default();
+    context.options_mut().execution.enable_recursive_ctes = true;
+
+    let planner = SqlToRel::new_with_options(&context, ParserOptions::default());
+    let result = DFParser::parse_sql_with_dialect(sql, &GenericDialect {});
+    let mut ast = result.unwrap();
+
+    let plan = planner
+        .statement_to_plan(ast.pop_front().unwrap())
+        .expect("recursive cte plan creation failed");
+
     assert_eq!(
-        "This feature is not implemented: Arrays with elements other than literal are not supported: now()",
-        err.strip_backtrace()
+        format!("{plan:?}"),
+        "Projection: numbers.n\
+        \n  SubqueryAlias: numbers\
+        \n    RecursiveQuery: is_distinct=false\
+        \n      Projection: Int64(1) AS n\
+        \n        EmptyRelation\
+        \n      Projection: numbers.n + Int64(1)\
+        \n        Filter: numbers.n < Int64(10)\
+        \n          TableScan: numbers"
     );
 }
 
@@ -2698,7 +2711,7 @@ fn prepare_stmt_quick_test(
 
 fn prepare_stmt_replace_params_quick_test(
     plan: LogicalPlan,
-    param_values: Vec<ScalarValue>,
+    param_values: impl Into<ParamValues>,
     expected_plan: &str,
 ) -> LogicalPlan {
     // replace params
@@ -2712,6 +2725,12 @@ fn prepare_stmt_replace_params_quick_test(
 struct MockContextProvider {
     options: ConfigOptions,
     udafs: HashMap<String, Arc<AggregateUDF>>,
+}
+
+impl MockContextProvider {
+    fn options_mut(&mut self) -> &mut ConfigOptions {
+        &mut self.options
+    }
 }
 
 impl ContextProvider for MockContextProvider {
@@ -2822,6 +2841,14 @@ impl ContextProvider for MockContextProvider {
 
     fn options(&self) -> &ConfigOptions {
         &self.options
+    }
+
+    fn create_cte_work_table(
+        &self,
+        _name: &str,
+        schema: SchemaRef,
+    ) -> Result<Arc<dyn TableSource>> {
+        Ok(Arc::new(EmptyTable::new(schema)))
     }
 }
 
@@ -3566,11 +3593,22 @@ fn test_select_unsupported_syntax_errors(#[case] sql: &str, #[case] error: &str)
 fn select_order_by_with_cast() {
     let sql =
         "SELECT first_name AS first_name FROM (SELECT first_name AS first_name FROM person) ORDER BY CAST(first_name as INT)";
-    let expected = "Sort: CAST(first_name AS first_name AS Int32) ASC NULLS LAST\
-                        \n  Projection: first_name AS first_name\
-                        \n    Projection: person.first_name AS first_name\
+    let expected = "Sort: CAST(person.first_name AS Int32) ASC NULLS LAST\
+                        \n  Projection: person.first_name\
+                        \n    Projection: person.first_name\
                         \n      TableScan: person";
     quick_test(sql, expected);
+}
+
+#[test]
+fn test_avoid_add_alias() {
+    // avoiding adding an alias if the column name is the same.
+    // plan1 = plan2
+    let sql = "select person.id as id from person order by person.id";
+    let plan1 = logical_plan(sql).unwrap();
+    let sql = "select id from person order by id";
+    let plan2 = logical_plan(sql).unwrap();
+    assert_eq!(format!("{plan1:?}"), format!("{plan2:?}"));
 }
 
 #[test]
@@ -3750,7 +3788,7 @@ fn test_prepare_statement_to_plan_no_param() {
 
     ///////////////////
     // replace params with values
-    let param_values = vec![];
+    let param_values: Vec<ScalarValue> = vec![];
     let expected_plan = "Projection: person.id, person.age\
         \n  Filter: person.age = Int64(10)\
         \n    TableScan: person";
@@ -3764,7 +3802,7 @@ fn test_prepare_statement_to_plan_one_param_no_value_panic() {
     let sql = "PREPARE my_plan(INT) AS SELECT id, age  FROM person WHERE age = 10";
     let plan = logical_plan(sql).unwrap();
     // declare 1 param but provide 0
-    let param_values = vec![];
+    let param_values: Vec<ScalarValue> = vec![];
     assert_eq!(
         plan.with_param_values(param_values)
             .unwrap_err()
@@ -3877,7 +3915,7 @@ Projection: person.id, orders.order_id
     assert_eq!(actual_types, expected_types);
 
     // replace params with values
-    let param_values = vec![ScalarValue::Int32(Some(10))];
+    let param_values = vec![ScalarValue::Int32(Some(10))].into();
     let expected_plan = r#"
 Projection: person.id, orders.order_id
   Inner Join:  Filter: person.id = orders.customer_id AND person.age = Int32(10)
@@ -3909,7 +3947,7 @@ Projection: person.id, person.age
     assert_eq!(actual_types, expected_types);
 
     // replace params with values
-    let param_values = vec![ScalarValue::Int32(Some(10))];
+    let param_values = vec![ScalarValue::Int32(Some(10))].into();
     let expected_plan = r#"
 Projection: person.id, person.age
   Filter: person.age = Int32(10)
@@ -3943,7 +3981,8 @@ Projection: person.id, person.age
     assert_eq!(actual_types, expected_types);
 
     // replace params with values
-    let param_values = vec![ScalarValue::Int32(Some(10)), ScalarValue::Int32(Some(30))];
+    let param_values =
+        vec![ScalarValue::Int32(Some(10)), ScalarValue::Int32(Some(30))].into();
     let expected_plan = r#"
 Projection: person.id, person.age
   Filter: person.age BETWEEN Int32(10) AND Int32(30)
@@ -3979,7 +4018,7 @@ Projection: person.id, person.age
     assert_eq!(actual_types, expected_types);
 
     // replace params with values
-    let param_values = vec![ScalarValue::UInt32(Some(10))];
+    let param_values = vec![ScalarValue::UInt32(Some(10))].into();
     let expected_plan = r#"
 Projection: person.id, person.age
   Filter: person.age = (<subquery>)
@@ -4019,7 +4058,8 @@ Dml: op=[Update] table=[person]
     assert_eq!(actual_types, expected_types);
 
     // replace params with values
-    let param_values = vec![ScalarValue::Int32(Some(42)), ScalarValue::UInt32(Some(1))];
+    let param_values =
+        vec![ScalarValue::Int32(Some(42)), ScalarValue::UInt32(Some(1))].into();
     let expected_plan = r#"
 Dml: op=[Update] table=[person]
   Projection: person.id AS id, person.first_name AS first_name, person.last_name AS last_name, Int32(42) AS age, person.state AS state, person.salary AS salary, person.birth_date AS birth_date, person.😀 AS 😀
@@ -4056,9 +4096,10 @@ fn test_prepare_statement_insert_infer() {
     // replace params with values
     let param_values = vec![
         ScalarValue::UInt32(Some(1)),
-        ScalarValue::Utf8(Some("Alan".to_string())),
-        ScalarValue::Utf8(Some("Turing".to_string())),
-    ];
+        ScalarValue::from("Alan"),
+        ScalarValue::from("Turing"),
+    ]
+    .into();
     let expected_plan = "Dml: op=[Insert Into] table=[person]\
                         \n  Projection: column1 AS id, column2 AS first_name, column3 AS last_name, \
                                     CAST(NULL AS Int32) AS age, CAST(NULL AS Utf8) AS state, CAST(NULL AS Float64) AS salary, \
@@ -4137,11 +4178,11 @@ fn test_prepare_statement_to_plan_multi_params() {
     // replace params with values
     let param_values = vec![
         ScalarValue::Int32(Some(10)),
-        ScalarValue::Utf8(Some("abc".to_string())),
+        ScalarValue::from("abc"),
         ScalarValue::Float64(Some(100.0)),
         ScalarValue::Int32(Some(20)),
         ScalarValue::Float64(Some(200.0)),
-        ScalarValue::Utf8(Some("xyz".to_string())),
+        ScalarValue::from("xyz"),
     ];
     let expected_plan =
             "Projection: person.id, person.age, Utf8(\"xyz\")\
@@ -4207,8 +4248,8 @@ fn test_prepare_statement_to_plan_value_list() {
     ///////////////////
     // replace params with values
     let param_values = vec![
-        ScalarValue::Utf8(Some("a".to_string())),
-        ScalarValue::Utf8(Some("b".to_string())),
+        ScalarValue::from("a".to_string()),
+        ScalarValue::from("b".to_string()),
     ];
     let expected_plan = "Projection: t.num, t.letter\
         \n  SubqueryAlias: t\

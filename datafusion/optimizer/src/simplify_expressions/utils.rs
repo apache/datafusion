@@ -23,7 +23,7 @@ use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::{
     expr::{Between, BinaryExpr, InList},
     expr_fn::{and, bitwise_and, bitwise_or, concat_ws, or},
-    lit, BuiltinScalarFunction, Expr, Like, Operator,
+    lit, BuiltinScalarFunction, Expr, Like, Operator, ScalarFunctionDefinition,
 };
 
 pub static POWS_OF_TEN: [i128; 38] = [
@@ -365,7 +365,7 @@ pub fn simpl_log(current_args: Vec<Expr>, info: &dyn SimplifyInfo) -> Result<Exp
             )?))
         }
         Expr::ScalarFunction(ScalarFunction {
-            fun: BuiltinScalarFunction::Power,
+            func_def: ScalarFunctionDefinition::BuiltIn(BuiltinScalarFunction::Power),
             args,
         }) if base == &args[0] => Ok(args[1].clone()),
         _ => {
@@ -405,7 +405,7 @@ pub fn simpl_power(current_args: Vec<Expr>, info: &dyn SimplifyInfo) -> Result<E
             Ok(base.clone())
         }
         Expr::ScalarFunction(ScalarFunction {
-            fun: BuiltinScalarFunction::Log,
+            func_def: ScalarFunctionDefinition::BuiltIn(BuiltinScalarFunction::Log),
             args,
         }) if base == &args[0] => Ok(args[1].clone()),
         _ => Ok(Expr::ScalarFunction(ScalarFunction::new(

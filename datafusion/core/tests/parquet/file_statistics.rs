@@ -133,7 +133,7 @@ async fn list_files_with_session_level_cache() {
     assert_eq!(get_list_file_cache_size(&state1), 1);
     let fg = &parquet1.base_config().file_groups;
     assert_eq!(fg.len(), 1);
-    assert_eq!(fg.get(0).unwrap().len(), 1);
+    assert_eq!(fg.first().unwrap().len(), 1);
 
     //Session 2 first time list files
     //check session 1 cache result not show in session 2
@@ -144,7 +144,7 @@ async fn list_files_with_session_level_cache() {
     assert_eq!(get_list_file_cache_size(&state2), 1);
     let fg2 = &parquet2.base_config().file_groups;
     assert_eq!(fg2.len(), 1);
-    assert_eq!(fg2.get(0).unwrap().len(), 1);
+    assert_eq!(fg2.first().unwrap().len(), 1);
 
     //Session 1 second time list files
     //check session 1 cache result not show in session 2
@@ -155,7 +155,7 @@ async fn list_files_with_session_level_cache() {
     assert_eq!(get_list_file_cache_size(&state1), 1);
     let fg = &parquet3.base_config().file_groups;
     assert_eq!(fg.len(), 1);
-    assert_eq!(fg.get(0).unwrap().len(), 1);
+    assert_eq!(fg.first().unwrap().len(), 1);
     // List same file no increase
     assert_eq!(get_list_file_cache_size(&state1), 1);
 }

@@ -34,18 +34,20 @@ use std::sync::Arc;
 use datafusion::dataframe::DataFrame;
 use datafusion::datasource::MemTable;
 use datafusion::error::Result;
-use datafusion::execution::context::SessionContext;
+use datafusion::execution::context::{SessionContext, SessionState};
 use datafusion::prelude::JoinType;
 use datafusion::prelude::{CsvReadOptions, ParquetReadOptions};
 use datafusion::test_util::parquet_test_data;
 use datafusion::{assert_batches_eq, assert_batches_sorted_eq};
-use datafusion_common::{DataFusionError, ScalarValue, UnnestOptions};
+use datafusion_common::{assert_contains, DataFusionError, ScalarValue, UnnestOptions};
 use datafusion_execution::config::SessionConfig;
+use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_expr::expr::{GroupingSet, Sort};
 use datafusion_expr::{
-    array_agg, avg, col, count, exists, expr, in_subquery, lit, max, out_ref_col,
-    scalar_subquery, sum, wildcard, AggregateFunction, Expr, ExprSchemable, WindowFrame,
-    WindowFrameBound, WindowFrameUnits, WindowFunction,
+    array_agg, avg, cast, col, count, exists, expr, in_subquery, lit, max, out_ref_col,
+    placeholder, scalar_subquery, sum, when, wildcard, AggregateFunction, Expr,
+    ExprSchemable, WindowFrame, WindowFrameBound, WindowFrameUnits,
+    WindowFunctionDefinition,
 };
 use datafusion_physical_expr::var_provider::{VarProvider, VarType};
 
@@ -170,15 +172,15 @@ async fn test_count_wildcard_on_window() -> Result<()> {
         .table("t1")
         .await?
         .select(vec![Expr::WindowFunction(expr::WindowFunction::new(
-            WindowFunction::AggregateFunction(AggregateFunction::Count),
+            WindowFunctionDefinition::AggregateFunction(AggregateFunction::Count),
             vec![wildcard()],
             vec![],
             vec![Expr::Sort(Sort::new(Box::new(col("a")), false, true))],
-            WindowFrame {
-                units: WindowFrameUnits::Range,
-                start_bound: WindowFrameBound::Preceding(ScalarValue::UInt32(Some(6))),
-                end_bound: WindowFrameBound::Following(ScalarValue::UInt32(Some(2))),
-            },
+            WindowFrame::new_bounds(
+                WindowFrameUnits::Range,
+                WindowFrameBound::Preceding(ScalarValue::UInt32(Some(6))),
+                WindowFrameBound::Following(ScalarValue::UInt32(Some(2))),
+            ),
         ))])?
         .explain(false, false)?
         .collect()
@@ -1323,6 +1325,167 @@ async fn unnest_array_agg() -> Result<()> {
     Ok(())
 }
 
+#[tokio::test]
+async fn unnest_with_redundant_columns() -> Result<()> {
+    let mut shape_id_builder = UInt32Builder::new();
+    let mut tag_id_builder = UInt32Builder::new();
+
+    for shape_id in 1..=3 {
+        for tag_id in 1..=3 {
+            shape_id_builder.append_value(shape_id as u32);
+            tag_id_builder.append_value((shape_id * 10 + tag_id) as u32);
+        }
+    }
+
+    let batch = RecordBatch::try_from_iter(vec![
+        ("shape_id", Arc::new(shape_id_builder.finish()) as ArrayRef),
+        ("tag_id", Arc::new(tag_id_builder.finish()) as ArrayRef),
+    ])?;
+
+    let ctx = SessionContext::new();
+    ctx.register_batch("shapes", batch)?;
+    let df = ctx.table("shapes").await?;
+
+    let results = df.clone().collect().await?;
+    let expected = vec![
+        "+----------+--------+",
+        "| shape_id | tag_id |",
+        "+----------+--------+",
+        "| 1        | 11     |",
+        "| 1        | 12     |",
+        "| 1        | 13     |",
+        "| 2        | 21     |",
+        "| 2        | 22     |",
+        "| 2        | 23     |",
+        "| 3        | 31     |",
+        "| 3        | 32     |",
+        "| 3        | 33     |",
+        "+----------+--------+",
+    ];
+    assert_batches_sorted_eq!(expected, &results);
+
+    // Doing an `array_agg` by `shape_id` produces:
+    let df = df
+        .clone()
+        .aggregate(
+            vec![col("shape_id")],
+            vec![array_agg(col("shape_id")).alias("shape_id2")],
+        )?
+        .unnest_column("shape_id2")?
+        .select(vec![col("shape_id")])?;
+
+    let optimized_plan = df.clone().into_optimized_plan()?;
+    let expected = vec![
+        "Projection: shapes.shape_id [shape_id:UInt32]",
+        "  Unnest: shape_id2 [shape_id:UInt32, shape_id2:UInt32;N]",
+        "    Aggregate: groupBy=[[shapes.shape_id]], aggr=[[ARRAY_AGG(shapes.shape_id) AS shape_id2]] [shape_id:UInt32, shape_id2:List(Field { name: \"item\", data_type: UInt32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} });N]",
+        "      TableScan: shapes projection=[shape_id] [shape_id:UInt32]",
+    ];
+
+    let formatted = optimized_plan.display_indent_schema().to_string();
+    let actual: Vec<&str> = formatted.trim().lines().collect();
+    assert_eq!(
+        expected, actual,
+        "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+    );
+
+    let results = df.collect().await?;
+    let expected = [
+        "+----------+",
+        "| shape_id |",
+        "+----------+",
+        "| 1        |",
+        "| 1        |",
+        "| 1        |",
+        "| 2        |",
+        "| 2        |",
+        "| 2        |",
+        "| 3        |",
+        "| 3        |",
+        "| 3        |",
+        "+----------+",
+    ];
+    assert_batches_sorted_eq!(expected, &results);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn unnest_analyze_metrics() -> Result<()> {
+    const NUM_ROWS: usize = 5;
+
+    let df = table_with_nested_types(NUM_ROWS).await?;
+    let results = df
+        .unnest_column("tags")?
+        .explain(false, true)?
+        .collect()
+        .await?;
+    let formatted = arrow::util::pretty::pretty_format_batches(&results)
+        .unwrap()
+        .to_string();
+    assert_contains!(&formatted, "elapsed_compute=");
+    assert_contains!(&formatted, "input_batches=1");
+    assert_contains!(&formatted, "input_rows=5");
+    assert_contains!(&formatted, "output_rows=10");
+    assert_contains!(&formatted, "output_batches=1");
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn consecutive_projection_same_schema() -> Result<()> {
+    let config = SessionConfig::new();
+    let runtime = Arc::new(RuntimeEnv::default());
+    let state = SessionState::new_with_config_rt(config, runtime);
+    let ctx = SessionContext::new_with_state(state);
+
+    let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]));
+
+    let batch =
+        RecordBatch::try_new(schema, vec![Arc::new(Int32Array::from(vec![0, 1]))])
+            .unwrap();
+
+    let df = ctx.read_batch(batch).unwrap();
+    df.clone().show().await.unwrap();
+
+    // Add `t` column full of nulls
+    let df = df
+        .with_column("t", cast(Expr::Literal(ScalarValue::Null), DataType::Int32))
+        .unwrap();
+    df.clone().show().await.unwrap();
+
+    let df = df
+        // (case when id = 1 then 10 else t) as t
+        .with_column(
+            "t",
+            when(col("id").eq(lit(1)), lit(10))
+                .otherwise(col("t"))
+                .unwrap(),
+        )
+        .unwrap()
+        // (case when id = 1 then 10 else t) as t2
+        .with_column(
+            "t2",
+            when(col("id").eq(lit(1)), lit(10))
+                .otherwise(col("t"))
+                .unwrap(),
+        )
+        .unwrap();
+
+    let results = df.collect().await?;
+    let expected = [
+        "+----+----+----+",
+        "| id | t  | t2 |",
+        "+----+----+----+",
+        "| 0  |    |    |",
+        "| 1  | 10 | 10 |",
+        "+----+----+----+",
+    ];
+    assert_batches_sorted_eq!(expected, &results);
+
+    Ok(())
+}
+
 async fn create_test_table(name: &str) -> Result<DataFrame> {
     let schema = Arc::new(Schema::new(vec![
         Field::new("a", DataType::Utf8, false),
@@ -1594,6 +1757,75 @@ async fn test_array_agg() -> Result<()> {
         "+-------------------------------------+",
     ];
     assert_batches_eq!(expected, &results);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_dataframe_placeholder_missing_param_values() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    let df = ctx
+        .read_empty()
+        .unwrap()
+        .with_column("a", lit(1))
+        .unwrap()
+        .filter(col("a").eq(placeholder("$0")))
+        .unwrap();
+
+    let logical_plan = df.logical_plan();
+    let formatted = logical_plan.display_indent_schema().to_string();
+    let actual: Vec<&str> = formatted.trim().lines().collect();
+    let expected = vec![
+        "Filter: a = $0 [a:Int32]",
+        "  Projection: Int32(1) AS a [a:Int32]",
+        "    EmptyRelation []",
+    ];
+    assert_eq!(
+        expected, actual,
+        "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+    );
+
+    // The placeholder is not replaced with a value,
+    // so the filter data type is not know, i.e. a = $0.
+    // Therefore, the optimization fails.
+    let optimized_plan = ctx.state().optimize(logical_plan);
+    assert!(optimized_plan.is_err());
+    assert!(optimized_plan
+        .unwrap_err()
+        .to_string()
+        .contains("Placeholder type could not be resolved. Make sure that the placeholder is bound to a concrete type, e.g. by providing parameter values."));
+
+    // Prodiving a parameter value should resolve the error
+    let df = ctx
+        .read_empty()
+        .unwrap()
+        .with_column("a", lit(1))
+        .unwrap()
+        .filter(col("a").eq(placeholder("$0")))
+        .unwrap()
+        .with_param_values(vec![("0", ScalarValue::from(3i32))]) // <-- provide parameter value
+        .unwrap();
+
+    let logical_plan = df.logical_plan();
+    let formatted = logical_plan.display_indent_schema().to_string();
+    let actual: Vec<&str> = formatted.trim().lines().collect();
+    let expected = vec![
+        "Filter: a = Int32(3) [a:Int32]",
+        "  Projection: Int32(1) AS a [a:Int32]",
+        "    EmptyRelation []",
+    ];
+    assert_eq!(
+        expected, actual,
+        "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+    );
+
+    let optimized_plan = ctx.state().optimize(logical_plan);
+    assert!(optimized_plan.is_ok());
+
+    let actual = optimized_plan.unwrap().display_indent_schema().to_string();
+    let expected = "EmptyRelation [a:Int32]";
+    assert_eq!(expected, actual);
 
     Ok(())
 }

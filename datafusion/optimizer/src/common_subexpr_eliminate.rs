@@ -20,6 +20,7 @@
 use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
 
+use crate::utils::is_volatile_expression;
 use crate::{utils, OptimizerConfig, OptimizerRule};
 
 use arrow::datatypes::DataType;
@@ -113,6 +114,8 @@ impl CommonSubexprEliminate {
         let Projection { expr, input, .. } = projection;
         let input_schema = Arc::clone(input.schema());
         let mut expr_set = ExprSet::new();
+
+        // Visit expr list and build expr identifier to occuring count map (`expr_set`).
         let arrays = to_arrays(expr, input_schema, &mut expr_set, ExprMask::Normal)?;
 
         let (mut new_expr, new_input) =
@@ -163,25 +166,74 @@ impl CommonSubexprEliminate {
         window: &Window,
         config: &dyn OptimizerConfig,
     ) -> Result<LogicalPlan> {
-        let Window {
-            input,
-            window_expr,
-            schema,
-        } = window;
+        let mut window_exprs = vec![];
+        let mut arrays_per_window = vec![];
         let mut expr_set = ExprSet::new();
 
-        let input_schema = Arc::clone(input.schema());
-        let arrays =
-            to_arrays(window_expr, input_schema, &mut expr_set, ExprMask::Normal)?;
+        // Get all window expressions inside the consecutive window operators.
+        // Consecutive window expressions may refer to same complex expression.
+        // If same complex expression is referred more than once by subsequent `WindowAggr`s,
+        // we can cache complex expression by evaluating it with a projection before the
+        // first WindowAggr.
+        // This enables us to cache complex expression "c3+c4" for following plan:
+        // WindowAggr: windowExpr=[[SUM(c9) ORDER BY [c3 + c4] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+        // --WindowAggr: windowExpr=[[SUM(c9) ORDER BY [c3 + c4] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+        // where, it is referred once by each `WindowAggr` (total of 2) in the plan.
+        let mut plan = LogicalPlan::Window(window.clone());
+        while let LogicalPlan::Window(window) = plan {
+            let Window {
+                input, window_expr, ..
+            } = window;
+            plan = input.as_ref().clone();
 
-        let (mut new_expr, new_input) =
-            self.rewrite_expr(&[window_expr], &[&arrays], input, &expr_set, config)?;
+            let input_schema = Arc::clone(input.schema());
+            let arrays =
+                to_arrays(&window_expr, input_schema, &mut expr_set, ExprMask::Normal)?;
 
-        Ok(LogicalPlan::Window(Window {
-            input: Arc::new(new_input),
-            window_expr: pop_expr(&mut new_expr)?,
-            schema: schema.clone(),
-        }))
+            window_exprs.push(window_expr);
+            arrays_per_window.push(arrays);
+        }
+
+        let mut window_exprs = window_exprs
+            .iter()
+            .map(|expr| expr.as_slice())
+            .collect::<Vec<_>>();
+        let arrays_per_window = arrays_per_window
+            .iter()
+            .map(|arrays| arrays.as_slice())
+            .collect::<Vec<_>>();
+
+        assert_eq!(window_exprs.len(), arrays_per_window.len());
+        let (mut new_expr, new_input) = self.rewrite_expr(
+            &window_exprs,
+            &arrays_per_window,
+            &plan,
+            &expr_set,
+            config,
+        )?;
+        assert_eq!(window_exprs.len(), new_expr.len());
+
+        // Construct consecutive window operator, with their corresponding new window expressions.
+        plan = new_input;
+        while let Some(new_window_expr) = new_expr.pop() {
+            // Since `new_expr` and `window_exprs` length are same. We can safely `.unwrap` here.
+            let orig_window_expr = window_exprs.pop().unwrap();
+            assert_eq!(new_window_expr.len(), orig_window_expr.len());
+
+            // Rename new re-written window expressions with original name (by giving alias)
+            // Otherwise we may receive schema error, in subsequent operators.
+            let new_window_expr = new_window_expr
+                .into_iter()
+                .zip(orig_window_expr.iter())
+                .map(|(new_window_expr, window_expr)| {
+                    let original_name = window_expr.name_for_alias()?;
+                    new_window_expr.alias_if_changed(original_name)
+                })
+                .collect::<Result<Vec<_>>>()?;
+            plan = LogicalPlan::Window(Window::try_new(new_window_expr, Arc::new(plan))?);
+        }
+
+        Ok(plan)
     }
 
     fn try_optimize_aggregate(
@@ -362,6 +414,7 @@ impl OptimizerRule for CommonSubexprEliminate {
             | LogicalPlan::Dml(_)
             | LogicalPlan::Copy(_)
             | LogicalPlan::Unnest(_)
+            | LogicalPlan::RecursiveQuery(_)
             | LogicalPlan::Prepare(_) => {
                 // apply the optimization to all inputs of the plan
                 utils::optimize_children(self, plan, config)?
@@ -509,10 +562,9 @@ enum ExprMask {
     /// - [`Sort`](Expr::Sort)
     /// - [`Wildcard`](Expr::Wildcard)
     /// - [`AggregateFunction`](Expr::AggregateFunction)
-    /// - [`AggregateUDF`](Expr::AggregateUDF)
     Normal,
 
-    /// Like [`Normal`](Self::Normal), but includes [`AggregateFunction`](Expr::AggregateFunction) and [`AggregateUDF`](Expr::AggregateUDF).
+    /// Like [`Normal`](Self::Normal), but includes [`AggregateFunction`](Expr::AggregateFunction).
     NormalAndAggregates,
 }
 
@@ -528,10 +580,7 @@ impl ExprMask {
                 | Expr::Wildcard { .. }
         );
 
-        let is_aggr = matches!(
-            expr,
-            Expr::AggregateFunction(..) | Expr::AggregateUDF { .. }
-        );
+        let is_aggr = matches!(expr, Expr::AggregateFunction(..));
 
         match self {
             Self::Normal => is_normal_minus_aggregates || is_aggr,
@@ -614,7 +663,12 @@ impl ExprIdentifierVisitor<'_> {
 impl TreeNodeVisitor for ExprIdentifierVisitor<'_> {
     type N = Expr;
 
-    fn pre_visit(&mut self, _expr: &Expr) -> Result<VisitRecursion> {
+    fn pre_visit(&mut self, expr: &Expr) -> Result<VisitRecursion> {
+        // related to https://github.com/apache/arrow-datafusion/issues/8814
+        // If the expr contain volatile expression or is a short-circuit expression, skip it.
+        if expr.short_circuits() || is_volatile_expression(expr)? {
+            return Ok(VisitRecursion::Skip);
+        }
         self.visit_stack
             .push(VisitRecord::EnterMark(self.node_count));
         self.node_count += 1;
@@ -691,7 +745,13 @@ struct CommonSubexprRewriter<'a> {
 impl TreeNodeRewriter for CommonSubexprRewriter<'_> {
     type N = Expr;
 
-    fn pre_visit(&mut self, _: &Expr) -> Result<RewriteRecursion> {
+    fn pre_visit(&mut self, expr: &Expr) -> Result<RewriteRecursion> {
+        // The `CommonSubexprRewriter` relies on `ExprIdentifierVisitor` to generate
+        // the `id_array`, which records the expr's identifier used to rewrite expr. So if we
+        // skip an expr in `ExprIdentifierVisitor`, we should skip it here, too.
+        if expr.short_circuits() || is_volatile_expression(expr)? {
+            return Ok(RewriteRecursion::Stop);
+        }
         if self.curr_index >= self.id_array.len()
             || self.max_series_number > self.id_array[self.curr_index].0
         {
@@ -780,8 +840,8 @@ mod test {
         avg, col, lit, logical_plan::builder::LogicalPlanBuilder, sum,
     };
     use datafusion_expr::{
-        grouping_set, AccumulatorFactoryFunction, AggregateUDF, ReturnTypeFunction,
-        Signature, StateTypeFunction, Volatility,
+        grouping_set, AccumulatorFactoryFunction, AggregateUDF, Signature,
+        SimpleAggregateUDF, Volatility,
     };
 
     use crate::optimizer::OptimizerContext;
@@ -901,22 +961,20 @@ mod test {
     fn aggregate() -> Result<()> {
         let table_scan = test_table_scan()?;
 
-        let return_type: ReturnTypeFunction = Arc::new(|inputs| {
-            assert_eq!(inputs, &[DataType::UInt32]);
-            Ok(Arc::new(DataType::UInt32))
-        });
+        let return_type = DataType::UInt32;
         let accumulator: AccumulatorFactoryFunction = Arc::new(|_| unimplemented!());
-        let state_type: StateTypeFunction = Arc::new(|_| unimplemented!());
+        let state_type = vec![DataType::UInt32];
         let udf_agg = |inner: Expr| {
-            Expr::AggregateUDF(datafusion_expr::expr::AggregateUDF::new(
-                Arc::new(AggregateUDF::new(
+            Expr::AggregateFunction(datafusion_expr::expr::AggregateFunction::new_udf(
+                Arc::new(AggregateUDF::from(SimpleAggregateUDF::new_with_signature(
                     "my_agg",
-                    &Signature::exact(vec![DataType::UInt32], Volatility::Stable),
-                    &return_type,
-                    &accumulator,
-                    &state_type,
-                )),
+                    Signature::exact(vec![DataType::UInt32], Volatility::Stable),
+                    return_type.clone(),
+                    accumulator.clone(),
+                    state_type.clone(),
+                ))),
                 vec![inner],
+                false,
                 None,
                 None,
             ))
@@ -1246,12 +1304,11 @@ mod test {
         let table_scan = test_table_scan()?;
 
         let plan = LogicalPlanBuilder::from(table_scan)
-            .filter(lit(1).gt(col("a")).and(lit(1).gt(col("a"))))?
+            .filter((lit(1) + col("a") - lit(10)).gt(lit(1) + col("a")))?
             .build()?;
 
         let expected = "Projection: test.a, test.b, test.c\
-        \n  Filter: Int32(1) > test.atest.aInt32(1) AS Int32(1) > test.a AND Int32(1) > test.atest.aInt32(1) AS Int32(1) > test.a\
-        \n    Projection: Int32(1) > test.a AS Int32(1) > test.atest.aInt32(1), test.a, test.b, test.c\
+        \n  Filter: Int32(1) + test.atest.aInt32(1) AS Int32(1) + test.a - Int32(10) > Int32(1) + test.atest.aInt32(1) AS Int32(1) + test.a\n    Projection: Int32(1) + test.a AS Int32(1) + test.atest.aInt32(1), test.a, test.b, test.c\
         \n      TableScan: test";
 
         assert_optimized_plan_eq(expected, &plan);

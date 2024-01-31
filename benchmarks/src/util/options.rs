@@ -26,9 +26,9 @@ pub struct CommonOpt {
     #[structopt(short = "i", long = "iterations", default_value = "3")]
     pub iterations: usize,
 
-    /// Number of partitions to process in parallel
-    #[structopt(short = "n", long = "partitions", default_value = "2")]
-    pub partitions: usize,
+    /// Number of partitions to process in parallel. Defaults to number of available cores.
+    #[structopt(short = "n", long = "partitions")]
+    pub partitions: Option<usize>,
 
     /// Batch size when reading CSV or Parquet files
     #[structopt(short = "s", long = "batch-size", default_value = "8192")]
@@ -48,7 +48,7 @@ impl CommonOpt {
     /// Modify the existing config appropriately
     pub fn update_config(&self, config: SessionConfig) -> SessionConfig {
         config
-            .with_target_partitions(self.partitions)
+            .with_target_partitions(self.partitions.unwrap_or(num_cpus::get()))
             .with_batch_size(self.batch_size)
     }
 }

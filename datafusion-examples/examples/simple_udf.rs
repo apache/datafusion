@@ -24,28 +24,30 @@ use datafusion::{
     logical_expr::Volatility,
 };
 
+use datafusion::error::Result;
 use datafusion::prelude::*;
-use datafusion::{error::Result, physical_plan::functions::make_scalar_function};
 use datafusion_common::cast::as_float64_array;
+use datafusion_expr::ColumnarValue;
+use datafusion_physical_expr::functions::columnar_values_to_array;
 use std::sync::Arc;
 
-// create local execution context with an in-memory table
+/// create local execution context with an in-memory table:
+///
+/// ```text
+/// +-----+-----+
+/// | a   | b   |
+/// +-----+-----+
+/// | 2.1 | 1.0 |
+/// | 3.1 | 2.0 |
+/// | 4.1 | 3.0 |
+/// | 5.1 | 4.0 |
+/// +-----+-----+
+/// ```
 fn create_context() -> Result<SessionContext> {
-    use datafusion::arrow::datatypes::{Field, Schema};
-    // define a schema.
-    let schema = Arc::new(Schema::new(vec![
-        Field::new("a", DataType::Float32, false),
-        Field::new("b", DataType::Float64, false),
-    ]));
-
     // define data.
-    let batch = RecordBatch::try_new(
-        schema,
-        vec![
-            Arc::new(Float32Array::from(vec![2.1, 3.1, 4.1, 5.1])),
-            Arc::new(Float64Array::from(vec![1.0, 2.0, 3.0, 4.0])),
-        ],
-    )?;
+    let a: ArrayRef = Arc::new(Float32Array::from(vec![2.1, 3.1, 4.1, 5.1]));
+    let b: ArrayRef = Arc::new(Float64Array::from(vec![1.0, 2.0, 3.0, 4.0]));
+    let batch = RecordBatch::try_from_iter(vec![("a", a), ("b", b)])?;
 
     // declare a new context. In spark API, this corresponds to a new spark SQLsession
     let ctx = SessionContext::new();
@@ -61,13 +63,15 @@ async fn main() -> Result<()> {
     let ctx = create_context()?;
 
     // First, declare the actual implementation of the calculation
-    let pow = |args: &[ArrayRef]| {
+    let pow = Arc::new(|args: &[ColumnarValue]| {
         // in DataFusion, all `args` and output are dynamically-typed arrays, which means that we need to:
         // 1. cast the values to the type we want
         // 2. perform the computation for every element in the array (using a loop or SIMD) and construct the result
 
         // this is guaranteed by DataFusion based on the function's signature.
         assert_eq!(args.len(), 2);
+
+        let args = columnar_values_to_array(args)?;
 
         // 1. cast both arguments to f64. These casts MUST be aligned with the signature or this function panics!
         let base = as_float64_array(&args[0]).expect("cast failed");
@@ -92,11 +96,8 @@ async fn main() -> Result<()> {
 
         // `Ok` because no error occurred during the calculation (we should add one if exponent was [0, 1[ and the base < 0 because that panics!)
         // `Arc` because arrays are immutable, thread-safe, trait objects.
-        Ok(Arc::new(array) as ArrayRef)
-    };
-    // the function above expects an `ArrayRef`, but DataFusion may pass a scalar to a UDF.
-    // thus, we use `make_scalar_function` to decorare the closure so that it can handle both Arrays and Scalar values.
-    let pow = make_scalar_function(pow);
+        Ok(ColumnarValue::from(Arc::new(array) as ArrayRef))
+    });
 
     // Next:
     // * give it a name so that it shows nicely when the plan is printed
@@ -139,6 +140,12 @@ async fn main() -> Result<()> {
 
     // print the results
     df.show().await?;
+
+    // Given that `pow` is registered in the context, we can also use it in SQL:
+    let sql_df = ctx.sql("SELECT pow(a, b) FROM t").await?;
+
+    // print the results
+    sql_df.show().await?;
 
     Ok(())
 }

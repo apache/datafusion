@@ -95,6 +95,7 @@ These methods execute the logical plan represented by the DataFrame and either c
 | write_csv                  | Execute this DataFrame and write the results to disk in CSV format.                                                         |
 | write_json                 | Execute this DataFrame and write the results to disk in JSON format.                                                        |
 | write_parquet              | Execute this DataFrame and write the results to disk in Parquet format.                                                     |
+| write_table                | Execute this DataFrame and write the results via the insert_into method of the registered TableProvider                     |
 
 ## Other DataFrame Methods
 
