@@ -30,7 +30,7 @@ use datafusion_physical_expr::datetime_expressions::make_date;
 
 fn years(rng: &mut ThreadRng) -> Int32Array {
     let mut years = vec![];
-    for _ in 0..10000 {
+    for _ in 0..1000 {
         years.push(rng.gen_range(1900..2050));
     }
 
@@ -39,7 +39,7 @@ fn years(rng: &mut ThreadRng) -> Int32Array {
 
 fn months(rng: &mut ThreadRng) -> Int32Array {
     let mut months = vec![];
-    for _ in 0..10000 {
+    for _ in 0..1000 {
         months.push(rng.gen_range(1..13));
     }
 
@@ -48,14 +48,14 @@ fn months(rng: &mut ThreadRng) -> Int32Array {
 
 fn days(rng: &mut ThreadRng) -> Int32Array {
     let mut days = vec![];
-    for _ in 0..10000 {
+    for _ in 0..1000 {
         days.push(rng.gen_range(1..29));
     }
 
     Int32Array::from(days)
 }
 fn criterion_benchmark(c: &mut Criterion) {
-    c.bench_function("make_date_col_col_col_10000", |b| {
+    c.bench_function("make_date_col_col_col_1000", |b| {
         let mut rng = rand::thread_rng();
         let years = ColumnarValue::Array(Arc::new(years(&mut rng)) as ArrayRef);
         let months = ColumnarValue::Array(Arc::new(months(&mut rng)) as ArrayRef);
@@ -69,7 +69,7 @@ fn criterion_benchmark(c: &mut Criterion) {
         })
     });
 
-    c.bench_function("make_date_scalar_col_col_10000", |b| {
+    c.bench_function("make_date_scalar_col_col_1000", |b| {
         let mut rng = rand::thread_rng();
         let year = ColumnarValue::Scalar(ScalarValue::Int32(Some(2025)));
         let months = ColumnarValue::Array(Arc::new(months(&mut rng)) as ArrayRef);
@@ -83,7 +83,7 @@ fn criterion_benchmark(c: &mut Criterion) {
         })
     });
 
-    c.bench_function("make_date_scalar_scalar_col_10000", |b| {
+    c.bench_function("make_date_scalar_scalar_col_1000", |b| {
         let mut rng = rand::thread_rng();
         let year = ColumnarValue::Scalar(ScalarValue::Int32(Some(2025)));
         let month = ColumnarValue::Scalar(ScalarValue::Int32(Some(11)));
