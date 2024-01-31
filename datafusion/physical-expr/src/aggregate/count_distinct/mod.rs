@@ -33,6 +33,7 @@ use arrow_array::types::{
     TimestampMicrosecondType, TimestampMillisecondType, TimestampNanosecondType,
     TimestampSecondType, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
 };
+use arrow_array::Scalar;
 
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::Accumulator;
@@ -44,8 +45,6 @@ use crate::aggregate::count_distinct::strings::StringDistinctCountAccumulator;
 use crate::aggregate::utils::down_cast_any_ref;
 use crate::expressions::format_state_name;
 use crate::{AggregateExpr, PhysicalExpr};
-
-type DistinctScalarValues = ScalarValue;
 
 /// Expression for a COUNT(DISTINCT) aggregation.
 #[derive(Debug)]
@@ -180,7 +179,7 @@ impl PartialEq<dyn Any> for DistinctCount {
 /// [`StringDistinctCountAccumulator`]
 #[derive(Debug)]
 struct DistinctCountAccumulator {
-    values: HashSet<DistinctScalarValues, RandomState>,
+    values: HashSet<ScalarValue, RandomState>,
     state_data_type: DataType,
 }
 
@@ -189,7 +188,7 @@ impl DistinctCountAccumulator {
     // This method is faster than .full_size(), however it is not suitable for variable length values like strings or complex types
     fn fixed_size(&self) -> usize {
         std::mem::size_of_val(self)
-            + (std::mem::size_of::<DistinctScalarValues>() * self.values.capacity())
+            + (std::mem::size_of::<ScalarValue>() * self.values.capacity())
             + self
                 .values
                 .iter()
@@ -202,7 +201,7 @@ impl DistinctCountAccumulator {
     // calculates the size as accurate as possible, call to this method is expensive
     fn full_size(&self) -> usize {
         std::mem::size_of_val(self)
-            + (std::mem::size_of::<DistinctScalarValues>() * self.values.capacity())
+            + (std::mem::size_of::<ScalarValue>() * self.values.capacity())
             + self
                 .values
                 .iter()
