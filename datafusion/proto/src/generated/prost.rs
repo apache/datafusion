@@ -2734,8 +2734,6 @@ pub enum ScalarFunction {
     Cardinality = 98,
     ArrayElement = 99,
     ArraySlice = 100,
-    Encode = 101,
-    Decode = 102,
     Cot = 103,
     ArrayHas = 104,
     ArrayHasAny = 105,
@@ -2767,6 +2765,7 @@ pub enum ScalarFunction {
     EndsWith = 131,
     InStr = 132,
     MakeDate = 133,
+    ArrayReverse = 134,
 }
 impl ScalarFunction {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -2876,8 +2875,6 @@ impl ScalarFunction {
             ScalarFunction::Cardinality => "Cardinality",
             ScalarFunction::ArrayElement => "ArrayElement",
             ScalarFunction::ArraySlice => "ArraySlice",
-            ScalarFunction::Encode => "Encode",
-            ScalarFunction::Decode => "Decode",
             ScalarFunction::Cot => "Cot",
             ScalarFunction::ArrayHas => "ArrayHas",
             ScalarFunction::ArrayHasAny => "ArrayHasAny",
@@ -2909,6 +2906,7 @@ impl ScalarFunction {
             ScalarFunction::EndsWith => "EndsWith",
             ScalarFunction::InStr => "InStr",
             ScalarFunction::MakeDate => "MakeDate",
+            ScalarFunction::ArrayReverse => "ArrayReverse",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -3015,8 +3013,6 @@ impl ScalarFunction {
             "Cardinality" => Some(Self::Cardinality),
             "ArrayElement" => Some(Self::ArrayElement),
             "ArraySlice" => Some(Self::ArraySlice),
-            "Encode" => Some(Self::Encode),
-            "Decode" => Some(Self::Decode),
             "Cot" => Some(Self::Cot),
             "ArrayHas" => Some(Self::ArrayHas),
             "ArrayHasAny" => Some(Self::ArrayHasAny),
@@ -3048,6 +3044,7 @@ impl ScalarFunction {
             "EndsWith" => Some(Self::EndsWith),
             "InStr" => Some(Self::InStr),
             "MakeDate" => Some(Self::MakeDate),
+            "ArrayReverse" => Some(Self::ArrayReverse),
             _ => None,
         }
     }

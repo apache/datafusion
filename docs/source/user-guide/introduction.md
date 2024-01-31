@@ -109,6 +109,7 @@ Here are some active projects using DataFusion:
 - [LakeSoul](https://github.com/lakesoul-io/LakeSoul) Open source LakeHouse framework with native IO in Rust.
 - [Lance](https://github.com/lancedb/lance) Modern columnar data format for ML
 - [Parseable](https://github.com/parseablehq/parseable) Log storage and observability platform
+- [ParadeDB](https://github.com/paradedb/paradedb) PostgreSQL for Search
 - [qv](https://github.com/timvw/qv) Quickly view your data
 - [bdt](https://github.com/andygrove/bdt) Boring Data Tool
 - [Restate](https://github.com/restatedev) Easily build resilient applications using distributed durable async/await

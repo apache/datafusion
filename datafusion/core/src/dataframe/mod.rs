@@ -40,7 +40,6 @@ use crate::physical_plan::{
     collect, collect_partitioned, execute_stream, execute_stream_partitioned,
     ExecutionPlan, SendableRecordBatchStream,
 };
-use crate::prelude::SessionContext;
 
 use arrow::array::{Array, ArrayRef, Int64Array, StringArray};
 use arrow::compute::{cast, concat};
@@ -59,6 +58,7 @@ use datafusion_expr::{
     TableProviderFilterPushDown, UNNAMED_TABLE,
 };
 
+use crate::prelude::SessionContext;
 use async_trait::async_trait;
 
 /// Contains options that control how data is

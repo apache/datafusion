@@ -639,8 +639,6 @@ enum ScalarFunction {
   Cardinality = 98;
   ArrayElement = 99;
   ArraySlice = 100;
-  Encode = 101;
-  Decode = 102;
   Cot = 103;
   ArrayHas = 104;
   ArrayHasAny = 105;
@@ -672,6 +670,7 @@ enum ScalarFunction {
   EndsWith = 131;
   InStr = 132;
   MakeDate = 133;
+  ArrayReverse = 134;
 }
 
 message ScalarFunctionNode {

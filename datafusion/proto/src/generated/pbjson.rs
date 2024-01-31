@@ -22391,8 +22391,6 @@ impl serde::Serialize for ScalarFunction {
             Self::Cardinality => "Cardinality",
             Self::ArrayElement => "ArrayElement",
             Self::ArraySlice => "ArraySlice",
-            Self::Encode => "Encode",
-            Self::Decode => "Decode",
             Self::Cot => "Cot",
             Self::ArrayHas => "ArrayHas",
             Self::ArrayHasAny => "ArrayHasAny",
@@ -22424,6 +22422,7 @@ impl serde::Serialize for ScalarFunction {
             Self::EndsWith => "EndsWith",
             Self::InStr => "InStr",
             Self::MakeDate => "MakeDate",
+            Self::ArrayReverse => "ArrayReverse",
         };
         serializer.serialize_str(variant)
     }
@@ -22536,8 +22535,6 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
             "Cardinality",
             "ArrayElement",
             "ArraySlice",
-            "Encode",
-            "Decode",
             "Cot",
             "ArrayHas",
             "ArrayHasAny",
@@ -22569,6 +22566,7 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
             "EndsWith",
             "InStr",
             "MakeDate",
+            "ArrayReverse",
         ];
 
         struct GeneratedVisitor;
@@ -22710,8 +22708,6 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
                     "Cardinality" => Ok(ScalarFunction::Cardinality),
                     "ArrayElement" => Ok(ScalarFunction::ArrayElement),
                     "ArraySlice" => Ok(ScalarFunction::ArraySlice),
-                    "Encode" => Ok(ScalarFunction::Encode),
-                    "Decode" => Ok(ScalarFunction::Decode),
                     "Cot" => Ok(ScalarFunction::Cot),
                     "ArrayHas" => Ok(ScalarFunction::ArrayHas),
                     "ArrayHasAny" => Ok(ScalarFunction::ArrayHasAny),
@@ -22743,6 +22739,7 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
                     "EndsWith" => Ok(ScalarFunction::EndsWith),
                     "InStr" => Ok(ScalarFunction::InStr),
                     "MakeDate" => Ok(ScalarFunction::MakeDate),
+                    "ArrayReverse" => Ok(ScalarFunction::ArrayReverse),
                     _ => Err(serde::de::Error::unknown_variant(value, FIELDS)),
                 }
             }

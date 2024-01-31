@@ -44,7 +44,6 @@ use datafusion_common::{
     Constraints, DFField, DFSchema, DFSchemaRef, DataFusionError, OwnedTableReference,
     Result, ScalarValue,
 };
-use datafusion_expr::expr::{Alias, Placeholder};
 use datafusion_expr::window_frame::{check_window_frame, regularize_window_order_by};
 use datafusion_expr::{
     abs, acos, acosh, array, array_append, array_concat, array_dims, array_distinct,
@@ -55,8 +54,8 @@ use datafusion_expr::{
     array_resize, array_slice, array_sort, array_to_string, array_union, arrow_typeof,
     ascii, asin, asinh, atan, atan2, atanh, bit_length, btrim, cardinality, cbrt, ceil,
     character_length, chr, coalesce, concat_expr, concat_ws_expr, cos, cosh, cot,
-    current_date, current_time, date_bin, date_part, date_trunc, decode, degrees, digest,
-    encode, ends_with, exp,
+    current_date, current_time, date_bin, date_part, date_trunc, degrees, digest,
+    ends_with, exp,
     expr::{self, InList, Sort, WindowFunction},
     factorial, find_in_set, flatten, floor, from_unixtime, gcd, gen_range, initcap,
     instr, isnan, iszero, lcm, left, levenshtein, ln, log, log10, log2,
@@ -71,6 +70,10 @@ use datafusion_expr::{
     GroupingSet::GroupingSets,
     JoinConstraint, JoinType, Like, Operator, TryCast, WindowFrame, WindowFrameBound,
     WindowFrameUnits,
+};
+use datafusion_expr::{
+    array_reverse,
+    expr::{Alias, Placeholder},
 };
 
 #[derive(Debug)]
@@ -501,6 +504,7 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::ArrayReplace => Self::ArrayReplace,
             ScalarFunction::ArrayReplaceN => Self::ArrayReplaceN,
             ScalarFunction::ArrayReplaceAll => Self::ArrayReplaceAll,
+            ScalarFunction::ArrayReverse => Self::ArrayReverse,
             ScalarFunction::ArraySlice => Self::ArraySlice,
             ScalarFunction::ArrayToString => Self::ArrayToString,
             ScalarFunction::ArrayIntersect => Self::ArrayIntersect,
@@ -519,8 +523,6 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::Sha384 => Self::SHA384,
             ScalarFunction::Sha512 => Self::SHA512,
             ScalarFunction::Digest => Self::Digest,
-            ScalarFunction::Encode => Self::Encode,
-            ScalarFunction::Decode => Self::Decode,
             ScalarFunction::Log2 => Self::Log2,
             ScalarFunction::Signum => Self::Signum,
             ScalarFunction::Ascii => Self::Ascii,
@@ -1460,6 +1462,9 @@ pub fn parse_expr(
                     parse_expr(&args[1], registry)?,
                     parse_expr(&args[2], registry)?,
                 )),
+                ScalarFunction::ArrayReverse => {
+                    Ok(array_reverse(parse_expr(&args[0], registry)?))
+                }
                 ScalarFunction::ArraySlice => Ok(array_slice(
                     parse_expr(&args[0], registry)?,
                     parse_expr(&args[1], registry)?,
@@ -1569,14 +1574,6 @@ pub fn parse_expr(
                 ScalarFunction::Sha384 => Ok(sha384(parse_expr(&args[0], registry)?)),
                 ScalarFunction::Sha512 => Ok(sha512(parse_expr(&args[0], registry)?)),
                 ScalarFunction::Md5 => Ok(md5(parse_expr(&args[0], registry)?)),
-                ScalarFunction::Encode => Ok(encode(
-                    parse_expr(&args[0], registry)?,
-                    parse_expr(&args[1], registry)?,
-                )),
-                ScalarFunction::Decode => Ok(decode(
-                    parse_expr(&args[0], registry)?,
-                    parse_expr(&args[1], registry)?,
-                )),
                 ScalarFunction::NullIf => Ok(nullif(
                     parse_expr(&args[0], registry)?,
                     parse_expr(&args[1], registry)?,
