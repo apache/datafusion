@@ -16,8 +16,8 @@
 # under the License.
 
 [package]
-name = "datafusion-expr"
-description = "Logical plan and expression representation for DataFusion query engine"
+name = "datafusion-functions"
+description = "Function packages for the DataFusion query engine"
 keywords = ["datafusion", "logical", "plan", "expressions"]
 readme = "README.md"
 version = { workspace = true }
@@ -28,24 +28,24 @@ license = { workspace = true }
 authors = { workspace = true }
 rust-version = { workspace = true }
 
+[features]
+# Enable encoding by default so the doctests work. In general don't automatically enable all packages.
+default = ["encoding_expressions"]
+# enable the encode/decode functions
+encoding_expressions = ["base64", "hex"]
+
+
 [lib]
-name = "datafusion_expr"
+name = "datafusion_functions"
 path = "src/lib.rs"
 
-[features]
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-ahash = { version = "0.8", default-features = false, features = [
-    "runtime-rng",
-] }
 arrow = { workspace = true }
-arrow-array = { workspace = true }
+base64 = { version = "0.21", optional = true }
 datafusion-common = { workspace = true }
-paste = "^1.0"
-sqlparser = { workspace = true }
-strum = { version = "0.26.1", features = ["derive"] }
-strum_macros = "0.26.0"
-
-[dev-dependencies]
-ctor = { workspace = true }
-env_logger = { workspace = true }
+datafusion-execution = { workspace = true }
+datafusion-expr = { workspace = true }
+hex = { version = "0.4", optional = true }
+log = "0.4.20"
