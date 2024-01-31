@@ -353,13 +353,13 @@
 <nav id="bd-toc-nav">
     <ul class="visible nav section-nav flex-column">
  <li class="toc-h2 nav-item toc-entry">
-  <a class="reference internal nav-link" href="#update-cargo-toml">
-   Update
-   <code class="docutils literal notranslate">
-    <span class="pre">
-     Cargo.toml
-    </span>
-   </code>
+  <a class="reference internal nav-link" href="#add-datafusion-as-a-dependency">
+   Add DataFusion as a dependency
+  </a>
+ </li>
+ <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#add-datafusion-latest-codebase-as-a-dependency">
+   Add DataFusion latest codebase as a dependency
   </a>
  </li>
  <li class="toc-h2 nav-item toc-entry">
@@ -467,14 +467,31 @@
 <h1>Example Usage<a class="headerlink" href="#example-usage" title="Link to this heading">¶</a></h1>
 <p>In this example some simple processing is performed on the <a class="reference external" href="https://github.com/apache/arrow-datafusion/blob/main/datafusion/core/tests/data/example.csv"><code class="docutils literal notranslate"><span class="pre">example.csv</span></code></a> file.</p>
 <p>Even <a class="reference external" href="https://github.com/apache/arrow-datafusion/tree/main/datafusion-examples"><code class="docutils literal notranslate"><span class="pre">more</span> <span class="pre">code</span> <span class="pre">examples</span></code></a> attached to the project.</p>
-<section id="update-cargo-toml">
-<h2>Update <code class="docutils literal notranslate"><span class="pre">Cargo.toml</span></code><a class="headerlink" href="#update-cargo-toml" title="Link to this heading">¶</a></h2>
+<section id="add-datafusion-as-a-dependency">
+<h2>Add DataFusion as a dependency<a class="headerlink" href="#add-datafusion-as-a-dependency" title="Link to this heading">¶</a></h2>
 <p>Find latest available Datafusion version on <a class="reference external" href="https://crates.io/crates/datafusion">DataFusion’s
 crates.io</a> page. Add the dependency to your <code class="docutils literal notranslate"><span class="pre">Cargo.toml</span></code> file:</p>
 <div class="highlight-toml notranslate"><div class="highlight"><pre><span></span><span class="n">datafusion</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;31&quot;</span>
 <span class="n">tokio</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;1.0&quot;</span>
 </pre></div>
 </div>
+</section>
+<section id="add-datafusion-latest-codebase-as-a-dependency">
+<h2>Add DataFusion latest codebase as a dependency<a class="headerlink" href="#add-datafusion-latest-codebase-as-a-dependency" title="Link to this heading">¶</a></h2>
+<p>Cargo supports adding dependency directly from Github which allows testing out latest DataFusion codebase without waiting the code to be released to crates.io
+according to the <a class="reference external" href="https://github.com/apache/arrow-datafusion/blob/main/dev/release/README.md#release-process">DataFusion release schedule</a></p>
+<div class="highlight-toml notranslate"><div class="highlight"><pre><span></span><span class="n">datafusion</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">git</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">&quot;https://github.com/apache/arrow-datafusion&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">branch</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">&quot;main&quot;</span><span class="p">}</span>
+</pre></div>
+</div>
+<p>Also it works on the package level</p>
+<div class="highlight-toml notranslate"><div class="highlight"><pre><span></span><span class="n">datafusion-common</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">git</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">&quot;https://github.com/apache/arrow-datafusion&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">branch</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">&quot;main&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">package</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">&quot;datafusion-common&quot;</span><span class="p">}</span>
+</pre></div>
+</div>
+<p>And with features</p>
+<div class="highlight-toml notranslate"><div class="highlight"><pre><span></span><span class="n">datafusion</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">git</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">&quot;https://github.com/apache/arrow-datafusion&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">branch</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">&quot;main&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">default-features</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span><span class="w"> </span><span class="n">features</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;unicode_expressions&quot;</span><span class="p">]</span><span class="w"> </span><span class="p">}</span>
+</pre></div>
+</div>
+<p>More on <a class="reference external" href="https://doc.rust-lang.org/cargo/reference/specifying-dependencies.html#specifying-dependencies">Cargo dependencies</a></p>
 </section>
 <section id="run-a-sql-query-against-data-stored-in-a-csv">
 <h2>Run a SQL query against data stored in a CSV:<a class="headerlink" href="#run-a-sql-query-against-data-stored-in-a-csv" title="Link to this heading">¶</a></h2>
@@ -663,7 +680,7 @@ like error backtrace. To enable a backtrace you need to add Datafusion <code cla
 <div class="highlight-toml notranslate"><div class="highlight"><pre><span></span><span class="n">datafusion</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">version</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">&quot;31.0.0&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">features</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;backtrace&quot;</span><span class="p">]}</span>
 </pre></div>
 </div>
-<p>Set environment [<code class="docutils literal notranslate"><span class="pre">variables</span></code>] https://doc.rust-lang.org/std/backtrace/index.html#environment-variables</p>
+<p>Set environment <a class="reference external" href="https://doc.rust-lang.org/std/backtrace/index.html#environment-variables">variables</a></p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nv">RUST_BACKTRACE</span><span class="o">=</span><span class="m">1</span><span class="w"> </span>./target/debug/datafusion-cli
 DataFusion<span class="w"> </span>CLI<span class="w"> </span>v31.0.0
 ❯<span class="w"> </span><span class="k">select</span><span class="w"> </span>row_numer<span class="o">()</span><span class="w"> </span>over<span class="w"> </span><span class="o">(</span>partition<span class="w"> </span>by<span class="w"> </span>a<span class="w"> </span>order<span class="w"> </span>by<span class="w"> </span>a<span class="o">)</span><span class="w"> </span>from<span class="w"> </span><span class="o">(</span><span class="k">select</span><span class="w"> </span><span class="m">1</span><span class="w"> </span>a<span class="o">)</span><span class="p">;</span>
