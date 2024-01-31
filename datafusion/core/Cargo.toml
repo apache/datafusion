@@ -27,7 +27,9 @@ homepage = { workspace = true }
 repository = { workspace = true }
 license = { workspace = true }
 authors = { workspace = true }
-rust-version = { workspace = true }
+# Specify MSRV here as `cargo msrv` doesn't support workspace version and fails with
+# "Unable to find key 'package.rust-version' (or 'package.metadata.msrv') in 'arrow-datafusion/Cargo.toml'"
+rust-version = "1.72"
 
 [lib]
 name = "datafusion"
