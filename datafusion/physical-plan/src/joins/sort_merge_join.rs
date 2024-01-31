@@ -1223,8 +1223,8 @@ impl SMJStream {
 /// Gets the arrays which join filters are applied on.
 fn get_filter_column(
     join_filter: &Option<JoinFilter>,
-    streamed_columns: &Vec<ArrayRef>,
-    buffered_columns: &Vec<ArrayRef>,
+    streamed_columns: &[ArrayRef],
+    buffered_columns: &[ArrayRef],
 ) -> Vec<ArrayRef> {
     let mut filter_columns = vec![];
 
@@ -1232,14 +1232,14 @@ fn get_filter_column(
         let left_columns = f
             .column_indices()
             .iter()
-            .filter(|col_index| (*col_index).side == JoinSide::Left)
+            .filter(|col_index| col_index.side == JoinSide::Left)
             .map(|i| streamed_columns[i.index].clone())
             .collect::<Vec<_>>();
 
         let right_columns = f
             .column_indices()
             .iter()
-            .filter(|col_index| (*col_index).side == JoinSide::Right)
+            .filter(|col_index| col_index.side == JoinSide::Right)
             .map(|i| buffered_columns[i.index].clone())
             .collect::<Vec<_>>();
 
