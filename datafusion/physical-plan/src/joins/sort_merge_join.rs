@@ -1600,7 +1600,7 @@ mod tests {
         join_type: JoinType,
     ) -> Result<SortMergeJoinExec> {
         let sort_options = vec![SortOptions::default(); on.len()];
-        SortMergeJoinExec::try_new(left, right, on, join_type, sort_options, false)
+        SortMergeJoinExec::try_new(left, right, on, None, join_type, sort_options, false)
     }
 
     fn join_with_options(
@@ -1615,6 +1615,7 @@ mod tests {
             left,
             right,
             on,
+            None,
             join_type,
             sort_options,
             null_equals_null,
