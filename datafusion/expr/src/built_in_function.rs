@@ -171,6 +171,8 @@ pub enum BuiltinScalarFunction {
     ArrayReplaceN,
     /// array_replace_all
     ArrayReplaceAll,
+    /// array_reverse
+    ArrayReverse,
     /// array_slice
     ArraySlice,
     /// array_to_string
@@ -427,6 +429,7 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::ArrayReplace => Volatility::Immutable,
             BuiltinScalarFunction::ArrayReplaceN => Volatility::Immutable,
             BuiltinScalarFunction::ArrayReplaceAll => Volatility::Immutable,
+            BuiltinScalarFunction::ArrayReverse => Volatility::Immutable,
             BuiltinScalarFunction::Flatten => Volatility::Immutable,
             BuiltinScalarFunction::ArraySlice => Volatility::Immutable,
             BuiltinScalarFunction::ArrayToString => Volatility::Immutable,
@@ -622,6 +625,7 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::ArrayReplace => Ok(input_expr_types[0].clone()),
             BuiltinScalarFunction::ArrayReplaceN => Ok(input_expr_types[0].clone()),
             BuiltinScalarFunction::ArrayReplaceAll => Ok(input_expr_types[0].clone()),
+            BuiltinScalarFunction::ArrayReverse => Ok(input_expr_types[0].clone()),
             BuiltinScalarFunction::ArraySlice => Ok(input_expr_types[0].clone()),
             BuiltinScalarFunction::ArrayResize => Ok(input_expr_types[0].clone()),
             BuiltinScalarFunction::ArrayToString => Ok(Utf8),
@@ -961,6 +965,7 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::ArrayReplaceAll => {
                 Signature::any(3, self.volatility())
             }
+            BuiltinScalarFunction::ArrayReverse => Signature::any(1, self.volatility()),
             BuiltinScalarFunction::ArraySlice => {
                 Signature::variadic_any(self.volatility())
             }
@@ -1567,6 +1572,7 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::ArrayReplaceAll => {
                 &["array_replace_all", "list_replace_all"]
             }
+            BuiltinScalarFunction::ArrayReverse => &["array_reverse", "list_reverse"],
             BuiltinScalarFunction::ArraySlice => &["array_slice", "list_slice"],
             BuiltinScalarFunction::ArrayToString => &[
                 "array_to_string",
