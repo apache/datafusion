@@ -86,7 +86,7 @@ fn analyze_internal(plan: &LogicalPlan) -> Result<LogicalPlan> {
         })
         .collect::<Result<Vec<_>>>()?;
 
-    plan.with_new_exprs(new_expr, &new_inputs)
+    plan.with_new_exprs(new_expr, new_inputs)
 }
 
 pub(crate) struct OperatorToFunctionRewriter {

@@ -159,7 +159,7 @@ impl ExprSchemable for Expr {
             Expr::Like { .. } | Expr::SimilarTo { .. } => Ok(DataType::Boolean),
             Expr::Placeholder(Placeholder { data_type, .. }) => {
                 data_type.clone().ok_or_else(|| {
-                    plan_datafusion_err!("Placeholder type could not be resolved")
+                    plan_datafusion_err!("Placeholder type could not be resolved. Make sure that the placeholder is bound to a concrete type, e.g. by providing parameter values.")
                 })
             }
             Expr::Wildcard { qualifier } => {
@@ -374,9 +374,14 @@ fn field_for_index<S: ExprSchema>(
         GetFieldAccess::ListIndex { key } => GetFieldAccessSchema::ListIndex {
             key_dt: key.get_type(schema)?,
         },
-        GetFieldAccess::ListRange { start, stop } => GetFieldAccessSchema::ListRange {
+        GetFieldAccess::ListRange {
+            start,
+            stop,
+            stride,
+        } => GetFieldAccessSchema::ListRange {
             start_dt: start.get_type(schema)?,
             stop_dt: stop.get_type(schema)?,
+            stride_dt: stride.get_type(schema)?,
         },
     }
     .get_accessed_field(&expr_dt)
