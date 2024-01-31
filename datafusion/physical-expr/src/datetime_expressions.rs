@@ -669,7 +669,7 @@ fn _date_trunc_coarse_with_tz(
             match truncated.and_local_timezone(value.timezone()) {
                 LocalResult::None => {
                     // It is impossible to truncate from a time that does exist into one that doesn't.
-                    panic!("date_trunc produced impossible time")
+                    exec_err!("date_trunc produced impossible time")
                 }
                 LocalResult::Single(datetime) => datetime,
                 LocalResult::Ambiguous(datetime1, datetime2) => {
