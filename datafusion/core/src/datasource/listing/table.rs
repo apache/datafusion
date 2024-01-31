@@ -776,7 +776,6 @@ impl TableProvider for ListingTable {
             file_groups,
             output_schema: self.schema(),
             table_partition_cols: self.options.table_partition_cols.clone(),
-            single_file_output: false,
             overwrite,
             file_type_writer_options,
         };

@@ -77,7 +77,7 @@ fn analyze_internal(
     plan: &LogicalPlan,
 ) -> Result<LogicalPlan> {
     // optimize child plans first
-    let new_inputs = plan
+    let mut new_inputs = plan
         .inputs()
         .iter()
         .map(|p| analyze_internal(external_schema, p))
@@ -115,9 +115,9 @@ fn analyze_internal(
     match &plan {
         LogicalPlan::Projection(_) => Ok(LogicalPlan::Projection(Projection::try_new(
             new_expr,
-            Arc::new(new_inputs[0].clone()),
+            Arc::new(new_inputs.swap_remove(0)),
         )?)),
-        _ => plan.with_new_exprs(new_expr, &new_inputs),
+        _ => plan.with_new_exprs(new_expr, new_inputs),
     }
 }
 

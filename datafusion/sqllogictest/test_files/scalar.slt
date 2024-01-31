@@ -1546,6 +1546,9 @@ SELECT null, -null
 ----
 NULL NULL
 
+query error DataFusion error: Error during planning: Negation only supports numeric, interval and timestamp types
+SELECT -'100'
+
 statement ok
 drop table test_boolean
 

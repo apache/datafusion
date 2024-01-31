@@ -74,18 +74,6 @@ impl DistinctCount {
     }
 }
 
-macro_rules! native_distinct_count_accumulator {
-    ($TYPE:ident) => {{
-        Ok(Box::new(NativeDistinctCountAccumulator::<$TYPE>::new()))
-    }};
-}
-
-macro_rules! float_distinct_count_accumulator {
-    ($TYPE:ident) => {{
-        Ok(Box::new(FloatDistinctCountAccumulator::<$TYPE>::new()))
-    }};
-}
-
 impl AggregateExpr for DistinctCount {
     /// Return a reference to Any that can be used for downcasting
     fn as_any(&self) -> &dyn Any {
@@ -112,57 +100,61 @@ impl AggregateExpr for DistinctCount {
         use DataType::*;
         use TimeUnit::*;
 
-        match &self.state_data_type {
-            Int8 => native_distinct_count_accumulator!(Int8Type),
-            Int16 => native_distinct_count_accumulator!(Int16Type),
-            Int32 => native_distinct_count_accumulator!(Int32Type),
-            Int64 => native_distinct_count_accumulator!(Int64Type),
-            UInt8 => native_distinct_count_accumulator!(UInt8Type),
-            UInt16 => native_distinct_count_accumulator!(UInt16Type),
-            UInt32 => native_distinct_count_accumulator!(UInt32Type),
-            UInt64 => native_distinct_count_accumulator!(UInt64Type),
-            Decimal128(_, _) => native_distinct_count_accumulator!(Decimal128Type),
-            Decimal256(_, _) => native_distinct_count_accumulator!(Decimal256Type),
+        Ok(match &self.state_data_type {
+            Int8 => Box::new(NativeDistinctCountAccumulator::<Int8Type>::new()),
+            Int16 => Box::new(NativeDistinctCountAccumulator::<Int16Type>::new()),
+            Int32 => Box::new(NativeDistinctCountAccumulator::<Int32Type>::new()),
+            Int64 => Box::new(NativeDistinctCountAccumulator::<Int64Type>::new()),
+            UInt8 => Box::new(NativeDistinctCountAccumulator::<UInt8Type>::new()),
+            UInt16 => Box::new(NativeDistinctCountAccumulator::<UInt16Type>::new()),
+            UInt32 => Box::new(NativeDistinctCountAccumulator::<UInt32Type>::new()),
+            UInt64 => Box::new(NativeDistinctCountAccumulator::<UInt64Type>::new()),
+            Decimal128(_, _) => {
+                Box::new(NativeDistinctCountAccumulator::<Decimal128Type>::new())
+            }
+            Decimal256(_, _) => {
+                Box::new(NativeDistinctCountAccumulator::<Decimal256Type>::new())
+            }
 
-            Date32 => native_distinct_count_accumulator!(Date32Type),
-            Date64 => native_distinct_count_accumulator!(Date64Type),
+            Date32 => Box::new(NativeDistinctCountAccumulator::<Date32Type>::new()),
+            Date64 => Box::new(NativeDistinctCountAccumulator::<Date64Type>::new()),
             Time32(Millisecond) => {
-                native_distinct_count_accumulator!(Time32MillisecondType)
+                Box::new(NativeDistinctCountAccumulator::<Time32MillisecondType>::new())
             }
             Time32(Second) => {
-                native_distinct_count_accumulator!(Time32SecondType)
+                Box::new(NativeDistinctCountAccumulator::<Time32SecondType>::new())
             }
             Time64(Microsecond) => {
-                native_distinct_count_accumulator!(Time64MicrosecondType)
+                Box::new(NativeDistinctCountAccumulator::<Time64MicrosecondType>::new())
             }
             Time64(Nanosecond) => {
-                native_distinct_count_accumulator!(Time64NanosecondType)
+                Box::new(NativeDistinctCountAccumulator::<Time64NanosecondType>::new())
             }
-            Timestamp(Microsecond, _) => {
-                native_distinct_count_accumulator!(TimestampMicrosecondType)
-            }
-            Timestamp(Millisecond, _) => {
-                native_distinct_count_accumulator!(TimestampMillisecondType)
-            }
+            Timestamp(Microsecond, _) => Box::new(NativeDistinctCountAccumulator::<
+                TimestampMicrosecondType,
+            >::new()),
+            Timestamp(Millisecond, _) => Box::new(NativeDistinctCountAccumulator::<
+                TimestampMillisecondType,
+            >::new()),
             Timestamp(Nanosecond, _) => {
-                native_distinct_count_accumulator!(TimestampNanosecondType)
+                Box::new(NativeDistinctCountAccumulator::<TimestampNanosecondType>::new())
             }
             Timestamp(Second, _) => {
-                native_distinct_count_accumulator!(TimestampSecondType)
+                Box::new(NativeDistinctCountAccumulator::<TimestampSecondType>::new())
             }
 
-            Float16 => float_distinct_count_accumulator!(Float16Type),
-            Float32 => float_distinct_count_accumulator!(Float32Type),
-            Float64 => float_distinct_count_accumulator!(Float64Type),
+            Float16 => Box::new(FloatDistinctCountAccumulator::<Float16Type>::new()),
+            Float32 => Box::new(FloatDistinctCountAccumulator::<Float32Type>::new()),
+            Float64 => Box::new(FloatDistinctCountAccumulator::<Float64Type>::new()),
 
-            Utf8 => Ok(Box::new(StringDistinctCountAccumulator::<i32>::new())),
-            LargeUtf8 => Ok(Box::new(StringDistinctCountAccumulator::<i64>::new())),
+            Utf8 => Box::new(StringDistinctCountAccumulator::<i32>::new()),
+            LargeUtf8 => Box::new(StringDistinctCountAccumulator::<i64>::new()),
 
-            _ => Ok(Box::new(DistinctCountAccumulator {
+            _ => Box::new(DistinctCountAccumulator {
                 values: HashSet::default(),
                 state_data_type: self.state_data_type.clone(),
-            })),
-        }
+            }),
+        })
     }
 
     fn name(&self) -> &str {

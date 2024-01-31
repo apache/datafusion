@@ -562,7 +562,6 @@ impl DefaultPhysicalPlanner {
                     input,
                     output_url,
                     file_format,
-                    single_file_output,
                     copy_options,
                 }) => {
                     let input_exec = self.create_initial_plan(input, session_state).await?;
@@ -588,7 +587,6 @@ impl DefaultPhysicalPlanner {
                         file_groups: vec![],
                         output_schema: Arc::new(schema),
                         table_partition_cols: vec![],
-                        single_file_output: *single_file_output,
                         overwrite: false,
                         file_type_writer_options
                     };

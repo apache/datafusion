@@ -89,12 +89,12 @@ impl TreeNode for LogicalPlan {
             .map_till_continue_and_collect(f)?;
         // TODO: once we trust `t.transformed` remove additional check
         if old_children
-            .iter()
+            .into_iter()
             .zip(t.data.iter())
-            .any(|(c1, c2)| c1 != &c2)
+            .any(|(c1, c2)| c1 != c2)
         {
             Ok(Transformed::new(
-                self.with_new_exprs(self.expressions(), t.data.as_slice())?,
+                self.with_new_exprs(self.expressions(), t.data)?,
                 true,
                 t.tnr,
             ))
