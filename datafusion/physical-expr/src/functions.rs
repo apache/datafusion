@@ -445,6 +445,9 @@ pub fn create_physical_fun(
         BuiltinScalarFunction::ArrayReplaceAll => Arc::new(|args| {
             make_scalar_function_inner(array_expressions::array_replace_all)(args)
         }),
+        BuiltinScalarFunction::ArrayReverse => Arc::new(|args| {
+            make_scalar_function_inner(array_expressions::array_reverse)(args)
+        }),
         BuiltinScalarFunction::ArraySlice => Arc::new(|args| {
             make_scalar_function_inner(array_expressions::array_slice)(args)
         }),
