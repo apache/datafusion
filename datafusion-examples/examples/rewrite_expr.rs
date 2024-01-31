@@ -103,6 +103,7 @@ impl MyAnalyzerRule {
                 _ => Transformed::no(plan),
             })
         })
+        .map(|t| t.data)
     }
 
     fn analyze_expr(expr: Expr) -> Result<Expr> {
@@ -118,6 +119,7 @@ impl MyAnalyzerRule {
                 _ => Transformed::no(expr),
             })
         })
+        .map(|t| t.data)
     }
 }
 
@@ -183,6 +185,7 @@ fn my_rewrite(expr: Expr) -> Result<Expr> {
             _ => Transformed::no(expr),
         })
     })
+    .map(|t| t.data)
 }
 
 #[derive(Default)]

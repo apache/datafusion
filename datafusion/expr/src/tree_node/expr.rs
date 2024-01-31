@@ -214,34 +214,26 @@ impl TreeNode for Expr {
                         case_insensitive,
                     ))
                 }),
-            Expr::Not(expr) => transform_box(expr, &mut f)?.map_data(|be| Expr::Not(be)),
+            Expr::Not(expr) => transform_box(expr, &mut f)?.map_data(Expr::Not),
             Expr::IsNotNull(expr) => {
-                transform_box(expr, &mut f)?.map_data(|be| Expr::IsNotNull(be))
+                transform_box(expr, &mut f)?.map_data(Expr::IsNotNull)
             }
-            Expr::IsNull(expr) => {
-                transform_box(expr, &mut f)?.map_data(|be| Expr::IsNull(be))
-            }
-            Expr::IsTrue(expr) => {
-                transform_box(expr, &mut f)?.map_data(|be| Expr::IsTrue(be))
-            }
-            Expr::IsFalse(expr) => {
-                transform_box(expr, &mut f)?.map_data(|be| Expr::IsFalse(be))
-            }
+            Expr::IsNull(expr) => transform_box(expr, &mut f)?.map_data(Expr::IsNull),
+            Expr::IsTrue(expr) => transform_box(expr, &mut f)?.map_data(Expr::IsTrue),
+            Expr::IsFalse(expr) => transform_box(expr, &mut f)?.map_data(Expr::IsFalse),
             Expr::IsUnknown(expr) => {
-                transform_box(expr, &mut f)?.map_data(|be| Expr::IsUnknown(be))
+                transform_box(expr, &mut f)?.map_data(Expr::IsUnknown)
             }
             Expr::IsNotTrue(expr) => {
-                transform_box(expr, &mut f)?.map_data(|be| Expr::IsNotTrue(be))
+                transform_box(expr, &mut f)?.map_data(Expr::IsNotTrue)
             }
             Expr::IsNotFalse(expr) => {
-                transform_box(expr, &mut f)?.map_data(|be| Expr::IsNotFalse(be))
+                transform_box(expr, &mut f)?.map_data(Expr::IsNotFalse)
             }
             Expr::IsNotUnknown(expr) => {
-                transform_box(expr, &mut f)?.map_data(|be| Expr::IsNotUnknown(be))
+                transform_box(expr, &mut f)?.map_data(Expr::IsNotUnknown)
             }
-            Expr::Negative(expr) => {
-                transform_box(expr, &mut f)?.map_data(|be| Expr::Negative(be))
-            }
+            Expr::Negative(expr) => transform_box(expr, &mut f)?.map_data(Expr::Negative),
             Expr::Between(Between {
                 expr,
                 negated,
@@ -310,9 +302,7 @@ impl TreeNode for Expr {
                         Ok(Expr::ScalarFunction(ScalarFunction::new_udf(fun, new_args)))
                     }
                     ScalarFunctionDefinition::Name(_) => {
-                        return internal_err!(
-                            "Function `Expr` with name should be resolved."
-                        );
+                        internal_err!("Function `Expr` with name should be resolved.")
                     }
                 })?
             }
@@ -379,9 +369,7 @@ impl TreeNode for Expr {
                         )))
                     }
                     AggregateFunctionDefinition::Name(_) => {
-                        return internal_err!(
-                            "Function `Expr` with name should be resolved."
-                        );
+                        internal_err!("Function `Expr` with name should be resolved.")
                     }
                 })?,
             Expr::GroupingSet(grouping_set) => match grouping_set {
